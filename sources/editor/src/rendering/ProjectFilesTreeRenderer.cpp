@@ -61,10 +61,7 @@ void ProjectFilesTreeRenderer::Paint(
         }
 
         if (folders[index].selected) {
-            GdiDrawing::FillRectColor(dc, row, Draw::Blend(Draw::Color(theme.panel), Draw::Color(theme.accent), state.IsSelectionFocused() ? 18 : 10));
-            if (state.IsSelectionFocused()) {
-                GdiDrawing::FillRectColor(dc, RECT{ row.left, row.top, row.left + 3, row.bottom }, Draw::Color(theme.accent));
-            }
+            GdiDrawing::FillRectColor(dc, row, Draw::Blend(Draw::Color(theme.panel), Draw::Color(theme.accent), state.IsSelectionFocused() ? 100 : 35));
         }
 
         const int indent = folders[index].depth * 14;

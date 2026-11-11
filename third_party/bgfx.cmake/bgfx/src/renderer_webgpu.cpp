@@ -2166,6 +2166,9 @@ WGPU_IMPORT
 				&&  m_frameBuffers[handle.idx].m_swapChain.m_nwh == _desc.nwh)
 				{
 					destroyFrameBuffer(handle);
+					// The API's own destroy of this handle is still on its way (creates run before destroys
+					// in a frame); releasing it twice would free its neighbours in the arena.
+					m_windowReplaced[handle.idx] = true;
 				}
 			}
 
@@ -2181,6 +2184,12 @@ WGPU_IMPORT
 
 		void destroyFrameBuffer(FrameBufferHandle _handle) override
 		{
+			if (m_windowReplaced[_handle.idx])
+			{
+				m_windowReplaced[_handle.idx] = false;
+				return;
+			}
+
 			invalidateBindGroupCache();
 
 			FrameBufferWGPU& frameBuffer = m_frameBuffers[_handle.idx];
@@ -4210,6 +4219,7 @@ WGPU_IMPORT
 		HandleArenaT<TextureWGPU,      BGFX_CONFIG_MAX_TEXTURES>       m_textures;
 		VertexLayout     m_vertexLayouts[BGFX_CONFIG_MAX_VERTEX_LAYOUTS];
 		HandleArenaT<FrameBufferWGPU,  BGFX_CONFIG_MAX_FRAME_BUFFERS>  m_frameBuffers;
+		bool m_windowReplaced[BGFX_CONFIG_MAX_FRAME_BUFFERS+1] = {};
 
 		StateCacheLru<ComputePipeline, 1024> m_computePipelineCache;
 		StateCacheLru<RenderPipeline, 1024>  m_renderPipelineCache;

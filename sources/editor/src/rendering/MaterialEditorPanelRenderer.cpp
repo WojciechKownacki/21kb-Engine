@@ -216,7 +216,6 @@ void DrawPreviewChoice(HDC dc, const RECT& rect, const EditorTheme& theme, HeroI
 void DrawHeader(HDC dc, const RECT& content, const EditorTheme& theme, const EditorSceneContext& sceneContext, bool dirty, bool infoVisible) {
     const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(content);
     GdiDrawing::FillRectColor(dc, layout.header, GdiDrawing::ToColorRef(theme.strip));
-    GdiDrawing::FillRectColor(dc, RECT{ layout.header.left, layout.header.top, layout.header.left + 3, layout.header.bottom }, GdiDrawing::ToColorRef(theme.accent));
     GdiDrawing::FillRectColor(dc, RECT{ layout.header.left, layout.header.bottom - 1, layout.header.right, layout.header.bottom }, GdiDrawing::ToColorRef(theme.borderChrome));
     if (layout.headerHeight > MaterialEditorPanelMetrics::HeaderHeight + kAssetEditScopeHeight) {
         const int dividerY = layout.compactToolbar ? content.top + 70 : content.top + 40;
@@ -2552,9 +2551,6 @@ void DrawMaterialGraphTexturePickerTile(
         selected
             ? EditorDialogStyle::Blend(EditorDialogStyle::Color(theme.panel), EditorDialogStyle::Color(theme.accent), 18)
             : EditorDialogStyle::Color(theme.panel));
-    if (selected) {
-        GdiDrawing::FillRectColor(dc, RECT{tile.left, tile.top, tile.left + 3, tile.bottom}, EditorDialogStyle::Color(theme.accent));
-    }
     EditorDialogStyle::PaintDivider(dc, RECT{tile.left, tile.bottom - 1, tile.right, tile.bottom}, theme);
 
     const RECT image{

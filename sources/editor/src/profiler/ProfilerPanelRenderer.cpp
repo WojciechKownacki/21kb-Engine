@@ -15,7 +15,6 @@
 #include <array>
 #include <cmath>
 #include <format>
-#include <numeric>
 
 namespace kb::editor {
 namespace {
@@ -144,9 +143,11 @@ public:
             PaintDiagnosisLeft();
             PaintDiagnosis();
             if (geometry_.right.right > geometry_.right.left) PaintDiagnosisDetails();
+        } else if (profiler_.Panel().tab == ProfilerPanelTab::Measurements) {
+            PaintMeasurements();
         } else {
             PaintLeft();
-            if (profiler_.Panel().tab == ProfilerPanelTab::Measurements) PaintMeasurements(); else PaintCounters();
+            PaintCounters();
         }
         PaintStatus();
     }
@@ -326,15 +327,15 @@ private:
             const RECT row = Rect(geometry_.areasList.left, geometry_.areasList.top + static_cast<int>(index) * ProfilerPanelGeometry::kRowHeight,
                 geometry_.areasList.right, geometry_.areasList.top + static_cast<int>(index + 1U) * ProfilerPanelGeometry::kRowHeight);
             const bool measured = selection_.AreaMeasured(area);
-            EditorDialogStyle::PaintCheckbox(c.dc, Rect(row.left + kPad, row.top + 4, row.left + kPad + 14, row.top + 18), theme_, measured);
-            c.Fill(Rect(row.left + kPad + 22, row.top + 7, row.left + kPad + 30, row.top + 15), palette::Area(area));
+            EditorDialogStyle::PaintSwitch(c.dc, Rect(row.left + kPad, row.top + 4, row.left + kPad + 26, row.top + 18), theme_, measured);
+            c.Fill(Rect(row.left + kPad + 34, row.top + 7, row.left + kPad + 42, row.top + 15), palette::Area(area));
             // The reading takes the room its digits need, and the name what is left.
             const std::string reading = measured ? AreaHeadline(registry_, area) : std::string{ "-" };
             const int readingLeft = row.right - kPad - c.Width(reading, 10) - 6;
-            c.Text(Rect(row.left + kPad + 38, row.top, readingLeft - 4, row.bottom), ProfilerText::Area(area), measured ? theme_.textPrimary : theme_.textSecondary);
+            c.Text(Rect(row.left + kPad + 50, row.top, readingLeft - 4, row.bottom), ProfilerText::Area(area), measured ? theme_.textPrimary : theme_.textSecondary);
             c.TextRight(Rect(readingLeft, row.top, row.right - kPad, row.bottom), reading, theme_.textDisabled, 10);
         }
-        // What a check means, for whoever opens the profiler for the first time.
+        // What a switch means, for whoever opens the profiler for the first time.
         if (geometry_.areasHint.bottom - geometry_.areasHint.top >= 44) {
             c.Wrapped(Rect(geometry_.areasHint.left + kPad, geometry_.areasHint.top + 4, geometry_.areasHint.right - kPad, geometry_.areasHint.bottom - 4),
                 EditorText("profiler.areas.hint", "Checked areas are measured and appear in the window. Unchecked ones cost nothing."), theme_.textDisabled, 10);
@@ -355,183 +356,154 @@ private:
         return plot.bottom - 2 - static_cast<int>(fraction * (plot.bottom - plot.top - 4));
     }
 
-    void PaintLine(const RECT& plot, const std::vector<double>& values, double axisMaximum, EditorColor color) const {
-        std::vector<POINT> points;
-        points.reserve(values.size());
-        for (std::size_t index = 0U; index < values.size(); ++index) {
-            points.push_back({ ProfilerFrameX(plot, values.size() - 1U - index), ValueY(plot, values[index], axisMaximum) });
-        }
-        canvas_.Stroke(points, color, PS_SOLID, 1);
-    }
-
-    void PaintThreshold(const RECT& plot, double value, double axisMaximum, EditorColor color, std::string_view label) const {
-        if (value <= 0.0) return;
-        const int y = ValueY(plot, value, axisMaximum);
-        canvas_.HLine(plot.left, plot.right, y, color, PS_DOT);
-        canvas_.TextRight(Rect(plot.right - 130, y - 13, plot.right - 4, y - 1), label, color, 9);
-    }
-
-    void PaintCursor(const RECT& plot) const {
+    void PaintCursor(const RECT& plot, EditorColor color) const {
         const std::optional<std::size_t> offset = ShownOffset();
         if (!offset || profiler_.Panel().selectedFrame == std::nullopt) return;
         const int x = ProfilerFrameX(plot, *offset);
-        canvas_.Fill(Rect(x, plot.top, x + 1, plot.bottom), palette::kBudget);
+        canvas_.Fill(Rect(x, plot.top, x + 1, plot.bottom), color);
     }
 
     void PaintUnavailable(const RECT& plot, std::string_view why) const {
         canvas_.Text(plot, why, theme_.textDisabled, 11, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 
-    void PaintChartLabel(const ProfilerChartRow& chart, EditorColor swatch, std::string_view name, std::string_view big, std::string_view detail) const {
+    // The frames of the history as bars: grey up to the target, and only what runs over it in color.
+    void PaintFrameStrip() const {
+        const RECT& strip = geometry_.frameStrip;
+        if (strip.bottom <= strip.top) return;
         const Canvas& c = canvas_;
-        c.Fill(chart.label, theme_.strip);
-        c.Fill(Rect(chart.label.right - 1, chart.label.top, chart.label.right, chart.label.bottom), theme_.borderChrome);
-        c.Fill(Rect(chart.label.left + kPad, chart.label.top + 9, chart.label.left + kPad + 8, chart.label.top + 17), swatch);
-        c.Text(Rect(chart.label.left + kPad + 14, chart.label.top + 4, chart.label.right - kPad, chart.label.top + 22), name, theme_.textPrimary, 12, FW_SEMIBOLD);
-        if (!big.empty()) c.Text(Rect(chart.label.left + kPad, chart.label.top + 20, chart.label.right - kPad, chart.label.top + 40), big, theme_.textPrimary, 14, FW_SEMIBOLD);
-        if (!detail.empty()) c.Text(Rect(chart.label.left + kPad, chart.label.top + 40, chart.label.right - kPad, chart.label.bottom - 1), detail, theme_.textSecondary, 10);
-    }
-
-    // A legend line in the label of a chart: a swatch, a name and a reading at the right.
-    void PaintLegend(const RECT& label, int line, EditorColor swatch, std::string_view name, std::string_view value) const {
-        const int top = label.top + 24 + line * 16;
-        canvas_.Fill(Rect(label.left + kPad, top + 5, label.left + kPad + 8, top + 13), swatch);
-        // The reading takes the room its digits need, and the name what is left.
-        const int valueLeft = label.right - kPad - std::max(40, canvas_.Width(value, 10) + 4);
-        canvas_.Text(Rect(label.left + kPad + 14, top, valueLeft - 4, top + 18), name, theme_.textSecondary, 10);
-        canvas_.TextRight(Rect(valueLeft, top, label.right - kPad, top + 18), value, theme_.textPrimary, 10);
-    }
-
-    void PaintFrameChart(const ProfilerChartRow& chart) const {
-        const Canvas& c = canvas_;
-        const std::size_t id = ProfilerRegistry::Id(ProfilerBuiltIn::FrameTime);
-        const kb::core::ProfilerCounterInfo& info = registry_.Info(id);
-        const std::vector<double> values = Series(registry_, ProfilerBuiltIn::FrameTime);
-        const kb::core::ProfilerCounterStats stats = registry_.Stats(id);
-        const std::string fps = ValueText(registry_, ProfilerRegistry::Id(ProfilerBuiltIn::FramesPerSecond));
-        PaintChartLabel(chart, theme_.textSecondary, ProfilerText::Counter(info), stats.available ? FormatProfilerValue(info, stats.now) : "-",
-            EditorLocalization::Format("profiler.panel.fps_target", "{fps} FPS, target {target} ms", { { "fps", fps }, { "target", ProfilerNumber::General(info.budget) } }));
-        c.Fill(chart.plot, theme_.panel);
-        if (values.empty()) { PaintUnavailable(chart.plot, std::string{ EditorText("profiler.unavailable", "unavailable") }); return; }
-        const double axis = AxisMaximum({ values }, info.budget, info.alarm);
-        const double step = static_cast<double>(chart.plot.right - chart.plot.left) / static_cast<double>(kHistory - 1U);
-        const int barWidth = std::max(1, static_cast<int>(std::ceil(step)) - 1);
-        for (std::size_t index = 0U; index < values.size(); ++index) {
-            const int x = ProfilerFrameX(chart.plot, values.size() - 1U - index);
-            const int y = ValueY(chart.plot, values[index], axis);
-            const ProfilerSeverity severity = ProfilerRegistry::Severity(info, values[index]);
-            c.Fill(Rect(x - barWidth, y, x, chart.plot.bottom), severity == ProfilerSeverity::Alarm ? palette::kAlarm : severity == ProfilerSeverity::Warning ? palette::kWarning : palette::kBlue);
-        }
-        PaintThreshold(chart.plot, info.budget, axis, palette::kWarning, std::string{ EditorText("profiler.panel.budget", "budget") } + " " + ProfilerNumber::General(info.budget));
-        PaintThreshold(chart.plot, info.alarm, axis, palette::kAlarm, ProfilerNumber::General(info.alarm) + " " + std::string{ EditorText("profiler.panel.alarm", "alarm") });
-        PaintCursor(chart.plot);
-    }
-
-    void PaintCpuChart(const ProfilerChartRow& chart) const {
-        const Canvas& c = canvas_;
-        const std::vector<double> game = Series(registry_, ProfilerBuiltIn::GameThreadTime);
-        const std::vector<double> render = Series(registry_, ProfilerBuiltIn::RenderThreadTime);
-        PaintChartLabel(chart, palette::kBlue, std::string{ EditorText("profiler.area.cpu", "CPU") }, "", "");
-        PaintLegend(chart.label, 0, palette::kBlue, ProfilerText::Counter(registry_.Info(ProfilerRegistry::Id(ProfilerBuiltIn::GameThreadTime))), ValueText(registry_, ProfilerRegistry::Id(ProfilerBuiltIn::GameThreadTime)));
-        PaintLegend(chart.label, 1, palette::kGreen, ProfilerText::Counter(registry_.Info(ProfilerRegistry::Id(ProfilerBuiltIn::RenderThreadTime))), ValueText(registry_, ProfilerRegistry::Id(ProfilerBuiltIn::RenderThreadTime)));
-        c.Fill(chart.plot, theme_.panel);
-        if (game.empty() && render.empty()) {
-            PaintUnavailable(chart.plot, std::string{ EditorText("profiler.panel.game_thread_play", "The game thread is measured in Play Mode") });
-            return;
-        }
+        const RECT& plot = geometry_.framePlot;
+        c.Fill(Rect(strip.left, strip.bottom - 1, strip.right, strip.bottom), theme_.borderChrome);
         const kb::core::ProfilerCounterInfo& info = registry_.Info(ProfilerRegistry::Id(ProfilerBuiltIn::FrameTime));
-        const double axis = AxisMaximum({ game, render }, info.budget, 0.0);
-        PaintThreshold(chart.plot, info.budget, axis, palette::kWarning, ProfilerNumber::General(info.budget));
-        PaintLine(chart.plot, game, axis, palette::kBlue);
-        PaintLine(chart.plot, render, axis, palette::kGreen);
-        PaintCursor(chart.plot);
-    }
-
-    void PaintGpuChart(const ProfilerChartRow& chart) const {
-        const std::size_t id = ProfilerRegistry::Id(ProfilerBuiltIn::GpuTime);
-        const std::vector<double> values = Series(registry_, ProfilerBuiltIn::GpuTime);
-        PaintChartLabel(chart, palette::kWarning, ProfilerText::Counter(registry_.Info(id)), ValueText(registry_, id), "");
-        canvas_.Fill(chart.plot, theme_.panel);
+        const std::vector<double> values = Series(registry_, ProfilerBuiltIn::FrameTime);
         if (values.empty()) {
-            PaintUnavailable(chart.plot, std::string{ EditorText("profiler.panel.gpu_timer", "No GPU timer on this device") });
+            PaintUnavailable(plot, EditorText("profiler.panel.no_frames", "No frames yet"));
             return;
         }
-        const kb::core::ProfilerCounterInfo& info = registry_.Info(id);
         const double axis = AxisMaximum({ values }, info.budget, 0.0);
-        PaintThreshold(chart.plot, info.budget, axis, palette::kWarning, ProfilerNumber::General(info.budget));
-        PaintLine(chart.plot, values, axis, palette::kWarning);
-        PaintCursor(chart.plot);
-    }
-
-    void PaintMemoryChart(const ProfilerChartRow& chart) const {
-        const std::size_t id = ProfilerRegistry::Id(ProfilerBuiltIn::ProcessMemory);
-        const std::vector<double> values = Series(registry_, ProfilerBuiltIn::ProcessMemory);
-        const std::size_t vram = ProfilerRegistry::Id(ProfilerBuiltIn::GpuMemory);
-        PaintChartLabel(chart, palette::kPurple, std::string{ EditorText("profiler.group.memory", "Memory") }, ValueText(registry_, id),
-            registry_.Stats(vram).available ? "VRAM " + ValueText(registry_, vram) : std::string{});
-        canvas_.Fill(chart.plot, theme_.panel);
-        if (values.empty()) { PaintUnavailable(chart.plot, std::string{ EditorText("profiler.unavailable", "unavailable") }); return; }
-        const double low = *std::ranges::min_element(values);
-        const double high = *std::ranges::max_element(values);
-        // The axis starts at the lowest reading, so a memory that creeps up shows as a slope.
-        const double span = std::max(high - low, std::max(1.0, high * 0.02));
-        std::vector<POINT> points;
+        const int budgetY = info.budget > 0.0 ? ValueY(plot, info.budget, axis) : static_cast<int>(plot.top);
+        const EditorColor inBudget = c.Mix(theme_.panel, theme_.textSecondary, 42);
         for (std::size_t index = 0U; index < values.size(); ++index) {
-            const int y = chart.plot.bottom - 3 - static_cast<int>((values[index] - low) / span * (chart.plot.bottom - chart.plot.top - 8));
-            points.push_back({ ProfilerFrameX(chart.plot, values.size() - 1U - index), y });
+            // A bar runs from the column of the frame before it, less a gap of one pixel.
+            const std::size_t offset = values.size() - 1U - index;
+            const int right = ProfilerFrameX(plot, offset);
+            const int left = std::max<int>(plot.left, std::min(right - 1, ProfilerFrameX(plot, offset + 1U) + 1));
+            const int y = ValueY(plot, values[index], axis);
+            c.Fill(Rect(left, std::max(y, budgetY), right, plot.bottom), inBudget);
+            if (y < budgetY) {
+                c.Fill(Rect(left, y, right, budgetY), ProfilerRegistry::Severity(info, values[index]) == ProfilerSeverity::Alarm ? palette::kAlarm : palette::kWarning);
+            }
         }
-        std::vector<POINT> area = points;
-        area.push_back({ points.back().x, chart.plot.bottom });
-        area.push_back({ points.front().x, chart.plot.bottom });
-        HBRUSH brush = CreateSolidBrush(Canvas::C(canvas_.Mix(theme_.panel, palette::kPurple, 22)));
-        HPEN none = CreatePen(PS_NULL, 0, 0);
-        HGDIOBJ previousBrush = SelectObject(canvas_.dc, brush);
-        HGDIOBJ previousPen = SelectObject(canvas_.dc, none);
-        Polygon(canvas_.dc, area.data(), static_cast<int>(area.size()));
-        SelectObject(canvas_.dc, previousPen);
-        SelectObject(canvas_.dc, previousBrush);
-        DeleteObject(none);
-        DeleteObject(brush);
-        canvas_.Stroke(points, palette::kPurple);
-        PaintCursor(chart.plot);
+        if (info.budget > 0.0) {
+            // The line of the budget, and its name on a patch of the panel so it reads over the bars.
+            c.HLine(plot.left, plot.right, budgetY, theme_.textPrimary, PS_DOT);
+            const std::string label = std::string{ EditorText("profiler.panel.budget", "budget") } + " " + FormatProfilerValue(info, info.budget);
+            const RECT patch = Rect(plot.right - c.Width(label, 10) - 12, plot.top, plot.right, plot.top + 15);
+            c.Fill(patch, theme_.panel);
+            c.Text(patch, label, theme_.textSecondary, 10, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
+        PaintCursor(plot, theme_.textPrimary);
     }
 
-    void PaintDrawingChart(const ProfilerChartRow& chart) const {
-        const std::size_t draws = ProfilerRegistry::Id(ProfilerBuiltIn::DrawCalls);
-        const std::size_t triangles = ProfilerRegistry::Id(ProfilerBuiltIn::Triangles);
-        PaintChartLabel(chart, palette::kCyan, std::string{ EditorText("profiler.group.drawing", "Drawing") }, "", "");
-        PaintLegend(chart.label, 0, palette::kBlue, std::string{ EditorText("profiler.panel.draws", "Draw calls") }, ValueText(registry_, draws));
-        PaintLegend(chart.label, 1, palette::kWarning, std::string{ EditorText("profiler.counter.triangles", "Triangles") }, ValueText(registry_, triangles));
-        canvas_.Fill(chart.plot, theme_.panel);
-        const std::vector<double> drawValues = Series(registry_, ProfilerBuiltIn::DrawCalls);
-        const std::vector<double> triangleValues = Series(registry_, ProfilerBuiltIn::Triangles);
-        if (drawValues.empty() && triangleValues.empty()) { PaintUnavailable(chart.plot, std::string{ EditorText("profiler.unavailable", "unavailable") }); return; }
-        // Each line has its own scale: the point is how it moves, the numbers are in the label.
-        PaintLine(chart.plot, drawValues, AxisMaximum({ drawValues }, 0.0, 0.0), palette::kBlue);
-        PaintLine(chart.plot, triangleValues, AxisMaximum({ triangleValues }, 0.0, 0.0), palette::kWarning);
-        PaintCursor(chart.plot);
-    }
-
-    void PaintRuler() const {
-        const Canvas& c = canvas_;
-        const ProfilerPanelState& state = profiler_.Panel();
-        c.Fill(geometry_.ruler, theme_.strip);
-        c.Fill(Rect(geometry_.ruler.left, geometry_.ruler.bottom - 1, geometry_.ruler.right, geometry_.ruler.bottom), theme_.borderChrome);
-        const std::size_t frames = registry_.Stats(ProfilerRegistry::Id(ProfilerBuiltIn::FrameTime)).samples;
+    // The last frames of a counter as a line. A time starts at zero, so its height reads as its
+    // size; a count or a memory starts at its lowest reading, so a slow climb shows.
+    void PaintSpark(const RECT& plot, std::size_t counter, const kb::core::ProfilerCounterInfo& info, EditorColor color) const {
         std::array<double, kHistory> samples{};
-        const std::size_t count = registry_.Samples(ProfilerRegistry::Id(ProfilerBuiltIn::FrameTime), samples);
-        const double seconds = std::accumulate(samples.begin(), samples.begin() + static_cast<std::ptrdiff_t>(count), 0.0) / 1000.0;
-        const std::string live = state.paused ? std::string{ EditorText("profiler.panel.paused", "Paused") } : state.selectedFrame ? std::string{ EditorText("profiler.panel.frame_picked", "Frame picked") } : std::string{ EditorText("profiler.panel.live", "Live") };
-        const RECT pill = Rect(geometry_.ruler.left + kPad, geometry_.ruler.top + 4, geometry_.ruler.left + kPad + 14 + static_cast<int>(live.size()) * 7, geometry_.ruler.bottom - 4);
-        c.Pill(pill, live, state.paused || state.selectedFrame ? theme_.textSecondary : palette::kBudget, c.Mix(theme_.panel, state.paused || state.selectedFrame ? theme_.textSecondary : palette::kBudget, 18));
-        c.Text(Rect(pill.right + 12, geometry_.ruler.top, geometry_.ruler.right - 260, geometry_.ruler.bottom),
-            EditorLocalization::Format("profiler.panel.last_frames", "last {frames} frames ({seconds} s)", { { "frames", std::to_string(frames) }, { "seconds", ProfilerNumber::Fixed(seconds, 1) } }),
-            theme_.textSecondary, 10);
-        const std::optional<std::uint64_t> shown = ProfilerShownFrame(profiler_);
-        c.TextRight(Rect(geometry_.ruler.right - 260, geometry_.ruler.top, geometry_.ruler.right - kPad, geometry_.ruler.bottom),
-            shown && state.selectedFrame ? EditorLocalization::Format("profiler.panel.selected", "selected: #{frame}", { { "frame", std::to_string(*shown) } })
-                                          : std::string{ EditorText("profiler.panel.pick_hint", "Click a chart to pick a frame") },
-            shown && state.selectedFrame ? palette::kBudget : theme_.textDisabled, 10);
+        const std::size_t count = registry_.Samples(counter, samples);
+        if (count < 2U) return;
+        const auto end = samples.begin() + static_cast<std::ptrdiff_t>(count);
+        const double high = *std::max_element(samples.begin(), end);
+        const double low = info.unit == kb::core::ProfilerUnit::Milliseconds ? 0.0 : *std::min_element(samples.begin(), end);
+        const double span = std::max({ high - low, high * 0.02, 1e-9 });
+        const int height = static_cast<int>(plot.bottom - plot.top) - 2;
+        std::vector<POINT> points;
+        points.reserve(count);
+        for (std::size_t index = 0U; index < count; ++index) {
+            points.push_back({ ProfilerFrameX(plot, count - 1U - index), plot.bottom - 1 - static_cast<int>((samples[index] - low) / span * height) });
+        }
+        canvas_.Stroke(points, color);
+        PaintCursor(plot, theme_.textDisabled);
+    }
+
+    // How much of its budget a reading takes: a bar that fills up to the budget, and the percent.
+    // Over the budget the bar and the number take the color of the warning or the alarm.
+    void PaintBudgetUse(const RECT& cell, const kb::core::ProfilerCounterInfo& info, double now, EditorColor color) const {
+        const Canvas& c = canvas_;
+        if (info.budget <= 0.0 || info.lowerIsWorse) {
+            c.Text(cell, "-", theme_.textDisabled);
+            return;
+        }
+        constexpr int kPercentWidth = 44;
+        const double use = now / info.budget;
+        const ProfilerSeverity severity = ProfilerRegistry::Severity(info, now);
+        const bool over = severity != ProfilerSeverity::Normal;
+        const int middle = (cell.top + cell.bottom) / 2;
+        const RECT track = Rect(cell.left, middle - 3, cell.right - kPercentWidth - 8, middle + 3);
+        if (track.right - track.left >= 24) {
+            c.Fill(track, c.Mix(theme_.panel, theme_.textSecondary, 16));
+            const int fill = static_cast<int>(std::clamp(use, 0.0, 1.0) * static_cast<double>(track.right - track.left));
+            c.Fill(Rect(track.left, track.top, track.left + fill, track.bottom), over ? SeverityColor(theme_, severity) : color);
+        }
+        c.TextRight(Rect(cell.right - kPercentWidth, cell.top, cell.right, cell.bottom), ProfilerNumber::Fixed(use * 100.0, 0) + "%",
+            over ? SeverityColor(theme_, severity) : theme_.textSecondary, 11, over ? FW_SEMIBOLD : FW_NORMAL);
+    }
+
+    // Why a counter of a measured area has no reading.
+    [[nodiscard]] static std::string_view WhyUnavailable(ProfilerBuiltIn counter) {
+        return counter == ProfilerBuiltIn::GameThreadTime ? EditorText("profiler.panel.game_thread_play", "The game thread is measured in Play Mode")
+            : counter == ProfilerBuiltIn::GpuTime ? EditorText("profiler.panel.gpu_timer", "No GPU timer on this device")
+                                                  : EditorText("profiler.unavailable", "unavailable");
+    }
+
+    void PaintBudgetRow(const ProfilerBudgetRow& row) const {
+        const Canvas& c = canvas_;
+        const RECT& r = row.bounds;
+        const ProfilerBudgetColumns columns = ResolveProfilerBudgetColumns(r);
+        const std::size_t id = ProfilerRegistry::Id(row.counter);
+        const kb::core::ProfilerCounterInfo& info = registry_.Info(id);
+        const kb::core::ProfilerCounterStats stats = registry_.Stats(id);
+        const bool measured = selection_.AreaMeasured(row.area);
+        const EditorColor color = palette::Area(row.area);
+        const int middle = (r.top + r.bottom) / 2;
+        c.Fill(Rect(r.left, r.bottom - 1, r.right, r.bottom), theme_.borderChrome);
+        c.Fill(Rect(columns.name, middle - 4, columns.name + 8, middle + 4), measured ? color : theme_.textDisabled);
+        c.Text(Rect(columns.name + 16, r.top, columns.spark - 8, r.bottom - 1), ProfilerText::Counter(info), measured ? theme_.textPrimary : theme_.textDisabled, 12);
+        const RECT spark = Rect(columns.spark, r.top + 5, columns.now - 12, r.bottom - 6);
+        const bool sparkFits = spark.right - spark.left >= 60;
+        const RECT nowCell = Rect(columns.now, r.top, columns.average - 6, r.bottom - 1);
+        const RECT averageCell = Rect(columns.average, r.top, columns.budget - 6, r.bottom - 1);
+        const RECT budgetCell = Rect(columns.budget + 18, r.top, columns.toggle - 8, r.bottom - 1);
+        if (measured && stats.available) {
+            if (sparkFits) PaintSpark(spark, id, info, color);
+            c.TextRight(nowCell, FormatProfilerValue(info, stats.now), theme_.textPrimary, 12, FW_SEMIBOLD);
+            c.TextRight(averageCell, FormatProfilerValue(info, stats.average), theme_.textSecondary);
+            PaintBudgetUse(budgetCell, info, stats.now, color);
+        } else {
+            if (sparkFits && measured) c.Text(spark, WhyUnavailable(row.counter), theme_.textDisabled, 10);
+            c.TextRight(nowCell, "-", theme_.textDisabled);
+            c.TextRight(averageCell, "-", theme_.textDisabled);
+            c.Text(budgetCell, "-", theme_.textDisabled);
+        }
+        if (row.startsArea) EditorDialogStyle::PaintSwitch(c.dc, ProfilerBudgetSwitchRect(r), theme_, measured);
+    }
+
+    // The budget table: one row for each counter that speaks for an area, and the switch that
+    // turns the measuring of the area on and off.
+    void PaintBudgetTable() const {
+        const RECT& header = geometry_.budgetHeader;
+        if (header.bottom <= header.top) return;
+        const Canvas& c = canvas_;
+        const ProfilerBudgetColumns columns = ResolveProfilerBudgetColumns(header);
+        c.Fill(header, theme_.strip);
+        c.Fill(Rect(header.left, header.bottom - 1, header.right, header.bottom), theme_.borderChrome);
+        c.Text(Rect(columns.name, header.top, columns.spark - 8, header.bottom), EditorText("profiler.panel.areas", "Areas"), theme_.textDisabled, 10);
+        if (columns.now - 12 - columns.spark >= 60) {
+            c.Text(Rect(columns.spark, header.top, columns.now - 12, header.bottom), EditorText("profiler.table.history", "Last frames"), theme_.textDisabled, 10);
+        }
+        c.TextRight(Rect(columns.now, header.top, columns.average - 6, header.bottom), EditorText("profiler.table.now", "Now"), theme_.textDisabled, 10);
+        c.TextRight(Rect(columns.average, header.top, columns.budget - 6, header.bottom), EditorText("profiler.table.average", "Average"), theme_.textDisabled, 10);
+        c.Text(Rect(columns.budget + 18, header.top, columns.toggle - 8, header.bottom), EditorText("profiler.panel.budget_label", "Budget"), theme_.textDisabled, 10);
+        for (const ProfilerBudgetRow& row : geometry_.budgetRows) PaintBudgetRow(row);
     }
 
     // The hierarchy of regions of the frame being shown.
@@ -601,18 +573,8 @@ private:
     }
 
     void PaintMeasurements() const {
-        PaintRuler();
-        for (const ProfilerChartRow& chart : geometry_.charts) {
-            canvas_.Fill(Rect(chart.row.left, chart.row.bottom - 1, chart.row.right, chart.row.bottom), theme_.borderChrome);
-            switch (chart.kind) {
-            case ProfilerChartKind::Frame: PaintFrameChart(chart); break;
-            case ProfilerChartKind::Cpu: PaintCpuChart(chart); break;
-            case ProfilerChartKind::Gpu: PaintGpuChart(chart); break;
-            case ProfilerChartKind::Memory: PaintMemoryChart(chart); break;
-            case ProfilerChartKind::Drawing: PaintDrawingChart(chart); break;
-            }
-            canvas_.Fill(Rect(chart.row.left, chart.row.bottom - 1, chart.row.right, chart.row.bottom), theme_.borderChrome);
-        }
+        PaintFrameStrip();
+        PaintBudgetTable();
         PaintHierarchy();
     }
 

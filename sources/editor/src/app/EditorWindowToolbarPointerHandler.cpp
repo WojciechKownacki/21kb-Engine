@@ -1,8 +1,17 @@
 #include "app/EditorWindowToolbarPointerHandler.hpp"
+#include "app/panels/EditorPanelCloser.hpp"
+
+#include <array>
+#include <iterator>
 
 #include "app/EditorEditCommandPolicy.hpp"
 #include "profiler/ProfilerPanel.hpp"
 #include "app/EditorSceneFileCommands.hpp"
+#include "app/EditorProjectCommands.hpp"
+#include "app/EditorPlayCommands.hpp"
+#include "engine/packaging/PackagingTargetCatalog.hpp"
+#include "packaging/EditorProjectPackageService.hpp"
+#include "rendering/BuildGamePanelModel.hpp"
 
 #if defined(_WIN32)
 #include "app/EditorSceneLifecycleGuard.hpp"
@@ -11,6 +20,7 @@
 #include "docking/EditorFloatingWindowSync.hpp"
 #include "localization/EditorLocalization.hpp"
 #include "platform/win32/EditorChoiceDialog.hpp"
+#include "platform/win32/EditorRepositoryWindow.hpp"
 #include "platform/win32/EditorSceneFileDialog.hpp"
 #include "platform/win32/EditorTextEntryDialog.hpp"
 #include "settings/EditorLayoutLibrary.hpp"
@@ -75,9 +85,27 @@ void InvalidateMenuChange(
 
 // The Layout menu lists what the project actually holds, so it is built the moment
 // the menu opens rather than carried between openings.
+// The everyday panels and where each one opens. The Layout menu lists them, so a closed
+// one can always be brought back.
+struct EverydayPanel {
+    DockPanelKind kind;
+    DockArea area;
+};
+constexpr EverydayPanel kEverydayPanels[] = {
+    { DockPanelKind::Hierarchy, DockArea::Left },
+    { DockPanelKind::Scene, DockArea::Center },
+    { DockPanelKind::Inspector, DockArea::Right },
+    { DockPanelKind::Assets, DockArea::Bottom },
+    { DockPanelKind::Console, DockArea::Bottom },
+    { DockPanelKind::Agent, DockArea::Right },
+    { DockPanelKind::Profiler, ProfilerPanel::kOpenArea },
+};
+static_assert(std::size(kEverydayPanels) == EditorLayoutMenuModel::MaximumPanels, "the Layout menu reserves a row for each everyday panel");
+
 void RefreshLayoutMenu(
     EditorShellInteractionState& shellInteraction,
     const EditorSceneContext& sceneContext,
+    const EditorDockModel& dockModel,
     bool deleting) {
     const std::vector<std::string> saved =
         EditorLayoutLibrary::List(EditorProjectPaths::ProjectRoot());
@@ -85,9 +113,57 @@ void RefreshLayoutMenu(
     if (deleting) {
         model.RebuildForDelete(saved);
     } else {
-        model.Rebuild(saved, sceneContext.EditorConfig().layoutName);
+        std::vector<EditorLayoutMenuPanel> panels;
+        for (const EverydayPanel& everyday : kEverydayPanels) {
+            for (const DockPanel& panel : dockModel.Queries().Panels()) {
+                if (panel.kind == everyday.kind) {
+                    panels.push_back({ .kind = panel.kind, .title = panel.title, .open = panel.visible });
+                    break;
+                }
+            }
+        }
+        model.Rebuild(saved, sceneContext.EditorConfig().layoutName, panels);
     }
     shellInteraction.SetLayoutMenu(std::move(model));
+}
+
+// What a menu lists from the project is read the moment it opens.
+void RefreshOpenMenu(EditorShellInteractionState& shellInteraction, const EditorSceneContext& sceneContext, const EditorDockModel& dockModel) {
+    switch (shellInteraction.OpenMenu()) {
+    case EditorMenuCommand::Layout:
+        RefreshLayoutMenu(shellInteraction, sceneContext, dockModel, false);
+        break;
+    case EditorMenuCommand::Scene:
+        shellInteraction.SetSceneMenu(EditorSceneFileCommands::SceneMenuRows(sceneContext), EditorSceneFileCommands::CanChangeOpenSceneFile(sceneContext));
+        break;
+    case EditorMenuCommand::RecentProjects:
+        shellInteraction.SetRecentProjectsMenu(EditorProjectCommands::RecentProjectRows());
+        break;
+    case EditorMenuCommand::PlayOptions:
+        shellInteraction.SetPlayMenu(sceneContext.EditorConfig().play, !sceneContext.HasPlayModeSceneSession());
+        break;
+    case EditorMenuCommand::Publish: {
+        std::vector<EditorPathMenuRow> platforms;
+        const std::string startupProblem = sceneContext.StartupSceneProblem();
+        for (const kb::packaging::PackagingTargetSpec& spec : kb::packaging::PackagingTargets()) {
+            const BuildGameValidation validation = BuildGamePanelModel::Validate(spec.target, sceneContext.ProjectConfiguration(),
+                sceneContext.BuildGameSettings(), true, sceneContext.BuildGamePackageSnapshot().state == EditorPackageJobState::Running,
+                sceneContext.HasBuildGameStorePassword(), sceneContext.HasBuildGameKeyPassword(),
+                sceneContext.HasBuildGameSecret(BuildGameField::WindowsCertificatePassword));
+            const bool ready = validation.canBuild && startupProblem.empty();
+            platforms.push_back(EditorPathMenuRow{
+                .label = std::string{ BuildGamePanelModel::TargetDisplayName(spec.target) },
+                .detail = ready ? std::string{ EditorText("menu.detail.publishReady", "Ready: starts the release build") }
+                                : (validation.canBuild ? startupProblem : validation.reason),
+                .active = ready,
+            });
+        }
+        shellInteraction.SetPublishMenu(std::move(platforms));
+        break;
+    }
+    default:
+        break;
+    }
 }
 
 // Switching arrangements replaces the whole workspace, so the torn-off windows are
@@ -233,6 +309,58 @@ void ActivatePanel(
     sceneViewport.RequestPresent();
 }
 
+// Settings lays out a list of pages beside the page itself, which the side dock is too narrow
+// for. Closed, it opens in a window of its own over the middle of the editor (or where it last
+// floated); open, wherever the user keeps it, it comes forward.
+void OpenSettingsPanel(
+    HWND mainWindow,
+    EditorDockModel& dockModel,
+    EditorFloatingWindowManager& floatingWindows,
+    EditorSceneBgfxViewport& sceneViewport) {
+    const DockPanel* panel = nullptr;
+    for (const DockPanel& candidate : dockModel.Queries().Panels()) {
+        if (candidate.kind == DockPanelKind::ProjectSettings) {
+            panel = dockModel.Queries().FindPanel(candidate.id);
+            break;
+        }
+    }
+    if (panel == nullptr) {
+        return;
+    }
+    if (panel->visible) {
+        if (const HWND window = floatingWindows.Queries().WindowForPanel(panel->id); window != nullptr) {
+            if (IsIconic(window) != FALSE) {
+                ShowWindow(window, SW_RESTORE);
+            }
+            SetForegroundWindow(window);
+            return;
+        }
+        ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::ProjectSettings, DockArea::Right);
+        return;
+    }
+    DockRect rect = panel->floatingRect;
+    if (panel->area != DockArea::Floating) {
+        RECT frame{};
+        GetWindowRect(mainWindow, &frame);
+        const int frameWidth = frame.right - frame.left;
+        const int frameHeight = frame.bottom - frame.top;
+        rect.width = std::max(480, std::min(920, frameWidth - 80));
+        rect.height = std::max(360, std::min(640, frameHeight - 80));
+        rect.x = frame.left + ((frameWidth - rect.width) / 2);
+        rect.y = frame.top + ((frameHeight - rect.height) / 2);
+    }
+    const std::uint32_t panelId = panel->id;
+    const std::string title = panel->title;
+    dockModel.Commands().UndockPanel(panelId, rect);
+    if (!floatingWindows.Commands().Create(panelId, title, rect)) {
+        // No window could be made for it: the panel still has to be reachable.
+        ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::ProjectSettings, DockArea::Right);
+        return;
+    }
+    InvalidateRect(mainWindow, nullptr, FALSE);
+    sceneViewport.RequestPresent();
+}
+
 [[nodiscard]] bool HandleMenuLeftButtonDown(
     HWND mainWindow,
     int x,
@@ -251,10 +379,13 @@ void ActivatePanel(
         const EditorMenuCommand oldMenu = shellInteraction.OpenMenu();
         const RECT oldRect = MenuInvalidationRect(layout, oldMenu, shellInteraction.MenuRowCount(oldMenu));
         static_cast<void>(shellInteraction.SetHoveredMenu(hitMenu));
-        static_cast<void>(shellInteraction.SetOpenMenu(hitMenu));
-        if (shellInteraction.OpenMenu() == EditorMenuCommand::Layout) {
-            RefreshLayoutMenu(shellInteraction, sceneContext, false);
+        if (oldMenu == EditorMenuCommand::RecentProjects && hitMenu == EditorMenuCommand::Project) {
+            // The list hangs from Project's button, which puts it away as it does Project's own rows.
+            shellInteraction.CloseMenu();
+        } else {
+            static_cast<void>(shellInteraction.SetOpenMenu(hitMenu));
         }
+        RefreshOpenMenu(shellInteraction, sceneContext, dockModel);
         RECT rect = oldRect;
         IncludeRect(rect, MenuInvalidationRect(
             layout, shellInteraction.OpenMenu(),
@@ -268,6 +399,144 @@ void ActivatePanel(
     }
 
     if (const std::optional<int> row = EditorToolbarRenderer::HitTestMenuRow(menu, x, y); row.has_value()) {
+        const EditorMenuCommand clickedMenu = shellInteraction.OpenMenu();
+        const auto closeMenu = [&]() {
+            shellInteraction.CloseMenu();
+            InvalidateMenuChange(mainWindow, layout, shellInteraction, clickedMenu, EditorMenuCommand::None);
+            InvalidateRect(mainWindow, nullptr, FALSE);
+        };
+        const auto showMenu = [&](EditorMenuCommand next) {
+            const RECT before = MenuInvalidationRect(layout, clickedMenu, shellInteraction.MenuRowCount(clickedMenu));
+            static_cast<void>(shellInteraction.SetOpenMenu(next));
+            RefreshOpenMenu(shellInteraction, sceneContext, dockModel);
+            RECT rect = before;
+            IncludeRect(rect, MenuInvalidationRect(layout, next, shellInteraction.MenuRowCount(next)));
+            InvalidateMainRect(mainWindow, rect);
+            InvalidateRect(mainWindow, nullptr, FALSE);
+        };
+        if (clickedMenu == EditorMenuCommand::PlayOptions) {
+            if (!shellInteraction.PlayMenuCanChange()) {
+                return true;
+            }
+            EditorConfiguration configuration = sceneContext.EditorConfig();
+            if (*row < 3) {
+                configuration.play.target = static_cast<EditorPlayTarget>(*row);
+            } else {
+                configuration.play.startPaused = !configuration.play.startPaused;
+            }
+            closeMenu();
+            static_cast<void>(sceneContext.SaveEditorConfig(std::move(configuration)));
+            return true;
+        }
+        if (clickedMenu == EditorMenuCommand::Publish) {
+            const auto platforms = static_cast<int>(shellInteraction.PublishRows().size());
+            const bool ready = *row < platforms && shellInteraction.PublishRows()[static_cast<std::size_t>(*row)].active;
+            closeMenu();
+            if (*row < platforms) {
+                static_cast<void>(sceneContext.SetBuildGameSelectedTarget(*row));
+            }
+            static_cast<void>(sceneContext.SetBuildGameSelectedProfile(1));
+            // The panel shows the build's progress, or what is still missing for it.
+            ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::BuildGame, DockArea::Center);
+            if (ready) {
+                const std::optional<EditorDirtySceneResolution> resolution =
+                    EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(mainWindow, sceneContext, EditorSceneTransition::BuildGame);
+                if (resolution.has_value() && sceneContext.StartBuildGamePackage(*resolution)) {
+                    static_cast<void>(SetTimer(mainWindow, kEditorPackageStatusTimer, 100U, nullptr));
+                }
+            }
+            InvalidateRect(mainWindow, nullptr, FALSE);
+            return true;
+        }
+        if (clickedMenu == EditorMenuCommand::Project) {
+            if (*row == 2) {
+                showMenu(EditorMenuCommand::RecentProjects);
+                return true;
+            }
+            closeMenu();
+            switch (*row) {
+            case 0:
+                EditorProjectCommands::OpenProject(mainWindow, sceneContext);
+                break;
+            case 1:
+                EditorProjectCommands::NewProject(mainWindow, sceneContext);
+                break;
+            case 3:
+                if (sceneContext.ProjectSettings().SelectedCategory() >= static_cast<int>(ProjectSettingsCategory::EditorGeneral)) {
+                    static_cast<void>(sceneContext.ProjectSettings().SelectCategory(static_cast<int>(ProjectSettingsCategory::Inputs)));
+                }
+                OpenSettingsPanel(mainWindow, dockModel, floatingWindows, sceneViewport);
+                break;
+            case 4:
+                static_cast<void>(sceneContext.ProjectSettings().SelectCategory(static_cast<int>(ProjectSettingsCategory::Plugins)));
+                OpenSettingsPanel(mainWindow, dockModel, floatingWindows, sceneViewport);
+                break;
+            case 5:
+                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::BuildGame, DockArea::Center);
+                break;
+            case 6:
+                EditorProjectCommands::ShowInExplorer(mainWindow, sceneContext);
+                break;
+            default:
+                break;
+            }
+            return true;
+        }
+        if (clickedMenu == EditorMenuCommand::RecentProjects) {
+            if (*row == 0) {
+                showMenu(EditorMenuCommand::Project);
+                return true;
+            }
+            const auto index = static_cast<std::size_t>(*row - 1);
+            if (index >= shellInteraction.RecentProjectRows().size() || shellInteraction.RecentProjectRows()[index].path.empty()) {
+                return true;
+            }
+            const std::filesystem::path project = shellInteraction.RecentProjectRows()[index].path;
+            closeMenu();
+            EditorProjectCommands::SwitchTo(mainWindow, sceneContext, project);
+            return true;
+        }
+        if (clickedMenu == EditorMenuCommand::Scene) {
+            const auto scenes = static_cast<int>(shellInteraction.SceneMenuRows().size());
+            const int action = *row - scenes;
+            if (action >= 0 && !shellInteraction.SceneDocumentActionsEnabled() && (action == 2 || action == 3 || action == 5)) {
+                return true;
+            }
+            std::filesystem::path scene;
+            if (action < 0) {
+                scene = shellInteraction.SceneMenuRows()[static_cast<std::size_t>(*row)].path;
+            }
+            closeMenu();
+            bool changed = false;
+            switch (action) {
+            case 0:
+                changed = EditorSceneFileCommands::NewScene(mainWindow, sceneContext);
+                break;
+            case 1:
+                changed = EditorSceneFileCommands::OpenScene(mainWindow, sceneContext);
+                break;
+            case 2:
+                changed = EditorSceneFileCommands::DuplicateScene(sceneContext);
+                break;
+            case 3:
+                changed = EditorSceneFileCommands::RenameScene(mainWindow, sceneContext);
+                break;
+            case 4:
+                changed = EditorEditCommandPolicy::ExecuteFromPointer(sceneContext, EditorEditCommand::Save);
+                break;
+            case 5:
+                changed = EditorSceneFileCommands::DeleteScene(mainWindow, sceneContext);
+                break;
+            default:
+                changed = EditorSceneFileCommands::OpenSceneFile(mainWindow, sceneContext, scene);
+                break;
+            }
+            if (changed) {
+                sceneViewport.RequestPresent();
+            }
+            InvalidateRect(mainWindow, nullptr, FALSE);
+            return true;
+        }
         if (shellInteraction.OpenMenu() == EditorMenuCommand::File) {
             if (*row == 0) {
                 if (EditorSceneFileCommands::NewScene(mainWindow, sceneContext)) {
@@ -294,18 +563,11 @@ void ActivatePanel(
             // Through the policy's pointer route: these rows used to call the context directly and so did
             // not honour the graph-gesture guard. The text-edit guard deliberately does not apply to a
             // click - the commands commit the pending edit themselves.
-            if (*row == 0) {
-                if (EditorEditCommandPolicy::ExecuteFromPointer(sceneContext, EditorEditCommand::Undo)) {
-                    sceneViewport.RequestPresent();
-                }
-            } else if (*row == 1) {
-                if (EditorEditCommandPolicy::ExecuteFromPointer(sceneContext, EditorEditCommand::Redo)) {
-                    sceneViewport.RequestPresent();
-                }
-            } else if (*row == 2) {
-                if (EditorEditCommandPolicy::ExecuteFromPointer(sceneContext, EditorEditCommand::Duplicate)) {
-                    sceneViewport.RequestPresent();
-                }
+            constexpr std::array<EditorEditCommand, 6> kEditRows{ EditorEditCommand::Undo, EditorEditCommand::Redo,
+                EditorEditCommand::Cut, EditorEditCommand::Copy, EditorEditCommand::Paste, EditorEditCommand::Duplicate };
+            if (*row >= 0 && *row < static_cast<int>(kEditRows.size()) &&
+                EditorEditCommandPolicy::ExecuteFromPointer(sceneContext, kEditRows[static_cast<std::size_t>(*row)])) {
+                sceneViewport.RequestPresent();
             }
         } else if (shellInteraction.OpenMenu() == EditorMenuCommand::Layout) {
             const EditorLayoutMenuRow* layoutRow = shellInteraction.LayoutMenu().Row(*row);
@@ -331,7 +593,7 @@ void ActivatePanel(
                 const RECT before = MenuInvalidationRect(
                     layout, EditorMenuCommand::Layout,
                     shellInteraction.MenuRowCount(EditorMenuCommand::Layout));
-                RefreshLayoutMenu(shellInteraction, sceneContext, true);
+                RefreshLayoutMenu(shellInteraction, sceneContext, dockModel, true);
                 static_cast<void>(shellInteraction.SetHoveredMenuRow(std::nullopt));
                 RECT rect = before;
                 IncludeRect(rect, MenuInvalidationRect(
@@ -342,6 +604,22 @@ void ActivatePanel(
             }
             case EditorLayoutMenuAction::Remove:
                 DeleteSavedLayout(mainWindow, dockModel, sceneContext, layoutRow->layoutName);
+                break;
+            case EditorLayoutMenuAction::TogglePanel:
+                if (layoutRow->active) {
+                    for (const DockPanel& panel : dockModel.Queries().Panels()) {
+                        if (panel.kind == layoutRow->panelKind) {
+                            static_cast<void>(EditorPanelCloser::Close(mainWindow, panel.id, dockModel, floatingWindows, sceneContext));
+                            break;
+                        }
+                    }
+                } else {
+                    for (const EverydayPanel& everyday : kEverydayPanels) {
+                        if (everyday.kind == layoutRow->panelKind) {
+                            ActivatePanel(mainWindow, dockModel, sceneViewport, everyday.kind, everyday.area);
+                        }
+                    }
+                }
                 break;
             }
             sceneViewport.RequestPresent();
@@ -359,21 +637,21 @@ void ActivatePanel(
                 if (sceneContext.ProjectSettings().SelectedCategory() >= static_cast<int>(ProjectSettingsCategory::EditorGeneral)) {
                     static_cast<void>(sceneContext.ProjectSettings().SelectCategory(static_cast<int>(ProjectSettingsCategory::Inputs)));
                 }
-                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::ProjectSettings, DockArea::Right);
+                OpenSettingsPanel(mainWindow, dockModel, floatingWindows, sceneViewport);
             } else if (*row == 2) {
                 // Editor Settings and Plugins are pages of the one Settings window.
                 static_cast<void>(sceneContext.ProjectSettings().SelectCategory(static_cast<int>(ProjectSettingsCategory::EditorGeneral)));
-                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::ProjectSettings, DockArea::Right);
+                OpenSettingsPanel(mainWindow, dockModel, floatingWindows, sceneViewport);
             } else if (*row == 3) {
                 static_cast<void>(sceneContext.ProjectSettings().SelectCategory(static_cast<int>(ProjectSettingsCategory::Plugins)));
-                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::ProjectSettings, DockArea::Right);
+                OpenSettingsPanel(mainWindow, dockModel, floatingWindows, sceneViewport);
             } else if (*row == 4) {
                 ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::Profiler, ProfilerPanel::kOpenArea);
             } else if (*row == 5) {
                 ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::AudioMixer, DockArea::Center);
             } else if (*row == 6) {
                 // The same as Ctrl+K: the Agent panel with its request box ready.
-                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::Agent, DockArea::Bottom);
+                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::Agent, DockArea::Right);
                 sceneContext.AgentPanel().Prepare();
                 sceneContext.AgentPanel().FocusInput(true);
             }
@@ -466,6 +744,11 @@ void ActivatePanel(
         return true;
     }
 
+    // The captions and rules between rows belong to the open menu, not to what lies under it.
+    if (x >= menu.dropdown.left && x < menu.dropdown.right && y >= menu.dropdown.top && y < menu.dropdown.bottom) {
+        return true;
+    }
+
     const EditorMenuCommand oldMenu = shellInteraction.OpenMenu();
     shellInteraction.CloseMenu();
     InvalidateMenuChange(mainWindow, layout, shellInteraction, oldMenu, EditorMenuCommand::None);
@@ -483,16 +766,13 @@ struct TransportClickResult {
            (command == EditorTransportCommand::Stop && (playMode.IsPlaying() || playMode.IsPaused()));
 }
 
-[[nodiscard]] TransportClickResult ExecuteTransportCommand(EditorTransportCommand command, EditorPlayModeState& playMode, EditorSceneContext& sceneContext) {
+[[nodiscard]] TransportClickResult ExecuteTransportCommand(EditorTransportCommand command, HWND mainWindow, EditorDockModel& dockModel, EditorPlayModeState& playMode, EditorSceneContext& sceneContext) {
     switch (command) {
     case EditorTransportCommand::Play:
         if (playMode.Mode() != EditorPlayMode::Stopped) {
             return {.handled = true, .invalidates = true};
         }
-        if (!sceneContext.BeginPlayModeSceneSession()) {
-            return {.handled = true, .invalidates = false};
-        }
-        playMode.Play();
+        static_cast<void>(EditorPlayCommands::Start(mainWindow, dockModel, sceneContext, playMode));
         return {.handled = true, .invalidates = true};
     case EditorTransportCommand::Stop:
         if (!TransportCommandEnabled(command, playMode)) {
@@ -500,6 +780,7 @@ struct TransportClickResult {
         }
         playMode.Stop();
         static_cast<void>(sceneContext.RestorePlayModeSceneSession());
+        EditorPlayCommands::RestoreWorkspace(dockModel);
         return {.handled = true, .invalidates = true};
     case EditorTransportCommand::Pause:
         if (!TransportCommandEnabled(command, playMode)) {
@@ -522,6 +803,7 @@ struct TransportClickResult {
     int x,
     int y,
     const DockLayout& layout,
+    EditorDockModel& dockModel,
     EditorSceneContext& sceneContext,
     EditorSceneBgfxViewport& sceneViewport,
     EditorPlayModeState& playMode,
@@ -537,7 +819,7 @@ struct TransportClickResult {
     }
 
     const bool previousPlayModeSceneActive = sceneContext.HasPlayModeSceneSession();
-    const TransportClickResult result = ExecuteTransportCommand(transport, playMode, sceneContext);
+    const TransportClickResult result = ExecuteTransportCommand(transport, mainWindow, dockModel, playMode, sceneContext);
     if (SceneViewportPresentationPolicy::RequiresPresent(
             previousPlayModeSceneActive,
             sceneContext.HasPlayModeSceneSession())) {
@@ -612,12 +894,52 @@ bool EditorWindowToolbarPointerHandler::HandleLeftButtonDown(
         return true;
     }
 
+    switch (EditorToolbarRenderer::HitTestTopBarItem(EditorToolbarRenderer::ResolveToolbar(ToRect(layout->toolbar)), x, y)) {
+    case EditorTopBarItem::Build:
+        ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::BuildGame, DockArea::Center);
+        return true;
+    case EditorTopBarItem::Minimize:
+        ShowWindow(mainWindow, SW_MINIMIZE);
+        return true;
+    case EditorTopBarItem::Maximize:
+        ShowWindow(mainWindow, IsZoomed(mainWindow) != FALSE ? SW_RESTORE : SW_MAXIMIZE);
+        return true;
+    case EditorTopBarItem::Close:
+        PostMessageW(mainWindow, WM_CLOSE, 0, 0);
+        return true;
+    case EditorTopBarItem::Branch: {
+        const RECT label = EditorToolbarRenderer::ResolveToolbar(ToRect(layout->toolbar)).branchLabel;
+        POINT anchor{ label.left, label.bottom };
+        ClientToScreen(mainWindow, &anchor);
+        EditorRepositoryWindow::Toggle(mainWindow, anchor, shellInteraction);
+        return true;
+    }
+    case EditorTopBarItem::Project:
+    case EditorTopBarItem::Scene:
+        // The menu check above has already taken these.
+        return true;
+    case EditorTopBarItem::PlayOptions:
+    case EditorTopBarItem::Publish:
+        // The menu check above has already taken these.
+        return true;
+    case EditorTopBarItem::None:
+    default:
+        break;
+    }
+
     if (EditorToolbarRenderer::HitTestStatusBarConsole(EditorToolbarRenderer::ResolveStatusBar(ToRect(layout->statusBar)), x, y)) {
         ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::Console, DockArea::Bottom);
         return true;
     }
 
-    return HandleTransportLeftButtonDown(mainWindow, x, y, *layout, sceneContext, sceneViewport, playMode, shellInteraction);
+    if (EditorToolbarRenderer::HitTestStatusBarAgent(EditorToolbarRenderer::ResolveStatusBar(ToRect(layout->statusBar)), x, y)) {
+        ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::Agent, DockArea::Right);
+        sceneContext.AgentPanel().Prepare();
+        sceneContext.AgentPanel().FocusInput(true);
+        return true;
+    }
+
+    return HandleTransportLeftButtonDown(mainWindow, x, y, *layout, dockModel, sceneContext, sceneViewport, playMode, shellInteraction);
 }
 
 bool EditorWindowToolbarPointerHandler::HandleMouseMove(
@@ -647,6 +969,7 @@ bool EditorWindowToolbarPointerHandler::HandleMouseMove(
     const EditorToolbarRects toolbar = EditorToolbarRenderer::ResolveToolbar(ToRect(layout->toolbar));
     changed = shellInteraction.SetHoveredSave(EditorToolbarRenderer::HitTestSave(toolbar, x, y)) || changed;
     changed = shellInteraction.SetHoveredTransport(EditorToolbarRenderer::HitTestTransport(toolbar, x, y)) || changed;
+    changed = shellInteraction.SetHoveredTopBarItem(EditorToolbarRenderer::HitTestTopBarItem(toolbar, x, y)) || changed;
     if (changed) {
         RECT rect = MenuInvalidationRect(
             *layout, shellInteraction.OpenMenu(),
@@ -661,6 +984,7 @@ void EditorWindowToolbarPointerHandler::ClearHover(EditorShellInteractionState& 
     shellInteraction.ClearMenuHover();
     shellInteraction.ClearSaveHover();
     shellInteraction.ClearTransportHover();
+    static_cast<void>(shellInteraction.SetHoveredTopBarItem(EditorTopBarItem::None));
 }
 
 } // namespace kb::editor

@@ -40,6 +40,11 @@ constexpr float kLightIconRayHalfWidth = 0.055F;
 constexpr std::array<float, 3> kSelectedLightWireframeColor{0.96F, 0.96F, 0.92F};
 constexpr std::array<float, 3> kUnselectedLightWireframeColor{0.48F, 0.075F, 0.11F};
 constexpr std::array<float, 3> kCameraWireframeColor{0.92F, 0.92F, 0.90F};
+constexpr float kUnselectedCameraWireframeAlpha = 0.55F;
+constexpr float kSceneIconStrokeHalfWidth = 0.07F;
+constexpr std::uint32_t kSceneIconWaveSegments = 6U;
+// The audio source glyph is the largest: two quads and twelve wave strokes, in two layers.
+constexpr std::size_t kSceneIconMaxVertices = (2U + 2U * kSceneIconWaveSegments) * 6U * 2U;
 
 using Vertex = SceneGizmoPass::GizmoVertex;
 using MeshRange = SceneGizmoPass::MeshRange;
@@ -394,7 +399,7 @@ void AppendCameraWireframe(
             line.from,
             line.to,
             kCameraWireframeColor,
-            line.alpha);
+            line.alpha * (camera.selected ? 1.0F : kUnselectedCameraWireframeAlpha));
     }
 }
 
@@ -549,17 +554,17 @@ void AppendLightIcons(std::vector<Vertex>& output, std::span<const EditorLightWi
     }
 }
 
-void AppendParticleIconVertex(
+void AppendSceneIconVertex(
     std::vector<Vertex>& output,
-    const EditorParticleIconDesc& particle,
+    const EditorSceneIconDesc& icon,
     float x,
     float y,
     float scale,
     std::array<float, 3> color,
     float alpha) {
     const std::array<float, 3> world = Add(
-        particle.position,
-        Add(Mul(particle.iconRight, x * scale), Mul(particle.iconUp, y * scale)));
+        icon.position,
+        Add(Mul(icon.iconRight, x * scale), Mul(icon.iconUp, y * scale)));
     output.push_back(Vertex{
         .x = world[0],
         .y = world[1],
@@ -574,69 +579,175 @@ void AppendParticleIconVertex(
     });
 }
 
-void AppendParticleTriangle(
-    std::vector<Vertex>& output,
-    const EditorParticleIconDesc& particle,
+// One layer of one icon: where it sits, how large it is and what it is painted with.
+struct SceneIconBrush {
+    std::vector<Vertex>& output;
+    const EditorSceneIconDesc& icon;
+    float scale = 1.0F;
+    std::array<float, 3> color{1.0F, 1.0F, 1.0F};
+    float alpha = 1.0F;
+};
+
+void AppendSceneIconTriangle(
+    const SceneIconBrush& brush,
+    std::array<float, 2> a,
+    std::array<float, 2> b,
+    std::array<float, 2> c) {
+    AppendSceneIconVertex(brush.output, brush.icon, a[0], a[1], brush.scale, brush.color, brush.alpha);
+    AppendSceneIconVertex(brush.output, brush.icon, b[0], b[1], brush.scale, brush.color, brush.alpha);
+    AppendSceneIconVertex(brush.output, brush.icon, c[0], c[1], brush.scale, brush.color, brush.alpha);
+}
+
+void AppendSceneIconQuad(
+    const SceneIconBrush& brush,
     std::array<float, 2> a,
     std::array<float, 2> b,
     std::array<float, 2> c,
-    float scale,
-    std::array<float, 3> color,
-    float alpha) {
-    AppendParticleIconVertex(output, particle, a[0], a[1], scale, color, alpha);
-    AppendParticleIconVertex(output, particle, b[0], b[1], scale, color, alpha);
-    AppendParticleIconVertex(output, particle, c[0], c[1], scale, color, alpha);
+    std::array<float, 2> d) {
+    AppendSceneIconTriangle(brush, a, b, c);
+    AppendSceneIconTriangle(brush, a, c, d);
 }
 
-void AppendParticleDiamond(
-    std::vector<Vertex>& output,
-    const EditorParticleIconDesc& particle,
+void AppendSceneIconStroke(
+    const SceneIconBrush& brush,
+    std::array<float, 2> from,
+    std::array<float, 2> to) {
+    const float dx = to[0] - from[0];
+    const float dy = to[1] - from[1];
+    const float length = std::sqrt(dx * dx + dy * dy);
+    if (length <= 0.0F) {
+        return;
+    }
+    // Run past both ends by the half width so strokes meeting at a corner close it.
+    const float ax = dx / length * kSceneIconStrokeHalfWidth;
+    const float ay = dy / length * kSceneIconStrokeHalfWidth;
+    AppendSceneIconQuad(
+        brush,
+        {from[0] - ax - ay, from[1] - ay + ax},
+        {to[0] + ax - ay, to[1] + ay + ax},
+        {to[0] + ax + ay, to[1] + ay - ax},
+        {from[0] - ax + ay, from[1] - ay - ax});
+}
+
+void AppendSceneIconDiamond(
+    const SceneIconBrush& brush,
     float centerX,
     float centerY,
     float halfWidth,
-    float halfHeight,
-    float scale,
-    std::array<float, 3> color,
-    float alpha) {
-    const std::array<float, 2> center{centerX, centerY};
-    const std::array<float, 2> top{centerX, centerY + halfHeight};
-    const std::array<float, 2> right{centerX + halfWidth, centerY};
-    const std::array<float, 2> bottom{centerX, centerY - halfHeight};
-    const std::array<float, 2> left{centerX - halfWidth, centerY};
-    AppendParticleTriangle(output, particle, center, top, right, scale, color, alpha);
-    AppendParticleTriangle(output, particle, center, right, bottom, scale, color, alpha);
-    AppendParticleTriangle(output, particle, center, bottom, left, scale, color, alpha);
-    AppendParticleTriangle(output, particle, center, left, top, scale, color, alpha);
+    float halfHeight) {
+    AppendSceneIconQuad(
+        brush,
+        {centerX, centerY + halfHeight},
+        {centerX + halfWidth, centerY},
+        {centerX, centerY - halfHeight},
+        {centerX - halfWidth, centerY});
 }
 
-void AppendParticleIconLayer(
-    std::vector<Vertex>& output,
-    const EditorParticleIconDesc& particle,
-    float scale,
-    std::array<float, 3> color,
-    float alpha) {
-    AppendParticleDiamond(output, particle, 0.0F, 0.0F, 0.28F, 0.88F, scale, color, alpha);
-    AppendParticleDiamond(output, particle, -0.55F, 0.32F, 0.16F, 0.34F, scale, color, alpha);
-    AppendParticleDiamond(output, particle, 0.55F, 0.25F, 0.14F, 0.29F, scale, color, alpha);
+void AppendParticleEffectGlyph(const SceneIconBrush& brush) {
+    AppendSceneIconDiamond(brush, 0.0F, 0.0F, 0.28F, 0.88F);
+    AppendSceneIconDiamond(brush, -0.55F, 0.32F, 0.16F, 0.34F);
+    AppendSceneIconDiamond(brush, 0.55F, 0.25F, 0.14F, 0.29F);
 }
 
-void AppendParticleIcons(
+// A camera body with its lens hood pointing right.
+void AppendCameraGlyph(const SceneIconBrush& brush) {
+    AppendSceneIconQuad(brush, {-0.86F, -0.52F}, {0.24F, -0.52F}, {0.24F, 0.52F}, {-0.86F, 0.52F});
+    AppendSceneIconQuad(brush, {0.36F, -0.14F}, {0.86F, -0.50F}, {0.86F, 0.50F}, {0.36F, 0.14F});
+}
+
+// A speaker with two sound waves.
+void AppendAudioSourceGlyph(const SceneIconBrush& brush) {
+    AppendSceneIconQuad(brush, {-0.84F, -0.24F}, {-0.48F, -0.24F}, {-0.48F, 0.24F}, {-0.84F, 0.24F});
+    AppendSceneIconQuad(brush, {-0.48F, -0.24F}, {-0.04F, -0.66F}, {-0.04F, 0.66F}, {-0.48F, 0.24F});
+    for (const float radius : {0.40F, 0.76F}) {
+        for (std::uint32_t i = 0; i < kSceneIconWaveSegments; ++i) {
+            const float a0 = (static_cast<float>(i) / static_cast<float>(kSceneIconWaveSegments) - 0.5F) * kPi * 0.5F;
+            const float a1 = (static_cast<float>(i + 1U) / static_cast<float>(kSceneIconWaveSegments) - 0.5F) * kPi * 0.5F;
+            AppendSceneIconStroke(
+                brush,
+                {0.08F + std::cos(a0) * radius, std::sin(a0) * radius},
+                {0.08F + std::cos(a1) * radius, std::sin(a1) * radius});
+        }
+    }
+}
+
+// The outline of a cube seen from one corner.
+void AppendCubeGlyph(const SceneIconBrush& brush) {
+    constexpr std::array<std::array<float, 2>, 6U> corners{{
+        {0.0F, 0.86F},
+        {0.745F, 0.43F},
+        {0.745F, -0.43F},
+        {0.0F, -0.86F},
+        {-0.745F, -0.43F},
+        {-0.745F, 0.43F},
+    }};
+    for (std::size_t i = 0; i < corners.size(); ++i) {
+        AppendSceneIconStroke(brush, corners[i], corners[(i + 1U) % corners.size()]);
+    }
+    AppendSceneIconStroke(brush, {0.0F, 0.0F}, corners[1]);
+    AppendSceneIconStroke(brush, {0.0F, 0.0F}, corners[3]);
+    AppendSceneIconStroke(brush, {0.0F, 0.0F}, corners[5]);
+}
+
+void AppendSceneIconGlyph(const SceneIconBrush& brush) {
+    switch (brush.icon.kind) {
+    case EditorSceneIconKind::ParticleEffect:
+        AppendParticleEffectGlyph(brush);
+        return;
+    case EditorSceneIconKind::Camera:
+        AppendCameraGlyph(brush);
+        return;
+    case EditorSceneIconKind::AudioSource:
+        AppendAudioSourceGlyph(brush);
+        return;
+    case EditorSceneIconKind::Entity:
+    case EditorSceneIconKind::Prefab:
+        AppendCubeGlyph(brush);
+        return;
+    }
+}
+
+[[nodiscard]] std::array<float, 3> SceneIconColor(const EditorSceneIconDesc& icon) noexcept {
+    if (icon.selected) {
+        return {1.0F, 0.98F, 0.90F};
+    }
+    switch (icon.kind) {
+    case EditorSceneIconKind::ParticleEffect:
+        return {0.74F, 0.38F, 1.0F};
+    case EditorSceneIconKind::Camera:
+        return {0.86F, 0.88F, 0.92F};
+    case EditorSceneIconKind::AudioSource:
+        return {0.36F, 0.80F, 0.72F};
+    case EditorSceneIconKind::Entity:
+        return {0.70F, 0.72F, 0.76F};
+    case EditorSceneIconKind::Prefab:
+        return {0.27F, 0.57F, 0.93F};
+    }
+    return {1.0F, 1.0F, 1.0F};
+}
+
+void AppendSceneIcons(
     std::vector<Vertex>& output,
-    std::span<const EditorParticleIconDesc> particles) {
-    output.reserve(output.size() + particles.size() * 72U);
-    for (const EditorParticleIconDesc& particle : particles) {
-        if (particle.iconWorldScale <= 0.0F) {
+    std::span<const EditorSceneIconDesc> icons) {
+    output.reserve(output.size() + icons.size() * kSceneIconMaxVertices);
+    for (const EditorSceneIconDesc& icon : icons) {
+        if (icon.iconWorldScale <= 0.0F) {
             continue;
         }
-        AppendParticleIconLayer(
-            output, particle, particle.iconWorldScale * 1.18F,
-            {0.0F, 0.0F, 0.0F}, 0.34F);
-        AppendParticleIconLayer(
-            output, particle, particle.iconWorldScale,
-            particle.selected
-                ? std::array<float, 3>{1.0F, 0.98F, 0.90F}
-                : std::array<float, 3>{0.74F, 0.38F, 1.0F},
-            0.97F);
+        AppendSceneIconGlyph(SceneIconBrush{
+            .output = output,
+            .icon = icon,
+            .scale = icon.iconWorldScale * 1.18F,
+            .color = {0.0F, 0.0F, 0.0F},
+            .alpha = 0.34F,
+        });
+        AppendSceneIconGlyph(SceneIconBrush{
+            .output = output,
+            .icon = icon,
+            .scale = icon.iconWorldScale,
+            .color = SceneIconColor(icon),
+            .alpha = 0.97F,
+        });
     }
 }
 
@@ -783,7 +894,7 @@ bool SceneGizmoPass::Submit(const SceneGizmoPassDesc& desc) const {
         ((!desc.visible || desc.worldScale <= 0.0F) &&
             desc.cameraWireframes.empty() &&
             desc.lightWireframes.empty() &&
-            desc.particleIcons.empty() &&
+            desc.sceneIcons.empty() &&
             desc.physicsDebugLines.empty())) {
         return false;
     }
@@ -799,7 +910,7 @@ bool SceneGizmoPass::Submit(const SceneGizmoPassDesc& desc) const {
         std::vector<Vertex> drawVertices;
         drawVertices.reserve(
             18000 + desc.lightWireframes.size() * 288U +
-            desc.particleIcons.size() * 72U);
+            desc.sceneIcons.size() * kSceneIconMaxVertices);
         for (const PassDesc& pass : passes) {
             if (desc.visible && desc.worldScale > 0.0F) {
                 for (const GizmoAxis axis : {GizmoAxis::X, GizmoAxis::Y, GizmoAxis::Z}) {
@@ -826,7 +937,7 @@ bool SceneGizmoPass::Submit(const SceneGizmoPassDesc& desc) const {
             }
         }
         AppendLightIcons(drawVertices, desc.lightWireframes);
-        AppendParticleIcons(drawVertices, desc.particleIcons);
+        AppendSceneIcons(drawVertices, desc.sceneIcons);
 
         const std::uint32_t vertexCount = static_cast<std::uint32_t>(drawVertices.size());
         if (vertexCount != 0U && bgfx::getAvailTransientVertexBuffer(vertexCount, layout_) >= vertexCount) {

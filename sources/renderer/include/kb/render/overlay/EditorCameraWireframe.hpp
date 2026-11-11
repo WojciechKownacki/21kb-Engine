@@ -26,6 +26,7 @@ struct EditorCameraWireframeDesc {
     // A non-positive value requests the full authored frustum.
     float displayFarClip = 0.0F;
     float aspect = 1.0F;
+    bool selected = false;
 };
 
 struct EditorCameraWireframeLine {

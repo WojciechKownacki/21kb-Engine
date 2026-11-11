@@ -17,11 +17,14 @@
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneComponentVisitors.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/SceneUIComponents.hpp"
 #include "engine/scene/SceneVisibilityResolution.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
+#include "engine/ui/layout/UIRectTransform.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "kb/render/overlay/EditorCameraWireframe.hpp"
 #include "kb/render/scene/SceneLightingQuality.hpp"
@@ -370,8 +373,7 @@ struct LightWireframeBasis {
     sceneContext.Scene().Components().Visitors().ForEachCamera(
         [](kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::CameraComponent& camera, void* opaque) {
             auto& context = *static_cast<Context*>(opaque);
-            if (!IsSelectedEntity(*context.sceneContext, entity) ||
-                !context.sceneContext->Scene().Components().Visibility().Get(entity).visible) {
+            if (!context.sceneContext->Scene().Components().Visibility().Get(entity).visible) {
                 return;
             }
 
@@ -397,6 +399,7 @@ struct LightWireframeBasis {
                 // Keep its authoring wireframe square instead of inheriting the
                 // unrelated Scene View panel aspect ratio.
                 .aspect = 1.0F,
+                .selected = IsSelectedEntity(*context.sceneContext, entity),
             });
         },
         &context);
@@ -452,7 +455,37 @@ struct LightWireframeBasis {
     return context.wireframes;
 }
 
-[[nodiscard]] std::vector<kb::render::EditorParticleIconDesc> BuildParticleIcons(
+// An entity that draws its own geometry, or lays out UI, is its own Scene View marker.
+[[nodiscard]] bool DrawsOwnSceneViewMarker(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+    const auto components = scene.Components();
+    return components.MeshRenderers().Has(entity) || components.Lights().Has(entity) ||
+        components.Sprites2D().Has(entity) || components.TilemapRenderers().Has(entity) ||
+        components.FacingPanels().Has(entity) || components.GeometrySwarms().Has(entity) ||
+        components.DeformedGeometries().Has(entity) ||
+        components.UI().Has<kb::scene::UIRectTransform>(entity);
+}
+
+[[nodiscard]] std::optional<kb::render::EditorSceneIconKind> SceneIconKindOf(
+    const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+    const auto components = scene.Components();
+    if (components.ParticleEffects().Has(entity)) {
+        return kb::render::EditorSceneIconKind::ParticleEffect;
+    }
+    if (components.Cameras().Has(entity)) {
+        return kb::render::EditorSceneIconKind::Camera;
+    }
+    if (components.AudioSources().Has(entity)) {
+        return kb::render::EditorSceneIconKind::AudioSource;
+    }
+    if (DrawsOwnSceneViewMarker(scene, entity)) {
+        return std::nullopt;
+    }
+    return scene.Prefabs().RootInstance(entity).IsValid()
+        ? kb::render::EditorSceneIconKind::Prefab
+        : kb::render::EditorSceneIconKind::Entity;
+}
+
+[[nodiscard]] std::vector<kb::render::EditorSceneIconDesc> BuildSceneIcons(
     const EditorSceneContext& sceneContext,
     const EditorViewportCameraState& viewportCamera,
     const EditorViewportCameraAxes& viewportAxes,
@@ -462,7 +495,7 @@ struct LightWireframeBasis {
         const EditorViewportCameraState* viewportCamera = nullptr;
         const EditorViewportCameraAxes* viewportAxes = nullptr;
         std::uint32_t renderHeight = 0U;
-        std::vector<kb::render::EditorParticleIconDesc> icons;
+        std::vector<kb::render::EditorSceneIconDesc> icons;
     } context{
         .sceneContext = &sceneContext,
         .viewportCamera = &viewportCamera,
@@ -470,20 +503,22 @@ struct LightWireframeBasis {
         .renderHeight = renderHeight,
     };
 
-    sceneContext.Scene().Components().ParticleEffects().ForEach(
+    sceneContext.Scene().Transforms().ForEach(
         [](kb::scene::SceneEntity entity,
-           const kb::scene::ParticleEffectComponent&,
+           const kb::scene::TransformComponent& transform,
            void* opaque) {
             auto& context = *static_cast<Context*>(opaque);
-            if (!kb::scene::ResolveVisibility(
+            const std::optional<kb::render::EditorSceneIconKind> kind =
+                SceneIconKindOf(context.sceneContext->Scene(), entity);
+            if (!kind.has_value() ||
+                !kb::scene::ResolveVisibility(
                     context.sceneContext->Scene(), entity).visible) {
                 return;
             }
-            const kb::scene::TransformComponent& transform =
-                context.sceneContext->Scene().Transforms().Get(entity);
             const kb::scene::Vec3 position = ResolveViewportPosition(
                 context.sceneContext->Scene(), entity, transform, context.viewportCamera->ViewportOrigin());
-            context.icons.push_back(kb::render::EditorParticleIconDesc{
+            context.icons.push_back(kb::render::EditorSceneIconDesc{
+                .kind = *kind,
                 .position = ToArray(position),
                 .iconRight = ToArray(context.viewportAxes->right),
                 .iconUp = ToArray(context.viewportAxes->up),
@@ -913,7 +948,7 @@ void AppendNavigationMesh(
         .editorGizmo = editorOverlaysEnabled && !twoD ? gizmo : kb::render::RenderSceneSubmitDesc::EditorGizmoDesc{},
         .editorCameraWireframes = editorOverlaysEnabled ? BuildCameraWireframes(sceneContext, viewportCamera.ViewportOrigin()) : std::vector<kb::render::EditorCameraWireframeDesc>{},
         .editorLightWireframes = editorOverlaysEnabled ? BuildLightWireframes(sceneContext, viewportCamera, axes, renderHeight) : std::vector<kb::render::EditorLightWireframeDesc>{},
-        .editorParticleIcons = editorOverlaysEnabled ? BuildParticleIcons(sceneContext, viewportCamera, axes, renderHeight) : std::vector<kb::render::EditorParticleIconDesc>{},
+        .editorSceneIcons = editorOverlaysEnabled ? BuildSceneIcons(sceneContext, viewportCamera, axes, renderHeight) : std::vector<kb::render::EditorSceneIconDesc>{},
         .physicsDebugLines = editorOverlaysEnabled ? BuildPhysicsDebugLines(sceneContext, viewportCamera.ViewportOrigin()) : std::vector<kb::render::PhysicsDebugLine>{},
         // Outline and handles belong exactly where the UI itself is shown, never on their own.
         .editorUIOverlays = editorOverlaysEnabled && screenUIVisible ? EditorUIRectInteraction::Overlays(sceneContext, static_cast<float>(renderWidth), static_cast<float>(renderHeight), twoD ? viewportState.UIZoom() : 1.0F) : std::vector<kb::scene::SceneUIFrameElement>{},

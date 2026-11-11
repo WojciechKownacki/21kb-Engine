@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "rendering/DockPanelFramePainter.hpp"
+#include "rendering/EditorPanelStyle.hpp"
 #include "rendering/EditorSurfacePainter.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/HeroIconPainter.hpp"
@@ -19,19 +20,11 @@ constexpr int kTabIconSize = 15;
 constexpr int kTabIconGap = 6;
 constexpr int kTabHorizontalPadding = 9;
 
-void DrawHairline(HDC dc, const RECT& rect, COLORREF color) {
-    GdiDrawing::FillRectColor(dc, rect, color);
-}
-
 void DrawTabChrome(HDC dc, const RECT& tab, bool active, const EditorTheme& theme) {
-    const COLORREF fill = GdiDrawing::ToColorRef(active ? theme.tabActive : theme.strip);
-    GdiDrawing::FillRectColor(dc, tab, fill);
-
-    const COLORREF edge = GdiDrawing::ToColorRef(active ? theme.borderPanel : theme.borderChrome);
+    GdiDrawing::FillRectColor(dc, tab, GdiDrawing::ToColorRef(theme.strip));
     if (active) {
-        DrawHairline(dc, RECT{ tab.left, tab.bottom - 2, tab.right, tab.bottom }, GdiDrawing::ToColorRef(theme.accent));
+        panel_style::FillDockTab(dc, tab, GdiDrawing::ToColorRef(theme.tabActive), panel_style::kDockTabCornerRadius);
     }
-    DrawHairline(dc, RECT{ tab.right - 1, tab.top + 1, tab.right, tab.bottom - 1 }, edge);
 }
 
 [[nodiscard]] RECT TabTitleRect(const RECT& tab) {
@@ -104,7 +97,7 @@ void DrawTabContent(HDC dc, const RECT& tab, const DockPanel& panel, const Edito
     const int iconTop = tab.top + ((tab.bottom - tab.top - kTabIconSize) / 2) + kTabTextVerticalOffset;
 
     const COLORREF textColor = GdiDrawing::ToColorRef(active ? theme.textPrimary : theme.textSecondary);
-    const COLORREF iconColor = GdiDrawing::ToColorRef(active ? theme.accent : theme.textDisabled);
+    const COLORREF iconColor = GdiDrawing::ToColorRef(active ? theme.textPrimary : theme.textDisabled);
     const RECT iconRect{ groupLeft, iconTop, groupLeft + kTabIconSize, iconTop + kTabIconSize };
     HeroIconPainter::Draw(dc, iconRect, icon, iconColor, icon == HeroIconKind::Gamepad2 ? 2 : 1);
 

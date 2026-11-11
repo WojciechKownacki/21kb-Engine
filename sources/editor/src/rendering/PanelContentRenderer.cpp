@@ -238,10 +238,7 @@ void DrawConsoleToolbar(HDC dc, const EditorConsoleLayoutRects& layout, const Ed
 
 void DrawConsoleRow(HDC dc, RECT row, const EditorTheme& theme, const EditorConsoleEntry& entry, std::uint32_t repeat, int visibleIndex, bool selected) {
     const bool zebra = (visibleIndex & 1) != 0;
-    GdiDrawing::FillRectColor(dc, row, selected ? Blend(Color(theme.panel), Color(theme.accent), 16) : RowBackground(theme, entry.level, zebra));
-    if (selected) {
-        GdiDrawing::FillRectColor(dc, RECT{ row.left, row.top, row.left + 3, row.bottom }, Color(theme.accent));
-    }
+    GdiDrawing::FillRectColor(dc, row, selected ? Color(theme.accent) : RowBackground(theme, entry.level, zebra));
 
     const std::string time = FormatTimestamp(entry.timestampMs);
     DrawText(dc, RECT{ row.left + 10, row.top, row.left + 90, row.bottom }, time.c_str(), Color(theme.textDisabled), 12);

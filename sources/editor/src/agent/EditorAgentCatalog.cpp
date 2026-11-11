@@ -112,7 +112,7 @@ struct Preset {
             // that keep a new conversation from reusing the cached prompt, and no permission prompt
             // that would stall a run nobody can answer.
             "--disable-slash-commands", "--exclude-dynamic-system-prompt-sections", "--permission-prompts", "none",
-            "--allowedTools", "mcp__kb-engine", "--disallowedTools", "Bash", "PowerShell", "--permission-mode", "acceptEdits",
+            "--allowedTools", "mcp__kb-engine", "--disallowedTools", "Bash", "PowerShell", "--permission-mode", "{permissionMode}",
             "--append-system-prompt",
             "You work inside the 21kb editor on the open project. Keep the request small: AGENTS.md says where things are; "
             "read only the one guide (kb-engine guide tool) or API page (api_reference with a topic) the task needs. "

@@ -20,6 +20,7 @@ struct EditorTheme {
     EditorColor menuBar;
     EditorColor toolbar;
     EditorColor toolbarButton;
+    EditorColor header;
     EditorColor splitter;
     EditorColor gridLine;
     EditorColor borderChrome;
@@ -32,7 +33,7 @@ struct EditorTheme {
 
 struct EditorMetrics {
     // The single top bar that holds the menus, the transport controls and Save.
-    int menuHeight = 40;
+    int menuHeight = 48;
     // Console error and warning counts along the window's bottom edge.
     int statusBarHeight = 24;
     int floatingChromeHeight = 24;
@@ -41,7 +42,7 @@ struct EditorMetrics {
     int tabStripHeight = 28;
     int tabMinWidth = 92;
     int tabWidth = 156;
-    int splitterSize = 6;
+    int splitterSize = 3;
 };
 
 [[nodiscard]] constexpr EditorColor Color(float r, float g, float b) {
@@ -54,23 +55,24 @@ struct EditorMetrics {
 
 [[nodiscard]] constexpr EditorTheme MakeEditorDarkTheme() {
     return EditorTheme{
-        .background = EditorColor{ 9, 12, 18 },
-        .chrome = EditorColor{ 13, 17, 25 },
-        .panel = EditorColor{ 18, 23, 32 },
-        .strip = EditorColor{ 22, 27, 37 },
-        .tabInactive = EditorColor{ 18, 23, 32 },
-        .tabActive = EditorColor{ 31, 37, 50 },
-        .menuBar = EditorColor{ 10, 13, 20 },
-        .toolbar = EditorColor{ 16, 21, 30 },
-        .toolbarButton = EditorColor{ 29, 35, 47 },
-        .splitter = EditorColor{ 5, 8, 13 },
-        .gridLine = EditorColor{ 37, 44, 58 },
-        .borderChrome = EditorColor{ 36, 43, 56 },
-        .borderPanel = EditorColor{ 49, 58, 75 },
-        .textPrimary = EditorColor{ 235, 238, 247 },
-        .textSecondary = EditorColor{ 184, 192, 211 },
-        .textDisabled = EditorColor{ 130, 140, 162 },
-        .accent = EditorColor{ 119, 119, 119 },
+        .background = EditorColor{ 21, 21, 21 },
+        .chrome = EditorColor{ 15, 15, 15 },
+        .panel = EditorColor{ 36, 36, 36 },
+        .strip = EditorColor{ 21, 21, 21 },
+        .tabInactive = EditorColor{ 21, 21, 21 },
+        .tabActive = EditorColor{ 36, 36, 36 },
+        .menuBar = EditorColor{ 21, 21, 21 },
+        .toolbar = EditorColor{ 36, 36, 36 },
+        .toolbarButton = EditorColor{ 56, 56, 56 },
+        .header = EditorColor{ 47, 47, 47 },
+        .splitter = EditorColor{ 21, 21, 21 },
+        .gridLine = EditorColor{ 47, 47, 47 },
+        .borderChrome = EditorColor{ 47, 47, 47 },
+        .borderPanel = EditorColor{ 56, 56, 56 },
+        .textPrimary = EditorColor{ 226, 226, 226 },
+        .textSecondary = EditorColor{ 192, 192, 192 },
+        .textDisabled = EditorColor{ 128, 128, 128 },
+        .accent = EditorColor{ 0, 112, 224 },
     };
 }
 

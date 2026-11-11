@@ -16,6 +16,7 @@ namespace {
 constexpr std::string_view kSaving = "Editor.Saving";
 constexpr std::string_view kPanels = "Editor.Panels";
 constexpr std::string_view kLayout = "Editor.Layout";
+constexpr std::string_view kPlay = "Editor.Play";
 
 } // namespace
 
@@ -63,6 +64,8 @@ EditorConfigurationLoadResult EditorConfigurationStore::Load(
         }
         result.configuration.panels.push_back(std::move(session));
     }
+    result.configuration.play.target = static_cast<EditorPlayTarget>(std::clamp<std::int64_t>(document.GetInt(kPlay, "Target").value_or(0), 0, 2));
+    result.configuration.play.startPaused = document.GetBool(kPlay, "StartPaused").value_or(false);
     if (const std::optional<std::string_view> layout = document.GetString(kLayout, "Tree")) {
         result.configuration.layout = std::string{*layout};
     }
@@ -95,6 +98,8 @@ bool EditorConfigurationStore::Save(
     document.SetInt(kSaving, "AutosaveIntervalMinutes",
         static_cast<std::int64_t>(std::clamp<std::uint32_t>(configuration.saving.autosaveIntervalMinutes, 1U, 120U)));
     configuration.profiler.Write(document);
+    document.SetInt(kPlay, "Target", static_cast<std::int64_t>(configuration.play.target));
+    document.SetBool(kPlay, "StartPaused", configuration.play.startPaused);
     for (const EditorPanelSession& session : configuration.panels) {
         if (session.panelId == 0U) {
             continue;

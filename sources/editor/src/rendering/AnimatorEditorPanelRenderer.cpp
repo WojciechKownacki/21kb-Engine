@@ -286,7 +286,6 @@ void AnimatorEditorPanelRenderer::Paint(
     }
 
     GdiDrawing::FillRectColor(dc, RECT{ content.left, content.top, content.right, content.top + kHeaderHeight }, ThemeColor(theme.strip));
-    GdiDrawing::FillRectColor(dc, RECT{ content.left, content.top, content.left + 3, content.top + kHeaderHeight }, ThemeColor(theme.accent));
     const kb::assets::AssetMetadata* metadata =
         sceneContext.Scene().Assets().Manager().Registry().Find(sceneContext.AnimatorEditorAssetId());
     const kb::assets::AssetMetadata* previewMesh =

@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 #include "rendering/EditorToolbarRenderer.hpp"
 #include "rendering/GdiDrawing.hpp"
+#include "rendering/components/EditorDialogStyle.hpp"
 
 #include <utility>
 
@@ -21,7 +22,7 @@ namespace {
 } // namespace
 
 EditorToolbarMenuOverlayWindow::EditorToolbarMenuOverlayWindow() noexcept
-    : popup_(ClassName, *this) {}
+    : popup_(ClassName, *this, CS_DROPSHADOW) {}
 
 void EditorToolbarMenuOverlayWindow::Show(HWND owner, const RECT& menuBar, const EditorTheme& theme, const EditorShellInteractionState& interaction) {
     if (owner == nullptr || interaction.OpenMenu() == EditorMenuCommand::None || !popup_.Ensure(owner)) {
@@ -41,6 +42,9 @@ void EditorToolbarMenuOverlayWindow::Show(HWND owner, const RECT& menuBar, const
     interaction_ = &interaction;
     const RenderedState state = Capture(interaction);
     const bool placed = popup_.ShowAt(EditorOverlayPopupWindow::OwnerClientToScreen(owner, paintBounds_));
+    if (placed) {
+        EditorDialogStyle::ApplyDropdownShape(popup_.Window(), interaction.OpenMenu() == EditorMenuCommand::Publish);
+    }
     if (placed || state != rendered_) {
         rendered_ = state;
         popup_.Invalidate();
@@ -72,8 +76,6 @@ EditorToolbarMenuOverlayWindow::RenderedState EditorToolbarMenuOverlayWindow::Ca
 }
 
 void EditorToolbarMenuOverlayWindow::PaintOverlay(HDC dc, const RECT& client) {
-    // The strips beside the dropdown's shadow belong to the shadow.
-    GdiDrawing::FillRectColor(dc, client, RGB(0, 0, 0));
     if (interaction_ == nullptr) {
         return;
     }

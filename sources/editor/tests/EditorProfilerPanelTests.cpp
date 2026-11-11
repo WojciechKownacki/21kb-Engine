@@ -72,43 +72,53 @@ void RunPanelGeometryTest() {
     ProfilerPanelState state;
     ProfilerSelection selection;  // cpu and gpu
     ProfilerPanelGeometry geometry = ResolveProfilerPanelGeometry(content, state, selection);
-    Require(geometry.charts.size() == 3U && geometry.charts[0].kind == ProfilerChartKind::Frame && geometry.charts[1].kind == ProfilerChartKind::Cpu && geometry.charts[2].kind == ProfilerChartKind::Gpu,
-        "CPU and GPU measured: the frame, the CPU and the GPU chart");
-    selection.ApplyPreset(ProfilerPreset::Everything, ProfilerRegistry{});
-    geometry = ResolveProfilerPanelGeometry(content, state, selection);
-    Require(geometry.charts.size() == 5U, "Every chart row when every area is measured");
-    int expectedTop = geometry.ruler.bottom;
-    for (const ProfilerChartRow& chart : geometry.charts) {
-        Require(chart.row.top == expectedTop && chart.row.bottom > chart.row.top && chart.plot.left == chart.label.right, "Chart rows follow one another, label then plot");
-        expectedTop = chart.row.bottom;
+    Require(geometry.left.right == geometry.left.left && geometry.center.left == content.left && geometry.center.right == content.right,
+        "Measurements has no left pane: the budget table takes the whole width");
+    Require(geometry.frameStrip.top == geometry.health.bottom && geometry.frameStrip.bottom > geometry.frameStrip.top &&
+            geometry.framePlot.left > geometry.frameStrip.left && geometry.framePlot.right < geometry.frameStrip.right &&
+            geometry.budgetHeader.top == geometry.frameStrip.bottom,
+        "The strip of frames, then the header of the budget table");
+    Require(geometry.budgetRows.size() == 6U && geometry.budgetRows.front().counter == ProfilerBuiltIn::GameThreadTime, "A row for each counter that speaks for an area");
+    int expectedTop = geometry.budgetHeader.bottom;
+    std::size_t switches = 0U;
+    for (const ProfilerBudgetRow& row : geometry.budgetRows) {
+        Require(row.bounds.top == expectedTop && row.bounds.bottom - row.bounds.top == ProfilerPanelGeometry::kBudgetRowHeight, "Budget rows follow one another at their full height");
+        const RECT toggle = ProfilerBudgetSwitchRect(row.bounds);
+        Require(toggle.top >= row.bounds.top && toggle.bottom <= row.bounds.bottom && toggle.right <= row.bounds.right, "The switch of a row is inside it");
+        switches += row.startsArea ? 1U : 0U;
+        expectedTop = row.bounds.bottom;
     }
-    Require(geometry.hierarchyTabs.top == expectedTop && geometry.hierarchyRows.bottom - geometry.hierarchyRows.top >= 100, "The hierarchy takes what the charts leave, and enough of it");
-    Require(geometry.center.left == geometry.left.right && geometry.status.bottom == content.bottom && geometry.areasHint.bottom <= geometry.status.top, "The panes fill the panel");
-    Require(geometry.health.top == geometry.toolbar.bottom && geometry.health.bottom - geometry.health.top == ProfilerPanelGeometry::kHealthHeight && !geometry.healthCompact &&
-            geometry.left.top == geometry.health.bottom && geometry.ruler.top == geometry.health.bottom,
+    Require(switches == 5U && !geometry.budgetRows[1].startsArea, "Each area has one switch, on its first row");
+    Require(geometry.hierarchyTabs.top == expectedTop && geometry.hierarchyRows.bottom - geometry.hierarchyRows.top >= 100, "The hierarchy takes what the table leaves, and enough of it");
+    Require(geometry.status.bottom == content.bottom && geometry.hierarchyRows.bottom == geometry.status.top, "The panes fill the panel");
+    Require(geometry.health.top == geometry.toolbar.bottom && geometry.health.bottom - geometry.health.top == ProfilerPanelGeometry::kHealthHeight && !geometry.healthCompact,
         "The overview sits between the toolbar and everything else");
+    const ProfilerBudgetColumns budgetColumns = ResolveProfilerBudgetColumns(geometry.budgetRows.front().bounds);
+    Require(budgetColumns.name < budgetColumns.spark && budgetColumns.spark < budgetColumns.now && budgetColumns.now < budgetColumns.average &&
+            budgetColumns.average < budgetColumns.budget && budgetColumns.budget < budgetColumns.toggle && budgetColumns.toggle < budgetColumns.end,
+        "The columns of the budget table run left to right without crossing");
 
-    // A panel docked in a low strip: the overview on one line, the charts, and no hierarchy squeezed under them.
+    // A panel docked in a low strip: the overview on one line, every row of the table, and neither the strip nor the hierarchy squeezed in.
     geometry = ResolveProfilerPanelGeometry(RECT{ 0, 0, 1920, 300 }, state, selection);
     Require(geometry.healthCompact && geometry.health.bottom - geometry.health.top == ProfilerPanelGeometry::kHealthCompactHeight, "A low panel has the overview on one line");
-    Require(geometry.charts.size() == 5U && geometry.charts.back().row.bottom <= geometry.status.top, "A low panel keeps every chart above the status line");
-    for (const ProfilerChartRow& chart : geometry.charts) {
-        Require(chart.row.bottom - chart.row.top >= 22, "A chart of a low panel is still tall enough to read");
+    Require(geometry.budgetRows.size() == 6U && geometry.budgetRows.back().bounds.bottom <= geometry.status.top, "A low panel keeps every budget row above the status line");
+    for (const ProfilerBudgetRow& row : geometry.budgetRows) {
+        Require(row.bounds.bottom - row.bounds.top >= 22, "A row of a low panel is still tall enough to read");
     }
+    Require(geometry.frameStrip.bottom == geometry.frameStrip.top, "A low panel leaves the strip of frames out");
     Require(geometry.hierarchyRows.bottom == geometry.hierarchyRows.top && geometry.hierarchyTabs.bottom == geometry.hierarchyTabs.top, "A low panel leaves the hierarchy out");
     geometry = ResolveProfilerPanelGeometry(RECT{ 0, 0, 960, 200 }, state, selection);
-    Require(geometry.charts.size() == 2U && geometry.charts[0].kind == ProfilerChartKind::Frame && geometry.charts[1].row.bottom <= geometry.status.top &&
-            geometry.charts[0].row.bottom - geometry.charts[0].row.top >= 22,
-        "A panel with room for two readable charts shows the first two rather than none");
+    Require(geometry.budgetRows.size() == 2U && geometry.budgetRows.back().bounds.bottom <= geometry.status.top,
+        "A panel with room for two readable rows shows the first two rather than none");
     geometry = ResolveProfilerPanelGeometry(RECT{ 0, 0, 900, 160 }, state, selection);
     Require(geometry.health.bottom == geometry.health.top, "A panel lower still has no overview");
-    for (const ProfilerChartRow& chart : geometry.charts) {
-        Require(chart.row.bottom <= geometry.status.top, "No chart of the lowest panel runs under the status line");
+    for (const ProfilerBudgetRow& row : geometry.budgetRows) {
+        Require(row.bounds.bottom <= geometry.status.top, "No row of the lowest panel runs under the status line");
     }
 
     state.tab = ProfilerPanelTab::Diagnosis;
     geometry = ResolveProfilerPanelGeometry(content, state, selection);
-    Require(geometry.right.right - geometry.right.left == ProfilerPanelGeometry::kRightWidth && geometry.center.right == geometry.right.left && geometry.charts.empty(), "Diagnosis has its details pane and no charts");
+    Require(geometry.right.right - geometry.right.left == ProfilerPanelGeometry::kRightWidth && geometry.center.right == geometry.right.left && geometry.budgetRows.empty(), "Diagnosis has its details pane and no budget table");
     geometry = ResolveProfilerPanelGeometry(RECT{ 0, 0, 800, 600 }, state, selection);
     Require(geometry.right.right == geometry.right.left, "A narrow panel leaves the details out");
 }
@@ -166,7 +176,7 @@ void RunPanelHitsTest() {
     ProfilerPanelGeometry geometry = ResolveProfilerPanelGeometry(content, profiler.Panel(), selection);
     std::vector<ProfilerPanelHit> hits = ProfilerPanelHits(geometry, profiler, selection);
     const auto count = [&](ProfilerPanelAction action) { return std::ranges::count(hits, action, &ProfilerPanelHit::action); };
-    Require(count(ProfilerPanelAction::Tab) == 3 && count(ProfilerPanelAction::Area) == 5 && count(ProfilerPanelAction::PickFrame) == 3, "Tabs, areas and a chart per measured area answer clicks");
+    Require(count(ProfilerPanelAction::Tab) == 3 && count(ProfilerPanelAction::Area) == 5 && count(ProfilerPanelAction::PickFrame) == 1, "Tabs, the switches of the areas and the strip of frames answer clicks");
     Require(count(ProfilerPanelAction::Record) == 1 && count(ProfilerPanelAction::Pause) == 1 && count(ProfilerPanelAction::Snapshot) == 1 && count(ProfilerPanelAction::WhatToShow) == 1, "The buttons of the toolbar");
     for (const ProfilerPanelHit& hit : hits) {
         Require(hit.bounds.right > hit.bounds.left && hit.bounds.bottom > hit.bounds.top && hit.bounds.left >= content.left && hit.bounds.right <= content.right, "Every hit is a real area inside the panel");

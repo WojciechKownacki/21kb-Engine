@@ -349,6 +349,13 @@ public:
         bool setAsStartupScene, EditorDirtySceneResolution dirtyResolution);
     // Why `folder`/`name` cannot be a new scene of the project, or an empty string when it can.
     [[nodiscard]] std::string NewScenePathError(std::string_view folder, std::string_view name) const;
+    // The Scene menu's work on the open scene. Rename follows it in the project's startup setting
+    // and needs no save: unsaved work stays unsaved under the new name. Duplicate writes the scene
+    // as it stands now beside it and leaves it open. Delete first moves to another scene, which
+    // takes the startup role if the deleted one had it; the only scene of a project stays.
+    [[nodiscard]] bool RenameOpenScene(std::string_view name);
+    [[nodiscard]] bool DuplicateOpenScene();
+    [[nodiscard]] bool DeleteOpenScene();
     [[nodiscard]] bool OpenDefaultScene();
     [[nodiscard]] bool OpenScene(const std::filesystem::path& path, EditorDirtySceneResolution dirtyResolution = EditorDirtySceneResolution::Save);
     [[nodiscard]] bool SaveCurrentScene();

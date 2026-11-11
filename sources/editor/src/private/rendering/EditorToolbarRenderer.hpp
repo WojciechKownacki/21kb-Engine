@@ -22,9 +22,18 @@ struct EditorToolbarRects {
 #if defined(_WIN32)
     RECT toolbar{};
     RECT saveButton{};
+    RECT projectButton{};
+    RECT sceneButton{};
+    RECT branchLabel{};
     RECT playButton{};
+    RECT playOptionsButton{};
     RECT stopButton{};
     RECT pauseButton{};
+    RECT buildButton{};
+    RECT publishButton{};
+    RECT minimizeButton{};
+    RECT maximizeButton{};
+    RECT closeButton{};
 #endif
 };
 
@@ -36,6 +45,7 @@ struct EditorStatusBarRects {
     RECT state{};
     RECT errors{};
     RECT warnings{};
+    RECT askAgent{};
     RECT backend{};
 #endif
 };
@@ -53,6 +63,10 @@ struct EditorMenuRects {
     RECT options{};
     RECT world{};
     RECT help{};
+    RECT project{};
+    RECT scene{};
+    RECT playOptions{};
+    RECT publish{};
     RECT dropdown{};
     std::array<RECT, MaximumRows> dropdownRows{};
     int dropdownRowCount = 0;
@@ -69,11 +83,17 @@ public:
     [[nodiscard]] static std::optional<int> HitTestMenuRow(const EditorMenuRects& rects, int x, int y) noexcept;
     [[nodiscard]] static EditorTransportCommand HitTestTransport(const EditorToolbarRects& rects, int x, int y) noexcept;
     [[nodiscard]] static bool HitTestSave(const EditorToolbarRects& rects, int x, int y) noexcept;
+    [[nodiscard]] static EditorTopBarItem HitTestTopBarItem(const EditorToolbarRects& rects, int x, int y) noexcept;
     [[nodiscard]] static EditorStatusBarRects ResolveStatusBar(const RECT& rect) noexcept;
     // True over the error or warning count, which open the Console.
     [[nodiscard]] static bool HitTestStatusBarConsole(const EditorStatusBarRects& rects, int x, int y) noexcept;
-    // Everything the open menu's dropdown paints, its shadow included.
+    // True over the button that brings the Agent panel forward.
+    [[nodiscard]] static bool HitTestStatusBarAgent(const EditorStatusBarRects& rects, int x, int y) noexcept;
+    // Everything the open menu's dropdown paints.
     [[nodiscard]] static RECT MenuDropdownPaintBounds(const EditorMenuRects& menu) noexcept;
+
+    // Reads the project's branch again on the next paint, after the repository changed.
+    static void InvalidateRepositoryState() noexcept;
 
     // The menu bar. The open menu's dropdown is not painted here: it hangs over the
     // panels below, scene viewports included, so EditorToolbarMenuOverlayWindow
@@ -89,7 +109,6 @@ public:
 private:
 #if defined(_WIN32)
     void PaintButton(HDC dc, const RECT& rect, const EditorTheme& theme, bool enabled, bool active, bool hovered, bool pressed, COLORREF glow) const;
-    void PaintTextButton(HDC dc, const RECT& rect, const EditorTheme& theme, std::string_view label, bool enabled, bool active, bool hovered, bool pressed, COLORREF glow) const;
 #endif
 };
 

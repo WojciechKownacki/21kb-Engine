@@ -2682,7 +2682,7 @@ void PaintUIDropdownBody(HDC dc, RECT body, const EditorTheme& theme, const Edit
             DrawAssetFieldRow(dc, item.rect, theme, state, section, property, InspectorPropertyId::UIAssetPicker, "      " + item.label,
                 AssetDisplayName(sceneContext, std::stoull(row->value)), item.row);
             if (selectedOption) {
-                GdiDrawing::FillRectColor(dc, Rect(item.rect.left, item.rect.top, item.rect.left + 3, item.rect.bottom), Color(theme.accent));
+                GdiDrawing::FillRectColor(dc, Rect(item.rect.right - 14, CenteredY(item.rect, 6), item.rect.right - 8, CenteredY(item.rect, 6) + 6), Color(theme.accent));
             }
             break;
         case DropdownInspectorItem::Kind::Footer:

@@ -174,7 +174,6 @@ void EditorSettingsPanelRenderer::Paint(
     GdiDrawing::FillRectColor(dc, content, Color(theme.panel));
 
     GdiDrawing::FillRectColor(dc, rects.header, Color(theme.strip));
-    GdiDrawing::FillRectColor(dc, {rects.header.left, rects.header.top, rects.header.left + 3, rects.header.bottom}, Color(theme.accent));
     GdiDrawing::FillRectColor(
         dc,
         {rects.header.left, rects.header.bottom - 1, rects.header.right, rects.header.bottom},
@@ -197,8 +196,7 @@ void EditorSettingsPanelRenderer::Paint(
         const RECT category = CategoryRow(rects.sidebar, index);
         const bool selected = static_cast<int>(g_category) == index;
         if (selected) {
-            GdiDrawing::FillRectColor(dc, category, Blend(Color(theme.panel), Color(theme.accent), 18));
-            GdiDrawing::FillRectColor(dc, {category.left, category.top, category.left + 2, category.bottom}, Color(theme.accent));
+            GdiDrawing::FillRectColor(dc, category, Color(theme.accent));
         }
         DrawText(
             dc,

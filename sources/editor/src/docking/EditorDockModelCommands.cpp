@@ -259,7 +259,8 @@ bool EditorDockModelCommands::ActivatePanelKind(DockPanelKind kind, DockArea fal
 
     DockNode* leaf = DockNodeQuery::FindLeafContaining(root_.get(), panel->id);
     if (leaf == nullptr) {
-        const DockArea targetArea = panel->area == DockArea::Floating ? fallbackArea : panel->area;
+        // The Agent opens where its caller asks, beside the Inspector, whatever an older layout remembered.
+        const DockArea targetArea = panel->area == DockArea::Floating || kind == DockPanelKind::Agent ? fallbackArea : panel->area;
         for (const DockPanel& candidate : panels_.All()) {
             if (candidate.id == panel->id || !candidate.visible || candidate.area != targetArea) {
                 continue;

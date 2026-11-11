@@ -27,6 +27,7 @@
 #include "scene/material_preview/EditorMaterialPreviewMeshFactory.hpp"
 #include "project/EditorProjectPaths.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
+#include "app/EditorPlayCommands.hpp"
 #include "profiler/EditorProfilerSampler.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MaterialPreviewPresentSettings.hpp"
@@ -54,8 +55,8 @@
 #include "app/EditorWindowInvalidator.hpp"
 #include "app/EditorEditCommandPolicy.hpp"
 #include "scene/EditorTerrainService.hpp"
-#include "diagnostics/EditorLagTrace.hpp"
 #include "scene/StaticMeshEditorSession.hpp"
+#include "diagnostics/EditorLagTrace.hpp"
 #include "localization/EditorLocalization.hpp"
 #include "platform/win32/Utf8Gdi.hpp"
 
@@ -309,7 +310,6 @@ void InvalidatePanelKind(EditorApplicationState& state, DockPanelKind kind) noex
         state.window, state.dockModel, state.floatingWindows, state.metrics, kind);
 }
 
-void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
 // Shows the Static Mesh window an Open asked for, closes its session once its tab is gone, and advances it; true
 // while the window keeps changing.
 [[nodiscard]] bool TickStaticMeshEditor(EditorApplicationState& state, float deltaSeconds) {
@@ -332,6 +332,7 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
     return true;
 }
 
+void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
     InvalidatePanelKind(state, DockPanelKind::Inspector);
 }
 
@@ -642,8 +643,7 @@ void PumpAgentPanel(EditorApplicationState& state) {
     // View and the Agent tab of the bottom drawer, which comes forward or steps back.
     switch (agent.TakeDockRequest()) {
     case EditorAgentPanelState::DockRequest::Dock:
-        static_cast<void>(state.dockModel.Commands().SetDrawerCollapsed(false));
-        static_cast<void>(state.dockModel.Commands().ActivatePanelKind(DockPanelKind::Agent, DockArea::Bottom));
+        static_cast<void>(state.dockModel.Commands().ActivatePanelKind(DockPanelKind::Agent, DockArea::Right));
         agent.FocusInput(true);
         state.sceneViewport.RequestPresent();
         InvalidateRect(state.window, nullptr, FALSE);
@@ -1434,6 +1434,7 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
         const bool previousPlayModeSceneActive = state.sceneContext.HasPlayModeSceneSession();
         state.playMode.Stop();
         static_cast<void>(state.sceneContext.RestorePlayModeSceneSession());
+        EditorPlayCommands::RestoreWorkspace(state.dockModel);
         if (SceneViewportPresentationPolicy::RequiresPresent(
                 previousPlayModeSceneActive,
                 state.sceneContext.HasPlayModeSceneSession())) {
@@ -1532,13 +1533,13 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
         !state.playMode.IsPlaying() && state.sceneContext.TickEditorSceneParticles(deltaSeconds);
     if (sceneParticlesChanged) state.sceneViewport.RequestPresent();
 
+    const bool staticMeshEditorChanged = TickStaticMeshEditor(state, deltaSeconds);
     const bool audioPreviewChanged = EditorAudioAssetPreview::Tick(state.sceneContext.Scene());
     if (state.sceneContext.ConsumeGameplayGraphOpenRequest()) {
         static_cast<void>(state.dockModel.Commands().ActivatePanelKind(DockPanelKind::GameplayGraphEditor,DockArea::Center));
         InvalidateRect(state.window,nullptr,FALSE);
     }
     if (auto* graph=state.sceneContext.GameplayGraphEditor(); graph && !graph->manualPreview && graph->Execute(std::min(deltaSeconds,0.25F))) {
-    const bool staticMeshEditorChanged = TickStaticMeshEditor(state, deltaSeconds);
         EditorWindowInvalidator::InvalidateDockPanel(state.window,state.dockModel,state.floatingWindows,state.metrics,DockPanelKind::GameplayGraphEditor);
     }
     if (state.sceneContext.ConsumeBlendSpace2DEditorOpenRequest()) {
@@ -1611,7 +1612,7 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     return viewportsPresented || navigationChanged || gizmoChanged || focusChanged ||
         animationPreviewCameraChanged || animationPreviewPlaybackChanged || particlePreviewChanged ||
         sceneParticlesChanged || scriptSaved || timelinePreviewChanged ||
-        audioPreviewChanged || audioMetersChanged || addComponentSliding || disclosureSliding || caretBlinking || skeletalMeshEditorOpenChanged ||
+        staticMeshEditorChanged || audioPreviewChanged || audioMetersChanged || addComponentSliding || disclosureSliding || caretBlinking || skeletalMeshEditorOpenChanged ||
         EditorTerrainService::ToolState().strokeActive;
 }
 

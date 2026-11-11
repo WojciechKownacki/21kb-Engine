@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/editor/docking/DockTypes.hpp"
+#include "app/EditorPlayPreferences.hpp"
 #include "profiler/ProfilerSelection.hpp"
 
 #include <cstdint>
@@ -34,6 +35,8 @@ struct EditorConfiguration {
     EditorSavingPreferences saving{};
     // The performance counters to measure and show, in the Profiler and on the scene.
     ProfilerSelection profiler{};
+    // The options under the arrow beside Play.
+    EditorPlayPreferences play{};
     // Where each panel was and whether it was open, so reopening a project puts the
     // workspace back the way it was left. Panels absent from the list keep the
     // default workspace's arrangement.

@@ -26,15 +26,8 @@ void StrokeLine(HDC dc, int x, int top, int bottom, COLORREF color) {
 }
 
 void DrawBase(HDC dc, RECT rect, const EditorTheme& theme, bool active) {
-    const COLORREF toolbarButton = GdiDrawing::ToColorRef(theme.toolbarButton);
-    const COLORREF border = GdiDrawing::ToColorRef(theme.borderPanel);
-    const COLORREF fill = active
-        ? SceneViewportToolbarDrawing::Blend(toolbarButton, RGB(55, 119, 142), 5, 10)
-        : SceneViewportToolbarDrawing::Blend(toolbarButton, RGB(0, 0, 0), 1, 8);
-    const COLORREF stroke = active ? RGB(86, 172, 205) : SceneViewportToolbarDrawing::Blend(border, RGB(96, 109, 132), 1, 5);
-    SceneViewportToolbarDrawing::FillRound(dc, rect, fill, stroke, SceneViewportToolbarMetrics::ButtonRadius);
-    const RECT highlight{ rect.left + 2, rect.top + 1, rect.right - 2, rect.top + 2 };
-    GdiDrawing::FillRectColor(dc, highlight, active ? RGB(85, 150, 174) : RGB(47, 53, 64));
+    const COLORREF fill = GdiDrawing::ToColorRef(active ? theme.accent : theme.toolbarButton);
+    SceneViewportToolbarDrawing::FillRound(dc, rect, fill, fill, SceneViewportToolbarMetrics::ButtonRadius);
 }
 
 } // namespace
@@ -48,7 +41,7 @@ COLORREF SceneViewportToolbarDrawing::Blend(COLORREF a, COLORREF b, int numerato
 }
 
 COLORREF SceneViewportToolbarDrawing::ToolbarRowColor(const EditorTheme& theme) noexcept {
-    return Blend(GdiDrawing::ToColorRef(theme.toolbar), RGB(0, 0, 0), 1, 6);
+    return GdiDrawing::ToColorRef(theme.toolbar);
 }
 
 void SceneViewportToolbarDrawing::FillRound(HDC dc, const RECT& rect, COLORREF fill, COLORREF border, int radius) {
@@ -108,12 +101,13 @@ void SceneViewportToolbarDrawing::DrawValueButton(HDC dc, RECT rect, HeroIconKin
 }
 
 void SceneViewportToolbarDrawing::DrawChip(HDC dc, const RECT& rect, std::string_view label, const EditorTheme& theme, bool active) {
-    FillRound(dc, rect, active ? RGB(36, 91, 111) : RGB(29, 34, 41), active ? RGB(91, 190, 220) : RGB(59, 68, 80), 7);
+    const COLORREF fill = GdiDrawing::ToColorRef(active ? theme.accent : theme.toolbarButton);
+    FillRound(dc, rect, fill, fill, SceneViewportToolbarMetrics::ButtonRadius);
     GdiDrawing::DrawCenteredText(dc, rect, label, active ? RGB(239, 252, 255) : GdiDrawing::ToColorRef(theme.textSecondary));
 }
 
 void SceneViewportToolbarDrawing::DrawValueBox(HDC dc, const RECT& rect, std::string_view text, const EditorTheme& theme) {
-    FillRound(dc, rect, RGB(22, 26, 32), RGB(52, 62, 74), 6);
+    FillRound(dc, rect, GdiDrawing::ToColorRef(theme.chrome), GdiDrawing::ToColorRef(theme.borderPanel), SceneViewportToolbarMetrics::ButtonRadius);
     GdiDrawing::DrawCenteredText(dc, rect, text, GdiDrawing::ToColorRef(theme.textPrimary));
 }
 

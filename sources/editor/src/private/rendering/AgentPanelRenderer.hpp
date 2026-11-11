@@ -27,6 +27,10 @@ enum class AgentPanelHitKind : std::uint8_t {
     AgentMenu,     // the agent and profile picker
     ModelMenu,
     EffortMenu,    // the reasoning level
+    ModeMenu,      // Agent, Plan or Ask
+    Attach,        // adds a file to the request
+    Chats,         // the open conversations
+    Search,        // finds a conversation by what was said in it
     SignInHint,    // the "not signed in" note: copies the sign-in command
     ConnectTools,  // registers the engine's tools with an agent that needs it once
     Suggestion,    // an example request on an empty conversation (index)
@@ -45,7 +49,11 @@ struct AgentPanelLayout {
     std::vector<RECT> tabCloses;
     RECT newTab{};
     RECT undock{};
+    RECT chats{};
+    RECT search{};
     RECT toolbar{};
+    RECT attach{};
+    RECT modeMenu{};
     RECT agentMenu{};
     RECT modelMenu{};
     RECT effortMenu{};

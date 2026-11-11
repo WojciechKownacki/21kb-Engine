@@ -149,8 +149,7 @@ void Activate(HWND owner, const ProfilerPanelGeometry& geometry, const ProfilerP
         break;
     case Action::PickFrame: {
         const std::size_t samples = registry.Stats(ProfilerRegistry::Id(ProfilerBuiltIn::FrameTime)).samples;
-        const ProfilerChartRow& chart = geometry.charts[static_cast<std::size_t>(hit.argument)];
-        if (samples > 0U) panel.selectedFrame = profiler.Frame() - static_cast<std::uint64_t>(ProfilerFrameOffsetAt(chart.plot, x, samples));
+        if (samples > 0U) panel.selectedFrame = profiler.Frame() - static_cast<std::uint64_t>(ProfilerFrameOffsetAt(geometry.framePlot, x, samples));
         selectionChanged = false;
         break;
     }

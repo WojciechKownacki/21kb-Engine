@@ -100,24 +100,18 @@ void DenseListRow::Paint(
         descriptor.contentRightInset,
         descriptor.showIcon);
     const COLORREF fill = descriptor.selected
-        ? ProjectFilesPanelDrawing::Blend(Color(theme.panel), Color(theme.accent), 16)
+        ? Color(theme.accent)
         : Color(descriptor.hovered ? theme.toolbarButton : theme.panel);
     GdiDrawing::FillRectColor(dc, layout.bounds, fill);
-    if (descriptor.selected) {
-        GdiDrawing::FillRectColor(
-            dc,
-            RECT{layout.bounds.left, layout.bounds.top, layout.bounds.left + 3, layout.bounds.bottom},
-            Color(theme.accent));
-    }
     if (descriptor.showDivider) {
         GdiDrawing::FillRectColor(
             dc,
             RECT{layout.bounds.left, layout.bounds.bottom - 1, layout.bounds.right, layout.bounds.bottom},
             Color(theme.borderChrome));
     }
-    const COLORREF ink = Color(descriptor.enabled ? theme.textPrimary : theme.textDisabled);
+    const COLORREF ink = descriptor.selected ? RGB(255, 255, 255) : Color(descriptor.enabled ? theme.textPrimary : theme.textDisabled);
     if (descriptor.showIcon) {
-        HeroIconPainter::Draw(dc, layout.icon, descriptor.icon, Color(descriptor.selected ? theme.accent : (descriptor.enabled ? theme.textSecondary : theme.textDisabled)), 2);
+        HeroIconPainter::Draw(dc, layout.icon, descriptor.icon, descriptor.selected ? RGB(255, 255, 255) : Color(descriptor.enabled ? theme.textSecondary : theme.textDisabled), 2);
     }
     if (descriptor.summary.empty()) {
         Text(dc, layout.text, descriptor.title, ink, 12, descriptor.selected ? FW_SEMIBOLD : FW_NORMAL,

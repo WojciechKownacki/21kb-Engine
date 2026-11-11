@@ -18,6 +18,8 @@
 #include "packaging/EditorProjectPackageService.hpp"
 #include "app/EditorAssetBrowserInputHandler.hpp"
 #include "app/EditorWindowHitTestHandler.hpp"
+#include "app/EditorProjectCommands.hpp"
+#include "app/EditorPlayCommands.hpp"
 #include "app/EditorWindowLifecycleHandler.hpp"
 #include "app/EditorPaintDispatcher.hpp"
 #include "app/ParticleEditorPanelInteraction.hpp"
@@ -768,14 +770,11 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
             return 0;
         }
         if (wparam == 'K' && ModifierDown(VK_CONTROL) && !ModifierDown(VK_MENU) && !ModifierDown(VK_SHIFT)) {
-            // From anywhere: the request box gets the keyboard - the docked Agent panel's when it is
-            // on screen, otherwise the bar over the Scene View; with neither, the panel comes forward.
+            // From anywhere: the Agent panel comes forward and its request box gets the keyboard.
             const bool docked = EditorPanelContentResolver::Resolve(DockPanelKind::Agent, context_.mainWindow, context_.mainWindow,
                 context_.dockModel, context_.floatingWindows, context_.metrics).has_value();
-            const bool sceneShown = EditorPanelContentResolver::Resolve(DockPanelKind::Scene, context_.mainWindow, context_.mainWindow,
-                context_.dockModel, context_.floatingWindows, context_.metrics).has_value();
-            if (!docked && !sceneShown) {
-                static_cast<void>(context_.dockModel.Commands().ActivatePanelKind(DockPanelKind::Agent, DockArea::Bottom));
+            if (!docked) {
+                static_cast<void>(context_.dockModel.Commands().ActivatePanelKind(DockPanelKind::Agent, DockArea::Right));
             }
             context_.sceneContext.AgentPanel().Prepare();
             context_.sceneContext.AgentPanel().FocusInput(true);
@@ -811,12 +810,11 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         if (wparam == 'P' && ModifierDown(VK_CONTROL) && !ModifierDown(VK_MENU) &&
             !ModifierDown(VK_SHIFT) && !context_.sceneContext.IsAnyInlineTextEditActive()) {
             if (context_.playMode.Mode() == EditorPlayMode::Stopped) {
-                if (context_.sceneContext.BeginPlayModeSceneSession()) {
-                    context_.playMode.Play();
-                }
+                static_cast<void>(EditorPlayCommands::Start(context_.mainWindow, context_.dockModel, context_.sceneContext, context_.playMode));
             } else {
                 context_.playMode.Stop();
                 static_cast<void>(context_.sceneContext.RestorePlayModeSceneSession());
+                EditorPlayCommands::RestoreWorkspace(context_.dockModel);
             }
             context_.sceneViewport.RequestPresent();
             InvalidateRect(context_.mainWindow, nullptr, FALSE);
@@ -957,7 +955,7 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         }
         break;
     case WM_NCCALCSIZE:
-        if (context_.floatingWindows.Queries().IsFloatingWindow(messageWindow)) {
+        if (messageWindow == context_.mainWindow || context_.floatingWindows.Queries().IsFloatingWindow(messageWindow)) {
             return EditorFloatingWindowFrame::HandleNonClientCalcSize(messageWindow, wparam, lparam);
         }
         break;
@@ -973,7 +971,7 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
     case WM_MBUTTONUP:
     case WM_SETCURSOR:
         if (message == WM_NCHITTEST) {
-            return EditorWindowHitTestHandler::Handle(messageWindow, lparam, context_.floatingWindows);
+            return EditorWindowHitTestHandler::Handle(messageWindow, lparam, context_.floatingWindows, context_.mainWindow, EditorMetrics{}.menuHeight);
         }
         if (context_.sceneContext.Inspector().IsListeningForKey() &&
             (message == WM_LBUTTONDOWN || message == WM_RBUTTONDOWN || message == WM_MBUTTONDOWN)) {
@@ -988,8 +986,14 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         return EditorWindowPointerMessageDispatcher{ context_ }.Dispatch(messageWindow, message, wparam, lparam);
     case WM_CONTEXTMENU:
         return 0;
-    case WM_CLOSE:
-        return EditorWindowLifecycleHandler{ context_.mainWindow, context_.running, context_.dockModel, context_.floatingWindows, context_.sceneContext }.HandleClose(messageWindow);
+    case WM_CLOSE: {
+        const LRESULT closed = EditorWindowLifecycleHandler{ context_.mainWindow, context_.running, context_.dockModel, context_.floatingWindows, context_.sceneContext }.HandleClose(messageWindow);
+        if (context_.running) {
+            // Still open: a question about unsaved work was cancelled, so no project switch either.
+            EditorProjectCommands::AbandonPendingSwitch();
+        }
+        return closed;
+    }
     case WM_DESTROY:
         return EditorWindowLifecycleHandler{ context_.mainWindow, context_.running, context_.dockModel, context_.floatingWindows, context_.sceneContext }.HandleDestroy(messageWindow);
     default:

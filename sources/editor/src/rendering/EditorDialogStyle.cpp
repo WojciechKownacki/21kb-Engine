@@ -126,6 +126,21 @@ EditorDialogListRowLayout EditorDialogStyle::ResolveListRow(
     };
 }
 
+void EditorDialogStyle::ApplyDropdownShape(HWND window, bool squareTopRight) noexcept {
+    constexpr int cornerDiameter = 8;
+    RECT client{};
+    if (window == nullptr || GetClientRect(window, &client) == FALSE) {
+        return;
+    }
+    HRGN shape = CreateRoundRectRgn(0, 0, client.right + 1, client.bottom + 1, cornerDiameter, cornerDiameter);
+    const int cornerLeft = squareTopRight ? static_cast<int>(client.right) - cornerDiameter : 0;
+    HRGN corner = CreateRectRgn(cornerLeft, 0, cornerLeft + cornerDiameter, cornerDiameter);
+    CombineRgn(shape, shape, corner, RGN_OR);
+    DeleteObject(corner);
+    // The window owns the region from here on.
+    SetWindowRgn(window, shape, TRUE);
+}
+
 void EditorDialogStyle::PaintSurface(HDC dc, const RECT& bounds, const EditorTheme& theme) {
     GdiDrawing::DrawSharpFrame(dc, bounds, Color(theme.panel), Color(theme.borderPanel));
 }

@@ -30,7 +30,8 @@ public:
         ~Client() = default;
     };
 
-    EditorOverlayPopupWindow(const wchar_t* className, Client& client) noexcept;
+    // `classStyle` is added to the window class, for a popup that wants CS_DROPSHADOW.
+    EditorOverlayPopupWindow(const wchar_t* className, Client& client, UINT classStyle = 0U) noexcept;
     ~EditorOverlayPopupWindow();
 
     EditorOverlayPopupWindow(const EditorOverlayPopupWindow&) = delete;
@@ -62,6 +63,7 @@ private:
 
     const wchar_t* className_ = nullptr;
     Client* client_ = nullptr;
+    UINT classStyle_ = 0U;
     HWND window_ = nullptr;
     HWND owner_ = nullptr;
     RECT screenBounds_{};

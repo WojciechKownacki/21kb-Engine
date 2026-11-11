@@ -6,7 +6,7 @@
 #include "kb/render/frame/RenderViewportDesc.hpp"
 #include "kb/render/overlay/EditorCameraWireframe.hpp"
 #include "kb/render/overlay/EditorLightWireframe.hpp"
-#include "kb/render/overlay/EditorParticleIcon.hpp"
+#include "kb/render/overlay/EditorSceneIcon.hpp"
 #include "kb/render/overlay/PhysicsDebugLine.hpp"
 #include "kb/render/post/ScenePostProcessSettings.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
@@ -197,7 +197,7 @@ struct RenderSceneSubmitDesc {
     // its translation in float; with this the render-space view is rebuilt exactly (docs/large_worlds.md).
     std::optional<kb::math::DVec3> cameraOverrideEye{};
     // The world position the editor overlay positions of this submit (gizmo target, camera and light wireframes,
-    // particle icons, physics debug lines) are relative to; zero for world-space overlays. A host working relative
+    // scene icons, physics debug lines) are relative to; zero for world-space overlays. A host working relative
     // to an origin near its camera hands its overlays over without leaving that space.
     kb::math::DVec3 overlayOrigin{};
     std::optional<ScenePostProcessSettings> postProcessSettings{};
@@ -209,7 +209,7 @@ struct RenderSceneSubmitDesc {
     std::span<const std::uint64_t> dirtySceneEntityIds{};
     std::span<const EditorCameraWireframeDesc> editorCameraWireframes{};
     std::span<const EditorLightWireframeDesc> editorLightWireframes{};
-    std::span<const EditorParticleIconDesc> editorParticleIcons{};
+    std::span<const EditorSceneIconDesc> editorSceneIcons{};
     std::span<const PhysicsDebugLine> physicsDebugLines{};
     std::span<const kb::scene::SceneUIFrameElement> editorUIOverlays{};
     float editorUIScale = 1.0F;

@@ -1,6 +1,8 @@
 #include "rendering/EditorToolbarRenderer.hpp"
 
 #if defined(_WIN32)
+#include "project/EditorProjectPaths.hpp"
+#include "rendering/EditorPanelStyle.hpp"
 #include "rendering/EditorSurfacePainter.hpp"
 #include "rendering/EditorToolbarLayout.hpp"
 #include "rendering/GdiDrawing.hpp"
@@ -22,6 +24,7 @@
 
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <string_view>
 
@@ -30,11 +33,16 @@ namespace {
 
 constexpr int kTransportIconInset = 6;
 constexpr int kToolbarButtonRadius = 6;
-constexpr int kSaveButtonRadius = 6;
-constexpr int kDropdownRadius = 7;
-constexpr int kDropdownShadowOffsetX = 2;
-constexpr int kDropdownShadowOffsetY = 3;
-constexpr int kToolbarStatusGap = 10;
+constexpr float kBarControlRadius = 3.0F;
+constexpr int kBarIconSize = 16;
+constexpr float kTabRadius = 4.0F;
+constexpr float kDropdownRowRadius = 3.0F;
+constexpr int kDropdownIconColumn = 24;
+constexpr int kDropdownIconSize = 18;
+constexpr int kDropdownRowPadding = 10;
+constexpr COLORREF kDropdownDangerText = RGB(255, 138, 128);
+constexpr COLORREF kBarHoverFill = RGB(87, 87, 87);
+constexpr COLORREF kCloseHoverFill = RGB(196, 43, 28);
 
 [[nodiscard]] COLORREF Blend(COLORREF a, COLORREF b, int numerator, int denominator) noexcept {
     const int inv = denominator - numerator;
@@ -62,11 +70,6 @@ constexpr int kToolbarStatusGap = 10;
     return (std::sin(seconds * 3.25) + 1.0) * 0.5;
 }
 
-[[nodiscard]] RECT OffsetRectCopy(RECT rect, int dx, int dy) noexcept {
-    OffsetRect(&rect, dx, dy);
-    return rect;
-}
-
 void DrawMenuText(HDC dc, RECT rect, std::string_view label, COLORREF text, UINT format) {
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, text);
@@ -92,27 +95,25 @@ void DrawStatusText(HDC dc, RECT rect, std::string_view label, COLORREF text, UI
     return std::string{ EditorText("toolbar.untitledScene", "Untitled.21kbscene") };
 }
 
-[[nodiscard]] std::string ScenePersistenceStatus(const EditorSceneContext& sceneContext) {
-    return sceneContext.SceneDocumentDirty() || sceneContext.HasDirtyMaterialAssetEdit() ? std::string{ EditorText("toolbar.sceneUnsaved", "Unsaved") }
-        : std::string{ EditorText("toolbar.sceneSaved", "Saved") };
-}
+ULONGLONG g_nextBranchRead = 0;
 
-[[nodiscard]] std::string PlayModeStatus(const EditorSceneContext& sceneContext, const EditorPlayModeState& playMode) {
-    switch (playMode.Mode()) {
-    case EditorPlayMode::Playing:
-        return std::string{ sceneContext.HasPlayModeSceneSession()
-                ? EditorText("toolbar.playingSnapshot", "Playing - runtime snapshot active")
-                : EditorText("toolbar.playing", "Playing") };
-    case EditorPlayMode::Paused:
-        return std::string{ sceneContext.HasPlayModeSceneSession()
-                ? EditorText("toolbar.pausedSnapshot", "Paused - runtime snapshot active")
-                : EditorText("toolbar.paused", "Paused") };
-    case EditorPlayMode::Stopped:
-        return std::string{ sceneContext.HasPlayModeSceneSession()
-                ? EditorText("toolbar.stoppingRestoring", "Stopping - restoring scene")
-                : EditorText("toolbar.editing", "Editing") };
+// The project's checked-out branch. Read from disk at most every few seconds, because the
+// bar repaints on every pointer move.
+[[nodiscard]] const std::string& CurrentBranch() {
+    static std::string cached;
+    const ULONGLONG now = GetTickCount64();
+    if (now < g_nextBranchRead) {
+        return cached;
     }
-    return std::string{ EditorText("toolbar.editing", "Editing") };
+    g_nextBranchRead = now + 5000ULL;
+    cached.clear();
+    std::ifstream head(EditorProjectPaths::ProjectRoot() / ".git" / "HEAD");
+    std::string line;
+    constexpr std::string_view prefix = "ref: refs/heads/";
+    if (head && std::getline(head, line) && line.starts_with(prefix)) {
+        cached = line.substr(prefix.size());
+    }
+    return cached;
 }
 
 void FillRound(HDC dc, const RECT& rect, COLORREF fill, COLORREF border, int radius) {
@@ -127,43 +128,14 @@ void FillRound(HDC dc, const RECT& rect, COLORREF fill, COLORREF border, int rad
     DeleteObject(brush);
 }
 
-void StrokeRound(HDC dc, const RECT& rect, COLORREF color, int radius, int width) {
-    HPEN pen = CreatePen(PS_SOLID, width, color);
-    HGDIOBJ oldPen = SelectObject(dc, pen);
-    HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
-    RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, radius, radius);
-    SelectObject(dc, oldBrush);
-    SelectObject(dc, oldPen);
-    DeleteObject(pen);
-}
-
-void AddRoundedRect(Gdiplus::GraphicsPath& path, const Gdiplus::RectF& rect, float radius) {
-    const float diameter = radius * 2.0F;
-    path.AddArc(rect.X, rect.Y, diameter, diameter, 180.0F, 90.0F);
-    path.AddArc(rect.X + rect.Width - diameter, rect.Y, diameter, diameter, 270.0F, 90.0F);
-    path.AddArc(rect.X + rect.Width - diameter, rect.Y + rect.Height - diameter, diameter, diameter, 0.0F, 90.0F);
-    path.AddArc(rect.X, rect.Y + rect.Height - diameter, diameter, diameter, 90.0F, 90.0F);
-    path.CloseFigure();
-}
-
-void FillRoundedAlpha(HDC dc, const RECT& rect, COLORREF color, BYTE alpha, float radius) {
-    if (alpha == 0U) {
-        return;
+[[nodiscard]] COLORREF FlatButtonFill(const EditorTheme& theme, bool enabled, bool hovered, bool pressed) noexcept {
+    if (!enabled) {
+        return ThemeColor(theme.panel);
     }
-    HeroIconGdiplusRuntime::EnsureStarted();
-    Gdiplus::Graphics graphics(dc);
-    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-    Gdiplus::GraphicsPath path;
-    AddRoundedRect(
-        path,
-        Gdiplus::RectF(
-            static_cast<float>(rect.left),
-            static_cast<float>(rect.top),
-            static_cast<float>(rect.right - rect.left),
-            static_cast<float>(rect.bottom - rect.top)),
-        radius);
-    Gdiplus::SolidBrush brush(Gdiplus::Color(alpha, GetRValue(color), GetGValue(color), GetBValue(color)));
-    graphics.FillPath(&brush, &path);
+    if (pressed) {
+        return ThemeColor(theme.chrome);
+    }
+    return hovered ? RGB(87, 87, 87) : ThemeColor(theme.toolbarButton);
 }
 
 } // namespace
@@ -188,6 +160,10 @@ bool EditorToolbarRenderer::HitTestStatusBarConsole(const EditorStatusBarRects& 
     return inside(rects.errors) || inside(rects.warnings);
 }
 
+bool EditorToolbarRenderer::HitTestStatusBarAgent(const EditorStatusBarRects& rects, int x, int y) noexcept {
+    return x >= rects.askAgent.left && x < rects.askAgent.right && y >= rects.askAgent.top && y < rects.askAgent.bottom;
+}
+
 EditorMenuCommand EditorToolbarRenderer::HitTestMenu(const EditorMenuRects& rects, int x, int y) noexcept {
     return EditorToolbarLayout::HitTestMenu(rects, x, y);
 }
@@ -204,16 +180,19 @@ bool EditorToolbarRenderer::HitTestSave(const EditorToolbarRects& rects, int x, 
     return EditorToolbarLayout::HitTestSave(rects, x, y);
 }
 
+EditorTopBarItem EditorToolbarRenderer::HitTestTopBarItem(const EditorToolbarRects& rects, int x, int y) noexcept {
+    return EditorToolbarLayout::HitTestTopBarItem(rects, x, y);
+}
+
 RECT EditorToolbarRenderer::MenuDropdownPaintBounds(const EditorMenuRects& menu) noexcept {
     if (menu.dropdown.right <= menu.dropdown.left || menu.dropdown.bottom <= menu.dropdown.top) {
         return RECT{};
     }
-    return RECT{
-        menu.dropdown.left,
-        menu.dropdown.top,
-        menu.dropdown.right + kDropdownShadowOffsetX,
-        menu.dropdown.bottom + kDropdownShadowOffsetY,
-    };
+    return menu.dropdown;
+}
+
+void EditorToolbarRenderer::InvalidateRepositoryState() noexcept {
+    g_nextBranchRead = 0;
 }
 
 namespace {
@@ -241,11 +220,11 @@ void EditorToolbarRenderer::PaintMenu(HDC dc, const RECT& rect, const EditorThem
     const EditorMenuRects menu =
         ResolveMenu(rect, interaction.OpenMenu(), interaction.MenuRowCount(interaction.OpenMenu()));
     // Only the titles' part of the row: the toolbar painted the rest of it.
-    EditorSurfacePainter::Fill(dc, RECT{ rect.left, rect.top, menu.help.right + 4, rect.bottom - 1 }, theme, EditorSurfaceKind::HeaderStrip);
+    EditorSurfacePainter::Fill(dc, RECT{ menu.file.left - 2, rect.top, menu.help.right + 4, rect.bottom }, theme, EditorSurfaceKind::HeaderStrip);
     const COLORREF textPrimary = ThemeColor(theme.textPrimary);
     const COLORREF textSecondary = ThemeColor(theme.textSecondary);
-    const COLORREF hoverFill = RGB(34, 39, 48);
-    const COLORREF activeFill = RGB(42, 47, 56);
+    const COLORREF hoverFill = ThemeColor(theme.toolbarButton);
+    const COLORREF openFill = ThemeColor(theme.header);
     // The font the layout measured the titles with.
     const ScopedFont menuFont(EditorToolbarLayout::MenuFontSize, FW_NORMAL);
     const ScopedGdiObject selectedFont(dc, menuFont.handle);
@@ -254,64 +233,162 @@ void EditorToolbarRenderer::PaintMenu(HDC dc, const RECT& rect, const EditorThem
         const RECT item = EditorToolbarLayout::MenuRectByCommand(menu, descriptor.command);
         const bool open = interaction.OpenMenu() == descriptor.command;
         const bool hovered = interaction.HoveredMenu() == descriptor.command;
-        if (open || hovered) {
-            FillRound(dc, item, open ? activeFill : hoverFill, RGB(48, 56, 68), 5);
+        if (open) {
+            panel_style::FillDockTab(dc, item, openFill, kTabRadius);
+        } else if (hovered) {
+            panel_style::DrawRoundedFrame(dc, item, hoverFill, hoverFill, kBarControlRadius, 1.0F);
         }
         DrawMenuText(dc, item, EditorToolbarLayout::MenuLabel(descriptor.command), open || hovered ? textPrimary : textSecondary, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 }
 
+namespace {
+
+struct DropdownRowView {
+    std::string_view label;
+    std::string_view detail;
+    std::string_view shortcut;
+    HeroIconKind icon = HeroIconKind::RectangleGroup;
+    bool enabled = true;
+    bool selected = false;
+    bool danger = false;
+    bool submenu = false;
+};
+
+[[nodiscard]] DropdownRowView ResolveDropdownRow(EditorMenuCommand openMenu, int row, const EditorShellInteractionState& interaction) {
+    if (openMenu == EditorMenuCommand::Layout) {
+        const EditorLayoutMenuRow* layoutRow = interaction.LayoutMenu().Row(row);
+        if (layoutRow == nullptr) {
+            return {};
+        }
+        return { .label = layoutRow->label, .icon = LayoutRowIcon(*layoutRow), .enabled = layoutRow->enabled };
+    }
+    if (openMenu == EditorMenuCommand::RecentProjects) {
+        if (row == 0) {
+            return { .label = EditorText("common.back", "Back"), .icon = HeroIconKind::ChevronLeft };
+        }
+        const auto& projects = interaction.RecentProjectRows();
+        const auto index = static_cast<std::size_t>(row - 1);
+        if (index >= projects.size()) {
+            return {};
+        }
+        return { .label = projects[index].label, .detail = projects[index].detail, .icon = HeroIconKind::Cube, .enabled = !projects[index].path.empty() };
+    }
+    int fixedRow = row;
+    if (openMenu == EditorMenuCommand::Publish) {
+        const auto& platforms = interaction.PublishRows();
+        if (static_cast<std::size_t>(row) < platforms.size()) {
+            const EditorPathMenuRow& platform = platforms[static_cast<std::size_t>(row)];
+            return { .label = platform.label, .detail = platform.detail, .icon = platform.active ? HeroIconKind::RocketLaunch : HeroIconKind::Warning };
+        }
+        fixedRow = row - static_cast<int>(platforms.size());
+    }
+    if (openMenu == EditorMenuCommand::Scene) {
+        const auto& scenes = interaction.SceneMenuRows();
+        if (static_cast<std::size_t>(row) < scenes.size()) {
+            return { .label = scenes[static_cast<std::size_t>(row)].label, .icon = HeroIconKind::Cube, .selected = scenes[static_cast<std::size_t>(row)].active };
+        }
+        fixedRow = row - static_cast<int>(scenes.size());
+    }
+    DropdownRowView view{
+        .label = EditorToolbarLayout::DropdownLabel(openMenu, fixedRow),
+        .detail = EditorToolbarLayout::DropdownDescription(openMenu, fixedRow),
+        .shortcut = EditorToolbarLayout::DropdownShortcut(openMenu, fixedRow),
+        .icon = EditorToolbarLayout::DropdownIcon(openMenu, fixedRow),
+    };
+    if (openMenu == EditorMenuCommand::PlayOptions) {
+        const EditorPlayPreferences& play = interaction.PlayMenuPreferences();
+        view.enabled = interaction.PlayMenuCanChange();
+        if (fixedRow < 3) {
+            view.selected = static_cast<int>(play.target) == fixedRow;
+        } else if (play.startPaused) {
+            view.icon = HeroIconKind::Check;
+        }
+    } else if (openMenu == EditorMenuCommand::Project) {
+        view.submenu = fixedRow == 2;
+    } else if (openMenu == EditorMenuCommand::Scene) {
+        view.enabled = interaction.SceneDocumentActionsEnabled() || fixedRow < 2 || fixedRow == 4;
+        view.danger = fixedRow == 5;
+    }
+    return view;
+}
+
+void PaintDropdownRow(HDC dc, const RECT& rect, const EditorTheme& theme, const DropdownRowView& row, bool hovered) {
+    if (row.selected) {
+        const COLORREF accent = ThemeColor(theme.accent);
+        panel_style::DrawRoundedFrame(dc, rect, accent, accent, kDropdownRowRadius, 1.0F);
+    } else if (hovered && row.enabled) {
+        const COLORREF hover = ThemeColor(theme.toolbarButton);
+        panel_style::DrawRoundedFrame(dc, rect, hover, hover, kDropdownRowRadius, 1.0F);
+    }
+    const COLORREF white = RGB(255, 255, 255);
+    const COLORREF disabled = ThemeColor(theme.textDisabled);
+    const COLORREF labelColor = !row.enabled ? disabled : (row.selected ? white : (row.danger ? kDropdownDangerText : ThemeColor(theme.textPrimary)));
+    const COLORREF mutedColor = !row.enabled ? disabled : (row.selected ? white : ThemeColor(theme.textSecondary));
+
+    const int columnLeft = static_cast<int>(rect.left) + kDropdownRowPadding;
+    const int iconLeft = columnLeft + (kDropdownIconColumn - kDropdownIconSize) / 2;
+    const int centerY = static_cast<int>(rect.top + rect.bottom) / 2;
+    HeroIconPainter::Draw(dc, RECT{ iconLeft, centerY - kDropdownIconSize / 2, iconLeft + kDropdownIconSize, centerY + kDropdownIconSize / 2 }, row.icon, mutedColor, 1);
+
+    int textRight = static_cast<int>(rect.right) - kDropdownRowPadding;
+    const ScopedFont labelFont(EditorToolbarLayout::MenuFontSize, FW_NORMAL);
+    const ScopedFont detailFont(EditorToolbarLayout::DropdownDetailFontSize, FW_NORMAL);
+    const ScopedGdiObject selectedFont(dc, labelFont.handle);
+    if (!row.shortcut.empty()) {
+        const int width = EditorDialogStyle::TextWidth(dc, row.shortcut, EditorToolbarLayout::MenuFontSize);
+        DrawStatusText(dc, RECT{ textRight - width, rect.top, textRight, rect.bottom }, row.shortcut, mutedColor, DT_RIGHT);
+        textRight -= width + 12;
+    }
+    if (row.submenu) {
+        constexpr int chevron = 12;
+        HeroIconPainter::Draw(dc, RECT{ textRight - chevron, centerY - chevron / 2, textRight, centerY + chevron / 2 }, HeroIconKind::ChevronRight, mutedColor, 1);
+        textRight -= chevron + 8;
+    }
+    const int textLeft = columnLeft + kDropdownIconColumn + kDropdownRowPadding;
+    if (row.detail.empty()) {
+        DrawStatusText(dc, RECT{ textLeft, rect.top, textRight, rect.bottom }, row.label, labelColor, DT_LEFT);
+        return;
+    }
+    DrawStatusText(dc, RECT{ textLeft, rect.top + 5, textRight, centerY + 2 }, row.label, labelColor, DT_LEFT);
+    const ScopedGdiObject smallFont(dc, detailFont.handle);
+    DrawStatusText(dc, RECT{ textLeft, centerY + 1, textRight, rect.bottom - 5 }, row.detail, mutedColor, DT_LEFT);
+}
+
+} // namespace
+
 void EditorToolbarRenderer::PaintMenuDropdown(HDC dc, const EditorMenuRects& menu, const EditorTheme& theme, const EditorShellInteractionState& interaction) const {
-    if (interaction.OpenMenu() == EditorMenuCommand::None) {
+    const EditorMenuCommand openMenu = interaction.OpenMenu();
+    if (EditorToolbarLayout::MenuIndex(openMenu) < 0) {
         return;
     }
+    GdiDrawing::FillRectColor(dc, menu.dropdown, ThemeColor(theme.header));
 
-    const int index = EditorToolbarLayout::MenuIndex(interaction.OpenMenu());
-    if (index < 0) {
-        return;
-    }
-
-    const RECT shadow = OffsetRectCopy(menu.dropdown, kDropdownShadowOffsetX, kDropdownShadowOffsetY);
-    FillRound(dc, shadow, RGB(0, 0, 0), RGB(0, 0, 0), kDropdownRadius);
-    EditorDialogStyle::PaintSurface(dc, menu.dropdown, theme);
-
-    const bool layoutMenu = interaction.OpenMenu() == EditorMenuCommand::Layout;
+    const ScopedFont headingFont(12, FW_SEMIBOLD);
     for (int row = 0; row < menu.dropdownRowCount; ++row) {
         const RECT rowRect = menu.dropdownRows[static_cast<std::size_t>(row)];
-        const bool hovered = interaction.HoveredMenuRow().has_value() && *interaction.HoveredMenuRow() == row;
-        const EditorLayoutMenuRow* layoutRow =
-            layoutMenu ? interaction.LayoutMenu().Row(row) : nullptr;
-        const std::string_view label = layoutRow != nullptr
-            ? std::string_view{ layoutRow->label }
-            : EditorToolbarLayout::DropdownLabel(interaction.OpenMenu(), row);
-        const bool enabled = layoutRow == nullptr || layoutRow->enabled;
-        if (layoutRow == nullptr && row > 0 && EditorToolbarLayout::DropdownStartsGroup(interaction.OpenMenu(), row)) {
-            GdiDrawing::FillRectColor(dc, RECT{ rowRect.left + 10, rowRect.top, rowRect.right - 10, rowRect.top + 1 },
-                ThemeColor(theme.borderChrome));
+        int above = static_cast<int>(rowRect.top);
+        if (EditorToolbarLayout::DropdownHasHeading(openMenu, row, menu.dropdownRowCount)) {
+            above -= EditorToolbarLayout::DropdownHeadingHeight;
+            const ScopedGdiObject selectedFont(dc, headingFont.handle);
+            DrawStatusText(dc, RECT{ rowRect.left + kDropdownRowPadding, above + 8, rowRect.right - kDropdownRowPadding, static_cast<int>(rowRect.top) - 4 },
+                EditorToolbarLayout::DropdownHeading(openMenu, row, menu.dropdownRowCount), RGB(168, 168, 168), DT_LEFT);
         }
-        // Every row of the Layout menu carries an icon, the layout in use a tick.
-        // Giving one only to that row would indent its label alone and leave the list
-        // ragged, because the icon is what the label is measured from.
-        EditorDialogStyle::PaintMenuRow(
-            dc,
-            RECT{ rowRect.left + 4, rowRect.top + 1, rowRect.right - 4, rowRect.bottom - 1 },
-            theme,
-            label,
-            layoutRow != nullptr ? LayoutRowIcon(*layoutRow) : EditorToolbarLayout::DropdownIcon(interaction.OpenMenu(), row),
-            hovered && enabled,
-            enabled,
-            true,
-            layoutRow != nullptr ? std::string_view{} : EditorToolbarLayout::DropdownShortcut(interaction.OpenMenu(), row));
+        if (EditorToolbarLayout::DropdownStartsGroup(openMenu, row, menu.dropdownRowCount)) {
+            const int ruleY = above - EditorToolbarLayout::DropdownSeparatorHeight / 2 - 1;
+            GdiDrawing::FillRectColor(dc, RECT{ rowRect.left + 4, ruleY, rowRect.right - 4, ruleY + 1 }, ThemeColor(theme.toolbarButton));
+        }
+        const bool hovered = interaction.HoveredMenuRow().has_value() && *interaction.HoveredMenuRow() == row;
+        PaintDropdownRow(dc, rowRect, theme, ResolveDropdownRow(openMenu, row, interaction), hovered);
     }
 }
 
 void EditorToolbarRenderer::PaintToolbar(HDC dc, const RECT& rect, const EditorTheme& theme, const EditorSceneContext& sceneContext, const EditorPlayModeState& playMode, const EditorShellInteractionState& interaction) const {
     EditorSurfacePainter::Fill(dc, rect, theme, EditorSurfaceKind::HeaderStrip);
-    GdiDrawing::FillRectColor(dc, RECT{ rect.left, rect.bottom - 1, rect.right, rect.bottom }, ThemeColor(theme.borderChrome));
     const EditorToolbarRects toolbar = ResolveToolbar(rect);
-    // Every label here is sized in points, so it scales with the monitor like the menus.
-    const ScopedFont statusFont(EditorToolbarLayout::MenuFontSize, FW_NORMAL);
-    const ScopedGdiObject selectedFont(dc, statusFont.handle);
+    const ScopedFont normalFont(EditorToolbarLayout::MenuFontSize, FW_NORMAL);
+    const ScopedFont boldFont(EditorToolbarLayout::MenuFontSize, FW_BOLD);
+    const ScopedGdiObject selectedFont(dc, normalFont.handle);
 
     const bool isPlaying = playMode.Mode() == EditorPlayMode::Playing;
     const bool isPaused = playMode.Mode() == EditorPlayMode::Paused;
@@ -319,66 +396,126 @@ void EditorToolbarRenderer::PaintToolbar(HDC dc, const RECT& rect, const EditorT
     const bool transportActive = isPlaying || isPaused;
     const EditorTransportCommand hovered = interaction.HoveredTransport();
     const EditorTransportCommand pressed = interaction.PressedTransport();
-    const COLORREF success = RGB(63, 194, 123);
+    const EditorTopBarItem hoveredItem = interaction.HoveredTopBarItem();
+    const COLORREF success = RGB(60, 203, 108);
     const COLORREF warning = RGB(224, 165, 54);
     const COLORREF danger = RGB(226, 74, 74);
-    const COLORREF noGlow = RGB(0, 0, 0);
+    const COLORREF ink = ThemeColor(theme.textPrimary);
+    const COLORREF muted = ThemeColor(theme.textSecondary);
+    const COLORREF disabled = ThemeColor(theme.textDisabled);
+    const COLORREF panel = ThemeColor(theme.panel);
+    const COLORREF button = ThemeColor(theme.toolbarButton);
+    const COLORREF white = RGB(255, 255, 255);
+
+    const auto fillControl = [dc](const RECT& area, COLORREF fill) {
+        panel_style::DrawRoundedFrame(dc, area, fill, fill, kBarControlRadius, 1.0F);
+    };
+    const auto iconAt = [dc](int left, const RECT& area, HeroIconKind icon, COLORREF color, int size = kBarIconSize) {
+        const int top = static_cast<int>(area.top) + (static_cast<int>(area.bottom - area.top) - size) / 2;
+        HeroIconPainter::Draw(dc, RECT{ left, top, left + size, top + size }, icon, color, 1);
+    };
+    const auto label = [&](const RECT& area, int left, int rightInset, std::string_view text, COLORREF color, bool bold) {
+        const ScopedGdiObject font(dc, bold ? boldFont.handle : normalFont.handle);
+        DrawStatusText(dc, RECT{ left, area.top, static_cast<int>(area.right) - rightInset, area.bottom }, text, color, DT_LEFT);
+    };
+
+    // Project, scene and branch.
+    const EditorMenuCommand openMenu = interaction.OpenMenu();
+    const COLORREF tab = ThemeColor(theme.header);
+    if (openMenu == EditorMenuCommand::Project || openMenu == EditorMenuCommand::RecentProjects) {
+        panel_style::FillDockTab(dc, toolbar.projectButton, tab, kTabRadius);
+    } else {
+        fillControl(toolbar.projectButton, hoveredItem == EditorTopBarItem::Project ? button : panel);
+    }
+    iconAt(toolbar.projectButton.left + 10, toolbar.projectButton, HeroIconKind::Cube, ink);
+    label(toolbar.projectButton, toolbar.projectButton.left + 32, 24, EditorProjectPaths::ProjectRoot().filename().string(), ink, true);
+    iconAt(toolbar.projectButton.right - 20, toolbar.projectButton, HeroIconKind::ChevronDown, muted, 12);
+
+    if (openMenu == EditorMenuCommand::Scene) {
+        panel_style::FillDockTab(dc, toolbar.sceneButton, tab, kTabRadius);
+    } else if (hoveredItem == EditorTopBarItem::Scene) {
+        fillControl(toolbar.sceneButton, button);
+    }
+    const bool unsaved = sceneContext.SceneDocumentDirty() || sceneContext.HasDirtyMaterialAssetEdit();
+    label(toolbar.sceneButton, toolbar.sceneButton.left + 10, unsaved ? 36 : 24, SceneDisplayName(sceneContext), ink, false);
+    if (unsaved) {
+        const int centerY = static_cast<int>(toolbar.sceneButton.top + toolbar.sceneButton.bottom) / 2;
+        const RECT dot{ toolbar.sceneButton.right - 32, centerY - 3, toolbar.sceneButton.right - 26, centerY + 3 };
+        panel_style::DrawRoundedFrame(dc, dot, warning, warning, 3.0F, 1.0F);
+    }
+    iconAt(toolbar.sceneButton.right - 20, toolbar.sceneButton, HeroIconKind::ChevronDown, muted, 12);
+
+    if (interaction.RepositoryWindowOpen()) {
+        panel_style::FillDockTab(dc, toolbar.branchLabel, tab, kTabRadius);
+    } else if (hoveredItem == EditorTopBarItem::Branch) {
+        fillControl(toolbar.branchLabel, button);
+    }
+    const std::string& branch = CurrentBranch();
+    label(toolbar.branchLabel, toolbar.branchLabel.left + 6, 0,
+        branch.empty() ? EditorText("toolbar.noBranch", "No repo") : std::string_view{ branch }, interaction.RepositoryWindowOpen() ? ink : muted, false);
+    const int separatorX = static_cast<int>(toolbar.branchLabel.right) + 4;
+    const int centerRow = static_cast<int>(rect.top + rect.bottom) / 2;
+    GdiDrawing::FillRectColor(dc, RECT{ separatorX, centerRow - 11, separatorX + 1, centerRow + 11 }, button);
+
+    // Transport.
     const bool playHovered = isStopped && hovered == EditorTransportCommand::Play;
     const bool playPressed = isStopped && pressed == EditorTransportCommand::Play;
     const bool pauseHovered = transportActive && hovered == EditorTransportCommand::Pause;
     const bool pausePressed = transportActive && pressed == EditorTransportCommand::Pause;
     const bool stopHovered = transportActive && hovered == EditorTransportCommand::Stop;
     const bool stopPressed = transportActive && pressed == EditorTransportCommand::Stop;
+    const COLORREF playFill = !isStopped ? panel : (playPressed ? ThemeColor(theme.chrome) : (playHovered ? kBarHoverFill : button));
+    fillControl(toolbar.playButton, playFill);
+    iconAt(toolbar.playButton.left + 16, toolbar.playButton, HeroIconKind::Play, isStopped ? success : disabled);
+    label(toolbar.playButton, toolbar.playButton.left + 40, 6, EditorText("toolbar.play", "Play"), isStopped ? ink : disabled, true);
+    if (openMenu == EditorMenuCommand::PlayOptions) {
+        panel_style::FillDockTab(dc, toolbar.playOptionsButton, tab, kTabRadius);
+    } else {
+        fillControl(toolbar.playOptionsButton, hoveredItem == EditorTopBarItem::PlayOptions ? kBarHoverFill : playFill);
+    }
+    iconAt(toolbar.playOptionsButton.left + 6, toolbar.playOptionsButton, HeroIconKind::ChevronDown, muted, 12);
 
-    const bool hasUnsavedOpenDocument = sceneContext.SceneDocumentDirty() || sceneContext.HasDirtyMaterialAssetEdit();
-    PaintTextButton(dc, toolbar.saveButton, theme, EditorText("common.save", "Save"), true, hasUnsavedOpenDocument, interaction.HoveredSave(), interaction.PressedSave(), warning);
-    PaintButton(dc, toolbar.playButton, theme, isStopped, false, playHovered, playPressed, noGlow);
-    PaintButton(dc, toolbar.pauseButton, theme, transportActive, isPaused, pauseHovered, pausePressed, isPaused ? success : noGlow);
-    PaintButton(dc, toolbar.stopButton, theme, transportActive, false, stopHovered, stopPressed, noGlow);
+    PaintButton(dc, toolbar.pauseButton, theme, transportActive, isPaused, pauseHovered, pausePressed, isPaused ? success : RGB(0, 0, 0));
+    PaintButton(dc, toolbar.stopButton, theme, transportActive, false, stopHovered, stopPressed, RGB(0, 0, 0));
+    iconAt(toolbar.pauseButton.left + 11, toolbar.pauseButton, isPaused ? HeroIconKind::Resume : HeroIconKind::Pause,
+        transportActive ? (isPaused ? success : warning) : disabled);
+    iconAt(toolbar.stopButton.left + 11, toolbar.stopButton, HeroIconKind::TransportStop, transportActive ? danger : disabled);
 
-    const double pulse = ToolbarPulse();
-    const COLORREF playIdleIcon = BlendRatio(success, RGB(178, 255, 213), 0.16);
-    const COLORREF playHoverIcon = BlendRatio(success, RGB(198, 255, 226), 0.30);
-    const COLORREF warningIcon = BlendRatio(warning, RGB(255, 226, 144), 0.10 + (0.18 * pulse));
-    const COLORREF resumeIcon = BlendRatio(success, RGB(180, 255, 212), 0.22 + (0.24 * pulse));
-    const COLORREF dangerIcon = BlendRatio(danger, RGB(255, 160, 160), 0.10 + (0.18 * pulse));
-    const COLORREF pauseHoverIcon = BlendRatio(warningIcon, RGB(255, 244, 190), 0.16);
-    const COLORREF stopHoverIcon = BlendRatio(dangerIcon, RGB(255, 210, 210), 0.16);
-    const COLORREF disabledIcon = ThemeColor(theme.textDisabled);
-    const auto iconRect = [](const RECT& button, bool pressedButton) noexcept {
-        RECT rect = GdiDrawing::Inset(button, kTransportIconInset);
-        if (pressedButton) {
-            OffsetRect(&rect, 0, 1);
+    // Build and Publish.
+    if (toolbar.buildButton.right > toolbar.buildButton.left) {
+        fillControl(toolbar.buildButton, hoveredItem == EditorTopBarItem::Build ? button : panel);
+        iconAt(toolbar.buildButton.left + 12, toolbar.buildButton, HeroIconKind::WrenchScrewdriver, ink);
+        label(toolbar.buildButton, toolbar.buildButton.left + 36, 6, EditorText("toolbar.build", "Build"), ink, false);
+        const COLORREF accent = ThemeColor(theme.accent);
+        if (openMenu == EditorMenuCommand::Publish) {
+            panel_style::FillDockTab(dc, toolbar.publishButton, tab, kTabRadius);
+        } else {
+            fillControl(toolbar.publishButton, hoveredItem == EditorTopBarItem::Publish ? BlendRatio(accent, white, 0.16) : accent);
         }
-        return rect;
-    };
+        iconAt(toolbar.publishButton.left + 12, toolbar.publishButton, HeroIconKind::RocketLaunch, white);
+        label(toolbar.publishButton, toolbar.publishButton.left + 36, 6, EditorText("toolbar.publish", "Publish"), white, true);
+    }
 
-    HeroIconPainter::Draw(dc, iconRect(toolbar.playButton, playPressed), HeroIconKind::Play, isStopped ? (playHovered ? playHoverIcon : playIdleIcon) : disabledIcon, 1);
-    HeroIconPainter::Draw(dc, iconRect(toolbar.pauseButton, pausePressed), isPaused ? HeroIconKind::Resume : HeroIconKind::Pause, transportActive ? (isPaused ? resumeIcon : (pauseHovered ? pauseHoverIcon : warningIcon)) : disabledIcon, 1);
-    HeroIconPainter::Draw(dc, iconRect(toolbar.stopButton, stopPressed), HeroIconKind::TransportStop, transportActive ? (stopHovered ? stopHoverIcon : dangerIcon) : disabledIcon, 1);
-
-    const COLORREF textSecondary = ThemeColor(theme.textSecondary);
-    const COLORREF dirtyText = sceneContext.SceneDocumentDirty() ? warningIcon : textSecondary;
-    const LONG statusGap = kToolbarStatusGap;
-    // The mode reads right before the transport it describes, the scene right before Save.
-    const RECT modeRect{
-        std::min(toolbar.playButton.left, static_cast<LONG>(EditorToolbarLayout::MenuTitlesRight(rect)) + statusGap),
-        rect.top,
-        toolbar.playButton.left - statusGap,
-        rect.bottom,
-    };
-    const RECT sceneRect{
-        toolbar.stopButton.right + statusGap,
-        rect.top,
-        (toolbar.saveButton.right > toolbar.saveButton.left ? toolbar.saveButton.left : rect.right) - statusGap,
-        rect.bottom,
-    };
-    DrawStatusText(dc, sceneRect,
-        EditorLocalization::Format("toolbar.sceneStatus", "{scene} - {status}",
-            { { "scene", SceneDisplayName(sceneContext) }, { "status", ScenePersistenceStatus(sceneContext) } }),
-        dirtyText, DT_RIGHT);
-    DrawStatusText(dc, modeRect, PlayModeStatus(sceneContext, playMode),
-        isPlaying ? success : (isPaused ? warning : textSecondary), DT_RIGHT);
+    // The window's own controls, now that the bar takes the title row's place.
+    if (hoveredItem == EditorTopBarItem::Minimize) {
+        GdiDrawing::FillRectColor(dc, toolbar.minimizeButton, button);
+    }
+    iconAt(toolbar.minimizeButton.left + 16, toolbar.minimizeButton, HeroIconKind::Minus, ink, 14);
+    if (hoveredItem == EditorTopBarItem::Maximize) {
+        GdiDrawing::FillRectColor(dc, toolbar.maximizeButton, button);
+    }
+    const int maxLeft = static_cast<int>(toolbar.maximizeButton.left) + 18;
+    const int maxTop = centerRow - 5;
+    const RECT square{ maxLeft, maxTop, maxLeft + 10, maxTop + 10 };
+    GdiDrawing::FillRectColor(dc, RECT{ square.left, square.top, square.right, square.top + 1 }, ink);
+    GdiDrawing::FillRectColor(dc, RECT{ square.left, square.bottom - 1, square.right, square.bottom }, ink);
+    GdiDrawing::FillRectColor(dc, RECT{ square.left, square.top, square.left + 1, square.bottom }, ink);
+    GdiDrawing::FillRectColor(dc, RECT{ square.right - 1, square.top, square.right, square.bottom }, ink);
+    const bool closeOver = hoveredItem == EditorTopBarItem::Close;
+    if (closeOver) {
+        GdiDrawing::FillRectColor(dc, toolbar.closeButton, kCloseHoverFill);
+    }
+    iconAt(toolbar.closeButton.left + 16, toolbar.closeButton, HeroIconKind::XMark, closeOver ? white : ink, 14);
 }
 
 void EditorToolbarRenderer::PaintStatusBar(
@@ -431,75 +568,17 @@ void EditorToolbarRenderer::PaintStatusBar(
     item(bar.warnings, HeroIconKind::Warning, warnings > 0U ? warning : dim,
         EditorLocalization::Format("statusBar.warnings", "{count} warnings", { { "count", std::to_string(warnings) } }),
         warnings > 0U ? warning : secondary);
+    item(bar.askAgent, HeroIconKind::Bolt, ThemeColor(theme.accent), EditorText("statusBar.askAgent", "Ask Agent"), ThemeColor(theme.textPrimary));
     if (drawerCollapsed) {
         DrawStatusText(dc, bar.backend, EditorText("statusBar.drawerHint", "Ctrl+Space  Project Files / Console"), secondary, DT_LEFT);
     }
     DrawStatusText(dc, bar.backend, backendLabel, dim, DT_RIGHT);
 }
 
-void EditorToolbarRenderer::PaintTextButton(HDC dc, const RECT& rect, const EditorTheme& theme, std::string_view label, bool enabled, bool active, bool hovered, bool pressed, COLORREF glow) const {
-    if (rect.right <= rect.left || rect.bottom <= rect.top) {
-        return;
-    }
-
-    static_cast<void>(theme);
-    const double pulse = ToolbarPulse();
-    const bool hasGlow = active && glow != RGB(0, 0, 0);
-    const COLORREF fill = enabled
-        ? (hovered ? RGB(38, 47, 60) : RGB(25, 30, 38))
-        : RGB(20, 23, 29);
-    const COLORREF activeFill = hasGlow ? BlendRatio(fill, glow, 0.12 + (0.08 * pulse)) : fill;
-    const COLORREF border = hasGlow ? BlendRatio(RGB(58, 70, 89), glow, 0.34 + (0.18 * pulse)) : (hovered ? RGB(66, 79, 101) : RGB(38, 45, 57));
-    const COLORREF text = enabled ? (active ? RGB(255, 229, 162) : RGB(204, 212, 222)) : RGB(110, 118, 130);
-    RECT button = rect;
-    if (pressed) {
-        OffsetRect(&button, 0, 1);
-    }
-    FillRound(dc, RECT{ button.left + 1, button.top + 2, button.right + 1, button.bottom + 2 }, RGB(8, 10, 14), RGB(8, 10, 14), kSaveButtonRadius);
-    FillRound(dc, button, activeFill, border, kSaveButtonRadius);
-    DrawStatusText(dc, RECT{ button.left + 8, button.top, button.right - 8, button.bottom }, label, text, DT_CENTER);
-}
-
 void EditorToolbarRenderer::PaintButton(HDC dc, const RECT& rect, const EditorTheme& theme, bool enabled, bool active, bool hovered, bool pressed, COLORREF glow) const {
-    static_cast<void>(theme);
-    const double pulse = ToolbarPulse();
-    const COLORREF idleTop = enabled ? RGB(29, 35, 45) : RGB(23, 27, 34);
-    const COLORREF idleBottom = enabled ? RGB(19, 23, 30) : RGB(19, 22, 28);
-    const COLORREF hoverTop = RGB(39, 49, 64);
-    const COLORREF hoverBottom = RGB(26, 32, 42);
-    const COLORREF activeTop = BlendRatio(RGB(42, 51, 64), RGB(50, 61, 78), 0.28 * pulse);
-    const COLORREF activeBottom = BlendRatio(RGB(25, 31, 40), RGB(31, 38, 50), 0.22 * pulse);
-    const bool hasGlow = active && glow != RGB(0, 0, 0);
-    const COLORREF glowFillTop = hasGlow ? BlendRatio(activeTop, glow, 0.14 + (0.08 * pulse)) : activeTop;
-    const COLORREF glowFillBottom = hasGlow ? BlendRatio(activeBottom, glow, 0.08 + (0.06 * pulse)) : activeBottom;
-    const COLORREF topFill = active ? glowFillTop : (hovered ? hoverTop : idleTop);
-    const COLORREF bottomFill = active ? glowFillBottom : (hovered ? hoverBottom : idleBottom);
-    const COLORREF border = hasGlow ? BlendRatio(RGB(65, 80, 102), glow, 0.42 + (0.24 * pulse)) : (hovered || active ? RGB(65, 80, 102) : RGB(36, 42, 53));
-
-    FillRound(dc, RECT{ rect.left + 1, rect.top + 2, rect.right + 1, rect.bottom + 2 }, RGB(8, 10, 14), RGB(8, 10, 14), kToolbarButtonRadius);
-    if (hasGlow) {
-        const BYTE softAlpha = static_cast<BYTE>(34 + (54 * pulse));
-        const BYTE coreAlpha = static_cast<BYTE>(46 + (76 * pulse));
-        FillRoundedAlpha(dc, RECT{ rect.left - 8, rect.top - 8, rect.right + 8, rect.bottom + 8 }, glow, static_cast<BYTE>(softAlpha / 2), static_cast<float>(kToolbarButtonRadius + 8));
-        FillRoundedAlpha(dc, RECT{ rect.left - 5, rect.top - 5, rect.right + 5, rect.bottom + 5 }, glow, softAlpha, static_cast<float>(kToolbarButtonRadius + 5));
-        FillRoundedAlpha(dc, RECT{ rect.left - 2, rect.top - 2, rect.right + 2, rect.bottom + 2 }, glow, coreAlpha, static_cast<float>(kToolbarButtonRadius + 2));
-    }
-    FillRound(dc, rect, topFill, border, kToolbarButtonRadius);
-
-    const RECT inner = GdiDrawing::Inset(rect, 1);
-    GdiDrawing::FillRectColor(dc, GdiDrawing::Inset(inner, 1), bottomFill);
-    GdiDrawing::FillRectColor(dc, RECT{ inner.left + 4, inner.top + 1, inner.right - 4, inner.top + 2 }, pressed ? RGB(12, 15, 20) : BlendRatio(RGB(51, 60, 73), RGB(76, 90, 112), active ? 0.24 * pulse : 0.0));
-    GdiDrawing::FillRectColor(dc, RECT{ inner.left + 4, inner.bottom - 2, inner.right - 4, inner.bottom - 1 }, pressed ? RGB(64, 72, 86) : RGB(12, 15, 20));
-
-    if ((hovered || active) && !hasGlow) {
-        const COLORREF soft = hasGlow ? BlendRatio(RGB(48, 70, 58), glow, 0.42 + (0.18 * pulse)) : (active ? BlendRatio(RGB(48, 61, 80), RGB(72, 92, 124), 0.18 * pulse) : RGB(46, 58, 76));
-        const RECT innerGlow = GdiDrawing::Inset(rect, 2);
-        StrokeRound(dc, innerGlow, soft, kToolbarButtonRadius - 2, 1);
-    }
-
-    if (!enabled) {
-        GdiDrawing::FillRectColor(dc, GdiDrawing::Inset(rect, 2), RGB(24, 27, 33));
-    }
+    const COLORREF fill = FlatButtonFill(theme, enabled, hovered, pressed);
+    const COLORREF border = active && glow != RGB(0, 0, 0) ? glow : fill;
+    FillRound(dc, rect, fill, border, kToolbarButtonRadius);
 }
 
 } // namespace kb::editor

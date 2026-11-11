@@ -49,9 +49,10 @@ constexpr int kTextBaselineOffsetY = 1;
     return row.left + (row.right - row.left) * 45 / 100;
 }
 constexpr int kSectionDividerInset = 8;
-constexpr float kSectionCornerRadius = 7.0F;
-constexpr float kSectionOutlineWidth = 1.5F;
-constexpr float kInputCornerRadius = 3.0F;
+constexpr float kSectionCornerRadius = 4.0F;
+constexpr float kSectionOutlineWidth = 1.0F;
+constexpr float kDockTabCornerRadius = 4.0F;
+constexpr float kInputCornerRadius = 4.0F;
 constexpr float kInputOutlineWidth = 1.0F;
 [[nodiscard]] inline COLORREF Color(EditorColor color) {
     return GdiDrawing::ToColorRef(color);
@@ -242,11 +243,34 @@ inline void DrawRoundedFrame(
     graphics.DrawPath(&pen, &path);
 }
 
-// `accent` paints a bar down the left edge. Focused fields use it so a field being typed
-// into is distinguishable at a glance from one the pointer merely rests on.
+// A focused field takes `accent` as its outline, so a field being typed into is
+// distinguishable at a glance from one the pointer merely rests on.
 inline void DrawInputFrame(HDC dc, const RECT& rect, COLORREF fill, COLORREF border,
                            COLORREF accent = CLR_INVALID, float accentWidth = 0.0F) {
-    DrawRoundedFrame(dc, rect, fill, border, kInputCornerRadius, kInputOutlineWidth, accent, accentWidth);
+    const COLORREF outline = accent != CLR_INVALID && accentWidth > 0.0F ? accent : border;
+    DrawRoundedFrame(dc, rect, fill, outline, kInputCornerRadius, kInputOutlineWidth);
+}
+
+// A dock tab: only its top corners are rounded, so the active tab runs into its panel.
+inline void FillDockTab(HDC dc, const RECT& rect, COLORREF fill, float radius) {
+    if (dc == nullptr || rect.right - rect.left <= 2 || rect.bottom - rect.top <= 2) {
+        return;
+    }
+    HeroIconGdiplusRuntime::EnsureStarted();
+    Gdiplus::Graphics graphics(dc);
+    ConfigureSectionGraphics(graphics);
+    Gdiplus::GraphicsPath path;
+    AddTopRoundedRectPath(
+        path,
+        Gdiplus::RectF{
+            static_cast<Gdiplus::REAL>(rect.left),
+            static_cast<Gdiplus::REAL>(rect.top),
+            static_cast<Gdiplus::REAL>(rect.right - rect.left),
+            static_cast<Gdiplus::REAL>(rect.bottom - rect.top),
+        },
+        radius);
+    Gdiplus::SolidBrush brush(GdiplusColor(fill));
+    graphics.FillPath(&brush, &path);
 }
 
 inline void DrawSectionButtonFrame(HDC dc, const RECT& rect, COLORREF fill, COLORREF border) {
@@ -254,7 +278,8 @@ inline void DrawSectionButtonFrame(HDC dc, const RECT& rect, COLORREF fill, COLO
 }
 
 inline void DrawSectionAccentFrame(HDC dc, const RECT& rect, COLORREF fill, COLORREF border, COLORREF accent) {
-    DrawRoundedFrame(dc, rect, fill, border, kSectionCornerRadius, kSectionOutlineWidth, accent, 3.5F);
+    static_cast<void>(border);
+    DrawRoundedFrame(dc, rect, fill, accent, kSectionCornerRadius, kSectionOutlineWidth);
 }
 
 inline void FillSectionHeaderBackground(HDC dc, const RECT& rect, COLORREF fill) {

@@ -63,7 +63,7 @@ public:
         render::RenderSceneSubmitDesc::EditorGizmoDesc editorGizmo{};
         std::vector<render::EditorCameraWireframeDesc> editorCameraWireframes;
         std::vector<render::EditorLightWireframeDesc> editorLightWireframes;
-        std::vector<render::EditorParticleIconDesc> editorParticleIcons;
+        std::vector<render::EditorSceneIconDesc> editorSceneIcons;
         std::vector<render::PhysicsDebugLine> physicsDebugLines;
         std::vector<kb::scene::SceneUIFrameElement> editorUIOverlays;
         float editorUIScale = 1.0F;

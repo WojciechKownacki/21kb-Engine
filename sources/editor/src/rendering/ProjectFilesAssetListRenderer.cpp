@@ -66,10 +66,7 @@ void DrawListHeader(HDC dc, const EditorAssetBrowserLayoutRects& layout, const E
 
 void DrawFolderRow(HDC dc, RECT row, const EditorTheme& theme, const EditorAssetFolderRow& folder, const EditorAssetBrowserState& state) {
     if (folder.selected) {
-        GdiDrawing::FillRectColor(dc, row, Draw::Blend(Draw::Color(theme.panel), Draw::Color(theme.accent), state.IsSelectionFocused() ? 18 : 10));
-        if (state.IsSelectionFocused()) {
-            GdiDrawing::FillRectColor(dc, RECT{ row.left, row.top, row.left + 3, row.bottom }, Draw::Color(theme.accent));
-        }
+        GdiDrawing::FillRectColor(dc, row, Draw::Blend(Draw::Color(theme.panel), Draw::Color(theme.accent), state.IsSelectionFocused() ? 100 : 35));
     }
     RECT icon{ row.left + 6, row.top + 4, row.left + 24, row.bottom - 4 };
     Draw::DrawIconWithShadow(dc, icon, HeroIconKind::Folder, Draw::FolderColor(folder.selected), 1);
@@ -87,10 +84,7 @@ void DrawFolderRow(HDC dc, RECT row, const EditorTheme& theme, const EditorAsset
 void DrawAssetRow(HDC dc, RECT row, const EditorTheme& theme, const EditorAssetItemRow& asset, const EditorAssetBrowserState& state,
     const EditorAssetUsers& users) {
     if (asset.selected) {
-        GdiDrawing::FillRectColor(dc, row, Draw::Blend(Draw::Color(theme.panel), Draw::Color(theme.accent), state.IsSelectionFocused() ? 18 : 10));
-        if (state.IsSelectionFocused()) {
-            GdiDrawing::FillRectColor(dc, RECT{ row.left, row.top, row.left + 3, row.bottom }, Draw::Color(theme.accent));
-        }
+        GdiDrawing::FillRectColor(dc, row, Draw::Blend(Draw::Color(theme.panel), Draw::Color(theme.accent), state.IsSelectionFocused() ? 100 : 35));
     }
     RECT icon{ row.left + 6, row.top + 4, row.left + 22, row.bottom - 4 };
     const ProjectFilesAssetIcon assetIcon = ProjectFilesAssetIconResolver::Resolve(asset.metadata, asset.selected);

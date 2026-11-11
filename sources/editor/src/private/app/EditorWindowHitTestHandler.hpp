@@ -13,7 +13,7 @@ namespace kb::editor {
 class EditorWindowHitTestHandler {
 public:
 #if defined(_WIN32)
-    [[nodiscard]] static LRESULT Handle(HWND messageWindow, LPARAM lparam, const EditorFloatingWindowManager& floatingWindows);
+    [[nodiscard]] static LRESULT Handle(HWND messageWindow, LPARAM lparam, const EditorFloatingWindowManager& floatingWindows, HWND mainWindow, int topBarHeight);
 #endif
 };
 

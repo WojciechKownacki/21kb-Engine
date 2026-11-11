@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 #include "localization/EditorLocalization.hpp"
 #include "platform/win32/Utf8Gdi.hpp"
+#include "rendering/EditorPanelStyle.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/HeroIconKind.hpp"
 #include "rendering/HeroIconPainter.hpp"
@@ -19,16 +20,14 @@ namespace {
 
 constexpr int kPad = 12;
 constexpr int kTabStripHeight = 34;
-constexpr int kToolbarHeight = 46;
 constexpr int kColumnMaxWidth = 880;
-constexpr int kComposerHeight = 92;
+constexpr int kComposerHeight = 104;
+constexpr int kComposerRowHeight = 26;
 constexpr int kHintHeight = 18;
-constexpr int kSendWidth = 92;
 constexpr int kEntryGap = 12;
 constexpr int kHeaderLine = 18;
 constexpr int kCardPad = 12;
-constexpr COLORREF kTeal = RGB(86, 172, 205);
-constexpr COLORREF kTealDeep = RGB(28, 66, 82);
+constexpr COLORREF kTeal = RGB(0, 112, 224);
 constexpr COLORREF kGreen = RGB(63, 194, 123);
 constexpr COLORREF kAmber = RGB(224, 165, 54);
 constexpr COLORREF kDanger = RGB(232, 108, 108);
@@ -37,16 +36,9 @@ constexpr COLORREF kDanger = RGB(232, 108, 108);
     return RGB(color.r, color.g, color.b);
 }
 
+// `radius` is the corner's diameter, as RoundRect took it; every control here stays flat and tight.
 void FillRound(HDC dc, const RECT& rect, COLORREF fill, COLORREF border, int radius) {
-    HBRUSH brush = CreateSolidBrush(fill);
-    HPEN pen = CreatePen(PS_SOLID, 1, border);
-    HGDIOBJ previousBrush = SelectObject(dc, brush);
-    HGDIOBJ previousPen = SelectObject(dc, pen);
-    RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, radius, radius);
-    SelectObject(dc, previousPen);
-    SelectObject(dc, previousBrush);
-    DeleteObject(pen);
-    DeleteObject(brush);
+    panel_style::DrawRoundedFrame(dc, rect, fill, border, static_cast<float>(std::min(radius, 8)) / 2.0F, 1.0F);
 }
 
 void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, int pointSize, int weight, UINT format) {
@@ -178,16 +170,13 @@ void PaintEntry(HDC dc, const RECT& column, int top, const std::vector<EditorAge
     }
 }
 
-// A toolbar picker: its name, dim, then the current value and a chevron.
-void PaintPicker(HDC dc, const RECT& rect, const EditorTheme& theme, std::string_view name, std::string_view value, bool enabled) {
-    FillRound(dc, rect, Color(theme.chrome), Color(theme.borderPanel), 14);
-    const int nameWidth = TextWidth(dc, name, 11);
-    Text(dc, RECT{ rect.left + 12, rect.top, rect.left + 12 + nameWidth, rect.bottom }, name, Color(theme.textDisabled), 11, FW_NORMAL,
-        DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    Text(dc, RECT{ rect.left + 20 + nameWidth, rect.top, rect.right - 26, rect.bottom }, value,
-        enabled ? Color(theme.textPrimary) : Color(theme.textDisabled), 12, FW_SEMIBOLD, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+// A picker in the composer's row: the current value and a chevron.
+void PaintPicker(HDC dc, const RECT& rect, const EditorTheme& theme, std::string_view value, bool enabled) {
+    FillRound(dc, rect, Color(theme.panel), Color(theme.panel), 6);
+    Text(dc, RECT{ rect.left + 8, rect.top, rect.right - 20, rect.bottom }, value,
+        enabled ? Color(theme.textPrimary) : Color(theme.textDisabled), 11, FW_NORMAL, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     const int chevronTop = static_cast<int>(rect.top + rect.bottom) / 2 - 5;
-    HeroIconPainter::Draw(dc, RECT{ rect.right - 20, chevronTop, rect.right - 10, chevronTop + 10 }, HeroIconKind::ChevronDown,
+    HeroIconPainter::Draw(dc, RECT{ rect.right - 16, chevronTop, rect.right - 6, chevronTop + 10 }, HeroIconKind::ChevronDown,
         enabled ? Color(theme.textSecondary) : Color(theme.textDisabled), 1);
 }
 
@@ -257,10 +246,11 @@ AgentPanelLayout AgentPanelRenderer::Resolve(const RECT& content, const EditorAg
     AgentPanelLayout layout;
     HDC dc = MeasuringDc();
 
-    // Conversation tabs, each as wide as its title within limits, then "+".
+    // The top row: the conversations and "+", then history and search on the right.
     layout.tabStrip = RECT{ content.left, content.top, content.right, std::min(content.bottom, content.top + kTabStripHeight) };
-    layout.undock = RECT{ layout.tabStrip.right - kPad - 26, layout.tabStrip.top + 6, layout.tabStrip.right - kPad, layout.tabStrip.top + 30 };
-    const int stripRight = static_cast<int>(layout.undock.left) - 8 - 30;
+    layout.search = RECT{ layout.tabStrip.right - kPad - 26, layout.tabStrip.top + 4, layout.tabStrip.right - kPad, layout.tabStrip.top + 30 };
+    layout.chats = RECT{ layout.search.left - 4 - 26, layout.search.top, layout.search.left - 4, layout.search.bottom };
+    const int stripRight = static_cast<int>(layout.chats.left) - 8 - 30;
     int x = static_cast<int>(content.left) + 8;
     const int count = state.ConversationCount();
     const int fair = count > 0 ? std::max(90, (stripRight - x) / count) : 200;
@@ -271,51 +261,56 @@ AgentPanelLayout AgentPanelRenderer::Resolve(const RECT& content, const EditorAg
         layout.tabCloses.push_back(RECT{ tab.right - 24, tab.top + 6, tab.right - 8, tab.top + 22 });
         x += width + 4;
     }
-    layout.newTab = RECT{ std::min(x + 2, stripRight), layout.tabStrip.top + 6, std::min(x + 2, stripRight) + 26, layout.tabStrip.top + 30 };
+    layout.newTab = RECT{ std::min(x + 2, stripRight), layout.tabStrip.top + 4, std::min(x + 2, stripRight) + 26, layout.tabStrip.top + 30 };
+    layout.toolbar = RECT{ content.left, layout.tabStrip.bottom, content.right, layout.tabStrip.bottom };
 
-    // Pickers on the left; account, usage and the one-off connect action on the right.
-    layout.toolbar = RECT{ content.left, layout.tabStrip.bottom, content.right, std::min(content.bottom, layout.tabStrip.bottom + kToolbarHeight) };
-    const int pickerTop = static_cast<int>(layout.toolbar.top) + 8;
-    const int pickerBottom = static_cast<int>(layout.toolbar.bottom) - 8;
-    int left = static_cast<int>(content.left) + kPad;
-    layout.agentMenu = RECT{ left, pickerTop, left + 236, pickerBottom };
-    left = static_cast<int>(layout.agentMenu.right) + 8;
-    layout.modelMenu = RECT{ left, pickerTop, left + 160, pickerBottom };
-    left = static_cast<int>(layout.modelMenu.right) + 8;
-    layout.effortMenu = RECT{ left, pickerTop, left + 176, pickerBottom };
-    left = static_cast<int>(layout.effortMenu.right) + 8;
-    if (state.Current() != nullptr && !state.Current()->connectArguments.empty()) {
-        layout.connectButton = RECT{ left, pickerTop, left + 168, pickerBottom };
-        left = static_cast<int>(layout.connectButton.right) + 8;
-    }
-    const int right = static_cast<int>(content.right) - kPad;
-    layout.status = RECT{ std::max(left, right - 300), pickerTop, right, pickerBottom };
-    layout.usage = RECT{ std::max(left, static_cast<int>(layout.status.left) - 240), pickerTop, static_cast<int>(layout.status.left) - 12, pickerBottom };
-
-    // The composer, in the same centred column as the conversation above it.
+    // The composer sits at the panel's foot: the text on top, its controls in one row under it.
     const int areaLeft = static_cast<int>(content.left);
     const int areaWidth = static_cast<int>(content.right - content.left);
-    const int columnWidth = std::max(0, std::min(kColumnMaxWidth, areaWidth - kPad * 4));
-    const int columnLeft = areaLeft + std::max(kPad * 2, (areaWidth - columnWidth) / 2);
+    const int columnWidth = std::max(0, std::min(kColumnMaxWidth, areaWidth - kPad * 2));
+    const int columnLeft = areaLeft + std::max(kPad, (areaWidth - columnWidth) / 2);
     const int composerBottom = static_cast<int>(content.bottom) - 6 - kHintHeight;
     const int composerTop = std::max(static_cast<int>(layout.toolbar.bottom), composerBottom - kComposerHeight);
     layout.composer = RECT{ columnLeft, composerTop, columnLeft + columnWidth, composerBottom };
-    layout.sendButton = RECT{ layout.composer.right - 12 - kSendWidth, layout.composer.bottom - 12 - 34, layout.composer.right - 12, layout.composer.bottom - 12 };
-    layout.input = RECT{ layout.composer.left + 16, layout.composer.top + 12, layout.sendButton.left - 12, layout.composer.bottom - 12 };
+    const int rowTop = static_cast<int>(layout.composer.bottom) - 6 - kComposerRowHeight;
+    const int rowBottom = rowTop + kComposerRowHeight;
+    int rowLeft = static_cast<int>(layout.composer.left) + 6;
+    layout.attach = RECT{ rowLeft, rowTop, rowLeft + kComposerRowHeight, rowBottom };
+    rowLeft += kComposerRowHeight + 4;
+    layout.effortMenu = RECT{ rowLeft, rowTop, rowLeft + kComposerRowHeight, rowBottom };
+    rowLeft += kComposerRowHeight + 4;
+    layout.modeMenu = RECT{ rowLeft, rowTop, rowLeft + 70, rowBottom };
+    rowLeft += 70 + 4;
+    layout.sendButton = RECT{ layout.composer.right - 6 - 30, rowTop, layout.composer.right - 6, rowBottom };
+    layout.modelMenu = RECT{ layout.sendButton.left - 4 - 76, rowTop, layout.sendButton.left - 4, rowBottom };
+    layout.agentMenu = RECT{ rowLeft, rowTop, std::max(rowLeft, static_cast<int>(layout.modelMenu.left) - 4), rowBottom };
+    layout.input = RECT{ layout.composer.left + 10, layout.composer.top + 8, layout.composer.right - 10, rowTop - 4 };
+
+    // One quiet line under it: account on the left, usage and the one-off connect on the right.
+    const int footerTop = static_cast<int>(layout.composer.bottom) + 3;
+    const int footerBottom = footerTop + kHintHeight - 3;
+    int footerRight = static_cast<int>(layout.composer.right);
+    if (state.Current() != nullptr && !state.Current()->connectArguments.empty()) {
+        layout.connectButton = RECT{ footerRight - 140, footerTop, footerRight, footerBottom };
+        footerRight = static_cast<int>(layout.connectButton.left) - 8;
+    }
+    const int footerMiddle = (static_cast<int>(layout.composer.left) + footerRight) / 2;
+    layout.status = RECT{ layout.composer.left, footerTop, footerMiddle, footerBottom };
+    layout.usage = RECT{ footerMiddle + 8, footerTop, footerRight, footerBottom };
 
     layout.conversation = RECT{ content.left, layout.toolbar.bottom, content.right, std::max(static_cast<int>(layout.toolbar.bottom), composerTop - 8) };
     layout.column = RECT{ columnLeft, layout.conversation.top + kPad, columnLeft + columnWidth, layout.conversation.bottom };
-    // The example requests sit in one row under the title, so they fit a short panel too.
-    constexpr int chipHeight = 34;
-    constexpr int chipGap = 10;
+    // The example requests stand one above another, so they read in a narrow side panel too.
+    constexpr int chipHeight = 32;
+    constexpr int chipGap = 6;
+    constexpr int chipsHeight = chipHeight * 3 + chipGap * 2;
     const int conversationTop = static_cast<int>(layout.conversation.top);
     const int conversationBottom = static_cast<int>(layout.conversation.bottom);
-    const int chipsTop = std::clamp((conversationTop + conversationBottom) / 2 + 4, conversationTop + 66,
-        std::max(conversationTop + 66, conversationBottom - chipHeight - 6));
-    const int chipWidth = std::max(0, (columnWidth - chipGap * 2) / 3);
+    const int chipsTop = std::clamp((conversationTop + conversationBottom - chipsHeight) / 2 + 40, conversationTop + 96,
+        std::max(conversationTop + 96, conversationBottom - chipsHeight - 6));
     for (int index = 0; index < 3; ++index) {
-        const int chipLeft = columnLeft + index * (chipWidth + chipGap);
-        layout.suggestions[static_cast<std::size_t>(index)] = RECT{ chipLeft, chipsTop, chipLeft + chipWidth, chipsTop + chipHeight };
+        const int chipTop = chipsTop + index * (chipHeight + chipGap);
+        layout.suggestions[static_cast<std::size_t>(index)] = RECT{ columnLeft, chipTop, columnLeft + columnWidth, chipTop + chipHeight };
     }
     return layout;
 }
@@ -344,15 +339,14 @@ void AgentPanelRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& t
     const EditorAgent* agent = state.Current();
     GdiDrawing::FillRectColor(dc, content, Color(theme.panel));
 
-    // Tabs: the open conversation lifted onto the panel's colour with a teal underline.
-    GdiDrawing::FillRectColor(dc, layout.tabStrip, Color(theme.chrome));
+    // Top row: the open conversation runs into the panel, as the dock tabs do.
+    GdiDrawing::FillRectColor(dc, layout.tabStrip, Color(theme.strip));
     for (int index = 0; index < static_cast<int>(layout.tabs.size()); ++index) {
         const RECT& tab = layout.tabs[static_cast<std::size_t>(index)];
         const EditorAgentConversation& conversation = state.Conversation(index);
         const bool active = index == state.ActiveConversation();
         if (active) {
-            FillRound(dc, RECT{ tab.left, tab.top, tab.right, tab.bottom + 8 }, Color(theme.panel), Color(theme.panel), 10);
-            GdiDrawing::FillRectColor(dc, RECT{ tab.left + 10, tab.bottom - 2, tab.right - 10, tab.bottom }, kTeal);
+            panel_style::FillDockTab(dc, tab, Color(theme.panel), panel_style::kDockTabCornerRadius);
         }
         int textLeft = static_cast<int>(tab.left) + 12;
         if (conversation.running) {
@@ -366,26 +360,76 @@ void AgentPanelRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& t
         const RECT& close = layout.tabCloses[static_cast<std::size_t>(index)];
         HeroIconPainter::Draw(dc, RECT{ close.left + 3, close.top + 3, close.right - 3, close.bottom - 3 }, HeroIconKind::XMark, Color(theme.textDisabled), 1);
     }
-    FillRound(dc, layout.newTab, Color(theme.panel), Color(theme.borderPanel), 10);
-    HeroIconPainter::Draw(dc, RECT{ layout.newTab.left + 6, layout.newTab.top + 5, layout.newTab.right - 6, layout.newTab.bottom - 5 },
-        HeroIconKind::Plus, Color(theme.textSecondary), 1);
-    HeroIconPainter::Draw(dc, RECT{ layout.undock.left + 5, layout.undock.top + 5, layout.undock.right - 5, layout.undock.bottom - 5 },
-        HeroIconKind::Upload, Color(theme.textSecondary), 1);
+    const auto headerIcon = [&](const RECT& rect, HeroIconKind icon) {
+        HeroIconPainter::Draw(dc, RECT{ rect.left + 5, rect.top + 5, rect.right - 5, rect.bottom - 5 }, icon, Color(theme.textSecondary), 1);
+    };
+    headerIcon(layout.newTab, HeroIconKind::Plus);
+    headerIcon(layout.chats, HeroIconKind::ListBullet);
+    headerIcon(layout.search, HeroIconKind::MagnifyingGlass);
 
-    // Toolbar: agent, model and reasoning; account and usage on the right.
-    GdiDrawing::FillRectColor(dc, RECT{ layout.toolbar.left, layout.toolbar.bottom - 1, layout.toolbar.right, layout.toolbar.bottom }, Color(theme.borderChrome));
-    const std::string defaultValue{ EditorText("agent.default", "Default") };
-    PaintPicker(dc, layout.agentMenu, theme, EditorText("agent.agentPicker", "Agent"),
-        agent != nullptr ? agent->Label() : std::string{ EditorText("agent.none", "None found") }, agent != nullptr);
-    PaintPicker(dc, layout.modelMenu, theme, EditorText("agent.modelPicker", "Model"),
-        state.Model().empty() ? defaultValue : Capitalized(state.Model()), agent != nullptr && !agent->models.empty());
-    PaintPicker(dc, layout.effortMenu, theme, EditorText("agent.effortPicker", "Reasoning"),
-        state.Effort().empty() ? defaultValue : Capitalized(state.Effort()), agent != nullptr && !agent->efforts.empty());
-    if (layout.connectButton.right > layout.connectButton.left) {
-        FillRound(dc, layout.connectButton, Color(theme.chrome), Color(theme.borderPanel), 14);
-        Text(dc, layout.connectButton, EditorText("agent.connectTools", "Connect engine tools"), Color(theme.textSecondary), 11, FW_SEMIBOLD,
-            DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    // The conversation, newest at the bottom.
+    const std::vector<EditorAgentEntry>& entries = state.Active().entries;
+    const RECT& column = layout.column;
+    const int saved = SaveDC(dc);
+    IntersectClipRect(dc, layout.conversation.left, layout.conversation.top, layout.conversation.right, layout.conversation.bottom);
+    if (entries.empty()) {
+        const int titleTop = static_cast<int>(layout.suggestions[0].top) - 96;
+        if (agent == nullptr) {
+            Text(dc, RECT{ column.left, titleTop, column.right, titleTop + 26 }, EditorText("agent.noAgentTitle", "No agent found on this computer"),
+                Color(theme.textPrimary), 14, FW_SEMIBOLD, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            Text(dc, RECT{ column.left, titleTop + 30, column.right, titleTop + 92 }, EditorText("agent.noAgentBody",
+                "Install Claude Code, Codex, Gemini CLI, Qwen Code or Grok (or Ollama, for local models with Codex), "
+                "or add your own from the Agent menu, then choose Refresh."),
+                Color(theme.textSecondary), 11, FW_NORMAL, DT_LEFT | DT_WORDBREAK);
+        } else {
+            Text(dc, RECT{ column.left, titleTop, column.right, titleTop + 26 }, EditorText("agent.emptyTitle", "What should the agent build?"),
+                Color(theme.textPrimary), 14, FW_SEMIBOLD, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            Text(dc, RECT{ column.left, titleTop + 30, column.right, titleTop + 92 }, EditorText("agent.emptyBody",
+                "It works on this project with the engine's own tools; the scene reloads when it changes something."),
+                Color(theme.textSecondary), 11, FW_NORMAL, DT_LEFT | DT_WORDBREAK);
+            for (int index = 0; index < 3; ++index) {
+                const RECT& chip = layout.suggestions[static_cast<std::size_t>(index)];
+                FillRound(dc, chip, Color(theme.toolbarButton), Color(theme.toolbarButton), 8);
+                Text(dc, RECT{ chip.left + 10, chip.top, chip.right - 10, chip.bottom }, Suggestion(index), Color(theme.textPrimary), 11, FW_NORMAL,
+                    DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            }
+        }
+    } else {
+        PaintEntries(dc, column, layout.conversation, theme, state);
     }
+    RestoreDC(dc, saved);
+
+    // The composer: the request on top, attach, reasoning, mode, agent, model and send under it.
+    const bool focused = state.InputFocused();
+    FillRound(dc, layout.composer, Color(theme.chrome), focused ? Color(theme.accent) : Color(theme.borderPanel), 8);
+    if (state.Input().empty() && !focused) {
+        Text(dc, layout.input, EditorText("agent.placeholder", "Describe what the agent should do..."), Color(theme.textDisabled), 12, FW_NORMAL,
+            DT_LEFT | DT_WORDBREAK);
+    } else {
+        Text(dc, layout.input, state.Input() + (focused ? "|" : ""), Color(theme.textPrimary), 12, FW_NORMAL,
+            DT_LEFT | DT_WORDBREAK | DT_EDITCONTROL);
+    }
+    const auto iconButton = [&](const RECT& rect, HeroIconKind icon, bool enabled) {
+        FillRound(dc, rect, Color(theme.panel), Color(theme.panel), 6);
+        HeroIconPainter::Draw(dc, RECT{ rect.left + 6, rect.top + 6, rect.right - 6, rect.bottom - 6 }, icon,
+            enabled ? Color(theme.textSecondary) : Color(theme.textDisabled), 1);
+    };
+    iconButton(layout.attach, HeroIconKind::Plus, true);
+    iconButton(layout.effortMenu, HeroIconKind::AdjustmentsHorizontal, agent != nullptr && !agent->efforts.empty());
+    const std::string defaultValue{ EditorText("agent.default", "Default") };
+    PaintPicker(dc, layout.modeMenu, theme, state.Mode() == EditorAgentMode::Plan ? EditorText("agent.mode.plan", "Plan")
+        : state.Mode() == EditorAgentMode::Ask ? EditorText("agent.mode.ask", "Ask") : EditorText("agent.mode.agent", "Agent"), true);
+    if (layout.agentMenu.right - layout.agentMenu.left > 40) {
+        PaintPicker(dc, layout.agentMenu, theme, agent != nullptr ? agent->Label() : std::string{ EditorText("agent.none", "None found") }, agent != nullptr);
+    }
+    PaintPicker(dc, layout.modelMenu, theme, state.Model().empty() ? defaultValue : Capitalized(state.Model()), agent != nullptr && !agent->models.empty());
+    const bool canSend = state.Running() || (agent != nullptr && !state.Input().empty());
+    const COLORREF sendFill = state.Running() ? kDanger : (canSend ? Color(theme.accent) : Color(theme.panel));
+    FillRound(dc, layout.sendButton, sendFill, sendFill, 6);
+    Text(dc, layout.sendButton, state.Running() ? std::string_view{ "\xE2\x96\xA0" } : std::string_view{ "\xE2\x86\x91" },
+        canSend ? RGB(255, 255, 255) : Color(theme.textDisabled), 13, FW_BOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    // Account on the left of the line under the composer; usage on its right.
     if (agent != nullptr) {
         COLORREF dot = kGreen;
         std::string status;
@@ -401,91 +445,23 @@ void AgentPanelRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& t
         } else {
             status = std::string{ EditorText("agent.signedIn", "Signed in") } + (state.Plan().empty() ? std::string{} : " \xC2\xB7 " + state.Plan());
         }
-        const int statusWidth = TextWidth(dc, status, 11);
-        const int dotLeft = std::max(static_cast<int>(layout.status.left), static_cast<int>(layout.status.right) - statusWidth - 14);
-        const int dotTop = static_cast<int>(layout.status.top + layout.status.bottom) / 2 - 4;
-        FillRound(dc, RECT{ dotLeft, dotTop, dotLeft + 8, dotTop + 8 }, dot, dot, 8);
-        Text(dc, RECT{ dotLeft + 14, layout.status.top, layout.status.right, layout.status.bottom }, status, Color(theme.textSecondary), 11, FW_NORMAL,
+        const int dotTop = static_cast<int>(layout.status.top + layout.status.bottom) / 2 - 3;
+        FillRound(dc, RECT{ layout.status.left + 2, dotTop, layout.status.left + 8, dotTop + 6 }, dot, dot, 6);
+        Text(dc, RECT{ layout.status.left + 13, layout.status.top, layout.status.right, layout.status.bottom }, status, Color(theme.textSecondary), 10, FW_NORMAL,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     }
     const EditorAgentUsage& usage = state.Active().usage;
     if (usage.contextTokens > 0U) {
-        // How much of the model's window the conversation fills, and its cost so far.
-        std::string text = "context " + Tokens(usage.contextTokens);
-        int barWidth = 0;
+        std::string text = Tokens(usage.contextTokens);
         if (usage.contextWindow > 0U) {
-            const double share = std::min(1.0, static_cast<double>(usage.contextTokens) / static_cast<double>(usage.contextWindow));
             text += " / " + Tokens(usage.contextWindow);
-            if (usage.costUsd > 0.0) {
-                char cost[32]{};
-                std::snprintf(cost, sizeof(cost), "  \xC2\xB7  $%.2f", usage.costUsd);
-                text += cost;
-            }
-            barWidth = 54;
-            const int barRight = static_cast<int>(layout.usage.right);
-            const int barTop = static_cast<int>(layout.usage.top + layout.usage.bottom) / 2 - 2;
-            FillRound(dc, RECT{ barRight - barWidth, barTop, barRight, barTop + 5 }, Color(theme.chrome), Color(theme.borderPanel), 5);
-            FillRound(dc, RECT{ barRight - barWidth, barTop, barRight - barWidth + std::max(5, static_cast<int>(barWidth * share)), barTop + 5 },
-                share > 0.8 ? kAmber : kTeal, share > 0.8 ? kAmber : kTeal, 5);
         }
-        Text(dc, RECT{ layout.usage.left, layout.usage.top, layout.usage.right - barWidth - (barWidth > 0 ? 8 : 0), layout.usage.bottom }, text,
-            Color(theme.textDisabled), 11, FW_NORMAL, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        Text(dc, layout.usage, text, Color(theme.textDisabled), 10, FW_NORMAL, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     }
-
-    // The conversation, newest at the bottom of a centred reading column.
-    const std::vector<EditorAgentEntry>& entries = state.Active().entries;
-    const RECT& column = layout.column;
-    const int saved = SaveDC(dc);
-    IntersectClipRect(dc, layout.conversation.left, layout.conversation.top, layout.conversation.right, layout.conversation.bottom);
-    if (entries.empty()) {
-        const int titleTop = static_cast<int>(layout.suggestions[0].top) - 62;
-        if (agent == nullptr) {
-            Text(dc, RECT{ column.left, titleTop, column.right, titleTop + 26 }, EditorText("agent.noAgentTitle", "No agent found on this computer"),
-                Color(theme.textPrimary), 14, FW_SEMIBOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-            Text(dc, RECT{ column.left, titleTop + 30, column.right, titleTop + 90 }, EditorText("agent.noAgentBody",
-                "Install Claude Code, Codex, Gemini CLI, Qwen Code or Grok (or Ollama, for local models with Codex), "
-                "or add your own from the Agent menu, then choose Refresh."),
-                Color(theme.textSecondary), 11, FW_NORMAL, DT_CENTER | DT_WORDBREAK);
-        } else {
-            Text(dc, RECT{ column.left, titleTop, column.right, titleTop + 26 }, EditorText("agent.emptyTitle", "What should the agent build?"),
-                Color(theme.textPrimary), 14, FW_SEMIBOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-            Text(dc, RECT{ column.left, titleTop + 28, column.right, titleTop + 48 }, EditorText("agent.emptyBody",
-                "It works on this project with the engine's own tools; the scene reloads when it changes something."),
-                Color(theme.textSecondary), 11, FW_NORMAL, DT_CENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-            for (int index = 0; index < 3; ++index) {
-                const RECT& chip = layout.suggestions[static_cast<std::size_t>(index)];
-                FillRound(dc, chip, Color(theme.chrome), Color(theme.borderPanel), 16);
-                Text(dc, RECT{ chip.left + 16, chip.top, chip.right - 16, chip.bottom }, Suggestion(index), Color(theme.textSecondary), 11, FW_NORMAL,
-                    DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-            }
-        }
-    } else {
-        PaintEntries(dc, column, layout.conversation, theme, state);
+    if (layout.connectButton.right > layout.connectButton.left) {
+        Text(dc, layout.connectButton, EditorText("agent.connectTools", "Connect engine tools"), Color(theme.accent), 10, FW_SEMIBOLD,
+            DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     }
-    RestoreDC(dc, saved);
-
-    // The composer: a rounded box with the send button inside it, a hint underneath.
-    const bool focused = state.InputFocused();
-    FillRound(dc, layout.composer, Color(theme.chrome), focused ? kTeal : Color(theme.borderPanel), 18);
-    if (state.Input().empty() && !focused) {
-        Text(dc, layout.input, EditorText("agent.placeholder", "Describe what the agent should do..."), Color(theme.textDisabled), 12, FW_NORMAL,
-            DT_LEFT | DT_WORDBREAK);
-    } else {
-        Text(dc, layout.input, state.Input() + (focused ? "|" : ""), Color(theme.textPrimary), 12, FW_NORMAL,
-            DT_LEFT | DT_WORDBREAK | DT_EDITCONTROL);
-    }
-    const bool canSend = state.Running() || (agent != nullptr && !state.Input().empty());
-    if (state.Running()) {
-        FillRound(dc, layout.sendButton, RGB(74, 34, 38), kDanger, 17);
-        Text(dc, layout.sendButton, EditorText("agent.stop", "Stop"), RGB(255, 220, 220), 12, FW_SEMIBOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    } else {
-        FillRound(dc, layout.sendButton, canSend ? kTealDeep : Color(theme.panel), canSend ? kTeal : Color(theme.borderPanel), 17);
-        Text(dc, layout.sendButton, EditorText("agent.send", "Send"), canSend ? RGB(235, 250, 255) : Color(theme.textDisabled), 12, FW_SEMIBOLD,
-            DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    }
-    Text(dc, RECT{ layout.composer.left + 4, layout.composer.bottom + 2, layout.composer.right, layout.composer.bottom + kHintHeight },
-        EditorText("agent.hint", "Enter sends  \xC2\xB7  Shift+Enter new line  \xC2\xB7  Ctrl+K opens this panel from anywhere"),
-        Color(theme.textDisabled), 10, FW_NORMAL, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
 AgentPanelHit AgentPanelRenderer::HitTest(const RECT& content, const EditorAgentPanelState& state, int x, int y) {
@@ -495,7 +471,10 @@ AgentPanelHit AgentPanelRenderer::HitTest(const RECT& content, const EditorAgent
         if (Inside(layout.tabs[static_cast<std::size_t>(index)], x, y)) return { AgentPanelHitKind::Tab, index };
     }
     if (Inside(layout.newTab, x, y)) return { AgentPanelHitKind::NewTab };
-    if (Inside(layout.undock, x, y)) return { AgentPanelHitKind::Undock };
+    if (Inside(layout.chats, x, y)) return { AgentPanelHitKind::Chats };
+    if (Inside(layout.search, x, y)) return { AgentPanelHitKind::Search };
+    if (Inside(layout.attach, x, y)) return { AgentPanelHitKind::Attach };
+    if (Inside(layout.modeMenu, x, y)) return { AgentPanelHitKind::ModeMenu };
     if (Inside(layout.agentMenu, x, y)) return { AgentPanelHitKind::AgentMenu };
     if (Inside(layout.modelMenu, x, y)) return { AgentPanelHitKind::ModelMenu };
     if (Inside(layout.effortMenu, x, y)) return { AgentPanelHitKind::EffortMenu };

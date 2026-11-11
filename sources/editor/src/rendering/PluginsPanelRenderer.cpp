@@ -144,7 +144,6 @@ void DrawText(HDC dc, RECT rect, std::string_view text, COLORREF color, int poin
 void DrawHeader(HDC dc, const RECT& content, const EditorTheme& theme) {
     const RECT header = HeaderRect(content);
     GdiDrawing::FillRectColor(dc, header, Color(theme.strip));
-    GdiDrawing::FillRectColor(dc, RECT{ header.left, header.top, header.left + 3, header.bottom }, Color(theme.accent));
     GdiDrawing::FillRectColor(dc, RECT{ header.left, header.bottom - 1, header.right, header.bottom }, Color(theme.borderChrome));
     DrawText(dc, RECT{ header.left + kPadding, header.top, header.right - kPadding, header.bottom }, EditorText("panel.plugins", "Plugins"), Color(theme.textPrimary), 14, FW_SEMIBOLD);
 }
@@ -189,9 +188,6 @@ void DrawRow(HDC dc, const RECT& row, const EditorTheme& theme, std::size_t inde
     const bool pendingReload = sceneContext.Plugins().HasPendingReload();
     const COLORREF rowFill = (index & 1U) != 0U ? Blend(Color(theme.panel), Color(theme.strip), 24) : Color(theme.panel);
     GdiDrawing::FillRectColor(dc, row, hovered ? Blend(Color(theme.panel), Color(theme.accent), 9) : rowFill);
-    if (enabled) {
-        GdiDrawing::FillRectColor(dc, RECT{ row.left, row.top, row.left + 3, row.bottom }, Color(theme.accent));
-    }
 
     EditorDialogStyle::PaintSwitch(dc, ToggleRect(row), theme, enabled);
     DrawText(dc, RECT{ row.left + 50, row.top + 1, row.left + kPluginColumnRight - 10, row.top + 18 }, PluginDisplayName(*plugin), Color(theme.textPrimary), 12, FW_SEMIBOLD);

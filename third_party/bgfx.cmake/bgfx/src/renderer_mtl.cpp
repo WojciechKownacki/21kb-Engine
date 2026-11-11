@@ -1757,6 +1757,9 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 				&&  m_frameBuffers[handle.idx].m_nwh == _desc.nwh)
 				{
 					destroyFrameBuffer(handle);
+					// The API's own destroy of this handle is still on its way (creates run before destroys
+					// in a frame); releasing it twice would free its neighbours in the arena.
+					m_windowReplaced[handle.idx] = true;
 				}
 			}
 
@@ -1778,6 +1781,12 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 
 		void destroyFrameBuffer(FrameBufferHandle _handle) override
 		{
+			if (m_windowReplaced[_handle.idx])
+			{
+				m_windowReplaced[_handle.idx] = false;
+				return;
+			}
+
 			if (m_fbh.idx == _handle.idx)
 			{
 				m_fbh = BGFX_INVALID_HANDLE;
@@ -3783,6 +3792,7 @@ static_assert(BX_COUNTOF(s_accessNames) == Access::Count, "Invalid s_accessNames
 		HandleArenaT<TextureMtl,      BGFX_CONFIG_MAX_TEXTURES>       m_textures;
 		FrameBufferMtl  m_mainFrameBuffer;
 		HandleArenaT<FrameBufferMtl,  BGFX_CONFIG_MAX_FRAME_BUFFERS>  m_frameBuffers;
+		bool m_windowReplaced[BGFX_CONFIG_MAX_FRAME_BUFFERS+1] = {};
 		VertexLayout    m_vertexLayouts[BGFX_CONFIG_MAX_VERTEX_LAYOUTS];
 
 		struct PipelineProgram

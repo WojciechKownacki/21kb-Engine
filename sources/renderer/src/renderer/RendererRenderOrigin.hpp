@@ -37,7 +37,7 @@ public:
 private:
     std::vector<EditorCameraWireframeDesc> cameraWireframes_;
     std::vector<EditorLightWireframeDesc> lightWireframes_;
-    std::vector<EditorParticleIconDesc> particleIcons_;
+    std::vector<EditorSceneIconDesc> sceneIcons_;
     std::vector<PhysicsDebugLine> physicsDebugLines_;
 };
 

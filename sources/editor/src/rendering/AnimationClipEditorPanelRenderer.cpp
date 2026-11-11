@@ -138,7 +138,6 @@ void AnimationClipEditorPanelRenderer::Paint(
     }
 
     GdiDrawing::FillRectColor(dc, RECT{ content.left, content.top, content.right, content.top + kHeaderHeight }, ThemeColor(theme.strip));
-    GdiDrawing::FillRectColor(dc, RECT{ content.left, content.top, content.left + 3, content.top + kHeaderHeight }, ThemeColor(theme.accent));
     const ScopedFont titleFont{ 13, FW_SEMIBOLD };
     const ScopedGdiObject selectedTitleFont(dc, titleFont.handle);
     SetBkMode(dc, TRANSPARENT);

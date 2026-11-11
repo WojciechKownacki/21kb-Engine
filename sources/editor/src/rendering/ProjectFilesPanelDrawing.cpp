@@ -43,7 +43,7 @@ COLORREF ProjectFilesPanelDrawing::Blend(COLORREF a, COLORREF b, int percentB) n
 }
 
 COLORREF ProjectFilesPanelDrawing::FolderColor(bool selected) noexcept {
-    return selected ? RGB(247, 196, 70) : RGB(232, 181, 56);
+    return selected ? RGB(210, 170, 110) : RGB(182, 143, 85);
 }
 
 bool ProjectFilesPanelDrawing::SameVirtualPath(const std::filesystem::path& left, const std::filesystem::path& right) {

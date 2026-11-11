@@ -2,18 +2,24 @@
 
 #if defined(_WIN32)
 #include "app/EditorTextInputShortcuts.hpp"
+#include "platform/win32/EditorFileDialogFilter.hpp"
+#include "platform/win32/EditorTextEntryDialog.hpp"
 #include "localization/EditorLocalization.hpp"
 #include "project/EditorProjectPaths.hpp"
 #include "rendering/AgentBarRenderer.hpp"
 #include "rendering/AgentPanelRenderer.hpp"
 #include "scene/EditorSceneContext.hpp"
 
+#include <CommDlg.h>
 #include <shellapi.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cwctype>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace kb::editor {
 namespace {
@@ -36,6 +42,37 @@ constexpr UINT kModelsPerAgent = 64U;
 
 [[nodiscard]] bool ControlDown() noexcept {
     return (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+}
+
+[[nodiscard]] std::string Lowered(std::string_view text) {
+    std::string lowered{ text };
+    for (char& character : lowered) {
+        character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+    }
+    return lowered;
+}
+
+[[nodiscard]] std::string ConversationLabel(const EditorAgentConversation& conversation) {
+    return conversation.title.empty() ? std::string{ EditorText("agent.newConversation", "New conversation") } : conversation.title;
+}
+
+// A small popup of the given rows under `anchor`; the chosen row, or nothing.
+[[nodiscard]] std::optional<std::size_t> PickFromMenu(HWND owner, const RECT& anchor, const std::vector<std::string>& rows, int checked) {
+    HMENU menu = CreatePopupMenu();
+    if (menu == nullptr) {
+        return std::nullopt;
+    }
+    for (std::size_t index = 0; index < rows.size(); ++index) {
+        AppendMenuW(menu, MF_STRING | (static_cast<int>(index) == checked ? MF_CHECKED : 0U), kFirstChoiceCommand + static_cast<UINT>(index), Widen(rows[index]).c_str());
+    }
+    POINT point{ anchor.left, anchor.bottom };
+    ClientToScreen(owner, &point);
+    const int chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN | TPM_NONOTIFY, point.x, point.y, 0, owner, nullptr);
+    DestroyMenu(menu);
+    if (chosen < static_cast<int>(kFirstChoiceCommand)) {
+        return std::nullopt;
+    }
+    return static_cast<std::size_t>(chosen) - kFirstChoiceCommand;
 }
 
 } // namespace
@@ -87,6 +124,94 @@ void EditorAgentPanelController::ShowAgentMenu(HWND owner, const RECT& anchor) {
     }
 }
 
+void EditorAgentPanelController::ShowModeMenu(HWND owner, const RECT& anchor) {
+    EditorAgentPanelState& agent = sceneContext_.AgentPanel();
+    const std::vector<std::string> rows{
+        std::string{ EditorText("agent.mode.agentRow", "Agent: changes the project") },
+        std::string{ EditorText("agent.mode.planRow", "Plan: only says what it would do") },
+        std::string{ EditorText("agent.mode.askRow", "Ask: only answers") },
+    };
+    if (const std::optional<std::size_t> chosen = PickFromMenu(owner, anchor, rows, static_cast<int>(agent.Mode()))) {
+        agent.SelectMode(static_cast<EditorAgentMode>(*chosen));
+    }
+}
+
+void EditorAgentPanelController::AttachFile(HWND owner) {
+    std::array<wchar_t, 32768> buffer{};
+    const std::wstring filter = EditorFileDialogFilter({ { EditorText("fileDialog.allFiles", "All files (*.*)"), "*.*" } });
+    const std::wstring title = Widen(EditorText("agent.attachTitle", "Attach a file to the request"));
+    const std::wstring directory = EditorProjectPaths::AssetsRoot().wstring();
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = owner;
+    dialog.lpstrFilter = filter.c_str();
+    dialog.lpstrFile = buffer.data();
+    dialog.nMaxFile = static_cast<DWORD>(buffer.size());
+    dialog.lpstrInitialDir = directory.c_str();
+    dialog.lpstrTitle = title.c_str();
+    dialog.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (GetOpenFileNameW(&dialog) == FALSE) {
+        return;
+    }
+    // The agent works in the project folder, so a file inside it is named from there.
+    std::filesystem::path file{ buffer.data() };
+    std::error_code error;
+    const std::filesystem::path relative = std::filesystem::relative(file, EditorProjectPaths::ProjectRoot(), error);
+    if (!error && !relative.empty() && *relative.begin() != "..") {
+        file = relative;
+    }
+    const std::u8string text = file.generic_u8string();
+    EditorAgentPanelState& agent = sceneContext_.AgentPanel();
+    agent.InsertText("\"" + std::string{ reinterpret_cast<const char*>(text.data()), text.size() } + "\" ");
+    agent.FocusInput(true);
+}
+
+void EditorAgentPanelController::ShowConversations(HWND owner, const RECT& anchor) {
+    EditorAgentPanelState& agent = sceneContext_.AgentPanel();
+    std::vector<std::string> rows;
+    for (int index = 0; index < agent.ConversationCount(); ++index) {
+        rows.push_back(ConversationLabel(agent.Conversation(index)));
+    }
+    if (const std::optional<std::size_t> chosen = PickFromMenu(owner, anchor, rows, agent.ActiveConversation())) {
+        agent.SelectConversation(static_cast<int>(*chosen));
+    }
+}
+
+void EditorAgentPanelController::SearchConversations(HWND owner, const RECT& anchor) {
+    const std::optional<std::string> query = EditorTextEntryDialog::Show(owner, {
+        .title = std::string{ EditorText("agent.searchTitle", "Find in Conversations") },
+        .label = std::string{ EditorText("agent.searchLabel", "Text to find") },
+        .hint = std::string{ EditorText("agent.searchHint", "Looks through what you and the agent wrote.") },
+        .acceptLabel = std::string{ EditorText("agent.searchAccept", "Find") },
+        .icon = HeroIconKind::MagnifyingGlass,
+    });
+    if (!query.has_value() || query->empty()) {
+        return;
+    }
+    EditorAgentPanelState& agent = sceneContext_.AgentPanel();
+    const std::string needle = Lowered(*query);
+    std::vector<int> found;
+    std::vector<std::string> rows;
+    for (int index = 0; index < agent.ConversationCount(); ++index) {
+        const EditorAgentConversation& conversation = agent.Conversation(index);
+        bool matches = Lowered(conversation.title).find(needle) != std::string::npos;
+        for (const EditorAgentEntry& entry : conversation.entries) {
+            matches = matches || Lowered(entry.text).find(needle) != std::string::npos;
+        }
+        if (matches) {
+            found.push_back(index);
+            rows.push_back(ConversationLabel(conversation));
+        }
+    }
+    if (found.empty()) {
+        agent.Add(EditorAgentEntryKind::Info, EditorLocalization::Format("agent.searchNothing", "No conversation mentions \"{text}\".", { { "text", *query } }));
+        return;
+    }
+    if (const std::optional<std::size_t> chosen = PickFromMenu(owner, anchor, rows, -1)) {
+        agent.SelectConversation(found[*chosen]);
+    }
+}
+
 bool EditorAgentPanelController::HandlePointerDown(HWND owner, const RECT& content, int x, int y) {
     EditorAgentPanelState& agent = sceneContext_.AgentPanel();
     agent.Prepare();
@@ -109,6 +234,18 @@ bool EditorAgentPanelController::HandlePointerDown(HWND owner, const RECT& conte
         return true;
     case AgentPanelHitKind::AgentMenu:
         ShowAgentMenu(owner, layout.agentMenu);
+        return true;
+    case AgentPanelHitKind::ModeMenu:
+        ShowModeMenu(owner, layout.modeMenu);
+        return true;
+    case AgentPanelHitKind::Attach:
+        AttachFile(owner);
+        return true;
+    case AgentPanelHitKind::Chats:
+        ShowConversations(owner, layout.chats);
+        return true;
+    case AgentPanelHitKind::Search:
+        SearchConversations(owner, layout.search);
         return true;
     case AgentPanelHitKind::ModelMenu:
         ShowChoiceMenu(owner, layout.modelMenu, true);

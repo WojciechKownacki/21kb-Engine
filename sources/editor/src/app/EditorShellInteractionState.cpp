@@ -44,7 +44,79 @@ int EditorShellInteractionState::MenuRowCount(EditorMenuCommand menu) const noex
     if (menu == EditorMenuCommand::Layout) {
         return static_cast<int>(layoutMenu_.Rows().size());
     }
+    if (menu == EditorMenuCommand::Scene) {
+        return static_cast<int>(sceneMenuRows_.size()) + EditorToolbarLayout::FixedRowCount(menu);
+    }
+    if (menu == EditorMenuCommand::Publish) {
+        return static_cast<int>(publishRows_.size()) + EditorToolbarLayout::FixedRowCount(menu);
+    }
+    if (menu == EditorMenuCommand::RecentProjects) {
+        // "Back" above the projects.
+        return static_cast<int>(recentProjectRows_.size()) + 1;
+    }
     return EditorToolbarLayout::FixedRowCount(menu);
+}
+
+void EditorShellInteractionState::SetSceneMenu(std::vector<EditorPathMenuRow> scenes, bool documentActionsEnabled) {
+    sceneMenuRows_ = std::move(scenes);
+    sceneDocumentActionsEnabled_ = documentActionsEnabled;
+}
+
+void EditorShellInteractionState::SetRecentProjectsMenu(std::vector<EditorPathMenuRow> projects) {
+    recentProjectRows_ = std::move(projects);
+}
+
+const std::vector<EditorPathMenuRow>& EditorShellInteractionState::SceneMenuRows() const noexcept {
+    return sceneMenuRows_;
+}
+
+const std::vector<EditorPathMenuRow>& EditorShellInteractionState::RecentProjectRows() const noexcept {
+    return recentProjectRows_;
+}
+
+bool EditorShellInteractionState::SceneDocumentActionsEnabled() const noexcept {
+    return sceneDocumentActionsEnabled_;
+}
+
+void EditorShellInteractionState::SetRepositoryWindowOpen(bool open) noexcept {
+    repositoryWindowOpen_ = open;
+}
+
+void EditorShellInteractionState::SetPlayMenu(EditorPlayPreferences preferences, bool canChange) noexcept {
+    playMenuPreferences_ = preferences;
+    playMenuCanChange_ = canChange;
+}
+
+const EditorPlayPreferences& EditorShellInteractionState::PlayMenuPreferences() const noexcept {
+    return playMenuPreferences_;
+}
+
+bool EditorShellInteractionState::PlayMenuCanChange() const noexcept {
+    return playMenuCanChange_;
+}
+
+void EditorShellInteractionState::SetPublishMenu(std::vector<EditorPathMenuRow> platforms) {
+    publishRows_ = std::move(platforms);
+}
+
+const std::vector<EditorPathMenuRow>& EditorShellInteractionState::PublishRows() const noexcept {
+    return publishRows_;
+}
+
+bool EditorShellInteractionState::RepositoryWindowOpen() const noexcept {
+    return repositoryWindowOpen_;
+}
+
+bool EditorShellInteractionState::SetHoveredTopBarItem(EditorTopBarItem item) noexcept {
+    if (hoveredTopBarItem_ == item) {
+        return false;
+    }
+    hoveredTopBarItem_ = item;
+    return true;
+}
+
+EditorTopBarItem EditorShellInteractionState::HoveredTopBarItem() const noexcept {
+    return hoveredTopBarItem_;
 }
 
 bool EditorShellInteractionState::SetHoveredSave(bool hovered) noexcept {

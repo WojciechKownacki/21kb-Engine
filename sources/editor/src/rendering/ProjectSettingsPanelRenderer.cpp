@@ -141,11 +141,10 @@ void DrawCategorySidebar(HDC dc, const ProjectSettingsPanelLayoutRects& rects, c
         const RECT row = ProjectSettingsPanelLayout::CategoryRow(rects.sidebar, index);
         const bool selected = index == selectedCategory;
         if (selected) {
-            GdiDrawing::FillRectColor(dc, row, Blend(Color(theme.panel), Color(theme.accent), 18));
-            GdiDrawing::FillRectColor(dc, RECT{ row.left, row.top, row.left + 3, row.bottom }, RGB(86, 172, 205));
+            GdiDrawing::FillRectColor(dc, row, Color(theme.accent));
         }
         DrawText(dc, RECT{ row.left + 12, row.top, row.right - 8, row.bottom }, CategoryLabel(index),
-            Color(selected ? theme.textPrimary : theme.textDisabled), 12, selected ? FW_SEMIBOLD : FW_NORMAL);
+            selected ? RGB(255, 255, 255) : Color(theme.textSecondary), 12, selected ? FW_SEMIBOLD : FW_NORMAL);
     }
 }
 
@@ -863,7 +862,6 @@ void ProjectSettingsPanelRenderer::Paint(
 
     // Title bar (full width).
     GdiDrawing::FillRectColor(dc, rects.header, Color(theme.strip));
-    GdiDrawing::FillRectColor(dc, RECT{ rects.header.left, rects.header.top, rects.header.left + 3, rects.header.bottom }, Color(theme.accent));
     GdiDrawing::FillRectColor(dc, RECT{ rects.header.left, rects.header.bottom - 1, rects.header.right, rects.header.bottom }, Color(theme.borderChrome));
     DrawText(dc, RECT{ rects.header.left + kPadding, rects.header.top, rects.header.right - kPadding, rects.header.bottom }, EditorText("panel.settings", "Settings"), Color(theme.textPrimary), 14, FW_SEMIBOLD);
 

@@ -474,6 +474,11 @@ add_executable(kb_editor WIN32
     src/private/platform/win32/EditorNewSceneDialog.hpp
     src/private/platform/win32/EditorProjectTemplateDialog.hpp
     src/private/platform/win32/EditorTextEntryDialog.hpp
+    src/private/platform/win32/EditorRepositoryWindow.hpp
+    src/private/project/EditorProjectRepository.hpp
+    src/private/app/EditorProjectCommands.hpp
+    src/private/app/EditorPlayCommands.hpp
+    src/private/app/EditorPlayPreferences.hpp
     src/private/platform/win32/EditorMap2DForm.hpp
     src/private/platform/win32/EditorMap2DWindow.hpp
     src/private/platform/win32/EditorModalWindowScope.hpp
@@ -754,6 +759,10 @@ add_executable(kb_editor WIN32
     src/platform/win32/EditorNewSceneDialog.cpp
     src/platform/win32/EditorProjectTemplateDialog.cpp
     src/platform/win32/EditorTextEntryDialog.cpp
+    src/platform/win32/EditorRepositoryWindow.cpp
+    src/project/EditorProjectRepository.cpp
+    src/app/EditorProjectCommands.cpp
+    src/app/EditorPlayCommands.cpp
     src/platform/win32/EditorMap2DForm.cpp
     src/platform/win32/EditorMap2DWindow.cpp
     src/platform/win32/EditorMeshAssetPickerDialog.cpp

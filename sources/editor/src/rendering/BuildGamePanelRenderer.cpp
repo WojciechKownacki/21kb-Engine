@@ -90,8 +90,7 @@ void DrawTargetRow(HDC dc, const RECT& row, const kb::packaging::PackagingTarget
     bool selected, bool hovered, const EditorTheme& theme) {
     if (!selected && hovered) GdiDrawing::FillRectColor(dc, row, HoverFill(theme));
     if (selected) {
-        GdiDrawing::FillRectColor(dc, row, Blend(Color(theme.panel), Color(theme.accent), 18));
-        GdiDrawing::FillRectColor(dc, RECT{ row.left, row.top, row.left + 3, row.bottom }, Color(theme.accent));
+        GdiDrawing::FillRectColor(dc, row, Color(theme.accent));
     }
     const RECT icon = BuildGamePanelLayout::IconBox(row, 18);
     HeroIconPainter::Draw(dc, icon, TargetIcon(target), Color(selected ? theme.textPrimary : theme.textSecondary));
@@ -103,8 +102,7 @@ void DrawProfileRow(HDC dc, const RECT& row, const BuildProfile& profile, bool s
     bool hovered, const EditorTheme& theme) {
     if (!selected && hovered) GdiDrawing::FillRectColor(dc, row, HoverFill(theme));
     if (selected) {
-        GdiDrawing::FillRectColor(dc, row, Blend(Color(theme.panel), Color(theme.accent), 18));
-        GdiDrawing::FillRectColor(dc, RECT{ row.left, row.top, row.left + 3, row.bottom }, Color(theme.accent));
+        GdiDrawing::FillRectColor(dc, row, Color(theme.accent));
     }
     const RECT icon = BuildGamePanelLayout::IconBox(row, 16);
     HeroIconPainter::Draw(dc, icon, profile.icon, Color(selected ? theme.textPrimary : theme.textSecondary));

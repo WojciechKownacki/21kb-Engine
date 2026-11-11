@@ -124,7 +124,7 @@ inline void DrawSectionHeader(HDC dc, RECT rect, const EditorTheme& theme, const
     const bool actionHovered = removeButton &&
         state.IsHovered(InspectorHitKind::ComponentMenuButton, section, InspectorPropertyId::ComponentRemove);
     const CategoryHeaderLayout layout = CategoryHeader::Resolve(rect, true, removeButton, false);
-    FillSectionHeaderBackground(dc, rect, hovered ? HoverFill(theme) : Color(theme.strip));
+    FillSectionHeaderBackground(dc, rect, hovered ? HoverFill(theme) : Color(theme.header));
     if (hovered) {
         GdiDrawing::FillRectColor(
             dc,
