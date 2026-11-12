@@ -1,12 +1,18 @@
 #include "EditorTestSupport.hpp"
 #include "EditorTestSuites.hpp"
 
+#include "scene/material/MaterialEditorState.hpp"
 #include "scene/material_preview/EditorMaterialGraphCookService.hpp"
 
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 
+#include <algorithm>
+#include <chrono>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <thread>
 #include <array>
 #include <string>
 #include <string_view>
@@ -525,6 +531,250 @@ void RunHotReloadLastGoodTest() {
     Require(fixed.HasGpuProgram() && fixed.graphSourceHash != goodHash,
         "KBMAT-MAT33: The fixed graph must bind a new program, not the stale one");
 }
+
+[[nodiscard]] RenderMaterialAssetData MakeParameterArithmeticMaterial(
+    RenderMaterialGraphNodeKind kind, std::string_view outputPin, std::string_view hint) {
+    RenderMaterialAssetData material{};
+    material.materialType = "graph";
+    material.materialTypeVersion = 1U;
+    material.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    material.graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U, .kind = kind, .positionX = 40, .positionY = 40,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+            .stableId = "tuned", .displayName = "Tuned", .defaultValueHint = std::string{ hint } } });
+    material.graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 3U, .kind = RenderMaterialGraphNodeKind::Multiply, .positionX = 200, .positionY = 40 });
+    material.graph.links.push_back(MakeLink(kind, 2U, std::string{ outputPin }, RenderMaterialGraphNodeKind::Multiply, 3U, "a"));
+    material.graph.links.push_back(MakeLink(kind, 2U, std::string{ outputPin }, RenderMaterialGraphNodeKind::Multiply, 3U, "b"));
+    material.graph.links.push_back(MakeLink(
+        RenderMaterialGraphNodeKind::Multiply, 3U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    return material;
+}
+
+// A scalar wired into a color slot: the graph is refused and the refusal names the output node whose
+// slot the scalar does not fit.
+[[nodiscard]] RenderMaterialAssetData MakeScalarIntoColorMaterial() {
+    RenderMaterialAssetData material{};
+    material.materialType = "graph";
+    material.materialTypeVersion = 1U;
+    material.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    material.graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantScalar, .positionX = 40, .positionY = 40 });
+    material.graph.links.push_back(MakeLink(
+        RenderMaterialGraphNodeKind::ConstantScalar, 2U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    return material;
+}
+
+[[nodiscard]] std::string ReadBinaryFile(const std::string& path) {
+    std::ifstream input{ path, std::ios::binary };
+    return std::string{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+}
+
+void RunParallelPassCompilesAreDeterministicTest() {
+    // The same graph compiled one pass at a time and with every pass at once must give the same result,
+    // in the same pass order, with byte-identical binaries.
+    const RenderMaterialAssetData material = MakeConstantColorMaterial("0.31 0.62 0.93 1");
+    const kb::assets::AssetId assetId{ 0x7A01U };
+    std::error_code error;
+
+    EditorMaterialGraphCookConfig serialConfig = MakeCookConfig("p45_parallel_serial");
+    serialConfig.maxParallelCompiles = 1U;
+    std::filesystem::remove_all(serialConfig.cacheRoot, error);
+    EditorMaterialGraphCookService serialService{ serialConfig };
+    const EditorMaterialGraphCookResult serial = serialService.CookNow(assetId, material);
+
+    EditorMaterialGraphCookConfig parallelConfig = MakeCookConfig("p45_parallel_wide");
+    parallelConfig.maxParallelCompiles = 4U;
+    std::filesystem::remove_all(parallelConfig.cacheRoot, error);
+    EditorMaterialGraphCookService parallelService{ parallelConfig };
+    const EditorMaterialGraphCookResult parallel = parallelService.CookNow(assetId, material);
+
+    Require(serial.status == EditorMaterialGraphCookStatus::Ready && parallel.status == EditorMaterialGraphCookStatus::Ready,
+        "P4.5: serial and parallel cooks of a valid graph must both compile it");
+    Require(serial.passes.size() == 4U && serial.passes.size() == parallel.passes.size(),
+        "P4.5: both cooks must cover the same passes");
+    Require(serial.compiledPassCount == 4U && parallel.compiledPassCount == 4U,
+        "P4.5: a cold cook must really compile every pass");
+    Require(serialService.PeakParallelCompiles() == 1U,
+        "P4.5: a service limited to one compile must never run two at once");
+    Require(parallelService.PeakParallelCompiles() >= 2U,
+        "P4.5: the passes of one cold cook must be compiled at the same time when the limit allows it");
+    Require(parallelService.PeakParallelCompiles() <= 4U,
+        "P4.5: parallel compiles must stay within the configured limit");
+    for (std::size_t index = 0U; index < serial.passes.size(); ++index) {
+        Require(serial.passes[index].pass == parallel.passes[index].pass,
+            "P4.5: pass results must keep the plan's order whatever order the compiles finished in");
+        Require(serial.passes[index].succeeded && parallel.passes[index].succeeded &&
+                serial.passes[index].binaryByteSize == parallel.passes[index].binaryByteSize,
+            "P4.5: parallel compiles must produce the binaries serial ones do");
+        Require(ReadBinaryFile(serial.passes[index].binaryPath) == ReadBinaryFile(parallel.passes[index].binaryPath),
+            "P4.5: a parallel compile must be byte-for-byte what a serial one is");
+    }
+    Require(serial.graphSourceHash == parallel.graphSourceHash && serial.diagnostics == parallel.diagnostics,
+        "P4.5: parallelism must not change the source or the diagnostics of a cook");
+}
+
+void RunStaleCompilesAreCancelledTest() {
+    // One compile at a time: while the first pass of graph A compiles, graph B replaces it. A's other
+    // passes must never start and A's result must never be published.
+    EditorMaterialGraphCookConfig config = MakeCookConfig("p45_cancel");
+    config.maxParallelCompiles = 1U;
+    config.debounceMs = 10U;
+    std::error_code error;
+    std::filesystem::remove_all(config.cacheRoot, error);
+    EditorMaterialGraphCookService service{ config };
+    const kb::assets::AssetId assetId{ 0x7A02U };
+
+    const std::uint64_t first = service.RequestCook(assetId, MakeConstantColorMaterial("0.1 0.2 0.3 1"));
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    while (service.PeakParallelCompiles() == 0U && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    Require(service.PeakParallelCompiles() == 1U, "P4.5: the first graph must have started compiling");
+    const std::uint64_t second = service.RequestCook(assetId, MakeConstantColorMaterial("0.9 0.8 0.7 1"));
+    Require(second > first, "P4.5: the replacing request must be the newer one");
+    service.WaitForIdle();
+
+    Require(service.SkippedCompileCount() >= 1U,
+        "P4.5: passes of a replaced graph that had not started must be skipped, not compiled");
+    const std::vector<EditorMaterialGraphCookResult> results = service.DrainResults();
+    Require(results.size() == 1U && results.front().requestGeneration == second,
+        "P4.5: only the replacing graph may report a result; the replaced one must stay silent");
+    Require(results.front().status == EditorMaterialGraphCookStatus::Ready && results.front().passes.size() == 4U,
+        "P4.5: the replacing graph must be compiled completely");
+    Require(service.LatestResult(assetId).requestGeneration == second,
+        "P4.5: the latest result must belong to the replacing graph");
+}
+
+void RunReopenAndUndoHitTheCacheTest() {
+    EditorMaterialGraphCookConfig config = MakeCookConfig("p45_reopen");
+    config.debounceMs = 600U;
+    std::error_code error;
+    std::filesystem::remove_all(config.cacheRoot, error);
+    const kb::assets::AssetId assetId{ 0x7A03U };
+    const RenderMaterialAssetData first = MakeConstantColorMaterial("0.2 0.3 0.4 1");
+    const RenderMaterialAssetData second = MakeConstantColorMaterial("0.6 0.5 0.4 1");
+    {
+        EditorMaterialGraphCookService service{ config };
+        service.RequestCook(assetId, first);
+        service.WaitForIdle();
+        service.RequestCook(assetId, second);
+        service.WaitForIdle();
+        static_cast<void>(service.DrainResults());
+
+        // Undo: the first graph is back. It was cooked before, so nothing waits for more edits and the
+        // cache serves every pass.
+        const auto startedAt = std::chrono::steady_clock::now();
+        service.RequestCook(assetId, first);
+        service.WaitForIdle();
+        const auto elapsed = std::chrono::steady_clock::now() - startedAt;
+        const EditorMaterialGraphCookResult undone = service.LatestResult(assetId);
+        Require(undone.status == EditorMaterialGraphCookStatus::UpToDate && undone.compiledPassCount == 0U &&
+                undone.cacheHitPassCount == undone.passes.size(),
+            "P4.5: undoing to an earlier graph must be served from the cache without compiling");
+        Require(elapsed < std::chrono::milliseconds(config.debounceMs),
+            "P4.5: undoing to an earlier graph must not wait out the edit delay");
+        Require(undone.elapsedMs < 400U, "P4.5: a cache hit must cost milliseconds, not the cost of a compile");
+    }
+    {
+        // Reopening: a new service (a new editor session) finds everything in the cache on disk.
+        EditorMaterialGraphCookService reopened{ config };
+        const auto startedAt = std::chrono::steady_clock::now();
+        const EditorMaterialGraphCookResult again = reopened.CookNow(assetId, second);
+        const auto elapsed = std::chrono::steady_clock::now() - startedAt;
+        Require(again.status == EditorMaterialGraphCookStatus::UpToDate && again.compiledPassCount == 0U,
+            "P4.5: reopening a graph must not compile it again");
+        Require(elapsed < std::chrono::milliseconds(400), "P4.5: reopening a cooked graph must be instant");
+    }
+}
+
+void RunParameterEditNeedsNoCompileTest() {
+    // A scalar, vector or color parameter is a uniform: its default is a value the program is given, so
+    // changing it changes neither the generated code nor the identity of the cook.
+    struct Kind { RenderMaterialGraphNodeKind kind; const char* pin; const char* before; const char* after; };
+    const std::array<Kind, 3U> kinds{ {
+        { RenderMaterialGraphNodeKind::ParameterScalar, "value", "0.25", "0.75" },
+        { RenderMaterialGraphNodeKind::ParameterVector, "xyz", "0.1 0.2 0.3", "0.9 0.8 0.7" },
+        { RenderMaterialGraphNodeKind::ParameterColor, "rgba", "0.1 0.2 0.3 1", "0.9 0.8 0.7 1" },
+    } };
+    for (const Kind& kind : kinds) {
+        const RenderMaterialAssetData before = MakeParameterArithmeticMaterial(kind.kind, kind.pin, kind.before);
+        const RenderMaterialAssetData after = MakeParameterArithmeticMaterial(kind.kind, kind.pin, kind.after);
+        const kb::assets::AssetId probe{ 0x7A04U };
+        const kb::render::RenderMaterialGraphCompileResult beforeCompile =
+            kb::render::CompileRenderMaterialGraphToShaderSource(before.graph, kb::render::RenderMaterialGraphBuildContext{ .assetId = probe.value });
+        const kb::render::RenderMaterialGraphCompileResult afterCompile =
+            kb::render::CompileRenderMaterialGraphToShaderSource(after.graph, kb::render::RenderMaterialGraphBuildContext{ .assetId = probe.value });
+        Require(beforeCompile.Succeeded() && afterCompile.Succeeded(),
+            "P4.5: the parameter test graphs must compile");
+        Require(beforeCompile.shader.sourceHash == afterCompile.shader.sourceHash && beforeCompile.shader.source == afterCompile.shader.source,
+            "P4.5: a parameter default must not appear in the generated shader code");
+        bool defaultTravelsAsUniform = false;
+        for (std::size_t index = 0U; index < beforeCompile.shader.reflection.uniforms.size() &&
+                                     index < afterCompile.shader.reflection.uniforms.size(); ++index) {
+            defaultTravelsAsUniform = defaultTravelsAsUniform ||
+                beforeCompile.shader.reflection.uniforms[index].defaultValue != afterCompile.shader.reflection.uniforms[index].defaultValue;
+        }
+        Require(defaultTravelsAsUniform, "P4.5: a parameter default must reach the program as a uniform value");
+    }
+
+    // The service agrees: the same cook identity, so asking again costs nothing.
+    const RenderMaterialAssetData before = MakeParameterArithmeticMaterial(RenderMaterialGraphNodeKind::ParameterColor, "rgba", "0.1 0.2 0.3 1");
+    const RenderMaterialAssetData after = MakeParameterArithmeticMaterial(RenderMaterialGraphNodeKind::ParameterColor, "rgba", "0.9 0.8 0.7 1");
+    EditorMaterialGraphCookConfig asyncConfig = MakeCookConfig("p45_parameter_async");
+    asyncConfig.debounceMs = 10U;
+    std::error_code error;
+    std::filesystem::remove_all(asyncConfig.cacheRoot, error);
+    EditorMaterialGraphCookService service{ asyncConfig };
+    const kb::assets::AssetId assetId{ 0x7A05U };
+    const std::uint64_t firstGeneration = service.RequestCook(assetId, before);
+    service.WaitForIdle();
+    Require(service.LatestResult(assetId).status == EditorMaterialGraphCookStatus::Ready,
+        "P4.5: the parameter graph must cook");
+    static_cast<void>(service.DrainResults());
+    const std::uint64_t secondGeneration = service.RequestCook(assetId, after);
+    Require(secondGeneration == firstGeneration,
+        "P4.5: changing only a parameter default must not start a new cook");
+    service.WaitForIdle();
+    Require(service.DrainResults().empty() && service.LatestResult(assetId).status == EditorMaterialGraphCookStatus::Ready,
+        "P4.5: changing only a parameter default must leave the cooked program as it is");
+
+    // A constant is part of the code, so it still is a new shader.
+    Require(!(service.CookNow(assetId, MakeConstantColorMaterial("0.1 0.1 0.1 1")).variantKey ==
+              service.CookNow(assetId, MakeConstantColorMaterial("0.2 0.2 0.2 1")).variantKey),
+        "P4.5: changing a constant, which is shader code, must still be a new cook");
+}
+
+void RunCookErrorsNameTheirNodeTest() {
+    const EditorMaterialGraphCookConfig config = MakeCookConfig("p45_errors");
+    EditorMaterialGraphCookService service{ config };
+    const kb::assets::AssetId assetId{ 0x7A06U };
+    const EditorMaterialGraphCookResult result = service.CookNow(assetId, MakeScalarIntoColorMaterial());
+    Require(result.status == EditorMaterialGraphCookStatus::Failed, "P4.5: a scalar wired into a color slot must fail the cook");
+    Require(result.diagnosticNodeIds.size() == result.diagnostics.size(),
+        "P4.5: every cook diagnostic line must say which node it is about, or none");
+    Require(std::ranges::find(result.diagnosticNodeIds, 1U) != result.diagnosticNodeIds.end() && !result.nodeDiagnostics.empty() &&
+            result.nodeDiagnostics.front().nodeId == 1U,
+        "P4.5: the cook must report the node the error belongs to");
+
+    // The editor puts the error on that node and lets a click on its line reach it.
+    RenderMaterialAssetData valid = MakeConstantColorMaterial("1 1 1 1");
+    kb::editor::MaterialEditorState editor;
+    editor.Open(assetId, valid);
+    editor.ApplyCookResult(result.diagnostics, false, false, false, true, result.diagnosticNodeIds, result.nodeDiagnostics);
+    const std::vector<std::uint32_t>& nodeIds = editor.DiagnosticNodeIds();
+    Require(nodeIds.size() == editor.Diagnostics().size() && std::ranges::find(nodeIds, 1U) != nodeIds.end(),
+        "P4.5: the diagnostics list must point at the node a compile error names");
+    Require(std::ranges::any_of(editor.GraphDiagnosticMarkers(), [](const kb::editor::MaterialEditorGraphDiagnosticMarker& marker) {
+            return marker.nodeId == 1U && marker.severity == kb::render::RenderMaterialGraphDiagnosticSeverity::Error;
+        }),
+        "P4.5: a compile error must be marked on the node that caused it");
+    editor.ApplyCookResult({}, true, true, false, false);
+    Require(std::ranges::none_of(editor.GraphDiagnosticMarkers(), [](const kb::editor::MaterialEditorGraphDiagnosticMarker& marker) {
+            return marker.nodeId == 1U;
+        }),
+        "P4.5: a later successful cook must clear the marks of the earlier failure");
+}
 #endif
 
 void RunCookBannerMappingTest() {
@@ -563,6 +813,11 @@ void RunEditorMaterialGraphCookServiceTests() {
     RunAsyncDebouncedCookTest();
     RunAsyncVariantCoexistenceTest();
     RunHotReloadLastGoodTest();
+    RunParallelPassCompilesAreDeterministicTest();
+    RunStaleCompilesAreCancelledTest();
+    RunReopenAndUndoHitTheCacheTest();
+    RunParameterEditNeedsNoCompileTest();
+    RunCookErrorsNameTheirNodeTest();
 #endif
 }
 

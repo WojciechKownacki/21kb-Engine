@@ -62,6 +62,10 @@ int main(int argumentCount, char** arguments) {
         kb::editor::tests::RunEditorViewportPreviewTests();
         return 0;
     }
+    if (argumentCount == 2 && std::string_view{ arguments[1] } == "material-cook") {
+        kb::editor::tests::RunEditorMaterialGraphCookServiceTests();
+        return 0;
+    }
     if (argumentCount == 2 && std::string_view{ arguments[1] } == "game-view") {
         kb::editor::tests::RunEditorGameViewTests();
         return 0;

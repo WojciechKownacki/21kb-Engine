@@ -1719,6 +1719,7 @@ if(BUILD_TESTING)
 
     add_test(NAME kb_editor_tests COMMAND $<TARGET_FILE:kb_editor_tests>)
     add_test(NAME kb_editor_timeline_tests COMMAND $<TARGET_FILE:kb_editor_tests> timeline)
+    add_test(NAME kb_editor_material_cook COMMAND $<TARGET_FILE:kb_editor_tests> material-cook)
     add_test(NAME kb_editor_static_mesh_tests COMMAND $<TARGET_FILE:kb_editor_tests> static-mesh)
     add_test(NAME kb_editor_gameplay_graph_tests COMMAND $<TARGET_FILE:kb_editor_tests> gameplay-graph)
     set_tests_properties(kb_editor_gameplay_graph_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "editor;gameplay;graph" TIMEOUT 60)

@@ -398,6 +398,7 @@ std::optional<std::uint32_t> MaterialGraphCanvas::HitTestLinkLocal(MaterialGraph
     }
     float bestDistance = std::numeric_limits<float>::max();
     std::optional<std::uint32_t> bestLink;
+    const float threshold = std::max(8.0F, 5.0F * zoom_);
     for (std::size_t linkIndex = 0U; linkIndex < links_.size(); ++linkIndex) {
         const MaterialGraphCanvasLink& link = links_[linkIndex];
         if (!ValidIndex(link.fromNode, nodes_.size()) || !ValidIndex(link.toNode, nodes_.size())) {
@@ -408,13 +409,20 @@ std::optional<std::uint32_t> MaterialGraphCanvas::HitTestLinkLocal(MaterialGraph
         const float dx = std::max(48.0F * zoom_, std::abs(to.x - from.x) * 0.5F);
         const MaterialGraphCanvasPoint c1{ from.x + dx, from.y };
         const MaterialGraphCanvasPoint c2{ to.x - dx, to.y };
+        // A curve never leaves the box of its four control points: most links are far from the pointer and
+        // are rejected here without sampling them.
+        if (local.x < std::min({ from.x, to.x, c1.x, c2.x }) - threshold ||
+            local.x > std::max({ from.x, to.x, c1.x, c2.x }) + threshold ||
+            local.y < std::min({ from.y, to.y }) - threshold ||
+            local.y > std::max({ from.y, to.y }) + threshold) {
+            continue;
+        }
         const float distance = DistancePointBezier(local, from, c1, c2, to);
         if (distance < bestDistance) {
             bestDistance = distance;
             bestLink = static_cast<std::uint32_t>(linkIndex);
         }
     }
-    const float threshold = std::max(8.0F, 5.0F * zoom_);
     if (bestLink.has_value() && bestDistance <= threshold) {
         return bestLink;
     }

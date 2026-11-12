@@ -10,11 +10,14 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <future>
 #include <limits>
 #include <sstream>
+#include <thread>
 #include <utility>
 
 namespace kb::editor {
@@ -72,12 +75,40 @@ void HashVariantBytes(std::uint64_t& hash, std::string_view value) noexcept {
     return result;
 }
 
+[[nodiscard]] bool IsDynamicParameterNode(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
+    return kind == kb::render::RenderMaterialGraphNodeKind::ParameterScalar ||
+        kind == kb::render::RenderMaterialGraphNodeKind::ParameterVector ||
+        kind == kb::render::RenderMaterialGraphNodeKind::ParameterColor;
+}
+
+// The identity of the shader code a material produces. A scalar, vector or color parameter is a uniform:
+// its default is a value handed to the program, not a part of it, so changing it must not look like a new
+// shader that needs compiling.
+[[nodiscard]] std::uint64_t ShaderCodeHash(const kb::render::RenderMaterialAssetData& material) {
+    const bool hasDefaults = std::ranges::any_of(material.graph.nodes, [](const kb::render::RenderMaterialGraphNode& node) {
+        return IsDynamicParameterNode(node.kind) && !node.parameter.defaultValueHint.empty();
+    });
+    if (!hasDefaults) {
+        return kb::render::RenderMaterialShaderSemanticHash(material);
+    }
+    kb::render::RenderMaterialAssetData code{};
+    code.materialType = material.materialType;
+    code.materialTypeVersion = material.materialTypeVersion;
+    code.graph = material.graph;
+    for (kb::render::RenderMaterialGraphNode& node : code.graph.nodes) {
+        if (IsDynamicParameterNode(node.kind)) {
+            node.parameter.defaultValueHint.clear();
+        }
+    }
+    return kb::render::RenderMaterialShaderSemanticHash(code);
+}
+
 [[nodiscard]] kb::render::RenderMaterialGraphVariantKey BuildCookVariantKey(
     const EditorMaterialGraphCookConfig& config,
     kb::assets::AssetId assetId,
     const kb::render::RenderMaterialAssetData& material,
     const kb::render::RenderMaterialGraphBuildContext& context) {
-    std::uint64_t inputHash = kb::render::RenderMaterialShaderSemanticHash(material);
+    std::uint64_t inputHash = ShaderCodeHash(material);
     HashVariantBytes(inputHash, config.shadercPath);
     HashVariantBytes(inputHash, config.varyingDefPath);
     for (const std::string& includeDir : config.includeDirs) {
@@ -144,10 +175,23 @@ struct CookCacheFootprint {
     return footprint;
 }
 
+void AppendCookNote(EditorMaterialGraphCookResult& result, std::string text) {
+    result.diagnostics.push_back(std::move(text));
+    result.diagnosticNodeIds.push_back(0U);
+}
+
+void AppendCookDiagnostic(EditorMaterialGraphCookResult& result, const kb::render::RenderMaterialGraphDiagnostic& diagnostic) {
+    result.diagnostics.push_back(FormatDiagnostic(diagnostic));
+    result.diagnosticNodeIds.push_back(diagnostic.nodeId);
+    if (diagnostic.nodeId != 0U) {
+        result.nodeDiagnostics.push_back(diagnostic);
+    }
+}
+
 void AppendCookBudgetWarnings(const EditorMaterialGraphCookConfig& config, EditorMaterialGraphCookResult& result) {
     const auto warn = [&result](std::string message) {
         result.budgetWarning = true;
-        result.diagnostics.push_back("[warning]: graph cook budget exceeded - " + std::move(message));
+        AppendCookNote(result, "[warning]: graph cook budget exceeded - " + std::move(message));
     };
     if (result.elapsedMs > config.compileWarningMs) {
         warn("cook time " + std::to_string(result.elapsedMs) + "ms/" + std::to_string(config.compileWarningMs) + "ms");
@@ -160,49 +204,51 @@ void AppendCookBudgetWarnings(const EditorMaterialGraphCookConfig& config, Edito
     }
 }
 
-// Deterministic, side-effect-free cook of a single material graph against an explicit config.
-// Shared by the synchronous CookNow() and the background worker (which snapshots the config under
-// the service lock) so neither path races on mutable service state.
-[[nodiscard]] EditorMaterialGraphCookResult ExecuteCook(
+// A graph turned into shader source, with the passes that still have to be compiled. Everything up to the
+// compiler runs in here; it is fast and runs once per request. `shader` is null when there is nothing to
+// compile (no compiler, or the graph does not generate code) and `result` is then already final.
+struct CookPlan {
+    EditorMaterialGraphCookResult result;
+    std::shared_ptr<const kb::render::RenderMaterialGraphShaderSource> shader;
+    std::vector<std::string> passes;
+    std::uint32_t materialTypeVersion = 1U;
+    std::chrono::steady_clock::time_point startedAt{};
+};
+
+// What compiling one pass produced.
+struct PassCookOutcome {
+    EditorMaterialGraphCookPassResult pass;
+    std::vector<kb::render::RenderMaterialGraphDiagnostic> diagnostics;
+};
+
+[[nodiscard]] CookPlan PlanCook(
     const EditorMaterialGraphCookConfig& config,
     kb::assets::AssetId assetId,
     const kb::render::RenderMaterialAssetData& material,
     kb::render::RenderMaterialGraphBuildContext graphContext) {
-    const auto startedAt = std::chrono::steady_clock::now();
-    EditorMaterialGraphCookResult result{};
+    CookPlan plan{};
+    plan.startedAt = std::chrono::steady_clock::now();
+    plan.materialTypeVersion = material.materialTypeVersion;
+    EditorMaterialGraphCookResult& result = plan.result;
     result.materialAssetId = assetId;
     result.variantKey = BuildCookVariantKey(config, assetId, material, graphContext);
     result.materialTypeVersion = material.materialTypeVersion;
 
-    const auto finish = [&config, startedAt](EditorMaterialGraphCookResult& cookResult) {
-        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - startedAt).count();
-        cookResult.elapsedMs = elapsed <= 0
-            ? 0U
-            : static_cast<std::uint32_t>(std::min<std::int64_t>(elapsed, std::numeric_limits<std::uint32_t>::max()));
-        const CookCacheFootprint footprint = MeasureCookCacheFootprint(config.cacheRoot);
-        cookResult.cacheEntryCount = footprint.entryCount;
-        cookResult.cacheByteSize = footprint.byteSize;
-        AppendCookBudgetWarnings(config, cookResult);
-    };
-
     if (config.shadercPath.empty()) {
         result.status = EditorMaterialGraphCookStatus::CookUnavailable;
-        result.diagnostics.emplace_back("[error]: graph shader cook unavailable - shaderc tool not found (set KB_GRAPH_SHADERC or build bgfx::shaderc)");
-        finish(result);
-        return result;
+        AppendCookNote(result, "[error]: graph shader cook unavailable - shaderc tool not found (set KB_GRAPH_SHADERC or build bgfx::shaderc)");
+        return plan;
     }
 
     graphContext.assetId = assetId.value;
-    const kb::render::RenderMaterialGraphCompileResult compiled =
+    kb::render::RenderMaterialGraphCompileResult compiled =
         kb::render::CompileRenderMaterialGraphToShaderSource(material.graph, graphContext);
     for (const kb::render::RenderMaterialGraphDiagnostic& diagnostic : compiled.diagnostics) {
-        result.diagnostics.push_back(FormatDiagnostic(diagnostic));
+        AppendCookDiagnostic(result, diagnostic);
     }
     if (!compiled.Succeeded()) {
         result.status = EditorMaterialGraphCookStatus::Failed;
-        finish(result);
-        return result;
+        return plan;
     }
     result.graphSourceHash = compiled.shader.sourceHash;
     result.backendName = std::string{ kb::render::RenderMaterialGraphShaderBackendName(config.backend) };
@@ -212,68 +258,115 @@ void AppendCookBudgetWarnings(const EditorMaterialGraphCookConfig& config, Edito
     result.uniformCount = static_cast<std::uint32_t>(compiled.shader.reflection.uniforms.size());
     result.varyingCount = static_cast<std::uint32_t>(compiled.shader.reflection.requiredVaryings.size());
 
-    const std::array<kb::render::RenderMaterialGraphShaderBackend, 1U> backends{ config.backend };
-    bool anyFailure = false;
-    bool allCacheHit = true;
     for (const std::string& pass : EffectivePasses(config)) {
-        if (!kb::render::RenderMaterialGraphCooksScenePass(compiled.shader.reflection, pass)) {
-            continue;
+        if (kb::render::RenderMaterialGraphCooksScenePass(compiled.shader.reflection, pass)) {
+            plan.passes.push_back(pass);
         }
-        kb::render::RenderMaterialGraphShaderArtifactRequest request{};
-        request.shadercPath = config.shadercPath;
-        request.varyingDefPath = config.varyingDefPath;
-        request.includeDirs = config.includeDirs;
-        request.dependencyFiles = config.dependencyFiles;
-        request.cacheRoot = config.cacheRoot;
-        request.pass = pass;
-        request.shaderPlatform = config.shaderPlatform;
-        request.materialTypeVersion = material.materialTypeVersion;
+    }
+    plan.shader = std::make_shared<const kb::render::RenderMaterialGraphShaderSource>(std::move(compiled.shader));
+    return plan;
+}
 
-        const kb::render::RenderMaterialGraphShaderArtifactResult cook =
-            kb::render::CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, request);
-        for (const kb::render::RenderMaterialGraphDiagnostic& diagnostic : cook.diagnostics) {
-            result.diagnostics.push_back(FormatDiagnostic(diagnostic));
-        }
+// Compiles one pass of a planned graph through the shared graph shader cache. Safe to run for several
+// passes at the same time: every pass owns its cache directory and the cache locks an entry while it
+// is written.
+[[nodiscard]] PassCookOutcome CompilePass(
+    const EditorMaterialGraphCookConfig& config,
+    const kb::render::RenderMaterialGraphShaderSource& shader,
+    std::uint32_t materialTypeVersion,
+    const std::string& pass) {
+    PassCookOutcome outcome{};
+    outcome.pass.pass = pass;
 
-        EditorMaterialGraphCookPassResult passResult{};
-        passResult.pass = pass;
-        const kb::render::RenderMaterialGraphShaderBinary* binary =
-            cook.Succeeded() && cook.artifact.has_value() ? cook.artifact->FindBinary(config.backend) : nullptr;
-        if (binary != nullptr) {
-            passResult.succeeded = true;
-            passResult.cacheHit = binary->cacheHit;
-            passResult.binaryPath = binary->binaryPath;
-            passResult.binaryByteSize = binary->byteSize;
-            if (binary->cacheHit) {
-                ++result.cacheHitPassCount;
-            } else {
-                ++result.compiledPassCount;
+    kb::render::RenderMaterialGraphShaderArtifactRequest request{};
+    request.shadercPath = config.shadercPath;
+    request.varyingDefPath = config.varyingDefPath;
+    request.includeDirs = config.includeDirs;
+    request.dependencyFiles = config.dependencyFiles;
+    request.cacheRoot = config.cacheRoot;
+    request.pass = pass;
+    request.shaderPlatform = config.shaderPlatform;
+    request.materialTypeVersion = materialTypeVersion;
+
+    const std::array<kb::render::RenderMaterialGraphShaderBackend, 1U> backends{ config.backend };
+    const kb::render::RenderMaterialGraphShaderArtifactResult cook =
+        kb::render::CookRenderMaterialGraphShaderArtifact(shader, backends, request);
+    outcome.diagnostics = cook.diagnostics;
+
+    const kb::render::RenderMaterialGraphShaderBinary* binary =
+        cook.Succeeded() && cook.artifact.has_value() ? cook.artifact->FindBinary(config.backend) : nullptr;
+    if (binary == nullptr) {
+        return outcome;
+    }
+    outcome.pass.succeeded = true;
+    outcome.pass.cacheHit = binary->cacheHit;
+    outcome.pass.binaryPath = binary->binaryPath;
+    outcome.pass.binaryByteSize = binary->byteSize;
+    // Off-thread shader warm: creating the freshly cooked DXBC on the live D3D11 device here forces the
+    // driver's DXBC->ISA compile to happen *now* (invisibly, off the render thread) instead of inside the
+    // next bgfx::frame() when the preview first draws with it -- which otherwise froze the whole editor UI
+    // for ~2s per new graph shader. No-op on non-D3D11 backends; deduped by bytecode so repeated cooks of
+    // the same shader stay cheap.
+    if (!binary->binaryPath.empty()) {
+        static_cast<void>(kb::render::PrewarmGraphShaderFile(binary->binaryPath));
+    }
+    return outcome;
+}
+
+// Puts the passes of a plan together, in the order the plan lists them, whatever order they finished in.
+[[nodiscard]] EditorMaterialGraphCookResult FinishCook(
+    const EditorMaterialGraphCookConfig& config,
+    CookPlan& plan,
+    std::vector<PassCookOutcome>& outcomes) {
+    EditorMaterialGraphCookResult result = std::move(plan.result);
+    if (plan.shader != nullptr) {
+        bool anyFailure = false;
+        bool allCacheHit = true;
+        for (PassCookOutcome& outcome : outcomes) {
+            if (!outcome.pass.succeeded && !anyFailure) {
+                // One short sentence a person can act on, ahead of the compiler's own words.
+                AppendCookNote(result, "[error]: This material could not be turned into a shader. Check the node you changed last.");
             }
-            allCacheHit = allCacheHit && binary->cacheHit;
-        } else {
-            anyFailure = true;
-            allCacheHit = false;
+            for (const kb::render::RenderMaterialGraphDiagnostic& diagnostic : outcome.diagnostics) {
+                AppendCookDiagnostic(result, diagnostic);
+            }
+            if (outcome.pass.succeeded) {
+                if (outcome.pass.cacheHit) {
+                    ++result.cacheHitPassCount;
+                } else {
+                    ++result.compiledPassCount;
+                }
+                allCacheHit = allCacheHit && outcome.pass.cacheHit;
+            } else {
+                anyFailure = true;
+                allCacheHit = false;
+            }
+            result.passes.push_back(std::move(outcome.pass));
         }
-        result.passes.push_back(std::move(passResult));
+        result.status = anyFailure
+            ? EditorMaterialGraphCookStatus::Failed
+            : (allCacheHit ? EditorMaterialGraphCookStatus::UpToDate : EditorMaterialGraphCookStatus::Ready);
     }
 
-    // Off-thread shader warm: this runs on the cook worker thread, before the result is published to
-    // the render thread. Creating the freshly cooked DXBC on the live D3D11 device here forces the
-    // driver's DXBC->ISA compile to happen *now* (invisibly, off the render thread) instead of inside
-    // the next bgfx::frame() when the preview first draws with it -- which otherwise froze the whole
-    // editor UI for ~2s per new graph shader (the shared bgfx frame stall). No-op on non-D3D11
-    // backends; deduped by bytecode so repeated cooks of the same shader stay cheap.
-    for (const EditorMaterialGraphCookPassResult& passResult : result.passes) {
-        if (passResult.succeeded && !passResult.binaryPath.empty()) {
-            static_cast<void>(kb::render::PrewarmGraphShaderFile(passResult.binaryPath));
-        }
-    }
-
-    result.status = anyFailure
-        ? EditorMaterialGraphCookStatus::Failed
-        : (allCacheHit ? EditorMaterialGraphCookStatus::UpToDate : EditorMaterialGraphCookStatus::Ready);
-    finish(result);
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - plan.startedAt).count();
+    result.elapsedMs = elapsed <= 0
+        ? 0U
+        : static_cast<std::uint32_t>(std::min<std::int64_t>(elapsed, std::numeric_limits<std::uint32_t>::max()));
+    const CookCacheFootprint footprint = MeasureCookCacheFootprint(config.cacheRoot);
+    result.cacheEntryCount = footprint.entryCount;
+    result.cacheByteSize = footprint.byteSize;
+    AppendCookBudgetWarnings(config, result);
     return result;
+}
+
+[[nodiscard]] std::uint32_t ResolveCompileParallelism(const EditorMaterialGraphCookConfig& config) noexcept {
+    if (config.maxParallelCompiles != 0U) {
+        return config.maxParallelCompiles;
+    }
+    constexpr std::uint32_t kMostAutomaticCompiles = 6U;
+    const std::uint32_t hardware = std::thread::hardware_concurrency();
+    return std::clamp<std::uint32_t>(hardware > 1U ? hardware - 1U : 1U, 1U, kMostAutomaticCompiles);
 }
 
 } // namespace
@@ -357,10 +450,56 @@ EditorMaterialGraphCookService::EditorMaterialGraphCookService()
     : EditorMaterialGraphCookService(EditorMaterialGraphCookConfig{}) {
 }
 
+// One cook in flight: the plan, one outcome slot per pass, and what the passes need to agree on.
+struct EditorMaterialGraphCookService::CookJob {
+    kb::render::RenderMaterialGraphVariantKey key{};
+    std::uint64_t generation = 0U;
+    EditorMaterialGraphCookConfig config;
+    CookPlan plan;
+    std::vector<PassCookOutcome> outcomes;
+    std::atomic<std::size_t> remaining{ 0U };
+    // Set by a newer request for the same variant: passes that have not started are skipped.
+    std::atomic<bool> cancelled{ false };
+    // Set for CookNow(), which waits for the last pass instead of publishing.
+    std::promise<void> completion;
+
+    // Compiles pass `index` unless the job was cancelled. True when this was the job's last pass.
+    bool RunPass(
+        std::size_t index,
+        std::atomic<std::uint32_t>& running,
+        std::atomic<std::uint32_t>& peak,
+        std::atomic<std::uint32_t>& skipped) {
+        if (cancelled.load(std::memory_order_acquire)) {
+            skipped.fetch_add(1U, std::memory_order_relaxed);
+        } else {
+            const std::uint32_t now = running.fetch_add(1U, std::memory_order_acq_rel) + 1U;
+            std::uint32_t seen = peak.load(std::memory_order_relaxed);
+            while (now > seen && !peak.compare_exchange_weak(seen, now, std::memory_order_relaxed)) {
+            }
+            try {
+                outcomes[index] = CompilePass(config, *plan.shader, plan.materialTypeVersion, plan.passes[index]);
+            } catch (const std::exception& error) {
+                outcomes[index] = PassCookOutcome{};
+                outcomes[index].pass.pass = plan.passes[index];
+                outcomes[index].diagnostics.push_back(kb::render::RenderMaterialGraphDiagnostic{
+                    .severity = kb::render::RenderMaterialGraphDiagnosticSeverity::Error,
+                    .pass = plan.passes[index],
+                    .message = std::string{ "The shader compiler stopped unexpectedly: " } + error.what(),
+                });
+            }
+            running.fetch_sub(1U, std::memory_order_acq_rel);
+        }
+        return remaining.fetch_sub(1U, std::memory_order_acq_rel) == 1U;
+    }
+};
+
 EditorMaterialGraphCookService::EditorMaterialGraphCookService(EditorMaterialGraphCookConfig config)
     : config_(std::move(config)),
       lane_{ std::make_unique<kb::assets::streaming::BackgroundLane>(
-          kb::assets::streaming::BackgroundLoadService::Shared(), kb::assets::streaming::BackgroundJobClass::Long) } {
+          kb::assets::streaming::BackgroundLoadService::Shared(), kb::assets::streaming::BackgroundJobClass::Long) },
+      compileLane_{ std::make_unique<kb::assets::streaming::BackgroundLane>(
+          kb::assets::streaming::BackgroundLoadService::Shared(), kb::assets::streaming::BackgroundJobClass::Long,
+          ResolveCompileParallelism(config_)) } {
 }
 
 EditorMaterialGraphCookService::~EditorMaterialGraphCookService() {
@@ -375,24 +514,52 @@ std::uint64_t EditorMaterialGraphCookService::RequestCook(
     kb::assets::AssetId assetId,
     const kb::render::RenderMaterialAssetData& material,
     kb::render::RenderMaterialGraphBuildContext graphContext) {
-    std::uint64_t generation = 0U;
+    EditorMaterialGraphCookConfig snapshot;
     {
         std::lock_guard<std::mutex> lock{ mutex_ };
         // Track the live renderer backend so cooked binaries land in the directory the runtime
         // program loader reads from for the active bgfx renderer.
         config_.backend = EditorMaterialGraphCookConfig::BackendForActiveRenderer();
-        generation = ++generationCounter_;
-        const kb::render::RenderMaterialGraphVariantKey variantKey =
-            BuildCookVariantKey(config_, assetId, material, graphContext);
-        // A newer source revision supersedes only the same program family. Preview,
-        // scene and node-preview variants remain independently queued and reported.
+        snapshot = config_;
+    }
+    // Hashing the graph is the costly part of a request; it runs before the lock is taken so a worker that
+    // publishes a result is never held up by it.
+    const kb::render::RenderMaterialGraphVariantKey variantKey =
+        BuildCookVariantKey(snapshot, assetId, material, graphContext);
+
+    std::uint64_t generation = 0U;
+    {
+        std::lock_guard<std::mutex> lock{ mutex_ };
+        // A newer source revision supersedes only the same program family. Preview, scene and node-preview
+        // variants remain independently queued and reported. Revisions that are still queued are dropped,
+        // and revisions already compiling stop starting new passes: their results are never published.
         EraseSupersededProgramFamily(pending_, variantKey);
+        for (const std::shared_ptr<CookJob>& job : inFlightJobs_) {
+            if (job->key.SameProgramFamily(variantKey) && !(job->key == variantKey)) {
+                job->cancelled.store(true, std::memory_order_release);
+            }
+        }
         EraseSupersededProgramFamily(latest_, variantKey);
+        // The same shader code again (a parameter value changed, a click that moved nothing) is already
+        // queued, compiling or done: there is nothing to compile.
+        if (const auto same = latest_.find(variantKey); same != latest_.end()) {
+            const EditorMaterialGraphCookStatus status = same->second.status;
+            if (status == EditorMaterialGraphCookStatus::Pending || status == EditorMaterialGraphCookStatus::Cooking ||
+                status == EditorMaterialGraphCookStatus::Ready || status == EditorMaterialGraphCookStatus::UpToDate) {
+                return same->second.requestGeneration;
+            }
+        }
+        generation = ++generationCounter_;
+        // A variant that was cooked before has its binaries in the cache: nothing is being typed that the
+        // wait could coalesce, so it goes straight to the cache check.
+        const bool cookedBefore =
+            std::find(knownVariants_.begin(), knownVariants_.end(), variantKey) != knownVariants_.end();
         PendingEntry entry{};
         entry.material = material;
         entry.graphContext = std::move(graphContext);
         entry.generation = generation;
-        entry.readyAt = std::chrono::steady_clock::now() + std::chrono::milliseconds(config_.debounceMs);
+        entry.readyAt = std::chrono::steady_clock::now() +
+            std::chrono::milliseconds(cookedBefore ? 0U : snapshot.debounceMs);
         pending_[variantKey] = std::move(entry);
 
         EditorMaterialGraphCookResult pendingResult{};
@@ -400,7 +567,7 @@ std::uint64_t EditorMaterialGraphCookService::RequestCook(
         pendingResult.variantKey = variantKey;
         pendingResult.materialTypeVersion = material.materialTypeVersion;
         pendingResult.requestGeneration = generation;
-        pendingResult.status = config_.shadercPath.empty()
+        pendingResult.status = snapshot.shadercPath.empty()
             ? EditorMaterialGraphCookStatus::CookUnavailable
             : EditorMaterialGraphCookStatus::Pending;
         latest_[variantKey] = std::move(pendingResult);
@@ -419,7 +586,25 @@ EditorMaterialGraphCookResult EditorMaterialGraphCookService::CookNow(
         std::lock_guard<std::mutex> lock{ mutex_ };
         snapshot = config_;
     }
-    return ExecuteCook(snapshot, assetId, material, std::move(graphContext));
+    const auto job = std::make_shared<CookJob>();
+    job->plan = PlanCook(snapshot, assetId, material, std::move(graphContext));
+    job->config = std::move(snapshot);
+    const std::size_t passCount = job->plan.shader != nullptr ? job->plan.passes.size() : 0U;
+    job->outcomes.resize(passCount);
+    job->remaining.store(passCount, std::memory_order_release);
+    std::future<void> done = job->completion.get_future();
+    for (std::size_t index = 0U; index < passCount; ++index) {
+        static_cast<void>(compileLane_->Run([this, job, index](std::string&) {
+            if (job->RunPass(index, runningCompiles_, peakCompiles_, skippedCompiles_)) {
+                job->completion.set_value();
+            }
+            return true;
+        }));
+    }
+    if (passCount != 0U) {
+        done.wait();
+    }
+    return FinishCook(job->config, job->plan, job->outcomes);
 }
 
 std::vector<EditorMaterialGraphCookResult> EditorMaterialGraphCookService::DrainResults() {
@@ -513,10 +698,92 @@ void EditorMaterialGraphCookService::StopWorker() {
         std::lock_guard<std::mutex> lock{ mutex_ };
         stop_ = true;
         pending_.clear();
+        for (const std::shared_ptr<CookJob>& job : inFlightJobs_) {
+            job->cancelled.store(true, std::memory_order_release);
+        }
     }
     wakeCv_.notify_all();
-    // Drops a drain that has not started and waits for a running one, which sees stop_.
+    // Drops a drain that has not started and waits for a running one, which sees stop_; then the same for
+    // the compiles, which skip their passes once cancelled.
     lane_.reset();
+    compileLane_.reset();
+}
+
+std::uint32_t EditorMaterialGraphCookService::PeakParallelCompiles() const noexcept {
+    return peakCompiles_.load(std::memory_order_relaxed);
+}
+
+std::uint32_t EditorMaterialGraphCookService::SkippedCompileCount() const noexcept {
+    return skippedCompiles_.load(std::memory_order_relaxed);
+}
+
+bool EditorMaterialGraphCookService::SupersededLocked(
+    const kb::render::RenderMaterialGraphVariantKey& key, std::uint64_t generation) const {
+    for (const auto& [pendingKey, pendingEntry] : pending_) {
+        if (pendingKey.SameProgramFamily(key) && pendingEntry.generation > generation) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void EditorMaterialGraphCookService::PublishResultLocked(EditorMaterialGraphCookResult result) {
+    // Hot-reload last-good policy (MAT-33): a successful cook becomes the new last-good; a
+    // failed/unavailable cook keeps the previous good program live and reports Stale so the
+    // viewport never drops to a black/error frame while the artist is mid-edit.
+    if (result.status == EditorMaterialGraphCookStatus::Ready || result.status == EditorMaterialGraphCookStatus::UpToDate) {
+        EraseSupersededProgramFamily(lastGood_, result.variantKey);
+        lastGood_[result.variantKey] = result;
+        constexpr std::size_t kKnownVariantLimit = 64U;
+        if (std::find(knownVariants_.begin(), knownVariants_.end(), result.variantKey) == knownVariants_.end()) {
+            knownVariants_.push_back(result.variantKey);
+            if (knownVariants_.size() > kKnownVariantLimit) {
+                knownVariants_.pop_front();
+            }
+        }
+    } else if (result.status == EditorMaterialGraphCookStatus::Failed || result.status == EditorMaterialGraphCookStatus::CookUnavailable) {
+        const EditorMaterialGraphCookResult* good = nullptr;
+        for (const auto& [goodKey, goodResult] : lastGood_) {
+            if (goodKey.SameProgramFamily(result.variantKey)) {
+                good = &goodResult;
+                break;
+            }
+        }
+        if (good != nullptr) {
+            EditorMaterialGraphCookResult stale = *good;
+            stale.status = EditorMaterialGraphCookStatus::Stale;
+            stale.requestGeneration = result.requestGeneration;
+            stale.diagnostics = result.diagnostics; // carry the failure reason for the panel
+            stale.diagnosticNodeIds = result.diagnosticNodeIds;
+            stale.nodeDiagnostics = result.nodeDiagnostics;
+            result = std::move(stale);
+        }
+    }
+    EraseSupersededProgramFamily(latest_, result.variantKey);
+    latest_[result.variantKey] = result;
+    completed_.push_back(std::move(result));
+}
+
+void EditorMaterialGraphCookService::RunPassJob(const std::shared_ptr<CookJob>& job, std::size_t index) {
+    if (job->RunPass(index, runningCompiles_, peakCompiles_, skippedCompiles_)) {
+        PublishJob(job);
+    }
+}
+
+void EditorMaterialGraphCookService::PublishJob(const std::shared_ptr<CookJob>& job) {
+    // A job a newer edit cancelled has nothing to report; skip putting its result together.
+    EditorMaterialGraphCookResult result;
+    if (!job->cancelled.load(std::memory_order_acquire)) {
+        result = FinishCook(job->config, job->plan, job->outcomes);
+        result.requestGeneration = job->generation;
+    }
+    std::lock_guard<std::mutex> lock{ mutex_ };
+    inFlightJobs_.erase(std::remove(inFlightJobs_.begin(), inFlightJobs_.end(), job), inFlightJobs_.end());
+    if (!stop_ && !job->cancelled.load(std::memory_order_acquire) && !SupersededLocked(job->key, job->generation)) {
+        PublishResultLocked(std::move(result));
+    }
+    --inFlight_;
+    idleCv_.notify_all();
 }
 
 void EditorMaterialGraphCookService::DrainPending() {
@@ -548,50 +815,50 @@ void EditorMaterialGraphCookService::DrainPending() {
         ++inFlight_;
 
         const kb::assets::AssetId assetId{ variantKey.materialAssetId };
-        latest_[variantKey].status = EditorMaterialGraphCookStatus::Cooking;
-        const EditorMaterialGraphCookConfig snapshot = config_;
+        if (const auto latestIt = latest_.find(variantKey); latestIt != latest_.end()) {
+            latestIt->second.status = EditorMaterialGraphCookStatus::Cooking;
+        }
+        const auto job = std::make_shared<CookJob>();
+        job->key = variantKey;
+        job->generation = entry.generation;
+        job->config = config_;
 
+        // The graph becomes shader source here, on the drain worker, and only the compiles are handed on.
         lock.unlock();
-        EditorMaterialGraphCookResult result = ExecuteCook(snapshot, assetId, entry.material, std::move(entry.graphContext));
-        result.requestGeneration = entry.generation;
+        job->plan = PlanCook(job->config, assetId, entry.material, std::move(entry.graphContext));
         lock.lock();
 
-        bool stillCurrent = true;
-        for (const auto& [pendingKey, pendingEntry] : pending_) {
-            if (pendingKey.SameProgramFamily(variantKey) && pendingEntry.generation > entry.generation) {
-                stillCurrent = false;
-                break;
-            }
+        if (stop_ || SupersededLocked(variantKey, entry.generation)) {
+            --inFlight_;
+            idleCv_.notify_all();
+            continue;
         }
-        if (stillCurrent) {
-            // Hot-reload last-good policy (MAT-33): a successful cook becomes the new last-good; a
-            // failed/unavailable cook keeps the previous good program live and reports Stale so the
-            // viewport never drops to a black/error frame while the artist is mid-edit.
-            if (result.status == EditorMaterialGraphCookStatus::Ready || result.status == EditorMaterialGraphCookStatus::UpToDate) {
-                EraseSupersededProgramFamily(lastGood_, result.variantKey);
-                lastGood_[result.variantKey] = result;
-            } else if (result.status == EditorMaterialGraphCookStatus::Failed || result.status == EditorMaterialGraphCookStatus::CookUnavailable) {
-                const EditorMaterialGraphCookResult* good = nullptr;
-                for (const auto& [goodKey, goodResult] : lastGood_) {
-                    if (goodKey.SameProgramFamily(result.variantKey)) {
-                        good = &goodResult;
-                        break;
-                    }
-                }
-                if (good != nullptr) {
-                    EditorMaterialGraphCookResult stale = *good;
-                    stale.status = EditorMaterialGraphCookStatus::Stale;
-                    stale.requestGeneration = result.requestGeneration;
-                    stale.diagnostics = result.diagnostics; // carry the failure reason for the panel
-                    result = std::move(stale);
-                }
+        if (job->plan.shader == nullptr || job->plan.passes.empty()) {
+            // Nothing to compile (no compiler, a graph that does not generate code): the plan is the result.
+            lock.unlock();
+            EditorMaterialGraphCookResult result = FinishCook(job->config, job->plan, job->outcomes);
+            result.requestGeneration = entry.generation;
+            lock.lock();
+            if (!stop_ && !SupersededLocked(variantKey, entry.generation)) {
+                PublishResultLocked(std::move(result));
             }
-            EraseSupersededProgramFamily(latest_, result.variantKey);
-            latest_[result.variantKey] = result;
-            completed_.push_back(std::move(result));
+            --inFlight_;
+            idleCv_.notify_all();
+            continue;
         }
-        --inFlight_;
-        idleCv_.notify_all();
+
+        const std::size_t passCount = job->plan.passes.size();
+        job->outcomes.resize(passCount);
+        job->remaining.store(passCount, std::memory_order_release);
+        inFlightJobs_.push_back(job);
+        lock.unlock();
+        for (std::size_t index = 0U; index < passCount; ++index) {
+            static_cast<void>(compileLane_->Run([this, job, index](std::string&) {
+                RunPassJob(job, index);
+                return true;
+            }));
+        }
+        lock.lock();
     }
 }
 

@@ -14,8 +14,10 @@
 #include <fstream>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <system_error>
+#include <unordered_map>
 #include <unordered_set>
 
 #if defined(_WIN32)
@@ -141,10 +143,23 @@ void AddArtifactDiagnostic(
     return names;
 }
 
+// A compiler binary (the compiler and its runtime) is tens of megabytes: reading and hashing it for every
+// cook of every pass dominated a cook that hit its cache. Its identity is its content hash, which the
+// process remembers per file size and write time and re-checks by the same two values.
+struct CompilerBinaryIdentity {
+    std::filesystem::path path;
+    std::uintmax_t size = 0U;
+    std::filesystem::file_time_type writeTime{};
+    std::uint64_t contentHash = 0U;
+};
+
 struct ResolvedShaderDependency {
     std::filesystem::path path;
     std::string name;
     std::string content;
+    // Set for a compiler binary: `content` stays empty and the identity stands in for it.
+    bool compilerBinary = false;
+    CompilerBinaryIdentity binary;
 };
 
 [[nodiscard]] std::optional<std::filesystem::path> ResolveShaderInclude(
@@ -259,13 +274,66 @@ struct ResolvedShaderDependency {
     return true;
 }
 
+[[nodiscard]] bool IdentifyCompilerBinary(const std::filesystem::path& path, CompilerBinaryIdentity& identity) {
+    const std::filesystem::path openPath = kb::platform::ExtendedLengthPath(path);
+    std::error_code error;
+    const std::uintmax_t size = std::filesystem::file_size(openPath, error);
+    if (error) return false;
+    const std::filesystem::file_time_type writeTime = std::filesystem::last_write_time(openPath, error);
+    if (error) return false;
+
+    static std::mutex memoMutex;
+    static std::unordered_map<std::string, CompilerBinaryIdentity> memo;
+    const std::string key = path.generic_string();
+    {
+        const std::lock_guard<std::mutex> lock{ memoMutex };
+        const auto found = memo.find(key);
+        if (found != memo.end() && found->second.size == size && found->second.writeTime == writeTime) {
+            identity = found->second;
+            return true;
+        }
+    }
+
+    std::ifstream input{ openPath, std::ios::binary };
+    if (!input) return false;
+    // The same value as hashing the whole file as one string: the size, then every byte.
+    std::uint64_t hash = 1469598103934665603ULL;
+    HashU64(hash, static_cast<std::uint64_t>(size));
+    std::array<char, 64U * 1024U> buffer{};
+    std::uintmax_t counted = 0U;
+    while (input) {
+        input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        const std::streamsize read = input.gcount();
+        if (read <= 0) break;
+        for (std::streamsize index = 0; index < read; ++index) {
+            HashByte(hash, static_cast<std::uint8_t>(static_cast<unsigned char>(buffer[static_cast<std::size_t>(index)])));
+        }
+        counted += static_cast<std::uintmax_t>(read);
+    }
+    if (input.bad() || counted != size) return false;
+    identity = CompilerBinaryIdentity{ .path = path, .size = size, .writeTime = writeTime, .contentHash = hash };
+    const std::lock_guard<std::mutex> lock{ memoMutex };
+    memo[key] = identity;
+    return true;
+}
+
+[[nodiscard]] bool CompilerBinaryUnchanged(const CompilerBinaryIdentity& identity) {
+    const std::filesystem::path openPath = kb::platform::ExtendedLengthPath(identity.path);
+    std::error_code error;
+    return std::filesystem::file_size(openPath, error) == identity.size && !error &&
+        std::filesystem::last_write_time(openPath, error) == identity.writeTime && !error;
+}
+
 [[nodiscard]] bool ShaderCompilerInputsUnchanged(
     std::span<const ResolvedShaderDependency> dependencies,
-    const std::filesystem::path& shadercPath,
-    std::string_view shadercBytes) {
+    const CompilerBinaryIdentity& shaderc) {
+    if (!CompilerBinaryUnchanged(shaderc)) return false;
     std::string current;
-    if (!ReadTextFileStrict(shadercPath, current) || current != shadercBytes) return false;
     for (const ResolvedShaderDependency& dependency : dependencies) {
+        if (dependency.compilerBinary) {
+            if (!CompilerBinaryUnchanged(dependency.binary)) return false;
+            continue;
+        }
         if (!ReadTextFileStrict(dependency.path, current) || current != dependency.content) {
             return false;
         }
@@ -440,7 +508,7 @@ private:
     for (const ResolvedShaderDependency& dependency : dependencies) {
         for (std::size_t index = 0U; index < canonicalIncludeDirs.size(); ++index) {
             std::filesystem::path relative;
-            if (RelativePathWithin(dependency.path, canonicalIncludeDirs[index], relative) &&
+            if (!dependency.compilerBinary && RelativePathWithin(dependency.path, canonicalIncludeDirs[index], relative) &&
                 !WriteCapturedShaderInput(
                     std::filesystem::path{ includeDirs[index] } / relative,
                     dependency.content)) {
@@ -603,25 +671,48 @@ private:
         FILE_ATTRIBUTE_NORMAL,
         nullptr);
 
-    STARTUPINFOW startup{};
-    startup.cb = sizeof(startup);
-    startup.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
-    startup.wShowWindow = SW_HIDE;
-    startup.hStdInput = nullInput == INVALID_HANDLE_VALUE ? nullptr : nullInput;
-    startup.hStdOutput = diagnostic;
-    startup.hStdError = diagnostic;
+    // Only the two handles the compiler is given may be inherited. Compiles of several passes start at
+    // the same time, and a file another thread has open at that moment (a cache entry it is about to
+    // rename into place) would otherwise stay open in this child and make that rename fail.
+    std::array<HANDLE, 2U> inheritedHandles{};
+    DWORD inheritedHandleCount = 0U;
+    if (nullInput != INVALID_HANDLE_VALUE) {
+        inheritedHandles[inheritedHandleCount++] = nullInput;
+    }
+    inheritedHandles[inheritedHandleCount++] = diagnostic;
+    SIZE_T attributeBytes = 0U;
+    InitializeProcThreadAttributeList(nullptr, 1U, 0U, &attributeBytes);
+    std::vector<std::uint8_t> attributeStorage(attributeBytes);
+    auto* attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attributeStorage.data());
+    const bool attributesReady = !attributeStorage.empty() &&
+        InitializeProcThreadAttributeList(attributes, 1U, 0U, &attributeBytes) != FALSE;
+    const bool handleListReady = attributesReady &&
+        UpdateProcThreadAttribute(attributes, 0U, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inheritedHandles.data(),
+            inheritedHandleCount * sizeof(HANDLE), nullptr, nullptr) != FALSE;
+
+    STARTUPINFOEXW startup{};
+    startup.StartupInfo.cb = sizeof(startup);
+    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+    startup.StartupInfo.wShowWindow = SW_HIDE;
+    startup.StartupInfo.hStdInput = nullInput == INVALID_HANDLE_VALUE ? nullptr : nullInput;
+    startup.StartupInfo.hStdOutput = diagnostic;
+    startup.StartupInfo.hStdError = diagnostic;
+    startup.lpAttributeList = attributes;
     PROCESS_INFORMATION process{};
-    const BOOL created = CreateProcessW(
+    const BOOL created = !handleListReady ? FALSE : CreateProcessW(
         executableWide.c_str(),
         commandLine.data(),
         nullptr,
         nullptr,
         TRUE,
-        CREATE_NO_WINDOW,
+        CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT,
         nullptr,
         nullptr,
-        &startup,
+        &startup.StartupInfo,
         &process);
+    if (attributesReady) {
+        DeleteProcThreadAttributeList(attributes);
+    }
     CloseHandle(diagnostic);
     if (nullInput != INVALID_HANDLE_VALUE) {
         CloseHandle(nullInput);
@@ -1790,14 +1881,13 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
     if (shadercCanonicalError) {
         shadercPath = std::filesystem::path{ request.shadercPath }.lexically_normal();
     }
-    std::string shadercBytes;
-    if (!ReadTextFileStrict(shadercPath, shadercBytes)) {
+    CompilerBinaryIdentity shadercIdentity;
+    if (!IdentifyCompilerBinary(shadercPath, shadercIdentity)) {
         AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
             "Material graph shader compiler identity could not be read: " + shadercPath.generic_string() + ".");
         return result;
     }
-    std::uint64_t shadercHash = 1469598103934665603ULL;
-    HashString64(shadercHash, shadercBytes);
+    const std::uint64_t shadercHash = shadercIdentity.contentHash;
     HashString64(dependencyHash, shadercPath.generic_string());
     HashU64(dependencyHash, shadercHash);
     artifact.dependencies.push_back(RenderMaterialGraphArtifactDependency{
@@ -1814,8 +1904,8 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
         std::error_code canonicalError;
         const std::filesystem::path canonicalRuntime =
             std::filesystem::weakly_canonical(runtimeCandidate, canonicalError);
-        std::string runtimeBytes;
-        if (canonicalError || !ReadTextFileStrict(canonicalRuntime, runtimeBytes)) {
+        CompilerBinaryIdentity runtimeIdentity;
+        if (canonicalError || !IdentifyCompilerBinary(canonicalRuntime, runtimeIdentity)) {
             AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
                 "Material graph shader compiler runtime identity could not be read: " +
                     runtimeCandidate.generic_string() + ".");
@@ -1824,14 +1914,19 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
         dependencies.push_back(ResolvedShaderDependency{
             .path = canonicalRuntime,
             .name = "shaderc-runtime:" + canonicalRuntime.filename().generic_string(),
-            .content = std::move(runtimeBytes),
+            .compilerBinary = true,
+            .binary = std::move(runtimeIdentity),
         });
     }
 
     HashU64(dependencyHash, dependencies.size());
     for (const ResolvedShaderDependency& dependency : dependencies) {
         std::uint64_t contentHash = 1469598103934665603ULL;
-        HashString64(contentHash, dependency.content);
+        if (dependency.compilerBinary) {
+            contentHash = dependency.binary.contentHash;
+        } else {
+            HashString64(contentHash, dependency.content);
+        }
         HashString64(dependencyHash, dependency.name);
         HashString64(dependencyHash, dependency.path.generic_string());
         HashU64(dependencyHash, contentHash);
@@ -1928,7 +2023,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
 
         ShaderCacheFileIdentity cachedIdentity{};
         if (ShaderCacheEntryIsValid(binaryPath, markerPath, cookKey, &cachedIdentity) &&
-            ShaderCompilerInputsUnchanged(dependencies, shadercPath, shadercBytes)) {
+            ShaderCompilerInputsUnchanged(dependencies, shadercIdentity)) {
             artifact.binaries.push_back(RenderMaterialGraphShaderBinary{
                 .backend = backend,
                 .binaryPath = kb::platform::PortablePath(binaryPath).generic_string(),
@@ -2005,7 +2100,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
         }
         std::filesystem::remove(errorPath, error);
         error.clear();
-        if (!ShaderCompilerInputsUnchanged(dependencies, shadercPath, shadercBytes)) {
+        if (!ShaderCompilerInputsUnchanged(dependencies, shadercIdentity)) {
             std::filesystem::remove(stagingBinary, error);
             AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
                 "Material graph shader compiler inputs changed while cooking; no cache artifact was published.",
@@ -2097,7 +2192,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
             ShaderCacheFileIdentity cachedVsIdentity{};
             if (ShaderCacheEntryIsValid(
                     vsBinaryPath, vsMarkerPath, vsCookKey, &cachedVsIdentity) &&
-                ShaderCompilerInputsUnchanged(dependencies, shadercPath, shadercBytes)) {
+                ShaderCompilerInputsUnchanged(dependencies, shadercIdentity)) {
                 artifact.vertexBinaries.push_back(RenderMaterialGraphShaderBinary{
                     .backend = backend,
                     .binaryPath = kb::platform::PortablePath(vsBinaryPath).generic_string(),
@@ -2174,7 +2269,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
             }
             std::filesystem::remove(vsErrorPath, error);
             error.clear();
-            if (!ShaderCompilerInputsUnchanged(dependencies, shadercPath, shadercBytes)) {
+            if (!ShaderCompilerInputsUnchanged(dependencies, shadercIdentity)) {
                 std::filesystem::remove(stagingVsBinary, error);
                 AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
                     "Material graph vertex shader compiler inputs changed while cooking; no cache artifact was published.",

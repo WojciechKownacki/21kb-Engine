@@ -457,12 +457,16 @@ public:
 
     void SetDiagnostics(std::vector<std::string> diagnostics, bool hasError);
 
+    // `diagnosticNodeIds` runs parallel to `diagnostics` (0 = not about one node) and `nodeDiagnostics`
+    // are the lines that name a node, so a compile error is marked on the node that caused it.
     void ApplyCookResult(
         std::vector<std::string> diagnostics,
         bool cookSucceeded,
         bool hasGpuProgram,
         bool hasLastGood,
-        bool fallbackApplied);
+        bool fallbackApplied,
+        std::vector<std::uint32_t> diagnosticNodeIds = {},
+        const std::vector<kb::render::RenderMaterialGraphDiagnostic>& nodeDiagnostics = {});
 
     void ApplyCookMaterialStats(
         std::uint64_t sourceHash,
@@ -926,6 +930,9 @@ private:
     std::vector<std::uint32_t> compilerDiagnosticLineNodeIds_;
     std::vector<std::string> externalDiagnostics_;
     std::vector<std::string> cookDiagnostics_;
+    std::vector<std::uint32_t> cookDiagnosticLineNodeIds_;
+    // How many markers at the end of graphDiagnosticMarkers_ came from the cook (the rest from the validator).
+    std::size_t cookMarkerCount_ = 0U;
     std::vector<MaterialEditorGraphDiagnosticMarker> graphDiagnosticMarkers_;
     bool diagnosticsHaveError_ = false;
     bool graphDiagnosticsHaveError_ = false;

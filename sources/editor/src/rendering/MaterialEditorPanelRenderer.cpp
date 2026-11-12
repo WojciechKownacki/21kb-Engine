@@ -2797,17 +2797,25 @@ void DrawGraphCanvasContent(
                 GraphCanvasBezierHandleDistance(from, to, canvasResult.canvas.Zoom()));
             }
     }
+    // The canvas lists the visible nodes in the document's order, so the node after the one drawn last is
+    // almost always the next one wanted; only a node out of that order is looked for by its id.
+    const std::vector<MaterialGraphCanvasNode>& canvasNodeList = canvasResult.canvas.Nodes();
+    std::size_t nextCanvasIndex = 0U;
     for (const kb::render::RenderMaterialGraphNode& node : graphView.nodes) {
         if (GraphNodeHiddenByCollapsedComposite(graphView, node.id)) {
             continue;
         }
         const std::optional<RECT> nodeRect = MaterialEditorPanelRenderer::GraphNodeRect(content, graphView, node.id, sceneContext, assetId);
-        const auto canvasNode = std::ranges::find_if(
-            canvasResult.canvas.Nodes(),
-            [&node](const MaterialGraphCanvasNode& candidate) { return candidate.stableId == std::to_string(node.id); });
-        if (nodeRect.has_value() && canvasNode != canvasResult.canvas.Nodes().end()) {
-            const std::uint32_t canvasNodeIndex = static_cast<std::uint32_t>(
-                std::distance(canvasResult.canvas.Nodes().begin(), canvasNode));
+        const std::string nodeIdText = std::to_string(node.id);
+        std::size_t canvasIndex = nextCanvasIndex;
+        if (canvasIndex >= canvasNodeList.size() || canvasNodeList[canvasIndex].stableId != nodeIdText) {
+            canvasIndex = static_cast<std::size_t>(std::ranges::find_if(
+                canvasNodeList,
+                [&nodeIdText](const MaterialGraphCanvasNode& candidate) { return candidate.stableId == nodeIdText; }) - canvasNodeList.begin());
+        }
+        if (nodeRect.has_value() && canvasIndex < canvasNodeList.size()) {
+            nextCanvasIndex = canvasIndex + 1U;
+            const std::uint32_t canvasNodeIndex = static_cast<std::uint32_t>(canvasIndex);
             DrawGraphNode(
                 dc,
                 *nodeRect,

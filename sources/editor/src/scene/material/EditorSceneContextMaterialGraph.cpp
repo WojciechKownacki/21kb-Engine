@@ -1780,7 +1780,9 @@ std::size_t EditorSceneContext::PumpMaterialGraphCookResults() {
                 cookSucceeded,
                 result.HasGpuProgram(),
                 hasLastGood,
-                fallbackApplied);
+                fallbackApplied,
+                result.diagnosticNodeIds,
+                result.nodeDiagnostics);
             std::vector<MaterialEditorCookPassTelemetry> passTelemetry;
             passTelemetry.reserve(result.passes.size());
             for (const EditorMaterialGraphCookPassResult& pass : result.passes) {
