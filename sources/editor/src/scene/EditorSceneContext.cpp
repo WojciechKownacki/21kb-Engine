@@ -3367,6 +3367,20 @@ bool EditorSceneContext::SetProjectNavigationAreas(std::vector<kb::scene::NavAre
     return SaveProjectConfiguration();
 }
 
+bool EditorSceneContext::SetProjectNavigationCrowd(float nearDistance, float midDistance, std::uint32_t farPathInterval) {
+    const auto distance = [](float value) { return std::isfinite(value) && value >= 0.0F && value <= kb::project::kProjectNavigationDistanceMax; };
+    if (!distance(nearDistance) || !distance(midDistance) || farPathInterval < 1U || farPathInterval > kb::project::kProjectNavigationFarPathIntervalMax ||
+        (projectConfig_.navigationNearDistance == nearDistance && projectConfig_.navigationMidDistance == midDistance &&
+            projectConfig_.navigationFarPathInterval == farPathInterval)) {
+        return false;
+    }
+    projectConfig_.navigationNearDistance = nearDistance;
+    projectConfig_.navigationMidDistance = midDistance;
+    projectConfig_.navigationFarPathInterval = farPathInterval;
+    kb::scene::SceneNavigation{ *scene_ }.ConfigureCrowd(projectConfig_.NavigationCrowd());
+    return SaveProjectConfiguration();
+}
+
 bool EditorSceneContext::SetProjectMicrophone(bool enabled) {
     if (projectConfig_.microphone == enabled) {
         return false;
@@ -3387,6 +3401,7 @@ void EditorSceneContext::ApplyProjectAudioAndTags(kb::scene::Scene& scene) {
     static_cast<void>(kb::audio::AudioPlayback::SetMasterVolume(scene, projectConfig_.masterVolume));
     static_cast<void>(scene.Tags().SetProjectDefinitions(projectConfig_.tags));
     kb::scene::SceneNavigation{ scene }.SetAreaDefinitions(projectConfig_.navigationAreas);
+    kb::scene::SceneNavigation{ scene }.ConfigureCrowd(projectConfig_.NavigationCrowd());
 }
 
 void EditorSceneContext::AdoptSceneTagsIntoProject() {

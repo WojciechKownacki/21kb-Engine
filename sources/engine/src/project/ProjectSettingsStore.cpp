@@ -336,6 +336,12 @@ ProjectSettingsLoadResult ProjectSettingsStore::Load(const std::filesystem::path
             result.settings.navigationAreas = std::move(areas);
         }
     }
+    result.settings.navigationNearDistance = ReadBoundedFloat(document, kNavigation, "CrowdNearDistance", defaults.navigationNearDistance,
+        0.0F, kProjectNavigationDistanceMax);
+    result.settings.navigationMidDistance = ReadBoundedFloat(document, kNavigation, "CrowdMidDistance", defaults.navigationMidDistance,
+        0.0F, kProjectNavigationDistanceMax);
+    result.settings.navigationFarPathInterval = ReadBounded(document, kNavigation, "CrowdFarPathInterval", defaults.navigationFarPathInterval,
+        1U, kProjectNavigationFarPathIntervalMax);
     result.settings.crashReportUploadUrl = ReadString(document, kCrashReports, "UploadUrl", defaults.crashReportUploadUrl);
     return result;
 }
@@ -430,6 +436,9 @@ bool ProjectSettingsStore::Save(
         static_cast<void>(document.Remove(kNavigation, "Area" + std::to_string(index) + "Colour"));
         static_cast<void>(document.Remove(kNavigation, "Area" + std::to_string(index) + "Cost"));
     }
+    document.SetFloat(kNavigation, "CrowdNearDistance", settings.navigationNearDistance);
+    document.SetFloat(kNavigation, "CrowdMidDistance", settings.navigationMidDistance);
+    document.SetInt(kNavigation, "CrowdFarPathInterval", settings.navigationFarPathInterval);
     document.SetBool(kInput, "Enabled", settings.inputEnabled);
     document.SetString(kInput, "MappingContext", settings.inputMappingContext);
     document.SetString(kPhysics, "LayersAsset", settings.physicsLayersAsset);

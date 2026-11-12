@@ -174,8 +174,8 @@ crowds in step:
 
 - Each agent is a crowd member with its `NavAgent` values: radius, height, maximum speed and
   acceleration; its neighbour range is `neighbourRangeRadii` radii.
-- Destinations are handed to the crowd with at most `maxPathRequestsPerStep` per step; waiting
-  agents report `Pending`. The crowd plans the path corridor (a quick search first, the rest of a
+- Destinations are handed to the crowd with at most `maxPathRequestsPerStep` per step, nearer
+  levels of detail first and then the longest waiting; waiting agents report `Pending`. The crowd plans the path corridor (a quick search first, the rest of a
   long path through its path queue), string-pulls it into corners, shortens it when a later corner
   comes into view and re-optimises it locally. A destination off the mesh gives `Failed`; an
   unreachable one a `Partial` path to the closest point. An agent stops within its
@@ -197,15 +197,22 @@ crowds in step:
   do not invalidate another profile's waiting path.
 - **Level of detail:** agents within `nearDistance` of a focus (`SetCrowdFocuses`, else every
   enabled Stream Focus; without any focus every agent is near) avoid, separate and shorten their
-  paths every step; the others only follow their corridors, shortening them every
-  `farPathOptimizationInterval` steps.
-- Agents join the crowds in entity id order and the crowds run on one thread, so equal input
-  replays to equal positions. Agents with a character controller hand their velocity to the
+  paths every step; agents within `midDistance` separate and shorten their paths but sample no
+  velocities; the others only follow their corridors, shortening them every
+  `farPathOptimizationInterval` steps. An agent moves to a farther level only 10% beyond its edge.
+  The project sets the three values (Project Settings, Navigation, Crowd Detail).
+- The crowd's per-member passes (path validity, walls and neighbours, corners, steering, velocity
+  sampling, integration, collision push, moving along the mesh) and reading the members back run
+  on an engine worker pool (`workerThreads`, 0 for the default count), each worker with its own
+  Detour query objects; every member writes only itself and everything that touches several
+  members runs on the calling thread. Agents join the crowds in entity id order, so equal input
+  replays to equal positions on any number of threads. Agents with a character controller hand their velocity to the
   physics character and follow where it moved them; while crossing a link their transform is
   placed directly.
 
-`ConfigureCrowd(NavigationCrowdSettings)` sets the budgets; `CrowdStats()` reports near and far
-agents, path requests, waiting agents, agents on links, sampled velocities and the step's wall time.
+`ConfigureCrowd(NavigationCrowdSettings)` sets the budgets; `CrowdStats()` reports near, mid and
+far agents, path requests, waiting agents, agents on links, sampled velocities and the wall time of
+the step and of its stages.
 
 ## Script API
 
@@ -224,23 +231,25 @@ components.
 
 ## Measurements
 
-On the development machine (Release, one thread for the crowd):
+On the development machine (Release):
 
 - Baking a 200 x 200 m arena with 25 pillars (cell 0.3 m, 96-cell tiles, 64 tiles) on the
   pool the bake starts: about 16 ms (about 73 ms on one thread).
-- Crowd step, agents walking across that arena through each other: 1000 agents about 2.6 ms,
-  5000 agents about 21 ms, 5000 agents with level of detail around one focus about 16 ms.
-  Under load from other builds on the same machine the figures doubled.
+- Crowd step, agents walking across that arena through each other, on the default worker pool of
+  a 24-thread machine: 1000 agents about 1.1 ms, 5000 agents about 3.8 ms, 10 000 agents about
+  7.3 ms (about 42 ms on one thread), 20 000 agents about 12 ms. Under load from other builds on
+  the same machine the figures doubled.
+- `FindPath` across the arena about 5 us, over 14 m about 2 us.
 
-`kb_engine_navigation-crowd-bench` checks that 1000 agents step within 8 ms and that level of
-detail makes a large crowd cheaper.
+`kb_engine_navigation-crowd-bench` checks that 1000 agents step within 8 ms, 10 000 agents within
+24 ms, and that level of detail makes a large crowd cheaper; it prints the stages of a step.
 The same gate checks a local rebake of four 12.8 m tiles containing a floor and a wall
 against an 8 ms median budget over nine warmed samples. Larger geometry and wider
 rebake regions need their own workload measurements.
 
 ## Limits
 
-- The crowd runs on one thread; LOD is the lever for very large crowds.
+- Path requests, the path queue and topology optimisation run on the calling thread.
 - A crowd walks one Detour mesh, so agents avoid and push only agents of their own profile.
 - At most 16 different agent area masks are in use at a time (the crowd's filter slots); an agent
   whose mask finds no free slot reports a `Failed` path. A crowd holds at most 65 535 agents and
@@ -260,9 +269,9 @@ rebake regions need their own workload measurements.
 
 | Test | Covers |
 | --- | --- |
-| `kb_engine_tests navigation-mesh` | Settings validation; the asset format (round trip, truncation, refusal of escaping connections and unknown areas); bakes on one worker, four and a bake-owned pool byte-identical; walkable area of a floor; slopes (30 vs 60 degrees) and steps (0.3 vs 0.6 m); carving obstacles (blocked, around, rotated, removed) with an agent walking around; geometry rebuilt at runtime; area costs and masks; two agent sizes through a doorway; jump and ladder links (one-way, disabled) crossed by agents; far from the world origin; a 1200-agent crowd replaying exactly; crowd level of detail; NavAgent, NavObstacle and NavLink save/load; Navigation Bounds limiting the bake (one box, two boxes, none), their settings (a wider agent leaves less ground, disagreeing bounds are refused), save/load and older files; moved, removed and added objects and a moved Navigation Bounds rebuilding only the tiles they touch into the full bake's tiles; a bake on a worker matching the synchronous bake of the saved scene; colliders and meshes with Affects Navigation off left out of full and partial bakes, kept through save/load, on in older files and set by scripts; the project's named areas (defaults, settings round trip, a scene's costs, a Not walkable area that is never crossed, names resolved by scripts); the debug view's triangles, polygon edges and tile bounds; scripts; a scene's ContentInstance placing its mesh; a world's tiles streaming in and out with its cells. |
+| `kb_engine_tests navigation-mesh` | Settings validation; the asset format (round trip, truncation, refusal of escaping connections and unknown areas); bakes on one worker, four and a bake-owned pool byte-identical; walkable area of a floor; slopes (30 vs 60 degrees) and steps (0.3 vs 0.6 m); carving obstacles (blocked, around, rotated, removed) with an agent walking around; geometry rebuilt at runtime; area costs and masks; two agent sizes through a doorway; jump and ladder links (one-way, disabled) crossed by agents; far from the world origin; a 1200-agent crowd with near, mid and far agents replaying exactly on one, two and eight threads; crowd level of detail and its transitions; the path request budget serving near agents first and every agent in the end; NavAgent, NavObstacle and NavLink save/load; Navigation Bounds limiting the bake (one box, two boxes, none), their settings (a wider agent leaves less ground, disagreeing bounds are refused), save/load and older files; moved, removed and added objects and a moved Navigation Bounds rebuilding only the tiles they touch into the full bake's tiles; a bake on a worker matching the synchronous bake of the saved scene; colliders and meshes with Affects Navigation off left out of full and partial bakes, kept through save/load, on in older files and set by scripts; the project's named areas (defaults, settings round trip, a scene's costs, a Not walkable area that is never crossed, names resolved by scripts); the debug view's triangles, polygon edges and tile bounds; scripts; a scene's ContentInstance placing its mesh; a world's tiles streaming in and out with its cells. |
 | `kb_engine_tests navigation-runtime` | Agents on baked meshes: accelerating within their speed, stopping at their stopping distance, re-planning for a new destination, standing still while the scene is paused; turning corners without leaving the mesh; going around a carving obstacle and walking straight again once it is disabled; a partial path to the closest point when an obstacle closes the way; steering around a non-carving obstacle; two agents passing each other and replaying exactly, and still passing when created in the other order; no mesh means a failed path until one is added; walking a mesh 10 000 km out as precisely as at the origin, as a root and as a child. |
-| `kb_engine_navigation-crowd-bench` | Crowd step budget for 1000 agents and the level-of-detail gain at 5000. |
+| `kb_engine_navigation-crowd-bench` | Crowd step budgets for 1000 and 10 000 agents, the level-of-detail gain at 5000, 20 000 agents over 600 steps, and `FindPath` cost. |
 | `kb_cli_tests` | `kb_cli navmesh bake` and `info` (colliders, imported meshes, profiles, kept settings) and `world build` with navigation and region chunks. |
 | `kb_editor_navigation_headless` | Editor bake of a scene with a floor collider, an imported mesh and a jump link; identical bytes to the kb_cli bake; the filled overlay drawn in the scene view, gone when hidden and hidden behind geometry in front of it; an agent crossing the link in Play mode. |
 | `kb_fuzz_navmesh_corpus` (`KB_BUILD_FUZZERS`) | The navigation mesh reader and polygon rebuild over the seed corpus. |

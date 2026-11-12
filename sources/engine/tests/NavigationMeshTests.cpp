@@ -547,6 +547,11 @@ struct CrowdRun {
     std::vector<Vec3> positions;
     std::size_t arrived = 0U;
     double milliseconds = 0.0;
+    // The slowest measured step.
+    double worst = 0.0;
+    // Average stage times of the measured steps, and the stages of the slowest one.
+    scene::NavigationCrowdStats stages{};
+    scene::NavigationCrowdStats worstStages{};
 };
 
 [[nodiscard]] nav::NavMeshAsset CrowdArena(double half) {
@@ -564,10 +569,11 @@ struct CrowdRun {
 
 // `count` agents on a grid each walk to the mirrored point across the arena's centre.
 [[nodiscard]] CrowdRun RunCrowd(const std::shared_ptr<const nav::NavMeshAsset>& arena, double half, int count, int steps,
-    std::vector<DVec3> focuses = {}) {
+    std::vector<DVec3> focuses = {}, const scene::NavigationCrowdSettings& settings = {}) {
     scene::Scene scene;
     std::string error;
     Check(scene.Navigation().AddNavMesh(arena, &error) != 0U, "the crowd arena must load: " + error);
+    scene.Navigation().ConfigureCrowd(settings);
     if (!focuses.empty()) scene.Navigation().SetCrowdFocuses(std::move(focuses));
     const int side = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(count))));
     const double spacing = (half * 1.6) / side;
@@ -586,9 +592,26 @@ struct CrowdRun {
     CrowdRun run;
     for (int step = 0; step < steps; ++step) {
         static_cast<void>(scene.Runtime().Update(kFrame));
-        if (step >= steps / 2) run.milliseconds += scene.Navigation().CrowdStats().milliseconds;
+        if (step >= steps / 2) {
+            const scene::NavigationCrowdStats stats = scene.Navigation().CrowdStats();
+            run.milliseconds += stats.milliseconds;
+            if (stats.milliseconds > run.worst) run.worstStages = stats;
+            run.worst = std::max(run.worst, stats.milliseconds);
+            run.stages.syncMilliseconds += stats.syncMilliseconds;
+            run.stages.pathMilliseconds += stats.pathMilliseconds;
+            run.stages.neighbourMilliseconds += stats.neighbourMilliseconds;
+            run.stages.cornerMilliseconds += stats.cornerMilliseconds;
+            run.stages.steeringMilliseconds += stats.steeringMilliseconds;
+            run.stages.avoidanceMilliseconds += stats.avoidanceMilliseconds;
+            run.stages.moveMilliseconds += stats.moveMilliseconds;
+        }
     }
-    run.milliseconds /= static_cast<double>(steps - steps / 2);
+    const double measured = static_cast<double>(steps - steps / 2);
+    run.milliseconds /= measured;
+    for (double* stage : { &run.stages.syncMilliseconds, &run.stages.pathMilliseconds, &run.stages.neighbourMilliseconds, &run.stages.cornerMilliseconds,
+             &run.stages.steeringMilliseconds, &run.stages.avoidanceMilliseconds, &run.stages.moveMilliseconds }) {
+        *stage /= measured;
+    }
     for (const scene::SceneEntity agent : agents) {
         run.positions.push_back(Position(scene, agent));
         const scene::NavAgent& component = Agent(scene, agent);
@@ -601,11 +624,19 @@ void TestCrowdIsDeterministic() {
     constexpr double kHalf = 60.0;
     const auto arena = std::make_shared<const nav::NavMeshAsset>(CrowdArena(kHalf));
     constexpr int kAgents = 1200;
-    const CrowdRun first = RunCrowd(arena, kHalf, kAgents, 300);
-    const CrowdRun second = RunCrowd(arena, kHalf, kAgents, 300);
+    // Near, mid and far agents around one focus, stepped on one, two and eight threads.
+    const std::vector<DVec3> focuses{ DVec3{ -30.0, 0.0, -30.0 } };
+    const auto run = [&](std::uint32_t threads) {
+        return RunCrowd(arena, kHalf, kAgents, 300, focuses,
+            scene::NavigationCrowdSettings{ .nearDistance = 30.0F, .midDistance = 60.0F, .workerThreads = threads });
+    };
+    const CrowdRun first = run(1U);
     Check(first.positions.size() == static_cast<std::size_t>(kAgents), "every crowd agent is reported");
-    Check(std::memcmp(first.positions.data(), second.positions.data(), first.positions.size() * sizeof(Vec3)) == 0,
-        "a crowd of 1200 agents replays to the same positions");
+    for (const std::uint32_t threads : { 1U, 2U, 8U }) {
+        const CrowdRun again = run(threads);
+        Check(std::memcmp(first.positions.data(), again.positions.data(), first.positions.size() * sizeof(Vec3)) == 0,
+            "a crowd of 1200 agents replays to the same positions on " + std::to_string(threads) + " threads");
+    }
     // Every agent started 0.8 m or more from the centre line and has had five seconds to walk toward it.
     std::size_t moved = 0U;
     const int side = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(kAgents))));
@@ -630,7 +661,7 @@ struct LevelOfDetailRun {
 [[nodiscard]] LevelOfDetailRun RunLevelOfDetail(const std::shared_ptr<const nav::NavMeshAsset>& arena, std::vector<DVec3> focuses) {
     scene::Scene scene;
     static_cast<void>(scene.Navigation().AddNavMesh(arena));
-    scene.Navigation().ConfigureCrowd(scene::NavigationCrowdSettings{ .nearDistance = 20.0F, .farPathOptimizationInterval = 4U });
+    scene.Navigation().ConfigureCrowd(scene::NavigationCrowdSettings{ .nearDistance = 20.0F, .midDistance = 20.0F, .farPathOptimizationInterval = 4U });
     scene.Navigation().SetCrowdFocuses(std::move(focuses));
     const scene::SceneEntity near = AddAgent(scene, DVec3{ -40.0, 0.0, -42.0 }, Vec3{ -40.0F, 0.0F, -20.0F });
     const scene::SceneEntity far = AddAgent(scene, DVec3{ 40.0, 0.0, 38.0 }, Vec3{ 40.0F, 0.0F, 20.0F });
@@ -661,6 +692,73 @@ void TestCrowdLevelOfDetail() {
         "near and far agents both make progress");
     Check(std::fabs(Horizontal(reduced.far, { 40.0F, 0.0F, 20.0F }) - Horizontal(detailed.far, { 40.0F, 0.0F, 20.0F })) < 0.5F,
         "a far agent with nothing to avoid covers the same ground as a near one");
+}
+
+// An agent walking away from the focus turns mid and then far a tenth beyond each edge, and near
+// again as soon as it walks back inside the near distance.
+void TestCrowdLevelOfDetailTransitions() {
+    scene::Scene scene;
+    static_cast<void>(AddMesh(scene, BakeNodes({ Slab(-5.0, 45.0, -3.0, 3.0, 0.0) })));
+    scene.Navigation().ConfigureCrowd(scene::NavigationCrowdSettings{ .nearDistance = 10.0F, .midDistance = 20.0F });
+    scene.Navigation().SetCrowdFocuses({ DVec3{} });
+    const scene::SceneEntity agent = AddAgent(scene, DVec3{}, Vec3{ 40.0F, 0.0F, 0.0F });
+    float firstMid = -1.0F;
+    float firstFar = -1.0F;
+    bool ordered = true;
+    for (int frame = 0; frame < 900 && firstFar < 0.0F; ++frame) {
+        const float before = Position(scene, agent).x;
+        static_cast<void>(scene.Runtime().Update(kFrame));
+        const scene::NavigationCrowdStats stats = scene.Navigation().CrowdStats();
+        if (stats.midAgents == 1U && firstMid < 0.0F) firstMid = before;
+        if (stats.farAgents == 1U && firstFar < 0.0F) firstFar = before;
+        ordered = ordered && (firstMid >= 0.0F || stats.nearAgents == 1U) && (firstFar >= 0.0F || stats.farAgents == 0U);
+    }
+    Check(ordered, "an agent walking away is near, then mid, then far");
+    Check(firstMid > 11.0F && firstMid < 11.2F, "an agent turns mid a tenth beyond the near distance: " + std::to_string(firstMid));
+    Check(firstFar > 22.0F && firstFar < 22.2F, "an agent turns far a tenth beyond the mid distance: " + std::to_string(firstFar));
+    scene::NavAgent back = Agent(scene, agent);
+    back.destination = Vec3{};
+    scene.Components().NavAgents().Set(agent, back);
+    float firstNear = -1.0F;
+    for (int frame = 0; frame < 900 && firstNear < 0.0F; ++frame) {
+        const float before = Position(scene, agent).x;
+        static_cast<void>(scene.Runtime().Update(kFrame));
+        if (scene.Navigation().CrowdStats().nearAgents == 1U) firstNear = before;
+    }
+    Check(firstNear <= 10.0F && firstNear > 9.8F, "an agent walking back is near at the near distance: " + std::to_string(firstNear));
+}
+
+// With a budget of three destinations per step, the agents near the focus are planned first even
+// though the far ones were created first, and every agent is planned in the end.
+void TestCrowdPathBudgetPriority() {
+    scene::Scene scene;
+    static_cast<void>(AddMesh(scene, BakeNodes({ Slab(-30.0, 30.0, -5.0, 5.0, 0.0) })));
+    scene.Navigation().ConfigureCrowd(scene::NavigationCrowdSettings{ .nearDistance = 10.0F, .midDistance = 10.0F, .maxPathRequestsPerStep = 3U });
+    scene.Navigation().SetCrowdFocuses({ DVec3{ 20.0, 0.0, 0.0 } });
+    std::vector<scene::SceneEntity> far;
+    std::vector<scene::SceneEntity> near;
+    for (int index = 0; index < 6; ++index) {
+        const float x = -25.0F + 1.5F * static_cast<float>(index);
+        far.push_back(AddAgent(scene, DVec3{ x, 0.0, -2.0 }, Vec3{ x, 0.0F, 2.0F }));
+    }
+    for (int index = 0; index < 6; ++index) {
+        const float x = 16.0F + 1.5F * static_cast<float>(index);
+        near.push_back(AddAgent(scene, DVec3{ x, 0.0, -2.0 }, Vec3{ x, 0.0F, 2.0F }));
+    }
+    const auto planned = [&](const std::vector<scene::SceneEntity>& group) {
+        return static_cast<std::size_t>(std::ranges::count_if(group, [&](scene::SceneEntity entity) {
+            return Agent(scene, entity).pathStatus != scene::NavPathStatus::Pending;
+        }));
+    };
+    std::string history;
+    bool withinBudget = true;
+    for (int frame = 0; frame < 4; ++frame) {
+        static_cast<void>(scene.Runtime().Update(kFrame));
+        withinBudget = withinBudget && scene.Navigation().CrowdStats().pathRequests <= 3U;
+        history += std::to_string(planned(near)) + "/" + std::to_string(planned(far)) + " ";
+    }
+    Check(withinBudget, "no step hands the crowd more destinations than its budget");
+    Check(history == "3/0 6/0 6/3 6/6 ", "near agents are planned first, then the far ones: " + history);
 }
 
 void TestNavComponentsPersist() {
@@ -1015,12 +1113,21 @@ void TestNamedAreas() {
     Check(settings.navigationAreas == defaults, "a new project starts with the default areas");
     settings.navigationAreas = { scene::NavAreaDefinition{ .name = "Floor", .colour = 0x123456U, .cost = 1.0F },
         scene::NavAreaDefinition{ .name = "Mud", .colour = 0xABCDEFU, .cost = 4.5F }, scene::NavAreaDefinition{ .name = "Pit", .colour = 0U, .cost = 0.0F } };
+    settings.navigationNearDistance = 25.0F;
+    settings.navigationMidDistance = 70.0F;
+    settings.navigationFarPathInterval = 8U;
     std::string error;
     Check(kb::project::ProjectSettingsStore::Save(root / "ProjectSettings.ini", settings, error), "project settings save: " + error);
     const kb::project::ProjectSettingsLoadResult reloaded = kb::project::ProjectSettingsStore::Load(root / "ProjectSettings.ini");
     Check(reloaded.Succeeded() && reloaded.settings.navigationAreas == settings.navigationAreas, "named areas keep their names, colours and costs");
+    const scene::NavigationCrowdSettings crowd = reloaded.settings.NavigationCrowd();
+    Check(crowd.nearDistance == 25.0F && crowd.midDistance == 70.0F && crowd.farPathOptimizationInterval == 8U,
+        "the crowd's level of detail round-trips through the project's settings");
     const kb::project::ProjectSettingsLoadResult missing = kb::project::ProjectSettingsStore::Load(root / "Missing.ini");
     Check(missing.settings.navigationAreas == defaults, "settings without areas use the default areas");
+    Check(missing.settings.NavigationCrowd().nearDistance == scene::NavigationCrowdSettings{}.nearDistance &&
+            missing.settings.NavigationCrowd().midDistance == scene::NavigationCrowdSettings{}.midDistance,
+        "settings without a crowd level of detail use the engine's defaults");
     std::filesystem::remove_all(root);
 
     // A scene takes the project's costs: a strip of Not walkable is never entered, one of Water is walked around.
@@ -1354,6 +1461,8 @@ void RunNavigationMeshTests() {
     TestFarFromTheWorldOrigin();
     TestCrowdIsDeterministic();
     TestCrowdLevelOfDetail();
+    TestCrowdLevelOfDetailTransitions();
+    TestCrowdPathBudgetPriority();
     TestNavComponentsPersist();
     TestBoundsLimitTheBake();
     TestBoundsBakeSettings();
@@ -1398,8 +1507,8 @@ void RunNavigationCrowdBenchmark() {
     static_cast<void>(CrowdArena(kHalf));
     const double bakeMilliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - bakeStart).count();
     const CrowdRun thousand = RunCrowd(arena, kHalf, 1000, 240);
-    // The two 5000-agent runs alternate and their medians are compared: one run of each swings
-    // by more than the level of detail saves.
+    // The two 5000-agent runs alternate and their fastest runs are compared: a run on workers that
+    // other load preempts swings by more than the level of detail saves.
     std::vector<double> fullRuns;
     std::vector<double> lodRuns;
     for (int round = 0; round < 3; ++round) {
@@ -1408,14 +1517,47 @@ void RunNavigationCrowdBenchmark() {
     }
     std::ranges::sort(fullRuns);
     std::ranges::sort(lodRuns);
-    const CrowdRun fiveThousand{ .milliseconds = fullRuns[1] };
-    const CrowdRun fiveThousandLod{ .milliseconds = lodRuns[1] };
+    const CrowdRun fiveThousand{ .milliseconds = fullRuns[0] };
+    const CrowdRun fiveThousandLod{ .milliseconds = lodRuns[0] };
     std::cout << "navigation: bake of a 200 x 200 m arena with 25 pillars " << bakeMilliseconds << " ms ("
               << arena->tiles.size() << " tiles)\n";
     std::cout << "navigation: crowd step, 1000 agents " << thousand.milliseconds << " ms, 5000 agents " << fiveThousand.milliseconds
               << " ms, 5000 agents with level of detail around one focus " << fiveThousandLod.milliseconds << " ms\n";
     Check(thousand.milliseconds < 8.0 * kSanitizerTimeScale, "1000 crowd agents must step within 8 ms: " + std::to_string(thousand.milliseconds));
+
+    const CrowdRun tenThousand = RunCrowd(arena, kHalf, 10000, 240);
+    const CrowdRun tenThousandOneThread = RunCrowd(arena, kHalf, 10000, 240, {}, scene::NavigationCrowdSettings{ .workerThreads = 1U });
+    // 600 measured steps: the slowest one shows the spikes a frame would see.
+    const CrowdRun twentyThousand = RunCrowd(arena, kHalf, 20000, 1200);
+    std::cout << "navigation: crowd step, 10000 agents " << tenThousand.milliseconds << " ms (slowest " << tenThousand.worst
+              << " ms; one thread " << tenThousandOneThread.milliseconds << " ms), 20000 agents " << twentyThousand.milliseconds
+              << " ms (slowest " << twentyThousand.worst << " ms over 600 steps)\n";
+    const CrowdRun fiveThousandStages = RunCrowd(arena, kHalf, 5000, 240);
+    const CrowdRun fiveThousandLodStages = RunCrowd(arena, kHalf, 5000, 240, { DVec3{ -50.0, 0.0, -50.0 } });
+    for (const auto& [label, stages] : { std::pair{ "5000 agents", fiveThousandStages.stages }, std::pair{ "5000 agents with level of detail", fiveThousandLodStages.stages },
+             std::pair{ "10000 agents", tenThousand.stages }, std::pair{ "10000 agents on one thread", tenThousandOneThread.stages },
+             std::pair{ "the slowest of 20000 agents", twentyThousand.worstStages } }) {
+        std::cout << "navigation: stages of a step, " << label << ": sync " << stages.syncMilliseconds << " ms, paths " << stages.pathMilliseconds
+                  << " ms, neighbours " << stages.neighbourMilliseconds << " ms, corners " << stages.cornerMilliseconds << " ms, steering "
+                  << stages.steeringMilliseconds << " ms, avoidance " << stages.avoidanceMilliseconds << " ms, move " << stages.moveMilliseconds << " ms\n";
+    }
+
+    // Path queries across the arena (around the pillars) and over a few metres, the first in a fresh scene and repeated.
+    const auto pathMilliseconds = [&](DVec3 from, DVec3 to, int repeats, std::string_view label) {
+        scene::Scene paths;
+        static_cast<void>(paths.Navigation().AddNavMesh(arena));
+        const auto cold = std::chrono::steady_clock::now();
+        Check(paths.Navigation().FindPath(from, to).status == scene::NavPathStatus::Complete, "a benchmark path must be complete");
+        const double first = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - cold).count();
+        const auto warm = std::chrono::steady_clock::now();
+        for (int repeat = 0; repeat < repeats; ++repeat) static_cast<void>(paths.Navigation().FindPath(from, to));
+        const double each = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - warm).count() / repeats;
+        std::cout << "navigation: FindPath " << label << ", first " << first << " ms, then " << each << " ms each\n";
+    };
+    pathMilliseconds(DVec3{ -90.0, 0.0, -90.0 }, DVec3{ 90.0, 0.0, 90.0 }, 200, "across 250 m");
+    pathMilliseconds(DVec3{ -5.0, 0.0, -5.0 }, DVec3{ 5.0, 0.0, 5.0 }, 2000, "over 14 m");
     Check(fiveThousandLod.milliseconds < fiveThousand.milliseconds, "level of detail must make a large crowd cheaper");
+    Check(tenThousand.milliseconds < 24.0 * kSanitizerTimeScale, "10000 crowd agents must step within 24 ms: " + std::to_string(tenThousand.milliseconds));
 }
 
 } // namespace kb::tests

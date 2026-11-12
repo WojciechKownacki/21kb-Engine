@@ -643,10 +643,11 @@ bool AreNavAreaDefinitionsValid(std::span<const NavAreaDefinition> areas) noexce
 }
 
 void SceneNavigation::ConfigureCrowd(const NavigationCrowdSettings& settings) {
-    if (!std::isfinite(settings.nearDistance) || settings.nearDistance < 0.0F || settings.farPathOptimizationInterval == 0U ||
+    if (!std::isfinite(settings.nearDistance) || settings.nearDistance < 0.0F || !std::isfinite(settings.midDistance) ||
+        settings.midDistance < 0.0F || settings.farPathOptimizationInterval == 0U ||
         settings.maxPathRequestsPerStep == 0U || !std::isfinite(settings.neighbourRangeRadii) || settings.neighbourRangeRadii <= 0.0F ||
         !std::isfinite(settings.separationWeight) || settings.separationWeight < 0.0F) {
-        throw std::invalid_argument("Crowd settings need a non-negative near distance, a positive optimisation interval, request budget and range");
+        throw std::invalid_argument("Crowd settings need non-negative near and mid distances, a positive optimisation interval, request budget and range");
     }
     SceneAccess::State(scene_).navigation.crowdSettings = settings;
 }

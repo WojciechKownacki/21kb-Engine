@@ -3394,3 +3394,8 @@ text "projectSettings.navigationAreasDescription" "Είδη εδάφους όπ�
 text "projectSettings.navigationAreasSection" "ΠΕΡΙΟΧΕΣ ΠΛΟΗΓΗΣΗΣ"
 text "projectSettings.navAreaNameHint" "Όνομα νέας περιοχής"
 text "projectSettings.navAreaAdd" "Προσθήκη περιοχής"
+text "projectSettings.crowdSection" "ΛΕΠΤΟΜΕΡΕΙΑ ΠΛΗΘΟΥΣ"
+text "projectSettings.crowdDescription" "Οι χαρακτήρες μακριά από την κάμερα κινούνται με λιγότερη δουλειά, ώστε να χωρούν περισσότεροι σε ένα καρέ."
+text "projectSettings.crowdNearDistance" "Πλήρης αποφυγή έως (m)"
+text "projectSettings.crowdMidDistance" "Μόνο απόσταση έως (m)"
+text "projectSettings.crowdFarPathInterval" "Πιο μακριά, ενημέρωση διαδρομών κάθε (βήματα)"

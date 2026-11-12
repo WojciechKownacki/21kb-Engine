@@ -570,6 +570,79 @@ if(NOT TARGET kb_recast)
     string(REPLACE "${_kb_crowd_reset}"
         "// Engine patch: cancel link animation before the slot can be reused.\n\t\tm_agentAnims[idx].active = false;\n\t\tm_agents[idx].active = false;"
         _kb_crowd_source "${_kb_crowd_source}")
+    # The crowd update runs its per-member passes on the engine's workers: the generated copy ends
+    # with the engine's path validity check and update (sources/engine/src/navigation/
+    # DetourCrowdUpdate.inl) in place of the upstream ones, the last two functions of the file, and
+    # its header gains the worker hooks and per-pass timings.
+    set(_kb_crowd_update "void dtCrowd::checkPathValidity(dtCrowdAgent** agents, const int nagents, const float dt)\n{")
+    set(_kb_crowd_purge "void dtCrowd::purge()\n{\n")
+    string(FIND "${_kb_crowd_source}" "${_kb_crowd_update}" _kb_crowd_update_offset)
+    string(FIND "${_kb_crowd_source}" "${_kb_crowd_purge}" _kb_crowd_purge_offset)
+    file(READ "${kb_recast_SOURCE_DIR}/DetourCrowd/Include/DetourCrowd.h" _kb_crowd_header)
+    set(_kb_crowd_class "class dtCrowd\n{\n")
+    set(_kb_crowd_private "\tvoid purge();\n")
+    set(_kb_crowd_public "\tvoid update(const float dt, dtCrowdAgentDebugInfo* debug);\n")
+    string(FIND "${_kb_crowd_header}" "${_kb_crowd_class}" _kb_crowd_class_offset)
+    string(FIND "${_kb_crowd_header}" "${_kb_crowd_private}" _kb_crowd_private_offset)
+    string(FIND "${_kb_crowd_header}" "${_kb_crowd_public}" _kb_crowd_public_offset)
+    if(_kb_crowd_update_offset EQUAL -1 OR _kb_crowd_purge_offset EQUAL -1 OR _kb_crowd_class_offset EQUAL -1 OR
+            _kb_crowd_private_offset EQUAL -1 OR _kb_crowd_public_offset EQUAL -1)
+        message(FATAL_ERROR "The pinned crowd source no longer matches the parallel update patch")
+    endif()
+    string(SUBSTRING "${_kb_crowd_source}" 0 ${_kb_crowd_update_offset} _kb_crowd_source)
+    string(REPLACE "${_kb_crowd_purge}" "${_kb_crowd_purge}\treleaseWorkers();\n" _kb_crowd_source "${_kb_crowd_source}")
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/sources/engine/src/navigation/DetourCrowdUpdate.inl" _kb_crowd_update_source)
+    string(APPEND _kb_crowd_source "${_kb_crowd_update_source}")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/sources/engine/src/navigation/DetourCrowdUpdate.inl")
+    string(REPLACE "${_kb_crowd_class}" [=[
+// Engine patch: the per-member passes of dtCrowd::update run through a parallel-for. It calls
+// `range(pass, begin, end, worker)` over [0, count) in pieces, each on one worker in [0, workers).
+typedef void (*dtCrowdPassRange)(void* pass, int begin, int end, int worker);
+typedef void (*dtCrowdParallelFor)(void* user, int count, dtCrowdPassRange range, void* pass);
+
+// Engine patch: the stages of dtCrowd::update timed by getPassMilliseconds.
+enum dtCrowdPass
+{
+	DT_CROWD_PASS_PATHS,
+	DT_CROWD_PASS_NEIGHBOURS,
+	DT_CROWD_PASS_CORNERS,
+	DT_CROWD_PASS_STEERING,
+	DT_CROWD_PASS_AVOIDANCE,
+	DT_CROWD_PASS_MOVE,
+	DT_CROWD_PASS_COUNT
+};
+
+class dtCrowd
+{
+]=] _kb_crowd_header "${_kb_crowd_header}")
+    string(REPLACE "${_kb_crowd_private}" [=[
+	void purge();
+
+	// Engine patch: the parallel-for and each worker's query objects.
+	dtCrowdParallelFor m_parallelFor = 0;
+	void* m_parallelUser = 0;
+	int m_workerCount = 0;
+	dtNavMeshQuery** m_workerQueries = 0;
+	dtObstacleAvoidanceQuery** m_workerAvoidance = 0;
+	int* m_workerSamples = 0;
+	float m_passMilliseconds[DT_CROWD_PASS_COUNT] = {};
+	void releaseWorkers();
+	template <typename Pass> void runPass(const int count, Pass& pass);
+]=] _kb_crowd_header "${_kb_crowd_header}")
+    string(REPLACE "${_kb_crowd_public}" [=[
+	void update(const float dt, dtCrowdAgentDebugInfo* debug);
+
+	/// Engine patch: runs the per-member passes of update() through @p run on @p workers workers,
+	/// each with its own query objects; a null @p run or no workers runs them on the calling thread.
+	/// Call after init(), which drops the workers. Returns false when they cannot be allocated.
+	bool setParallelFor(dtCrowdParallelFor run, void* user, const int workers);
+
+	/// Engine patch: wall time of each stage of the last update(), indexed by dtCrowdPass.
+	const float* getPassMilliseconds() const { return m_passMilliseconds; }
+]=] _kb_crowd_header "${_kb_crowd_header}")
+    file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/navigation/DetourCrowd.h"
+        CONTENT "${_kb_crowd_header}" @ONLY)
     file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/navigation/DetourCrowd.cpp"
         CONTENT "${_kb_crowd_source}" @ONLY)
     add_library(kb_recast STATIC
@@ -602,6 +675,7 @@ if(NOT TARGET kb_recast)
     target_include_directories(kb_recast PUBLIC
         ${kb_recast_SOURCE_DIR}/Recast/Include
         ${kb_recast_SOURCE_DIR}/Detour/Include
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/navigation
         ${kb_recast_SOURCE_DIR}/DetourCrowd/Include
         ${kb_recast_SOURCE_DIR}/DetourTileCache/Include
     )

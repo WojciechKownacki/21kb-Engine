@@ -30,7 +30,8 @@ constexpr std::array<std::uint8_t, 8U> kSourceMagic{ '2', '1', 'K', 'B', 'S', 'R
 // microphone and carries no data (left out while it is off); bit 7 says the Android graphics API follows the
 // render scale as one byte (left out while it is Auto); bit 8 says the launch screen settings follow (left out while
 // they are all defaults); bit 9 says the navigation areas follow the launch screen (left out while they are the
-// default areas).
+// default areas); bit 10 says the crowd level-of-detail distances and far path interval follow them (left out while
+// they are the defaults).
 constexpr std::uint32_t kPartialManifestFlag = 1U;
 constexpr std::uint32_t kTombstonesManifestFlag = 2U;
 constexpr std::uint32_t kRuntimeSettingsManifestFlag = 4U;
@@ -41,9 +42,10 @@ constexpr std::uint32_t kMicrophoneManifestFlag = 64U;
 constexpr std::uint32_t kAndroidGraphicsApiManifestFlag = 128U;
 constexpr std::uint32_t kSplashManifestFlag = 256U;
 constexpr std::uint32_t kNavigationAreasManifestFlag = 512U;
+constexpr std::uint32_t kNavigationCrowdManifestFlag = 1024U;
 constexpr std::uint32_t kSettingsManifestFlags = kRuntimeSettingsManifestFlag | kMasterVolumeManifestFlag | kTagsManifestFlag |
     kRenderScaleManifestFlag | kMicrophoneManifestFlag | kAndroidGraphicsApiManifestFlag | kSplashManifestFlag |
-    kNavigationAreasManifestFlag;
+    kNavigationAreasManifestFlag | kNavigationCrowdManifestFlag;
 constexpr std::uint64_t kMaxManifestBytes = 64ULL * 1024ULL * 1024ULL;
 constexpr std::uint32_t kMaxDescriptorTargetPlatforms =
     kb::project::ProjectDescriptorFormat::MaxTargetPlatformCount;
@@ -275,7 +277,10 @@ private:
         within(settings.masterVolume, 0.0F, 1.0F) && settings.tags.size() <= kb::project::kProjectTagsMax &&
         std::ranges::all_of(settings.tags, [](const std::string& tag) {
             return !tag.empty() && kb::scene::SceneTagCatalog::CanonicalName(tag) == tag;
-        }) && kb::scene::AreNavAreaDefinitionsValid(settings.navigationAreas);
+        }) && kb::scene::AreNavAreaDefinitionsValid(settings.navigationAreas) &&
+        within(settings.navigationNearDistance, 0.0F, kb::project::kProjectNavigationDistanceMax) &&
+        within(settings.navigationMidDistance, 0.0F, kb::project::kProjectNavigationDistanceMax) &&
+        within(settings.navigationFarPathInterval, 1U, kb::project::kProjectNavigationFarPathIntervalMax);
 }
 
 // The manifest flags of the settings that differ from their defaults and so have to be written.
@@ -288,7 +293,11 @@ private:
         (settings.microphone != defaults.microphone ? kMicrophoneManifestFlag : 0U) |
         (settings.display.androidGraphicsApi != defaults.display.androidGraphicsApi ? kAndroidGraphicsApiManifestFlag : 0U) |
         (settings.display.splash != defaults.display.splash ? kSplashManifestFlag : 0U) |
-        (settings.navigationAreas != defaults.navigationAreas ? kNavigationAreasManifestFlag : 0U);
+        (settings.navigationAreas != defaults.navigationAreas ? kNavigationAreasManifestFlag : 0U) |
+        (settings.navigationNearDistance != defaults.navigationNearDistance || settings.navigationMidDistance != defaults.navigationMidDistance ||
+                settings.navigationFarPathInterval != defaults.navigationFarPathInterval
+            ? kNavigationCrowdManifestFlag
+            : 0U);
 }
 
 [[nodiscard]] bool ArtifactLess(
@@ -553,6 +562,11 @@ void EncodeSettings(std::vector<std::uint8_t>& bytes, const kb::project::Project
             PutFloat(bytes, area.cost);
         }
     }
+    if ((flags & kNavigationCrowdManifestFlag) != 0U) {
+        PutFloat(bytes, settings.navigationNearDistance);
+        PutFloat(bytes, settings.navigationMidDistance);
+        PutUInt32(bytes, settings.navigationFarPathInterval);
+    }
 }
 
 [[nodiscard]] bool DecodeRuntimeSettings(Reader& reader, kb::project::ProjectSettings& settings) {
@@ -650,7 +664,10 @@ void EncodeSettings(std::vector<std::uint8_t>& bytes, const kb::project::Project
         ((flags & kMicrophoneManifestFlag) == 0U || (settings.microphone = true)) &&
         ((flags & kAndroidGraphicsApiManifestFlag) == 0U || DecodeAndroidGraphicsApi(reader, settings.display)) &&
         ((flags & kSplashManifestFlag) == 0U || DecodeSplash(reader, settings.display.splash)) &&
-        ((flags & kNavigationAreasManifestFlag) == 0U || DecodeNavigationAreas(reader, settings.navigationAreas));
+        ((flags & kNavigationAreasManifestFlag) == 0U || DecodeNavigationAreas(reader, settings.navigationAreas)) &&
+        ((flags & kNavigationCrowdManifestFlag) == 0U ||
+            (reader.ReadFloat(settings.navigationNearDistance) && reader.ReadFloat(settings.navigationMidDistance) &&
+                reader.ReadUInt32(settings.navigationFarPathInterval)));
 }
 
 } // namespace

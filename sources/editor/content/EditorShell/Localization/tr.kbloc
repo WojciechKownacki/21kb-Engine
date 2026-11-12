@@ -3394,3 +3394,8 @@ text "projectSettings.navigationAreasDescription" "Karakterlerin yürüdüğü z
 text "projectSettings.navigationAreasSection" "NAVİGASYON ALANLARI"
 text "projectSettings.navAreaNameHint" "Yeni alan adı"
 text "projectSettings.navAreaAdd" "Alan ekle"
+text "projectSettings.crowdSection" "KALABALIK AYRINTISI"
+text "projectSettings.crowdDescription" "Kameradan uzak karakterler daha az işle hareket eder, böylece bir kareye daha fazlası sığar."
+text "projectSettings.crowdNearDistance" "Tam kaçınma şu mesafeye kadar (m)"
+text "projectSettings.crowdMidDistance" "Yalnızca mesafe koruma şu mesafeye kadar (m)"
+text "projectSettings.crowdFarPathInterval" "Daha uzakta yolları her (adım) güncelle"

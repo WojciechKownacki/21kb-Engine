@@ -1360,6 +1360,8 @@ public:
     // Replaces the project's navigation areas; false, and nothing changes, for a list that cannot be the project's.
     // The open scene takes the new costs and the navigation overlay the new colours.
     [[nodiscard]] bool SetProjectNavigationAreas(std::vector<kb::scene::NavAreaDefinition> areas);
+    // The crowd's level of detail: near and mid distances in metres, the far path interval in steps.
+    [[nodiscard]] bool SetProjectNavigationCrowd(float nearDistance, float midDistance, std::uint32_t farPathInterval);
     // Adds a tag to the project's list, which every scene of the project starts from; true when it was new and
     // valid. The open scene defines it at once. Removing one is DeleteSceneTag.
     [[nodiscard]] bool AddProjectTag(std::string_view name);

@@ -3404,3 +3404,8 @@ text "projectSettings.navigationAreasDescription" "Види поверхні, я
 text "projectSettings.navigationAreasSection" "ОБЛАСТІ НАВІГАЦІЇ"
 text "projectSettings.navAreaNameHint" "Назва нової області"
 text "projectSettings.navAreaAdd" "Додати область"
+text "projectSettings.crowdSection" "ДЕТАЛІЗАЦІЯ НАТОВПУ"
+text "projectSettings.crowdDescription" "Персонажі далеко від камери рухаються з меншими витратами, тож у кадр вміщується більше."
+text "projectSettings.crowdNearDistance" "Повне ухилення до (м)"
+text "projectSettings.crowdMidDistance" "Лише відстань до (м)"
+text "projectSettings.crowdFarPathInterval" "Далі оновлювати шляхи кожні (кроків)"

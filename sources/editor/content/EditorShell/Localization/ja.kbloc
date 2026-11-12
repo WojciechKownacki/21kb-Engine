@@ -3389,3 +3389,8 @@ text "projectSettings.navigationAreasDescription" "キャラクターが歩く�
 text "projectSettings.navigationAreasSection" "ナビゲーションエリア"
 text "projectSettings.navAreaNameHint" "新しいエリア名"
 text "projectSettings.navAreaAdd" "エリアを追加"
+text "projectSettings.crowdSection" "群衆の詳細度"
+text "projectSettings.crowdDescription" "カメラから遠いキャラクターは少ない処理で動くため、1フレームにより多く収まります。"
+text "projectSettings.crowdNearDistance" "完全な回避の範囲 (m)"
+text "projectSettings.crowdMidDistance" "距離を保つだけの範囲 (m)"
+text "projectSettings.crowdFarPathInterval" "それより遠くは経路を更新する間隔 (ステップ)"

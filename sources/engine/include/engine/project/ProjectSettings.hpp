@@ -2,6 +2,7 @@
 
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/scene/Navigation.hpp"
+#include "engine/scene/SceneNavigation.hpp"
 
 #include <array>
 #include <cstdint>
@@ -47,6 +48,9 @@ inline constexpr float kProjectRenderScaleMin = 0.5F;
 inline constexpr float kProjectRenderScaleMax = 1.0F;
 inline constexpr float kProjectGravityLimit = 1000.0F;
 inline constexpr float kProjectTimeScaleMax = 100.0F;
+// Bounds of the crowd level-of-detail settings: distances in metres, the far path interval in steps.
+inline constexpr float kProjectNavigationDistanceMax = 100000.0F;
+inline constexpr std::uint32_t kProjectNavigationFarPathIntervalMax = 600U;
 // Most scenes a project lists for its package besides the startup scene.
 inline constexpr std::size_t kProjectAdditionalScenesMax = 256U;
 // Most tags a project defines of its own: the scene's tag catalogue holds 256 names, six of them built in.
@@ -196,6 +200,13 @@ struct ProjectSettings {
     // Navigation
     // The named navigation areas; an area's id is its position in the list. Scenes store the ids.
     std::vector<kb::scene::NavAreaDefinition> navigationAreas = kb::scene::DefaultNavAreaDefinitions();
+    // The crowd's level of detail around the camera and the Stream Focus entities (see
+    // kb::scene::NavigationCrowdSettings): agents within the near distance avoid each other fully,
+    // within the mid distance they only keep apart, and farther ones follow their paths, shortening
+    // them every `navigationFarPathInterval` steps.
+    float navigationNearDistance = kb::scene::NavigationCrowdSettings{}.nearDistance;
+    float navigationMidDistance = kb::scene::NavigationCrowdSettings{}.midDistance;
+    std::uint32_t navigationFarPathInterval = kb::scene::NavigationCrowdSettings{}.farPathOptimizationInterval;
 
     // Crash reports
     // Where a shipped Windows game sends the crash reports its player agreed to
@@ -203,6 +214,15 @@ struct ProjectSettings {
     std::string crashReportUploadUrl;
 
     [[nodiscard]] bool operator==(const ProjectSettings&) const noexcept = default;
+
+    // The crowd settings the project's scenes play with: its level of detail over the engine defaults.
+    [[nodiscard]] kb::scene::NavigationCrowdSettings NavigationCrowd() const noexcept {
+        kb::scene::NavigationCrowdSettings crowd;
+        crowd.nearDistance = navigationNearDistance;
+        crowd.midDistance = navigationMidDistance;
+        crowd.farPathOptimizationInterval = navigationFarPathInterval;
+        return crowd;
+    }
 };
 
 // The scenes a package holds, in order: the startup scene (defaultMap) first, then the additional scenes.

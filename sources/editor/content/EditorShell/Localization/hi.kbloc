@@ -3394,3 +3394,8 @@ text "projectSettings.navigationAreasDescription" "ज़मीन के प्
 text "projectSettings.navigationAreasSection" "नेविगेशन एरिया"
 text "projectSettings.navAreaNameHint" "नए एरिया का नाम"
 text "projectSettings.navAreaAdd" "एरिया जोड़ें"
+text "projectSettings.crowdSection" "भीड़ का विवरण"
+text "projectSettings.crowdDescription" "कैमरे से दूर के किरदार कम काम से चलते हैं, इसलिए एक फ़्रेम में उनमें से ज़्यादा समा जाते हैं।"
+text "projectSettings.crowdNearDistance" "पूरा बचाव इतने तक (मी)"
+text "projectSettings.crowdMidDistance" "सिर्फ़ दूरी इतने तक (मी)"
+text "projectSettings.crowdFarPathInterval" "इससे दूर, रास्ते हर (कदम) पर अपडेट करें"

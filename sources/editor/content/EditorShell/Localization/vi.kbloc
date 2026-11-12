@@ -3389,3 +3389,8 @@ text "projectSettings.navigationAreasDescription" "Các loại mặt đất nhâ
 text "projectSettings.navigationAreasSection" "VÙNG ĐIỀU HƯỚNG"
 text "projectSettings.navAreaNameHint" "Tên vùng mới"
 text "projectSettings.navAreaAdd" "Thêm vùng"
+text "projectSettings.crowdSection" "CHI TIẾT ĐÁM ĐÔNG"
+text "projectSettings.crowdDescription" "Nhân vật ở xa camera di chuyển tốn ít công hơn, nên một khung hình chứa được nhiều hơn."
+text "projectSettings.crowdNearDistance" "Né tránh đầy đủ đến (m)"
+text "projectSettings.crowdMidDistance" "Chỉ giữ khoảng cách đến (m)"
+text "projectSettings.crowdFarPathInterval" "Xa hơn, cập nhật đường đi mỗi (bước)"

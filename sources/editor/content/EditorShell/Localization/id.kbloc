@@ -3389,3 +3389,8 @@ text "projectSettings.navigationAreasDescription" "Jenis permukaan tempat karakt
 text "projectSettings.navigationAreasSection" "AREA NAVIGASI"
 text "projectSettings.navAreaNameHint" "Nama area baru"
 text "projectSettings.navAreaAdd" "Tambah area"
+text "projectSettings.crowdSection" "DETAIL KERUMUNAN"
+text "projectSettings.crowdDescription" "Karakter yang jauh dari kamera bergerak dengan kerja lebih sedikit, jadi lebih banyak muat dalam satu frame."
+text "projectSettings.crowdNearDistance" "Menghindar penuh hingga (m)"
+text "projectSettings.crowdMidDistance" "Hanya menjaga jarak hingga (m)"
+text "projectSettings.crowdFarPathInterval" "Lebih jauh, perbarui jalur setiap (langkah)"

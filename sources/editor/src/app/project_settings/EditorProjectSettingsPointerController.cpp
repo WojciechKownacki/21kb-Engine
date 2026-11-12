@@ -723,6 +723,10 @@ bool EditorProjectSettingsPointerController::CommitNumberEdit(EditorSceneContext
         if (next.masterVolume != current.masterVolume) {
             static_cast<void>(sceneContext.SetProjectMasterVolume(next.masterVolume));
         }
+        if (next.navigationNearDistance != current.navigationNearDistance || next.navigationMidDistance != current.navigationMidDistance ||
+            next.navigationFarPathInterval != current.navigationFarPathInterval) {
+            static_cast<void>(sceneContext.SetProjectNavigationCrowd(next.navigationNearDistance, next.navigationMidDistance, next.navigationFarPathInterval));
+        }
     }
     return true;
 }

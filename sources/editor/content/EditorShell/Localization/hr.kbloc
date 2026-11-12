@@ -3399,3 +3399,8 @@ text "projectSettings.navigationAreasDescription" "Vrste tla po kojima likovi ho
 text "projectSettings.navigationAreasSection" "NAVIGACIJSKA PODRUČJA"
 text "projectSettings.navAreaNameHint" "Naziv novog područja"
 text "projectSettings.navAreaAdd" "Dodaj područje"
+text "projectSettings.crowdSection" "DETALJNOST MNOŠTVA"
+text "projectSettings.crowdDescription" "Likovi daleko od kamere kreću se uz manje posla, pa ih više stane u jedan kadar."
+text "projectSettings.crowdNearDistance" "Potpuno izbjegavanje do (m)"
+text "projectSettings.crowdMidDistance" "Samo razmak do (m)"
+text "projectSettings.crowdFarPathInterval" "Dalje osvježavaj putove svakih (koraka)"

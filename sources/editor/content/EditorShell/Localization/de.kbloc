@@ -3394,3 +3394,8 @@ text "projectSettings.navigationAreasDescription" "Bodenarten, auf denen Figuren
 text "projectSettings.navigationAreasSection" "NAVIGATIONSBEREICHE"
 text "projectSettings.navAreaNameHint" "Name des neuen Bereichs"
 text "projectSettings.navAreaAdd" "Bereich hinzufügen"
+text "projectSettings.crowdSection" "MENGENDETAIL"
+text "projectSettings.crowdDescription" "Figuren weit von der Kamera bewegen sich mit weniger Aufwand, so passen mehr von ihnen in ein Bild."
+text "projectSettings.crowdNearDistance" "Volles Ausweichen bis (m)"
+text "projectSettings.crowdMidDistance" "Nur Abstand halten bis (m)"
+text "projectSettings.crowdFarPathInterval" "Weiter entfernt Wege alle (Schritte) erneuern"

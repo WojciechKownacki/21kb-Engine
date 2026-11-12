@@ -430,6 +430,7 @@ bool ReadMountedGameProjectRuntime(
     packaged.masterVolume = manifest.settings.masterVolume;
     packaged.tags = manifest.settings.tags;
     packaged.navigationAreas = manifest.settings.navigationAreas;
+    packaged.navigationCrowd = manifest.settings.NavigationCrowd();
     for (const kb::project::ProjectPluginReference& plugin : packaged.descriptor.plugins) {
         if (plugin.enabled && !plugin.name.empty()) {
             packaged.requiredModules.push_back(plugin.name);
@@ -757,11 +758,12 @@ bool LoadGameProjectScene(
         return false;
     }
     scene.Runtime().ApplyProjectSimulation(runtime.simulation);
-    // The master gain, and the tags and navigation areas every scene of the project starts from, before any scene
-    // is loaded.
+    // The master gain, and the tags, navigation areas and crowd level of detail every scene of the project starts
+    // from, before any scene is loaded.
     static_cast<void>(kb::audio::AudioPlayback::SetMasterVolume(scene, runtime.masterVolume));
     static_cast<void>(scene.Tags().SetProjectDefinitions(runtime.tags));
     kb::scene::SceneNavigation{ scene }.SetAreaDefinitions(runtime.navigationAreas);
+    kb::scene::SceneNavigation{ scene }.ConfigureCrowd(runtime.navigationCrowd);
     scene.LoadedContent().ReportLoadProgress(0.4F);
 
     if (!runtime.sceneReference.empty() && runtime.sceneReference.front() == '/') {

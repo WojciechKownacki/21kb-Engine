@@ -562,6 +562,34 @@ struct SearchableSetting {
     }
 }
 
+// The Navigation page keeps the bottom of its pane for the crowd's level of detail: a section header, a line of
+// description and one row per number; the list of areas fills the rest.
+constexpr int kNavCrowdRowPitch = 30;
+constexpr int kNavCrowdBlockHeight = 24 + 22 + 3 * kNavCrowdRowPitch;
+constexpr std::array<ProjectSettingsNumber, 3U> kNavCrowdNumbers{ ProjectSettingsNumber::NavNearDistance, ProjectSettingsNumber::NavMidDistance,
+    ProjectSettingsNumber::NavFarPathInterval };
+
+[[nodiscard]] ProjectSettingsPanelLayoutRects ListRects(const EditorSceneContext& sceneContext, ProjectSettingsPanelLayoutRects rects) noexcept {
+    if (static_cast<ProjectSettingsCategory>(sceneContext.ProjectSettings().SelectedCategory()) == ProjectSettingsCategory::Navigation) {
+        rects.sceneList.bottom = std::max(rects.sceneList.top, rects.sceneList.bottom - kNavCrowdBlockHeight);
+    }
+    return rects;
+}
+
+[[nodiscard]] RECT NavCrowdHeader(const ProjectSettingsPanelLayoutRects& listRects) noexcept {
+    return RECT{ listRects.sceneList.left, listRects.sceneList.bottom + 4, listRects.sceneList.right, listRects.sceneList.bottom + 24 };
+}
+
+[[nodiscard]] RECT NavCrowdLabel(const ProjectSettingsPanelLayoutRects& listRects, int row) noexcept {
+    const LONG top = NavCrowdHeader(listRects).bottom + 22 + row * kNavCrowdRowPitch;
+    return RECT{ listRects.sceneList.left + 8, top, listRects.sceneList.right - 130, top + 24 };
+}
+
+[[nodiscard]] RECT NavCrowdValue(const ProjectSettingsPanelLayoutRects& listRects, int row) noexcept {
+    const RECT label = NavCrowdLabel(listRects, row);
+    return RECT{ listRects.sceneList.right - 120, label.top, listRects.sceneList.right, label.bottom };
+}
+
 // The cells of a row of the Navigation page: the colour swatch, the name and the cost, before the remove button.
 [[nodiscard]] RECT NavAreaSwatch(const ProjectSettingsPanelLayoutRects& rects, int visibleRow) noexcept {
     const RECT row = ProjectSettingsPanelLayout::SceneRow(rects, visibleRow);
@@ -892,7 +920,8 @@ void DrawTagsPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const Ed
 // The project's navigation areas, in id order: a cell and a button that add one, and per area its colour (a click picks
 // the next one), its name and its cost (both typed), and a remove button on the last area only, so the ids of the
 // others never change. The list scrolls with the wheel when it is longer than the pane.
-void DrawNavigationPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
+void DrawNavigationPage(HDC dc, const ProjectSettingsPanelLayoutRects& pageRects, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
+    const ProjectSettingsPanelLayoutRects rects = ListRects(sceneContext, pageRects);
     const std::vector<kb::scene::NavAreaDefinition>& areas = sceneContext.ProjectConfiguration().navigationAreas;
     const EditorProjectSettingsState& state = sceneContext.ProjectSettings();
     GdiDrawing::FillRectColor(dc, rects.sectionHeader, Color(theme.strip));
@@ -936,6 +965,22 @@ void DrawNavigationPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, co
         drawCell(NavAreaCostCell(rects, visible), EditorProjectSettingsState::kNavAreaCostEdit + index, ProjectSettingsPanelRenderer::NavAreaCostText(area.cost));
         DrawOptionButton(dc, ProjectSettingsPanelLayout::SceneRemoveButton(rects, visible), theme, EditorText("projectSettings.sceneRemove", "Remove"), false,
             index + 1 == static_cast<int>(areas.size()) && areas.size() > 1U);
+    }
+
+    // The crowd's level of detail.
+    const RECT header = NavCrowdHeader(rects);
+    GdiDrawing::FillRectColor(dc, header, Color(theme.strip));
+    DrawText(dc, RECT{ header.left + 8, header.top, header.right - 8, header.bottom }, EditorText("projectSettings.crowdSection", "CROWD DETAIL"),
+        Color(theme.textSecondary), 11, FW_SEMIBOLD);
+    DrawText(dc, RECT{ header.left, header.bottom, header.right, header.bottom + 22 },
+        EditorText("projectSettings.crowdDescription", "Characters far from the camera move with less work, so more of them fit in a frame."),
+        Color(theme.textDisabled), 11);
+    const std::array<std::string_view, 3U> labels{ EditorText("projectSettings.crowdNearDistance", "Full avoidance up to (m)"),
+        EditorText("projectSettings.crowdMidDistance", "Keep apart up to (m)"),
+        EditorText("projectSettings.crowdFarPathInterval", "Farther away, update paths every (steps)") };
+    for (int row = 0; row < 3; ++row) {
+        DrawText(dc, NavCrowdLabel(rects, row), labels[static_cast<std::size_t>(row)], Color(theme.textPrimary), 12);
+        DrawNumberCell(dc, NavCrowdValue(rects, row), theme, sceneContext, kNavCrowdNumbers[static_cast<std::size_t>(row)]);
     }
 }
 
@@ -1238,6 +1283,13 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
     }
 
     if (category == ProjectSettingsCategory::Navigation) {
+        const ProjectSettingsPanelLayoutRects listRects = ListRects(sceneContext, rects);
+        for (int row = 0; row < 3; ++row) {
+            const RECT value = NavCrowdValue(listRects, row);
+            if (PointInRect(value, x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::NumberField, .index = static_cast<int>(kNavCrowdNumbers[static_cast<std::size_t>(row)]), .rect = value };
+            }
+        }
         if (PointInRect(rects.tagAddButton, x, y)) {
             return Hit{ .kind = ProjectSettingsHitKind::NavAreaAdd, .index = -1, .rect = rects.tagAddButton };
         }
@@ -1245,15 +1297,15 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
             return Hit{ .kind = ProjectSettingsHitKind::NavAreaNameField, .index = -1, .rect = rects.tagNameField };
         }
         const int count = ListedRowCount(sceneContext);
-        const int capacity = ProjectSettingsPanelLayout::SceneRowCapacity(rects);
-        const int first = FirstVisibleScene(sceneContext, rects);
+        const int capacity = ProjectSettingsPanelLayout::SceneRowCapacity(listRects);
+        const int first = FirstVisibleScene(sceneContext, listRects);
         for (int visible = 0; visible < capacity && first + visible < count; ++visible) {
             const int index = first + visible;
             const std::array<std::pair<ProjectSettingsHitKind, RECT>, 4U> cells{ {
-                { ProjectSettingsHitKind::NavAreaColour, NavAreaSwatch(rects, visible) },
-                { ProjectSettingsHitKind::NavAreaName, NavAreaNameCell(rects, visible) },
-                { ProjectSettingsHitKind::NavAreaCost, NavAreaCostCell(rects, visible) },
-                { ProjectSettingsHitKind::NavAreaRemove, ProjectSettingsPanelLayout::SceneRemoveButton(rects, visible) },
+                { ProjectSettingsHitKind::NavAreaColour, NavAreaSwatch(listRects, visible) },
+                { ProjectSettingsHitKind::NavAreaName, NavAreaNameCell(listRects, visible) },
+                { ProjectSettingsHitKind::NavAreaCost, NavAreaCostCell(listRects, visible) },
+                { ProjectSettingsHitKind::NavAreaRemove, ProjectSettingsPanelLayout::SceneRemoveButton(listRects, visible) },
             } };
             for (const auto& [kind, cell] : cells) {
                 if (PointInRect(cell, x, y)) return Hit{ .kind = kind, .index = index, .rect = cell };
@@ -1362,7 +1414,7 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
 
 int ProjectSettingsPanelRenderer::FirstVisibleScene(const EditorSceneContext& sceneContext, const ProjectSettingsPanelLayoutRects& rects) {
     const int count = ListedRowCount(sceneContext);
-    const int last = std::max(0, count - ProjectSettingsPanelLayout::SceneRowCapacity(rects));
+    const int last = std::max(0, count - ProjectSettingsPanelLayout::SceneRowCapacity(ListRects(sceneContext, rects)));
     return std::clamp(sceneContext.ProjectSettings().FirstVisibleScene(), 0, last);
 }
 
@@ -1374,7 +1426,7 @@ std::string ProjectSettingsPanelRenderer::NavAreaCostText(float cost) {
 
 int ProjectSettingsPanelRenderer::MaximumFirstVisibleScene(const RECT& content, const EditorSceneContext& sceneContext) {
     const int count = ListedRowCount(sceneContext);
-    return std::max(0, count - ProjectSettingsPanelLayout::SceneRowCapacity(ProjectSettingsPanelLayout::Resolve(content)));
+    return std::max(0, count - ProjectSettingsPanelLayout::SceneRowCapacity(ListRects(sceneContext, ProjectSettingsPanelLayout::Resolve(content))));
 }
 
 ProjectSettingsNumberLimits ProjectSettingsPanelRenderer::NumberLimits(ProjectSettingsNumber number) noexcept {
@@ -1394,6 +1446,11 @@ ProjectSettingsNumberLimits ProjectSettingsPanelRenderer::NumberLimits(ProjectSe
         return { 0.0, 1.0, false };
     case ProjectSettingsNumber::RenderScale:
         return { static_cast<double>(kb::project::kProjectRenderScaleMin), static_cast<double>(kb::project::kProjectRenderScaleMax), false };
+    case ProjectSettingsNumber::NavNearDistance:
+    case ProjectSettingsNumber::NavMidDistance:
+        return { 0.0, static_cast<double>(kb::project::kProjectNavigationDistanceMax), false };
+    case ProjectSettingsNumber::NavFarPathInterval:
+        return { 1.0, static_cast<double>(kb::project::kProjectNavigationFarPathIntervalMax), true };
     case ProjectSettingsNumber::FrameRateCap:
     case ProjectSettingsNumber::Count:
     default:
@@ -1430,6 +1487,15 @@ std::string ProjectSettingsPanelRenderer::NumberText(const kb::project::ProjectS
         break;
     case ProjectSettingsNumber::RenderScale:
         std::snprintf(text, sizeof(text), "%g", static_cast<double>(settings.display.renderScale));
+        break;
+    case ProjectSettingsNumber::NavNearDistance:
+        std::snprintf(text, sizeof(text), "%g", static_cast<double>(settings.navigationNearDistance));
+        break;
+    case ProjectSettingsNumber::NavMidDistance:
+        std::snprintf(text, sizeof(text), "%g", static_cast<double>(settings.navigationMidDistance));
+        break;
+    case ProjectSettingsNumber::NavFarPathInterval:
+        std::snprintf(text, sizeof(text), "%u", settings.navigationFarPathInterval);
         break;
     case ProjectSettingsNumber::Count:
     default:
@@ -1469,6 +1535,15 @@ kb::project::ProjectSettings ProjectSettingsPanelRenderer::WithNumber(
         break;
     case ProjectSettingsNumber::RenderScale:
         settings.display.renderScale = static_cast<float>(value);
+        break;
+    case ProjectSettingsNumber::NavNearDistance:
+        settings.navigationNearDistance = static_cast<float>(value);
+        break;
+    case ProjectSettingsNumber::NavMidDistance:
+        settings.navigationMidDistance = static_cast<float>(value);
+        break;
+    case ProjectSettingsNumber::NavFarPathInterval:
+        settings.navigationFarPathInterval = static_cast<std::uint32_t>(value);
         break;
     case ProjectSettingsNumber::Count:
     default:

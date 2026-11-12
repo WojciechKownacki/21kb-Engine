@@ -2277,7 +2277,7 @@ if(BUILD_TESTING)
     endforeach()
     # The step-spike gate lengthens its frames while other load slows the physics step down.
     set_tests_properties(kb_engine_physics-step-spikes PROPERTIES TIMEOUT 600)
-    # The crowd budget is absolute (1000 agents within 8 ms per navigation step in an optimised
+    # The crowd budget is absolute (1000 agents within 8 ms, 10 000 within 24 ms per navigation step in an optimised
     # build), with headroom for a slower machine; it also requires level of detail to pay off.
     add_test(NAME kb_engine_navigation-crowd-bench COMMAND $<TARGET_FILE:kb_engine_tests> navigation-crowd-bench)
     set_tests_properties(kb_engine_navigation-crowd-bench PROPERTIES

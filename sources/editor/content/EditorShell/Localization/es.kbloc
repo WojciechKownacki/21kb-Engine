@@ -3394,3 +3394,8 @@ text "projectSettings.navigationAreasDescription" "Tipos de suelo por los que ca
 text "projectSettings.navigationAreasSection" "ÁREAS DE NAVEGACIÓN"
 text "projectSettings.navAreaNameHint" "Nombre del área nueva"
 text "projectSettings.navAreaAdd" "Añadir área"
+text "projectSettings.crowdSection" "DETALLE DE MULTITUDES"
+text "projectSettings.crowdDescription" "Los personajes lejos de la cámara se mueven con menos trabajo, así caben más en un fotograma."
+text "projectSettings.crowdNearDistance" "Evitación completa hasta (m)"
+text "projectSettings.crowdMidDistance" "Solo separación hasta (m)"
+text "projectSettings.crowdFarPathInterval" "Más lejos, actualizar rutas cada (pasos)"

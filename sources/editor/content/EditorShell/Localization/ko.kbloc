@@ -3389,3 +3389,8 @@ text "projectSettings.navigationAreasDescription" "캐릭터가 걷는 지면 �
 text "projectSettings.navigationAreasSection" "내비게이션 영역"
 text "projectSettings.navAreaNameHint" "새 영역 이름"
 text "projectSettings.navAreaAdd" "영역 추가"
+text "projectSettings.crowdSection" "군중 디테일"
+text "projectSettings.crowdDescription" "카메라에서 먼 캐릭터는 적은 작업으로 움직이므로 한 프레임에 더 많이 담을 수 있습니다."
+text "projectSettings.crowdNearDistance" "완전 회피 범위 (m)"
+text "projectSettings.crowdMidDistance" "간격 유지만 하는 범위 (m)"
+text "projectSettings.crowdFarPathInterval" "그보다 멀면 경로 갱신 간격 (스텝)"

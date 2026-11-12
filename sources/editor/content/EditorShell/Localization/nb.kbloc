@@ -3394,3 +3394,8 @@ text "projectSettings.navigationAreasDescription" "Typer underlag figurer går p
 text "projectSettings.navigationAreasSection" "NAVIGASJONSOMRÅDER"
 text "projectSettings.navAreaNameHint" "Navn på nytt område"
 text "projectSettings.navAreaAdd" "Legg til område"
+text "projectSettings.crowdSection" "DETALJNIVÅ FOR FOLKEMENGDE"
+text "projectSettings.crowdDescription" "Figurer langt fra kameraet beveger seg med mindre arbeid, så flere av dem får plass i et bilde."
+text "projectSettings.crowdNearDistance" "Full unnvikelse opptil (m)"
+text "projectSettings.crowdMidDistance" "Bare avstand opptil (m)"
+text "projectSettings.crowdFarPathInterval" "Lenger unna, oppdater stier hvert (steg)"

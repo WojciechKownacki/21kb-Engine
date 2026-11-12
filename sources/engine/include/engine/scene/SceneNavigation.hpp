@@ -25,24 +25,31 @@ class Scene;
 // How the crowd (DetourCrowd) moving agents over polygon navigation meshes spends its time. Agents
 // closer than `nearDistance` to a level-of-detail focus (SetCrowdFocuses, else every enabled Stream
 // Focus; without any focus every agent is near) avoid neighbours and walls by sampling velocities,
-// keep apart from neighbours and shorten their paths every step; the others only follow their path
-// corridors and shorten them every `farPathOptimizationInterval` steps.
+// keep apart from neighbours and shorten their paths every step; agents within `midDistance` keep
+// apart from neighbours and shorten their paths every step but do not sample velocities; the others
+// only follow their path corridors and shorten them every `farPathOptimizationInterval` steps. An
+// agent moves to a farther level only 10% beyond its edge, so agents on an edge do not flicker.
 struct NavigationCrowdSettings {
     float nearDistance = 60.0F;
+    float midDistance = 120.0F;
     std::uint32_t farPathOptimizationInterval = 4U;
-    // Destinations handed to the crowd per step; agents waiting for theirs stand still and report a
-    // Pending path.
+    // Destinations handed to the crowd per step, nearer levels of detail first, then the longest
+    // waiting; agents waiting for theirs stand still and report a Pending path.
     std::uint32_t maxPathRequestsPerStep = 64U;
     // Neighbours (at most 6) and walls an agent reacts to lie within this many of its radii.
     float neighbourRangeRadii = 12.0F;
     float separationWeight = 2.0F;
     bool avoidance = true;
+    // Threads the per-agent work of a step runs on: 0 uses the engine's default worker count, 1 the
+    // calling thread. The result is the same for every count.
+    std::uint32_t workerThreads = 0U;
 };
 
 struct NavigationCrowdStats {
     // Agents walking the polygon meshes, split by level of detail.
     std::size_t agents = 0U;
     std::size_t nearAgents = 0U;
+    std::size_t midAgents = 0U;
     std::size_t farAgents = 0U;
     // Destinations handed to the crowd in the last step, and agents whose path is not planned yet.
     std::size_t pathRequests = 0U;
@@ -50,8 +57,17 @@ struct NavigationCrowdStats {
     std::size_t onLinks = 0U;
     // Candidate velocities the crowd sampled to avoid collisions.
     std::size_t velocitySamples = 0U;
-    // Wall time of the last navigation step.
+    // Wall time of the last navigation step, and of its stages: handing agents to the crowd and
+    // reading them back, then the crowd's paths (validity, requests, queue), walls and neighbours,
+    // corners and links, steering, velocity sampling, and moving.
     double milliseconds = 0.0;
+    double syncMilliseconds = 0.0;
+    double pathMilliseconds = 0.0;
+    double neighbourMilliseconds = 0.0;
+    double cornerMilliseconds = 0.0;
+    double steeringMilliseconds = 0.0;
+    double avoidanceMilliseconds = 0.0;
+    double moveMilliseconds = 0.0;
 };
 
 struct NavQueryOptions {

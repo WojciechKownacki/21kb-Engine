@@ -3414,3 +3414,8 @@ text "projectSettings.navigationAreasDescription" "أنواع الأرض الت�
 text "projectSettings.navigationAreasSection" "مناطق التنقل"
 text "projectSettings.navAreaNameHint" "اسم المنطقة الجديدة"
 text "projectSettings.navAreaAdd" "إضافة منطقة"
+text "projectSettings.crowdSection" "تفاصيل الحشد"
+text "projectSettings.crowdDescription" "الشخصيات البعيدة عن الكاميرا تتحرك بجهد أقل، فيتسع الإطار لعدد أكبر منها."
+text "projectSettings.crowdNearDistance" "تجنّب كامل حتى (م)"
+text "projectSettings.crowdMidDistance" "تباعد فقط حتى (م)"
+text "projectSettings.crowdFarPathInterval" "أبعد من ذلك، تحديث المسارات كل (خطوات)"

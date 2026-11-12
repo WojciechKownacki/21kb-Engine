@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/ecs/WorkerPool.hpp"
 #include "engine/scene/Navigation.hpp"
 #include "engine/scene/SceneNavigation.hpp"
 #include "navigation/NavMeshRuntime.hpp"
@@ -44,11 +45,13 @@ struct NavMeshCrowdObstacle {
 // agent profile (a crowd walks one Detour mesh), each agent a crowd member whose parameters come
 // from its NavAgent. The crowd plans and follows path corridors, separates, samples velocities
 // against neighbours and walls, resolves overlaps and crosses off-mesh links; this class hands it
-// destinations (a bounded number per step), maps area masks to crowd filters, stops agents at
-// their stopping distance, shapes link crossings by link kind and lowers the update work of agents
-// far from every focus by switching crowd update flags. Non-carving obstacles join every crowd as
-// members that never move. Agents are added in id order and the crowd runs on one thread, so
-// equal input replays exactly.
+// destinations (a bounded number per step, nearer levels of detail first), maps area masks to crowd
+// filters, stops agents at their stopping distance, shapes link crossings by link kind and lowers
+// the update work of agents far from every focus by switching crowd update flags. Non-carving
+// obstacles join every crowd as members that never move. The crowd's per-member passes run on an
+// engine worker pool, each member writing only itself; agents are added in id order and everything
+// that touches several members runs on the calling thread, so equal input replays exactly for any
+// number of workers.
 class NavMeshCrowd {
 public:
     NavMeshCrowd();
@@ -93,6 +96,8 @@ private:
         kb::math::Vec3 position{};
         float remaining = 0.0F;
         kb::scene::NavPathStatus status = kb::scene::NavPathStatus::Invalid;
+        // Level of detail: 0 near, 1 mid, 2 far.
+        std::uint8_t detail = 2U;
         // The off-mesh link the agent heads for next, and the one it is crossing.
         dtPolyRef nextLink = 0U;
         bool onLink = false;
@@ -109,10 +114,20 @@ private:
 
     void ResetProfiles(std::size_t count);
     void Detach(AgentRecord& record);
+    void UseWorkers(std::uint32_t requested);
+    void AttachWorkers(dtCrowd& crowd);
 
     std::vector<ProfileCrowd> crowds_;
     std::map<std::uint64_t, AgentRecord> agents_;
     std::map<std::uint64_t, ObstacleRecord> obstacles_;
+    // Workers of the crowds' per-member passes; none when they run on the calling thread.
+    std::unique_ptr<kb::ecs::WorkerPool> workers_;
+    std::size_t workerCount_ = 1U;
+    // Per-step lists, kept to reuse their storage.
+    std::vector<kb::scene::NavAreaMask> masks_;
+    std::vector<AgentRecord*> records_;
+    std::vector<std::size_t> members_;
+    std::vector<std::size_t> waiting_;
     std::uint64_t step_ = 0U;
     std::uint64_t nextRequest_ = 1U;
     kb::scene::NavigationCrowdStats stats_{};

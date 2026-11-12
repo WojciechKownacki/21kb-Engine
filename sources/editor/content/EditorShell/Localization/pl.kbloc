@@ -3532,3 +3532,8 @@ text "projectSettings.navigationAreasDescription" "Rodzaje podłoża, po którym
 text "projectSettings.navigationAreasSection" "OBSZARY NAWIGACJI"
 text "projectSettings.navAreaNameHint" "Nazwa nowego obszaru"
 text "projectSettings.navAreaAdd" "Dodaj obszar"
+text "projectSettings.crowdSection" "SZCZEGÓŁOWOŚĆ TŁUMU"
+text "projectSettings.crowdDescription" "Postacie daleko od kamery poruszają się mniejszym kosztem, więc więcej z nich mieści się w klatce."
+text "projectSettings.crowdNearDistance" "Pełne omijanie do (m)"
+text "projectSettings.crowdMidDistance" "Tylko odstęp do (m)"
+text "projectSettings.crowdFarPathInterval" "Dalej odświeżaj ścieżki co (kroków)"

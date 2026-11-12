@@ -3399,3 +3399,8 @@ text "projectSettings.navigationAreasDescription" "Врсте тла по кој
 text "projectSettings.navigationAreasSection" "НАВИГАЦИОНЕ ОБЛАСТИ"
 text "projectSettings.navAreaNameHint" "Назив нове области"
 text "projectSettings.navAreaAdd" "Додај област"
+text "projectSettings.crowdSection" "ДЕТАЉНОСТ ГОМИЛЕ"
+text "projectSettings.crowdDescription" "Ликови далеко од камере крећу се уз мање посла, па их више стане у један кадар."
+text "projectSettings.crowdNearDistance" "Потпуно избегавање до (м)"
+text "projectSettings.crowdMidDistance" "Само размак до (м)"
+text "projectSettings.crowdFarPathInterval" "Даље освежавај путање сваких (корака)"

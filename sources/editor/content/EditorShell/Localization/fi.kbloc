@@ -3394,3 +3394,8 @@ text "projectSettings.navigationAreasDescription" "Maastotyypit, joilla hahmot k
 text "projectSettings.navigationAreasSection" "NAVIGOINTIALUEET"
 text "projectSettings.navAreaNameHint" "Uuden alueen nimi"
 text "projectSettings.navAreaAdd" "Lisää alue"
+text "projectSettings.crowdSection" "JOUKON TARKKUUS"
+text "projectSettings.crowdDescription" "Kaukana kamerasta olevat hahmot liikkuvat vähemmällä työllä, joten niitä mahtuu enemmän ruutuun."
+text "projectSettings.crowdNearDistance" "Täysi väistely enintään (m)"
+text "projectSettings.crowdMidDistance" "Vain välimatka enintään (m)"
+text "projectSettings.crowdFarPathInterval" "Kauempana reitit päivitetään joka (askel)"

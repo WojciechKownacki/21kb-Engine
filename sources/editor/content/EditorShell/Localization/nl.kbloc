@@ -3394,3 +3394,8 @@ text "projectSettings.navigationAreasDescription" "Soorten ondergrond waarop per
 text "projectSettings.navigationAreasSection" "NAVIGATIEGEBIEDEN"
 text "projectSettings.navAreaNameHint" "Naam van nieuw gebied"
 text "projectSettings.navAreaAdd" "Gebied toevoegen"
+text "projectSettings.crowdSection" "MENIGTEDETAIL"
+text "projectSettings.crowdDescription" "Personages ver van de camera bewegen met minder werk, zodat er meer in een beeld passen."
+text "projectSettings.crowdNearDistance" "Volledig ontwijken tot (m)"
+text "projectSettings.crowdMidDistance" "Alleen afstand houden tot (m)"
+text "projectSettings.crowdFarPathInterval" "Verder weg paden elke (stappen) bijwerken"

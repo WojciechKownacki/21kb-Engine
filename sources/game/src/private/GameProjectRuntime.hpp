@@ -57,6 +57,7 @@ struct GameProjectRuntime {
     float masterVolume = 1.0F;
     std::vector<std::string> tags;
     std::vector<kb::scene::NavAreaDefinition> navigationAreas;
+    kb::scene::NavigationCrowdSettings navigationCrowd;
     std::vector<std::string> requiredModules;
     std::shared_ptr<kb::assets::bake::RuntimeAssetPack> assetPack;
 

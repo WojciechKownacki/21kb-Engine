@@ -3399,3 +3399,8 @@ text "projectSettings.navigationAreasDescription" "Druhy povrchu, po kterém pos
 text "projectSettings.navigationAreasSection" "NAVIGAČNÍ OBLASTI"
 text "projectSettings.navAreaNameHint" "Název nové oblasti"
 text "projectSettings.navAreaAdd" "Přidat oblast"
+text "projectSettings.crowdSection" "DETAIL DAVU"
+text "projectSettings.crowdDescription" "Postavy daleko od kamery se pohybují s menší prací, takže se jich do snímku vejde víc."
+text "projectSettings.crowdNearDistance" "Plné vyhýbání do (m)"
+text "projectSettings.crowdMidDistance" "Jen odstup do (m)"
+text "projectSettings.crowdFarPathInterval" "Dál obnovovat cesty každých (kroků)"

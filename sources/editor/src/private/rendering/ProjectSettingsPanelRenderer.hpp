@@ -131,6 +131,9 @@ enum class ProjectSettingsNumber : int {
     FrameRateCap,
     MasterVolume,
     RenderScale,
+    NavNearDistance,
+    NavMidDistance,
+    NavFarPathInterval,
     Count,
 };
 // What a number setting accepts: whole numbers or not, and the bounds a typed value is clamped to.

@@ -3389,3 +3389,8 @@ text "projectSettings.navigationAreasDescription" "ประเภทพื้�
 text "projectSettings.navigationAreasSection" "พื้นที่นำทาง"
 text "projectSettings.navAreaNameHint" "ชื่อพื้นที่ใหม่"
 text "projectSettings.navAreaAdd" "เพิ่มพื้นที่"
+text "projectSettings.crowdSection" "รายละเอียดฝูงชน"
+text "projectSettings.crowdDescription" "ตัวละครที่อยู่ไกลกล้องเคลื่อนที่โดยใช้งานน้อยลง จึงใส่ได้มากขึ้นในหนึ่งเฟรม"
+text "projectSettings.crowdNearDistance" "หลบหลีกเต็มที่ถึง (ม.)"
+text "projectSettings.crowdMidDistance" "เว้นระยะอย่างเดียวถึง (ม.)"
+text "projectSettings.crowdFarPathInterval" "ไกลกว่านั้น อัปเดตเส้นทางทุก (ขั้น)"

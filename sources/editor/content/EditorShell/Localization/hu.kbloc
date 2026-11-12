@@ -3394,3 +3394,8 @@ text "projectSettings.navigationAreasDescription" "Talajfajták, amelyeken a kar
 text "projectSettings.navigationAreasSection" "NAVIGÁCIÓS TERÜLETEK"
 text "projectSettings.navAreaNameHint" "Új terület neve"
 text "projectSettings.navAreaAdd" "Terület hozzáadása"
+text "projectSettings.crowdSection" "TÖMEG RÉSZLETESSÉGE"
+text "projectSettings.crowdDescription" "A kamerától távoli karakterek kevesebb munkával mozognak, így több fér el belőlük egy képkockában."
+text "projectSettings.crowdNearDistance" "Teljes kitérés eddig (m)"
+text "projectSettings.crowdMidDistance" "Csak távolságtartás eddig (m)"
+text "projectSettings.crowdFarPathInterval" "Távolabb az utak frissítése minden (lépés)"

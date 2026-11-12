@@ -3394,3 +3394,8 @@ text "projectSettings.navigationAreasDescription" "Видове терен, по
 text "projectSettings.navigationAreasSection" "НАВИГАЦИОННИ ОБЛАСТИ"
 text "projectSettings.navAreaNameHint" "Име на нова област"
 text "projectSettings.navAreaAdd" "Добави област"
+text "projectSettings.crowdSection" "ДЕТАЙЛНОСТ НА ТЪЛПАТА"
+text "projectSettings.crowdDescription" "Героите далеч от камерата се движат с по-малко работа, така че повече от тях се побират в кадър."
+text "projectSettings.crowdNearDistance" "Пълно избягване до (м)"
+text "projectSettings.crowdMidDistance" "Само раздалечаване до (м)"
+text "projectSettings.crowdFarPathInterval" "По-далеч обновявай пътищата на всеки (стъпки)"

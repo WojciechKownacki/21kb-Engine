@@ -3394,3 +3394,8 @@ text "projectSettings.navigationAreasDescription" "Types de sol sur lesquels mar
 text "projectSettings.navigationAreasSection" "ZONES DE NAVIGATION"
 text "projectSettings.navAreaNameHint" "Nom de la nouvelle zone"
 text "projectSettings.navAreaAdd" "Ajouter une zone"
+text "projectSettings.crowdSection" "DÉTAIL DES FOULES"
+text "projectSettings.crowdDescription" "Les personnages loin de la caméra se déplacent avec moins de travail, pour en faire tenir davantage dans une image."
+text "projectSettings.crowdNearDistance" "Évitement complet jusqu'à (m)"
+text "projectSettings.crowdMidDistance" "Simple écartement jusqu'à (m)"
+text "projectSettings.crowdFarPathInterval" "Plus loin, mettre à jour les chemins tous les (pas)"

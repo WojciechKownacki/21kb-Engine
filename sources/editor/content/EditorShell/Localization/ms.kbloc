@@ -3389,3 +3389,8 @@ text "projectSettings.navigationAreasDescription" "Jenis permukaan tempat watak 
 text "projectSettings.navigationAreasSection" "KAWASAN NAVIGASI"
 text "projectSettings.navAreaNameHint" "Nama kawasan baharu"
 text "projectSettings.navAreaAdd" "Tambah kawasan"
+text "projectSettings.crowdSection" "PERINCIAN KERUMUNAN"
+text "projectSettings.crowdDescription" "Watak yang jauh dari kamera bergerak dengan kerja yang kurang, jadi lebih banyak muat dalam satu bingkai."
+text "projectSettings.crowdNearDistance" "Elakan penuh hingga (m)"
+text "projectSettings.crowdMidDistance" "Hanya menjarakkan hingga (m)"
+text "projectSettings.crowdFarPathInterval" "Lebih jauh, kemas kini laluan setiap (langkah)"

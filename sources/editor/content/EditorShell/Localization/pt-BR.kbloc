@@ -3394,3 +3394,8 @@ text "projectSettings.navigationAreasDescription" "Tipos de chão onde os person
 text "projectSettings.navigationAreasSection" "ÁREAS DE NAVEGAÇÃO"
 text "projectSettings.navAreaNameHint" "Nome da nova área"
 text "projectSettings.navAreaAdd" "Adicionar área"
+text "projectSettings.crowdSection" "DETALHE DA MULTIDÃO"
+text "projectSettings.crowdDescription" "Personagens longe da câmera se movem com menos trabalho, então cabem mais deles em um quadro."
+text "projectSettings.crowdNearDistance" "Desvio completo até (m)"
+text "projectSettings.crowdMidDistance" "Só afastamento até (m)"
+text "projectSettings.crowdFarPathInterval" "Mais longe, atualizar caminhos a cada (passos)"

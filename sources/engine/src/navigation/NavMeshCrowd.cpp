@@ -23,6 +23,32 @@ constexpr float kEpsilon = 1.0e-5F;
 // Box searched for the polygon an agent or a destination stands on.
 const Vec3 kSearchExtents{ 2.0F, 4.0F, 2.0F };
 constexpr unsigned kNearFlags = DT_CROWD_ANTICIPATE_TURNS | DT_CROWD_OPTIMIZE_VIS | DT_CROWD_OPTIMIZE_TOPO;
+// An agent moves to a farther level of detail only this far beyond its edge.
+constexpr float kDetailHysteresis = 1.1F;
+// Members per piece of a parallel crowd pass; fewer members run on the calling thread.
+constexpr std::size_t kMembersPerPiece = 64U;
+
+// Calls `body(begin, end, worker)` over [0, count) in pieces on the pool's workers, or at once on
+// this thread (as worker 0) without a pool or with few items.
+template <typename Body>
+void ForEachPiece(kb::ecs::WorkerPool* pool, std::size_t count, Body&& body) {
+    const std::size_t pieces = pool != nullptr ? pool->WorkerCount() * 4U : 1U;
+    const std::size_t size = std::max(kMembersPerPiece, (count + pieces - 1U) / pieces);
+    if (pool == nullptr || count <= size) {
+        if (count > 0U) body(std::size_t{ 0U }, count, std::size_t{ 0U });
+        return;
+    }
+    pool->ParallelForChunks(count, size, [&](kb::ecs::WorkerContext worker, const kb::ecs::WorkerPoolChunk& piece) {
+        body(piece.begin, piece.begin + piece.count, worker.workerIndex);
+    });
+}
+
+// Runs a crowd pass over the engine's worker pool, in pieces of members.
+void RunCrowdPass(void* user, int count, dtCrowdPassRange range, void* pass) {
+    ForEachPiece(static_cast<kb::ecs::WorkerPool*>(user), static_cast<std::size_t>(count), [&](std::size_t begin, std::size_t end, std::size_t worker) {
+        range(pass, static_cast<int>(begin), static_cast<int>(end), static_cast<int>(worker));
+    });
+}
 
 [[nodiscard]] float HorizontalLength(Vec3 value) noexcept {
     return std::sqrt(value.x * value.x + value.z * value.z);
@@ -188,6 +214,23 @@ void NavMeshCrowd::ResetProfiles(std::size_t count) {
     for (auto& [id, record] : obstacles_) record.indices.assign(count, -1);
 }
 
+void NavMeshCrowd::UseWorkers(std::uint32_t requested) {
+    const std::size_t count = requested == 0U ? kb::ecs::WorkerPool::DefaultWorkerCount() : requested;
+    if (count == workerCount_) return;
+    workerCount_ = count;
+    workers_.reset();
+    if (count > 1U) workers_ = std::make_unique<kb::ecs::WorkerPool>(kb::ecs::WorkerPoolConfig{ .workerCount = count });
+    for (ProfileCrowd& slot : crowds_) {
+        if (slot.crowd) AttachWorkers(*slot.crowd);
+    }
+}
+
+void NavMeshCrowd::AttachWorkers(dtCrowd& crowd) {
+    if (workers_ && crowd.setParallelFor(&RunCrowdPass, workers_.get(), static_cast<int>(workers_->WorkerCount()))) return;
+    // Without workers, or without memory for their query objects, the passes run on this thread.
+    static_cast<void>(crowd.setParallelFor(nullptr, nullptr, 0));
+}
+
 void NavMeshCrowd::Detach(AgentRecord& record) {
     if (record.index >= 0 && record.profile < crowds_.size() && crowds_[record.profile].crowd) {
         crowds_[record.profile].crowd->removeAgent(record.index);
@@ -207,15 +250,26 @@ void NavMeshCrowd::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
     ++step_;
     outputs.assign(agents.size(), NavMeshCrowdAgentOutput{});
     const std::uint32_t profiles = runtime.ProfileCount();
+    UseWorkers(settings.workerThreads);
 
-    // 1. Forget agents and obstacles that are gone.
-    for (auto record = agents_.begin(); record != agents_.end();) {
-        if (std::ranges::binary_search(agents, record->first, {}, &NavMeshCrowdAgentInput::id)) {
-            ++record;
-            continue;
+    // 1. Forget agents and obstacles that are gone, and find every agent's record: both lists are in
+    // id order, so one walk over them does it.
+    std::vector<AgentRecord*>& records = records_;
+    records.assign(agents.size(), nullptr);
+    auto known = agents_.begin();
+    for (std::size_t index = 0U; index < agents.size(); ++index) {
+        const std::uint64_t id = agents[index].id;
+        while (known != agents_.end() && known->first < id) {
+            Detach(known->second);
+            known = agents_.erase(known);
         }
-        Detach(record->second);
-        record = agents_.erase(record);
+        if (known == agents_.end() || known->first != id) known = agents_.emplace_hint(known, id, AgentRecord{});
+        records[index] = &known->second;
+        ++known;
+    }
+    while (known != agents_.end()) {
+        Detach(known->second);
+        known = agents_.erase(known);
     }
     for (auto record = obstacles_.begin(); record != obstacles_.end();) {
         if (std::ranges::binary_search(obstacles, record->first, {}, &NavMeshCrowdObstacle::id)) {
@@ -229,19 +283,19 @@ void NavMeshCrowd::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
     }
 
     // 2. Which crowd every agent belongs to, and the filter of its areas.
-    std::vector<kb::scene::NavAreaMask> masks;
+    std::vector<kb::scene::NavAreaMask>& masks = masks_;
+    masks.clear();
     for (const NavMeshCrowdAgentInput& input : agents) {
-        if (input.agent.enabled) masks.push_back(input.agent.areaMask);
+        // A crowd uses a handful of area sets at most.
+        if (input.agent.enabled && std::ranges::find(masks, input.agent.areaMask) == masks.end()) masks.push_back(input.agent.areaMask);
     }
     std::ranges::sort(masks);
-    masks.erase(std::unique(masks.begin(), masks.end()), masks.end());
     runtime.KeepFilterSlots(masks);
-    std::vector<AgentRecord*> records(agents.size(), nullptr);
-    std::vector<std::size_t> members(profiles, obstacles.size());
+    std::vector<std::size_t>& members = members_;
+    members.assign(profiles, obstacles.size());
     for (std::size_t index = 0U; index < agents.size(); ++index) {
         const NavMeshCrowdAgentInput& input = agents[index];
-        AgentRecord& record = agents_[input.id];
-        records[index] = &record;
+        AgentRecord& record = *records[index];
         const std::uint32_t profile = runtime.ProfileForRadius(input.agent.radius);
         const int filter = input.agent.enabled ? runtime.FilterSlot(input.agent.areaMask) : -1;
         if (!input.agent.enabled || filter < 0 || profile >= profiles || profile != record.profile || filter != record.filter) {
@@ -290,6 +344,7 @@ void NavMeshCrowd::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
         avoidance.adaptiveRings = 2;
         avoidance.adaptiveDepth = 3;
         crowd->setObstacleAvoidanceParams(0, &avoidance);
+        AttachWorkers(*crowd);
         slot.crowd = std::move(crowd);
         slot.capacity = capacity;
         slot.meshGeneration = generation;
@@ -326,7 +381,8 @@ void NavMeshCrowd::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
 
     // 5. Members follow their agents: join, follow moves made outside the crowd, take parameters.
     NavAreaFilter filter;
-    std::vector<std::size_t> waiting;
+    std::vector<std::size_t>& waiting = waiting_;
+    waiting.clear();
     for (std::size_t index = 0U; index < agents.size(); ++index) {
         const NavMeshCrowdAgentInput& input = agents[index];
         AgentRecord& record = *records[index];
@@ -343,19 +399,30 @@ void NavMeshCrowd::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
             continue;
         }
         runtime.ConfigureFilter(filter, input.agent.areaMask);
-        const bool near = focuses.empty() || std::ranges::any_of(focuses, [&](Vec3 focus) {
-            return HorizontalDistance(focus, input.position) <= settings.nearDistance;
-        });
+        float focusDistance = 0.0F;
+        if (!focuses.empty()) {
+            focusDistance = std::numeric_limits<float>::max();
+            for (const Vec3 focus : focuses) focusDistance = std::min(focusDistance, HorizontalDistance(focus, input.position));
+        }
+        const auto detailAt = [&](float scale) -> std::uint8_t {
+            return focusDistance <= settings.nearDistance * scale ? 0U : focusDistance <= settings.midDistance * scale ? 1U : 2U;
+        };
+        std::uint8_t detail = detailAt(1.0F);
+        if (detail > record.detail) detail = std::max(record.detail, detailAt(kDetailHysteresis));
+        record.detail = detail;
         unsigned flags = kNearFlags;
         if (settings.separationWeight > 0.0F) flags |= DT_CROWD_SEPARATION;
         if (settings.avoidance) flags |= DT_CROWD_OBSTACLE_AVOIDANCE;
-        if (!near) {
+        if (detail == 1U) {
+            // Mid agents keep apart and shorten their corridors, but do not sample velocities.
+            flags &= ~unsigned{ DT_CROWD_OBSTACLE_AVOIDANCE | DT_CROWD_OPTIMIZE_TOPO };
+        } else if (detail == 2U) {
             // Far agents follow their corridors without avoidance or separation, and shorten them toward
             // corners that came into view only every few steps.
             const std::uint32_t interval = std::max(1U, settings.farPathOptimizationInterval);
             flags = DT_CROWD_ANTICIPATE_TURNS | ((step_ + input.id) % interval == 0U ? unsigned{ DT_CROWD_OPTIMIZE_VIS } : 0U);
         }
-        ++(near ? stats_.nearAgents : stats_.farAgents);
+        ++(detail == 0U ? stats_.nearAgents : detail == 1U ? stats_.midAgents : stats_.farAgents);
         const dtCrowdAgentParams params = AgentParams(input.agent, record.filter, static_cast<unsigned char>(flags), settings);
         const auto attach = [&](Vec3 position) {
             Detach(record);
@@ -442,10 +509,13 @@ void NavMeshCrowd::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
         }
     }
 
-    // 6. Hand the oldest waiting destinations to the crowd, as many as the step allows.
+    // 6. Hand waiting destinations to the crowd, as many as the step allows: nearer levels of detail
+    // first, then the longest waiting.
     std::ranges::sort(waiting, [&](std::size_t left, std::size_t right) {
-        return records[left]->requestOrder != records[right]->requestOrder ? records[left]->requestOrder < records[right]->requestOrder
-                                                                            : agents[left].id < agents[right].id;
+        const AgentRecord& a = *records[left];
+        const AgentRecord& b = *records[right];
+        if (a.detail != b.detail) return a.detail < b.detail;
+        return a.requestOrder != b.requestOrder ? a.requestOrder < b.requestOrder : agents[left].id < agents[right].id;
     });
     for (const std::size_t index : waiting) {
         AgentRecord& record = *records[index];
@@ -472,136 +542,158 @@ void NavMeshCrowd::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
     }
 
     // 7. Step every crowd; note which link each member heads for, to know the link it starts crossing.
-    for (std::size_t index = 0U; index < agents.size(); ++index) {
-        AgentRecord& record = *records[index];
-        record.nextLink = 0U;
-        if (record.index < 0 || record.onLink) continue;
-        const dtCrowdAgent* member = crowds_[record.profile].crowd->getAgent(record.index);
-        if (member->state == DT_CROWDAGENT_STATE_WALKING && member->ncorners > 0 &&
-            (member->cornerFlags[member->ncorners - 1] & DT_STRAIGHTPATH_OFFMESH_CONNECTION) != 0U) {
-            record.nextLink = member->cornerPolys[member->ncorners - 1];
+    // This and reading the members back touch only the agent's own record, output and member.
+    ForEachPiece(workers_.get(), agents.size(), [&](std::size_t begin, std::size_t end, std::size_t) {
+        for (std::size_t index = begin; index < end; ++index) {
+            AgentRecord& record = *records[index];
+            record.nextLink = 0U;
+            if (record.index < 0 || record.onLink) continue;
+            const dtCrowdAgent* member = crowds_[record.profile].crowd->getAgent(record.index);
+            if (member->state == DT_CROWDAGENT_STATE_WALKING && member->ncorners > 0 &&
+                (member->cornerFlags[member->ncorners - 1] & DT_STRAIGHTPATH_OFFMESH_CONNECTION) != 0U) {
+                record.nextLink = member->cornerPolys[member->ncorners - 1];
+            }
         }
-    }
+    });
     for (ProfileCrowd& slot : crowds_) {
         if (!slot.crowd) continue;
         slot.crowd->update(deltaSeconds, nullptr);
         stats_.velocitySamples += static_cast<std::size_t>(slot.crowd->getVelocitySampleCount());
+        const float* passes = slot.crowd->getPassMilliseconds();
+        stats_.pathMilliseconds += passes[DT_CROWD_PASS_PATHS];
+        stats_.neighbourMilliseconds += passes[DT_CROWD_PASS_NEIGHBOURS];
+        stats_.cornerMilliseconds += passes[DT_CROWD_PASS_CORNERS];
+        stats_.steeringMilliseconds += passes[DT_CROWD_PASS_STEERING];
+        stats_.avoidanceMilliseconds += passes[DT_CROWD_PASS_AVOIDANCE];
+        stats_.moveMilliseconds += passes[DT_CROWD_PASS_MOVE];
     }
 
     // 8. Read the members back.
-    for (std::size_t index = 0U; index < agents.size(); ++index) {
-        const NavMeshCrowdAgentInput& input = agents[index];
-        AgentRecord& record = *records[index];
-        NavMeshCrowdAgentOutput& output = outputs[index];
-        if (!input.agent.enabled || record.index < 0) continue;
-        dtCrowd& crowd = *crowds_[record.profile].crowd;
-        dtCrowdAgent* member = crowd.getEditableAgent(record.index);
-        if (member->state == DT_CROWDAGENT_STATE_INVALID) {
-            // The polygons under the agent went away; it joins again where it stands next step.
-            Detach(record);
-            record.status = NavPathStatus::Failed;
-            output.status = record.status;
-            continue;
-        }
-        const Vec3 position = FromArray(member->npos);
-        if (member->state == DT_CROWDAGENT_STATE_OFFMESH) {
-            if (!record.onLink) {
-                record.onLink = true;
-                record.activeLink.reset();
-                record.linkKind = kb::scene::NavLinkKind::Walk;
-                record.linkStart = record.position;
-                record.linkEnd = position;
-                const dtNavMesh* mesh = runtime.Mesh(record.profile);
-                const dtMeshTile* tile = nullptr;
-                const dtPoly* poly = nullptr;
-                if (mesh != nullptr && record.nextLink != 0U && dtStatusSucceed(mesh->getTileAndPolyByRef(record.nextLink, &tile, &poly)) &&
-                    poly->getType() == DT_POLYTYPE_OFFMESH_CONNECTION) {
-                    // The link's ends as placed on the polygons, which the crowd moves the agent between.
-                    const Vec3 a = FromArray(&tile->verts[static_cast<std::size_t>(poly->verts[0]) * 3U]);
-                    const Vec3 b = FromArray(&tile->verts[static_cast<std::size_t>(poly->verts[1]) * 3U]);
-                    // The end the agent came from is the start of its crossing.
-                    const bool forward = HorizontalDistance(record.position, a) <= HorizontalDistance(record.position, b);
-                    record.linkStart = forward ? a : b;
-                    record.linkEnd = forward ? b : a;
-                    if (const NavRuntimeLink* link = runtime.LinkForPolygon(record.profile, record.nextLink); link != nullptr) {
-                        record.linkKind = link->kind;
-                        record.activeLink = *link;
+    std::atomic<std::size_t> linkCrossings{ 0U };
+    std::atomic<std::size_t> waitingMembers{ 0U };
+    ForEachPiece(workers_.get(), agents.size(), [&](std::size_t begin, std::size_t end, std::size_t) {
+        std::size_t onLinks = 0U;
+        std::size_t waitingForPath = 0U;
+        for (std::size_t index = begin; index < end; ++index) {
+            const NavMeshCrowdAgentInput& input = agents[index];
+            AgentRecord& record = *records[index];
+            NavMeshCrowdAgentOutput& output = outputs[index];
+            if (!input.agent.enabled || record.index < 0) continue;
+            dtCrowd& crowd = *crowds_[record.profile].crowd;
+            dtCrowdAgent* member = crowd.getEditableAgent(record.index);
+            if (member->state == DT_CROWDAGENT_STATE_INVALID) {
+                // The polygons under the agent went away; it joins again where it stands next step.
+                Detach(record);
+                record.status = NavPathStatus::Failed;
+                output.status = record.status;
+                continue;
+            }
+            const Vec3 position = FromArray(member->npos);
+            if (member->state == DT_CROWDAGENT_STATE_OFFMESH) {
+                if (!record.onLink) {
+                    record.onLink = true;
+                    record.activeLink.reset();
+                    record.linkKind = kb::scene::NavLinkKind::Walk;
+                    record.linkStart = record.position;
+                    record.linkEnd = position;
+                    const dtNavMesh* mesh = runtime.Mesh(record.profile);
+                    const dtMeshTile* tile = nullptr;
+                    const dtPoly* poly = nullptr;
+                    if (mesh != nullptr && record.nextLink != 0U && dtStatusSucceed(mesh->getTileAndPolyByRef(record.nextLink, &tile, &poly)) &&
+                        poly->getType() == DT_POLYTYPE_OFFMESH_CONNECTION) {
+                        // The link's ends as placed on the polygons, which the crowd moves the agent between.
+                        const Vec3 a = FromArray(&tile->verts[static_cast<std::size_t>(poly->verts[0]) * 3U]);
+                        const Vec3 b = FromArray(&tile->verts[static_cast<std::size_t>(poly->verts[1]) * 3U]);
+                        // The end the agent came from is the start of its crossing.
+                        const bool forward = HorizontalDistance(record.position, a) <= HorizontalDistance(record.position, b);
+                        record.linkStart = forward ? a : b;
+                        record.linkEnd = forward ? b : a;
+                        if (const NavRuntimeLink* link = runtime.LinkForPolygon(record.profile, record.nextLink); link != nullptr) {
+                            record.linkKind = link->kind;
+                            record.activeLink = *link;
+                        }
                     }
                 }
+                ++onLinks;
+                record.position = position;
+                output.position = LinkPosition(record.linkKind, record.linkStart, record.linkEnd, position);
+                output.velocity = {};
+                output.onLink = true;
+                output.status = record.status;
+                output.remainingDistance = record.remaining;
+                continue;
             }
-            ++stats_.onLinks;
+            record.onLink = false;
             record.position = position;
-            output.position = LinkPosition(record.linkKind, record.linkStart, record.linkEnd, position);
-            output.velocity = {};
-            output.onLink = true;
-            output.status = record.status;
-            output.remainingDistance = record.remaining;
-            continue;
-        }
-        record.onLink = false;
-        record.position = position;
 
-        if (!record.requested) {
-            record.status = NavPathStatus::Pending;
-            record.remaining = HorizontalDistance(position, input.agent.destination);
-        } else if (!record.arrived && !record.destinationMissing) {
-            switch (member->targetState) {
-            case DT_CROWDAGENT_TARGET_VALID:
-                record.status = member->corridor.getLastPoly() == member->targetRef && !member->partial ? NavPathStatus::Complete : NavPathStatus::Partial;
-                break;
-            case DT_CROWDAGENT_TARGET_FAILED:
-                record.status = NavPathStatus::Failed;
-                break;
-            case DT_CROWDAGENT_TARGET_NONE:
-                // The crowd dropped a destination whose polygons went away; it is planned again when the tiles change.
-                record.destinationMissing = true;
-                record.status = NavPathStatus::Failed;
-                break;
-            default:
+            if (!record.requested) {
                 record.status = NavPathStatus::Pending;
-                ++stats_.waitingForPath;
-                break;
-            }
-            float remaining = 0.0F;
-            bool endInSight = member->ncorners == 0;
-            if (member->ncorners > 0) {
-                remaining = HorizontalDistance(position, FromArray(&member->cornerVerts[0]));
-                for (int corner = 1; corner < member->ncorners; ++corner) {
-                    remaining += HorizontalDistance(FromArray(&member->cornerVerts[static_cast<std::size_t>(corner - 1) * 3U]),
-                        FromArray(&member->cornerVerts[static_cast<std::size_t>(corner) * 3U]));
+                record.remaining = HorizontalDistance(position, input.agent.destination);
+            } else if (!record.arrived && !record.destinationMissing) {
+                switch (member->targetState) {
+                case DT_CROWDAGENT_TARGET_VALID:
+                    record.status = member->corridor.getLastPoly() == member->targetRef && !member->partial ? NavPathStatus::Complete : NavPathStatus::Partial;
+                    break;
+                case DT_CROWDAGENT_TARGET_FAILED:
+                    record.status = NavPathStatus::Failed;
+                    break;
+                case DT_CROWDAGENT_TARGET_NONE:
+                    // The crowd dropped a destination whose polygons went away; it is planned again when the tiles change.
+                    record.destinationMissing = true;
+                    record.status = NavPathStatus::Failed;
+                    break;
+                default:
+                    record.status = NavPathStatus::Pending;
+                    ++waitingForPath;
+                    break;
                 }
-                const int last = member->ncorners - 1;
-                endInSight = (member->cornerFlags[last] & DT_STRAIGHTPATH_END) != 0U;
-                if (!endInSight) {
-                    remaining += HorizontalDistance(FromArray(&member->cornerVerts[static_cast<std::size_t>(last) * 3U]),
-                        FromArray(member->corridor.getTarget()));
+                float remaining = 0.0F;
+                bool endInSight = member->ncorners == 0;
+                if (member->ncorners > 0) {
+                    remaining = HorizontalDistance(position, FromArray(&member->cornerVerts[0]));
+                    for (int corner = 1; corner < member->ncorners; ++corner) {
+                        remaining += HorizontalDistance(FromArray(&member->cornerVerts[static_cast<std::size_t>(corner - 1) * 3U]),
+                            FromArray(&member->cornerVerts[static_cast<std::size_t>(corner) * 3U]));
+                    }
+                    const int last = member->ncorners - 1;
+                    endInSight = (member->cornerFlags[last] & DT_STRAIGHTPATH_END) != 0U;
+                    if (!endInSight) {
+                        remaining += HorizontalDistance(FromArray(&member->cornerVerts[static_cast<std::size_t>(last) * 3U]),
+                            FromArray(member->corridor.getTarget()));
+                    }
+                } else {
+                    remaining = HorizontalDistance(position, FromArray(member->corridor.getTarget()));
                 }
-            } else {
-                remaining = HorizontalDistance(position, FromArray(member->corridor.getTarget()));
+                record.remaining = remaining;
+                const bool settled = record.status == NavPathStatus::Complete || record.status == NavPathStatus::Partial;
+                if (settled && endInSight && remaining <= std::max(input.agent.stoppingDistance, 1.0e-3F)) {
+                    // Within the stopping distance of the end: the crowd stops steering it.
+                    record.arrived = true;
+                    record.arrivedAt = FromArray(member->corridor.getTarget());
+                    static_cast<void>(crowd.resetMoveTarget(record.index));
+                    dtVset(member->vel, 0.0F, 0.0F, 0.0F);
+                    dtVset(member->nvel, 0.0F, 0.0F, 0.0F);
+                }
             }
-            record.remaining = remaining;
-            const bool settled = record.status == NavPathStatus::Complete || record.status == NavPathStatus::Partial;
-            if (settled && endInSight && remaining <= std::max(input.agent.stoppingDistance, 1.0e-3F)) {
-                // Within the stopping distance of the end: the crowd stops steering it.
-                record.arrived = true;
-                record.arrivedAt = FromArray(member->corridor.getTarget());
-                static_cast<void>(crowd.resetMoveTarget(record.index));
-                dtVset(member->vel, 0.0F, 0.0F, 0.0F);
-                dtVset(member->nvel, 0.0F, 0.0F, 0.0F);
+            if (record.arrived) {
+                record.remaining = HorizontalDistance(position, record.arrivedAt);
             }
+            if (record.destinationMissing) {
+                record.remaining = HorizontalDistance(position, input.agent.destination);
+            }
+            output.position = position;
+            output.velocity = record.arrived || record.destinationMissing ? Vec3{} : Vec3{ member->vel[0], 0.0F, member->vel[2] };
+            output.remainingDistance = record.remaining;
+            output.status = record.status;
         }
-        if (record.arrived) {
-            record.remaining = HorizontalDistance(position, record.arrivedAt);
-        }
-        if (record.destinationMissing) {
-            record.remaining = HorizontalDistance(position, input.agent.destination);
-        }
-        output.position = position;
-        output.velocity = record.arrived || record.destinationMissing ? Vec3{} : Vec3{ member->vel[0], 0.0F, member->vel[2] };
-        output.remainingDistance = record.remaining;
-        output.status = record.status;
-    }
+        linkCrossings += onLinks;
+        waitingMembers += waitingForPath;
+    });
+    stats_.onLinks += linkCrossings;
+    stats_.waitingForPath += waitingMembers;
     stats_.milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+    stats_.syncMilliseconds = stats_.milliseconds - stats_.pathMilliseconds - stats_.neighbourMilliseconds - stats_.cornerMilliseconds -
+        stats_.steeringMilliseconds - stats_.avoidanceMilliseconds - stats_.moveMilliseconds;
 }
 
 } // namespace kb::navigation

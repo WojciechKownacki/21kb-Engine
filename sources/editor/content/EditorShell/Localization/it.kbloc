@@ -3394,3 +3394,8 @@ text "projectSettings.navigationAreasDescription" "Tipi di terreno su cui cammin
 text "projectSettings.navigationAreasSection" "AREE DI NAVIGAZIONE"
 text "projectSettings.navAreaNameHint" "Nome della nuova area"
 text "projectSettings.navAreaAdd" "Aggiungi area"
+text "projectSettings.crowdSection" "DETTAGLIO DELLA FOLLA"
+text "projectSettings.crowdDescription" "I personaggi lontani dalla telecamera si muovono con meno lavoro, così ne entrano di più in un fotogramma."
+text "projectSettings.crowdNearDistance" "Schivata completa fino a (m)"
+text "projectSettings.crowdMidDistance" "Solo distanza fino a (m)"
+text "projectSettings.crowdFarPathInterval" "Più lontano, aggiorna i percorsi ogni (passi)"

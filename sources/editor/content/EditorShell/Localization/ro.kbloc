@@ -3399,3 +3399,8 @@ text "projectSettings.navigationAreasDescription" "Tipuri de teren pe care merg 
 text "projectSettings.navigationAreasSection" "ZONE DE NAVIGARE"
 text "projectSettings.navAreaNameHint" "Numele zonei noi"
 text "projectSettings.navAreaAdd" "Adaugă zonă"
+text "projectSettings.crowdSection" "DETALIUL MULȚIMII"
+text "projectSettings.crowdDescription" "Personajele departe de cameră se mișcă cu mai puțină muncă, așa că încap mai multe într-un cadru."
+text "projectSettings.crowdNearDistance" "Evitare completă până la (m)"
+text "projectSettings.crowdMidDistance" "Doar distanțare până la (m)"
+text "projectSettings.crowdFarPathInterval" "Mai departe, actualizează traseele la fiecare (pași)"

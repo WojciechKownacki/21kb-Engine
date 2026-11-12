@@ -3389,3 +3389,8 @@ text "projectSettings.navigationAreasDescription" "角色行走的地面类型�
 text "projectSettings.navigationAreasSection" "导航区域"
 text "projectSettings.navAreaNameHint" "新区域名称"
 text "projectSettings.navAreaAdd" "添加区域"
+text "projectSettings.crowdSection" "人群细节"
+text "projectSettings.crowdDescription" "离摄像机远的角色移动时开销更少，因此一帧能容纳更多角色。"
+text "projectSettings.crowdNearDistance" "完整避让范围（米）"
+text "projectSettings.crowdMidDistance" "仅保持间距范围（米）"
+text "projectSettings.crowdFarPathInterval" "更远处每隔多少步更新路径（步）"

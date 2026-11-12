@@ -3357,3 +3357,8 @@ text "projectSettings.navigationAreasDescription" "Kinds of ground characters wa
 text "projectSettings.navigationAreasSection" "NAVIGATION AREAS"
 text "projectSettings.navAreaNameHint" "New area name"
 text "projectSettings.navAreaAdd" "Add area"
+text "projectSettings.crowdSection" "CROWD DETAIL"
+text "projectSettings.crowdDescription" "Characters far from the camera move with less work, so more of them fit in a frame."
+text "projectSettings.crowdNearDistance" "Full avoidance up to (m)"
+text "projectSettings.crowdMidDistance" "Keep apart up to (m)"
+text "projectSettings.crowdFarPathInterval" "Farther away, update paths every (steps)"
