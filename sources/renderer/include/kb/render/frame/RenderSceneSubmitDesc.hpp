@@ -7,6 +7,7 @@
 #include "kb/render/overlay/EditorCameraWireframe.hpp"
 #include "kb/render/overlay/EditorLightWireframe.hpp"
 #include "kb/render/overlay/EditorSceneIcon.hpp"
+#include "kb/render/overlay/DebugFillTriangle.hpp"
 #include "kb/render/overlay/PhysicsDebugLine.hpp"
 #include "kb/render/post/ScenePostProcessSettings.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
@@ -211,6 +212,7 @@ struct RenderSceneSubmitDesc {
     std::span<const EditorLightWireframeDesc> editorLightWireframes{};
     std::span<const EditorSceneIconDesc> editorSceneIcons{};
     std::span<const PhysicsDebugLine> physicsDebugLines{};
+    std::span<const DebugFillTriangle> debugFillTriangles{};
     std::span<const kb::scene::SceneUIFrameElement> editorUIOverlays{};
     float editorUIScale = 1.0F;
     kb::math::Vec2 editorUIOffset{};

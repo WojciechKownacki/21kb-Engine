@@ -65,6 +65,7 @@ public:
         std::vector<render::EditorLightWireframeDesc> editorLightWireframes;
         std::vector<render::EditorSceneIconDesc> editorSceneIcons;
         std::vector<render::PhysicsDebugLine> physicsDebugLines;
+        std::vector<render::DebugFillTriangle> debugFillTriangles;
         std::vector<kb::scene::SceneUIFrameElement> editorUIOverlays;
         float editorUIScale = 1.0F;
         kb::math::Vec2 editorUIOffset{};

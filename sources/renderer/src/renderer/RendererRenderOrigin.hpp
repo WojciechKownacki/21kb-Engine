@@ -39,6 +39,7 @@ private:
     std::vector<EditorLightWireframeDesc> lightWireframes_;
     std::vector<EditorSceneIconDesc> sceneIcons_;
     std::vector<PhysicsDebugLine> physicsDebugLines_;
+    std::vector<DebugFillTriangle> debugFillTriangles_;
 };
 
 } // namespace kb::render

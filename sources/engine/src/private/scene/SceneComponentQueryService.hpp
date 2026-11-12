@@ -169,6 +169,8 @@ public:
     [[nodiscard]] static const NavObstacle* TryGetNavObstacle(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool HasNavLink(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const NavLink* TryGetNavLink(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasNavBounds(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const NavBounds* TryGetNavBounds(const Scene& scene, SceneEntity entity) noexcept;
 };
 
 } // namespace kb::scene

@@ -187,6 +187,7 @@ struct ScenePrefabArchetypeSpawnPayload {
     std::vector<NavAgent> navAgents;
     std::vector<NavObstacle> navObstacles;
     std::vector<NavLink> navLinks;
+    std::vector<NavBounds> navBounds;
     std::vector<kb::ecs::CommandBuffer::BulkComponentView> views;
     std::vector<kb::ecs::World::BulkComponentView> worldViews;
     std::vector<kb::ecs::Entity> createdEntities;
@@ -391,6 +392,10 @@ struct ScenePrefabArchetypeSpawnPayload {
             RepeatComponents(navLinks, std::span<const NavLink>{ archetype.navLinks }, instanceCount);
             AddComponentViews(views, worldViews, std::span<const NavLink>{ navLinks });
         }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::NavBounds)) {
+            RepeatComponents(navBounds, std::span<const NavBounds>{ archetype.navBounds }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const NavBounds>{ navBounds });
+        }
     }
 
     void BuildPattern(const ScenePrefabBakedArchetype& archetype, std::size_t instanceCount) {
@@ -591,6 +596,10 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::NavLink)) {
             AddCommandComponentPatternView(views, std::span<const NavLink>{ archetype.navLinks }, instanceCount);
             AddWorldComponentPatternView(worldViews, std::span<const NavLink>{ archetype.navLinks }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::NavBounds)) {
+            AddCommandComponentPatternView(views, std::span<const NavBounds>{ archetype.navBounds }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const NavBounds>{ archetype.navBounds }, instanceCount);
         }
     }
 };

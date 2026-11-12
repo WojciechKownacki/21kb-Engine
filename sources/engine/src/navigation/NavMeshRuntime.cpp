@@ -48,6 +48,26 @@ void ToArray(Vec3 value, float* out) noexcept {
     return Vec3{ value[0], value[1], value[2] };
 }
 
+// Calls `corner` with the three corners of every triangle a polygon is split into.
+template <typename CornerFn>
+void ForEachPolygonTriangleCorner(const dtMeshTile& tile, int polygonIndex, CornerFn&& corner) {
+    const dtPoly& polygon = tile.polys[polygonIndex];
+    const dtPolyDetail& detail = tile.detailMeshes[polygonIndex];
+    for (int triangle = 0; triangle < detail.triCount; ++triangle) {
+        const unsigned char* corners = &tile.detailTris[(detail.triBase + static_cast<unsigned int>(triangle)) * 4U];
+        for (int index = 0; index < 3; ++index) {
+            const float* vertex = corners[index] < polygon.vertCount
+                ? &tile.verts[polygon.verts[corners[index]] * 3U]
+                : &tile.detailVerts[(detail.vertBase + corners[index] - polygon.vertCount) * 3U];
+            corner(FromArray(vertex));
+        }
+    }
+}
+
+[[nodiscard]] kb::math::DVec3 Moved(const float* value, const kb::math::DVec3& offset) noexcept {
+    return kb::math::DVec3{ offset.x + value[0], offset.y + value[1], offset.z + value[2] };
+}
+
 } // namespace
 
 NavAreaFilter::NavAreaFilter() noexcept {
@@ -802,21 +822,45 @@ std::vector<Vec3> NavMeshRuntime::DebugTriangles(std::uint32_t profile) const {
         const dtMeshTile* tile = mesh->getTile(index);
         if (tile == nullptr || tile->header == nullptr) continue;
         for (int polygonIndex = 0; polygonIndex < tile->header->polyCount; ++polygonIndex) {
-            const dtPoly& polygon = tile->polys[polygonIndex];
-            if (polygon.getType() == DT_POLYTYPE_OFFMESH_CONNECTION) continue;
-            const dtPolyDetail& detail = tile->detailMeshes[polygonIndex];
-            for (int triangle = 0; triangle < detail.triCount; ++triangle) {
-                const unsigned char* corners = &tile->detailTris[(detail.triBase + static_cast<unsigned int>(triangle)) * 4U];
-                for (int corner = 0; corner < 3; ++corner) {
-                    const float* vertex = corners[corner] < polygon.vertCount
-                        ? &tile->verts[polygon.verts[corners[corner]] * 3U]
-                        : &tile->detailVerts[(detail.vertBase + corners[corner] - polygon.vertCount) * 3U];
-                    triangles.push_back(FromArray(vertex));
-                }
-            }
+            if (tile->polys[polygonIndex].getType() == DT_POLYTYPE_OFFMESH_CONNECTION) continue;
+            ForEachPolygonTriangleCorner(*tile, polygonIndex, [&triangles](Vec3 corner) { triangles.push_back(corner); });
         }
     }
     return triangles;
+}
+
+NavMeshDebugGeometry NavMeshRuntime::DebugGeometry(std::uint32_t profile, const kb::math::DVec3& offset) const {
+    NavMeshDebugGeometry geometry;
+    const dtNavMesh* mesh = Mesh(profile);
+    if (mesh == nullptr) {
+        return geometry;
+    }
+    for (int index = 0; index < mesh->getMaxTiles(); ++index) {
+        const dtMeshTile* tile = mesh->getTile(index);
+        if (tile == nullptr || tile->header == nullptr) continue;
+        geometry.tiles.push_back(NavMeshDebugGeometry::Box{ Moved(tile->header->bmin, offset), Moved(tile->header->bmax, offset) });
+        for (int polygonIndex = 0; polygonIndex < tile->header->polyCount; ++polygonIndex) {
+            const dtPoly& polygon = tile->polys[polygonIndex];
+            if (polygon.getType() == DT_POLYTYPE_OFFMESH_CONNECTION) continue;
+            const std::size_t first = geometry.triangles.size();
+            ForEachPolygonTriangleCorner(*tile, polygonIndex, [&geometry, &offset](Vec3 corner) {
+                geometry.triangles.push_back(kb::math::DVec3{ offset.x + corner.x, offset.y + corner.y, offset.z + corner.z });
+            });
+            const std::uint8_t area = static_cast<std::uint8_t>(polygon.getArea() == 0U ? 0U : polygon.getArea() - 1U);
+            geometry.triangleAreas.insert(geometry.triangleAreas.end(), (geometry.triangles.size() - first) / 3U, area);
+            for (unsigned int edge = 0U; edge < polygon.vertCount; ++edge) {
+                const unsigned short neighbour = polygon.neis[edge];
+                // An edge shared with a polygon of the same tile is drawn by the lower-numbered one.
+                if (neighbour != 0U && (neighbour & DT_EXT_LINK) == 0U && static_cast<int>(neighbour) - 1 < polygonIndex) continue;
+                geometry.edges.push_back(NavMeshDebugGeometry::Edge{
+                    .from = Moved(&tile->verts[polygon.verts[edge] * 3U], offset),
+                    .to = Moved(&tile->verts[polygon.verts[(edge + 1U) % polygon.vertCount] * 3U], offset),
+                    .boundary = neighbour == 0U,
+                });
+            }
+        }
+    }
+    return geometry;
 }
 
 std::vector<kb::math::DVec3> NavMeshAssetTriangles(std::shared_ptr<const NavMeshAsset> asset, std::uint32_t profile) {
@@ -838,6 +882,23 @@ std::vector<kb::math::DVec3> NavMeshAssetTriangles(std::shared_ptr<const NavMesh
         triangles.push_back(origin + corner);
     }
     return triangles;
+}
+
+NavMeshDebugGeometry NavMeshAssetDebugGeometry(std::shared_ptr<const NavMeshAsset> asset, std::uint32_t profile) {
+    if (asset == nullptr || asset->tiles.empty()) {
+        return {};
+    }
+    // Centred on the first tile like NavMeshAssetTriangles.
+    const double tileSize = asset->settings.TileWorldSize();
+    const kb::math::DVec3 origin{ static_cast<double>(asset->tiles.front().coord.x) * tileSize, 0.0,
+        static_cast<double>(asset->tiles.front().coord.z) * tileSize };
+    NavMeshRuntime runtime;
+    runtime.SetOrigin(origin);
+    std::string error;
+    if (runtime.AddTileSet(std::move(asset), error) == 0U) {
+        return {};
+    }
+    return runtime.DebugGeometry(profile, origin);
 }
 
 double NavMeshRuntime::WalkableArea(std::uint32_t profile) const {

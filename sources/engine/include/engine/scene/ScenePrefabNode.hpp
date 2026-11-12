@@ -160,6 +160,7 @@ struct ScenePrefabNodeComponents {
     std::optional<NavAgent> navAgent;
     std::optional<NavObstacle> navObstacle;
     std::optional<NavLink> navLink;
+    std::optional<NavBounds> navBounds;
 };
 
 struct ScenePrefabNodeDesc {

@@ -768,6 +768,15 @@ void AppendLightWireframes(std::vector<Vertex>& output, std::span<const EditorLi
 // AppendLightWireframes above (same program/layout/BGFX_STATE_PT_LINES submission) - a flat
 // list of independent segments needs no thickness/circle construction, just AppendLine per
 // entry.
+// Filled overlay triangles are their own triangle-list draw, submitted before the gizmo so handles stay
+// on top of the filled surfaces, and skipped alone when the frame has no transient room left for them.
+void AppendDebugFillTriangles(std::vector<Vertex>& output, std::span<const DebugFillTriangle> triangles) {
+    output.reserve(output.size() + triangles.size() * 3U);
+    for (const DebugFillTriangle& triangle : triangles) {
+        for (const std::array<float, 3>& corner : triangle.corners) AppendLineVertex(output, corner, triangle.color, triangle.alpha);
+    }
+}
+
 void AppendPhysicsDebugLines(std::vector<Vertex>& output, std::span<const PhysicsDebugLine> lines) {
     output.reserve(output.size() + lines.size() * 2U);
     for (const PhysicsDebugLine& line : lines) {
@@ -844,7 +853,8 @@ bool SceneGizmoPass::Submit(const SceneGizmoPassDesc& desc) const {
             desc.cameraWireframes.empty() &&
             desc.lightWireframes.empty() &&
             desc.sceneIcons.empty() &&
-            desc.physicsDebugLines.empty())) {
+            desc.physicsDebugLines.empty() &&
+            desc.debugFillTriangles.empty())) {
         return false;
     }
 
@@ -855,6 +865,20 @@ bool SceneGizmoPass::Submit(const SceneGizmoPassDesc& desc) const {
 
     ConfigureOverlayView(desc);
     bool submitted = false;
+    if (!desc.debugFillTriangles.empty()) {
+        std::vector<Vertex> fillVertices;
+        AppendDebugFillTriangles(fillVertices, desc.debugFillTriangles);
+        const std::uint32_t vertexCount = static_cast<std::uint32_t>(fillVertices.size());
+        if (bgfx::getAvailTransientVertexBuffer(vertexCount, layout_) >= vertexCount) {
+            bgfx::TransientVertexBuffer buffer{};
+            bgfx::allocTransientVertexBuffer(&buffer, vertexCount, layout_);
+            std::memcpy(buffer.data, fillVertices.data(), sizeof(Vertex) * fillVertices.size());
+            bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ALPHA);
+            bgfx::setVertexBuffer(0, &buffer);
+            bgfx::submit(desc.viewId, program_);
+            submitted = true;
+        }
+    }
     {
         std::vector<Vertex> drawVertices;
         drawVertices.reserve(

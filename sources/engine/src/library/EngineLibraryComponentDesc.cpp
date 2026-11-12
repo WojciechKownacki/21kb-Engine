@@ -133,6 +133,11 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
             .serializable = true,
         },
         LibraryComponentDesc{
+            .name = "NavBounds",
+            .id = ComputeLibraryComponentId("NavBounds"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
             .name = "Animator",
             .id = ComputeLibraryComponentId("Animator"),
             .serializable = true,

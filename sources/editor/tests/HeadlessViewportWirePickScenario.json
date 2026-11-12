@@ -22,6 +22,13 @@
     { "op": "assert_viewport_click", "focus_radius": 4.0, "x": -2.3, "y": -1.0, "z": 0.0 },
     { "op": "assert_viewport_click", "focus_radius": 4.0, "x": -2.3, "y": -1.0, "z": 0.0 },
     { "op": "assert_viewport_click", "focus_radius": 4.0, "x": 0.0, "y": -2.8, "z": -1.0, "entity": "cube" },
-    { "op": "assert_viewport_click", "focus_radius": 4.0, "x": 0.0, "y": 0.8, "z": 0.0 }
+    { "op": "assert_viewport_click", "focus_radius": 4.0, "x": 0.0, "y": 0.8, "z": 0.0 },
+
+    { "op": "create_scene", "name": "BoundsPick", "template": "Empty" },
+    { "op": "create_entity", "id": "bounds", "name": "Navigation Bounds", "preset": "Navigation Bounds" },
+    { "op": "set_property", "entity": "bounds", "component": "NavBounds", "property": "size.x", "value": 4.0 },
+    { "op": "set_property", "entity": "bounds", "component": "NavBounds", "property": "size.y", "value": 2.0 },
+    { "op": "set_property", "entity": "bounds", "component": "NavBounds", "property": "size.z", "value": 4.0 },
+    { "op": "assert_viewport_click", "focus_radius": 4.0, "x": 0.0, "y": 1.0, "z": 2.0, "entity": "bounds" }
   ]
 }

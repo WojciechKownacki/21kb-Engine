@@ -153,7 +153,7 @@ bool EditorSceneContext::BakeNavigation() {
     }
     navigation_.Show({ std::make_shared<kb::navigation::NavMeshAsset>(baked.asset) });
     console_.Info("Navigation", "Baked " + std::to_string(baked.stats.tiles) + " navigation tile(s) for " +
-        std::to_string(settings.profiles.size()) + " agent profile(s) from " + std::to_string(baked.geometry.meshes) + " mesh(es) and " +
+        std::to_string(baked.asset.settings.profiles.size()) + " agent profile(s) from " + std::to_string(baked.geometry.meshes) + " mesh(es) and " +
         std::to_string(baked.geometry.colliders) + " collider(s) in " + std::to_string(static_cast<long long>(baked.stats.milliseconds)) +
         " ms into " + navPath.generic_string() + ".");
     return true;

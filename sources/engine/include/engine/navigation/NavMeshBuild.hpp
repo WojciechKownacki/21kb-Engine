@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/math/DVec3.hpp"
+#include "engine/scene/Navigation.hpp"
 
 #include <array>
 #include <compare>
@@ -23,10 +24,10 @@ struct NavAgentProfile {
     static constexpr std::size_t MaxNameBytes = 64U;
 
     std::string name = "Humanoid";
-    float radius = 0.4F;
-    float height = 1.8F;
-    float maxClimb = 0.4F;
-    float maxSlopeDegrees = 45.0F;
+    float radius = kb::scene::kDefaultNavAgentRadius;
+    float height = kb::scene::kDefaultNavAgentHeight;
+    float maxClimb = kb::scene::kDefaultNavAgentMaxStepHeight;
+    float maxSlopeDegrees = kb::scene::kDefaultNavAgentMaxSlopeDegrees;
 
     friend bool operator==(const NavAgentProfile&, const NavAgentProfile&) = default;
 };
@@ -41,7 +42,7 @@ struct NavMeshBuildSettings {
 
     std::vector<NavAgentProfile> profiles{ NavAgentProfile{} };
     // Horizontal and vertical size of the voxels geometry is rasterised into, in metres.
-    float cellSize = 0.25F;
+    float cellSize = kb::scene::kDefaultNavCellSize;
     float cellHeight = 0.2F;
     // Side of a tile in voxels. A layer holds at most 255 walkable regions, so very cluttered
     // ground wants smaller tiles.
@@ -84,6 +85,12 @@ struct NavGeometryChunk {
     std::vector<std::uint32_t> indices;
 };
 
+// A world-space box the bake is limited to.
+struct NavBakeBox {
+    kb::math::DVec3 min{};
+    kb::math::DVec3 max{};
+};
+
 class NavGeometry {
 public:
     // Adds a chunk; indices outside the vertex list and non-finite vertices are dropped with
@@ -92,9 +99,14 @@ public:
     [[nodiscard]] std::span<const NavGeometryChunk> Chunks() const noexcept { return chunks_; }
     [[nodiscard]] std::size_t TriangleCount() const noexcept;
     [[nodiscard]] bool Empty() const noexcept { return chunks_.empty(); }
+    // Without bake boxes every tile the geometry touches is baked; with them only tiles touching a
+    // box are, and only the walkable ground inside the union of the boxes is kept.
+    void AddBakeBox(const NavBakeBox& box);
+    [[nodiscard]] std::span<const NavBakeBox> BakeBoxes() const noexcept { return bakeBoxes_; }
 
 private:
     std::vector<NavGeometryChunk> chunks_;
+    std::vector<NavBakeBox> bakeBoxes_;
 };
 
 // One walkable layer of a tile: a height grid with an area and neighbour connections per column,

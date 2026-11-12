@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "app/scene_viewport/EditorViewportOverlayPick.hpp"
+#include "scene/EditorNavigation.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
@@ -320,6 +321,16 @@ void PickNearestCameraVisitor(kb::scene::SceneEntity entity, const kb::scene::Tr
     }
 }
 
+// The box edges of every Navigation Bounds, which the Scene View always draws.
+void PickNearestNavBoundsLines(NearestPickContext& pick) {
+    if (pick.scene == nullptr || pick.overlays == nullptr) {
+        return;
+    }
+    for (const EditorNavBoundsLine& line : EditorNavigation::BoundsLines(*pick.scene, pick.origin)) {
+        pick.overlays->ConsiderLine(line.owner, line.from, line.to);
+    }
+}
+
 // Collider, character controller and joint outlines, while physics debug drawing shows them.
 void PickNearestPhysicsLines(NearestPickContext& pick) {
     if (pick.scene == nullptr || pick.overlays == nullptr || !kb::scene::PhysicsDebugDraw::IsEnabled(*pick.scene)) {
@@ -523,6 +534,7 @@ EditorSceneViewportPickResult EditorSceneViewportMeshPicker::PickNearest(
     scene.Components().Visitors().ForEachLight(&PickNearestLightVisitor, &context);
     scene.Components().Visitors().ForEachCamera(&PickNearestCameraVisitor, &context);
     PickNearestPhysicsLines(context);
+    PickNearestNavBoundsLines(context);
     static_cast<const kb::scene::Scene&>(scene).Components().ParticleEffects().ForEach(
         &PickNearestParticleVisitor, &context);
     scene.Transforms().ForEach(&PickNearestEntityVisitor, &context);

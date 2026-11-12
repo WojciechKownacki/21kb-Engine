@@ -113,6 +113,7 @@ struct ScenePrefabNodeStateWriterContext {
     SceneNavAgentComponents navAgents;
     SceneNavObstacleComponents navObstacles;
     SceneNavLinkComponents navLinks;
+    SceneNavBoundsComponents navBounds;
     SceneUIComponents ui;
 };
 

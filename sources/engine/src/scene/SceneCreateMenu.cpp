@@ -26,7 +26,7 @@ namespace {
 constexpr std::string_view k3DObject = "3D Object";
 constexpr std::string_view kLight = "Light";
 
-constexpr std::array<SceneCreateItem, 24> kItems{ {
+constexpr std::array<SceneCreateItem, 25> kItems{ {
     { "Empty", "Create Empty", "Entity", {}, "Ctrl+Shift+N" },
     { "Map Top Down", "Map - Top Down", "Map", "2D Object", {} },
     { "Map Platformer", "Map - Platformer", "Map", "2D Object", {} },
@@ -51,6 +51,7 @@ constexpr std::array<SceneCreateItem, 24> kItems{ {
     { "Particle System", "Particle System", "Particle System", "Effects", {} },
     { "Audio Source", "Audio Source", "Audio Source", "Audio", {} },
     { "Audio Listener", "Audio Listener", "Audio Listener", "Audio", {} },
+    { "Navigation Bounds", "Navigation Bounds", "Navigation Bounds", {}, {} },
 } };
 
 [[nodiscard]] std::optional<LightKind> LightKindOf(std::string_view id) noexcept {
@@ -72,6 +73,7 @@ constexpr std::array<SceneCreateItem, 24> kItems{ {
     if (id == "Particle System") return { "Particle Effect" };
     if (id == "Audio Source") return { "AudioSource" };
     if (id == "Audio Listener") return { "AudioListener" };
+    if (id == "Navigation Bounds") return { "NavBounds" };
     return {};
 }
 

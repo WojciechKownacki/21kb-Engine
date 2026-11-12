@@ -1696,7 +1696,8 @@ bool EditorHeadlessAutomation::VerifySceneCreationMenu() {
             item->id == "Camera" ? has("Camera") :
             item->id == "Particle System" ? has("Particle Effect") :
             item->id == "Audio Source" ? has("AudioSource") :
-            item->id == "Audio Listener" ? has("AudioListener") : true;
+            item->id == "Audio Listener" ? has("AudioListener") :
+            item->id == "Navigation Bounds" ? has("NavBounds") : true;
         if (!components) return fail(id + ": components missing");
         if (shape && context_.Scene().Components().MeshRenderers().TryGet(entity)->meshAssetId !=
                 kb::assets::BuiltInShapeId(kb::assets::FindBuiltInShape(item->id)->shape).value)

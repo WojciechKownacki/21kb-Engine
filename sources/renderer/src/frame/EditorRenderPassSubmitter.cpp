@@ -213,6 +213,7 @@ void EditorRenderPassSubmitter::SubmitGizmoOverlay(const RenderViewportPlan& vie
             .lightWireframes = desc.editorLightWireframes,
             .sceneIcons = desc.editorSceneIcons,
             .physicsDebugLines = desc.physicsDebugLines,
+            .debugFillTriangles = desc.debugFillTriangles,
             .visible = desc.editorGizmo.visible,
         }));
         return;

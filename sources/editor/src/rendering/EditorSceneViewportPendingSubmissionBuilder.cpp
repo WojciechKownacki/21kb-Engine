@@ -134,6 +134,7 @@ render::RenderSceneSubmitDesc EditorSceneBgfxViewport::PendingSubmissionBuilder:
         .editorLightWireframes = std::span<const render::EditorLightWireframeDesc>{present.settings.editorLightWireframes.data(), present.settings.editorLightWireframes.size()},
         .editorSceneIcons = std::span<const render::EditorSceneIconDesc>{present.settings.editorSceneIcons.data(), present.settings.editorSceneIcons.size()},
         .physicsDebugLines = std::span<const render::PhysicsDebugLine>{present.settings.physicsDebugLines.data(), present.settings.physicsDebugLines.size()},
+        .debugFillTriangles = std::span<const render::DebugFillTriangle>{present.settings.debugFillTriangles.data(), present.settings.debugFillTriangles.size()},
         .editorUIOverlays = present.settings.editorUIOverlays,
         .editorUIScale = present.settings.editorUIScale,
         .editorUIOffset = present.settings.editorUIOffset,

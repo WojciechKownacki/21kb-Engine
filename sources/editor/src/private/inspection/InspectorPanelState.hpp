@@ -128,6 +128,7 @@ enum class InspectorSectionId : std::uint8_t {
     TilemapRenderer,
     TilemapCollider,
     UITheme,
+    NavBounds,
 
 };
 

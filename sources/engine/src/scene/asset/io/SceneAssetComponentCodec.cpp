@@ -72,6 +72,8 @@ enum SceneNodeComponentBits : std::uint64_t {
       Collider2DBit = 1ULL << 48U,
       Body2DBit = 1ULL << 47U,
       Sprite2DBit = 1ULL << 46U,
+      // Read from NavBoundsFileVersion on; written after every other component.
+      NavBoundsBit = 1ULL << 50U,
 
 };
 
@@ -92,7 +94,7 @@ constexpr std::uint64_t KnownComponentBits = CameraBit |
     NavObstacleBit |
     RegionShapeBit |
     GuideCurveBit |
-      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit | SurfaceCastBit | FacingPanelBit | SpaceStrokeBit | HistoryRibbonBit | LensEchoBit | SkeletonBindingBit | DeformedGeometryBit | MotionSkeletonRuleBit | ParticleEffectBit | UIBit | NavLinkBit | SocketAttachmentBit | CombatantBit | AIBrainBit | GridBit | TilemapBit | TilemapRendererBit | TilemapColliderBit | Sprite2DBit | Body2DBit | Collider2DBit | CharacterController2DBit;
+      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit | SurfaceCastBit | FacingPanelBit | SpaceStrokeBit | HistoryRibbonBit | LensEchoBit | SkeletonBindingBit | DeformedGeometryBit | MotionSkeletonRuleBit | ParticleEffectBit | UIBit | NavLinkBit | SocketAttachmentBit | CombatantBit | AIBrainBit | GridBit | TilemapBit | TilemapRendererBit | TilemapColliderBit | Sprite2DBit | Body2DBit | Collider2DBit | CharacterController2DBit | NavBoundsBit;
 
 [[nodiscard]] std::uint64_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
     std::uint64_t componentBits = 0;
@@ -137,6 +139,7 @@ constexpr std::uint64_t KnownComponentBits = CameraBit |
     include(components.deformedGeometry.has_value(), DeformedGeometryBit);
     include(!components.ui.Empty(), UIBit);
     include(components.navLink.has_value(), NavLinkBit);
+    include(components.navBounds.has_value(), NavBoundsBit);
     include(components.socketAttachment.has_value(), SocketAttachmentBit);
     include(components.combatant.has_value(), CombatantBit);
     include(components.aiBrain.has_value(), AIBrainBit);
@@ -736,6 +739,18 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         if (!IsSprite2DComponentValid(value)) return false;
         output.sprite2D = value;
     }
+    if ((componentBits & NavBoundsBit) != 0U) {
+        if (fileVersion < SceneDocument::NavBoundsFileVersion) return false;
+        NavBounds bounds{};
+        if (!SceneAssetPrimitiveCodec::ReadVec3(input, bounds.center) || !SceneAssetPrimitiveCodec::ReadVec3(input, bounds.size) ||
+            !input.ReadFloat(bounds.agentRadius) || !input.ReadFloat(bounds.agentHeight) || !input.ReadFloat(bounds.maxStepHeight) ||
+            !input.ReadFloat(bounds.maxSlopeDegrees) || !input.ReadFloat(bounds.cellSize) || !input.ReadFloat(bounds.tileSize)) return false;
+        for (const float value : { bounds.center.x, bounds.center.y, bounds.center.z, bounds.size.x, bounds.size.y, bounds.size.z, bounds.agentRadius,
+                 bounds.agentHeight, bounds.maxStepHeight, bounds.maxSlopeDegrees, bounds.cellSize, bounds.tileSize }) {
+            if (!std::isfinite(value)) return false;
+        }
+        output.navBounds = bounds;
+    }
     return true;
 }
 
@@ -1174,6 +1189,17 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetBinaryIO::WriteInt32(output, value.sortingOrder);
         SceneAssetBinaryIO::WriteBool(output, value.wall);
         SceneAssetBinaryIO::WriteBool(output, value.visible);
+    }
+    if (components.navBounds.has_value()) {
+        const NavBounds& bounds = *components.navBounds;
+        SceneAssetPrimitiveCodec::WriteVec3(output, bounds.center);
+        SceneAssetPrimitiveCodec::WriteVec3(output, bounds.size);
+        SceneAssetBinaryIO::WriteFloat(output, bounds.agentRadius);
+        SceneAssetBinaryIO::WriteFloat(output, bounds.agentHeight);
+        SceneAssetBinaryIO::WriteFloat(output, bounds.maxStepHeight);
+        SceneAssetBinaryIO::WriteFloat(output, bounds.maxSlopeDegrees);
+        SceneAssetBinaryIO::WriteFloat(output, bounds.cellSize);
+        SceneAssetBinaryIO::WriteFloat(output, bounds.tileSize);
     }
 
 }

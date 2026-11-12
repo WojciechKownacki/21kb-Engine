@@ -1610,6 +1610,7 @@ if(BUILD_TESTING)
           src/app/scene_viewport/EditorSceneViewportMath.cpp
           src/app/scene_viewport/EditorSceneViewportMeshPicker.cpp
           src/app/scene_viewport/EditorViewportOverlayPick.cpp
+          src/scene/EditorNavigation.cpp
       src/scene/material/EditorMaterialAssetAuthoring.cpp
     src/scene/material/EditorMaterialAssetEditCommand.cpp
     src/scene/material/EditorMaterialAssetGateway.cpp

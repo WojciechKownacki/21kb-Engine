@@ -3,6 +3,7 @@
 #include "kb/render/overlay/EditorCameraWireframe.hpp"
 #include "kb/render/overlay/EditorLightWireframe.hpp"
 #include "kb/render/overlay/EditorSceneIcon.hpp"
+#include "kb/render/overlay/DebugFillTriangle.hpp"
 #include "kb/render/overlay/PhysicsDebugLine.hpp"
 #include "kb/render/frame/RenderTargetDesc.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
@@ -31,6 +32,7 @@ struct SceneGizmoPassDesc {
     std::span<const EditorLightWireframeDesc> lightWireframes{};
     std::span<const EditorSceneIconDesc> sceneIcons{};
     std::span<const PhysicsDebugLine> physicsDebugLines{};
+    std::span<const DebugFillTriangle> debugFillTriangles{};
     bool visible = false;
 
     [[nodiscard]] bool IsValid() const noexcept;

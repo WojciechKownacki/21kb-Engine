@@ -192,6 +192,11 @@ namespace {
         lhs.area == rhs.area && lhs.bidirectional == rhs.bidirectional && lhs.enabled == rhs.enabled;
 }
 
+[[nodiscard]] bool Equals(const NavBounds& lhs, const NavBounds& rhs) noexcept {
+    return Equals(lhs.center, rhs.center) && Equals(lhs.size, rhs.size) && lhs.agentRadius == rhs.agentRadius && lhs.agentHeight == rhs.agentHeight &&
+        lhs.maxStepHeight == rhs.maxStepHeight && lhs.maxSlopeDegrees == rhs.maxSlopeDegrees && lhs.cellSize == rhs.cellSize && lhs.tileSize == rhs.tileSize;
+}
+
 [[nodiscard]] bool Equals(const AuxFrameComponent& lhs, const AuxFrameComponent& rhs) noexcept {
     return lhs.mode == rhs.mode && lhs.imageTargetId == rhs.imageTargetId && lhs.width == rhs.width && lhs.height == rhs.height &&
         Equals(lhs.mirrorPlaneNormal, rhs.mirrorPlaneNormal) && lhs.mirrorPlaneOffset == rhs.mirrorPlaneOffset && lhs.enabled == rhs.enabled;
@@ -367,6 +372,7 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , navAgents(scene.Components().NavAgents())
     , navObstacles(scene.Components().NavObstacles())
     , navLinks(scene.Components().NavLinks())
+    , navBounds(scene.Components().NavBounds())
     , ui(scene.Components().UI()) {
     state.suppressPrefabDirtyTracking = true;
 }
@@ -494,6 +500,7 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     WriteOptionalComponent(context.navAgents, entity, node.components.navAgent);
     WriteOptionalComponent(context.navObstacles, entity, node.components.navObstacle);
     WriteOptionalComponent(context.navLinks, entity, node.components.navLink);
+    WriteOptionalComponent(context.navBounds, entity, node.components.navBounds);
 }
 
 } // namespace kb::scene

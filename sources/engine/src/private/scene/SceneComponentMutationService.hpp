@@ -265,6 +265,10 @@ public:
     static void SetNavLink(Scene& scene, SceneEntity entity, const NavLink& component);
     static void RemoveNavLink(Scene& scene, SceneEntity entity) noexcept;
     static void MarkNavLinkModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static NavBounds* TryGetNavBounds(Scene& scene, SceneEntity entity) noexcept;
+    static void SetNavBounds(Scene& scene, SceneEntity entity, const NavBounds& component);
+    static void RemoveNavBounds(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkNavBoundsModified(Scene& scene, SceneEntity entity) noexcept;
 };
 
 } // namespace kb::scene

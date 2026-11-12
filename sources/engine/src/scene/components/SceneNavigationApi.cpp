@@ -19,6 +19,7 @@ void SceneComponentMutationService::Mark##Name##Modified(Scene& scene, SceneEnti
 KB_NAVIGATION_API(NavAgent, NavAgent)
 KB_NAVIGATION_API(NavObstacle, NavObstacle)
 KB_NAVIGATION_API(NavLink, NavLink)
+KB_NAVIGATION_API(NavBounds, NavBounds)
 
 #undef KB_NAVIGATION_API
 

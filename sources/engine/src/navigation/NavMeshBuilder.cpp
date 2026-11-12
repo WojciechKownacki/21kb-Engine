@@ -190,6 +190,24 @@ struct ProfileVoxels {
         error = "could not erode the walkable area of tile " + std::to_string(coord.x) + "," + std::to_string(coord.z);
         return false;
     }
+    // Walkable ground outside every bake box is dropped, so the mesh ends at the boxes' sides.
+    if (const std::span<const NavBakeBox> boxes = geometry.BakeBoxes(); !boxes.empty()) {
+        for (int z = 0; z < compact->height; ++z) {
+            for (int x = 0; x < compact->width; ++x) {
+                const double worldX = tileMinX + static_cast<double>(bmin[0]) + (static_cast<double>(x) + 0.5) * cellSize;
+                const double worldZ = tileMinZ + static_cast<double>(bmin[2]) + (static_cast<double>(z) + 0.5) * cellSize;
+                const rcCompactCell& cell = compact->cells[x + z * compact->width];
+                for (unsigned int span = cell.index; span < cell.index + cell.count; ++span) {
+                    const double worldY = static_cast<double>(bmin[1]) + static_cast<double>(compact->spans[span].y) * cellHeight;
+                    const bool inside = std::ranges::any_of(boxes, [&](const NavBakeBox& box) {
+                        return worldX >= box.min.x && worldX <= box.max.x && worldZ >= box.min.z && worldZ <= box.max.z &&
+                            worldY >= box.min.y - cellHeight && worldY <= box.max.y;
+                    });
+                    if (!inside) compact->areas[span] = RC_NULL_AREA;
+                }
+            }
+        }
+    }
     std::unique_ptr<rcHeightfieldLayerSet, LayerSetDeleter> layers{ rcAllocHeightfieldLayerSet() };
     if (!layers || !rcBuildHeightfieldLayers(&context, *compact, voxels.border, voxels.height, *layers)) {
         error = "could not build the walkable layers of tile " + std::to_string(coord.x) + "," + std::to_string(coord.z);
@@ -249,6 +267,15 @@ struct ProfileVoxels {
                 return {};
             }
         }
+    }
+    if (const std::span<const NavBakeBox> boxes = geometry.BakeBoxes(); !boxes.empty()) {
+        std::erase_if(buckets, [&](const auto& entry) {
+            const double minX = static_cast<double>(entry.first.x) * tileSize;
+            const double minZ = static_cast<double>(entry.first.z) * tileSize;
+            return std::ranges::none_of(boxes, [&](const NavBakeBox& box) {
+                return box.max.x >= minX && box.min.x <= minX + tileSize && box.max.z >= minZ && box.min.z <= minZ + tileSize;
+            });
+        });
     }
     return buckets;
 }
@@ -313,6 +340,14 @@ void NavGeometry::Add(NavGeometryChunk chunk) {
     }
     chunk.indices = std::move(indices);
     chunks_.push_back(std::move(chunk));
+}
+
+void NavGeometry::AddBakeBox(const NavBakeBox& box) {
+    const bool finite = std::isfinite(box.min.x) && std::isfinite(box.min.y) && std::isfinite(box.min.z) &&
+        std::isfinite(box.max.x) && std::isfinite(box.max.y) && std::isfinite(box.max.z);
+    if (finite && box.min.x <= box.max.x && box.min.y <= box.max.y && box.min.z <= box.max.z) {
+        bakeBoxes_.push_back(box);
+    }
 }
 
 std::size_t NavGeometry::TriangleCount() const noexcept {

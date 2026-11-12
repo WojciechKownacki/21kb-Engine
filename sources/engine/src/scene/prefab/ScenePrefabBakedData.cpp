@@ -112,6 +112,7 @@ namespace {
     if (components.navAgent.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::NavAgent);
     if (components.navObstacle.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::NavObstacle);
     if (components.navLink.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::NavLink);
+    if (components.navBounds.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::NavBounds);
     return mask;
 }
 
@@ -271,6 +272,7 @@ ScenePrefabBakedData ScenePrefabBakedData::Bake(std::span<const ScenePrefabNodeD
         if (node.components.navAgent.has_value()) archetype.navAgents.push_back(*node.components.navAgent);
         if (node.components.navObstacle.has_value()) archetype.navObstacles.push_back(*node.components.navObstacle);
         if (node.components.navLink.has_value()) archetype.navLinks.push_back(*node.components.navLink);
+        if (node.components.navBounds.has_value()) archetype.navBounds.push_back(*node.components.navBounds);
     }
 
     return data;

@@ -12,6 +12,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneDocument.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneNavigation.hpp"
@@ -29,6 +30,8 @@
 #include "engine/world/WorldDescriptor.hpp"
 #include "engine/world/WorldObjectFile.hpp"
 #include "engine/world/WorldPartitionRuntime.hpp"
+#include "scene/asset/io/SceneAssetBinaryIO.hpp"
+#include "scene/asset/io/SceneAssetComponentCodec.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -37,6 +40,7 @@
 #include <cstring>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -697,6 +701,162 @@ void TestNavComponentsPersist() {
     std::filesystem::remove_all(root);
 }
 
+// A Navigation Bounds node: a box `size` wide around `position`.
+[[nodiscard]] scene::ScenePrefabNodeDesc BoundsNode(DVec3 position, Vec3 size, scene::NavBounds bounds = {}) {
+    scene::ScenePrefabNodeDesc node;
+    node.name = "Navigation Bounds";
+    node.SetLocalTranslation(position);
+    bounds.size = size;
+    node.components.navBounds = bounds;
+    return node;
+}
+
+[[nodiscard]] double WalkableArea(const nav::NavMeshAsset& asset) {
+    if (asset.tiles.empty()) return 0.0;
+    scene::Scene scene;
+    static_cast<void>(AddMesh(scene, asset));
+    return scene.Navigation().NavMeshWalkableArea();
+}
+
+[[nodiscard]] nav::NavMeshAsset BakeWithBounds(const std::vector<scene::ScenePrefabNodeDesc>& nodes) {
+    nav::NavGeometry geometry;
+    nav::NavGeometryCollectStats stats;
+    nav::CollectNavGeometry(nodes, Settings(), nullptr, geometry, stats);
+    return BakeGeometry(geometry, Settings());
+}
+
+void TestBoundsLimitTheBake() {
+    const scene::ScenePrefabNodeDesc floor = Slab(-20.0, 20.0, -20.0, 20.0, 0.0);
+    const double whole = WalkableArea(BakeWithBounds({ floor }));
+    Check(whole > 38.0 * 38.0, "without Navigation Bounds the whole floor is baked: " + std::to_string(whole));
+
+    const nav::NavMeshAsset boxed = BakeWithBounds({ floor, BoundsNode(DVec3{ 2.0, 0.0, 3.0 }, Vec3{ 10.0F, 4.0F, 10.0F }) });
+    const double inside = WalkableArea(boxed);
+    Check(inside > 90.0 && inside <= 101.0, "one Navigation Bounds keeps the floor inside its 10 x 10 m box only: " + std::to_string(inside));
+    scene::Scene single;
+    static_cast<void>(AddMesh(single, boxed));
+    const std::optional<DVec3> centre = single.Navigation().NearestPoint(DVec3{ 2.0, 0.5, 3.0 });
+    Check(centre.has_value() && std::fabs(centre->x - 2.0) < 0.01, "the box's centre is walkable");
+    const std::optional<DVec3> outside = single.Navigation().NearestPoint(DVec3{ -12.0, 0.0, -12.0 });
+    Check(!outside.has_value() || outside->x > -3.2, "floor outside the box is not baked");
+    Check(boxed.tiles.size() < BakeWithBounds({ floor }).tiles.size(), "tiles no Navigation Bounds touches are not baked");
+
+    const double both = WalkableArea(BakeWithBounds({ floor, BoundsNode(DVec3{ -12.0, 0.0, 0.0 }, Vec3{ 8.0F, 4.0F, 8.0F }),
+        BoundsNode(DVec3{ 12.0, 0.0, 0.0 }, Vec3{ 8.0F, 4.0F, 8.0F }) }));
+    Check(both > 2.0 * 56.0 && both <= 2.0 * 65.0, "two Navigation Bounds bake the union of their boxes: " + std::to_string(both));
+
+    const double above = WalkableArea(BakeWithBounds({ floor, BoundsNode(DVec3{ 0.0, 10.0, 0.0 }, Vec3{ 10.0F, 4.0F, 10.0F }) }));
+    Check(above == 0.0, "a box above the floor bakes nothing: " + std::to_string(above));
+}
+
+void TestBoundsBakeSettings() {
+    scene::NavBounds bounds{};
+    const nav::NavMeshBuildSettings defaults = nav::NavBoundsBuildSettings(bounds);
+    Check(defaults.profiles.size() == 1U && defaults.profiles[0] == nav::NavAgentProfile{} && defaults.cellSize == nav::NavMeshBuildSettings{}.cellSize &&
+        defaults.tileCells == nav::NavMeshBuildSettings{}.tileCells, "a default Navigation Bounds bakes with the default settings");
+    Check(scene::NavAgent{}.radius == nav::NavAgentProfile{}.radius, "a default agent is as wide as the default baked profile");
+    bounds.agentRadius = 1.0F;
+    bounds.agentHeight = 1.2F;
+    bounds.maxStepHeight = 0.3F;
+    bounds.maxSlopeDegrees = 30.0F;
+    bounds.cellSize = 0.2F;
+    bounds.tileSize = 9.6F;
+    const nav::NavMeshBuildSettings own = nav::NavBoundsBuildSettings(bounds);
+    Check(own.profiles[0].radius == 1.0F && own.profiles[0].height == 1.2F && own.profiles[0].maxClimb == 0.3F &&
+        own.profiles[0].maxSlopeDegrees == 30.0F && own.cellSize == 0.2F && own.tileCells == 48U, "a Navigation Bounds' settings become the bake's");
+
+    // A wider agent keeps further from the walls, so less of the floor is walkable.
+    const std::filesystem::path root = FreshDirectory("bounds");
+    const auto bake = [&root](std::vector<scene::NavBounds> boxes) {
+        scene::Scene scene;
+        static_cast<void>(AddCollider(scene, DVec3{ 0.0, -0.25, 0.0 }, Vec3{ 20.0F, 0.5F, 20.0F }));
+        for (const scene::NavBounds& box : boxes) {
+            const scene::SceneObject holder = scene.Entities().CreateObject(scene::SceneObjectDesc{ .name = "Navigation Bounds" });
+            scene.Components().NavBounds().Set(holder.Entity(), box);
+        }
+        Check(scene::SceneDocumentService::Save(scene, root / "Bounds.21kbscene", "Bounds"), "a scene with Navigation Bounds saves");
+        return nav::BakeSceneNavMesh(root / "Bounds.21kbscene", Settings(), nullptr);
+    };
+    scene::NavBounds narrow{ .size = { 40.0F, 10.0F, 40.0F } };
+    scene::NavBounds wide = narrow;
+    wide.agentRadius = 1.2F;
+    const nav::NavSceneBakeResult narrowBake = bake({ narrow });
+    const nav::NavSceneBakeResult wideBake = bake({ wide });
+    Check(narrowBake.succeeded && wideBake.succeeded, "scenes with Navigation Bounds bake: " + narrowBake.error + wideBake.error);
+    Check(narrowBake.asset.settings == nav::NavBoundsBuildSettings(narrow) && wideBake.asset.settings.profiles[0].radius == 1.2F,
+        "a scene with Navigation Bounds bakes with their settings, not the ones passed in");
+    const double narrowArea = WalkableArea(narrowBake.asset);
+    const double wideArea = WalkableArea(wideBake.asset);
+    Check(wideArea < narrowArea - 20.0, "a bigger agent radius leaves a smaller walkable area: " + std::to_string(wideArea) + " vs " + std::to_string(narrowArea));
+    const nav::NavSceneBakeResult mixed = bake({ narrow, wide });
+    Check(!mixed.succeeded && mixed.error.find("different bake settings") != std::string::npos,
+        "Navigation Bounds that disagree on the settings are refused: " + mixed.error);
+    std::filesystem::remove_all(root);
+}
+
+void TestBoundsPersist() {
+    const std::filesystem::path root = FreshDirectory("bounds_persist");
+    const scene::NavBounds saved{ .center = { 1.0F, 2.0F, 3.0F }, .size = { 4.0F, 5.0F, 6.0F }, .agentRadius = 0.7F, .agentHeight = 1.6F,
+        .maxStepHeight = 0.35F, .maxSlopeDegrees = 38.0F, .cellSize = 0.3F, .tileSize = 12.0F };
+    {
+        scene::Scene scene;
+        const scene::SceneObject holder = scene.Entities().CreateObject(scene::SceneObjectDesc{ .name = "Navigation Bounds" });
+        scene.Components().NavBounds().Set(holder.Entity(), saved);
+        Check(scene::SceneDocumentService::Save(scene, root / "Bounds.21kbscene", "Bounds"), "a scene with Navigation Bounds saves");
+    }
+    scene::Scene loaded;
+    Check(scene::SceneDocumentService::LoadFileIntoScene(loaded, root / "Bounds.21kbscene"), "a scene with Navigation Bounds loads");
+    struct Found {
+        scene::Scene* scene = nullptr;
+        std::vector<scene::NavBounds> bounds;
+    } found{ .scene = &loaded, .bounds = {} };
+    loaded.Transforms().ForEach([](scene::SceneEntity entity, const scene::TransformComponent&, void* context) {
+        auto* search = static_cast<Found*>(context);
+        if (const scene::NavBounds* bounds = search->scene->Components().NavBounds().TryGet(entity); bounds != nullptr) search->bounds.push_back(*bounds);
+    }, &found);
+    Check(found.bounds.size() == 1U && std::memcmp(&found.bounds[0], &saved, sizeof(saved)) == 0, "a Navigation Bounds keeps every field through a save and a load");
+    std::filesystem::remove_all(root);
+
+    // Files from before Navigation Bounds still read; a Navigation Bounds in a file that claims to be older is refused.
+    scene::ScenePrefabNodeComponents plain;
+    plain.navLink = scene::NavLink{};
+    std::vector<std::uint8_t> plainBytes;
+    scene::SceneAssetComponentCodec::Write(plainBytes, plain);
+    scene::SceneAssetBinaryIO::ByteReader plainReader{ plainBytes };
+    scene::ScenePrefabNodeComponents plainRead;
+    Check(scene::SceneAssetComponentCodec::Read(plainReader, scene::SceneDocument::NavBoundsFileVersion - 1U, plainRead) && plainRead.navLink.has_value() &&
+        !plainRead.navBounds.has_value(), "components written without Navigation Bounds read as an older file");
+    scene::ScenePrefabNodeComponents withBounds;
+    withBounds.navBounds = saved;
+    std::vector<std::uint8_t> boundsBytes;
+    scene::SceneAssetComponentCodec::Write(boundsBytes, withBounds);
+    scene::SceneAssetBinaryIO::ByteReader oldReader{ boundsBytes };
+    scene::ScenePrefabNodeComponents oldRead;
+    Check(!scene::SceneAssetComponentCodec::Read(oldReader, scene::SceneDocument::NavBoundsFileVersion - 1U, oldRead),
+        "a file older than Navigation Bounds cannot hold one");
+}
+
+void TestDebugGeometry() {
+    const nav::NavMeshAsset floor = BakeNodes({ Slab(-10.0, 10.0, -10.0, 10.0, 0.0) });
+    const auto shared = std::make_shared<const nav::NavMeshAsset>(floor);
+    const nav::NavMeshDebugGeometry drawn = nav::NavMeshAssetDebugGeometry(shared, 0U);
+    const std::vector<DVec3> triangles = nav::NavMeshAssetTriangles(shared, 0U);
+    Check(drawn.triangles == triangles && drawn.triangleAreas.size() * 3U == triangles.size(), "the debug view fills the same triangles the mesh has");
+    Check(std::ranges::all_of(drawn.triangleAreas, [](std::uint8_t area) { return area == scene::kDefaultNavArea; }), "an unpainted floor is all ground");
+    Check(drawn.tiles.size() == floor.tiles.size(), "every tile's bounds are drawn");
+    std::size_t boundary = 0U;
+    for (const nav::NavMeshDebugGeometry::Edge& edge : drawn.edges) {
+        if (edge.boundary) ++boundary;
+    }
+    Check(boundary >= 4U && drawn.edges.size() < triangles.size(), "polygon edges are drawn without the diagonals inside polygons: " +
+        std::to_string(drawn.edges.size()) + " edges for " + std::to_string(triangles.size() / 3U) + " triangles");
+    for (const nav::NavMeshDebugGeometry::Edge& edge : drawn.edges) {
+        if (!edge.boundary) continue;
+        const bool onRim = std::fabs(std::fabs(edge.from.x) - 9.6) < 0.3 || std::fabs(std::fabs(edge.from.z) - 9.6) < 0.3;
+        Check(onRim, "an outer edge lies on the rim of the walkable floor");
+    }
+}
+
 void TestNavigationScriptApi() {
     // Scripts edit links through the component API and query the mesh through Navigation.*.
     scene::Scene scene;
@@ -995,6 +1155,10 @@ void RunNavigationMeshTests() {
     TestCrowdIsDeterministic();
     TestCrowdLevelOfDetail();
     TestNavComponentsPersist();
+    TestBoundsLimitTheBake();
+    TestBoundsBakeSettings();
+    TestBoundsPersist();
+    TestDebugGeometry();
     TestNavigationScriptApi();
     TestPlacedNavigationMesh();
     TestTilesStreamWithCells();

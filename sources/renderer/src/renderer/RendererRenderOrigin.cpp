@@ -64,6 +64,11 @@ void RendererRelativeOverlays::Apply(RenderSceneSubmitDesc& desc, const kb::math
         line.to = RendererRenderOrigin::Relative(line.to, from, origin);
     }
     desc.physicsDebugLines = physicsDebugLines_;
+    debugFillTriangles_.assign(desc.debugFillTriangles.begin(), desc.debugFillTriangles.end());
+    for (DebugFillTriangle& triangle : debugFillTriangles_) {
+        for (std::array<float, 3>& corner : triangle.corners) corner = RendererRenderOrigin::Relative(corner, from, origin);
+    }
+    desc.debugFillTriangles = debugFillTriangles_;
 }
 
 } // namespace kb::render

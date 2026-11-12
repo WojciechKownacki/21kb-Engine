@@ -30,7 +30,7 @@
     { "op": "capture_scene_viewport", "checkpoint": "navmesh-shown" },
     { "op": "navmesh_set_visible", "visible": false },
     { "op": "capture_scene_viewport", "checkpoint": "navmesh-hidden" },
-    { "op": "assert_capture_color_difference", "with": "navmesh-shown", "without": "navmesh-hidden", "color": [35, 127, 167], "tolerance": 40, "min_pixels": 100 },
+    { "op": "assert_capture_color_difference", "with": "navmesh-shown", "without": "navmesh-hidden", "color": [67, 122, 0], "tolerance": 30, "min_pixels": 20000 },
     { "op": "navmesh_set_visible", "visible": true },
 
     { "op": "create_entity", "id": "agent", "name": "Agent" },

@@ -58,6 +58,7 @@ namespace {
         InspectorComponentTile{ .id = "NavAgent", .category = "Navigation", .label = "Nav Agent", .icon = HeroIconKind::Gamepad2 },
         InspectorComponentTile{ .id = "NavObstacle", .category = "Navigation", .label = "Nav Obstacle", .icon = HeroIconKind::Cube },
         InspectorComponentTile{ .id = "NavLink", .category = "Navigation", .label = "Nav Link", .icon = HeroIconKind::RotationSnap },
+        InspectorComponentTile{ .id = "NavBounds", .category = "Navigation", .label = "Navigation Bounds", .icon = HeroIconKind::Navigation },
     };
     for (const kb::scene::UIComponentDescriptor& definition : kb::scene::UIComponentCatalog()) {
         tiles.push_back(InspectorComponentTile{
@@ -149,6 +150,7 @@ constexpr ComponentNames kComponentNames[] = {
     {"NavAgent", "pathfinding, path, walk to, ai movement, navigation", "Lets the object walk to a point along a route that avoids obstacles."},
     {"NavObstacle", "blocker, avoid, obstacle, block path", "Makes walkers go around this object."},
     {"NavLink", "jump link, off mesh, ladder, connection, drop down", "Joins two walkable places that are not next to each other, like a jump or a ladder."},
+    {"NavBounds", "navmesh bounds, bake area, walkable area, nav volume, agent size, region", "Marks the area where walkable ground is baked and sets how big the characters are."},
 };
 
 [[nodiscard]] const ComponentNames* FindNames(std::string_view componentId) noexcept {
@@ -285,6 +287,7 @@ std::string InspectorComponentCatalog::DisplayLabel(const InspectorComponentTile
     if (tile.id == "NavAgent") return std::string{ EditorText("component.navAgent", "Nav Agent") };
     if (tile.id == "NavObstacle") return std::string{ EditorText("component.navObstacle", "Nav Obstacle") };
     if (tile.id == "NavLink") return std::string{ EditorText("component.navLink", "Nav Link") };
+    if (tile.id == "NavBounds") return std::string{ EditorText("component.navBounds", "Navigation Bounds") };
     for (const kb::scene::UIComponentDescriptor& definition : kb::scene::UIComponentCatalog()) {
         if (tile.id == definition.stableId) {
             return std::string{ InspectorUIComponentModel::DisplayName(definition.type) };

@@ -7,8 +7,10 @@
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/ScenePrefabNode.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <string>
 
 namespace kb::navigation {
@@ -216,6 +218,21 @@ void CollectNavGeometry(std::span<const kb::scene::ScenePrefabNodeDesc> nodes, c
             moving[index] = moving[node.parentNode] || ownMotion;
             visible[index] = visible[node.parentNode] && !hidden;
         }
+        if (components.navBounds.has_value()) {
+            const kb::scene::NavBounds& bounds = *components.navBounds;
+            // The world-space box around the eight transformed corners.
+            NavBakeBox box{ .min = { std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity() },
+                .max = { -std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity() } };
+            for (int corner = 0; corner < 8; ++corner) {
+                const double x = static_cast<double>(bounds.center.x) + std::fabs(static_cast<double>(bounds.size.x)) * ((corner & 1) != 0 ? 0.5 : -0.5);
+                const double y = static_cast<double>(bounds.center.y) + std::fabs(static_cast<double>(bounds.size.y)) * ((corner & 2) != 0 ? 0.5 : -0.5);
+                const double z = static_cast<double>(bounds.center.z) + std::fabs(static_cast<double>(bounds.size.z)) * ((corner & 4) != 0 ? 0.5 : -0.5);
+                const kb::math::DVec3 placed = world[index].translation + ApplyLinear(world[index].linear, x, y, z);
+                box.min = { std::min(box.min.x, placed.x), std::min(box.min.y, placed.y), std::min(box.min.z, placed.z) };
+                box.max = { std::max(box.max.x, placed.x), std::max(box.max.y, placed.y), std::max(box.max.z, placed.z) };
+            }
+            geometry.AddBakeBox(box);
+        }
         if (moving[index] || components.navAgent.has_value() || components.navObstacle.has_value() || components.characterController.has_value()) {
             continue;
         }
@@ -261,15 +278,43 @@ void CollectNavGeometry(std::span<const kb::scene::ScenePrefabNodeDesc> nodes, c
     }
 }
 
-NavSceneBakeResult BakeSceneNavMesh(const std::filesystem::path& scenePath, const NavMeshBuildSettings& settings, INavGeometrySource* source) {
+NavMeshBuildSettings NavBoundsBuildSettings(const kb::scene::NavBounds& bounds) {
+    NavMeshBuildSettings settings;
+    settings.profiles.front().radius = bounds.agentRadius;
+    settings.profiles.front().height = bounds.agentHeight;
+    settings.profiles.front().maxClimb = bounds.maxStepHeight;
+    settings.profiles.front().maxSlopeDegrees = bounds.maxSlopeDegrees;
+    settings.cellSize = bounds.cellSize;
+    // The tile side in whole cells, kept within what a tile may hold.
+    const float cells = bounds.cellSize > 0.0F ? std::round(bounds.tileSize / bounds.cellSize) : 0.0F;
+    settings.tileCells = static_cast<std::uint32_t>(std::clamp(std::isfinite(cells) ? cells : 0.0F,
+        static_cast<float>(NavMeshBuildSettings::MinTileCells), static_cast<float>(NavMeshBuildSettings::MaxTileCells)));
+    return settings;
+}
+
+NavSceneBakeResult BakeSceneNavMesh(const std::filesystem::path& scenePath, const NavMeshBuildSettings& sceneSettings, INavGeometrySource* source) {
     NavSceneBakeResult result;
     const kb::scene::SceneDocumentLoadResult loaded = kb::scene::SceneDocumentService::Load(scenePath);
     if (!loaded.succeeded) {
         result.error = "the scene " + scenePath.generic_string() + " could not be read: " + loaded.error;
         return result;
     }
+    const std::span<const kb::scene::ScenePrefabNodeDesc> nodes = loaded.document.worldPrefab.Nodes();
+    NavMeshBuildSettings settings = sceneSettings;
+    const kb::scene::ScenePrefabNodeDesc* first = nullptr;
+    for (const kb::scene::ScenePrefabNodeDesc& node : nodes) {
+        if (!node.components.navBounds.has_value()) continue;
+        const NavMeshBuildSettings own = NavBoundsBuildSettings(*node.components.navBounds);
+        if (first == nullptr) {
+            first = &node;
+            settings = own;
+        } else if (!SameNavMeshLayout(settings, own)) {
+            result.error = "the Navigation Bounds \"" + first->name + "\" and \"" + node.name + "\" use different bake settings";
+            return result;
+        }
+    }
     NavGeometry geometry;
-    CollectNavGeometry(loaded.document.worldPrefab.Nodes(), settings, source, geometry, result.geometry);
+    CollectNavGeometry(nodes, settings, source, geometry, result.geometry);
     NavMeshBakeResult baked = NavMeshBuilder::Bake(settings, geometry);
     if (!baked.succeeded) {
         result.error = std::move(baked.error);

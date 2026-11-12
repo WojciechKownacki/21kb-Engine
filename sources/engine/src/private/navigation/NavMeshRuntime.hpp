@@ -168,6 +168,8 @@ public:
         const NavAreaFilter& filter);
     // Triangles of every polygon of a profile, three corners each, in the mesh's space.
     [[nodiscard]] std::vector<kb::math::Vec3> DebugTriangles(std::uint32_t profile) const;
+    // Polygons, edges and tile bounds of a profile, moved by `offset` (the mesh's origin).
+    [[nodiscard]] NavMeshDebugGeometry DebugGeometry(std::uint32_t profile, const kb::math::DVec3& offset) const;
     // Summed horizontal area of the polygons of a profile.
     [[nodiscard]] double WalkableArea(std::uint32_t profile) const;
 

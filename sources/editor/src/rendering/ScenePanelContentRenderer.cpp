@@ -674,29 +674,53 @@ void AppendWorldPartitionGrid(
     }
 }
 
-// Outlines the polygons of the baked navigation mesh, relative to the viewport origin.
+[[nodiscard]] std::array<float, 3U> RelativeToOrigin(const std::array<float, 3U>& point, const kb::math::DVec3& origin) noexcept {
+    return std::array<float, 3U>{
+        static_cast<float>(static_cast<double>(point[0]) - origin.x),
+        static_cast<float>(static_cast<double>(point[1]) - origin.y),
+        static_cast<float>(static_cast<double>(point[2]) - origin.z),
+    };
+}
+
+// The boxes of the Navigation Bounds, then the edges and tile bounds of the baked navigation mesh,
+// relative to the viewport origin.
 void AppendNavigationMesh(
     const EditorSceneContext& sceneContext,
     const kb::math::DVec3& origin,
     std::vector<kb::render::PhysicsDebugLine>& lines) {
+    for (const EditorNavBoundsLine& line : EditorNavigation::BoundsLines(sceneContext.Scene(), origin)) {
+        lines.push_back(kb::render::PhysicsDebugLine{
+            .from = { line.from.x, line.from.y, line.from.z },
+            .to = { line.to.x, line.to.y, line.to.z },
+            .color = EditorNavigation::BoundsColor,
+            .alpha = 1.0F,
+        });
+    }
     if (!sceneContext.Navigation().Visible()) {
         return;
     }
-    const auto relative = [&origin](const std::array<float, 3U>& point) {
-        return std::array<float, 3U>{
-            static_cast<float>(static_cast<double>(point[0]) - origin.x),
-            static_cast<float>(static_cast<double>(point[1]) - origin.y),
-            static_cast<float>(static_cast<double>(point[2]) - origin.z),
-        };
-    };
-    for (const EditorWorldGridLine& line : sceneContext.Navigation().Lines()) {
+    for (const kb::render::PhysicsDebugLine& line : sceneContext.Navigation().Lines()) {
         lines.push_back(kb::render::PhysicsDebugLine{
-            .from = relative(line.from),
-            .to = relative(line.to),
+            .from = RelativeToOrigin(line.from, origin),
+            .to = RelativeToOrigin(line.to, origin),
             .color = line.color,
-            .alpha = 0.9F,
+            .alpha = line.alpha,
         });
     }
+}
+
+// The filled walkable polygons of the baked navigation mesh, relative to the viewport origin.
+[[nodiscard]] std::vector<kb::render::DebugFillTriangle> BuildDebugFillTriangles(const EditorSceneContext& sceneContext, const kb::math::DVec3& origin) {
+    std::vector<kb::render::DebugFillTriangle> triangles;
+    if (!sceneContext.Navigation().Visible()) {
+        return triangles;
+    }
+    triangles.reserve(sceneContext.Navigation().Fills().size());
+    for (const kb::render::DebugFillTriangle& fill : sceneContext.Navigation().Fills()) {
+        kb::render::DebugFillTriangle& triangle = triangles.emplace_back(fill);
+        for (std::array<float, 3U>& corner : triangle.corners) corner = RelativeToOrigin(corner, origin);
+    }
+    return triangles;
 }
 
 [[nodiscard]] std::vector<kb::render::PhysicsDebugLine> BuildPhysicsDebugLines(const EditorSceneContext& sceneContext, const kb::math::DVec3& origin) {
@@ -926,6 +950,7 @@ void AppendNavigationMesh(
         .editorLightWireframes = editorOverlaysEnabled ? BuildLightWireframes(sceneContext, viewportCamera, axes, renderHeight) : std::vector<kb::render::EditorLightWireframeDesc>{},
         .editorSceneIcons = editorOverlaysEnabled ? BuildSceneIcons(sceneContext, viewportCamera, axes, renderHeight) : std::vector<kb::render::EditorSceneIconDesc>{},
         .physicsDebugLines = editorOverlaysEnabled ? BuildPhysicsDebugLines(sceneContext, viewportCamera.ViewportOrigin()) : std::vector<kb::render::PhysicsDebugLine>{},
+        .debugFillTriangles = editorOverlaysEnabled ? BuildDebugFillTriangles(sceneContext, viewportCamera.ViewportOrigin()) : std::vector<kb::render::DebugFillTriangle>{},
         // Outline and handles belong exactly where the UI itself is shown, never on their own.
         .editorUIOverlays = editorOverlaysEnabled && screenUIVisible ? EditorUIRectInteraction::Overlays(sceneContext, static_cast<float>(renderWidth), static_cast<float>(renderHeight), twoD ? viewportState.UIZoom() : 1.0F) : std::vector<kb::scene::SceneUIFrameElement>{},
         .editorUIScale = twoD ? viewportState.UIZoom() : 1.0F,

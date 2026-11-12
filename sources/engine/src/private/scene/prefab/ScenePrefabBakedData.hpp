@@ -57,6 +57,7 @@ enum class ScenePrefabBakedComponentMask : std::uint64_t {
     SocketAttachment = 1ULL << 37U,
     Combatant = 1ULL << 38U,
     AIBrain = 1ULL << 39U,
+    NavBounds = 1ULL << 48U,
 };
 
 [[nodiscard]] constexpr std::uint64_t ScenePrefabBakedMask(ScenePrefabBakedComponentMask mask) noexcept {
@@ -120,6 +121,7 @@ struct ScenePrefabBakedArchetype {
     std::vector<NavAgent> navAgents;
     std::vector<NavObstacle> navObstacles;
     std::vector<NavLink> navLinks;
+    std::vector<NavBounds> navBounds;
 };
 
 class ScenePrefabBakedData {

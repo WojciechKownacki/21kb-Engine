@@ -31,7 +31,8 @@ namespace {
 using kb::script::ScriptValue;
 using kb::script::ScriptValueType;
 
-constexpr std::array<InspectorGenericComponentModel::Section, 10> kSections{ {
+constexpr std::array<InspectorGenericComponentModel::Section, 11> kSections{ {
+    { "NavBounds", InspectorSectionId::NavBounds, HeroIconKind::Navigation, "Navigation Bounds" },
     { "Combatant", InspectorSectionId::Combatant, HeroIconKind::Gamepad2, "Combatant" },
     { "AIBrain", InspectorSectionId::AIBrain, HeroIconKind::Gamepad2, "AI Brain" },
     { "CharacterController2D", InspectorSectionId::CharacterController2D, HeroIconKind::RectangleGroup, "Character Controller 2D" },
@@ -50,8 +51,13 @@ constexpr std::array<InspectorGenericComponentModel::Section, 10> kSections{ {
 constexpr std::array<std::string_view, 12> kSprite2DBasicRows{ "imageAssetId", "cellWidth", "cellHeight", "frameCount",
     "framesPerSecond", "loop", "playing", "flipX", "flipY", "tintA", "sortingOrder", "visible" };
 
+// Navigation Bounds: the box and the size of the characters; how finely the mesh is cut waits behind Advanced.
+constexpr std::array<std::string_view, 10> kNavBoundsBasicRows{ "size.x", "size.y", "size.z", "center.x", "center.y", "center.z",
+    "agentRadius", "agentHeight", "maxStepHeight", "maxSlopeDegrees" };
+
 [[nodiscard]] std::span<const std::string_view> BasicRowsOf(std::string_view component) noexcept {
     if (component == "Sprite2D") return kSprite2DBasicRows;
+    if (component == "NavBounds") return kNavBoundsBasicRows;
     return {};
 }
 
@@ -62,6 +68,7 @@ constexpr std::array<std::string_view, 12> kSprite2DBasicRows{ "imageAssetId", "
 
 // The unit shown after a number.
 [[nodiscard]] std::string_view UnitOf(std::string_view component, std::string_view property) noexcept {
+    if (component == "NavBounds") return property == "maxSlopeDegrees" ? "\u00B0" : "m";
     if (component != "Sprite2D") return {};
     if (property == "cellWidth" || property == "cellHeight" || property == "margin" || property == "spacing" ||
         property == "imageWidth" || property == "imageHeight" || property == "pixelsPerUnit") return "px";

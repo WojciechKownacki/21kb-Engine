@@ -366,7 +366,7 @@ struct ComponentAccess {
 
 // clang-format on
 
-constexpr std::array<std::string_view, 48> kComponentNames{
+constexpr std::array<std::string_view, 49> kComponentNames{
     "AudioSource",
     "AudioListener",
     "Transform",
@@ -383,6 +383,7 @@ constexpr std::array<std::string_view, 48> kComponentNames{
     "NavAgent",
     "NavObstacle",
     "NavLink",
+    "NavBounds",
     "Tags",
     "RegionShape",
     "GuideCurve",
@@ -1031,6 +1032,21 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kNavLinkPropertyDescs
     ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
 };
 
+constexpr std::array<ScriptSceneComponentPropertyDesc, 12> kNavBoundsPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "size.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "size.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "size.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "center.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "center.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "center.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "agentRadius", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "agentHeight", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "maxStepHeight", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "maxSlopeDegrees", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "cellSize", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "tileSize", ScriptValueType::Float },
+};
+
 constexpr std::array<FieldBinding, 13> kTransformFields{
     KB_NESTED_FLOAT(kb::scene::TransformComponent, localPosition, x),
     KB_NESTED_FLOAT(kb::scene::TransformComponent, localPosition, y),
@@ -1562,6 +1578,21 @@ constexpr std::array<FieldBinding, 11> kNavLinkFields{
     KB_BOOL(kb::scene::NavLink, enabled),
 };
 
+constexpr std::array<FieldBinding, 12> kNavBoundsFields{
+    KB_NESTED_FLOAT(kb::scene::NavBounds, size, x),
+    KB_NESTED_FLOAT(kb::scene::NavBounds, size, y),
+    KB_NESTED_FLOAT(kb::scene::NavBounds, size, z),
+    KB_NESTED_FLOAT(kb::scene::NavBounds, center, x),
+    KB_NESTED_FLOAT(kb::scene::NavBounds, center, y),
+    KB_NESTED_FLOAT(kb::scene::NavBounds, center, z),
+    KB_FLOAT(kb::scene::NavBounds, agentRadius),
+    KB_FLOAT(kb::scene::NavBounds, agentHeight),
+    KB_FLOAT(kb::scene::NavBounds, maxStepHeight),
+    KB_FLOAT(kb::scene::NavBounds, maxSlopeDegrees),
+    KB_FLOAT(kb::scene::NavBounds, cellSize),
+    KB_FLOAT(kb::scene::NavBounds, tileSize),
+};
+
 constexpr std::array<FieldBinding, 1> kTagsFields{
     FieldBinding{
         "text",
@@ -1994,6 +2025,7 @@ void MarkCombatantModified(kb::scene::Scene& scene, kb::scene::SceneEntity entit
 void MarkAIBrainModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().AIBrains().MarkModified(entity); }
 void MarkNavObstacleModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().NavObstacles().MarkModified(entity); }
 void MarkNavLinkModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().NavLinks().MarkModified(entity); }
+void MarkNavBoundsModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().NavBounds().MarkModified(entity); }
 void MarkTagsModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().Tags().MarkModified(entity); }
 void MarkRegionShapeModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().RegionShapes().MarkModified(entity); }
 void MarkGuideCurveModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().GuideCurves().MarkModified(entity); }
@@ -2107,6 +2139,10 @@ void MarkLensEchoModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity
     if (componentName == "NavLink") {
         kb::scene::NavLink* component = scene.Components().NavLinks().TryGet(entity);
         return ComponentAccess{ component, component, kNavLinkFields, &MarkNavLinkModified };
+    }
+    if (componentName == "NavBounds") {
+        kb::scene::NavBounds* component = scene.Components().NavBounds().TryGet(entity);
+        return ComponentAccess{ component, component, kNavBoundsFields, &MarkNavBoundsModified };
     }
     if (componentName == "Tags") {
         kb::scene::TagsComponent* component = scene.Components().Tags().TryGet(entity);
@@ -2304,6 +2340,7 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
     if (componentName == "AIBrain") return kAIBrainPropertyDescs;
     if (componentName == "NavObstacle") return kNavObstaclePropertyDescs;
     if (componentName == "NavLink") return kNavLinkPropertyDescs;
+    if (componentName == "NavBounds") return kNavBoundsPropertyDescs;
     if (componentName == "Tags") return kTagsPropertyDescs;
     return {};
 }

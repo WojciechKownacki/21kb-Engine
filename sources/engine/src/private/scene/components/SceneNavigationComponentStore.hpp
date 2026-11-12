@@ -28,6 +28,12 @@ public:
     void SetNavLink(SceneEntity entity, const NavLink& component);
     void RemoveNavLink(SceneEntity entity) noexcept;
     void MarkNavLinkModified(SceneEntity entity) noexcept;
+    [[nodiscard]] bool HasNavBounds(SceneEntity entity) const noexcept;
+    [[nodiscard]] const NavBounds* TryGetNavBounds(SceneEntity entity) const noexcept;
+    [[nodiscard]] NavBounds* TryGetNavBounds(SceneEntity entity) noexcept;
+    void SetNavBounds(SceneEntity entity, const NavBounds& component);
+    void RemoveNavBounds(SceneEntity entity) noexcept;
+    void MarkNavBoundsModified(SceneEntity entity) noexcept;
 private:
     kb::ecs::World* world_ = nullptr;
 };

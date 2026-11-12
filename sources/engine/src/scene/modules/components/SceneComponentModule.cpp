@@ -116,6 +116,7 @@ SceneDeformedGeometryComponentQueries SceneComponentQueries::DeformedGeometries(
 SceneNavAgentComponentQueries SceneComponentQueries::NavAgents() const noexcept { return SceneNavAgentComponentQueries{ scene_ }; }
 SceneNavObstacleComponentQueries SceneComponentQueries::NavObstacles() const noexcept { return SceneNavObstacleComponentQueries{ scene_ }; }
 SceneNavLinkComponentQueries SceneComponentQueries::NavLinks() const noexcept { return SceneNavLinkComponentQueries{ scene_ }; }
+SceneNavBoundsComponentQueries SceneComponentQueries::NavBounds() const noexcept { return SceneNavBoundsComponentQueries{ scene_ }; }
 
 SceneComponentVisitors SceneComponentQueries::Visitors() const noexcept {
     return SceneComponentVisitors{ scene_ };
@@ -232,6 +233,7 @@ SceneDeformedGeometryComponents SceneComponents::DeformedGeometries() const noex
 SceneNavAgentComponents SceneComponents::NavAgents() const noexcept { return SceneNavAgentComponents{ scene_ }; }
 SceneNavObstacleComponents SceneComponents::NavObstacles() const noexcept { return SceneNavObstacleComponents{ scene_ }; }
 SceneNavLinkComponents SceneComponents::NavLinks() const noexcept { return SceneNavLinkComponents{ scene_ }; }
+SceneNavBoundsComponents SceneComponents::NavBounds() const noexcept { return SceneNavBoundsComponents{ scene_ }; }
 
 SceneComponentVisitors SceneComponents::Visitors() const noexcept {
     return SceneComponentVisitors{ scene_ };

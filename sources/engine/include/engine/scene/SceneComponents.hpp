@@ -107,6 +107,7 @@ public:
     [[nodiscard]] SceneNavAgentComponents NavAgents() const noexcept;
     [[nodiscard]] SceneNavObstacleComponents NavObstacles() const noexcept;
     [[nodiscard]] SceneNavLinkComponents NavLinks() const noexcept;
+    [[nodiscard]] SceneNavBoundsComponents NavBounds() const noexcept;
     [[nodiscard]] SceneComponentVisitors Visitors() const noexcept;
     [[nodiscard]] SceneUIComponents UI() const noexcept;
 
