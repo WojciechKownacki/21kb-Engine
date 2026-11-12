@@ -57,6 +57,15 @@ public:
         static_cast<void>(value);
     }
 
+    // See IScriptBackend::HasEntry. Default yes so lightweight test runtimes need not implement it.
+    [[nodiscard]] virtual bool HasEntry(
+        const kb::scene::BehaviourComponent& behaviour,
+        std::string_view name) {
+        static_cast<void>(behaviour);
+        static_cast<void>(name);
+        return true;
+    }
+
     // Lua implementations with retained event callbacks release every
     // callback owned by this asset before the scene system performs its
     // explicit hot-reload restart. Default no-op keeps lightweight test
@@ -80,6 +89,7 @@ public:
         kb::scene::SceneEntity entity,
         const kb::scene::BehaviourComponent& behaviour,
         std::span<const kb::scene::BehaviourVariableOverride> overrides) override;
+    [[nodiscard]] bool HasEntry(const kb::scene::BehaviourComponent& behaviour, std::string_view name) override;
     void ResetAssetForHotReload(kb::assets::AssetId assetId, ScriptEventBus& events) noexcept override;
 
 private:

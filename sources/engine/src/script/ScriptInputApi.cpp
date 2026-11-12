@@ -51,8 +51,7 @@ kb::input::LocalUserId PlayerFromArgs(std::span<const ScriptFunctionArgument> ar
     if (value == nullptr) {
         return kb::input::kPrimaryLocalUser;
     }
-    const int player = value->AsInt();
-    return player > 0 ? kb::input::LocalUserId{static_cast<std::uint32_t>(player)} : kb::input::kPrimaryLocalUser;
+    return ScriptInputApi::UserForPlayer(value->AsInt());
 }
 
 ScriptFunctionPin PlayerPin() {
@@ -816,6 +815,10 @@ bool RegisterStopVibration(ScriptRuntimeHost& host) {
 }
 
 } // namespace
+
+kb::input::LocalUserId ScriptInputApi::UserForPlayer(int player) noexcept {
+    return player > 0 ? kb::input::LocalUserId{static_cast<std::uint32_t>(player)} : kb::input::kPrimaryLocalUser;
+}
 
 bool ScriptInputApi::Register(ScriptRuntimeHost& host) {
     bool ok = RegisterInputSensorApi(host);

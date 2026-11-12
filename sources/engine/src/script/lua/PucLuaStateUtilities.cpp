@@ -13,6 +13,7 @@ namespace kb::script {
 void* PucLuaMemoryBudget::Allocate(void* userData, void* block, std::size_t oldSize, std::size_t newSize) noexcept {
     auto& budget = *static_cast<PucLuaMemoryBudget*>(userData);
     static_cast<void>(oldSize); // The arena owns logical sizes and retained capacities.
+    if (block == nullptr && newSize != 0U) ++budget.allocationCount;
     try {
         if (!budget.arena) budget.arena = std::make_shared<PucLuaMemoryArena>();
         void* resized = budget.arena->Resize(block, newSize, budget.limitBytes,
@@ -73,7 +74,8 @@ std::string PucLuaErrorReporter::ErrorWithTracebackFromTop(lua_State* state) {
     if (message == nullptr) {
         message = "lua error";
     }
-    luaL_traceback(state, state, message, 1);
+    // Level 0: the failed entry is still on the coroutine's stack, no message handler sits above it.
+    luaL_traceback(state, state, message, 0);
     return ErrorFromTop(state);
 }
 

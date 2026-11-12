@@ -9,6 +9,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace kb::script {
@@ -75,6 +76,18 @@ public:
         static_cast<void>(entity);
         static_cast<void>(behaviour);
         static_cast<void>(overrides);
+    }
+
+    // Whether `behaviour` has a function called `name` to run - a per-frame phase (ToString of FixedTick .. AfterRender)
+    // or an event handler. The dispatchers ask once per script asset and name and pass over the instances of an asset
+    // that answers no, so a script that defines only some callbacks costs nothing in the others. A backend that cannot
+    // tell answers yes.
+    [[nodiscard]] virtual bool HasEntry(
+        const kb::scene::BehaviourComponent& behaviour,
+        std::string_view name) {
+        static_cast<void>(behaviour);
+        static_cast<void>(name);
+        return true;
     }
 
     // Releases state owned by live instances of one behaviour asset after a

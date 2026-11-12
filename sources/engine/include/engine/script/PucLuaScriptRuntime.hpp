@@ -87,6 +87,13 @@ struct PucLuaExposedVariableInstance {
     bool overridden = false;
 };
 
+// What the collector's end-of-frame steps have cost so far (PucLuaScriptRuntime::StepGarbageCollector).
+struct PucLuaCollectionStats {
+    std::uint64_t steps = 0U;
+    std::uint64_t totalMicroseconds = 0U;
+    std::uint64_t longestStepMicroseconds = 0U;
+};
+
 class PucLuaScriptRuntime final : public ILuaScriptRuntime, public ILuaScriptAssetStore, public kb::core::IRuntimeStateProvider {
 public:
     PucLuaScriptRuntime();
@@ -141,6 +148,9 @@ public:
     [[nodiscard]] bool HasActiveExecutionBudget() const noexcept;
     // Bytes the Lua state currently holds, counted by its bounded allocator.
     [[nodiscard]] std::size_t LuaMemoryUsedBytes() const noexcept;
+    // Blocks the Lua state has asked its allocator for since it was created; two readings bracket the allocations
+    // a stretch of script work made.
+    [[nodiscard]] std::uint64_t LuaAllocationCount() const noexcept;
     // Allocator block capacities/headers and checkpoint image storage, not process RSS.
     [[nodiscard]] std::size_t LuaMemoryOwnedBytes() const noexcept;
     [[nodiscard]] const PucLuaDebugSettings& DebugSettings() const noexcept;
@@ -176,6 +186,18 @@ public:
         kb::assets::AssetId assetId,
         EventSubscriptionHandle handle);
 
+    // True unless the script of `behaviour` is loaded and defines nothing called `name`; also true while any entry is
+    // suspended in a coroutine, which must be resumed whatever the script defines now.
+    [[nodiscard]] bool HasEntry(
+        const kb::scene::BehaviourComponent& behaviour,
+        std::string_view name) override;
+
+    // Runs the collector for at most ScriptExecutionBudgetSettings::luaCollectionMicrosecondsPerFrame (the first
+    // call also switches the state to generational mode, where a step is one collection of the objects created since
+    // the last one - the per-frame garbage of scripts). The scene system host calls it once at the end of a frame.
+    void StepGarbageCollector() noexcept;
+    [[nodiscard]] PucLuaCollectionStats CollectionStats() const noexcept;
+
     [[nodiscard]] ScriptBackendExecutionResult ExecuteLifecycle(
         const kb::scene::BehaviourComponent& behaviour,
         ScriptExecutionContext& context) override;
@@ -201,6 +223,11 @@ private:
         ScriptExecutionContext& context,
         const ScriptEvent* event);
     [[nodiscard]] int FindScriptEnvironment(kb::assets::AssetId assetId) const noexcept;
+    // Idle coroutine threads are kept in a table in the Lua registry (so a state checkpoint restores them with the
+    // rest of the heap): an entry that returns hands its thread back instead of leaving it to the collector, and the
+    // next entry starts on it. AcquireThread leaves the thread on the state's stack.
+    [[nodiscard]] lua_State* AcquireThread();
+    void ReleaseThread(lua_State* thread, int threadIndex) noexcept;
 
     struct ScriptRecord {
         int environmentRef = -2;
@@ -272,7 +299,14 @@ private:
     std::unordered_map<std::uint64_t, ScriptRecord> scripts_;
     std::unordered_map<std::string, ModuleRecord> modules_;
     std::unordered_map<std::uint64_t, std::vector<ExposedVariableRecord>> exposedVariables_;
-    std::unordered_map<InstanceKey, std::vector<PucLuaExposedVariableInstance>, InstanceKeyHasher> instanceVariables_;
+    // The exposed variables of one behaviour instance, and the definitions revision they were last synchronized
+    // with: an instance is brought in line with its asset's definitions when they change, not on every call.
+    struct InstanceVariableSet {
+        std::vector<PucLuaExposedVariableInstance> values;
+        std::uint64_t syncedRevision = 0U;
+    };
+    std::unordered_map<InstanceKey, InstanceVariableSet, InstanceKeyHasher> instanceVariables_;
+    std::uint64_t exposedRevision_ = 1U;
     // LIB-097: registry references own Lua generator threads. Each thread is
     // scoped to one behaviour instance and entry function, so yielding Tick
     // never suspends another entity or lifecycle callback.
@@ -293,6 +327,7 @@ private:
     std::size_t remainingLuaInstructions_ = 0U;
     bool executionBudgetActive_ = false;
     std::uint64_t generation_ = 1U;
+    PucLuaCollectionStats collectionStats_;
 };
 
 } // namespace kb::script

@@ -37,6 +37,8 @@ private:
 // protected call into a panic that ends the process.
 struct PucLuaMemoryBudget final {
     std::size_t usedBytes = 0U;
+    // Blocks the state asked its allocator for since it was created.
+    std::uint64_t allocationCount = 0U;
     std::size_t limitBytes = 0U;
     std::uint32_t protectedDepth = 0U;
     bool limitReached = false;

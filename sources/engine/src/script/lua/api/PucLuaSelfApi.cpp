@@ -167,23 +167,18 @@ int LuaInspectorNewIndex(lua_State* state) {
     return 0;
 }
 
-} // namespace
+// Registry key of the metatable every `self` shares.
+constexpr char kSelfMetatableKey = 0;
 
-void PucLuaSelfApi::PushSelf(lua_State* state, ScriptExecutionContext& context) {
-    lua_createtable(state, 0, 9);
-    lua_pushinteger(state, static_cast<lua_Integer>(context.Self().Id()));
-    lua_setfield(state, -2, "entity");
-    lua_pushinteger(state, static_cast<lua_Integer>(context.Asset().value));
-    lua_setfield(state, -2, "asset");
-    lua_pushstring(state, "Lua");
-    lua_setfield(state, -2, "backend");
-    PucLuaScriptRuntime* runtime = *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(state));
-    if (runtime != nullptr) {
-        PushVariables(state, runtime->InstanceVariables(context.Self(), context.Asset()));
-    } else {
-        lua_newtable(state);
+// Pushes the metatable whose __index holds the five `self` methods. They are created once, so building a `self`
+// for a call makes no closures.
+void PushSelfMetatable(lua_State* state) {
+    if (lua_rawgetp(state, LUA_REGISTRYINDEX, &kSelfMetatableKey) == LUA_TTABLE) {
+        return;
     }
-    lua_setfield(state, -2, "variables");
+    lua_pop(state, 1);
+    lua_createtable(state, 0, 1);
+    lua_createtable(state, 0, 5);
     PucLuaRuntimeApi::PushContextSlot(state);
     lua_pushcclosure(state, &PucLuaSafeCall<&LuaSelfHasComponent>, 1);
     lua_setfield(state, -2, "HasComponent");
@@ -199,6 +194,30 @@ void PucLuaSelfApi::PushSelf(lua_State* state, ScriptExecutionContext& context) 
     PucLuaRuntimeApi::PushContextSlot(state);
     lua_pushcclosure(state, &PucLuaSafeCall<&LuaSelfSetVariable>, 1);
     lua_setfield(state, -2, "SetVariable");
+    lua_setfield(state, -2, "__index");
+    lua_pushvalue(state, -1);
+    lua_rawsetp(state, LUA_REGISTRYINDEX, &kSelfMetatableKey);
+}
+
+} // namespace
+
+void PucLuaSelfApi::PushSelf(lua_State* state, ScriptExecutionContext& context) {
+    lua_createtable(state, 0, 4);
+    lua_pushinteger(state, static_cast<lua_Integer>(context.Self().Id()));
+    lua_setfield(state, -2, "entity");
+    lua_pushinteger(state, static_cast<lua_Integer>(context.Asset().value));
+    lua_setfield(state, -2, "asset");
+    lua_pushstring(state, "Lua");
+    lua_setfield(state, -2, "backend");
+    PucLuaScriptRuntime* runtime = *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(state));
+    if (runtime != nullptr) {
+        PushVariables(state, runtime->InstanceVariables(context.Self(), context.Asset()));
+    } else {
+        lua_newtable(state);
+    }
+    lua_setfield(state, -2, "variables");
+    PushSelfMetatable(state);
+    lua_setmetatable(state, -2);
 }
 
 void PucLuaSelfApi::AttachInspector(lua_State* state, int environmentIndex, ScriptExecutionContext* context) {

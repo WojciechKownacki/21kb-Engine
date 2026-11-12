@@ -2205,6 +2205,7 @@ if(BUILD_TESTING)
         tests/SceneSystemTests.cpp
         tests/SceneSystemTransformSyncTests.cpp
         tests/ScriptApiCatalogTests.cpp
+        tests/ScriptDispatchBenchmark.cpp
         tests/ScriptRuntimeTests.cpp
         tests/SystemLifecycleTests.cpp
         tests/TestSuites.hpp
@@ -2241,6 +2242,8 @@ if(BUILD_TESTING)
     add_test(NAME kb_engine_input_sensors COMMAND $<TARGET_FILE:kb_engine_tests> input)
     set_tests_properties(kb_engine_input_sensors PROPERTIES TIMEOUT 60 LABELS "engine;input")
     add_test(NAME kb_engine_scene_ui COMMAND $<TARGET_FILE:kb_engine_tests> scene-ui)
+    add_test(NAME kb_engine_script_dispatch COMMAND $<TARGET_FILE:kb_engine_tests> script-dispatch)
+    set_tests_properties(kb_engine_script_dispatch PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300 LABELS "engine;script")
     add_test(NAME kb_engine_video_conversion COMMAND $<TARGET_FILE:kb_engine_tests> video-conversion)
     set_tests_properties(kb_engine_video_conversion PROPERTIES TIMEOUT 60 LABELS "engine;video")
     if(WIN32)
@@ -2268,7 +2271,7 @@ if(BUILD_TESTING)
 
     # Machine-independent performance gates: each compares two measurements taken in the same run. They
     # run alone, as other tests competing for the CPU in between would skew one measurement and not the other.
-    foreach(kb_perf_suite physics-step-spikes scene-transform-bench agents-frame)
+    foreach(kb_perf_suite physics-step-spikes scene-transform-bench agents-frame script-dispatch-bench)
         add_test(NAME kb_engine_${kb_perf_suite} COMMAND $<TARGET_FILE:kb_engine_tests> ${kb_perf_suite})
         set_tests_properties(kb_engine_${kb_perf_suite} PROPERTIES
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR}

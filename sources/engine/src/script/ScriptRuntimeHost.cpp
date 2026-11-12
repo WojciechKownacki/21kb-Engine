@@ -241,6 +241,7 @@ bool ScriptRuntimeHostState::RestoreRuntimeState(const kb::core::RuntimeStateSna
     if (snapshot.installed) {
         auto& system = this->installedSceneSystem->System();
         system.lifecycleRecords_ = snapshot.lifecycle;
+        system.phaseOrderDirty_ = true;
         system.frameSettings_ = snapshot.systemFrameSettings;
         system.fixedAccumulatorSeconds_ = snapshot.accumulator;
         system.lastGameplayEventSequence_ = snapshot.gameplaySequence;
@@ -293,6 +294,9 @@ void ScriptRuntimeHostSceneSystem::OnFrameStart(kb::scene::SceneSystemContext& c
 void ScriptRuntimeHostSceneSystem::OnUpdate(kb::scene::SceneSystemContext& context) {
     system_.OnUpdate(context);
     CollectDiagnostics();
+    // The scripts of the frame are done: collect their garbage now, within its budget, rather than inside the
+    // allocations of whichever script runs next.
+    state_->luaRuntime.StepGarbageCollector();
 }
 
 void ScriptRuntimeHostSceneSystem::OnFixedUpdate(kb::scene::SceneSystemContext& context) {
@@ -325,18 +329,71 @@ void ScriptRuntimeHostSceneSystem::ExecuteShutdown(kb::scene::Scene& scene, floa
     return name.empty() ? "entity #" + std::to_string(entity.Id()) : "'" + name + "'";
 }
 
+// What the usual Lua runtime errors mean, in words for someone who does not read Lua; empty for the rest.
+[[nodiscard]] std::string_view PlainErrorHint(std::string_view message) {
+    const auto mentions = [message](std::string_view text) { return message.find(text) != std::string_view::npos; };
+    if (mentions("attempt to index a nil value")) {
+        return "Something that has no value yet was used as if it had fields (name.field). It was never set, or a call that should have given it a value returned nothing.";
+    }
+    if (mentions("attempt to call a nil value")) {
+        return "A function that does not exist was called. Check the spelling, and that the module it comes from is imported.";
+    }
+    if (mentions("attempt to perform arithmetic on a nil value") || (mentions("attempt to compare") && mentions("nil"))) {
+        return "A number is missing: a variable or field used in this calculation has no value yet.";
+    }
+    if (mentions("attempt to concatenate a nil value")) {
+        return "A text is missing: a variable or field joined into this text has no value yet.";
+    }
+    if (mentions("attempt to index a number value") || mentions("attempt to index a string value") || mentions("attempt to index a boolean value")) {
+        return "A single value was used as if it were a table with fields (name.field).";
+    }
+    return {};
+}
+
+// A Lua error starts with the script and line ("Assets/Scripts/Door.lua:12: attempt to ..."). The console line already
+// names the script, so it reads "line 12: attempt to ..." and is followed by the plain explanation, when there is one.
+[[nodiscard]] std::string ScriptErrorText(std::string_view message) {
+    const std::size_t firstLineEnd = message.find('\n');
+    const std::string_view firstLine = message.substr(0U, firstLineEnd);
+    std::string text{ firstLine };
+    for (std::size_t colon = firstLine.find(':'); colon != std::string_view::npos; colon = firstLine.find(':', colon + 1U)) {
+        std::size_t digitsEnd = colon + 1U;
+        while (digitsEnd < firstLine.size() && firstLine[digitsEnd] >= '0' && firstLine[digitsEnd] <= '9') {
+            ++digitsEnd;
+        }
+        if (digitsEnd > colon + 1U && firstLine.substr(digitsEnd, 2U) == ": ") {
+            text = "line " + std::string{ firstLine.substr(colon + 1U, digitsEnd - colon - 1U) } + ": " + std::string{ firstLine.substr(digitsEnd + 2U) };
+            break;
+        }
+    }
+    if (const std::string_view hint = PlainErrorHint(firstLine); !hint.empty()) {
+        text += "\n    " + std::string{ hint };
+    }
+    if (firstLineEnd != std::string_view::npos) {
+        text += std::string{ message.substr(firstLineEnd) };
+    }
+    return text;
+}
+
 void ScriptRuntimeHostSceneSystem::CollectDiagnostics() {
     const auto push = [this](std::string line) {
         if (state_->reportedSceneSystemDiagnostics.insert(line).second) {
             state_->pendingSceneSystemDiagnostics.push_back(std::move(line));
         }
     };
+    // A script that was reloaded is a new chance: an error it raised before was reported once and is not repeated every
+    // frame, but the same error after an edit must show again.
+    if (!system_.LastPrepareResult().reloadedAssets.empty()) {
+        state_->reportedSceneSystemDiagnostics.clear();
+    }
     for (const ScriptDiagnostic& diagnostic : system_.LastResult().diagnostics) {
         // Name the object and its script so a broken behaviour (e.g. a dangling reference to a
         // deleted/renamed script - "lua script is not loaded") points at exactly which object's
         // Script component to fix, instead of a bare, un-actionable number.
+        // The backend's message already ends with the stack trace it also reports separately; show it once.
+        const std::string_view reason{ diagnostic.message };
         push(EntityName(state_->scene, diagnostic.entity) + ", " + ScriptName(state_->scene, diagnostic.assetId) + ": " +
-            diagnostic.message +
+            ScriptErrorText(diagnostic.stackTrace.empty() ? reason : reason.substr(0U, reason.find("\nstack traceback:"))) +
             (diagnostic.stackTrace.empty() ? std::string{} : "\n" + diagnostic.stackTrace));
         if (state_->disableFailingBehaviours) {
             DisableFailingBehaviour(diagnostic);

@@ -6,6 +6,7 @@
 #include "engine/scene/SceneEntities.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -110,8 +111,47 @@ void DispatchBehaviour(kb::scene::SceneEntity entity, const kb::scene::Behaviour
 }
 
 void DispatchSceneBehaviours(kb::scene::Scene& scene, DispatchContext& context) {
+    if (context.event != nullptr && context.event->target.IsValid()) {
+        // An event for one entity concerns that entity's behaviour only; there is nothing to collect and order.
+        const kb::scene::SceneEntity target = context.event->target;
+        if (const kb::scene::BehaviourComponent* behaviour = scene.Components().Behaviours().TryGet(target);
+            behaviour != nullptr && scene.Entities().IsActive(target)) {
+            const kb::scene::BehaviourComponent snapshot = *behaviour;
+            DispatchBehaviour(target, snapshot, context);
+        }
+        return;
+    }
     std::vector<BehaviourDispatchRecord> behaviours;
     scene.Components().Behaviours().ForEach(&CollectBehaviour, &behaviours);
+    if (context.event != nullptr) {
+        // An event reaches the behaviours whose script handles it. The rest are passed over before the order is
+        // worked out, so a broadcast costs what its receivers cost, not a call for every behaviour in the scene;
+        // each asset is asked once.
+        struct Answer {
+            std::uint64_t assetId = 0U;
+            kb::scene::BehaviourBackend backend = kb::scene::BehaviourBackend::Native;
+            bool handles = true;
+        };
+        std::array<Answer, 16> answers{};
+        std::size_t answerCount = 0U;
+        std::size_t passedOver = 0U;
+        std::erase_if(behaviours, [&](const BehaviourDispatchRecord& record) {
+            for (std::size_t index = 0U; index < answerCount; ++index) {
+                if (answers[index].assetId == record.behaviour.behaviourAssetId && answers[index].backend == record.behaviour.backend) {
+                    passedOver += answers[index].handles ? 0U : 1U;
+                    return !answers[index].handles;
+                }
+            }
+            IScriptBackend* backend = context.runtime->FindBackend(record.behaviour.backend);
+            const bool handles = backend == nullptr || backend->HasEntry(record.behaviour, context.event->name);
+            if (answerCount < answers.size()) {
+                answers[answerCount++] = Answer{ record.behaviour.behaviourAssetId, record.behaviour.backend, handles };
+            }
+            passedOver += handles ? 0U : 1U;
+            return !handles;
+        });
+        context.result->visitedBehaviours += passedOver;
+    }
     std::ranges::sort(behaviours, &ComesBefore);
     for (const BehaviourDispatchRecord& record : behaviours) {
         if (!scene.Entities().IsActive(record.entity)) {

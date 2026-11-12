@@ -141,6 +141,10 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunLargeNonAdditiveSceneTransitionBenchmark();
     } else if (suite == "script") {
         kb::tests::RunScriptRuntimeTests();
+    } else if (suite == "script-dispatch") {
+        kb::tests::RunScriptDispatchTests();
+    } else if (suite == "script-dispatch-bench") {
+        kb::tests::RunScriptDispatchBenchmark();
     } else if (suite == "script-collections") {
         kb::tests::RunScriptCollectionsTests();
     } else if (suite == "script-save") {
@@ -228,6 +232,7 @@ void RunAllSuites() {
     kb::tests::RunScenePrefabTests();
     kb::tests::RunProjectSceneTests();
     kb::tests::RunScriptRuntimeTests();
+    kb::tests::RunScriptDispatchTests();
     kb::tests::RunScriptApiCatalogTests();
     kb::tests::RunVisualGraphTests();
     kb::tests::RunInputTests();

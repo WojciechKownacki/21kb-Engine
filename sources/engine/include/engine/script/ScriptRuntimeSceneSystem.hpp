@@ -78,6 +78,9 @@ private:
         kb::scene::BehaviourComponent behaviour{};
         bool active = false;
         bool created = false;
+        // The synchronization pass that last found the behaviour in the scene; a record an older pass left
+        // behind belongs to a behaviour that is gone.
+        std::uint64_t seenEpoch = 0U;
     };
 
     void BeginFrame(kb::scene::Scene& scene, float deltaSeconds);
@@ -153,7 +156,6 @@ private:
         const kb::scene::BehaviourComponent& behaviour,
         ScriptLifecycleEvent event,
         float deltaSeconds);
-    [[nodiscard]] std::vector<BehaviourLifecycleRecord> CollectBehaviourRecords(kb::scene::Scene& scene) const;
     [[nodiscard]] static BehaviourLifecycleKey MakeKey(kb::scene::SceneEntity entity, const kb::scene::BehaviourComponent& behaviour) noexcept;
 
     std::vector<kb::scene::PendingCollisionEvent> collisionEventScratch_;
@@ -167,6 +169,12 @@ private:
     ScriptRuntimeAssetPrepareResult lastPrepareResult_;
     std::vector<ScriptUIDispatch> uiDispatches_;
     std::unordered_map<BehaviourLifecycleKey, BehaviourLifecycleRecord, BehaviourLifecycleKeyHasher> lifecycleRecords_;
+    // The records the per-frame phases visit (created and active), in the guaranteed execution order. Built when a
+    // synchronization or a restart changes the records, not for every phase of every frame; the pointers refer to
+    // lifecycleRecords_ elements, so whoever replaces or erases records marks the order dirty.
+    std::vector<BehaviourLifecycleRecord*> phaseOrder_;
+    bool phaseOrderDirty_ = true;
+    std::uint64_t syncEpoch_ = 0U;
 };
 
 } // namespace kb::script

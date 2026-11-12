@@ -13,6 +13,7 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
@@ -27,6 +28,10 @@ namespace kb::script {
 namespace {
 
 constexpr int kNoReference = LUA_NOREF;
+
+// Registry key of the table of idle coroutine threads, and how many it keeps.
+constexpr char kThreadPoolKey = 0;
+constexpr std::size_t kMaxIdleThreads = 8U;
 
 // Number of active call frames of a Lua thread.
 [[nodiscard]] int CallDepth(lua_State* thread) noexcept {
@@ -68,6 +73,9 @@ PucLuaScriptRuntime::PucLuaScriptRuntime()
         lua_atpanic(state_, &Panic);
         *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(state_)) = this;
         PucLuaSandboxEnvironment::OpenSafeLibraries(state_);
+        // Scripts make a stream of short-lived tables (self, events, results); the generational collector reclaims
+        // those without marking the long-lived heap again.
+        static_cast<void>(lua_gc(state_, LUA_GCGEN, 0, 0));
     }
 }
 
@@ -318,6 +326,7 @@ void PucLuaScriptRuntime::SetScriptExposedVariables(
         });
     }
     exposedVariables_[assetId.value] = std::move(records);
+    ++exposedRevision_;
 }
 
 std::span<const PucLuaExposedVariableInstance> PucLuaScriptRuntime::InstanceVariables(kb::scene::SceneEntity entity, kb::assets::AssetId assetId) const noexcept {
@@ -328,7 +337,7 @@ std::span<const PucLuaExposedVariableInstance> PucLuaScriptRuntime::InstanceVari
     if (iter == instanceVariables_.end()) {
         return {};
     }
-    return iter->second;
+    return iter->second.values;
 }
 
 bool PucLuaScriptRuntime::SetInstanceVariable(kb::scene::SceneEntity entity, kb::assets::AssetId assetId, std::string_view name, ScriptValue value) {
@@ -339,7 +348,7 @@ bool PucLuaScriptRuntime::SetInstanceVariable(kb::scene::SceneEntity entity, kb:
     if (iter == instanceVariables_.end()) {
         return false;
     }
-    PucLuaExposedVariableInstance* variable = PucLuaValueBridge::FindVariable(iter->second, name);
+    PucLuaExposedVariableInstance* variable = PucLuaValueBridge::FindVariable(iter->second.values, name);
     if (variable == nullptr || !PucLuaValueBridge::IsCompatible(value, variable->type)) {
         return false;
     }
@@ -374,7 +383,7 @@ void PucLuaScriptRuntime::SetInstanceVariableOverride(kb::scene::SceneEntity ent
     std::vector<PucLuaExposedVariableInstance>& variables = instanceVariables_[InstanceKey{
         .entityId = entity.Id(),
         .assetId = assetId.value,
-    }];
+    }].values;
     PucLuaExposedVariableInstance* variable = PucLuaValueBridge::FindVariable(variables, name);
     if (variable == nullptr) {
         variables.push_back(PucLuaExposedVariableInstance{
@@ -426,6 +435,10 @@ bool PucLuaScriptRuntime::IsExecutionBudgetEnabled() const noexcept {
 
 std::size_t PucLuaScriptRuntime::LuaMemoryUsedBytes() const noexcept {
     return memoryBudget_->usedBytes;
+}
+
+std::uint64_t PucLuaScriptRuntime::LuaAllocationCount() const noexcept {
+    return memoryBudget_->allocationCount;
 }
 
 bool PucLuaScriptRuntime::HasActiveExecutionBudget() const noexcept {
@@ -646,6 +659,76 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteEvent(const kb::scene::
     return ExecuteFunction(behaviour, event.name, context, &event);
 }
 
+bool PucLuaScriptRuntime::HasEntry(const kb::scene::BehaviourComponent& behaviour, std::string_view name) {
+    if (state_ == nullptr || !coroutineRefs_.empty()) {
+        return true;
+    }
+    const auto script = scripts_.find(behaviour.behaviourAssetId);
+    if (script == scripts_.end()) {
+        return true; // the dispatch itself reports a script that is not loaded
+    }
+    PucLuaStackGuard stack{ state_ };
+    lua_rawgeti(state_, LUA_REGISTRYINDEX, script->second.environmentRef);
+    lua_pushlstring(state_, name.data(), name.size());
+    lua_gettable(state_, -2);
+    return lua_isnil(state_, -1) == 0; // a value that is not a function still dispatches, to be reported
+}
+
+void PucLuaScriptRuntime::StepGarbageCollector() noexcept {
+    const std::uint32_t budgetMicroseconds = executionBudgetSettings_.luaCollectionMicrosecondsPerFrame;
+    if (state_ == nullptr || budgetMicroseconds == 0U || executionBudgetActive_ || memoryBudget_->protectedDepth != 0U) {
+        return;
+    }
+    using Clock = std::chrono::steady_clock;
+    const Clock::time_point start = Clock::now();
+    // Generational: a step collects the objects created since the last one, the temporary tables of a frame's
+    // scripts, instead of marking the whole heap again; the mode is applied once and stays.
+    static_cast<void>(lua_gc(state_, LUA_GCGEN, 0, 0));
+    static_cast<void>(lua_gc(state_, LUA_GCSTEP, 0));
+    const auto elapsed = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - start).count());
+    ++collectionStats_.steps;
+    collectionStats_.totalMicroseconds += elapsed;
+    collectionStats_.longestStepMicroseconds = std::max(collectionStats_.longestStepMicroseconds, elapsed);
+}
+
+PucLuaCollectionStats PucLuaScriptRuntime::CollectionStats() const noexcept {
+    return collectionStats_;
+}
+
+lua_State* PucLuaScriptRuntime::AcquireThread() {
+    if (lua_rawgetp(state_, LUA_REGISTRYINDEX, &kThreadPoolKey) == LUA_TTABLE) {
+        const lua_Unsigned idle = lua_rawlen(state_, -1);
+        if (idle != 0U) {
+            lua_rawgeti(state_, -1, static_cast<lua_Integer>(idle));
+            lua_pushnil(state_);
+            lua_rawseti(state_, -3, static_cast<lua_Integer>(idle));
+            lua_remove(state_, -2);
+            return lua_tothread(state_, -1);
+        }
+    }
+    lua_pop(state_, 1);
+    lua_State* thread = lua_newthread(state_);
+    *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(thread)) = this;
+    return thread;
+}
+
+void PucLuaScriptRuntime::ReleaseThread(lua_State* thread, int threadIndex) noexcept {
+    lua_settop(thread, 0);
+    threadIndex = lua_absindex(state_, threadIndex);
+    if (lua_rawgetp(state_, LUA_REGISTRYINDEX, &kThreadPoolKey) != LUA_TTABLE) {
+        lua_pop(state_, 1);
+        lua_createtable(state_, static_cast<int>(kMaxIdleThreads), 0);
+        lua_pushvalue(state_, -1);
+        lua_rawsetp(state_, LUA_REGISTRYINDEX, &kThreadPoolKey);
+    }
+    const lua_Unsigned idle = lua_rawlen(state_, -1);
+    if (idle < kMaxIdleThreads) {
+        lua_pushvalue(state_, threadIndex);
+        lua_rawseti(state_, -2, static_cast<lua_Integer>(idle + 1U));
+    }
+    lua_pop(state_, 1);
+}
+
 ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
     const kb::scene::BehaviourComponent& behaviour,
     std::string_view functionName,
@@ -667,8 +750,8 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
             }
         }
     };
-    const int environmentRef = FindScriptEnvironment(assetId);
-    if (environmentRef == kNoReference) {
+    const auto script = scripts_.find(assetId.value);
+    if (script == scripts_.end()) {
         result.diagnostics.push_back(ScriptDiagnostic{
             .entity = context.Self(),
             .assetId = assetId,
@@ -678,6 +761,7 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
         eraseDestroyedInstanceState();
         return result;
     }
+    const int environmentRef = script->second.environmentRef;
     if (debugPause_.has_value() && debugPause_->instance == instanceKey && debugPause_->functionName == functionName &&
         context.Lifecycle() != ScriptLifecycleEvent::Destroyed) {
         // Suspended at a debugger pause: the entry stays on its line until Continue or a step releases it, while
@@ -685,49 +769,56 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
         return result;
     }
 
+    // An instance is brought in line with its asset's exposed-variable definitions when they change (and on its
+    // first call), not on every call: a variable a script wrote is marked overridden and keeps its value, any
+    // other one always holds the default.
     if (const auto definitions = exposedVariables_.find(assetId.value); definitions != exposedVariables_.end()) {
-        std::vector<PucLuaExposedVariableInstance>& variables = instanceVariables_[instanceKey];
-        std::vector<std::string_view> declaredNames;
-        declaredNames.reserve(definitions->second.size());
-        for (const ExposedVariableRecord& definition : definitions->second) {
-            declaredNames.push_back(definition.pin.name);
-            PucLuaExposedVariableInstance* variable = PucLuaValueBridge::FindVariable(variables, definition.pin.name);
-            if (variable == nullptr) {
-                const ScriptValue value = definition.hasDefault ? definition.defaultValue : PucLuaValueBridge::DefaultFor(definition.pin.type);
-                variables.push_back(PucLuaExposedVariableInstance{
-                    .name = definition.pin.name,
-                    .type = definition.pin.type,
-                    .value = value,
-                    .overridden = false,
-                });
-                continue;
-            }
-            if (variable->type != definition.pin.type) {
-                if (variable->overridden) {
-                    result.diagnostics.push_back(ScriptDiagnostic{
-                        .entity = context.Self(),
-                        .assetId = assetId,
-                        .backend = behaviour.backend,
-                        .message = "lua exposed variable type conflict for '" + variable->name + "'",
+        InstanceVariableSet& instance = instanceVariables_[instanceKey];
+        if (instance.syncedRevision != exposedRevision_) {
+            std::vector<PucLuaExposedVariableInstance>& variables = instance.values;
+            std::vector<std::string_view> declaredNames;
+            declaredNames.reserve(definitions->second.size());
+            for (const ExposedVariableRecord& definition : definitions->second) {
+                declaredNames.push_back(definition.pin.name);
+                PucLuaExposedVariableInstance* variable = PucLuaValueBridge::FindVariable(variables, definition.pin.name);
+                if (variable == nullptr) {
+                    const ScriptValue value = definition.hasDefault ? definition.defaultValue : PucLuaValueBridge::DefaultFor(definition.pin.type);
+                    variables.push_back(PucLuaExposedVariableInstance{
+                        .name = definition.pin.name,
+                        .type = definition.pin.type,
+                        .value = value,
+                        .overridden = false,
                     });
-                    eraseDestroyedInstanceState();
-                    return result;
+                    continue;
                 }
-                const ScriptValue value = definition.hasDefault ? definition.defaultValue : PucLuaValueBridge::DefaultFor(definition.pin.type);
-                variable->type = definition.pin.type;
-                variable->value = value;
-                variable->overridden = false;
-                continue;
+                if (variable->type != definition.pin.type) {
+                    if (variable->overridden) {
+                        result.diagnostics.push_back(ScriptDiagnostic{
+                            .entity = context.Self(),
+                            .assetId = assetId,
+                            .backend = behaviour.backend,
+                            .message = "lua exposed variable type conflict for '" + variable->name + "'",
+                        });
+                        eraseDestroyedInstanceState();
+                        return result;
+                    }
+                    const ScriptValue value = definition.hasDefault ? definition.defaultValue : PucLuaValueBridge::DefaultFor(definition.pin.type);
+                    variable->type = definition.pin.type;
+                    variable->value = value;
+                    variable->overridden = false;
+                    continue;
+                }
+                if (!variable->overridden) {
+                    variable->value = definition.hasDefault ? definition.defaultValue : PucLuaValueBridge::DefaultFor(definition.pin.type);
+                }
             }
-            if (!variable->overridden) {
-                variable->value = definition.hasDefault ? definition.defaultValue : PucLuaValueBridge::DefaultFor(definition.pin.type);
-            }
+            variables.erase(
+                std::remove_if(variables.begin(), variables.end(), [&declaredNames](const PucLuaExposedVariableInstance& variable) {
+                    return !variable.overridden && std::ranges::find(declaredNames, std::string_view{ variable.name }) == declaredNames.end();
+                }),
+                variables.end());
+            instance.syncedRevision = exposedRevision_;
         }
-        variables.erase(
-            std::remove_if(variables.begin(), variables.end(), [&declaredNames](const PucLuaExposedVariableInstance& variable) {
-                return !variable.overridden && std::ranges::find(declaredNames, std::string_view{ variable.name }) == declaredNames.end();
-            }),
-            variables.end());
     }
 
     PucLuaStackGuard stack{ state_ };
@@ -746,24 +837,31 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
 
     // LIB-097: every Lua lifecycle/event entry is a generator. A yielded
     // thread is resumed on the next invocation of that same entry; a normal
-    // function still runs exactly once and then releases its thread.
+    // function still runs exactly once and its thread goes back to the idle
+    // pool. Only a thread that yields is anchored in the registry.
     lua_State* coroutine = nullptr;
     int coroutineRef = kNoReference;
     bool resuming = false;
-    if (const auto instance = coroutineRefs_.find(instanceKey); instance != coroutineRefs_.end()) {
-        if (const auto suspended = instance->second.find(std::string{functionName}); suspended != instance->second.end()) {
-            coroutineRef = suspended->second;
-            lua_rawgeti(state_, LUA_REGISTRYINDEX, coroutineRef);
-            coroutine = lua_tothread(state_, -1);
-            lua_pop(state_, 1);
-            resuming = coroutine != nullptr;
+    if (!coroutineRefs_.empty()) {
+        if (const auto instance = coroutineRefs_.find(instanceKey); instance != coroutineRefs_.end()) {
+            if (const auto suspended = instance->second.find(std::string{functionName}); suspended != instance->second.end()) {
+                coroutineRef = suspended->second;
+                lua_rawgeti(state_, LUA_REGISTRYINDEX, coroutineRef);
+                coroutine = lua_tothread(state_, -1);
+                resuming = coroutine != nullptr;
+                if (!resuming) {
+                    lua_pop(state_, 1);
+                }
+            }
         }
     }
 
     int argumentCount = 0;
     bool resumingInsideHook = false;
+    int threadIndex = 0;
     if (coroutine == nullptr) {
-        lua_getfield(state_, environmentIndex, std::string{ functionName }.c_str());
+        lua_pushlstring(state_, functionName.data(), functionName.size());
+        lua_gettable(state_, environmentIndex);
         if (lua_isnil(state_, -1) != 0) {
             eraseDestroyedInstanceState();
             return result;
@@ -778,15 +876,14 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
             eraseDestroyedInstanceState();
             return result;
         }
-        coroutine = lua_newthread(state_);
-        *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(coroutine)) = this;
-        lua_pushvalue(state_, -1);
-        coroutineRef = luaL_ref(state_, LUA_REGISTRYINDEX);
-        lua_pop(state_, 1);
-        // Stack now holds environment and the entry function. Move the
-        // function to the owned generator thread before its first resume.
+        coroutine = AcquireThread();
+        threadIndex = lua_gettop(state_);
+        // The stack now holds the environment, the entry function and the thread. The function is copied to the
+        // thread before its first resume.
+        lua_pushvalue(state_, threadIndex - 1);
         lua_xmove(state_, coroutine, 1);
-    } else if (resuming) {
+    } else {
+        threadIndex = lua_gettop(state_);
         resumingInsideHook = SuspendedInsideHook(coroutine);
         if (!resumingInsideHook) {
             lua_settop(coroutine, 0);
@@ -820,8 +917,7 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
     std::string coroutineError =
         status == LUA_OK ? std::string{} : PucLuaErrorReporter::ErrorWithTracebackFromTop(coroutine);
     if (status != LUA_OK && coroutineError.find("stack traceback") == std::string::npos) {
-        const auto script = scripts_.find(assetId.value);
-        const std::string_view chunkName = script == scripts_.end() ? std::string_view{ "<unknown>" } : std::string_view{ script->second.chunkName };
+        const auto chunkName = std::string_view{ script->second.chunkName };
         coroutineError += "\nstack traceback:\n\t[entry " + std::string{ functionName } + " in " + std::string{ chunkName } + "]";
     }
     PucLuaDebugHook::Clear(coroutine);
@@ -838,6 +934,10 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
         debugStepThread_ = nullptr;
     }
     if (status == LUA_YIELD) {
+        if (coroutineRef == kNoReference) {
+            lua_pushvalue(state_, threadIndex);
+            coroutineRef = luaL_ref(state_, LUA_REGISTRYINDEX);
+        }
         coroutineRefs_[instanceKey][std::string{functionName}] = coroutineRef;
         if (debugSuspended) {
             debugPause_ = DebugPause{
@@ -863,18 +963,16 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
         return result;
     }
 
-    if (const auto instance = coroutineRefs_.find(instanceKey); instance != coroutineRefs_.end()) {
-        if (const auto suspended = instance->second.find(std::string{functionName}); suspended != instance->second.end()) {
-            luaL_unref(state_, LUA_REGISTRYINDEX, suspended->second);
-            instance->second.erase(suspended);
-            if (instance->second.empty()) {
-                coroutineRefs_.erase(instance);
+    if (resuming) {
+        if (const auto instance = coroutineRefs_.find(instanceKey); instance != coroutineRefs_.end()) {
+            if (const auto suspended = instance->second.find(std::string{functionName}); suspended != instance->second.end()) {
+                luaL_unref(state_, LUA_REGISTRYINDEX, suspended->second);
+                instance->second.erase(suspended);
+                if (instance->second.empty()) {
+                    coroutineRefs_.erase(instance);
+                }
             }
-        } else if (coroutineRef != kNoReference) {
-            luaL_unref(state_, LUA_REGISTRYINDEX, coroutineRef);
         }
-    } else if (coroutineRef != kNoReference) {
-        luaL_unref(state_, LUA_REGISTRYINDEX, coroutineRef);
     }
     if (status != LUA_OK) {
         const std::size_t traceOffset = coroutineError.find("\nstack traceback:");
@@ -890,6 +988,7 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
         return result;
     }
 
+    ReleaseThread(coroutine, threadIndex);
     result.executed = true;
     eraseDestroyedInstanceState();
     return result;

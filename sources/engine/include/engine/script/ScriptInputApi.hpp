@@ -1,5 +1,7 @@
 #pragma once
 
+#include "engine/input/InputLocalUser.hpp"
+
 namespace kb::script {
 
 class ScriptRuntimeHost;
@@ -108,6 +110,8 @@ class ScriptRuntimeHost;
 // unplugged) and react, e.g. auto-pause or show a reconnect prompt.
 struct ScriptInputApi {
     [[nodiscard]] static bool Register(ScriptRuntimeHost& host);
+    // The local user a script's optional `player` argument selects: none or <= 0 is the primary user.
+    [[nodiscard]] static kb::input::LocalUserId UserForPlayer(int player) noexcept;
 };
 
 } // namespace kb::script

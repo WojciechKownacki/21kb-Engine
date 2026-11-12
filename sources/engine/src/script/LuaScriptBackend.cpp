@@ -27,6 +27,10 @@ void LuaScriptBackend::ApplyExposedVariableOverrides(
     }
 }
 
+bool LuaScriptBackend::HasEntry(const kb::scene::BehaviourComponent& behaviour, std::string_view name) {
+    return runtime_.HasEntry(behaviour, name);
+}
+
 void LuaScriptBackend::ResetAssetForHotReload(kb::assets::AssetId assetId, ScriptEventBus& events) noexcept {
     runtime_.ResetAssetForHotReload(assetId, events);
 }
