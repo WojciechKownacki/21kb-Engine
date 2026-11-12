@@ -1498,6 +1498,38 @@ ReadScriptValue(
         const bool matched = state.context.SelectedEntity() == ResolveEntity(state, *alias);
         return {matched, matched ? "ray selects the rendered owner" : "ray selected a different object"};
     }
+    if (*operation == "assert_viewport_click") {
+        // Frames the Scene View on a sphere looking along +Z, clicks where a world point lands on screen (moved by
+        // offset_x pixels) through the viewport's click selection, and checks what is selected; without "entity"
+        // the click must clear the selection.
+        const auto focusRadius = NumberMember(step, "focus_radius", error);
+        const auto x = NumberMember(step, "x", error);
+        const auto y = NumberMember(step, "y", error);
+        const auto z = NumberMember(step, "z", error);
+        if (!focusRadius || !x || !y || !z) return {false, error};
+        const auto offsetX = NumberMember(step, "offset_x", error, false);
+        const auto alias = StringMember(step, "entity", error, false);
+        EditorViewportCameraState& camera = state.context.ViewportCamera();
+        camera.SetViewAngles(0.0F, 0.0F);
+        camera.FocusOn(kb::scene::Vec3{}, static_cast<float>(*focusRadius), 0.0F);
+        const RECT renderArea{0, 0, 960, 540};
+        const kb::scene::Vec3 world{static_cast<float>(*x), static_cast<float>(*y), static_cast<float>(*z)};
+        float screenX = 0.0F;
+        float screenY = 0.0F;
+        if (!EditorSceneViewportMath::WorldToScreen(camera, renderArea, world, screenX, screenY)) return {false, "the click point is behind the camera"};
+        screenX += static_cast<float>(offsetX.value_or(0.0));
+        const EditorViewportCameraAxes axes = camera.Axes();
+        const float tanHalfFov = std::tan(EditorSceneViewportMath::DegreesToRadians(camera.VerticalFovDegrees()) * 0.5F);
+        const float ndcX = screenX / 960.0F * 2.0F - 1.0F;
+        const float ndcY = 1.0F - screenY / 540.0F * 2.0F;
+        const EditorSceneViewportRay ray{axes.position, EditorSceneViewportMath::Normalize(axes.forward +
+            axes.right * (ndcX * tanHalfFov * 960.0F / 540.0F) + axes.up * (ndcY * tanHalfFov))};
+        const auto pick = EditorSceneViewportMeshPicker::PickNearest(state.context.Scene(), camera, renderArea, screenX, screenY, ray);
+        EditorSceneViewportSelectionController::ApplyClick(state.context, pick.entity, EditorSceneViewportSelectionMode::Replace);
+        const kb::scene::SceneEntity expected = alias ? ResolveEntity(state, *alias) : kb::scene::SceneEntity{};
+        const bool matched = alias ? state.context.SelectedEntity() == expected : state.context.SelectedHierarchyEntities().empty();
+        return {matched, matched ? "the click selects what is drawn under it" : "the click selected a different object"};
+    }
     if (*operation == "assert_sprite_visibility") {
         const auto alias = StringMember(step, "entity", error);
         const auto expected = BoolMember(step, "visible", error);

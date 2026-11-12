@@ -28,8 +28,6 @@ constexpr std::uint32_t kRotateRingSegments = 96U;
 constexpr std::uint32_t kRotateRingTubeSegments = 8U;
 constexpr std::uint32_t kHubStacks = 16U;
 constexpr std::uint32_t kHubSlices = 32U;
-constexpr std::uint32_t kLightWireframeSegments = 64U;
-constexpr float kLightWireframeMinRange = 0.01F;
 constexpr float kLightWireframeThicknessScale = 0.018F;
 constexpr std::uint32_t kLightIconDiscSegments = 32U;
 constexpr std::uint32_t kLightIconRayCount = 8U;
@@ -751,66 +749,17 @@ void AppendSceneIcons(
     }
 }
 
-void AppendCircle(
-    std::vector<Vertex>& output,
-    std::array<float, 3> center,
-    std::array<float, 3> axisA,
-    std::array<float, 3> axisB,
-    float radius,
-    std::array<float, 3> color,
-    float alpha,
-    float thickness) {
-    const float clampedRadius = std::max(kLightWireframeMinRange, radius);
-    for (std::uint32_t i = 0; i < kLightWireframeSegments; ++i) {
-        const float t0 = static_cast<float>(i) / static_cast<float>(kLightWireframeSegments);
-        const float t1 = static_cast<float>(i + 1U) / static_cast<float>(kLightWireframeSegments);
-        const float a0 = t0 * 2.0F * kPi;
-        const float a1 = t1 * 2.0F * kPi;
-        const std::array<float, 3> p0 = Add(center, Add(Mul(axisA, std::cos(a0) * clampedRadius), Mul(axisB, std::sin(a0) * clampedRadius)));
-        const std::array<float, 3> p1 = Add(center, Add(Mul(axisA, std::cos(a1) * clampedRadius), Mul(axisB, std::sin(a1) * clampedRadius)));
-        AppendThickLine(output, p0, p1, color, alpha, axisA, axisB, thickness);
-    }
-}
-
-void AppendPointLightWireframe(std::vector<Vertex>& output, const EditorLightWireframeDesc& light) {
-    constexpr std::array<float, 3> xAxis{1.0F, 0.0F, 0.0F};
-    constexpr std::array<float, 3> yAxis{0.0F, 1.0F, 0.0F};
-    constexpr std::array<float, 3> zAxis{0.0F, 0.0F, 1.0F};
-    const std::array<float, 3> color = LightWireframeColor(light);
-    const float thickness = LightWireframeThickness(light);
-    const float selectedBoost = light.selected ? 1.18F : 1.0F;
-    AppendCircle(output, light.position, xAxis, yAxis, light.range, color, 0.78F * selectedBoost, thickness);
-    AppendCircle(output, light.position, xAxis, zAxis, light.range, color, 0.50F * selectedBoost, thickness);
-    AppendCircle(output, light.position, yAxis, zAxis, light.range, color, 0.50F * selectedBoost, thickness);
-}
-
-void AppendSpotLightWireframe(std::vector<Vertex>& output, const EditorLightWireframeDesc& light) {
-    const float range = std::max(kLightWireframeMinRange, light.range);
-    const float coneRadians = std::clamp(light.outerConeDegrees, 0.0F, 179.0F) * 0.5F * kPi / 180.0F;
-    const float radius = std::tan(coneRadians) * range;
-    const std::array<float, 3> endCenter = Add(light.position, Mul(light.forward, range));
-    const std::array<float, 3> color = LightWireframeColor(light);
-    const float thickness = LightWireframeThickness(light);
-    const float selectedBoost = light.selected ? 1.18F : 1.0F;
-    AppendCircle(output, endCenter, light.right, light.up, radius, color, 0.78F * selectedBoost, thickness);
-
-    for (std::uint32_t i = 0; i < 4U; ++i) {
-        const float angle = static_cast<float>(i) * kPi * 0.5F + kPi * 0.25F;
-        const std::array<float, 3> rim = Add(endCenter, Add(Mul(light.right, std::cos(angle) * radius), Mul(light.up, std::sin(angle) * radius)));
-        AppendThickLine(output, light.position, rim, color, 0.82F * selectedBoost, light.right, light.up, thickness);
-    }
-}
-
 void AppendLightWireframes(std::vector<Vertex>& output, std::span<const EditorLightWireframeDesc> lights) {
-    output.reserve(output.size() + lights.size() * static_cast<std::size_t>(kLightWireframeSegments * 6U));
+    std::vector<EditorLightWireframeLine> lines;
     for (const EditorLightWireframeDesc& light : lights) {
-        if (light.kind == EditorLightWireframeKind::Directional || light.range <= 0.0F) {
-            continue;
-        }
-        if (light.kind == EditorLightWireframeKind::Spot) {
-            AppendSpotLightWireframe(output, light);
-        } else {
-            AppendPointLightWireframe(output, light);
+        lines.clear();
+        BuildEditorLightWireframeLines(light, lines);
+        const std::array<float, 3> color = LightWireframeColor(light);
+        const float thickness = LightWireframeThickness(light);
+        const float selectedBoost = light.selected ? 1.18F : 1.0F;
+        output.reserve(output.size() + lines.size() * 6U);
+        for (const EditorLightWireframeLine& line : lines) {
+            AppendThickLine(output, line.from, line.to, color, line.alpha * selectedBoost, line.planeA, line.planeB, thickness);
         }
     }
 }

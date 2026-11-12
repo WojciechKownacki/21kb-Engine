@@ -198,6 +198,7 @@ void CollectShapesVisitor(SceneEntity entity, const TransformComponent& transfor
     auto* context = static_cast<CollectContext*>(rawContext);
     const Scene& scene = *context->scene;
     std::vector<PhysicsDebugLineDesc>& output = *context->lines;
+    const std::size_t firstLine = output.size();
     const Vec3 position = kb::math::RelativeTo(scene.Transforms().WorldTranslation(entity, transform), context->origin);
 
     const float scaleX = NonZeroAbs(transform.worldScale.x);
@@ -270,6 +271,10 @@ void CollectShapesVisitor(SceneEntity entity, const TransformComponent& transfor
         }
         AppendLine(output, ownerAnchor, connectedAnchor, kJointColor, kJointAlpha);
         AppendJointLimits(output, *joint, transform.worldRotation, ownerAnchor, connectedAnchor);
+    }
+
+    for (std::size_t i = firstLine; i < output.size(); ++i) {
+        output[i].owner = entity;
     }
 }
 

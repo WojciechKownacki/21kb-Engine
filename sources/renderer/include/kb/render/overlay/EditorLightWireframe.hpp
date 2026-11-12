@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <vector>
 
 namespace kb::render {
 
@@ -25,5 +26,22 @@ struct EditorLightWireframeDesc {
     float iconWorldScale = 1.0F;
     bool selected = false;
 };
+
+// One straight piece of a light's range shape. `planeA` and `planeB` span the plane the piece is
+// drawn in, so a drawn ribbon can be widened inside it.
+struct EditorLightWireframeLine {
+    std::array<float, 3> from{0.0F, 0.0F, 0.0F};
+    std::array<float, 3> to{0.0F, 0.0F, 0.0F};
+    std::array<float, 3> planeA{1.0F, 0.0F, 0.0F};
+    std::array<float, 3> planeB{0.0F, 1.0F, 0.0F};
+    float alpha = 1.0F;
+};
+
+// Appends every line of the light's range shape: three axis circles for a point light, the far
+// ring and four edges for a spot light. A directional light, or a light without range, has none.
+// The Scene View draws exactly these lines and picks against exactly these lines.
+void BuildEditorLightWireframeLines(
+    const EditorLightWireframeDesc& light,
+    std::vector<EditorLightWireframeLine>& output);
 
 } // namespace kb::render

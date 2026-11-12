@@ -23,7 +23,8 @@ public:
         const RECT& renderArea,
         float screenX,
         float screenY,
-        const EditorSceneViewportRay& ray);
+        const EditorSceneViewportRay& ray,
+        float dpiScale = 1.0F);
     [[nodiscard]] static std::vector<kb::scene::SceneEntity> PickInsideRect(
         kb::scene::Scene& scene,
         const EditorViewportCameraState& camera,

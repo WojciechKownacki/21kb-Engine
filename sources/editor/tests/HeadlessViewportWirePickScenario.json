@@ -1,0 +1,22 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    { "op": "create_scene", "name": "WirePick", "template": "Empty" },
+
+    { "op": "create_entity", "id": "left", "name": "Left Light", "preset": "Point Light" },
+    { "op": "set_entity_position", "entity": "left", "x": -1.5, "y": 0.0, "z": 0.0 },
+    { "op": "set_property", "entity": "left", "component": "Light", "property": "range", "value": 2.0 },
+    { "op": "create_entity", "id": "right", "name": "Right Light", "preset": "Point Light" },
+    { "op": "set_entity_position", "entity": "right", "x": 1.5, "y": 0.0, "z": 0.0 },
+    { "op": "set_property", "entity": "right", "component": "Light", "property": "range", "value": 2.0 },
+    { "op": "create_entity", "id": "cube", "name": "Cube", "preset": "Cube" },
+    { "op": "set_entity_position", "entity": "cube", "x": 0.0, "y": -2.8, "z": 0.0 },
+
+    { "op": "assert_viewport_click", "focus_radius": 4.0, "x": -3.5, "y": 0.0, "z": 0.0, "offset_x": 3.0, "entity": "left" },
+    { "op": "assert_viewport_click", "focus_radius": 4.0, "x": 0.0, "y": 0.8, "z": 0.0 },
+    { "op": "assert_viewport_click", "focus_radius": 4.0, "x": 3.5, "y": 0.0, "z": 0.0, "offset_x": -3.0, "entity": "right" },
+    { "op": "assert_viewport_click", "focus_radius": 4.0, "x": 1.5, "y": 1.0, "z": -1.0 },
+    { "op": "assert_viewport_click", "focus_radius": 4.0, "x": 0.0, "y": -2.8, "z": -1.0, "entity": "cube" },
+    { "op": "assert_viewport_click", "focus_radius": 4.0, "x": 0.0, "y": 0.8, "z": 0.0 }
+  ]
+}

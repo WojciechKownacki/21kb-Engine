@@ -188,6 +188,7 @@ add_library(kb_renderer STATIC
     src/frame/RenderPassGraphValidator.hpp
     src/frame/RenderPassKind.cpp
     src/overlay/EditorCameraWireframe.cpp
+    src/overlay/EditorLightWireframe.cpp
     src/overlay/SceneGizmoPass.cpp
     src/overlay/SceneGridPass.cpp
     src/overlay/SelectionBoxOverlayPass.cpp

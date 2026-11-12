@@ -67,7 +67,8 @@ bool EditorSceneViewportSelectionInteraction::SelectAt(
         hit->renderArea,
         hit->localX,
         hit->localY,
-        hit->ray);
+        hit->ray,
+        static_cast<float>(GetDpiForWindow(sourceWindow)) / static_cast<float>(USER_DEFAULT_SCREEN_DPI));
     sceneContext.AssetBrowser().ClearSelection();
     EditorSceneViewportSelectionController::ApplyClick(sceneContext, pick.entity, CurrentSelectionMode());
     return true;

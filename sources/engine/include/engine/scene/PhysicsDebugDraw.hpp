@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/TransformComponent.hpp"
 
 #include <vector>
@@ -19,6 +20,9 @@ struct PhysicsDebugLineDesc {
     Vec3 to{};
     Vec3 color{1.0F, 1.0F, 1.0F};
     float alpha = 1.0F;
+    // The entity whose collider, character controller or joint the line outlines, so a Scene View
+    // click on the line can select it. Invalid for the query trace, which belongs to no entity.
+    SceneEntity owner{};
 };
 
 // LIB-132: "trace pojedynczego query" - literally ONE query, not a history/log. Recorded by

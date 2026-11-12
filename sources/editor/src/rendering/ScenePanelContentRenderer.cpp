@@ -47,7 +47,6 @@ namespace {
 constexpr float kGizmoTargetPixels = 90.0F;
 constexpr float kGizmoAxisLength = 1.16F;
 constexpr float kMinGizmoDepth = 0.25F;
-constexpr float kCameraWireframeWorldDepth = 10.0F;
 
 struct SceneViewportRenderProfileDesc {
     kb::render::SceneRenderMeshPassMode meshPassMode = kb::render::SceneRenderMeshPassMode::OpaqueOnly;
@@ -335,17 +334,6 @@ struct LightWireframeBasis {
     return transform.worldDirty ? transform.localRotation : transform.worldRotation;
 }
 
-[[nodiscard]] float CameraWireframeDisplayFarClip(
-    const kb::scene::CameraComponent& camera) noexcept {
-    const float nearClip = std::max(0.0001F, camera.nearClip);
-    const float authoredFarClip =
-        std::max(nearClip + 0.0001F, camera.farClip);
-    const float minimumVisibleDepth = nearClip + 0.001F;
-    return std::min(
-        authoredFarClip,
-        std::max(minimumVisibleDepth, kCameraWireframeWorldDepth));
-}
-
 [[nodiscard]] std::vector<kb::render::EditorCameraWireframeDesc> BuildCameraWireframes(
     const EditorSceneContext& sceneContext,
     const kb::math::DVec3& origin) {
@@ -382,7 +370,7 @@ struct LightWireframeBasis {
                 // Keep the authoring frustum closed without changing
                 // Camera.farClip. A fixed world-space depth makes the gizmo
                 // naturally shrink/grow as Scene View moves away/towards it.
-                .displayFarClip = CameraWireframeDisplayFarClip(camera),
+                .displayFarClip = kb::render::EditorCameraWireframeDisplayFarClip(camera.nearClip, camera.farClip),
                 // CameraComponent does not own the editor fly-camera viewport.
                 // Keep its authoring wireframe square instead of inheriting the
                 // unrelated Scene View panel aspect ratio.

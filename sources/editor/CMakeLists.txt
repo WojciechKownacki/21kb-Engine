@@ -124,6 +124,7 @@ add_executable(kb_editor WIN32
     src/app/scene_viewport/EditorSceneViewportMath.cpp
     src/app/scene_viewport/EditorSceneViewportAssetDragPreview.cpp
     src/app/scene_viewport/EditorSceneViewportMeshPicker.cpp
+    src/app/scene_viewport/EditorViewportOverlayPick.cpp
     src/app/scene_viewport/EditorUIRectInteraction.cpp
     src/private/app/scene_viewport/EditorUIRectInteraction.hpp
     src/private/scene/EditorUIRectDragState.hpp
@@ -419,6 +420,7 @@ add_executable(kb_editor WIN32
     src/private/app/scene_viewport/EditorSceneViewportHitResolver.hpp
     src/private/app/scene_viewport/EditorSceneViewportAssetDragPreview.hpp
     src/private/app/scene_viewport/EditorSceneViewportMeshPicker.hpp
+    src/private/app/scene_viewport/EditorViewportOverlayPick.hpp
     src/private/app/scene_viewport/EditorSceneViewportObjectInteraction.hpp
     src/private/app/scene_viewport/EditorSceneViewportSelectionController.hpp
     src/private/app/scene_viewport/EditorSceneViewportSelectionInteraction.hpp
@@ -1607,6 +1609,7 @@ if(BUILD_TESTING)
           tests/EditorGameplayGraphTests.cpp
           src/app/scene_viewport/EditorSceneViewportMath.cpp
           src/app/scene_viewport/EditorSceneViewportMeshPicker.cpp
+          src/app/scene_viewport/EditorViewportOverlayPick.cpp
       src/scene/material/EditorMaterialAssetAuthoring.cpp
     src/scene/material/EditorMaterialAssetEditCommand.cpp
     src/scene/material/EditorMaterialAssetGateway.cpp
@@ -2203,6 +2206,13 @@ if(BUILD_TESTING)
             --selftest-task "SELFTEST-Joint-Kinds")
     set_tests_properties(kb_editor_joint_kinds_headless PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;physics" TIMEOUT 180)
+    add_test(NAME kb_editor_viewport_wire_pick_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessViewportWirePickScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Viewport-Wire-Pick")
+    set_tests_properties(kb_editor_viewport_wire_pick_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;selection" TIMEOUT 180)
     add_test(NAME kb_editor_animator_workflow_headless
         COMMAND $<TARGET_FILE:kb_editor>
             --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessAnimatorWorkflowScenario.json"

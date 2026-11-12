@@ -4,6 +4,7 @@
 #include "app/EditorPlayModeState.hpp"
 #include "app/scene_viewport/EditorViewportCameraNavigationInput.hpp"
 #include "app/scene_viewport/EditorSceneViewportMeshPicker.hpp"
+#include "app/scene_viewport/EditorViewportOverlayPick.hpp"
 #include "app/scene_viewport/EditorTerrainStrokeTickPolicy.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
 #include "engine/scene/LightComponent.hpp"
@@ -1214,78 +1215,86 @@ kb::editor::EditorSceneViewportRay BuildViewportRay(
     };
 }
 
-void RunViewportLightWireframePickerChoosesNestedInnerWireframeTest() {
+void RunViewportScreenSegmentDistanceTest() {
+    float along = -1.0F;
+    const float middle = kb::editor::EditorViewportScreenSegmentDistance(5.0F, 3.0F, 0.0F, 0.0F, 10.0F, 0.0F, along);
+    kb::editor::tests::Require(std::abs(middle - 3.0F) < 0.0001F && std::abs(along - 0.5F) < 0.0001F,
+        "A click beside the middle of a screen segment should measure straight to it");
+    const float pastEnd = kb::editor::EditorViewportScreenSegmentDistance(13.0F, 4.0F, 0.0F, 0.0F, 10.0F, 0.0F, along);
+    kb::editor::tests::Require(std::abs(pastEnd - 5.0F) < 0.0001F && along == 1.0F,
+        "A click past the end of a screen segment should measure to its end point");
+    const float degenerate = kb::editor::EditorViewportScreenSegmentDistance(3.0F, 4.0F, 0.0F, 0.0F, 0.0F, 0.0F, along);
+    kb::editor::tests::Require(std::abs(degenerate - 5.0F) < 0.0001F && along == 0.0F,
+        "A segment collapsed to a point should measure to that point");
+    kb::editor::tests::Require(
+        kb::editor::EditorViewportWirePickTolerancePixels(2.0F) == 2.0F * kb::editor::EditorViewportWirePickTolerancePixels(1.0F),
+        "The line pick tolerance should grow with the display scale");
+}
+
+void RunViewportOverlayPickWinnerTest() {
+    const kb::scene::SceneEntity lineOwner{ 1U };
+    const kb::scene::SceneEntity otherLineOwner{ 2U };
+    const kb::scene::SceneEntity meshOwner{ 3U };
+    const kb::editor::EditorViewportOverlayHit closeLine{ .entity = lineOwner, .pixelDistance = 1.0F, .depth = 20.0F };
+    const kb::editor::EditorViewportOverlayHit distantLine{ .entity = otherLineOwner, .pixelDistance = 4.0F, .depth = 5.0F };
+    kb::editor::tests::Require(kb::editor::EditorViewportOverlayHitIsBetter(closeLine, distantLine) && !kb::editor::EditorViewportOverlayHitIsBetter(distantLine, closeLine),
+        "The line closest to the click on screen should win, however deep it lies");
+    const kb::editor::EditorViewportOverlayHit tieNearer{ .entity = otherLineOwner, .pixelDistance = 1.2F, .depth = 8.0F };
+    kb::editor::tests::Require(kb::editor::EditorViewportOverlayHitIsBetter(tieNearer, closeLine),
+        "Lines equally close on screen should resolve to the one nearer the camera");
+
+    const kb::editor::EditorSceneViewportPickResult meshInFront{ .entity = meshOwner, .distance = 10.0F };
+    const kb::editor::EditorSceneViewportPickResult meshBehind{ .entity = meshOwner, .distance = 30.0F };
+    kb::editor::tests::Require(kb::editor::ResolveViewportClickPick(meshInFront, closeLine).entity == meshOwner,
+        "Geometry in front of a line should keep the click");
+    kb::editor::tests::Require(kb::editor::ResolveViewportClickPick(meshBehind, closeLine).entity == lineOwner,
+        "A line in front of geometry should take the click");
+    kb::editor::tests::Require(kb::editor::ResolveViewportClickPick(meshBehind, {}).entity == meshOwner,
+        "Without a line or icon nearby the geometry under the cursor should be picked");
+    kb::editor::tests::Require(!kb::editor::ResolveViewportClickPick({}, {}).IsValid(),
+        "A click on empty space should pick nothing");
+}
+
+// Two overlapping point lights seen straight along the Z axis: each is picked only by its own
+// drawn lines and its icon, never by the space inside its range.
+void RunViewportLightWireframePicksOnlyByLinesTest() {
     kb::scene::Scene scene;
-    const kb::scene::SceneEntity outerLight = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Outer Point Light" });
-    const kb::scene::SceneEntity innerLight = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Inner Point Light" });
+    const kb::scene::SceneEntity leftLight = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Left Point Light" });
+    const kb::scene::SceneEntity rightLight = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Right Point Light" });
+    const kb::scene::Vec3 leftPosition{-1.5F, 0.0F, 0.0F};
+    const kb::scene::Vec3 rightPosition{1.5F, 0.0F, 0.0F};
+    for (const auto& [entity, position] : { std::pair{leftLight, leftPosition}, std::pair{rightLight, rightPosition} }) {
+        scene.Components().Lights().Set(entity, kb::scene::LightComponent{ .kind = kb::scene::LightKind::Point, .range = 2.0F });
+        scene.Transforms().Set(entity, kb::scene::TransformComponent{ .localPosition = position });
+    }
 
-    scene.Components().Lights().Set(outerLight, kb::scene::LightComponent{
-        .kind = kb::scene::LightKind::Point,
-        .range = 3.0F,
-    });
-    scene.Components().Lights().Set(innerLight, kb::scene::LightComponent{
-        .kind = kb::scene::LightKind::Point,
-        .range = 1.0F,
-    });
-
-    const kb::scene::Vec3 position{0.0F, 0.0F, 0.0F};
-    scene.Transforms().Set(outerLight, kb::scene::TransformComponent{ .localPosition = position, .worldPosition = position });
-    scene.Transforms().Set(innerLight, kb::scene::TransformComponent{ .localPosition = position, .worldPosition = position });
-
-    const kb::editor::EditorViewportCameraState camera;
+    kb::editor::EditorViewportCameraState camera;
+    camera.SetViewAngles(0.0F, 0.0F);
+    camera.FocusOn(kb::scene::Vec3{0.0F, 0.0F, 0.0F}, 4.0F, 0.0F);
+    kb::editor::tests::Require(std::abs(camera.Axes().forward.z) > 0.999F,
+        "The overlapping lights fixture should look straight along the Z axis");
     const RECT renderArea{0, 0, 960, 540};
-    const kb::editor::EditorViewportCameraAxes axes = camera.Axes();
-    float screenX = 0.0F;
-    float screenY = 0.0F;
-    const bool projected = kb::editor::EditorSceneViewportMath::WorldToScreen(
-        camera,
-        renderArea,
-        kb::editor::EditorSceneViewportMath::Add(position, kb::editor::EditorSceneViewportMath::Mul(axes.right, 1.0F)),
-        screenX,
-        screenY);
+    const auto click = [&](kb::scene::Vec3 world, float offsetX) {
+        float x = 0.0F;
+        float y = 0.0F;
+        kb::editor::tests::Require(kb::editor::EditorSceneViewportMath::WorldToScreen(camera, renderArea, world, x, y),
+            "Overlapping lights test point should project into the viewport");
+        x += offsetX;
+        return kb::editor::EditorSceneViewportMeshPicker::PickNearest(scene, camera, renderArea, x, y, BuildViewportRay(camera, renderArea, x, y));
+    };
 
-    kb::editor::tests::Require(projected, "Point light wireframe test point should project into the viewport");
-    const kb::editor::EditorSceneViewportPickResult pick = kb::editor::EditorSceneViewportMeshPicker::PickNearest(
-        scene,
-        camera,
-        renderArea,
-        screenX,
-        screenY,
-        BuildViewportRay(camera, renderArea, screenX, screenY));
-
-    kb::editor::tests::Require(pick.IsValid(), "Viewport picker should hit a point light wireframe");
-    kb::editor::tests::Require(pick.entity == innerLight, "Viewport picker should choose the nested inner light wireframe");
-
-    float insideScreenX = 0.0F;
-    float insideScreenY = 0.0F;
-    const bool insideProjected = kb::editor::EditorSceneViewportMath::WorldToScreen(
-        camera,
-        renderArea,
-        kb::editor::EditorSceneViewportMath::Add(position, kb::editor::EditorSceneViewportMath::Mul(axes.right, 0.5F)),
-        insideScreenX,
-        insideScreenY);
-    kb::editor::tests::Require(insideProjected, "Nested point light interior test point should project into the viewport");
-    const kb::editor::EditorSceneViewportPickResult insidePick = kb::editor::EditorSceneViewportMeshPicker::PickNearest(
-        scene,
-        camera,
-        renderArea,
-        insideScreenX,
-        insideScreenY,
-        BuildViewportRay(camera, renderArea, insideScreenX, insideScreenY));
-    kb::editor::tests::Require(insidePick.IsValid(), "Viewport picker should hit a point light interior without pixel-perfect aiming");
-    kb::editor::tests::Require(insidePick.entity == innerLight, "Viewport picker should prefer the nested inner light volume over the enclosing outer light");
-
-    const float forgivingScreenX = screenX + 12.0F;
-    const float forgivingScreenY = screenY;
-    const kb::editor::EditorSceneViewportPickResult forgivingPick = kb::editor::EditorSceneViewportMeshPicker::PickNearest(
-        scene,
-        camera,
-        renderArea,
-        forgivingScreenX,
-        forgivingScreenY,
-        BuildViewportRay(camera, renderArea, forgivingScreenX, forgivingScreenY));
-    kb::editor::tests::Require(forgivingPick.IsValid(), "Viewport picker should hit a point light wireframe with a forgiving pick radius");
-    kb::editor::tests::Require(forgivingPick.entity == innerLight, "Viewport picker should keep the nested inner light selectable near its wireframe edge");
+    kb::editor::tests::Require(!click(kb::scene::Vec3{0.0F, 0.8F, 0.0F}, 0.0F).IsValid(),
+        "A click inside both light ranges, away from every line, should pick nothing");
+    kb::editor::tests::Require(!click(kb::scene::Vec3{-1.5F, 1.0F, -1.0F}, 0.0F).IsValid(),
+        "A click inside one light range, away from its lines and icon, should pick nothing");
+    kb::editor::tests::Require(click(kb::scene::Vec3{-3.5F, 0.0F, 0.0F}, 3.0F).entity == leftLight,
+        "A click a few pixels from the left light's circle should pick the left light");
+    kb::editor::tests::Require(click(kb::scene::Vec3{3.5F, 0.0F, 0.0F}, -3.0F).entity == rightLight,
+        "A click a few pixels from the right light's circle should pick the right light");
+    kb::editor::tests::Require(!click(kb::scene::Vec3{3.5F, 0.0F, 0.0F}, 30.0F).IsValid(),
+        "A click well outside the line tolerance should pick nothing");
+    kb::editor::tests::Require(click(leftPosition, 0.0F).entity == leftLight,
+        "A click on a light's icon should pick that light");
 }
 
 void RunViewportLightIconPickerSelectsLightIconsTest() {
@@ -1302,7 +1311,8 @@ void RunViewportLightIconPickerSelectsLightIconsTest() {
     });
 
     const kb::scene::Vec3 pointPosition{-1.0F, 0.0F, 0.0F};
-    const kb::scene::Vec3 directionalPosition{1.0F, 0.0F, 0.0F};
+    // Clear of the point light's range circles, which pass through (1, 0, 0).
+    const kb::scene::Vec3 directionalPosition{3.0F, 0.0F, 0.0F};
     scene.Transforms().Set(pointLight, kb::scene::TransformComponent{ .localPosition = pointPosition });
     scene.Transforms().Set(directionalLight, kb::scene::TransformComponent{ .localPosition = directionalPosition });
 
@@ -1963,7 +1973,9 @@ void RunEditorViewportPreviewTests() {
     RunViewportMeshPickerSkipsHiddenMeshesTest();
     RunViewportMeshPickerUsesPublishedWorldBoundsTest();
     RunViewportMeshPickerPrefersPublishedBoxOverSphereTest();
-    RunViewportLightWireframePickerChoosesNestedInnerWireframeTest();
+    RunViewportScreenSegmentDistanceTest();
+    RunViewportOverlayPickWinnerTest();
+    RunViewportLightWireframePicksOnlyByLinesTest();
     RunViewportLightIconPickerSelectsLightIconsTest();
     RunViewportParticleIconPickerSelectsParticleEffectTest();
     RunViewportPickerSelectsEntityWithoutRenderableComponentTest();
