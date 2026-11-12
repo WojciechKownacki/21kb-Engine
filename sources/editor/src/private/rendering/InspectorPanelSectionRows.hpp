@@ -3,6 +3,8 @@
 #include "engine/scene/SceneTransforms.hpp"
 #include "localization/EditorLocalization.hpp"
 #include "inspection/EditorValueFormatter.hpp"
+#include "inspection/InspectorComponentDefaults.hpp"
+#include "inspection/InspectorFieldGuide.hpp"
 #include "inspection/InspectorPanelState.hpp"
 #include "inspection/InspectorSceneColor.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
@@ -15,6 +17,7 @@
 #include "rendering/ProjectFilesPanelDrawing.hpp"
 #include "rendering/components/CategoryHeader.hpp"
 #include "rendering/components/PropertyRow.hpp"
+#include "rendering/gdi/EditorTextMeasure.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
 
 #pragma warning(push, 0)
@@ -27,6 +30,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <span>
 #include <string>
 #include <string_view>
@@ -37,6 +41,8 @@ inline constexpr int kDisclosureRowHeight = 18;
 inline constexpr int kDisclosureTextOffset = 29;
 inline constexpr int kGroupRowHeight = 20;
 inline constexpr int kValueRightInset = 3;
+// The reset arrow a changed value shows at the right end of its label, and the entries of the component menu.
+inline constexpr int kResetMarkerWidth = 18;
 
 namespace {
 // The shared panel look now lives in EditorPanelStyle; these names stay unqualified
@@ -122,7 +128,8 @@ using panel_style::DrawTriangle;
 inline void DrawSectionHeader(HDC dc, RECT rect, const EditorTheme& theme, const InspectorPanelState& state, InspectorSectionId section, HeroIconKind icon, std::string_view title, bool removeButton = false) {
     const bool hovered = state.IsHovered(InspectorHitKind::SectionHeader, section, InspectorPropertyId::None);
     const bool actionHovered = removeButton &&
-        state.IsHovered(InspectorHitKind::ComponentMenuButton, section, InspectorPropertyId::ComponentRemove);
+        state.IsHovered(InspectorHitKind::ComponentMenuButton, section,
+            InspectorComponentDefaults::Supports(section) ? InspectorPropertyId::ComponentMenu : InspectorPropertyId::ComponentRemove);
     const CategoryHeaderLayout layout = CategoryHeader::Resolve(rect, true, removeButton, false);
     FillSectionHeaderBackground(dc, rect, hovered ? HoverFill(theme) : Color(theme.header));
     if (hovered) {
@@ -149,20 +156,24 @@ inline void DrawSectionHeader(HDC dc, RECT rect, const EditorTheme& theme, const
             layout.trailingAction,
             actionHovered ? HoverFill(theme) : Color(theme.strip),
             actionHovered ? Color(theme.accent) : Color(theme.borderPanel));
+        const bool menu = InspectorComponentDefaults::Supports(section);
         HeroIconPainter::Draw(
             dc,
-            Shrink(layout.trailingAction, 4, 4, 4, 4),
-            HeroIconKind::XMark,
-            actionHovered ? Color(theme.textPrimary) : Color(theme.textDisabled),
-            1);
+            Shrink(layout.trailingAction, menu ? 3 : 4, menu ? 3 : 4, menu ? 3 : 4, menu ? 3 : 4),
+            menu ? HeroIconKind::EllipsisHorizontal : HeroIconKind::XMark,
+            actionHovered ? Color(theme.textPrimary) : (menu ? Color(theme.textSecondary) : Color(theme.textDisabled)),
+            menu ? 2 : 1);
     }
 }
 
 // `hovered` and `editing` are deliberately separate. They used to be one flag, so a field being
 // typed into looked exactly like one the pointer happened to be over, and there was no way to
 // tell which field would receive the next keystroke.
+//
+// `unit` is written after the number in the box's right end. A `fill` from 0 to 1 draws the value as a slider: the
+// box shows how far along its range the number is (clicking and dragging it already scrubs the value).
 inline void DrawValueBox(HDC dc, RECT rect, const EditorTheme& theme, std::string_view value, bool hovered = false,
-                         bool editing = false, bool caretVisible = false) {
+                         bool editing = false, bool caretVisible = false, std::string_view unit = {}, float fill = -1.0F) {
     DrawInputFrame(
         dc,
         rect,
@@ -170,9 +181,26 @@ inline void DrawValueBox(HDC dc, RECT rect, const EditorTheme& theme, std::strin
         hovered || editing ? Color(theme.accent) : Color(theme.borderPanel),
         editing ? Color(theme.accent) : CLR_INVALID,
         editing ? 2.0F : 0.0F);
+    if (fill >= 0.0F && !editing) {
+        const int inner = std::max(0, static_cast<int>(rect.right - rect.left) - 4);
+        const int width = static_cast<int>(std::lround(static_cast<float>(inner) * std::clamp(fill, 0.0F, 1.0F)));
+        if (width > 0) {
+            const COLORREF accent = Color(theme.accent);
+            const COLORREF base = Color(theme.chrome);
+            const auto mix = [&](int shift) { return static_cast<int>(((accent >> shift) & 0xFFU) * 30U + ((base >> shift) & 0xFFU) * 70U) / 100; };
+            GdiDrawing::FillRectColor(dc, Rect(rect.left + 2, rect.bottom - 5, rect.left + 2 + width, rect.bottom - 2),
+                RGB(mix(0), mix(8), mix(16)));
+        }
+    }
     ScopedFont font(12, FW_NORMAL);
     const ScopedGdiObject selectedFont(dc, font.handle);
-    const RECT textRect = Shrink(rect, 9, 0, 4, 0);
+    RECT textRect = Shrink(rect, 9, 0, 4, 0);
+    if (!unit.empty()) {
+        const int unitWidth = MeasureTextWidth(unit, 12, FW_NORMAL);
+        const RECT unitRect = Rect(std::max(static_cast<int>(textRect.left), static_cast<int>(textRect.right) - unitWidth), textRect.top, textRect.right, textRect.bottom);
+        Text(dc, unitRect, unit, Color(theme.textDisabled), DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+        textRect.right = std::max(textRect.left, unitRect.left - 6);
+    }
     Text(dc, textRect, value, Color(theme.textPrimary));
     if (editing && caretVisible) {
         DrawTextCaret(dc, textRect, value, Color(theme.textPrimary));
@@ -242,11 +270,39 @@ inline void DrawRotationRow(HDC dc, RECT row, const EditorTheme& theme, const In
     DrawAxisLane(dc, z, theme, state, InspectorSectionId::Transform, InspectorPropertyId::RotationZ, 'Z', FormatFloat(degrees.z));
 }
 
+// The label of a row. A value that differs from its default gives the right end of the label to a reset arrow; the
+// arrow is where a click puts the value back (InspectorHitKind::ResetField).
+[[nodiscard]] inline RECT ResetMarkerRect(RECT row) noexcept {
+    const int right = InspectorLabelColumnRight(row);
+    return Rect(right - kResetMarkerWidth, row.top, right, row.bottom);
+}
+
+inline void DrawRowLabel(HDC dc, RECT row, const EditorTheme& theme, const InspectorPanelState& state, InspectorSectionId section,
+    InspectorPropertyId property, int index, std::string_view label) {
+    RECT labelRect = Rect(row.left + kRowPadX, row.top, InspectorLabelColumnRight(row), row.bottom);
+    const bool changed = state.IsFieldChanged(section, property, index);
+    if (changed) {
+        labelRect.right -= kResetMarkerWidth;
+    }
+    {
+        ScopedFont labelFont(12, FW_SEMIBOLD);
+        const ScopedGdiObject selectedFont(dc, labelFont.handle);
+        Text(dc, labelRect, label, Color(theme.textSecondary));
+    }
+    if (changed) {
+        const bool hovered = state.IsHovered(InspectorHitKind::ResetField, section, property, index);
+        const RECT marker = ResetMarkerRect(row);
+        const RECT icon = CenteredRect(marker, marker.left + 2, 14, 14);
+        HeroIconPainter::Draw(dc, icon, HeroIconKind::Undo, hovered ? Color(theme.accent) : Color(theme.textDisabled), 1);
+    }
+}
+
 // `editIndex` disambiguates rows that share one property id but are addressed by
 // index (physics fields, script variables). Pass -1 for singular rows. The inline
 // editor buffer is shown only in the specific row being edited, never in every
 // sibling row that happens to reuse the same property id.
-inline void DrawFieldRow(HDC dc, RECT row, const EditorTheme& theme, const InspectorPanelState& state, InspectorSectionId section, InspectorPropertyId property, std::string_view label, std::string_view value, int editIndex = -1) {
+inline void DrawFieldRow(HDC dc, RECT row, const EditorTheme& theme, const InspectorPanelState& state, InspectorSectionId section, InspectorPropertyId property, std::string_view label, std::string_view value, int editIndex = -1,
+    std::string_view unit = {}, float fill = -1.0F) {
     const bool indexedPassiveField = property == InspectorPropertyId::None && editIndex >= 0;
     const bool passiveHovered =
         indexedPassiveField &&
@@ -259,12 +315,8 @@ inline void DrawFieldRow(HDC dc, RECT row, const EditorTheme& theme, const Inspe
     GdiDrawing::FillRectColor(dc, row, rowHovered ? HoverFill(theme) : Color(theme.panel));
     const RECT labelRect = Rect(row.left + kRowPadX, row.top, InspectorLabelColumnRight(row), row.bottom);
     const RECT valueRect = Rect(labelRect.right, CenteredY(row, kValueHeight), row.right - kValueRightInset, CenteredY(row, kValueHeight) + kValueHeight);
-    {
-        ScopedFont labelFont(12, FW_SEMIBOLD);
-        const ScopedGdiObject selectedFont(dc, labelFont.handle);
-        Text(dc, labelRect, label, Color(theme.textSecondary));
-    }
-    DrawValueBox(dc, valueRect, theme, shown, valueHovered, editing, state.IsTextCaretVisible());
+    DrawRowLabel(dc, row, theme, state, section, property, editIndex, label);
+    DrawValueBox(dc, valueRect, theme, shown, valueHovered, editing, state.IsTextCaretVisible(), unit, fill);
 }
 
 // A colour swatch filling a value box (sRGB values); alpha shows over a checkerboard.
@@ -293,11 +345,7 @@ inline void DrawColorRow(HDC dc, RECT row, const EditorTheme& theme, const Inspe
     const bool swatchHovered = state.IsHovered(InspectorHitKind::ColorField, section, property);
     GdiDrawing::FillRectColor(dc, row, RowHovered(state, property) || swatchHovered ? HoverFill(theme) : Color(theme.panel));
     const RECT labelRect = Rect(row.left + kRowPadX, row.top, InspectorLabelColumnRight(row), row.bottom);
-    {
-        ScopedFont labelFont(12, FW_SEMIBOLD);
-        const ScopedGdiObject selectedFont(dc, labelFont.handle);
-        Text(dc, labelRect, label, Color(theme.textSecondary));
-    }
+    DrawRowLabel(dc, row, theme, state, section, property, -1, label);
     const RECT valueRect = Rect(labelRect.right, CenteredY(row, kValueHeight), row.right - kValueRightInset, CenteredY(row, kValueHeight) + kValueHeight);
     DrawColorSwatch(dc, valueRect, theme,
         { InspectorSceneColor::LinearToSrgb(linear.x), InspectorSceneColor::LinearToSrgb(linear.y), InspectorSceneColor::LinearToSrgb(linear.z), 1.0F },
@@ -503,6 +551,35 @@ inline void DrawAssetFieldRow(HDC dc, RECT row, const EditorTheme& theme, const 
     HeroIconPainter::Draw(dc, Shrink(button, 3, 3, 3, 3), HeroIconKind::MagnifyingGlass, buttonHovered ? Color(theme.textPrimary) : Color(theme.textSecondary), 1);
 }
 
+// One entry of a list that opens under a section (the component menu, the Joint's quick setups): a full-width
+// button row. A disabled entry stays visible and takes no click.
+inline void DrawMenuItemRow(HDC dc, RECT row, const EditorTheme& theme, const InspectorPanelState& state, InspectorSectionId section,
+    InspectorPropertyId property, int index, std::string_view label, bool enabled) {
+    const bool hovered = enabled && state.IsHovered(InspectorHitKind::Row, section, property, index);
+    GdiDrawing::FillRectColor(dc, row, Color(theme.panel));
+    const RECT button = Shrink(row, kRowPadX, 2, kValueRightInset, 2);
+    DrawInputFrame(dc, button, hovered ? HoverFill(theme) : Color(theme.chrome), hovered ? Color(theme.accent) : Color(theme.borderPanel));
+    ScopedFont font(12, FW_SEMIBOLD);
+    const ScopedGdiObject selectedFont(dc, font.handle);
+    Text(dc, button, label, !enabled ? Color(theme.textDisabled) : hovered ? Color(theme.textPrimary) : Color(theme.textSecondary),
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+
+[[nodiscard]] inline std::string_view ComponentMenuItemLabel(InspectorComponentMenuItem item) {
+    switch (item) {
+    case InspectorComponentMenuItem::Reset: return EditorText("inspector.menu.reset", "Reset");
+    case InspectorComponentMenuItem::Remove: return EditorText("inspector.menu.remove", "Remove Component");
+    case InspectorComponentMenuItem::Copy: return EditorText("inspector.menu.copy", "Copy Settings");
+    case InspectorComponentMenuItem::Paste: return EditorText("inspector.menu.paste", "Paste Settings");
+    }
+    return {};
+}
+
+// The height the open list under a section adds; sections add it to their own.
+[[nodiscard]] inline int OpenMenuHeight(const InspectorPanelState& state, InspectorSectionId section) noexcept {
+    return state.IsComponentMenuOpen(section) && !state.IsCollapsed(section) ? kComponentMenuItemCount * (kFieldRowHeight + kDividerHeight) : 0;
+}
+
 // One element of the Dropdown's Options list, first line: a drag handle and the option's label field.
 [[nodiscard]] inline RECT DropdownOptionHandleRect(RECT row) noexcept {
     return Rect(row.left + kRowPadX, row.top, row.left + kRowPadX + 16, row.bottom);
@@ -561,13 +638,8 @@ inline void DrawBoolRow(HDC dc, RECT row, const EditorTheme& theme, const Inspec
     if (RowHovered(state, property, editIndex)) {
         GdiDrawing::FillRectColor(dc, row, HoverFill(theme));
     }
-    const RECT labelRect = Rect(row.left + kRowPadX, row.top, InspectorLabelColumnRight(row), row.bottom);
     const RECT box = CheckboxRectForRow(row);
-    ScopedFont labelFont(12, FW_SEMIBOLD);
-    {
-        const ScopedGdiObject selectedFont(dc, labelFont.handle);
-        Text(dc, labelRect, label, Color(theme.textSecondary));
-    }
+    DrawRowLabel(dc, row, theme, state, section, property, editIndex, label);
     const bool hovered = state.IsHovered(InspectorHitKind::BoolField, section, property, editIndex);
     DrawInputFrame(
         dc,
@@ -618,6 +690,14 @@ public:
         if (!collapsed_) {
             DrawDivider(dc_, theme_, bounds_.left, bounds_.right, y_);
             y_ += kDividerHeight;
+            if (state_.IsComponentMenuOpen(section_)) {
+                for (int item = 0; item < kComponentMenuItemCount; ++item) {
+                    const InspectorComponentMenuItem which = static_cast<InspectorComponentMenuItem>(item);
+                    const bool enabled = which != InspectorComponentMenuItem::Paste || InspectorComponentDefaults::CanPaste(section_);
+                    DrawMenuItemRow(dc_, Row(), theme_, state_, section_, InspectorPropertyId::ComponentMenuItem, item, ComponentMenuItemLabel(which), enabled);
+                    Advance();
+                }
+            }
         }
     }
 
@@ -628,10 +708,16 @@ public:
             theme_);
     }
 
-    void Field(std::string_view label, std::string_view value, InspectorPropertyId property = InspectorPropertyId::None, int editIndex = -1) { if (!collapsed_) { DrawFieldRow(dc_, Row(), theme_, state_, section_, property, label, value, editIndex); Advance(); } }
+    void Field(std::string_view label, std::string_view value, InspectorPropertyId property = InspectorPropertyId::None, int editIndex = -1, std::string_view unit = {}, float fill = -1.0F) { if (!collapsed_) { DrawFieldRow(dc_, Row(), theme_, state_, section_, property, label, value, editIndex, unit, fill); Advance(); } }
+    // A number: its unit and, when it has a natural range, the slider fill come from the field guide.
+    void Float(std::string_view label, std::string_view value, InspectorPropertyId property, float number = std::numeric_limits<float>::quiet_NaN()) {
+        const InspectorFieldHelp help = InspectorFieldGuide::Help(property);
+        const float span = help.maximum - help.minimum;
+        const float fill = help.bounded && span > 0.0F && !std::isnan(number) ? (number - help.minimum) / span : -1.0F;
+        Field(label, value, property, -1, help.unit, fill);
+    }
     void Tag(std::string_view label, std::string_view value, InspectorPropertyId property, int editIndex = -1) { if (!collapsed_) { DrawTagFieldRow(dc_, Row(), theme_, state_, section_, property, label, value, editIndex); Advance(); } }
     void AssetField(std::string_view label, std::string_view value, InspectorPropertyId property, InspectorPropertyId buttonProperty, int editIndex = -1) { if (!collapsed_) { DrawAssetFieldRow(dc_, Row(), theme_, state_, section_, property, buttonProperty, label, value, editIndex); Advance(); } }
-    void Float(std::string_view label, std::string_view value, InspectorPropertyId property) { Field(label, value, property); }
     void Color(const kb::scene::Vec3& linear, InspectorPropertyId property) { if (!collapsed_) { DrawColorRow(dc_, Row(), theme_, state_, section_, property, InspectorSceneColor::Label(property), linear); Advance(); } }
     void Bool(std::string_view label, bool value, InspectorPropertyId property = InspectorPropertyId::None, int editIndex = -1) { if (!collapsed_) { DrawBoolRow(dc_, Row(), theme_, state_, section_, property, label, value, editIndex); Advance(); } }
     void Vec3(std::string_view label, const kb::scene::Vec3& value, InspectorPropertyId x, InspectorPropertyId y, InspectorPropertyId z) { if (!collapsed_) { DrawVec3Row(dc_, Row(), theme_, state_, section_, label, value, x, y, z); Advance(); } }
@@ -639,6 +725,7 @@ public:
     void BoolPair(std::string_view label, std::string_view firstLabel, bool firstValue, InspectorPropertyId firstProperty, std::string_view secondLabel, bool secondValue, InspectorPropertyId secondProperty) { if (!collapsed_) { DrawBoolPairRow(dc_, Row(), theme_, state_, section_, label, firstLabel, firstValue, firstProperty, secondLabel, secondValue, secondProperty); Advance(); } }
     void Group(std::string_view label) { if (!collapsed_) { DrawGroupRow(dc_, Rect(bounds_.left, y_, bounds_.right, y_ + kGroupRowHeight), theme_, label); y_ += kGroupRowHeight; DrawDivider(dc_, theme_, bounds_.left, bounds_.right, y_); y_ += kDividerHeight; } }
     void Action(std::string_view label, InspectorPropertyId property, bool accent = false) { if (!collapsed_) { DrawActionRow(dc_, Row(), theme_, state_, section_, property, label, accent); Advance(); } }
+    void MenuItem(std::string_view label, InspectorPropertyId property, int index, bool enabled = true) { if (!collapsed_) { DrawMenuItemRow(dc_, Row(), theme_, state_, section_, property, index, label, enabled); Advance(); } }
     [[nodiscard]] RECT Reserve(int height) noexcept {
         if (collapsed_ || height <= 0) {
             return {};

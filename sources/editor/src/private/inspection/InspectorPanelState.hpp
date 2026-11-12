@@ -10,6 +10,8 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace kb::editor {
 
@@ -128,6 +130,17 @@ enum class InspectorSectionId : std::uint8_t {
 
 };
 
+// The list that opens under a section: the component menu behind the header button, or the Joint's quick setups.
+enum class InspectorMenuKind : std::uint8_t {
+    None,
+    Component,
+    JointPresets,
+};
+
+// The entries of those lists, in the order they are shown: a hit on one carries its position as the index.
+enum class InspectorComponentMenuItem : std::uint8_t { Reset, Remove, Copy, Paste };
+inline constexpr int kComponentMenuItemCount = 4;
+
 enum class InspectorHitKind : std::uint8_t {
     None,
     Row,
@@ -144,6 +157,7 @@ enum class InspectorHitKind : std::uint8_t {
     ScrollbarThumb,
     ValueTypeOption,
     TagOption,
+    ResetField, // the marker beside a value that differs from its default
 };
 
 // Animated disclosure groups are shared Inspector UI state. Add a value here
@@ -504,6 +518,10 @@ enum class InspectorPropertyId : std::uint16_t {
     HistoryRibbonReceivesShadow,
     HistoryRibbonEnabled,
     ComponentRemove,
+    ComponentMenu,     // the header button of a component that offers Reset / Remove / Copy / Paste
+    ComponentMenuItem, // one entry of that menu; the hit's index says which
+    JointPreset,       // the Joint's "Quick setup" row
+    JointPresetItem,   // one entry of its list; the hit's index is the JointPreset
     AddComponentButton,
     AddComponentSearch,
     AddComponentOption,
@@ -661,6 +679,16 @@ enum class InspectorPropertyId : std::uint16_t {
     UIThemeField,
 };
 
+// One Inspector field: the section it sits in, its property id and, for rows that share a property id (physics
+// fields), the row index.
+struct InspectorFieldKey {
+    InspectorSectionId section = InspectorSectionId::None;
+    InspectorPropertyId property = InspectorPropertyId::None;
+    int index = -1;
+
+    [[nodiscard]] friend bool operator==(const InspectorFieldKey&, const InspectorFieldKey&) noexcept = default;
+};
+
 struct InspectorDynamicRowIdentity {
     std::uint64_t ownerAssetId = 0U;
     std::uint64_t ownerDocumentGeneration = 0U;
@@ -719,9 +747,20 @@ struct InspectorPanelState {
     void EndAddComponentScrollbarDrag() noexcept;
     [[nodiscard]] bool IsAddComponentScrollbarDragging() const noexcept { return addComponentScrollDragging_; }
     [[nodiscard]] int AddComponentScrollbarGrabOffset() const noexcept { return addComponentScrollGrab_; }
+    // The list open under one section: the component menu (Reset, Remove, Copy, Paste) behind its header button or
+    // the Joint's quick setups. One list is open at a time; toggling the open one closes it.
     [[nodiscard]] bool IsComponentMenuOpen(InspectorSectionId section) const noexcept;
+    [[nodiscard]] bool IsMenuOpen(InspectorMenuKind kind, InspectorSectionId section) const noexcept;
+    void ToggleMenu(InspectorMenuKind kind, InspectorSectionId section) noexcept;
     void ToggleComponentMenu(InspectorSectionId section) noexcept;
     void CloseComponentMenus() noexcept;
+
+    // The fields of the shown component that differ from their defaults, refreshed on every paint, so the rows can
+    // carry the reset marker and a click on it can be told from a click on the label.
+    void SetChangedFields(std::vector<InspectorFieldKey> fields) noexcept { changedFields_ = std::move(fields); }
+    [[nodiscard]] bool IsFieldChanged(InspectorSectionId section, InspectorPropertyId property, int index = -1) const noexcept;
+    [[nodiscard]] InspectorHitKind HoveredKind() const noexcept { return hoveredKind_; }
+    [[nodiscard]] InspectorSectionId HoveredSection() const noexcept { return hoveredSection_; }
     // `index` disambiguates rows that share one property id (physics fields,
     // script variables). Pass -1 for singular rows. IsHovered/HoveredIndex report
     // it so only the row actually under the cursor highlights.
@@ -857,7 +896,9 @@ private:
     bool addComponentSlideForward_ = true;
     bool addComponentScrollDragging_ = false;
     int addComponentScrollGrab_ = 0;
-    bool scriptComponentMenuOpen_ = false;
+    InspectorMenuKind menuKind_ = InspectorMenuKind::None;
+    InspectorSectionId menuSection_ = InspectorSectionId::None;
+    std::vector<InspectorFieldKey> changedFields_;
     InspectorHitKind hoveredKind_ = InspectorHitKind::None;
     InspectorSectionId hoveredSection_ = InspectorSectionId::None;
     InspectorPropertyId hoveredProperty_ = InspectorPropertyId::None;

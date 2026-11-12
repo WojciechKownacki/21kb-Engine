@@ -64,7 +64,7 @@ bool InspectorPanelState::TickDisclosures(float deltaSeconds) noexcept {
 }
 
 void InspectorPanelState::ToggleAddComponentBrowser() {
-    scriptComponentMenuOpen_ = false;
+    menuKind_ = InspectorMenuKind::None;
     addComponentBrowserOpen_ = !addComponentBrowserOpen_;
     // Always (re)open at the top-level category list, unscrolled and settled.
     addComponentView_ = AddComponentView::Categories;
@@ -143,18 +143,36 @@ bool InspectorPanelState::SetHover(InspectorHitKind kind, InspectorSectionId sec
 }
 
 bool InspectorPanelState::IsComponentMenuOpen(InspectorSectionId section) const noexcept {
-    return section == InspectorSectionId::Script && scriptComponentMenuOpen_;
+    return IsMenuOpen(InspectorMenuKind::Component, section);
+}
+
+bool InspectorPanelState::IsMenuOpen(InspectorMenuKind kind, InspectorSectionId section) const noexcept {
+    return kind != InspectorMenuKind::None && menuKind_ == kind && menuSection_ == section;
+}
+
+void InspectorPanelState::ToggleMenu(InspectorMenuKind kind, InspectorSectionId section) noexcept {
+    CloseAddComponentBrowser();
+    if (IsMenuOpen(kind, section)) {
+        menuKind_ = InspectorMenuKind::None;
+        menuSection_ = InspectorSectionId::None;
+        return;
+    }
+    menuKind_ = kind;
+    menuSection_ = section;
 }
 
 void InspectorPanelState::ToggleComponentMenu(InspectorSectionId section) noexcept {
-    CloseAddComponentBrowser();
-    if (section == InspectorSectionId::Script) {
-        scriptComponentMenuOpen_ = !scriptComponentMenuOpen_;
-    }
+    ToggleMenu(InspectorMenuKind::Component, section);
 }
 
 void InspectorPanelState::CloseComponentMenus() noexcept {
-    scriptComponentMenuOpen_ = false;
+    menuKind_ = InspectorMenuKind::None;
+    menuSection_ = InspectorSectionId::None;
+}
+
+bool InspectorPanelState::IsFieldChanged(InspectorSectionId section, InspectorPropertyId property, int index) const noexcept {
+    return property != InspectorPropertyId::None &&
+        std::ranges::find(changedFields_, InspectorFieldKey{ .section = section, .property = property, .index = index }) != changedFields_.end();
 }
 
 void InspectorPanelState::ClearHover() noexcept {

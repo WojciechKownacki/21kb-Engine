@@ -23,7 +23,25 @@ namespace {
 }
 
 [[nodiscard]] PhysicsField FloatField(std::string_view label, float value) {
-    return PhysicsField{ .label = std::string{ label }, .kind = PhysicsFieldKind::Float, .value = FormatFloat(value) };
+    return PhysicsField{ .label = std::string{ label }, .kind = PhysicsFieldKind::Float, .value = FormatFloat(value), .number = value };
+}
+
+// What a row says beyond its label: hover help, a unit after the number, a natural range for a slider.
+[[nodiscard]] PhysicsField Tip(PhysicsField field, std::string_view tooltip) {
+    field.tooltip = std::string{ tooltip };
+    return field;
+}
+
+[[nodiscard]] PhysicsField Unit(PhysicsField field, std::string_view unit) {
+    field.unit = unit;
+    return field;
+}
+
+[[nodiscard]] PhysicsField Range(PhysicsField field, float minimum, float maximum) {
+    field.bounded = true;
+    field.minimum = minimum;
+    field.maximum = maximum;
+    return field;
 }
 
 [[nodiscard]] PhysicsField BoolField(std::string_view label, bool value) {
@@ -130,20 +148,28 @@ struct JointAxisRow {
 // ---------------------------------------------------------------------------
 std::vector<PhysicsField> InspectorPhysicsModel::Fields(const kb::scene::RigidbodyComponent& c) {
     return {
-        EnumField(EditorText("inspector.rigidbody.bodyType", "Body Type"), BodyTypeName(c.bodyType)),
-        FloatField(EditorText("inspector.rigidbody.mass", "Mass"), c.mass),
+        Tip(EnumField(EditorText("inspector.rigidbody.bodyType", "Body Type"), BodyTypeName(c.bodyType)),
+            EditorText("inspector.tip.rigidbody.bodyType", "Dynamic moves by physics, Kinematic moves only when you move it, Static never moves.")),
+        Unit(Tip(FloatField(EditorText("inspector.rigidbody.mass", "Mass"), c.mass),
+            EditorText("inspector.tip.rigidbody.mass", "How heavy the object is. Heavier objects push lighter ones away.")), "kg"),
         FloatField(EditorText("inspector.rigidbody.gravityScale", "Gravity Scale"), c.gravityScale),
         BoolField(EditorText("inspector.rigidbody.useGravity", "Use Gravity"), c.useGravity),
-        BoolField(EditorText("inspector.rigidbody.lockRotation", "Lock Rotation"), c.lockRotation),
-        BoolField(EditorText("inspector.rigidbody.continuousCD", "Continuous CD"), c.useContinuousCollision),
-        FloatField(EditorText("inspector.rigidbody.linVelocityX", "Lin Velocity X"), c.linearVelocity.x),
-        FloatField(EditorText("inspector.rigidbody.linVelocityY", "Lin Velocity Y"), c.linearVelocity.y),
-        FloatField(EditorText("inspector.rigidbody.linVelocityZ", "Lin Velocity Z"), c.linearVelocity.z),
-        FloatField(EditorText("inspector.rigidbody.angVelocityX", "Ang Velocity X"), c.angularVelocity.x),
-        FloatField(EditorText("inspector.rigidbody.angVelocityY", "Ang Velocity Y"), c.angularVelocity.y),
-        FloatField(EditorText("inspector.rigidbody.angVelocityZ", "Ang Velocity Z"), c.angularVelocity.z),
-        FloatField(EditorText("inspector.rigidbody.linearDamping", "Linear Damping"), c.linearDamping),
-        FloatField(EditorText("inspector.rigidbody.angularDamping", "Angular Damping"), c.angularDamping),
+        Tip(BoolField(EditorText("inspector.rigidbody.lockRotation", "Lock Rotation"), c.lockRotation),
+            EditorText("inspector.tip.rigidbody.lockRotation", "The object slides but never tips over or spins.")),
+        Tip(BoolField(EditorText("inspector.rigidbody.fastMoving", "Fast Moving"), c.useContinuousCollision),
+            EditorText("inspector.tip.rigidbody.fastMoving", "Turn on for fast objects, such as bullets, so they cannot pass through walls.")),
+        Unit(Tip(FloatField(EditorLocalization::Format("inspector.rigidbody.velocity", "Speed {axis}", { { "axis", "X" } }), c.linearVelocity.x),
+            EditorText("inspector.tip.rigidbody.linearVelocity", "How fast the object moves along this axis.")), "m/s"),
+        Unit(FloatField(EditorLocalization::Format("inspector.rigidbody.velocity", "Speed {axis}", { { "axis", "Y" } }), c.linearVelocity.y), "m/s"),
+        Unit(FloatField(EditorLocalization::Format("inspector.rigidbody.velocity", "Speed {axis}", { { "axis", "Z" } }), c.linearVelocity.z), "m/s"),
+        Unit(Tip(FloatField(EditorLocalization::Format("inspector.rigidbody.spin", "Spin {axis}", { { "axis", "X" } }), c.angularVelocity.x),
+            EditorText("inspector.tip.rigidbody.angularVelocity", "How fast the object spins around this axis.")), "\xC2\xB0/s"),
+        Unit(FloatField(EditorLocalization::Format("inspector.rigidbody.spin", "Spin {axis}", { { "axis", "Y" } }), c.angularVelocity.y), "\xC2\xB0/s"),
+        Unit(FloatField(EditorLocalization::Format("inspector.rigidbody.spin", "Spin {axis}", { { "axis", "Z" } }), c.angularVelocity.z), "\xC2\xB0/s"),
+        Range(Tip(FloatField(EditorText("inspector.rigidbody.linearDamping", "Linear Damping"), c.linearDamping),
+            EditorText("inspector.tip.rigidbody.linearDamping", "Slows the movement down over time, like air drag.")), 0.0F, 1.0F),
+        Range(Tip(FloatField(EditorText("inspector.rigidbody.angularDamping", "Angular Damping"), c.angularDamping),
+            EditorText("inspector.tip.rigidbody.angularDamping", "Slows the spinning down over time.")), 0.0F, 1.0F),
     };
 }
 
@@ -205,20 +231,27 @@ bool InspectorPhysicsModel::CycleEnum(kb::scene::RigidbodyComponent& c, int inde
 // ---------------------------------------------------------------------------
 std::vector<PhysicsField> InspectorPhysicsModel::Fields(const kb::scene::ColliderComponent& c) {
     return {
-        EnumField(EditorText("inspector.collider.shape", "Shape"), ColliderShapeName(c.shape)),
-        FloatField(EditorText("inspector.collider.centerX", "Center X"), c.center.x),
-        FloatField(EditorText("inspector.collider.centerY", "Center Y"), c.center.y),
-        FloatField(EditorText("inspector.collider.centerZ", "Center Z"), c.center.z),
-        FloatField(EditorText("inspector.collider.boxSizeX", "Box Size X"), c.boxSize.x),
-        FloatField(EditorText("inspector.collider.boxSizeY", "Box Size Y"), c.boxSize.y),
-        FloatField(EditorText("inspector.collider.boxSizeZ", "Box Size Z"), c.boxSize.z),
-        FloatField(EditorText("inspector.collider.radius", "Radius"), c.radius),
-        FloatField(EditorText("inspector.collider.height", "Height"), c.height),
-        BoolField(EditorText("inspector.collider.isTrigger", "Is Trigger"), c.trigger),
-        FloatField(EditorText("inspector.collider.friction", "Friction"), c.friction),
-        FloatField(EditorText("inspector.collider.restitution", "Restitution"), c.restitution),
+        Tip(EnumField(EditorText("inspector.collider.shape", "Shape"), ColliderShapeName(c.shape)),
+            EditorText("inspector.tip.collider.shape", "The outline that detects hits: a box, a sphere, a capsule or the shape of a mesh.")),
+        Unit(Tip(FloatField(EditorText("inspector.collider.centerX", "Center X"), c.center.x),
+            EditorText("inspector.tip.collider.center", "Moves the shape away from the middle of the object.")), "m"),
+        Unit(FloatField(EditorText("inspector.collider.centerY", "Center Y"), c.center.y), "m"),
+        Unit(FloatField(EditorText("inspector.collider.centerZ", "Center Z"), c.center.z), "m"),
+        Unit(Tip(FloatField(EditorText("inspector.collider.boxSizeX", "Box Size X"), c.boxSize.x),
+            EditorText("inspector.tip.collider.boxSize", "Width, height and depth of the box.")), "m"),
+        Unit(FloatField(EditorText("inspector.collider.boxSizeY", "Box Size Y"), c.boxSize.y), "m"),
+        Unit(FloatField(EditorText("inspector.collider.boxSizeZ", "Box Size Z"), c.boxSize.z), "m"),
+        Unit(FloatField(EditorText("inspector.collider.radius", "Radius"), c.radius), "m"),
+        Unit(FloatField(EditorText("inspector.collider.height", "Height"), c.height), "m"),
+        Tip(BoolField(EditorText("inspector.collider.isTrigger", "Is Trigger"), c.trigger),
+            EditorText("inspector.tip.collider.isTrigger", "Notices things passing through but does not block them.")),
+        Range(Tip(FloatField(EditorText("inspector.collider.friction", "Friction"), c.friction),
+            EditorText("inspector.tip.collider.friction", "How much the surface grips. 0 is slippery like ice, 1 is rough.")), 0.0F, 1.0F),
+        Range(Tip(FloatField(EditorText("inspector.collider.bounciness", "Bounciness"), c.restitution),
+            EditorText("inspector.tip.collider.bounciness", "How much things bounce off. 0 does not bounce, 1 bounces back fully.")), 0.0F, 1.0F),
         ReadOnlyField(EditorText("inspector.collider.layerMask", "Layer Mask"), std::to_string(c.layer)),
-        ReadOnlyField(EditorText("inspector.collider.collisionMeshAsset", "Collision Mesh Asset"), std::to_string(c.meshAssetId)),
+        Tip(ReadOnlyField(EditorText("inspector.collider.collisionMeshAsset", "Collision Mesh Asset"), std::to_string(c.meshAssetId)),
+            EditorText("inspector.tip.collider.meshAsset", "The mesh whose surface is used as the shape.")),
     };
 }
 
@@ -286,8 +319,10 @@ std::vector<PhysicsField> InspectorPhysicsModel::Fields(const kb::scene::Charact
         FloatField(EditorText("inspector.characterController.centerZ", "Center Z"), c.center.z),
         FloatField(EditorText("inspector.characterController.radius", "Radius"), c.radius),
         FloatField(EditorText("inspector.characterController.height", "Height"), c.height),
-        FloatField(EditorText("inspector.characterController.slopeLimit", "Slope Limit"), c.slopeLimitDegrees),
-        FloatField(EditorText("inspector.characterController.stepOffset", "Step Offset"), c.stepOffset),
+        Unit(Range(Tip(FloatField(EditorText("inspector.characterController.slopeLimit", "Slope Limit"), c.slopeLimitDegrees),
+            EditorText("inspector.tip.characterController.slopeLimit", "The steepest slope the character can walk up.")), 0.0F, 90.0F), "\xC2\xB0"),
+        Unit(Tip(FloatField(EditorText("inspector.characterController.stepOffset", "Step Offset"), c.stepOffset),
+            EditorText("inspector.tip.characterController.stepOffset", "The tallest step the character climbs without jumping.")), "m"),
         FloatField(EditorText("inspector.characterController.gravityScale", "Gravity Scale"), c.gravityScale),
         BoolField(EditorText("inspector.characterController.useGravity", "Use Gravity"), c.useGravity),
     };
@@ -337,30 +372,47 @@ bool InspectorPhysicsModel::CycleEnum(kb::scene::CharacterControllerComponent&, 
 // Joint
 // ---------------------------------------------------------------------------
 std::vector<PhysicsField> InspectorPhysicsModel::Fields(const kb::scene::JointComponent& c) {
+    // The limits are angles for a hinge and the twist of a cone, distances for the other kinds.
+    const std::string_view limitUnit = c.type == kb::scene::JointType::Hinge || c.type == kb::scene::JointType::Cone ? "\xC2\xB0" : "m";
     std::vector<PhysicsField> fields{
-        EnumField(EditorText("inspector.joint.type", "Type"), JointTypeName(c.type)),
-        FloatField(EditorText("inspector.joint.anchorX", "Anchor X"), c.anchor.x),
-        FloatField(EditorText("inspector.joint.anchorY", "Anchor Y"), c.anchor.y),
-        FloatField(EditorText("inspector.joint.anchorZ", "Anchor Z"), c.anchor.z),
-        FloatField(EditorText("inspector.joint.connAnchorX", "Conn Anchor X"), c.connectedAnchor.x),
-        FloatField(EditorText("inspector.joint.connAnchorY", "Conn Anchor Y"), c.connectedAnchor.y),
-        FloatField(EditorText("inspector.joint.connAnchorZ", "Conn Anchor Z"), c.connectedAnchor.z),
-        FloatField(EditorText("inspector.joint.axisX", "Axis X"), c.axis.x),
+        Tip(EnumField(EditorText("inspector.joint.type", "Type"), JointTypeName(c.type)),
+            EditorText("inspector.tip.joint.type", "How the two objects are connected: held together, a hinge, a slider, a rope and more.")),
+        Unit(Tip(FloatField(EditorText("inspector.joint.anchorX", "Anchor X"), c.anchor.x),
+            EditorText("inspector.tip.joint.anchor", "Where on this object the joint is attached.")), "m"),
+        Unit(FloatField(EditorText("inspector.joint.anchorY", "Anchor Y"), c.anchor.y), "m"),
+        Unit(FloatField(EditorText("inspector.joint.anchorZ", "Anchor Z"), c.anchor.z), "m"),
+        Unit(Tip(FloatField(EditorLocalization::Format("inspector.joint.otherAnchor", "Other Anchor {axis}", { { "axis", "X" } }), c.connectedAnchor.x),
+            EditorText("inspector.tip.joint.connectedAnchor", "Where on the other object, or in the world, the joint is attached.")), "m"),
+        Unit(FloatField(EditorLocalization::Format("inspector.joint.otherAnchor", "Other Anchor {axis}", { { "axis", "Y" } }), c.connectedAnchor.y), "m"),
+        Unit(FloatField(EditorLocalization::Format("inspector.joint.otherAnchor", "Other Anchor {axis}", { { "axis", "Z" } }), c.connectedAnchor.z), "m"),
+        Tip(FloatField(EditorText("inspector.joint.axisX", "Axis X"), c.axis.x),
+            EditorText("inspector.tip.joint.axis", "The direction the joint turns around or slides along.")),
         FloatField(EditorText("inspector.joint.axisY", "Axis Y"), c.axis.y),
         FloatField(EditorText("inspector.joint.axisZ", "Axis Z"), c.axis.z),
-        FloatField(EditorText("inspector.joint.minLimit", "Min Limit"), c.minLimit),
-        FloatField(EditorText("inspector.joint.maxLimit", "Max Limit"), c.maxLimit),
-        BoolField(EditorText("inspector.joint.enableLimit", "Enable Limit"), c.enableLimit),
-        FloatField(EditorText("inspector.joint.motorTargetVelocity", "Motor Target Velocity"), c.motor.targetVelocity),
-        FloatField(EditorText("inspector.joint.motorForce", "Motor Force"), c.motor.force),
-        FloatField(EditorText("inspector.joint.spring", "Spring"), c.spring.spring),
-        FloatField(EditorText("inspector.joint.springDamper", "Spring Damper"), c.spring.damper),
-        FloatField(EditorText("inspector.joint.breakForce", "Break Force"), c.breakForce),
-        FloatField(EditorLocalization::Format("inspector.joint.secondaryAxis", "Secondary Axis {axis}", { { "axis", "X" } }), c.freedom.secondaryAxis.x),
+        Unit(Tip(FloatField(EditorText("inspector.joint.minLimit", "Min Limit"), c.minLimit),
+            EditorText("inspector.tip.joint.minLimit", "The lowest angle or distance the joint can reach.")), limitUnit),
+        Unit(Tip(FloatField(EditorText("inspector.joint.maxLimit", "Max Limit"), c.maxLimit),
+            EditorText("inspector.tip.joint.maxLimit", "The highest angle or distance the joint can reach.")), limitUnit),
+        Tip(BoolField(EditorText("inspector.joint.enableLimit", "Enable Limit"), c.enableLimit),
+            EditorText("inspector.tip.joint.enableLimit", "Stops the joint from moving past the minimum and maximum.")),
+        Tip(FloatField(EditorText("inspector.joint.motorTargetVelocity", "Motor Target Velocity"), c.motor.targetVelocity),
+            EditorText("inspector.tip.joint.motorVelocity", "The speed the motor drives the joint at.")),
+        Tip(FloatField(EditorText("inspector.joint.motorForce", "Motor Force"), c.motor.force),
+            EditorText("inspector.tip.joint.motorForce", "How strongly the motor pushes. Zero turns the motor off.")),
+        Tip(FloatField(EditorText("inspector.joint.spring", "Spring"), c.spring.spring),
+            EditorText("inspector.tip.joint.spring", "How stiff the spring is. Zero keeps the joint rigid.")),
+        Tip(FloatField(EditorText("inspector.joint.springDamper", "Spring Damper"), c.spring.damper),
+            EditorText("inspector.tip.joint.springDamper", "How quickly the spring stops bouncing.")),
+        Unit(Tip(FloatField(EditorText("inspector.joint.breakForce", "Break Force"), c.breakForce),
+            EditorText("inspector.tip.joint.breakForce", "The joint snaps when pushed harder than this. Zero never breaks.")), "N"),
+        Tip(FloatField(EditorLocalization::Format("inspector.joint.secondaryAxis", "Secondary Axis {axis}", { { "axis", "X" } }), c.freedom.secondaryAxis.x),
+            EditorText("inspector.tip.joint.secondaryAxis", "A second direction that fixes how the joint is turned.")),
         FloatField(EditorLocalization::Format("inspector.joint.secondaryAxis", "Secondary Axis {axis}", { { "axis", "Y" } }), c.freedom.secondaryAxis.y),
         FloatField(EditorLocalization::Format("inspector.joint.secondaryAxis", "Secondary Axis {axis}", { { "axis", "Z" } }), c.freedom.secondaryAxis.z),
-        FloatField(EditorText("inspector.joint.swing1Limit", "Swing 1 Limit"), c.freedom.swing1Limit),
-        FloatField(EditorText("inspector.joint.swing2Limit", "Swing 2 Limit"), c.freedom.swing2Limit),
+        Unit(Range(Tip(FloatField(EditorText("inspector.joint.swing1Limit", "Swing 1 Limit"), c.freedom.swing1Limit),
+            EditorText("inspector.tip.joint.swing", "How far the joint may tilt, in degrees. 180 leaves it free.")), 0.0F, 180.0F), "\xC2\xB0"),
+        Unit(Range(Tip(FloatField(EditorText("inspector.joint.swing2Limit", "Swing 2 Limit"), c.freedom.swing2Limit),
+            EditorText("inspector.tip.joint.swing", "How far the joint may tilt, in degrees. 180 leaves it free.")), 0.0F, 180.0F), "\xC2\xB0"),
     };
     for (int axis = 0; axis < InspectorPhysicsModel::JointAxisCount; ++axis) {
         const kb::scene::JointAxis& limit = c.freedom.axes[static_cast<std::size_t>(axis)];
@@ -498,6 +550,209 @@ PhysicsFieldKind InspectorPhysicsModel::KindOf(PhysicsComponentKind component, i
     case PhysicsComponentKind::Joint: return kindAt(Fields(kb::scene::JointComponent{}), index);
     }
     return PhysicsFieldKind::Float;
+}
+
+// ---------------------------------------------------------------------------
+// Layout, reset to default and Joint presets
+// ---------------------------------------------------------------------------
+namespace {
+
+// Builds a PhysicsLayout: rows added before Advanced() are always shown, the rest sit behind the Advanced row.
+class LayoutBuilder {
+public:
+    LayoutBuilder& Row(int index) noexcept {
+        layout_.rows[static_cast<std::size_t>(layout_.count++)] = static_cast<std::uint8_t>(index);
+        if (!advanced_) {
+            layout_.basicCount = layout_.count;
+        }
+        return *this;
+    }
+    LayoutBuilder& Rows(int first, int count) noexcept {
+        for (int offset = 0; offset < count; ++offset) {
+            Row(first + offset);
+        }
+        return *this;
+    }
+    LayoutBuilder& Advanced() noexcept {
+        advanced_ = true;
+        return *this;
+    }
+    [[nodiscard]] PhysicsLayout Done() const noexcept { return layout_; }
+
+private:
+    PhysicsLayout layout_{};
+    bool advanced_ = false;
+};
+
+template <typename Component>
+[[nodiscard]] std::vector<int> ChangedRowsOf(const Component& component) {
+    const std::vector<PhysicsField> now = InspectorPhysicsModel::Fields(component);
+    const std::vector<PhysicsField> fresh = InspectorPhysicsModel::Fields(Component{});
+    std::vector<int> changed;
+    for (std::size_t index = 0U; index < now.size(); ++index) {
+        if (now[index].kind != PhysicsFieldKind::ReadOnly && now[index].value != fresh[index].value) {
+            changed.push_back(static_cast<int>(index));
+        }
+    }
+    return changed;
+}
+
+// Float rows take the fresh value, check boxes are flipped when they differ, and a choice is advanced until it
+// shows the fresh one (a choice has at most a handful of values).
+template <typename Component>
+[[nodiscard]] bool ResetRowOf(Component& component, int index) {
+    const Component fresh{};
+    const std::vector<PhysicsField> before = InspectorPhysicsModel::Fields(component);
+    const std::vector<PhysicsField> target = InspectorPhysicsModel::Fields(fresh);
+    if (index < 0 || index >= static_cast<int>(before.size())) {
+        return false;
+    }
+    const PhysicsField& want = target[static_cast<std::size_t>(index)];
+    switch (before[static_cast<std::size_t>(index)].kind) {
+    case PhysicsFieldKind::Float:
+        return InspectorPhysicsModel::ApplyFloat(component, index, want.number);
+    case PhysicsFieldKind::Bool:
+        return before[static_cast<std::size_t>(index)].boolValue == want.boolValue || InspectorPhysicsModel::ToggleBool(component, index);
+    case PhysicsFieldKind::Enum:
+        for (int step = 0; step < 16; ++step) {
+            if (InspectorPhysicsModel::Fields(component)[static_cast<std::size_t>(index)].value == want.value) {
+                return true;
+            }
+            if (!InspectorPhysicsModel::CycleEnum(component, index)) {
+                return false;
+            }
+        }
+        return false;
+    case PhysicsFieldKind::ReadOnly:
+        break;
+    }
+    return false;
+}
+
+} // namespace
+
+PhysicsLayout InspectorPhysicsModel::Layout(const kb::scene::RigidbodyComponent&) noexcept {
+    // Body type, mass and the two switches people reach for first; drag, and the speeds the body has right now, behind Advanced.
+    return LayoutBuilder{}.Row(0).Row(1).Row(3).Row(2).Row(4).Row(5).Advanced().Row(12).Row(13).Rows(6, 6).Done();
+}
+
+PhysicsLayout InspectorPhysicsModel::Layout(const kb::scene::ColliderComponent& component) noexcept {
+    LayoutBuilder layout;
+    layout.Row(0);
+    switch (component.shape) {
+    case kb::scene::ColliderShape::Box:
+    case kb::scene::ColliderShape::OneWayBox: layout.Rows(4, 3); break;
+    case kb::scene::ColliderShape::Sphere: layout.Row(7); break;
+    case kb::scene::ColliderShape::Capsule: layout.Row(7).Row(8); break;
+    case kb::scene::ColliderShape::Mesh: layout.Row(13); break;
+    }
+    layout.Rows(1, 3).Row(9).Advanced().Row(10).Row(11).Row(12);
+    return layout.Done();
+}
+
+PhysicsLayout InspectorPhysicsModel::Layout(const kb::scene::CharacterControllerComponent&) noexcept {
+    return LayoutBuilder{}.Rows(0, FieldCount(PhysicsComponentKind::CharacterController)).Done();
+}
+
+PhysicsLayout InspectorPhysicsModel::Layout(const kb::scene::JointComponent& component) noexcept {
+    using Type = kb::scene::JointType;
+    const Type type = component.type;
+    const bool hinge = type == Type::Hinge;
+    const bool slider = type == Type::Slider;
+    const bool cone = type == Type::Cone;
+    const bool sixDof = type == Type::SixDof;
+    LayoutBuilder layout;
+    layout.Row(0);
+    if (hinge || slider || cone) {
+        layout.Rows(7, 3); // the axis it turns around or slides along
+    }
+    if (cone) {
+        layout.Rows(JointSwing1Row, 2);
+    }
+    if (hinge || slider || cone || type == Type::Distance) {
+        layout.Row(12).Row(10).Row(11);
+    }
+    if (type == Type::Rope) {
+        layout.Row(10).Row(11);
+    }
+    layout.Advanced().Rows(1, 6); // where each side is attached
+    if (type == Type::Distance || slider || type == Type::Rope) {
+        layout.Rows(15, 2);
+    }
+    if (hinge || slider) {
+        layout.Rows(13, 2);
+    }
+    layout.Row(17);
+    if (slider || cone || sixDof) {
+        layout.Rows(JointSecondaryAxisRow, 3);
+    }
+    if (sixDof) {
+        layout.Rows(7, 3);
+        layout.Rows(JointFirstAxisRow, JointAxisRows * JointAxisCount);
+    }
+    return layout.Done();
+}
+
+std::vector<int> InspectorPhysicsModel::ChangedRows(const kb::scene::RigidbodyComponent& component) { return ChangedRowsOf(component); }
+std::vector<int> InspectorPhysicsModel::ChangedRows(const kb::scene::ColliderComponent& component) { return ChangedRowsOf(component); }
+std::vector<int> InspectorPhysicsModel::ChangedRows(const kb::scene::CharacterControllerComponent& component) { return ChangedRowsOf(component); }
+std::vector<int> InspectorPhysicsModel::ChangedRows(const kb::scene::JointComponent& component) { return ChangedRowsOf(component); }
+
+bool InspectorPhysicsModel::ResetRow(kb::scene::RigidbodyComponent& component, int index) { return ResetRowOf(component, index); }
+bool InspectorPhysicsModel::ResetRow(kb::scene::ColliderComponent& component, int index) { return ResetRowOf(component, index); }
+bool InspectorPhysicsModel::ResetRow(kb::scene::CharacterControllerComponent& component, int index) { return ResetRowOf(component, index); }
+bool InspectorPhysicsModel::ResetRow(kb::scene::JointComponent& component, int index) { return ResetRowOf(component, index); }
+
+std::string_view JointPresetName(JointPreset preset) {
+    switch (preset) {
+    case JointPreset::Door: return EditorText("inspector.joint.preset.door", "Door");
+    case JointPreset::SlidingDoor: return EditorText("inspector.joint.preset.slidingDoor", "Sliding door");
+    case JointPreset::Pendulum: return EditorText("inspector.joint.preset.pendulum", "Pendulum");
+    case JointPreset::Rope: return EditorText("inspector.joint.preset.rope", "Rope");
+    case JointPreset::CharacterLimb: return EditorText("inspector.joint.preset.limb", "Character limb");
+    }
+    return {};
+}
+
+void ApplyJointPreset(kb::scene::JointComponent& joint, JointPreset preset) noexcept {
+    using Type = kb::scene::JointType;
+    switch (preset) {
+    case JointPreset::Door:
+        joint.type = Type::Hinge;
+        joint.axis = { 0.0F, 1.0F, 0.0F };
+        joint.enableLimit = true;
+        joint.minLimit = -90.0F;
+        joint.maxLimit = 90.0F;
+        break;
+    case JointPreset::SlidingDoor:
+        joint.type = Type::Slider;
+        joint.axis = { 1.0F, 0.0F, 0.0F };
+        joint.enableLimit = true;
+        joint.minLimit = 0.0F;
+        joint.maxLimit = 1.5F;
+        break;
+    case JointPreset::Pendulum:
+        joint.type = Type::Hinge;
+        joint.axis = { 0.0F, 0.0F, 1.0F };
+        joint.enableLimit = false;
+        joint.minLimit = 0.0F;
+        joint.maxLimit = 0.0F;
+        break;
+    case JointPreset::Rope:
+        joint.type = Type::Rope;
+        joint.minLimit = 0.0F;
+        joint.maxLimit = 3.0F;
+        break;
+    case JointPreset::CharacterLimb:
+        joint.type = Type::Cone;
+        joint.axis = { 0.0F, 1.0F, 0.0F };
+        joint.freedom.swing1Limit = 45.0F;
+        joint.freedom.swing2Limit = 45.0F;
+        joint.enableLimit = true;
+        joint.minLimit = -45.0F;
+        joint.maxLimit = 45.0F;
+        break;
+    }
 }
 
 } // namespace kb::editor

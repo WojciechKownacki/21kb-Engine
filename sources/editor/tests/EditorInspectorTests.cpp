@@ -12,7 +12,9 @@
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/project/ProjectDescriptor.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneComponentAuthoring.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneHistory.hpp"
@@ -26,6 +28,8 @@
 #include "inspection/InspectorAudioComponentModel.hpp"
 #include "inspection/InspectorAudioScrubController.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
+#include "inspection/InspectorComponentDefaults.hpp"
+#include "inspection/InspectorFieldGuide.hpp"
 #include "inspection/InspectorComponentLabelFormatter.hpp"
 #include "inspection/InspectorMeshRendererMaterialSlotModel.hpp"
 #include "inspection/InspectorMaterialTextureSlotFormatter.hpp"
@@ -3017,6 +3021,343 @@ void RunInspectorPhysicsModelTest() {
     kb::editor::tests::Require(InspectorPhysicsModel::KindOf(PhysicsComponentKind::Rigidbody, 99) == PhysicsFieldKind::Float, "KindOf returns Float for an out-of-range index");
 }
 
+// How many times `row` appears among the first `limit` rows of a layout.
+[[nodiscard]] int CountRow(const kb::editor::PhysicsLayout& layout, int row, int limit) {
+    int found = 0;
+    for (int position = 0; position < limit; ++position) {
+        found += layout.rows[static_cast<std::size_t>(position)] == row ? 1 : 0;
+    }
+    return found;
+}
+
+[[nodiscard]] bool InBasic(const kb::editor::PhysicsLayout& layout, int row) { return CountRow(layout, row, layout.basicCount) == 1; }
+[[nodiscard]] bool InAdvanced(const kb::editor::PhysicsLayout& layout, int row) {
+    return CountRow(layout, row, layout.count) == 1 && CountRow(layout, row, layout.basicCount) == 0;
+}
+[[nodiscard]] bool Absent(const kb::editor::PhysicsLayout& layout, int row) { return CountRow(layout, row, layout.count) == 0; }
+
+// Every layout lists each row at most once and only rows that exist.
+[[nodiscard]] bool LayoutIsSound(const kb::editor::PhysicsLayout& layout, int fieldCount) {
+    if (layout.count < 1 || layout.count > fieldCount || layout.basicCount < 1 || layout.basicCount > layout.count) {
+        return false;
+    }
+    for (int position = 0; position < layout.count; ++position) {
+        const int row = layout.rows[static_cast<std::size_t>(position)];
+        if (row >= fieldCount || CountRow(layout, row, layout.count) != 1) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Which rows a physics section shows, and which of them wait behind its Advanced row.
+void RunInspectorPhysicsLayoutTest() {
+    using kb::editor::InspectorPhysicsModel;
+    using kb::editor::PhysicsComponentKind;
+    using kb::scene::ColliderShape;
+    using kb::scene::JointType;
+
+    const kb::editor::PhysicsLayout body = InspectorPhysicsModel::Layout(kb::scene::RigidbodyComponent{});
+    kb::editor::tests::Require(LayoutIsSound(body, InspectorPhysicsModel::FieldCount(PhysicsComponentKind::Rigidbody)) && body.count == 14 && body.basicCount == 6 && body.HasAdvanced(),
+        "A rigidbody lists all fourteen rows once, six of them before its Advanced row");
+    kb::editor::tests::Require(InBasic(body, 0) && InBasic(body, 1) && InBasic(body, 3) && InAdvanced(body, 12) && InAdvanced(body, 13) && InAdvanced(body, 6),
+        "Body type, mass and gravity are basic; damping and the current speeds are advanced");
+
+    kb::scene::ColliderComponent collider;
+    const int colliderRows = InspectorPhysicsModel::FieldCount(PhysicsComponentKind::Collider);
+    auto layoutOf = [&](ColliderShape shape) {
+        collider.shape = shape;
+        return InspectorPhysicsModel::Layout(collider);
+    };
+    const kb::editor::PhysicsLayout box = layoutOf(ColliderShape::Box);
+    kb::editor::tests::Require(LayoutIsSound(box, colliderRows) && InBasic(box, 4) && InBasic(box, 5) && InBasic(box, 6) && Absent(box, 7) && Absent(box, 8) && Absent(box, 13),
+        "A box collider shows its three sizes and no radius, height or mesh");
+    const kb::editor::PhysicsLayout sphere = layoutOf(ColliderShape::Sphere);
+    kb::editor::tests::Require(LayoutIsSound(sphere, colliderRows) && InBasic(sphere, 7) && Absent(sphere, 4) && Absent(sphere, 8),
+        "A sphere collider shows only its radius");
+    const kb::editor::PhysicsLayout capsule = layoutOf(ColliderShape::Capsule);
+    kb::editor::tests::Require(LayoutIsSound(capsule, colliderRows) && InBasic(capsule, 7) && InBasic(capsule, 8) && Absent(capsule, 4),
+        "A capsule collider shows its radius and height");
+    const kb::editor::PhysicsLayout mesh = layoutOf(ColliderShape::Mesh);
+    kb::editor::tests::Require(LayoutIsSound(mesh, colliderRows) && InBasic(mesh, 13) && Absent(mesh, 4) && Absent(mesh, 7),
+        "A mesh collider shows the mesh it uses");
+    kb::editor::tests::Require(InBasic(box, 9) && InBasic(box, 1) && InAdvanced(box, 10) && InAdvanced(box, 11) && InAdvanced(box, 12),
+        "Every collider keeps the trigger switch and the centre up front, and friction, bounciness and layers behind Advanced");
+
+    const kb::editor::PhysicsLayout character = InspectorPhysicsModel::Layout(kb::scene::CharacterControllerComponent{});
+    kb::editor::tests::Require(LayoutIsSound(character, 9) && character.count == 9 && !character.HasAdvanced(),
+        "A character controller has no Advanced row");
+
+    kb::scene::JointComponent joint;
+    const int jointRows = InspectorPhysicsModel::JointRowCount;
+    auto jointLayout = [&](JointType type) {
+        joint.type = type;
+        return InspectorPhysicsModel::Layout(joint);
+    };
+    const kb::editor::PhysicsLayout fixed = jointLayout(JointType::Fixed);
+    kb::editor::tests::Require(LayoutIsSound(fixed, jointRows) && fixed.basicCount == 1 && InBasic(fixed, 0) && InAdvanced(fixed, 1) && InAdvanced(fixed, 17) &&
+            Absent(fixed, 7) && Absent(fixed, 13) && Absent(fixed, 15) && Absent(fixed, InspectorPhysicsModel::JointFirstAxisRow),
+        "A fixed joint shows only its type up front and leaves out axis, motor, spring and the six axes");
+    const kb::editor::PhysicsLayout hinge = jointLayout(JointType::Hinge);
+    kb::editor::tests::Require(LayoutIsSound(hinge, jointRows) && InBasic(hinge, 7) && InBasic(hinge, 10) && InBasic(hinge, 11) && InBasic(hinge, 12) &&
+            InAdvanced(hinge, 13) && InAdvanced(hinge, 14) && Absent(hinge, 15) && Absent(hinge, InspectorPhysicsModel::JointSwing1Row),
+        "A hinge shows its axis and limits, keeps the motor behind Advanced and has no spring");
+    const kb::editor::PhysicsLayout slider = jointLayout(JointType::Slider);
+    kb::editor::tests::Require(LayoutIsSound(slider, jointRows) && InBasic(slider, 12) && InAdvanced(slider, 13) && InAdvanced(slider, 15) &&
+            InAdvanced(slider, InspectorPhysicsModel::JointSecondaryAxisRow),
+        "A slider has motor, spring and second axis behind Advanced");
+    const kb::editor::PhysicsLayout cone = jointLayout(JointType::Cone);
+    kb::editor::tests::Require(LayoutIsSound(cone, jointRows) && InBasic(cone, InspectorPhysicsModel::JointSwing1Row) && InBasic(cone, InspectorPhysicsModel::JointSwing1Row + 1) && Absent(cone, 13),
+        "A cone shows its two swing limits up front and has no motor");
+    const kb::editor::PhysicsLayout rope = jointLayout(JointType::Rope);
+    kb::editor::tests::Require(LayoutIsSound(rope, jointRows) && InBasic(rope, 10) && InBasic(rope, 11) && Absent(rope, 12) && InAdvanced(rope, 15),
+        "A rope shows its length limits and keeps the spring behind Advanced");
+    const kb::editor::PhysicsLayout sixDof = jointLayout(JointType::SixDof);
+    bool allAxisRows = true;
+    for (int row = InspectorPhysicsModel::JointFirstAxisRow; row < jointRows; ++row) {
+        allAxisRows = allAxisRows && InAdvanced(sixDof, row);
+    }
+    kb::editor::tests::Require(LayoutIsSound(sixDof, jointRows) && allAxisRows && sixDof.basicCount == 1,
+        "A six-degrees-of-freedom joint keeps the thirty axis rows behind Advanced");
+}
+
+// Every component's Advanced foldout starts closed and opens on its own, without touching the others.
+void RunInspectorAdvancedFoldoutStateTest() {
+    using kb::editor::InspectorDisclosureId;
+    const InspectorDisclosureId foldouts[] = { InspectorDisclosureId::CameraAdvanced, InspectorDisclosureId::LightAdvanced,
+        InspectorDisclosureId::MeshRendererAdvanced, InspectorDisclosureId::RigidbodyAdvanced, InspectorDisclosureId::ColliderAdvanced,
+        InspectorDisclosureId::JointAdvanced };
+    for (const InspectorDisclosureId opened : foldouts) {
+        kb::editor::InspectorPanelState state;
+        for (const InspectorDisclosureId foldout : foldouts) {
+            kb::editor::tests::Require(!state.IsDisclosureExpanded(foldout), "An Advanced foldout starts closed");
+        }
+        state.ToggleDisclosure(opened);
+        bool onlyOpened = true;
+        for (const InspectorDisclosureId foldout : foldouts) {
+            onlyOpened = onlyOpened && state.IsDisclosureExpanded(foldout) == (foldout == opened);
+        }
+        kb::editor::tests::Require(onlyOpened, "Opening one Advanced foldout leaves the others closed");
+        state.ToggleDisclosure(opened);
+        kb::editor::tests::Require(!state.IsDisclosureExpanded(opened), "Toggling an Advanced foldout again closes it");
+    }
+}
+
+// A changed value is put back to what Add Component creates; the physics rows do it through their own model.
+void RunInspectorPhysicsResetTest() {
+    using kb::editor::InspectorPhysicsModel;
+    kb::scene::RigidbodyComponent body;
+    kb::editor::tests::Require(InspectorPhysicsModel::ChangedRows(body).empty(), "A fresh rigidbody has no changed rows");
+    body.mass = 5.0F;
+    body.bodyType = kb::scene::RigidbodyBodyType::Kinematic;
+    body.lockRotation = true;
+    const std::vector<int> changed = InspectorPhysicsModel::ChangedRows(body);
+    kb::editor::tests::Require(changed == std::vector<int>({ 0, 1, 4 }), "The body type, the mass and the rotation lock are reported as changed");
+    kb::editor::tests::Require(InspectorPhysicsModel::ResetRow(body, 1) && body.mass == 1.0F, "A number goes back to its default");
+    kb::editor::tests::Require(InspectorPhysicsModel::ResetRow(body, 4) && !body.lockRotation, "A switch goes back to its default");
+    kb::editor::tests::Require(InspectorPhysicsModel::ResetRow(body, 0) && body.bodyType == kb::scene::RigidbodyBodyType::Dynamic, "A choice cycles back to its default");
+    kb::editor::tests::Require(InspectorPhysicsModel::ChangedRows(body).empty(), "Nothing is left changed after resetting the three rows");
+
+    kb::scene::ColliderComponent collider;
+    collider.meshAssetId = 77U;
+    kb::editor::tests::Require(InspectorPhysicsModel::ChangedRows(collider).empty() && !InspectorPhysicsModel::ResetRow(collider, 12),
+        "A read-only row is never reported and cannot be reset");
+
+    kb::scene::JointComponent joint;
+    joint.type = kb::scene::JointType::Rope;
+    joint.maxLimit = 4.0F;
+    kb::editor::tests::Require(InspectorPhysicsModel::ChangedRows(joint) == std::vector<int>({ 0, 11 }), "A joint reports its type and its limit");
+    kb::editor::tests::Require(InspectorPhysicsModel::ResetRow(joint, 0) && joint.type == kb::scene::JointType::Fixed &&
+            InspectorPhysicsModel::ResetRow(joint, 11) && joint.maxLimit == 0.0F,
+        "A joint type cycles back to Fixed and its limit to zero");
+}
+
+// The reset arrow, Reset, Copy and Paste of the components the Inspector offers them for, on a real scene.
+void RunInspectorComponentDefaultsTest() {
+    using kb::editor::InspectorComponentDefaults;
+    using kb::editor::InspectorFieldKey;
+    using kb::editor::InspectorPropertyId;
+    using kb::editor::InspectorSectionId;
+
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Defaults" });
+    const char* const names[] = { "Camera", "Light", "MeshRenderer", "Rigidbody", "Collider", "CharacterController", "Joint" };
+    kb::project::ProjectDescriptor project;
+    for (const char* name : names) {
+        if (const kb::scene::SceneComponentKind* kind = kb::scene::SceneComponentAuthoring::Find(name); kind != nullptr && !kind->requiredPlugin.empty()) {
+            project.plugins.push_back(kb::project::ProjectPluginReference{ .name = std::string{ kind->requiredPlugin } });
+        }
+    }
+    for (const char* name : names) {
+        kb::editor::tests::Require(kb::scene::SceneComponentAuthoring::Add(scene, entity, name, project).status == kb::scene::SceneComponentAddStatus::Added,
+            "A component of the redesigned set can be added the way Add Component does");
+    }
+    kb::editor::tests::Require(InspectorComponentDefaults::ChangedFields(scene, entity).empty(),
+        "A component as Add Component creates it has no changed field, so the default the Inspector compares with matches the editor's");
+
+    auto components = scene.Components();
+    components.Cameras().TryGet(entity)->farClip = 500.0F;
+    components.Lights().TryGet(entity)->intensity = 3.0F;
+    components.MeshRenderers().TryGet(entity)->lodBias = 2;
+    components.Rigidbodies().TryGet(entity)->mass = 5.0F;
+    components.Colliders().TryGet(entity)->shape = kb::scene::ColliderShape::Sphere;
+    components.Joints().TryGet(entity)->type = kb::scene::JointType::Hinge;
+    const std::vector<InspectorFieldKey> changed = InspectorComponentDefaults::ChangedFields(scene, entity);
+    const auto has = [&changed](InspectorSectionId section, InspectorPropertyId property, int index) {
+        return std::ranges::find(changed, InspectorFieldKey{ .section = section, .property = property, .index = index }) != changed.end();
+    };
+    kb::editor::tests::Require(changed.size() == 6U && has(InspectorSectionId::Camera, InspectorPropertyId::CameraFarClip, -1) &&
+            has(InspectorSectionId::Light, InspectorPropertyId::LightIntensity, -1) &&
+            has(InspectorSectionId::MeshRenderer, InspectorPropertyId::MeshRendererLodBias, -1) &&
+            has(InspectorSectionId::Rigidbody, InspectorPropertyId::RigidbodyField, 1) &&
+            has(InspectorSectionId::Collider, InspectorPropertyId::ColliderField, 0) &&
+            has(InspectorSectionId::Joint, InspectorPropertyId::JointField, 0),
+        "Exactly the six edited fields are reported as changed");
+
+    kb::editor::tests::Require(InspectorComponentDefaults::ResetField(scene, entity,
+            InspectorFieldKey{ .section = InspectorSectionId::Camera, .property = InspectorPropertyId::CameraFarClip }) &&
+            components.Cameras().TryGet(entity)->farClip == 1000.0F,
+        "Resetting one field puts it back and nothing else");
+    kb::editor::tests::Require(InspectorComponentDefaults::ChangedFields(scene, entity).size() == 5U, "The other five stay changed");
+    kb::editor::tests::Require(InspectorComponentDefaults::ResetComponent(scene, entity, InspectorSectionId::Joint) &&
+            components.Joints().TryGet(entity)->type == kb::scene::JointType::Fixed,
+        "Reset puts back every value of one component");
+    kb::editor::tests::Require(InspectorComponentDefaults::ChangedFields(scene, entity).size() == 4U && components.Lights().TryGet(entity)->intensity == 3.0F,
+        "Resetting a component leaves the other components as they are");
+    kb::editor::tests::Require(!InspectorComponentDefaults::ResetField(scene, entity,
+            InspectorFieldKey{ .section = InspectorSectionId::General, .property = InspectorPropertyId::EntityName }),
+        "A field without a default cannot be reset");
+
+    // Copy and Paste: the settings travel to another object that has the component; its own connections stay.
+    const kb::scene::SceneEntity other = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Target" });
+    kb::editor::tests::Require(kb::scene::SceneComponentAuthoring::Add(scene, other, "Light", project).status == kb::scene::SceneComponentAddStatus::Added &&
+            kb::scene::SceneComponentAuthoring::Add(scene, other, "Joint", project).status == kb::scene::SceneComponentAddStatus::Added,
+        "Add the target components");
+    kb::editor::tests::Require(InspectorComponentDefaults::CopyComponent(scene, entity, InspectorSectionId::Light) &&
+            InspectorComponentDefaults::CanPaste(InspectorSectionId::Light) && !InspectorComponentDefaults::CanPaste(InspectorSectionId::Camera),
+        "Copy keeps one kind of component for a later Paste");
+    kb::editor::tests::Require(InspectorComponentDefaults::PasteComponent(scene, other, InspectorSectionId::Light) &&
+            components.Lights().TryGet(other)->intensity == 3.0F,
+        "Paste writes the copied settings into the other light");
+    components.Joints().TryGet(other)->connectedEntity = entity;
+    components.Joints().TryGet(entity)->type = kb::scene::JointType::Slider;
+    kb::editor::tests::Require(InspectorComponentDefaults::CopyComponent(scene, entity, InspectorSectionId::Joint) &&
+            InspectorComponentDefaults::PasteComponent(scene, other, InspectorSectionId::Joint) &&
+            components.Joints().TryGet(other)->type == kb::scene::JointType::Slider && components.Joints().TryGet(other)->connectedEntity == entity,
+        "Pasting a joint keeps the body the target is connected to");
+    kb::editor::tests::Require(!InspectorComponentDefaults::PasteComponent(scene, other, InspectorSectionId::Camera),
+        "A component that is not held, or that the target lacks, is not pasted");
+}
+
+// The one-click Joint setups set the kind and the limits they document and leave the rest of the joint alone.
+void RunJointPresetTest() {
+    using kb::editor::ApplyJointPreset;
+    using kb::editor::JointPreset;
+    using kb::scene::JointType;
+
+    kb::scene::JointComponent door;
+    door.anchor = { 0.5F, 1.0F, 0.0F };
+    door.breakForce = 900.0F;
+    door.motor.force = 12.0F;
+    ApplyJointPreset(door, JointPreset::Door);
+    kb::editor::tests::Require(door.type == JointType::Hinge && door.axis.x == 0.0F && door.axis.y == 1.0F && door.axis.z == 0.0F &&
+            door.enableLimit && door.minLimit == -90.0F && door.maxLimit == 90.0F,
+        "Door: a hinge about the up axis that opens a quarter turn either way");
+    kb::editor::tests::Require(door.anchor.x == 0.5F && door.anchor.y == 1.0F && door.breakForce == 900.0F && door.motor.force == 12.0F,
+        "A preset keeps the anchors, the break force and the motor");
+
+    kb::scene::JointComponent sliding;
+    ApplyJointPreset(sliding, JointPreset::SlidingDoor);
+    kb::editor::tests::Require(sliding.type == JointType::Slider && sliding.axis.x == 1.0F && sliding.axis.y == 0.0F && sliding.axis.z == 0.0F &&
+            sliding.enableLimit && sliding.minLimit == 0.0F && sliding.maxLimit == 1.5F,
+        "Sliding door: a slider along X from the closed pose out to 1.5 m");
+
+    kb::scene::JointComponent pendulum;
+    pendulum.enableLimit = true;
+    pendulum.minLimit = -3.0F;
+    pendulum.maxLimit = 3.0F;
+    ApplyJointPreset(pendulum, JointPreset::Pendulum);
+    kb::editor::tests::Require(pendulum.type == JointType::Hinge && pendulum.axis.z == 1.0F && pendulum.axis.y == 0.0F && !pendulum.enableLimit &&
+            pendulum.minLimit == 0.0F && pendulum.maxLimit == 0.0F,
+        "Pendulum: a hinge about Z with no limit, free to swing");
+
+    kb::scene::JointComponent rope;
+    ApplyJointPreset(rope, JointPreset::Rope);
+    kb::editor::tests::Require(rope.type == JointType::Rope && rope.minLimit == 0.0F && rope.maxLimit == 3.0F, "Rope: up to 3 m long");
+
+    kb::scene::JointComponent limb;
+    ApplyJointPreset(limb, JointPreset::CharacterLimb);
+    kb::editor::tests::Require(limb.type == JointType::Cone && limb.freedom.swing1Limit == 45.0F && limb.freedom.swing2Limit == 45.0F &&
+            limb.enableLimit && limb.minLimit == -45.0F && limb.maxLimit == 45.0F,
+        "Character limb: a cone with 45 degrees of swing and a 45 degree twist either way");
+
+    bool named = true;
+    for (int preset = 0; preset < kb::editor::kJointPresetCount; ++preset) {
+        named = named && !kb::editor::JointPresetName(static_cast<JointPreset>(preset)).empty();
+    }
+    kb::editor::tests::Require(named, "Every preset has a name");
+}
+
+// The hover help, units and slider ranges of the rows.
+void RunInspectorFieldHelpTest() {
+    using kb::editor::InspectorFieldGuide;
+    using kb::editor::InspectorPhysicsModel;
+    using kb::editor::InspectorPropertyId;
+    using kb::editor::InspectorSectionId;
+
+    const kb::editor::InspectorFieldHelp fov = InspectorFieldGuide::Help(InspectorPropertyId::CameraVerticalFov);
+    kb::editor::tests::Require(fov.bounded && fov.minimum == 10.0F && fov.maximum == 120.0F && fov.unit == "\xC2\xB0" && !fov.tooltip.empty(),
+        "The field of view is a slider from 10 to 120 degrees with a help text");
+    kb::editor::tests::Require(InspectorFieldGuide::Help(InspectorPropertyId::LightRange).unit == "m" && !InspectorFieldGuide::Help(InspectorPropertyId::LightIntensity).tooltip.empty() &&
+            InspectorFieldGuide::Help(InspectorPropertyId::LightShadowStrength).bounded,
+        "Light range is in metres, intensity has help and shadow strength is a slider");
+    kb::editor::tests::Require(InspectorFieldGuide::Help(InspectorPropertyId::EntityName).tooltip.empty() && !InspectorFieldGuide::Help(InspectorPropertyId::EntityName).bounded,
+        "A property without help has none");
+    kb::editor::tests::Require(!InspectorFieldGuide::Tooltip(InspectorSectionId::Camera, InspectorPropertyId::CameraNearClip, -1).empty() &&
+            !InspectorFieldGuide::Tooltip(InspectorSectionId::Rigidbody, InspectorPropertyId::RigidbodyField, 1).empty() &&
+            !InspectorFieldGuide::Tooltip(InspectorSectionId::Joint, InspectorPropertyId::JointField, 17).empty() &&
+            InspectorFieldGuide::Tooltip(InspectorSectionId::Joint, InspectorPropertyId::JointField, 9999).empty() &&
+            InspectorFieldGuide::Tooltip(InspectorSectionId::General, InspectorPropertyId::EntityName, -1).empty(),
+        "The hover help is found by section, property and row, for every kind of row");
+
+    const std::vector<kb::editor::PhysicsField> body = InspectorPhysicsModel::Fields(kb::scene::RigidbodyComponent{});
+    kb::editor::tests::Require(body[1].unit == "kg" && !body[1].tooltip.empty() && body[12].bounded && body[12].minimum == 0.0F && body[12].maximum == 1.0F,
+        "The mass is in kilograms and the damping is a slider from 0 to 1");
+    kb::scene::JointComponent joint;
+    joint.type = kb::scene::JointType::Hinge;
+    const bool hingeDegrees = InspectorPhysicsModel::Fields(joint)[10].unit == "\xC2\xB0";
+    joint.type = kb::scene::JointType::Slider;
+    kb::editor::tests::Require(hingeDegrees && InspectorPhysicsModel::Fields(joint)[10].unit == "m",
+        "A joint limit is in degrees for a hinge and in metres for a slider");
+}
+
+// The changed-value marker and the lists that open under a section.
+void RunInspectorResetMarkerAndMenuStateTest() {
+    using kb::editor::InspectorMenuKind;
+    using kb::editor::InspectorPropertyId;
+    using kb::editor::InspectorSectionId;
+
+    kb::editor::InspectorPanelState state;
+    kb::editor::tests::Require(!state.IsFieldChanged(InspectorSectionId::Light, InspectorPropertyId::LightIntensity), "Nothing is marked before a paint");
+    state.SetChangedFields({ { InspectorSectionId::Light, InspectorPropertyId::LightIntensity, -1 }, { InspectorSectionId::Rigidbody, InspectorPropertyId::RigidbodyField, 4 } });
+    kb::editor::tests::Require(state.IsFieldChanged(InspectorSectionId::Light, InspectorPropertyId::LightIntensity) &&
+            state.IsFieldChanged(InspectorSectionId::Rigidbody, InspectorPropertyId::RigidbodyField, 4) &&
+            !state.IsFieldChanged(InspectorSectionId::Rigidbody, InspectorPropertyId::RigidbodyField, 5) &&
+            !state.IsFieldChanged(InspectorSectionId::Light, InspectorPropertyId::LightRange),
+        "A field is marked by its section, property and row, and a sibling row is not");
+
+    state.ToggleComponentMenu(InspectorSectionId::Camera);
+    kb::editor::tests::Require(state.IsComponentMenuOpen(InspectorSectionId::Camera) && !state.IsComponentMenuOpen(InspectorSectionId::Light), "The component menu opens under one section");
+    state.ToggleMenu(InspectorMenuKind::JointPresets, InspectorSectionId::Joint);
+    kb::editor::tests::Require(!state.IsComponentMenuOpen(InspectorSectionId::Camera) && state.IsMenuOpen(InspectorMenuKind::JointPresets, InspectorSectionId::Joint),
+        "Opening the quick setups closes the component menu");
+    state.ToggleMenu(InspectorMenuKind::JointPresets, InspectorSectionId::Joint);
+    kb::editor::tests::Require(!state.IsMenuOpen(InspectorMenuKind::JointPresets, InspectorSectionId::Joint), "Toggling the open list closes it");
+    state.ToggleComponentMenu(InspectorSectionId::Light);
+    state.CloseComponentMenus();
+    kb::editor::tests::Require(!state.IsComponentMenuOpen(InspectorSectionId::Light), "Closing the menus closes the open one");
+}
+
 // Collapse state is a set of section ids, so every section — including the physics
 // component sections added later — toggles independently. Guards the bug where
 // physics section headers refused to collapse (a hand-maintained switch omitted them).
@@ -3582,6 +3923,13 @@ void RunEditorInspectorTests() {
     RunEditorConsoleStateTest();
     RunInspectorPhysicsModelTest();
     RunInspectorSectionCollapseTest();
+    RunInspectorPhysicsLayoutTest();
+    RunInspectorAdvancedFoldoutStateTest();
+    RunInspectorPhysicsResetTest();
+    RunInspectorComponentDefaultsTest();
+    RunJointPresetTest();
+    RunInspectorFieldHelpTest();
+    RunInspectorResetMarkerAndMenuStateTest();
     RunInspectorDisclosureAnimationTest();
     RunInspectorHoverIndexTest();
     RunAddComponentBrowserModelTest();

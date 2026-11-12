@@ -114,6 +114,8 @@ using inspector_panel_rows::InspectorLabelColumnRight;
 using inspector_panel_rows::AssetPickerTextRect;
 using inspector_panel_rows::CheckboxRectForRow;
 using inspector_panel_rows::ComponentRemoveButtonRect;
+using inspector_panel_rows::OpenMenuHeight;
+using inspector_panel_rows::ResetMarkerRect;
 using inspector_panel_rows::DrawAssetFieldRow;
 using inspector_panel_rows::DrawBoolRow;
 using inspector_panel_rows::DrawDropdownOptionFooter;
@@ -2235,11 +2237,7 @@ void PaintHistoryRibbonSection(HDC dc, RECT content, int& y, const EditorTheme& 
     InspectorDisclosureId disclosure, int basicRows, int allRows) noexcept {
     if (state.IsCollapsed(section)) return kSectionHeaderHeight;
     const int rows = state.IsDisclosureExpanded(disclosure) ? allRows : basicRows;
-    return kSectionHeaderHeight + kDividerHeight + rows * (kFieldRowHeight + kDividerHeight) + kDisclosureRowHeight;
-}
-
-[[nodiscard]] bool HasPhysicsDisclosure(InspectorSectionId section) noexcept {
-    return section == InspectorSectionId::Rigidbody || section == InspectorSectionId::Collider || section == InspectorSectionId::Joint;
+    return kSectionHeaderHeight + kDividerHeight + rows * (kFieldRowHeight + kDividerHeight) + kDisclosureRowHeight + OpenMenuHeight(state, section);
 }
 
 [[nodiscard]] InspectorDisclosureId PhysicsDisclosure(InspectorSectionId section) noexcept {
@@ -2252,9 +2250,106 @@ void PaintHistoryRibbonSection(HDC dc, RECT content, int& y, const EditorTheme& 
     return section == InspectorSectionId::Rigidbody ? InspectorPropertyId::RigidbodyAdvanced : InspectorPropertyId::ColliderAdvanced;
 }
 
-[[nodiscard]] int PhysicsBasicRows(InspectorSectionId section) noexcept {
-    if (section == InspectorSectionId::Joint) return InspectorPhysicsModel::JointBasicRows;
-    return section == InspectorSectionId::Rigidbody ? 6 : 10;
+// The rows a section adds above its fields: the Joint's "Quick setup" button and, opened, the list of setups.
+[[nodiscard]] int PhysicsExtraRows(const InspectorPanelState& state, InspectorSectionId section) noexcept {
+    return section == InspectorSectionId::Joint
+        ? 1 + (state.IsMenuOpen(InspectorMenuKind::JointPresets, section) ? kJointPresetCount : 0)
+        : 0;
+}
+
+// Must match PaintPhysicsSection and HitPhysicsSection: both walk the same layout.
+[[nodiscard]] int PhysicsSectionHeight(const InspectorPanelState& state, InspectorSectionId section, const PhysicsLayout& layout) noexcept {
+    if (state.IsCollapsed(section)) {
+        return kSectionHeaderHeight;
+    }
+    const int extra = PhysicsExtraRows(state, section);
+    if (layout.HasAdvanced()) {
+        return AdvancedSectionHeight(state, section, PhysicsDisclosure(section), layout.basicCount + extra, layout.count + extra);
+    }
+    return kSectionHeaderHeight + kDividerHeight + (layout.count + extra) * (kFieldRowHeight + kDividerHeight) + OpenMenuHeight(state, section);
+}
+
+// The Camera's rows in display order: what the view looks like first (the lens that applies to its projection, the
+// background), then the clipping range, which camera is the main one and which layers it draws behind Advanced.
+// Painting, hit testing and the section height all read this one list.
+enum class CameraRowKind { Choice, Number, Check, Colour };
+
+struct CameraRow {
+    InspectorPropertyId property = InspectorPropertyId::None;
+    CameraRowKind kind = CameraRowKind::Choice;
+};
+
+struct CameraLayout {
+    std::array<CameraRow, 12> rows{};
+    int count = 0;
+    int basicCount = 0;
+};
+
+[[nodiscard]] CameraLayout CameraRowsFor(const kb::scene::CameraComponent& camera) noexcept {
+    using P = InspectorPropertyId;
+    using K = CameraRowKind;
+    CameraLayout layout;
+    const auto add = [&layout](P property, K kind) { layout.rows[static_cast<std::size_t>(layout.count++)] = CameraRow{ property, kind }; };
+    add(P::CameraProjection, K::Choice);
+    add(camera.projection == kb::scene::CameraProjection::Orthographic ? P::CameraOrthographicHeight : P::CameraVerticalFov, K::Number);
+    add(P::CameraClearMode, K::Choice);
+    if (camera.clearMode == kb::scene::CameraClearMode::SolidColor) {
+        add(P::CameraClearColor, K::Colour);
+    }
+    layout.basicCount = layout.count;
+    add(P::CameraNearClip, K::Number);
+    add(P::CameraFarClip, K::Number);
+    add(P::CameraPrimary, K::Check);
+    add(P::CameraViewportId, K::Choice);
+    add(P::CameraPriority, K::Choice);
+    add(P::CameraCullingMask, K::Choice);
+    return layout;
+}
+
+[[nodiscard]] int CameraSectionHeight(const InspectorPanelState& inspector, const kb::scene::CameraComponent& camera) noexcept {
+    const CameraLayout layout = CameraRowsFor(camera);
+    return AdvancedSectionHeight(inspector, InspectorSectionId::Camera, InspectorDisclosureId::CameraAdvanced, layout.basicCount, layout.count);
+}
+
+void PaintCameraRow(SectionWriter& section, const kb::scene::CameraComponent& camera, const CameraRow& row) {
+    using P = InspectorPropertyId;
+    switch (row.property) {
+    case P::CameraProjection:
+        section.Field(EditorText("inspector.camera.projection", "Projection"), InspectorComponentLabelFormatter::ProjectionName(camera.projection), row.property);
+        break;
+    case P::CameraVerticalFov:
+        section.Float(EditorText("inspector.camera.fieldOfView", "Field of View"), FormatFloat(camera.verticalFovDegrees, 2), row.property, camera.verticalFovDegrees);
+        break;
+    case P::CameraOrthographicHeight:
+        section.Float(EditorText("inspector.camera.size", "Size"), FormatFloat(camera.orthographicHeight, 2), row.property);
+        break;
+    case P::CameraClearMode:
+        section.Field(EditorText("inspector.camera.clearMode", "Background"), InspectorComponentLabelFormatter::CameraClearModeName(camera.clearMode), row.property);
+        break;
+    case P::CameraClearColor:
+        section.Color(camera.clearColor, row.property);
+        break;
+    case P::CameraNearClip:
+        section.Float(EditorText("inspector.camera.nearClip", "Near Clip"), FormatFloat(camera.nearClip, 3), row.property);
+        break;
+    case P::CameraFarClip:
+        section.Float(EditorText("inspector.camera.farClip", "Far Clip"), FormatFloat(camera.farClip, 2), row.property);
+        break;
+    case P::CameraPrimary:
+        section.Bool(EditorText("inspector.camera.primary", "Primary"), camera.primary, row.property);
+        break;
+    case P::CameraViewportId:
+        section.Field(EditorText("inspector.camera.viewportID", "Viewport ID"), std::to_string(camera.viewportId), row.property);
+        break;
+    case P::CameraPriority:
+        section.Field(EditorText("inspector.camera.priority", "Priority"), std::to_string(camera.priority), row.property);
+        break;
+    case P::CameraCullingMask:
+        section.Field(EditorText("inspector.camera.cullingMask", "Culling Mask"), std::to_string(camera.cullingMask), row.property);
+        break;
+    default:
+        break;
+    }
 }
 
 void PaintCameraSection(
@@ -2273,50 +2368,17 @@ void PaintCameraSection(
         HeroIconKind::Eye,
         EditorText("inspector.camera.title", "Camera"),
         true);
-    section.Field(
-        EditorText("inspector.camera.projection", "Projection"),
-        InspectorComponentLabelFormatter::ProjectionName(camera.projection),
-        InspectorPropertyId::CameraProjection);
-    section.Float(
-        EditorText("inspector.camera.verticalFOV", "Vertical FOV"),
-        FormatFloat(camera.verticalFovDegrees, 2),
-        InspectorPropertyId::CameraVerticalFov);
-    section.Float(
-        EditorText("inspector.camera.orthoHeight", "Ortho Height"),
-        FormatFloat(camera.orthographicHeight, 2),
-        InspectorPropertyId::CameraOrthographicHeight);
-    section.Disclosure(EditorText("inspector.meshRenderer.advanced", "Advanced"), InspectorPropertyId::CameraAdvanced,
-        inspector.IsDisclosureExpanded(InspectorDisclosureId::CameraAdvanced));
-    if (!inspector.IsDisclosureExpanded(InspectorDisclosureId::CameraAdvanced)) {
-        y = section.Bottom() + kSectionGap;
-        return;
+    const CameraLayout layout = CameraRowsFor(camera);
+    for (int position = 0; position < layout.count; ++position) {
+        if (position == layout.basicCount) {
+            section.Disclosure(EditorText("inspector.meshRenderer.advanced", "Advanced"), InspectorPropertyId::CameraAdvanced,
+                inspector.IsDisclosureExpanded(InspectorDisclosureId::CameraAdvanced));
+            if (!inspector.IsDisclosureExpanded(InspectorDisclosureId::CameraAdvanced)) {
+                break;
+            }
+        }
+        PaintCameraRow(section, camera, layout.rows[static_cast<std::size_t>(position)]);
     }
-    section.Float(
-        EditorText("inspector.camera.nearClip", "Near Clip"),
-        FormatFloat(camera.nearClip, 3),
-        InspectorPropertyId::CameraNearClip);
-    section.Float(
-        EditorText("inspector.camera.farClip", "Far Clip"),
-        FormatFloat(camera.farClip, 2),
-        InspectorPropertyId::CameraFarClip);
-    section.Bool(EditorText("inspector.camera.primary", "Primary"), camera.primary, InspectorPropertyId::CameraPrimary);
-    section.Field(
-        EditorText("inspector.camera.viewportID", "Viewport ID"),
-        std::to_string(camera.viewportId),
-        InspectorPropertyId::CameraViewportId);
-    section.Field(
-        EditorText("inspector.camera.priority", "Priority"),
-        std::to_string(camera.priority),
-        InspectorPropertyId::CameraPriority);
-    section.Field(
-        EditorText("inspector.camera.cullingMask", "Culling Mask"),
-        std::to_string(camera.cullingMask),
-        InspectorPropertyId::CameraCullingMask);
-    section.Field(
-        EditorText("inspector.camera.clearMode", "Background"),
-        InspectorComponentLabelFormatter::CameraClearModeName(camera.clearMode),
-        InspectorPropertyId::CameraClearMode);
-    section.Color(camera.clearColor, InspectorPropertyId::CameraClearColor);
     y = section.Bottom() + kSectionGap;
 }
 
@@ -2364,7 +2426,7 @@ void PaintLightSection(
     const EditorTheme& theme,
     const InspectorPanelState& inspector,
     const kb::scene::LightComponent& light) {
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Light, HeroIconKind::Bolt, EditorText("inspector.light.title", "Light"));
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Light, HeroIconKind::Bolt, EditorText("inspector.light.title", "Light"), true);
     section.Field(EditorText("inspector.light.type", "Type"), InspectorComponentLabelFormatter::LightKindName(light.kind), InspectorPropertyId::LightKind);
     if (LightUsesAreaSize(light.kind)) {
         section.Field(EditorText("inspector.light.shape", "Shape"), InspectorComponentLabelFormatter::LightShapeName(light.kind), InspectorPropertyId::LightShape);
@@ -2375,8 +2437,8 @@ void PaintLightSection(
         section.Float(EditorText("inspector.light.range", "Range"), FormatFloat(light.range, 2), InspectorPropertyId::LightRange);
     }
     if (LightUsesSpotCone(light.kind)) {
-        section.Float(EditorText("inspector.light.innerAngle", "Inner Angle"), FormatFloat(light.innerConeDegrees, 2), InspectorPropertyId::LightInnerCone);
-        section.Float(EditorText("inspector.light.outerAngle", "Outer Angle"), FormatFloat(light.outerConeDegrees, 2), InspectorPropertyId::LightOuterCone);
+        section.Float(EditorText("inspector.light.innerAngle", "Inner Angle"), FormatFloat(light.innerConeDegrees, 2), InspectorPropertyId::LightInnerCone, light.innerConeDegrees);
+        section.Float(EditorText("inspector.light.outerAngle", "Outer Angle"), FormatFloat(light.outerConeDegrees, 2), InspectorPropertyId::LightOuterCone, light.outerConeDegrees);
     }
     if (LightUsesAreaSize(light.kind)) {
         section.Float(EditorText("inspector.light.width", "Width"), FormatFloat(light.areaWidth, 2), InspectorPropertyId::LightAreaWidth);
@@ -2390,7 +2452,7 @@ void PaintLightSection(
         y = section.Bottom() + kSectionGap;
         return;
     }
-    section.Float(EditorText("inspector.light.shadowStrength", "Shadow Strength"), FormatFloat(light.shadowStrength, 2), InspectorPropertyId::LightShadowStrength);
+    section.Float(EditorText("inspector.light.shadowStrength", "Shadow Strength"), FormatFloat(light.shadowStrength, 2), InspectorPropertyId::LightShadowStrength, light.shadowStrength);
     section.Float(EditorText("inspector.light.shadowBias", "Shadow Bias"), FormatFloat(light.shadowBias, 2), InspectorPropertyId::LightShadowBias);
     section.Float(EditorText("inspector.light.shadowNormalBias", "Shadow Normal Bias"), FormatFloat(light.shadowNormalBias, 2), InspectorPropertyId::LightShadowNormalBias);
     section.Field(EditorText("inspector.light.shadowFilter", "Shadow Filter"), InspectorComponentLabelFormatter::LightShadowFilterName(light.shadowFilter), InspectorPropertyId::LightShadowFilter);
@@ -2417,6 +2479,9 @@ void PaintLightSection(
     y = section.Bottom() + kSectionGap;
 }
 
+// What the Advanced foldout shows per material slot: its name, source, default, status and the sections that use it.
+constexpr std::size_t kMeshRendererSlotAdvancedFields = 5U;
+
 void PaintMeshRendererSection(
     HDC dc,
     RECT content,
@@ -2434,37 +2499,39 @@ void PaintMeshRendererSection(
         mesh,
         [&sceneContext](std::uint64_t materialId) { return MaterialDisplayName(sceneContext, materialId); },
         [&sceneContext](std::uint64_t materialId) { return MaterialSlotRuntimeStatus(sceneContext, materialId); });
-    if (!slotRows.empty()) {
-        section.Disclosure(
-            EditorText("inspector.meshRenderer.advanced", "Advanced"),
-            InspectorPropertyId::MeshRendererAdvanced,
-            inspector.IsDisclosureExpanded(InspectorDisclosureId::MeshRendererAdvanced));
-    }
+    // Advanced holds what only an expert needs: what each material slot is and where it is used, and the level of
+    // detail and mobility settings. The slot's override stays up front: it is the one thing most authors change.
+    section.Disclosure(
+        EditorText("inspector.meshRenderer.advanced", "Advanced"),
+        InspectorPropertyId::MeshRendererAdvanced,
+        inspector.IsDisclosureExpanded(InspectorDisclosureId::MeshRendererAdvanced));
     for (const InspectorMeshRendererMaterialSlotRow& row : slotRows) {
         const std::string slot = std::to_string(row.slotIndex + 1U);
         const std::string nameLabel = EditorLocalization::Format("inspector.meshRenderer.slotName", "Slot {slot} Name", { { "slot", slot } });
         const std::string sourceLabel = EditorLocalization::Format("inspector.meshRenderer.slotSource", "Slot {slot} Source", { { "slot", slot } });
         const std::string defaultLabel = EditorLocalization::Format("inspector.meshRenderer.slotDefault", "Slot {slot} Default", { { "slot", slot } });
-        const std::array<DisplayField, 3> advancedFields{ {
+        const std::string statusLabel = EditorLocalization::Format("inspector.meshRenderer.slotMaterialStatus", "Slot {slot} Material Status", { { "slot", slot } });
+        const std::string sectionsLabel = EditorLocalization::Format("inspector.meshRenderer.slotSections", "Slot {slot} Sections", { { "slot", slot } });
+        const std::array<DisplayField, kMeshRendererSlotAdvancedFields> advancedFields{ {
             { nameLabel, row.slotName },
             { sourceLabel, row.importedSourceName },
             { defaultLabel, row.defaultMaterialName },
+            { statusLabel, row.activeMaterialStatus },
+            { sectionsLabel, row.sectionsUsingSlot },
         } };
         section.AnimatedFields(
             advancedFields,
             inspector.DisclosureExpansion(InspectorDisclosureId::MeshRendererAdvanced),
-            static_cast<int>(row.slotIndex * 3U));
+            static_cast<int>(row.slotIndex * kMeshRendererSlotAdvancedFields));
         section.AssetField(row.label, row.overrideMaterialName, MeshRendererMaterialSlotProperty(row.slotIndex), MeshRendererMaterialSlotPickerProperty(row.slotIndex));
-        section.Field(EditorLocalization::Format("inspector.meshRenderer.slotMaterialStatus", "Slot {slot} Material Status", { { "slot", slot } }),
-            row.activeMaterialStatus);
-        section.Field(EditorLocalization::Format("inspector.meshRenderer.slotSections", "Slot {slot} Sections", { { "slot", slot } }),
-            row.sectionsUsingSlot);
     }
     section.Bool(EditorText("inspector.meshRenderer.castsShadow", "Casts Shadow"), renderer.castsShadow, InspectorPropertyId::MeshRendererCastsShadow);
     section.Bool(EditorText("inspector.meshRenderer.receivesShadow", "Receives Shadow"), renderer.receivesShadow, InspectorPropertyId::MeshRendererReceivesShadow);
-    section.Bool(EditorText("inspector.meshRenderer.lodEnabled", "Use Levels of Detail"), renderer.lodEnabled, InspectorPropertyId::MeshRendererLodEnabled);
-    section.Field(EditorText("inspector.meshRenderer.lodBias", "LOD Bias"), std::to_string(renderer.lodBias), InspectorPropertyId::MeshRendererLodBias);
-    section.Field(EditorText("inspector.meshRenderer.mobility", "Mobility"), InspectorComponentLabelFormatter::MeshMobilityName(renderer.mobility), InspectorPropertyId::MeshRendererMobility);
+    if (inspector.IsDisclosureExpanded(InspectorDisclosureId::MeshRendererAdvanced)) {
+        section.Bool(EditorText("inspector.meshRenderer.lodEnabled", "Use Levels of Detail"), renderer.lodEnabled, InspectorPropertyId::MeshRendererLodEnabled);
+        section.Field(EditorText("inspector.meshRenderer.lodBias", "LOD Bias"), std::to_string(renderer.lodBias), InspectorPropertyId::MeshRendererLodBias);
+        section.Field(EditorText("inspector.meshRenderer.mobility", "Mobility"), InspectorComponentLabelFormatter::MeshMobilityName(renderer.mobility), InspectorPropertyId::MeshRendererMobility);
+    }
     y = section.Bottom() + kSectionGap;
 }
 
@@ -2493,22 +2560,35 @@ void PaintPhysicsSection(
     std::string_view title,
     InspectorPropertyId fieldProperty,
     const std::vector<PhysicsField>& fields,
+    const PhysicsLayout& layout,
     bool showFitButton,
     bool fitEnabled) {
     SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, sectionId, HeroIconKind::Cube, title, true);
-    for (int index = 0; index < static_cast<int>(fields.size()); ++index) {
-        if (HasPhysicsDisclosure(sectionId) && index == PhysicsBasicRows(sectionId)) {
+    if (sectionId == InspectorSectionId::Joint) {
+        // One click sets the type and the limits for a common use; the list opens under the button.
+        section.Action(EditorText("inspector.joint.preset", "Quick setup"), InspectorPropertyId::JointPreset);
+        if (inspector.IsMenuOpen(InspectorMenuKind::JointPresets, sectionId)) {
+            for (int preset = 0; preset < kJointPresetCount; ++preset) {
+                section.MenuItem(JointPresetName(static_cast<JointPreset>(preset)), InspectorPropertyId::JointPresetItem, preset);
+            }
+        }
+    }
+    for (int position = 0; position < layout.count; ++position) {
+        if (layout.HasAdvanced() && position == layout.basicCount) {
             section.Disclosure(EditorText("inspector.meshRenderer.advanced", "Advanced"), PhysicsAdvancedProperty(sectionId),
                 inspector.IsDisclosureExpanded(PhysicsDisclosure(sectionId)));
             if (!inspector.IsDisclosureExpanded(PhysicsDisclosure(sectionId))) break;
         }
+        const int index = layout.rows[static_cast<std::size_t>(position)];
         const PhysicsField& field = fields[static_cast<std::size_t>(index)];
         // Pass the row index so hover/inline-edit highlight only the row under the
         // cursor (all rows in a component share one property id).
         if (field.kind == PhysicsFieldKind::Bool) {
             section.Bool(field.label, field.boolValue, fieldProperty, index);
         } else {
-            section.Field(field.label, field.value, fieldProperty, index);
+            const float span = field.maximum - field.minimum;
+            const float fill = field.bounded && span > 0.0F ? (field.number - field.minimum) / span : -1.0F;
+            section.Field(field.label, field.value, fieldProperty, index, field.unit, fill);
         }
     }
     if (showFitButton && !inspector.IsCollapsed(sectionId)) {
@@ -3678,6 +3758,44 @@ struct PrefabSectionModel {
     return model;
 }
 
+// The hover help under the row the pointer rests on: the label of a row that has some, or a changed value's reset
+// arrow. The row bounds come from the hit test, which works on the content before it is scrolled; `shift` is how far
+// the painted content sits from there.
+void PaintFieldTooltip(HDC dc, const RECT& viewport, int shift, const EditorTheme& theme, const InspectorPanelState& inspector) {
+    if (inspector.IsTextEditing()) {
+        return;
+    }
+    std::string text;
+    if (inspector.HoveredKind() == InspectorHitKind::ResetField) {
+        text = EditorText("inspector.resetToDefault", "Reset to default");
+    } else if (inspector.HoveredKind() == InspectorHitKind::Row) {
+        text = InspectorFieldGuide::Tooltip(inspector.HoveredSection(), inspector.HoveredProperty(), inspector.HoveredIndex());
+    }
+    const InspectorRowBounds row = inspector.HoveredRowBounds();
+    if (text.empty() || row.Empty()) {
+        return;
+    }
+    constexpr int kMargin = 12;
+    constexpr int kPad = 8;
+    constexpr int kLineHeight = 15;
+    const int width = std::max(120, static_cast<int>(viewport.right - viewport.left) - 2 * kMargin);
+    const int textWidth = width - 2 * kPad;
+    const int measured = MeasureTextWidth(text, 11, FW_NORMAL) * 11 / 10;
+    const int lines = std::max(1, (measured + textWidth - 1) / textWidth);
+    const int height = lines * kLineHeight + 2 * kPad - 2;
+    int top = row.bottom + shift + 3;
+    if (top + height > viewport.bottom) {
+        top = row.top + shift - height - 3;
+    }
+    top = std::max(static_cast<int>(viewport.top), top);
+    const RECT box = Rect(viewport.left + kMargin, top, viewport.left + kMargin + width, top + height);
+    DrawFrame(dc, box, Color(theme.chrome), Color(theme.borderPanel));
+    ScopedFont font(11, FW_NORMAL);
+    const ScopedGdiObject selectedFont(dc, font.handle);
+    Text(dc, Rect(box.left + kPad, box.top + kPad - 1, box.right - kPad, box.bottom - kPad + 1), text, Color(theme.textSecondary),
+        DT_LEFT | DT_TOP | DT_WORDBREAK);
+}
+
 void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& theme, const EditorSceneContext& sceneContext, kb::scene::SceneEntity selected) {
     const kb::scene::Scene& scene = sceneContext.Scene();
     const InspectorPanelState& inspector = sceneContext.Inspector();
@@ -3861,8 +3979,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (const kb::scene::CameraComponent* camera =
             scene.Components().Cameras().TryGet(selected);
         camera != nullptr) {
-        const int h =
-            AdvancedSectionHeight(inspector, InspectorSectionId::Camera, InspectorDisclosureId::CameraAdvanced, 3, 11);
+        const int h = CameraSectionHeight(inspector, *camera);
         if (sectionVisible(y, h)) {
             PaintCameraSection(dc, content, y, theme, inspector, *camera);
         } else {
@@ -4001,49 +4118,54 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         }
     }
     if (const kb::scene::RigidbodyComponent* rigidbody = scene.Components().Rigidbodies().TryGet(selected); rigidbody != nullptr) {
-        const int h = AdvancedSectionHeight(inspector, InspectorSectionId::Rigidbody, InspectorDisclosureId::RigidbodyAdvanced, 6, InspectorPhysicsModel::FieldCount(PhysicsComponentKind::Rigidbody));
+        const PhysicsLayout layout = InspectorPhysicsModel::Layout(*rigidbody);
+        const int h = PhysicsSectionHeight(inspector, InspectorSectionId::Rigidbody, layout);
         if (sectionVisible(y, h)) {
-            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::Rigidbody, EditorText("inspector.rigidbody.title", "Rigidbody"), InspectorPropertyId::RigidbodyField, InspectorPhysicsModel::Fields(*rigidbody), false, false);
+            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::Rigidbody, EditorText("inspector.rigidbody.title", "Rigidbody"), InspectorPropertyId::RigidbodyField, InspectorPhysicsModel::Fields(*rigidbody), layout, false, false);
         } else {
             y += h + kSectionGap;
         }
     }
     if (const kb::scene::ColliderComponent* collider = scene.Components().Colliders().TryGet(selected); collider != nullptr) {
-        int h = AdvancedSectionHeight(inspector, InspectorSectionId::Collider, InspectorDisclosureId::ColliderAdvanced, 10, InspectorPhysicsModel::FieldCount(PhysicsComponentKind::Collider));
+        const PhysicsLayout layout = InspectorPhysicsModel::Layout(*collider);
+        int h = PhysicsSectionHeight(inspector, InspectorSectionId::Collider, layout);
         if (!inspector.IsCollapsed(InspectorSectionId::Collider)) {
             h += kFieldRowHeight + kDividerHeight; // the "Fit to Mesh" action button
         }
         if (sectionVisible(y, h)) {
-            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::Collider, EditorText("inspector.collider.title", "Collider"), InspectorPropertyId::ColliderField, InspectorPhysicsModel::Fields(*collider), true, sceneContext.CanFitColliderToMesh(selected));
+            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::Collider, EditorText("inspector.collider.title", "Collider"), InspectorPropertyId::ColliderField, InspectorPhysicsModel::Fields(*collider), layout, true, sceneContext.CanFitColliderToMesh(selected));
         } else {
             y += h + kSectionGap;
         }
     }
     if (const kb::scene::CharacterControllerComponent* character = scene.Components().CharacterControllers().TryGet(selected); character != nullptr) {
-        const int h = SectionHeight(inspector, InspectorSectionId::CharacterController, InspectorPhysicsModel::FieldCount(PhysicsComponentKind::CharacterController));
+        const PhysicsLayout layout = InspectorPhysicsModel::Layout(*character);
+        const int h = PhysicsSectionHeight(inspector, InspectorSectionId::CharacterController, layout);
         if (sectionVisible(y, h)) {
-            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::CharacterController, EditorText("inspector.characterController.title", "Character Controller"), InspectorPropertyId::CharacterControllerField, InspectorPhysicsModel::Fields(*character), false, false);
+            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::CharacterController, EditorText("inspector.characterController.title", "Character Controller"), InspectorPropertyId::CharacterControllerField, InspectorPhysicsModel::Fields(*character), layout, false, false);
         } else {
             y += h + kSectionGap;
         }
     }
     if (const kb::scene::JointComponent* joint = scene.Components().Joints().TryGet(selected); joint != nullptr) {
-        const int h = AdvancedSectionHeight(inspector, InspectorSectionId::Joint, InspectorDisclosureId::JointAdvanced, InspectorPhysicsModel::JointBasicRows, InspectorPhysicsModel::FieldCount(PhysicsComponentKind::Joint));
+        const PhysicsLayout layout = InspectorPhysicsModel::Layout(*joint);
+        const int h = PhysicsSectionHeight(inspector, InspectorSectionId::Joint, layout);
         if (sectionVisible(y, h)) {
-            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::Joint, EditorText("inspector.joint.title", "Joint"), InspectorPropertyId::JointField, InspectorPhysicsModel::Fields(*joint), false, false);
+            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::Joint, EditorText("inspector.joint.title", "Joint"), InspectorPropertyId::JointField, InspectorPhysicsModel::Fields(*joint), layout, false, false);
         } else {
             y += h + kSectionGap;
         }
     }
     DrawAddComponent(dc, content, theme, inspector, y);
     PaintTagsDropdown(dc, content, theme, sceneContext, selected);
+    PaintFieldTooltip(dc, viewport, static_cast<int>(content.top - viewport.top), theme, inspector);
 }
 
 [[nodiscard]] int SectionHeight(const InspectorPanelState& inspector, InspectorSectionId section, int rows) noexcept {
     if (inspector.IsCollapsed(section)) {
         return kSectionHeaderHeight;
     }
-    return kSectionHeaderHeight + kDividerHeight + rows * (kFieldRowHeight + kDividerHeight);
+    return kSectionHeaderHeight + kDividerHeight + rows * (kFieldRowHeight + kDividerHeight) + OpenMenuHeight(inspector, section);
 }
 
 [[nodiscard]] int TerrainSectionHeight(const InspectorPanelState& inspector, std::size_t layerCount) noexcept {
@@ -4141,7 +4263,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
 
 [[nodiscard]] int MeshRendererAdvancedMetadataHeight(const InspectorPanelState& inspector) noexcept {
     return static_cast<int>(std::lround(
-        3.0F * static_cast<float>(kFieldRowHeight + kDividerHeight)
+        static_cast<float>(kMeshRendererSlotAdvancedFields) * static_cast<float>(kFieldRowHeight + kDividerHeight)
         * inspector.DisclosureExpansion(InspectorDisclosureId::MeshRendererAdvanced)));
 }
 
@@ -4154,12 +4276,14 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     }
     const std::optional<kb::render::RenderMeshAssetData> mesh = LoadMeshAssetData(sceneContext, renderer.meshAssetId);
     const std::uint32_t slotCount = InspectorMeshRendererMaterialSlotModel::SlotRowCount(renderer, mesh);
-    const int fixedRows = 7 + 3 * static_cast<int>(slotCount);
-    const int disclosureHeight = slotCount == 0U ? 0 : kDisclosureRowHeight + kDividerHeight;
+    // Mesh, material, one override per slot, the two shadow switches and, opened, the three expert rows.
+    const int fixedRows = 4 + static_cast<int>(slotCount) + (inspector.IsDisclosureExpanded(InspectorDisclosureId::MeshRendererAdvanced) ? 3 : 0);
+    const int disclosureHeight = kDisclosureRowHeight + kDividerHeight;
     return kSectionHeaderHeight + kDividerHeight
         + fixedRows * (kFieldRowHeight + kDividerHeight)
         + disclosureHeight
-        + static_cast<int>(slotCount) * MeshRendererAdvancedMetadataHeight(inspector);
+        + static_cast<int>(slotCount) * MeshRendererAdvancedMetadataHeight(inspector)
+        + OpenMenuHeight(inspector, InspectorSectionId::MeshRenderer);
 }
 
 [[nodiscard]] int EntityContentHeight(const EditorSceneContext& sceneContext, kb::scene::SceneEntity selected) {
@@ -4205,9 +4329,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         height += SectionHeight(inspector, InspectorSectionId::Script, scriptRows) + kSectionGap;
     }
     if (scene.Components().Cameras().Has(selected)) {
-        height +=
-            AdvancedSectionHeight(inspector, InspectorSectionId::Camera, InspectorDisclosureId::CameraAdvanced, 3, 11) +
-            kSectionGap;
+        height += CameraSectionHeight(inspector, *scene.Components().Cameras().TryGet(selected)) + kSectionGap;
     }
     if (const kb::scene::LightComponent* light = scene.Components().Lights().TryGet(selected); light != nullptr) {
         height += AdvancedSectionHeight(inspector, InspectorSectionId::Light, InspectorDisclosureId::LightAdvanced, LightBasicRows(*light), LightSectionRows(*light)) + kSectionGap;
@@ -4263,19 +4385,19 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         height += SectionHeight(inspector, generic.id, rows) + kSectionGap;
     }
     if (const kb::scene::RigidbodyComponent* rigidbody = scene.Components().Rigidbodies().TryGet(selected); rigidbody != nullptr) {
-        height += AdvancedSectionHeight(inspector, InspectorSectionId::Rigidbody, InspectorDisclosureId::RigidbodyAdvanced, 6, InspectorPhysicsModel::FieldCount(PhysicsComponentKind::Rigidbody)) + kSectionGap;
+        height += PhysicsSectionHeight(inspector, InspectorSectionId::Rigidbody, InspectorPhysicsModel::Layout(*rigidbody)) + kSectionGap;
     }
     if (const kb::scene::ColliderComponent* collider = scene.Components().Colliders().TryGet(selected); collider != nullptr) {
-        height += AdvancedSectionHeight(inspector, InspectorSectionId::Collider, InspectorDisclosureId::ColliderAdvanced, 10, InspectorPhysicsModel::FieldCount(PhysicsComponentKind::Collider)) + kSectionGap;
+        height += PhysicsSectionHeight(inspector, InspectorSectionId::Collider, InspectorPhysicsModel::Layout(*collider)) + kSectionGap;
         if (!inspector.IsCollapsed(InspectorSectionId::Collider)) {
             height += kFieldRowHeight + kDividerHeight; // the "Fit to Mesh" action button
         }
     }
     if (const kb::scene::CharacterControllerComponent* character = scene.Components().CharacterControllers().TryGet(selected); character != nullptr) {
-        height += SectionHeight(inspector, InspectorSectionId::CharacterController, InspectorPhysicsModel::FieldCount(PhysicsComponentKind::CharacterController)) + kSectionGap;
+        height += PhysicsSectionHeight(inspector, InspectorSectionId::CharacterController, InspectorPhysicsModel::Layout(*character)) + kSectionGap;
     }
     if (const kb::scene::JointComponent* joint = scene.Components().Joints().TryGet(selected); joint != nullptr) {
-        height += AdvancedSectionHeight(inspector, InspectorSectionId::Joint, InspectorDisclosureId::JointAdvanced, InspectorPhysicsModel::JointBasicRows, InspectorPhysicsModel::FieldCount(PhysicsComponentKind::Joint)) + kSectionGap;
+        height += PhysicsSectionHeight(inspector, InspectorSectionId::Joint, InspectorPhysicsModel::Layout(*joint)) + kSectionGap;
     }
     height += kAddComponentButtonHeight + kSectionGap;
     return height;
@@ -4649,7 +4771,8 @@ void AdvanceRow(int& y) noexcept;
     if (removeButton) {
         const RECT remove = ComponentRemoveButtonRect(header);
         if (Contains(remove, x, yPoint)) {
-            return MakeHit(InspectorHitKind::ComponentMenuButton, section, InspectorPropertyId::ComponentRemove, remove);
+            return MakeHit(InspectorHitKind::ComponentMenuButton, section,
+                InspectorComponentDefaults::Supports(section) ? InspectorPropertyId::ComponentMenu : InspectorPropertyId::ComponentRemove, remove);
         }
     }
     if (Contains(header, x, yPoint)) {
@@ -4657,6 +4780,17 @@ void AdvanceRow(int& y) noexcept;
     }
     if (!state.IsCollapsed(section)) {
         y += kDividerHeight;
+        if (state.IsComponentMenuOpen(section)) {
+            for (int item = 0; item < kComponentMenuItemCount; ++item) {
+                const RECT row = Rect(bounds.left, y, bounds.right, y + kFieldRowHeight);
+                if (Contains(row, x, yPoint)) {
+                    InspectorPanelRenderer::Hit hit = MakeHit(InspectorHitKind::Row, section, InspectorPropertyId::ComponentMenuItem, row);
+                    hit.index = item;
+                    return hit;
+                }
+                y += kFieldRowHeight + kDividerHeight;
+            }
+        }
     }
     return {};
 }
@@ -4682,6 +4816,7 @@ void AdvanceGroup(int& y) noexcept {
     InspectorSectionId section,
     InspectorPropertyId fieldProperty,
     PhysicsComponentKind component,
+    const PhysicsLayout& layout,
     int x,
     int yPoint,
     int& y,
@@ -4692,14 +4827,30 @@ void AdvanceGroup(int& y) noexcept {
     if (state.IsCollapsed(section)) {
         return {};
     }
-    const int fieldCount = InspectorPhysicsModel::FieldCount(component);
-    for (int i = 0; i < fieldCount; ++i) {
-        if (HasPhysicsDisclosure(section) && i == PhysicsBasicRows(section)) {
+    if (section == InspectorSectionId::Joint) {
+        const RECT button = RowRect(content, y);
+        if (Contains(button, x, yPoint)) return MakeHit(InspectorHitKind::Row, section, InspectorPropertyId::JointPreset, button);
+        AdvanceRow(y);
+        if (state.IsMenuOpen(InspectorMenuKind::JointPresets, section)) {
+            for (int preset = 0; preset < kJointPresetCount; ++preset) {
+                const RECT row = RowRect(content, y);
+                if (Contains(row, x, yPoint)) {
+                    InspectorPanelRenderer::Hit hit = MakeHit(InspectorHitKind::Row, section, InspectorPropertyId::JointPresetItem, row);
+                    hit.index = preset;
+                    return hit;
+                }
+                AdvanceRow(y);
+            }
+        }
+    }
+    for (int position = 0; position < layout.count; ++position) {
+        if (layout.HasAdvanced() && position == layout.basicCount) {
             const RECT disclosure = Rect(content.left, y, content.right, y + kDisclosureRowHeight);
             if (Contains(disclosure, x, yPoint)) return MakeHit(InspectorHitKind::Row, section, PhysicsAdvancedProperty(section), disclosure);
             y += kDisclosureRowHeight;
             if (!state.IsDisclosureExpanded(PhysicsDisclosure(section))) break;
         }
+        const int i = layout.rows[static_cast<std::size_t>(position)];
         const RECT row = RowRect(content, y);
         InspectorPanelRenderer::Hit hit = InspectorPhysicsModel::KindOf(component, i) == PhysicsFieldKind::Bool
             ? HitBool(row, section, fieldProperty, x, yPoint)
@@ -4813,95 +4964,39 @@ void AdvanceGroup(int& y) noexcept {
 [[nodiscard]] InspectorPanelRenderer::Hit HitTestCameraSection(
     const RECT& content,
     const InspectorPanelState& state,
+    const kb::scene::CameraComponent& camera,
     int x,
     int yPoint,
     int& y) noexcept {
-    if (InspectorPanelRenderer::Hit hit =
-            HitSectionHeader(
-                content,
-                y,
-                state,
-                InspectorSectionId::Camera,
-                x,
-                yPoint,
-                true);
+    if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::Camera, x, yPoint, true);
         hit.kind != InspectorHitKind::None) {
         return hit;
     }
     if (state.IsCollapsed(InspectorSectionId::Camera)) {
         return {};
     }
-
-    if (InspectorPanelRenderer::Hit hit =
-            HitTextRow(
-                RowRect(content, y),
-                InspectorSectionId::Camera,
-                InspectorPropertyId::CameraProjection,
-                x,
-                yPoint);
-        hit.kind != InspectorHitKind::None) {
-        return hit;
-    }
-    AdvanceRow(y);
-    for (const InspectorPropertyId property : {
-             InspectorPropertyId::CameraVerticalFov,
-             InspectorPropertyId::CameraOrthographicHeight,
-             InspectorPropertyId::CameraNearClip,
-             InspectorPropertyId::CameraFarClip,
-         }) {
-        if (property == InspectorPropertyId::CameraNearClip) {
+    const CameraLayout layout = CameraRowsFor(camera);
+    for (int position = 0; position < layout.count; ++position) {
+        if (position == layout.basicCount) {
             const RECT disclosure = Rect(content.left, y, content.right, y + kDisclosureRowHeight);
             if (Contains(disclosure, x, yPoint)) return MakeHit(InspectorHitKind::Row, InspectorSectionId::Camera, InspectorPropertyId::CameraAdvanced, disclosure);
             y += kDisclosureRowHeight;
             if (!state.IsDisclosureExpanded(InspectorDisclosureId::CameraAdvanced)) return {};
         }
-        if (InspectorPanelRenderer::Hit hit =
-                HitFloatRow(
-                    RowRect(content, y),
-                    InspectorSectionId::Camera,
-                    property,
-                    x,
-                    yPoint);
-            hit.kind != InspectorHitKind::None) {
+        const CameraRow& row = layout.rows[static_cast<std::size_t>(position)];
+        const RECT rect = RowRect(content, y);
+        InspectorPanelRenderer::Hit hit{};
+        switch (row.kind) {
+        case CameraRowKind::Choice: hit = HitTextRow(rect, InspectorSectionId::Camera, row.property, x, yPoint); break;
+        case CameraRowKind::Number: hit = HitFloatRow(rect, InspectorSectionId::Camera, row.property, x, yPoint); break;
+        case CameraRowKind::Check: hit = HitBool(rect, InspectorSectionId::Camera, row.property, x, yPoint); break;
+        case CameraRowKind::Colour: hit = HitColorRow(rect, InspectorSectionId::Camera, row.property, x, yPoint); break;
+        }
+        if (hit.kind != InspectorHitKind::None) {
             return hit;
         }
         AdvanceRow(y);
     }
-    if (InspectorPanelRenderer::Hit hit =
-            HitBool(
-                RowRect(content, y),
-                InspectorSectionId::Camera,
-                InspectorPropertyId::CameraPrimary,
-                x,
-                yPoint);
-        hit.kind != InspectorHitKind::None) {
-        return hit;
-    }
-    AdvanceRow(y);
-    for (const InspectorPropertyId property : {
-             InspectorPropertyId::CameraViewportId,
-             InspectorPropertyId::CameraPriority,
-             InspectorPropertyId::CameraCullingMask,
-             InspectorPropertyId::CameraClearMode,
-         }) {
-        if (InspectorPanelRenderer::Hit hit =
-                HitTextRow(
-                    RowRect(content, y),
-                    InspectorSectionId::Camera,
-                    property,
-                    x,
-                    yPoint);
-            hit.kind != InspectorHitKind::None) {
-            return hit;
-        }
-        AdvanceRow(y);
-    }
-    if (InspectorPanelRenderer::Hit hit =
-            HitColorRow(RowRect(content, y), InspectorSectionId::Camera, InspectorPropertyId::CameraClearColor, x, yPoint);
-        hit.kind != InspectorHitKind::None) {
-        return hit;
-    }
-    AdvanceRow(y);
     return {};
 }
 
@@ -4941,7 +5036,7 @@ void AdvanceGroup(int& y) noexcept {
     const RECT& content, const InspectorPanelState& state, const kb::scene::LightComponent& light,
     int x, int yPoint, int& y) noexcept {
     constexpr auto section = InspectorSectionId::Light;
-    if (auto hit = HitSectionHeader(content, y, state, section, x, yPoint); hit.kind != InspectorHitKind::None) return hit;
+    if (auto hit = HitSectionHeader(content, y, state, section, x, yPoint, true); hit.kind != InspectorHitKind::None) return hit;
     if (state.IsCollapsed(section)) return {};
     using P = InspectorPropertyId;
     const std::array properties{P::LightKind, P::LightShape, P::LightColor, P::LightIntensity, P::LightRange,
@@ -5408,6 +5503,7 @@ void InspectorPanelRenderer::Paint(
         return;
     }
 
+    sceneContext.Inspector().SetChangedFields(InspectorComponentDefaults::ChangedFields(sceneContext.Scene(), selected));
     PaintEntity(dc, inner, viewport, theme, sceneContext, selected);
     RestoreDC(dc, -1);
     if (scrollable) {
@@ -5497,6 +5593,18 @@ void InspectorPanelRenderer::Paint(
 }
 
 InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content, const EditorSceneContext& sceneContext, int x, int yPoint) {
+    Hit hit = HitTestRows(content, sceneContext, x, yPoint);
+    // A changed value shows a reset arrow at the right end of its label: pressing it is not pressing the label.
+    if (hit.kind == InspectorHitKind::Row && sceneContext.Inspector().IsFieldChanged(hit.section, hit.property, hit.index)) {
+        const RECT marker = ResetMarkerRect(hit.rect);
+        if (x >= marker.left && x < marker.right) {
+            hit.kind = InspectorHitKind::ResetField;
+        }
+    }
+    return hit;
+}
+
+InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTestRows(const RECT& content, const EditorSceneContext& sceneContext, int x, int yPoint) {
     if (!Contains(content, x, yPoint)) {
         return {};
     }
@@ -5949,7 +6057,7 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
 
     if (sceneContext.Scene().Components().Cameras().Has(selected)) {
         if (InspectorPanelRenderer::Hit hit =
-                HitTestCameraSection(viewport, state, x, scrolledY, y);
+                HitTestCameraSection(viewport, state, *sceneContext.Scene().Components().Cameras().TryGet(selected), x, scrolledY, y);
             hit.kind != InspectorHitKind::None) {
             return hit;
         }
@@ -6012,7 +6120,7 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
                 *renderer,
                 mesh,
                 [&sceneContext](std::uint64_t materialId) { return MaterialDisplayName(sceneContext, materialId); });
-            if (!slotRows.empty()) {
+            {
                 const RECT advanced = Rect(content.left, y, content.right, y + kDisclosureRowHeight);
                 if (Contains(advanced, x, scrolledY)) {
                     return MakeHit(InspectorHitKind::Row, InspectorSectionId::MeshRenderer, InspectorPropertyId::MeshRendererAdvanced, advanced);
@@ -6024,7 +6132,7 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
                 const int metadataRight = content.right;
                 const int metadataLeft = content.left + kDisclosureTextOffset - kRowPadX;
                 const int metadataBottom = y + metadataHeight;
-                for (int fieldIndex = 0; fieldIndex < 3; ++fieldIndex) {
+                for (int fieldIndex = 0; fieldIndex < static_cast<int>(kMeshRendererSlotAdvancedFields); ++fieldIndex) {
                     const RECT fieldRow = RowRect(
                         Rect(metadataLeft, viewport.top, metadataRight, viewport.bottom),
                         y + fieldIndex * (kFieldRowHeight + kDividerHeight));
@@ -6037,7 +6145,7 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
                             InspectorPropertyId::None,
                             x,
                             scrolledY);
-                        hit.index = static_cast<int>(row.slotIndex * 3U) + fieldIndex;
+                        hit.index = static_cast<int>(row.slotIndex * kMeshRendererSlotAdvancedFields) + fieldIndex;
                         return hit;
                     }
                 }
@@ -6053,8 +6161,6 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
                     return hit;
                 }
                 AdvanceRow(y);
-                AdvanceRow(y);
-                AdvanceRow(y);
             }
             if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::MeshRenderer, InspectorPropertyId::MeshRendererCastsShadow, x, scrolledY); hit.kind != InspectorHitKind::None) {
                 return hit;
@@ -6064,15 +6170,17 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
                 return hit;
             }
             AdvanceRow(y);
-            if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::MeshRenderer, InspectorPropertyId::MeshRendererLodEnabled, x, scrolledY); hit.kind != InspectorHitKind::None) {
-                return hit;
-            }
-            AdvanceRow(y);
-            for (const InspectorPropertyId property : { InspectorPropertyId::MeshRendererLodBias, InspectorPropertyId::MeshRendererMobility }) {
-                if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::MeshRenderer, property, x, scrolledY); hit.kind != InspectorHitKind::None) {
+            if (state.IsDisclosureExpanded(InspectorDisclosureId::MeshRendererAdvanced)) {
+                if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::MeshRenderer, InspectorPropertyId::MeshRendererLodEnabled, x, scrolledY); hit.kind != InspectorHitKind::None) {
                     return hit;
                 }
                 AdvanceRow(y);
+                for (const InspectorPropertyId property : { InspectorPropertyId::MeshRendererLodBias, InspectorPropertyId::MeshRendererMobility }) {
+                    if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::MeshRenderer, property, x, scrolledY); hit.kind != InspectorHitKind::None) {
+                        return hit;
+                    }
+                    AdvanceRow(y);
+                }
             }
         }
         y += kSectionGap;
@@ -6320,25 +6428,25 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
     }
 
     if (const kb::scene::RigidbodyComponent* rigidbody = sceneContext.Scene().Components().Rigidbodies().TryGet(selected); rigidbody != nullptr) {
-        if (InspectorPanelRenderer::Hit hit = HitPhysicsSection(viewport, state, InspectorSectionId::Rigidbody, InspectorPropertyId::RigidbodyField, PhysicsComponentKind::Rigidbody, x, scrolledY, y); hit.kind != InspectorHitKind::None) {
+        if (InspectorPanelRenderer::Hit hit = HitPhysicsSection(viewport, state, InspectorSectionId::Rigidbody, InspectorPropertyId::RigidbodyField, PhysicsComponentKind::Rigidbody, InspectorPhysicsModel::Layout(*rigidbody), x, scrolledY, y); hit.kind != InspectorHitKind::None) {
             return hit;
         }
         y += kSectionGap;
     }
     if (const kb::scene::ColliderComponent* collider = sceneContext.Scene().Components().Colliders().TryGet(selected); collider != nullptr) {
-        if (InspectorPanelRenderer::Hit hit = HitPhysicsSection(viewport, state, InspectorSectionId::Collider, InspectorPropertyId::ColliderField, PhysicsComponentKind::Collider, x, scrolledY, y, true); hit.kind != InspectorHitKind::None) {
+        if (InspectorPanelRenderer::Hit hit = HitPhysicsSection(viewport, state, InspectorSectionId::Collider, InspectorPropertyId::ColliderField, PhysicsComponentKind::Collider, InspectorPhysicsModel::Layout(*collider), x, scrolledY, y, true); hit.kind != InspectorHitKind::None) {
             return hit;
         }
         y += kSectionGap;
     }
     if (const kb::scene::CharacterControllerComponent* character = sceneContext.Scene().Components().CharacterControllers().TryGet(selected); character != nullptr) {
-        if (InspectorPanelRenderer::Hit hit = HitPhysicsSection(viewport, state, InspectorSectionId::CharacterController, InspectorPropertyId::CharacterControllerField, PhysicsComponentKind::CharacterController, x, scrolledY, y); hit.kind != InspectorHitKind::None) {
+        if (InspectorPanelRenderer::Hit hit = HitPhysicsSection(viewport, state, InspectorSectionId::CharacterController, InspectorPropertyId::CharacterControllerField, PhysicsComponentKind::CharacterController, InspectorPhysicsModel::Layout(*character), x, scrolledY, y); hit.kind != InspectorHitKind::None) {
             return hit;
         }
         y += kSectionGap;
     }
     if (const kb::scene::JointComponent* joint = sceneContext.Scene().Components().Joints().TryGet(selected); joint != nullptr) {
-        if (InspectorPanelRenderer::Hit hit = HitPhysicsSection(viewport, state, InspectorSectionId::Joint, InspectorPropertyId::JointField, PhysicsComponentKind::Joint, x, scrolledY, y); hit.kind != InspectorHitKind::None) {
+        if (InspectorPanelRenderer::Hit hit = HitPhysicsSection(viewport, state, InspectorSectionId::Joint, InspectorPropertyId::JointField, PhysicsComponentKind::Joint, InspectorPhysicsModel::Layout(*joint), x, scrolledY, y); hit.kind != InspectorHitKind::None) {
             return hit;
         }
         y += kSectionGap;

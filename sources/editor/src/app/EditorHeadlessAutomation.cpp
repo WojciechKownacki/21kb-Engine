@@ -2277,6 +2277,7 @@ bool EditorHeadlessAutomation::VerifyInspectorShadowRows() {
     const auto cube = context_.CreateMenuObject("Cube");
     if (!cube.IsValid()) return fail("cube-not-created");
     context_.SelectEntity(cube);
+    if (!click(InspectorSectionId::MeshRenderer, P::MeshRendererAdvanced, InspectorHitKind::Row)) return fail("mesh-advanced-row-not-found");
     for (const P property : { P::MeshRendererLodEnabled, P::MeshRendererLodBias, P::MeshRendererMobility })
         if (!FindInspectorHit(context_, InspectorSectionId::MeshRenderer, property))
             return fail("mesh-row-not-found-" + std::to_string(static_cast<int>(property)));

@@ -452,6 +452,8 @@ add_executable(kb_editor WIN32
     src/private/inspection/InspectorComponentCatalog.hpp
     src/private/inspection/InspectorComponentLabelFormatter.hpp
     src/private/inspection/InspectorPhysicsModel.hpp
+    src/private/inspection/InspectorComponentDefaults.hpp
+    src/private/inspection/InspectorFieldGuide.hpp
     src/private/inspection/InspectorAddComponentBrowserModel.hpp
     src/private/inspection/InspectorEntitySummaryTextBuilder.hpp
     src/private/inspection/InspectorLightTextBuilder.hpp
@@ -953,6 +955,8 @@ add_executable(kb_editor WIN32
     src/inspection/InspectorSceneColorEdit.cpp
     src/inspection/InspectorComponentLabelFormatter.cpp
     src/inspection/InspectorPhysicsModel.cpp
+    src/inspection/InspectorComponentDefaults.cpp
+    src/inspection/InspectorFieldGuide.cpp
     src/inspection/ui/InspectorUIComponentModel.cpp
     src/inspection/InspectorAddComponentBrowserModel.cpp
     src/inspection/InspectorEntitySummaryTextBuilder.cpp
@@ -1656,6 +1660,8 @@ if(BUILD_TESTING)
         src/localization/EditorLocalization.cpp
         src/inspection/InspectorComponentLabelFormatter.cpp
         src/inspection/InspectorPhysicsModel.cpp
+        src/inspection/InspectorComponentDefaults.cpp
+        src/inspection/InspectorFieldGuide.cpp
         src/inspection/ui/InspectorUIComponentModel.cpp
         src/inspection/ui/InspectorUIThemeModel.cpp
         src/inspection/ui/InspectorUIClickHandler.cpp

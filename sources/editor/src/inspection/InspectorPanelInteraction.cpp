@@ -51,6 +51,7 @@
 #include "inspection/InspectorAddComponentBrowserModel.hpp"
 #include "inspection/InspectorAudioComponentModel.hpp"
 #include "inspection/InspectorAudioScrubController.hpp"
+#include "inspection/InspectorComponentDefaults.hpp"
 #include "inspection/InspectorInputInteraction.hpp"
 #include "inspection/InspectorPhysicsModel.hpp"
 #include "inspection/ui/InspectorUIComponentModel.hpp"
@@ -3320,6 +3321,57 @@ namespace {
 
 } // namespace
 
+namespace {
+
+[[nodiscard]] bool IsComponentMenuProperty(InspectorPropertyId property) noexcept {
+    return property == InspectorPropertyId::ComponentMenu || property == InspectorPropertyId::ComponentMenuItem ||
+        property == InspectorPropertyId::JointPreset || property == InspectorPropertyId::JointPresetItem;
+}
+
+// The entries of the component menu and the Joint's quick setups. Each change is one undoable scene command; Copy
+// only keeps the settings for a later Paste.
+[[nodiscard]] bool RunComponentMenuItem(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit, int x, int y) noexcept {
+    const InspectorSectionId section = hit.section;
+    switch (static_cast<InspectorComponentMenuItem>(hit.index)) {
+    case InspectorComponentMenuItem::Reset:
+        return sceneContext.ExecuteSceneCommand("Reset Component", [&sceneContext, entity, section]() {
+            return InspectorComponentDefaults::ResetComponent(sceneContext.Scene(), entity, section);
+        });
+    case InspectorComponentMenuItem::Remove:
+        // The same removal the component's own header button has always done.
+        return InspectorPanelInteraction::HandlePointerDown(sceneContext,
+            InspectorPanelRenderer::Hit{ .kind = InspectorHitKind::ComponentMenuButton, .section = section,
+                .property = InspectorPropertyId::ComponentRemove, .index = -1, .rect = hit.rect }, x, y);
+    case InspectorComponentMenuItem::Copy:
+        return InspectorComponentDefaults::CopyComponent(sceneContext.Scene(), entity, section);
+    case InspectorComponentMenuItem::Paste:
+        if (!InspectorComponentDefaults::CanPaste(section)) {
+            return false;
+        }
+        return sceneContext.ExecuteSceneCommand("Paste Settings", [&sceneContext, entity, section]() {
+            return InspectorComponentDefaults::PasteComponent(sceneContext.Scene(), entity, section);
+        });
+    }
+    return false;
+}
+
+[[nodiscard]] bool ApplyJointPresetItem(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, int item) noexcept {
+    if (item < 0 || item >= kJointPresetCount) {
+        return false;
+    }
+    return sceneContext.ExecuteSceneCommand("Apply Joint Preset", [&sceneContext, entity, item]() {
+        kb::scene::JointComponent* joint = sceneContext.Scene().Components().Joints().TryGet(entity);
+        if (joint == nullptr) {
+            return false;
+        }
+        ApplyJointPreset(*joint, static_cast<JointPreset>(item));
+        sceneContext.Scene().Components().Joints().MarkModified(entity);
+        return true;
+    });
+}
+
+} // namespace
+
 bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneContext, const InspectorPanelRenderer::Hit& hit, int x, int y) noexcept {
     if (hit.kind == InspectorHitKind::None) {
         sceneContext.Inspector().EndTextEdit();
@@ -3348,6 +3400,33 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     }
 
     kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
+    if (!IsComponentMenuProperty(hit.property)) {
+        sceneContext.Inspector().CloseComponentMenus();
+    }
+    if (hit.kind == InspectorHitKind::ResetField) {
+        sceneContext.Inspector().EndTextEdit();
+        if (sceneContext.Scene().Entities().IsAlive(entity)) {
+            static_cast<void>(sceneContext.ExecuteSceneCommand("Reset Value", [&sceneContext, entity, hit]() {
+                return InspectorComponentDefaults::ResetField(sceneContext.Scene(), entity,
+                    InspectorFieldKey{ .section = hit.section, .property = hit.property, .index = hit.index });
+            }));
+        }
+        return true;
+    }
+    if (IsComponentMenuProperty(hit.property) && (hit.kind == InspectorHitKind::ComponentMenuButton || hit.kind == InspectorHitKind::Row)) {
+        sceneContext.Inspector().EndTextEdit();
+        if (hit.property == InspectorPropertyId::ComponentMenu) {
+            sceneContext.Inspector().ToggleComponentMenu(hit.section);
+        } else if (hit.property == InspectorPropertyId::JointPreset) {
+            sceneContext.Inspector().ToggleMenu(InspectorMenuKind::JointPresets, hit.section);
+        } else if (sceneContext.Scene().Entities().IsAlive(entity)) {
+            const bool presetItem = hit.property == InspectorPropertyId::JointPresetItem;
+            sceneContext.Inspector().CloseComponentMenus();
+            static_cast<void>(presetItem ? ApplyJointPresetItem(sceneContext, entity, hit.index)
+                                         : RunComponentMenuItem(sceneContext, entity, hit, x, y));
+        }
+        return true;
+    }
     if (const std::optional<InspectorDisclosureId> disclosure = DisclosureForProperty(hit.property);
         hit.kind == InspectorHitKind::Row && disclosure.has_value()) {
         sceneContext.Inspector().EndTextEdit();
@@ -3521,6 +3600,11 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
             } else if (hit.section == InspectorSectionId::HistoryRibbon && sceneContext.Scene().Components().HistoryRibbons().Has(entity)) {
                 if (sceneContext.BeginSceneEditTransaction("Remove Trail Renderer")) {
                     sceneContext.Scene().Components().HistoryRibbons().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
+            } else if (hit.section == InspectorSectionId::Light && sceneContext.Scene().Components().Lights().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Light")) {
+                    sceneContext.Scene().Components().Lights().Remove(entity);
                     static_cast<void>(sceneContext.CommitSceneEditTransaction());
                 }
             } else if (const std::optional<PhysicsComponentKind> kind = PhysicsKindForSection(hit.section); kind.has_value()) {

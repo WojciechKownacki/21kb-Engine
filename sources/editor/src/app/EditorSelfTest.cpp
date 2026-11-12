@@ -34,6 +34,7 @@
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/HeroIconGdiplusRuntime.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
+#include "inspection/InspectorFieldGuide.hpp"
 #include "inspection/InspectorPanelInteraction.hpp"
 #include "inspection/InspectorPhysicsModel.hpp"
 #include "rendering/ProjectSettingsPanelLayout.hpp"
@@ -5673,20 +5674,25 @@ void RunMaterialEditorGlobalSaveSuite(Report& report) {
 }
 
 void RunInspectorBasicAdvancedSuite(Report& report) {
+    // A joint shows only the rows its kind uses, so the Joint cases name the kind that has the row under test.
     struct Case { const char* component; InspectorDisclosureId disclosure; InspectorPropertyId toggle;
-        InspectorPropertyId field; int index; const char* value; };
+        InspectorPropertyId field; int index; const char* value; kb::scene::JointType joint = kb::scene::JointType::Fixed; };
+    constexpr int kJointMotorForceRow = 14;
     const std::array cases{
         Case{"Camera", InspectorDisclosureId::CameraAdvanced, InspectorPropertyId::CameraAdvanced, InspectorPropertyId::CameraFarClip, -1, "500"},
         Case{"Light", InspectorDisclosureId::LightAdvanced, InspectorPropertyId::LightAdvanced, InspectorPropertyId::LightShadowStrength, -1, "0.75"},
         Case{"Rigidbody", InspectorDisclosureId::RigidbodyAdvanced, InspectorPropertyId::RigidbodyAdvanced, InspectorPropertyId::RigidbodyField, 12, "0.25"},
         Case{"Collider", InspectorDisclosureId::ColliderAdvanced, InspectorPropertyId::ColliderAdvanced, InspectorPropertyId::ColliderField, 10, "0.25"},
-        Case{"Joint", InspectorDisclosureId::JointAdvanced, InspectorPropertyId::JointAdvanced, InspectorPropertyId::JointField, InspectorPhysicsModel::JointBasicRows + 1, "75"},
-        Case{"Joint", InspectorDisclosureId::JointAdvanced, InspectorPropertyId::JointAdvanced, InspectorPropertyId::JointField, InspectorPhysicsModel::JointFirstAxisRow + 1, "-0.5"}};
+        Case{"Joint", InspectorDisclosureId::JointAdvanced, InspectorPropertyId::JointAdvanced, InspectorPropertyId::JointField, kJointMotorForceRow, "75", kb::scene::JointType::Hinge},
+        Case{"Joint", InspectorDisclosureId::JointAdvanced, InspectorPropertyId::JointAdvanced, InspectorPropertyId::JointField, InspectorPhysicsModel::JointFirstAxisRow + 1, "-0.5", kb::scene::JointType::SixDof}};
     for (const auto& test : cases) {
         EditorSceneContext context;
         const auto actor = context.CreateHierarchyObject();
         context.SelectEntity(actor);
         report.Check(context.AddComponentToEntity(actor, test.component), "Add component with usable defaults");
+        if (test.disclosure == InspectorDisclosureId::JointAdvanced) {
+            context.Scene().Components().Joints().TryGet(actor)->type = test.joint;
+        }
         EditorHeadlessAutomation automation{context, ArtifactPath(test.component)};
         auto find = [&]() {
             static_cast<void>(context.Inspector().SetScrollOffset(0, 0));
@@ -5723,13 +5729,161 @@ void RunInspectorBasicAdvancedSuite(Report& report) {
         if (test.disclosure == InspectorDisclosureId::ColliderAdvanced) changed = context.Scene().Components().Colliders().TryGet(actor)->friction == 0.25F;
         if (test.disclosure == InspectorDisclosureId::JointAdvanced) {
             const kb::scene::JointComponent& joint = *context.Scene().Components().Joints().TryGet(actor);
-            changed = test.index == InspectorPhysicsModel::JointBasicRows + 1 ? joint.motor.force == 75.0F : joint.freedom.axes[0].minLimit == -0.5F;
+            changed = test.index == kJointMotorForceRow ? joint.motor.force == 75.0F : joint.freedom.axes[0].minLimit == -0.5F;
         }
         report.Check(changed, "Advanced edit changes the intended runtime property");
         report.Check(automation.CaptureInspector("advanced"), "Capture expanded Inspector controls");
         report.Check(automation.InspectorClickRow(test.toggle, -1, InspectorHitKind::Row), "Close Advanced through live pointer handling");
         report.Check(find().kind == InspectorHitKind::None && InspectorPanelRenderer::ContentHeight(kContent, context) == basicHeight,
             "Collapsing restores basic geometry and hides advanced hit regions");
+    }
+}
+
+// The reset arrow, the component menu and the Joint's quick setups through live pointer handling: the rows they
+// add must be where painting and hit testing agree they are, and each click must change the scene and undo.
+void RunInspectorResetMenuPresetSuite(Report& report) {
+    EditorSceneContext context;
+    const auto actor = context.CreateHierarchyObject();
+    context.SelectEntity(actor);
+    report.Check(context.AddComponentToEntity(actor, "Rigidbody") && context.AddComponentToEntity(actor, "Joint"),
+        "Add the components under test");
+    EditorHeadlessAutomation automation{context, ArtifactPath("reset-menu-preset")};
+    // Looked up each time: an undo restores the scene's stores.
+    const auto body = [&]() -> kb::scene::RigidbodyComponent& { return *context.Scene().Components().Rigidbodies().TryGet(actor); };
+    const auto joint = [&]() -> kb::scene::JointComponent& { return *context.Scene().Components().Joints().TryGet(actor); };
+
+    const auto find = [&](auto&& accept) {
+        static_cast<void>(context.Inspector().SetScrollOffset(0, 0));
+        const RECT panel = WholeInspector(context);
+        for (int y = panel.top; y < panel.bottom; y += 2) {
+            for (int x = panel.left; x < panel.right; x += 4) {
+                const auto hit = InspectorPanelRenderer::HitTest(panel, context, x, y);
+                if (accept(hit)) return hit;
+            }
+        }
+        return InspectorPanelRenderer::Hit{};
+    };
+    const auto press = [&](const InspectorPanelRenderer::Hit& hit) {
+        const POINT point = Center(hit.rect);
+        const bool handled = InspectorPanelInteraction::HandlePointerDown(context, hit, point.x, point.y);
+        static_cast<void>(InspectorPanelInteraction::HandlePointerUp(context));
+        return handled;
+    };
+    const auto menuItem = [&](InspectorSectionId section, int item) {
+        return find([&](const InspectorPanelRenderer::Hit& hit) {
+            return hit.kind == InspectorHitKind::Row && hit.section == section && hit.property == InspectorPropertyId::ComponentMenuItem && hit.index == item;
+        });
+    };
+    const auto menuButton = [&](InspectorSectionId section) {
+        return find([&](const InspectorPanelRenderer::Hit& hit) {
+            return hit.kind == InspectorHitKind::ComponentMenuButton && hit.section == section && hit.property == InspectorPropertyId::ComponentMenu;
+        });
+    };
+
+    // Reset arrow: marked after a paint, absent while the value is the default, and one press puts the value back.
+    report.Check(find([](const InspectorPanelRenderer::Hit& hit) { return hit.kind == InspectorHitKind::ResetField; }).kind == InspectorHitKind::None,
+        "No value is changed, so no reset arrow can be pressed");
+    body().mass = 5.0F;
+    report.Check(automation.CaptureInspector("changed"), "Paint the Inspector with a changed value");
+    const InspectorPanelRenderer::Hit arrow = find([](const InspectorPanelRenderer::Hit& hit) {
+        return hit.kind == InspectorHitKind::ResetField && hit.section == InspectorSectionId::Rigidbody && hit.index == 1;
+    });
+    report.Check(arrow.kind == InspectorHitKind::ResetField, "The changed mass offers its reset arrow");
+    report.Check(press(arrow) && body().mass == 1.0F, "Pressing the reset arrow puts the mass back");
+    report.Check(context.UndoSceneCommand() && body().mass == 5.0F, "The reset is one undoable step");
+
+    // Hovering a label shows its help, and hovering the arrow says what it does.
+    const InspectorPanelRenderer::Hit massLabel = find([](const InspectorPanelRenderer::Hit& hit) {
+        return hit.kind == InspectorHitKind::Row && hit.section == InspectorSectionId::Rigidbody &&
+            hit.property == InspectorPropertyId::RigidbodyField && hit.index == 1;
+    });
+    report.Check(massLabel.kind == InspectorHitKind::Row &&
+            !InspectorFieldGuide::Tooltip(massLabel.section, massLabel.property, massLabel.index).empty(),
+        "The mass label can be hovered and has a help text");
+    static_cast<void>(InspectorPanelInteraction::UpdateHover(context, massLabel));
+    report.Check(automation.CaptureInspector("tooltip-label"), "Paint the help of a hovered label");
+    static_cast<void>(InspectorPanelInteraction::UpdateHover(context, arrow));
+    report.Check(automation.CaptureInspector("tooltip-reset-arrow"), "Paint the help of the hovered reset arrow");
+    static_cast<void>(InspectorPanelInteraction::UpdateHover(context, {}));
+
+    // Component menu: Reset, Copy, Paste and Remove.
+    const InspectorPanelRenderer::Hit button = menuButton(InspectorSectionId::Rigidbody);
+    report.Check(button.kind == InspectorHitKind::ComponentMenuButton && press(button) && context.Inspector().IsComponentMenuOpen(InspectorSectionId::Rigidbody),
+        "The header button opens the component menu");
+    const InspectorPanelRenderer::Hit reset = menuItem(InspectorSectionId::Rigidbody, 0);
+    report.Check(reset.kind == InspectorHitKind::Row && press(reset) && body().mass == 1.0F && !context.Inspector().IsComponentMenuOpen(InspectorSectionId::Rigidbody),
+        "Reset puts every value of the component back and closes the menu");
+    body().mass = 9.0F;
+    report.Check(press(menuButton(InspectorSectionId::Rigidbody)) && press(menuItem(InspectorSectionId::Rigidbody, 2)) && body().mass == 9.0F,
+        "Copy changes nothing in the scene");
+    body().mass = 2.0F;
+    report.Check(press(menuButton(InspectorSectionId::Rigidbody)) && press(menuItem(InspectorSectionId::Rigidbody, 3)) && body().mass == 9.0F,
+        "Paste brings the copied settings back");
+
+    // Quick setup: one press opens the list, one press on a setup sets the kind and the limits.
+    const InspectorPanelRenderer::Hit quick = find([](const InspectorPanelRenderer::Hit& hit) {
+        return hit.kind == InspectorHitKind::Row && hit.section == InspectorSectionId::Joint && hit.property == InspectorPropertyId::JointPreset;
+    });
+    report.Check(quick.kind == InspectorHitKind::Row && press(quick) && context.Inspector().IsMenuOpen(InspectorMenuKind::JointPresets, InspectorSectionId::Joint),
+        "The quick setup button opens the list of setups");
+    const InspectorPanelRenderer::Hit sliding = find([](const InspectorPanelRenderer::Hit& hit) {
+        return hit.kind == InspectorHitKind::Row && hit.section == InspectorSectionId::Joint && hit.property == InspectorPropertyId::JointPresetItem && hit.index == 1;
+    });
+    report.Check(sliding.kind == InspectorHitKind::Row && press(sliding) && joint().type == kb::scene::JointType::Slider && joint().enableLimit &&
+            joint().maxLimit == 1.5F && !context.Inspector().IsMenuOpen(InspectorMenuKind::JointPresets, InspectorSectionId::Joint),
+        "Sliding door sets a slider with its limits and closes the list");
+    report.Check(context.UndoSceneCommand() && joint().type == kb::scene::JointType::Fixed && !joint().enableLimit, "A quick setup is one undoable step");
+    report.Check(automation.CaptureInspector("joint-after-undo"), "Paint the Inspector after the undo");
+
+    report.Check(press(menuButton(InspectorSectionId::Rigidbody)) && press(menuItem(InspectorSectionId::Rigidbody, 1)) &&
+            !context.Scene().Components().Rigidbodies().Has(actor),
+        "Remove Component in the menu removes the component");
+}
+
+// Painting, hit testing and the scroll height walk the same sections by three separate routines. With every kind of
+// component on one object, and with each Advanced foldout and each list open, the button under the last section
+// must stay reachable: a routine that disagrees about one section loses everything below it.
+void RunInspectorSectionStackSuite(Report& report) {
+    EditorSceneContext context;
+    const auto actor = context.CreateMenuObject("Cube");
+    context.SelectEntity(actor);
+    report.Check(context.AddComponentToEntity(actor, "Rigidbody") && context.AddComponentToEntity(actor, "Joint") &&
+            context.AddComponentToEntity(actor, "Camera") && context.AddComponentToEntity(actor, "Light"),
+        "Add one of each component to the cube");
+    context.Scene().Components().Joints().TryGet(actor)->type = kb::scene::JointType::Hinge;
+
+    const auto addButtonReachable = [&]() {
+        const int maxScroll = InspectorPanelRenderer::MaxScrollOffset(kContent, context);
+        static_cast<void>(context.Inspector().SetScrollOffset(maxScroll, maxScroll));
+        for (int y = kContent.top; y < kContent.bottom; y += 3) {
+            const auto hit = InspectorPanelRenderer::HitTest(kContent, context, (kContent.left + kContent.right) / 2, y);
+            if (hit.property == InspectorPropertyId::AddComponentButton) return true;
+        }
+        return false;
+    };
+    report.Check(addButtonReachable(), "The Add Component button is reachable with every section closed to its basics");
+
+    const InspectorDisclosureId foldouts[] = { InspectorDisclosureId::MeshRendererAdvanced, InspectorDisclosureId::RigidbodyAdvanced,
+        InspectorDisclosureId::ColliderAdvanced, InspectorDisclosureId::JointAdvanced, InspectorDisclosureId::CameraAdvanced,
+        InspectorDisclosureId::LightAdvanced };
+    for (const InspectorDisclosureId foldout : foldouts) {
+        context.Inspector().ToggleDisclosure(foldout);
+        static_cast<void>(context.Inspector().TickDisclosures(1.0F));
+        report.Check(addButtonReachable(), "The Add Component button is reachable with one more Advanced foldout open");
+    }
+    const InspectorSectionId sections[] = { InspectorSectionId::MeshRenderer, InspectorSectionId::Rigidbody, InspectorSectionId::Collider,
+        InspectorSectionId::Joint, InspectorSectionId::Camera, InspectorSectionId::Light };
+    for (const InspectorSectionId section : sections) {
+        context.Inspector().ToggleComponentMenu(section);
+        report.Check(addButtonReachable(), "The Add Component button is reachable with a component menu open");
+        context.Inspector().CloseComponentMenus();
+    }
+    context.Inspector().ToggleMenu(InspectorMenuKind::JointPresets, InspectorSectionId::Joint);
+    report.Check(addButtonReachable(), "The Add Component button is reachable with the Joint's quick setups open");
+    context.Inspector().CloseComponentMenus();
+    for (const InspectorSectionId section : sections) {
+        context.Inspector().ToggleCollapsed(section);
+        report.Check(addButtonReachable(), "The Add Component button is reachable with a section collapsed");
     }
 }
 
@@ -7112,6 +7266,8 @@ int EditorSelfTest::Run(
     RunSuiteInScratch(report, "inspector_material_preview_surface", &RunInspectorMaterialPreviewSurfaceSuite);
     RunSuiteInScratch(report, "inspector_material_drop_target", &RunInspectorMaterialDropTargetSuite);
     RunSuiteInScratch(report, "inspector_basic_advanced", &RunInspectorBasicAdvancedSuite);
+    RunSuiteInScratch(report, "inspector_reset_menu_preset", &RunInspectorResetMenuPresetSuite);
+    RunSuiteInScratch(report, "inspector_section_stack", &RunInspectorSectionStackSuite);
     RunSuiteInScratch(report, "inspector_light_component", &RunInspectorLightComponentSuite);
     RunSuiteInScratch(report, "prefab_placement", &RunPrefabPlacementSuite);
     RunSuiteInScratch(report, "prefab_inspector", &RunPrefabInspectorSuite);

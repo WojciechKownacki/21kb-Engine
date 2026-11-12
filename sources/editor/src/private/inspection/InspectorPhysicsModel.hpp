@@ -5,6 +5,8 @@
 #include "engine/scene/JointComponent.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
 
+#include <array>
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -38,6 +40,27 @@ struct PhysicsField {
     PhysicsFieldKind kind = PhysicsFieldKind::Float;
     std::string value;      // display text (formatted value, enum name, or unused for Bool)
     bool boolValue = false; // meaningful only when kind == Bool
+    // What the row tells the author beyond its label: one plain sentence for the hover help, the unit shown
+    // after a number, and, for a number with a natural range, that range (the row then draws as a slider).
+    std::string tooltip;
+    std::string_view unit;
+    float number = 0.0F; // the value of a Float row
+    bool bounded = false;
+    float minimum = 0.0F;
+    float maximum = 0.0F;
+};
+
+// The rows of one physics component as the Inspector lays them out: field indices in display order. The first
+// `basicCount` of them are always shown; the others sit behind the section's Advanced row. A section whose
+// rows are all basic (`basicCount == count`) has no Advanced row. Paint, hit testing and the section height
+// all read this one list, so they cannot disagree about which rows exist.
+struct PhysicsLayout {
+    static constexpr int kMaxRows = 64;
+    std::array<std::uint8_t, kMaxRows> rows{};
+    int count = 0;
+    int basicCount = 0;
+
+    [[nodiscard]] bool HasAdvanced() const noexcept { return basicCount < count; }
 };
 
 class InspectorPhysicsModel {
@@ -56,10 +79,8 @@ public:
         return 0;
     }
 
-    // Joint rows: the shared ones first (index 0 is the type), the first JointBasicRows of them always
-    // shown and the rest behind the section's Advanced disclosure, then the settings of the slider, cone
-    // and six-degrees-of-freedom kinds.
-    static constexpr int JointBasicRows = 13;
+    // Joint rows: the shared ones first (index 0 is the type), then the settings of the slider, cone and
+    // six-degrees-of-freedom kinds. Which of them the Inspector shows, and in what order, is Layout().
     static constexpr int JointSecondaryAxisRow = 18; // three rows: x, y, z
     static constexpr int JointSwing1Row = 21;        // then the second swing limit
     static constexpr int JointFirstAxisRow = 23;     // JointAxisRows rows per axis, JointAxisCount axes
@@ -105,6 +126,41 @@ public:
     [[nodiscard]] static bool CycleEnum(kb::scene::ColliderComponent& component, int index) noexcept;
     [[nodiscard]] static bool CycleEnum(kb::scene::CharacterControllerComponent& component, int index) noexcept;
     [[nodiscard]] static bool CycleEnum(kb::scene::JointComponent& component, int index) noexcept;
+
+    // Which rows a component shows and in what order (see PhysicsLayout). Rows that mean nothing for the
+    // component's current setting (a box size on a sphere, a motor on a fixed joint) are left out.
+    [[nodiscard]] static PhysicsLayout Layout(const kb::scene::RigidbodyComponent& component) noexcept;
+    [[nodiscard]] static PhysicsLayout Layout(const kb::scene::ColliderComponent& component) noexcept;
+    [[nodiscard]] static PhysicsLayout Layout(const kb::scene::CharacterControllerComponent& component) noexcept;
+    [[nodiscard]] static PhysicsLayout Layout(const kb::scene::JointComponent& component) noexcept;
+
+    // The editable rows whose value differs from a freshly added component's: the rows the Inspector marks
+    // so the author can put them back. Read-only rows never appear.
+    [[nodiscard]] static std::vector<int> ChangedRows(const kb::scene::RigidbodyComponent& component);
+    [[nodiscard]] static std::vector<int> ChangedRows(const kb::scene::ColliderComponent& component);
+    [[nodiscard]] static std::vector<int> ChangedRows(const kb::scene::CharacterControllerComponent& component);
+    [[nodiscard]] static std::vector<int> ChangedRows(const kb::scene::JointComponent& component);
+
+    // Puts one row back to a freshly added component's value. False for a read-only or out-of-range row.
+    [[nodiscard]] static bool ResetRow(kb::scene::RigidbodyComponent& component, int index);
+    [[nodiscard]] static bool ResetRow(kb::scene::ColliderComponent& component, int index);
+    [[nodiscard]] static bool ResetRow(kb::scene::CharacterControllerComponent& component, int index);
+    [[nodiscard]] static bool ResetRow(kb::scene::JointComponent& component, int index);
 };
+
+// One-click Joint setups: the joint type and the limits that suit a common use. Anchors, the connected body,
+// motor, spring and break force stay as the author set them.
+enum class JointPreset {
+    Door,        // hinge turning about the up axis, a quarter turn either way
+    SlidingDoor, // slider along X, from the closed pose out to 1.5 m
+    Pendulum,    // hinge about Z with no limit, free to swing
+    Rope,        // rope up to 3 m long
+    CharacterLimb, // cone: 45 degrees of swing, a 45 degree twist either way
+};
+
+inline constexpr int kJointPresetCount = 5;
+
+[[nodiscard]] std::string_view JointPresetName(JointPreset preset);
+void ApplyJointPreset(kb::scene::JointComponent& joint, JointPreset preset) noexcept;
 
 } // namespace kb::editor

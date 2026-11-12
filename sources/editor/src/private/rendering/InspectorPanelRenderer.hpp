@@ -30,7 +30,9 @@ public:
         const RECT& content,
         const EditorTheme& theme,
         EditorSceneContext& sceneContext) const;
+    // What is under the point. A changed value's reset arrow is told from the rest of its label here.
     [[nodiscard]] static Hit HitTest(const RECT& content, const EditorSceneContext& sceneContext, int x, int y);
+    [[nodiscard]] static Hit HitTestRows(const RECT& content, const EditorSceneContext& sceneContext, int x, int y);
     [[nodiscard]] static int ContentHeight(const RECT& content, const EditorSceneContext& sceneContext);
     [[nodiscard]] static int MaxScrollOffset(const RECT& content, const EditorSceneContext& sceneContext);
     [[nodiscard]] static std::optional<RECT> MaterialPreviewRect(const RECT& content, const EditorSceneContext& sceneContext) noexcept;
