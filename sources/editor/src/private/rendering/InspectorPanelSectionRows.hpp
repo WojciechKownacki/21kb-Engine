@@ -132,30 +132,19 @@ inline void DrawSectionHeader(HDC dc, RECT rect, const EditorTheme& theme, const
             InspectorComponentDefaults::Supports(section) ? InspectorPropertyId::ComponentMenu : InspectorPropertyId::ComponentRemove);
     const CategoryHeaderLayout layout = CategoryHeader::Resolve(rect, true, removeButton, false);
     FillSectionHeaderBackground(dc, rect, hovered ? HoverFill(theme) : Color(theme.header));
-    if (hovered) {
-        GdiDrawing::FillRectColor(
-            dc,
-            Rect(
-                rect.left + 1,
-                rect.top + static_cast<int>(kSectionCornerRadius),
-                rect.left + 4,
-                rect.bottom),
-            Color(theme.accent));
-    }
     DrawDivider(dc, theme, rect.left, rect.right, rect.bottom - 1);
-    DrawTriangle(dc, Shrink(layout.disclosure, 4, 4, 4, 4), !state.IsCollapsed(section), Color(theme.textSecondary));
-    HeroIconPainter::Draw(dc, layout.icon, icon, hovered ? Color(theme.accent) : Color(theme.textSecondary), 2);
+    DrawTriangle(dc, Shrink(layout.disclosure, 4, 4, 4, 4), !state.IsCollapsed(section), Color(theme.textDisabled));
+    HeroIconPainter::Draw(dc, layout.icon, icon, hovered ? Color(theme.textSecondary) : Color(theme.textDisabled), 2);
     {
         ScopedFont font(12, FW_SEMIBOLD);
         const ScopedGdiObject selectedFont(dc, font.handle);
         Text(dc, layout.title, title, Color(theme.textPrimary));
     }
     if (removeButton) {
-        DrawInputFrame(
-            dc,
-            layout.trailingAction,
-            actionHovered ? HoverFill(theme) : Color(theme.strip),
-            actionHovered ? Color(theme.accent) : Color(theme.borderPanel));
+        // The button shows its frame only under the pointer; at rest it is just its glyph.
+        if (actionHovered) {
+            DrawInputFrame(dc, layout.trailingAction, HoverFill(theme), Color(theme.accent));
+        }
         const bool menu = InspectorComponentDefaults::Supports(section);
         HeroIconPainter::Draw(
             dc,
@@ -207,6 +196,18 @@ inline void DrawValueBox(HDC dc, RECT rect, const EditorTheme& theme, std::strin
     }
 }
 
+// The label of a row in its column. Its width is noted so that the column can grow to the widest label of the panel.
+inline void DrawLabelText(HDC dc, RECT labelRect, const EditorTheme& theme, std::string_view label) {
+    panel_style::NoteInspectorLabelWidth(MeasureTextWidth(label, 12, FW_SEMIBOLD));
+    ScopedFont labelFont(12, FW_SEMIBOLD);
+    const ScopedGdiObject selectedFont(dc, labelFont.handle);
+    Text(dc, labelRect, label, Color(theme.textSecondary));
+}
+
+// Defined below the vector rows, which use it for the reset arrow.
+inline void DrawRowLabel(HDC dc, RECT row, const EditorTheme& theme, const InspectorPanelState& state, InspectorSectionId section,
+    InspectorPropertyId property, int index, std::string_view label);
+
 inline void DrawAxisLane(HDC dc, RECT rect, const EditorTheme& theme, const InspectorPanelState& state, InspectorSectionId section, InspectorPropertyId property, char axis, std::string_view value) {
     const RECT letter = Rect(rect.left, rect.top, rect.left + kAxisLetterWidth, rect.bottom);
     {
@@ -229,11 +230,7 @@ inline void DrawVec3Row(HDC dc, RECT row, const EditorTheme& theme, const Inspec
     }
     const RECT labelRect = Rect(row.left + kRowPadX, row.top, InspectorLabelColumnRight(row), row.bottom);
     const RECT valueRect = Rect(labelRect.right, row.top, row.right - kValueRightInset, row.bottom);
-    ScopedFont labelFont(12, FW_SEMIBOLD);
-    {
-        const ScopedGdiObject selectedFont(dc, labelFont.handle);
-        Text(dc, labelRect, label, Color(theme.textSecondary));
-    }
+    DrawRowLabel(dc, row, theme, state, section, xProperty, -1, label);
     const int valueWidth = static_cast<int>(valueRect.right - valueRect.left);
     const int laneWidth = std::max<int>(44, std::max(0, valueWidth - (kLaneGap * 2)) / 3);
     const int lanesWidth = laneWidth * 3 + kLaneGap * 2;
@@ -252,11 +249,7 @@ inline void DrawRotationRow(HDC dc, RECT row, const EditorTheme& theme, const In
     }
     const RECT labelRect = Rect(row.left + kRowPadX, row.top, InspectorLabelColumnRight(row), row.bottom);
     const RECT valueRect = Rect(labelRect.right, row.top, row.right - kValueRightInset, row.bottom);
-    ScopedFont labelFont(12, FW_SEMIBOLD);
-    {
-        const ScopedGdiObject selectedFont(dc, labelFont.handle);
-        Text(dc, labelRect, label, Color(theme.textSecondary));
-    }
+    DrawRowLabel(dc, row, theme, state, InspectorSectionId::Transform, InspectorPropertyId::RotationX, -1, label);
     const int valueWidth = static_cast<int>(valueRect.right - valueRect.left);
     const int laneWidth = std::max<int>(44, std::max(0, valueWidth - (kLaneGap * 2)) / 3);
     const int lanesWidth = laneWidth * 3 + kLaneGap * 2;
@@ -284,11 +277,7 @@ inline void DrawRowLabel(HDC dc, RECT row, const EditorTheme& theme, const Inspe
     if (changed) {
         labelRect.right -= kResetMarkerWidth;
     }
-    {
-        ScopedFont labelFont(12, FW_SEMIBOLD);
-        const ScopedGdiObject selectedFont(dc, labelFont.handle);
-        Text(dc, labelRect, label, Color(theme.textSecondary));
-    }
+    DrawLabelText(dc, labelRect, theme, label);
     if (changed) {
         const bool hovered = state.IsHovered(InspectorHitKind::ResetField, section, property, index);
         const RECT marker = ResetMarkerRect(row);
@@ -400,11 +389,7 @@ inline void DrawPairRow(
     }
     const RECT labelRect = Rect(row.left + kRowPadX, row.top, InspectorLabelColumnRight(row), row.bottom);
     const RECT valueRect = Rect(labelRect.right, row.top, row.right - kValueRightInset, row.bottom);
-    {
-        ScopedFont labelFont(12, FW_SEMIBOLD);
-        const ScopedGdiObject selectedFont(dc, labelFont.handle);
-        Text(dc, labelRect, label, Color(theme.textSecondary));
-    }
+    DrawLabelText(dc, labelRect, theme, label);
     const int valueWidth = static_cast<int>(valueRect.right - valueRect.left);
     const int laneWidth = std::max(66, (valueWidth - kLaneGap) / 2);
     const RECT first = Rect(valueRect.left, valueRect.top, valueRect.left + laneWidth, valueRect.bottom);
@@ -431,11 +416,7 @@ inline void DrawBoolPairRow(
     }
     const RECT labelRect = Rect(row.left + kRowPadX, row.top, InspectorLabelColumnRight(row), row.bottom);
     const RECT valueRect = Rect(labelRect.right, row.top, row.right - kValueRightInset, row.bottom);
-    {
-        ScopedFont labelFont(12, FW_SEMIBOLD);
-        const ScopedGdiObject selectedFont(dc, labelFont.handle);
-        Text(dc, labelRect, label, Color(theme.textSecondary));
-    }
+    DrawLabelText(dc, labelRect, theme, label);
     const int laneWidth = std::max(66, (static_cast<int>(valueRect.right - valueRect.left) - kLaneGap) / 2);
     const std::array<RECT, 2U> lanes{
         Rect(valueRect.left, valueRect.top, valueRect.left + laneWidth, valueRect.bottom),
@@ -489,6 +470,21 @@ inline void DrawActionRow(
         DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
+// The box of a value chosen from a list that opens under the row: the chosen entry (dimmed when `chosen` is false, as
+// for "None") and a chevron.
+inline void DrawDropdownValue(HDC dc, RECT valueRect, const EditorTheme& theme, std::string_view text, bool chosen, bool hovered, bool open) {
+    DrawInputFrame(dc, valueRect, hovered || open ? HoverFill(theme) : Color(theme.chrome),
+        open ? Color(theme.textDisabled) : Color(theme.borderPanel));
+    ScopedFont valueFont(12, chosen ? FW_SEMIBOLD : FW_NORMAL);
+    const ScopedGdiObject selectedFont(dc, valueFont.handle);
+    Text(dc, Shrink(valueRect, 8, 0, 28, 0), text, chosen ? Color(theme.textPrimary) : Color(theme.textDisabled));
+    constexpr int chevronSize = 12;
+    const int chevronLeft = static_cast<int>(valueRect.right) - 15 - chevronSize / 2;
+    const int chevronTop = CenteredY(valueRect, chevronSize);
+    HeroIconPainter::Draw(dc, Rect(chevronLeft, chevronTop, chevronLeft + chevronSize, chevronTop + chevronSize),
+        HeroIconKind::ChevronDown, Color(open ? theme.textPrimary : theme.textSecondary), 1);
+}
+
 inline void DrawTagFieldRow(HDC dc, RECT row, const EditorTheme& theme, const InspectorPanelState& state,
     InspectorSectionId section, InspectorPropertyId property, std::string_view label, std::string_view value, int editIndex = -1) {
     if (RowHovered(state, property, editIndex)) {
@@ -496,28 +492,45 @@ inline void DrawTagFieldRow(HDC dc, RECT row, const EditorTheme& theme, const In
     }
     const RECT labelRect = Rect(row.left + kRowPadX, row.top, InspectorLabelColumnRight(row), row.bottom);
     const RECT valueRect = Rect(labelRect.right, CenteredY(row, kValueHeight), row.right - kValueRightInset, CenteredY(row, kValueHeight) + kValueHeight);
-    {
-        ScopedFont labelFont(12, FW_SEMIBOLD);
-        const ScopedGdiObject selectedFont(dc, labelFont.handle);
-        Text(dc, labelRect, label, Color(theme.textSecondary));
-    }
+    DrawLabelText(dc, labelRect, theme, label);
 
     const bool hovered = FieldValueHovered(state, section, property, editIndex) ||
         state.IsHovered(InspectorHitKind::ChoiceField, section, property, editIndex);
     const bool classified = !value.empty();
     const bool open = property == InspectorPropertyId::TagsText && state.IsTagsDropdownOpen();
-    DrawInputFrame(dc, valueRect, hovered || open ? HoverFill(theme) : Color(theme.chrome),
-        open ? Color(theme.textDisabled) : Color(theme.borderPanel));
+    DrawDropdownValue(dc, valueRect, theme, classified ? value : EditorText("inspector.none", "None"), classified, hovered, open);
+}
+
+// A row whose value is picked from a list that opens right under it (the Joint's Preset): the label, and the chosen
+// entry in a box with a chevron. A press on the row opens or closes the list.
+inline void DrawDropdownRow(HDC dc, RECT row, const EditorTheme& theme, const InspectorPanelState& state, InspectorSectionId section,
+    InspectorPropertyId property, std::string_view label, std::string_view value, bool open) {
+    const bool hovered = state.IsHovered(InspectorHitKind::Row, section, property) || state.IsHovered(InspectorHitKind::TextField, section, property);
+    GdiDrawing::FillRectColor(dc, row, hovered ? HoverFill(theme) : Color(theme.panel));
+    const RECT labelRect = Rect(row.left + kRowPadX, row.top, InspectorLabelColumnRight(row), row.bottom);
+    const RECT valueRect = Rect(labelRect.right, CenteredY(row, kValueHeight), row.right - kValueRightInset, CenteredY(row, kValueHeight) + kValueHeight);
+    DrawLabelText(dc, labelRect, theme, label);
+    DrawDropdownValue(dc, valueRect, theme, value, true, hovered, open);
+}
+
+// One entry of such a list, in the value column under the row. The chosen one carries a check mark.
+inline void DrawDropdownItemRow(HDC dc, RECT row, const EditorTheme& theme, const InspectorPanelState& state, InspectorSectionId section,
+    InspectorPropertyId property, int index, std::string_view label, bool chosen) {
+    const bool hovered = state.IsHovered(InspectorHitKind::Row, section, property, index);
+    GdiDrawing::FillRectColor(dc, row, Color(theme.panel));
+    const RECT labelRect = Rect(row.left + kRowPadX, row.top, InspectorLabelColumnRight(row), row.bottom);
+    const RECT box = Rect(labelRect.right, row.top + 2, row.right - kValueRightInset, row.bottom - 2);
+    DrawInputFrame(dc, box, hovered ? HoverFill(theme) : Color(theme.chrome), hovered ? Color(theme.accent) : Color(theme.borderPanel));
     {
-        ScopedFont valueFont(12, classified ? FW_SEMIBOLD : FW_NORMAL);
-        const ScopedGdiObject selectedFont(dc, valueFont.handle);
-        Text(dc, Shrink(valueRect, 8, 0, 28, 0), classified ? value : EditorText("inspector.none", "None"),
-            classified ? Color(theme.textPrimary) : Color(theme.textDisabled));
-        constexpr int chevronSize = 12;
-        const int chevronLeft = static_cast<int>(valueRect.right) - 15 - chevronSize / 2;
-        const int chevronTop = CenteredY(valueRect, chevronSize);
-        HeroIconPainter::Draw(dc, Rect(chevronLeft, chevronTop, chevronLeft + chevronSize, chevronTop + chevronSize),
-            HeroIconKind::ChevronDown, Color(open ? theme.textPrimary : theme.textSecondary), 1);
+        ScopedFont font(12, chosen ? FW_SEMIBOLD : FW_NORMAL);
+        const ScopedGdiObject selectedFont(dc, font.handle);
+        Text(dc, Shrink(box, 8, 0, 28, 0), label, hovered || chosen ? Color(theme.textPrimary) : Color(theme.textSecondary));
+    }
+    if (chosen) {
+        constexpr int markSize = 12;
+        const int left = static_cast<int>(box.right) - 15 - markSize / 2;
+        const int top = CenteredY(box, markSize);
+        HeroIconPainter::Draw(dc, Rect(left, top, left + markSize, top + markSize), HeroIconKind::Check, Color(theme.accent), 1);
     }
 }
 
@@ -540,18 +553,14 @@ inline void DrawAssetFieldRow(HDC dc, RECT row, const EditorTheme& theme, const 
     const RECT textRect = AssetPickerTextRect(valueRect);
     const bool valueHovered = state.IsHovered(InspectorHitKind::TextField, section, property, editIndex);
     const bool buttonHovered = state.IsHovered(InspectorHitKind::TextField, section, buttonProperty, editIndex);
-    ScopedFont labelFont(12, FW_SEMIBOLD);
-    {
-        const ScopedGdiObject selectedFont(dc, labelFont.handle);
-        Text(dc, labelRect, label, Color(theme.textSecondary));
-    }
+    DrawLabelText(dc, labelRect, theme, label);
     DrawValueBox(dc, textRect, theme, value, valueHovered);
     const RECT button = AssetPickerButtonRect(valueRect);
     DrawInputFrame(dc, button, buttonHovered ? HoverFill(theme) : Color(theme.chrome), buttonHovered ? Color(theme.accent) : Color(theme.borderPanel));
     HeroIconPainter::Draw(dc, Shrink(button, 3, 3, 3, 3), HeroIconKind::MagnifyingGlass, buttonHovered ? Color(theme.textPrimary) : Color(theme.textSecondary), 1);
 }
 
-// One entry of a list that opens under a section (the component menu, the Joint's quick setups): a full-width
+// One entry of a list that opens under a section (the component menu, the Joint's presets): a full-width
 // button row. A disabled entry stays visible and takes no click.
 inline void DrawMenuItemRow(HDC dc, RECT row, const EditorTheme& theme, const InspectorPanelState& state, InspectorSectionId section,
     InspectorPropertyId property, int index, std::string_view label, bool enabled) {
@@ -571,13 +580,17 @@ inline void DrawMenuItemRow(HDC dc, RECT row, const EditorTheme& theme, const In
     case InspectorComponentMenuItem::Remove: return EditorText("inspector.menu.remove", "Remove Component");
     case InspectorComponentMenuItem::Copy: return EditorText("inspector.menu.copy", "Copy Settings");
     case InspectorComponentMenuItem::Paste: return EditorText("inspector.menu.paste", "Paste Settings");
+    case InspectorComponentMenuItem::ResetPosition: return EditorText("inspector.menu.resetPosition", "Reset Position");
+    case InspectorComponentMenuItem::ResetRotation: return EditorText("inspector.menu.resetRotation", "Reset Rotation");
+    case InspectorComponentMenuItem::ResetScale: return EditorText("inspector.menu.resetScale", "Reset Scale");
     }
     return {};
 }
 
 // The height the open list under a section adds; sections add it to their own.
 [[nodiscard]] inline int OpenMenuHeight(const InspectorPanelState& state, InspectorSectionId section) noexcept {
-    return state.IsComponentMenuOpen(section) && !state.IsCollapsed(section) ? kComponentMenuItemCount * (kFieldRowHeight + kDividerHeight) : 0;
+    return state.IsComponentMenuOpen(section) && !state.IsCollapsed(section)
+        ? static_cast<int>(InspectorComponentMenuItems(section).size()) * (kFieldRowHeight + kDividerHeight) : 0;
 }
 
 // One element of the Dropdown's Options list, first line: a drag handle and the option's label field.
@@ -691,11 +704,12 @@ public:
             DrawDivider(dc_, theme_, bounds_.left, bounds_.right, y_);
             y_ += kDividerHeight;
             if (state_.IsComponentMenuOpen(section_)) {
-                for (int item = 0; item < kComponentMenuItemCount; ++item) {
-                    const InspectorComponentMenuItem which = static_cast<InspectorComponentMenuItem>(item);
+                int item = 0;
+                for (const InspectorComponentMenuItem which : InspectorComponentMenuItems(section_)) {
                     const bool enabled = which != InspectorComponentMenuItem::Paste || InspectorComponentDefaults::CanPaste(section_);
                     DrawMenuItemRow(dc_, Row(), theme_, state_, section_, InspectorPropertyId::ComponentMenuItem, item, ComponentMenuItemLabel(which), enabled);
                     Advance();
+                    ++item;
                 }
             }
         }
@@ -726,6 +740,8 @@ public:
     void Group(std::string_view label) { if (!collapsed_) { DrawGroupRow(dc_, Rect(bounds_.left, y_, bounds_.right, y_ + kGroupRowHeight), theme_, label); y_ += kGroupRowHeight; DrawDivider(dc_, theme_, bounds_.left, bounds_.right, y_); y_ += kDividerHeight; } }
     void Action(std::string_view label, InspectorPropertyId property, bool accent = false) { if (!collapsed_) { DrawActionRow(dc_, Row(), theme_, state_, section_, property, label, accent); Advance(); } }
     void MenuItem(std::string_view label, InspectorPropertyId property, int index, bool enabled = true) { if (!collapsed_) { DrawMenuItemRow(dc_, Row(), theme_, state_, section_, property, index, label, enabled); Advance(); } }
+    void Dropdown(std::string_view label, std::string_view value, InspectorPropertyId property, bool open) { if (!collapsed_) { DrawDropdownRow(dc_, Row(), theme_, state_, section_, property, label, value, open); Advance(); } }
+    void DropdownItem(std::string_view label, InspectorPropertyId property, int index, bool chosen) { if (!collapsed_) { DrawDropdownItemRow(dc_, Row(), theme_, state_, section_, property, index, label, chosen); Advance(); } }
     [[nodiscard]] RECT Reserve(int height) noexcept {
         if (collapsed_ || height <= 0) {
             return {};

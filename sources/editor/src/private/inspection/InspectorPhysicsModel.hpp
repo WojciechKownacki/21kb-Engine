@@ -7,6 +7,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -86,7 +87,18 @@ public:
     static constexpr int JointFirstAxisRow = 23;     // JointAxisRows rows per axis, JointAxisCount axes
     static constexpr int JointAxisRows = 5;          // mode, min, max, drive velocity, drive force
     static constexpr int JointAxisCount = static_cast<int>(kb::scene::kJointAxisCount);
-    static constexpr int JointRowCount = JointFirstAxisRow + JointAxisRows * JointAxisCount;
+    // Plain rows after the raw ones. Each stands for one or two raw values and is shown only for the kind that
+    // reads them: how far a hinge opens (either way), how far a slider travels, how long a rope is, how far a
+    // cone tilts and twists, the motor speed, and the direction as a choice of the X, Y or Z axis.
+    static constexpr int JointPlainFirstRow = JointFirstAxisRow + JointAxisRows * JointAxisCount;
+    static constexpr int JointOpensRow = JointPlainFirstRow;
+    static constexpr int JointSlidesRow = JointPlainFirstRow + 1;
+    static constexpr int JointLengthRow = JointPlainFirstRow + 2;
+    static constexpr int JointTiltRow = JointPlainFirstRow + 3;
+    static constexpr int JointTwistRow = JointPlainFirstRow + 4;
+    static constexpr int JointMotorSpeedRow = JointPlainFirstRow + 5;
+    static constexpr int JointDirectionRow = JointPlainFirstRow + 6;
+    static constexpr int JointRowCount = JointPlainFirstRow + 7;
 
     // The index-stable field rows for a component, in render order.
     [[nodiscard]] static std::vector<PhysicsField> Fields(const kb::scene::RigidbodyComponent& component);
@@ -148,8 +160,8 @@ public:
     [[nodiscard]] static bool ResetRow(kb::scene::JointComponent& component, int index);
 };
 
-// One-click Joint setups: the joint type and the limits that suit a common use. Anchors, the connected body,
-// motor, spring and break force stay as the author set them.
+// Joint setups chosen from the Preset row: the joint type and the limits that suit a common use. Anchors, the
+// connected body, motor, spring and break force stay as the author set them.
 enum class JointPreset {
     Door,        // hinge turning about the up axis, a quarter turn either way
     SlidingDoor, // slider along X, from the closed pose out to 1.5 m
@@ -162,5 +174,9 @@ inline constexpr int kJointPresetCount = 5;
 
 [[nodiscard]] std::string_view JointPresetName(JointPreset preset);
 void ApplyJointPreset(kb::scene::JointComponent& joint, JointPreset preset) noexcept;
+
+// The preset the joint's settings amount to, so the Preset row can name it; none once any value a preset sets
+// has been changed ("Custom").
+[[nodiscard]] std::optional<JointPreset> MatchJointPreset(const kb::scene::JointComponent& joint) noexcept;
 
 } // namespace kb::editor

@@ -3251,6 +3251,10 @@ void ApplyEntityFloatField(EditorSceneContext& sceneContext, kb::scene::SceneEnt
         return InspectorDisclosureId::ColliderAdvanced;
     case InspectorPropertyId::JointAdvanced:
         return InspectorDisclosureId::JointAdvanced;
+    case InspectorPropertyId::AudioSourceAdvanced:
+        return InspectorDisclosureId::AudioSourceAdvanced;
+    case InspectorPropertyId::GenericAdvanced:
+        return InspectorDisclosureId::GenericAdvanced;
     case InspectorPropertyId::TerrainAdvanced:
         return InspectorDisclosureId::TerrainAdvanced;
     case InspectorPropertyId::UIAnchorPresets:
@@ -3328,11 +3332,22 @@ namespace {
         property == InspectorPropertyId::JointPreset || property == InspectorPropertyId::JointPresetItem;
 }
 
-// The entries of the component menu and the Joint's quick setups. Each change is one undoable scene command; Copy
+// The entries of the component menu and the Joint's presets. Each change is one undoable scene command; Copy
 // only keeps the settings for a later Paste.
 [[nodiscard]] bool RunComponentMenuItem(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit, int x, int y) noexcept {
     const InspectorSectionId section = hit.section;
-    switch (static_cast<InspectorComponentMenuItem>(hit.index)) {
+    const std::span<const InspectorComponentMenuItem> items = InspectorComponentMenuItems(section);
+    if (hit.index < 0 || hit.index >= static_cast<int>(items.size())) {
+        return false;
+    }
+    const InspectorComponentMenuItem item = items[static_cast<std::size_t>(hit.index)];
+    switch (item) {
+    case InspectorComponentMenuItem::ResetPosition:
+    case InspectorComponentMenuItem::ResetRotation:
+    case InspectorComponentMenuItem::ResetScale:
+        return sceneContext.ExecuteSceneCommand("Reset Transform", [&sceneContext, entity, item]() {
+            return InspectorComponentDefaults::ResetTransformPart(sceneContext.Scene(), entity, item);
+        });
     case InspectorComponentMenuItem::Reset:
         return sceneContext.ExecuteSceneCommand("Reset Component", [&sceneContext, entity, section]() {
             return InspectorComponentDefaults::ResetComponent(sceneContext.Scene(), entity, section);

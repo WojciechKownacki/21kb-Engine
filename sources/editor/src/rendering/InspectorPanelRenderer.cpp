@@ -201,6 +201,8 @@ constexpr int kMeshPreviewToolbarHeight = 30;
 constexpr int kMeshPreviewToolbarButtonSize = 22;
 constexpr int kMeshPreviewToolbarButtonGap = 4;
 constexpr int kAddComponentButtonHeight = 32;
+// The gap that sets the button apart from the last component above it.
+constexpr int kAddComponentSeparation = 14;
 constexpr int kAddComponentBrowserWidth = 320;
 constexpr int kAddComponentBrowserMaxHeight = 400;
 constexpr int kAddComponentSearchHeight = 24;
@@ -451,7 +453,7 @@ void DrawDivider(HDC dc, int left, int right, int y) {
     const int availableLeft = content.left + inset;
     const int availableRight = content.right - inset;
     // The full width of the Inspector, under the components.
-    return Rect(availableLeft, y, std::max(availableLeft, availableRight), y + kAddComponentButtonHeight);
+    return Rect(availableLeft, y + kAddComponentSeparation, std::max(availableLeft, availableRight), y + kAddComponentSeparation + kAddComponentButtonHeight);
 }
 
 [[nodiscard]] RECT AddComponentBrowserRect(RECT content, int y) noexcept {
@@ -1664,28 +1666,37 @@ void PaintAudioSourceSection(
     const kb::scene::AudioSourceComponent& audioSource) {
     SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::AudioSource, HeroIconKind::SpeakerWave, EditorText("inspector.audioSource.title", "Audio Source"),
         InspectorAudioComponentModel::HasRemoveControl(InspectorSectionId::AudioSource));
-    for (const InspectorAudioRow& row : InspectorAudioComponentModel::SourceRows()) {
+    const std::span<const InspectorAudioRow> rows = InspectorAudioComponentModel::SourceRows();
+    for (int index = 0; index < static_cast<int>(rows.size()); ++index) {
+        if (index == InspectorAudioComponentModel::SourceBasicCount()) {
+            const bool open = inspector.IsDisclosureExpanded(InspectorDisclosureId::AudioSourceAdvanced);
+            section.Disclosure(EditorText("inspector.meshRenderer.advanced", "Advanced"), InspectorPropertyId::AudioSourceAdvanced, open);
+            if (!open) {
+                break;
+            }
+        }
+        const InspectorAudioRow& row = rows[static_cast<std::size_t>(index)];
         switch (row.property) {
         case InspectorPropertyId::AudioSourceClip:
             section.AssetField(InspectorAudioComponentModel::Label(row.property), InspectorAudioComponentModel::ClipDisplay(sceneContext.Scene(), audioSource), row.property, row.pickerProperty);
             break;
         case InspectorPropertyId::AudioSourceClipClear: section.Action(InspectorAudioComponentModel::Label(row.property), row.property); break;
-        case InspectorPropertyId::AudioSourceVolume: section.Float(InspectorAudioComponentModel::Label(row.property), FormatFloat(audioSource.volume, 3), row.property); break;
-        case InspectorPropertyId::AudioSourcePitch: section.Float(InspectorAudioComponentModel::Label(row.property), FormatFloat(audioSource.pitch, 3), row.property); break;
+        case InspectorPropertyId::AudioSourceVolume: section.Float(InspectorAudioComponentModel::Label(row.property), FormatFloat(audioSource.volume, 3), row.property, audioSource.volume); break;
+        case InspectorPropertyId::AudioSourcePitch: section.Float(InspectorAudioComponentModel::Label(row.property), FormatFloat(audioSource.pitch, 3), row.property, audioSource.pitch); break;
         case InspectorPropertyId::AudioSourceEnabled: section.Bool(InspectorAudioComponentModel::Label(row.property), audioSource.enabled, row.property); break;
         case InspectorPropertyId::AudioSourceAutoplay: section.Bool(InspectorAudioComponentModel::Label(row.property), audioSource.autoplay, row.property); break;
         case InspectorPropertyId::AudioSourceLoop: section.Bool(InspectorAudioComponentModel::Label(row.property), audioSource.loop, row.property); break;
         case InspectorPropertyId::AudioSourceMute: section.Bool(InspectorAudioComponentModel::Label(row.property), audioSource.mute, row.property); break;
         case InspectorPropertyId::AudioSourceSpatial: section.Bool(InspectorAudioComponentModel::Label(row.property), audioSource.spatial, row.property); break;
-        case InspectorPropertyId::AudioSourcePan: section.Float(InspectorAudioComponentModel::Label(row.property), FormatFloat(audioSource.pan, 3), row.property); break;
-        case InspectorPropertyId::AudioSourceSpatialBlend: section.Float(InspectorAudioComponentModel::Label(row.property), FormatFloat(audioSource.spatialBlend, 3), row.property); break;
+        case InspectorPropertyId::AudioSourcePan: section.Float(InspectorAudioComponentModel::Label(row.property), FormatFloat(audioSource.pan, 3), row.property, audioSource.pan); break;
+        case InspectorPropertyId::AudioSourceSpatialBlend: section.Float(InspectorAudioComponentModel::Label(row.property), FormatFloat(audioSource.spatialBlend, 3), row.property, audioSource.spatialBlend); break;
         case InspectorPropertyId::AudioSourceAttenuation:
             section.Field(InspectorAudioComponentModel::Label(row.property), InspectorComponentLabelFormatter::AudioAttenuationModelName(audioSource.attenuationModel), row.property);
             break;
-        case InspectorPropertyId::AudioSourceMinDistance: section.Float(InspectorAudioComponentModel::Label(row.property), FormatFloat(audioSource.minDistance, 3), row.property); break;
-        case InspectorPropertyId::AudioSourceMaxDistance: section.Float(InspectorAudioComponentModel::Label(row.property), FormatFloat(audioSource.maxDistance, 3), row.property); break;
-        case InspectorPropertyId::AudioSourceRolloff: section.Float(InspectorAudioComponentModel::Label(row.property), FormatFloat(audioSource.rolloff, 3), row.property); break;
-        case InspectorPropertyId::AudioSourceDopplerFactor: section.Float(InspectorAudioComponentModel::Label(row.property), FormatFloat(audioSource.dopplerFactor, 3), row.property); break;
+        case InspectorPropertyId::AudioSourceMinDistance: section.Float(InspectorAudioComponentModel::Label(row.property), FormatFloat(audioSource.minDistance, 3), row.property, audioSource.minDistance); break;
+        case InspectorPropertyId::AudioSourceMaxDistance: section.Float(InspectorAudioComponentModel::Label(row.property), FormatFloat(audioSource.maxDistance, 3), row.property, audioSource.maxDistance); break;
+        case InspectorPropertyId::AudioSourceRolloff: section.Float(InspectorAudioComponentModel::Label(row.property), FormatFloat(audioSource.rolloff, 3), row.property, audioSource.rolloff); break;
+        case InspectorPropertyId::AudioSourceDopplerFactor: section.Float(InspectorAudioComponentModel::Label(row.property), FormatFloat(audioSource.dopplerFactor, 3), row.property, audioSource.dopplerFactor); break;
         case InspectorPropertyId::AudioSourceOutputBus:
             section.Field(InspectorAudioComponentModel::Label(row.property), InspectorAudioComponentModel::OutputBusDisplay(sceneContext.Scene(), audioSource), row.property);
             break;
@@ -2250,7 +2261,7 @@ void PaintHistoryRibbonSection(HDC dc, RECT content, int& y, const EditorTheme& 
     return section == InspectorSectionId::Rigidbody ? InspectorPropertyId::RigidbodyAdvanced : InspectorPropertyId::ColliderAdvanced;
 }
 
-// The rows a section adds above its fields: the Joint's "Quick setup" button and, opened, the list of setups.
+// The rows a section adds above its fields: the Joint's Preset row and, opened, the list of presets.
 [[nodiscard]] int PhysicsExtraRows(const InspectorPanelState& state, InspectorSectionId section) noexcept {
     return section == InspectorSectionId::Joint
         ? 1 + (state.IsMenuOpen(InspectorMenuKind::JointPresets, section) ? kJointPresetCount : 0)
@@ -2267,6 +2278,11 @@ void PaintHistoryRibbonSection(HDC dc, RECT content, int& y, const EditorTheme& 
         return AdvancedSectionHeight(state, section, PhysicsDisclosure(section), layout.basicCount + extra, layout.count + extra);
     }
     return kSectionHeaderHeight + kDividerHeight + (layout.count + extra) * (kFieldRowHeight + kDividerHeight) + OpenMenuHeight(state, section);
+}
+
+[[nodiscard]] int AudioSourceSectionHeight(const InspectorPanelState& state) noexcept {
+    return AdvancedSectionHeight(state, InspectorSectionId::AudioSource, InspectorDisclosureId::AudioSourceAdvanced,
+        InspectorAudioComponentModel::SourceBasicCount(), static_cast<int>(InspectorAudioComponentModel::SourceRows().size()));
 }
 
 // The Camera's rows in display order: what the view looks like first (the lens that applies to its projection, the
@@ -2562,14 +2578,20 @@ void PaintPhysicsSection(
     const std::vector<PhysicsField>& fields,
     const PhysicsLayout& layout,
     bool showFitButton,
-    bool fitEnabled) {
+    bool fitEnabled,
+    std::optional<JointPreset> chosenPreset = std::nullopt) {
     SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, sectionId, HeroIconKind::Cube, title, true);
     if (sectionId == InspectorSectionId::Joint) {
-        // One click sets the type and the limits for a common use; the list opens under the button.
-        section.Action(EditorText("inspector.joint.preset", "Quick setup"), InspectorPropertyId::JointPreset);
-        if (inspector.IsMenuOpen(InspectorMenuKind::JointPresets, sectionId)) {
+        // One row names the setup the joint amounts to ("Custom" once a value was changed); choosing from its list
+        // sets the type and the limits for a common use.
+        const bool listOpen = inspector.IsMenuOpen(InspectorMenuKind::JointPresets, sectionId);
+        section.Dropdown(EditorText("inspector.joint.preset", "Preset"),
+            chosenPreset.has_value() ? JointPresetName(*chosenPreset) : EditorText("inspector.joint.preset.custom", "Custom"),
+            InspectorPropertyId::JointPreset, listOpen);
+        if (listOpen) {
             for (int preset = 0; preset < kJointPresetCount; ++preset) {
-                section.MenuItem(JointPresetName(static_cast<JointPreset>(preset)), InspectorPropertyId::JointPresetItem, preset);
+                section.DropdownItem(JointPresetName(static_cast<JointPreset>(preset)), InspectorPropertyId::JointPresetItem, preset,
+                    chosenPreset.has_value() && static_cast<int>(*chosenPreset) == preset);
             }
         }
     }
@@ -2664,6 +2686,15 @@ void PaintMultiSelection(HDC dc, RECT content, const EditorTheme& theme, const E
 // Forward declarations — the layout-height helpers are defined further down but
 // PaintEntity needs them to size (and virtualize) each section.
 [[nodiscard]] int SectionHeight(const InspectorPanelState& inspector, InspectorSectionId section, int rows) noexcept;
+// A generic section: its basic rows, and when it has more, the Advanced row and the rest while that is open.
+[[nodiscard]] int GenericSectionHeight(const InspectorPanelState& state, InspectorSectionId section,
+    const std::vector<InspectorGenericComponentModel::Row>& rows) noexcept {
+    const int basic = InspectorGenericComponentModel::BasicCount(rows);
+    if (basic == static_cast<int>(rows.size())) {
+        return SectionHeight(state, section, basic);
+    }
+    return AdvancedSectionHeight(state, section, InspectorDisclosureId::GenericAdvanced, basic, static_cast<int>(rows.size()));
+}
 [[nodiscard]] int MeshRendererSectionHeight(const EditorSceneContext& sceneContext, const kb::scene::MeshRendererComponent& renderer);
 [[nodiscard]] int TerrainSectionHeight(const InspectorPanelState& inspector, std::size_t layerCount) noexcept;
 
@@ -2807,10 +2838,10 @@ void PaintUIDropdownBody(HDC dc, RECT body, const EditorTheme& theme, const Edit
         component != kb::scene::UIComponentType::Dropdown)
         return SectionHeight(state, section, propertyCount) + kDisclosureRowHeight + kDividerHeight;
     if (component == kb::scene::UIComponentType::Dropdown && !state.IsCollapsed(section))
-        return kSectionHeaderHeight + kDividerHeight + DropdownInspectorLayout({0, 0, 1, 1}, 0, rows).height;
+        return kSectionHeaderHeight + kDividerHeight + DropdownInspectorLayout({0, 0, 1, 1}, 0, rows).height + OpenMenuHeight(state, section);
     if (component != kb::scene::UIComponentType::RectTransform || state.IsCollapsed(section))
         return SectionHeight(state, section, propertyCount);
-    return kSectionHeaderHeight + kDividerHeight + kUIRectGeometryHeight +
+    return kSectionHeaderHeight + kDividerHeight + OpenMenuHeight(state, section) + kUIRectGeometryHeight +
         (state.IsDisclosureExpanded(InspectorDisclosureId::UIAnchorPresets) ? kUIAnchorGridHeight : 0) +
         3 * (kFieldRowHeight + kDividerHeight) + kDisclosureRowHeight + kDividerHeight +
         (state.IsDisclosureExpanded(InspectorDisclosureId::UIRectAdvanced)
@@ -2836,11 +2867,27 @@ void PaintUIDropdownBody(HDC dc, RECT body, const EditorTheme& theme, const Edit
     return Rect(x, y, x + half, y + 22);
 }
 
-[[nodiscard]] RECT UIRectPairFieldRect(RECT row, int lane, int pair) noexcept {
-    const int left = row.left + 88;
+// The room the Rect Transform's captions need in the editor's language: the name of a pair row, and the caption in
+// front of the rotation row's second box.
+struct UIRectCaptionWidths {
+    int row = 88;
+    int order = 43;
+};
+
+[[nodiscard]] UIRectCaptionWidths UIRectCaptions() {
+    const int rowName = std::max({ MeasureTextWidth(EditorText("inspector.uiRect.pivot", "Pivot"), 14, FW_SEMIBOLD),
+        MeasureTextWidth(EditorText("inspector.uiRect.rotation", "Rotation"), 14, FW_SEMIBOLD),
+        MeasureTextWidth(EditorText("inspector.uiRect.scale", "Scale"), 14, FW_SEMIBOLD) });
+    return UIRectCaptionWidths{ .row = std::max(88, rowName + 24),
+        .order = std::max(43, MeasureTextWidth(EditorText("inspector.uiRect.order", "Order"), 14, FW_SEMIBOLD) + 14) };
+}
+
+[[nodiscard]] RECT UIRectPairFieldRect(RECT row, int lane, int pair) {
+    const UIRectCaptionWidths captions = UIRectCaptions();
+    const int left = row.left + captions.row;
     const int half = (row.right - left - 14) / 2;
     const int x = left + lane * (half + 6);
-    return Rect(x + (pair == 1 && lane == 1 ? 43 : 15), row.top + 2, x + half, row.top + kFieldRowHeight - 2);
+    return Rect(x + (pair == 1 && lane == 1 ? captions.order : 15), row.top + 2, x + half, row.top + kFieldRowHeight - 2);
 }
 
 [[nodiscard]] int UIPropertyIndex(const std::vector<InspectorUIPropertyRow>& rows, std::string_view name) {
@@ -2922,14 +2969,14 @@ void PaintUIRectBody(HDC dc, RECT body, const EditorTheme& theme, const Inspecto
     };
     for (int pair = 0; pair < 3; ++pair) {
         const RECT rowRect = Rect(body.left, y, body.right, y + kFieldRowHeight);
-        Text(dc, Rect(body.left + 10, y, body.left + 86, y + kFieldRowHeight), labels[pair], Color(theme.textSecondary));
+        Text(dc, Rect(body.left + 10, y, body.left + UIRectCaptions().row - 2, y + kFieldRowHeight), labels[pair], Color(theme.textSecondary));
         for (int lane = 0; lane < 2; ++lane) {
             const int index = UIPropertyIndex(rows, kUIRectPairs[pair][lane]);
             if (index < 0) continue;
             const auto& row = rows[static_cast<std::size_t>(index)];
             const RECT box = UIRectPairFieldRect(rowRect, lane, pair);
             const bool editing = state.EditedProperty() == InspectorPropertyId::UIRectTransformField && state.EditIndex() == index;
-            Text(dc, Rect(box.left - (pair == 1 && lane == 1 ? 43 : 15), box.top, box.left, box.bottom),
+            Text(dc, Rect(box.left - (pair == 1 && lane == 1 ? UIRectCaptions().order : 15), box.top, box.left, box.bottom),
                 pair == 1 ? (lane == 0 ? std::string_view{ "Z" } : EditorText("inspector.uiRect.order", "Order"))
                           : (lane == 0 ? std::string_view{ "X" } : std::string_view{ "Y" }), Color(theme.textSecondary));
             DrawValueBox(dc, box, theme, editing ? std::string_view{state.EditBuffer()} : row.value, false, editing,
@@ -3007,11 +3054,11 @@ void PaintUIComponentSections(HDC dc, RECT content, const RECT& band,
             if (component == kb::scene::UIComponentType::RectTransform) {
                 if (!inspector.IsCollapsed(sectionId)) {
                     const auto* rect = sceneContext.Scene().Components().UI().TryGet<kb::scene::UIRectTransform>(entity);
-                    if (rect != nullptr) PaintUIRectBody(dc, section.Reserve(height - kSectionHeaderHeight - kDividerHeight), theme, inspector, *rect, rows);
+                    if (rect != nullptr) PaintUIRectBody(dc, section.Reserve(height - kSectionHeaderHeight - kDividerHeight - OpenMenuHeight(inspector, sectionId)), theme, inspector, *rect, rows);
                 }
             } else if (component == kb::scene::UIComponentType::Dropdown) {
                 if (!inspector.IsCollapsed(sectionId))
-                    PaintUIDropdownBody(dc, section.Reserve(height - kSectionHeaderHeight - kDividerHeight), theme, sceneContext, rows);
+                    PaintUIDropdownBody(dc, section.Reserve(height - kSectionHeaderHeight - kDividerHeight - OpenMenuHeight(inspector, sectionId)), theme, sceneContext, rows);
             } else for (int index = 0, firstAdvanced = FirstAdvancedUIRow(rows); index < static_cast<int>(rows.size()); ++index) {
                 const InspectorUIPropertyRow& row = rows[static_cast<std::size_t>(index)];
                 if (row.fieldCount == 0) continue;
@@ -3044,7 +3091,7 @@ void PaintUIComponentSections(HDC dc, RECT content, const RECT& band,
                             row.name.starts_with("navigation")),
                         editableProperty, InspectorPropertyId::UIAssetPicker, index);
                 } else {
-                    section.Field(row.label, row.value, editableProperty, index);
+                    section.Field(row.label, row.value, editableProperty, index, row.unit);
                 }
             }
         }
@@ -3853,7 +3900,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (!scene.Components().UI().Has<kb::scene::UIRectTransform>(selected)) {
         const int h = SectionHeight(inspector, InspectorSectionId::Transform, 3);
         if (sectionVisible(y, h)) {
-            SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Transform, HeroIconKind::Gamepad2, EditorText("inspector.transform.title", "Transform"));
+            SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Transform, HeroIconKind::Gamepad2, EditorText("inspector.transform.title", "Transform"), true);
             section.Vec3(EditorText("inspector.transform.position", "Position"), transform.localPosition, InspectorPropertyId::PositionX, InspectorPropertyId::PositionY, InspectorPropertyId::PositionZ);
             section.Rotation(EditorText("inspector.transform.rotation", "Rotation"), transform.localRotation);
             section.Vec3(EditorText("inspector.transform.scale", "Scale"), transform.localScale, InspectorPropertyId::ScaleX, InspectorPropertyId::ScaleY, InspectorPropertyId::ScaleZ);
@@ -4027,7 +4074,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         }
     }
     if (const kb::scene::AudioSourceComponent* audioSource = scene.Components().AudioSources().TryGet(selected); audioSource != nullptr) {
-        const int h = SectionHeight(inspector, InspectorSectionId::AudioSource, static_cast<int>(InspectorAudioComponentModel::SourceRows().size()));
+        const int h = AudioSourceSectionHeight(inspector);
         if (sectionVisible(y, h)) {
             PaintAudioSourceSection(dc, content, y, theme, inspector, sceneContext, *audioSource);
         } else {
@@ -4094,13 +4141,20 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         if (!kb::scene::SceneComponentAuthoring::Has(scene, selected, generic.component)) continue;
         const std::vector<InspectorGenericComponentModel::Row> rows =
             InspectorGenericComponentModel::Rows(const_cast<kb::scene::Scene&>(scene), selected, generic);
-        const int h = SectionHeight(inspector, generic.id, static_cast<int>(rows.size()));
+        const int h = GenericSectionHeight(inspector, generic.id, rows);
         if (sectionVisible(y, h)) {
             SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector,
                 generic.id, generic.icon, EditorText("inspector.generic." + std::string{ generic.component }, generic.title), true);
-            for (const InspectorGenericComponentModel::Row& row : rows) {
+            const int basicRows = InspectorGenericComponentModel::BasicCount(rows);
+            for (int index = 0; index < static_cast<int>(rows.size()); ++index) {
+                if (index == basicRows) {
+                    const bool open = inspector.IsDisclosureExpanded(InspectorDisclosureId::GenericAdvanced);
+                    section.Disclosure(EditorText("inspector.meshRenderer.advanced", "Advanced"), InspectorPropertyId::GenericAdvanced, open);
+                    if (!open) break;
+                }
+                const InspectorGenericComponentModel::Row& row = rows[static_cast<std::size_t>(index)];
                 if (row.isBool) section.Bool(row.label, row.boolValue, InspectorPropertyId::GenericComponentField, row.editIndex);
-                else section.Field(row.label, row.value, InspectorPropertyId::GenericComponentField, row.editIndex);
+                else section.Field(row.label, row.value, InspectorPropertyId::GenericComponentField, row.editIndex, row.unit);
             }
             y = section.Bottom() + kSectionGap;
         } else {
@@ -4151,7 +4205,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         const PhysicsLayout layout = InspectorPhysicsModel::Layout(*joint);
         const int h = PhysicsSectionHeight(inspector, InspectorSectionId::Joint, layout);
         if (sectionVisible(y, h)) {
-            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::Joint, EditorText("inspector.joint.title", "Joint"), InspectorPropertyId::JointField, InspectorPhysicsModel::Fields(*joint), layout, false, false);
+            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::Joint, EditorText("inspector.joint.title", "Joint"), InspectorPropertyId::JointField, InspectorPhysicsModel::Fields(*joint), layout, false, false, MatchJointPreset(*joint));
         } else {
             y += h + kSectionGap;
         }
@@ -4353,7 +4407,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         }
     }
     if (scene.Components().AudioSources().TryGet(selected) != nullptr) {
-        height += SectionHeight(inspector, InspectorSectionId::AudioSource, static_cast<int>(InspectorAudioComponentModel::SourceRows().size())) + kSectionGap;
+        height += AudioSourceSectionHeight(inspector) + kSectionGap;
     }
     if (scene.Components().AudioListeners().TryGet(selected) != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::AudioListener, static_cast<int>(InspectorAudioComponentModel::ListenerRows().size())) + kSectionGap;
@@ -4381,8 +4435,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     }
     for (const InspectorGenericComponentModel::Section& generic : InspectorGenericComponentModel::Sections()) {
         if (!kb::scene::SceneComponentAuthoring::Has(scene, selected, generic.component)) continue;
-        const int rows = static_cast<int>(InspectorGenericComponentModel::Rows(const_cast<kb::scene::Scene&>(scene), selected, generic).size());
-        height += SectionHeight(inspector, generic.id, rows) + kSectionGap;
+        height += GenericSectionHeight(inspector, generic.id, InspectorGenericComponentModel::Rows(const_cast<kb::scene::Scene&>(scene), selected, generic)) + kSectionGap;
     }
     if (const kb::scene::RigidbodyComponent* rigidbody = scene.Components().Rigidbodies().TryGet(selected); rigidbody != nullptr) {
         height += PhysicsSectionHeight(inspector, InspectorSectionId::Rigidbody, InspectorPhysicsModel::Layout(*rigidbody)) + kSectionGap;
@@ -4399,7 +4452,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (const kb::scene::JointComponent* joint = scene.Components().Joints().TryGet(selected); joint != nullptr) {
         height += PhysicsSectionHeight(inspector, InspectorSectionId::Joint, InspectorPhysicsModel::Layout(*joint)) + kSectionGap;
     }
-    height += kAddComponentButtonHeight + kSectionGap;
+    height += kAddComponentSeparation + kAddComponentButtonHeight + kSectionGap;
     return height;
 }
 
@@ -4781,7 +4834,7 @@ void AdvanceRow(int& y) noexcept;
     if (!state.IsCollapsed(section)) {
         y += kDividerHeight;
         if (state.IsComponentMenuOpen(section)) {
-            for (int item = 0; item < kComponentMenuItemCount; ++item) {
+            for (int item = 0; item < static_cast<int>(InspectorComponentMenuItems(section).size()); ++item) {
                 const RECT row = Rect(bounds.left, y, bounds.right, y + kFieldRowHeight);
                 if (Contains(row, x, yPoint)) {
                     InspectorPanelRenderer::Hit hit = MakeHit(InspectorHitKind::Row, section, InspectorPropertyId::ComponentMenuItem, row);
@@ -5005,9 +5058,24 @@ void AdvanceGroup(int& y) noexcept {
     int& y,
     InspectorSectionId section,
     std::span<const InspectorAudioRow> rows,
+    const InspectorPanelState& state,
+    int basicCount,
+    InspectorPropertyId advancedProperty,
+    InspectorDisclosureId advanced,
     int x,
     int yPoint) noexcept {
-    for (const InspectorAudioRow& row : rows) {
+    for (int index = 0; index < static_cast<int>(rows.size()); ++index) {
+        if (index == basicCount) {
+            const RECT disclosure = Rect(content.left, y, content.right, y + kDisclosureRowHeight);
+            if (Contains(disclosure, x, yPoint)) {
+                return MakeHit(InspectorHitKind::Row, section, advancedProperty, disclosure);
+            }
+            y += kDisclosureRowHeight;
+            if (!state.IsDisclosureExpanded(advanced)) {
+                break;
+            }
+        }
+        const InspectorAudioRow& row = rows[static_cast<std::size_t>(index)];
         const RECT rect = RowRect(content, y);
         InspectorPanelRenderer::Hit hit{};
         if (row.kind == InspectorAudioControlKind::Asset) {
@@ -5467,6 +5535,8 @@ void InspectorPanelRenderer::Paint(
     SaveDC(dc);
     IntersectClipRect(dc, viewport.left, viewport.top, viewport.right, viewport.bottom);
 
+    // Only an object's components measure their labels; assets and several objects keep the plain share of the row.
+    panel_style::InspectorWidestLabel() = 0;
     if (sceneContext.AssetBrowser().InspectorAsset().IsValid()) {
         PaintAsset(dc, inner, theme, sceneContext);
         RestoreDC(dc, -1);
@@ -5504,7 +5574,15 @@ void InspectorPanelRenderer::Paint(
     }
 
     sceneContext.Inspector().SetChangedFields(InspectorComponentDefaults::ChangedFields(sceneContext.Scene(), selected));
+    // The label column follows the widest label of the object: the rows measure their labels as they paint, so the
+    // first pass learns the width and, when a label was wider than any before, a second pass draws with it.
+    panel_style::BeginInspectorLabelMeasure(selected.Id(), EditorLocalization::Current());
+    const int measuredBefore = panel_style::InspectorWidestLabel();
     PaintEntity(dc, inner, viewport, theme, sceneContext, selected);
+    if (panel_style::InspectorWidestLabel() != measuredBefore) {
+        GdiDrawing::FillRectColor(dc, viewport, Color(theme.background));
+        PaintEntity(dc, inner, viewport, theme, sceneContext, selected);
+    }
     RestoreDC(dc, -1);
     if (scrollable) {
         const RECT track = ScrollbarTrackRect(content);
@@ -5765,7 +5843,7 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTestRows(const RECT& cont
     y += kSectionGap;
 
     if (!sceneContext.Scene().Components().UI().Has<kb::scene::UIRectTransform>(selected)) {
-        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::Transform, x, scrolledY); hit.kind != InspectorHitKind::None) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::Transform, x, scrolledY, true); hit.kind != InspectorHitKind::None) {
             return hit;
         }
         if (!state.IsCollapsed(InspectorSectionId::Transform)) {
@@ -6192,7 +6270,8 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTestRows(const RECT& cont
             return hit;
         }
         if (!state.IsCollapsed(InspectorSectionId::AudioSource)) {
-            if (InspectorPanelRenderer::Hit hit = HitAudioRows(viewport, y, InspectorSectionId::AudioSource, InspectorAudioComponentModel::SourceRows(), x, scrolledY); hit.kind != InspectorHitKind::None) {
+            if (InspectorPanelRenderer::Hit hit = HitAudioRows(viewport, y, InspectorSectionId::AudioSource, InspectorAudioComponentModel::SourceRows(), state,
+                InspectorAudioComponentModel::SourceBasicCount(), InspectorPropertyId::AudioSourceAdvanced, InspectorDisclosureId::AudioSourceAdvanced, x, scrolledY); hit.kind != InspectorHitKind::None) {
                 return hit;
             }
         }
@@ -6205,7 +6284,8 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTestRows(const RECT& cont
             return hit;
         }
         if (!state.IsCollapsed(InspectorSectionId::AudioListener)) {
-            if (InspectorPanelRenderer::Hit hit = HitAudioRows(viewport, y, InspectorSectionId::AudioListener, InspectorAudioComponentModel::ListenerRows(), x, scrolledY); hit.kind != InspectorHitKind::None) {
+            if (InspectorPanelRenderer::Hit hit = HitAudioRows(viewport, y, InspectorSectionId::AudioListener, InspectorAudioComponentModel::ListenerRows(), state,
+                static_cast<int>(InspectorAudioComponentModel::ListenerRows().size()), InspectorPropertyId::None, InspectorDisclosureId::AudioSourceAdvanced, x, scrolledY); hit.kind != InspectorHitKind::None) {
                 return hit;
             }
         }
@@ -6395,7 +6475,15 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTestRows(const RECT& cont
         if (!state.IsCollapsed(generic.id)) {
             const std::vector<InspectorGenericComponentModel::Row> rows =
                 InspectorGenericComponentModel::Rows(const_cast<kb::scene::Scene&>(sceneContext.Scene()), selected, generic);
-            for (const InspectorGenericComponentModel::Row& row : rows) {
+            const int basicRows = InspectorGenericComponentModel::BasicCount(rows);
+            for (int index = 0; index < static_cast<int>(rows.size()); ++index) {
+                if (index == basicRows) {
+                    const RECT disclosure = Rect(viewport.left, y, viewport.right, y + kDisclosureRowHeight);
+                    if (Contains(disclosure, x, scrolledY)) return MakeHit(InspectorHitKind::Row, generic.id, InspectorPropertyId::GenericAdvanced, disclosure);
+                    y += kDisclosureRowHeight;
+                    if (!state.IsDisclosureExpanded(InspectorDisclosureId::GenericAdvanced)) break;
+                }
+                const InspectorGenericComponentModel::Row& row = rows[static_cast<std::size_t>(index)];
                 InspectorPanelRenderer::Hit hit = row.isBool
                     ? HitBool(RowRect(viewport, y), generic.id, InspectorPropertyId::GenericComponentField, x, scrolledY)
                     : HitTextRow(RowRect(viewport, y), generic.id, InspectorPropertyId::GenericComponentField, x, scrolledY);

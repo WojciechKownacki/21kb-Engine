@@ -38,6 +38,23 @@ static_assert(static_cast<std::uint16_t>(InspectorPropertyId::UIAccessibilityFie
 
 // The Inspector name of a UI property in the editor language, by the engine's property name. A
 // property the engine adds without an entry here shows its name split into words.
+// The component's properties in the order the Inspector lists them: what a widget author sets first, then the rare
+// settings.
+[[nodiscard]] std::vector<kb::scene::UIComponentPropertyDescriptor> OrderedCatalog(kb::scene::UIComponentType component) {
+    const auto catalogSpan = kb::scene::UIComponentPropertyCatalog(component);
+    std::vector<kb::scene::UIComponentPropertyDescriptor> catalog(catalogSpan.begin(), catalogSpan.end());
+    std::ranges::stable_partition(catalog, [component](const kb::scene::UIComponentPropertyDescriptor& property) {
+        return !InspectorUIComponentModel::IsAdvancedProperty(component, property.name);
+    });
+    return catalog;
+}
+
+[[nodiscard]] std::string_view UnitOf(kb::scene::UIComponentType component, std::string_view name) noexcept {
+    if (component == kb::scene::UIComponentType::Text && (name == "fontSize" || name == "minFontSize" || name == "characterSpacing")) return "px";
+    if (component == kb::scene::UIComponentType::Selectable && name == "colorFadeSeconds") return "s";
+    return {};
+}
+
 [[nodiscard]] std::string Label(std::string_view name) {
     // "options.3.text" -> "Option 4", "options.3.icon" -> "Option 4 Icon": the list reads as numbered
     // choices rather than as indexed fields.
@@ -396,6 +413,14 @@ std::vector<kb::scene::UIComponentType> InspectorUIComponentModel::Components(
     return output;
 }
 
+std::string_view InspectorUIComponentModel::PropertyNameAt(kb::scene::UIComponentType component, int index) {
+    const bool onClick = component == kb::scene::UIComponentType::Selectable;
+    if (onClick && index == 0) return "onClick";
+    const std::vector<kb::scene::UIComponentPropertyDescriptor> catalog = OrderedCatalog(component);
+    const int position = index - (onClick ? 1 : 0);
+    return position >= 0 && position < static_cast<int>(catalog.size()) ? catalog[static_cast<std::size_t>(position)].name : std::string_view{};
+}
+
 std::vector<InspectorUIPropertyRow> InspectorUIComponentModel::Properties(
     const kb::scene::Scene& scene, kb::scene::SceneEntity entity,
     kb::scene::UIComponentType component) {
@@ -412,12 +437,7 @@ std::vector<InspectorUIPropertyRow> InspectorUIComponentModel::Properties(
     }
 
     std::vector<InspectorUIPropertyRow> output;
-    const auto catalogSpan = kb::scene::UIComponentPropertyCatalog(component);
-    std::vector<kb::scene::UIComponentPropertyDescriptor> catalog(catalogSpan.begin(), catalogSpan.end());
-    // What a widget author sets first, then the rare settings.
-    std::ranges::stable_partition(catalog, [component](const kb::scene::UIComponentPropertyDescriptor& property) {
-        return !IsAdvancedProperty(component, property.name);
-    });
+    const std::vector<kb::scene::UIComponentPropertyDescriptor> catalog = OrderedCatalog(component);
     if (component == kb::scene::UIComponentType::Selectable) {
         output.push_back(InspectorUIPropertyRow{
             .name = "onClick",
@@ -439,6 +459,7 @@ std::vector<InspectorUIPropertyRow> InspectorUIComponentModel::Properties(
             .writable = property.writable,
             .choices = Choices(component, property.name),
             .advanced = IsAdvancedProperty(component, property.name),
+            .unit = UnitOf(component, property.name),
         });
     }
     // Keep canonical indices for editing and automation; only the leading field
@@ -537,6 +558,15 @@ std::vector<InspectorUIPropertyRow> InspectorUIComponentModel::Properties(
 }
 
 bool InspectorUIComponentModel::IsAdvancedProperty(kb::scene::UIComponentType component, std::string_view name) noexcept {
+    if (component == kb::scene::UIComponentType::Text) {
+        return name == "localizationKey" || name == "localizationNumber" || name == "fontVariations" || name == "fallbackFontAssetId" ||
+            name == "fontRenderMode" || name == "lineSpacing" || name == "richText" || name == "overflow" || name == "maxLines" ||
+            name == "autoSize" || name == "minFontSize" || name == "characterSpacing";
+    }
+    if (component == kb::scene::UIComponentType::Image) {
+        return name == "uvRect" || name == "nineSlice" || name == "fillMethod" || name == "fillOrigin" || name == "fillAmount" ||
+            name == "fillClockwise" || name == "alphaHitThreshold" || name == "materialAssetId";
+    }
     if (component != kb::scene::UIComponentType::Selectable) return false;
     return name == "raycastTarget" || name.starts_with("navigation") || name == "eventName" || name == "eventTarget" ||
         name == "colorFadeSeconds" || name == "targetGraphic" || name.starts_with("selectedColor") ||

@@ -1,11 +1,19 @@
 #include "inspection/InspectorComponentDefaults.hpp"
+#include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/ParticleEffectComponent.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/SceneUIComponentSet.hpp"
+#include "engine/ui/UIComponentPropertyCatalog.hpp"
+#include "inspection/InspectorGenericComponentModel.hpp"
+#include "inspection/ui/InspectorUIComponentModel.hpp"
 #include "inspection/InspectorPhysicsModel.hpp"
+#include "engine/scene/SceneComponentAuthoring.hpp"
 
 #include <type_traits>
 #include <variant>
@@ -23,6 +31,10 @@ template <typename T>
 
 [[nodiscard]] bool Same(const kb::scene::Vec3& lhs, const kb::scene::Vec3& rhs) noexcept {
     return lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z;
+}
+
+[[nodiscard]] bool Same(const kb::scene::Quat& lhs, const kb::scene::Quat& rhs) noexcept {
+    return lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z && lhs.w == rhs.w;
 }
 
 // One value of a component: its Inspector property, how to tell it differs from the default and how to put it back.
@@ -93,6 +105,29 @@ const Field<kb::scene::MeshRendererComponent> kMeshRendererFields[] = {
     KB_FIELD(kb::scene::MeshRendererComponent, P::MeshRendererMobility, mobility),
 };
 
+// The clip and the output bus are choices; "Enabled" of a Particle Effect follows the choice of an effect (a new
+// component stays off until it has one), so it is not marked.
+const Field<kb::scene::AudioSourceComponent> kAudioSourceFields[] = {
+    KB_FIELD(kb::scene::AudioSourceComponent, P::AudioSourceVolume, volume),
+    KB_FIELD(kb::scene::AudioSourceComponent, P::AudioSourcePitch, pitch),
+    KB_FIELD(kb::scene::AudioSourceComponent, P::AudioSourceEnabled, enabled),
+    KB_FIELD(kb::scene::AudioSourceComponent, P::AudioSourceAutoplay, autoplay),
+    KB_FIELD(kb::scene::AudioSourceComponent, P::AudioSourceLoop, loop),
+    KB_FIELD(kb::scene::AudioSourceComponent, P::AudioSourceMute, mute),
+    KB_FIELD(kb::scene::AudioSourceComponent, P::AudioSourceSpatial, spatial),
+    KB_FIELD(kb::scene::AudioSourceComponent, P::AudioSourcePan, pan),
+    KB_FIELD(kb::scene::AudioSourceComponent, P::AudioSourceSpatialBlend, spatialBlend),
+    KB_FIELD(kb::scene::AudioSourceComponent, P::AudioSourceAttenuation, attenuationModel),
+    KB_FIELD(kb::scene::AudioSourceComponent, P::AudioSourceMinDistance, minDistance),
+    KB_FIELD(kb::scene::AudioSourceComponent, P::AudioSourceMaxDistance, maxDistance),
+    KB_FIELD(kb::scene::AudioSourceComponent, P::AudioSourceRolloff, rolloff),
+    KB_FIELD(kb::scene::AudioSourceComponent, P::AudioSourceDopplerFactor, dopplerFactor),
+};
+
+const Field<kb::scene::ParticleEffectComponent> kParticleEffectFields[] = {
+    KB_FIELD(kb::scene::ParticleEffectComponent, P::ParticleEffectAutoPlay, autoPlay),
+};
+
 #undef KB_FIELD
 
 template <typename Component, std::size_t N>
@@ -122,10 +157,58 @@ template <typename Component, std::size_t N>
     return false;
 }
 
+// The settings of a component shown from its property table (Sprite 2D and the other generic sections).
+struct GenericSnapshot {
+    std::string component;
+    InspectorGenericComponentModel::Values values;
+};
+
+// The settings of a UI component as plain values, by property name.
+using UIValues = std::vector<std::pair<std::string, kb::scene::UIComponentPropertyValue>>;
+
+struct UISnapshot {
+    kb::scene::UIComponentType component{};
+    UIValues values;
+};
+
+// A UI component's settings. Links to other objects never travel between objects; with `keepReferences` assets stay
+// out too, so that a reset keeps the picture or the font that was chosen.
+[[nodiscard]] UIValues UIValuesOf(const kb::scene::UIComponentSet& set, kb::scene::UIComponentType component, bool keepReferences) {
+    UIValues values;
+    for (const kb::scene::UIComponentPropertyDescriptor& descriptor : kb::scene::UIComponentPropertyCatalog(component)) {
+        if (!descriptor.writable || descriptor.type == kb::scene::UIComponentPropertyType::Entity ||
+            (keepReferences && descriptor.type == kb::scene::UIComponentPropertyType::Asset)) {
+            continue;
+        }
+        kb::scene::UIComponentPropertyValue value;
+        if (kb::scene::ReadUIComponentProperty(set, component, descriptor.name, value)) {
+            values.emplace_back(std::string{ descriptor.name }, std::move(value));
+        }
+    }
+    return values;
+}
+
+[[nodiscard]] bool WriteUIValues(kb::scene::Scene& scene, kb::scene::SceneEntity entity, kb::scene::UIComponentType component, const UIValues& values) {
+    kb::scene::UIComponentSet candidate = kb::scene::CaptureSceneUIComponents(scene.Components().UI(), entity);
+    if (!kb::scene::HasUIComponent(candidate, component)) {
+        return false;
+    }
+    bool any = false;
+    for (const auto& [name, value] : values) {
+        any = kb::scene::WriteUIComponentProperty(candidate, component, name, value) == kb::scene::UIComponentPropertyWriteResult::Succeeded || any;
+    }
+    if (!any) {
+        return false;
+    }
+    kb::scene::SynchronizeSceneUIComponents(scene.Components().UI(), entity, candidate);
+    return true;
+}
+
 // What Copy Settings keeps until the next one.
 using Clipboard = std::variant<std::monostate, kb::scene::CameraComponent, kb::scene::LightComponent,
     kb::scene::MeshRendererComponent, kb::scene::RigidbodyComponent, kb::scene::ColliderComponent,
-    kb::scene::CharacterControllerComponent, kb::scene::JointComponent>;
+    kb::scene::CharacterControllerComponent, kb::scene::JointComponent, kb::scene::AudioSourceComponent,
+    kb::scene::ParticleEffectComponent, GenericSnapshot, UISnapshot>;
 
 Clipboard& Held() noexcept {
     static Clipboard clipboard;
@@ -148,9 +231,12 @@ bool InspectorComponentDefaults::Supports(InspectorSectionId section) noexcept {
     case InspectorSectionId::Collider:
     case InspectorSectionId::CharacterController:
     case InspectorSectionId::Joint:
+    case InspectorSectionId::AudioSource:
+    case InspectorSectionId::ParticleEffect:
+    case InspectorSectionId::Transform:
         return true;
     default:
-        return false;
+        return InspectorGenericComponentModel::Find(section) != nullptr || InspectorUIComponentModel::Component(section).has_value();
     }
 }
 
@@ -177,6 +263,30 @@ std::vector<InspectorFieldKey> InspectorComponentDefaults::ChangedFields(const k
     }
     if (const kb::scene::JointComponent* joint = components.Joints().TryGet(entity)) {
         CollectRows(changed, InspectorSectionId::Joint, P::JointField, InspectorPhysicsModel::ChangedRows(*joint));
+    }
+    if (const kb::scene::AudioSourceComponent* source = components.AudioSources().TryGet(entity)) {
+        CollectChanged(changed, InspectorSectionId::AudioSource, *source, kb::scene::AudioSourceComponent{}, kAudioSourceFields);
+    }
+    if (const kb::scene::ParticleEffectComponent* effect = components.ParticleEffects().TryGet(entity)) {
+        CollectChanged(changed, InspectorSectionId::ParticleEffect, *effect, kb::scene::ParticleEffectComponent{}, kParticleEffectFields);
+    }
+    for (const InspectorGenericComponentModel::Section& generic : InspectorGenericComponentModel::Sections()) {
+        if (kb::scene::SceneComponentAuthoring::Has(scene, entity, generic.component)) {
+            CollectRows(changed, generic.id, P::GenericComponentField, InspectorGenericComponentModel::ChangedRows(scene, entity, generic));
+        }
+    }
+    // One mark per vector row, carried by the row's first property.
+    if (const kb::scene::TransformComponent* transform = scene.Transforms().TryGet(entity)) {
+        const kb::scene::TransformComponent fresh{};
+        if (!Same(transform->localPosition, fresh.localPosition)) {
+            changed.push_back(InspectorFieldKey{ .section = InspectorSectionId::Transform, .property = P::PositionX });
+        }
+        if (!Same(transform->localRotation, fresh.localRotation)) {
+            changed.push_back(InspectorFieldKey{ .section = InspectorSectionId::Transform, .property = P::RotationX });
+        }
+        if (!Same(transform->localScale, fresh.localScale)) {
+            changed.push_back(InspectorFieldKey{ .section = InspectorSectionId::Transform, .property = P::ScaleX });
+        }
     }
     return changed;
 }
@@ -240,14 +350,59 @@ bool InspectorComponentDefaults::ResetField(kb::scene::Scene& scene, kb::scene::
         components.Joints().MarkModified(entity);
         return true;
     }
+    case InspectorSectionId::AudioSource: {
+        kb::scene::AudioSourceComponent* source = components.AudioSources().TryGet(entity);
+        if (source == nullptr || !ResetByProperty(*source, kb::scene::AudioSourceComponent{}, kAudioSourceFields, field.property)) {
+            return false;
+        }
+        components.AudioSources().MarkModified(entity);
+        return true;
+    }
+    case InspectorSectionId::ParticleEffect: {
+        kb::scene::ParticleEffectComponent* effect = components.ParticleEffects().TryGet(entity);
+        if (effect == nullptr || !ResetByProperty(*effect, kb::scene::ParticleEffectComponent{}, kParticleEffectFields, field.property)) {
+            return false;
+        }
+        components.ParticleEffects().MarkModified(entity);
+        return true;
+    }
+    case InspectorSectionId::Transform:
+        switch (field.property) {
+        case P::PositionX: return ResetTransformPart(scene, entity, InspectorComponentMenuItem::ResetPosition);
+        case P::RotationX: return ResetTransformPart(scene, entity, InspectorComponentMenuItem::ResetRotation);
+        case P::ScaleX: return ResetTransformPart(scene, entity, InspectorComponentMenuItem::ResetScale);
+        default: return false;
+        }
     default:
+        return InspectorGenericComponentModel::Find(field.section) != nullptr && InspectorGenericComponentModel::ResetRow(scene, entity, field.index);
+    }
+}
+
+bool InspectorComponentDefaults::ResetTransformPart(kb::scene::Scene& scene, kb::scene::SceneEntity entity, InspectorComponentMenuItem part) {
+    if (!scene.Entities().IsAlive(entity) || scene.Transforms().TryGet(entity) == nullptr) {
         return false;
     }
+    kb::scene::TransformComponent transform = scene.Transforms().Get(entity);
+    const kb::scene::TransformComponent fresh{};
+    switch (part) {
+    case InspectorComponentMenuItem::ResetPosition: transform.localPosition = fresh.localPosition; break;
+    case InspectorComponentMenuItem::ResetRotation: transform.localRotation = fresh.localRotation; break;
+    case InspectorComponentMenuItem::ResetScale: transform.localScale = fresh.localScale; break;
+    default: return false;
+    }
+    scene.Transforms().Set(entity, transform);
+    return true;
 }
 
 bool InspectorComponentDefaults::ResetComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, InspectorSectionId section) {
     if (!Supports(section)) {
         return false;
+    }
+    // A UI component has no marks (a widget made from a preset starts away from the plain component), so a reset
+    // writes the plain component's values.
+    if (const std::optional<kb::scene::UIComponentType> ui = InspectorUIComponentModel::Component(section)) {
+        kb::scene::UIComponentSet plain;
+        return kb::scene::AddUIComponent(plain, *ui) && WriteUIValues(scene, entity, *ui, UIValuesOf(plain, *ui, true));
     }
     // Each changed field is put back on its own: a joint's own type decides which rows exist.
     for (const InspectorFieldKey& field : ChangedFields(scene, entity)) {
@@ -282,7 +437,21 @@ bool InspectorComponentDefaults::CopyComponent(const kb::scene::Scene& scene, kb
     case InspectorSectionId::Joint:
         if (const auto* joint = components.Joints().TryGet(entity)) { Held() = *joint; return true; }
         break;
+    case InspectorSectionId::AudioSource:
+        if (const auto* source = components.AudioSources().TryGet(entity)) { Held() = *source; return true; }
+        break;
+    case InspectorSectionId::ParticleEffect:
+        if (const auto* effect = components.ParticleEffects().TryGet(entity)) { Held() = *effect; return true; }
+        break;
     default:
+        if (const InspectorGenericComponentModel::Section* generic = InspectorGenericComponentModel::Find(section)) {
+            GenericSnapshot snapshot{ .component = std::string{ generic->component } };
+            if (InspectorGenericComponentModel::Capture(scene, entity, *generic, snapshot.values)) { Held() = std::move(snapshot); return true; }
+        }
+        if (const std::optional<kb::scene::UIComponentType> ui = InspectorUIComponentModel::Component(section)) {
+            const kb::scene::UIComponentSet set = kb::scene::CaptureSceneUIComponents(scene.Components().UI(), entity);
+            if (kb::scene::HasUIComponent(set, *ui)) { Held() = UISnapshot{ .component = *ui, .values = UIValuesOf(set, *ui, false) }; return true; }
+        }
         break;
     }
     return false;
@@ -297,7 +466,18 @@ bool InspectorComponentDefaults::CanPaste(InspectorSectionId section) noexcept {
     case InspectorSectionId::Collider: return Holds<kb::scene::ColliderComponent>(section);
     case InspectorSectionId::CharacterController: return Holds<kb::scene::CharacterControllerComponent>(section);
     case InspectorSectionId::Joint: return Holds<kb::scene::JointComponent>(section);
-    default: return false;
+    case InspectorSectionId::AudioSource: return Holds<kb::scene::AudioSourceComponent>(section);
+    case InspectorSectionId::ParticleEffect: return Holds<kb::scene::ParticleEffectComponent>(section);
+    default: {
+        const InspectorGenericComponentModel::Section* generic = InspectorGenericComponentModel::Find(section);
+        const GenericSnapshot* held = std::get_if<GenericSnapshot>(&Held());
+        if (generic != nullptr) {
+            return held != nullptr && held->component == generic->component;
+        }
+        const std::optional<kb::scene::UIComponentType> ui = InspectorUIComponentModel::Component(section);
+        const UISnapshot* heldUI = std::get_if<UISnapshot>(&Held());
+        return ui.has_value() && heldUI != nullptr && heldUI->component == *ui;
+    }
     }
 }
 
@@ -340,7 +520,20 @@ bool InspectorComponentDefaults::PasteComponent(kb::scene::Scene& scene, kb::sce
             return true;
         }
         break;
+    case InspectorSectionId::AudioSource:
+        if (auto* source = components.AudioSources().TryGet(entity)) { *source = std::get<kb::scene::AudioSourceComponent>(Held()); components.AudioSources().MarkModified(entity); return true; }
+        break;
+    case InspectorSectionId::ParticleEffect:
+        if (auto* effect = components.ParticleEffects().TryGet(entity)) { *effect = std::get<kb::scene::ParticleEffectComponent>(Held()); components.ParticleEffects().MarkModified(entity); return true; }
+        break;
     default:
+        if (const InspectorGenericComponentModel::Section* generic = InspectorGenericComponentModel::Find(section);
+            generic != nullptr && kb::scene::SceneComponentAuthoring::Has(scene, entity, generic->component)) {
+            return InspectorGenericComponentModel::Apply(scene, entity, *generic, std::get<GenericSnapshot>(Held()).values);
+        }
+        if (const std::optional<kb::scene::UIComponentType> ui = InspectorUIComponentModel::Component(section)) {
+            return WriteUIValues(scene, entity, *ui, std::get<UISnapshot>(Held()).values);
+        }
         break;
     }
     return false;

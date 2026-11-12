@@ -5739,7 +5739,7 @@ void RunInspectorBasicAdvancedSuite(Report& report) {
     }
 }
 
-// The reset arrow, the component menu and the Joint's quick setups through live pointer handling: the rows they
+// The reset arrow, the component menu and the Joint's presets through live pointer handling: the rows they
 // add must be where painting and hit testing agree they are, and each click must change the scene and undo.
 void RunInspectorResetMenuPresetSuite(Report& report) {
     EditorSceneContext context;
@@ -5820,19 +5820,19 @@ void RunInspectorResetMenuPresetSuite(Report& report) {
     report.Check(press(menuButton(InspectorSectionId::Rigidbody)) && press(menuItem(InspectorSectionId::Rigidbody, 3)) && body().mass == 9.0F,
         "Paste brings the copied settings back");
 
-    // Quick setup: one press opens the list, one press on a setup sets the kind and the limits.
+    // Preset: one press opens the list, one press on a preset sets the kind and the limits.
     const InspectorPanelRenderer::Hit quick = find([](const InspectorPanelRenderer::Hit& hit) {
         return hit.kind == InspectorHitKind::Row && hit.section == InspectorSectionId::Joint && hit.property == InspectorPropertyId::JointPreset;
     });
     report.Check(quick.kind == InspectorHitKind::Row && press(quick) && context.Inspector().IsMenuOpen(InspectorMenuKind::JointPresets, InspectorSectionId::Joint),
-        "The quick setup button opens the list of setups");
+        "The Preset row opens the list of presets");
     const InspectorPanelRenderer::Hit sliding = find([](const InspectorPanelRenderer::Hit& hit) {
         return hit.kind == InspectorHitKind::Row && hit.section == InspectorSectionId::Joint && hit.property == InspectorPropertyId::JointPresetItem && hit.index == 1;
     });
     report.Check(sliding.kind == InspectorHitKind::Row && press(sliding) && joint().type == kb::scene::JointType::Slider && joint().enableLimit &&
             joint().maxLimit == 1.5F && !context.Inspector().IsMenuOpen(InspectorMenuKind::JointPresets, InspectorSectionId::Joint),
         "Sliding door sets a slider with its limits and closes the list");
-    report.Check(context.UndoSceneCommand() && joint().type == kb::scene::JointType::Fixed && !joint().enableLimit, "A quick setup is one undoable step");
+    report.Check(context.UndoSceneCommand() && joint().type == kb::scene::JointType::Fixed && !joint().enableLimit, "A preset is one undoable step");
     report.Check(automation.CaptureInspector("joint-after-undo"), "Paint the Inspector after the undo");
 
     report.Check(press(menuButton(InspectorSectionId::Rigidbody)) && press(menuItem(InspectorSectionId::Rigidbody, 1)) &&
@@ -5879,7 +5879,7 @@ void RunInspectorSectionStackSuite(Report& report) {
         context.Inspector().CloseComponentMenus();
     }
     context.Inspector().ToggleMenu(InspectorMenuKind::JointPresets, InspectorSectionId::Joint);
-    report.Check(addButtonReachable(), "The Add Component button is reachable with the Joint's quick setups open");
+    report.Check(addButtonReachable(), "The Add Component button is reachable with the Joint's presets open");
     context.Inspector().CloseComponentMenus();
     for (const InspectorSectionId section : sections) {
         context.Inspector().ToggleCollapsed(section);

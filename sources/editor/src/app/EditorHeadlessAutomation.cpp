@@ -2238,6 +2238,9 @@ bool EditorHeadlessAutomation::VerifyUIClickHandler() {
     if (!FindInspectorHit(context_, section, InspectorPropertyId::UISelectableAdvanced, -1, InspectorHitKind::Row, &disclosure))
         return fail("advanced-row-not-found");
     if (!CaptureInspectorBottom("ui-selectable-advanced-collapsed")) return false;
+    // The capture scrolled to the bottom, which moves the row: find it again where it is now.
+    if (!FindInspectorHit(context_, section, InspectorPropertyId::UISelectableAdvanced, -1, InspectorHitKind::Row, &disclosure))
+        return fail("advanced-row-not-found-after-capture");
     if (!EditorInspectorPointerController{context_}.HandlePointerDown(kInspectorContent, disclosure.x, disclosure.y, impl_->viewport) ||
         !context_.Inspector().IsDisclosureExpanded(InspectorDisclosureId::UISelectableAdvanced))
         return fail("advanced-row-did-not-open");

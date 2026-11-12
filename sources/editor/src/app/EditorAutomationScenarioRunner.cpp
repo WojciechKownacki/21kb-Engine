@@ -3207,8 +3207,8 @@ ReadScriptValue(
             state.context.SelectEntity(entity);
             const auto section = *component == "World2DMap" ? InspectorSectionId::World2DMap :
                 *component == "AudioSource" ? InspectorSectionId::AudioSource : InspectorSectionId::MeshRenderer;
-            // The Mesh Renderer's header button opens its component menu, whose Remove entry removes it.
-            const bool clicked = section == InspectorSectionId::MeshRenderer
+            // The Mesh Renderer's and the Audio Source's header buttons open a component menu, whose Remove entry removes it.
+            const bool clicked = section != InspectorSectionId::World2DMap
                 ? state.automation.InspectorClickRow(InspectorPropertyId::ComponentMenu, -1, InspectorHitKind::ComponentMenuButton, section) &&
                     state.automation.InspectorClickRow(InspectorPropertyId::ComponentMenuItem, static_cast<int>(InspectorComponentMenuItem::Remove),
                         InspectorHitKind::Row, section)

@@ -1,7 +1,9 @@
 #include "inspection/InspectorPhysicsModel.hpp"
 #include "localization/EditorLocalization.hpp"
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdio>
 
 namespace kb::editor {
@@ -117,6 +119,48 @@ namespace {
         return EditorText("inspector.joint.modeFree", "Free");
     }
     return EditorText("inspector.joint.modeLocked", "Locked");
+}
+
+// How strongly a motor pushes when its speed is set while its force is still zero: enough for ordinary doors and lifts.
+constexpr float kJointMotorStartForce = 1000.0F;
+
+// The unit axes a joint can be pointed along from the Direction row; anything else reads "Custom".
+[[nodiscard]] int JointAxisChoice(const kb::scene::Vec3& axis) noexcept {
+    const float length = std::sqrt(axis.x * axis.x + axis.y * axis.y + axis.z * axis.z);
+    if (!(length > 1e-6F)) {
+        return -1;
+    }
+    constexpr float tolerance = 1e-4F;
+    const float x = axis.x / length;
+    const float y = axis.y / length;
+    const float z = axis.z / length;
+    if (std::fabs(x - 1.0F) < tolerance && std::fabs(y) < tolerance && std::fabs(z) < tolerance) return 0;
+    if (std::fabs(y - 1.0F) < tolerance && std::fabs(x) < tolerance && std::fabs(z) < tolerance) return 1;
+    if (std::fabs(z - 1.0F) < tolerance && std::fabs(x) < tolerance && std::fabs(y) < tolerance) return 2;
+    return -1;
+}
+
+[[nodiscard]] std::string_view JointDirectionName(const kb::scene::Vec3& axis) {
+    switch (JointAxisChoice(axis)) {
+    case 0: return EditorText("inspector.joint.direction.x", "X (sideways)");
+    case 1: return EditorText("inspector.joint.direction.y", "Y (up)");
+    case 2: return EditorText("inspector.joint.direction.z", "Z (forward)");
+    default: return EditorText("inspector.joint.direction.custom", "Custom");
+    }
+}
+
+// The Direction row says what the axis is for: a hinge turns around it, a slider slides along it.
+[[nodiscard]] std::string_view JointDirectionLabel(kb::scene::JointType type) {
+    switch (type) {
+    case kb::scene::JointType::Hinge: return EditorText("inspector.joint.turnsAround", "Turns around");
+    case kb::scene::JointType::Slider: return EditorText("inspector.joint.slidesAlong", "Slides along");
+    case kb::scene::JointType::Cone: return EditorText("inspector.joint.pointsAlong", "Points along");
+    default: return EditorText("inspector.joint.direction", "Direction");
+    }
+}
+
+[[nodiscard]] float ClampDegrees(float value) noexcept {
+    return value < 0.0F ? 0.0F : (value > 180.0F ? 180.0F : value);
 }
 
 // The first three axes of a SixDof joint are translations, the last three rotations, each named X, Y, Z.
@@ -374,6 +418,8 @@ bool InspectorPhysicsModel::CycleEnum(kb::scene::CharacterControllerComponent&, 
 std::vector<PhysicsField> InspectorPhysicsModel::Fields(const kb::scene::JointComponent& c) {
     // The limits are angles for a hinge and the twist of a cone, distances for the other kinds.
     const std::string_view limitUnit = c.type == kb::scene::JointType::Hinge || c.type == kb::scene::JointType::Cone ? "\xC2\xB0" : "m";
+    const std::string_view motorUnit = c.type == kb::scene::JointType::Hinge ? "\xC2\xB0/s" : "m/s";
+    const bool distance = c.type == kb::scene::JointType::Distance;
     std::vector<PhysicsField> fields{
         Tip(EnumField(EditorText("inspector.joint.type", "Type"), JointTypeName(c.type)),
             EditorText("inspector.tip.joint.type", "How the two objects are connected: held together, a hinge, a slider, a rope and more.")),
@@ -389,9 +435,9 @@ std::vector<PhysicsField> InspectorPhysicsModel::Fields(const kb::scene::JointCo
             EditorText("inspector.tip.joint.axis", "The direction the joint turns around or slides along.")),
         FloatField(EditorText("inspector.joint.axisY", "Axis Y"), c.axis.y),
         FloatField(EditorText("inspector.joint.axisZ", "Axis Z"), c.axis.z),
-        Unit(Tip(FloatField(EditorText("inspector.joint.minLimit", "Min Limit"), c.minLimit),
+        Unit(Tip(FloatField(distance ? EditorText("inspector.joint.minDistance", "Min Distance") : EditorText("inspector.joint.minLimit", "Min Limit"), c.minLimit),
             EditorText("inspector.tip.joint.minLimit", "The lowest angle or distance the joint can reach.")), limitUnit),
-        Unit(Tip(FloatField(EditorText("inspector.joint.maxLimit", "Max Limit"), c.maxLimit),
+        Unit(Tip(FloatField(distance ? EditorText("inspector.joint.maxDistance", "Max Distance") : EditorText("inspector.joint.maxLimit", "Max Limit"), c.maxLimit),
             EditorText("inspector.tip.joint.maxLimit", "The highest angle or distance the joint can reach.")), limitUnit),
         Tip(BoolField(EditorText("inspector.joint.enableLimit", "Enable Limit"), c.enableLimit),
             EditorText("inspector.tip.joint.enableLimit", "Stops the joint from moving past the minimum and maximum.")),
@@ -414,6 +460,7 @@ std::vector<PhysicsField> InspectorPhysicsModel::Fields(const kb::scene::JointCo
         Unit(Range(Tip(FloatField(EditorText("inspector.joint.swing2Limit", "Swing 2 Limit"), c.freedom.swing2Limit),
             EditorText("inspector.tip.joint.swing", "How far the joint may tilt, in degrees. 180 leaves it free.")), 0.0F, 180.0F), "\xC2\xB0"),
     };
+    // The axis blocks of a SixDof joint come before the plain rows (see JointPlainFirstRow).
     for (int axis = 0; axis < InspectorPhysicsModel::JointAxisCount; ++axis) {
         const kb::scene::JointAxis& limit = c.freedom.axes[static_cast<std::size_t>(axis)];
         const std::string label = JointAxisLabel(axis);
@@ -423,6 +470,20 @@ std::vector<PhysicsField> InspectorPhysicsModel::Fields(const kb::scene::JointCo
         fields.push_back(FloatField(EditorLocalization::Format("inspector.joint.axisDriveVelocity", "{axis} Drive Velocity", { { "axis", label } }), limit.motor.targetVelocity));
         fields.push_back(FloatField(EditorLocalization::Format("inspector.joint.axisDriveForce", "{axis} Drive Force", { { "axis", label } }), limit.motor.force));
     }
+    fields.push_back(Range(Unit(Tip(FloatField(EditorText("inspector.joint.opensUpTo", "Opens up to"), c.maxLimit),
+        EditorText("inspector.tip.joint.opens", "How far it swings open, to each side of where it starts.")), "\xC2\xB0"), 0.0F, 180.0F));
+    fields.push_back(Unit(Tip(FloatField(EditorText("inspector.joint.slidesUpTo", "Slides up to"), c.maxLimit),
+        EditorText("inspector.tip.joint.slides", "How far it slides from where it starts.")), "m"));
+    fields.push_back(Unit(Tip(FloatField(EditorText("inspector.joint.maxLength", "Max length"), c.maxLimit),
+        EditorText("inspector.tip.joint.length", "The longest the rope can get. Past this it pulls tight.")), "m"));
+    fields.push_back(Range(Unit(Tip(FloatField(EditorText("inspector.joint.tiltsUpTo", "Tilts up to"), c.freedom.swing1Limit),
+        EditorText("inspector.tip.joint.tilt", "How far it can tilt in any direction. 180 leaves it free.")), "\xC2\xB0"), 0.0F, 180.0F));
+    fields.push_back(Range(Unit(Tip(FloatField(EditorText("inspector.joint.twistsUpTo", "Twists up to"), c.maxLimit),
+        EditorText("inspector.tip.joint.twist", "How far it can twist to each side.")), "\xC2\xB0"), 0.0F, 180.0F));
+    fields.push_back(Unit(Tip(FloatField(EditorText("inspector.joint.motorSpeed", "Motor speed"), c.motor.targetVelocity),
+        EditorText("inspector.tip.joint.motorSpeed", "How fast the motor moves it. 0 turns the motor off.")), motorUnit));
+    fields.push_back(Tip(EnumField(JointDirectionLabel(c.type), JointDirectionName(c.axis)),
+        EditorText("inspector.tip.joint.direction", "Which way it turns, slides or points. Click to change it.")));
     return fields;
 }
 
@@ -449,6 +510,12 @@ bool InspectorPhysicsModel::ReadFloat(const kb::scene::JointComponent& c, int in
     case JointSecondaryAxisRow + 2: out = c.freedom.secondaryAxis.z; return true;
     case JointSwing1Row: out = c.freedom.swing1Limit; return true;
     case JointSwing1Row + 1: out = c.freedom.swing2Limit; return true;
+    case JointOpensRow:
+    case JointSlidesRow:
+    case JointLengthRow:
+    case JointTwistRow: out = c.maxLimit; return true;
+    case JointTiltRow: out = c.freedom.swing1Limit; return true;
+    case JointMotorSpeedRow: out = c.motor.targetVelocity; return true;
     default: break;
     }
     JointAxisRow located;
@@ -488,6 +555,22 @@ bool InspectorPhysicsModel::ApplyFloat(kb::scene::JointComponent& c, int index, 
     case JointSecondaryAxisRow + 2: c.freedom.secondaryAxis.z = v; return true;
     case JointSwing1Row: c.freedom.swing1Limit = v < 0.0F ? 0.0F : (v > 180.0F ? 180.0F : v); return true;
     case JointSwing1Row + 1: c.freedom.swing2Limit = v < 0.0F ? 0.0F : (v > 180.0F ? 180.0F : v); return true;
+    case JointOpensRow:
+    case JointTwistRow: // the same amount to either side of where it starts
+        c.maxLimit = ClampDegrees(v);
+        c.minLimit = -c.maxLimit;
+        return true;
+    case JointSlidesRow:
+    case JointLengthRow: c.maxLimit = v < 0.0F ? 0.0F : v; return true;
+    case JointTiltRow:
+        c.freedom.swing1Limit = ClampDegrees(v);
+        c.freedom.swing2Limit = c.freedom.swing1Limit;
+        return true;
+    case JointMotorSpeedRow:
+        // A motor with no force does nothing, so a speed switches it on and a zero speed switches it off.
+        c.motor.targetVelocity = v;
+        c.motor.force = v == 0.0F ? 0.0F : (c.motor.force == 0.0F ? kJointMotorStartForce : c.motor.force);
+        return true;
     default: break;
     }
     JointAxisRow located;
@@ -520,6 +603,14 @@ bool InspectorPhysicsModel::CycleEnum(kb::scene::JointComponent& c, int index) n
         case kb::scene::JointAxisMode::Locked: mode = kb::scene::JointAxisMode::Limited; break;
         case kb::scene::JointAxisMode::Limited: mode = kb::scene::JointAxisMode::Free; break;
         case kb::scene::JointAxisMode::Free: mode = kb::scene::JointAxisMode::Locked; break;
+        }
+        return true;
+    }
+    if (index == JointDirectionRow) {
+        switch (JointAxisChoice(c.axis)) {
+        case 0: c.axis = { 0.0F, 1.0F, 0.0F }; break;
+        case 1: c.axis = { 0.0F, 0.0F, 1.0F }; break;
+        default: c.axis = { 1.0F, 0.0F, 0.0F }; break;
         }
         return true;
     }
@@ -661,21 +752,43 @@ PhysicsLayout InspectorPhysicsModel::Layout(const kb::scene::JointComponent& com
     const bool slider = type == Type::Slider;
     const bool cone = type == Type::Cone;
     const bool sixDof = type == Type::SixDof;
+    const bool rope = type == Type::Rope;
+    const bool distance = type == Type::Distance;
     LayoutBuilder layout;
     layout.Row(0);
+    // What most authors set, in plain terms: the direction, whether the movement is limited, and how far it goes.
     if (hinge || slider || cone) {
-        layout.Rows(7, 3); // the axis it turns around or slides along
+        layout.Row(JointDirectionRow);
+    }
+    if (cone) {
+        layout.Row(JointTiltRow);
+    }
+    if (hinge || slider || cone) {
+        layout.Row(12);
+        if (component.enableLimit) {
+            layout.Row(hinge ? JointOpensRow : (slider ? JointSlidesRow : JointTwistRow));
+        }
+    }
+    if (slider) {
+        layout.Row(JointMotorSpeedRow);
+    }
+    if (rope) {
+        layout.Row(JointLengthRow);
+    }
+    if (distance) {
+        layout.Row(12).Row(10).Row(11);
+    }
+    // The raw values behind those rows, and everything else, sit behind Advanced.
+    layout.Advanced().Rows(1, 6); // where each side is attached
+    if (hinge || slider || cone) {
+        layout.Rows(7, 3); // the axis as numbers
     }
     if (cone) {
         layout.Rows(JointSwing1Row, 2);
     }
-    if (hinge || slider || cone || type == Type::Distance) {
-        layout.Row(12).Row(10).Row(11);
-    }
-    if (type == Type::Rope) {
+    if (hinge || slider || cone || rope) {
         layout.Row(10).Row(11);
     }
-    layout.Advanced().Rows(1, 6); // where each side is attached
     if (type == Type::Distance || slider || type == Type::Rope) {
         layout.Rows(15, 2);
     }
@@ -696,7 +809,15 @@ PhysicsLayout InspectorPhysicsModel::Layout(const kb::scene::JointComponent& com
 std::vector<int> InspectorPhysicsModel::ChangedRows(const kb::scene::RigidbodyComponent& component) { return ChangedRowsOf(component); }
 std::vector<int> InspectorPhysicsModel::ChangedRows(const kb::scene::ColliderComponent& component) { return ChangedRowsOf(component); }
 std::vector<int> InspectorPhysicsModel::ChangedRows(const kb::scene::CharacterControllerComponent& component) { return ChangedRowsOf(component); }
-std::vector<int> InspectorPhysicsModel::ChangedRows(const kb::scene::JointComponent& component) { return ChangedRowsOf(component); }
+std::vector<int> InspectorPhysicsModel::ChangedRows(const kb::scene::JointComponent& component) {
+    // A plain row stands for raw values the other kinds show too; only the rows this kind lists are reported.
+    const PhysicsLayout layout = Layout(component);
+    std::vector<int> changed = ChangedRowsOf(component);
+    std::erase_if(changed, [&layout](int row) {
+        return row >= JointPlainFirstRow && std::find(layout.rows.begin(), layout.rows.begin() + layout.count, static_cast<std::uint8_t>(row)) == layout.rows.begin() + layout.count;
+    });
+    return changed;
+}
 
 bool InspectorPhysicsModel::ResetRow(kb::scene::RigidbodyComponent& component, int index) { return ResetRowOf(component, index); }
 bool InspectorPhysicsModel::ResetRow(kb::scene::ColliderComponent& component, int index) { return ResetRowOf(component, index); }
@@ -712,6 +833,21 @@ std::string_view JointPresetName(JointPreset preset) {
     case JointPreset::CharacterLimb: return EditorText("inspector.joint.preset.limb", "Character limb");
     }
     return {};
+}
+
+std::optional<JointPreset> MatchJointPreset(const kb::scene::JointComponent& joint) noexcept {
+    for (int index = 0; index < kJointPresetCount; ++index) {
+        // Applying a preset to a copy changes only the values the preset sets, so the copy equals the joint exactly
+        // when the joint already has them.
+        kb::scene::JointComponent probe = joint;
+        ApplyJointPreset(probe, static_cast<JointPreset>(index));
+        if (probe.type == joint.type && probe.axis.x == joint.axis.x && probe.axis.y == joint.axis.y && probe.axis.z == joint.axis.z &&
+            probe.enableLimit == joint.enableLimit && probe.minLimit == joint.minLimit && probe.maxLimit == joint.maxLimit &&
+            probe.freedom.swing1Limit == joint.freedom.swing1Limit && probe.freedom.swing2Limit == joint.freedom.swing2Limit) {
+            return static_cast<JointPreset>(index);
+        }
+    }
+    return std::nullopt;
 }
 
 void ApplyJointPreset(kb::scene::JointComponent& joint, JointPreset preset) noexcept {

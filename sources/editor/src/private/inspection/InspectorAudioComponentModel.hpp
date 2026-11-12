@@ -47,7 +47,10 @@ class InspectorAudioComponentModel {
 public:
     InspectorAudioComponentModel() = delete;
 
+    // The Audio Source's rows in display order; the first SourceBasicCount() of them are always shown, the others sit
+    // behind the Advanced row.
     [[nodiscard]] static std::span<const InspectorAudioRow> SourceRows() noexcept;
+    [[nodiscard]] static int SourceBasicCount() noexcept;
     // A row's label in the editor language.
     [[nodiscard]] static std::string_view Label(InspectorPropertyId property);
     [[nodiscard]] static std::span<const InspectorAudioRow> ListenerRows() noexcept;

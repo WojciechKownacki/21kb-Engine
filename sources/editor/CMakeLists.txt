@@ -961,6 +961,7 @@ add_executable(kb_editor WIN32
     src/inspection/InspectorAddComponentBrowserModel.cpp
     src/inspection/InspectorEntitySummaryTextBuilder.cpp
     src/inspection/InspectorGenericComponentModel.cpp
+    src/inspection/InspectorGenericComponentFields.cpp
     src/inspection/InspectorLightTextBuilder.cpp
     src/inspection/InspectorMeshRendererMaterialSlotModel.cpp
     src/inspection/InspectorMaterialTextureSlotFormatter.cpp
@@ -1662,6 +1663,7 @@ if(BUILD_TESTING)
         src/inspection/InspectorPhysicsModel.cpp
         src/inspection/InspectorComponentDefaults.cpp
         src/inspection/InspectorFieldGuide.cpp
+        src/inspection/InspectorGenericComponentFields.cpp
         src/inspection/ui/InspectorUIComponentModel.cpp
         src/inspection/ui/InspectorUIThemeModel.cpp
         src/inspection/ui/InspectorUIClickHandler.cpp

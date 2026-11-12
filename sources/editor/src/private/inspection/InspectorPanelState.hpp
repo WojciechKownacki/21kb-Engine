@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -130,16 +131,26 @@ enum class InspectorSectionId : std::uint8_t {
 
 };
 
-// The list that opens under a section: the component menu behind the header button, or the Joint's quick setups.
+// The list that opens under a section: the component menu behind the header button, or the Joint's presets.
 enum class InspectorMenuKind : std::uint8_t {
     None,
     Component,
     JointPresets,
 };
 
-// The entries of those lists, in the order they are shown: a hit on one carries its position as the index.
-enum class InspectorComponentMenuItem : std::uint8_t { Reset, Remove, Copy, Paste };
-inline constexpr int kComponentMenuItemCount = 4;
+// The entries of those lists. A Transform cannot be removed or copied; its entries put one part back.
+enum class InspectorComponentMenuItem : std::uint8_t { Reset, Remove, Copy, Paste, ResetPosition, ResetRotation, ResetScale };
+
+// The entries of a section's component menu in the order they are shown: a hit on one carries its position as the index.
+[[nodiscard]] inline std::span<const InspectorComponentMenuItem> InspectorComponentMenuItems(InspectorSectionId section) noexcept {
+    using Item = InspectorComponentMenuItem;
+    static constexpr std::array<Item, 4> kComponent{ Item::Reset, Item::Remove, Item::Copy, Item::Paste };
+    static constexpr std::array<Item, 3> kTransform{ Item::ResetPosition, Item::ResetRotation, Item::ResetScale };
+    if (section == InspectorSectionId::Transform) {
+        return kTransform;
+    }
+    return kComponent;
+}
 
 enum class InspectorHitKind : std::uint8_t {
     None,
@@ -174,6 +185,8 @@ enum class InspectorDisclosureId : std::uint8_t {
     RigidbodyAdvanced,
     ColliderAdvanced,
     JointAdvanced,
+    AudioSourceAdvanced,
+    GenericAdvanced,
     Count,
 };
 
@@ -184,6 +197,8 @@ enum class InspectorPropertyId : std::uint16_t {
     RigidbodyAdvanced,
     ColliderAdvanced,
     JointAdvanced,
+    AudioSourceAdvanced,
+    GenericAdvanced,
     EntityName,
     EntityVisible,
     EntityVisibilityMode,
@@ -520,7 +535,7 @@ enum class InspectorPropertyId : std::uint16_t {
     ComponentRemove,
     ComponentMenu,     // the header button of a component that offers Reset / Remove / Copy / Paste
     ComponentMenuItem, // one entry of that menu; the hit's index says which
-    JointPreset,       // the Joint's "Quick setup" row
+    JointPreset,       // the Joint's Preset row
     JointPresetItem,   // one entry of its list; the hit's index is the JointPreset
     AddComponentButton,
     AddComponentSearch,
@@ -748,7 +763,7 @@ struct InspectorPanelState {
     [[nodiscard]] bool IsAddComponentScrollbarDragging() const noexcept { return addComponentScrollDragging_; }
     [[nodiscard]] int AddComponentScrollbarGrabOffset() const noexcept { return addComponentScrollGrab_; }
     // The list open under one section: the component menu (Reset, Remove, Copy, Paste) behind its header button or
-    // the Joint's quick setups. One list is open at a time; toggling the open one closes it.
+    // the Joint's presets. One list is open at a time; toggling the open one closes it.
     [[nodiscard]] bool IsComponentMenuOpen(InspectorSectionId section) const noexcept;
     [[nodiscard]] bool IsMenuOpen(InspectorMenuKind kind, InspectorSectionId section) const noexcept;
     void ToggleMenu(InspectorMenuKind kind, InspectorSectionId section) noexcept;

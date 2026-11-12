@@ -18,6 +18,7 @@
 #include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneHistory.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
@@ -30,6 +31,7 @@
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorComponentDefaults.hpp"
 #include "inspection/InspectorFieldGuide.hpp"
+#include "inspection/InspectorGenericComponentModel.hpp"
 #include "inspection/InspectorComponentLabelFormatter.hpp"
 #include "inspection/InspectorMeshRendererMaterialSlotModel.hpp"
 #include "inspection/InspectorMaterialTextureSlotFormatter.hpp"
@@ -71,6 +73,7 @@
 #include "scene/material_preview/EditorMaterialPreviewMeshLoader.hpp"
 #include "scene/material_preview/EditorMaterialPreviewPrimitivePolicy.hpp"
 #include "scene/material_preview/EditorMaterialPreviewScene.hpp"
+#include "rendering/EditorPanelStyle.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/MaterialPreviewRenderPolicy.hpp"
 #include "engine/scene/Scene.hpp"
@@ -474,14 +477,13 @@ void RunAudioInspectorComponentModelTest() {
 
     const std::array<std::pair<InspectorPropertyId, InspectorAudioControlKind>, 17U> expectedSourceRows{ {
         { InspectorPropertyId::AudioSourceClip, InspectorAudioControlKind::Asset },
-        { InspectorPropertyId::AudioSourceClipClear, InspectorAudioControlKind::Action },
         { InspectorPropertyId::AudioSourceVolume, InspectorAudioControlKind::Float },
-        { InspectorPropertyId::AudioSourcePitch, InspectorAudioControlKind::Float },
-        { InspectorPropertyId::AudioSourceEnabled, InspectorAudioControlKind::Bool },
-        { InspectorPropertyId::AudioSourceAutoplay, InspectorAudioControlKind::Bool },
         { InspectorPropertyId::AudioSourceLoop, InspectorAudioControlKind::Bool },
-        { InspectorPropertyId::AudioSourceMute, InspectorAudioControlKind::Bool },
+        { InspectorPropertyId::AudioSourceAutoplay, InspectorAudioControlKind::Bool },
         { InspectorPropertyId::AudioSourceSpatial, InspectorAudioControlKind::Bool },
+        { InspectorPropertyId::AudioSourceEnabled, InspectorAudioControlKind::Bool },
+        { InspectorPropertyId::AudioSourceMute, InspectorAudioControlKind::Bool },
+        { InspectorPropertyId::AudioSourcePitch, InspectorAudioControlKind::Float },
         { InspectorPropertyId::AudioSourcePan, InspectorAudioControlKind::Float },
         { InspectorPropertyId::AudioSourceSpatialBlend, InspectorAudioControlKind::Float },
         { InspectorPropertyId::AudioSourceAttenuation, InspectorAudioControlKind::Enum },
@@ -490,8 +492,13 @@ void RunAudioInspectorComponentModelTest() {
         { InspectorPropertyId::AudioSourceRolloff, InspectorAudioControlKind::Float },
         { InspectorPropertyId::AudioSourceDopplerFactor, InspectorAudioControlKind::Float },
         { InspectorPropertyId::AudioSourceOutputBus, InspectorAudioControlKind::Route },
+        { InspectorPropertyId::AudioSourceClipClear, InspectorAudioControlKind::Action },
     } };
     const std::span<const kb::editor::InspectorAudioRow> sourceRows = InspectorAudioComponentModel::SourceRows();
+    kb::editor::tests::Require(InspectorAudioComponentModel::SourceBasicCount() == 6 &&
+            sourceRows[0].property == InspectorPropertyId::AudioSourceClip && sourceRows[1].property == InspectorPropertyId::AudioSourceVolume &&
+            sourceRows[static_cast<std::size_t>(InspectorAudioComponentModel::SourceBasicCount())].property == InspectorPropertyId::AudioSourceMute,
+        "The Audio Source keeps the clip, volume and play switches up front and the rest behind Advanced");
     kb::editor::tests::Require(sourceRows.size() == expectedSourceRows.size(), "Audio Source Inspector should expose every authored field exactly once");
     for (std::size_t index = 0U; index < expectedSourceRows.size(); ++index) {
         kb::editor::tests::Require(sourceRows[index].property == expectedSourceRows[index].first && sourceRows[index].kind == expectedSourceRows[index].second && !InspectorAudioComponentModel::Label(sourceRows[index].property).empty(), "Audio Source Inspector row order, kind, or label is inconsistent");
@@ -3099,22 +3106,34 @@ void RunInspectorPhysicsLayoutTest() {
             Absent(fixed, 7) && Absent(fixed, 13) && Absent(fixed, 15) && Absent(fixed, InspectorPhysicsModel::JointFirstAxisRow),
         "A fixed joint shows only its type up front and leaves out axis, motor, spring and the six axes");
     const kb::editor::PhysicsLayout hinge = jointLayout(JointType::Hinge);
-    kb::editor::tests::Require(LayoutIsSound(hinge, jointRows) && InBasic(hinge, 7) && InBasic(hinge, 10) && InBasic(hinge, 11) && InBasic(hinge, 12) &&
+    kb::editor::tests::Require(LayoutIsSound(hinge, jointRows) && InBasic(hinge, InspectorPhysicsModel::JointDirectionRow) && InBasic(hinge, 12) &&
+            Absent(hinge, InspectorPhysicsModel::JointOpensRow) && InAdvanced(hinge, 7) && InAdvanced(hinge, 10) && InAdvanced(hinge, 11) &&
             InAdvanced(hinge, 13) && InAdvanced(hinge, 14) && Absent(hinge, 15) && Absent(hinge, InspectorPhysicsModel::JointSwing1Row),
-        "A hinge shows its axis and limits, keeps the motor behind Advanced and has no spring");
+        "A hinge shows its direction and the limit switch, keeps the raw axis, limits and motor behind Advanced and has no spring");
+    joint.enableLimit = true;
+    const kb::editor::PhysicsLayout limitedHinge = jointLayout(JointType::Hinge);
+    kb::editor::tests::Require(LayoutIsSound(limitedHinge, jointRows) && InBasic(limitedHinge, InspectorPhysicsModel::JointOpensRow),
+        "A hinge with its limit on shows how far it opens");
     const kb::editor::PhysicsLayout slider = jointLayout(JointType::Slider);
-    kb::editor::tests::Require(LayoutIsSound(slider, jointRows) && InBasic(slider, 12) && InAdvanced(slider, 13) && InAdvanced(slider, 15) &&
+    kb::editor::tests::Require(LayoutIsSound(slider, jointRows) && InBasic(slider, 12) && InBasic(slider, InspectorPhysicsModel::JointSlidesRow) &&
+            InBasic(slider, InspectorPhysicsModel::JointMotorSpeedRow) && InAdvanced(slider, 13) && InAdvanced(slider, 15) &&
             InAdvanced(slider, InspectorPhysicsModel::JointSecondaryAxisRow),
-        "A slider has motor, spring and second axis behind Advanced");
+        "A slider shows how far it slides and its motor speed; the raw motor, spring and second axis sit behind Advanced");
     const kb::editor::PhysicsLayout cone = jointLayout(JointType::Cone);
-    kb::editor::tests::Require(LayoutIsSound(cone, jointRows) && InBasic(cone, InspectorPhysicsModel::JointSwing1Row) && InBasic(cone, InspectorPhysicsModel::JointSwing1Row + 1) && Absent(cone, 13),
-        "A cone shows its two swing limits up front and has no motor");
+    kb::editor::tests::Require(LayoutIsSound(cone, jointRows) && InBasic(cone, InspectorPhysicsModel::JointTiltRow) && InBasic(cone, InspectorPhysicsModel::JointTwistRow) &&
+            InAdvanced(cone, InspectorPhysicsModel::JointSwing1Row) && InAdvanced(cone, InspectorPhysicsModel::JointSwing1Row + 1) && Absent(cone, 13),
+        "A cone shows how far it tilts and twists; the two raw swing limits sit behind Advanced and it has no motor");
+    joint.enableLimit = false;
     const kb::editor::PhysicsLayout rope = jointLayout(JointType::Rope);
-    kb::editor::tests::Require(LayoutIsSound(rope, jointRows) && InBasic(rope, 10) && InBasic(rope, 11) && Absent(rope, 12) && InAdvanced(rope, 15),
-        "A rope shows its length limits and keeps the spring behind Advanced");
+    kb::editor::tests::Require(LayoutIsSound(rope, jointRows) && InBasic(rope, InspectorPhysicsModel::JointLengthRow) && InAdvanced(rope, 10) && InAdvanced(rope, 11) &&
+            Absent(rope, 12) && InAdvanced(rope, 15),
+        "A rope shows its length, keeps the raw limits and the spring behind Advanced and has no limit switch");
+    const kb::editor::PhysicsLayout distance = jointLayout(JointType::Distance);
+    kb::editor::tests::Require(LayoutIsSound(distance, jointRows) && InBasic(distance, 10) && InBasic(distance, 11) && InBasic(distance, 12) && Absent(distance, InspectorPhysicsModel::JointDirectionRow),
+        "A distance joint keeps its minimum and maximum distance up front");
     const kb::editor::PhysicsLayout sixDof = jointLayout(JointType::SixDof);
     bool allAxisRows = true;
-    for (int row = InspectorPhysicsModel::JointFirstAxisRow; row < jointRows; ++row) {
+    for (int row = InspectorPhysicsModel::JointFirstAxisRow; row < InspectorPhysicsModel::JointPlainFirstRow; ++row) {
         allAxisRows = allAxisRows && InAdvanced(sixDof, row);
     }
     kb::editor::tests::Require(LayoutIsSound(sixDof, jointRows) && allAxisRows && sixDof.basicCount == 1,
@@ -3166,7 +3185,7 @@ void RunInspectorPhysicsResetTest() {
     kb::scene::JointComponent joint;
     joint.type = kb::scene::JointType::Rope;
     joint.maxLimit = 4.0F;
-    kb::editor::tests::Require(InspectorPhysicsModel::ChangedRows(joint) == std::vector<int>({ 0, 11 }), "A joint reports its type and its limit");
+    kb::editor::tests::Require(InspectorPhysicsModel::ChangedRows(joint) == std::vector<int>({ 0, 11, InspectorPhysicsModel::JointLengthRow }), "A joint reports its type and its limit, as the raw row and as the rope length");
     kb::editor::tests::Require(InspectorPhysicsModel::ResetRow(joint, 0) && joint.type == kb::scene::JointType::Fixed &&
             InspectorPhysicsModel::ResetRow(joint, 11) && joint.maxLimit == 0.0F,
         "A joint type cycles back to Fixed and its limit to zero");
@@ -3250,6 +3269,227 @@ void RunInspectorComponentDefaultsTest() {
 }
 
 // The one-click Joint setups set the kind and the limits they document and leave the rest of the joint alone.
+// The Transform, Audio Source, Particle Effect and Sprite 2D share the marks, resets and menus of the other components.
+void RunInspectorMoreComponentDefaultsTest() {
+    using kb::editor::InspectorComponentDefaults;
+    using kb::editor::InspectorComponentMenuItem;
+    using kb::editor::InspectorFieldKey;
+    using kb::editor::InspectorGenericComponentModel;
+    using kb::editor::InspectorPropertyId;
+    using kb::editor::InspectorSectionId;
+
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "More" });
+    const char* const names[] = { "AudioSource", "Particle Effect", "Sprite2D" };
+    kb::project::ProjectDescriptor project;
+    for (const char* name : names) {
+        if (const kb::scene::SceneComponentKind* kind = kb::scene::SceneComponentAuthoring::Find(name); kind != nullptr && !kind->requiredPlugin.empty()) {
+            project.plugins.push_back(kb::project::ProjectPluginReference{ .name = std::string{ kind->requiredPlugin } });
+        }
+        kb::editor::tests::Require(kb::scene::SceneComponentAuthoring::Add(scene, entity, name, project).status == kb::scene::SceneComponentAddStatus::Added,
+            "Add the component the way Add Component does");
+    }
+    kb::editor::tests::Require(InspectorComponentDefaults::ChangedFields(scene, entity).empty(),
+        "Audio Source, Particle Effect, Sprite 2D and a fresh Transform have no changed field");
+
+    auto components = scene.Components();
+    components.AudioSources().TryGet(entity)->volume = 0.5F;
+    components.AudioSources().TryGet(entity)->loop = true;
+    components.ParticleEffects().TryGet(entity)->autoPlay = false;
+    kb::scene::TransformComponent transform = scene.Transforms().Get(entity);
+    transform.localPosition = { 1.0F, 2.0F, 3.0F };
+    transform.localScale = { 2.0F, 2.0F, 2.0F };
+    scene.Transforms().Set(entity, transform);
+    const InspectorGenericComponentModel::Section* sprite = InspectorGenericComponentModel::Find(InspectorSectionId::Sprite2D);
+    kb::editor::tests::Require(sprite != nullptr, "Sprite 2D is one of the sections drawn from a property table");
+    const std::vector<InspectorGenericComponentModel::Row> before = InspectorGenericComponentModel::Rows(scene, entity, *sprite);
+    const auto rowIndex = [](const std::vector<InspectorGenericComponentModel::Row>& rows, std::string_view label) {
+        const auto found = std::ranges::find_if(rows, [label](const InspectorGenericComponentModel::Row& row) { return row.label == label; });
+        return found == rows.end() ? -1 : static_cast<int>(found - rows.begin());
+    };
+    const int flipPosition = rowIndex(before, "Flip X");
+    kb::editor::tests::Require(flipPosition >= 0, "Sprite 2D lists Flip X");
+    const int flipEdit = before[static_cast<std::size_t>(flipPosition)].editIndex;
+    kb::editor::tests::Require(kb::script::ScriptSceneComponentApi::SetProperty(scene, entity, "Sprite2D", "flipX", kb::script::ScriptValue{ true }).succeeded,
+        "Flip the sprite");
+
+    const std::vector<InspectorFieldKey> changed = InspectorComponentDefaults::ChangedFields(scene, entity);
+    const auto has = [&changed](InspectorSectionId section, InspectorPropertyId property, int index) {
+        return std::ranges::find(changed, InspectorFieldKey{ .section = section, .property = property, .index = index }) != changed.end();
+    };
+    kb::editor::tests::Require(changed.size() == 6U && has(InspectorSectionId::AudioSource, InspectorPropertyId::AudioSourceVolume, -1) &&
+            has(InspectorSectionId::AudioSource, InspectorPropertyId::AudioSourceLoop, -1) &&
+            has(InspectorSectionId::ParticleEffect, InspectorPropertyId::ParticleEffectAutoPlay, -1) &&
+            has(InspectorSectionId::Sprite2D, InspectorPropertyId::GenericComponentField, flipEdit) &&
+            has(InspectorSectionId::Transform, InspectorPropertyId::PositionX, -1) && has(InspectorSectionId::Transform, InspectorPropertyId::ScaleX, -1) &&
+            !has(InspectorSectionId::Transform, InspectorPropertyId::RotationX, -1),
+        "Exactly the edited fields and the moved and scaled Transform rows are marked");
+
+    // Resets put one value, one transform part or a whole component back.
+    kb::editor::tests::Require(InspectorComponentDefaults::ResetField(scene, entity, InspectorFieldKey{ .section = InspectorSectionId::Transform, .property = InspectorPropertyId::PositionX }) &&
+            scene.Transforms().Get(entity).localPosition.x == 0.0F && scene.Transforms().Get(entity).localPosition.z == 0.0F && scene.Transforms().Get(entity).localScale.x == 2.0F,
+        "The position arrow puts the whole position back and leaves the scale");
+    kb::editor::tests::Require(InspectorComponentDefaults::ResetTransformPart(scene, entity, InspectorComponentMenuItem::ResetScale) &&
+            scene.Transforms().Get(entity).localScale.x == 1.0F && scene.Transforms().Get(entity).localScale.z == 1.0F &&
+            !InspectorComponentDefaults::ResetTransformPart(scene, entity, InspectorComponentMenuItem::Remove),
+        "Reset Scale puts the scale back and only the three transform entries are accepted");
+    kb::editor::tests::Require(InspectorComponentDefaults::ResetField(scene, entity, InspectorFieldKey{ .section = InspectorSectionId::Sprite2D,
+            .property = InspectorPropertyId::GenericComponentField, .index = flipEdit }) &&
+            !kb::script::ScriptSceneComponentApi::GetProperty(scene, entity, "Sprite2D", "flipX").value.AsBool(),
+        "A Sprite 2D row is put back through its property table");
+    kb::editor::tests::Require(InspectorComponentDefaults::ResetComponent(scene, entity, InspectorSectionId::AudioSource) &&
+            components.AudioSources().TryGet(entity)->volume == 1.0F && !components.AudioSources().TryGet(entity)->loop &&
+            !components.ParticleEffects().TryGet(entity)->autoPlay,
+        "Reset puts back the whole Audio Source and leaves the Particle Effect");
+
+    // Copy and Paste reach the new components too.
+    const kb::scene::SceneEntity other = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Target" });
+    for (const char* name : names) {
+        kb::editor::tests::Require(kb::scene::SceneComponentAuthoring::Add(scene, other, name, project).status == kb::scene::SceneComponentAddStatus::Added, "Add the target components");
+    }
+    components.AudioSources().TryGet(entity)->pitch = 1.5F;
+    kb::editor::tests::Require(InspectorComponentDefaults::CopyComponent(scene, entity, InspectorSectionId::AudioSource) && InspectorComponentDefaults::CanPaste(InspectorSectionId::AudioSource) &&
+            !InspectorComponentDefaults::CanPaste(InspectorSectionId::ParticleEffect) && InspectorComponentDefaults::PasteComponent(scene, other, InspectorSectionId::AudioSource) &&
+            components.AudioSources().TryGet(other)->pitch == 1.5F,
+        "An Audio Source's settings paste into another one");
+    kb::editor::tests::Require(kb::script::ScriptSceneComponentApi::SetProperty(scene, entity, "Sprite2D", "pixelsPerUnit", kb::script::ScriptValue{ 32.0F }).succeeded &&
+            InspectorComponentDefaults::CopyComponent(scene, entity, InspectorSectionId::Sprite2D) && InspectorComponentDefaults::CanPaste(InspectorSectionId::Sprite2D) &&
+            !InspectorComponentDefaults::CanPaste(InspectorSectionId::AudioSource) && InspectorComponentDefaults::PasteComponent(scene, other, InspectorSectionId::Sprite2D) &&
+            kb::script::ScriptSceneComponentApi::GetProperty(scene, other, "Sprite2D", "pixelsPerUnit").value.AsFloat() == 32.0F,
+        "A Sprite 2D's settings paste into another one and an Audio Source cannot take them");
+    kb::editor::tests::Require(!InspectorComponentDefaults::CanPaste(InspectorSectionId::Transform) && !InspectorComponentDefaults::CopyComponent(scene, entity, InspectorSectionId::Transform),
+        "The Transform has no Copy or Paste");
+
+    // The menus: a Transform only resets its parts, every other component can also be removed.
+    const std::span<const InspectorComponentMenuItem> transformMenu = kb::editor::InspectorComponentMenuItems(InspectorSectionId::Transform);
+    const std::span<const InspectorComponentMenuItem> audioMenu = kb::editor::InspectorComponentMenuItems(InspectorSectionId::AudioSource);
+    kb::editor::tests::Require(InspectorComponentDefaults::Supports(InspectorSectionId::Transform) && InspectorComponentDefaults::Supports(InspectorSectionId::AudioSource) &&
+            InspectorComponentDefaults::Supports(InspectorSectionId::ParticleEffect) && InspectorComponentDefaults::Supports(InspectorSectionId::Sprite2D) &&
+            !InspectorComponentDefaults::Supports(InspectorSectionId::General) && transformMenu.size() == 3U &&
+            std::ranges::find(transformMenu, InspectorComponentMenuItem::Remove) == transformMenu.end() &&
+            audioMenu.size() == 4U && std::ranges::find(audioMenu, InspectorComponentMenuItem::Remove) != audioMenu.end(),
+        "The Transform menu has the three resets and no Remove; the other menus keep Reset, Remove, Copy and Paste");
+
+    // Sprite 2D keeps the settings of an ordinary sprite up front, says what each row is for and puts the rest behind Advanced.
+    const std::vector<InspectorGenericComponentModel::Row> rows = InspectorGenericComponentModel::Rows(scene, entity, *sprite);
+    const int basic = InspectorGenericComponentModel::BasicCount(rows);
+    const int pivot = rowIndex(rows, "Pivot X");
+    kb::editor::tests::Require(basic > 0 && basic < static_cast<int>(rows.size()) && rowIndex(rows, "Image") < basic && rowIndex(rows, "Flip X") < basic &&
+            pivot >= basic && rows[static_cast<std::size_t>(rowIndex(rows, "Cell Width"))].unit == "px",
+        "Sprite 2D lists the image, the flips and the cell size first and the pivot and tint behind Advanced");
+    kb::editor::tests::Require(!InspectorGenericComponentModel::Tooltip(flipEdit).empty() &&
+            !kb::editor::InspectorFieldGuide::Tooltip(InspectorSectionId::Sprite2D, InspectorPropertyId::GenericComponentField, flipEdit).empty(),
+        "A Sprite 2D row has a help text");
+    kb::editor::tests::Require(InspectorComponentDefaults::ChangedFields(scene, other).size() >= 2U,
+        "The pasted target shows its own changed rows");
+
+    // Hover help for the rows of the Transform, Audio Source and Particle Effect, and the units and ranges of the Audio Source.
+    using kb::editor::InspectorFieldGuide;
+    kb::editor::tests::Require(!InspectorFieldGuide::Tooltip(InspectorSectionId::Transform, InspectorPropertyId::PositionX, -1).empty() &&
+            !InspectorFieldGuide::Tooltip(InspectorSectionId::Transform, InspectorPropertyId::RotationX, -1).empty() &&
+            !InspectorFieldGuide::Tooltip(InspectorSectionId::Transform, InspectorPropertyId::ScaleX, -1).empty() &&
+            InspectorFieldGuide::Tooltip(InspectorSectionId::Transform, InspectorPropertyId::PositionY, -1).empty() &&
+            !InspectorFieldGuide::Tooltip(InspectorSectionId::AudioSource, InspectorPropertyId::AudioSourceVolume, -1).empty() &&
+            !InspectorFieldGuide::Tooltip(InspectorSectionId::ParticleEffect, InspectorPropertyId::ParticleEffectAutoPlay, -1).empty(),
+        "The Transform, Audio Source and Particle Effect rows have help texts");
+    kb::editor::tests::Require(InspectorFieldGuide::Help(InspectorPropertyId::AudioSourceVolume).bounded && InspectorFieldGuide::Help(InspectorPropertyId::AudioSourceMaxDistance).unit == "m" &&
+            InspectorFieldGuide::Help(InspectorPropertyId::AudioSourcePan).minimum == -1.0F,
+        "Audio Source volume is a slider, its distances are in metres and the pan runs from -1 to 1");
+}
+
+// The UI components: expert rows behind Advanced, units, help texts and the component menu (Reset, Copy, Paste).
+void RunInspectorUIComponentMenuTest() {
+    using kb::editor::InspectorComponentDefaults;
+    using kb::editor::InspectorFieldGuide;
+    using kb::editor::InspectorPropertyId;
+    using kb::editor::InspectorSectionId;
+    using kb::editor::InspectorUIComponentModel;
+    using kb::scene::UIComponentType;
+
+    kb::editor::tests::Require(!InspectorUIComponentModel::IsAdvancedProperty(UIComponentType::Text, "content") &&
+            !InspectorUIComponentModel::IsAdvancedProperty(UIComponentType::Text, "fontSize") &&
+            InspectorUIComponentModel::IsAdvancedProperty(UIComponentType::Text, "localizationKey") &&
+            InspectorUIComponentModel::IsAdvancedProperty(UIComponentType::Text, "characterSpacing") &&
+            !InspectorUIComponentModel::IsAdvancedProperty(UIComponentType::Image, "color") &&
+            InspectorUIComponentModel::IsAdvancedProperty(UIComponentType::Image, "fillAmount") &&
+            !InspectorUIComponentModel::IsAdvancedProperty(UIComponentType::Button, "submitOnRelease"),
+        "A Text keeps its words, font and size up front and an Image its picture and colour; the expert rows are advanced");
+
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity widget = scene.Entities().CreateObject().Entity();
+    kb::scene::ApplySceneUIComponents(scene.Components().UI(), widget, kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Button));
+    const kb::scene::SceneEntity other = scene.Entities().CreateObject().Entity();
+    kb::scene::ApplySceneUIComponents(scene.Components().UI(), other, kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Button));
+
+    const std::vector<kb::editor::InspectorUIPropertyRow> rows = InspectorUIComponentModel::Properties(scene, widget, UIComponentType::Text);
+    bool namesAgree = !rows.empty();
+    bool advancedLast = true;
+    bool seenAdvanced = false;
+    for (std::size_t index = 0U; index < rows.size(); ++index) {
+        namesAgree = namesAgree && InspectorUIComponentModel::PropertyNameAt(UIComponentType::Text, static_cast<int>(index)) == rows[index].name;
+        seenAdvanced = seenAdvanced || rows[index].advanced;
+        advancedLast = advancedLast && (!seenAdvanced || rows[index].advanced);
+    }
+    kb::editor::tests::Require(namesAgree && advancedLast && InspectorUIComponentModel::PropertyNameAt(UIComponentType::Text, static_cast<int>(rows.size())).empty() &&
+            InspectorUIComponentModel::PropertyNameAt(UIComponentType::Selectable, 0) == "onClick",
+        "A row's property name follows the order of the Inspector, with the expert rows last");
+    const auto sizeRow = std::ranges::find_if(rows, [](const kb::editor::InspectorUIPropertyRow& row) { return row.name == "fontSize"; });
+    kb::editor::tests::Require(sizeRow != rows.end() && sizeRow->unit == "px" && !sizeRow->advanced, "The font size is in pixels");
+
+    const InspectorSectionId textSection = InspectorUIComponentModel::Section(UIComponentType::Text);
+    const InspectorPropertyId textProperty = InspectorUIComponentModel::Property(UIComponentType::Text);
+    kb::editor::tests::Require(!InspectorFieldGuide::Tooltip(textSection, textProperty, 0).empty() &&
+            !InspectorFieldGuide::Tooltip(InspectorUIComponentModel::Section(UIComponentType::Selectable), InspectorUIComponentModel::Property(UIComponentType::Selectable), 0).empty() &&
+            !InspectorFieldGuide::Tooltip(InspectorUIComponentModel::Section(UIComponentType::Button), InspectorUIComponentModel::Property(UIComponentType::Button), 0).empty(),
+        "The words of a Text, the click of a Selectable and a Button have help texts");
+
+    // Reset puts a Text back to the plain component (keeping its font choice); Copy and Paste move its settings to another Text.
+    kb::scene::UIComponentSet plain;
+    kb::editor::tests::Require(kb::scene::AddUIComponent(plain, UIComponentType::Text) && plain.text.has_value(), "A plain Text component exists");
+    kb::scene::UIText* text = scene.Components().UI().TryGet<kb::scene::UIText>(widget);
+    kb::editor::tests::Require(text != nullptr, "The button preset has a Text");
+    text->fontSize = plain.text->fontSize + 11.0F;
+    text->richText = !plain.text->richText;
+    kb::editor::tests::Require(InspectorComponentDefaults::Supports(textSection) && InspectorComponentDefaults::CopyComponent(scene, widget, textSection) &&
+            InspectorComponentDefaults::CanPaste(textSection) && !InspectorComponentDefaults::CanPaste(InspectorUIComponentModel::Section(UIComponentType::Selectable)),
+        "A UI component can be copied, and only a Text takes what a Text gave");
+    kb::editor::tests::Require(InspectorComponentDefaults::PasteComponent(scene, other, textSection) &&
+            scene.Components().UI().TryGet<kb::scene::UIText>(other)->fontSize == plain.text->fontSize + 11.0F &&
+            scene.Components().UI().TryGet<kb::scene::UIText>(other)->richText == !plain.text->richText,
+        "Paste writes the copied settings into the other Text");
+    kb::editor::tests::Require(InspectorComponentDefaults::ResetComponent(scene, widget, textSection) &&
+            scene.Components().UI().TryGet<kb::scene::UIText>(widget)->fontSize == plain.text->fontSize &&
+            scene.Components().UI().TryGet<kb::scene::UIText>(widget)->richText == plain.text->richText,
+        "Reset puts the Text back to the plain component");
+}
+
+// The label column grows to the widest label measured for the object shown, within a share of the row, and starts over
+// for another object or language.
+void RunInspectorLabelColumnTest() {
+    namespace style = kb::editor::panel_style;
+    const RECT row{ 0, 0, 400, 26 };
+    style::BeginInspectorLabelMeasure(1ULL, "en");
+    style::BeginInspectorLabelMeasure(2ULL, "en");
+    kb::editor::tests::Require(style::InspectorWidestLabel() == 0 && style::InspectorLabelColumnRight(row) == 180,
+        "Before any label is measured the column is 45 percent of the row");
+    style::NoteInspectorLabelWidth(40);
+    kb::editor::tests::Require(style::InspectorLabelColumnRight(row) == 144, "A short label never takes the column below 36 percent");
+    style::NoteInspectorLabelWidth(120);
+    style::NoteInspectorLabelWidth(90);
+    const int fitted = style::InspectorLabelColumnRight(row);
+    kb::editor::tests::Require(style::InspectorWidestLabel() == 120 && fitted > 144 && fitted < 220 && fitted >= 120 + style::kRowPadX,
+        "The column follows the widest label and leaves room for the reset arrow");
+    style::NoteInspectorLabelWidth(900);
+    kb::editor::tests::Require(style::InspectorLabelColumnRight(row) == 220, "A very long label never takes the column past 55 percent");
+    style::BeginInspectorLabelMeasure(2ULL, "en");
+    kb::editor::tests::Require(style::InspectorWidestLabel() == 900, "The same object and language keep what was measured");
+    style::BeginInspectorLabelMeasure(2ULL, "de");
+    kb::editor::tests::Require(style::InspectorWidestLabel() == 0, "Another language measures again");
+    style::NoteInspectorLabelWidth(50);
+    style::BeginInspectorLabelMeasure(3ULL, "de");
+    kb::editor::tests::Require(style::InspectorWidestLabel() == 0, "Another object measures again");
+}
+
 void RunJointPresetTest() {
     using kb::editor::ApplyJointPreset;
     using kb::editor::JointPreset;
@@ -3296,6 +3536,109 @@ void RunJointPresetTest() {
         named = named && !kb::editor::JointPresetName(static_cast<JointPreset>(preset)).empty();
     }
     kb::editor::tests::Require(named, "Every preset has a name");
+}
+
+// The Preset row names the setup the joint amounts to, and the plain rows write the right underlying values.
+void RunJointPlainRowsTest() {
+    using kb::editor::ApplyJointPreset;
+    using kb::editor::InspectorPhysicsModel;
+    using kb::editor::JointPreset;
+    using kb::editor::MatchJointPreset;
+    using kb::scene::JointType;
+
+    for (int index = 0; index < kb::editor::kJointPresetCount; ++index) {
+        kb::scene::JointComponent joint;
+        joint.anchor = { 1.0F, 2.0F, 3.0F };
+        ApplyJointPreset(joint, static_cast<JointPreset>(index));
+        const std::optional<JointPreset> match = MatchJointPreset(joint);
+        kb::editor::tests::Require(match.has_value() && static_cast<int>(*match) == index,
+            "A joint that a preset just set is named after that preset, whatever its anchors");
+    }
+    kb::scene::JointComponent door;
+    ApplyJointPreset(door, JointPreset::Door);
+    door.maxLimit = 100.0F;
+    kb::editor::tests::Require(!MatchJointPreset(door).has_value() && !MatchJointPreset(kb::scene::JointComponent{}).has_value(),
+        "A joint changed after a preset, and a fresh one, are Custom");
+
+    // Door: "Opens up to" is the same angle to each side.
+    kb::scene::JointComponent hinge;
+    hinge.type = JointType::Hinge;
+    kb::editor::tests::Require(InspectorPhysicsModel::ApplyFloat(hinge, InspectorPhysicsModel::JointOpensRow, 70.0F) && hinge.maxLimit == 70.0F && hinge.minLimit == -70.0F,
+        "Opens up to turns the limit into the same angle either way");
+    kb::editor::tests::Require(InspectorPhysicsModel::ApplyFloat(hinge, InspectorPhysicsModel::JointOpensRow, 400.0F) && hinge.maxLimit == 180.0F && hinge.minLimit == -180.0F,
+        "Opens up to stops at half a turn");
+    float shown = 0.0F;
+    kb::editor::tests::Require(InspectorPhysicsModel::ReadFloat(hinge, InspectorPhysicsModel::JointOpensRow, shown) && shown == 180.0F,
+        "Opens up to reads the angle back");
+
+    // Sliding door: the travel and the motor speed.
+    kb::scene::JointComponent slider;
+    ApplyJointPreset(slider, JointPreset::SlidingDoor);
+    kb::editor::tests::Require(InspectorPhysicsModel::ApplyFloat(slider, InspectorPhysicsModel::JointSlidesRow, 2.5F) && slider.maxLimit == 2.5F && slider.minLimit == 0.0F &&
+            InspectorPhysicsModel::ApplyFloat(slider, InspectorPhysicsModel::JointSlidesRow, -1.0F) && slider.maxLimit == 0.0F,
+        "Slides up to sets the travel from the closed pose and never goes negative");
+    kb::editor::tests::Require(slider.motor.force == 0.0F && InspectorPhysicsModel::ApplyFloat(slider, InspectorPhysicsModel::JointMotorSpeedRow, 0.5F) &&
+            slider.motor.targetVelocity == 0.5F && slider.motor.force > 0.0F,
+        "A motor speed switches the motor on by giving it a force");
+    const float startForce = slider.motor.force;
+    kb::editor::tests::Require(InspectorPhysicsModel::ApplyFloat(slider, InspectorPhysicsModel::JointMotorSpeedRow, 1.5F) && slider.motor.targetVelocity == 1.5F && slider.motor.force == startForce,
+        "A second speed keeps the force");
+    kb::editor::tests::Require(InspectorPhysicsModel::ApplyFloat(slider, InspectorPhysicsModel::JointMotorSpeedRow, 0.0F) && slider.motor.targetVelocity == 0.0F && slider.motor.force == 0.0F,
+        "A speed of zero switches the motor off");
+
+    // Rope: the longest length.
+    kb::scene::JointComponent rope;
+    ApplyJointPreset(rope, JointPreset::Rope);
+    kb::editor::tests::Require(InspectorPhysicsModel::ApplyFloat(rope, InspectorPhysicsModel::JointLengthRow, 6.0F) && rope.maxLimit == 6.0F && rope.minLimit == 0.0F &&
+            InspectorPhysicsModel::ReadFloat(rope, InspectorPhysicsModel::JointLengthRow, shown) && shown == 6.0F,
+        "Max length writes the rope's longest length");
+
+    // Character limb: tilt and twist.
+    kb::scene::JointComponent limb;
+    ApplyJointPreset(limb, JointPreset::CharacterLimb);
+    kb::editor::tests::Require(InspectorPhysicsModel::ApplyFloat(limb, InspectorPhysicsModel::JointTiltRow, 30.0F) && limb.freedom.swing1Limit == 30.0F && limb.freedom.swing2Limit == 30.0F &&
+            InspectorPhysicsModel::ApplyFloat(limb, InspectorPhysicsModel::JointTwistRow, 20.0F) && limb.maxLimit == 20.0F && limb.minLimit == -20.0F,
+        "Tilts up to sets both swing limits and Twists up to the twist either way");
+
+    // The direction is a choice among the three axes; anything else reads Custom and starts over from X.
+    kb::scene::JointComponent direction;
+    direction.axis = { 0.0F, 1.0F, 0.0F };
+    const int directionRow = InspectorPhysicsModel::JointDirectionRow;
+    kb::editor::tests::Require(InspectorPhysicsModel::KindOf(kb::editor::PhysicsComponentKind::Joint, directionRow) == kb::editor::PhysicsFieldKind::Enum &&
+            InspectorPhysicsModel::Fields(direction)[static_cast<std::size_t>(directionRow)].value == InspectorPhysicsModel::Fields(kb::scene::JointComponent{})[static_cast<std::size_t>(directionRow)].value,
+        "The direction row is a choice and the default axis is Y");
+    kb::editor::tests::Require(InspectorPhysicsModel::CycleEnum(direction, directionRow) && direction.axis.z == 1.0F && direction.axis.y == 0.0F &&
+            InspectorPhysicsModel::CycleEnum(direction, directionRow) && direction.axis.x == 1.0F && direction.axis.z == 0.0F &&
+            InspectorPhysicsModel::CycleEnum(direction, directionRow) && direction.axis.y == 1.0F,
+        "The direction cycles Y, Z, X");
+    direction.axis = { 1.0F, 1.0F, 0.0F };
+    const std::string custom = InspectorPhysicsModel::Fields(direction)[static_cast<std::size_t>(directionRow)].value;
+    kb::editor::tests::Require(!custom.empty() && custom != InspectorPhysicsModel::Fields(kb::scene::JointComponent{})[static_cast<std::size_t>(directionRow)].value &&
+            InspectorPhysicsModel::CycleEnum(direction, directionRow) && direction.axis.x == 1.0F && direction.axis.y == 0.0F,
+        "A diagonal axis reads Custom and the next choice is X");
+
+    // The plain rows are labelled per kind, carry a unit and a help text, and reset like any other row.
+    kb::scene::JointComponent probe;
+    probe.type = JointType::Slider;
+    const auto sliderRows = InspectorPhysicsModel::Fields(probe);
+    probe.type = JointType::Hinge;
+    const auto hingeRows = InspectorPhysicsModel::Fields(probe);
+    kb::editor::tests::Require(sliderRows[static_cast<std::size_t>(directionRow)].label != hingeRows[static_cast<std::size_t>(directionRow)].label &&
+            hingeRows[static_cast<std::size_t>(InspectorPhysicsModel::JointOpensRow)].unit == "\xC2\xB0" &&
+            sliderRows[static_cast<std::size_t>(InspectorPhysicsModel::JointSlidesRow)].unit == "m" &&
+            sliderRows[static_cast<std::size_t>(InspectorPhysicsModel::JointMotorSpeedRow)].unit == "m/s" &&
+            hingeRows[static_cast<std::size_t>(InspectorPhysicsModel::JointMotorSpeedRow)].unit == "\xC2\xB0/s" &&
+            !hingeRows[static_cast<std::size_t>(InspectorPhysicsModel::JointOpensRow)].tooltip.empty() &&
+            !sliderRows[static_cast<std::size_t>(InspectorPhysicsModel::JointMotorSpeedRow)].tooltip.empty(),
+        "The plain rows are named for the kind of joint, carry their unit and say what they do");
+    kb::scene::JointComponent reset;
+    ApplyJointPreset(reset, JointPreset::Door);
+    const std::vector<int> changed = InspectorPhysicsModel::ChangedRows(reset);
+    const auto marked = [&changed](int row) { return std::find(changed.begin(), changed.end(), row) != changed.end(); };
+    kb::editor::tests::Require(marked(InspectorPhysicsModel::JointOpensRow) && marked(10) && marked(11) && marked(0),
+        "After a preset the plain row and the raw limits it stands for are marked as changed");
+    kb::editor::tests::Require(InspectorPhysicsModel::ResetRow(reset, InspectorPhysicsModel::JointOpensRow) && reset.maxLimit == 0.0F && reset.minLimit == 0.0F,
+        "Resetting Opens up to puts both limits back");
 }
 
 // The hover help, units and slider ranges of the rows.
@@ -3350,7 +3693,7 @@ void RunInspectorResetMarkerAndMenuStateTest() {
     kb::editor::tests::Require(state.IsComponentMenuOpen(InspectorSectionId::Camera) && !state.IsComponentMenuOpen(InspectorSectionId::Light), "The component menu opens under one section");
     state.ToggleMenu(InspectorMenuKind::JointPresets, InspectorSectionId::Joint);
     kb::editor::tests::Require(!state.IsComponentMenuOpen(InspectorSectionId::Camera) && state.IsMenuOpen(InspectorMenuKind::JointPresets, InspectorSectionId::Joint),
-        "Opening the quick setups closes the component menu");
+        "Opening the presets closes the component menu");
     state.ToggleMenu(InspectorMenuKind::JointPresets, InspectorSectionId::Joint);
     kb::editor::tests::Require(!state.IsMenuOpen(InspectorMenuKind::JointPresets, InspectorSectionId::Joint), "Toggling the open list closes it");
     state.ToggleComponentMenu(InspectorSectionId::Light);
@@ -3927,7 +4270,11 @@ void RunEditorInspectorTests() {
     RunInspectorAdvancedFoldoutStateTest();
     RunInspectorPhysicsResetTest();
     RunInspectorComponentDefaultsTest();
+    RunInspectorMoreComponentDefaultsTest();
+    RunInspectorLabelColumnTest();
+    RunInspectorUIComponentMenuTest();
     RunJointPresetTest();
+    RunJointPlainRowsTest();
     RunInspectorFieldHelpTest();
     RunInspectorResetMarkerAndMenuStateTest();
     RunInspectorDisclosureAnimationTest();

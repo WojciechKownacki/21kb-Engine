@@ -42,11 +42,35 @@ constexpr int kDividerHeight = 1;
 constexpr int kCheckboxSize = 16;
 constexpr int kTextBaselineOffsetY = 1;
 
-// Where every Inspector row's label column ends: 45% of the row,
-// so long names ("Atmosphere Thickness", "Sun Size Convergence") fit at
-// the usual panel width instead of being cut.
+// The widest label the Inspector has drawn for the object it shows, in pixels. Rows note their label as they paint
+// (NoteInspectorLabelWidth), and the panel starts over when another object or language is shown.
+[[nodiscard]] inline int& InspectorWidestLabel() noexcept {
+    static int widest = 0;
+    return widest;
+}
+
+inline void NoteInspectorLabelWidth(int pixels) noexcept {
+    InspectorWidestLabel() = std::max(InspectorWidestLabel(), pixels);
+}
+
+inline void BeginInspectorLabelMeasure(unsigned long long subject, std::string_view language) {
+    static unsigned long long lastSubject = 0ULL;
+    static std::string lastLanguage;
+    if (subject != lastSubject || language != lastLanguage) {
+        lastSubject = subject;
+        lastLanguage = std::string{ language };
+        InspectorWidestLabel() = 0;
+    }
+}
+
+// Where every Inspector row's label column ends: where the widest label of the panel needs it to, with room for the
+// reset arrow, but never less than 36% or more than 55% of the row so that the values keep their share. Before any
+// label was measured it is 45% of the row.
 [[nodiscard]] inline int InspectorLabelColumnRight(RECT row) noexcept {
-    return row.left + (row.right - row.left) * 45 / 100;
+    const int width = static_cast<int>(row.right - row.left);
+    constexpr int kLabelTrailing = kRowPadX + 24;
+    const int wanted = InspectorWidestLabel() > 0 ? InspectorWidestLabel() + kLabelTrailing : width * 45 / 100;
+    return row.left + std::clamp(wanted, width * 36 / 100, width * 55 / 100);
 }
 constexpr int kSectionDividerInset = 8;
 constexpr float kSectionCornerRadius = 4.0F;
