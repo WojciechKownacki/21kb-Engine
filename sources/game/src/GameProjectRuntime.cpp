@@ -17,6 +17,7 @@
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
+#include "engine/scene/SceneNavigation.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneLightProbeAccess.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
@@ -428,6 +429,7 @@ bool ReadMountedGameProjectRuntime(
     packaged.simulation = manifest.settings.simulation;
     packaged.masterVolume = manifest.settings.masterVolume;
     packaged.tags = manifest.settings.tags;
+    packaged.navigationAreas = manifest.settings.navigationAreas;
     for (const kb::project::ProjectPluginReference& plugin : packaged.descriptor.plugins) {
         if (plugin.enabled && !plugin.name.empty()) {
             packaged.requiredModules.push_back(plugin.name);
@@ -755,9 +757,11 @@ bool LoadGameProjectScene(
         return false;
     }
     scene.Runtime().ApplyProjectSimulation(runtime.simulation);
-    // The master gain, and the tags every scene of the project starts from, before any scene is loaded.
+    // The master gain, and the tags and navigation areas every scene of the project starts from, before any scene
+    // is loaded.
     static_cast<void>(kb::audio::AudioPlayback::SetMasterVolume(scene, runtime.masterVolume));
     static_cast<void>(scene.Tags().SetProjectDefinitions(runtime.tags));
+    kb::scene::SceneNavigation{ scene }.SetAreaDefinitions(runtime.navigationAreas);
     scene.LoadedContent().ReportLoadProgress(0.4F);
 
     if (!runtime.sceneReference.empty() && runtime.sceneReference.front() == '/') {

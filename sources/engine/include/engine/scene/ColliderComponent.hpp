@@ -40,6 +40,8 @@ struct ColliderComponent {
     std::uint32_t layer = 0x7FFFFFFFU;
     // Static triangle geometry in a CollisionMesh asset; zero for primitive shapes.
     std::uint64_t meshAssetId = 0;
+    // Whether a static collider adds its shape to a navigation mesh bake; off leaves it out of every bake.
+    bool affectsNavigation = true;
 };
 
 } // namespace kb::scene

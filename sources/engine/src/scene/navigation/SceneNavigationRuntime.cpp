@@ -587,6 +587,61 @@ float SceneNavigation::AreaCost(NavAreaId area) const noexcept {
     return navigation.polygons ? navigation.polygons->AreaCost(area) : 1.0F;
 }
 
+void SceneNavigation::SetAreaDefinitions(std::span<const NavAreaDefinition> areas) {
+    SceneNavigationState& navigation = SceneAccess::State(scene_).navigation;
+    navigation.areaDefinitions.assign(areas.begin(), areas.begin() + static_cast<std::ptrdiff_t>(std::min<std::size_t>(areas.size(), kNavAreaCount)));
+    nav::NavMeshRuntime& polygons = Polygons(navigation);
+    NavAreaMask blocked = 0U;
+    for (std::uint32_t area = 0U; area < kNavAreaCount; ++area) {
+        const float cost = area < navigation.areaDefinitions.size() ? navigation.areaDefinitions[area].cost : 1.0F;
+        if (cost == 0.0F) blocked |= NavAreaBit(static_cast<NavAreaId>(area));
+        polygons.SetAreaCost(static_cast<NavAreaId>(area), cost == 0.0F ? 1.0F : cost);
+    }
+    polygons.SetBlockedAreas(blocked);
+}
+
+const std::vector<NavAreaDefinition>& SceneNavigation::AreaDefinitions() const noexcept {
+    return SceneAccess::State(scene_).navigation.areaDefinitions;
+}
+
+std::optional<NavAreaId> SceneNavigation::FindArea(std::string_view name) const noexcept {
+    return FindNavArea(SceneAccess::State(scene_).navigation.areaDefinitions, name);
+}
+
+std::vector<NavAreaDefinition> DefaultNavAreaDefinitions() {
+    return {
+        NavAreaDefinition{ .name = "Walkable", .colour = 0x8CFF00U, .cost = 1.0F },
+        NavAreaDefinition{ .name = "Road", .colour = 0xB0B0B0U, .cost = 1.0F },
+        NavAreaDefinition{ .name = "Grass", .colour = 0x2E9E3EU, .cost = 2.0F },
+        NavAreaDefinition{ .name = "Water", .colour = 0x2F80EDU, .cost = 10.0F },
+        NavAreaDefinition{ .name = "Not walkable", .colour = 0xE03C31U, .cost = 0.0F },
+    };
+}
+
+std::optional<NavAreaId> FindNavArea(std::span<const NavAreaDefinition> areas, std::string_view name) noexcept {
+    const auto lower = [](char value) { return value >= 'A' && value <= 'Z' ? static_cast<char>(value - 'A' + 'a') : value; };
+    for (std::size_t area = 0U; area < areas.size() && area < kNavAreaCount; ++area) {
+        const std::string& candidate = areas[area].name;
+        if (!candidate.empty() && candidate.size() == name.size() &&
+            std::equal(candidate.begin(), candidate.end(), name.begin(), [&](char a, char b) { return lower(a) == lower(b); })) {
+            return static_cast<NavAreaId>(area);
+        }
+    }
+    return std::nullopt;
+}
+
+bool AreNavAreaDefinitionsValid(std::span<const NavAreaDefinition> areas) noexcept {
+    if (areas.size() > kNavAreaCount) return false;
+    for (std::size_t area = 0U; area < areas.size(); ++area) {
+        const NavAreaDefinition& definition = areas[area];
+        if (definition.name.empty() || definition.colour > 0xFFFFFFU || !std::isfinite(definition.cost) || definition.cost < 0.0F ||
+            FindNavArea(areas.first(area), definition.name).has_value()) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void SceneNavigation::ConfigureCrowd(const NavigationCrowdSettings& settings) {
     if (!std::isfinite(settings.nearDistance) || settings.nearDistance < 0.0F || settings.farPathOptimizationInterval == 0U ||
         settings.maxPathRequestsPerStep == 0U || !std::isfinite(settings.neighbourRangeRadii) || settings.neighbourRangeRadii <= 0.0F ||

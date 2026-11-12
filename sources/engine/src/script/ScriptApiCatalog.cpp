@@ -241,6 +241,7 @@ constexpr auto kLuaBindings = std::to_array<ScriptApiCatalogLuaBindingDefinition
     { "Navigation", "Raycast", "Navigation.Raycast", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Navigation", "NearestPoint", "Navigation.NearestPoint", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Navigation", "SetAreaCost", "Navigation.SetAreaCost", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
+    { "Navigation", "FindArea", "Navigation.FindArea", ScriptApiCatalogLuaReturnKind::SingleOutput, "area" },
     { "", "Log", "Log", ScriptApiCatalogLuaReturnKind::Default, "" },
 });
 

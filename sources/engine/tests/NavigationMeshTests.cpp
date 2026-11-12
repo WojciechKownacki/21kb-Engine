@@ -7,6 +7,7 @@
 #include "engine/navigation/NavGeometryCollector.hpp"
 #include "engine/navigation/NavMeshAsset.hpp"
 #include "engine/navigation/NavMeshBuild.hpp"
+#include "engine/project/ProjectSettings.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/Navigation.hpp"
 #include "engine/scene/Scene.hpp"
@@ -32,6 +33,8 @@
 #include "engine/world/WorldPartitionRuntime.hpp"
 #include "scene/asset/io/SceneAssetBinaryIO.hpp"
 #include "scene/asset/io/SceneAssetComponentCodec.hpp"
+#include "scene/asset/io/components/SceneAssetPhysicsComponentCodec.hpp"
+#include "scene/asset/io/components/SceneAssetRenderComponentCodec.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -923,6 +926,137 @@ void TestDebugGeometry() {
     }
 }
 
+void TestObjectsThatDoNotAffectNavigation() {
+    const scene::ScenePrefabNodeDesc floor = Slab(-40.0, 40.0, -40.0, 40.0, 0.0);
+    const scene::ScenePrefabNodeDesc pillar = BoxNode(DVec3{ 5.0, 1.0, 5.0 }, Vec3{ 2.0F, 2.0F, 2.0F });
+    scene::ScenePrefabNodeDesc ignored = pillar;
+    ignored.components.collider->affectsNavigation = false;
+    const nav::NavMeshBakeResult bare = nav::NavMeshBuilder::Bake(Settings(), CollectNodes({ floor }));
+    const nav::NavMeshBakeResult withIgnored = nav::NavMeshBuilder::Bake(Settings(), CollectNodes({ floor, ignored }));
+    const nav::NavMeshBakeResult withPillar = nav::NavMeshBuilder::Bake(Settings(), CollectNodes({ floor, pillar }));
+    Check(bare.succeeded && withIgnored.succeeded && withPillar.succeeded && withIgnored.tiles == bare.tiles && withPillar.tiles != bare.tiles,
+        "a collider that does not affect navigation adds nothing to the bake");
+    // Switching the flag is an edit like any other: only the pillar's tiles are rebuilt, to the full bake.
+    CheckEditRebuildsItsTiles({ floor, pillar }, { floor, ignored }, "a pillar that stops affecting navigation");
+    CheckEditRebuildsItsTiles({ floor, ignored }, { floor, pillar }, "a pillar that starts affecting navigation");
+
+    // A mesh renderer is left out before its mesh is even looked for.
+    scene::ScenePrefabNodeDesc mesh;
+    mesh.name = "Mesh";
+    mesh.components.meshRenderer = scene::MeshRendererComponent{ .meshAssetId = 7U };
+    nav::NavGeometry geometry;
+    nav::NavGeometryCollectStats stats;
+    nav::CollectNavGeometry(std::vector<scene::ScenePrefabNodeDesc>{ mesh }, Settings(), nullptr, geometry, stats);
+    Check(stats.unresolved == 1U, "a mesh that affects navigation is looked for");
+    mesh.components.meshRenderer->affectsNavigation = false;
+    nav::NavGeometryCollectStats skipped;
+    nav::CollectNavGeometry(std::vector<scene::ScenePrefabNodeDesc>{ mesh }, Settings(), nullptr, geometry, skipped);
+    Check(skipped.unresolved == 0U && skipped.meshes == 0U, "a mesh that does not affect navigation is not collected");
+
+    // The flag survives a save and a load; files from before it load with it on.
+    const std::filesystem::path root = FreshDirectory("affects_navigation");
+    {
+        scene::Scene saved;
+        const scene::SceneObject holder = saved.Entities().CreateObject(scene::SceneObjectDesc{ .name = "Grass" });
+        saved.Components().Colliders().Set(holder.Entity(), scene::ColliderComponent{ .affectsNavigation = false });
+        saved.Components().MeshRenderers().Set(holder.Entity(), scene::MeshRendererComponent{ .affectsNavigation = false });
+        Check(scene::SceneDocumentService::Save(saved, root / "Grass.21kbscene", "Grass"), "a scene with objects that do not affect navigation saves");
+    }
+    scene::Scene loaded;
+    Check(scene::SceneDocumentService::LoadFileIntoScene(loaded, root / "Grass.21kbscene"), "that scene loads");
+    struct Found {
+        scene::Scene* scene = nullptr;
+        int off = 0;
+    } found{ .scene = &loaded };
+    loaded.Transforms().ForEach([](scene::SceneEntity entity, const scene::TransformComponent&, void* context) {
+        auto* search = static_cast<Found*>(context);
+        const scene::ColliderComponent* collider = search->scene->Components().Colliders().TryGet(entity);
+        const scene::MeshRendererComponent* renderer = search->scene->Components().MeshRenderers().TryGet(entity);
+        search->off += (collider != nullptr && !collider->affectsNavigation ? 1 : 0) + (renderer != nullptr && !renderer->affectsNavigation ? 1 : 0);
+    }, &found);
+    Check(found.off == 2, "the collider and the mesh renderer keep affecting navigation off through a save and a load");
+    std::filesystem::remove_all(root);
+    std::vector<std::uint8_t> colliderBytes;
+    scene::SceneAssetPhysicsComponentCodec::WriteCollider(colliderBytes, scene::ColliderComponent{ .affectsNavigation = false });
+    colliderBytes.pop_back();
+    scene::SceneAssetBinaryIO::ByteReader colliderReader{ colliderBytes };
+    scene::ColliderComponent oldCollider;
+    Check(scene::SceneAssetPhysicsComponentCodec::ReadCollider(colliderReader, scene::SceneDocument::AffectsNavigationFileVersion - 1U, oldCollider) &&
+        oldCollider.affectsNavigation, "a collider from an older file affects navigation");
+    std::vector<std::uint8_t> rendererBytes;
+    scene::SceneAssetRenderComponentCodec::WriteMeshRenderer(rendererBytes, scene::MeshRendererComponent{ .affectsNavigation = false });
+    rendererBytes.pop_back();
+    scene::SceneAssetBinaryIO::ByteReader rendererReader{ rendererBytes };
+    scene::MeshRendererComponent oldRenderer;
+    Check(scene::SceneAssetRenderComponentCodec::ReadMeshRenderer(rendererReader, scene::SceneDocument::AffectsNavigationFileVersion - 1U, oldRenderer) &&
+        oldRenderer.affectsNavigation, "a mesh renderer from an older file affects navigation");
+
+    // Scripts read and write the flag like any other field.
+    scene::Scene scripted;
+    const scene::SceneObject object = scripted.Entities().CreateObject(scene::SceneObjectDesc{ .name = "Scripted" });
+    scripted.Components().Colliders().Set(object.Entity(), scene::ColliderComponent{});
+    const auto set = kb::script::ScriptSceneComponentApi::SetProperty(scripted, object.Entity(), "Collider", "affectsNavigation", kb::script::ScriptValue{ false });
+    Check(set.succeeded && !scripted.Components().Colliders().TryGet(object.Entity())->affectsNavigation, "a script turns a collider's affects navigation off");
+}
+
+void TestNamedAreas() {
+    const std::vector<scene::NavAreaDefinition> defaults = scene::DefaultNavAreaDefinitions();
+    Check(defaults.size() == 5U && defaults[0].name == "Walkable" && defaults[4].name == "Not walkable" && defaults[4].cost == 0.0F &&
+        scene::AreNavAreaDefinitionsValid(defaults), "the default areas are Walkable, Road, Grass, Water and Not walkable");
+    Check(scene::FindNavArea(defaults, "water") == std::optional<scene::NavAreaId>{ 3U } && !scene::FindNavArea(defaults, "Lava").has_value(),
+        "an area name resolves to its id, whatever its letter case");
+    std::vector<scene::NavAreaDefinition> repeated = defaults;
+    repeated.push_back(scene::NavAreaDefinition{ .name = "ROAD" });
+    Check(!scene::AreNavAreaDefinitionsValid(repeated), "two areas cannot share a name");
+
+    // The list round-trips through the project's settings file; a file without it keeps the defaults.
+    const std::filesystem::path root = FreshDirectory("named_areas");
+    kb::project::ProjectSettings settings;
+    Check(settings.navigationAreas == defaults, "a new project starts with the default areas");
+    settings.navigationAreas = { scene::NavAreaDefinition{ .name = "Floor", .colour = 0x123456U, .cost = 1.0F },
+        scene::NavAreaDefinition{ .name = "Mud", .colour = 0xABCDEFU, .cost = 4.5F }, scene::NavAreaDefinition{ .name = "Pit", .colour = 0U, .cost = 0.0F } };
+    std::string error;
+    Check(kb::project::ProjectSettingsStore::Save(root / "ProjectSettings.ini", settings, error), "project settings save: " + error);
+    const kb::project::ProjectSettingsLoadResult reloaded = kb::project::ProjectSettingsStore::Load(root / "ProjectSettings.ini");
+    Check(reloaded.Succeeded() && reloaded.settings.navigationAreas == settings.navigationAreas, "named areas keep their names, colours and costs");
+    const kb::project::ProjectSettingsLoadResult missing = kb::project::ProjectSettingsStore::Load(root / "Missing.ini");
+    Check(missing.settings.navigationAreas == defaults, "settings without areas use the default areas");
+    std::filesystem::remove_all(root);
+
+    // A scene takes the project's costs: a strip of Not walkable is never entered, one of Water is walked around.
+    scene::Scene scene;
+    static_cast<void>(AddMesh(scene, BakeNodes({ Slab(-10.0, 10.0, -10.0, 10.0, 0.0) })));
+    const scene::SceneEntity strip = AddObstacle(scene, { 0.0F, 0.0F, -2.0F },
+        scene::NavObstacle{ .shape = scene::NavObstacleShape::Box, .size = { 2.0F, 2.0F, 16.0F }, .area = 3U, .carve = false });
+    const Vec3 from{ -8.0F, 0.0F, 0.0F };
+    const Vec3 to{ 8.0F, 0.0F, 0.0F };
+    Check(std::fabs(Path(scene, from, to).length - 16.0F) < 0.05F, "without the project's areas every area costs 1");
+    scene.Navigation().SetAreaDefinitions(defaults);
+    Check(scene.Navigation().FindArea("Water") == std::optional<scene::NavAreaId>{ 3U } && scene.Navigation().AreaCost(3U) == 10.0F,
+        "the scene knows the project's areas and their costs");
+    const scene::NavPathResult aroundWater = Path(scene, from, to);
+    Check(aroundWater.status == scene::NavPathStatus::Complete && aroundWater.length > 20.0F, "a costly area is walked around");
+    scene.Components().NavObstacles().TryGet(strip)->area = 2U;
+    scene.Components().NavObstacles().TryGet(strip)->size.z = 30.0F;
+    scene.Components().NavObstacles().MarkModified(strip);
+    static_cast<void>(scene.Runtime().Update(kFrame));
+    Check(Path(scene, from, to).status == scene::NavPathStatus::Complete, "a cheap area across the whole floor is crossed");
+    scene.Components().NavObstacles().TryGet(strip)->area = 4U;
+    scene.Components().NavObstacles().MarkModified(strip);
+    static_cast<void>(scene.Runtime().Update(kFrame));
+    Check(Path(scene, from, to).status != scene::NavPathStatus::Complete, "a Not walkable area across the whole floor cannot be crossed");
+
+    // Scripts name areas instead of numbering them.
+    kb::script::ScriptRuntimeHost host{ scene };
+    const kb::script::ScriptFunctionCallContext call{ .scene = &scene };
+    const kb::script::ScriptFunctionCallResult found = host.Functions().Call("Navigation.FindArea",
+        std::vector<kb::script::ScriptFunctionArgument>{ { .name = "name", .value = kb::script::ScriptValue{ std::string{ "grass" } } } }, call);
+    Check(found.Succeeded() && found.Output("found")->AsBool() && found.Output("area")->AsInt() == 2, "Navigation.FindArea resolves an area's name");
+    const kb::script::ScriptFunctionCallResult unknown = host.Functions().Call("Navigation.FindArea",
+        std::vector<kb::script::ScriptFunctionArgument>{ { .name = "name", .value = kb::script::ScriptValue{ std::string{ "Lava" } } } }, call);
+    Check(unknown.Succeeded() && !unknown.Output("found")->AsBool() && unknown.Output("area")->AsInt() == -1, "an unknown area name finds nothing");
+}
+
 void TestNavigationScriptApi() {
     // Scripts edit links through the component API and query the mesh through Navigation.*.
     scene::Scene scene;
@@ -1227,6 +1361,8 @@ void RunNavigationMeshTests() {
     TestEditsRebuildOnlyTheirTiles();
     TestBackgroundBakeMatchesTheSynchronousOne();
     TestDebugGeometry();
+    TestObjectsThatDoNotAffectNavigation();
+    TestNamedAreas();
     TestNavigationScriptApi();
     TestPlacedNavigationMesh();
     TestTilesStreamWithCells();

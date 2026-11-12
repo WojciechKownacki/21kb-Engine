@@ -333,7 +333,8 @@ constexpr auto kFunctionDocumentation = std::to_array<FunctionDocumentation>({
     { "Navigation.PathCorner", "Returns a corner of the last path Navigation.FindPath found in this scene." },
     { "Navigation.Raycast", "Walks a straight line over the navigation mesh and returns where a wall stops it." },
     { "Navigation.NearestPoint", "Returns the closest point on the navigation mesh to a position." },
-    { "Navigation.SetAreaCost", "Sets the cost multiplier of moving through a navigation area." },
+    { "Navigation.SetAreaCost", "Sets the cost multiplier of moving through a navigation area, given by its id or its name." },
+    { "Navigation.FindArea", "Returns the id of the navigation area with a name from the project settings, or -1." },
 
     { "MeshRenderer.SetMesh", "Assigns a registered mesh asset to an entity mesh renderer." },
     { "MeshRenderer.SetMaterial", "Assigns a registered material asset to every mesh section on an entity." },

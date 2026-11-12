@@ -64,6 +64,7 @@ bool SceneAssetPhysicsComponentCodec::ReadCollider(SceneAssetBinaryIO::ByteReade
     output.trigger = trigger;
     output.meshAssetId = 0;
     if (fileVersion >= 40U && !input.ReadUInt64(output.meshAssetId)) return false;
+    if (fileVersion >= SceneDocument::AffectsNavigationFileVersion && !input.ReadBool(output.affectsNavigation)) return false;
     return true;
 }
 
@@ -78,6 +79,7 @@ void SceneAssetPhysicsComponentCodec::WriteCollider(std::vector<std::uint8_t>& o
     SceneAssetBinaryIO::WriteFloat(output, collider.restitution);
     SceneAssetBinaryIO::WriteUInt32(output, collider.layer);
     SceneAssetBinaryIO::WriteUInt64(output, collider.meshAssetId);
+    SceneAssetBinaryIO::WriteUInt8(output, collider.affectsNavigation ? 1U : 0U);
 }
 
 bool SceneAssetPhysicsComponentCodec::ReadCharacterController(SceneAssetBinaryIO::ByteReader& input, CharacterControllerComponent& output) {

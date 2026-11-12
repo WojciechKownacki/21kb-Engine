@@ -109,8 +109,8 @@ public:
 
     // The sidebar groups its categories under captions: Project from the first category,
     // Editor from kEditorGroupStart, Plugins from kPluginsGroupStart.
-    static constexpr int kEditorGroupStart = 8;
-    static constexpr int kPluginsGroupStart = 10;
+    static constexpr int kEditorGroupStart = 9;
+    static constexpr int kPluginsGroupStart = 11;
     // A category row in the left sidebar (index 0 is the first category).
     [[nodiscard]] static RECT CategoryRow(const RECT& sidebar, int index) noexcept;
     // The caption above group 0 (Project), 1 (Editor) or 2 (Plugins).

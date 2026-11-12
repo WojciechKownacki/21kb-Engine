@@ -137,6 +137,11 @@ public:
     // not finite and positive.
     void SetAreaCost(NavAreaId area, float cost) noexcept;
     [[nodiscard]] float AreaCost(NavAreaId area) const noexcept;
+    // The project's named areas: sets every area's cost from the list (an area it leaves out costs 1)
+    // and blocks the areas whose cost is 0. FindArea resolves a name against the list.
+    void SetAreaDefinitions(std::span<const NavAreaDefinition> areas);
+    [[nodiscard]] const std::vector<NavAreaDefinition>& AreaDefinitions() const noexcept;
+    [[nodiscard]] std::optional<NavAreaId> FindArea(std::string_view name) const noexcept;
 
     void ConfigureCrowd(const NavigationCrowdSettings& settings);
     [[nodiscard]] NavigationCrowdSettings CrowdSettings() const noexcept;

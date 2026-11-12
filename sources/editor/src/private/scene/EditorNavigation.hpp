@@ -2,6 +2,7 @@
 
 #include "engine/navigation/NavGeometryCollector.hpp"
 #include "engine/navigation/NavMeshAsset.hpp"
+#include "engine/scene/Navigation.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "kb/render/overlay/DebugFillTriangle.hpp"
@@ -13,6 +14,7 @@
 #include <filesystem>
 #include <future>
 #include <memory>
+#include <span>
 #include <vector>
 
 namespace kb::scene {
@@ -49,15 +51,16 @@ public:
 
     [[nodiscard]] bool Visible() const noexcept { return visible_; }
     void SetVisible(bool visible) noexcept { visible_ = visible; }
-    // Replaces the drawing with the polygons of the first agent profile of `meshes`.
-    void Show(const std::vector<std::shared_ptr<const kb::navigation::NavMeshAsset>>& meshes);
+    // Replaces the drawing with the polygons of the first agent profile of `meshes`, each filled with the
+    // colour of its area in `areas` (the project's navigation areas).
+    void Show(const std::vector<std::shared_ptr<const kb::navigation::NavMeshAsset>>& meshes, std::span<const kb::scene::NavAreaDefinition> areas);
     void Clear() noexcept;
     [[nodiscard]] const std::vector<kb::render::PhysicsDebugLine>& Lines() const noexcept { return lines_; }
     [[nodiscard]] const std::vector<kb::render::DebugFillTriangle>& Fills() const noexcept { return fills_; }
     [[nodiscard]] std::size_t TriangleCount() const noexcept { return triangles_; }
     [[nodiscard]] bool HasMesh() const noexcept { return triangles_ != 0U; }
-    // The fill colour of a navigation area when the shown meshes use more than one area.
-    [[nodiscard]] static std::array<float, 3U> AreaColor(std::uint8_t area) noexcept;
+    // The fill colour of a navigation area: its colour in `areas`, or the walkable fill for an area the list leaves out.
+    [[nodiscard]] static std::array<float, 3U> AreaColor(std::span<const kb::scene::NavAreaDefinition> areas, std::uint8_t area) noexcept;
     static constexpr std::array<float, 3U> BoundsColor{ 0.78F, 0.78F, 0.78F };
     // The box edges of every visible Navigation Bounds of `scene`, relative to `origin`.
     [[nodiscard]] static std::vector<EditorNavBoundsLine> BoundsLines(const kb::scene::Scene& scene, const kb::math::DVec3& origin);

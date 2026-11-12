@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/project/ProjectDescriptor.hpp"
+#include "engine/scene/Navigation.hpp"
 
 #include <array>
 #include <cstdint>
@@ -191,6 +192,10 @@ struct ProjectSettings {
     // Physics and time
     std::string physicsLayersAsset;
     ProjectSimulationSettings simulation;
+
+    // Navigation
+    // The named navigation areas; an area's id is its position in the list. Scenes store the ids.
+    std::vector<kb::scene::NavAreaDefinition> navigationAreas = kb::scene::DefaultNavAreaDefinitions();
 
     // Crash reports
     // Where a shipped Windows game sends the crash reports its player agreed to

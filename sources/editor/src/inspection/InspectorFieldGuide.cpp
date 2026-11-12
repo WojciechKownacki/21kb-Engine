@@ -187,6 +187,8 @@ InspectorFieldHelp InspectorFieldGuide::Help(InspectorPropertyId property) {
         return Plain(EditorText("inspector.tip.meshRenderer.levelsOfDetail", "Swaps to simpler models when far away, which saves speed."));
     case P::MeshRendererMobility:
         return Plain(MobilityTip());
+    case P::MeshRendererAffectsNavigation:
+        return Plain(EditorText("inspector.tip.affectsNavigation", "Characters walk on this object or around it. Turn off for things they should ignore, such as grass or small props."));
     // Audio Source
     case P::AudioSourceClip:
         return Plain(EditorText("inspector.tip.audioSource.clip", "The sound file that plays."));

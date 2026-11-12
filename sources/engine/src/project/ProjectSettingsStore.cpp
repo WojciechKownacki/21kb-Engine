@@ -25,6 +25,7 @@ constexpr std::string_view kPhysics = "Project.Physics";
 constexpr std::string_view kTime = "Project.Time";
 constexpr std::string_view kAudio = "Project.Audio";
 constexpr std::string_view kTags = "Project.Tags";
+constexpr std::string_view kNavigation = "Project.Navigation";
 constexpr std::string_view kCrashReports = "Project.CrashReports";
 
 [[nodiscard]] std::string_view LightingPathName(ProjectSceneLightingPath path) noexcept {
@@ -319,6 +320,22 @@ ProjectSettingsLoadResult ProjectSettingsStore::Load(const std::filesystem::path
     }
     simulation.timeScale = ReadBoundedFloat(document, kTime, "TimeScale", defaults.simulation.timeScale,
         0.0F, kProjectTimeScaleMax);
+    // The areas as a count and a name, colour and cost per area; a file without them keeps the default areas
+    // and a list that is not valid is ignored.
+    if (const std::optional<std::int64_t> areaCount = document.GetInt(kNavigation, "AreaCount");
+        areaCount.has_value() && *areaCount >= 0 && *areaCount <= static_cast<std::int64_t>(kb::scene::kNavAreaCount)) {
+        std::vector<kb::scene::NavAreaDefinition> areas(static_cast<std::size_t>(*areaCount));
+        for (std::size_t index = 0U; index < areas.size(); ++index) {
+            const std::string prefix = "Area" + std::to_string(index);
+            areas[index].name = ReadString(document, kNavigation, prefix + "Name", "");
+            areas[index].colour = static_cast<std::uint32_t>(std::clamp<std::int64_t>(
+                document.GetInt(kNavigation, prefix + "Colour").value_or(-1), -1, 0xFFFFFF + 1));
+            areas[index].cost = document.GetFloat(kNavigation, prefix + "Cost").value_or(-1.0F);
+        }
+        if (kb::scene::AreNavAreaDefinitionsValid(areas)) {
+            result.settings.navigationAreas = std::move(areas);
+        }
+    }
     result.settings.crashReportUploadUrl = ReadString(document, kCrashReports, "UploadUrl", defaults.crashReportUploadUrl);
     return result;
 }
@@ -400,6 +417,18 @@ bool ProjectSettingsStore::Save(
         document.SetString(kTags, "Tag" + std::to_string(index), settings.tags[index]);
     }
     for (std::size_t index = tagCount; document.Remove(kTags, "Tag" + std::to_string(index)); ++index) {
+    }
+    const std::size_t areaCount = std::min<std::size_t>(settings.navigationAreas.size(), kb::scene::kNavAreaCount);
+    document.SetInt(kNavigation, "AreaCount", static_cast<std::int64_t>(areaCount));
+    for (std::size_t index = 0U; index < areaCount; ++index) {
+        const std::string prefix = "Area" + std::to_string(index);
+        document.SetString(kNavigation, prefix + "Name", settings.navigationAreas[index].name);
+        document.SetInt(kNavigation, prefix + "Colour", static_cast<std::int64_t>(settings.navigationAreas[index].colour));
+        document.SetFloat(kNavigation, prefix + "Cost", settings.navigationAreas[index].cost);
+    }
+    for (std::size_t index = areaCount; document.Remove(kNavigation, "Area" + std::to_string(index) + "Name"); ++index) {
+        static_cast<void>(document.Remove(kNavigation, "Area" + std::to_string(index) + "Colour"));
+        static_cast<void>(document.Remove(kNavigation, "Area" + std::to_string(index) + "Cost"));
     }
     document.SetBool(kInput, "Enabled", settings.inputEnabled);
     document.SetString(kInput, "MappingContext", settings.inputMappingContext);

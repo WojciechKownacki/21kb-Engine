@@ -25,7 +25,8 @@ namespace {
         && lhs.materialSlotAssetIds == rhs.materialSlotAssetIds
         && lhs.materialSlotOverrideCount == rhs.materialSlotOverrideCount
         && lhs.castsShadow == rhs.castsShadow
-        && lhs.receivesShadow == rhs.receivesShadow && lhs.lodBias == rhs.lodBias && lhs.lodEnabled == rhs.lodEnabled && lhs.mobility == rhs.mobility;
+        && lhs.receivesShadow == rhs.receivesShadow && lhs.lodBias == rhs.lodBias && lhs.lodEnabled == rhs.lodEnabled && lhs.mobility == rhs.mobility
+        && lhs.affectsNavigation == rhs.affectsNavigation;
 }
 
 [[nodiscard]] bool Equal(const LightComponent& lhs, const LightComponent& rhs) noexcept {
@@ -73,7 +74,8 @@ namespace {
         && lhs.trigger == rhs.trigger
         && lhs.friction == rhs.friction
         && lhs.restitution == rhs.restitution
-        && lhs.layer == rhs.layer;
+        && lhs.layer == rhs.layer
+        && lhs.affectsNavigation == rhs.affectsNavigation;
 }
 
 [[nodiscard]] bool Equal(const TagsComponent& lhs, const TagsComponent& rhs) noexcept {

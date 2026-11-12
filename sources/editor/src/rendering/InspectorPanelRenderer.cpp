@@ -1828,13 +1828,37 @@ void PaintDeformedGeometrySection(
     y = section.Bottom() + kSectionGap;
 }
 
+// The name of a navigation area in the project's list, or its id when the list does not name it.
+[[nodiscard]] std::string NavAreaLabel(std::span<const kb::scene::NavAreaDefinition> areas, std::uint32_t area) {
+    return area < areas.size() ? areas[area].name : std::to_string(area);
+}
+
+// The areas of the project's list an agent walks on: all of them, none, or their names.
+[[nodiscard]] std::string NavAreaMaskLabel(std::span<const kb::scene::NavAreaDefinition> areas, kb::scene::NavAreaMask mask) {
+    std::string names;
+    std::size_t count = 0U;
+    for (std::size_t area = 0U; area < areas.size(); ++area) {
+        if ((mask & kb::scene::NavAreaBit(static_cast<kb::scene::NavAreaId>(area))) == 0U) continue;
+        names += (count++ == 0U ? "" : ", ") + areas[area].name;
+    }
+    if (count == 0U) return std::string{ EditorText("inspector.navAreas.none", "None") };
+    if (count == areas.size()) return std::string{ EditorText("inspector.navAreas.all", "All areas") };
+    return names;
+}
+
+// The rows the open list of navigation areas adds under a section's area row.
+[[nodiscard]] int NavAreaMenuRows(const InspectorPanelState& inspector, InspectorSectionId section, std::size_t areaCount) noexcept {
+    return inspector.IsMenuOpen(InspectorMenuKind::NavAreas, section) ? static_cast<int>(areaCount) : 0;
+}
+
 void PaintNavAgentSection(
     HDC dc,
     RECT content,
     int& y,
     const EditorTheme& theme,
     const InspectorPanelState& inspector,
-    const kb::scene::NavAgent& agent) {
+    const kb::scene::NavAgent& agent,
+    std::span<const kb::scene::NavAreaDefinition> areas) {
     SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector,
         InspectorSectionId::NavAgent, HeroIconKind::Gamepad2, EditorText("inspector.navAgent.title", "Nav Agent"), true);
     section.Field(EditorText("inspector.navAgent.radius", "Radius"), FormatFloat(agent.radius, 3), InspectorPropertyId::NavAgentRadius);
@@ -1843,7 +1867,14 @@ void PaintNavAgentSection(
     section.Field(EditorText("inspector.navAgent.acceleration", "Acceleration"), FormatFloat(agent.acceleration, 3), InspectorPropertyId::NavAgentAcceleration);
     section.Field(EditorText("inspector.navAgent.angularSpeed", "Angular Speed"), FormatFloat(agent.angularSpeedDegrees, 3), InspectorPropertyId::NavAgentAngularSpeed);
     section.Field(EditorText("inspector.navAgent.stoppingDistance", "Stopping Distance"), FormatFloat(agent.stoppingDistance, 3), InspectorPropertyId::NavAgentStoppingDistance);
-    section.Field(EditorText("inspector.navAgent.areaMask", "Area Mask"), std::to_string(agent.areaMask), InspectorPropertyId::NavAgentAreaMask);
+    const bool areasOpen = inspector.IsMenuOpen(InspectorMenuKind::NavAreas, InspectorSectionId::NavAgent);
+    section.Dropdown(EditorText("inspector.navAgent.areaMask", "Walkable Areas"), NavAreaMaskLabel(areas, agent.areaMask), InspectorPropertyId::NavAgentAreaMask, areasOpen);
+    if (areasOpen) {
+        for (std::size_t area = 0U; area < areas.size(); ++area) {
+            section.DropdownItem(areas[area].name, InspectorPropertyId::NavAgentAreaMaskItem, static_cast<int>(area),
+                (agent.areaMask & kb::scene::NavAreaBit(static_cast<kb::scene::NavAreaId>(area))) != 0U);
+        }
+    }
     section.Vec3(EditorText("inspector.navAgent.destination", "Destination"), agent.destination, InspectorPropertyId::NavAgentDestinationX, InspectorPropertyId::NavAgentDestinationY, InspectorPropertyId::NavAgentDestinationZ);
     section.Bool(EditorText("inspector.enabled", "Enabled"), agent.enabled, InspectorPropertyId::NavAgentEnabled);
     y = section.Bottom() + kSectionGap;
@@ -1855,7 +1886,8 @@ void PaintNavObstacleSection(
     int& y,
     const EditorTheme& theme,
     const InspectorPanelState& inspector,
-    const kb::scene::NavObstacle& obstacle) {
+    const kb::scene::NavObstacle& obstacle,
+    std::span<const kb::scene::NavAreaDefinition> areas) {
     SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector,
         InspectorSectionId::NavObstacle, HeroIconKind::Cube, EditorText("inspector.navObstacle.title", "Nav Obstacle"), true);
     section.Field(EditorText("inspector.navObstacle.shape", "Shape"), obstacle.shape == kb::scene::NavObstacleShape::Box
@@ -1865,7 +1897,13 @@ void PaintNavObstacleSection(
     section.Vec3(EditorText("inspector.navObstacle.size", "Size"), obstacle.size, InspectorPropertyId::NavObstacleSizeX, InspectorPropertyId::NavObstacleSizeY, InspectorPropertyId::NavObstacleSizeZ);
     section.Field(EditorText("inspector.navObstacle.radius", "Radius"), FormatFloat(obstacle.radius, 3), InspectorPropertyId::NavObstacleRadius);
     section.Field(EditorText("inspector.navObstacle.height", "Height"), FormatFloat(obstacle.height, 3), InspectorPropertyId::NavObstacleHeight);
-    section.Field(EditorText("inspector.navObstacle.area", "Area"), std::to_string(obstacle.area), InspectorPropertyId::NavObstacleArea);
+    const bool areasOpen = inspector.IsMenuOpen(InspectorMenuKind::NavAreas, InspectorSectionId::NavObstacle);
+    section.Dropdown(EditorText("inspector.navObstacle.area", "Area"), NavAreaLabel(areas, obstacle.area), InspectorPropertyId::NavObstacleArea, areasOpen);
+    if (areasOpen) {
+        for (std::size_t area = 0U; area < areas.size(); ++area) {
+            section.DropdownItem(areas[area].name, InspectorPropertyId::NavObstacleAreaItem, static_cast<int>(area), obstacle.area == area);
+        }
+    }
     section.Bool(EditorText("inspector.navObstacle.carve", "Carve"), obstacle.carve, InspectorPropertyId::NavObstacleCarve);
     section.Bool(EditorText("inspector.enabled", "Enabled"), obstacle.enabled, InspectorPropertyId::NavObstacleEnabled);
     y = section.Bottom() + kSectionGap;
@@ -2543,6 +2581,7 @@ void PaintMeshRendererSection(
     }
     section.Bool(EditorText("inspector.meshRenderer.castsShadow", "Casts Shadow"), renderer.castsShadow, InspectorPropertyId::MeshRendererCastsShadow);
     section.Bool(EditorText("inspector.meshRenderer.receivesShadow", "Receives Shadow"), renderer.receivesShadow, InspectorPropertyId::MeshRendererReceivesShadow);
+    section.Bool(EditorText("inspector.affectsNavigation", "Affects Navigation"), renderer.affectsNavigation, InspectorPropertyId::MeshRendererAffectsNavigation);
     if (inspector.IsDisclosureExpanded(InspectorDisclosureId::MeshRendererAdvanced)) {
         section.Bool(EditorText("inspector.meshRenderer.lodEnabled", "Use Levels of Detail"), renderer.lodEnabled, InspectorPropertyId::MeshRendererLodEnabled);
         section.Field(EditorText("inspector.meshRenderer.lodBias", "LOD Bias"), std::to_string(renderer.lodBias), InspectorPropertyId::MeshRendererLodBias);
@@ -4114,17 +4153,19 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         }
     }
     if (const kb::scene::NavAgent* agent = scene.Components().NavAgents().TryGet(selected); agent != nullptr) {
-        const int h = SectionHeight(inspector, InspectorSectionId::NavAgent, 9);
+        const std::vector<kb::scene::NavAreaDefinition>& areas = sceneContext.ProjectConfiguration().navigationAreas;
+        const int h = SectionHeight(inspector, InspectorSectionId::NavAgent, 9 + NavAreaMenuRows(inspector, InspectorSectionId::NavAgent, areas.size()));
         if (sectionVisible(y, h)) {
-            PaintNavAgentSection(dc, content, y, theme, inspector, *agent);
+            PaintNavAgentSection(dc, content, y, theme, inspector, *agent, areas);
         } else {
             y += h + kSectionGap;
         }
     }
     if (const kb::scene::NavObstacle* obstacle = scene.Components().NavObstacles().TryGet(selected); obstacle != nullptr) {
-        const int h = SectionHeight(inspector, InspectorSectionId::NavObstacle, 8);
+        const std::vector<kb::scene::NavAreaDefinition>& areas = sceneContext.ProjectConfiguration().navigationAreas;
+        const int h = SectionHeight(inspector, InspectorSectionId::NavObstacle, 8 + NavAreaMenuRows(inspector, InspectorSectionId::NavObstacle, areas.size()));
         if (sectionVisible(y, h)) {
-            PaintNavObstacleSection(dc, content, y, theme, inspector, *obstacle);
+            PaintNavObstacleSection(dc, content, y, theme, inspector, *obstacle, areas);
         } else {
             y += h + kSectionGap;
         }
@@ -4330,8 +4371,9 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     }
     const std::optional<kb::render::RenderMeshAssetData> mesh = LoadMeshAssetData(sceneContext, renderer.meshAssetId);
     const std::uint32_t slotCount = InspectorMeshRendererMaterialSlotModel::SlotRowCount(renderer, mesh);
-    // Mesh, material, one override per slot, the two shadow switches and, opened, the three expert rows.
-    const int fixedRows = 4 + static_cast<int>(slotCount) + (inspector.IsDisclosureExpanded(InspectorDisclosureId::MeshRendererAdvanced) ? 3 : 0);
+    // Mesh, material, one override per slot, the two shadow switches, the navigation switch and, opened, the three
+    // expert rows.
+    const int fixedRows = 5 + static_cast<int>(slotCount) + (inspector.IsDisclosureExpanded(InspectorDisclosureId::MeshRendererAdvanced) ? 3 : 0);
     const int disclosureHeight = kDisclosureRowHeight + kDividerHeight;
     return kSectionHeaderHeight + kDividerHeight
         + fixedRows * (kFieldRowHeight + kDividerHeight)
@@ -4422,10 +4464,12 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         height += SectionHeight(inspector, InspectorSectionId::DeformedGeometry, 12) + kSectionGap;
     }
     if (scene.Components().NavAgents().TryGet(selected) != nullptr) {
-        height += SectionHeight(inspector, InspectorSectionId::NavAgent, 9) + kSectionGap;
+        height += SectionHeight(inspector, InspectorSectionId::NavAgent,
+            9 + NavAreaMenuRows(inspector, InspectorSectionId::NavAgent, sceneContext.ProjectConfiguration().navigationAreas.size())) + kSectionGap;
     }
     if (scene.Components().NavObstacles().TryGet(selected) != nullptr) {
-        height += SectionHeight(inspector, InspectorSectionId::NavObstacle, 8) + kSectionGap;
+        height += SectionHeight(inspector, InspectorSectionId::NavObstacle,
+            8 + NavAreaMenuRows(inspector, InspectorSectionId::NavObstacle, sceneContext.ProjectConfiguration().navigationAreas.size())) + kSectionGap;
     }
     if (scene.Components().NavLinks().TryGet(selected) != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::NavLink, 7) + kSectionGap;
@@ -4854,6 +4898,26 @@ void AdvanceRow(int& y) noexcept {
 
 void AdvanceGroup(int& y) noexcept {
     y += kGroupRowHeight + kDividerHeight;
+}
+
+// Hit-tests a navigation area row and, while its list is open, one row per project area; an item hit carries
+// the area id as its index.
+[[nodiscard]] InspectorPanelRenderer::Hit HitNavAreaRows(const RECT& content, int& y, const InspectorPanelState& state, InspectorSectionId section,
+    InspectorPropertyId rowProperty, InspectorPropertyId itemProperty, std::size_t areaCount, int x, int yPoint) noexcept {
+    const RECT row = RowRect(content, y);
+    AdvanceRow(y);
+    if (Contains(row, x, yPoint)) return MakeHit(InspectorHitKind::Row, section, rowProperty, row);
+    if (!state.IsMenuOpen(InspectorMenuKind::NavAreas, section)) return {};
+    for (std::size_t area = 0U; area < areaCount; ++area) {
+        const RECT item = RowRect(content, y);
+        AdvanceRow(y);
+        if (Contains(item, x, yPoint)) {
+            InspectorPanelRenderer::Hit hit = MakeHit(InspectorHitKind::Row, section, itemProperty, item);
+            hit.index = static_cast<int>(area);
+            return hit;
+        }
+    }
+    return {};
 }
 
 // Hit-tests a physics component section (header "×" + one row per field). Mirrors
@@ -6248,6 +6312,10 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTestRows(const RECT& cont
                 return hit;
             }
             AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::MeshRenderer, InspectorPropertyId::MeshRendererAffectsNavigation, x, scrolledY); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            AdvanceRow(y);
             if (state.IsDisclosureExpanded(InspectorDisclosureId::MeshRendererAdvanced)) {
                 if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::MeshRenderer, InspectorPropertyId::MeshRendererLodEnabled, x, scrolledY); hit.kind != InspectorHitKind::None) {
                     return hit;
@@ -6402,14 +6470,17 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTestRows(const RECT& cont
             return hit;
         }
         if (!state.IsCollapsed(InspectorSectionId::NavAgent)) {
-            const std::array<InspectorPropertyId, 7> scalarRows{ {
+            const std::array<InspectorPropertyId, 6> scalarRows{ {
                 InspectorPropertyId::NavAgentRadius, InspectorPropertyId::NavAgentHeight, InspectorPropertyId::NavAgentMaxSpeed,
                 InspectorPropertyId::NavAgentAcceleration, InspectorPropertyId::NavAgentAngularSpeed, InspectorPropertyId::NavAgentStoppingDistance,
-                InspectorPropertyId::NavAgentAreaMask,
             } };
             for (const InspectorPropertyId property : scalarRows) {
                 if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::NavAgent, property, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
                 AdvanceRow(y);
+            }
+            if (InspectorPanelRenderer::Hit hit = HitNavAreaRows(viewport, y, state, InspectorSectionId::NavAgent, InspectorPropertyId::NavAgentAreaMask,
+                    InspectorPropertyId::NavAgentAreaMaskItem, sceneContext.ProjectConfiguration().navigationAreas.size(), x, scrolledY); hit.kind != InspectorHitKind::None) {
+                return hit;
             }
             if (InspectorPanelRenderer::Hit hit = HitVec3(RowRect(viewport, y), InspectorSectionId::NavAgent, InspectorPropertyId::NavAgentDestinationX, InspectorPropertyId::NavAgentDestinationY, InspectorPropertyId::NavAgentDestinationZ, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
             AdvanceRow(y);
@@ -6430,10 +6501,14 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTestRows(const RECT& cont
             AdvanceRow(y);
             if (InspectorPanelRenderer::Hit hit = HitVec3(RowRect(viewport, y), InspectorSectionId::NavObstacle, InspectorPropertyId::NavObstacleSizeX, InspectorPropertyId::NavObstacleSizeY, InspectorPropertyId::NavObstacleSizeZ, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
             AdvanceRow(y);
-            const std::array<InspectorPropertyId, 3> scalarRows{ { InspectorPropertyId::NavObstacleRadius, InspectorPropertyId::NavObstacleHeight, InspectorPropertyId::NavObstacleArea } };
+            const std::array<InspectorPropertyId, 2> scalarRows{ { InspectorPropertyId::NavObstacleRadius, InspectorPropertyId::NavObstacleHeight } };
             for (const InspectorPropertyId property : scalarRows) {
                 if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::NavObstacle, property, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
                 AdvanceRow(y);
+            }
+            if (InspectorPanelRenderer::Hit hit = HitNavAreaRows(viewport, y, state, InspectorSectionId::NavObstacle, InspectorPropertyId::NavObstacleArea,
+                    InspectorPropertyId::NavObstacleAreaItem, sceneContext.ProjectConfiguration().navigationAreas.size(), x, scrolledY); hit.kind != InspectorHitKind::None) {
+                return hit;
             }
             if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::NavObstacle, InspectorPropertyId::NavObstacleCarve, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
             AdvanceRow(y);

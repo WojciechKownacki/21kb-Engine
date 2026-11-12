@@ -145,6 +145,7 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
                 LibraryComponentInspectorFieldDesc{ "lodBias", "LOD Bias", "Shifts the chosen level of detail (positive = coarser, negative = finer)." },
                 LibraryComponentInspectorFieldDesc{ "lodEnabled", "LOD", "Whether levels of detail are chosen by distance; off always draws the finest level." },
                 LibraryComponentInspectorFieldDesc{ "mobility", "Mobility", "Movable or Static: a static mesh never moves while the scene runs." },
+                LibraryComponentInspectorFieldDesc{ "affectsNavigation", "Affects Navigation", "Whether this mesh adds walkable or blocking geometry to a navigation mesh bake." },
             },
         },
         LibraryComponentInspectorDesc{
@@ -197,6 +198,7 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
                 LibraryComponentInspectorFieldDesc{ "friction", "Friction", "Surface friction coefficient." },
                 LibraryComponentInspectorFieldDesc{ "restitution", "Restitution", "Bounciness - 0 absorbs all energy, 1 is a perfectly elastic bounce." },
                 LibraryComponentInspectorFieldDesc{ "layer", "Layer", "Raw collision layer bitmask this collider belongs to, matched against a query's layer mask." },
+                LibraryComponentInspectorFieldDesc{ "affectsNavigation", "Affects Navigation", "Whether this collider adds walkable or blocking geometry to a navigation mesh bake." },
             },
         },
         LibraryComponentInspectorDesc{

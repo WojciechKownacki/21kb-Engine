@@ -56,34 +56,20 @@ void CollectBoundsLines(kb::scene::SceneEntity entity, const kb::scene::Transfor
 
 } // namespace
 
-std::array<float, 3U> EditorNavigation::AreaColor(std::uint8_t area) noexcept {
-    if (area == 0U) return FillColor;
-    // Hues spread by the golden ratio, so neighbouring area ids get clearly different colours.
-    const float hue = std::fmod(static_cast<float>(area) * 0.61803398875F + 0.25F, 1.0F) * 6.0F;
-    const float fraction = hue - std::floor(hue);
-    const float high = 1.0F;
-    const float low = 0.2F;
-    const float down = high - (high - low) * fraction;
-    const float up = low + (high - low) * fraction;
-    switch (static_cast<int>(hue)) {
-    case 0: return { high, up, low };
-    case 1: return { down, high, low };
-    case 2: return { low, high, up };
-    case 3: return { low, down, high };
-    case 4: return { up, low, high };
-    default: return { high, low, down };
-    }
+std::array<float, 3U> EditorNavigation::AreaColor(std::span<const kb::scene::NavAreaDefinition> areas, std::uint8_t area) noexcept {
+    if (area >= areas.size()) return FillColor;
+    const std::uint32_t colour = areas[area].colour;
+    return { static_cast<float>((colour >> 16U) & 0xFFU) / 255.0F, static_cast<float>((colour >> 8U) & 0xFFU) / 255.0F,
+        static_cast<float>(colour & 0xFFU) / 255.0F };
 }
 
-void EditorNavigation::Show(const std::vector<std::shared_ptr<const kb::navigation::NavMeshAsset>>& meshes) {
+void EditorNavigation::Show(const std::vector<std::shared_ptr<const kb::navigation::NavMeshAsset>>& meshes,
+    std::span<const kb::scene::NavAreaDefinition> areas) {
     Clear();
     std::vector<kb::navigation::NavMeshDebugGeometry> shown;
-    std::set<std::uint8_t> areas;
     for (const std::shared_ptr<const kb::navigation::NavMeshAsset>& mesh : meshes) {
         shown.push_back(kb::navigation::NavMeshAssetDebugGeometry(mesh, 0U));
-        areas.insert(shown.back().triangleAreas.begin(), shown.back().triangleAreas.end());
     }
-    const bool colourByArea = areas.size() > 1U;
     std::set<std::pair<Corner, Corner>> drawn;
     const auto addLine = [this](const kb::math::DVec3& from, const kb::math::DVec3& to, const std::array<float, 3U>& color, float alpha) {
         if (lines_.size() < MaxLines) lines_.push_back(kb::render::PhysicsDebugLine{ .from = Lifted(from), .to = Lifted(to), .color = color, .alpha = alpha });
@@ -93,7 +79,7 @@ void EditorNavigation::Show(const std::vector<std::shared_ptr<const kb::navigati
         for (std::size_t index = 0U; index + 2U < geometry.triangles.size() && fills_.size() < MaxFillTriangles; index += 3U) {
             fills_.push_back(kb::render::DebugFillTriangle{
                 .corners = { Lifted(geometry.triangles[index]), Lifted(geometry.triangles[index + 1U]), Lifted(geometry.triangles[index + 2U]) },
-                .color = colourByArea ? AreaColor(geometry.triangleAreas[index / 3U]) : FillColor,
+                .color = AreaColor(areas, geometry.triangleAreas[index / 3U]),
                 .alpha = FillAlpha,
             });
         }

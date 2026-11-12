@@ -16,7 +16,8 @@ namespace {
         && lhs.castsShadow == rhs.castsShadow
         && lhs.receivesShadow == rhs.receivesShadow
         && lhs.layer == rhs.layer
-        && lhs.lodBias == rhs.lodBias && lhs.lodEnabled == rhs.lodEnabled && lhs.mobility == rhs.mobility;
+        && lhs.lodBias == rhs.lodBias && lhs.lodEnabled == rhs.lodEnabled && lhs.mobility == rhs.mobility
+        && lhs.affectsNavigation == rhs.affectsNavigation;
 }
 
 } // namespace
@@ -47,6 +48,7 @@ void ScenePrefabMeshRendererOverrideReporter::Append(SceneComponents components,
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "meshRenderer.lodBias", std::to_string(actual->lodBias), ScenePrefabOverrideFlag::MeshRenderer);
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "meshRenderer.lodEnabled", ScenePrefabOverrideValueFormatter::ToString(actual->lodEnabled), ScenePrefabOverrideFlag::MeshRenderer);
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "meshRenderer.mobility", std::to_string(static_cast<int>(actual->mobility)), ScenePrefabOverrideFlag::MeshRenderer);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "meshRenderer.affectsNavigation", ScenePrefabOverrideValueFormatter::ToString(actual->affectsNavigation), ScenePrefabOverrideFlag::MeshRenderer);
         return;
     }
     if (actual->meshAssetId != expected->meshAssetId) {
@@ -80,6 +82,9 @@ void ScenePrefabMeshRendererOverrideReporter::Append(SceneComponents components,
     }
     if (actual->mobility != expected->mobility) {
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "meshRenderer.mobility", std::to_string(static_cast<int>(actual->mobility)), ScenePrefabOverrideFlag::MeshRenderer);
+    }
+    if (actual->affectsNavigation != expected->affectsNavigation) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "meshRenderer.affectsNavigation", ScenePrefabOverrideValueFormatter::ToString(actual->affectsNavigation), ScenePrefabOverrideFlag::MeshRenderer);
     }
 }
 

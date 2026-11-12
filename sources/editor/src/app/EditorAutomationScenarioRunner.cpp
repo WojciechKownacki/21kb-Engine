@@ -36,6 +36,8 @@
 #include "assets/EditorAssetBrowserHitPayloadResolver.hpp"
 #include "rendering/EditorSettingsPanelRenderer.hpp"
 #include "rendering/ProjectSettingsPanelRenderer.hpp"
+#include "rendering/ProjectSettingsPanelLayout.hpp"
+#include "app/project_settings/EditorProjectSettingsPointerController.hpp"
 #include "engine/scene/SceneLocalization.hpp"
 #include "docking/EditorDockModel.hpp"
 #include "docking/EditorWorkspaceArrangement.hpp"
@@ -1160,6 +1162,104 @@ ReadScriptValue(
         // The bake runs on a worker; the scenario waits for it like the editor's frame loop collects it.
         const bool baked = context.BakeNavigation() && context.WaitForNavigationBake();
         return StepOutcome{ baked, std::to_string(context.Navigation().TriangleCount()) + " triangle(s) shown" };
+    }
+    if (operation == "navigation_inspector_click") {
+        // A click on a navigation row of the Inspector of an object, through the panel's own hit test: the Affects
+        // Navigation switch of its Mesh Renderer or Collider, or the area row of its Nav Obstacle or Nav Agent and,
+        // with an index, the area of the opened list; "expect" is the obstacle's area or the agent's area mask after it.
+        const auto alias = StringMember(step, "entity", error);
+        const auto row = StringMember(step, "row", error);
+        if (!alias || !row) return StepOutcome{ false, error };
+        context.SelectEntity(ResolveEntity(state, *alias));
+        const int index = static_cast<int>(NumberMember(step, "index", error, false).value_or(-1.0));
+        if (*row == "mesh_affects_navigation") {
+            return StepOutcome{ state.automation.InspectorClickRow(InspectorPropertyId::MeshRendererAffectsNavigation, -1, InspectorHitKind::BoolField,
+                InspectorSectionId::MeshRenderer), *row };
+        }
+        if (*row == "collider_affects_navigation") {
+            return StepOutcome{ state.automation.InspectorClickRow(InspectorPropertyId::ColliderField, 14, InspectorHitKind::BoolField,
+                InspectorSectionId::Collider), *row };
+        }
+        const bool obstacle = *row == "obstacle_area";
+        if (!obstacle && *row != "agent_areas") return StepOutcome{ false, "unknown navigation inspector row" };
+        const InspectorSectionId section = obstacle ? InspectorSectionId::NavObstacle : InspectorSectionId::NavAgent;
+        if (!context.Inspector().IsMenuOpen(InspectorMenuKind::NavAreas, section) &&
+            !state.automation.InspectorClickRow(obstacle ? InspectorPropertyId::NavObstacleArea : InspectorPropertyId::NavAgentAreaMask, -1,
+                InspectorHitKind::Row, section)) {
+            return StepOutcome{ false, "the area row is not visible" };
+        }
+        if (index < 0) return StepOutcome{ context.Inspector().IsMenuOpen(InspectorMenuKind::NavAreas, section), *row + " opened" };
+        if (!state.automation.InspectorClickRow(obstacle ? InspectorPropertyId::NavObstacleAreaItem : InspectorPropertyId::NavAgentAreaMaskItem,
+                index, InspectorHitKind::Row, section)) {
+            return StepOutcome{ false, "area " + std::to_string(index) + " is not in the open list" };
+        }
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        const kb::scene::NavObstacle* navObstacle = context.Scene().Components().NavObstacles().TryGet(entity);
+        const kb::scene::NavAgent* navAgent = context.Scene().Components().NavAgents().TryGet(entity);
+        const std::uint32_t value = obstacle ? (navObstacle != nullptr ? navObstacle->area : 0U) : (navAgent != nullptr ? navAgent->areaMask : 0U);
+        const auto expect = NumberMember(step, "expect", error, false);
+        return StepOutcome{ !expect.has_value() || value == static_cast<std::uint32_t>(*expect), *row + " = " + std::to_string(value) };
+    }
+    if (operation == "navigation_settings_click") {
+        // A click on the Navigation page of the project settings, found through the page's own hit test, and the text
+        // typed into the cell it opens (applied as a click elsewhere applies it).
+        const auto target = StringMember(step, "target", error);
+        if (!target) return StepOutcome{ false, error };
+        const int index = static_cast<int>(NumberMember(step, "index", error, false).value_or(-1.0));
+        const std::optional<std::string> text = StringMember(step, "text", error, false);
+        static_cast<void>(context.ProjectSettings().SelectCategory(static_cast<int>(ProjectSettingsCategory::Navigation)));
+        constexpr RECT kContent{ 0, 0, 1280, 800 };
+        const ProjectSettingsPanelLayoutRects rects = ProjectSettingsPanelLayout::Resolve(kContent);
+        const ProjectSettingsHitKind kind = *target == "colour" ? ProjectSettingsHitKind::NavAreaColour
+            : *target == "name" ? ProjectSettingsHitKind::NavAreaName : *target == "cost" ? ProjectSettingsHitKind::NavAreaCost
+            : *target == "remove" ? ProjectSettingsHitKind::NavAreaRemove : *target == "new" ? ProjectSettingsHitKind::NavAreaNameField
+            : ProjectSettingsHitKind::None;
+        if (kind == ProjectSettingsHitKind::None) return StepOutcome{ false, "unknown navigation settings target" };
+        const RECT area = kind == ProjectSettingsHitKind::NavAreaNameField ? rects.tagNameField : ProjectSettingsPanelLayout::SceneRow(rects, std::max(index, 0));
+        const int y = static_cast<int>((area.top + area.bottom) / 2);
+        std::optional<int> x;
+        for (int probe = static_cast<int>(area.left); probe < static_cast<int>(area.right) && !x.has_value(); probe += 2) {
+            const ProjectSettingsPanelRenderer::Hit hit = ProjectSettingsPanelRenderer::HitTest(kContent, context, probe, y);
+            if (hit.kind == kind && (kind == ProjectSettingsHitKind::NavAreaNameField || hit.index == index)) x = probe;
+        }
+        if (!x.has_value()) return StepOutcome{ false, "the page shows no " + *target + " cell there" };
+        EditorProjectSettingsPointerController controller{ context };
+        static_cast<void>(controller.HandlePointerDown(kContent, *x, y));
+        if (text.has_value()) {
+            if (!context.ProjectSettings().IsNumberEditing()) return StepOutcome{ false, "the cell takes no text" };
+            context.ProjectSettings().NumberEdit().Clear();
+            for (const char character : *text) context.ProjectSettings().NumberEdit().AppendAscii(static_cast<wchar_t>(character));
+            static_cast<void>(EditorProjectSettingsPointerController::CommitNumberEdit(context));
+        }
+        return StepOutcome{ true, *target };
+    }
+    if (operation == "assert_navigation_area") {
+        // An area of the project's list: its name, colour and cost, the cost the open scene uses, and, with
+        // "overlay", that every filled polygon of the shown navigation mesh (all of that area) has the area's colour.
+        const auto index = NumberMember(step, "index", error);
+        if (!index) return StepOutcome{ false, error };
+        const auto area = static_cast<std::size_t>(*index);
+        const std::vector<kb::scene::NavAreaDefinition>& areas = context.ProjectConfiguration().navigationAreas;
+        if (const auto count = NumberMember(step, "count", error, false); count.has_value() && areas.size() != static_cast<std::size_t>(*count)) {
+            return StepOutcome{ false, std::to_string(areas.size()) + " area(s)" };
+        }
+        if (area >= areas.size()) return StepOutcome{ false, "no area " + std::to_string(area) };
+        const kb::scene::NavAreaDefinition& definition = areas[area];
+        std::string describe = definition.name + " #" + std::to_string(definition.colour) + " cost " + std::to_string(definition.cost);
+        bool ok = true;
+        if (const auto name = StringMember(step, "name", error, false); name.has_value()) ok = ok && definition.name == *name;
+        if (const auto colour = NumberMember(step, "colour", error, false); colour.has_value()) ok = ok && definition.colour == static_cast<std::uint32_t>(*colour);
+        if (const auto cost = NumberMember(step, "cost", error, false); cost.has_value()) {
+            ok = ok && definition.cost == static_cast<float>(*cost) &&
+                (*cost == 0.0 || context.Scene().Navigation().AreaCost(static_cast<kb::scene::NavAreaId>(area)) == static_cast<float>(*cost));
+        }
+        if (BoolMember(step, "overlay", error, false).value_or(false)) {
+            const std::array<float, 3U> expected = EditorNavigation::AreaColor(areas, static_cast<std::uint8_t>(area));
+            const std::vector<kb::render::DebugFillTriangle>& fills = context.Navigation().Fills();
+            ok = ok && !fills.empty() && std::ranges::all_of(fills, [&](const kb::render::DebugFillTriangle& fill) { return fill.color == expected; });
+            describe += ", " + std::to_string(fills.size()) + " filled triangle(s)";
+        }
+        return StepOutcome{ ok, describe };
     }
     if (operation == "navmesh_wait_update") {
         // The frame loop pumps the automatic update of the changed tiles; the scenario pumps until one is applied.
@@ -2425,6 +2525,8 @@ ReadScriptValue(
             index = static_cast<int>(ProjectSettingsCategory::Scenes);
         } else if (*category == "tags") {
             index = static_cast<int>(ProjectSettingsCategory::Tags);
+        } else if (*category == "navigation") {
+            index = static_cast<int>(ProjectSettingsCategory::Navigation);
         } else {
             return { false, "unknown project settings category" };
         }

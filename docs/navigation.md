@@ -25,7 +25,7 @@ official release tarball at a pinned SHA-256 (see `third_party/THIRD_PARTY_LICEN
 | Agent profile | One agent size: name, radius, height, max climb (step height) and max slope. A mesh holds tiles for up to 8 profiles. An agent uses the smallest profile at least as wide as its radius, else the widest. |
 | Tile | A square of the global tile grid, `cellSize * tileCells` metres wide. Tile `(x, z)` covers `[x * size, (x + 1) * size)` on X and the same on Z, so tiles baked separately (world cells) fit together. |
 | Layer | One walkable storey of a tile: a height grid with an area and neighbour connections per column. A bridge over a road gives two layers. Tiles store layers, not polygons: polygons are built from layers when a tile is added and again whenever an obstacle or link touching it changes. |
-| Area | One of 32 navigation areas (0 is ordinary ground). Areas have costs per scene and agents carry an area mask. |
+| Area | One of 32 navigation areas (0 is ordinary ground). The project names them, with a colour and a cost, in Project Settings > Navigation (by default Walkable, Road, Grass, Water and Not walkable); an area's id is its place in that list and scenes store the ids. Every scene starts from the project's costs (a cost of 0 makes an area not walkable), scripts may change them, and agents carry an area mask. |
 | Obstacle | A `NavObstacle`: carving obstacles cut holes into the tiles they touch (grown by each profile's radius); obstacles with an area repaint the polygons under them; others are steered around by agents. |
 | Off-mesh link | A `NavLink`: a jump, ladder or walk between two points the polygons do not join. |
 
@@ -49,6 +49,9 @@ The static geometry of the scene (or of the world's base layer, always-loaded ob
   (`.kbterrain`) as its exact heightfield, holes included. Hidden mesh renderers are skipped.
 - **Colliders**: boxes, spheres and capsules, and mesh colliders (CollisionMesh assets). Triggers
   are skipped.
+
+A mesh renderer or collider with **Affects Navigation** off (`affectsNavigation`, on by default) adds
+nothing to any bake, full or automatic, like grass or small props a character should ignore.
 
 A node is static unless it, or a node above it, has a dynamic or kinematic rigidbody; nodes with
 a `NavAgent`, `NavObstacle` or character controller are never baked. Surfaces facing up or down
@@ -75,8 +78,8 @@ Navigation Bounds of a scene must hold the same settings, or the bake is refused
   would; a change of the bake settings, or a first or last Navigation Bounds, bakes the whole scene
   again. World > **Turn Automatic Navigation Update On or Off** switches this off for the session.
   World > **Show or Hide Navigation Mesh** toggles the debug view of the baked mesh in the scene
-  view: the walkable polygons filled in translucent green (one colour per navigation area when
-  several are used), their outlines with the outer edges stronger, and each tile's bounds in
+  view: the walkable polygons filled with the colour of their navigation area (Walkable is green),
+  their outlines with the outer edges stronger, and each tile's bounds in
   yellow, all lifted 10 cm above the ground and hidden behind scene geometry in front of them.
   Navigation Bounds boxes are always drawn (also hidden behind geometry) and are selected by a
   click on their lines.
@@ -212,7 +215,8 @@ agents, path requests, waiting agents, agents on links, sampled velocities and t
 | `Navigation.PathCorner(index)` | `found`, `x`, `y`, `z` of a corner of the last path found in this scene |
 | `Navigation.Raycast(startX, startY, startZ, endX, endY, endZ[, profile, areaMask])` | `valid`, `hit`, `fraction`, `x`, `y`, `z`, `normalX`, `normalZ` |
 | `Navigation.NearestPoint(x, y, z[, profile, areaMask])` | `found`, `x`, `y`, `z` |
-| `Navigation.SetAreaCost(area, cost)` | `applied` |
+| `Navigation.SetAreaCost(area, cost)` | `applied`; in Lua `area` may also be an area's name |
+| `Navigation.FindArea(name)` | `found`, `area` (the id of the project's area of that name, -1 for none) |
 
 Lua accepts positional arguments or one table of named ones. `NavLink` properties (`start.x` ...,
 `kind`, `area`, `bidirectional`, `enabled`) are editable through the component API like other
@@ -256,7 +260,7 @@ rebake regions need their own workload measurements.
 
 | Test | Covers |
 | --- | --- |
-| `kb_engine_tests navigation-mesh` | Settings validation; the asset format (round trip, truncation, refusal of escaping connections and unknown areas); bakes on one worker, four and a bake-owned pool byte-identical; walkable area of a floor; slopes (30 vs 60 degrees) and steps (0.3 vs 0.6 m); carving obstacles (blocked, around, rotated, removed) with an agent walking around; geometry rebuilt at runtime; area costs and masks; two agent sizes through a doorway; jump and ladder links (one-way, disabled) crossed by agents; far from the world origin; a 1200-agent crowd replaying exactly; crowd level of detail; NavAgent, NavObstacle and NavLink save/load; Navigation Bounds limiting the bake (one box, two boxes, none), their settings (a wider agent leaves less ground, disagreeing bounds are refused), save/load and older files; moved, removed and added objects and a moved Navigation Bounds rebuilding only the tiles they touch into the full bake's tiles; a bake on a worker matching the synchronous bake of the saved scene; the debug view's triangles, polygon edges and tile bounds; scripts; a scene's ContentInstance placing its mesh; a world's tiles streaming in and out with its cells. |
+| `kb_engine_tests navigation-mesh` | Settings validation; the asset format (round trip, truncation, refusal of escaping connections and unknown areas); bakes on one worker, four and a bake-owned pool byte-identical; walkable area of a floor; slopes (30 vs 60 degrees) and steps (0.3 vs 0.6 m); carving obstacles (blocked, around, rotated, removed) with an agent walking around; geometry rebuilt at runtime; area costs and masks; two agent sizes through a doorway; jump and ladder links (one-way, disabled) crossed by agents; far from the world origin; a 1200-agent crowd replaying exactly; crowd level of detail; NavAgent, NavObstacle and NavLink save/load; Navigation Bounds limiting the bake (one box, two boxes, none), their settings (a wider agent leaves less ground, disagreeing bounds are refused), save/load and older files; moved, removed and added objects and a moved Navigation Bounds rebuilding only the tiles they touch into the full bake's tiles; a bake on a worker matching the synchronous bake of the saved scene; colliders and meshes with Affects Navigation off left out of full and partial bakes, kept through save/load, on in older files and set by scripts; the project's named areas (defaults, settings round trip, a scene's costs, a Not walkable area that is never crossed, names resolved by scripts); the debug view's triangles, polygon edges and tile bounds; scripts; a scene's ContentInstance placing its mesh; a world's tiles streaming in and out with its cells. |
 | `kb_engine_tests navigation-runtime` | Agents on baked meshes: accelerating within their speed, stopping at their stopping distance, re-planning for a new destination, standing still while the scene is paused; turning corners without leaving the mesh; going around a carving obstacle and walking straight again once it is disabled; a partial path to the closest point when an obstacle closes the way; steering around a non-carving obstacle; two agents passing each other and replaying exactly, and still passing when created in the other order; no mesh means a failed path until one is added; walking a mesh 10 000 km out as precisely as at the origin, as a root and as a child. |
 | `kb_engine_navigation-crowd-bench` | Crowd step budget for 1000 agents and the level-of-detail gain at 5000. |
 | `kb_cli_tests` | `kb_cli navmesh bake` and `info` (colliders, imported meshes, profiles, kept settings) and `world build` with navigation and region chunks. |

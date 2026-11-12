@@ -236,7 +236,7 @@ void CollectNavGeometry(std::span<const kb::scene::ScenePrefabNodeDesc> nodes, c
         if (moving[index] || components.navAgent.has_value() || components.navObstacle.has_value() || components.characterController.has_value()) {
             continue;
         }
-        if (settings.colliders && components.collider.has_value() && !components.collider->trigger) {
+        if (settings.colliders && components.collider.has_value() && !components.collider->trigger && components.collider->affectsNavigation) {
             const kb::scene::ColliderComponent& collider = *components.collider;
             vertices.clear();
             indices.clear();
@@ -266,7 +266,8 @@ void CollectNavGeometry(std::span<const kb::scene::ScenePrefabNodeDesc> nodes, c
                 ++stats.colliders;
             }
         }
-        if (settings.renderMeshes && visible[index] && components.meshRenderer.has_value() && components.meshRenderer->meshAssetId != 0U) {
+        if (settings.renderMeshes && visible[index] && components.meshRenderer.has_value() && components.meshRenderer->meshAssetId != 0U &&
+            components.meshRenderer->affectsNavigation) {
             const std::shared_ptr<const NavSourceMesh> mesh = source != nullptr ? source->RenderMesh(components.meshRenderer->meshAssetId) : nullptr;
             if (mesh != nullptr && !mesh->indices.empty()) {
                 AddPlaced(world[index], mesh->vertices, mesh->indices, geometry);

@@ -1357,6 +1357,9 @@ public:
     [[nodiscard]] bool SetProjectMasterVolume(float volume);
     // Whether the game records from the microphone; true when it changed and was saved.
     [[nodiscard]] bool SetProjectMicrophone(bool enabled);
+    // Replaces the project's navigation areas; false, and nothing changes, for a list that cannot be the project's.
+    // The open scene takes the new costs and the navigation overlay the new colours.
+    [[nodiscard]] bool SetProjectNavigationAreas(std::vector<kb::scene::NavAreaDefinition> areas);
     // Adds a tag to the project's list, which every scene of the project starts from; true when it was new and
     // valid. The open scene defines it at once. Removing one is DeleteSceneTag.
     [[nodiscard]] bool AddProjectTag(std::string_view name);
@@ -1616,7 +1619,7 @@ private:
     // Switches a plugin that new projects have on by default on for this project too.
     [[nodiscard]] bool SwitchOnDefaultPlugin(std::string_view pluginId, std::string_view notice);
     [[nodiscard]] bool SaveProjectConfiguration();
-    // Gives a scene the project's master volume and tag list.
+    // Gives a scene the project's master volume, tag list and navigation areas.
     void ApplyProjectAudioAndTags(kb::scene::Scene& scene);
     // Adds the tags the open scene defines and the project's list lacks to the list, so a tag an author made in
     // an older scene is not lost; the list is saved when it grew.

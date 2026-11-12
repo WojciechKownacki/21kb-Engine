@@ -296,6 +296,8 @@ std::vector<PhysicsField> InspectorPhysicsModel::Fields(const kb::scene::Collide
         ReadOnlyField(EditorText("inspector.collider.layerMask", "Layer Mask"), std::to_string(c.layer)),
         Tip(ReadOnlyField(EditorText("inspector.collider.collisionMeshAsset", "Collision Mesh Asset"), std::to_string(c.meshAssetId)),
             EditorText("inspector.tip.collider.meshAsset", "The mesh whose surface is used as the shape.")),
+        Tip(BoolField(EditorText("inspector.affectsNavigation", "Affects Navigation"), c.affectsNavigation),
+            EditorText("inspector.tip.affectsNavigation", "Characters walk on this object or around it. Turn off for things they should ignore, such as grass or small props.")),
     };
 }
 
@@ -332,11 +334,11 @@ bool InspectorPhysicsModel::ApplyFloat(kb::scene::ColliderComponent& c, int inde
 }
 
 bool InspectorPhysicsModel::ToggleBool(kb::scene::ColliderComponent& c, int index) noexcept {
-    if (index != 9) {
-        return false;
+    switch (index) {
+    case 9: c.trigger = !c.trigger; return true;
+    case 14: c.affectsNavigation = !c.affectsNavigation; return true;
+    default: return false;
     }
-    c.trigger = !c.trigger;
-    return true;
 }
 
 bool InspectorPhysicsModel::CycleEnum(kb::scene::ColliderComponent& c, int index) noexcept {
@@ -737,7 +739,7 @@ PhysicsLayout InspectorPhysicsModel::Layout(const kb::scene::ColliderComponent& 
     case kb::scene::ColliderShape::Capsule: layout.Row(7).Row(8); break;
     case kb::scene::ColliderShape::Mesh: layout.Row(13); break;
     }
-    layout.Rows(1, 3).Row(9).Advanced().Row(10).Row(11).Row(12);
+    layout.Rows(1, 3).Row(9).Row(14).Advanced().Row(10).Row(11).Row(12);
     return layout.Done();
 }
 

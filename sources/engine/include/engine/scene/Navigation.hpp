@@ -4,6 +4,11 @@
 
 #include <cstdint>
 #include <limits>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace kb::scene {
 
@@ -23,6 +28,25 @@ inline constexpr NavAreaMask kAllNavAreas = std::numeric_limits<NavAreaMask>::ma
 [[nodiscard]] constexpr NavAreaMask NavAreaBit(NavAreaId area) noexcept {
     return IsValidNavArea(area) ? (NavAreaMask{ 1U } << area) : 0U;
 }
+
+// A named navigation area of the project; its position in the project's list is its area id. The
+// colour (0xRRGGBB) paints the area in the editor's navigation overlay; the cost multiplies the length
+// of a path through it. A cost of 0 marks the area not walkable: no path or agent ever enters it.
+struct NavAreaDefinition {
+    std::string name;
+    std::uint32_t colour = 0x8CFF00U;
+    float cost = 1.0F;
+
+    [[nodiscard]] bool operator==(const NavAreaDefinition&) const noexcept = default;
+};
+
+// Walkable, Road, Grass, Water and Not walkable, in that order (ids 0 to 4).
+[[nodiscard]] std::vector<NavAreaDefinition> DefaultNavAreaDefinitions();
+// The id of the area named `name` (letter case ignored), or nothing.
+[[nodiscard]] std::optional<NavAreaId> FindNavArea(std::span<const NavAreaDefinition> areas, std::string_view name) noexcept;
+// Whether a list can be a project's areas: at most kNavAreaCount, each named uniquely, with a
+// colour of 24 bits and a cost that is 0 or finite and positive.
+[[nodiscard]] bool AreNavAreaDefinitionsValid(std::span<const NavAreaDefinition> areas) noexcept;
 
 // The default agent size, shared by agents, baked agent profiles and Navigation Bounds so a default
 // agent fits the margin a default bake leaves along walls.

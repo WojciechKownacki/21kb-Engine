@@ -57,6 +57,7 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "meshRenderer.lodBias=" << components.meshRenderer->lodBias << '\n';
         output << "meshRenderer.lodEnabled=" << (components.meshRenderer->lodEnabled ? 1 : 0) << '\n';
         output << "meshRenderer.mobility=" << static_cast<int>(components.meshRenderer->mobility) << '\n';
+        output << "meshRenderer.affectsNavigation=" << (components.meshRenderer->affectsNavigation ? 1 : 0) << '\n';
     }
 
     output << "light=" << (components.light.has_value() ? 1 : 0) << '\n';
@@ -118,6 +119,7 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "collider.restitution=" << components.collider->restitution << '\n';
         output << "collider.layer=" << components.collider->layer << '\n';
         output << "collider.meshAssetId=" << components.collider->meshAssetId << '\n';
+        output << "collider.affectsNavigation=" << (components.collider->affectsNavigation ? 1 : 0) << '\n';
     }
 
     output << "characterController=" << (components.characterController.has_value() ? 1 : 0) << '\n';

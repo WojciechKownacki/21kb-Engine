@@ -56,6 +56,7 @@ struct GameProjectRuntime {
     // The master gain and the tag list of the project (applied by LoadGameProjectScene).
     float masterVolume = 1.0F;
     std::vector<std::string> tags;
+    std::vector<kb::scene::NavAreaDefinition> navigationAreas;
     std::vector<std::string> requiredModules;
     std::shared_ptr<kb::assets::bake::RuntimeAssetPack> assetPack;
 

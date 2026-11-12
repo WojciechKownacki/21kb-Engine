@@ -137,6 +137,8 @@ enum class InspectorMenuKind : std::uint8_t {
     None,
     Component,
     JointPresets,
+    // The project's navigation areas under a Nav Obstacle's area or a Nav Agent's walkable areas.
+    NavAreas,
 };
 
 // The entries of those lists. A Transform cannot be removed or copied; its entries put one part back.
@@ -271,6 +273,7 @@ enum class InspectorPropertyId : std::uint16_t {
     MeshRendererLodBias,
     MeshRendererLodEnabled,
     MeshRendererMobility,
+    MeshRendererAffectsNavigation,
     MeshRendererMaterialSlot0,
     MeshRendererMaterialSlot1,
     MeshRendererMaterialSlot2,
@@ -391,6 +394,7 @@ enum class InspectorPropertyId : std::uint16_t {
     NavAgentDestinationY,
     NavAgentDestinationZ,
     NavAgentEnabled,
+    NavAgentAreaMaskItem,
     NavObstacleShape,
     NavObstacleCenterX,
     NavObstacleCenterY,
@@ -403,6 +407,7 @@ enum class InspectorPropertyId : std::uint16_t {
     NavObstacleArea,
     NavObstacleCarve,
     NavObstacleEnabled,
+    NavObstacleAreaItem,
     TagsText,
     TagsRemove,
     RegionShapeKind,

@@ -41,6 +41,8 @@ struct SceneNavigationState {
     std::map<std::uint64_t, PlacedNavMeshRecord> placedMeshes;
     // Corners of the last path Navigation.FindPath found from a script, for Navigation.PathCorner.
     std::vector<kb::math::DVec3> scriptPath;
+    // The project's named areas (SceneNavigation::SetAreaDefinitions).
+    std::vector<NavAreaDefinition> areaDefinitions;
 };
 
 } // namespace kb::scene

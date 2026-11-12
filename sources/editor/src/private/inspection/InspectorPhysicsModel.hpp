@@ -73,7 +73,7 @@ public:
     [[nodiscard]] static constexpr int FieldCount(PhysicsComponentKind component) noexcept {
         switch (component) {
         case PhysicsComponentKind::Rigidbody: return 14;
-        case PhysicsComponentKind::Collider: return 14;
+        case PhysicsComponentKind::Collider: return 15;
         case PhysicsComponentKind::CharacterController: return 9;
         case PhysicsComponentKind::Joint: return JointRowCount;
         }

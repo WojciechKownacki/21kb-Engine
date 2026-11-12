@@ -51,6 +51,8 @@ struct MeshRendererComponent {
     std::int32_t lodBias = 0;
     bool lodEnabled = true;
     MeshMobility mobility = MeshMobility::Movable;
+    // Whether a static mesh adds its triangles to a navigation mesh bake; off leaves it out of every bake.
+    bool affectsNavigation = true;
     // Disposable visuals created by editor/runtime systems. Not serialized as authored components.
     bool shadowOnly = false;
     bool transient = false;

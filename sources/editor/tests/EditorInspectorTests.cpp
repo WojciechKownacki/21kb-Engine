@@ -3079,6 +3079,11 @@ void RunInspectorPhysicsLayoutTest() {
     const kb::editor::PhysicsLayout box = layoutOf(ColliderShape::Box);
     kb::editor::tests::Require(LayoutIsSound(box, colliderRows) && InBasic(box, 4) && InBasic(box, 5) && InBasic(box, 6) && Absent(box, 7) && Absent(box, 8) && Absent(box, 13),
         "A box collider shows its three sizes and no radius, height or mesh");
+    kb::editor::tests::Require(colliderRows == 15 && InBasic(box, 14) && InspectorPhysicsModel::Fields(collider).size() == 15U,
+        "A collider shows its Affects Navigation switch with the basic rows");
+    kb::scene::ColliderComponent toggled;
+    kb::editor::tests::Require(InspectorPhysicsModel::ToggleBool(toggled, 14) && !toggled.affectsNavigation && !toggled.trigger,
+        "The Affects Navigation row switches the collider's flag and nothing else");
     const kb::editor::PhysicsLayout sphere = layoutOf(ColliderShape::Sphere);
     kb::editor::tests::Require(LayoutIsSound(sphere, colliderRows) && InBasic(sphere, 7) && Absent(sphere, 4) && Absent(sphere, 8),
         "A sphere collider shows only its radius");

@@ -120,7 +120,8 @@ template <typename T>
         || !ParseOptionalField(fields, "collider.friction", collider.friction)
         || !ParseOptionalField(fields, "collider.restitution", collider.restitution)
         || !ParseOptionalField(fields, "collider.layer", collider.layer)
-        || !ParseOptionalField(fields, "collider.meshAssetId", collider.meshAssetId)) {
+        || !ParseOptionalField(fields, "collider.meshAssetId", collider.meshAssetId)
+        || !ParseOptionalBool(fields, "collider.affectsNavigation", collider.affectsNavigation)) {
         return false;
     }
 

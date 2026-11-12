@@ -103,6 +103,7 @@ const Field<kb::scene::MeshRendererComponent> kMeshRendererFields[] = {
     KB_FIELD(kb::scene::MeshRendererComponent, P::MeshRendererLodEnabled, lodEnabled),
     KB_FIELD(kb::scene::MeshRendererComponent, P::MeshRendererLodBias, lodBias),
     KB_FIELD(kb::scene::MeshRendererComponent, P::MeshRendererMobility, mobility),
+    KB_FIELD(kb::scene::MeshRendererComponent, P::MeshRendererAffectsNavigation, affectsNavigation),
 };
 
 // The clip and the output bus are choices; "Enabled" of a Particle Effect follows the choice of an effect (a new

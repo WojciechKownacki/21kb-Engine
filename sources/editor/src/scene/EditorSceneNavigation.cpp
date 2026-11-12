@@ -98,7 +98,7 @@ void EditorSceneContext::RefreshNavigationView() {
             if (read.succeeded) meshes.push_back(std::make_shared<kb::navigation::NavMeshAsset>(std::move(read.asset)));
         }
     }
-    navigation_.Show(meshes);
+    navigation_.Show(meshes, projectConfig_.navigationAreas);
 }
 
 void EditorSceneContext::SetNavigationMeshVisible(bool visible) {
@@ -181,7 +181,7 @@ bool EditorSceneContext::ApplyNavigationBake(EditorNavigationBakeJob& job) {
     static_cast<void>(scene_->Assets().Discover());
     navigationUpdates_.baseline = job.prepared;
     navigationUpdates_.asset = std::make_shared<const kb::navigation::NavMeshAsset>(baked.asset);
-    navigation_.Show({ navigationUpdates_.asset });
+    navigation_.Show({ navigationUpdates_.asset }, projectConfig_.navigationAreas);
     if (job.automatic) {
         console_.Info("Navigation", "Navigation updated: " + std::to_string(job.tiles.empty() ? baked.stats.tiles : job.tiles.size()) +
             " tile(s) rebuilt in " + std::to_string(static_cast<long long>(baked.stats.milliseconds)) + " ms.");

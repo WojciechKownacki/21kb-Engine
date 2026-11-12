@@ -28,6 +28,9 @@ bool SceneAssetRenderComponentCodec::ReadMeshRenderer(SceneAssetBinaryIO::ByteRe
         }
         output.mobility = static_cast<MeshMobility>(mobility);
     }
+    if (fileVersion >= SceneDocument::AffectsNavigationFileVersion && !input.ReadBool(output.affectsNavigation)) {
+        return false;
+    }
     return IsMeshRendererComponentValid(output);
 }
 
@@ -44,6 +47,7 @@ void SceneAssetRenderComponentCodec::WriteMeshRenderer(std::vector<std::uint8_t>
     SceneAssetBinaryIO::WriteInt32(output, meshRenderer.lodBias);
     SceneAssetBinaryIO::WriteUInt8(output, meshRenderer.lodEnabled ? 1U : 0U);
     SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(meshRenderer.mobility));
+    SceneAssetBinaryIO::WriteUInt8(output, meshRenderer.affectsNavigation ? 1U : 0U);
 }
 
 bool SceneAssetRenderComponentCodec::ReadLight(SceneAssetBinaryIO::ByteReader& input, std::uint32_t fileVersion, LightComponent& output) {

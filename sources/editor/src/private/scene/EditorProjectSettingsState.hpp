@@ -45,6 +45,7 @@ enum class ProjectSettingsTooltipKind : std::uint8_t {
     MasterVolume,
     Microphone,
     Tags,
+    NavigationAreas,
 };
 
 // Transient UI state for the Project Settings panel: which category is selected
@@ -82,11 +83,21 @@ public:
     // Typing into a setting's cell: which cell (a ProjectSettingsNumber, kTagNameEdit for the new tag's name,
     // -1 for none) and the text typed so far. The text starts out selected, so the first key replaces the old value.
     static constexpr int kTagNameEdit = 1000;
+    // The name of a new navigation area, and per area its cost and its new name (plus the area id).
+    static constexpr int kNavAreaNameEdit = 1001;
+    static constexpr int kNavAreaCostEdit = 2000;
+    static constexpr int kNavAreaRenameEdit = 3000;
+    static constexpr int kNavAreaEditRange = 64;
     [[nodiscard]] bool IsNumberEditing() const noexcept {
         return editedNumber_ >= 0;
     }
     [[nodiscard]] bool IsTagNameEditing() const noexcept {
         return editedNumber_ == kTagNameEdit;
+    }
+    // Whether the cell being typed in takes any text (a name) rather than a number.
+    [[nodiscard]] bool IsTextEditing() const noexcept {
+        return IsTagNameEditing() || editedNumber_ == kNavAreaNameEdit ||
+            (editedNumber_ >= kNavAreaRenameEdit && editedNumber_ < kNavAreaRenameEdit + kNavAreaEditRange);
     }
     [[nodiscard]] int EditedNumber() const noexcept {
         return editedNumber_;

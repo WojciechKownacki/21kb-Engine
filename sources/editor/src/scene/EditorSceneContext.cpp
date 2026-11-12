@@ -42,6 +42,7 @@
 #include "engine/scene/HistoryRibbonComponent.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "engine/scene/SceneTagCatalog.hpp"
+#include "engine/scene/SceneNavigation.hpp"
 #include "engine/scene/LensEchoComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
@@ -3356,6 +3357,16 @@ bool EditorSceneContext::SetProjectMasterVolume(float volume) {
     return SaveProjectConfiguration();
 }
 
+bool EditorSceneContext::SetProjectNavigationAreas(std::vector<kb::scene::NavAreaDefinition> areas) {
+    if (!kb::scene::AreNavAreaDefinitionsValid(areas) || projectConfig_.navigationAreas == areas) {
+        return false;
+    }
+    projectConfig_.navigationAreas = std::move(areas);
+    kb::scene::SceneNavigation{ *scene_ }.SetAreaDefinitions(projectConfig_.navigationAreas);
+    RefreshNavigationView();
+    return SaveProjectConfiguration();
+}
+
 bool EditorSceneContext::SetProjectMicrophone(bool enabled) {
     if (projectConfig_.microphone == enabled) {
         return false;
@@ -3375,6 +3386,7 @@ bool EditorSceneContext::AddProjectTag(std::string_view name) {
 void EditorSceneContext::ApplyProjectAudioAndTags(kb::scene::Scene& scene) {
     static_cast<void>(kb::audio::AudioPlayback::SetMasterVolume(scene, projectConfig_.masterVolume));
     static_cast<void>(scene.Tags().SetProjectDefinitions(projectConfig_.tags));
+    kb::scene::SceneNavigation{ scene }.SetAreaDefinitions(projectConfig_.navigationAreas);
 }
 
 void EditorSceneContext::AdoptSceneTagsIntoProject() {

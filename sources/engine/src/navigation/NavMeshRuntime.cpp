@@ -648,8 +648,14 @@ float NavMeshRuntime::AreaCost(kb::scene::NavAreaId area) const noexcept {
     return kb::scene::IsValidNavArea(area) ? costs_[area] : 0.0F;
 }
 
+void NavMeshRuntime::SetBlockedAreas(kb::scene::NavAreaMask areas) {
+    if (blocked_ == areas) return;
+    blocked_ = areas;
+    RefreshPolygonFlags();
+}
+
 void NavMeshRuntime::ConfigureFilter(NavAreaFilter& filter, kb::scene::NavAreaMask areas) const noexcept {
-    filter.SetAreas(areas);
+    filter.SetAreas(areas & ~blocked_);
     for (std::uint32_t area = 0U; area < kb::scene::kNavAreaCount; ++area) {
         filter.setAreaCost(static_cast<int>(area + 1U), costs_[area]);
     }
@@ -660,6 +666,9 @@ unsigned short NavMeshRuntime::PolygonFlags(unsigned char areaCode) const noexce
         return 0U;
     }
     const kb::scene::NavAreaMask bit = kb::scene::NavAreaBit(static_cast<kb::scene::NavAreaId>(areaCode - 1U));
+    if ((blocked_ & bit) != 0U) {
+        return 0U;
+    }
     unsigned short flags = 0U;
     for (int slot = 0; slot < kCrowdFilterCount; ++slot) {
         if ((filterMasks_[static_cast<std::size_t>(slot)] & bit) != 0U) flags = static_cast<unsigned short>(flags | (1U << slot));

@@ -58,6 +58,12 @@ enum class ProjectSettingsHitKind : std::uint8_t {
     TagNameField,         // Tags: the cell that takes the name of a new tag.
     TagAdd,               // Tags: the button that adds the typed tag.
     TagRemove,            // Tags: takes a tag out of the project's list (index = position in the list).
+    NavAreaNameField,     // Navigation: the cell that takes the name of a new area.
+    NavAreaAdd,           // Navigation: the button that adds the typed area.
+    NavAreaName,          // Navigation: an area's name, typed anew (index = area id).
+    NavAreaColour,        // Navigation: an area's colour swatch; a click picks the next colour (index = area id).
+    NavAreaCost,          // Navigation: an area's cost cell (index = area id).
+    NavAreaRemove,        // Navigation: takes the last area out of the list (index = area id).
 };
 
 // Categories shown in the left sidebar. Add entries here as the panel grows;
@@ -72,6 +78,7 @@ enum class ProjectSettingsCategory : int {
     Audio,
     Scenes,
     Tags,
+    Navigation,
     // Editor: the Editor Settings pages, shown in this window.
     EditorGeneral,
     EditorSaving,
@@ -82,7 +89,7 @@ enum class ProjectSettingsCategory : int {
 #endif
 
 #if defined(_WIN32)
-static_assert(static_cast<int>(ProjectSettingsCategory::EditorGeneral) == 8 && static_cast<int>(ProjectSettingsCategory::Plugins) == 10,
+static_assert(static_cast<int>(ProjectSettingsCategory::EditorGeneral) == 9 && static_cast<int>(ProjectSettingsCategory::Plugins) == 11,
     "the sidebar's group captions (ProjectSettingsPanelLayout::k*GroupStart) follow the category order");
 #endif
 
@@ -159,6 +166,8 @@ public:
     [[nodiscard]] static int MaximumFirstVisibleScene(const RECT& content, const EditorSceneContext& sceneContext);
     [[nodiscard]] static ProjectSettingsNumberLimits NumberLimits(ProjectSettingsNumber number) noexcept;
     [[nodiscard]] static std::string NumberText(const kb::project::ProjectSettings& settings, ProjectSettingsNumber number);
+    // The cost of a navigation area as its cell shows it and as typing it starts.
+    [[nodiscard]] static std::string NavAreaCostText(float cost);
     [[nodiscard]] static kb::project::ProjectSettings WithNumber(
         kb::project::ProjectSettings settings, ProjectSettingsNumber number, double value);
     // The page area when the selected category shows another panel's content (Editor or Plugins),

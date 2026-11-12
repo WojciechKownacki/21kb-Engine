@@ -65,6 +65,8 @@ constexpr int kTooltipPaddingY = 10;
         return EditorText("projectSettings.category.scenes", "Scenes");
     case ProjectSettingsCategory::Tags:
         return EditorText("projectSettings.category.tags", "Tags");
+    case ProjectSettingsCategory::Navigation:
+        return EditorText("projectSettings.category.navigation", "Navigation");
     case ProjectSettingsCategory::EditorGeneral:
         return EditorText("projectSettings.category.editorGeneral", "General");
     case ProjectSettingsCategory::EditorSaving:
@@ -270,6 +272,8 @@ struct TooltipContent {
         return EditorText("projectSettings.microphone", "Microphone");
     case ProjectSettingsTooltipKind::Tags:
         return EditorText("projectSettings.category.tags", "Tags");
+    case ProjectSettingsTooltipKind::NavigationAreas:
+        return EditorText("projectSettings.navigationAreas", "Navigation Areas");
     default:
         return {};
     }
@@ -397,6 +401,7 @@ struct TooltipContent {
     case ProjectSettingsTooltipKind::MasterVolume:
     case ProjectSettingsTooltipKind::Microphone:
     case ProjectSettingsTooltipKind::Tags:
+    case ProjectSettingsTooltipKind::NavigationAreas:
         // These settings say all there is to say in their one-line description.
         return TooltipContent{ SettingLabel(kind), DescriptionFor(kind) };
     case ProjectSettingsTooltipKind::None:
@@ -476,6 +481,9 @@ struct TooltipContent {
         return EditorText("projectSettings.microphoneDescription", "Lets the game record from the microphone; an Android package then asks for the record-audio permission.");
     case ProjectSettingsTooltipKind::Tags:
         return EditorText("projectSettings.tagsDescription", "Tags for objects, shared by every scene, besides the built-in ones.");
+    case ProjectSettingsTooltipKind::NavigationAreas:
+        return EditorText("projectSettings.navigationAreasDescription",
+            "Kinds of ground characters walk on. A higher cost makes paths avoid an area; a cost of 0 makes it not walkable.");
     case ProjectSettingsTooltipKind::GravityPreset:
     case ProjectSettingsTooltipKind::None:
     default:
@@ -524,6 +532,8 @@ struct SearchableSetting {
         return fromKinds({ Kind::MasterVolume, Kind::Microphone });
     case ProjectSettingsCategory::Tags:
         return fromKinds({ Kind::Tags });
+    case ProjectSettingsCategory::Navigation:
+        return fromKinds({ Kind::NavigationAreas });
     case ProjectSettingsCategory::Scenes:
         return { { EditorText("projectSettings.scenesInBuild", "Scenes in Build"),
             EditorText("projectSettings.scenesInBuildDescription", "Scenes in the game package, in order. The first one starts the game.") } };
@@ -542,11 +552,31 @@ struct SearchableSetting {
     }
 }
 
-// How many rows the list of the open page has: the scenes of the build on the Scenes page, the tags on the Tags page.
+// How many rows the list of the open page has: the scenes of the build on the Scenes page, the tags on the Tags page,
+// the areas on the Navigation page.
 [[nodiscard]] int ListedRowCount(const EditorSceneContext& sceneContext) {
-    return static_cast<ProjectSettingsCategory>(sceneContext.ProjectSettings().SelectedCategory()) == ProjectSettingsCategory::Tags
-        ? static_cast<int>(sceneContext.ProjectConfiguration().tags.size())
-        : static_cast<int>(kb::project::ProjectBuildScenes(sceneContext.ProjectConfiguration()).size());
+    switch (static_cast<ProjectSettingsCategory>(sceneContext.ProjectSettings().SelectedCategory())) {
+    case ProjectSettingsCategory::Tags: return static_cast<int>(sceneContext.ProjectConfiguration().tags.size());
+    case ProjectSettingsCategory::Navigation: return static_cast<int>(sceneContext.ProjectConfiguration().navigationAreas.size());
+    default: return static_cast<int>(kb::project::ProjectBuildScenes(sceneContext.ProjectConfiguration()).size());
+    }
+}
+
+// The cells of a row of the Navigation page: the colour swatch, the name and the cost, before the remove button.
+[[nodiscard]] RECT NavAreaSwatch(const ProjectSettingsPanelLayoutRects& rects, int visibleRow) noexcept {
+    const RECT row = ProjectSettingsPanelLayout::SceneRow(rects, visibleRow);
+    return RECT{ row.left + 8, row.top + 5, row.left + 32, row.bottom - 5 };
+}
+
+[[nodiscard]] RECT NavAreaCostCell(const ProjectSettingsPanelLayoutRects& rects, int visibleRow) noexcept {
+    constexpr int kCostWidth = 90;
+    const RECT remove = ProjectSettingsPanelLayout::SceneRemoveButton(rects, visibleRow);
+    return RECT{ remove.left - 8 - kCostWidth, remove.top, remove.left - 8, remove.bottom };
+}
+
+[[nodiscard]] RECT NavAreaNameCell(const ProjectSettingsPanelLayoutRects& rects, int visibleRow) noexcept {
+    const RECT row = ProjectSettingsPanelLayout::SceneRow(rects, visibleRow);
+    return RECT{ NavAreaSwatch(rects, visibleRow).right + 8, row.top + 3, NavAreaCostCell(rects, visibleRow).left - 8, row.bottom - 3 };
 }
 
 // The description under a setting: one line at the normal size. Some languages need much more room than English, so
@@ -859,6 +889,56 @@ void DrawTagsPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const Ed
     }
 }
 
+// The project's navigation areas, in id order: a cell and a button that add one, and per area its colour (a click picks
+// the next one), its name and its cost (both typed), and a remove button on the last area only, so the ids of the
+// others never change. The list scrolls with the wheel when it is longer than the pane.
+void DrawNavigationPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
+    const std::vector<kb::scene::NavAreaDefinition>& areas = sceneContext.ProjectConfiguration().navigationAreas;
+    const EditorProjectSettingsState& state = sceneContext.ProjectSettings();
+    GdiDrawing::FillRectColor(dc, rects.sectionHeader, Color(theme.strip));
+    DrawText(dc, RECT{ rects.sectionHeader.left + 8, rects.sectionHeader.top, rects.sectionHeader.right - 8, rects.sectionHeader.bottom },
+        EditorText("projectSettings.navigationAreasSection", "NAVIGATION AREAS"), Color(theme.textSecondary), 11, FW_SEMIBOLD);
+    DrawText(dc, rects.scenesIntro, DescriptionFor(ProjectSettingsTooltipKind::NavigationAreas), Color(theme.textDisabled), 11);
+    {
+        const bool editing = state.EditedNumber() == EditorProjectSettingsState::kNavAreaNameEdit;
+        const RECT cell = rects.tagNameField;
+        GdiDrawing::DrawSharpFrame(dc, cell, Color(theme.chrome), Color(editing ? theme.accent : theme.borderPanel));
+        const RECT text{ cell.left + 8, cell.top, cell.right - 8, cell.bottom };
+        if (editing) {
+            const CutTextDataScope data;
+            DrawText(dc, text, std::string{ state.NumberEdit().Query() } + "|", Color(theme.textPrimary), 12);
+        } else {
+            const std::string_view hint = EditorText("projectSettings.navAreaNameHint", "New area name");
+            DrawText(dc, text, hint, Color(theme.textDisabled), EditorDialogStyle::FittingSize(dc, hint, static_cast<int>(text.right - text.left), 12));
+        }
+    }
+    DrawOptionButton(dc, rects.tagAddButton, theme, EditorText("projectSettings.navAreaAdd", "Add area"), false,
+        areas.size() < kb::scene::kNavAreaCount);
+
+    const int capacity = ProjectSettingsPanelLayout::SceneRowCapacity(rects);
+    const int first = ProjectSettingsPanelRenderer::FirstVisibleScene(sceneContext, rects);
+    for (int visible = 0; visible < capacity && first + visible < static_cast<int>(areas.size()); ++visible) {
+        const int index = first + visible;
+        const kb::scene::NavAreaDefinition& area = areas[static_cast<std::size_t>(index)];
+        const RECT row = ProjectSettingsPanelLayout::SceneRow(rects, visible);
+        GdiDrawing::DrawSharpFrame(dc, row, Color(theme.chrome), Color(theme.borderPanel));
+        const RECT swatch = NavAreaSwatch(rects, visible);
+        GdiDrawing::DrawSharpFrame(dc, swatch, RGB((area.colour >> 16U) & 0xFFU, (area.colour >> 8U) & 0xFFU, area.colour & 0xFFU), Color(theme.borderPanel));
+        // The name and the cost are the project's data, not interface text; a cell being typed in shows the text so far.
+        const auto drawCell = [&](const RECT& cell, int edit, const std::string& value) {
+            const bool editing = state.EditedNumber() == edit;
+            GdiDrawing::DrawSharpFrame(dc, cell, Color(theme.chrome), Color(editing ? theme.accent : theme.chrome));
+            const CutTextDataScope data;
+            DrawText(dc, RECT{ cell.left + 6, cell.top, cell.right - 6, cell.bottom }, editing ? std::string{ state.NumberEdit().Query() } + "|" : value,
+                Color(theme.textPrimary), 12);
+        };
+        drawCell(NavAreaNameCell(rects, visible), EditorProjectSettingsState::kNavAreaRenameEdit + index, area.name);
+        drawCell(NavAreaCostCell(rects, visible), EditorProjectSettingsState::kNavAreaCostEdit + index, ProjectSettingsPanelRenderer::NavAreaCostText(area.cost));
+        DrawOptionButton(dc, ProjectSettingsPanelLayout::SceneRemoveButton(rects, visible), theme, EditorText("projectSettings.sceneRemove", "Remove"), false,
+            index + 1 == static_cast<int>(areas.size()) && areas.size() > 1U);
+    }
+}
+
 // The scenes a package holds, startup scene first: the list, a button that adds a scene, and per scene a move up
 // and a remove button. The list scrolls with the wheel when it is longer than the pane.
 void DrawScenesPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
@@ -982,6 +1062,9 @@ void ProjectSettingsPanelRenderer::Paint(
         break;
     case ProjectSettingsCategory::Tags:
         DrawTagsPage(dc, rects, theme, sceneContext);
+        break;
+    case ProjectSettingsCategory::Navigation:
+        DrawNavigationPage(dc, rects, theme, sceneContext);
         break;
     case ProjectSettingsCategory::EditorGeneral:
     case ProjectSettingsCategory::EditorSaving: {
@@ -1154,6 +1237,31 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
         return Hit{};
     }
 
+    if (category == ProjectSettingsCategory::Navigation) {
+        if (PointInRect(rects.tagAddButton, x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::NavAreaAdd, .index = -1, .rect = rects.tagAddButton };
+        }
+        if (PointInRect(rects.tagNameField, x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::NavAreaNameField, .index = -1, .rect = rects.tagNameField };
+        }
+        const int count = ListedRowCount(sceneContext);
+        const int capacity = ProjectSettingsPanelLayout::SceneRowCapacity(rects);
+        const int first = FirstVisibleScene(sceneContext, rects);
+        for (int visible = 0; visible < capacity && first + visible < count; ++visible) {
+            const int index = first + visible;
+            const std::array<std::pair<ProjectSettingsHitKind, RECT>, 4U> cells{ {
+                { ProjectSettingsHitKind::NavAreaColour, NavAreaSwatch(rects, visible) },
+                { ProjectSettingsHitKind::NavAreaName, NavAreaNameCell(rects, visible) },
+                { ProjectSettingsHitKind::NavAreaCost, NavAreaCostCell(rects, visible) },
+                { ProjectSettingsHitKind::NavAreaRemove, ProjectSettingsPanelLayout::SceneRemoveButton(rects, visible) },
+            } };
+            for (const auto& [kind, cell] : cells) {
+                if (PointInRect(cell, x, y)) return Hit{ .kind = kind, .index = index, .rect = cell };
+            }
+        }
+        return Hit{};
+    }
+
     if (category == ProjectSettingsCategory::Tags) {
         if (PointInRect(rects.tagAddButton, x, y)) {
             return Hit{ .kind = ProjectSettingsHitKind::TagAdd, .index = -1, .rect = rects.tagAddButton };
@@ -1256,6 +1364,12 @@ int ProjectSettingsPanelRenderer::FirstVisibleScene(const EditorSceneContext& sc
     const int count = ListedRowCount(sceneContext);
     const int last = std::max(0, count - ProjectSettingsPanelLayout::SceneRowCapacity(rects));
     return std::clamp(sceneContext.ProjectSettings().FirstVisibleScene(), 0, last);
+}
+
+std::string ProjectSettingsPanelRenderer::NavAreaCostText(float cost) {
+    char text[32]{};
+    std::snprintf(text, sizeof(text), "%g", static_cast<double>(cost));
+    return text;
 }
 
 int ProjectSettingsPanelRenderer::MaximumFirstVisibleScene(const RECT& content, const EditorSceneContext& sceneContext) {

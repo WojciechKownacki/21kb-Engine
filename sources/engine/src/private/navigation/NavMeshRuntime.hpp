@@ -143,6 +143,8 @@ public:
 
     void SetAreaCost(kb::scene::NavAreaId area, float cost) noexcept;
     [[nodiscard]] float AreaCost(kb::scene::NavAreaId area) const noexcept;
+    // Areas no query or agent enters, whatever its own area mask.
+    void SetBlockedAreas(kb::scene::NavAreaMask areas);
     void ConfigureFilter(NavAreaFilter& filter, kb::scene::NavAreaMask areas) const noexcept;
 
     // A crowd filters polygons by their 16 flag bits only, so every area mask its members use gets a
@@ -228,6 +230,7 @@ private:
     std::map<std::uint64_t, std::uint32_t> linkUserIds_;
     std::uint32_t nextLinkUserId_ = 1U;
     std::array<float, kb::scene::kNavAreaCount> costs_{};
+    kb::scene::NavAreaMask blocked_ = 0U;
     // Area mask per crowd filter slot; 0 marks a free slot.
     std::array<kb::scene::NavAreaMask, kCrowdFilterCount> filterMasks_{ kb::scene::kAllNavAreas };
     std::uint64_t nextGeneration_ = 1U;

@@ -786,7 +786,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 26> kLightPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "shadowCascadeDistribution", ScriptValueType::Float },
 };
 
-constexpr std::array<ScriptSceneComponentPropertyDesc, 7> kMeshRendererPropertyDescs{
+constexpr std::array<ScriptSceneComponentPropertyDesc, 8> kMeshRendererPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "materialSlotOverrideCount", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "castsShadow", ScriptValueType::Bool },
     ScriptSceneComponentPropertyDesc{ "receivesShadow", ScriptValueType::Bool },
@@ -794,6 +794,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 7> kMeshRendererPropertyD
     ScriptSceneComponentPropertyDesc{ "lodBias", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "lodEnabled", ScriptValueType::Bool },
     ScriptSceneComponentPropertyDesc{ "mobility", ScriptValueType::Int, true, kMeshMobilityNames },
+    ScriptSceneComponentPropertyDesc{ "affectsNavigation", ScriptValueType::Bool },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 3> kBehaviourPropertyDescs{
@@ -819,7 +820,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 14> kRigidbodyPropertyDes
     ScriptSceneComponentPropertyDesc{ "angularDamping", ScriptValueType::Float },
 };
 
-constexpr std::array<ScriptSceneComponentPropertyDesc, 14> kColliderPropertyDescs{
+constexpr std::array<ScriptSceneComponentPropertyDesc, 15> kColliderPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "shape", ScriptValueType::Int, true, kColliderShapeNames },
     ScriptSceneComponentPropertyDesc{ "meshAssetId", ScriptValueType::Hash },
     ScriptSceneComponentPropertyDesc{ "center.x", ScriptValueType::Float },
@@ -834,6 +835,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 14> kColliderPropertyDesc
     ScriptSceneComponentPropertyDesc{ "friction", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "restitution", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "layer", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "affectsNavigation", ScriptValueType::Bool },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 9> kCharacterControllerPropertyDescs{
@@ -1214,7 +1216,7 @@ constexpr std::array<FieldBinding, 26> kLightFields{
     KB_FLOAT(kb::scene::LightComponent, shadowCascadeDistribution),
 };
 
-constexpr std::array<FieldBinding, 7> kMeshRendererFields{
+constexpr std::array<FieldBinding, 8> kMeshRendererFields{
     KB_UINT32(kb::scene::MeshRendererComponent, materialSlotOverrideCount),
     KB_BOOL(kb::scene::MeshRendererComponent, castsShadow),
     KB_BOOL(kb::scene::MeshRendererComponent, receivesShadow),
@@ -1222,6 +1224,7 @@ constexpr std::array<FieldBinding, 7> kMeshRendererFields{
     KB_INT(kb::scene::MeshRendererComponent, lodBias),
     KB_BOOL(kb::scene::MeshRendererComponent, lodEnabled),
     KB_SCENE_ENUM(kb::scene::MeshRendererComponent, mobility, kb::scene::MeshMobility, kb::scene::MeshMobility::Static),
+    KB_BOOL(kb::scene::MeshRendererComponent, affectsNavigation),
 };
 
 constexpr std::array<FieldBinding, 3> kBehaviourFields{
@@ -1247,7 +1250,7 @@ constexpr std::array<FieldBinding, 14> kRigidbodyFields{
     KB_FLOAT(kb::scene::RigidbodyComponent, angularDamping),
 };
 
-constexpr std::array<FieldBinding, 14> kColliderFields{
+constexpr std::array<FieldBinding, 15> kColliderFields{
     KB_COLLIDER_SHAPE(kb::scene::ColliderComponent, shape),
     FieldBinding{"meshAssetId",
         [](const void* c) noexcept -> ScriptValue { return ScriptValue{static_cast<const kb::scene::ColliderComponent*>(c)->meshAssetId, ScriptValueType::Hash}; },
@@ -1268,6 +1271,7 @@ constexpr std::array<FieldBinding, 14> kColliderFields{
     KB_FLOAT(kb::scene::ColliderComponent, friction),
     KB_FLOAT(kb::scene::ColliderComponent, restitution),
     KB_UINT32(kb::scene::ColliderComponent, layer),
+    KB_BOOL(kb::scene::ColliderComponent, affectsNavigation),
 };
 
 constexpr std::array<FieldBinding, 9> kCharacterControllerFields{

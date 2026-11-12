@@ -699,6 +699,18 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
 
 [[nodiscard]] bool HandleMeshRendererClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
     sceneContext.Inspector().EndTextEdit();
+    if (hit.property == InspectorPropertyId::MeshRendererAffectsNavigation) {
+        if (!sceneContext.BeginSceneEditTransaction("Edit Mesh Affects Navigation")) return true;
+        kb::scene::MeshRendererComponent* renderer = sceneContext.Scene().Components().MeshRenderers().TryGet(entity);
+        if (renderer == nullptr) {
+            sceneContext.CancelSceneEditTransaction();
+            return true;
+        }
+        renderer->affectsNavigation = !renderer->affectsNavigation;
+        sceneContext.Scene().Components().MeshRenderers().MarkModified(entity);
+        static_cast<void>(sceneContext.CommitSceneEditTransaction());
+        return true;
+    }
     if (hit.property == InspectorPropertyId::MeshRendererLodBias || hit.property == InspectorPropertyId::MeshRendererLodEnabled ||
         hit.property == InspectorPropertyId::MeshRendererMobility) {
         const kb::scene::MeshRendererComponent* current = sceneContext.Scene().Components().MeshRenderers().TryGet(entity);
@@ -1871,7 +1883,6 @@ template <typename Mutator>
     case InspectorPropertyId::NavAgentAcceleration: return FormatCompactFloat(agent.acceleration);
     case InspectorPropertyId::NavAgentAngularSpeed: return FormatCompactFloat(agent.angularSpeedDegrees);
     case InspectorPropertyId::NavAgentStoppingDistance: return FormatCompactFloat(agent.stoppingDistance);
-    case InspectorPropertyId::NavAgentAreaMask: return std::to_string(agent.areaMask);
     case InspectorPropertyId::NavAgentDestinationX: return FormatCompactFloat(agent.destination.x);
     case InspectorPropertyId::NavAgentDestinationY: return FormatCompactFloat(agent.destination.y);
     case InspectorPropertyId::NavAgentDestinationZ: return FormatCompactFloat(agent.destination.z);
@@ -1883,7 +1894,6 @@ template <typename Mutator>
     switch (property) {
     case InspectorPropertyId::NavObstacleRadius: return FormatCompactFloat(obstacle.radius);
     case InspectorPropertyId::NavObstacleHeight: return FormatCompactFloat(obstacle.height);
-    case InspectorPropertyId::NavObstacleArea: return std::to_string(obstacle.area);
     case InspectorPropertyId::NavObstacleCenterX: return FormatCompactFloat(obstacle.center.x);
     case InspectorPropertyId::NavObstacleCenterY: return FormatCompactFloat(obstacle.center.y);
     case InspectorPropertyId::NavObstacleCenterZ: return FormatCompactFloat(obstacle.center.z);
@@ -2017,6 +2027,19 @@ template <typename Mutator>
     if (hit.property == InspectorPropertyId::NavAgentEnabled) {
         return EditNavAgent(sceneContext, entity, "Toggle Nav Agent", [](kb::scene::NavAgent& value) { value.enabled = !value.enabled; return true; });
     }
+    // The walkable areas: the row opens the project's areas, an area switches on or off and the list stays open.
+    if (hit.property == InspectorPropertyId::NavAgentAreaMask) {
+        sceneContext.Inspector().EndTextEdit();
+        sceneContext.Inspector().ToggleMenu(InspectorMenuKind::NavAreas, InspectorSectionId::NavAgent);
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::NavAgentAreaMaskItem) {
+        const kb::scene::NavAreaMask bit = kb::scene::NavAreaBit(static_cast<kb::scene::NavAreaId>(hit.index));
+        return bit != 0U && EditNavAgent(sceneContext, entity, "Edit Nav Agent Walkable Areas", [bit](kb::scene::NavAgent& value) {
+            value.areaMask ^= bit;
+            return true;
+        });
+    }
     if (IsNavAgentProperty(hit.property)) {
         sceneContext.Inspector().BeginTextEdit(hit.property, NavAgentFieldValue(*agent, hit.property));
     }
@@ -2031,6 +2054,21 @@ template <typename Mutator>
     }
     if (hit.property == InspectorPropertyId::NavObstacleEnabled) {
         return EditNavObstacle(sceneContext, entity, "Toggle Nav Obstacle", [](kb::scene::NavObstacle& value) { value.enabled = !value.enabled; return true; });
+    }
+    // The area: the row opens the project's areas and choosing one sets it and closes the list.
+    if (hit.property == InspectorPropertyId::NavObstacleArea) {
+        sceneContext.Inspector().EndTextEdit();
+        sceneContext.Inspector().ToggleMenu(InspectorMenuKind::NavAreas, InspectorSectionId::NavObstacle);
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::NavObstacleAreaItem) {
+        sceneContext.Inspector().CloseComponentMenus();
+        const int area = hit.index;
+        return area >= 0 && kb::scene::IsValidNavArea(static_cast<kb::scene::NavAreaId>(area)) &&
+            EditNavObstacle(sceneContext, entity, "Edit Nav Obstacle Area", [area](kb::scene::NavObstacle& value) {
+                value.area = static_cast<kb::scene::NavAreaId>(area);
+                return true;
+            });
     }
     if (hit.property == InspectorPropertyId::NavObstacleShape) {
         return EditNavObstacle(sceneContext, entity, "Change Nav Obstacle Shape", [](kb::scene::NavObstacle& value) {
@@ -2433,12 +2471,6 @@ template <typename Mutator>
 
 [[nodiscard]] bool ApplyNavAgentText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
     float value = 0.0F;
-    if (property == InspectorPropertyId::NavAgentAreaMask) {
-        std::uint32_t mask = 0U;
-        const auto parsed = std::from_chars(text.data(), text.data() + text.size(), mask);
-        if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) return false;
-        return EditNavAgent(sceneContext, entity, "Edit Nav Agent Area Mask", [mask](kb::scene::NavAgent& agent) { agent.areaMask = static_cast<kb::scene::NavAreaMask>(mask); return true; });
-    }
     if (!ParseFloat(text, value) || !std::isfinite(value)) return false;
     return EditNavAgent(sceneContext, entity, "Edit Nav Agent", [property, value](kb::scene::NavAgent& agent) {
         switch (property) {
@@ -2457,12 +2489,6 @@ template <typename Mutator>
 }
 
 [[nodiscard]] bool ApplyNavObstacleText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
-    if (property == InspectorPropertyId::NavObstacleArea) {
-        unsigned int area = 0U;
-        const auto parsed = std::from_chars(text.data(), text.data() + text.size(), area);
-        if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size() || area > 255U) return false;
-        return EditNavObstacle(sceneContext, entity, "Edit Nav Obstacle Area", [area](kb::scene::NavObstacle& obstacle) { obstacle.area = static_cast<kb::scene::NavAreaId>(area); return true; });
-    }
     float value = 0.0F;
     if (!ParseFloat(text, value) || !std::isfinite(value)) return false;
     return EditNavObstacle(sceneContext, entity, "Edit Nav Obstacle", [property, value](kb::scene::NavObstacle& obstacle) {

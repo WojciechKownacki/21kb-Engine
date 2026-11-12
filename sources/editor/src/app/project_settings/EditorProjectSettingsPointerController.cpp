@@ -9,6 +9,7 @@
 #include "scene/EditorSceneContext.hpp"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <cstdint>
@@ -188,6 +189,8 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
         return ProjectSettingsTooltipKind::Microphone;
     case ProjectSettingsHitKind::TagNameField:
         return ProjectSettingsTooltipKind::Tags;
+    case ProjectSettingsHitKind::NavAreaNameField:
+        return ProjectSettingsTooltipKind::NavigationAreas;
     case ProjectSettingsHitKind::WindowModeOption:
         return ProjectSettingsTooltipKind::WindowMode;
     case ProjectSettingsHitKind::WindowSizeOption:
@@ -283,6 +286,53 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
     return value;
 }
 
+// The colours an area's swatch steps through, and the colour a new area starts with.
+constexpr std::array<std::uint32_t, 10U> kNavAreaColours{ 0x8CFF00U, 0xB0B0B0U, 0x2E9E3EU, 0x2F80EDU, 0xE03C31U,
+    0xF2C94CU, 0x9B51E0U, 0xF2994AU, 0x56CCF2U, 0xEB5FA8U };
+
+[[nodiscard]] std::uint32_t NextNavAreaColour(std::uint32_t colour) noexcept {
+    const auto found = std::ranges::find(kNavAreaColours, colour);
+    return found == kNavAreaColours.end() || found + 1 == kNavAreaColours.end() ? kNavAreaColours.front() : *(found + 1);
+}
+
+// The cell of the Navigation page a hit falls on, as the edit it starts; -1 for anything else.
+[[nodiscard]] int NavAreaEditForHit(const ProjectSettingsPanelRenderer::Hit& hit) noexcept {
+    switch (hit.kind) {
+    case ProjectSettingsHitKind::NavAreaNameField: return EditorProjectSettingsState::kNavAreaNameEdit;
+    case ProjectSettingsHitKind::NavAreaName: return EditorProjectSettingsState::kNavAreaRenameEdit + hit.index;
+    case ProjectSettingsHitKind::NavAreaCost: return EditorProjectSettingsState::kNavAreaCostEdit + hit.index;
+    default: return -1;
+    }
+}
+
+// Applies a typed navigation area cell: a new area's name adds the area, an area's name renames it and its cost sets
+// it. False when the edit is not one of these.
+bool CommitNavAreaEdit(EditorSceneContext& sceneContext, int edit, std::string text) {
+    std::vector<kb::scene::NavAreaDefinition> areas = sceneContext.ProjectConfiguration().navigationAreas;
+    const auto trimmed = [](std::string value) {
+        const std::size_t begin = value.find_first_not_of(' ');
+        const std::size_t end = value.find_last_not_of(' ');
+        return begin == std::string::npos ? std::string{} : value.substr(begin, end - begin + 1U);
+    };
+    if (edit == EditorProjectSettingsState::kNavAreaNameEdit) {
+        areas.push_back(kb::scene::NavAreaDefinition{ .name = trimmed(std::move(text)), .colour = kNavAreaColours[areas.size() % kNavAreaColours.size()], .cost = 1.0F });
+    } else if (const int rename = edit - EditorProjectSettingsState::kNavAreaRenameEdit;
+               rename >= 0 && rename < EditorProjectSettingsState::kNavAreaEditRange) {
+        if (static_cast<std::size_t>(rename) >= areas.size()) return true;
+        areas[static_cast<std::size_t>(rename)].name = trimmed(std::move(text));
+    } else if (const int cost = edit - EditorProjectSettingsState::kNavAreaCostEdit;
+               cost >= 0 && cost < EditorProjectSettingsState::kNavAreaEditRange) {
+        const std::optional<double> value = ParseTypedNumber(std::move(text));
+        if (static_cast<std::size_t>(cost) >= areas.size() || !value.has_value()) return true;
+        areas[static_cast<std::size_t>(cost)].cost = static_cast<float>(*value);
+    } else {
+        return false;
+    }
+    // A list that cannot be the project's (an empty or repeated name, a negative cost) leaves the areas as they were.
+    static_cast<void>(sceneContext.SetProjectNavigationAreas(std::move(areas)));
+    return true;
+}
+
 // Offers the project's scenes that are not in the build list yet and appends the chosen one.
 [[nodiscard]] bool AddSceneFromMenu(EditorSceneContext& sceneContext, HWND owner) {
     if (owner == nullptr) {
@@ -330,7 +380,8 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
     // A click outside the number (or the tag name) being typed applies it first.
     const EditorProjectSettingsState& settingsState = sceneContext.ProjectSettings();
     const bool staysInCell = (hit.kind == ProjectSettingsHitKind::NumberField && hit.index == settingsState.EditedNumber()) ||
-        (hit.kind == ProjectSettingsHitKind::TagNameField && settingsState.IsTagNameEditing());
+        (hit.kind == ProjectSettingsHitKind::TagNameField && settingsState.IsTagNameEditing()) ||
+        (NavAreaEditForHit(hit) >= 0 && NavAreaEditForHit(hit) == settingsState.EditedNumber());
     const bool committed = settingsState.IsNumberEditing() && !staysInCell &&
         EditorProjectSettingsPointerController::CommitNumberEdit(sceneContext);
     switch (hit.kind) {
@@ -370,6 +421,39 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
         // A typed name was added above; the cell is ready for the next one.
         sceneContext.ProjectSettings().BeginTagNameEdit();
         return true;
+    case ProjectSettingsHitKind::NavAreaNameField:
+    case ProjectSettingsHitKind::NavAreaName:
+    case ProjectSettingsHitKind::NavAreaCost: {
+        const std::vector<kb::scene::NavAreaDefinition>& areas = sceneContext.ProjectConfiguration().navigationAreas;
+        const int edit = NavAreaEditForHit(hit);
+        if (sceneContext.ProjectSettings().EditedNumber() != edit) {
+            const auto area = static_cast<std::size_t>(std::max(hit.index, 0));
+            sceneContext.ProjectSettings().BeginNumberEdit(edit, hit.kind == ProjectSettingsHitKind::NavAreaNameField || area >= areas.size() ? std::string{}
+                : hit.kind == ProjectSettingsHitKind::NavAreaName ? areas[area].name : ProjectSettingsPanelRenderer::NavAreaCostText(areas[area].cost));
+        }
+        return true;
+    }
+    case ProjectSettingsHitKind::NavAreaAdd:
+        // A typed name was added above; the cell is ready for the next one.
+        sceneContext.ProjectSettings().BeginNumberEdit(EditorProjectSettingsState::kNavAreaNameEdit, {});
+        return true;
+    case ProjectSettingsHitKind::NavAreaColour: {
+        std::vector<kb::scene::NavAreaDefinition> areas = sceneContext.ProjectConfiguration().navigationAreas;
+        if (hit.index >= 0 && static_cast<std::size_t>(hit.index) < areas.size()) {
+            areas[static_cast<std::size_t>(hit.index)].colour = NextNavAreaColour(areas[static_cast<std::size_t>(hit.index)].colour);
+            static_cast<void>(sceneContext.SetProjectNavigationAreas(std::move(areas)));
+        }
+        return true;
+    }
+    case ProjectSettingsHitKind::NavAreaRemove: {
+        // Only the last area goes, so the ids scenes store for the others keep their meaning.
+        std::vector<kb::scene::NavAreaDefinition> areas = sceneContext.ProjectConfiguration().navigationAreas;
+        if (areas.size() > 1U && hit.index + 1 == static_cast<int>(areas.size())) {
+            areas.pop_back();
+            static_cast<void>(sceneContext.SetProjectNavigationAreas(std::move(areas)));
+        }
+        return true;
+    }
     case ProjectSettingsHitKind::TagRemove: {
         const std::vector<std::string> tags = sceneContext.ProjectConfiguration().tags;
         if (hit.index >= 0 && static_cast<std::size_t>(hit.index) < tags.size()) {
@@ -615,6 +699,10 @@ bool EditorProjectSettingsPointerController::CommitNumberEdit(EditorSceneContext
         return false;
     }
     const std::string text{ state.NumberEdit().Query() };
+    if (const int edit = state.EditedNumber(); edit >= EditorProjectSettingsState::kNavAreaNameEdit && edit != EditorProjectSettingsState::kTagNameEdit) {
+        state.EndNumberEdit();
+        if (CommitNavAreaEdit(sceneContext, edit, text)) return true;
+    }
     if (state.IsTagNameEditing()) {
         // A typed tag name is added to the project's list (a name that cannot be listed is dropped).
         state.EndNumberEdit();

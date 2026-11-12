@@ -3121,14 +3121,31 @@ int LuaNavigationNearestPoint(lua_State* state) {
     return LuaNavigationCall(state, "Navigation.NearestPoint", { "x", "y", "z", "profile", "areaMask" }, 3);
 }
 
+// The id of the navigation area named `name` in the project settings, or -1.
+[[nodiscard]] int FindNavigationArea(ScriptExecutionContext& context, const char* name) {
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("name", ScriptValue{ std::string{ name } }) };
+    const ScriptFunctionCallResult result = context.CallFunction("Navigation.FindArea", arguments);
+    return result.Output("area").value_or(ScriptValue{ -1 }).AsInt();
+}
+
+int LuaNavigationFindArea(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    const char* name = PucLuaCheckString(state, 1);
+    lua_pushinteger(state, context != nullptr ? FindNavigationArea(*context, name) : -1);
+    return 1;
+}
+
+// The area is an id or the name of a project navigation area.
 int LuaNavigationSetAreaCost(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) {
         lua_pushboolean(state, 0);
         return 1;
     }
+    const int area = lua_type(state, 1) == LUA_TSTRING ? FindNavigationArea(*context, lua_tostring(state, 1))
+                                                       : static_cast<int>(PucLuaCheckInteger(state, 1));
     const std::vector<ScriptFunctionArgument> arguments{
-        Arg("area", ScriptValue{ static_cast<int>(PucLuaCheckInteger(state, 1)) }),
+        Arg("area", ScriptValue{ area }),
         Arg("cost", ScriptValue{ static_cast<float>(PucLuaCheckNumber(state, 2)) }),
     };
     const ScriptFunctionCallResult result = context->CallFunction("Navigation.SetAreaCost", arguments);
@@ -3769,6 +3786,7 @@ constexpr auto kCatalogBindingAdapters = std::to_array<lua_CFunction>({
     &LuaNavigationRaycast,
     &LuaNavigationNearestPoint,
     &LuaNavigationSetAreaCost,
+    &LuaNavigationFindArea,
 });
 
 [[nodiscard]] std::size_t CountCatalogTableBindings(std::string_view tableName) noexcept {
