@@ -330,6 +330,7 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
             !std::isfinite(agent.height) || !std::isfinite(agent.maxSpeed) || !std::isfinite(agent.acceleration) ||
             !std::isfinite(agent.angularSpeedDegrees) || !std::isfinite(agent.stoppingDistance) || !std::isfinite(agent.remainingDistance) ||
             status > static_cast<std::uint32_t>(NavPathStatus::Cancelled)) return false;
+        if (fileVersion >= SceneDocument::NavAgentHordeFileVersion && !input.ReadBool(agent.horde)) return false;
         agent.pathStatus = static_cast<NavPathStatus>(status);
         output.navAgent = agent;
     }
@@ -853,6 +854,7 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetBinaryIO::WriteFloat(output, agent.remainingDistance);
         SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(agent.pathStatus));
         SceneAssetBinaryIO::WriteBool(output, agent.enabled);
+        SceneAssetBinaryIO::WriteBool(output, agent.horde);
     }
     if (components.navObstacle.has_value()) {
         const NavObstacle& obstacle = *components.navObstacle;

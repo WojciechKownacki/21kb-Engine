@@ -1877,6 +1877,7 @@ void PaintNavAgentSection(
     }
     section.Vec3(EditorText("inspector.navAgent.destination", "Destination"), agent.destination, InspectorPropertyId::NavAgentDestinationX, InspectorPropertyId::NavAgentDestinationY, InspectorPropertyId::NavAgentDestinationZ);
     section.Bool(EditorText("inspector.enabled", "Enabled"), agent.enabled, InspectorPropertyId::NavAgentEnabled);
+    section.Bool(EditorText("inspector.navAgent.horde", "Move as Horde"), agent.horde, InspectorPropertyId::NavAgentHorde);
     y = section.Bottom() + kSectionGap;
 }
 
@@ -4154,7 +4155,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     }
     if (const kb::scene::NavAgent* agent = scene.Components().NavAgents().TryGet(selected); agent != nullptr) {
         const std::vector<kb::scene::NavAreaDefinition>& areas = sceneContext.ProjectConfiguration().navigationAreas;
-        const int h = SectionHeight(inspector, InspectorSectionId::NavAgent, 9 + NavAreaMenuRows(inspector, InspectorSectionId::NavAgent, areas.size()));
+        const int h = SectionHeight(inspector, InspectorSectionId::NavAgent, 10 + NavAreaMenuRows(inspector, InspectorSectionId::NavAgent, areas.size()));
         if (sectionVisible(y, h)) {
             PaintNavAgentSection(dc, content, y, theme, inspector, *agent, areas);
         } else {
@@ -4465,7 +4466,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     }
     if (scene.Components().NavAgents().TryGet(selected) != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::NavAgent,
-            9 + NavAreaMenuRows(inspector, InspectorSectionId::NavAgent, sceneContext.ProjectConfiguration().navigationAreas.size())) + kSectionGap;
+            10 + NavAreaMenuRows(inspector, InspectorSectionId::NavAgent, sceneContext.ProjectConfiguration().navigationAreas.size())) + kSectionGap;
     }
     if (scene.Components().NavObstacles().TryGet(selected) != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::NavObstacle,
@@ -6485,6 +6486,8 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTestRows(const RECT& cont
             if (InspectorPanelRenderer::Hit hit = HitVec3(RowRect(viewport, y), InspectorSectionId::NavAgent, InspectorPropertyId::NavAgentDestinationX, InspectorPropertyId::NavAgentDestinationY, InspectorPropertyId::NavAgentDestinationZ, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
             AdvanceRow(y);
             if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::NavAgent, InspectorPropertyId::NavAgentEnabled, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::NavAgent, InspectorPropertyId::NavAgentHorde, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
             AdvanceRow(y);
         }
         y += kSectionGap;

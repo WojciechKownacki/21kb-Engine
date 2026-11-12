@@ -994,7 +994,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 9> kSocketAttachmentPrope
     ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
 };
 
-constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kNavAgentPropertyDescs{
+constexpr std::array<ScriptSceneComponentPropertyDesc, 12> kNavAgentPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "radius", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "height", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "maxSpeed", ScriptValueType::Float },
@@ -1006,6 +1006,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kNavAgentPropertyDesc
     ScriptSceneComponentPropertyDesc{ "destination.y", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "destination.z", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "horde", ScriptValueType::Bool },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 9> kNavObstaclePropertyDescs{
@@ -1542,7 +1543,7 @@ constexpr std::array<FieldBinding, 9> kSocketAttachmentFields{
     KB_BOOL(kb::scene::SocketAttachmentComponent, enabled),
 };
 
-constexpr std::array<FieldBinding, 11> kNavAgentFields{
+constexpr std::array<FieldBinding, 12> kNavAgentFields{
     KB_FLOAT(kb::scene::NavAgent, radius),
     KB_FLOAT(kb::scene::NavAgent, height),
     KB_FLOAT(kb::scene::NavAgent, maxSpeed),
@@ -1554,6 +1555,7 @@ constexpr std::array<FieldBinding, 11> kNavAgentFields{
     KB_NESTED_FLOAT(kb::scene::NavAgent, destination, y),
     KB_NESTED_FLOAT(kb::scene::NavAgent, destination, z),
     KB_BOOL(kb::scene::NavAgent, enabled),
+    KB_BOOL(kb::scene::NavAgent, horde),
 };
 
 constexpr std::array<FieldBinding, 9> kNavObstacleFields{

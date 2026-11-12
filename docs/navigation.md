@@ -214,6 +214,41 @@ crowds in step:
 far agents, path requests, waiting agents, agents on links, sampled velocities and the wall time of
 the step and of its stages.
 
+## Horde movement
+
+A `NavAgent` with `horde` on (Inspector: **Move as Horde**) leaves the crowd: agents heading for the
+same destination (with the same profile and areas) share one navigation field instead of each
+planning a path (`NavMeshHorde`):
+
+- **The field** lives on the polygons of the profile's mesh: from the polygon the destination lies
+  in, a search over the polygons' portals (and off-mesh links) outward gives every polygon it
+  reaches its cost to the destination and the portal to leave by. It grows by at most
+  `hordeFieldNodesPerStep` polygons per step, all fields together, and only as far as the agents
+  following it stand (plus a few polygons beyond). Fields are kept for reuse (`hordeFieldCacheSize`,
+  the least recently used goes first).
+- **A moving destination** keeps its field while it stays in its polygon. When it enters another
+  polygon a new field grows within the budget while the agents keep following the old one, taking
+  the new one as soon as it reaches them, so a running target costs no spike.
+- **Steering:** each agent heads for the closest point of its polygon's portal (looking one polygon
+  further when it stands at the portal), or straight for the destination in its polygon, and moves
+  over the polygons through portals it may enter, sliding along walls, at the height of the
+  polygon under it, so storeys, stairs and bridges are kept apart. A link on the way is walked
+  straight from end to end.
+- **Separation:** one grid over the agents is built per step; neighbours closer than both radii
+  plus `hordeSeparationDistance` push each other apart (squared falloff, weighted by
+  `separationWeight`), ignoring agents more than an agent's height above or below. There is no
+  velocity sampling.
+- **Level of detail:** with the crowd's focuses and distances, mid agents update every second step
+  and far agents every fourth (with the elapsed time) and without separation. An agent that stopped
+  within its stopping distance sleeps until its destination moves away.
+- The agents step on the crowd's worker pool, each writing only itself and reading the grid in a
+  fixed order, so equal input replays exactly on any number of threads. The crowd's reading of the
+  agents' transforms runs on the same pool.
+
+`CrowdStats()` reports the horde agents, how many were updated, asleep, waiting for their field and
+on links, the fields kept, the polygons the fields grew by and the wall time of the horde step and
+of its fields.
+
 ## Script API
 
 | Function | Returns |
@@ -226,8 +261,8 @@ the step and of its stages.
 | `Navigation.FindArea(name)` | `found`, `area` (the id of the project's area of that name, -1 for none) |
 
 Lua accepts positional arguments or one table of named ones. `NavLink` properties (`start.x` ...,
-`kind`, `area`, `bidirectional`, `enabled`) are editable through the component API like other
-components.
+`kind`, `area`, `bidirectional`, `enabled`) and `NavAgent` properties (`destination.x` ...,
+`horde`, `enabled` ...) are editable through the component API like other components.
 
 ## Measurements
 
@@ -240,9 +275,16 @@ On the development machine (Release):
   7.3 ms (about 42 ms on one thread), 20 000 agents about 12 ms. Under load from other builds on
   the same machine the figures doubled.
 - `FindPath` across the arena about 5 us, over 14 m about 2 us.
+- Horde step on a 240 x 240 m two-storey level with stairs, a bridge and a link, targets moving
+  every step (median of 1000 steps): 10 000 agents about 0.7 ms after 1, 10 or 100 targets (the
+  slowest step about 1.5 ms; about 2.2 ms on one thread), 50 000 agents about 3.6 ms after 1 or 10
+  targets and about 8 ms after 100. 10 000 individual crowd agents in the same scenario took
+  about 12 ms in the same run.
 
 `kb_engine_navigation-crowd-bench` checks that 1000 agents step within 8 ms, 10 000 agents within
 24 ms, and that level of detail makes a large crowd cheaper; it prints the stages of a step.
+`kb_engine_navigation-horde-bench` checks that 10 000 horde agents step within 3 ms (median) after
+one target and 6 ms after 100, and 50 000 within 30 ms.
 The same gate checks a local rebake of four 12.8 m tiles containing a floor and a wall
 against an 8 ms median budget over nine warmed samples. Larger geometry and wider
 rebake regions need their own workload measurements.
@@ -251,6 +293,9 @@ rebake regions need their own workload measurements.
 
 - Path requests, the path queue and topology optimisation run on the calling thread.
 - A crowd walks one Detour mesh, so agents avoid and push only agents of their own profile.
+- Horde agents push only each other apart; crowd agents and non-carving obstacles do not see them.
+  A horde field is rebuilt from scratch when the tiles of its profile change, and changed area
+  costs reach fields made afterwards.
 - At most 16 different agent area masks are in use at a time (the crowd's filter slots); an agent
   whose mask finds no free slot reports a `Failed` path. A crowd holds at most 65 535 agents and
   non-carving obstacles.
@@ -269,9 +314,10 @@ rebake regions need their own workload measurements.
 
 | Test | Covers |
 | --- | --- |
-| `kb_engine_tests navigation-mesh` | Settings validation; the asset format (round trip, truncation, refusal of escaping connections and unknown areas); bakes on one worker, four and a bake-owned pool byte-identical; walkable area of a floor; slopes (30 vs 60 degrees) and steps (0.3 vs 0.6 m); carving obstacles (blocked, around, rotated, removed) with an agent walking around; geometry rebuilt at runtime; area costs and masks; two agent sizes through a doorway; jump and ladder links (one-way, disabled) crossed by agents; far from the world origin; a 1200-agent crowd with near, mid and far agents replaying exactly on one, two and eight threads; crowd level of detail and its transitions; the path request budget serving near agents first and every agent in the end; NavAgent, NavObstacle and NavLink save/load; Navigation Bounds limiting the bake (one box, two boxes, none), their settings (a wider agent leaves less ground, disagreeing bounds are refused), save/load and older files; moved, removed and added objects and a moved Navigation Bounds rebuilding only the tiles they touch into the full bake's tiles; a bake on a worker matching the synchronous bake of the saved scene; colliders and meshes with Affects Navigation off left out of full and partial bakes, kept through save/load, on in older files and set by scripts; the project's named areas (defaults, settings round trip, a scene's costs, a Not walkable area that is never crossed, names resolved by scripts); the debug view's triangles, polygon edges and tile bounds; scripts; a scene's ContentInstance placing its mesh; a world's tiles streaming in and out with its cells. |
+| `kb_engine_tests navigation-mesh` | Settings validation; the asset format (round trip, truncation, refusal of escaping connections and unknown areas); bakes on one worker, four and a bake-owned pool byte-identical; walkable area of a floor; slopes (30 vs 60 degrees) and steps (0.3 vs 0.6 m); carving obstacles (blocked, around, rotated, removed) with an agent walking around; geometry rebuilt at runtime; area costs and masks; two agent sizes through a doorway; jump and ladder links (one-way, disabled) crossed by agents; far from the world origin; a 1200-agent crowd with near, mid and far agents replaying exactly on one, two and eight threads; crowd level of detail and its transitions; the path request budget serving near agents first and every agent in the end; a horde climbing stairs and a link onto a deck over one shared field, replaying exactly on one, two and eight threads, keeping its field for a destination moved within its polygon and following the old field while a new one grows; NavAgent (horde included), NavObstacle and NavLink save/load; Navigation Bounds limiting the bake (one box, two boxes, none), their settings (a wider agent leaves less ground, disagreeing bounds are refused), save/load and older files; moved, removed and added objects and a moved Navigation Bounds rebuilding only the tiles they touch into the full bake's tiles; a bake on a worker matching the synchronous bake of the saved scene; colliders and meshes with Affects Navigation off left out of full and partial bakes, kept through save/load, on in older files and set by scripts; the project's named areas (defaults, settings round trip, a scene's costs, a Not walkable area that is never crossed, names resolved by scripts); the debug view's triangles, polygon edges and tile bounds; scripts; a scene's ContentInstance placing its mesh; a world's tiles streaming in and out with its cells. |
 | `kb_engine_tests navigation-runtime` | Agents on baked meshes: accelerating within their speed, stopping at their stopping distance, re-planning for a new destination, standing still while the scene is paused; turning corners without leaving the mesh; going around a carving obstacle and walking straight again once it is disabled; a partial path to the closest point when an obstacle closes the way; steering around a non-carving obstacle; two agents passing each other and replaying exactly, and still passing when created in the other order; no mesh means a failed path until one is added; walking a mesh 10 000 km out as precisely as at the origin, as a root and as a child. |
 | `kb_engine_navigation-crowd-bench` | Crowd step budgets for 1000 and 10 000 agents, the level-of-detail gain at 5000, 20 000 agents over 600 steps, and `FindPath` cost. |
+| `kb_engine_navigation-horde-bench` | Horde step of 10 000 and 50 000 agents chasing 1, 10 and 100 moving targets on a two-storey level (stairs, bridge, link) over 2000 steps (p50, p95, p99, slowest), and individual crowd agents in the same scenario. |
 | `kb_cli_tests` | `kb_cli navmesh bake` and `info` (colliders, imported meshes, profiles, kept settings) and `world build` with navigation and region chunks. |
 | `kb_editor_navigation_headless` | Editor bake of a scene with a floor collider, an imported mesh and a jump link; identical bytes to the kb_cli bake; the filled overlay drawn in the scene view, gone when hidden and hidden behind geometry in front of it; an agent crossing the link in Play mode. |
 | `kb_fuzz_navmesh_corpus` (`KB_BUILD_FUZZERS`) | The navigation mesh reader and polygon rebuild over the seed corpus. |

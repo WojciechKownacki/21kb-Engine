@@ -293,6 +293,7 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
                 LibraryComponentInspectorFieldDesc{ "destination.y", "Destination Y", "World destination Y coordinate." },
                 LibraryComponentInspectorFieldDesc{ "destination.z", "Destination Z", "World destination Z coordinate." },
                 LibraryComponentInspectorFieldDesc{ "enabled", "Enabled", "Whether navigation steering is active." },
+                LibraryComponentInspectorFieldDesc{ "horde", "Move as Horde", "Share one route with every agent heading to the same destination instead of planning its own path." },
             },
         },
         LibraryComponentInspectorDesc{

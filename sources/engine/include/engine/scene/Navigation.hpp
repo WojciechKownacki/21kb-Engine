@@ -77,6 +77,10 @@ struct NavAgent {
     float remainingDistance = 0.0F;
     NavPathStatus pathStatus = NavPathStatus::Invalid;
     bool enabled = true;
+    // Moves with the horde: agents with the same destination share one navigation field toward it
+    // and steer by it instead of each planning a path, keeping apart without avoidance. Much
+    // cheaper for many agents after few destinations.
+    bool horde = false;
 };
 
 enum class NavObstacleShape : std::uint8_t {

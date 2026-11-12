@@ -11,6 +11,7 @@
 
 namespace kb::navigation {
 class NavMeshCrowd;
+class NavMeshHorde;
 class NavMeshRuntime;
 }
 
@@ -34,6 +35,8 @@ struct SceneNavigationState {
     // Polygon navigation meshes and the crowd moving agents over them (created on first use).
     std::shared_ptr<kb::navigation::NavMeshRuntime> polygons;
     std::shared_ptr<kb::navigation::NavMeshCrowd> crowd;
+    // Agents in horde mode, moved by shared navigation fields instead of the crowd.
+    std::shared_ptr<kb::navigation::NavMeshHorde> horde;
     NavigationCrowdSettings crowdSettings{};
     std::vector<kb::math::DVec3> crowdFocuses;
     bool crowdFocusesSet = false;

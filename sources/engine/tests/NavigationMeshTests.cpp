@@ -761,6 +761,182 @@ void TestCrowdPathBudgetPriority() {
     Check(history == "3/0 6/0 6/3 6/6 ", "near agents are planned first, then the far ones: " + history);
 }
 
+// A level on two storeys: ground [-half, half]^2; a deck 3 m up over x in [half/3, half]; stairs up
+// to the deck in the far corner (z near -0.8 half); a 3 m wide bridge at deck height reaching back
+// over the ground along z in [10, 13]; and a ladder link from the ground up onto the bridge's end.
+struct HordeLevel {
+    std::shared_ptr<const nav::NavMeshAsset> asset;
+    double half = 0.0;
+    double deckX = 0.0;
+    Vec3 ladderStart{};
+    Vec3 ladderEnd{};
+};
+
+[[nodiscard]] HordeLevel MakeHordeLevel(double half) {
+    HordeLevel level;
+    level.half = half;
+    level.deckX = half / 3.0;
+    std::vector<scene::ScenePrefabNodeDesc> nodes{ Slab(-half, half, -half, half, 0.0), Slab(level.deckX, half, -half, half, 3.0) };
+    const double stairsZ = -half * 0.8;
+    for (int step = 0; step < 12; ++step) {
+        const double top = 0.25 * (step + 1);
+        nodes.push_back(Slab(level.deckX - 6.0 + 0.5 * step, level.deckX - 5.5 + 0.5 * step, stairsZ - 4.0, stairsZ + 4.0, top, top));
+    }
+    nodes.push_back(Slab(-half + 2.0, level.deckX, 10.0, 13.0, 3.0));
+    nav::NavMeshBuildSettings settings = Settings();
+    settings.cellSize = 0.3F;
+    settings.tileCells = 96U;
+    level.asset = std::make_shared<const nav::NavMeshAsset>(BakeNodes(nodes, settings));
+    level.ladderStart = Vec3{ static_cast<float>(-half + 4.0), 0.0F, 15.5F };
+    level.ladderEnd = Vec3{ static_cast<float>(-half + 4.0), 3.0F, 12.0F };
+    return level;
+}
+
+struct HordeRun {
+    std::vector<Vec3> positions;
+    std::vector<double> steps;
+    double crowdMilliseconds = 0.0;
+    bool crossedLink = false;
+    std::size_t maxFields = 0U;
+    std::size_t maxWaiting = 0U;
+    std::size_t updated = 0U;
+    // Field growth time of the slowest step.
+    double slowestFieldMilliseconds = 0.0;
+    [[nodiscard]] double Percentile(double fraction) const {
+        std::vector<double> sorted = steps;
+        std::ranges::sort(sorted);
+        return sorted.empty() ? 0.0 : sorted[std::min(sorted.size() - 1U, static_cast<std::size_t>(fraction * static_cast<double>(sorted.size())))];
+    }
+    [[nodiscard]] double Average() const {
+        double sum = 0.0;
+        for (const double step : steps) sum += step;
+        return steps.empty() ? 0.0 : sum / static_cast<double>(steps.size());
+    }
+};
+
+// `count` agents on the ground chase `targets` targets circling on the deck and on the ground
+// (agent i chases target i % targets), as a horde or as individual crowd agents. Measures the
+// navigation step of the second half of `steps`.
+[[nodiscard]] HordeRun RunHorde(const HordeLevel& level, int count, int targets, int steps, bool horde, std::uint32_t threads = 0U,
+    std::optional<Vec3> fixedGoal = std::nullopt) {
+    const bool moving = !fixedGoal.has_value();
+    scene::Scene scene;
+    std::string error;
+    Check(scene.Navigation().AddNavMesh(level.asset, &error) != 0U, "the horde level must load: " + error);
+    scene.Navigation().ConfigureCrowd(scene::NavigationCrowdSettings{ .workerThreads = threads });
+    static_cast<void>(AddLink(scene, level.ladderStart, scene::NavLink{
+        .start = {}, .end = level.ladderEnd - level.ladderStart, .radius = 0.6F, .kind = scene::NavLinkKind::Walk, .bidirectional = true }));
+    const double half = level.half;
+    const auto target = [&](int index, int step) {
+        if (fixedGoal) return *fixedGoal;
+        // Even targets circle on the deck, odd ones on the ground; 8 m circles at 2 m/s.
+        const double angle = (moving ? step * kFrame * 0.25 : 0.0) + index * 0.7;
+        const bool deck = index % 2 == 0;
+        const double spanZ = half * 1.4;
+        const double cz = -half * 0.7 + spanZ * ((index * 0.618) - std::floor(index * 0.618));
+        const double cx = deck ? (level.deckX + half) * 0.5 : -half * 0.5;
+        return Vec3{ static_cast<float>(cx + 8.0 * std::cos(angle)), deck ? 3.0F : 0.0F, static_cast<float>(cz + 8.0 * std::sin(angle)) };
+    };
+    const int side = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(count))));
+    const double minX = -half * 0.95;
+    const double spanX = (level.deckX - 8.0) - minX;
+    const double spanZ = half * 1.9;
+    std::vector<scene::SceneEntity> agents;
+    agents.reserve(static_cast<std::size_t>(count));
+    for (int index = 0; index < count; ++index) {
+        const double x = minX + spanX * (index % side + 0.5) / side;
+        const double z = -half * 0.95 + spanZ * (index / side + 0.5) / side;
+        const scene::SceneObject object = scene.Entities().CreateObject(scene::SceneObjectDesc{ .name = "Horde" });
+        scene.Transforms().SetLocalTranslation(object.Entity(), DVec3{ x, 0.0, z });
+        scene.Components().NavAgents().Set(object.Entity(), scene::NavAgent{
+            .radius = 0.4F, .maxSpeed = 3.5F, .acceleration = 10.0F, .stoppingDistance = 1.0F, .destination = target(index % targets, 0), .horde = horde });
+        agents.push_back(object.Entity());
+    }
+    scene.Runtime().SynchronizeTransforms();
+    HordeRun run;
+    double slowest = 0.0;
+    std::vector<Vec3> goals(static_cast<std::size_t>(targets));
+    for (int step = 0; step < steps; ++step) {
+        if (moving) {
+            for (int index = 0; index < targets; ++index) goals[static_cast<std::size_t>(index)] = target(index, step);
+            for (int index = 0; index < count; ++index) {
+                scene.Components().NavAgents().TryGet(agents[static_cast<std::size_t>(index)])->destination = goals[static_cast<std::size_t>(index % targets)];
+            }
+        }
+        static_cast<void>(scene.Runtime().Update(kFrame));
+        const scene::NavigationCrowdStats stats = scene.Navigation().CrowdStats();
+        run.crossedLink = run.crossedLink || (horde ? stats.hordeOnLinks : stats.onLinks) > 0U;
+        run.maxFields = std::max(run.maxFields, stats.hordeFields);
+        if (step >= steps / 2) {
+            const double milliseconds = horde ? stats.hordeMilliseconds : stats.milliseconds;
+            if (run.steps.empty() || milliseconds > slowest) {
+                slowest = milliseconds;
+                run.slowestFieldMilliseconds = stats.hordeFieldMilliseconds;
+            }
+            run.steps.push_back(milliseconds);
+            run.maxWaiting = std::max(run.maxWaiting, stats.hordeWaiting);
+            run.updated += stats.hordeUpdated;
+        }
+    }
+    for (const scene::SceneEntity agent : agents) run.positions.push_back(Position(scene, agent));
+    return run;
+}
+
+// Horde agents on the ground reach a target on the deck over the stairs, the bridge and the
+// ladder link, sharing one field; agents under the bridge are not pushed by those on it.
+void TestHordeCrossesLevels() {
+    const HordeLevel level = MakeHordeLevel(30.0);
+    const Vec3 goal{ static_cast<float>(level.deckX + 4.0), 3.0F, 11.5F };
+    const HordeRun run = RunHorde(level, 300, 1, 60 * 40, true, 0U, goal);
+    std::size_t arrived = 0U;
+    for (const Vec3 position : run.positions) {
+        arrived += position.y > 2.5F && Horizontal(position, goal) < 12.0F ? 1U : 0U;
+    }
+    Check(arrived >= 270U, "a horde climbs onto the deck and gathers at its target: " + std::to_string(arrived) + " of 300");
+    Check(run.maxFields == 1U, "one target gives one shared field: " + std::to_string(run.maxFields));
+    Check(run.crossedLink, "horde agents take the ladder link when it is the short way");
+}
+
+// The horde replays to the same positions on one, two and eight threads, with moving targets.
+void TestHordeIsDeterministic() {
+    const HordeLevel level = MakeHordeLevel(30.0);
+    const HordeRun first = RunHorde(level, 1500, 4, 400, true, 1U);
+    for (const std::uint32_t threads : { 2U, 8U }) {
+        const HordeRun again = RunHorde(level, 1500, 4, 400, true, threads);
+        Check(std::memcmp(first.positions.data(), again.positions.data(), first.positions.size() * sizeof(Vec3)) == 0,
+            "a horde of 1500 agents replays to the same positions on " + std::to_string(threads) + " threads");
+    }
+}
+
+// A target moving within its polygon reuses its field; one moving into other polygons builds new
+// fields while the agents keep following the old one, so none stands waiting.
+void TestHordeFieldFollowsItsTarget() {
+    scene::Scene scene;
+    static_cast<void>(AddMesh(scene, BakeNodes({ Slab(-20.0, 20.0, -20.0, 20.0, 0.0), BoxNode(DVec3{ 0.0, 1.0, 0.0 }, Vec3{ 2.0F, 2.0F, 12.0F }) })));
+    std::vector<scene::SceneEntity> agents;
+    for (int index = 0; index < 50; ++index) {
+        agents.push_back(AddAgent(scene, DVec3{ -15.0 + (index % 10) * 1.2, 0.0, -6.0 + (index / 10) * 1.2 }, Vec3{ 12.0F, 0.0F, 0.0F }));
+        scene.Components().NavAgents().TryGet(agents.back())->horde = true;
+    }
+    for (int frame = 0; frame < 30; ++frame) static_cast<void>(scene.Runtime().Update(kFrame));
+    Check(scene.Navigation().CrowdStats().hordeFields == 1U && scene.Navigation().CrowdStats().hordeWaiting == 0U,
+        "50 agents with one destination share one field and all follow it");
+    for (const scene::SceneEntity agent : agents) scene.Components().NavAgents().TryGet(agent)->destination = Vec3{ 12.05F, 0.0F, 0.02F };
+    static_cast<void>(scene.Runtime().Update(kFrame));
+    Check(scene.Navigation().CrowdStats().hordeFields == 1U, "a destination moved within its polygon keeps the field");
+    std::size_t waiting = 0U;
+    for (int frame = 0; frame < 900; ++frame) {
+        const Vec3 destination{ 12.0F, 0.0F, -15.0F + 0.03F * static_cast<float>(frame) };
+        for (const scene::SceneEntity agent : agents) scene.Components().NavAgents().TryGet(agent)->destination = destination;
+        static_cast<void>(scene.Runtime().Update(kFrame));
+        waiting = std::max(waiting, scene.Navigation().CrowdStats().hordeWaiting);
+    }
+    Check(waiting == 0U, "agents follow the old field while the new one grows: " + std::to_string(waiting) + " waited");
+    std::size_t near = 0U;
+    for (const scene::SceneEntity agent : agents) near += Horizontal(Position(scene, agent), { 12.0F, 0.0F, 11.97F }) < 6.0F ? 1U : 0U;
+    Check(near >= 45U, "the horde goes around the wall and keeps up with its moving target: " + std::to_string(near) + " of 50");
+}
+
 void TestNavComponentsPersist() {
     const std::filesystem::path root = FreshDirectory("persist");
     {
@@ -770,6 +946,7 @@ void TestNavComponentsPersist() {
             .bidirectional = false, .enabled = true }));
         const scene::SceneEntity agent = AddAgent(scene, DVec3{ 2.0, 0.0, 1.0 }, Vec3{ 5.0F, 0.0F, -3.0F }, 0.6F, 4.5F);
         scene.Components().NavAgents().TryGet(agent)->areaMask = scene::kAllNavAreas & ~scene::NavAreaBit(5U);
+        scene.Components().NavAgents().TryGet(agent)->horde = true;
         static_cast<void>(AddObstacle(scene, { -2.0F, 0.0F, 4.0F }, scene::NavObstacle{
             .shape = scene::NavObstacleShape::Cylinder, .radius = 1.25F, .height = 3.0F, .area = 6U, .carve = false }));
         Check(scene::SceneDocumentService::Save(scene, root / "Navigation.21kbscene", "Navigation"), "a scene with navigation components saves");
@@ -795,7 +972,8 @@ void TestNavComponentsPersist() {
         links[0].kind == scene::NavLinkKind::Ladder && links[0].area == 7U && !links[0].bidirectional,
         "a link keeps every field through a save and a load");
     Check(found.agents.size() == 1U && found.agents[0].radius == 0.6F && found.agents[0].maxSpeed == 4.5F && found.agents[0].destination.z == -3.0F &&
-        found.agents[0].areaMask == (scene::kAllNavAreas & ~scene::NavAreaBit(5U)), "an agent keeps its fields through a save and a load");
+        found.agents[0].areaMask == (scene::kAllNavAreas & ~scene::NavAreaBit(5U)) && found.agents[0].horde,
+        "an agent keeps its fields through a save and a load");
     Check(found.obstacles.size() == 1U && found.obstacles[0].shape == scene::NavObstacleShape::Cylinder && found.obstacles[0].radius == 1.25F &&
         found.obstacles[0].height == 3.0F && found.obstacles[0].area == 6U && !found.obstacles[0].carve,
         "an obstacle keeps its fields through a save and a load");
@@ -1463,6 +1641,9 @@ void RunNavigationMeshTests() {
     TestCrowdLevelOfDetail();
     TestCrowdLevelOfDetailTransitions();
     TestCrowdPathBudgetPriority();
+    TestHordeCrossesLevels();
+    TestHordeIsDeterministic();
+    TestHordeFieldFollowsItsTarget();
     TestNavComponentsPersist();
     TestBoundsLimitTheBake();
     TestBoundsBakeSettings();
@@ -1558,6 +1739,38 @@ void RunNavigationCrowdBenchmark() {
     pathMilliseconds(DVec3{ -5.0, 0.0, -5.0 }, DVec3{ 5.0, 0.0, 5.0 }, 2000, "over 14 m");
     Check(fiveThousandLod.milliseconds < fiveThousand.milliseconds, "level of detail must make a large crowd cheaper");
     Check(tenThousand.milliseconds < 24.0 * kSanitizerTimeScale, "10000 crowd agents must step within 24 ms: " + std::to_string(tenThousand.milliseconds));
+}
+
+// Horde cost: 10 000 and 50 000 agents chasing 1, 10 and 100 moving targets on the two-storey level
+// (stairs, bridge, ladder link) over 2000 steps, and individual crowd agents in the same scenario.
+void RunNavigationHordeBenchmark() {
+    const HordeLevel level = MakeHordeLevel(120.0);
+    const auto report = [](std::string_view label, const HordeRun& run) {
+        std::cout << "navigation: " << label << ": average " << run.Average() << " ms, p50 " << run.Percentile(0.5) << " ms, p95 "
+                  << run.Percentile(0.95) << " ms, p99 " << run.Percentile(0.99) << " ms, max " << run.Percentile(1.0) << " ms, fields "
+                  << run.maxFields << ", most waiting " << run.maxWaiting << ", fields in the slowest step " << run.slowestFieldMilliseconds << " ms\n";
+    };
+    double tenThousandOne = 0.0;
+    double tenThousandHundred = 0.0;
+    double fiftyThousandHundred = 0.0;
+    for (const int count : { 10000, 50000 }) {
+        for (const int targets : { 1, 10, 100 }) {
+            const HordeRun run = RunHorde(level, count, targets, 2000, true);
+            report("horde step, " + std::to_string(count) + " agents, " + std::to_string(targets) + " moving targets", run);
+            if (count == 10000 && targets == 1) tenThousandOne = run.Percentile(0.5);
+            if (count == 10000 && targets == 100) tenThousandHundred = run.Percentile(0.5);
+            if (count == 50000 && targets == 100) fiftyThousandHundred = run.Percentile(0.5);
+        }
+    }
+    const HordeRun oneThread = RunHorde(level, 10000, 1, 600, true, 1U);
+    report("horde step, 10000 agents, 1 moving target, one thread", oneThread);
+    for (const int targets : { 1, 100 }) {
+        const HordeRun run = RunHorde(level, 10000, targets, 2000, false);
+        report("crowd step, 10000 individual agents, " + std::to_string(targets) + " moving targets", run);
+    }
+    Check(tenThousandOne < 3.0 * kSanitizerTimeScale, "10000 horde agents after one target must step within 3 ms: " + std::to_string(tenThousandOne));
+    Check(tenThousandHundred < 6.0 * kSanitizerTimeScale, "10000 horde agents after 100 targets must step within 6 ms: " + std::to_string(tenThousandHundred));
+    Check(fiftyThousandHundred < 30.0 * kSanitizerTimeScale, "50000 horde agents must step within 30 ms: " + std::to_string(fiftyThousandHundred));
 }
 
 } // namespace kb::tests

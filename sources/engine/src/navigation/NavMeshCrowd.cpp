@@ -225,6 +225,11 @@ void NavMeshCrowd::UseWorkers(std::uint32_t requested) {
     }
 }
 
+kb::ecs::WorkerPool* NavMeshCrowd::Workers(std::uint32_t requested) {
+    UseWorkers(requested);
+    return workers_.get();
+}
+
 void NavMeshCrowd::AttachWorkers(dtCrowd& crowd) {
     if (workers_ && crowd.setParallelFor(&RunCrowdPass, workers_.get(), static_cast<int>(workers_->WorkerCount()))) return;
     // Without workers, or without memory for their query objects, the passes run on this thread.

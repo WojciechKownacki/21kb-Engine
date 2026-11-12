@@ -41,6 +41,7 @@ void RunCrashReportConsentTests();
 void RunNavigationRuntimeTests();
 void RunNavigationMeshTests();
 void RunNavigationCrowdBenchmark();
+void RunNavigationHordeBenchmark();
 void RunPortalVisibilityTests();
 void RunMotionSkeletonRuleTests();
 void RunWorldPartitionTests();

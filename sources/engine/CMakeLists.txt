@@ -1054,6 +1054,7 @@ add_library(kb_engine STATIC
         src/scene/components/SceneLensEchoStorage.cpp
       src/scene/SceneContentInstanceService.cpp
     src/navigation/NavMeshCrowd.cpp
+    src/navigation/NavMeshHorde.cpp
     src/navigation/NavGeometryCollector.cpp
     src/navigation/NavMeshAsset.cpp
     src/navigation/NavMeshBuilder.cpp
@@ -1477,6 +1478,7 @@ add_library(kb_engine STATIC
       src/private/scene/SceneContentInstanceService.hpp
       src/private/scene/systems/ContentInstanceSceneSystem.hpp
     src/private/navigation/NavMeshCrowd.hpp
+    src/private/navigation/NavMeshHorde.hpp
     src/private/navigation/NavMeshRuntime.hpp
     src/private/world/WorldAssetLoaders.hpp
     src/private/world/WorldObjectSplit.hpp
@@ -2285,6 +2287,15 @@ if(BUILD_TESTING)
         LABELS "performance"
         RUN_SERIAL TRUE
         TIMEOUT 300
+    )
+    # Horde agents sharing navigation fields: 10 000 after one target within 3 ms, after 100 targets
+    # within 6 ms, 50 000 within 30 ms (median step, optimised build); prints the crowd for comparison.
+    add_test(NAME kb_engine_navigation-horde-bench COMMAND $<TARGET_FILE:kb_engine_tests> navigation-horde-bench)
+    set_tests_properties(kb_engine_navigation-horde-bench PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        LABELS "performance"
+        RUN_SERIAL TRUE
+        TIMEOUT 1500
     )
 
     kb_apply_quality_gates(kb_engine_tests)

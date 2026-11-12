@@ -189,6 +189,8 @@ InspectorFieldHelp InspectorFieldGuide::Help(InspectorPropertyId property) {
         return Plain(MobilityTip());
     case P::MeshRendererAffectsNavigation:
         return Plain(EditorText("inspector.tip.affectsNavigation", "Characters walk on this object or around it. Turn off for things they should ignore, such as grass or small props."));
+    case P::NavAgentHorde:
+        return Plain(EditorText("inspector.tip.navAgentHorde", "Walks with everyone heading to the same place, sharing one route. Much faster for large groups; they push apart instead of dodging."));
     // Audio Source
     case P::AudioSourceClip:
         return Plain(EditorText("inspector.tip.audioSource.clip", "The sound file that plays."));

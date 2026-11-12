@@ -68,6 +68,9 @@ public:
     [[nodiscard]] bool OnLink(std::uint64_t id) const noexcept;
     // The corners an agent steers through next, in the mesh's space.
     [[nodiscard]] std::vector<kb::math::Vec3> Corners(std::uint64_t id) const;
+    // The worker pool of `requested` threads (0 the default count) the per-agent passes run on;
+    // null when they run on the calling thread.
+    [[nodiscard]] kb::ecs::WorkerPool* Workers(std::uint32_t requested);
 
 private:
     struct CrowdDeleter {

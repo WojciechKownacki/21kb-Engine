@@ -43,6 +43,11 @@ struct NavigationCrowdSettings {
     // Threads the per-agent work of a step runs on: 0 uses the engine's default worker count, 1 the
     // calling thread. The result is the same for every count.
     std::uint32_t workerThreads = 0U;
+    // Horde agents (NavAgent::horde): polygons the shared navigation fields grow by per step, all
+    // fields together; fields kept for reuse; the gap beyond touching at which they push apart.
+    std::uint32_t hordeFieldNodesPerStep = 4096U;
+    std::uint32_t hordeFieldCacheSize = 128U;
+    float hordeSeparationDistance = 0.3F;
 };
 
 struct NavigationCrowdStats {
@@ -68,6 +73,18 @@ struct NavigationCrowdStats {
     double steeringMilliseconds = 0.0;
     double avoidanceMilliseconds = 0.0;
     double moveMilliseconds = 0.0;
+    // Horde agents: how many, how many were updated this step (far ones less often), asleep where
+    // they stopped, waiting for their field to reach them and crossing links; the fields kept and
+    // the polygons they grew by this step; the wall time of the horde step and of its fields.
+    std::size_t hordeAgents = 0U;
+    std::size_t hordeUpdated = 0U;
+    std::size_t hordeAsleep = 0U;
+    std::size_t hordeWaiting = 0U;
+    std::size_t hordeOnLinks = 0U;
+    std::size_t hordeFields = 0U;
+    std::size_t hordeFieldNodes = 0U;
+    double hordeMilliseconds = 0.0;
+    double hordeFieldMilliseconds = 0.0;
 };
 
 struct NavQueryOptions {

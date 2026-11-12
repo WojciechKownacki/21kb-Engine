@@ -394,6 +394,7 @@ enum class InspectorPropertyId : std::uint16_t {
     NavAgentDestinationY,
     NavAgentDestinationZ,
     NavAgentEnabled,
+    NavAgentHorde,
     NavAgentAreaMaskItem,
     NavObstacleShape,
     NavObstacleCenterX,

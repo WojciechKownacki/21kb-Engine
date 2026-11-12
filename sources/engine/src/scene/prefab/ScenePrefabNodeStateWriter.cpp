@@ -180,7 +180,7 @@ namespace {
     return lhs.radius == rhs.radius && lhs.height == rhs.height && lhs.maxSpeed == rhs.maxSpeed && lhs.acceleration == rhs.acceleration &&
         lhs.angularSpeedDegrees == rhs.angularSpeedDegrees && lhs.stoppingDistance == rhs.stoppingDistance && lhs.areaMask == rhs.areaMask &&
         Equals(lhs.destination, rhs.destination) && Equals(lhs.velocity, rhs.velocity) && lhs.remainingDistance == rhs.remainingDistance &&
-        lhs.pathStatus == rhs.pathStatus && lhs.enabled == rhs.enabled;
+        lhs.pathStatus == rhs.pathStatus && lhs.enabled == rhs.enabled && lhs.horde == rhs.horde;
 }
 
 [[nodiscard]] bool Equals(const NavObstacle& lhs, const NavObstacle& rhs) noexcept {

@@ -2027,6 +2027,9 @@ template <typename Mutator>
     if (hit.property == InspectorPropertyId::NavAgentEnabled) {
         return EditNavAgent(sceneContext, entity, "Toggle Nav Agent", [](kb::scene::NavAgent& value) { value.enabled = !value.enabled; return true; });
     }
+    if (hit.property == InspectorPropertyId::NavAgentHorde) {
+        return EditNavAgent(sceneContext, entity, "Toggle Nav Agent Horde Movement", [](kb::scene::NavAgent& value) { value.horde = !value.horde; return true; });
+    }
     // The walkable areas: the row opens the project's areas, an area switches on or off and the list stays open.
     if (hit.property == InspectorPropertyId::NavAgentAreaMask) {
         sceneContext.Inspector().EndTextEdit();

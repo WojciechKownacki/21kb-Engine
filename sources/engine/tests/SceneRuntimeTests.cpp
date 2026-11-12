@@ -188,6 +188,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunNavigationMeshTests();
     } else if (suite == "navigation-crowd-bench") {
         kb::tests::RunNavigationCrowdBenchmark();
+    } else if (suite == "navigation-horde-bench") {
+        kb::tests::RunNavigationHordeBenchmark();
     } else if (suite == "portal-visibility") {
         kb::tests::RunPortalVisibilityTests();
     } else if (suite == "motion-skeleton-rule") {

@@ -66,6 +66,7 @@ struct SceneDocument {
     //      normal bias, filter, quality and (directional) cascade count and distribution. Older files load
     //      the defaults.
     // v64: a Mesh Renderer and a Collider persist whether they affect navigation; older files load with it on.
+    // v65: a NavAgent persists whether it moves with the horde; older files load with it off.
     static constexpr std::uint32_t TilemapFileVersion = 50U;
     static constexpr std::uint32_t OneWayColliderFileVersion = 51U;
     static constexpr std::uint32_t ModalCanvasFileVersion = 52U;
@@ -83,7 +84,8 @@ struct SceneDocument {
     static constexpr std::uint32_t JointFreedomFileVersion = 62U;
     static constexpr std::uint32_t NavBoundsFileVersion = 63U;
     static constexpr std::uint32_t AffectsNavigationFileVersion = 64U;
-    static constexpr std::uint32_t CurrentFileVersion = 64U;
+    static constexpr std::uint32_t NavAgentHordeFileVersion = 65U;
+    static constexpr std::uint32_t CurrentFileVersion = 65U;
     static constexpr std::uint32_t SocketAttachmentFileVersion = 49U;
     static constexpr std::uint32_t CombatantFileVersion = 49U;
     static constexpr std::uint32_t AIBrainFileVersion = 49U;
