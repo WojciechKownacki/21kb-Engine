@@ -262,8 +262,10 @@ opening of each pair):
 - The agents step on the crowd's worker pool (on the calling thread on Android): each worker takes
   blocks of 128 agents from a shared counter until none is left, so a worker on a slower core ends up
   with fewer. Each agent writes only itself and reads the grid in a fixed order, so equal input replays
-  exactly on any number of threads. The crowd's reading of the agents' transforms runs on the same
-  pool.
+  exactly on any number of threads. The step's preparation (records, profiles, goals) and the grid
+  (a counting sort: bounds, cell counts, cell starts, placing, each cell's run back in agent order)
+  run in the same blocks; only agents that need a mesh search or a new goal and the work per goal
+  stay on the calling thread. The crowd's reading of the agents' transforms runs on the same pool.
 
 `CrowdStats()` reports the horde agents, how many were updated, asleep, waiting for guidance and
 on links, the fields kept (goal and exit fields), the nodes the fields and routes grew by and the
@@ -301,7 +303,7 @@ On the development machine (Release):
   10 targets and 3.3 ms after 100. A process that Windows runs at power-saving quality (a test
   started in the background) is placed on the efficiency cores and takes up to twice as long;
   targets that cross polygons and tiles every step cost the same; 10 000 agents spread over a
-  2 km map after 10 targets about 4.7 ms; 10 000 horde agents among 500 crowd agents about 0.6 ms
+  2 km map after 10 targets about 2 to 2.5 ms; 10 000 horde agents among 500 crowd agents about 0.6 ms
   plus 0.8 ms for the crowd. 10 000 individual crowd agents in the same scenario took 4 to 15 ms
   depending on the load of the machine.
 - On a phone (8 cores: one fast, three medium, four slow; the same level, steps on the calling

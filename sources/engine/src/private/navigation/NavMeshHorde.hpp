@@ -8,7 +8,9 @@
 
 #include <DetourNavMesh.h>
 
+#include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <unordered_map>
 #include <vector>
@@ -237,7 +239,20 @@ private:
     std::size_t ExpandRoute(NavHordeRoute& route, std::size_t budget);
     // Notes that an agent standing in a cluster without guidance waits for it (after the parallel pass).
     void RegisterDemand(std::uint32_t goal, std::uint32_t node);
-    void BuildGrid(float cellSize, std::span<const NavMeshBody> bodies);
+    // The horizontal bounds of the agents on the mesh.
+    struct GridBounds {
+        float minX = std::numeric_limits<float>::max();
+        float minZ = std::numeric_limits<float>::max();
+        float maxX = std::numeric_limits<float>::lowest();
+        float maxZ = std::numeric_limits<float>::lowest();
+        void Add(kb::math::Vec3 position) noexcept {
+            minX = std::min(minX, position.x);
+            minZ = std::min(minZ, position.z);
+            maxX = std::max(maxX, position.x);
+            maxZ = std::max(maxZ, position.z);
+        }
+    };
+    void BuildGrid(float cellSize, std::span<const NavMeshBody> bodies, GridBounds agentBounds, kb::ecs::WorkerPool* workers);
 
     std::vector<NavPolygonGraph> graphs_;
     std::vector<NavHordeField> fields_;
@@ -257,6 +272,9 @@ private:
     // Per agent of the step: the goal it is after, and its radius.
     std::vector<std::uint32_t> wanted_;
     std::vector<float> radii_;
+    // Per agent of the step: what is left for the pass in agent order after the parallel one (a mesh
+    // search, a new goal).
+    std::vector<std::uint8_t> pending_;
     std::size_t fieldCursor_ = 0U;
     std::uint64_t fieldStamp_ = 0U;
     // Spatial grid over the step's start positions: agents sorted by cell, their positions and
@@ -269,6 +287,12 @@ private:
     std::vector<float> sortedY_;
     std::vector<float> sortedZ_;
     std::vector<float> sortedRadius_;
+    // Building the grid on the workers: per block of agents, its cells with their counts (by cell),
+    // then where the block's agents of each cell go; per agent, its entry among its block's cells.
+    std::vector<std::uint32_t> blockCells_;
+    std::vector<std::uint32_t> blockCounts_;
+    std::vector<std::uint32_t> blockCellCount_;
+    std::vector<std::uint8_t> entryOf_;
     float gridMinX_ = 0.0F;
     float gridMinZ_ = 0.0F;
     float gridCell_ = 1.0F;

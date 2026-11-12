@@ -28,6 +28,9 @@ const Vec3 kSearchExtents{ 2.0F, 4.0F, 2.0F };
 // kAgentsPerBlock that the workers take one after another.
 constexpr std::size_t kMinAgentsForWorkers = 2048U;
 constexpr std::size_t kAgentsPerBlock = 128U;
+// Below this many agents and bodies the grid is built on the calling thread: its passes on the workers
+// cost more to start than they save.
+constexpr std::size_t kMinAgentsForParallelGrid = 16384U;
 // An agent moves to a farther level of detail only this far beyond its edge.
 constexpr float kDetailHysteresis = 1.1F;
 // Steps between updates of near, mid and far agents.
@@ -42,12 +45,33 @@ constexpr std::uint8_t kNoWay = 0xFFU;
 // Steps through polygon edges one move may take.
 constexpr int kMaxCrossings = 8;
 constexpr std::uint32_t kMaxGridCells = 1U << 22U;
+// An agent's goal not found in the parallel pass: it is made after the pass, and the agent finds it in the steering pass.
+constexpr std::uint32_t kGoalMissing = kNone - 1U;
+// What is left of an agent for the pass in agent order: nothing, a mesh search (then its goal), its goal.
+constexpr std::uint8_t kNothingPending = 0U;
+constexpr std::uint8_t kFindPolygon = 1U;
+constexpr std::uint8_t kMakeGoal = 2U;
+
+[[nodiscard]] bool OnWorkers(const kb::ecs::WorkerPool* pool, std::size_t count) noexcept {
+    // One worker only adds the hand-over to the step.
+    return pool != nullptr && pool->WorkerCount() > 1U && count > kMinAgentsForWorkers && count >= kMinAgentsOnWorkers;
+}
+
+void LowerTo(std::atomic<float>& target, float value) noexcept {
+    float seen = target.load(std::memory_order_relaxed);
+    while (value < seen && !target.compare_exchange_weak(seen, value, std::memory_order_relaxed)) {}
+}
+
+void RaiseTo(std::atomic<float>& target, float value) noexcept {
+    float seen = target.load(std::memory_order_relaxed);
+    while (value > seen && !target.compare_exchange_weak(seen, value, std::memory_order_relaxed)) {}
+}
 
 // Runs `body(begin, end)` over all `count` agents. On the workers, each one takes the next block of
 // agents from a shared counter until none is left, so a worker on a slower core ends up with fewer.
 template <typename Body>
 void ForEachPiece(kb::ecs::WorkerPool* pool, std::size_t count, Body&& body) {
-    if (pool == nullptr || count <= kMinAgentsForWorkers || count < kMinAgentsOnWorkers) {
+    if (!OnWorkers(pool, count)) {
         if (count > 0U) body(std::size_t{ 0U }, count);
         return;
     }
@@ -852,24 +876,23 @@ void NavMeshHorde::RegisterDemand(std::uint32_t goalIndex, std::uint32_t node) {
     }
 }
 
-void NavMeshHorde::BuildGrid(float cellSize, std::span<const NavMeshBody> bodies) {
-    // The agents come first, then the bodies of other kinds (crowd agents, obstacles) that push them.
+void NavMeshHorde::BuildGrid(float cellSize, std::span<const NavMeshBody> bodies, GridBounds agentBounds, kb::ecs::WorkerPool* workers) {
+    // The agents come first, then the bodies of other kinds (crowd agents, obstacles) that push them;
+    // `agentBounds` holds the agents on the mesh. A counting sort; on the workers it runs in passes
+    // over blocks of agents: each block's cells with their counts; then on the calling thread, per
+    // cell, where its run starts and, block after block, where each block's agents of it go; then each
+    // block places its agents. Every run is in agent order, so the grid does not depend on the number
+    // of workers.
     const std::size_t agents = records_.size();
     const std::size_t count = agents + bodies.size();
+    const bool parallel = OnWorkers(workers, count) && count >= kMinAgentsForParallelGrid;
     const auto positionAt = [&](std::size_t index) { return index < agents ? records_[index].position : bodies[index - agents].position; };
     const auto onGrid = [&](std::size_t index) { return index >= agents || records_[index].node != kNone; };
-    float minX = std::numeric_limits<float>::max();
-    float minZ = minX;
-    float maxX = std::numeric_limits<float>::lowest();
-    float maxZ = maxX;
-    for (std::size_t index = 0U; index < count; ++index) {
-        if (!onGrid(index)) continue;
-        const Vec3 position = positionAt(index);
-        minX = std::min(minX, position.x);
-        minZ = std::min(minZ, position.z);
-        maxX = std::max(maxX, position.x);
-        maxZ = std::max(maxZ, position.z);
-    }
+    for (const NavMeshBody& body : bodies) agentBounds.Add(body.position);
+    const float minX = agentBounds.minX;
+    const float minZ = agentBounds.minZ;
+    const float maxX = agentBounds.maxX;
+    const float maxZ = agentBounds.maxZ;
     if (minX > maxX) {
         gridWidth_ = gridHeight_ = 0U;
         cellStart_.assign(1U, 0U);
@@ -888,35 +911,93 @@ void NavMeshHorde::BuildGrid(float cellSize, std::span<const NavMeshBody> bodies
     const std::size_t cells = static_cast<std::size_t>(gridWidth_) * gridHeight_;
     cellStart_.assign(cells + 1U, 0U);
     cellOf_.resize(count);
-    for (std::size_t index = 0U; index < count; ++index) {
-        if (!onGrid(index)) {
-            cellOf_[index] = kNone;
-            continue;
-        }
+    const auto cellAt = [&](std::size_t index) {
         const Vec3 position = positionAt(index);
         const auto cx = std::min(static_cast<std::uint32_t>((position.x - minX) / gridCell_), gridWidth_ - 1U);
         const auto cz = std::min(static_cast<std::uint32_t>((position.z - minZ) / gridCell_), gridHeight_ - 1U);
-        cellOf_[index] = cz * gridWidth_ + cx;
-        ++cellStart_[cellOf_[index] + 1U];
-    }
-    for (std::size_t cell = 0U; cell < cells; ++cell) cellStart_[cell + 1U] += cellStart_[cell];
-    const std::size_t placed = cellStart_[cells];
-    sorted_.resize(placed);
-    sortedX_.resize(placed);
-    sortedY_.resize(placed);
-    sortedZ_.resize(placed);
-    sortedRadius_.resize(placed);
-    fill_.assign(cellStart_.begin(), cellStart_.end() - 1);
-    for (std::size_t index = 0U; index < count; ++index) {
-        if (cellOf_[index] == kNone) continue;
-        const std::uint32_t at = fill_[cellOf_[index]]++;
+        return cz * gridWidth_ + cx;
+    };
+    const auto place = [&](std::uint32_t at, std::size_t index) {
         const Vec3 position = positionAt(index);
         sorted_[at] = static_cast<std::uint32_t>(index);
         sortedX_[at] = position.x;
         sortedY_[at] = position.y;
         sortedZ_[at] = position.z;
         sortedRadius_[at] = index < agents ? radii_[index] : bodies[index - agents].radius;
+    };
+    const auto resizeSorted = [&] {
+        for (std::size_t cell = 0U; cell < cells; ++cell) cellStart_[cell + 1U] += cellStart_[cell];
+        const std::size_t placed = cellStart_[cells];
+        sorted_.resize(placed);
+        sortedX_.resize(placed);
+        sortedY_.resize(placed);
+        sortedZ_.resize(placed);
+        sortedRadius_.resize(placed);
+    };
+    if (!parallel) {
+        for (std::size_t index = 0U; index < count; ++index) {
+            cellOf_[index] = onGrid(index) ? cellAt(index) : kNone;
+            if (cellOf_[index] != kNone) ++cellStart_[cellOf_[index] + 1U];
+        }
+        resizeSorted();
+        fill_.assign(cellStart_.begin(), cellStart_.end() - 1);
+        for (std::size_t index = 0U; index < count; ++index) {
+            if (cellOf_[index] != kNone) place(fill_[cellOf_[index]]++, index);
+        }
+        return;
     }
+    // Each block's cells, by cell, with how many of its agents stand in each.
+    const std::size_t blocks = (count + kAgentsPerBlock - 1U) / kAgentsPerBlock;
+    blockCells_.resize(blocks * kAgentsPerBlock);
+    blockCounts_.resize(blocks * kAgentsPerBlock);
+    blockCellCount_.resize(blocks);
+    entryOf_.resize(count);
+    ForEachPiece(workers, count, [&](std::size_t begin, std::size_t end) {
+        std::uint64_t keys[kAgentsPerBlock];
+        std::size_t used = 0U;
+        for (std::size_t index = begin; index < end; ++index) {
+            cellOf_[index] = onGrid(index) ? cellAt(index) : kNone;
+            if (cellOf_[index] != kNone) keys[used++] = (static_cast<std::uint64_t>(cellOf_[index]) << 32U) | (index - begin);
+        }
+        std::sort(keys, keys + used);
+        const std::size_t block = begin / kAgentsPerBlock;
+        std::uint32_t* blockCells = blockCells_.data() + block * kAgentsPerBlock;
+        std::uint32_t* blockCounts = blockCounts_.data() + block * kAgentsPerBlock;
+        std::uint32_t entries = 0U;
+        for (std::size_t at = 0U; at < used; ++at) {
+            const auto cell = static_cast<std::uint32_t>(keys[at] >> 32U);
+            if (entries == 0U || blockCells[entries - 1U] != cell) {
+                blockCells[entries] = cell;
+                blockCounts[entries++] = 0U;
+            }
+            ++blockCounts[entries - 1U];
+            entryOf_[begin + (keys[at] & 0xFFFFFFFFULL)] = static_cast<std::uint8_t>(entries - 1U);
+        }
+        blockCellCount_[block] = entries;
+    });
+    // Where each cell's run starts, then, block after block, where the block's agents of each cell go.
+    for (std::size_t block = 0U; block < blocks; ++block) {
+        for (std::uint32_t entry = 0U; entry < blockCellCount_[block]; ++entry) {
+            cellStart_[blockCells_[block * kAgentsPerBlock + entry] + 1U] += blockCounts_[block * kAgentsPerBlock + entry];
+        }
+    }
+    resizeSorted();
+    fill_.assign(cellStart_.begin(), cellStart_.end() - 1);
+    for (std::size_t block = 0U; block < blocks; ++block) {
+        for (std::uint32_t entry = 0U; entry < blockCellCount_[block]; ++entry) {
+            const std::size_t at = block * kAgentsPerBlock + entry;
+            const std::uint32_t first = fill_[blockCells_[at]];
+            fill_[blockCells_[at]] += blockCounts_[at];
+            blockCounts_[at] = first;
+        }
+    }
+    // Each block places its agents, in agent order.
+    ForEachPiece(workers, count, [&](std::size_t begin, std::size_t end) {
+        std::uint32_t* next = blockCounts_.data() + (begin / kAgentsPerBlock) * kAgentsPerBlock;
+        for (std::size_t index = begin; index < end; ++index) {
+            if (cellOf_[index] != kNone) place(next[entryOf_[index]]++, index);
+        }
+    });
 }
 
 void NavMeshHorde::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAgentInput> agents, std::span<const NavMeshBody> bodies,
@@ -926,12 +1007,12 @@ void NavMeshHorde::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
     ++step_;
     expanded_ = waiting_ = asleep_ = ticked_ = onLinks_ = 0U;
     agents_ = agents.size();
-    outputs.assign(agents.size(), NavMeshCrowdAgentOutput{});
+    // Every output is written by the steering pass.
+    outputs.resize(agents.size());
 
     // 1. Records follow the agents (both in id order).
-    bool sameAgents = records_.size() == agents.size();
-    for (std::size_t index = 0U; sameAgents && index < agents.size(); ++index) sameAgents = records_[index].id == agents[index].id;
-    if (!sameAgents) {
+    // The parallel pass of step 2 checks the order and has them follow again if it changed.
+    const auto followAgents = [&] {
         scratch_.clear();
         scratch_.reserve(agents.size());
         auto known = records_.begin();
@@ -945,7 +1026,8 @@ void NavMeshHorde::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
             }
         }
         records_.swap(scratch_);
-    }
+    };
+    if (records_.size() != agents.size()) followAgents();
     SyncGraphs(runtime);
     const std::uint32_t profiles = runtime.ProfileCount();
     const std::size_t cacheSize = std::max<std::size_t>(settings.hordeFieldCacheSize, 1U);
@@ -958,88 +1040,164 @@ void NavMeshHorde::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
         costSignature_ = Mix(costs, every.Areas());
     }
 
-    // 2. Every agent's goal and the field shared by the agents of that goal; agents join the mesh.
+    // 2. Every agent's goal and the field shared by the agents of that goal; agents join the mesh. The
+    // agents are looked at in parallel; those that need the mesh searched or a new goal are handled
+    // after that in agent order (one agent per new goal and block), then every goal once.
     for (Goal& goal : goals_) goal.used = false;
-    wanted_.assign(agents.size(), kNone);
-    demand_.assign(agents.size(), 0U);
+    wanted_.resize(agents.size());
+    demand_.resize(agents.size());
     radii_.resize(agents.size());
-    std::uint32_t lastGoal = kNone;
-    float lastRadius = -1.0F;
-    std::uint32_t lastProfile = kNone;
-    for (std::size_t index = 0U; index < agents.size(); ++index) {
-        const NavMeshCrowdAgentInput& input = agents[index];
-        AgentRecord& record = records_[index];
-        radii_[index] = input.agent.radius;
-        if (input.agent.radius != lastRadius) {
-            lastRadius = input.agent.radius;
-            lastProfile = runtime.ProfileForRadius(input.agent.radius);
-            if (lastProfile >= profiles || runtime.Mesh(lastProfile) == nullptr) lastProfile = kNone;
+    pending_.resize(agents.size());
+    std::atomic<std::size_t> pending{ 0U };
+    std::atomic<float> widestAgent{ 0.1F };
+    std::atomic<float> lowX{ std::numeric_limits<float>::max() };
+    std::atomic<float> lowZ{ std::numeric_limits<float>::max() };
+    std::atomic<float> highX{ std::numeric_limits<float>::lowest() };
+    std::atomic<float> highZ{ std::numeric_limits<float>::lowest() };
+    std::atomic<bool> reordered{ false };
+    const auto prepare = [&](std::size_t begin, std::size_t end) {
+        for (std::size_t index = begin; index < end; ++index) {
+            if (records_[index].id == agents[index].id) continue;
+            reordered.store(true, std::memory_order_relaxed);
+            return;
         }
-        const std::uint32_t profile = lastProfile;
-        if (!input.agent.enabled || profile == kNone) {
-            record.node = kNone;
-            continue;
+        GridBounds blockBounds;
+        float lastRadius = -1.0F;
+        std::uint32_t lastProfile = kNone;
+        std::uint32_t lastGoal = kNone;
+        // The last goal of the block not found: the agents after it with the same key wait for its making.
+        Goal lastMissing{};
+        bool missing = false;
+        float blockWidest = 0.0F;
+        std::size_t blockPending = 0U;
+        for (std::size_t index = begin; index < end; ++index) {
+            const NavMeshCrowdAgentInput& input = agents[index];
+            AgentRecord& record = records_[index];
+            radii_[index] = input.agent.radius;
+            blockWidest = std::max(blockWidest, input.agent.radius);
+            wanted_[index] = kNone;
+            demand_[index] = 0U;
+            pending_[index] = kNothingPending;
+            if (input.agent.radius != lastRadius) {
+                lastRadius = input.agent.radius;
+                lastProfile = runtime.ProfileForRadius(input.agent.radius);
+                if (lastProfile >= profiles || runtime.Mesh(lastProfile) == nullptr) lastProfile = kNone;
+            }
+            const std::uint32_t profile = lastProfile;
+            if (!input.agent.enabled || profile == kNone) {
+                record.node = kNone;
+                continue;
+            }
+            if (record.profile != profile) {
+                record.node = kNone;
+                record.field = kNone;
+            }
+            record.profile = profile;
+            const float moved = HorizontalLength(input.position - record.position);
+            if (record.node == kNone || (record.linkNode == kNone && (moved > std::max(input.agent.radius * 4.0F, 2.0F) ||
+                                             std::fabs(input.position.y - record.position.y) > input.agent.height))) {
+                // Joining, or moved far by something else: the mesh is searched after this pass.
+                pending_[index] = kFindPolygon;
+                ++blockPending;
+                continue;
+            }
+            if (record.linkNode == kNone && moved > 1.0e-4F) {
+                // Moved a little by something else (a character's physics): follow it over the polygons.
+                record.position = input.position;
+            }
+            blockBounds.Add(record.position);
+            // The goal: agents with the same destination, areas and profile share one.
+            const Goal key{ .profile = profile, .destination = input.agent.destination, .areas = input.agent.areaMask };
+            if (lastGoal == kNone || !goals_[lastGoal].Same(key)) {
+                if (missing && lastMissing.Same(key)) {
+                    wanted_[index] = kGoalMissing;
+                    continue;
+                }
+                const std::uint32_t found = FindGoal(key);
+                if (found == kNone) {
+                    wanted_[index] = kGoalMissing;
+                    pending_[index] = kMakeGoal;
+                    ++blockPending;
+                    lastMissing = key;
+                    missing = true;
+                    continue;
+                }
+                lastGoal = found;
+                std::atomic_ref<bool>{ goals_[found].used }.store(true, std::memory_order_relaxed);
+            }
+            wanted_[index] = lastGoal;
         }
-        if (record.profile != profile) {
-            record.node = kNone;
-            record.field = kNone;
-        }
-        record.profile = profile;
-        const NavPolygonGraph& graph = graphs_[profile];
-        const float moved = HorizontalLength(input.position - record.position);
-        if (record.node == kNone || (record.linkNode == kNone && (moved > std::max(input.agent.radius * 4.0F, 2.0F) ||
-                                         std::fabs(input.position.y - record.position.y) > input.agent.height))) {
-            // Joining, or moved far by something else: find the polygon again.
-            NavAreaFilter filter;
-            runtime.ConfigureFilter(filter, input.agent.areaMask);
-            const auto nearest = runtime.Nearest(profile, input.position, kSearchExtents, filter);
-            record.node = nearest ? graph.NodeOf(*runtime.Mesh(profile), nearest->first) : kNone;
-            record.polygon = nearest ? nearest->first : 0U;
-            record.position = nearest ? nearest->second : input.position;
-            record.velocity = Vec3{};
-            record.linkNode = kNone;
-            record.asleep = false;
-            if (record.node == kNone) continue;
-        } else if (record.linkNode == kNone && moved > 1.0e-4F) {
-            // Moved a little by something else (a character's physics): follow it over the polygons.
-            record.position = input.position;
-        }
-        // The goal: agents with the same destination, areas and profile share one.
-        Goal key{ .profile = profile, .destination = input.agent.destination, .areas = input.agent.areaMask };
-        std::uint32_t goal = kNone;
-        if (lastGoal != kNone && goals_[lastGoal].Same(key)) {
-            goal = lastGoal;
-        } else {
-            goal = FindGoal(key);
+        RaiseTo(widestAgent, blockWidest);
+        LowerTo(lowX, blockBounds.minX);
+        LowerTo(lowZ, blockBounds.minZ);
+        RaiseTo(highX, blockBounds.maxX);
+        RaiseTo(highZ, blockBounds.maxZ);
+        if (blockPending > 0U) pending.fetch_add(blockPending, std::memory_order_relaxed);
+    };
+    ForEachPiece(workers, agents.size(), prepare);
+    if (reordered.load(std::memory_order_relaxed)) {
+        // Agents came or went with the count unchanged: the records follow, and the pass runs again.
+        followAgents();
+        for (Goal& goal : goals_) goal.used = false;
+        pending.store(0U, std::memory_order_relaxed);
+        ForEachPiece(workers, agents.size(), prepare);
+    }
+    GridBounds agentBounds{ .minX = lowX.load(std::memory_order_relaxed), .minZ = lowZ.load(std::memory_order_relaxed),
+        .maxX = highX.load(std::memory_order_relaxed), .maxZ = highZ.load(std::memory_order_relaxed) };
+    if (pending.load(std::memory_order_relaxed) > 0U) {
+        for (std::size_t index = 0U; index < agents.size(); ++index) {
+            if (pending_[index] == kNothingPending) continue;
+            const NavMeshCrowdAgentInput& input = agents[index];
+            AgentRecord& record = records_[index];
+            if (pending_[index] == kFindPolygon) {
+                const NavPolygonGraph& graph = graphs_[record.profile];
+                NavAreaFilter filter;
+                runtime.ConfigureFilter(filter, input.agent.areaMask);
+                const auto nearest = runtime.Nearest(record.profile, input.position, kSearchExtents, filter);
+                record.node = nearest ? graph.NodeOf(*runtime.Mesh(record.profile), nearest->first) : kNone;
+                record.polygon = nearest ? nearest->first : 0U;
+                record.position = nearest ? nearest->second : input.position;
+                record.velocity = Vec3{};
+                record.linkNode = kNone;
+                record.asleep = false;
+                if (record.node == kNone) continue;
+                agentBounds.Add(record.position);
+            }
+            const Goal key{ .profile = record.profile, .destination = input.agent.destination, .areas = input.agent.areaMask };
+            std::uint32_t goal = FindGoal(key);
             if (goal == kNone) {
                 goal = static_cast<std::uint32_t>(goals_.size());
                 goals_.push_back(key);
                 IndexGoals(goal);
             }
+            goals_[goal].used = true;
+            wanted_[index] = goal;
         }
-        lastGoal = goal;
-        Goal& target = goals_[goal];
-        target.used = true;
+    }
+    for (Goal& target : goals_) {
+        if (!target.used) continue;
+        const NavPolygonGraph& graph = graphs_[target.profile];
         if (target.revision != graph.revision) {
-            target.node = GoalNode(runtime, profile, target.destination, target.areas);
+            target.node = GoalNode(runtime, target.profile, target.destination, target.areas);
             target.cluster = target.node != kNone ? graph.cluster[target.node] : kNone;
             target.revision = graph.revision;
             target.field = kNone;
             target.route = kNone;
         }
         if (target.node == kNone) continue;
-        if (target.field == kNone || !SameField(fields_[target.field], profile, target.node, kNoWay, target.areas, costSignature_)) {
-            target.field = FindField(profile, target.node, kNoWay, target.areas);
+        if (target.field == kNone || !SameField(fields_[target.field], target.profile, target.node, kNoWay, target.areas, costSignature_)) {
+            target.field = FindField(target.profile, target.node, kNoWay, target.areas);
         }
-        if (target.route == kNone || routes_[target.route].goalCluster != target.cluster || routes_[target.route].profile != profile ||
+        if (target.route == kNone || routes_[target.route].goalCluster != target.cluster || routes_[target.route].profile != target.profile ||
             routes_[target.route].graphRevision != graph.revision) {
-            target.route = FindRoute(profile, target.cluster, cacheSize);
+            target.route = FindRoute(target.profile, target.cluster, cacheSize);
         }
         fields_[target.field].lastUsed = step_;
         routes_[target.route].lastUsed = step_;
-        wanted_[index] = goal;
     }
-    // Goals no agent is after any more are forgotten (their fields stay cached).
+    // Goals no agent is after any more are forgotten (their fields stay cached); the steering pass
+    // renumbers the agents' goals.
+    bool renumbered = false;
     if (std::ranges::any_of(goals_, [](const Goal& goal) { return !goal.used; })) {
         std::size_t kept = 0U;
         remap_.assign(goals_.size(), kNone);
@@ -1050,7 +1208,7 @@ void NavMeshHorde::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
         }
         goals_.resize(kept);
         IndexGoals(kNone);
-        for (std::uint32_t& goal : wanted_) goal = goal == kNone ? kNone : remap_[goal];
+        renumbered = true;
     }
 
     // 3. Fields grow toward the agents waiting for them, within the step's budget.
@@ -1059,11 +1217,10 @@ void NavMeshHorde::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
     fieldMilliseconds_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - fieldsStarted).count();
 
     // 4. One spatial grid over where the agents stand at the start of the step.
-    float widest = 0.1F;
-    for (std::size_t index = 0U; index < agents.size(); ++index) widest = std::max(widest, radii_[index]);
+    float widest = widestAgent.load(std::memory_order_relaxed);
     for (const NavMeshBody& body : bodies) widest = std::max(widest, body.radius);
     const float buffer = std::max(settings.hordeSeparationDistance, 0.01F);
-    BuildGrid(widest * 2.0F + buffer, bodies);
+    BuildGrid(widest * 2.0F + buffer, bodies, agentBounds, workers);
 
     // 5. Every agent steers and moves, writing only itself.
     const float separationWeight = settings.separationWeight;
@@ -1071,19 +1228,32 @@ void NavMeshHorde::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
     std::atomic<std::size_t> asleep{ 0U };
     std::atomic<std::size_t> onLinks{ 0U };
     std::atomic<std::size_t> ticked{ 0U };
+    std::atomic<std::size_t> demanding{ 0U };
     ForEachPiece(workers, agents.size(), [&](std::size_t begin, std::size_t end) {
+        // The goal the last agent of the block made after the parallel pass turned out to be.
+        std::uint32_t lastMade = kNone;
         for (std::size_t index = begin; index < end; ++index) {
             const NavMeshCrowdAgentInput& input = agents[index];
             AgentRecord& record = records_[index];
             NavMeshCrowdAgentOutput& output = outputs[index];
+            output = NavMeshCrowdAgentOutput{};
             output.position = input.position;
             if (!input.agent.enabled) continue;
-            if (record.node == kNone || wanted_[index] == kNone) {
+            std::uint32_t goalIndex = wanted_[index];
+            if (goalIndex == kGoalMissing) {
+                const Goal key{ .profile = record.profile, .destination = input.agent.destination, .areas = input.agent.areaMask };
+                if (lastMade == kNone || !goals_[lastMade].Same(key)) lastMade = FindGoal(key);
+                goalIndex = lastMade;
+            } else if (renumbered && goalIndex != kNone) {
+                goalIndex = remap_[goalIndex];
+            }
+            wanted_[index] = goalIndex;
+            if (record.node == kNone || goalIndex == kNone || goals_[goalIndex].node == kNone) {
                 output.status = NavPathStatus::Failed;
                 continue;
             }
             const NavPolygonGraph& graph = graphs_[record.profile];
-            const Goal& goal = goals_[wanted_[index]];
+            const Goal& goal = goals_[goalIndex];
             const std::uint32_t here = graph.cluster[record.node];
             const NavHordeRoute& route = routes_[goal.route];
             // The guidance of this step: the goal's field in the goal's cluster, else the exit field of
@@ -1377,8 +1547,10 @@ void NavMeshHorde::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
         std::size_t blockAsleep = 0U;
         std::size_t blockOnLinks = 0U;
         std::size_t blockTicked = 0U;
+        std::size_t blockDemanding = 0U;
         for (std::size_t index = begin; index < end; ++index) {
             const AgentRecord& record = records_[index];
+            blockDemanding += demand_[index];
             if (!agents[index].agent.enabled || record.node == kNone) continue;
             blockWaiting += record.waiting ? 1U : 0U;
             blockAsleep += record.asleep ? 1U : 0U;
@@ -1389,13 +1561,15 @@ void NavMeshHorde::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
         asleep.fetch_add(blockAsleep, std::memory_order_relaxed);
         onLinks.fetch_add(blockOnLinks, std::memory_order_relaxed);
         ticked.fetch_add(blockTicked, std::memory_order_relaxed);
+        if (blockDemanding > 0U) demanding.fetch_add(blockDemanding, std::memory_order_relaxed);
     });
     waiting_ = waiting.load(std::memory_order_relaxed);
     asleep_ = asleep.load(std::memory_order_relaxed);
     onLinks_ = onLinks.load(std::memory_order_relaxed);
     ticked_ = ticked.load(std::memory_order_relaxed);
     // 6. Agents waiting for guidance tell the fields and routes (in agent order, so any number of workers gives the same result).
-    for (std::size_t index = 0U; index < agents.size(); ++index) {
+    const bool anyDemand = demanding.load(std::memory_order_relaxed) > 0U;
+    for (std::size_t index = 0U; anyDemand && index < agents.size(); ++index) {
         if (demand_[index] != 0U) RegisterDemand(wanted_[index], records_[index].node);
     }
     if (step_ % kExitRefresh == 0U) {
