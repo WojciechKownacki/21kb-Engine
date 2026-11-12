@@ -8,6 +8,7 @@
 #include <DetourNavMesh.h>
 
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <memory>
 #include <span>
@@ -40,6 +41,16 @@ struct NavMeshCrowdObstacle {
     float radius = 0.0F;
     float height = 0.0F;
 };
+
+// Agents from which a pass over the agents runs on the worker pool instead of the calling thread.
+// Fork-join over these passes loses on phones at every size measured (up to 40 000 agents): pieces
+// that land on the slow cores hold the pass up for longer than the pass takes on a fast core, so
+// there the passes stay on the calling thread and no pool is made.
+#if defined(__ANDROID__)
+inline constexpr std::size_t kMinAgentsOnWorkers = std::numeric_limits<std::size_t>::max();
+#else
+inline constexpr std::size_t kMinAgentsOnWorkers = 0U;
+#endif
 
 // Moves NavAgents over the polygon meshes of a NavMeshRuntime with DetourCrowd: one dtCrowd per
 // agent profile (a crowd walks one Detour mesh), each agent a crowd member whose parameters come
@@ -126,6 +137,8 @@ private:
     // Workers of the crowds' per-member passes; none when they run on the calling thread.
     std::unique_ptr<kb::ecs::WorkerPool> workers_;
     std::size_t workerCount_ = 1U;
+    // Whether the crowds' passes run on the workers this step (enough agents, see kMinAgentsOnWorkers).
+    bool pooled_ = false;
     // Per-step lists, kept to reuse their storage.
     std::vector<kb::scene::NavAreaMask> masks_;
     std::vector<AgentRecord*> records_;

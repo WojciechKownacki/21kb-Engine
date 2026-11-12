@@ -219,7 +219,9 @@ void NavMeshCrowd::UseWorkers(std::uint32_t requested) {
     if (count == workerCount_) return;
     workerCount_ = count;
     workers_.reset();
-    if (count > 1U) workers_ = std::make_unique<kb::ecs::WorkerPool>(kb::ecs::WorkerPoolConfig{ .workerCount = count });
+    if (count > 1U && kMinAgentsOnWorkers != std::numeric_limits<std::size_t>::max()) {
+        workers_ = std::make_unique<kb::ecs::WorkerPool>(kb::ecs::WorkerPoolConfig{ .workerCount = count });
+    }
     for (ProfileCrowd& slot : crowds_) {
         if (slot.crowd) AttachWorkers(*slot.crowd);
     }
@@ -231,7 +233,7 @@ kb::ecs::WorkerPool* NavMeshCrowd::Workers(std::uint32_t requested) {
 }
 
 void NavMeshCrowd::AttachWorkers(dtCrowd& crowd) {
-    if (workers_ && crowd.setParallelFor(&RunCrowdPass, workers_.get(), static_cast<int>(workers_->WorkerCount()))) return;
+    if (pooled_ && workers_ && crowd.setParallelFor(&RunCrowdPass, workers_.get(), static_cast<int>(workers_->WorkerCount()))) return;
     // Without workers, or without memory for their query objects, the passes run on this thread.
     static_cast<void>(crowd.setParallelFor(nullptr, nullptr, 0));
 }
@@ -256,6 +258,12 @@ void NavMeshCrowd::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
     outputs.assign(agents.size(), NavMeshCrowdAgentOutput{});
     const std::uint32_t profiles = runtime.ProfileCount();
     UseWorkers(settings.workerThreads);
+    if ((workers_ != nullptr && agents.size() >= kMinAgentsOnWorkers) != pooled_) {
+        pooled_ = !pooled_;
+        for (ProfileCrowd& slot : crowds_) {
+            if (slot.crowd) AttachWorkers(*slot.crowd);
+        }
+    }
 
     // 1. Forget agents and obstacles that are gone, and find every agent's record: both lists are in
     // id order, so one walk over them does it.
@@ -548,7 +556,7 @@ void NavMeshCrowd::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
 
     // 7. Step every crowd; note which link each member heads for, to know the link it starts crossing.
     // This and reading the members back touch only the agent's own record, output and member.
-    ForEachPiece(workers_.get(), agents.size(), [&](std::size_t begin, std::size_t end, std::size_t) {
+    ForEachPiece(pooled_ ? workers_.get() : nullptr, agents.size(), [&](std::size_t begin, std::size_t end, std::size_t) {
         for (std::size_t index = begin; index < end; ++index) {
             AgentRecord& record = *records[index];
             record.nextLink = 0U;
@@ -576,7 +584,7 @@ void NavMeshCrowd::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
     // 8. Read the members back.
     std::atomic<std::size_t> linkCrossings{ 0U };
     std::atomic<std::size_t> waitingMembers{ 0U };
-    ForEachPiece(workers_.get(), agents.size(), [&](std::size_t begin, std::size_t end, std::size_t) {
+    ForEachPiece(pooled_ ? workers_.get() : nullptr, agents.size(), [&](std::size_t begin, std::size_t end, std::size_t) {
         std::size_t onLinks = 0U;
         std::size_t waitingForPath = 0U;
         for (std::size_t index = begin; index < end; ++index) {

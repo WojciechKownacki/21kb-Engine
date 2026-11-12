@@ -29,8 +29,13 @@ constexpr std::size_t kAgentsPerPiece = 2048U;
 constexpr float kDetailHysteresis = 1.1F;
 // Steps between updates of near, mid and far agents.
 constexpr std::uint32_t kTickInterval[3] = { 1U, 2U, 4U };
-// Nodes a field expands beyond the last agent it serves, so agents stepping on do not wait.
-constexpr std::size_t kFieldLookahead = 64U;
+// Clusters a route expands beyond the last agent it serves, so agents stepping on do not wait.
+constexpr std::size_t kRouteLookahead = 8U;
+// Steps a field or route may go unused before its slot can be taken by another.
+constexpr std::uint64_t kFieldIdle = 48U;
+// Steps between the refreshes of the use stamps of the exit fields routes keep.
+constexpr std::uint64_t kExitRefresh = 16U;
+constexpr std::uint8_t kNoWay = 0xFFU;
 // Steps through polygon edges one move may take.
 constexpr int kMaxCrossings = 8;
 constexpr std::uint32_t kMaxGridCells = 1U << 22U;
@@ -39,7 +44,7 @@ template <typename Body>
 void ForEachPiece(kb::ecs::WorkerPool* pool, std::size_t count, Body&& body) {
     const std::size_t pieces = pool != nullptr ? pool->WorkerCount() * 4U : 1U;
     const std::size_t size = std::max(kAgentsPerPiece, (count + pieces - 1U) / pieces);
-    if (pool == nullptr || count <= size) {
+    if (pool == nullptr || count <= size || count < kMinAgentsOnWorkers) {
         if (count > 0U) body(std::size_t{ 0U }, count);
         return;
     }
@@ -105,6 +110,31 @@ void ForEachPiece(kb::ecs::WorkerPool* pool, std::size_t count, Body&& body) {
     const float length = dx * dx + dz * dz;
     const float t = length > 1.0e-12F ? std::clamp(((p.x - a.x) * dx + (p.z - a.z) * dz) / length, 0.0F, 1.0F) : 0.0F;
     return Lerp(a, b, t);
+}
+
+[[nodiscard]] std::uint64_t Mix(std::uint64_t hash, std::uint64_t value) noexcept {
+    return (hash ^ value) * 1099511628211ULL;
+}
+
+[[nodiscard]] std::uint64_t FloatBits(float value) noexcept {
+    std::uint32_t bits = 0U;
+    std::memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+// Whether `field` is the one over `source` leaving by `exitWay` for `areas` made with `costs`.
+[[nodiscard]] std::uint64_t FieldKey(std::uint32_t profile, std::uint32_t source, std::uint8_t exitWay, kb::scene::NavAreaMask areas,
+    std::uint64_t costs) noexcept {
+    std::uint64_t hash = 1469598103934665603ULL;
+    for (const std::uint64_t value : { std::uint64_t{ profile }, std::uint64_t{ source }, std::uint64_t{ exitWay }, std::uint64_t{ areas }, costs }) {
+        hash = Mix(hash, value);
+    }
+    return hash;
+}
+
+[[nodiscard]] bool SameField(const NavHordeField& field, std::uint32_t profile, std::uint32_t source, std::uint8_t exitWay,
+    kb::scene::NavAreaMask areas, std::uint64_t costs) noexcept {
+    return field.source == source && field.profile == profile && field.exitWay == exitWay && field.areas == areas && field.costs == costs;
 }
 
 // Separation of one agent from the agents of a run of the grid: every neighbour inside the summed
@@ -241,6 +271,7 @@ void NavPolygonGraph::Build(const dtNavMesh& mesh, std::uint64_t meshRevision, s
         tileSalt[static_cast<std::size_t>(index)] = tile->salt;
         nodes += static_cast<std::uint32_t>(tile->header->polyCount);
     }
+    std::vector<std::uint32_t> slotOf(nodes);
     firstVertex.resize(nodes);
     vertexCount.resize(nodes);
     firstPortal.resize(nodes);
@@ -266,6 +297,7 @@ void NavPolygonGraph::Build(const dtNavMesh& mesh, std::uint64_t meshRevision, s
             const std::uint32_t node = tileBase[static_cast<std::size_t>(index)] + static_cast<std::uint32_t>(polygon);
             const dtPoly& poly = tile->polys[polygon];
             reference[node] = base | static_cast<dtPolyRef>(polygon);
+            slotOf[node] = static_cast<std::uint32_t>(index);
             const unsigned char code = poly.getArea();
             area[node] = code == 0U || code > kb::scene::kNavAreaCount ? 0xFFU : static_cast<std::uint8_t>(code - 1U);
             firstVertex[node] = static_cast<std::uint32_t>(vertices.size());
@@ -308,6 +340,111 @@ void NavPolygonGraph::Build(const dtNavMesh& mesh, std::uint64_t meshRevision, s
     incoming.resize(portals.size());
     std::vector<std::uint32_t> fill(firstIncoming.begin(), firstIncoming.end() - 1);
     for (std::uint32_t index = 0U; index < portals.size(); ++index) incoming[fill[portals[index].node]++] = index;
+
+    // Clusters: the polygons of one tile slot that join through portals; a link stands alone.
+    std::vector<std::uint32_t> parent(nodes);
+    for (std::uint32_t node = 0U; node < nodes; ++node) parent[node] = node;
+    const auto root = [&](std::uint32_t node) {
+        while (parent[node] != node) {
+            parent[node] = parent[parent[node]];
+            node = parent[node];
+        }
+        return node;
+    };
+    for (std::uint32_t index = 0U; index < portals.size(); ++index) {
+        const std::uint32_t a = portalOwner[index];
+        const std::uint32_t b = portals[index].node;
+        if (slotOf[a] != slotOf[b] || linkRadius[a] > 0.0F || linkRadius[b] > 0.0F) continue;
+        const std::uint32_t ra = root(a);
+        const std::uint32_t rb = root(b);
+        if (ra != rb) parent[std::max(ra, rb)] = std::min(ra, rb);
+    }
+    cluster.assign(nodes, kNone);
+    local.assign(nodes, 0U);
+    std::vector<std::uint32_t> idOfRoot(nodes, kNone);
+    std::uint32_t clusters = 0U;
+    for (std::uint32_t node = 0U; node < nodes; ++node) {
+        const std::uint32_t top = root(node);
+        if (idOfRoot[top] == kNone) idOfRoot[top] = clusters++;
+        cluster[node] = idOfRoot[top];
+    }
+    clusterFirst.assign(static_cast<std::size_t>(clusters) + 1U, 0U);
+    for (std::uint32_t node = 0U; node < nodes; ++node) ++clusterFirst[cluster[node] + 1U];
+    for (std::uint32_t c = 0U; c < clusters; ++c) clusterFirst[c + 1U] += clusterFirst[c];
+    clusterNodes.resize(nodes);
+    {
+        std::vector<std::uint32_t> cursor(clusterFirst.begin(), clusterFirst.end() - 1);
+        for (std::uint32_t node = 0U; node < nodes; ++node) {
+            const std::uint32_t c = cluster[node];
+            local[node] = cursor[c] - clusterFirst[c];
+            clusterNodes[cursor[c]++] = node;
+        }
+    }
+    clusterCentre.assign(clusters, Vec3{});
+    signature.assign(clusters, 0U);
+    for (std::uint32_t c = 0U; c < clusters; ++c) {
+        Vec3 sum{};
+        std::uint64_t hash = 1469598103934665603ULL;
+        for (std::uint32_t at = clusterFirst[c]; at < clusterFirst[c + 1U]; ++at) {
+            const std::uint32_t node = clusterNodes[at];
+            sum = sum + centre[node];
+            hash = Mix(hash, reference[node]);
+            hash = Mix(hash, (static_cast<std::uint64_t>(area[node]) << 8U) | vertexCount[node]);
+            hash = Mix(hash, FloatBits(centre[node].x));
+            hash = Mix(hash, FloatBits(centre[node].y));
+            hash = Mix(hash, FloatBits(centre[node].z));
+            for (std::uint32_t portal = firstPortal[node]; portal < firstPortal[node] + portalCount[node]; ++portal) {
+                hash = Mix(hash, reference[portals[portal].node]);
+                hash = Mix(hash, (static_cast<std::uint64_t>(portals[portal].edge) << 32U) | FloatBits(portals[portal].from));
+                hash = Mix(hash, FloatBits(portals[portal].to));
+            }
+        }
+        clusterCentre[c] = sum * (1.0F / static_cast<float>(clusterFirst[c + 1U] - clusterFirst[c]));
+        signature[c] = hash;
+    }
+    // Gateways: for every ordered pair of neighbouring clusters the widest opening between them.
+    struct Opening {
+        std::uint32_t portal = 0U;
+        float width = 0.0F;
+    };
+    std::vector<Opening> openings;
+    for (std::uint32_t index = 0U; index < portals.size(); ++index) {
+        const std::uint32_t a = portalOwner[index];
+        const std::uint32_t b = portals[index].node;
+        if (cluster[a] == cluster[b]) continue;
+        float width = 1.0F;
+        if (linkRadius[a] <= 0.0F && linkRadius[b] <= 0.0F) {
+            const Vec3 p = vertices[firstVertex[a] + portals[index].edge];
+            const Vec3 q = vertices[firstVertex[a] + (portals[index].edge + 1U) % vertexCount[a]];
+            width = HorizontalLength(q - p) * (portals[index].to - portals[index].from);
+        }
+        openings.push_back(Opening{ index, width });
+    }
+    std::ranges::sort(openings, [&](const Opening& x, const Opening& y) {
+        const std::uint32_t fx = cluster[portalOwner[x.portal]], fy = cluster[portalOwner[y.portal]];
+        if (fx != fy) return fx < fy;
+        const std::uint32_t tx = cluster[portals[x.portal].node], ty = cluster[portals[y.portal].node];
+        if (tx != ty) return tx < ty;
+        return x.width != y.width ? x.width > y.width : x.portal < y.portal;
+    });
+    gateways.clear();
+    gatewayFirst.assign(static_cast<std::size_t>(clusters) + 1U, 0U);
+    for (const Opening& opening : openings) {
+        const std::uint32_t from = cluster[portalOwner[opening.portal]];
+        const std::uint32_t to = cluster[portals[opening.portal].node];
+        if (!gateways.empty() && gateways.back().from == from && gateways.back().to == to) continue;
+        const Vec3 delta = clusterCentre[to] - clusterCentre[from];
+        gateways.push_back(Gateway{ from, to, portalOwner[opening.portal], opening.portal,
+            std::max(std::sqrt(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z), 0.01F) });
+        ++gatewayFirst[from + 1U];
+    }
+    for (std::uint32_t c = 0U; c < clusters; ++c) gatewayFirst[c + 1U] += gatewayFirst[c];
+    firstArriving.assign(static_cast<std::size_t>(clusters) + 1U, 0U);
+    for (const Gateway& gateway : gateways) ++firstArriving[gateway.to + 1U];
+    for (std::uint32_t c = 0U; c < clusters; ++c) firstArriving[c + 1U] += firstArriving[c];
+    arriving.resize(gateways.size());
+    std::vector<std::uint32_t> arrivals(firstArriving.begin(), firstArriving.end() - 1);
+    for (std::uint32_t index = 0U; index < gateways.size(); ++index) arriving[arrivals[gateways[index].to]++] = index;
 }
 
 std::uint32_t NavPolygonGraph::NodeOf(const dtNavMesh& mesh, dtPolyRef polygon) const noexcept {
@@ -334,6 +471,10 @@ std::uint64_t NavMeshHorde::Goal::Hash() const noexcept {
 void NavMeshHorde::Clear() {
     graphs_.clear();
     fields_.clear();
+    fieldIndex_.clear();
+    freeFields_.clear();
+    routes_.clear();
+    costSignature_ = 0U;
     records_.clear();
     goals_.clear();
     goalTable_.clear();
@@ -375,7 +516,7 @@ void NavMeshHorde::AddStats(kb::scene::NavigationCrowdStats& stats) const noexce
     stats.hordeWaiting = waiting_;
     stats.hordeOnLinks = onLinks_;
     stats.hordeFields = 0U;
-    for (const NavHordeField& field : fields_) stats.hordeFields += field.goal != kNone ? 1U : 0U;
+    for (const NavHordeField& field : fields_) stats.hordeFields += field.source != kNone ? 1U : 0U;
     stats.hordeFieldNodes = expanded_;
     stats.hordeMilliseconds = milliseconds_;
     stats.hordeFieldMilliseconds = fieldMilliseconds_;
@@ -398,8 +539,24 @@ void NavMeshHorde::SyncGraphs(NavMeshRuntime& runtime) {
             record.field = kNone;
             record.linkNode = kNone;
         }
+        // A finished field survives where its cluster is unchanged (the same polygons, areas and
+        // portals), so only the tiles that were rebuilt, and their neighbours, make new ones.
         for (NavHordeField& field : fields_) {
-            if (field.profile == profile && field.goal != kNone) field.goal = kNone;
+            if (field.profile != profile || field.source == kNone) continue;
+            const std::uint32_t anchor = graph.NodeOf(*mesh, field.anchor);
+            const std::uint32_t source = graph.NodeOf(*mesh, field.sourceReference);
+            const bool kept = field.open.empty() && anchor != kNone && source != kNone && graph.cluster[anchor] == graph.cluster[source] &&
+                graph.clusterNodes[graph.clusterFirst[graph.cluster[anchor]]] == anchor && graph.signature[graph.cluster[anchor]] == field.signature;
+            field.source = kept ? source : kNone;
+            field.cluster = kept ? graph.cluster[anchor] : kNone;
+        }
+        freeFields_.clear();
+        for (std::uint32_t slot = 0U; slot < fields_.size(); ++slot) {
+            if (fields_[slot].source == kNone) freeFields_.push_back(slot);
+        }
+        RebuildFieldIndex();
+        for (NavHordeRoute& route : routes_) {
+            if (route.profile == profile) route.goalCluster = kNone;
         }
         for (Goal& goal : goals_) {
             if (goal.profile == profile) goal.revision = 0U;
@@ -416,50 +573,119 @@ std::uint32_t NavMeshHorde::GoalNode(NavMeshRuntime& runtime, std::uint32_t prof
     return graphs_[profile].NodeOf(*mesh, nearest->first);
 }
 
-std::uint32_t NavMeshHorde::FindField(std::uint32_t profile, std::uint32_t goal, kb::scene::NavAreaMask areas, std::size_t cacheSize) {
+std::uint32_t NavMeshHorde::FindField(std::uint32_t profile, std::uint32_t goal, std::uint8_t exitWay, kb::scene::NavAreaMask areas) {
+    const std::uint64_t key = FieldKey(profile, goal, exitWay, areas, costSignature_);
+    for (auto [at, end] = fieldIndex_.equal_range(key); at != end; ++at) {
+        NavHordeField& field = fields_[at->second];
+        if (SameField(field, profile, goal, exitWay, areas, costSignature_)) {
+            field.lastUsed = step_;
+            return at->second;
+        }
+    }
+    std::uint32_t slot = kNone;
+    if (!freeFields_.empty()) {
+        slot = freeFields_.back();
+        freeFields_.pop_back();
+    } else {
+        slot = static_cast<std::uint32_t>(fields_.size());
+        fields_.emplace_back();
+    }
+    fieldIndex_.emplace(key, slot);
+    const NavPolygonGraph& graph = graphs_[profile];
+    NavHordeField& field = fields_[slot];
+    const std::uint32_t cluster = graph.cluster[goal];
+    const std::size_t nodes = graph.clusterFirst[cluster + 1U] - graph.clusterFirst[cluster];
+    field.profile = profile;
+    field.cluster = cluster;
+    field.source = goal;
+    field.exitWay = exitWay;
+    field.areas = areas;
+    field.costs = costSignature_;
+    field.anchor = graph.reference[graph.clusterNodes[graph.clusterFirst[cluster]]];
+    field.sourceReference = graph.reference[goal];
+    field.signature = graph.signature[cluster];
+    field.cost.assign(nodes, std::numeric_limits<float>::max());
+    field.way.assign(nodes, kNoWay);
+    field.settled.assign(nodes, 0U);
+    field.open.clear();
+    field.wanted = true;
+    field.lastUsed = step_;
+    field.stamp = ++fieldStamp_;
+    field.cost[graph.local[goal]] = 0.0F;
+    field.way[graph.local[goal]] = exitWay;
+    field.open.emplace_back(0.0F, goal);
+    return slot;
+}
+
+void NavMeshHorde::RebuildFieldIndex() {
+    fieldIndex_.clear();
+    for (std::uint32_t slot = 0U; slot < fields_.size(); ++slot) {
+        const NavHordeField& field = fields_[slot];
+        if (field.source != kNone) fieldIndex_.emplace(FieldKey(field.profile, field.source, field.exitWay, field.areas, field.costs), slot);
+    }
+}
+
+void NavMeshHorde::SweepFields(std::size_t cacheSize) {
+    std::size_t live = fields_.size() - freeFields_.size();
+    if (live <= cacheSize) return;
+    std::vector<std::uint32_t> idle;
+    for (std::uint32_t slot = 0U; slot < fields_.size(); ++slot) {
+        if (fields_[slot].source != kNone && fields_[slot].lastUsed + kFieldIdle < step_) idle.push_back(slot);
+    }
+    std::ranges::sort(idle, [&](std::uint32_t a, std::uint32_t b) {
+        return fields_[a].lastUsed != fields_[b].lastUsed ? fields_[a].lastUsed < fields_[b].lastUsed : a < b;
+    });
+    for (std::size_t at = 0U; at < idle.size() && live > cacheSize; ++at, --live) {
+        fields_[idle[at]].source = kNone;
+        freeFields_.push_back(idle[at]);
+    }
+    RebuildFieldIndex();
+}
+
+std::uint32_t NavMeshHorde::FindRoute(std::uint32_t profile, std::uint32_t goalCluster, std::size_t cacheSize) {
+    const NavPolygonGraph& graph = graphs_[profile];
     std::uint32_t free = kNone;
     std::uint32_t oldest = kNone;
-    for (std::uint32_t index = 0U; index < fields_.size(); ++index) {
-        NavHordeField& field = fields_[index];
-        if (field.goal == kNone) {
+    for (std::uint32_t index = 0U; index < routes_.size(); ++index) {
+        NavHordeRoute& route = routes_[index];
+        if (route.goalCluster == kNone) {
             if (free == kNone) free = index;
             continue;
         }
-        if (field.profile == profile && field.goal == goal && field.areas == areas) {
-            field.lastUsed = step_;
+        if (route.profile == profile && route.goalCluster == goalCluster && route.graphRevision == graph.revision) {
+            route.lastUsed = step_;
             return index;
         }
-        // Fields in use this step or the last (agents still follow them) are kept.
-        if (field.lastUsed + 1U < step_ && (oldest == kNone || field.lastUsed < fields_[oldest].lastUsed)) oldest = index;
+        if (route.lastUsed + kFieldIdle < step_ && (oldest == kNone || route.lastUsed < routes_[oldest].lastUsed)) oldest = index;
     }
     std::uint32_t slot = free;
     if (slot == kNone) {
-        if (fields_.size() < cacheSize || oldest == kNone) {
-            slot = static_cast<std::uint32_t>(fields_.size());
-            fields_.emplace_back();
+        if (routes_.size() < cacheSize || oldest == kNone) {
+            slot = static_cast<std::uint32_t>(routes_.size());
+            routes_.emplace_back();
         } else {
             slot = oldest;
         }
     }
-    const NavPolygonGraph& graph = graphs_[profile];
-    NavHordeField& field = fields_[slot];
-    const std::size_t nodes = graph.NodeCount();
-    field.profile = profile;
-    field.goal = goal;
-    field.areas = areas;
-    field.graphRevision = graph.revision;
-    field.cost.assign(nodes, std::numeric_limits<float>::max());
-    field.way.assign(nodes, kNone);
-    field.settled.assign(nodes, 0U);
-    field.needed.assign(nodes, 0U);
-    field.open.clear();
-    field.settledCount = 0U;
-    field.unmet = 0U;
-    field.lookahead = kFieldLookahead;
-    field.lastUsed = step_;
-    field.stamp = ++fieldStamp_;
-    field.cost[goal] = 0.0F;
-    field.open.emplace_back(0.0F, goal);
+    NavHordeRoute& route = routes_[slot];
+    const std::size_t clusters = graph.ClusterCount();
+    route.profile = profile;
+    route.goalCluster = goalCluster;
+    route.graphRevision = graph.revision;
+    route.cost.assign(clusters, std::numeric_limits<float>::max());
+    route.gateway.assign(clusters, kNone);
+    route.settled.assign(clusters, 0U);
+    route.needed.assign(clusters, 0U);
+    route.exitField.assign(clusters, kNone);
+    route.exitStamp.assign(clusters, 0U);
+    route.exitClusters.clear();
+    route.unmet = 0U;
+    route.lookahead = kRouteLookahead;
+    route.open.clear();
+    route.lastUsed = step_;
+    route.stamp = ++fieldStamp_;
+    route.cost[goalCluster] = 0.0F;
+    route.open.emplace_back(0.0F, goalCluster);
     return slot;
 }
 
@@ -475,31 +701,29 @@ std::size_t NavMeshHorde::Expand(const NavMeshRuntime& runtime, NavHordeField& f
         return a.first != b.first ? a.first > b.first : a.second > b.second;
     };
     std::size_t used = 0U;
-    while (used < budget && !field.open.empty() && (field.unmet > 0U || field.lookahead > 0U)) {
+    while (used < budget && !field.open.empty()) {
         std::ranges::pop_heap(field.open, later);
         const auto [cost, node] = field.open.back();
         field.open.pop_back();
         ++used;
-        if (field.settled[node] != 0U) continue;
-        field.settled[node] = 1U;
-        ++field.settledCount;
-        if (field.needed[node] != 0U) {
-            field.needed[node] = 0U;
-            --field.unmet;
-        } else if (field.unmet == 0U && field.lookahead > 0U) {
-            --field.lookahead;
+        if (field.settled[graph.local[node]] != 0U) continue;
+        if (node == field.source && !passable(node)) {
+            // A source the agents may not enter leads nowhere.
+            field.open.clear();
+            break;
         }
-        // Every node with a portal into this one can step here.
+        field.settled[graph.local[node]] = 1U;
+        // Every node of the cluster with a portal into this one can step here.
         for (std::uint32_t at = graph.firstIncoming[node]; at < graph.firstIncoming[node + 1U]; ++at) {
             const std::uint32_t portal = graph.incoming[at];
             const std::uint32_t from = graph.portalOwner[portal];
-            if (field.settled[from] != 0U || !passable(from)) continue;
+            if (graph.cluster[from] != field.cluster || field.settled[graph.local[from]] != 0U || !passable(from)) continue;
             const Vec3 delta = graph.centre[node] - graph.centre[from];
             const float length = std::sqrt(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z);
             const float next = cost + length * runtime.AreaCost(graph.area[from]);
-            if (next < field.cost[from]) {
-                field.cost[from] = next;
-                field.way[from] = portal;
+            if (next < field.cost[graph.local[from]]) {
+                field.cost[graph.local[from]] = next;
+                field.way[graph.local[from]] = static_cast<std::uint8_t>(portal - graph.firstPortal[from]);
                 field.open.emplace_back(next, from);
                 std::ranges::push_heap(field.open, later);
             }
@@ -508,36 +732,136 @@ std::size_t NavMeshHorde::Expand(const NavMeshRuntime& runtime, NavHordeField& f
     return used;
 }
 
+std::size_t NavMeshHorde::ExpandRoute(NavHordeRoute& route, std::size_t budget) {
+    const NavPolygonGraph& graph = graphs_[route.profile];
+    const auto later = [](const std::pair<float, std::uint32_t>& a, const std::pair<float, std::uint32_t>& b) {
+        return a.first != b.first ? a.first > b.first : a.second > b.second;
+    };
+    std::size_t used = 0U;
+    while (used < budget && !route.open.empty() && (route.unmet > 0U || route.lookahead > 0U)) {
+        std::ranges::pop_heap(route.open, later);
+        const auto [cost, cluster] = route.open.back();
+        route.open.pop_back();
+        ++used;
+        if (route.settled[cluster] != 0U) continue;
+        route.settled[cluster] = 1U;
+        if (route.needed[cluster] != 0U) {
+            route.needed[cluster] = 0U;
+            --route.unmet;
+        } else if (route.unmet == 0U && route.lookahead > 0U) {
+            --route.lookahead;
+        }
+        // Every cluster with a gateway into this one can step here.
+        for (std::uint32_t at = graph.firstArriving[cluster]; at < graph.firstArriving[cluster + 1U]; ++at) {
+            const std::uint32_t gateway = graph.arriving[at];
+            const std::uint32_t from = graph.gateways[gateway].from;
+            if (route.settled[from] != 0U) continue;
+            const float next = cost + graph.gateways[gateway].cost;
+            if (next < route.cost[from]) {
+                route.cost[from] = next;
+                route.gateway[from] = gateway;
+                route.open.emplace_back(next, from);
+                std::ranges::push_heap(route.open, later);
+            } else if (route.gateway[from] != kNone && next <= route.cost[from] + 1.0e-3F) {
+                // Equally cheap ways: the one that goes on toward the goal, so routes run straight rather than along a lattice.
+                const Vec3 goalCentre = graph.clusterCentre[route.goalCluster];
+                const Vec3 viaThis = graph.clusterCentre[graph.gateways[gateway].to] - goalCentre;
+                const Vec3 viaOther = graph.clusterCentre[graph.gateways[route.gateway[from]].to] - goalCentre;
+                if (viaThis.x * viaThis.x + viaThis.z * viaThis.z < viaOther.x * viaOther.x + viaOther.z * viaOther.z) route.gateway[from] = gateway;
+            }
+        }
+    }
+    return used;
+}
+
 void NavMeshHorde::ExpandFields(const NavMeshRuntime& runtime, std::size_t budget) {
-    // Fields agents wait for come first, in slot order starting after last step's first, so a
-    // shared budget reaches every field.
+    // Routes first (one cluster step unblocks many agents), then the fields agents wait for, then
+    // the others, each in slot order starting after last step's first so the shared budget reaches all.
+    for (NavHordeRoute& route : routes_) {
+        if (route.goalCluster == kNone || route.open.empty() || route.lastUsed != step_ || budget == 0U) continue;
+        const std::size_t used = ExpandRoute(route, budget);
+        budget -= std::min(used, budget);
+        expanded_ += used;
+    }
     const std::size_t count = fields_.size();
     if (count == 0U) return;
     for (int pass = 0; pass < 2 && budget > 0U; ++pass) {
         for (std::size_t offset = 0U; offset < count && budget > 0U; ++offset) {
             NavHordeField& field = fields_[(fieldCursor_ + offset) % count];
-            if (field.goal == kNone || field.open.empty() || field.lastUsed != step_) continue;
-            if (pass == 0 && field.unmet == 0U) continue;
+            if (field.source == kNone || field.open.empty() || field.lastUsed + kExitRefresh * 2U < step_) continue;
+            if (pass == 0 && !field.wanted) continue;
             const std::size_t used = Expand(runtime, field, budget);
             budget -= std::min(used, budget);
             expanded_ += used;
+            if (field.open.empty()) field.wanted = false;
         }
     }
     fieldCursor_ = (fieldCursor_ + 1U) % count;
 }
 
-void NavMeshHorde::BuildGrid(float cellSize) {
-    const std::size_t count = records_.size();
+void NavMeshHorde::RegisterDemand(std::uint32_t goalIndex, std::uint32_t node) {
+    const Goal& goal = goals_[goalIndex];
+    const NavPolygonGraph& graph = graphs_[goal.profile];
+    const std::uint32_t here = graph.cluster[node];
+    if (here == goal.cluster) {
+        fields_[goal.field].wanted = true;
+        return;
+    }
+    NavHordeRoute& route = routes_[goal.route];
+    if (route.settled[here] == 0U) {
+        if (route.needed[here] == 0U) {
+            route.needed[here] = 1U;
+            ++route.unmet;
+            route.lookahead = kRouteLookahead;
+        }
+        return;
+    }
+    // The exit field of a cluster's gateway, made once per route.
+    const auto exitOf = [&](std::uint32_t cluster) {
+        const std::uint32_t slot = route.exitField[cluster];
+        if (slot != kNone && fields_[slot].source != kNone && fields_[slot].stamp == route.exitStamp[cluster] && fields_[slot].costs == costSignature_) return slot;
+        const NavPolygonGraph::Gateway& gateway = graph.gateways[route.gateway[cluster]];
+        const std::uint32_t made = FindField(goal.profile, gateway.node, static_cast<std::uint8_t>(gateway.portal - graph.firstPortal[gateway.node]),
+            goal.areas);
+        if (route.exitField[cluster] == kNone) route.exitClusters.push_back(cluster);
+        route.exitField[cluster] = made;
+        route.exitStamp[cluster] = fields_[made].stamp;
+        return made;
+    };
+    fields_[exitOf(here)].wanted = true;
+    // The two clusters after it: their fields are made ahead, so agents stepping over do not wait for them.
+    std::uint32_t next = here;
+    for (int ahead = 0; ahead < 2; ++ahead) {
+        next = graph.gateways[route.gateway[next]].to;
+        while (next != goal.cluster && graph.IsLinkCluster(next) && route.settled[next] != 0U && route.gateway[next] != kNone) {
+            next = graph.gateways[route.gateway[next]].to;
+        }
+        if (next == goal.cluster) {
+            fields_[goal.field].wanted = true;
+            break;
+        }
+        if (route.settled[next] == 0U || route.gateway[next] == kNone || graph.IsLinkCluster(next)) break;
+        fields_[exitOf(next)].wanted = true;
+    }
+}
+
+void NavMeshHorde::BuildGrid(float cellSize, std::span<const NavMeshBody> bodies) {
+    // The agents come first, then the bodies of other kinds (crowd agents, obstacles) that push them.
+    const std::size_t agents = records_.size();
+    const std::size_t count = agents + bodies.size();
+    const auto positionAt = [&](std::size_t index) { return index < agents ? records_[index].position : bodies[index - agents].position; };
+    const auto onGrid = [&](std::size_t index) { return index >= agents || records_[index].node != kNone; };
     float minX = std::numeric_limits<float>::max();
     float minZ = minX;
     float maxX = std::numeric_limits<float>::lowest();
     float maxZ = maxX;
-    for (const AgentRecord& record : records_) {
-        if (record.node == kNone) continue;
-        minX = std::min(minX, record.position.x);
-        minZ = std::min(minZ, record.position.z);
-        maxX = std::max(maxX, record.position.x);
-        maxZ = std::max(maxZ, record.position.z);
+    for (std::size_t index = 0U; index < count; ++index) {
+        if (!onGrid(index)) continue;
+        const Vec3 position = positionAt(index);
+        minX = std::min(minX, position.x);
+        minZ = std::min(minZ, position.z);
+        maxX = std::max(maxX, position.x);
+        maxZ = std::max(maxZ, position.z);
     }
     if (minX > maxX) {
         gridWidth_ = gridHeight_ = 0U;
@@ -558,13 +882,13 @@ void NavMeshHorde::BuildGrid(float cellSize) {
     cellStart_.assign(cells + 1U, 0U);
     cellOf_.resize(count);
     for (std::size_t index = 0U; index < count; ++index) {
-        const AgentRecord& record = records_[index];
-        if (record.node == kNone) {
+        if (!onGrid(index)) {
             cellOf_[index] = kNone;
             continue;
         }
-        const auto cx = std::min(static_cast<std::uint32_t>((record.position.x - minX) / gridCell_), gridWidth_ - 1U);
-        const auto cz = std::min(static_cast<std::uint32_t>((record.position.z - minZ) / gridCell_), gridHeight_ - 1U);
+        const Vec3 position = positionAt(index);
+        const auto cx = std::min(static_cast<std::uint32_t>((position.x - minX) / gridCell_), gridWidth_ - 1U);
+        const auto cz = std::min(static_cast<std::uint32_t>((position.z - minZ) / gridCell_), gridHeight_ - 1U);
         cellOf_[index] = cz * gridWidth_ + cx;
         ++cellStart_[cellOf_[index] + 1U];
     }
@@ -579,16 +903,17 @@ void NavMeshHorde::BuildGrid(float cellSize) {
     for (std::size_t index = 0U; index < count; ++index) {
         if (cellOf_[index] == kNone) continue;
         const std::uint32_t at = fill_[cellOf_[index]]++;
+        const Vec3 position = positionAt(index);
         sorted_[at] = static_cast<std::uint32_t>(index);
-        sortedX_[at] = records_[index].position.x;
-        sortedY_[at] = records_[index].position.y;
-        sortedZ_[at] = records_[index].position.z;
-        sortedRadius_[at] = radii_[index];
+        sortedX_[at] = position.x;
+        sortedY_[at] = position.y;
+        sortedZ_[at] = position.z;
+        sortedRadius_[at] = index < agents ? radii_[index] : bodies[index - agents].radius;
     }
 }
 
-void NavMeshHorde::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAgentInput> agents, std::span<const Vec3> focuses,
-    const kb::scene::NavigationCrowdSettings& settings, float deltaSeconds, kb::ecs::WorkerPool* workers,
+void NavMeshHorde::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAgentInput> agents, std::span<const NavMeshBody> bodies,
+    std::span<const Vec3> focuses, const kb::scene::NavigationCrowdSettings& settings, float deltaSeconds, kb::ecs::WorkerPool* workers,
     std::vector<NavMeshCrowdAgentOutput>& outputs) {
     const auto started = std::chrono::steady_clock::now();
     ++step_;
@@ -616,10 +941,20 @@ void NavMeshHorde::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
     }
     SyncGraphs(runtime);
     const std::uint32_t profiles = runtime.ProfileCount();
+    const std::size_t cacheSize = std::max<std::size_t>(settings.hordeFieldCacheSize, 1U);
+    // Changed area costs or blocked areas make new fields; the old ones keep guiding till those reach the agents.
+    {
+        std::uint64_t costs = 1469598103934665603ULL;
+        for (std::uint32_t area = 0U; area < kb::scene::kNavAreaCount; ++area) costs = Mix(costs, FloatBits(runtime.AreaCost(static_cast<kb::scene::NavAreaId>(area))));
+        NavAreaFilter every;
+        runtime.ConfigureFilter(every, kb::scene::kAllNavAreas);
+        costSignature_ = Mix(costs, every.Areas());
+    }
 
     // 2. Every agent's goal and the field shared by the agents of that goal; agents join the mesh.
     for (Goal& goal : goals_) goal.used = false;
     wanted_.assign(agents.size(), kNone);
+    demand_.assign(agents.size(), 0U);
     radii_.resize(agents.size());
     std::uint32_t lastGoal = kNone;
     float lastRadius = -1.0F;
@@ -680,22 +1015,22 @@ void NavMeshHorde::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
         target.used = true;
         if (target.revision != graph.revision) {
             target.node = GoalNode(runtime, profile, target.destination, target.areas);
+            target.cluster = target.node != kNone ? graph.cluster[target.node] : kNone;
             target.revision = graph.revision;
             target.field = kNone;
+            target.route = kNone;
         }
         if (target.node == kNone) continue;
-        if (target.field == kNone || fields_[target.field].goal != target.node || fields_[target.field].areas != target.areas ||
-            fields_[target.field].profile != profile) {
-            target.field = FindField(profile, target.node, target.areas, std::max<std::size_t>(settings.hordeFieldCacheSize, 1U));
+        if (target.field == kNone || !SameField(fields_[target.field], profile, target.node, kNoWay, target.areas, costSignature_)) {
+            target.field = FindField(profile, target.node, kNoWay, target.areas);
+        }
+        if (target.route == kNone || routes_[target.route].goalCluster != target.cluster || routes_[target.route].profile != profile ||
+            routes_[target.route].graphRevision != graph.revision) {
+            target.route = FindRoute(profile, target.cluster, cacheSize);
         }
         fields_[target.field].lastUsed = step_;
+        routes_[target.route].lastUsed = step_;
         wanted_[index] = goal;
-        NavHordeField& field = fields_[target.field];
-        if (field.settled[record.node] == 0U && field.needed[record.node] == 0U) {
-            field.needed[record.node] = 1U;
-            ++field.unmet;
-            field.lookahead = kFieldLookahead;
-        }
     }
     // Goals no agent is after any more are forgotten (their fields stay cached).
     if (std::ranges::any_of(goals_, [](const Goal& goal) { return !goal.used; })) {
@@ -719,8 +1054,9 @@ void NavMeshHorde::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
     // 4. One spatial grid over where the agents stand at the start of the step.
     float widest = 0.1F;
     for (std::size_t index = 0U; index < agents.size(); ++index) widest = std::max(widest, radii_[index]);
+    for (const NavMeshBody& body : bodies) widest = std::max(widest, body.radius);
     const float buffer = std::max(settings.hordeSeparationDistance, 0.01F);
-    BuildGrid(widest * 2.0F + buffer);
+    BuildGrid(widest * 2.0F + buffer, bodies);
 
     // 5. Every agent steers and moves, writing only itself.
     const float separationWeight = settings.separationWeight;
@@ -737,13 +1073,25 @@ void NavMeshHorde::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
             }
             const NavPolygonGraph& graph = graphs_[record.profile];
             const Goal& goal = goals_[wanted_[index]];
-            const NavHordeField& next = fields_[goal.field];
-            // The agent takes the field of its goal once it reaches it, and keeps the old one (unless its
-            // slot went to another field) till then.
+            const std::uint32_t here = graph.cluster[record.node];
+            const NavHordeRoute& route = routes_[goal.route];
+            // The guidance of this step: the goal's field in the goal's cluster, else the exit field of
+            // the cluster's gateway on the route.
+            std::uint32_t next = kNone;
+            if (here == goal.cluster) {
+                next = goal.field;
+            } else {
+                const std::uint32_t slot = route.exitField[here];
+                if (slot != kNone && fields_[slot].source != kNone && fields_[slot].stamp == route.exitStamp[here] && fields_[slot].costs == costSignature_) next = slot;
+            }
+            // The agent takes it once it reaches the agent, and keeps the old field (unless its slot went
+            // to another field) till then.
             std::uint32_t use = record.field;
-            if (use != kNone && (fields_[use].stamp != record.fieldStamp || fields_[use].goal == kNone)) use = kNone;
-            if (next.settled[record.node] != 0U) use = goal.field;
-            if (use != kNone && fields_[use].settled[record.node] == 0U && record.linkNode == kNone) use = kNone;
+            if (use != kNone && (fields_[use].stamp != record.fieldStamp || fields_[use].source == kNone)) use = kNone;
+            const bool guided = next != kNone && fields_[next].Reaches(graph, record.node);
+            if (guided) use = next;
+            if (use != kNone && !fields_[use].Reaches(graph, record.node) && record.linkNode == kNone) use = kNone;
+            if (!guided) demand_[index] = 1U;
             record.field = use;
             record.fieldStamp = use != kNone ? fields_[use].stamp : 0U;
 
@@ -762,6 +1110,12 @@ void NavMeshHorde::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
             const float stop = std::max(input.agent.stoppingDistance, 1.0e-3F);
             const bool inGoal = record.node == goal.node && record.linkNode == kNone;
             const float toGoal = HorizontalLength(goal.destination - record.position);
+            // What is left of the way: the field's cost, and the route's from the gateway's cluster on.
+            float tail = 0.0F;
+            if (use != kNone && here != goal.cluster && route.gateway[here] != kNone) tail = route.cost[graph.gateways[route.gateway[here]].to];
+            const auto left = [&](std::uint32_t node) {
+                return use != kNone && fields_[use].Reaches(graph, node) ? fields_[use].cost[graph.local[node]] + tail : toGoal;
+            };
             if (record.asleep) {
                 // Asleep where it stopped: it wakes when its goal moves away.
                 if (!inGoal || HorizontalLength(goal.destination - record.sleptFor) > stop + input.agent.radius) {
@@ -774,12 +1128,15 @@ void NavMeshHorde::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
                 }
             }
             if (use == kNone && !inGoal) {
-                // The field has not reached this agent yet: it stands this step. A field that grew as
-                // far as it can without reaching it leaves it no way to the goal.
+                // The guidance has not reached this agent yet: it stands this step. A field or route that
+                // grew as far as it can without reaching it leaves it no way to the goal.
                 record.velocity = Vec3{};
                 output.position = record.position;
-                output.status = next.open.empty() ? NavPathStatus::Failed : NavPathStatus::Pending;
-                record.waiting = !next.open.empty();
+                const bool exhausted = next != kNone ? fields_[next].open.empty()
+                    : here == goal.cluster ? fields_[goal.field].open.empty() : route.open.empty() && route.settled[here] == 0U;
+                output.status = exhausted ? NavPathStatus::Failed : NavPathStatus::Pending;
+                record.waiting = !exhausted;
+                if (exhausted) demand_[index] = 0U;
                 continue;
             }
             record.waiting = false;
@@ -790,7 +1147,7 @@ void NavMeshHorde::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
                 output.position = record.position;
                 output.velocity = record.velocity;
                 output.status = NavPathStatus::Complete;
-                output.remainingDistance = use != kNone ? fields_[use].cost[record.node] : toGoal;
+                output.remainingDistance = left(record.node);
                 output.onLink = record.linkNode != kNone;
                 continue;
             }
@@ -820,7 +1177,7 @@ void NavMeshHorde::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
                 output.velocity = record.velocity;
                 output.onLink = record.linkNode != kNone;
                 output.status = NavPathStatus::Complete;
-                output.remainingDistance = use != kNone ? fields_[use].cost[record.node] : toGoal;
+                output.remainingDistance = left(record.node);
                 continue;
             }
 
@@ -847,7 +1204,7 @@ void NavMeshHorde::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
             };
             if (!inGoal && use != kNone) {
                 const NavHordeField& field = fields_[use];
-                const std::uint32_t way = field.way[record.node];
+                const std::uint32_t way = field.Way(graph, record.node);
                 if (way != kNone) {
                     const std::uint32_t ahead = graph.portals[way].node;
                     if (graph.IsLink(ahead)) {
@@ -863,8 +1220,8 @@ void NavMeshHorde::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
                         if (HorizontalLength(aim - record.position) < input.agent.radius + 0.25F) {
                             if (ahead == goal.node) {
                                 aim = goal.destination;
-                            } else if (field.way[ahead] != kNone && !graph.IsLink(graph.portals[field.way[ahead]].node)) {
-                                aim = portalPoint(ahead, field.way[ahead], aim);
+                            } else if (field.Way(graph, ahead) != kNone && !graph.IsLink(graph.portals[field.Way(graph, ahead)].node)) {
+                                aim = portalPoint(ahead, field.Way(graph, ahead), aim);
                             } else {
                                 aim = graph.centre[ahead];
                             }
@@ -872,18 +1229,19 @@ void NavMeshHorde::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
                     }
                 }
             }
+            const std::uint32_t exitGateway = linkAhead != kNone ? route.gateway[graph.cluster[linkAhead]] : kNone;
             if (linkAhead != kNone && HorizontalLength(aim - record.position) <= std::max(graph.linkRadius[linkAhead], input.agent.radius * 2.25F) &&
-                fields_[use].way[linkAhead] != kNone) {
-                // At the link: cross it toward the end the field continues from.
+                exitGateway != kNone) {
+                // At the link: cross it toward the end the route continues from.
                 record.linkNode = linkAhead;
-                record.linkEnd = graph.portals[fields_[use].way[linkAhead]].edge;
-                record.linkLanding = graph.portals[fields_[use].way[linkAhead]].node;
+                record.linkEnd = graph.portals[graph.gateways[exitGateway].portal].edge;
+                record.linkLanding = graph.portals[graph.gateways[exitGateway].portal].node;
                 record.linkTravelled = 0.0F;
                 record.velocity = Vec3{};
                 output.position = record.position;
                 output.onLink = true;
                 output.status = NavPathStatus::Complete;
-                output.remainingDistance = fields_[use].cost[record.node];
+                output.remainingDistance = left(record.node);
                 continue;
             }
             Vec3 desired{};
@@ -1001,10 +1359,24 @@ void NavMeshHorde::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
             output.position = record.position;
             output.velocity = record.velocity;
             output.status = NavPathStatus::Complete;
-            output.remainingDistance = node == goal.node ? HorizontalLength(goal.destination - from)
-                : use != kNone && fields_[use].settled[node] != 0U ? fields_[use].cost[node] : toGoal;
+            output.remainingDistance = node == goal.node ? HorizontalLength(goal.destination - from) : left(node);
         }
     });
+    // 6. Agents waiting for guidance tell the fields and routes (in agent order, so any number of workers gives the same result).
+    for (std::size_t index = 0U; index < agents.size(); ++index) {
+        if (demand_[index] != 0U) RegisterDemand(wanted_[index], records_[index].node);
+    }
+    if (step_ % kExitRefresh == 0U) {
+        // The exit fields of routes in use count as used, so they stay while the route does.
+        for (const NavHordeRoute& route : routes_) {
+            if (route.goalCluster == kNone || route.lastUsed + kExitRefresh < step_) continue;
+            for (const std::uint32_t cluster : route.exitClusters) {
+                const std::uint32_t slot = route.exitField[cluster];
+                if (slot != kNone && fields_[slot].source != kNone && fields_[slot].stamp == route.exitStamp[cluster]) fields_[slot].lastUsed = step_;
+            }
+        }
+        SweepFields(cacheSize);
+    }
     for (std::size_t index = 0U; index < agents.size(); ++index) {
         const AgentRecord& record = records_[index];
         if (!agents[index].agent.enabled || record.node == kNone) continue;

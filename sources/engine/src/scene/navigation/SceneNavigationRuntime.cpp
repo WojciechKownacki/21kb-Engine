@@ -263,7 +263,8 @@ void StepPolygonNavigation(Scene& scene, SceneState& state, std::span<const std:
         }
     };
     constexpr std::size_t kAgentsPerRead = 1024U;
-    kb::ecs::WorkerPool* readers = authored.size() > kAgentsPerRead ? navigation.crowd->Workers(navigation.crowdSettings.workerThreads) : nullptr;
+    kb::ecs::WorkerPool* readers = authored.size() > std::max(kAgentsPerRead, nav::kMinAgentsOnWorkers)
+        ? navigation.crowd->Workers(navigation.crowdSettings.workerThreads) : nullptr;
     if (readers != nullptr) {
         readers->ParallelForChunks(authored.size(), kAgentsPerRead, [&](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
             readAgents(chunk.begin, chunk.begin + chunk.count);
@@ -308,12 +309,19 @@ void StepPolygonNavigation(Scene& scene, SceneState& state, std::span<const std:
     }
     std::vector<nav::NavMeshCrowdAgentOutput> crowdOutputs;
     std::vector<nav::NavMeshCrowdAgentOutput> hordeOutputs;
+    // What pushes horde agents apart besides each other: the crowd's agents and the obstacles agents steer around.
+    std::vector<nav::NavMeshBody> hordeBodies;
     std::vector<nav::NavMeshCrowdAgentOutput> outputs(agents.size());
     std::vector<bool> restoredPositions(agents.size(), false);
     for (std::uint32_t step = 0U; step < steps; ++step) {
         navigation.crowd->Step(runtime, inputs, circles, focuses, navigation.crowdSettings, deltaSeconds, crowdOutputs);
         if (!hordeInputs.empty()) {
-            navigation.horde->Step(runtime, hordeInputs, focuses, navigation.crowdSettings, deltaSeconds,
+            hordeBodies.clear();
+            for (const nav::NavMeshCrowdAgentInput& input : inputs) {
+                if (input.agent.enabled) hordeBodies.push_back(nav::NavMeshBody{ .position = input.position, .radius = input.agent.radius });
+            }
+            for (const nav::NavMeshCrowdObstacle& circle : circles) hordeBodies.push_back(nav::NavMeshBody{ .position = circle.center, .radius = circle.radius });
+            navigation.horde->Step(runtime, hordeInputs, hordeBodies, focuses, navigation.crowdSettings, deltaSeconds,
                 navigation.crowd->Workers(navigation.crowdSettings.workerThreads), hordeOutputs);
         }
         for (std::size_t index = 0U; index < inputs.size(); ++index) {

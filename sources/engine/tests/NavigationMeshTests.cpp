@@ -796,6 +796,8 @@ struct HordeRun {
     std::vector<Vec3> positions;
     std::vector<double> steps;
     double crowdMilliseconds = 0.0;
+    // Horde agents waiting for guidance over the steps after the first half second, up to half way.
+    std::size_t laterWaiting = 0U;
     bool crossedLink = false;
     std::size_t maxFields = 0U;
     std::size_t maxWaiting = 0U;
@@ -818,19 +820,19 @@ struct HordeRun {
 // (agent i chases target i % targets), as a horde or as individual crowd agents. Measures the
 // navigation step of the second half of `steps`.
 [[nodiscard]] HordeRun RunHorde(const HordeLevel& level, int count, int targets, int steps, bool horde, std::uint32_t threads = 0U,
-    std::optional<Vec3> fixedGoal = std::nullopt) {
+    std::optional<Vec3> fixedGoal = std::nullopt, double targetSpin = 0.25, int crowdAgents = 0, std::uint32_t fieldBudget = 4096U) {
     const bool moving = !fixedGoal.has_value();
     scene::Scene scene;
     std::string error;
     Check(scene.Navigation().AddNavMesh(level.asset, &error) != 0U, "the horde level must load: " + error);
-    scene.Navigation().ConfigureCrowd(scene::NavigationCrowdSettings{ .workerThreads = threads });
+    scene.Navigation().ConfigureCrowd(scene::NavigationCrowdSettings{ .workerThreads = threads, .hordeFieldNodesPerStep = fieldBudget });
     static_cast<void>(AddLink(scene, level.ladderStart, scene::NavLink{
         .start = {}, .end = level.ladderEnd - level.ladderStart, .radius = 0.6F, .kind = scene::NavLinkKind::Walk, .bidirectional = true }));
     const double half = level.half;
     const auto target = [&](int index, int step) {
         if (fixedGoal) return *fixedGoal;
         // Even targets circle on the deck, odd ones on the ground; 8 m circles at 2 m/s.
-        const double angle = (moving ? step * kFrame * 0.25 : 0.0) + index * 0.7;
+        const double angle = (moving ? step * kFrame * targetSpin : 0.0) + index * 0.7;
         const bool deck = index % 2 == 0;
         const double spanZ = half * 1.4;
         const double cz = -half * 0.7 + spanZ * ((index * 0.618) - std::floor(index * 0.618));
@@ -842,6 +844,7 @@ struct HordeRun {
     const double spanX = (level.deckX - 8.0) - minX;
     const double spanZ = half * 1.9;
     std::vector<scene::SceneEntity> agents;
+    std::vector<scene::SceneEntity> crowd;
     agents.reserve(static_cast<std::size_t>(count));
     for (int index = 0; index < count; ++index) {
         const double x = minX + spanX * (index % side + 0.5) / side;
@@ -851,6 +854,16 @@ struct HordeRun {
         scene.Components().NavAgents().Set(object.Entity(), scene::NavAgent{
             .radius = 0.4F, .maxSpeed = 3.5F, .acceleration = 10.0F, .stoppingDistance = 1.0F, .destination = target(index % targets, 0), .horde = horde });
         agents.push_back(object.Entity());
+    }
+    // Individual crowd agents among them, after the same targets.
+    for (int index = 0; index < crowdAgents; ++index) {
+        const double x = minX + spanX * ((index * 37) % 101 + 0.5) / 101.0;
+        const double z = -half * 0.95 + spanZ * ((index * 53) % 103 + 0.5) / 103.0;
+        const scene::SceneObject object = scene.Entities().CreateObject(scene::SceneObjectDesc{ .name = "Crowd" });
+        scene.Transforms().SetLocalTranslation(object.Entity(), DVec3{ x, 0.0, z });
+        scene.Components().NavAgents().Set(object.Entity(), scene::NavAgent{
+            .radius = 0.4F, .maxSpeed = 3.5F, .acceleration = 10.0F, .stoppingDistance = 1.0F, .destination = target(index % targets, 0) });
+        crowd.push_back(object.Entity());
     }
     scene.Runtime().SynchronizeTransforms();
     HordeRun run;
@@ -862,9 +875,14 @@ struct HordeRun {
             for (int index = 0; index < count; ++index) {
                 scene.Components().NavAgents().TryGet(agents[static_cast<std::size_t>(index)])->destination = goals[static_cast<std::size_t>(index % targets)];
             }
+            for (int index = 0; index < crowdAgents; ++index) {
+                scene.Components().NavAgents().TryGet(crowd[static_cast<std::size_t>(index)])->destination = goals[static_cast<std::size_t>(index % targets)];
+            }
         }
         static_cast<void>(scene.Runtime().Update(kFrame));
         const scene::NavigationCrowdStats stats = scene.Navigation().CrowdStats();
+        if (step >= steps / 2) run.crowdMilliseconds += stats.milliseconds;
+        if (step >= 30 && step < steps / 2) run.laterWaiting += stats.hordeWaiting;
         run.crossedLink = run.crossedLink || (horde ? stats.hordeOnLinks : stats.onLinks) > 0U;
         run.maxFields = std::max(run.maxFields, stats.hordeFields);
         if (step >= steps / 2) {
@@ -893,7 +911,7 @@ void TestHordeCrossesLevels() {
         arrived += position.y > 2.5F && Horizontal(position, goal) < 12.0F ? 1U : 0U;
     }
     Check(arrived >= 270U, "a horde climbs onto the deck and gathers at its target: " + std::to_string(arrived) + " of 300");
-    Check(run.maxFields == 1U, "one target gives one shared field: " + std::to_string(run.maxFields));
+    Check(run.maxFields <= 24U, "one target gives a few shared fields, not one per agent: " + std::to_string(run.maxFields));
     Check(run.crossedLink, "horde agents take the ladder link when it is the short way");
 }
 
@@ -919,22 +937,86 @@ void TestHordeFieldFollowsItsTarget() {
         scene.Components().NavAgents().TryGet(agents.back())->horde = true;
     }
     for (int frame = 0; frame < 30; ++frame) static_cast<void>(scene.Runtime().Update(kFrame));
-    Check(scene.Navigation().CrowdStats().hordeFields == 1U && scene.Navigation().CrowdStats().hordeWaiting == 0U,
-        "50 agents with one destination share one field and all follow it");
+    const std::size_t fields = scene.Navigation().CrowdStats().hordeFields;
+    Check(fields <= 12U && scene.Navigation().CrowdStats().hordeWaiting == 0U,
+        "50 agents with one destination share a few fields and all follow them: " + std::to_string(fields));
     for (const scene::SceneEntity agent : agents) scene.Components().NavAgents().TryGet(agent)->destination = Vec3{ 12.05F, 0.0F, 0.02F };
     static_cast<void>(scene.Runtime().Update(kFrame));
-    Check(scene.Navigation().CrowdStats().hordeFields == 1U, "a destination moved within its polygon keeps the field");
+    Check(scene.Navigation().CrowdStats().hordeFields == fields, "a destination moved within its polygon keeps its field");
     std::size_t waiting = 0U;
+    std::size_t waitedSteps = 0U;
     for (int frame = 0; frame < 900; ++frame) {
         const Vec3 destination{ 12.0F, 0.0F, -15.0F + 0.03F * static_cast<float>(frame) };
         for (const scene::SceneEntity agent : agents) scene.Components().NavAgents().TryGet(agent)->destination = destination;
         static_cast<void>(scene.Runtime().Update(kFrame));
         waiting = std::max(waiting, scene.Navigation().CrowdStats().hordeWaiting);
+        waitedSteps += scene.Navigation().CrowdStats().hordeWaiting;
     }
-    Check(waiting == 0U, "agents follow the old field while the new one grows: " + std::to_string(waiting) + " waited");
+    // Agents keep to the old fields while new ones grow; only one that has just stepped into a tile whose field is
+    // not there yet stands for a step.
+    Check(waiting <= 4U && waitedSteps <= 90U, "agents follow the old field while the new one grows: at most " + std::to_string(waiting) +
+        " waited at once, " + std::to_string(waitedSteps) + " agent steps in all");
     std::size_t near = 0U;
     for (const scene::SceneEntity agent : agents) near += Horizontal(Position(scene, agent), { 12.0F, 0.0F, 11.97F }) < 6.0F ? 1U : 0U;
     Check(near >= 45U, "the horde goes around the wall and keeps up with its moving target: " + std::to_string(near) + " of 50");
+}
+
+// Far from their target and with a tiny field budget, horde agents still set off along the route over the
+// tiles instead of waiting for a field that would take long to reach them.
+void TestHordeFarAgentsFollowTheRoute() {
+    scene::Scene scene;
+    static_cast<void>(AddMesh(scene, BakeNodes({ Slab(-150.0, 150.0, -40.0, 40.0, 0.0) })));
+    scene.Navigation().ConfigureCrowd(scene::NavigationCrowdSettings{ .hordeFieldNodesPerStep = 48U });
+    std::vector<scene::SceneEntity> agents;
+    std::vector<float> startX;
+    for (int index = 0; index < 120; ++index) {
+        const double x = -140.0 + (index % 12) * 2.5;
+        agents.push_back(AddAgent(scene, DVec3{ x, 0.0, -14.0 + (index / 12) * 2.5 }, Vec3{ 120.0F, 0.0F, 0.0F }));
+        startX.push_back(static_cast<float>(x));
+        scene.Components().NavAgents().TryGet(agents.back())->horde = true;
+    }
+    std::size_t waitingLater = 0U;
+    for (int frame = 0; frame < 150; ++frame) {
+        static_cast<void>(scene.Runtime().Update(kFrame));
+        if (frame >= 30) waitingLater = std::max(waitingLater, scene.Navigation().CrowdStats().hordeWaiting);
+    }
+    Check(waitingLater == 0U, "far horde agents are guided along the route within half a second: " + std::to_string(waitingLater) + " waited");
+    std::size_t advanced = 0U;
+    float total = 0.0F;
+    for (std::size_t index = 0U; index < agents.size(); ++index) {
+        const float travelled = Position(scene, agents[index]).x - startX[index];
+        advanced += travelled > 2.0F ? 1U : 0U;
+        total += travelled;
+    }
+    Check(advanced >= 110U && total / 120.0F >= 4.0F, "far horde agents walk toward their target: " + std::to_string(advanced) + " of 120, average " +
+        std::to_string(total / 120.0F) + " m");
+}
+
+// A horde keeps its distance from a crowd agent and from an obstacle it steers around, like from each other.
+void TestHordeKeepsOffOtherBodies() {
+    scene::Scene scene;
+    static_cast<void>(AddMesh(scene, BakeNodes({ Slab(-30.0, 30.0, -30.0, 30.0, 0.0) })));
+    const scene::SceneEntity guard = AddAgent(scene, DVec3{ 10.0, 0.0, 0.0 }, Vec3{ 10.0F, 0.0F, 0.0F });
+    static_cast<void>(AddObstacle(scene, { 10.0F, 0.0F, 12.0F }, scene::NavObstacle{
+        .shape = scene::NavObstacleShape::Cylinder, .radius = 1.0F, .height = 2.0F, .carve = false }));
+    std::vector<scene::SceneEntity> toGuard;
+    std::vector<scene::SceneEntity> pastObstacle;
+    for (int index = 0; index < 4; ++index) {
+        toGuard.push_back(AddAgent(scene, DVec3{ -10.0 + index * 1.0, 0.0, -6.0 }, Vec3{ 10.0F, 0.0F, 0.0F }));
+        scene.Components().NavAgents().TryGet(toGuard.back())->horde = true;
+        // These walk straight at the obstacle's centre on their way to a point behind it.
+        pastObstacle.push_back(AddAgent(scene, DVec3{ 10.0 + (index - 1.5) * 0.15, 0.0, 2.0 + index * 1.0 }, Vec3{ 10.0F, 0.0F, 24.0F }));
+        scene.Components().NavAgents().TryGet(pastObstacle.back())->horde = true;
+    }
+    float closestToObstacle = 1.0e9F;
+    for (int frame = 0; frame < 60 * 20; ++frame) {
+        static_cast<void>(scene.Runtime().Update(kFrame));
+        for (const scene::SceneEntity agent : pastObstacle) closestToObstacle = std::min(closestToObstacle, Horizontal(Position(scene, agent), { 10.0F, 0.0F, 12.0F }));
+    }
+    float closestToGuard = 1.0e9F;
+    for (const scene::SceneEntity agent : toGuard) closestToGuard = std::min(closestToGuard, Horizontal(Position(scene, agent), Position(scene, guard)));
+    Check(closestToGuard >= 0.6F, "horde agents keep apart from a crowd agent: " + std::to_string(closestToGuard) + " m");
+    Check(closestToObstacle >= 0.8F, "horde agents steer around a non-carving obstacle: " + std::to_string(closestToObstacle) + " m");
 }
 
 void TestNavComponentsPersist() {
@@ -1644,6 +1726,8 @@ void RunNavigationMeshTests() {
     TestHordeCrossesLevels();
     TestHordeIsDeterministic();
     TestHordeFieldFollowsItsTarget();
+    TestHordeFarAgentsFollowTheRoute();
+    TestHordeKeepsOffOtherBodies();
     TestNavComponentsPersist();
     TestBoundsLimitTheBake();
     TestBoundsBakeSettings();
@@ -1767,6 +1851,26 @@ void RunNavigationHordeBenchmark() {
     for (const int targets : { 1, 100 }) {
         const HordeRun run = RunHorde(level, 10000, targets, 2000, false);
         report("crowd step, 10000 individual agents, " + std::to_string(targets) + " moving targets", run);
+    }
+    // Targets that cross polygons and tiles every step (about 13 m per second per step), 10 and 100 of them.
+    for (const int targets : { 10, 100 }) {
+        const HordeRun run = RunHorde(level, 10000, targets, 1000, true, 0U, std::nullopt, 25.0);
+        report("horde step, 10000 agents, " + std::to_string(targets) + " targets crossing polygons every step", run);
+    }
+    // A mixed scene: a horde and individual crowd agents after the same targets.
+    {
+        const HordeRun run = RunHorde(level, 10000, 10, 1000, true, 0U, std::nullopt, 0.25, 500);
+        report("horde step, 10000 horde agents among 500 crowd agents", run);
+        std::cout << "navigation: crowd step of those 500 agents, average " << run.crowdMilliseconds / static_cast<double>(run.steps.size()) << " ms\n";
+    }
+    // A 2 km map with agents spread over it: far agents follow the route, none waits for a field.
+    {
+        const HordeLevel huge = MakeHordeLevel(1000.0);
+        const HordeRun run = RunHorde(huge, 10000, 10, 600, true, 0U, std::nullopt, 0.25, 0, 4096U);
+        report("horde step, 10000 agents spread over a 2 km map, 10 moving targets", run);
+        // Agent steps spent waiting for guidance after the first half second, of 10000 agents over 270 steps: a few edge crossings at most.
+        Check(run.laterWaiting < 2700U, "horde agents on a 2 km map do not wait for fields after the first half second: " + std::to_string(run.laterWaiting) + " agent steps");
+        Check(run.Percentile(0.5) < 6.0 * kSanitizerTimeScale, "10000 horde agents on a 2 km map must step within 6 ms: " + std::to_string(run.Percentile(0.5)));
     }
     Check(tenThousandOne < 3.0 * kSanitizerTimeScale, "10000 horde agents after one target must step within 3 ms: " + std::to_string(tenThousandOne));
     Check(tenThousandHundred < 6.0 * kSanitizerTimeScale, "10000 horde agents after 100 targets must step within 6 ms: " + std::to_string(tenThousandHundred));

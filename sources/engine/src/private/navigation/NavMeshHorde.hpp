@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <span>
+#include <unordered_map>
 #include <vector>
 
 namespace kb::navigation {
@@ -50,37 +51,114 @@ struct NavPolygonGraph {
     std::vector<std::uint32_t> tileBase;
     // Salt of every tile slot when the graph was built (a reference of another salt is stale).
     std::vector<std::uint32_t> tileSalt;
+    // Clusters: the polygons of one tile slot that join through portals (an off-mesh link is a cluster
+    // of its own). A cluster's nodes are `clusterNodes[clusterFirst[c] .. clusterFirst[c + 1])` in node
+    // order, `local` is a node's place in its cluster, `signature` stands for everything a field over
+    // the cluster depends on (polygons, areas, portals), `anchor` is the reference of its first node.
+    std::vector<std::uint32_t> cluster;
+    std::vector<std::uint32_t> local;
+    std::vector<std::uint32_t> clusterFirst;
+    std::vector<std::uint32_t> clusterNodes;
+    std::vector<std::uint64_t> signature;
+    std::vector<kb::math::Vec3> clusterCentre;
+    // The way from one cluster into a neighbouring one: the polygon (or link) it leaves from, the
+    // portal it uses and its cost. One per ordered pair of neighbouring clusters, the widest opening.
+    struct Gateway {
+        std::uint32_t from = kNone;
+        std::uint32_t to = kNone;
+        std::uint32_t node = kNone;
+        std::uint32_t portal = kNone;
+        float cost = 0.0F;
+    };
+    std::vector<Gateway> gateways;
+    std::vector<std::uint32_t> gatewayFirst;
+    // Gateways into each cluster, grouped by it (indices into `gateways`).
+    std::vector<std::uint32_t> firstArriving;
+    std::vector<std::uint32_t> arriving;
 
     void Build(const dtNavMesh& mesh, std::uint64_t meshRevision, std::uint64_t meshGeneration);
     [[nodiscard]] std::size_t NodeCount() const noexcept { return centre.size(); }
+    [[nodiscard]] std::size_t ClusterCount() const noexcept { return clusterCentre.size(); }
     [[nodiscard]] bool IsLink(std::uint32_t node) const noexcept { return linkRadius[node] > 0.0F; }
+    [[nodiscard]] bool IsLinkCluster(std::uint32_t c) const noexcept {
+        return clusterFirst[c + 1U] - clusterFirst[c] == 1U && IsLink(clusterNodes[clusterFirst[c]]);
+    }
     [[nodiscard]] std::uint32_t NodeOf(const dtNavMesh& mesh, dtPolyRef polygon) const noexcept;
 };
 
-// One shared navigation field: every reached node of a profile's graph knows its cost to the goal
-// node and the portal toward it. Expanded from the goal outward (a reverse Dijkstra over the
-// portals) a bounded number of nodes per step, only as far as the agents using it need.
+// One navigation field over one cluster of a profile's graph: every node of the cluster knows its
+// cost to the field's source node and the portal toward it (a reverse Dijkstra over the portals,
+// a bounded number of nodes per step). A goal field flows to the polygon a destination lies in;
+// an exit field flows to the polygon a gateway leaves from and carries the gateway's portal, so
+// it is the same for every destination whose route leaves the cluster that way.
 struct NavHordeField {
     std::uint32_t profile = 0U;
-    std::uint32_t goal = NavPolygonGraph::kNone;
+    std::uint32_t cluster = NavPolygonGraph::kNone;
+    // kNone while the slot is free.
+    std::uint32_t source = NavPolygonGraph::kNone;
+    // Ordinal among the source's portals of the one the field leaves by (exit fields), else 0xFF.
+    std::uint8_t exitWay = 0xFFU;
     kb::scene::NavAreaMask areas = kb::scene::kAllNavAreas;
-    std::uint64_t graphRevision = 0U;
+    // The area costs and blocked areas the field was made with (a changed set makes a new field).
+    std::uint64_t costs = 0U;
+    // The cluster as it was built: its first node's reference and its signature, and the source's
+    // reference, so the field survives a rebuilt graph in which the cluster is unchanged.
+    dtPolyRef anchor = 0U;
+    dtPolyRef sourceReference = 0U;
+    std::uint64_t signature = 0U;
+    // Per local node of the cluster: cost to the source, and the ordinal among the node's portals
+    // of the way toward it (0xFF at the source of a goal field and where the field has not reached).
     std::vector<float> cost;
-    // Index into the graph's portals: the way out of a node toward the goal; kNone at the goal or
-    // where the field has not reached yet.
-    std::vector<std::uint32_t> way;
+    std::vector<std::uint8_t> way;
     std::vector<std::uint8_t> settled;
-    // Nodes agents stand on that the field has not settled yet, and how many; expansion goes on
-    // while there are any, then `lookahead` nodes further.
-    std::vector<std::uint8_t> needed;
-    std::size_t unmet = 0U;
-    std::size_t lookahead = 0U;
     // Open nodes, a binary heap ordered by cost then node index.
     std::vector<std::pair<float, std::uint32_t>> open;
-    std::size_t settledCount = 0U;
+    // Agents are waiting for the field (set by the step, cleared by the expansion).
+    bool wanted = false;
     std::uint64_t lastUsed = 0U;
     // Raised whenever the slot starts a new field, so agents notice their field was replaced.
     std::uint64_t stamp = 0U;
+
+    [[nodiscard]] bool Reaches(const NavPolygonGraph& graph, std::uint32_t node) const noexcept {
+        return graph.cluster[node] == cluster && settled[graph.local[node]] != 0U;
+    }
+    // The portal (index into the graph's portals) leading from `node` toward the source, or kNone.
+    [[nodiscard]] std::uint32_t Way(const NavPolygonGraph& graph, std::uint32_t node) const noexcept {
+        if (graph.cluster[node] != cluster) return NavPolygonGraph::kNone;
+        const std::uint8_t ordinal = way[graph.local[node]];
+        return ordinal == 0xFFU ? NavPolygonGraph::kNone : graph.firstPortal[node] + ordinal;
+    }
+};
+
+// The cheap route toward a destination's cluster over the graph's gateways: every reached cluster
+// knows its cost to the goal cluster and the gateway to leave by (a reverse Dijkstra, like a field,
+// only as far as agents need). Agents outside the goal cluster follow the exit field of their
+// cluster's gateway, which `exitField` remembers per cluster.
+struct NavHordeRoute {
+    std::uint32_t profile = 0U;
+    std::uint32_t goalCluster = NavPolygonGraph::kNone;
+    std::uint64_t graphRevision = 0U;
+    std::vector<float> cost;
+    // Index into the graph's gateways, kNone at the goal cluster and where the route has not reached.
+    std::vector<std::uint32_t> gateway;
+    std::vector<std::uint8_t> settled;
+    std::vector<std::uint8_t> needed;
+    std::size_t unmet = 0U;
+    std::size_t lookahead = 0U;
+    std::vector<std::pair<float, std::uint32_t>> open;
+    // Per cluster: the exit field of its gateway (a slot of the field pool) and the stamp it had.
+    std::vector<std::uint32_t> exitField;
+    std::vector<std::uint64_t> exitStamp;
+    // The clusters that have an exit field here, so the use stamps are refreshed without a walk over all clusters.
+    std::vector<std::uint32_t> exitClusters;
+    std::uint64_t lastUsed = 0U;
+    std::uint64_t stamp = 0U;
+};
+
+// Something other than a horde agent that pushes horde agents apart: a crowd agent, an obstacle.
+struct NavMeshBody {
+    kb::math::Vec3 position{};
+    float radius = 0.0F;
 };
 
 // Moves NavAgents in horde mode: agents heading for the same goal polygon share one navigation
@@ -91,10 +169,11 @@ struct NavHordeField {
 // equal input replays exactly for any number of workers.
 class NavMeshHorde {
 public:
-    // `agents` sorted by id; `outputs` receives one entry per agent, in the same order.
-    void Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAgentInput> agents, std::span<const kb::math::Vec3> focuses,
-        const kb::scene::NavigationCrowdSettings& settings, float deltaSeconds, kb::ecs::WorkerPool* workers,
-        std::vector<NavMeshCrowdAgentOutput>& outputs);
+    // `agents` sorted by id; `outputs` receives one entry per agent, in the same order. `bodies` stand
+    // where they are for the step and push the agents away like other agents do.
+    void Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAgentInput> agents, std::span<const NavMeshBody> bodies,
+        std::span<const kb::math::Vec3> focuses, const kb::scene::NavigationCrowdSettings& settings, float deltaSeconds,
+        kb::ecs::WorkerPool* workers, std::vector<NavMeshCrowdAgentOutput>& outputs);
     void Clear();
     // Horde figures of the last step (the horde fields of NavigationCrowdStats).
     void AddStats(kb::scene::NavigationCrowdStats& stats) const noexcept;
@@ -125,13 +204,15 @@ private:
         kb::math::Vec3 sleptFor{};
     };
     // A destination agents are after, with their profile and areas, the polygon it lies in and the
-    // field leading there.
+    // field and the route leading there.
     struct Goal {
         std::uint32_t profile = 0U;
         kb::math::Vec3 destination{};
         kb::scene::NavAreaMask areas = 0U;
         std::uint32_t node = NavPolygonGraph::kNone;
+        std::uint32_t cluster = NavPolygonGraph::kNone;
         std::uint32_t field = NavPolygonGraph::kNone;
+        std::uint32_t route = NavPolygonGraph::kNone;
         std::uint64_t revision = 0U;
         bool used = false;
         [[nodiscard]] bool Same(const Goal& other) const noexcept;
@@ -143,16 +224,33 @@ private:
     [[nodiscard]] std::uint32_t FindGoal(const Goal& key) const noexcept;
     // Enters goal `added` into the goal table, or rebuilds the table (kNone).
     void IndexGoals(std::uint32_t added);
-    std::uint32_t FindField(std::uint32_t profile, std::uint32_t goal, kb::scene::NavAreaMask areas, std::size_t cacheSize);
+    // The field over `source`'s cluster flowing to `source` (leaving by `exitWay` for an exit field),
+    // made if it does not exist yet.
+    std::uint32_t FindField(std::uint32_t profile, std::uint32_t source, std::uint8_t exitWay, kb::scene::NavAreaMask areas);
+    // Frees the fields unused for a while beyond the cache size, oldest first, and rebuilds the field index.
+    void SweepFields(std::size_t cacheSize);
+    void RebuildFieldIndex();
+    std::uint32_t FindRoute(std::uint32_t profile, std::uint32_t goalCluster, std::size_t cacheSize);
+    // Fields and routes the step's agents wait for grow first, then the others, within `budget` nodes.
     void ExpandFields(const NavMeshRuntime& runtime, std::size_t budget);
     std::size_t Expand(const NavMeshRuntime& runtime, NavHordeField& field, std::size_t budget);
-    void BuildGrid(float cellSize);
+    std::size_t ExpandRoute(NavHordeRoute& route, std::size_t budget);
+    // Notes that an agent standing in a cluster without guidance waits for it (after the parallel pass).
+    void RegisterDemand(std::uint32_t goal, std::uint32_t node);
+    void BuildGrid(float cellSize, std::span<const NavMeshBody> bodies);
 
     std::vector<NavPolygonGraph> graphs_;
     std::vector<NavHordeField> fields_;
+    std::vector<NavHordeRoute> routes_;
+    // Fields by the hash of their key (profile, source, exit, areas, costs), and the free slots of the pool.
+    std::unordered_multimap<std::uint64_t, std::uint32_t> fieldIndex_;
+    std::vector<std::uint32_t> freeFields_;
     std::vector<AgentRecord> records_;
     std::vector<AgentRecord> scratch_;
     std::vector<Goal> goals_;
+    // Per agent of the step: set when the agent has no guidance yet and waits for it.
+    std::vector<std::uint8_t> demand_;
+    std::uint64_t costSignature_ = 0U;
     // Goal indices by the hash of their key (open addressing, kNone for an empty slot).
     std::vector<std::uint32_t> goalTable_;
     std::vector<std::uint32_t> remap_;

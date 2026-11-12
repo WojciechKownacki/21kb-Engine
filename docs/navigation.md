@@ -205,7 +205,9 @@ crowds in step:
   sampling, integration, collision push, moving along the mesh) and reading the members back run
   on an engine worker pool (`workerThreads`, 0 for the default count), each worker with its own
   Detour query objects; every member writes only itself and everything that touches several
-  members runs on the calling thread. Agents join the crowds in entity id order, so equal input
+  members runs on the calling thread. On Android the passes stay on the calling thread and no pool
+  is made (`kMinAgentsOnWorkers`): there pieces that land on the slow cores hold a pass up for
+  longer than the pass takes on a fast core, at every crowd size measured. Agents join the crowds in entity id order, so equal input
   replays to equal positions on any number of threads. Agents with a character controller hand their velocity to the
   physics character and follow where it moved them; while crossing a link their transform is
   placed directly.
@@ -217,37 +219,53 @@ the step and of its stages.
 ## Horde movement
 
 A `NavAgent` with `horde` on (Inspector: **Move as Horde**) leaves the crowd: agents heading for the
-same destination (with the same profile and areas) share one navigation field instead of each
-planning a path (`NavMeshHorde`):
+same destination (with the same profile and areas) share their guidance instead of each planning a
+path (`NavMeshHorde`). The polygons of a profile's mesh are grouped into **clusters** (the polygons
+of one tile layer that join through portals; an off-mesh link is a cluster of its own), built once
+per navigation mesh together with the **gateways** between neighbouring clusters (the widest
+opening of each pair):
 
-- **The field** lives on the polygons of the profile's mesh: from the polygon the destination lies
-  in, a search over the polygons' portals (and off-mesh links) outward gives every polygon it
-  reaches its cost to the destination and the portal to leave by. It grows by at most
-  `hordeFieldNodesPerStep` polygons per step, all fields together, and only as far as the agents
-  following it stand (plus a few polygons beyond). Fields are kept for reuse (`hordeFieldCacheSize`,
-  the least recently used goes first).
-- **A moving destination** keeps its field while it stays in its polygon. When it enters another
-  polygon a new field grows within the budget while the agents keep following the old one, taking
-  the new one as soon as it reaches them, so a running target costs no spike.
+- **The route:** from the cluster a destination lies in, a search over the gateways outward gives
+  every cluster it reaches its cost to the destination and the gateway to leave by. It is shared by
+  every destination in that cluster, grows within the shared budget and only as far as the agents
+  that need it stand (plus a few clusters), so a map of any size costs only where agents are.
+- **The fields:** inside the destination's cluster agents follow the *goal field* (a search over
+  the cluster's polygons from the polygon the destination lies in, giving each polygon its cost
+  and the portal to leave by); in every other cluster they follow the *exit field* of the route's
+  gateway (the same search from the polygon the gateway leaves from, ending in the gateway's
+  portal), which is the same for every destination whose route leaves that way. A field has the
+  size of its cluster, so starting one costs only the polygons it visits. All fields and the route
+  grow by at most `hordeFieldNodesPerStep` nodes per step together, routes first, then the fields
+  agents wait for, and the fields of the two clusters ahead of them. Fields are kept for reuse
+  (`hordeFieldCacheSize` idle ones, the least recently used goes first).
+- **A moving destination** only makes a new goal field when it enters another polygon (a few dozen
+  polygons at most) and a new route when it enters another cluster; every exit field already made
+  stays. Agents keep following the old guidance until the new reaches them, so a running target
+  costs no spike and no agent waits except for one that has just stepped into a tile whose field is
+  not there yet.
+- **Changed tiles and costs:** a rebuilt tile (or one of its neighbours at the border) drops only
+  the fields over the clusters that changed; changed area costs or blocked areas make new fields
+  on the next step while the old ones keep guiding.
 - **Steering:** each agent heads for the closest point of its polygon's portal (looking one polygon
   further when it stands at the portal), or straight for the destination in its polygon, and moves
   over the polygons through portals it may enter, sliding along walls, at the height of the
   polygon under it, so storeys, stairs and bridges are kept apart. A link on the way is walked
-  straight from end to end.
+  straight from end to end, to the landing the route continues from.
 - **Separation:** one grid over the agents is built per step; neighbours closer than both radii
   plus `hordeSeparationDistance` push each other apart (squared falloff, weighted by
-  `separationWeight`), ignoring agents more than an agent's height above or below. There is no
-  velocity sampling.
+  `separationWeight`), ignoring agents more than an agent's height above or below. Crowd agents
+  and non-carving obstacles stand in the same grid, so horde agents keep off them too; crowd
+  agents do not see horde agents. There is no velocity sampling.
 - **Level of detail:** with the crowd's focuses and distances, mid agents update every second step
   and far agents every fourth (with the elapsed time) and without separation. An agent that stopped
   within its stopping distance sleeps until its destination moves away.
-- The agents step on the crowd's worker pool, each writing only itself and reading the grid in a
-  fixed order, so equal input replays exactly on any number of threads. The crowd's reading of the
-  agents' transforms runs on the same pool.
+- The agents step on the crowd's worker pool (on the calling thread on Android), each writing only itself and reading the grid in a fixed order, so equal input replays
+  exactly on any number of threads. The crowd's reading of the agents' transforms runs on the same
+  pool.
 
-`CrowdStats()` reports the horde agents, how many were updated, asleep, waiting for their field and
-on links, the fields kept, the polygons the fields grew by and the wall time of the horde step and
-of its fields.
+`CrowdStats()` reports the horde agents, how many were updated, asleep, waiting for guidance and
+on links, the fields kept (goal and exit fields), the nodes the fields and routes grew by and the
+wall time of the horde step and of its fields.
 
 ## Script API
 
@@ -276,15 +294,24 @@ On the development machine (Release):
   the same machine the figures doubled.
 - `FindPath` across the arena about 5 us, over 14 m about 2 us.
 - Horde step on a 240 x 240 m two-storey level with stairs, a bridge and a link, targets moving
-  every step (median of 1000 steps): 10 000 agents about 0.7 ms after 1, 10 or 100 targets (the
-  slowest step about 1.5 ms; about 2.2 ms on one thread), 50 000 agents about 3.6 ms after 1 or 10
-  targets and about 8 ms after 100. 10 000 individual crowd agents in the same scenario took
-  about 12 ms in the same run.
+  every step (median of 1000 steps, machine shared with other work): 10 000 agents about 1.5 ms
+  after 1 target and 2 ms after 10 or 100 (about 2.3 ms on one thread), 50 000 agents about 8 ms;
+  targets that cross polygons and tiles every step cost the same; 10 000 agents spread over a
+  2 km map after 10 targets about 4 ms; 10 000 horde agents among 500 crowd agents about 1.6 ms
+  plus 1.8 ms for the crowd. 10 000 individual crowd agents in the same scenario took about 15 ms.
+- On a phone (8 cores: one fast, three medium, four slow; the same level, steps on the calling
+  thread): 1000 horde agents 0.16 ms, 5000 agents 0.8 ms, 10 000 agents 1.8 ms after one target
+  and 2.2 ms after ten, with no step more than 10% above the median; 1000 individual crowd agents
+  1.6 ms, 3000 agents 5.6 ms. With the worker pool the same passes took 4 to 5 times as long
+  (10 000 horde agents 7 to 9 ms, 1000 crowd agents 7 ms, 40 000 horde agents 22 ms against 8.6 ms
+  on the calling thread) with steps up to twice that.
 
 `kb_engine_navigation-crowd-bench` checks that 1000 agents step within 8 ms, 10 000 agents within
 24 ms, and that level of detail makes a large crowd cheaper; it prints the stages of a step.
 `kb_engine_navigation-horde-bench` checks that 10 000 horde agents step within 3 ms (median) after
-one target and 6 ms after 100, and 50 000 within 30 ms.
+one target and 6 ms after 100, 50 000 within 30 ms, and that 10 000 agents spread over a 2 km map
+step within 6 ms without waiting for fields; it also prints targets that cross polygons every step
+and a horde among crowd agents.
 The same gate checks a local rebake of four 12.8 m tiles containing a floor and a wall
 against an 8 ms median budget over nine warmed samples. Larger geometry and wider
 rebake regions need their own workload measurements.
@@ -293,9 +320,11 @@ rebake regions need their own workload measurements.
 
 - Path requests, the path queue and topology optimisation run on the calling thread.
 - A crowd walks one Detour mesh, so agents avoid and push only agents of their own profile.
-- Horde agents push only each other apart; crowd agents and non-carving obstacles do not see them.
-  A horde field is rebuilt from scratch when the tiles of its profile change, and changed area
-  costs reach fields made afterwards.
+- Horde agents are pushed apart by each other, by crowd agents and by non-carving obstacles; crowd
+  agents do not see them. The route over the clusters ignores area masks: an agent whose mask
+  forbids an area its route crosses reports a `Failed` path when its field cannot reach the gateway.
+  Gateways are the widest opening of a pair of clusters, so routes follow tile edges and run a
+  little longer than the shortest way.
 - At most 16 different agent area masks are in use at a time (the crowd's filter slots); an agent
   whose mask finds no free slot reports a `Failed` path. A crowd holds at most 65 535 agents and
   non-carving obstacles.
@@ -314,10 +343,10 @@ rebake regions need their own workload measurements.
 
 | Test | Covers |
 | --- | --- |
-| `kb_engine_tests navigation-mesh` | Settings validation; the asset format (round trip, truncation, refusal of escaping connections and unknown areas); bakes on one worker, four and a bake-owned pool byte-identical; walkable area of a floor; slopes (30 vs 60 degrees) and steps (0.3 vs 0.6 m); carving obstacles (blocked, around, rotated, removed) with an agent walking around; geometry rebuilt at runtime; area costs and masks; two agent sizes through a doorway; jump and ladder links (one-way, disabled) crossed by agents; far from the world origin; a 1200-agent crowd with near, mid and far agents replaying exactly on one, two and eight threads; crowd level of detail and its transitions; the path request budget serving near agents first and every agent in the end; a horde climbing stairs and a link onto a deck over one shared field, replaying exactly on one, two and eight threads, keeping its field for a destination moved within its polygon and following the old field while a new one grows; NavAgent (horde included), NavObstacle and NavLink save/load; Navigation Bounds limiting the bake (one box, two boxes, none), their settings (a wider agent leaves less ground, disagreeing bounds are refused), save/load and older files; moved, removed and added objects and a moved Navigation Bounds rebuilding only the tiles they touch into the full bake's tiles; a bake on a worker matching the synchronous bake of the saved scene; colliders and meshes with Affects Navigation off left out of full and partial bakes, kept through save/load, on in older files and set by scripts; the project's named areas (defaults, settings round trip, a scene's costs, a Not walkable area that is never crossed, names resolved by scripts); the debug view's triangles, polygon edges and tile bounds; scripts; a scene's ContentInstance placing its mesh; a world's tiles streaming in and out with its cells. |
+| `kb_engine_tests navigation-mesh` | Settings validation; the asset format (round trip, truncation, refusal of escaping connections and unknown areas); bakes on one worker, four and a bake-owned pool byte-identical; walkable area of a floor; slopes (30 vs 60 degrees) and steps (0.3 vs 0.6 m); carving obstacles (blocked, around, rotated, removed) with an agent walking around; geometry rebuilt at runtime; area costs and masks; two agent sizes through a doorway; jump and ladder links (one-way, disabled) crossed by agents; far from the world origin; a 1200-agent crowd with near, mid and far agents replaying exactly on one, two and eight threads; crowd level of detail and its transitions; the path request budget serving near agents first and every agent in the end; a horde climbing stairs and a link onto a deck over shared fields, replaying exactly on one, two and eight threads, keeping its field for a destination moved within its polygon and following the old field while a new one grows; far horde agents setting off along the route with a tiny field budget; horde agents keeping off a crowd agent and steering around a non-carving obstacle; NavAgent (horde included), NavObstacle and NavLink save/load; Navigation Bounds limiting the bake (one box, two boxes, none), their settings (a wider agent leaves less ground, disagreeing bounds are refused), save/load and older files; moved, removed and added objects and a moved Navigation Bounds rebuilding only the tiles they touch into the full bake's tiles; a bake on a worker matching the synchronous bake of the saved scene; colliders and meshes with Affects Navigation off left out of full and partial bakes, kept through save/load, on in older files and set by scripts; the project's named areas (defaults, settings round trip, a scene's costs, a Not walkable area that is never crossed, names resolved by scripts); the debug view's triangles, polygon edges and tile bounds; scripts; a scene's ContentInstance placing its mesh; a world's tiles streaming in and out with its cells. |
 | `kb_engine_tests navigation-runtime` | Agents on baked meshes: accelerating within their speed, stopping at their stopping distance, re-planning for a new destination, standing still while the scene is paused; turning corners without leaving the mesh; going around a carving obstacle and walking straight again once it is disabled; a partial path to the closest point when an obstacle closes the way; steering around a non-carving obstacle; two agents passing each other and replaying exactly, and still passing when created in the other order; no mesh means a failed path until one is added; walking a mesh 10 000 km out as precisely as at the origin, as a root and as a child. |
 | `kb_engine_navigation-crowd-bench` | Crowd step budgets for 1000 and 10 000 agents, the level-of-detail gain at 5000, 20 000 agents over 600 steps, and `FindPath` cost. |
-| `kb_engine_navigation-horde-bench` | Horde step of 10 000 and 50 000 agents chasing 1, 10 and 100 moving targets on a two-storey level (stairs, bridge, link) over 2000 steps (p50, p95, p99, slowest), and individual crowd agents in the same scenario. |
+| `kb_engine_navigation-horde-bench` | Horde step of 10 000 and 50 000 agents chasing 1, 10 and 100 moving targets on a two-storey level (stairs, bridge, link) over 2000 steps (p50, p95, p99, slowest), individual crowd agents in the same scenario, targets crossing polygons every step, a horde among crowd agents, and 10 000 agents on a 2 km map. |
 | `kb_cli_tests` | `kb_cli navmesh bake` and `info` (colliders, imported meshes, profiles, kept settings) and `world build` with navigation and region chunks. |
 | `kb_editor_navigation_headless` | Editor bake of a scene with a floor collider, an imported mesh and a jump link; identical bytes to the kb_cli bake; the filled overlay drawn in the scene view, gone when hidden and hidden behind geometry in front of it; an agent crossing the link in Play mode. |
 | `kb_fuzz_navmesh_corpus` (`KB_BUILD_FUZZERS`) | The navigation mesh reader and polygon rebuild over the seed corpus. |
