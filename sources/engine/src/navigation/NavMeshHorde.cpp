@@ -1,6 +1,7 @@
 #include "navigation/NavMeshHorde.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -23,8 +24,10 @@ namespace {
 
 constexpr std::uint32_t kNone = NavPolygonGraph::kNone;
 const Vec3 kSearchExtents{ 2.0F, 4.0F, 2.0F };
-// Agents per piece of a parallel pass; fewer run on the calling thread.
-constexpr std::size_t kAgentsPerPiece = 2048U;
+// Passes over fewer agents than this run on the calling thread; larger ones are cut into blocks of
+// kAgentsPerBlock that the workers take one after another.
+constexpr std::size_t kMinAgentsForWorkers = 2048U;
+constexpr std::size_t kAgentsPerBlock = 128U;
 // An agent moves to a farther level of detail only this far beyond its edge.
 constexpr float kDetailHysteresis = 1.1F;
 // Steps between updates of near, mid and far agents.
@@ -40,16 +43,20 @@ constexpr std::uint8_t kNoWay = 0xFFU;
 constexpr int kMaxCrossings = 8;
 constexpr std::uint32_t kMaxGridCells = 1U << 22U;
 
+// Runs `body(begin, end)` over all `count` agents. On the workers, each one takes the next block of
+// agents from a shared counter until none is left, so a worker on a slower core ends up with fewer.
 template <typename Body>
 void ForEachPiece(kb::ecs::WorkerPool* pool, std::size_t count, Body&& body) {
-    const std::size_t pieces = pool != nullptr ? pool->WorkerCount() * 4U : 1U;
-    const std::size_t size = std::max(kAgentsPerPiece, (count + pieces - 1U) / pieces);
-    if (pool == nullptr || count <= size || count < kMinAgentsOnWorkers) {
+    if (pool == nullptr || count <= kMinAgentsForWorkers || count < kMinAgentsOnWorkers) {
         if (count > 0U) body(std::size_t{ 0U }, count);
         return;
     }
-    pool->ParallelForChunks(count, size, [&](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& piece) {
-        body(piece.begin, piece.begin + piece.count);
+    std::atomic<std::size_t> next{ 0U };
+    pool->ParallelForChunks(pool->WorkerCount(), 1U, [&](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk&) {
+        for (std::size_t begin = next.fetch_add(kAgentsPerBlock, std::memory_order_relaxed); begin < count;
+             begin = next.fetch_add(kAgentsPerBlock, std::memory_order_relaxed)) {
+            body(begin, std::min(begin + kAgentsPerBlock, count));
+        }
     });
 }
 
@@ -1060,6 +1067,10 @@ void NavMeshHorde::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
 
     // 5. Every agent steers and moves, writing only itself.
     const float separationWeight = settings.separationWeight;
+    std::atomic<std::size_t> waiting{ 0U };
+    std::atomic<std::size_t> asleep{ 0U };
+    std::atomic<std::size_t> onLinks{ 0U };
+    std::atomic<std::size_t> ticked{ 0U };
     ForEachPiece(workers, agents.size(), [&](std::size_t begin, std::size_t end) {
         for (std::size_t index = begin; index < end; ++index) {
             const NavMeshCrowdAgentInput& input = agents[index];
@@ -1361,7 +1372,28 @@ void NavMeshHorde::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
             output.status = NavPathStatus::Complete;
             output.remainingDistance = node == goal.node ? HorizontalLength(goal.destination - from) : left(node);
         }
+        // The block's share of the step's figures.
+        std::size_t blockWaiting = 0U;
+        std::size_t blockAsleep = 0U;
+        std::size_t blockOnLinks = 0U;
+        std::size_t blockTicked = 0U;
+        for (std::size_t index = begin; index < end; ++index) {
+            const AgentRecord& record = records_[index];
+            if (!agents[index].agent.enabled || record.node == kNone) continue;
+            blockWaiting += record.waiting ? 1U : 0U;
+            blockAsleep += record.asleep ? 1U : 0U;
+            blockOnLinks += record.linkNode != kNone ? 1U : 0U;
+            blockTicked += record.idle == 0U && !record.asleep && !record.waiting ? 1U : 0U;
+        }
+        waiting.fetch_add(blockWaiting, std::memory_order_relaxed);
+        asleep.fetch_add(blockAsleep, std::memory_order_relaxed);
+        onLinks.fetch_add(blockOnLinks, std::memory_order_relaxed);
+        ticked.fetch_add(blockTicked, std::memory_order_relaxed);
     });
+    waiting_ = waiting.load(std::memory_order_relaxed);
+    asleep_ = asleep.load(std::memory_order_relaxed);
+    onLinks_ = onLinks.load(std::memory_order_relaxed);
+    ticked_ = ticked.load(std::memory_order_relaxed);
     // 6. Agents waiting for guidance tell the fields and routes (in agent order, so any number of workers gives the same result).
     for (std::size_t index = 0U; index < agents.size(); ++index) {
         if (demand_[index] != 0U) RegisterDemand(wanted_[index], records_[index].node);
@@ -1376,14 +1408,6 @@ void NavMeshHorde::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
             }
         }
         SweepFields(cacheSize);
-    }
-    for (std::size_t index = 0U; index < agents.size(); ++index) {
-        const AgentRecord& record = records_[index];
-        if (!agents[index].agent.enabled || record.node == kNone) continue;
-        waiting_ += record.waiting ? 1U : 0U;
-        asleep_ += record.asleep ? 1U : 0U;
-        onLinks_ += record.linkNode != kNone ? 1U : 0U;
-        ticked_ += record.idle == 0U && !record.asleep && !record.waiting ? 1U : 0U;
     }
     milliseconds_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
 }

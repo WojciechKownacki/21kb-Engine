@@ -259,7 +259,9 @@ opening of each pair):
 - **Level of detail:** with the crowd's focuses and distances, mid agents update every second step
   and far agents every fourth (with the elapsed time) and without separation. An agent that stopped
   within its stopping distance sleeps until its destination moves away.
-- The agents step on the crowd's worker pool (on the calling thread on Android), each writing only itself and reading the grid in a fixed order, so equal input replays
+- The agents step on the crowd's worker pool (on the calling thread on Android): each worker takes
+  blocks of 128 agents from a shared counter until none is left, so a worker on a slower core ends up
+  with fewer. Each agent writes only itself and reads the grid in a fixed order, so equal input replays
   exactly on any number of threads. The crowd's reading of the agents' transforms runs on the same
   pool.
 
@@ -294,11 +296,14 @@ On the development machine (Release):
   the same machine the figures doubled.
 - `FindPath` across the arena about 5 us, over 14 m about 2 us.
 - Horde step on a 240 x 240 m two-storey level with stairs, a bridge and a link, targets moving
-  every step (median of 1000 steps, machine shared with other work): 10 000 agents about 1.5 ms
-  after 1 target and 2 ms after 10 or 100 (about 2.3 ms on one thread), 50 000 agents about 8 ms;
+  every step (median of 2000 steps, 24 threads): 10 000 agents about 0.5 ms after 1 target and
+  0.5 to 0.6 ms after 10 or 100 (about 1.3 ms on one thread), 50 000 agents about 3 ms after 1 or
+  10 targets and 3.3 ms after 100. A process that Windows runs at power-saving quality (a test
+  started in the background) is placed on the efficiency cores and takes up to twice as long;
   targets that cross polygons and tiles every step cost the same; 10 000 agents spread over a
-  2 km map after 10 targets about 4 ms; 10 000 horde agents among 500 crowd agents about 1.6 ms
-  plus 1.8 ms for the crowd. 10 000 individual crowd agents in the same scenario took about 15 ms.
+  2 km map after 10 targets about 4.7 ms; 10 000 horde agents among 500 crowd agents about 0.6 ms
+  plus 0.8 ms for the crowd. 10 000 individual crowd agents in the same scenario took 4 to 15 ms
+  depending on the load of the machine.
 - On a phone (8 cores: one fast, three medium, four slow; the same level, steps on the calling
   thread): 1000 horde agents 0.16 ms, 5000 agents 0.8 ms, 10 000 agents 1.8 ms after one target
   and 2.2 ms after ten, with no step more than 10% above the median; 1000 individual crowd agents
