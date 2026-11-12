@@ -40,6 +40,7 @@
 #include <cstdlib>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <random>
@@ -1920,9 +1921,9 @@ void DrawGraphNodeDirect(
         DrawParameterColorValue(dc, rect, node, material);
         DrawColorRampWatcher(dc, rect, node);
 
-        const std::vector<EditorMaterialGraphPinPresentation> inputPins =
+        const std::vector<EditorMaterialGraphPinPresentation>& inputPins =
             EditorMaterialGraphPinPresentationCatalog::InputPins(node);
-        const std::vector<EditorMaterialGraphPinPresentation> outputPins =
+        const std::vector<EditorMaterialGraphPinPresentation>& outputPins =
             EditorMaterialGraphPinPresentationCatalog::OutputPins(node);
         const bool splitPinLabelLanes = !inputPins.empty() && !outputPins.empty() &&
             !MaterialEditorPanelIsTextureSamplePreviewNode(node.kind) &&
@@ -2772,6 +2773,14 @@ void DrawGraphCanvasContent(
         linkGraphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
         linkGraphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
         const std::vector<MaterialGraphCanvasNode>& canvasNodes = canvasResult.canvas.Nodes();
+        // Each link finds the node it starts at by id; the ids are sorted once so that is a search, not a
+        // walk of the whole graph, and the list keeps its storage from one draw to the next.
+        thread_local std::vector<std::pair<std::uint32_t, const kb::render::RenderMaterialGraphNode*>> nodesById;
+        nodesById.clear();
+        for (const kb::render::RenderMaterialGraphNode& graphNode : graphView.nodes) {
+            nodesById.emplace_back(graphNode.id, &graphNode);
+        }
+        std::ranges::sort(nodesById, [](const auto& lhs, const auto& rhs) { return lhs.first < rhs.first; });
         for (const MaterialGraphCanvasLink& link : canvasResult.canvas.Links()) {
             if (link.fromNode >= canvasNodes.size() || link.toNode >= canvasNodes.size()) {
                 continue;
@@ -2781,7 +2790,10 @@ void DrawGraphCanvasContent(
                 continue;
             }
             const std::uint32_t fromNodeId = static_cast<std::uint32_t>(std::strtoul(fromCanvasNode.stableId.c_str(), nullptr, 10));
-            const kb::render::RenderMaterialGraphNode* fromNode = kb::render::FindRenderMaterialGraphNode(graphView, fromNodeId);
+            const auto fromEntry = std::ranges::lower_bound(
+                nodesById, fromNodeId, std::less<>{}, [](const auto& entry) { return entry.first; });
+            const kb::render::RenderMaterialGraphNode* fromNode =
+                fromEntry != nodesById.end() && fromEntry->first == fromNodeId ? fromEntry->second : nullptr;
             const POINT from = GraphCanvasPointToPoint(canvasResult.canvas.PinCenterWindow(link.fromNode, link.fromPin, true));
             const POINT to = GraphCanvasPointToPoint(canvasResult.canvas.PinCenterWindow(link.toNode, link.toPin, false));
             const std::string& fromPin = fromCanvasNode.outputs[link.fromPin].stableId;

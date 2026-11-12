@@ -105,6 +105,8 @@ struct EditorMaterialGraphCookConfig {
     std::uint32_t compileWarningMs = 5000U;
     std::uint32_t cacheEntryWarningThreshold = 4096U;
     std::uint64_t cacheByteWarningThreshold = 256ULL * 1024ULL * 1024ULL;
+    // The shader cache keeps at most this much: past it, the graphs used longest ago are removed.
+    std::uint64_t cacheByteLimit = 128ULL * 1024ULL * 1024ULL;
     kb::render::RenderMaterialGraphShaderBackend backend = kb::render::RenderMaterialGraphShaderBackend::Dxbc;
     kb::assets::bake::ShaderBakePlatform shaderPlatform =
         kb::assets::bake::ShaderBakePlatform::Windows;
@@ -123,8 +125,9 @@ struct EditorMaterialGraphCookConfig {
 // loads through MaterialProgramRegistry. A background worker debounces and dedupes edits and turns the
 // graph into shader source; every pass of every variant is then compiled by its own job, up to
 // `maxParallelCompiles` at once. A newer edit of a variant stops the older one from starting compiles
-// and its result is never published. CookNow() runs the same jobs and waits for them, for batch
-// cooks (scene/project load) and tests.
+// and its result is never published; once the newer edit starts compiling, the older one's running
+// compilers are ended too. Returning to the older edit before that (undo) keeps its running compile.
+// CookNow() runs the same jobs and waits for them, for batch cooks (scene/project load) and tests.
 class EditorMaterialGraphCookService {
 public:
     EditorMaterialGraphCookService();
@@ -168,6 +171,8 @@ public:
     [[nodiscard]] std::uint32_t PeakParallelCompiles() const noexcept;
     // Compiles that were never started because a newer edit replaced their variant.
     [[nodiscard]] std::uint32_t SkippedCompileCount() const noexcept;
+    // Compiler processes that were ended while running because a newer edit replaced their variant.
+    [[nodiscard]] std::uint32_t TerminatedCompileCount() const noexcept;
 
 private:
     struct CookJob;
@@ -188,6 +193,8 @@ private:
     void RunPassJob(const std::shared_ptr<CookJob>& job, std::size_t index);
     // Builds the result of a job whose passes are all done and publishes it unless it is stale.
     void PublishJob(const std::shared_ptr<CookJob>& job);
+    // Needs mutex_. Ends the compilers of jobs a newer request replaced, now that `current` is the one compiling.
+    void TerminateSupersededJobsLocked(const CookJob& current);
     // Needs mutex_. True when a newer request for the same variant is waiting for its debounce.
     [[nodiscard]] bool SupersededLocked(
         const kb::render::RenderMaterialGraphVariantKey& key, std::uint64_t generation) const;
@@ -224,6 +231,7 @@ private:
     mutable std::atomic<std::uint32_t> runningCompiles_{ 0U };
     mutable std::atomic<std::uint32_t> peakCompiles_{ 0U };
     mutable std::atomic<std::uint32_t> skippedCompiles_{ 0U };
+    mutable std::atomic<std::uint32_t> terminatedCompiles_{ 0U };
     std::unique_ptr<kb::assets::streaming::BackgroundLane> lane_;
     std::unique_ptr<kb::assets::streaming::BackgroundLane> compileLane_;
 };

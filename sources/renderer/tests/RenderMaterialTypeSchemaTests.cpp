@@ -3317,6 +3317,27 @@ void RunMaterialGraphOrganizationNodeCodegenTest() {
     Require(namedCompile.shader.source == directCompile.shader.source,
         "KBMAT-MAT56: Named reroute declaration/usage must inline to the declaration input without changing shader source");
 
+    // A parameter behind a named reroute is read by the shader through the usage, so it must be declared and
+    // reflected exactly as if it were linked to the output directly.
+    RenderMaterialGraphDocument namedParameterGraph = MakeDefaultRenderMaterialGraphDocument();
+    const RenderMaterialGraphNode namedParameter{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ParameterColor,
+        .parameter = RenderMaterialGraphParameterMetadata{ .stableId = "RouteTint", .displayName = "Route Tint", .defaultValueHint = "0.25 0.5 0.75 1" },
+    };
+    namedParameterGraph.nodes.push_back(namedParameter);
+    namedParameterGraph.nodes.push_back(declaration);
+    namedParameterGraph.nodes.push_back(usage);
+    namedParameterGraph.links.push_back(MakeGraphLink(namedParameter, "rgba", declaration, "input"));
+    namedParameterGraph.links.push_back(MakeGraphLink(usage, "output", namedParameterGraph.nodes.front(), "baseColor"));
+    const RenderMaterialGraphCompileResult namedParameterCompile =
+        compileGraph(namedParameterGraph, 0x5603U, "KBMAT-MAT56: Named reroute parameter graph should compile");
+    Require(namedParameterCompile.shader.reflection.uniforms.size() == 1U &&
+            namedParameterCompile.shader.reflection.uniforms.front().kind == RenderMaterialGraphNodeKind::ParameterColor &&
+            namedParameterCompile.shader.source.find("uniform vec4 " + namedParameterCompile.shader.reflection.uniforms.front().name + ";") !=
+                std::string::npos,
+        "KBMAT-MAT56: A parameter behind a named reroute must still be declared as a uniform");
+
     RenderMaterialGraphDocument missingDeclarationGraph = MakeDefaultRenderMaterialGraphDocument();
     RenderMaterialGraphNode missingUsage = usage;
     missingUsage.parameter.stableId = "MissingRoute";

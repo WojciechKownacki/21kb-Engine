@@ -30,6 +30,7 @@
 #include <windows.h>
 #else
 #include <fcntl.h>
+#include <signal.h>
 #include <spawn.h>
 #include <sys/file.h>
 #include <sys/wait.h>
@@ -456,6 +457,76 @@ private:
 #endif
 };
 
+// Records that a cache entry is being used now, so the cache can tell recent entries from forgotten ones.
+// The lock file is the one file every cook of an entry opens, hit or miss, which makes it the stamp.
+void StampShaderCacheEntryUsed(const std::filesystem::path& lockPath) {
+    std::error_code error;
+    std::filesystem::last_write_time(lockPath, std::filesystem::file_time_type::clock::now(), error);
+}
+
+// The graph node whose code a shader compiler message is about. The compiler numbers the lines of the code
+// it was given after preprocessing, which no longer matches the wrapper, but it repeats the offending line
+// in its message (">>> <line>: <text>"). The generated graph code carries a marker line before the code of
+// each node, so the node is the one whose code holds that text. 0 when the message repeats no line, or the
+// text is not in a node's code, or it is in the code of more than one node.
+[[nodiscard]] std::uint32_t NodeOfCompilerMessage(std::string_view source, std::string_view log) {
+    const auto trimmed = [](std::string_view text) {
+        const std::size_t first = text.find_first_not_of(" \t\r");
+        if (first == std::string_view::npos) {
+            return std::string_view{};
+        }
+        return text.substr(first, text.find_last_not_of(" \t\r") - first + 1U);
+    };
+    const auto forEachLine = [](std::string_view text, const auto& visit) {
+        for (std::size_t begin = 0U; begin < text.size();) {
+            const std::size_t end = std::min(text.find('\n', begin), text.size());
+            if (visit(text.substr(begin, end - begin))) {
+                return;
+            }
+            begin = end + 1U;
+        }
+    };
+
+    std::string_view wanted;
+    forEachLine(log, [&](std::string_view line) {
+        if (!line.starts_with(">>> ") || line.find(':') == std::string_view::npos) {
+            return false;
+        }
+        const std::string_view text = trimmed(line.substr(line.find(':') + 1U));
+        if (text.empty() || text == "^") {
+            return false;
+        }
+        wanted = text;
+        return true;
+    });
+    if (wanted.empty()) {
+        return 0U;
+    }
+
+    std::uint32_t node = 0U;
+    std::uint32_t found = 0U;
+    bool seen = false;
+    bool ambiguous = false;
+    forEachLine(source, [&](std::string_view line) {
+        const std::string_view text = trimmed(line);
+        if (text.starts_with("// ") && text.substr(3U).starts_with(kRenderMaterialGraphNodeMarker)) {
+            node = 0U;
+            for (const char ch : text.substr(3U + kRenderMaterialGraphNodeMarker.size())) {
+                if (ch < '0' || ch > '9') {
+                    break;
+                }
+                node = node * 10U + static_cast<std::uint32_t>(ch - '0');
+            }
+        } else if (text == wanted) {
+            ambiguous = ambiguous || (seen && node != found);
+            found = seen ? found : node;
+            seen = true;
+        }
+        return false;
+    });
+    return seen && !ambiguous ? found : 0U;
+}
+
 [[nodiscard]] bool RelativePathWithin(
     const std::filesystem::path& child,
     const std::filesystem::path& parent,
@@ -628,10 +699,13 @@ private:
 }
 #endif
 
+// Runs the compiler to its end and returns its exit code; with `terminate` it ends the process as soon as the
+// flag reads true.
 [[nodiscard]] int RunShaderCompilerHidden(
     const std::filesystem::path& executable,
     const std::vector<std::string>& arguments,
-    const std::filesystem::path& diagnosticPath) {
+    const std::filesystem::path& diagnosticPath,
+    const std::atomic<bool>* terminate = nullptr) {
 #if defined(_WIN32)
     const std::wstring executableWide = executable.wstring();
     if (executableWide.empty()) {
@@ -721,7 +795,18 @@ private:
         return -1;
     }
 
-    WaitForSingleObject(process.hProcess, INFINITE);
+    if (terminate == nullptr) {
+        WaitForSingleObject(process.hProcess, INFINITE);
+    } else {
+        constexpr DWORD kTerminateCheckMs = 20U;
+        while (WaitForSingleObject(process.hProcess, kTerminateCheckMs) == WAIT_TIMEOUT) {
+            if (terminate->load(std::memory_order_acquire)) {
+                static_cast<void>(TerminateProcess(process.hProcess, static_cast<UINT>(-1)));
+                WaitForSingleObject(process.hProcess, INFINITE);
+                break;
+            }
+        }
+    }
     DWORD exitCode = static_cast<DWORD>(-1);
     static_cast<void>(GetExitCodeProcess(process.hProcess, &exitCode));
     CloseHandle(process.hThread);
@@ -732,6 +817,7 @@ private:
     static_cast<void>(executable);
     static_cast<void>(arguments);
     static_cast<void>(diagnosticPath);
+    static_cast<void>(terminate);
     return -1;
 #else
     posix_spawn_file_actions_t actions{};
@@ -767,10 +853,27 @@ private:
         return -1;
     }
     int status = 0;
-    if (waitpid(process, &status, 0) < 0 || !WIFEXITED(status)) {
-        return -1;
+    if (terminate == nullptr) {
+        if (waitpid(process, &status, 0) < 0 || !WIFEXITED(status)) {
+            return -1;
+        }
+        return WEXITSTATUS(status);
     }
-    return WEXITSTATUS(status);
+    while (true) {
+        const pid_t finished = waitpid(process, &status, WNOHANG);
+        if (finished < 0) {
+            return -1;
+        }
+        if (finished == process) {
+            return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+        }
+        if (terminate->load(std::memory_order_acquire)) {
+            static_cast<void>(kill(process, SIGKILL));
+            static_cast<void>(waitpid(process, &status, 0));
+            return -1;
+        }
+        usleep(20000);
+    }
 #endif
 }
 
@@ -2021,6 +2124,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
             continue;
         }
 
+        StampShaderCacheEntryUsed(binaryPath.string() + ".lock");
         ShaderCacheFileIdentity cachedIdentity{};
         if (ShaderCacheEntryIsValid(binaryPath, markerPath, cookKey, &cachedIdentity) &&
             ShaderCompilerInputsUnchanged(dependencies, shadercIdentity)) {
@@ -2080,7 +2184,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
             arguments.emplace_back("--debug");
         }
 
-        const int exitCode = RunShaderCompilerHidden(shadercPath, arguments, errorPath);
+        const int exitCode = RunShaderCompilerHidden(shadercPath, arguments, errorPath, request.terminate);
 
         const bool produced = IsNonEmptyRegularFile(stagingBinary);
         if (exitCode != 0 || !produced) {
@@ -2096,6 +2200,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
                 "' (pass '" + request.pass + "'): " + log,
                 request.pass,
                 std::string{ RenderMaterialGraphShaderBackendName(backend) });
+            result.diagnostics.back().nodeId = NodeOfCompilerMessage(artifact.wrapperSource, log);
             continue;
         }
         std::filesystem::remove(errorPath, error);
@@ -2249,7 +2354,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
                 arguments.emplace_back("--debug");
             }
 
-            const int exitCode = RunShaderCompilerHidden(shadercPath, arguments, vsErrorPath);
+            const int exitCode = RunShaderCompilerHidden(shadercPath, arguments, vsErrorPath, request.terminate);
 
             const bool produced = IsNonEmptyRegularFile(stagingVsBinary);
             if (exitCode != 0 || !produced) {
@@ -2343,6 +2448,96 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
     }
 
     result.artifact = std::move(artifact);
+    return result;
+}
+
+RenderMaterialGraphShaderCachePruneResult PruneRenderMaterialGraphShaderCache(
+    std::string_view cacheRoot,
+    const RenderMaterialGraphShaderCachePolicy& policy) {
+    RenderMaterialGraphShaderCachePruneResult result{};
+    if (cacheRoot.empty() || policy.maxBytes == 0U) {
+        return result;
+    }
+    // One prune at a time in a process: a request that arrives while another runs has nothing to add.
+    static std::mutex pruneMutex;
+    const std::unique_lock<std::mutex> pruneLock{ pruneMutex, std::try_to_lock };
+    if (!pruneLock.owns_lock()) {
+        return result;
+    }
+
+    struct GraphFolder {
+        std::filesystem::path path;
+        std::uint64_t bytes = 0U;
+        std::filesystem::file_time_type lastUsed{};
+    };
+    const auto measure = [](GraphFolder& folder) {
+        folder.bytes = 0U;
+        folder.lastUsed = std::filesystem::file_time_type::min();
+        std::error_code error;
+        for (std::filesystem::recursive_directory_iterator it{ folder.path, error }, end; it != end && !error; it.increment(error)) {
+            std::error_code entryError;
+            if (!it->is_regular_file(entryError) || entryError) {
+                continue;
+            }
+            folder.bytes += it->file_size(entryError);
+            const std::filesystem::file_time_type written = it->last_write_time(entryError);
+            if (!entryError) {
+                folder.lastUsed = std::max(folder.lastUsed, written);
+            }
+        }
+    };
+
+    // <cacheRoot>/<platform>/graph_<hash>: the only folders this removes.
+    std::vector<GraphFolder> graphs;
+    std::uint64_t total = 0U;
+    std::error_code error;
+    const std::filesystem::path root = kb::platform::ExtendedLengthPath(std::string{ cacheRoot });
+    for (std::filesystem::directory_iterator platformIt{ root, error }, end; platformIt != end && !error; platformIt.increment(error)) {
+        std::error_code platformError;
+        if (!platformIt->is_directory(platformError) || platformError) {
+            continue;
+        }
+        for (std::filesystem::directory_iterator graphIt{ platformIt->path(), platformError }; graphIt != end && !platformError; graphIt.increment(platformError)) {
+            std::error_code graphError;
+            if (!graphIt->is_directory(graphError) || graphError || graphIt->path().filename().string().rfind("graph_", 0U) != 0U) {
+                continue;
+            }
+            GraphFolder folder{ .path = graphIt->path() };
+            measure(folder);
+            total += folder.bytes;
+            graphs.push_back(std::move(folder));
+        }
+    }
+
+    const std::uint64_t target = policy.targetBytes != 0U && policy.targetBytes < policy.maxBytes ? policy.targetBytes : policy.maxBytes;
+    if (total > policy.maxBytes) {
+        std::ranges::sort(graphs, [](const GraphFolder& lhs, const GraphFolder& rhs) { return lhs.lastUsed < rhs.lastUsed; });
+        const std::filesystem::file_time_type now = std::filesystem::file_time_type::clock::now();
+        for (GraphFolder& folder : graphs) {
+            if (total <= target) {
+                break;
+            }
+            if (folder.lastUsed != std::filesystem::file_time_type::min() && now - folder.lastUsed < policy.inUseWindow) {
+                // Sorted by last use: everything after this graph is in use as well.
+                ++result.keptGraphs;
+                continue;
+            }
+            std::error_code removeError;
+            std::filesystem::remove_all(folder.path, removeError);
+            const std::uint64_t before = folder.bytes;
+            if (std::filesystem::exists(folder.path, removeError) && !removeError) {
+                // A file a cook still holds open stays; count what really went.
+                measure(folder);
+                ++result.keptGraphs;
+            } else {
+                folder.bytes = 0U;
+                ++result.removedGraphs;
+            }
+            total -= before - folder.bytes;
+            result.removedBytes += before - folder.bytes;
+        }
+    }
+    result.remainingBytes = total;
     return result;
 }
 

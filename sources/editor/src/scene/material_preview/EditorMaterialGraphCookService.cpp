@@ -2,6 +2,7 @@
 #include "localization/EditorLocalization.hpp"
 
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
+#include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
 #include "kb/render/resources/RenderMaterialGraphShaderPrewarmer.hpp"
 #include "kb/render/resources/RenderMaterialGraphShaderToolchain.hpp"
 #include "kb/render/resources/RenderMaterialSemanticHash.hpp"
@@ -180,12 +181,27 @@ void AppendCookNote(EditorMaterialGraphCookResult& result, std::string text) {
     result.diagnosticNodeIds.push_back(0U);
 }
 
-void AppendCookDiagnostic(EditorMaterialGraphCookResult& result, const kb::render::RenderMaterialGraphDiagnostic& diagnostic) {
+// `markNode` false keeps the line clickable (it still names its node) without putting a second mark on the node.
+void AppendCookDiagnostic(
+    EditorMaterialGraphCookResult& result,
+    const kb::render::RenderMaterialGraphDiagnostic& diagnostic,
+    bool markNode = true) {
     result.diagnostics.push_back(FormatDiagnostic(diagnostic));
     result.diagnosticNodeIds.push_back(diagnostic.nodeId);
-    if (diagnostic.nodeId != 0U) {
+    if (markNode && diagnostic.nodeId != 0U) {
         result.nodeDiagnostics.push_back(diagnostic);
     }
+}
+
+// The shader compiler rejected the code of one node: say so on that node, in words that need no knowledge of shaders.
+void AppendCookNodeRejected(EditorMaterialGraphCookResult& result, std::uint32_t nodeId, const std::string& pass) {
+    AppendCookDiagnostic(result, kb::render::RenderMaterialGraphDiagnostic{
+        .severity = kb::render::RenderMaterialGraphDiagnosticSeverity::Error,
+        .kind = kb::render::RenderMaterialGraphDiagnosticKind::ShaderGenerationFailed,
+        .nodeId = nodeId,
+        .pass = pass,
+        .message = "This node could not be turned into a shader. Check its values, its connections and any code it contains.",
+    });
 }
 
 void AppendCookBudgetWarnings(const EditorMaterialGraphCookConfig& config, EditorMaterialGraphCookResult& result) {
@@ -274,7 +290,8 @@ struct PassCookOutcome {
     const EditorMaterialGraphCookConfig& config,
     const kb::render::RenderMaterialGraphShaderSource& shader,
     std::uint32_t materialTypeVersion,
-    const std::string& pass) {
+    const std::string& pass,
+    const std::atomic<bool>* terminate) {
     PassCookOutcome outcome{};
     outcome.pass.pass = pass;
 
@@ -287,6 +304,7 @@ struct PassCookOutcome {
     request.pass = pass;
     request.shaderPlatform = config.shaderPlatform;
     request.materialTypeVersion = materialTypeVersion;
+    request.terminate = terminate;
 
     const std::array<kb::render::RenderMaterialGraphShaderBackend, 1U> backends{ config.backend };
     const kb::render::RenderMaterialGraphShaderArtifactResult cook =
@@ -322,13 +340,25 @@ struct PassCookOutcome {
     if (plan.shader != nullptr) {
         bool anyFailure = false;
         bool allCacheHit = true;
+        std::vector<std::uint32_t> rejectedNodes;
         for (PassCookOutcome& outcome : outcomes) {
-            if (!outcome.pass.succeeded && !anyFailure) {
-                // One short sentence a person can act on, ahead of the compiler's own words.
-                AppendCookNote(result, "[error]: This material could not be turned into a shader. Check the node you changed last.");
+            if (!outcome.pass.succeeded) {
+                // One short sentence a person can act on, ahead of the compiler's own words: on the node the
+                // compiler's message points at, or for the whole material when no node can be told.
+                const auto named = std::ranges::find_if(outcome.diagnostics, [](const kb::render::RenderMaterialGraphDiagnostic& diagnostic) {
+                    return diagnostic.nodeId != 0U;
+                });
+                if (named != outcome.diagnostics.end()) {
+                    if (std::ranges::find(rejectedNodes, named->nodeId) == rejectedNodes.end()) {
+                        rejectedNodes.push_back(named->nodeId);
+                        AppendCookNodeRejected(result, named->nodeId, outcome.pass.pass);
+                    }
+                } else if (!anyFailure) {
+                    AppendCookNote(result, "[error]: This material could not be turned into a shader. Check the node you changed last.");
+                }
             }
             for (const kb::render::RenderMaterialGraphDiagnostic& diagnostic : outcome.diagnostics) {
-                AppendCookDiagnostic(result, diagnostic);
+                AppendCookDiagnostic(result, diagnostic, false);
             }
             if (outcome.pass.succeeded) {
                 if (outcome.pass.cacheHit) {
@@ -353,7 +383,15 @@ struct PassCookOutcome {
     result.elapsedMs = elapsed <= 0
         ? 0U
         : static_cast<std::uint32_t>(std::min<std::int64_t>(elapsed, std::numeric_limits<std::uint32_t>::max()));
-    const CookCacheFootprint footprint = MeasureCookCacheFootprint(config.cacheRoot);
+    CookCacheFootprint footprint = MeasureCookCacheFootprint(config.cacheRoot);
+    if (footprint.byteSize > config.cacheByteLimit) {
+        // Down to three quarters of the limit, so the next cook does not have to prune again.
+        static_cast<void>(kb::render::PruneRenderMaterialGraphShaderCache(config.cacheRoot,
+            kb::render::RenderMaterialGraphShaderCachePolicy{
+                .maxBytes = config.cacheByteLimit,
+                .targetBytes = config.cacheByteLimit / 4U * 3U }));
+        footprint = MeasureCookCacheFootprint(config.cacheRoot);
+    }
     result.cacheEntryCount = footprint.entryCount;
     result.cacheByteSize = footprint.byteSize;
     AppendCookBudgetWarnings(config, result);
@@ -460,6 +498,12 @@ struct EditorMaterialGraphCookService::CookJob {
     std::atomic<std::size_t> remaining{ 0U };
     // Set by a newer request for the same variant: passes that have not started are skipped.
     std::atomic<bool> cancelled{ false };
+    // Set once the newer request is compiling itself: the compilers this job has running are ended.
+    std::atomic<bool> terminate{ false };
+    // Passes the job skipped because it was cancelled; a job that skipped one has no complete result to go back to.
+    std::atomic<std::uint32_t> skippedPasses{ 0U };
+    // Passes compiling right now.
+    std::atomic<std::uint32_t> activePasses{ 0U };
     // Set for CookNow(), which waits for the last pass instead of publishing.
     std::promise<void> completion;
 
@@ -471,13 +515,15 @@ struct EditorMaterialGraphCookService::CookJob {
         std::atomic<std::uint32_t>& skipped) {
         if (cancelled.load(std::memory_order_acquire)) {
             skipped.fetch_add(1U, std::memory_order_relaxed);
+            skippedPasses.fetch_add(1U, std::memory_order_relaxed);
         } else {
+            activePasses.fetch_add(1U, std::memory_order_acq_rel);
             const std::uint32_t now = running.fetch_add(1U, std::memory_order_acq_rel) + 1U;
             std::uint32_t seen = peak.load(std::memory_order_relaxed);
             while (now > seen && !peak.compare_exchange_weak(seen, now, std::memory_order_relaxed)) {
             }
             try {
-                outcomes[index] = CompilePass(config, *plan.shader, plan.materialTypeVersion, plan.passes[index]);
+                outcomes[index] = CompilePass(config, *plan.shader, plan.materialTypeVersion, plan.passes[index], &terminate);
             } catch (const std::exception& error) {
                 outcomes[index] = PassCookOutcome{};
                 outcomes[index].pass.pass = plan.passes[index];
@@ -488,6 +534,7 @@ struct EditorMaterialGraphCookService::CookJob {
                 });
             }
             running.fetch_sub(1U, std::memory_order_acq_rel);
+            activePasses.fetch_sub(1U, std::memory_order_acq_rel);
         }
         return remaining.fetch_sub(1U, std::memory_order_acq_rel) == 1U;
     }
@@ -540,6 +587,23 @@ std::uint64_t EditorMaterialGraphCookService::RequestCook(
             }
         }
         EraseSupersededProgramFamily(latest_, variantKey);
+        // Back to the edit that is still compiling (undo before the newer edit started): its compile is
+        // cheaper than starting over, so it goes on and the compilers of the edit it replaced are ended.
+        for (const std::shared_ptr<CookJob>& job : inFlightJobs_) {
+            if (job->key == variantKey && job->cancelled.load(std::memory_order_acquire) &&
+                !job->terminate.load(std::memory_order_acquire) && job->skippedPasses.load(std::memory_order_acquire) == 0U) {
+                job->cancelled.store(false, std::memory_order_release);
+                TerminateSupersededJobsLocked(*job);
+                EditorMaterialGraphCookResult cooking{};
+                cooking.materialAssetId = assetId;
+                cooking.variantKey = variantKey;
+                cooking.materialTypeVersion = material.materialTypeVersion;
+                cooking.requestGeneration = job->generation;
+                cooking.status = EditorMaterialGraphCookStatus::Cooking;
+                latest_[variantKey] = std::move(cooking);
+                return job->generation;
+            }
+        }
         // The same shader code again (a parameter value changed, a click that moved nothing) is already
         // queued, compiling or done: there is nothing to compile.
         if (const auto same = latest_.find(variantKey); same != latest_.end()) {
@@ -717,6 +781,20 @@ std::uint32_t EditorMaterialGraphCookService::SkippedCompileCount() const noexce
     return skippedCompiles_.load(std::memory_order_relaxed);
 }
 
+std::uint32_t EditorMaterialGraphCookService::TerminatedCompileCount() const noexcept {
+    return terminatedCompiles_.load(std::memory_order_relaxed);
+}
+
+void EditorMaterialGraphCookService::TerminateSupersededJobsLocked(const CookJob& current) {
+    for (const std::shared_ptr<CookJob>& job : inFlightJobs_) {
+        if (job.get() == &current || !job->key.SameProgramFamily(current.key) ||
+            !job->cancelled.load(std::memory_order_acquire) || job->terminate.exchange(true, std::memory_order_acq_rel)) {
+            continue;
+        }
+        terminatedCompiles_.fetch_add(job->activePasses.load(std::memory_order_acquire), std::memory_order_relaxed);
+    }
+}
+
 bool EditorMaterialGraphCookService::SupersededLocked(
     const kb::render::RenderMaterialGraphVariantKey& key, std::uint64_t generation) const {
     for (const auto& [pendingKey, pendingEntry] : pending_) {
@@ -851,6 +929,8 @@ void EditorMaterialGraphCookService::DrainPending() {
         job->outcomes.resize(passCount);
         job->remaining.store(passCount, std::memory_order_release);
         inFlightJobs_.push_back(job);
+        // This edit is compiling now, so the older ones it replaced have nothing left to wait for.
+        TerminateSupersededJobsLocked(*job);
         lock.unlock();
         for (std::size_t index = 0U; index < passCount; ++index) {
             static_cast<void>(compileLane_->Run([this, job, index](std::string&) {

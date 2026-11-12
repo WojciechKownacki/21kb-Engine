@@ -6,9 +6,11 @@
 
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
+#include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -745,6 +747,245 @@ void RunParameterEditNeedsNoCompileTest() {
         "P4.5: changing a constant, which is shader code, must still be a new cook");
 }
 
+// A graph with a custom code node wired to the base color. A body that names something that does not exist
+// is accepted by the graph and refused by the shader compiler.
+[[nodiscard]] RenderMaterialAssetData MakeCustomCodeMaterial(std::string_view body) {
+    RenderMaterialAssetData material{};
+    material.materialType = "graph";
+    material.materialTypeVersion = 1U;
+    material.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    material.graph.shadingModel = "unlit";
+    RenderMaterialGraphNode custom{ .id = 2U, .kind = RenderMaterialGraphNodeKind::CustomCode };
+    custom.customCode.body = std::string{ body };
+    custom.customCode.outputType = kb::render::RenderMaterialGraphPinType::Color;
+    custom.customCode.inputs = {
+        kb::render::RenderMaterialGraphCustomPin{ .name = "A", .type = kb::render::RenderMaterialGraphPinType::Color } };
+    RenderMaterialGraphNode source{ .id = 3U, .kind = RenderMaterialGraphNodeKind::ConstantColor,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0 1 0 1" } };
+    const RenderMaterialGraphNode output = material.graph.nodes[0];
+    const auto link = [](const RenderMaterialGraphNode& from, std::string fromPin, const RenderMaterialGraphNode& to, std::string toPin) {
+        RenderMaterialGraphLink made{
+            .fromNodeId = from.id,
+            .fromPinId = kb::render::RenderMaterialGraphStablePinId(from, fromPin, true),
+            .fromPin = std::move(fromPin),
+            .toNodeId = to.id,
+            .toPinId = kb::render::RenderMaterialGraphStablePinId(to, toPin, false),
+            .toPin = std::move(toPin),
+        };
+        made.id = kb::render::MakeRenderMaterialGraphLinkId(made);
+        return made;
+    };
+    material.graph.links.push_back(link(source, "rgba", custom, "A"));
+    material.graph.links.push_back(link(custom, "value", output, "baseColor"));
+    material.graph.nodes.push_back(std::move(custom));
+    material.graph.nodes.push_back(std::move(source));
+    return material;
+}
+
+void RunShaderCompilerErrorNamesItsNodeTest() {
+    // The generated code carries a marker before the code of each node ...
+    const RenderMaterialAssetData good = MakeCustomCodeMaterial("return A;");
+    const kb::render::RenderMaterialGraphCompileResult compiled = kb::render::CompileRenderMaterialGraphToShaderSource(
+        good.graph, kb::render::RenderMaterialGraphBuildContext{ .assetId = 0x7A08U });
+    Require(compiled.Succeeded(), "P4.6: the custom code graph must compile");
+    const std::string marker = std::string{ kb::render::kRenderMaterialGraphNodeMarker };
+    const std::size_t opened = compiled.shader.source.find(marker + "2\n");
+    const std::size_t closed = opened == std::string::npos ? opened : compiled.shader.source.find(marker + "0\n", opened);
+    Require(opened != std::string::npos && closed != std::string::npos &&
+            compiled.shader.source.substr(opened, closed - opened).find("return A;") != std::string::npos,
+        "P4.6: the code of a node must sit between its marker and the marker that ends it");
+
+    // ... so a message from the shader compiler about that code ends up on that node, in plain words.
+    EditorMaterialGraphCookConfig config = MakeCookConfig("p46_error_node");
+    std::error_code error;
+    std::filesystem::remove_all(config.cacheRoot, error);
+    EditorMaterialGraphCookService service{ config };
+    const EditorMaterialGraphCookResult result =
+        service.CookNow(kb::assets::AssetId{ 0x7A09U }, MakeCustomCodeMaterial("return MissingInput + A;"));
+    Require(result.status == EditorMaterialGraphCookStatus::Failed, "P4.6: custom code the compiler refuses must fail the cook");
+    Require(result.nodeDiagnostics.size() == 1U && result.nodeDiagnostics.front().nodeId == 2U &&
+            result.nodeDiagnostics.front().message.find("node could not be turned into a shader") != std::string::npos,
+        "P4.6: the compiler's refusal must be marked once, on the node whose code it is, in plain words");
+    const auto compilerLine = std::ranges::find_if(result.diagnostics, [](const std::string& line) {
+        return line.find("MissingInput") != std::string::npos;
+    });
+    Require(compilerLine != result.diagnostics.end() &&
+            result.diagnosticNodeIds[static_cast<std::size_t>(compilerLine - result.diagnostics.begin())] == 2U,
+        "P4.6: the compiler's own line must stay in the list and lead to the node");
+    Require(std::ranges::none_of(result.diagnostics, [](const std::string& line) {
+            return line.find("Check the node you changed last") != std::string::npos;
+        }),
+        "P4.6: with the node known, the general advice must not be shown");
+}
+
+void RunShaderCacheIsPrunedLeastRecentlyUsedFirstTest() {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::path{ MakeCookConfig("p46_prune").cacheRoot };
+    std::error_code error;
+    fs::remove_all(root, error);
+    const auto now = fs::file_time_type::clock::now();
+    const auto makeGraph = [&](std::string_view name, std::chrono::hours age) {
+        const fs::path graphFolder = root / "windows" / std::string{ name };
+        const fs::path folder = graphFolder / "variant_1" / "BaseOpaque" / "dxbc";
+        fs::create_directories(folder, error);
+        std::ofstream{ folder / "fs_1.bin", std::ios::binary } << std::string(1000U, 'x');
+        fs::last_write_time(folder / "fs_1.bin", now - age, error);
+        return graphFolder;
+    };
+    const auto exists = [](const fs::path& path) {
+        std::error_code ignored;
+        return fs::exists(path, ignored);
+    };
+
+    // Over the limit: the graphs used longest ago go first, down to the target; recent ones stay.
+    const fs::path oldest = makeGraph("graph_1", std::chrono::hours{ 5 });
+    const fs::path older = makeGraph("graph_2", std::chrono::hours{ 4 });
+    const fs::path old = makeGraph("graph_3", std::chrono::hours{ 3 });
+    const fs::path fresh = makeGraph("graph_4", std::chrono::hours{ 0 });
+    const kb::render::RenderMaterialGraphShaderCachePruneResult pruned = kb::render::PruneRenderMaterialGraphShaderCache(
+        root.generic_string(), kb::render::RenderMaterialGraphShaderCachePolicy{ .maxBytes = 2500U, .targetBytes = 2000U });
+    Require(!exists(oldest) && !exists(older) && exists(old) && exists(fresh),
+        "P4.6: the graphs used longest ago must be removed first and the recent ones kept");
+    Require(pruned.removedGraphs == 2U && pruned.removedBytes == 2000U && pruned.remainingBytes == 2000U,
+        "P4.6: the prune must report what it removed and what is left");
+
+    // Under the limit: nothing is removed.
+    const kb::render::RenderMaterialGraphShaderCachePruneResult untouched = kb::render::PruneRenderMaterialGraphShaderCache(
+        root.generic_string(), kb::render::RenderMaterialGraphShaderCachePolicy{ .maxBytes = 5000U });
+    Require(untouched.removedGraphs == 0U && exists(old) && exists(fresh), "P4.6: a cache within its limit must be left alone");
+
+    // Everything recently used (a compile may be writing into it): nothing is removed even over the limit.
+    fs::remove_all(root, error);
+    for (const char* name : { "graph_1", "graph_2", "graph_3" }) {
+        static_cast<void>(makeGraph(name, std::chrono::hours{ 0 }));
+    }
+    const kb::render::RenderMaterialGraphShaderCachePruneResult inUse = kb::render::PruneRenderMaterialGraphShaderCache(
+        root.generic_string(), kb::render::RenderMaterialGraphShaderCachePolicy{ .maxBytes = 1000U, .targetBytes = 500U });
+    Require(inUse.removedGraphs == 0U && inUse.keptGraphs == 3U && exists(root / "windows" / "graph_1"),
+        "P4.6: graphs used a moment ago must never be removed, whatever the limit");
+
+#if defined(_WIN32)
+    // A file a running compile holds open cannot be deleted: its graph stays, the rest of the work goes on.
+    fs::remove_all(root, error);
+    const fs::path held = makeGraph("graph_1", std::chrono::hours{ 5 });
+    const fs::path other = makeGraph("graph_2", std::chrono::hours{ 4 });
+    std::ofstream holder{ held / "variant_1" / "BaseOpaque" / "dxbc" / "fs_1.bin", std::ios::binary | std::ios::app };
+    const kb::render::RenderMaterialGraphShaderCachePruneResult busy = kb::render::PruneRenderMaterialGraphShaderCache(
+        root.generic_string(), kb::render::RenderMaterialGraphShaderCachePolicy{ .maxBytes = 500U, .targetBytes = 100U });
+    holder.close();
+    Require(exists(held) && !exists(other) && busy.removedGraphs == 1U && busy.keptGraphs == 1U,
+        "P4.6: a graph with a file in use must stay while the others are still removed");
+#endif
+}
+
+void RunShaderCacheUseIsStampedAndPrunedByTheServiceTest() {
+    namespace fs = std::filesystem;
+    EditorMaterialGraphCookConfig config = MakeCookConfig("p46_prune_service");
+    config.cacheByteLimit = 1U; // every cook is over the limit
+    std::error_code error;
+    fs::remove_all(config.cacheRoot, error);
+    EditorMaterialGraphCookService service{ config };
+    const kb::assets::AssetId assetId{ 0x7A0AU };
+
+    // What a cook has just written or used is not removed, however small the limit.
+    const EditorMaterialGraphCookResult first = service.CookNow(assetId, MakeConstantColorMaterial("0.1 0.2 0.3 1"));
+    const EditorMaterialGraphCookResult second = service.CookNow(assetId, MakeConstantColorMaterial("0.9 0.8 0.7 1"));
+    Require(first.status == EditorMaterialGraphCookStatus::Ready && second.status == EditorMaterialGraphCookStatus::Ready,
+        "P4.6: a cook over the cache limit must still succeed");
+    for (const EditorMaterialGraphCookPassResult& pass : first.passes) {
+        Require(fs::exists(pass.binaryPath, error), "P4.6: pruning must not remove what a cook has just produced");
+    }
+
+    // Using an old entry again counts as use: its stamp is renewed even though nothing is compiled.
+    const auto longAgo = fs::file_time_type::clock::now() - std::chrono::hours{ 5 };
+    for (fs::recursive_directory_iterator it{ config.cacheRoot, error }, end; it != end && !error; it.increment(error)) {
+        if (it->is_regular_file(error)) {
+            fs::last_write_time(it->path(), longAgo, error);
+        }
+    }
+    const EditorMaterialGraphCookResult again = service.CookNow(assetId, MakeConstantColorMaterial("0.1 0.2 0.3 1"));
+    Require(again.cacheHitPassCount == again.passes.size() && again.compiledPassCount == 0U,
+        "P4.6: an entry whose files are old must still be a cache hit");
+    std::size_t locks = 0U;
+    std::size_t renewed = 0U;
+    for (fs::recursive_directory_iterator it{ config.cacheRoot, error }, end; it != end && !error; it.increment(error)) {
+        if (it->path().extension() == ".lock") {
+            ++locks;
+            renewed += fs::file_time_type::clock::now() - it->last_write_time(error) < std::chrono::minutes{ 1 } ? 1U : 0U;
+        }
+    }
+    Require(locks >= again.passes.size() && renewed >= again.passes.size(),
+        "P4.6: using a cache entry must renew its last-use stamp");
+}
+
+void RunSupersededCompilersAreEndedTest() {
+    // One compile at a time, so the first graph's compiler is certainly running when the second graph
+    // replaces it. Once the second one compiles itself, the first one's compiler must be ended, not waited for.
+    EditorMaterialGraphCookConfig config = MakeCookConfig("p46_terminate");
+    config.maxParallelCompiles = 1U;
+    config.debounceMs = 10U;
+    std::error_code error;
+    std::filesystem::remove_all(config.cacheRoot, error);
+    EditorMaterialGraphCookService service{ config };
+    const kb::assets::AssetId assetId{ 0x7A0BU };
+
+    const std::uint64_t first = service.RequestCook(assetId, MakeConstantColorMaterial("0.1 0.2 0.3 1"));
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    while (service.PeakParallelCompiles() == 0U && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    Require(service.PeakParallelCompiles() == 1U, "P4.6: the first graph must have started compiling");
+    const auto replacedAt = std::chrono::steady_clock::now();
+    const std::uint64_t second = service.RequestCook(assetId, MakeConstantColorMaterial("0.9 0.8 0.7 1"));
+    Require(second > first, "P4.6: the replacing request must be the newer one");
+    service.WaitForIdle();
+    const auto replacedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - replacedAt).count();
+    std::fprintf(stderr, "P4.6: with one compile slot the replacing graph is ready %lld ms after the edit, %u running compile(s) ended\n",
+        static_cast<long long>(replacedMs), service.TerminatedCompileCount());
+
+    Require(service.TerminatedCompileCount() >= 1U,
+        "P4.6: the compiler running for a replaced graph must be ended once the replacing graph compiles");
+    const std::vector<EditorMaterialGraphCookResult> results = service.DrainResults();
+    Require(results.size() == 1U && results.front().requestGeneration == second &&
+            results.front().status == EditorMaterialGraphCookStatus::Ready && results.front().passes.size() == 4U,
+        "P4.6: only the replacing graph may report, and it must be compiled completely");
+    Require(service.CookNow(assetId, MakeConstantColorMaterial("0.9 0.8 0.7 1")).cacheHitPassCount == 4U,
+        "P4.6: ending a compiler must leave no half-written cache entry behind");
+}
+
+void RunReturningToTheCompilingEditKeepsItTest() {
+    // The first graph is compiling and the second replaces it, but within the edit delay the user undoes back
+    // to the first one: its compile is the cheapest way to the result, so it goes on and nothing is ended.
+    EditorMaterialGraphCookConfig config = MakeCookConfig("p46_revive");
+    config.maxParallelCompiles = 1U;
+    config.debounceMs = 700U;
+    std::error_code error;
+    std::filesystem::remove_all(config.cacheRoot, error);
+    EditorMaterialGraphCookService service{ config };
+    const kb::assets::AssetId assetId{ 0x7A0CU };
+
+    const std::uint64_t first = service.RequestCook(assetId, MakeConstantColorMaterial("0.1 0.2 0.3 1"));
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    while (service.PeakParallelCompiles() == 0U && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    Require(service.PeakParallelCompiles() == 1U, "P4.6: the first graph must have started compiling");
+    const std::uint64_t second = service.RequestCook(assetId, MakeConstantColorMaterial("0.9 0.8 0.7 1"));
+    Require(second > first, "P4.6: the replacing request must be the newer one");
+    const std::uint64_t back = service.RequestCook(assetId, MakeConstantColorMaterial("0.1 0.2 0.3 1"));
+    Require(back == first, "P4.6: going back to the compiling graph must continue that compile, not start another");
+    service.WaitForIdle();
+
+    Require(service.TerminatedCompileCount() == 0U && service.SkippedCompileCount() == 0U,
+        "P4.6: going back must neither end a running compile nor skip a pass");
+    const std::vector<EditorMaterialGraphCookResult> results = service.DrainResults();
+    Require(results.size() == 1U && results.front().requestGeneration == first &&
+            results.front().status == EditorMaterialGraphCookStatus::Ready && results.front().passes.size() == 4U,
+        "P4.6: the compile gone back to must finish and report as the current graph");
+    Require(service.LatestResult(assetId).requestGeneration == first,
+        "P4.6: the latest result must be the one gone back to");
+}
+
 void RunCookErrorsNameTheirNodeTest() {
     const EditorMaterialGraphCookConfig config = MakeCookConfig("p45_errors");
     EditorMaterialGraphCookService service{ config };
@@ -817,6 +1058,11 @@ void RunEditorMaterialGraphCookServiceTests() {
     RunStaleCompilesAreCancelledTest();
     RunReopenAndUndoHitTheCacheTest();
     RunParameterEditNeedsNoCompileTest();
+    RunShaderCompilerErrorNamesItsNodeTest();
+    RunShaderCacheIsPrunedLeastRecentlyUsedFirstTest();
+    RunShaderCacheUseIsStampedAndPrunedByTheServiceTest();
+    RunSupersededCompilersAreEndedTest();
+    RunReturningToTheCompilingEditKeepsItTest();
     RunCookErrorsNameTheirNodeTest();
 #endif
 }

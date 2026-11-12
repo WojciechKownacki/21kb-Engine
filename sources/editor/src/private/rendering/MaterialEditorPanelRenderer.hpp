@@ -1514,7 +1514,7 @@ inline POINT MaterialEditorPanelInputPinPoint(const RECT& node, kb::render::Rend
             std::clamp(y, bodyTop + MaterialEditorPanelScaled(6, scale), static_cast<int>(node.bottom) - MaterialEditorPanelScaled(6, scale)),
         };
     }
-    const int count = static_cast<int>(std::max<std::size_t>(1U, MaterialEditorPanelInputPins(kind).size()));
+    const int count = static_cast<int>(std::max<std::size_t>(1U, EditorMaterialGraphPinPresentationCatalog::InputPins(kind).size()));
     const int bodyTop = node.top + headerHeight;
     const int bodyHeight = std::max(1, MaterialEditorPanelRectHeight(node) - headerHeight);
     const int rowHeight = std::min(
@@ -1610,7 +1610,7 @@ inline POINT MaterialEditorPanelOutputPinPoint(
     const int headerHeight = MaterialEditorPanelScaled(MaterialEditorPanelMetrics::GraphNodeHeaderHeight, scale);
     const int bodyTop = node.top + headerHeight;
     const int bodyHeight = std::max(1, MaterialEditorPanelRectHeight(node) - headerHeight);
-    const std::size_t inputCount = MaterialEditorPanelHitTestInputPins(graphNode).size();
+    const std::size_t inputCount = EditorMaterialGraphPinPresentationCatalog::InputPins(graphNode).size();
     const std::size_t outputCount = std::max<std::size_t>(1U, count);
     const int rowCount = static_cast<int>(std::max(inputCount, outputCount));
     const int rowHeight = std::min(

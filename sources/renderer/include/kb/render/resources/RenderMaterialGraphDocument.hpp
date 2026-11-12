@@ -592,6 +592,10 @@ struct RenderMaterialGraphFunctionInlineResult {
     [[nodiscard]] bool Succeeded() const noexcept;
 };
 
+// The comment a generated shader carries before the code of each graph node ("<marker><node id>"; id 0 ends a
+// node's code), so a line the shader compiler complains about can be traced back to its node.
+inline constexpr std::string_view kRenderMaterialGraphNodeMarker = "kb-node:";
+
 enum class RenderMaterialGraphReflectionUniformSource : std::uint8_t {
     MaterialParameter,
     ParameterCollection,

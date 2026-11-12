@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cctype>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 
 namespace kb::editor {
@@ -419,43 +420,101 @@ ReconcileWithSchema(std::vector<EditorMaterialGraphPinPresentation> preferred,
     return reconciled;
 }
 
-[[nodiscard]] std::vector<std::string> PinNames(std::vector<EditorMaterialGraphPinPresentation> pins) {
+[[nodiscard]] std::vector<std::string> PinNames(const std::vector<EditorMaterialGraphPinPresentation>& pins) {
     std::vector<std::string> names;
     names.reserve(pins.size());
-    for (EditorMaterialGraphPinPresentation& pin : pins) {
-        names.push_back(std::move(pin.name));
+    for (const EditorMaterialGraphPinPresentation& pin : pins) {
+        names.push_back(pin.name);
     }
     return names;
 }
 
+[[nodiscard]] bool HasOwnPins(const kb::render::RenderMaterialGraphNode& node) noexcept {
+    return node.kind == kb::render::RenderMaterialGraphNodeKind::CustomCode ||
+        node.kind == kb::render::RenderMaterialGraphNodeKind::MaterialFunctionCall;
+}
+
+// The pins of a node with its own pins, as the node lists them: inputs by name, and outputs by name behind
+// the "value" output a custom code node always has.
+[[nodiscard]] bool PinsMatchNode(
+    const std::vector<EditorMaterialGraphPinPresentation>& pins,
+    const kb::render::RenderMaterialGraphNode& node,
+    bool outputs) {
+    const std::vector<kb::render::RenderMaterialGraphCustomPin>& listed = outputs ? node.customCode.outputs : node.customCode.inputs;
+    const std::size_t leading = outputs && node.kind == kb::render::RenderMaterialGraphNodeKind::CustomCode ? 1U : 0U;
+    if (pins.size() != leading + listed.size() || (leading != 0U && pins.front().name != "value")) {
+        return false;
+    }
+    for (std::size_t index = 0U; index < listed.size(); ++index) {
+        if (pins[leading + index].name != listed[index].name) {
+            return false;
+        }
+    }
+    return true;
+}
+
+struct PinCaches final {
+    // Labels come from the language in use; a language change starts the lists over.
+    std::string language;
+    std::unordered_map<kb::render::RenderMaterialGraphNodeKind, std::vector<EditorMaterialGraphPinPresentation>> inputsByKind;
+    std::unordered_map<kb::render::RenderMaterialGraphNodeKind, std::vector<EditorMaterialGraphPinPresentation>> outputsByKind;
+    std::unordered_map<std::uint32_t, std::vector<EditorMaterialGraphPinPresentation>> inputsByNode;
+    std::unordered_map<std::uint32_t, std::vector<EditorMaterialGraphPinPresentation>> outputsByNode;
+};
+
+[[nodiscard]] PinCaches& CurrentPinCaches() {
+    thread_local PinCaches caches;
+    if (caches.language != EditorLocalization::Current()) {
+        caches = PinCaches{};
+        caches.language = std::string{ EditorLocalization::Current() };
+    }
+    return caches;
+}
+
 } // namespace
 
-std::vector<EditorMaterialGraphPinPresentation>
+const std::vector<EditorMaterialGraphPinPresentation>&
 EditorMaterialGraphPinPresentationCatalog::InputPins(kb::render::RenderMaterialGraphNodeKind kind) {
-    return ReconcileWithSchema(PreferredInputPins(kind), kb::render::RenderMaterialGraphNodeInputPinNames(kind));
+    PinCaches& caches = CurrentPinCaches();
+    if (const auto found = caches.inputsByKind.find(kind); found != caches.inputsByKind.end()) {
+        return found->second;
+    }
+    return caches.inputsByKind.emplace(
+        kind, ReconcileWithSchema(PreferredInputPins(kind), kb::render::RenderMaterialGraphNodeInputPinNames(kind))).first->second;
 }
 
-std::vector<EditorMaterialGraphPinPresentation>
+const std::vector<EditorMaterialGraphPinPresentation>&
 EditorMaterialGraphPinPresentationCatalog::InputPins(const kb::render::RenderMaterialGraphNode& node) {
-    if (node.kind == kb::render::RenderMaterialGraphNodeKind::CustomCode ||
-        node.kind == kb::render::RenderMaterialGraphNodeKind::MaterialFunctionCall) {
-        return GraphPinFallback(kb::render::RenderMaterialGraphNodeInputPinNames(node));
+    if (!HasOwnPins(node)) {
+        return InputPins(node.kind);
     }
-    return InputPins(node.kind);
+    std::vector<EditorMaterialGraphPinPresentation>& pins = CurrentPinCaches().inputsByNode[node.id];
+    if (!PinsMatchNode(pins, node, false)) {
+        pins = GraphPinFallback(kb::render::RenderMaterialGraphNodeInputPinNames(node));
+    }
+    return pins;
 }
 
-std::vector<EditorMaterialGraphPinPresentation>
+const std::vector<EditorMaterialGraphPinPresentation>&
 EditorMaterialGraphPinPresentationCatalog::OutputPins(kb::render::RenderMaterialGraphNodeKind kind) {
-    return ReconcileWithSchema(PreferredOutputPins(kind), kb::render::RenderMaterialGraphNodeOutputPinNames(kind));
+    PinCaches& caches = CurrentPinCaches();
+    if (const auto found = caches.outputsByKind.find(kind); found != caches.outputsByKind.end()) {
+        return found->second;
+    }
+    return caches.outputsByKind.emplace(
+        kind, ReconcileWithSchema(PreferredOutputPins(kind), kb::render::RenderMaterialGraphNodeOutputPinNames(kind))).first->second;
 }
 
-std::vector<EditorMaterialGraphPinPresentation>
+const std::vector<EditorMaterialGraphPinPresentation>&
 EditorMaterialGraphPinPresentationCatalog::OutputPins(const kb::render::RenderMaterialGraphNode& node) {
-    if (node.kind == kb::render::RenderMaterialGraphNodeKind::CustomCode ||
-        node.kind == kb::render::RenderMaterialGraphNodeKind::MaterialFunctionCall) {
-        return GraphPinFallback(kb::render::RenderMaterialGraphNodeOutputPinNames(node));
+    if (!HasOwnPins(node)) {
+        return OutputPins(node.kind);
     }
-    return OutputPins(node.kind);
+    std::vector<EditorMaterialGraphPinPresentation>& pins = CurrentPinCaches().outputsByNode[node.id];
+    if (!PinsMatchNode(pins, node, true)) {
+        pins = GraphPinFallback(kb::render::RenderMaterialGraphNodeOutputPinNames(node));
+    }
+    return pins;
 }
 
 std::vector<std::string>

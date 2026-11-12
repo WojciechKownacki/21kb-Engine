@@ -468,6 +468,39 @@ void AttachDiagnosticContext(
     return expression;
 }
 
+// The marker line that precedes the code written for one node. A shader compiler message names a line; the
+// nearest marker above it names the node, which is how an error in generated code is shown on its node.
+// Node 0 closes a node's code (the code after it belongs to no single node).
+[[nodiscard]] std::string GraphNodeMarkerLine(std::uint32_t nodeId) {
+    return "    // " + std::string{ kRenderMaterialGraphNodeMarker } + std::to_string(nodeId) + "\n";
+}
+
+// The statements of the generated function. Each run of statements written for one node starts with its marker.
+class GraphStatements final {
+public:
+    explicit GraphStatements(const std::vector<std::uint32_t>& nodeStack) noexcept : nodeStack_{ &nodeStack } {}
+
+    GraphStatements& operator+=(std::string_view text) {
+        const std::uint32_t node = nodeStack_->empty() ? 0U : nodeStack_->back();
+        if (node != markedNode_) {
+            text_ += GraphNodeMarkerLine(node);
+            markedNode_ = node;
+        }
+        text_ += text;
+        return *this;
+    }
+
+    // The statements as they enter the function: closed, so the lines written after them are no node's.
+    [[nodiscard]] std::string Closed() const {
+        return markedNode_ != 0U ? text_ + GraphNodeMarkerLine(0U) : text_;
+    }
+
+private:
+    const std::vector<std::uint32_t>* nodeStack_;
+    std::string text_;
+    std::uint32_t markedNode_ = 0U;
+};
+
 struct GraphCodegen {
     const RenderMaterialGraphDocument& graph;
     const RenderMaterialGraphBuildContext& context;
@@ -480,7 +513,7 @@ struct GraphCodegen {
     std::unordered_map<std::string, std::string> customOutputTemps;
     std::unordered_set<std::uint32_t> emittedCustomFunctions;
     std::vector<std::pair<std::uint32_t, std::string>> functionDefinitions;
-    std::string statements;
+    GraphStatements statements{ stack };
     // PixelNormalWS: the surface Normal in world space, emitted once per function.
     std::string pixelNormalTemp;
     // Set while the Normal (or the attribute set that carries it) compiles: PixelNormalWS cannot feed it.
@@ -1025,7 +1058,9 @@ void AppendCustomCodeFunctionDefinitions(
     std::unordered_set<std::uint32_t>& emittedDefinitions) {
     for (const auto& [nodeId, definition] : definitions) {
         if (emittedDefinitions.insert(nodeId).second) {
+            source += GraphNodeMarkerLine(nodeId);
             source += definition;
+            source += GraphNodeMarkerLine(0U);
         }
     }
 }
@@ -1967,7 +2002,7 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         const auto height = [&](const std::string& uv) {
             return "(1.0 - texture2DGrad(" + texture + ", " + uv + ", " + v("Dx") + ", " + v("Dy") + ")." + channel + ")";
         };
-        std::string& s = cg.statements;
+        GraphStatements& s = cg.statements;
         s += "    vec2 " + v("Uv") + " = " + CompileInputExpression(cg, node, "uv", RenderMaterialGraphPinType::Float2, "ctx.uv0") + ";\n";
         s += "    vec2 " + v("Dx") + " = dFdx(" + v("Uv") + ");\n";
         s += "    vec2 " + v("Dy") + " = dFdy(" + v("Uv") + ");\n";
@@ -2593,16 +2628,18 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
 
     cg.stack.push_back(node.id);
     std::string base = CompileNodeBaseExpression(cg, node);
-    cg.stack.pop_back();
 
     const auto fanOutIt = cg.fanOut.find(node.id);
     const std::uint32_t fanOut = fanOutIt == cg.fanOut.end() ? 0U : fanOutIt->second;
     if (IsGraphCseCandidate(node.kind) && (fanOut > 1U || cg.forcedTemp.contains(node.id))) {
+        // The temporary is the node's own statement, so it is written while the node is still the one compiling.
         std::string tempName = "n" + std::to_string(node.id) + "_v";
         cg.statements += "    " + GraphCodegenGlslType(GraphNodeCanonicalType(node.kind)) + " " + tempName + " = " + base + ";\n";
+        cg.stack.pop_back();
         cg.emittedTemp.emplace(node.id, tempName);
         return SelectGraphPinFromBase(cg, node, tempName, outputPin);
     }
+    cg.stack.pop_back();
     return SelectGraphPinFromBase(cg, node, base, outputPin);
 }
 
@@ -3825,6 +3862,16 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
                 }
             }
         }
+        // A named reroute usage is fed by its declaration, which no link joins to it: what feeds the
+        // declaration (a parameter, a texture) is just as much part of the shader.
+        const RenderMaterialGraphNode* current = FindRenderMaterialGraphNode(graph, currentId);
+        if (current != nullptr && current->kind == RenderMaterialGraphNodeKind::NamedRerouteUsage) {
+            for (const RenderMaterialGraphNode* declaration : NamedRerouteDeclarations(graph, NamedRerouteKey(*current))) {
+                if (std::find(reachable.begin(), reachable.end(), declaration->id) == reachable.end()) {
+                    reachable.push_back(declaration->id);
+                }
+            }
+        }
     }
 
     struct ReflectionUniformEntry {
@@ -4462,10 +4509,10 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     source += "MaterialSurface EvaluateMaterialGraph(MaterialGraphContext ctx) {\n";
     source += "    MaterialSurface material;\n";
     if (useMaterialAttributes) {
-        source += cg.statements;
+        source += cg.statements.Closed();
         source += "    material = " + attributesExpr + ";\n";
     } else {
-        source += cg.statements;
+        source += cg.statements.Closed();
         source += "    material.baseColor = " + baseColorExpr + ";\n";
         source += "    material.metallic = " + metallicExpr + ";\n";
         source += "    material.roughness = " + roughnessExpr + ";\n";
@@ -4514,7 +4561,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         AppendCustomCodeFunctionDefinitions(source, vertexCg.functionDefinitions, emittedCustomFunctionDefinitions);
         source += "\n";
         source += std::string{ returnType } + " " + std::string{ functionName } + "(MaterialGraphContext ctx) {\n";
-        source += vertexCg.statements;
+        source += vertexCg.statements.Closed();
         source += "    return " + expr + ";\n";
         source += "}\n";
     };

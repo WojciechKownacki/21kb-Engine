@@ -3,6 +3,8 @@
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <iosfwd>
 #include <optional>
@@ -52,6 +54,9 @@ struct RenderMaterialGraphShaderArtifactRequest {
     std::optional<kb::assets::bake::ShaderBakePlatform> shaderPlatform;
     std::uint32_t materialTypeVersion = 1U;
     bool debug = false;
+    // While this reads true, a shader compiler the cook has running is ended and the cook gives up: a newer
+    // edit has made its result useless. Null means never. The flag must outlive the cook.
+    const std::atomic<bool>* terminate = nullptr;
 };
 
 struct RenderMaterialGraphArtifactDependency {
@@ -161,6 +166,30 @@ struct RenderMaterialGraphShaderManifest {
     const RenderMaterialGraphShaderSource& shader,
     std::span<const RenderMaterialGraphShaderBackend> backends,
     const RenderMaterialGraphShaderArtifactRequest& request);
+
+// How much compiled graph shader output a cache root may keep. Entries are grouped per graph (one
+// `graph_<hash>` folder per shader source); the least recently used graphs go first.
+struct RenderMaterialGraphShaderCachePolicy {
+    std::uint64_t maxBytes = 0U;
+    // The size a prune shrinks to once the limit is passed, so the next cook does not prune again.
+    std::uint64_t targetBytes = 0U;
+    // A graph that was used within this window is never removed: a compile may be writing into it.
+    std::chrono::seconds inUseWindow{ 600 };
+};
+
+struct RenderMaterialGraphShaderCachePruneResult {
+    std::uint32_t removedGraphs = 0U;
+    std::uint64_t removedBytes = 0U;
+    std::uint64_t remainingBytes = 0U;
+    // Graphs over the limit that were kept because they are in use or could not be removed.
+    std::uint32_t keptGraphs = 0U;
+};
+
+// Removes least recently used graphs from `cacheRoot` until it fits `policy`. Safe next to running cooks:
+// every cook stamps the entry it works on, and a file a cook holds open cannot be deleted.
+[[nodiscard]] RenderMaterialGraphShaderCachePruneResult PruneRenderMaterialGraphShaderCache(
+    std::string_view cacheRoot,
+    const RenderMaterialGraphShaderCachePolicy& policy);
 
 [[nodiscard]] RenderMaterialGraphShaderManifest BuildRenderMaterialGraphShaderManifest(
     std::span<const RenderMaterialGraphShaderArtifact> artifacts);
