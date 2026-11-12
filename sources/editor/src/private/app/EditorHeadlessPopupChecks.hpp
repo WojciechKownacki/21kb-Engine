@@ -43,6 +43,12 @@ public:
     // and to the browser popup, and checks that the search filters the components.
     [[nodiscard]] static EditorHeadlessPopupCheckResult VerifyAddComponentSearchInput(
         EditorSceneContext& sceneContext, EditorSceneBgfxViewport& viewport);
+    // Frames the Scene View of a real editor window on a sphere of focusRadius at the scene origin, looking
+    // along +Z, and clicks it the way the mouse does - a move, then the button down and up - where the world
+    // point (x, y, z) lands on screen, moved by offsetX pixels. The selection is left as the click made it.
+    [[nodiscard]] static EditorHeadlessPopupCheckResult ClickSceneView(
+        EditorSceneContext& sceneContext, EditorSceneBgfxViewport& viewport,
+        float x, float y, float z, float offsetX, float focusRadius);
 #endif
 };
 

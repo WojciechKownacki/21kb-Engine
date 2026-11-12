@@ -18,8 +18,11 @@
 #include "rendering/EditorToolbarRenderer.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MainWindowBackBufferPainter.hpp"
+#include "rendering/SceneViewportToolbarRenderer.hpp"
+#include "app/scene_viewport/EditorSceneViewportTypes.hpp"
 #include "scene/EditorSceneContext.hpp"
 
+#include <cmath>
 #include <memory>
 #include <bx/math.h>
 
@@ -695,6 +698,30 @@ EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::VerifyAddComponentSear
         detail = "click,type-window,type-popup,filtered,billboard,decal,technical-name,painted-help";
     }
     return result;
+}
+
+EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::ClickSceneView(
+    EditorSceneContext& sceneContext, EditorSceneBgfxViewport& viewport,
+    float x, float y, float z, float offsetX, float focusRadius) {
+    EditorWindowUnderTest editor(sceneContext, viewport);
+    if (!editor.Create()) return { false, "window creation" };
+    const std::optional<DockPanelLayout> scenePanel = editor.ActivePanel(DockPanelKind::Scene);
+    if (!scenePanel.has_value()) return { false, "the window shows no Scene View" };
+    EditorViewportCameraState& camera = sceneContext.ViewportCamera(scenePanel->panelId);
+    camera.SetViewAngles(0.0F, 0.0F);
+    camera.FocusOn(kb::scene::Vec3{}, focusRadius, 0.0F);
+    const RECT renderArea = SceneViewportToolbarRenderer::Resolve(
+        headless::ToRect(scenePanel->content), sceneContext.ViewportPreview(scenePanel->panelId), sceneContext).renderArea;
+    float screenX = 0.0F;
+    float screenY = 0.0F;
+    if (!EditorSceneViewportMath::WorldToScreen(camera, renderArea, kb::scene::Vec3{ x, y, z }, screenX, screenY)) {
+        return { false, "the click point is behind the camera" };
+    }
+    const POINT point{
+        renderArea.left + static_cast<LONG>(std::lround(screenX + offsetX)),
+        renderArea.top + static_cast<LONG>(std::lround(screenY)) };
+    editor.Click(editor.Window(), point);
+    return { true, "clicked the Scene View at " + std::to_string(point.x) + "," + std::to_string(point.y) };
 }
 
 } // namespace kb::editor

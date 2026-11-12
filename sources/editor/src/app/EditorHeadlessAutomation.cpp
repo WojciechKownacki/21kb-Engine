@@ -4747,6 +4747,13 @@ bool EditorHeadlessAutomation::VerifyDockingInteractions() {
     return result.succeeded;
 }
 
+bool EditorHeadlessAutomation::ClickSceneView(float x, float y, float z, float offsetX, float focusRadius) {
+    const auto result = EditorHeadlessPopupChecks::ClickSceneView(context_, impl_->viewport, x, y, z, offsetX, focusRadius);
+    Trace("click_scene_view", result.succeeded, result.detail);
+    lastCheckDetail_ = result.detail;
+    return result.succeeded;
+}
+
 bool EditorHeadlessAutomation::VerifyToolbarMenuOverlay() {
     const EditorHeadlessPopupCheckResult result =
         EditorHeadlessPopupChecks::VerifyToolbarMenuOverlay(context_, impl_->viewport);

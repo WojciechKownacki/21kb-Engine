@@ -197,6 +197,8 @@ public:
     // Clicking the Add Component browser's search box on a real editor window and
     // typing filters the components, whether the keys reach the window or the popup.
     [[nodiscard]] bool VerifyAddComponentSearchInput();
+    // A mouse click on the Scene View of a real editor window; see EditorHeadlessPopupChecks::ClickSceneView.
+    [[nodiscard]] bool ClickSceneView(float x, float y, float z, float offsetX, float focusRadius);
     [[nodiscard]] bool CaptureEditorScene(std::string_view checkpoint, bool editorOverlaysEnabled = true);
     // The Scene panel's viewport exactly as the editor presents it: its own camera and the
     // production present settings, editor overlays included (grid lines, the world cell grid).
