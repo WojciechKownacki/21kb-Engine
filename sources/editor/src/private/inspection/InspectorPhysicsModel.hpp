@@ -51,10 +51,21 @@ public:
         case PhysicsComponentKind::Rigidbody: return 14;
         case PhysicsComponentKind::Collider: return 14;
         case PhysicsComponentKind::CharacterController: return 9;
-        case PhysicsComponentKind::Joint: return 13;
+        case PhysicsComponentKind::Joint: return JointRowCount;
         }
         return 0;
     }
+
+    // Joint rows: the shared ones first (index 0 is the type), the first JointBasicRows of them always
+    // shown and the rest behind the section's Advanced disclosure, then the settings of the slider, cone
+    // and six-degrees-of-freedom kinds.
+    static constexpr int JointBasicRows = 13;
+    static constexpr int JointSecondaryAxisRow = 18; // three rows: x, y, z
+    static constexpr int JointSwing1Row = 21;        // then the second swing limit
+    static constexpr int JointFirstAxisRow = 23;     // JointAxisRows rows per axis, JointAxisCount axes
+    static constexpr int JointAxisRows = 5;          // mode, min, max, drive velocity, drive force
+    static constexpr int JointAxisCount = static_cast<int>(kb::scene::kJointAxisCount);
+    static constexpr int JointRowCount = JointFirstAxisRow + JointAxisRows * JointAxisCount;
 
     // The index-stable field rows for a component, in render order.
     [[nodiscard]] static std::vector<PhysicsField> Fields(const kb::scene::RigidbodyComponent& component);

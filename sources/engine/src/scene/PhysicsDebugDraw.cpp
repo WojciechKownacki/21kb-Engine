@@ -121,6 +121,72 @@ void AppendWireCapsule(std::vector<PhysicsDebugLineDesc>& lines, Vec3 center, fl
     }
 }
 
+// World-space frame of a joint (x = axis, y = secondary axis made perpendicular to it, z = x cross y), the
+// same one the physics backend builds; false while the axis is zero.
+[[nodiscard]] bool JointFrameWorld(const JointComponent& joint, Quat rotation, Vec3& x, Vec3& y, Vec3& z) noexcept {
+    const float axisLength = kb::math::Length(joint.axis);
+    if (!(axisLength > 0.0001F)) {
+        return false;
+    }
+    const Vec3 localX = joint.axis * (1.0F / axisLength);
+    Vec3 localY = joint.freedom.secondaryAxis - localX * kb::math::Dot(joint.freedom.secondaryAxis, localX);
+    if (kb::math::Length(localY) < 0.001F) {
+        // Parallel or zero secondary axis: any perpendicular will do, the least aligned world axis crossed in.
+        const Vec3 pick = std::fabs(localX.x) <= std::fabs(localX.y) && std::fabs(localX.x) <= std::fabs(localX.z) ? Vec3{1.0F, 0.0F, 0.0F}
+            : (std::fabs(localX.y) <= std::fabs(localX.z) ? Vec3{0.0F, 1.0F, 0.0F} : Vec3{0.0F, 0.0F, 1.0F});
+        localY = kb::math::Cross(localX, pick);
+    }
+    localY = kb::math::Normalize(localY);
+    x = Rotate(rotation, localX);
+    y = Rotate(rotation, localY);
+    z = Rotate(rotation, kb::math::Cross(localX, localY));
+    return true;
+}
+
+// Axis, and for the kinds with limits the range they allow: a slider's travel as a segment, a cone as its swing
+// ellipse seen from the anchor, a rope as the sphere it can reach.
+void AppendJointLimits(std::vector<PhysicsDebugLineDesc>& lines, const JointComponent& joint, Quat rotation, Vec3 ownerAnchor, Vec3 connectedAnchor) {
+    constexpr float kGizmoLength = 0.5F;
+    constexpr std::uint32_t kConeSegments = 24U;
+    Vec3 x{};
+    Vec3 y{};
+    Vec3 z{};
+    switch (joint.type) {
+    case JointType::Slider:
+    case JointType::Cone:
+    case JointType::SixDof:
+        if (!JointFrameWorld(joint, rotation, x, y, z)) {
+            return;
+        }
+        AppendLine(lines, ownerAnchor, ownerAnchor + x * kGizmoLength, kJointColor, kJointAlpha);
+        break;
+    case JointType::Rope:
+        // Slack inside the range: the connected anchor is the centre of what the owner anchor can reach.
+        AppendWireSphere(lines, connectedAnchor, joint.maxLimit, kJointColor, kJointAlpha);
+        return;
+    default:
+        return;
+    }
+    if (joint.type == JointType::Slider && joint.enableLimit) {
+        AppendLine(lines, connectedAnchor + x * joint.minLimit, connectedAnchor + x * joint.maxLimit, kJointColor, kJointAlpha);
+    } else if (joint.type == JointType::Cone) {
+        // Rotation about the secondary axis tilts the axis toward z, rotation about z toward y.
+        constexpr float kMaxTilt = 1.5F;
+        const float tiltZ = std::tan(std::min(joint.freedom.swing1Limit * kPi / 180.0F, kMaxTilt));
+        const float tiltY = std::tan(std::min(joint.freedom.swing2Limit * kPi / 180.0F, kMaxTilt));
+        Vec3 previous = ownerAnchor + (x + z * tiltZ) * kGizmoLength;
+        for (std::uint32_t i = 1U; i <= kConeSegments; ++i) {
+            const float angle = (static_cast<float>(i) / static_cast<float>(kConeSegments)) * 2.0F * kPi;
+            const Vec3 point = ownerAnchor + (x + z * (tiltZ * std::cos(angle)) + y * (tiltY * std::sin(angle))) * kGizmoLength;
+            AppendLine(lines, previous, point, kJointColor, kJointAlpha);
+            if (i % (kConeSegments / 4U) == 0U) {
+                AppendLine(lines, ownerAnchor, point, kJointColor, kJointAlpha);
+            }
+            previous = point;
+        }
+    }
+}
+
 struct CollectContext {
     const Scene* scene = nullptr;
     std::vector<PhysicsDebugLineDesc>* lines = nullptr;
@@ -203,6 +269,7 @@ void CollectShapesVisitor(SceneEntity entity, const TransformComponent& transfor
             }
         }
         AppendLine(output, ownerAnchor, connectedAnchor, kJointColor, kJointAlpha);
+        AppendJointLimits(output, *joint, transform.worldRotation, ownerAnchor, connectedAnchor);
     }
 }
 

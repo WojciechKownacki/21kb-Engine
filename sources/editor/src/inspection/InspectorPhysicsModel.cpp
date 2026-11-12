@@ -77,8 +77,50 @@ namespace {
         return EditorText("inspector.joint.distance", "Distance");
     case kb::scene::JointType::Point:
         return EditorText("inspector.joint.point", "Point");
+    case kb::scene::JointType::Slider:
+        return EditorText("inspector.joint.slider", "Slider");
+    case kb::scene::JointType::Cone:
+        return EditorText("inspector.joint.cone", "Cone");
+    case kb::scene::JointType::SixDof:
+        return EditorText("inspector.joint.sixDof", "Six DOF");
+    case kb::scene::JointType::Rope:
+        return EditorText("inspector.joint.rope", "Rope");
     }
     return EditorText("inspector.joint.fixed", "Fixed");
+}
+
+[[nodiscard]] std::string_view JointAxisModeName(kb::scene::JointAxisMode mode) {
+    switch (mode) {
+    case kb::scene::JointAxisMode::Locked:
+        return EditorText("inspector.joint.modeLocked", "Locked");
+    case kb::scene::JointAxisMode::Limited:
+        return EditorText("inspector.joint.modeLimited", "Limited");
+    case kb::scene::JointAxisMode::Free:
+        return EditorText("inspector.joint.modeFree", "Free");
+    }
+    return EditorText("inspector.joint.modeLocked", "Locked");
+}
+
+// The first three axes of a SixDof joint are translations, the last three rotations, each named X, Y, Z.
+[[nodiscard]] std::string JointAxisLabel(int axis) {
+    const std::string_view letter = axis % 3 == 0 ? "X" : (axis % 3 == 1 ? "Y" : "Z");
+    return axis < 3 ? EditorLocalization::Format("inspector.joint.linearAxis", "Linear {axis}", { { "axis", std::string{ letter } } })
+                    : EditorLocalization::Format("inspector.joint.angularAxis", "Angular {axis}", { { "axis", std::string{ letter } } });
+}
+
+// Where a Joint row index falls in the per-axis block: the axis and which of its JointAxisRows rows.
+struct JointAxisRow {
+    int axis = 0;
+    int row = 0;
+};
+
+[[nodiscard]] bool LocateJointAxisRow(int index, JointAxisRow& out) noexcept {
+    const int local = index - InspectorPhysicsModel::JointFirstAxisRow;
+    if (local < 0 || local >= InspectorPhysicsModel::JointAxisRows * InspectorPhysicsModel::JointAxisCount) {
+        return false;
+    }
+    out = JointAxisRow{ .axis = local / InspectorPhysicsModel::JointAxisRows, .row = local % InspectorPhysicsModel::JointAxisRows };
+    return true;
 }
 
 } // namespace
@@ -295,7 +337,7 @@ bool InspectorPhysicsModel::CycleEnum(kb::scene::CharacterControllerComponent&, 
 // Joint
 // ---------------------------------------------------------------------------
 std::vector<PhysicsField> InspectorPhysicsModel::Fields(const kb::scene::JointComponent& c) {
-    return {
+    std::vector<PhysicsField> fields{
         EnumField(EditorText("inspector.joint.type", "Type"), JointTypeName(c.type)),
         FloatField(EditorText("inspector.joint.anchorX", "Anchor X"), c.anchor.x),
         FloatField(EditorText("inspector.joint.anchorY", "Anchor Y"), c.anchor.y),
@@ -314,7 +356,22 @@ std::vector<PhysicsField> InspectorPhysicsModel::Fields(const kb::scene::JointCo
         FloatField(EditorText("inspector.joint.spring", "Spring"), c.spring.spring),
         FloatField(EditorText("inspector.joint.springDamper", "Spring Damper"), c.spring.damper),
         FloatField(EditorText("inspector.joint.breakForce", "Break Force"), c.breakForce),
+        FloatField(EditorLocalization::Format("inspector.joint.secondaryAxis", "Secondary Axis {axis}", { { "axis", "X" } }), c.freedom.secondaryAxis.x),
+        FloatField(EditorLocalization::Format("inspector.joint.secondaryAxis", "Secondary Axis {axis}", { { "axis", "Y" } }), c.freedom.secondaryAxis.y),
+        FloatField(EditorLocalization::Format("inspector.joint.secondaryAxis", "Secondary Axis {axis}", { { "axis", "Z" } }), c.freedom.secondaryAxis.z),
+        FloatField(EditorText("inspector.joint.swing1Limit", "Swing 1 Limit"), c.freedom.swing1Limit),
+        FloatField(EditorText("inspector.joint.swing2Limit", "Swing 2 Limit"), c.freedom.swing2Limit),
     };
+    for (int axis = 0; axis < InspectorPhysicsModel::JointAxisCount; ++axis) {
+        const kb::scene::JointAxis& limit = c.freedom.axes[static_cast<std::size_t>(axis)];
+        const std::string label = JointAxisLabel(axis);
+        fields.push_back(EnumField(EditorLocalization::Format("inspector.joint.axisMode", "{axis} Mode", { { "axis", label } }), JointAxisModeName(limit.mode)));
+        fields.push_back(FloatField(EditorLocalization::Format("inspector.joint.axisMin", "{axis} Min", { { "axis", label } }), limit.minLimit));
+        fields.push_back(FloatField(EditorLocalization::Format("inspector.joint.axisMax", "{axis} Max", { { "axis", label } }), limit.maxLimit));
+        fields.push_back(FloatField(EditorLocalization::Format("inspector.joint.axisDriveVelocity", "{axis} Drive Velocity", { { "axis", label } }), limit.motor.targetVelocity));
+        fields.push_back(FloatField(EditorLocalization::Format("inspector.joint.axisDriveForce", "{axis} Drive Force", { { "axis", label } }), limit.motor.force));
+    }
+    return fields;
 }
 
 bool InspectorPhysicsModel::ReadFloat(const kb::scene::JointComponent& c, int index, float& out) noexcept {
@@ -335,6 +392,23 @@ bool InspectorPhysicsModel::ReadFloat(const kb::scene::JointComponent& c, int in
     case 15: out = c.spring.spring; return true;
     case 16: out = c.spring.damper; return true;
     case 17: out = c.breakForce; return true;
+    case JointSecondaryAxisRow: out = c.freedom.secondaryAxis.x; return true;
+    case JointSecondaryAxisRow + 1: out = c.freedom.secondaryAxis.y; return true;
+    case JointSecondaryAxisRow + 2: out = c.freedom.secondaryAxis.z; return true;
+    case JointSwing1Row: out = c.freedom.swing1Limit; return true;
+    case JointSwing1Row + 1: out = c.freedom.swing2Limit; return true;
+    default: break;
+    }
+    JointAxisRow located;
+    if (!LocateJointAxisRow(index, located)) {
+        return false;
+    }
+    const kb::scene::JointAxis& axis = c.freedom.axes[static_cast<std::size_t>(located.axis)];
+    switch (located.row) {
+    case 1: out = axis.minLimit; return true;
+    case 2: out = axis.maxLimit; return true;
+    case 3: out = axis.motor.targetVelocity; return true;
+    case 4: out = axis.motor.force; return true;
     default: return false;
     }
 }
@@ -357,6 +431,23 @@ bool InspectorPhysicsModel::ApplyFloat(kb::scene::JointComponent& c, int index, 
     case 15: c.spring.spring = v < 0.0F ? 0.0F : v; return true;
     case 16: c.spring.damper = v < 0.0F ? 0.0F : v; return true;
     case 17: c.breakForce = v < 0.0F ? 0.0F : v; return true;
+    case JointSecondaryAxisRow: c.freedom.secondaryAxis.x = v; return true;
+    case JointSecondaryAxisRow + 1: c.freedom.secondaryAxis.y = v; return true;
+    case JointSecondaryAxisRow + 2: c.freedom.secondaryAxis.z = v; return true;
+    case JointSwing1Row: c.freedom.swing1Limit = v < 0.0F ? 0.0F : (v > 180.0F ? 180.0F : v); return true;
+    case JointSwing1Row + 1: c.freedom.swing2Limit = v < 0.0F ? 0.0F : (v > 180.0F ? 180.0F : v); return true;
+    default: break;
+    }
+    JointAxisRow located;
+    if (!LocateJointAxisRow(index, located)) {
+        return false;
+    }
+    kb::scene::JointAxis& axis = c.freedom.axes[static_cast<std::size_t>(located.axis)];
+    switch (located.row) {
+    case 1: axis.minLimit = v; return true;
+    case 2: axis.maxLimit = v; return true;
+    case 3: axis.motor.targetVelocity = v; return true;
+    case 4: axis.motor.force = v < 0.0F ? 0.0F : v; return true;
     default: return false;
     }
 }
@@ -370,6 +461,16 @@ bool InspectorPhysicsModel::ToggleBool(kb::scene::JointComponent& c, int index) 
 }
 
 bool InspectorPhysicsModel::CycleEnum(kb::scene::JointComponent& c, int index) noexcept {
+    JointAxisRow located;
+    if (LocateJointAxisRow(index, located) && located.row == 0) {
+        kb::scene::JointAxisMode& mode = c.freedom.axes[static_cast<std::size_t>(located.axis)].mode;
+        switch (mode) {
+        case kb::scene::JointAxisMode::Locked: mode = kb::scene::JointAxisMode::Limited; break;
+        case kb::scene::JointAxisMode::Limited: mode = kb::scene::JointAxisMode::Free; break;
+        case kb::scene::JointAxisMode::Free: mode = kb::scene::JointAxisMode::Locked; break;
+        }
+        return true;
+    }
     if (index != 0) {
         return false;
     }
@@ -377,7 +478,11 @@ bool InspectorPhysicsModel::CycleEnum(kb::scene::JointComponent& c, int index) n
     case kb::scene::JointType::Fixed: c.type = kb::scene::JointType::Hinge; break;
     case kb::scene::JointType::Hinge: c.type = kb::scene::JointType::Distance; break;
     case kb::scene::JointType::Distance: c.type = kb::scene::JointType::Point; break;
-    case kb::scene::JointType::Point: c.type = kb::scene::JointType::Fixed; break;
+    case kb::scene::JointType::Point: c.type = kb::scene::JointType::Slider; break;
+    case kb::scene::JointType::Slider: c.type = kb::scene::JointType::Cone; break;
+    case kb::scene::JointType::Cone: c.type = kb::scene::JointType::SixDof; break;
+    case kb::scene::JointType::SixDof: c.type = kb::scene::JointType::Rope; break;
+    case kb::scene::JointType::Rope: c.type = kb::scene::JointType::Fixed; break;
     }
     return true;
 }

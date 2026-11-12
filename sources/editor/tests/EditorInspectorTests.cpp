@@ -2955,13 +2955,65 @@ void RunInspectorPhysicsModelTest() {
     kb::editor::tests::Require(InspectorPhysicsModel::CycleEnum(joint, 0) && joint.type == kb::scene::JointType::Hinge, "Cycling Joint type Fixed -> Hinge");
     kb::editor::tests::Require(InspectorPhysicsModel::ApplyFloat(joint, 10, -1.5F) && joint.minLimit == -1.5F, "Joint Min Limit writes minLimit");
     kb::editor::tests::Require(!joint.enableLimit && InspectorPhysicsModel::ToggleBool(joint, 12) && joint.enableLimit, "Toggling Joint Enable Limit flips it");
-    kb::editor::tests::Require(InspectorPhysicsModel::Fields(joint).size() == 18U, "Joint shows motor, spring and break force fields");
+    kb::editor::tests::Require(InspectorPhysicsModel::Fields(joint).size() == static_cast<std::size_t>(InspectorPhysicsModel::FieldCount(PhysicsComponentKind::Joint)),
+        "Joint lists exactly the rows its section height and hit testing count");
     kb::editor::tests::Require(InspectorPhysicsModel::ApplyFloat(joint, 13, 90.0F) && joint.motor.targetVelocity == 90.0F &&
         InspectorPhysicsModel::ApplyFloat(joint, 14, 100.0F) && joint.motor.force == 100.0F, "Joint Motor fields write motor");
     kb::editor::tests::Require(InspectorPhysicsModel::ApplyFloat(joint, 15, -3.0F) && joint.spring.spring == 0.0F &&
         InspectorPhysicsModel::ApplyFloat(joint, 17, 50.0F) && joint.breakForce == 50.0F, "Joint Spring clamps to 0 and Break Force writes breakForce");
 
     kb::editor::tests::Require(InspectorPhysicsModel::KindOf(PhysicsComponentKind::Joint, 0) == PhysicsFieldKind::Enum, "KindOf reports the Joint type field as Enum");
+
+    // Joint: every kind is reachable from the type row, the freedom rows edit the freedom settings.
+    kb::scene::JointComponent kinds;
+    std::array<bool, 8> kindSeen{};
+    for (int cycle = 0; cycle < 8; ++cycle) {
+        kb::editor::tests::Require(InspectorPhysicsModel::CycleEnum(kinds, 0), "Cycling the Joint type must always succeed");
+        kindSeen[static_cast<std::size_t>(kinds.type)] = true;
+    }
+    kb::editor::tests::Require(std::all_of(kindSeen.begin(), kindSeen.end(), [](bool seen) { return seen; }) && kinds.type == kb::scene::JointType::Fixed,
+        "The Joint type row must cycle through all eight kinds and wrap");
+    kinds.type = kb::scene::JointType::Point;
+    kb::editor::tests::Require(InspectorPhysicsModel::CycleEnum(kinds, 0) && kinds.type == kb::scene::JointType::Slider &&
+            InspectorPhysicsModel::CycleEnum(kinds, 0) && kinds.type == kb::scene::JointType::Cone &&
+            InspectorPhysicsModel::CycleEnum(kinds, 0) && kinds.type == kb::scene::JointType::SixDof &&
+            InspectorPhysicsModel::CycleEnum(kinds, 0) && kinds.type == kb::scene::JointType::Rope,
+        "The Joint type row must offer Slider, Cone, Six DOF and Rope after Point");
+
+    kb::scene::JointComponent freedom;
+    const int axisRow = InspectorPhysicsModel::JointFirstAxisRow;
+    kb::editor::tests::Require(InspectorPhysicsModel::KindOf(PhysicsComponentKind::Joint, axisRow) == PhysicsFieldKind::Enum &&
+            InspectorPhysicsModel::KindOf(PhysicsComponentKind::Joint, axisRow + 1) == PhysicsFieldKind::Float,
+        "KindOf must report an axis mode row as Enum and its limit rows as Float");
+    kb::editor::tests::Require(InspectorPhysicsModel::CycleEnum(freedom, axisRow) && freedom.freedom.axes[0].mode == kb::scene::JointAxisMode::Limited &&
+            InspectorPhysicsModel::CycleEnum(freedom, axisRow) && freedom.freedom.axes[0].mode == kb::scene::JointAxisMode::Free &&
+            InspectorPhysicsModel::CycleEnum(freedom, axisRow) && freedom.freedom.axes[0].mode == kb::scene::JointAxisMode::Locked,
+        "An axis mode row must cycle Locked, Limited, Free");
+    const int lastAxisRow = axisRow + InspectorPhysicsModel::JointAxisRows * (InspectorPhysicsModel::JointAxisCount - 1);
+    kb::editor::tests::Require(InspectorPhysicsModel::CycleEnum(freedom, lastAxisRow) && freedom.freedom.axes[5].mode == kb::scene::JointAxisMode::Limited &&
+            InspectorPhysicsModel::ApplyFloat(freedom, lastAxisRow + 1, -30.0F) && freedom.freedom.axes[5].minLimit == -30.0F &&
+            InspectorPhysicsModel::ApplyFloat(freedom, lastAxisRow + 2, 45.0F) && freedom.freedom.axes[5].maxLimit == 45.0F &&
+            InspectorPhysicsModel::ApplyFloat(freedom, lastAxisRow + 3, 12.0F) && freedom.freedom.axes[5].motor.targetVelocity == 12.0F &&
+            InspectorPhysicsModel::ApplyFloat(freedom, lastAxisRow + 4, -5.0F) && freedom.freedom.axes[5].motor.force == 0.0F,
+        "The rows of the last axis must edit the last axis and nothing else");
+    float read = 0.0F;
+    kb::editor::tests::Require(InspectorPhysicsModel::ReadFloat(freedom, lastAxisRow + 2, read) && read == 45.0F && !InspectorPhysicsModel::ReadFloat(freedom, lastAxisRow, read) &&
+            !InspectorPhysicsModel::ReadFloat(freedom, InspectorPhysicsModel::JointRowCount, read),
+        "ReadFloat must return the axis limits and refuse the mode row and rows past the end");
+    kb::editor::tests::Require(!InspectorPhysicsModel::CycleEnum(freedom, InspectorPhysicsModel::JointRowCount) && !InspectorPhysicsModel::ApplyFloat(freedom, InspectorPhysicsModel::JointRowCount, 1.0F),
+        "A row past the end of the Joint list must not edit anything");
+    kb::editor::tests::Require(InspectorPhysicsModel::ApplyFloat(freedom, InspectorPhysicsModel::JointSwing1Row, 270.0F) && freedom.freedom.swing1Limit == 180.0F &&
+            InspectorPhysicsModel::ApplyFloat(freedom, InspectorPhysicsModel::JointSwing1Row + 1, -4.0F) && freedom.freedom.swing2Limit == 0.0F &&
+            InspectorPhysicsModel::ApplyFloat(freedom, InspectorPhysicsModel::JointSecondaryAxisRow + 2, 1.0F) && freedom.freedom.secondaryAxis.z == 1.0F,
+        "Swing limits clamp to 0..180 degrees and the secondary axis rows write the secondary axis");
+    const std::vector<kb::editor::PhysicsField> rows = InspectorPhysicsModel::Fields(freedom);
+    bool kindsAgree = true;
+    bool labelsFilled = true;
+    for (int row = 0; row < InspectorPhysicsModel::JointRowCount; ++row) {
+        kindsAgree = kindsAgree && InspectorPhysicsModel::KindOf(PhysicsComponentKind::Joint, row) == rows[static_cast<std::size_t>(row)].kind;
+        labelsFilled = labelsFilled && !rows[static_cast<std::size_t>(row)].label.empty() && rows[static_cast<std::size_t>(row)].label.find('{') == std::string::npos;
+    }
+    kb::editor::tests::Require(kindsAgree && labelsFilled, "Every Joint row has a kind that matches its list entry and a label with no unresolved placeholder");
     kb::editor::tests::Require(InspectorPhysicsModel::KindOf(PhysicsComponentKind::Rigidbody, 99) == PhysicsFieldKind::Float, "KindOf returns Float for an out-of-range index");
 }
 

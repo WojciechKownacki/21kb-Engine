@@ -79,7 +79,8 @@ struct SceneDocument {
     static constexpr std::uint32_t UIThemeBindingFileVersion = 59U;
     static constexpr std::uint32_t BehaviourVariableOverridesFileVersion = 60U;
     static constexpr std::uint32_t MeshLodAndShadowQualityFileVersion = 61U;
-    static constexpr std::uint32_t CurrentFileVersion = 61U;
+    static constexpr std::uint32_t JointFreedomFileVersion = 62U;
+    static constexpr std::uint32_t CurrentFileVersion = 62U;
     static constexpr std::uint32_t SocketAttachmentFileVersion = 49U;
     static constexpr std::uint32_t CombatantFileVersion = 49U;
     static constexpr std::uint32_t AIBrainFileVersion = 49U;

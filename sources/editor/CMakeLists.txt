@@ -2188,6 +2188,13 @@ if(BUILD_TESTING)
             --selftest-task "SELFTEST-Physics-Workflow")
     set_tests_properties(kb_editor_physics_workflow_headless PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;physics" TIMEOUT 180)
+    add_test(NAME kb_editor_joint_kinds_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessJointKindsScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Joint-Kinds")
+    set_tests_properties(kb_editor_joint_kinds_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;physics" TIMEOUT 180)
     add_test(NAME kb_editor_animator_workflow_headless
         COMMAND $<TARGET_FILE:kb_editor>
             --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessAnimatorWorkflowScenario.json"

@@ -3551,8 +3551,9 @@ void RunComponentInspectorDescCatalogTest() {
     // Particle Effect contributes nine authoring and playback fields.
     // NavLink adds eleven (start, end, radius, kind, area, bidirectional, enabled).
     // Rigidbody damping adds two; Joint motor, spring and break force add five.
+    // Joint freedom adds thirty-five (secondary axis, swing limits and six axes of five settings).
     // Audio Source contributes sixteen fields and Audio Listener four.
-    kb::tests::Require(fieldsChecked == 857U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (857, including text rendering, themes, collision mesh and the compatibility alias) across all components");
+    kb::tests::Require(fieldsChecked == 892U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (892, including text rendering, themes, collision mesh and the compatibility alias) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();

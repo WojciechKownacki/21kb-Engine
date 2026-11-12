@@ -549,6 +549,23 @@ struct SearchableSetting {
         : static_cast<int>(kb::project::ProjectBuildScenes(sceneContext.ProjectConfiguration()).size());
 }
 
+// The description under a setting: one line at the normal size. Some languages need much more room than English, so
+// a longer one first shrinks to the largest size it fits at, and when even the smallest size does not fit it runs
+// over two lines - the row pitch leaves the second line the gap under the row, no more.
+void DrawSettingDescription(HDC dc, RECT rect, std::string_view text, COLORREF color) {
+    constexpr int normalSize = 11;
+    constexpr int smallestSize = 10;
+    constexpr int twoLineHeight = 28;
+    const int room = static_cast<int>(rect.right - rect.left);
+    const int size = EditorDialogStyle::FittingSize(dc, text, room, normalSize, FW_NORMAL, smallestSize);
+    if (EditorDialogStyle::TextWidth(dc, text, size, FW_NORMAL) <= room) {
+        DrawText(dc, rect, text, color, size);
+        return;
+    }
+    rect.bottom = rect.top + twoLineHeight;
+    DrawTooltipText(dc, rect, text, color, smallestSize);
+}
+
 // A setting's label with its description under it. While searching, a setting that does not
 // match is dimmed, so the matching ones stand out on the page.
 void DrawSetting(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const RECT& label, std::string_view text,
@@ -557,12 +574,19 @@ void DrawSetting(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const REC
     const bool matches = query.empty() || ContainsIgnoringCase(text, query) || ContainsIgnoringCase(description, query) ||
         ContainsIgnoringCase(TooltipForKind(kind).title, query);
     const bool active = enabled && matches;
-    // The label is longer in some languages than its column is wide: it gets the largest size it fits at.
+    // The label is longer in some languages than its column is wide: it gets the largest size it fits at, and when
+    // even the smallest size does not fit it runs over two lines, which the height of the row has room for.
     const RECT room{ label.left, label.top, label.right - 8, label.bottom };
     const int weight = !query.empty() && matches ? FW_SEMIBOLD : FW_NORMAL;
-    DrawText(dc, room, text, Color(active ? (query.empty() ? theme.textSecondary : theme.textPrimary) : theme.textDisabled),
-        EditorDialogStyle::FittingSize(dc, text, static_cast<int>(room.right - room.left), 12, weight), weight);
-    DrawText(dc, ProjectSettingsPanelLayout::DescriptionRect(rects, label), description, Color(theme.textDisabled), 11);
+    const COLORREF labelColor = Color(active ? (query.empty() ? theme.textSecondary : theme.textPrimary) : theme.textDisabled);
+    const int labelWidth = static_cast<int>(room.right - room.left);
+    const int labelSize = EditorDialogStyle::FittingSize(dc, text, labelWidth, 12, weight);
+    if (EditorDialogStyle::TextWidth(dc, text, labelSize, weight) <= labelWidth) {
+        DrawText(dc, room, text, labelColor, labelSize, weight);
+    } else {
+        DrawTooltipText(dc, RECT{ room.left, room.top + 2, room.right, room.bottom - 2 }, text, labelColor, labelSize, weight);
+    }
+    DrawSettingDescription(dc, ProjectSettingsPanelLayout::DescriptionRect(rects, label), description, Color(theme.textDisabled));
 }
 
 void DrawTooltip(HDC dc, const RECT& content, const EditorTheme& theme, const EditorProjectSettingsState& state) {

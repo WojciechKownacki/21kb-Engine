@@ -80,6 +80,7 @@ struct ScenePrefabJointComponent {
     JointMotor motor{};
     JointSpring spring{};
     float breakForce = 0.0F;
+    JointFreedom freedom{};
 };
 
 struct ScenePrefabRegionPortalComponent {

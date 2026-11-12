@@ -16,6 +16,8 @@
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "scene/asset/io/SceneAssetBinaryIO.hpp"
+#include "scene/asset/io/components/SceneAssetPhysicsComponentCodec.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1152,6 +1154,156 @@ void RunPhysicsComponentPrefabHashCoverageTest() {
     }, "Prefab hash must change when Joint payload is added");
 }
 
+bool SameJointFreedom(const kb::scene::JointFreedom& lhs, const kb::scene::JointFreedom& rhs) {
+    if (lhs.secondaryAxis.x != rhs.secondaryAxis.x || lhs.secondaryAxis.y != rhs.secondaryAxis.y || lhs.secondaryAxis.z != rhs.secondaryAxis.z ||
+        lhs.swing1Limit != rhs.swing1Limit || lhs.swing2Limit != rhs.swing2Limit) {
+        return false;
+    }
+    for (std::size_t index = 0U; index < lhs.axes.size(); ++index) {
+        const kb::scene::JointAxis& a = lhs.axes[index];
+        const kb::scene::JointAxis& b = rhs.axes[index];
+        if (a.mode != b.mode || a.minLimit != b.minLimit || a.maxLimit != b.maxLimit || a.motor.targetVelocity != b.motor.targetVelocity ||
+            a.motor.force != b.motor.force) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// The slider, cone, six-degrees-of-freedom and rope kinds keep every setting through the prefab text file, the scene
+// file and the binary codec, and joints written before those kinds existed read back unchanged.
+void RunExtendedJointSerializationTest() {
+    using kb::scene::JointAxisMode;
+    using kb::scene::JointType;
+    using kb::scene::ScenePrefabJointComponent;
+    ScenePrefabJointComponent slider{ .type = JointType::Slider, .anchor = { 0.1F, 0.2F, 0.3F }, .axis = { 1.0F, 0.0F, 0.0F }, .minLimit = -0.5F,
+        .maxLimit = 2.0F, .enableLimit = true, .motor = { .targetVelocity = 1.5F, .force = 40.0F }, .spring = { .spring = 100.0F, .damper = 5.0F },
+        .breakForce = 300.0F };
+    slider.freedom.secondaryAxis = { 0.0F, 0.0F, 1.0F };
+    ScenePrefabJointComponent cone{ .type = JointType::Cone, .axis = { 0.0F, -1.0F, 0.0F }, .minLimit = -10.0F, .maxLimit = 25.0F, .enableLimit = true };
+    cone.freedom.swing1Limit = 20.0F;
+    cone.freedom.swing2Limit = 35.0F;
+    ScenePrefabJointComponent six{ .type = JointType::SixDof, .breakForce = 12.0F };
+    six.freedom.axes[0] = { .mode = JointAxisMode::Free, .motor = { .targetVelocity = 2.0F, .force = 50.0F } };
+    six.freedom.axes[1] = { .mode = JointAxisMode::Limited, .minLimit = -0.25F, .maxLimit = 0.75F };
+    six.freedom.axes[3] = { .mode = JointAxisMode::Limited, .minLimit = -30.0F, .maxLimit = 45.0F, .motor = { .targetVelocity = 10.0F, .force = 5.0F } };
+    six.freedom.axes[5].mode = JointAxisMode::Free;
+    ScenePrefabJointComponent rope{ .type = JointType::Rope, .minLimit = 0.5F, .maxLimit = 4.0F, .spring = { .spring = 20.0F, .damper = 2.0F } };
+    const std::array<ScenePrefabJointComponent, 4U> joints{ slider, cone, six, rope };
+
+    // Prefab text file.
+    const std::filesystem::path prefabPath = std::filesystem::temp_directory_path() / "21kb_engine_extended_joint.kbprefab";
+    std::error_code removeError;
+    std::filesystem::remove(prefabPath, removeError);
+    {
+        kb::scene::Scene source;
+        kb::scene::ScenePrefab prefab;
+        for (std::size_t index = 0U; index < joints.size(); ++index) {
+            const std::uint32_t node = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Joint " + std::to_string(index) });
+            prefab.TryGetMutableNode(node)->components.joint = joints[index];
+        }
+        const kb::scene::ScenePrefabHandle handle = source.Prefabs().Register("ExtendedJointRoundTrip", std::move(prefab));
+        kb::tests::Require(handle.IsValid() && source.Prefabs().Save(handle, prefabPath), "The extended joint prefab could not be saved");
+        kb::scene::Scene target;
+        const kb::scene::ScenePrefabHandle loaded = target.Prefabs().Load(prefabPath);
+        kb::tests::Require(loaded.IsValid(), "The extended joint prefab could not be loaded");
+        const kb::scene::ScenePrefab loadedPrefab = target.Prefabs().Get(loaded);
+        kb::tests::Require(loadedPrefab.Nodes().size() == joints.size(), "The extended joint prefab lost nodes");
+        for (std::size_t index = 0U; index < joints.size(); ++index) {
+            const auto& read = loadedPrefab.Nodes()[index].components.joint;
+            kb::tests::Require(read.has_value() && read->type == joints[index].type && read->minLimit == joints[index].minLimit &&
+                    read->maxLimit == joints[index].maxLimit && read->enableLimit == joints[index].enableLimit && read->breakForce == joints[index].breakForce &&
+                    read->motor.force == joints[index].motor.force && read->spring.spring == joints[index].spring.spring &&
+                    SameJointFreedom(read->freedom, joints[index].freedom),
+                "The prefab text file did not keep a slider, cone, six-degrees-of-freedom or rope joint");
+        }
+    }
+    std::filesystem::remove(prefabPath, removeError);
+
+    // Scene file: live components in, the same settings out of the saved document.
+    const std::filesystem::path scenePath = std::filesystem::temp_directory_path() / "21kb_engine_extended_joint.21kbscene";
+    std::filesystem::remove(scenePath, removeError);
+    {
+        kb::scene::Scene scene;
+        for (std::size_t index = 0U; index < joints.size(); ++index) {
+            const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "SceneJoint " + std::to_string(index) });
+            const ScenePrefabJointComponent& joint = joints[index];
+            scene.Components().Joints().Set(object.Entity(), kb::scene::JointComponent{ .type = joint.type, .anchor = joint.anchor, .axis = joint.axis,
+                .minLimit = joint.minLimit, .maxLimit = joint.maxLimit, .enableLimit = joint.enableLimit, .motor = joint.motor, .spring = joint.spring,
+                .breakForce = joint.breakForce, .freedom = joint.freedom });
+        }
+        kb::tests::Require(kb::scene::SceneDocumentService::Save(scene, scenePath, "ExtendedJoints"), "The extended joint scene could not be saved");
+        const kb::scene::SceneDocumentLoadResult loaded = kb::scene::SceneDocumentService::Load(scenePath);
+        kb::tests::Require(loaded.succeeded && loaded.document.fileVersion == kb::scene::SceneDocument::CurrentFileVersion &&
+                kb::scene::SceneDocument::CurrentFileVersion >= kb::scene::SceneDocument::JointFreedomFileVersion,
+            "The extended joint scene did not load as a current file");
+        std::size_t found = 0U;
+        for (const kb::scene::ScenePrefabNodeDesc& node : loaded.document.worldPrefab.Nodes()) {
+            for (std::size_t index = 0U; index < joints.size(); ++index) {
+                if (node.name != "SceneJoint " + std::to_string(index)) {
+                    continue;
+                }
+                ++found;
+                kb::tests::Require(node.components.joint.has_value() && node.components.joint->type == joints[index].type &&
+                        node.components.joint->breakForce == joints[index].breakForce && SameJointFreedom(node.components.joint->freedom, joints[index].freedom),
+                    "The scene file did not keep a slider, cone, six-degrees-of-freedom or rope joint");
+            }
+        }
+        kb::tests::Require(found == joints.size(), "The extended joint scene lost joint objects");
+    }
+    std::filesystem::remove(scenePath, removeError);
+
+    // Binary codec: the current layout round trips, a layout from before the freedom block reads with defaults, a
+    // damaged axis mode is refused.
+    std::vector<std::uint8_t> bytes;
+    kb::scene::SceneAssetPhysicsComponentCodec::WriteJoint(bytes, six);
+    ScenePrefabJointComponent current;
+    kb::scene::SceneAssetBinaryIO::ByteReader currentReader{ bytes };
+    kb::tests::Require(kb::scene::SceneAssetPhysicsComponentCodec::ReadJoint(currentReader, kb::scene::SceneDocument::CurrentFileVersion, current) &&
+            currentReader.Exhausted() && current.type == JointType::SixDof && SameJointFreedom(current.freedom, six.freedom),
+        "The current joint layout did not round trip");
+
+    constexpr std::size_t freedomBytes = 3U * 4U + 2U * 4U + kb::scene::kJointAxisCount * 5U * 4U;
+    kb::tests::Require(bytes.size() > freedomBytes, "The joint layout is smaller than its freedom block");
+    std::vector<std::uint8_t> legacy(bytes.begin(), bytes.end() - static_cast<std::ptrdiff_t>(freedomBytes));
+    ScenePrefabJointComponent old;
+    kb::scene::SceneAssetBinaryIO::ByteReader legacyReader{ legacy };
+    kb::tests::Require(kb::scene::SceneAssetPhysicsComponentCodec::ReadJoint(legacyReader, kb::scene::SceneDocument::JointFreedomFileVersion - 1U, old) &&
+            legacyReader.Exhausted() && old.type == JointType::SixDof && old.breakForce == six.breakForce &&
+            SameJointFreedom(old.freedom, kb::scene::JointFreedom{}),
+        "A joint written before the freedom block must read back with default freedom");
+    kb::scene::SceneAssetBinaryIO::ByteReader mismatchedReader{ legacy };
+    ScenePrefabJointComponent mismatched;
+    kb::tests::Require(!kb::scene::SceneAssetPhysicsComponentCodec::ReadJoint(mismatchedReader, kb::scene::SceneDocument::CurrentFileVersion, mismatched),
+        "A joint cut short of its freedom block must not read as a current one");
+
+    std::vector<std::uint8_t> damaged = bytes;
+    const std::size_t firstModeOffset = bytes.size() - kb::scene::kJointAxisCount * 5U * 4U;
+    damaged[firstModeOffset] = 7U;
+    kb::scene::SceneAssetBinaryIO::ByteReader damagedReader{ damaged };
+    ScenePrefabJointComponent refused;
+    kb::tests::Require(!kb::scene::SceneAssetPhysicsComponentCodec::ReadJoint(damagedReader, kb::scene::SceneDocument::CurrentFileVersion, refused),
+        "A joint with an unknown axis mode must be refused");
+
+    // Prefab identity: the freedom settings count for the kinds that read them and for no other.
+    const auto prefabGuid = [](const ScenePrefabJointComponent& joint) {
+        kb::scene::Scene scene;
+        kb::scene::ScenePrefab prefab;
+        const std::uint32_t node = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Joint" });
+        prefab.TryGetMutableNode(node)->components.joint = joint;
+        const kb::scene::ScenePrefabHandle handle = scene.Prefabs().Register("ExtendedJointHash", std::move(prefab));
+        kb::tests::Require(handle.IsValid(), "The extended joint hash fixture could not be registered");
+        return scene.Prefabs().Guid(handle);
+    };
+    ScenePrefabJointComponent changedSix = six;
+    changedSix.freedom.axes[2].mode = JointAxisMode::Free;
+    kb::tests::Require(prefabGuid(six) != prefabGuid(changedSix), "Prefab hash must change when a six-degrees-of-freedom axis changes");
+    ScenePrefabJointComponent hinge{ .type = JointType::Hinge };
+    ScenePrefabJointComponent changedHinge = hinge;
+    changedHinge.freedom.swing1Limit = 10.0F;
+    kb::tests::Require(prefabGuid(hinge) == prefabGuid(changedHinge), "Prefab hash of a hinge must not depend on settings it does not read");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -1183,6 +1335,7 @@ void RunScenePrefabCaptureTests() {
     run("RunNestedPrefabAssetRoundTripTest", RunNestedPrefabAssetRoundTripTest);
     run("RunPrefabCaptureRejectsExternalJointTargetTest", RunPrefabCaptureRejectsExternalJointTargetTest);
     run("RunPhysicsComponentPrefabHashCoverageTest", RunPhysicsComponentPrefabHashCoverageTest);
+    run("RunExtendedJointSerializationTest", RunExtendedJointSerializationTest);
 }
 
 } // namespace kb::tests

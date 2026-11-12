@@ -51,7 +51,8 @@ target_sources(kb_cli_core PRIVATE
     ../editor/src/docking/DockLayoutSerializer.cpp
     ../editor/src/docking/DockNodeFactory.cpp
     ../editor/src/docking/DockGeometry.cpp
-    ../editor/src/localization/EditorLocalization.cpp)
+    ../editor/src/localization/EditorLocalization.cpp
+    ../editor/src/scene/EditorGameView.cpp)
 
 # world build resolves meshes for HLOD proxies with the same loaders kb_cooker uses.
 # Materials (.kbmat) are renderer assets: material-new/set/show and MeshRenderer material=.

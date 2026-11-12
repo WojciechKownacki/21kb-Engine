@@ -5679,7 +5679,9 @@ void RunInspectorBasicAdvancedSuite(Report& report) {
         Case{"Camera", InspectorDisclosureId::CameraAdvanced, InspectorPropertyId::CameraAdvanced, InspectorPropertyId::CameraFarClip, -1, "500"},
         Case{"Light", InspectorDisclosureId::LightAdvanced, InspectorPropertyId::LightAdvanced, InspectorPropertyId::LightShadowStrength, -1, "0.75"},
         Case{"Rigidbody", InspectorDisclosureId::RigidbodyAdvanced, InspectorPropertyId::RigidbodyAdvanced, InspectorPropertyId::RigidbodyField, 12, "0.25"},
-        Case{"Collider", InspectorDisclosureId::ColliderAdvanced, InspectorPropertyId::ColliderAdvanced, InspectorPropertyId::ColliderField, 10, "0.25"}};
+        Case{"Collider", InspectorDisclosureId::ColliderAdvanced, InspectorPropertyId::ColliderAdvanced, InspectorPropertyId::ColliderField, 10, "0.25"},
+        Case{"Joint", InspectorDisclosureId::JointAdvanced, InspectorPropertyId::JointAdvanced, InspectorPropertyId::JointField, InspectorPhysicsModel::JointBasicRows + 1, "75"},
+        Case{"Joint", InspectorDisclosureId::JointAdvanced, InspectorPropertyId::JointAdvanced, InspectorPropertyId::JointField, InspectorPhysicsModel::JointFirstAxisRow + 1, "-0.5"}};
     for (const auto& test : cases) {
         EditorSceneContext context;
         const auto actor = context.CreateHierarchyObject();
@@ -5719,6 +5721,10 @@ void RunInspectorBasicAdvancedSuite(Report& report) {
         if (test.disclosure == InspectorDisclosureId::LightAdvanced) changed = context.Scene().Components().Lights().TryGet(actor)->shadowStrength == 0.75F;
         if (test.disclosure == InspectorDisclosureId::RigidbodyAdvanced) changed = context.Scene().Components().Rigidbodies().TryGet(actor)->linearDamping == 0.25F;
         if (test.disclosure == InspectorDisclosureId::ColliderAdvanced) changed = context.Scene().Components().Colliders().TryGet(actor)->friction == 0.25F;
+        if (test.disclosure == InspectorDisclosureId::JointAdvanced) {
+            const kb::scene::JointComponent& joint = *context.Scene().Components().Joints().TryGet(actor);
+            changed = test.index == InspectorPhysicsModel::JointBasicRows + 1 ? joint.motor.force == 75.0F : joint.freedom.axes[0].minLimit == -0.5F;
+        }
         report.Check(changed, "Advanced edit changes the intended runtime property");
         report.Check(automation.CaptureInspector("advanced"), "Capture expanded Inspector controls");
         report.Check(automation.InspectorClickRow(test.toggle, -1, InspectorHitKind::Row), "Close Advanced through live pointer handling");

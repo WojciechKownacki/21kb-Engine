@@ -103,7 +103,7 @@ void SceneAssetPhysicsComponentCodec::WriteCharacterController(std::vector<std::
 bool SceneAssetPhysicsComponentCodec::ReadJoint(SceneAssetBinaryIO::ByteReader& input, std::uint32_t fileVersion, ScenePrefabJointComponent& output) {
     std::uint32_t type = 0;
     if (!input.ReadUInt32(type) ||
-        type > static_cast<std::uint32_t>(JointType::Point) ||
+        type > static_cast<std::uint32_t>(JointType::Rope) ||
         !input.ReadUInt64(output.connectedNodeStableId) ||
         !SceneAssetPrimitiveCodec::ReadVec3(input, output.anchor) ||
         !SceneAssetPrimitiveCodec::ReadVec3(input, output.connectedAnchor) ||
@@ -117,6 +117,21 @@ bool SceneAssetPhysicsComponentCodec::ReadJoint(SceneAssetBinaryIO::ByteReader& 
         (!input.ReadFloat(output.motor.targetVelocity) || !input.ReadFloat(output.motor.force) ||
          !input.ReadFloat(output.spring.spring) || !input.ReadFloat(output.spring.damper) || !input.ReadFloat(output.breakForce))) {
         return false;
+    }
+    if (fileVersion >= SceneDocument::JointFreedomFileVersion) {
+        JointFreedom& freedom = output.freedom;
+        if (!SceneAssetPrimitiveCodec::ReadVec3(input, freedom.secondaryAxis) || !input.ReadFloat(freedom.swing1Limit) ||
+            !input.ReadFloat(freedom.swing2Limit)) {
+            return false;
+        }
+        for (JointAxis& axis : freedom.axes) {
+            std::uint32_t mode = 0;
+            if (!input.ReadUInt32(mode) || mode > static_cast<std::uint32_t>(JointAxisMode::Free) || !input.ReadFloat(axis.minLimit) ||
+                !input.ReadFloat(axis.maxLimit) || !input.ReadFloat(axis.motor.targetVelocity) || !input.ReadFloat(axis.motor.force)) {
+                return false;
+            }
+            axis.mode = static_cast<JointAxisMode>(mode);
+        }
     }
     output.type = static_cast<JointType>(type);
     return true;
@@ -136,6 +151,16 @@ void SceneAssetPhysicsComponentCodec::WriteJoint(std::vector<std::uint8_t>& outp
     SceneAssetBinaryIO::WriteFloat(output, joint.spring.spring);
     SceneAssetBinaryIO::WriteFloat(output, joint.spring.damper);
     SceneAssetBinaryIO::WriteFloat(output, joint.breakForce);
+    SceneAssetPrimitiveCodec::WriteVec3(output, joint.freedom.secondaryAxis);
+    SceneAssetBinaryIO::WriteFloat(output, joint.freedom.swing1Limit);
+    SceneAssetBinaryIO::WriteFloat(output, joint.freedom.swing2Limit);
+    for (const JointAxis& axis : joint.freedom.axes) {
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(axis.mode));
+        SceneAssetBinaryIO::WriteFloat(output, axis.minLimit);
+        SceneAssetBinaryIO::WriteFloat(output, axis.maxLimit);
+        SceneAssetBinaryIO::WriteFloat(output, axis.motor.targetVelocity);
+        SceneAssetBinaryIO::WriteFloat(output, axis.motor.force);
+    }
 }
 
 } // namespace kb::scene

@@ -57,6 +57,7 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
             .motor = joint->motor,
             .spring = joint->spring,
             .breakForce = joint->breakForce,
+            .freedom = joint->freedom,
         };
     }
 

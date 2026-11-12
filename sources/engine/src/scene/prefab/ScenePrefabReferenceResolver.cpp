@@ -21,7 +21,7 @@ void ScenePrefabReferenceResolver::Apply(Scene& scene, const ScenePrefabNodeDesc
             .type = joint.type, .connectedEntity = resolve(joint.connectedNodeStableId),
             .anchor = joint.anchor, .connectedAnchor = joint.connectedAnchor, .axis = joint.axis,
             .minLimit = joint.minLimit, .maxLimit = joint.maxLimit, .enableLimit = joint.enableLimit,
-            .motor = joint.motor, .spring = joint.spring, .breakForce = joint.breakForce});
+            .motor = joint.motor, .spring = joint.spring, .breakForce = joint.breakForce, .freedom = joint.freedom});
     }
     if (components.regionPortal) {
         const auto& portal = *components.regionPortal;

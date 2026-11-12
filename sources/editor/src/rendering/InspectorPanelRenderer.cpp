@@ -2238,15 +2238,22 @@ void PaintHistoryRibbonSection(HDC dc, RECT content, int& y, const EditorTheme& 
     return kSectionHeaderHeight + kDividerHeight + rows * (kFieldRowHeight + kDividerHeight) + kDisclosureRowHeight;
 }
 
+[[nodiscard]] bool HasPhysicsDisclosure(InspectorSectionId section) noexcept {
+    return section == InspectorSectionId::Rigidbody || section == InspectorSectionId::Collider || section == InspectorSectionId::Joint;
+}
+
 [[nodiscard]] InspectorDisclosureId PhysicsDisclosure(InspectorSectionId section) noexcept {
+    if (section == InspectorSectionId::Joint) return InspectorDisclosureId::JointAdvanced;
     return section == InspectorSectionId::Rigidbody ? InspectorDisclosureId::RigidbodyAdvanced : InspectorDisclosureId::ColliderAdvanced;
 }
 
 [[nodiscard]] InspectorPropertyId PhysicsAdvancedProperty(InspectorSectionId section) noexcept {
+    if (section == InspectorSectionId::Joint) return InspectorPropertyId::JointAdvanced;
     return section == InspectorSectionId::Rigidbody ? InspectorPropertyId::RigidbodyAdvanced : InspectorPropertyId::ColliderAdvanced;
 }
 
 [[nodiscard]] int PhysicsBasicRows(InspectorSectionId section) noexcept {
+    if (section == InspectorSectionId::Joint) return InspectorPhysicsModel::JointBasicRows;
     return section == InspectorSectionId::Rigidbody ? 6 : 10;
 }
 
@@ -2490,7 +2497,7 @@ void PaintPhysicsSection(
     bool fitEnabled) {
     SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, sectionId, HeroIconKind::Cube, title, true);
     for (int index = 0; index < static_cast<int>(fields.size()); ++index) {
-        if ((sectionId == InspectorSectionId::Rigidbody || sectionId == InspectorSectionId::Collider) && index == PhysicsBasicRows(sectionId)) {
+        if (HasPhysicsDisclosure(sectionId) && index == PhysicsBasicRows(sectionId)) {
             section.Disclosure(EditorText("inspector.meshRenderer.advanced", "Advanced"), PhysicsAdvancedProperty(sectionId),
                 inspector.IsDisclosureExpanded(PhysicsDisclosure(sectionId)));
             if (!inspector.IsDisclosureExpanded(PhysicsDisclosure(sectionId))) break;
@@ -4021,7 +4028,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         }
     }
     if (const kb::scene::JointComponent* joint = scene.Components().Joints().TryGet(selected); joint != nullptr) {
-        const int h = SectionHeight(inspector, InspectorSectionId::Joint, InspectorPhysicsModel::FieldCount(PhysicsComponentKind::Joint));
+        const int h = AdvancedSectionHeight(inspector, InspectorSectionId::Joint, InspectorDisclosureId::JointAdvanced, InspectorPhysicsModel::JointBasicRows, InspectorPhysicsModel::FieldCount(PhysicsComponentKind::Joint));
         if (sectionVisible(y, h)) {
             PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::Joint, EditorText("inspector.joint.title", "Joint"), InspectorPropertyId::JointField, InspectorPhysicsModel::Fields(*joint), false, false);
         } else {
@@ -4268,7 +4275,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         height += SectionHeight(inspector, InspectorSectionId::CharacterController, InspectorPhysicsModel::FieldCount(PhysicsComponentKind::CharacterController)) + kSectionGap;
     }
     if (const kb::scene::JointComponent* joint = scene.Components().Joints().TryGet(selected); joint != nullptr) {
-        height += SectionHeight(inspector, InspectorSectionId::Joint, InspectorPhysicsModel::FieldCount(PhysicsComponentKind::Joint)) + kSectionGap;
+        height += AdvancedSectionHeight(inspector, InspectorSectionId::Joint, InspectorDisclosureId::JointAdvanced, InspectorPhysicsModel::JointBasicRows, InspectorPhysicsModel::FieldCount(PhysicsComponentKind::Joint)) + kSectionGap;
     }
     height += kAddComponentButtonHeight + kSectionGap;
     return height;
@@ -4687,7 +4694,7 @@ void AdvanceGroup(int& y) noexcept {
     }
     const int fieldCount = InspectorPhysicsModel::FieldCount(component);
     for (int i = 0; i < fieldCount; ++i) {
-        if ((section == InspectorSectionId::Rigidbody || section == InspectorSectionId::Collider) && i == PhysicsBasicRows(section)) {
+        if (HasPhysicsDisclosure(section) && i == PhysicsBasicRows(section)) {
             const RECT disclosure = Rect(content.left, y, content.right, y + kDisclosureRowHeight);
             if (Contains(disclosure, x, yPoint)) return MakeHit(InspectorHitKind::Row, section, PhysicsAdvancedProperty(section), disclosure);
             y += kDisclosureRowHeight;

@@ -9031,6 +9031,38 @@ void RunWorldSetPropertyPhysicsComponentsTest() {
     kb::tests::Require(kb::tests::NearlyEqual(scene.Components().CharacterControllers().TryGet(bodyObject.Entity())->radius, 0.35F),
         "World.SetPropertyFloat must actually change CharacterController.radius on the live component");
 
+    // The slider, cone, six-degrees-of-freedom and rope settings are script properties like the rest of the joint.
+    const auto setJointProperty = [&](const char* function, const char* property, kb::script::ScriptValue value) {
+        const std::vector<kb::script::ScriptFunctionArgument> jointArgs{
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ jointObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+            kb::script::ScriptFunctionArgument{ .name = "component", .value = kb::script::ScriptValue{ std::string{ "Joint" } } },
+            kb::script::ScriptFunctionArgument{ .name = "property", .value = kb::script::ScriptValue{ std::string{ property } } },
+            kb::script::ScriptFunctionArgument{ .name = "value", .value = std::move(value) },
+        };
+        const kb::script::ScriptFunctionCallResult result = host.Functions().Call(function, jointArgs, context);
+        return result.Succeeded() && result.Output("set")->AsBool();
+    };
+    kb::tests::Require(setJointProperty("World.SetPropertyInt", "type", kb::script::ScriptValue{ static_cast<int>(kb::scene::JointType::SixDof) }),
+        "World.SetPropertyInt must accept the SixDof joint type");
+    kb::tests::Require(!setJointProperty("World.SetPropertyInt", "type", kb::script::ScriptValue{ static_cast<int>(kb::scene::JointType::Rope) + 1 }),
+        "World.SetPropertyInt must refuse a joint type past the last kind");
+    kb::tests::Require(setJointProperty("World.SetPropertyInt", "freedom.angularY.mode", kb::script::ScriptValue{ static_cast<int>(kb::scene::JointAxisMode::Limited) }) &&
+            setJointProperty("World.SetPropertyFloat", "freedom.angularY.maxLimit", kb::script::ScriptValue{ 35.0F }) &&
+            setJointProperty("World.SetPropertyFloat", "freedom.linearX.motor.force", kb::script::ScriptValue{ 80.0F }) &&
+            setJointProperty("World.SetPropertyFloat", "freedom.swing1Limit", kb::script::ScriptValue{ 20.0F }) &&
+            setJointProperty("World.SetPropertyFloat", "freedom.secondaryAxis.z", kb::script::ScriptValue{ 1.0F }),
+        "World.SetProperty must set the joint freedom properties");
+    kb::tests::Require(!setJointProperty("World.SetPropertyInt", "freedom.angularY.mode", kb::script::ScriptValue{ 3 }),
+        "World.SetPropertyInt must refuse an axis mode past Free");
+    {
+        const kb::scene::JointComponent* joint = scene.Components().Joints().TryGet(jointObject.Entity());
+        kb::tests::Require(joint != nullptr && joint->type == kb::scene::JointType::SixDof &&
+                joint->freedom.axes[4].mode == kb::scene::JointAxisMode::Limited && kb::tests::NearlyEqual(joint->freedom.axes[4].maxLimit, 35.0F) &&
+                kb::tests::NearlyEqual(joint->freedom.axes[0].motor.force, 80.0F) && kb::tests::NearlyEqual(joint->freedom.swing1Limit, 20.0F) &&
+                kb::tests::NearlyEqual(joint->freedom.secondaryAxis.z, 1.0F),
+            "The joint freedom script properties must change the live component");
+    }
+
     // LIB-082: Joint.connectedEntity is deliberately NOT reachable through
     // the generic property mechanism (ScriptSceneComponentApi's FieldBinding
     // table only ever exposes Bool/Int/Float, audited by
@@ -13549,7 +13581,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     // NavLink adds eleven fields.
     // WorldBackdrop grew eleven procedural sky fields.
     // Animator (5), DeformedGeometry (8), SocketAttachment (9), Combatant (26) and AIBrain (37) fields: 681 -> 766.
-    kb::tests::Require(fieldsChecked == 857U, "Script component API generated accessor coverage test did not exercise the expected total field count (857, including text rendering, themes, audio fields and the compatibility alias)");
+    kb::tests::Require(fieldsChecked == 892U, "Script component API generated accessor coverage test did not exercise the expected total field count (892, including text rendering, themes, audio fields and the compatibility alias)");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -13646,7 +13678,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    kb::tests::Require(propertiesChecked == 857U, "LIB-082 raw-pointer audit did not exercise the expected total field count (857, including text rendering, themes, audio fields and the compatibility alias)");
+    kb::tests::Require(propertiesChecked == 892U, "LIB-082 raw-pointer audit did not exercise the expected total field count (892, including text rendering, themes, audio fields and the compatibility alias)");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {

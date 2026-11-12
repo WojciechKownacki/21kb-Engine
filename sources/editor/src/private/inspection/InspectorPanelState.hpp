@@ -159,6 +159,7 @@ enum class InspectorDisclosureId : std::uint8_t {
     LightAdvanced,
     RigidbodyAdvanced,
     ColliderAdvanced,
+    JointAdvanced,
     Count,
 };
 
@@ -168,6 +169,7 @@ enum class InspectorPropertyId : std::uint16_t {
     LightAdvanced,
     RigidbodyAdvanced,
     ColliderAdvanced,
+    JointAdvanced,
     EntityName,
     EntityVisible,
     EntityVisibilityMode,

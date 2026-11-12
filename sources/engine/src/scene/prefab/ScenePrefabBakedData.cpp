@@ -186,6 +186,7 @@ ScenePrefabBakedData ScenePrefabBakedData::Bake(std::span<const ScenePrefabNodeD
                 .motor = prefabJoint.motor,
                 .spring = prefabJoint.spring,
                 .breakForce = prefabJoint.breakForce,
+                .freedom = prefabJoint.freedom,
             });
         }
         if (node.components.tags.has_value()) {

@@ -3248,6 +3248,8 @@ void ApplyEntityFloatField(EditorSceneContext& sceneContext, kb::scene::SceneEnt
         return InspectorDisclosureId::RigidbodyAdvanced;
     case InspectorPropertyId::ColliderAdvanced:
         return InspectorDisclosureId::ColliderAdvanced;
+    case InspectorPropertyId::JointAdvanced:
+        return InspectorDisclosureId::JointAdvanced;
     case InspectorPropertyId::TerrainAdvanced:
         return InspectorDisclosureId::TerrainAdvanced;
     case InspectorPropertyId::UIAnchorPresets:
