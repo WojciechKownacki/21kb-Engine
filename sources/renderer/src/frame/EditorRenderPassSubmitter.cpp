@@ -4,6 +4,7 @@
 
 #include <bgfx/bgfx.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <sstream>
@@ -128,7 +129,9 @@ void EditorRenderPassSubmitter::SubmitSceneOverlays(const RenderViewportPlan& vi
                     << " extent=" << desc.target.viewport.extent.width << 'x' << desc.target.viewport.extent.height;
             WriteRendererDebugLog("grid_trace", message.str());
         }
-        if (desc.editorGrid.visible) {
+        const bool depthTestedDebug = !desc.debugFillTriangles.empty() ||
+            std::any_of(desc.physicsDebugLines.begin(), desc.physicsDebugLines.end(), [](const PhysicsDebugLine& line) { return line.depthTested; });
+        if (desc.editorGrid.visible || depthTestedDebug) {
             const SceneGridPassDesc gridDesc{
                 .viewId = viewportPlan.viewIds.sceneOverlays,
                 .frameBuffer = desc.target.frameBuffer,
@@ -139,9 +142,18 @@ void EditorRenderPassSubmitter::SubmitSceneOverlays(const RenderViewportPlan& vi
                 .minorSpacingMeters = desc.editorGrid.minorSpacingMeters,
                 .majorEvery = desc.editorGrid.majorEvery,
                 .buildDepthFrameBuffer = buildDepthFrameBuffer,
+                .drawGrid = desc.editorGrid.visible,
                 .worldOffset = desc.editorGrid.worldOffset,
             };
-            static_cast<void>(gridPass_.Submit(gridDesc));
+            // Debug surfaces and lines go into the same view after the grid, against the scene depth.
+            if (gridPass_.Submit(gridDesc) && depthTestedDebug) {
+                static_cast<void>(gizmoPass_.SubmitDepthTested(SceneDepthTestedDebugDesc{
+                    .viewId = viewportPlan.viewIds.sceneOverlays,
+                    .camera = camera,
+                    .lines = desc.physicsDebugLines,
+                    .triangles = desc.debugFillTriangles,
+                }));
+            }
         } else {
             SubmitEmptyEditorView(
                 viewportPlan.viewIds.sceneOverlays,
@@ -213,7 +225,6 @@ void EditorRenderPassSubmitter::SubmitGizmoOverlay(const RenderViewportPlan& vie
             .lightWireframes = desc.editorLightWireframes,
             .sceneIcons = desc.editorSceneIcons,
             .physicsDebugLines = desc.physicsDebugLines,
-            .debugFillTriangles = desc.debugFillTriangles,
             .visible = desc.editorGizmo.visible,
         }));
         return;

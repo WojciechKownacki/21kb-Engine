@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/navigation/NavGeometryCollector.hpp"
 #include "engine/navigation/NavMeshAsset.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/TransformComponent.hpp"
@@ -7,7 +8,10 @@
 #include "kb/render/overlay/PhysicsDebugLine.hpp"
 
 #include <array>
+#include <chrono>
 #include <cstddef>
+#include <filesystem>
+#include <future>
 #include <memory>
 #include <vector>
 
@@ -63,6 +67,39 @@ private:
     std::vector<kb::render::PhysicsDebugLine> lines_;
     std::vector<kb::render::DebugFillTriangle> fills_;
     std::size_t triangles_ = 0U;
+};
+
+// A navigation bake running on a worker: the whole scene (World > Bake Navigation Mesh, or an
+// update that cannot be narrowed to tiles) or the tiles changed since the last bake. The geometry is
+// collected on the main thread before the job starts and the result is applied there when it ends.
+struct EditorNavigationBakeJob {
+    std::filesystem::path scenePath;
+    // What the job bakes from; the baseline of the next update once applied.
+    std::shared_ptr<const kb::navigation::NavScenePreparation> prepared;
+    // The tiles rebuilt by an update; empty for a whole bake.
+    std::vector<kb::navigation::NavTileCoord> tiles;
+    bool automatic = false;
+    kb::navigation::NavBakeProgress progress;
+    std::future<kb::navigation::NavSceneBakeResult> result;
+    int shownPercent = -1;
+};
+
+// Keeps the open scene's navigation mesh in step with its static geometry: after an edit settles,
+// only the tiles the edit touched are rebuilt, in the background.
+struct EditorNavigationUpdates {
+    static constexpr std::chrono::milliseconds SettleDelay{ 500 };
+
+    bool automatic = true;
+    // The geometry and the mesh of the last bake of the open scene; null until one is known.
+    std::shared_ptr<const kb::navigation::NavScenePreparation> baseline;
+    std::shared_ptr<const kb::navigation::NavMeshAsset> asset;
+    std::filesystem::path scenePath;
+    // Reads the meshes for the updates; dropped with the scene and before a bake the user starts.
+    std::unique_ptr<kb::navigation::INavGeometrySource> source;
+    std::uint64_t checkedRevision = 0U;
+    std::uint64_t pendingRevision = 0U;
+    std::chrono::steady_clock::time_point pendingSince{};
+    std::unique_ptr<EditorNavigationBakeJob> job;
 };
 
 } // namespace kb::editor

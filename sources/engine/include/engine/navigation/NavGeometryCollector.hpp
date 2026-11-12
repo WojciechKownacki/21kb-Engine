@@ -89,10 +89,26 @@ struct NavSceneBakeResult {
 // The build settings a Navigation Bounds holds: one agent profile and its cell and tile size.
 [[nodiscard]] NavMeshBuildSettings NavBoundsBuildSettings(const kb::scene::NavBounds& bounds);
 
-// Bakes the static geometry of a saved scene (.21kbscene). A scene with Navigation Bounds bakes with
-// their settings (they must all agree) inside their boxes; one without bakes with `settings`
-// everywhere. The editor, kb_cli and tools call this with the same source, so a scene bakes to the
-// same bytes everywhere.
+// What a scene bakes from: the settings and the static geometry of its nodes.
+struct NavScenePreparation {
+    bool succeeded = false;
+    NavMeshBuildSettings settings;
+    NavGeometry geometry;
+    NavGeometryCollectStats stats;
+    std::string error;
+};
+
+// Collects a scene's geometry for a bake. A scene with Navigation Bounds bakes with their settings
+// (they must all agree) inside their boxes; one without bakes with `settings` everywhere. Reads
+// assets through `source`, so it runs where the source may be used.
+[[nodiscard]] NavScenePreparation PrepareSceneNavBake(std::span<const kb::scene::ScenePrefabNodeDesc> nodes, const NavMeshBuildSettings& settings,
+    INavGeometrySource* source);
+// Bakes prepared geometry; touches nothing but `prepared` (and `progress`), so it may run on any thread.
+[[nodiscard]] NavSceneBakeResult BakePreparedSceneNavMesh(const NavScenePreparation& prepared, NavBakeProgress* progress = nullptr);
+
+// Bakes the static geometry of a saved scene (.21kbscene): PrepareSceneNavBake, then
+// BakePreparedSceneNavMesh. The editor, kb_cli and tools bake through these with the same source, so
+// a scene bakes to the same bytes everywhere.
 [[nodiscard]] NavSceneBakeResult BakeSceneNavMesh(const std::filesystem::path& scenePath, const NavMeshBuildSettings& settings,
     INavGeometrySource* source);
 // Where a scene's navigation mesh lives: <scene>.21kbnavmesh beside it.

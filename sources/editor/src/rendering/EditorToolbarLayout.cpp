@@ -48,7 +48,7 @@ constexpr std::array<EditorMenuDescriptor, 6> kMenus{{
 
 // How many of those rows each menu actually shows. Layout and the recent projects count
 // zero here, and Scene only its actions: the rest comes from the project, not the build.
-constexpr std::array<int, 11> kDropdownRowCounts{ 5, 6, 0, 7, 12, 4, 7, 6, 0, 5, 1 };
+constexpr std::array<int, 11> kDropdownRowCounts{ 5, 6, 0, 7, 13, 4, 7, 6, 0, 5, 1 };
 
 // The Layout menu is the only one whose length the project decides, so the row
 // geometry has to have room for the longest one the menu model can produce.
@@ -508,7 +508,7 @@ std::string_view EditorToolbarLayout::DropdownLabel(EditorMenuCommand menu, int 
         return rows[static_cast<std::size_t>(row)];
     }
     case EditorMenuCommand::World: {
-        const std::array<std::string_view, 12> rows{
+        const std::array<std::string_view, 13> rows{
             EditorText("menu.world.loadCellsNearCamera", "Load Cells Near Camera"),
             EditorText("menu.world.loadAllCells", "Load All Cells"),
             EditorText("menu.world.unloadAllCells", "Unload All Cells"),
@@ -520,6 +520,7 @@ std::string_view EditorToolbarLayout::DropdownLabel(EditorMenuCommand menu, int 
             EditorText("menu.world.toggleSelectionAlwaysLoaded", "Toggle Selection Always Loaded"),
             EditorText("menu.world.bakeNavigationMesh", "Bake Navigation Mesh"),
             EditorText("menu.world.toggleNavigationMesh", "Show or Hide Navigation Mesh"),
+            EditorText("menu.world.toggleNavigationAutoUpdate", "Turn Automatic Navigation Update On or Off"),
             EditorText("menu.world.buildLighting", "Build Lighting"),
         };
         return rows[static_cast<std::size_t>(row)];
@@ -600,7 +601,7 @@ std::string_view EditorToolbarLayout::DropdownDescription(EditorMenuCommand menu
             EditorText("menu.detail.agent", "Tell the agent what to do"),
         });
     case EditorMenuCommand::World:
-        return pick(std::array<std::string_view, 12>{
+        return pick(std::array<std::string_view, 13>{
             EditorText("menu.detail.loadNear", "Around the view"),
             EditorText("menu.detail.loadAll", "The whole world into memory"),
             EditorText("menu.detail.unloadAll", "Frees the memory"),
@@ -612,6 +613,7 @@ std::string_view EditorToolbarLayout::DropdownDescription(EditorMenuCommand menu
             EditorText("menu.detail.alwaysLoaded", "Stays in memory with every cell"),
             EditorText("menu.detail.bakeNavigation", "Where characters can walk"),
             EditorText("menu.detail.showNavigation", "Walkable areas in the view"),
+            EditorText("menu.detail.navigationAutoUpdate", "Rebuilds the tiles an edit touches"),
             EditorText("menu.detail.buildLighting", "Bakes lights and bounces into lightmaps"),
         });
     case EditorMenuCommand::Help:
@@ -674,7 +676,7 @@ HeroIconKind EditorToolbarLayout::DropdownIcon(EditorMenuCommand menu, int row) 
         return pick(std::array{ HeroIconKind::Camera, HeroIconKind::Download, HeroIconKind::Upload,
             HeroIconKind::WrenchScrewdriver, HeroIconKind::Grid, HeroIconKind::Map,
             HeroIconKind::Plus, HeroIconKind::Layers, HeroIconKind::LockClosed,
-            HeroIconKind::Navigation, HeroIconKind::Eye, HeroIconKind::Bolt });
+            HeroIconKind::Navigation, HeroIconKind::Eye, HeroIconKind::Clock, HeroIconKind::Bolt });
     case EditorMenuCommand::Help:
         return pick(std::array{ HeroIconKind::BookOpen, HeroIconKind::Flag, HeroIconKind::DocumentText, HeroIconKind::Info });
     case EditorMenuCommand::Project:

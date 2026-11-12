@@ -836,6 +836,72 @@ void TestBoundsPersist() {
         "a file older than Navigation Bounds cannot hold one");
 }
 
+[[nodiscard]] nav::NavGeometry CollectNodes(const std::vector<scene::ScenePrefabNodeDesc>& nodes) {
+    nav::NavGeometry geometry;
+    nav::NavGeometryCollectStats stats;
+    nav::CollectNavGeometry(nodes, Settings(), nullptr, geometry, stats);
+    return geometry;
+}
+
+// Moves `nodes` from one geometry to the next: only the changed tiles are rebuilt, and they give the full bake.
+void CheckEditRebuildsItsTiles(const std::vector<scene::ScenePrefabNodeDesc>& before, const std::vector<scene::ScenePrefabNodeDesc>& after,
+    const std::string& edit, bool fewerThanAll = true) {
+    const nav::NavGeometry oldGeometry = CollectNodes(before);
+    const nav::NavGeometry newGeometry = CollectNodes(after);
+    const nav::NavMeshBakeResult baked = nav::NavMeshBuilder::Bake(Settings(), oldGeometry);
+    const nav::NavMeshBakeResult full = nav::NavMeshBuilder::Bake(Settings(), newGeometry);
+    const std::optional<std::vector<nav::NavTileCoord>> changed = nav::ChangedNavTiles(Settings(), oldGeometry, newGeometry);
+    Check(baked.succeeded && full.succeeded && changed.has_value() && !changed->empty(), edit + ": the edit names the tiles it changes");
+    Check(!fewerThanAll || changed->size() < full.tiles.size(), edit + ": " + std::to_string(changed->size()) + " of " + std::to_string(full.tiles.size()) +
+        " tiles are rebuilt, not all of them");
+    const nav::NavMeshBakeResult rebuilt = nav::NavMeshBuilder::RebuildTiles(Settings(), newGeometry, baked.tiles, *changed);
+    Check(rebuilt.succeeded && rebuilt.tiles == full.tiles, edit + ": rebuilding the changed tiles gives the full bake of the edited scene");
+    Check(baked.tiles != full.tiles, edit + ": the edit changes the navigation mesh");
+}
+
+void TestEditsRebuildOnlyTheirTiles() {
+    const scene::ScenePrefabNodeDesc floor = Slab(-40.0, 40.0, -40.0, 40.0, 0.0);
+    const scene::ScenePrefabNodeDesc pillar = BoxNode(DVec3{ 5.0, 1.0, 5.0 }, Vec3{ 2.0F, 2.0F, 2.0F });
+    const scene::ScenePrefabNodeDesc moved = BoxNode(DVec3{ -20.0, 1.0, -20.0 }, Vec3{ 2.0F, 2.0F, 2.0F });
+    const nav::NavGeometry still = CollectNodes({ floor, pillar });
+    const std::optional<std::vector<nav::NavTileCoord>> none = nav::ChangedNavTiles(Settings(), still, CollectNodes({ floor, pillar }));
+    Check(none.has_value() && none->empty(), "geometry that did not change rebuilds no tile");
+    CheckEditRebuildsItsTiles({ floor, pillar }, { floor, moved }, "a moved pillar");
+    CheckEditRebuildsItsTiles({ floor, pillar }, { floor }, "a removed pillar");
+    CheckEditRebuildsItsTiles({ floor }, { floor, pillar }, "an added pillar");
+    const scene::ScenePrefabNodeDesc bounds = BoundsNode(DVec3{ 0.0, 0.0, 0.0 }, Vec3{ 30.0F, 4.0F, 30.0F });
+    const scene::ScenePrefabNodeDesc grown = BoundsNode(DVec3{ 10.0, 0.0, 0.0 }, Vec3{ 30.0F, 4.0F, 30.0F });
+    // A box moving across the floor changes every tile it covered or covers now, but not the other box's.
+    const scene::ScenePrefabNodeDesc far = BoundsNode(DVec3{ -30.0, 0.0, -30.0 }, Vec3{ 10.0F, 4.0F, 10.0F });
+    CheckEditRebuildsItsTiles({ floor, pillar, bounds, far }, { floor, pillar, grown, far }, "a moved Navigation Bounds", false);
+    Check(!nav::ChangedNavTiles(Settings(), CollectNodes({ floor }), CollectNodes({ floor, bounds })).has_value(),
+        "the first Navigation Bounds changes every tile, so the whole scene is baked again");
+}
+
+void TestBackgroundBakeMatchesTheSynchronousOne() {
+    const std::filesystem::path root = FreshDirectory("background");
+    scene::Scene source;
+    static_cast<void>(AddCollider(source, DVec3{ 0.0, -0.25, 0.0 }, Vec3{ 60.0F, 0.5F, 60.0F }));
+    static_cast<void>(AddCollider(source, DVec3{ 3.0, 1.0, -2.0 }, Vec3{ 2.0F, 2.0F, 2.0F }));
+    const std::filesystem::path path = root / "Background.21kbscene";
+    Check(scene::SceneDocumentService::Save(source, path, "Background"), "the scene saves");
+    const nav::NavSceneBakeResult synchronous = nav::BakeSceneNavMesh(path, Settings(), nullptr);
+    Check(synchronous.succeeded && !synchronous.asset.tiles.empty(), "the saved scene bakes: " + synchronous.error);
+    // The editor collects the open scene on its thread and bakes it on a worker.
+    const scene::SceneDocument captured = scene::SceneDocumentService::Capture(source, "Background");
+    const nav::NavScenePreparation prepared = nav::PrepareSceneNavBake(captured.worldPrefab.Nodes(), Settings(), nullptr);
+    Check(prepared.succeeded, "the open scene's geometry is collected: " + prepared.error);
+    nav::NavBakeProgress progress;
+    std::thread worker;
+    nav::NavSceneBakeResult background;
+    worker = std::thread([&prepared, &progress, &background]() { background = nav::BakePreparedSceneNavMesh(prepared, &progress); });
+    worker.join();
+    Check(background.succeeded && background.asset.settings == synchronous.asset.settings && background.asset.tiles == synchronous.asset.tiles,
+        "a bake on a worker gives the same navigation mesh as the synchronous bake of the saved scene");
+    Check(progress.total.load() > 0U && progress.built.load() == progress.total.load(), "the bake reports every tile it built");
+    std::filesystem::remove_all(root);
+}
+
 void TestDebugGeometry() {
     const nav::NavMeshAsset floor = BakeNodes({ Slab(-10.0, 10.0, -10.0, 10.0, 0.0) });
     const auto shared = std::make_shared<const nav::NavMeshAsset>(floor);
@@ -1158,6 +1224,8 @@ void RunNavigationMeshTests() {
     TestBoundsLimitTheBake();
     TestBoundsBakeSettings();
     TestBoundsPersist();
+    TestEditsRebuildOnlyTheirTiles();
+    TestBackgroundBakeMatchesTheSynchronousOne();
     TestDebugGeometry();
     TestNavigationScriptApi();
     TestPlacedNavigationMesh();

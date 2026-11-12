@@ -292,39 +292,54 @@ NavMeshBuildSettings NavBoundsBuildSettings(const kb::scene::NavBounds& bounds) 
     return settings;
 }
 
-NavSceneBakeResult BakeSceneNavMesh(const std::filesystem::path& scenePath, const NavMeshBuildSettings& sceneSettings, INavGeometrySource* source) {
-    NavSceneBakeResult result;
-    const kb::scene::SceneDocumentLoadResult loaded = kb::scene::SceneDocumentService::Load(scenePath);
-    if (!loaded.succeeded) {
-        result.error = "the scene " + scenePath.generic_string() + " could not be read: " + loaded.error;
-        return result;
-    }
-    const std::span<const kb::scene::ScenePrefabNodeDesc> nodes = loaded.document.worldPrefab.Nodes();
-    NavMeshBuildSettings settings = sceneSettings;
+NavScenePreparation PrepareSceneNavBake(std::span<const kb::scene::ScenePrefabNodeDesc> nodes, const NavMeshBuildSettings& sceneSettings,
+    INavGeometrySource* source) {
+    NavScenePreparation result;
+    result.settings = sceneSettings;
     const kb::scene::ScenePrefabNodeDesc* first = nullptr;
     for (const kb::scene::ScenePrefabNodeDesc& node : nodes) {
         if (!node.components.navBounds.has_value()) continue;
         const NavMeshBuildSettings own = NavBoundsBuildSettings(*node.components.navBounds);
         if (first == nullptr) {
             first = &node;
-            settings = own;
-        } else if (!SameNavMeshLayout(settings, own)) {
+            result.settings = own;
+        } else if (!SameNavMeshLayout(result.settings, own)) {
             result.error = "the Navigation Bounds \"" + first->name + "\" and \"" + node.name + "\" use different bake settings";
             return result;
         }
     }
-    NavGeometry geometry;
-    CollectNavGeometry(nodes, settings, source, geometry, result.geometry);
-    NavMeshBakeResult baked = NavMeshBuilder::Bake(settings, geometry);
+    CollectNavGeometry(nodes, result.settings, source, result.geometry, result.stats);
+    result.succeeded = true;
+    return result;
+}
+
+NavSceneBakeResult BakePreparedSceneNavMesh(const NavScenePreparation& prepared, NavBakeProgress* progress) {
+    NavSceneBakeResult result;
+    result.geometry = prepared.stats;
+    if (!prepared.succeeded) {
+        result.error = prepared.error;
+        return result;
+    }
+    NavMeshBakeResult baked = NavMeshBuilder::Bake(prepared.settings, prepared.geometry, nullptr, progress);
     if (!baked.succeeded) {
         result.error = std::move(baked.error);
         return result;
     }
-    result.asset.settings = settings;
+    result.asset.settings = prepared.settings;
     result.asset.tiles = std::move(baked.tiles);
     result.stats = baked.stats;
     result.succeeded = true;
     return result;
+}
+
+NavSceneBakeResult BakeSceneNavMesh(const std::filesystem::path& scenePath, const NavMeshBuildSettings& sceneSettings, INavGeometrySource* source) {
+    const kb::scene::SceneDocumentLoadResult loaded = kb::scene::SceneDocumentService::Load(scenePath);
+    if (!loaded.succeeded) {
+        NavSceneBakeResult result;
+        result.error = "the scene " + scenePath.generic_string() + " could not be read: " + loaded.error;
+        return result;
+    }
+    return BakePreparedSceneNavMesh(PrepareSceneNavBake(loaded.document.worldPrefab.Nodes(), sceneSettings, source));
 }
 
 std::filesystem::path SceneNavMeshPath(const std::filesystem::path& scenePath) {

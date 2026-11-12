@@ -4,9 +4,11 @@
 #include "engine/scene/Navigation.hpp"
 
 #include <array>
+#include <atomic>
 #include <compare>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -156,6 +158,20 @@ struct NavMeshBakeResult {
     std::string error;
 };
 
+// How far a running bake has got: tile builds finished out of those it has to do. Another thread may
+// read it while the bake runs.
+struct NavBakeProgress {
+    std::atomic<std::size_t> total{ 0U };
+    std::atomic<std::size_t> built{ 0U };
+};
+
+// The tiles whose bake can differ between two geometries baked with the same settings: those (with
+// the border their agents need) touched by a chunk or a bake box only one of the geometries holds.
+// Empty when nothing changed; nullopt when everything may have, because one of them has bake boxes
+// and the other has none.
+[[nodiscard]] std::optional<std::vector<NavTileCoord>> ChangedNavTiles(const NavMeshBuildSettings& settings,
+    const NavGeometry& before, const NavGeometry& after);
+
 class NavMeshBuilder {
 public:
     NavMeshBuilder() = delete;
@@ -170,7 +186,13 @@ public:
     // bake. The tiles are the same bytes whatever the number of workers.
     // Workers of a pool started for a bake: one per core, at most 8 (each holds a tile's voxels).
     [[nodiscard]] static std::size_t DefaultBakeWorkerCount() noexcept;
-    [[nodiscard]] static NavMeshBakeResult Bake(const NavMeshBuildSettings& settings, const NavGeometry& geometry, kb::ecs::WorkerPool* workers = nullptr);
+    [[nodiscard]] static NavMeshBakeResult Bake(const NavMeshBuildSettings& settings, const NavGeometry& geometry, kb::ecs::WorkerPool* workers = nullptr,
+        NavBakeProgress* progress = nullptr);
+    // `tiles` (a bake's result) with the tiles at `coords` of every profile built again from the geometry, on
+    // the workers the way Bake builds them: rebuilding the tiles ChangedNavTiles names gives what a full
+    // Bake of the new geometry gives.
+    [[nodiscard]] static NavMeshBakeResult RebuildTiles(const NavMeshBuildSettings& settings, const NavGeometry& geometry,
+        std::vector<NavTile> tiles, std::span<const NavTileCoord> coords, kb::ecs::WorkerPool* workers = nullptr, NavBakeProgress* progress = nullptr);
 };
 
 } // namespace kb::navigation

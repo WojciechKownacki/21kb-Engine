@@ -1,6 +1,10 @@
 #include "kb/render/overlay/SceneGizmoPass.hpp"
 
+#include "kb/render/SceneColorAlphaPolicy.hpp"
+#include "kb/render/SceneDepthPolicy.hpp"
 #include "kb/render/ShaderLoader.hpp"
+
+#include <bx/math.h>
 
 #include <algorithm>
 #include <array>
@@ -768,8 +772,8 @@ void AppendLightWireframes(std::vector<Vertex>& output, std::span<const EditorLi
 // AppendLightWireframes above (same program/layout/BGFX_STATE_PT_LINES submission) - a flat
 // list of independent segments needs no thickness/circle construction, just AppendLine per
 // entry.
-// Filled overlay triangles are their own triangle-list draw, submitted before the gizmo so handles stay
-// on top of the filled surfaces, and skipped alone when the frame has no transient room left for them.
+// Filled debug triangles are their own triangle-list draw in the depth-tested scene overlay view, so walls
+// hide them and the gizmo drawn later stays on top; skipped alone when the frame has no transient room left.
 void AppendDebugFillTriangles(std::vector<Vertex>& output, std::span<const DebugFillTriangle> triangles) {
     output.reserve(output.size() + triangles.size() * 3U);
     for (const DebugFillTriangle& triangle : triangles) {
@@ -777,11 +781,29 @@ void AppendDebugFillTriangles(std::vector<Vertex>& output, std::span<const Debug
     }
 }
 
-void AppendPhysicsDebugLines(std::vector<Vertex>& output, std::span<const PhysicsDebugLine> lines) {
+void AppendPhysicsDebugLines(std::vector<Vertex>& output, std::span<const PhysicsDebugLine> lines, bool depthTested) {
     output.reserve(output.size() + lines.size() * 2U);
     for (const PhysicsDebugLine& line : lines) {
-        AppendLine(output, line.from, line.to, line.color, line.alpha);
+        if (line.depthTested == depthTested) AppendLine(output, line.from, line.to, line.color, line.alpha);
     }
+}
+
+// Copies the vertices into a transient buffer and submits them with the given transform and state; false when the
+// frame has no room.
+bool SubmitTransient(
+    bgfx::ViewId viewId, bgfx::ProgramHandle program, const bgfx::VertexLayout& layout, std::span<const Vertex> vertices, const std::array<float, 16>& transform, std::uint64_t state) {
+    const std::uint32_t vertexCount = static_cast<std::uint32_t>(vertices.size());
+    if (vertexCount == 0U || bgfx::getAvailTransientVertexBuffer(vertexCount, layout) < vertexCount) {
+        return false;
+    }
+    bgfx::TransientVertexBuffer buffer{};
+    bgfx::allocTransientVertexBuffer(&buffer, vertexCount, layout);
+    std::memcpy(buffer.data, vertices.data(), sizeof(Vertex) * vertices.size());
+    bgfx::setTransform(transform.data());
+    bgfx::setState(state);
+    bgfx::setVertexBuffer(0, &buffer);
+    bgfx::submit(viewId, program);
+    return true;
 }
 
 [[nodiscard]] float AxisBoost(GizmoAxis axis, int hoveredAxis, int draggedAxis) noexcept {
@@ -853,8 +875,7 @@ bool SceneGizmoPass::Submit(const SceneGizmoPassDesc& desc) const {
             desc.cameraWireframes.empty() &&
             desc.lightWireframes.empty() &&
             desc.sceneIcons.empty() &&
-            desc.physicsDebugLines.empty() &&
-            desc.debugFillTriangles.empty())) {
+            desc.physicsDebugLines.empty())) {
         return false;
     }
 
@@ -865,20 +886,6 @@ bool SceneGizmoPass::Submit(const SceneGizmoPassDesc& desc) const {
 
     ConfigureOverlayView(desc);
     bool submitted = false;
-    if (!desc.debugFillTriangles.empty()) {
-        std::vector<Vertex> fillVertices;
-        AppendDebugFillTriangles(fillVertices, desc.debugFillTriangles);
-        const std::uint32_t vertexCount = static_cast<std::uint32_t>(fillVertices.size());
-        if (bgfx::getAvailTransientVertexBuffer(vertexCount, layout_) >= vertexCount) {
-            bgfx::TransientVertexBuffer buffer{};
-            bgfx::allocTransientVertexBuffer(&buffer, vertexCount, layout_);
-            std::memcpy(buffer.data, fillVertices.data(), sizeof(Vertex) * fillVertices.size());
-            bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ALPHA);
-            bgfx::setVertexBuffer(0, &buffer);
-            bgfx::submit(desc.viewId, program_);
-            submitted = true;
-        }
-    }
     {
         std::vector<Vertex> drawVertices;
         drawVertices.reserve(
@@ -931,7 +938,7 @@ bool SceneGizmoPass::Submit(const SceneGizmoPassDesc& desc) const {
         std::vector<Vertex> lineVertices;
         AppendCameraWireframes(lineVertices, desc.cameraWireframes);
         AppendLightWireframes(lineVertices, desc.lightWireframes);
-        AppendPhysicsDebugLines(lineVertices, desc.physicsDebugLines);
+        AppendPhysicsDebugLines(lineVertices, desc.physicsDebugLines, false);
         const std::uint32_t vertexCount = static_cast<std::uint32_t>(lineVertices.size());
         if (vertexCount != 0U && bgfx::getAvailTransientVertexBuffer(vertexCount, layout_) >= vertexCount) {
             bgfx::TransientVertexBuffer buffer{};
@@ -945,6 +952,25 @@ bool SceneGizmoPass::Submit(const SceneGizmoPassDesc& desc) const {
         }
     }
     return submitted;
+}
+
+bool SceneGizmoPass::SubmitDepthTested(const SceneDepthTestedDebugDesc& desc) const {
+    if (!IsInitialized() || desc.camera == nullptr) {
+        return false;
+    }
+    std::vector<Vertex> fillVertices;
+    AppendDebugFillTriangles(fillVertices, desc.triangles);
+    std::vector<Vertex> lineVertices;
+    AppendPhysicsDebugLines(lineVertices, desc.lines, true);
+    // The scene overlay view keeps identity view and projection matrices, so the camera goes in the model transform.
+    std::array<float, 16> viewProjection{};
+    bx::mtxMul(viewProjection.data(), desc.camera->view.data(), desc.camera->projection.data());
+    // Translucent over the scene colour, read-only against the scene depth (SceneColorAlphaPolicy, SceneDepthPolicy).
+    const std::uint64_t state = SceneDepthPolicy::SceneOverlayState(true) |
+        SceneColorAlphaPolicy::HidingBlend(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA);
+    const bool filled = SubmitTransient(desc.viewId, program_, layout_, fillVertices, viewProjection, state);
+    const bool lined = SubmitTransient(desc.viewId, program_, layout_, lineVertices, viewProjection, state | BGFX_STATE_PT_LINES);
+    return filled || lined;
 }
 
 bool SceneGizmoPass::IsInitialized() const noexcept {

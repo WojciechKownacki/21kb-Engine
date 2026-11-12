@@ -4,7 +4,7 @@
 
 namespace kb::render {
 
-// A flat, unlit, translucent triangle drawn in the editor overlay pass before its lines (filled debug
+// A flat, unlit, translucent triangle drawn over the scene with its depth, so walls hide it (filled debug
 // surfaces such as the walkable area of a navigation mesh). Positions are world space like
 // PhysicsDebugLine; the renderer moves them relative to the render origin.
 struct DebugFillTriangle {

@@ -728,6 +728,9 @@ void OpenSettingsPanel(
                 changed = true;
                 break;
             case 11:
+                sceneContext.SetNavigationAutoUpdate(!sceneContext.NavigationAutoUpdate());
+                break;
+            case 12:
                 changed = sceneContext.BuildLighting();
                 break;
             default:

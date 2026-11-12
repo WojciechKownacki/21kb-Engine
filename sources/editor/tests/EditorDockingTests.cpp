@@ -450,7 +450,7 @@ void RunWorldMenuTest() {
     // The pointer handler acts on World rows by index; the labels must stay in that order.
     using kb::editor::EditorMenuCommand;
     using kb::editor::EditorToolbarLayout;
-    kb::editor::tests::Require(EditorToolbarLayout::FixedRowCount(EditorMenuCommand::World) == 12,
+    kb::editor::tests::Require(EditorToolbarLayout::FixedRowCount(EditorMenuCommand::World) == 13,
         "The World menu lists its region, build, selection and navigation commands");
     kb::editor::tests::Require(EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 0) == "Load Cells Near Camera" &&
             EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 3) == "Build World and HLODs" &&
@@ -459,7 +459,8 @@ void RunWorldMenuTest() {
             EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 8) == "Toggle Selection Always Loaded" &&
             EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 9) == "Bake Navigation Mesh" &&
             EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 10) == "Show or Hide Navigation Mesh" &&
-            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 11) == "Build Lighting",
+            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 11) == "Turn Automatic Navigation Update On or Off" &&
+            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 12) == "Build Lighting",
         "World menu rows must match the rows the pointer handler executes");
     kb::editor::tests::Require(EditorToolbarLayout::FixedRowCount(EditorMenuCommand::Help) == 4 &&
             EditorToolbarLayout::DropdownLabel(EditorMenuCommand::Help, 3) == "About",

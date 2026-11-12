@@ -226,7 +226,9 @@ std::vector<InspectorGenericComponentModel::Row> InspectorGenericComponentModel:
             kb::script::ScriptSceneComponentApi::GetProperty(scene, entity, section.component, desc.name);
         const kb::library::LibraryComponentInspectorFieldDesc* label =
             kb::library::EngineLibraryComponentInspectorRegistry::FindField(section.component, desc.name);
-        Row row{ .label = label != nullptr ? std::string{ label->displayName } : std::string{ desc.name },
+        // Field labels translate like the section titles: inspector.generic.<Component>.<field>.
+        const std::string labelKey = "inspector.generic." + std::string{ section.component } + "." + std::string{ desc.name };
+        Row row{ .label = std::string{ EditorText(labelKey, label != nullptr ? label->displayName : std::string_view{ desc.name }) },
                  .editIndex = sectionIndex * kFieldsPerSection + static_cast<int>(index) };
         if (const std::string unit = ValueLabel(scene, entity, section.component, desc.name); !unit.empty()) row.label = unit;
         if (value.succeeded) {

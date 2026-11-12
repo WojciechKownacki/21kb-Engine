@@ -377,6 +377,16 @@ public:
     // with a Navigation Mesh ContentInstance; for a world, enables navigation in the world file
     // and builds the world, which bakes one navigation mesh per cell.
     [[nodiscard]] bool BakeNavigation();
+    // For a scene, BakeNavigation only starts the bake on a worker; these apply its result on this
+    // thread. Pump applies a finished bake, reports progress and starts the automatic update of the
+    // changed tiles once an edit has settled; it returns true when the shown mesh changed.
+    [[nodiscard]] bool PumpNavigationBake();
+    // Blocks until the running bake ends and applies it; false when it failed or none ran.
+    [[nodiscard]] bool WaitForNavigationBake();
+    [[nodiscard]] bool NavigationBakeInProgress() const noexcept;
+    // Whether static edits rebuild the tiles they touch by themselves (on by default).
+    [[nodiscard]] bool NavigationAutoUpdate() const noexcept;
+    void SetNavigationAutoUpdate(bool enabled);
     // Bakes the open scene's static lights and bounces into lightmaps (the scene is saved first and again after).
     [[nodiscard]] bool BuildLighting();
     [[nodiscard]] EditorNavigation& Navigation() noexcept;
@@ -1810,7 +1820,10 @@ private:
     EditorAutosaveState autosave_;
     EditorPlayModeSceneSession playModeSceneSession_;
     EditorWorldPartition worldPartition_;
+    // Writes and shows a finished navigation bake (and places a new scene mesh); false when it failed.
+    [[nodiscard]] bool ApplyNavigationBake(EditorNavigationBakeJob& job);
     EditorNavigation navigation_;
+    EditorNavigationUpdates navigationUpdates_;
     std::uint64_t playModeRenderTopologyVersion_ = 0U;
     std::size_t playModeRootCount_ = 0U;
     std::uint64_t playModeRootAppendEpoch_ = 0U;

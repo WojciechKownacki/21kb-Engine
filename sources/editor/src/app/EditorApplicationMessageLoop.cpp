@@ -752,6 +752,10 @@ void RefreshAssetUsersForList(EditorApplicationState& state) {
         state.sceneViewport.RequestPresent();
         InvalidateRect(state.window, nullptr, FALSE);
     }
+    // A navigation bake or tile update finished on its worker: the new mesh in the view.
+    if (state.sceneContext.PumpNavigationBake()) {
+        state.sceneViewport.RequestPresent();
+    }
     const auto cookStart = std::chrono::steady_clock::now();
     const std::size_t cookResults = state.sceneContext.PumpMaterialGraphCookResults();
     const double cookMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - cookStart).count();
@@ -1883,6 +1887,7 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
             if (state.sceneContext.MaterialEditor().OpenAssetId().IsValid() ||
                 EditorAudioAssetPreview::HasActivePreview() ||
                 state.sceneContext.AssetImportInProgress() ||
+                state.sceneContext.NavigationBakeInProgress() ||
                 state.sceneContext.HasPendingSkeletalMeshEditorOpen() ||
                 state.sceneContext.AgentPanel().AnyRunning() || state.sceneContext.AgentPanel().CheckingAccount() ||
                 EditorMeshPreviewCache().HasPendingPreviewWork()) {

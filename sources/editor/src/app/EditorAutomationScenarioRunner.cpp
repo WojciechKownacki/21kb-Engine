@@ -1157,7 +1157,20 @@ ReadScriptValue(
     std::string error;
     EditorSceneContext& context = state.context;
     if (operation == "navmesh_bake") {
-        return StepOutcome{ context.BakeNavigation(), std::to_string(context.Navigation().TriangleCount()) + " triangle(s) shown" };
+        // The bake runs on a worker; the scenario waits for it like the editor's frame loop collects it.
+        const bool baked = context.BakeNavigation() && context.WaitForNavigationBake();
+        return StepOutcome{ baked, std::to_string(context.Navigation().TriangleCount()) + " triangle(s) shown" };
+    }
+    if (operation == "navmesh_wait_update") {
+        // The frame loop pumps the automatic update of the changed tiles; the scenario pumps until one is applied.
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 20 };
+        bool applied = false;
+        while (!applied && std::chrono::steady_clock::now() < deadline) {
+            applied = context.PumpNavigationBake();
+            if (!applied) std::this_thread::sleep_for(std::chrono::milliseconds{ 20 });
+        }
+        return StepOutcome{ applied, applied ? std::to_string(context.Navigation().TriangleCount()) + " triangle(s) shown after the update"
+                                             : std::string{ "no automatic navigation update was applied" } };
     }
     if (operation == "navmesh_set_visible") {
         const auto visible = BoolMember(step, "visible", error);
@@ -6447,6 +6460,8 @@ ReadScriptValue(
         const auto without = StringMember(step, "without", error);
         const JsonValue* color = Member(step, "color", JsonValue::Kind::Array, error);
         const std::uint32_t minimum = UInt32Member(step, "min_pixels", error, false).value_or(100U);
+        // At most this many: drawing that something in front must hide.
+        const std::optional<std::uint32_t> maximum = UInt32Member(step, "max_pixels", error, false);
         const double tolerance = NumberMember(step, "tolerance", error, false).value_or(48.0);
         if (!with || !without || color == nullptr || color->Size() != 3U || !error.empty()) {
             return { false, error.empty() ? "color must be [r, g, b] in 0..255" : error };
@@ -6477,8 +6492,9 @@ ReadScriptValue(
                 }
             }
         }
-        return { matching >= minimum, "changed pixels: " + std::to_string(changed) + ", in the color: " + std::to_string(matching) +
-            " (minimum " + std::to_string(minimum) + ")" };
+        return { matching >= minimum && (!maximum.has_value() || matching <= *maximum),
+            "changed pixels: " + std::to_string(changed) + ", in the color: " + std::to_string(matching) + " (minimum " + std::to_string(minimum) +
+            (maximum.has_value() ? ", maximum " + std::to_string(*maximum) : std::string{}) + ")" };
     }
 
     if (*operation == "assert_capture_color") {

@@ -683,7 +683,7 @@ void AppendWorldPartitionGrid(
 }
 
 // The boxes of the Navigation Bounds, then the edges and tile bounds of the baked navigation mesh,
-// relative to the viewport origin.
+// relative to the viewport origin; scene geometry in front hides them like the filled walkable area.
 void AppendNavigationMesh(
     const EditorSceneContext& sceneContext,
     const kb::math::DVec3& origin,
@@ -694,6 +694,7 @@ void AppendNavigationMesh(
             .to = { line.to.x, line.to.y, line.to.z },
             .color = EditorNavigation::BoundsColor,
             .alpha = 1.0F,
+            .depthTested = true,
         });
     }
     if (!sceneContext.Navigation().Visible()) {
@@ -705,6 +706,7 @@ void AppendNavigationMesh(
             .to = RelativeToOrigin(line.to, origin),
             .color = line.color,
             .alpha = line.alpha,
+            .depthTested = true,
         });
     }
 }

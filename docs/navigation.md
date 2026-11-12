@@ -65,14 +65,21 @@ Navigation Bounds of a scene must hold the same settings, or the bake is refused
 
 ## Baking a scene
 
-- **Editor:** World > **Bake Navigation Mesh**. The editor saves the scene, bakes
-  `<scene>.21kbnavmesh` beside it, and, if the scene does not place it yet, adds a
-  **Navigation Mesh** object with a ContentInstance of kind **Navigation Mesh** pointing at it.
+- **Editor:** World > **Bake Navigation Mesh**. The editor saves the scene, collects its static
+  geometry and bakes it on a worker while the editor stays usable (the Console reports each quarter
+  done); then it writes `<scene>.21kbnavmesh` beside the scene and, if the scene does not place it
+  yet, adds a **Navigation Mesh** object with a ContentInstance of kind **Navigation Mesh** pointing
+  at it. Once a scene has a mesh, edits to its static geometry or its Navigation Bounds update it by
+  themselves: half a second after an edit settles, only the tiles the changed objects touch (with
+  the border the agents need) are rebuilt in the background, giving the same tiles a full bake
+  would; a change of the bake settings, or a first or last Navigation Bounds, bakes the whole scene
+  again. World > **Turn Automatic Navigation Update On or Off** switches this off for the session.
   World > **Show or Hide Navigation Mesh** toggles the debug view of the baked mesh in the scene
   view: the walkable polygons filled in translucent green (one colour per navigation area when
   several are used), their outlines with the outer edges stronger, and each tile's bounds in
-  yellow, all lifted 10 cm above the ground. Navigation Bounds boxes are always drawn and are
-  selected by a click on their lines.
+  yellow, all lifted 10 cm above the ground and hidden behind scene geometry in front of them.
+  Navigation Bounds boxes are always drawn (also hidden behind geometry) and are selected by a
+  click on their lines.
 - **kb_cli:**
   `kb_cli navmesh bake --project <dir> --scene Assets/Scenes/Level.21kbscene [--out <file>] [--cell-size m] [--cell-height m] [--tile-cells n] [--agent name:radius:height:climb:slope]...`.
   Settings not given are those of the mesh being replaced, else the defaults; the editor bakes with
@@ -249,9 +256,9 @@ rebake regions need their own workload measurements.
 
 | Test | Covers |
 | --- | --- |
-| `kb_engine_tests navigation-mesh` | Settings validation; the asset format (round trip, truncation, refusal of escaping connections and unknown areas); bakes on one worker, four and a bake-owned pool byte-identical; walkable area of a floor; slopes (30 vs 60 degrees) and steps (0.3 vs 0.6 m); carving obstacles (blocked, around, rotated, removed) with an agent walking around; geometry rebuilt at runtime; area costs and masks; two agent sizes through a doorway; jump and ladder links (one-way, disabled) crossed by agents; far from the world origin; a 1200-agent crowd replaying exactly; crowd level of detail; NavAgent, NavObstacle and NavLink save/load; Navigation Bounds limiting the bake (one box, two boxes, none), their settings (a wider agent leaves less ground, disagreeing bounds are refused), save/load and older files; the debug view's triangles, polygon edges and tile bounds; scripts; a scene's ContentInstance placing its mesh; a world's tiles streaming in and out with its cells. |
+| `kb_engine_tests navigation-mesh` | Settings validation; the asset format (round trip, truncation, refusal of escaping connections and unknown areas); bakes on one worker, four and a bake-owned pool byte-identical; walkable area of a floor; slopes (30 vs 60 degrees) and steps (0.3 vs 0.6 m); carving obstacles (blocked, around, rotated, removed) with an agent walking around; geometry rebuilt at runtime; area costs and masks; two agent sizes through a doorway; jump and ladder links (one-way, disabled) crossed by agents; far from the world origin; a 1200-agent crowd replaying exactly; crowd level of detail; NavAgent, NavObstacle and NavLink save/load; Navigation Bounds limiting the bake (one box, two boxes, none), their settings (a wider agent leaves less ground, disagreeing bounds are refused), save/load and older files; moved, removed and added objects and a moved Navigation Bounds rebuilding only the tiles they touch into the full bake's tiles; a bake on a worker matching the synchronous bake of the saved scene; the debug view's triangles, polygon edges and tile bounds; scripts; a scene's ContentInstance placing its mesh; a world's tiles streaming in and out with its cells. |
 | `kb_engine_tests navigation-runtime` | Agents on baked meshes: accelerating within their speed, stopping at their stopping distance, re-planning for a new destination, standing still while the scene is paused; turning corners without leaving the mesh; going around a carving obstacle and walking straight again once it is disabled; a partial path to the closest point when an obstacle closes the way; steering around a non-carving obstacle; two agents passing each other and replaying exactly, and still passing when created in the other order; no mesh means a failed path until one is added; walking a mesh 10 000 km out as precisely as at the origin, as a root and as a child. |
 | `kb_engine_navigation-crowd-bench` | Crowd step budget for 1000 agents and the level-of-detail gain at 5000. |
 | `kb_cli_tests` | `kb_cli navmesh bake` and `info` (colliders, imported meshes, profiles, kept settings) and `world build` with navigation and region chunks. |
-| `kb_editor_navigation_headless` | Editor bake of a scene with a floor collider, an imported mesh and a jump link; identical bytes to the kb_cli bake; the filled overlay drawn in the scene view and gone when hidden; an agent crossing the link in Play mode. |
+| `kb_editor_navigation_headless` | Editor bake of a scene with a floor collider, an imported mesh and a jump link; identical bytes to the kb_cli bake; the filled overlay drawn in the scene view, gone when hidden and hidden behind geometry in front of it; an agent crossing the link in Play mode. |
 | `kb_fuzz_navmesh_corpus` (`KB_BUILD_FUZZERS`) | The navigation mesh reader and polygon rebuild over the seed corpus. |
