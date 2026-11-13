@@ -211,7 +211,6 @@ void PucLuaScriptRuntime::Clear() noexcept {
     stateLifetime_->spareThread = nullptr;
     stateLifetime_->spareThreadReference = -2;
     stateLifetime_->spareThreadBusy = false;
-    stateLifetime_->spareThreadHooked = false;
     cachedScript_ = nullptr;
     callSites_.clear();
     ++callSiteRevision_;
@@ -433,20 +432,13 @@ void PucLuaScriptRuntime::SetExecutionBudgetSettings(ScriptExecutionBudgetSettin
 }
 
 void PucLuaScriptRuntime::BeginExecutionBudget() noexcept {
-    remainingLuaInstructions_ = executionBudgetSettings_.luaInstructionsPerBehaviour;
+    if (state_ != nullptr) PucLuaDebugHook::ArmRunaway(state_, executionBudgetSettings_.luaInstructionsPerBehaviour);
     executionBudgetActive_ = true;
 }
 
 void PucLuaScriptRuntime::EndExecutionBudget() noexcept {
-    remainingLuaInstructions_ = 0U;
+    if (state_ != nullptr) PucLuaDebugHook::DisarmRunaway(state_);
     executionBudgetActive_ = false;
-}
-
-bool PucLuaScriptRuntime::ConsumeLuaInstructions(std::size_t count) noexcept {
-    if (!executionBudgetActive_) return true;
-    if (count > remainingLuaInstructions_) return false;
-    remainingLuaInstructions_ -= count;
-    return true;
 }
 
 kb::core::BudgetExceededPolicy PucLuaScriptRuntime::ExecutionBudgetPolicy() const noexcept {
@@ -649,12 +641,10 @@ bool PucLuaScriptRuntime::PushModuleForImport(std::string_view name, std::string
         return lua_pcall(state_, 0, 1, errorHandlerIndex);
     }();
     // Import can run inside another module or a script's top-level code. Keep
-    // that caller's execution budget and debugger hook active after returning.
-    // An exhausted budget switches to a one-instruction hook so protected calls
-    // cannot swallow the failure indefinitely. Do not relax that hook on import
-    // unwind: the importing script still owns the same exhausted budget.
-    if (!(HasActiveExecutionBudget() && (previousMask & LUA_MASKCOUNT) != 0 && lua_gethookcount(state_) == 1))
-        lua_sethook(state_, previousHook, previousMask, previousCount);
+    // that caller's debugger hook active after returning. The execution budget
+    // is not part of the hook: an exhausted budget stops the importing script
+    // again at its next loop or call, so protected calls cannot swallow it.
+    lua_sethook(state_, previousHook, previousMask, previousCount);
     if (status != LUA_OK) {
         error = PucLuaErrorReporter::ErrorFromTop(state_);
         module.loading = false;
@@ -765,13 +755,6 @@ bool PucLuaScriptRuntime::TryLeanExecute(
     const bool executionBudgetEnabled = IsExecutionBudgetEnabled();
     if (executionBudgetEnabled) {
         BeginExecutionBudget();
-        if (!lifetime.spareThreadHooked) {
-            PucLuaDebugHook::Install(thread, *this);
-            lifetime.spareThreadHooked = true;
-        }
-    } else if (lifetime.spareThreadHooked) {
-        PucLuaDebugHook::Clear(thread);
-        lifetime.spareThreadHooked = false;
     }
     debugSuspendAllowed_ = true;
     int resultCount = 0;
@@ -817,7 +800,6 @@ void PucLuaScriptRuntime::FinishLeanResume(
     lifetime.spareThread = nullptr;
     lifetime.spareThreadReference = kNoReference;
     lifetime.spareThreadBusy = false;
-    lifetime.spareThreadHooked = false;
     if (status == LUA_YIELD) {
         executed = true;
         return;
@@ -1265,9 +1247,6 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
         coroutineError += "\nstack traceback:\n\t[entry " + std::string{ functionName } + " in " + std::string{ chunkName } + "]";
     }
     PucLuaDebugHook::Clear(coroutine);
-    if (coroutine == stateLifetime_->spareThread) {
-        stateLifetime_->spareThreadHooked = false;
-    }
     if (executionBudgetEnabled) {
         EndExecutionBudget();
     }
@@ -1286,7 +1265,6 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
         stateLifetime_->spareThread = nullptr;
         stateLifetime_->spareThreadReference = -2;
         stateLifetime_->spareThreadBusy = false;
-        stateLifetime_->spareThreadHooked = false;
     }
     if (status == LUA_YIELD) {
         if (coroutineRef == kNoReference) {

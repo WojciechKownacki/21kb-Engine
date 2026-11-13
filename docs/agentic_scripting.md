@@ -123,12 +123,13 @@ mods: scripts in one game share save slots, exposed gameplay APIs and the networ
 a mod authenticates its publisher; it does not grant extra Lua capabilities. Native host code and
 custom registered functions are trusted and must preserve these boundaries themselves.
 
-Limits, per behaviour call: the instruction budget (`luaInstructionsPerBehaviour`, one million by default; also applied to the
+Limits, per behaviour call: the execution budget (`luaInstructionsPerBehaviour`, one million loop iterations and calls by default; also applied to the
 code at the top of a script while it loads, so a loop there fails the load) and a memory cap per Lua
 runtime (256 MiB by default). A script that exceeds a limit fails with a diagnostic naming the limit and
 the script; the shipped hosts then disable that behaviour (`disableFailingBehaviours`), and the other
-scripts keep running. Trusted hosts can explicitly disable the instruction cap by setting it to zero.
-The cap also applies to script-created coroutines. It counts Lua instructions, not elapsed time;
+scripts keep running. Trusted hosts can explicitly disable the cap by setting it to zero.
+The cap also applies to script-created coroutines. It counts loop iterations and calls (every pass of a loop and every
+Lua or native function call), not elapsed time;
 native API calls are not preempted, and there is no wall-clock limit.
 
 **Native C++ scripts and plugins are not sandboxed.** They run inside the game process with all of its

@@ -9,6 +9,7 @@ extern "C" {
 }
 
 #include <optional>
+#include <climits>
 #include <cstdlib>
 #include <algorithm>
 #include <string>
@@ -93,17 +94,23 @@ void HookImpl(lua_State* state, lua_Debug* debug) {
     if (runtime == nullptr || debug == nullptr) {
         return;
     }
-    if (debug->event == LUA_HOOKCOUNT &&
-        !runtime->ConsumeLuaInstructions(100U)) {
+    if (debug->event == LUA_HOOKCOUNT) {
+        // The interpreter arms a count hook on the running thread when the allowance of loop iterations and calls
+        // given by ArmRunaway is spent. One that fires while the allowance is not spent (armed in an earlier entry
+        // and not cleared) is dropped.
+        const int mask = lua_gethookmask(state);
+        if (lua_getrunaway(state) > 0 || !runtime->HasActiveExecutionBudget()) {
+            lua_sethook(state, &Hook, mask & ~LUA_MASKCOUNT, 0);
+            return;
+        }
         if (runtime->ExecutionBudgetPolicy() ==
             kb::core::BudgetExceededPolicy::Suspend && lua_isyieldable(state) != 0) {
+            lua_sethook(state, &Hook, mask & ~LUA_MASKCOUNT, 0);
             static_cast<void>(lua_yieldk(state, 0, 0, nullptr));
             return;
         }
-        // A script can catch a hook error with pcall. Once exhausted, check every
-        // subsequent instruction so it cannot repeatedly catch the error inside
-        // another long-running protected call and keep the host occupied forever.
-        lua_sethook(state, &Hook, LUA_MASKCOUNT, 1);
+        // A script can catch a hook error with pcall. The count hook stays armed with the spent allowance, so the
+        // very next instruction stops it again and it cannot keep the host occupied by catching the error forever.
         luaL_error(state, "lua execution budget exceeded");
     }
     // Breakpoints and steps act on line events only, and not while another script is suspended at a pause.
@@ -297,15 +304,16 @@ PucLuaDebugEvaluationResult PucLuaDebugHook::Evaluate(lua_State* paused, std::st
 
 void PucLuaDebugHook::Install(lua_State* state, const PucLuaScriptRuntime& runtime) {
     if (runtime.NeedsDebugLineHook()) {
-        const bool budgetActive = runtime.HasActiveExecutionBudget();
-        lua_sethook(
-            state,
-            &Hook,
-            budgetActive ? LUA_MASKLINE | LUA_MASKCOUNT : LUA_MASKLINE,
-            budgetActive ? 100 : 0);
-    } else if (runtime.HasActiveExecutionBudget()) {
-        lua_sethook(state, &Hook, LUA_MASKCOUNT, 100);
+        lua_sethook(state, &Hook, LUA_MASKLINE, 0);
     }
+}
+
+void PucLuaDebugHook::ArmRunaway(lua_State* state, std::size_t limit) noexcept {
+    lua_setrunaway(state, &Hook, static_cast<int>(std::min<std::size_t>(limit, static_cast<std::size_t>(INT_MAX))));
+}
+
+void PucLuaDebugHook::DisarmRunaway(lua_State* state) noexcept {
+    lua_setrunaway(state, nullptr, 0);
 }
 
 void PucLuaDebugHook::Clear(lua_State* state) {

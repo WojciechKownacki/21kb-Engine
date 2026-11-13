@@ -139,6 +139,7 @@ constexpr auto kLuaBindings = std::to_array<ScriptApiCatalogLuaBindingDefinition
     { "UI", "Pressed", "UI.Pressed", ScriptApiCatalogLuaReturnKind::SingleOutput, "entity" },
     { "UI", "Focused", "UI.Focused", ScriptApiCatalogLuaReturnKind::SingleOutput, "entity" },
     { "Time", "delta", "Time.Delta", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Time", "Delta", "Time.Delta", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Transform", "GetPosition", "Transform.GetPosition", ScriptApiCatalogLuaReturnKind::GuardedTable, "found" },
     { "Transform", "GetPositionXYZ", "Transform.GetPosition", ScriptApiCatalogLuaReturnKind::GuardedValues, "found" },
     { "Transform", "SetPosition", "Transform.SetPosition", ScriptApiCatalogLuaReturnKind::Default, "" },
@@ -183,6 +184,7 @@ constexpr auto kLuaBindings = std::to_array<ScriptApiCatalogLuaBindingDefinition
     { "Input", "WasReleased", "Input.WasReleased", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Input", "Value", "Input.Value", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Input", "Vector2", "Input.Vector2", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
+    { "Input", "Vector2XY", "Input.Vector2", ScriptApiCatalogLuaReturnKind::Values, "" },
     { "Input", "Vector3", "Input.Vector3", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Input", "AddMappingContext", "Input.AddMappingContext", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Input", "RemoveMappingContext", "Input.RemoveMappingContext", ScriptApiCatalogLuaReturnKind::Default, "" },
@@ -395,6 +397,8 @@ const char* ToString(ScriptApiCatalogLuaReturnKind kind) noexcept {
         return "GuardedTable";
     case ScriptApiCatalogLuaReturnKind::GuardedValues:
         return "GuardedValues";
+    case ScriptApiCatalogLuaReturnKind::Values:
+        return "Values";
     }
     return "Default";
 }

@@ -810,9 +810,9 @@ bool WriteLocalPosition(kb::scene::Scene& scene, kb::scene::SceneEntity entity, 
 } // namespace
 
 bool ScriptTransformApi::SetLocalPosition(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::optional<float> x, std::optional<float> y, std::optional<float> z) {
-    return WriteLocalPosition(scene, entity, [x, y, z](const kb::scene::Vec3& position) {
-        return kb::scene::Vec3{ x.value_or(position.x), y.value_or(position.y), z.value_or(position.z) };
-    });
+    const std::uint8_t axes = static_cast<std::uint8_t>((x.has_value() ? kb::scene::kTransformAxisX : 0U) |
+        (y.has_value() ? kb::scene::kTransformAxisY : 0U) | (z.has_value() ? kb::scene::kTransformAxisZ : 0U));
+    return scene.Transforms().SetLocalPosition(entity, kb::scene::Vec3{ x.value_or(0.0F), y.value_or(0.0F), z.value_or(0.0F) }, axes);
 }
 
 bool ScriptTransformApi::TranslateLocalPosition(kb::scene::Scene& scene, kb::scene::SceneEntity entity, float x, float y, float z) {

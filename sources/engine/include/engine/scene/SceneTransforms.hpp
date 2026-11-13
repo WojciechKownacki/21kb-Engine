@@ -87,6 +87,11 @@ struct TransformPassStats {
     std::size_t ranges = 0U;
 };
 
+inline constexpr std::uint8_t kTransformAxisX = 1U;
+inline constexpr std::uint8_t kTransformAxisY = 2U;
+inline constexpr std::uint8_t kTransformAxisZ = 4U;
+inline constexpr std::uint8_t kTransformAxesXYZ = kTransformAxisX | kTransformAxisY | kTransformAxisZ;
+
 // One in-place write of an entity's transform, from SceneTransforms::BeginWrite to EndWrite.
 struct SceneTransformWrite {
     SceneEntity entity{};
@@ -170,6 +175,11 @@ public:
     // finds the row again and skips a destroyed entity. Nothing else may write the row in between.
     [[nodiscard]] SceneTransformWrite BeginWrite(SceneEntity entity) noexcept;
     void EndWrite(const SceneTransformWrite& write);
+    // Sets the local position of a live entity (only the axes in `axes`, a mix of kTransformAxisX/Y/Z; the others keep their
+    // value) with one lookup of its row, publishing it as EndWrite does. The one entry the script functions and the Lua
+    // bindings write positions through. An entity without a stored transform gets one with the default rotation and scale.
+    // False when the entity is not alive.
+    bool SetLocalPosition(SceneEntity entity, const Vec3& position, std::uint8_t axes);
     void MarkModified(SceneEntity entity) noexcept;
     // Bulk dirty signal: marks many transforms modified in one batched pass.
     void MarkModified(std::span<const SceneEntity> entities) noexcept;

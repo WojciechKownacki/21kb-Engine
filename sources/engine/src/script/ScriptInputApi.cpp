@@ -46,12 +46,13 @@ std::string ActionName(std::span<const ScriptFunctionArgument> arguments) {
 
 // Optional; absent (or <= 0) means the primary local user, so every existing
 // call site that predates LIB-115 keeps querying exactly what it always has.
-kb::input::LocalUserId PlayerFromArgs(std::span<const ScriptFunctionArgument> arguments) {
+int PlayerNumberFromArgs(std::span<const ScriptFunctionArgument> arguments) {
     const ScriptValue* value = FindArg(arguments, "player");
-    if (value == nullptr) {
-        return kb::input::kPrimaryLocalUser;
-    }
-    return ScriptInputApi::UserForPlayer(value->AsInt());
+    return value == nullptr ? 0 : static_cast<int>(value->AsInt());
+}
+
+kb::input::LocalUserId PlayerFromArgs(std::span<const ScriptFunctionArgument> arguments) {
+    return ScriptInputApi::UserForPlayer(PlayerNumberFromArgs(arguments));
 }
 
 ScriptFunctionPin PlayerPin() {
@@ -108,7 +109,7 @@ bool RegisterValueQuery(ScriptRuntimeHost& host, std::string name) {
         if (context.scene == nullptr) {
             return NoScene();
         }
-        const kb::input::InputValue value = context.scene->Input(PlayerFromArgs(arguments)).GetActionValue(ActionName(arguments));
+        const kb::input::InputValue value = ScriptInputApi::ActionValue(*context.scene, PlayerNumberFromArgs(arguments), ActionName(arguments));
         return ScriptFunctionCallResult{
             .executed = true,
             .outputs = {ScriptFunctionArgument{"value", ScriptValue{value.AsAxis1D()}}},
@@ -131,7 +132,7 @@ bool RegisterActionBoolQuery(ScriptRuntimeHost& host, std::string name) {
         if (context.scene == nullptr) {
             return NoScene();
         }
-        const kb::input::InputValue value = context.scene->Input(PlayerFromArgs(arguments)).GetActionValue(ActionName(arguments));
+        const kb::input::InputValue value = ScriptInputApi::ActionValue(*context.scene, PlayerNumberFromArgs(arguments), ActionName(arguments));
         return BoolResult("value", value.AsBool());
     };
     return host.RegisterFunction(std::move(desc));
@@ -147,7 +148,7 @@ bool RegisterValueQueryXY(ScriptRuntimeHost& host, std::string name) {
         if (context.scene == nullptr) {
             return NoScene();
         }
-        const kb::input::InputValue value = context.scene->Input(PlayerFromArgs(arguments)).GetActionValue(ActionName(arguments));
+        const kb::input::InputValue value = ScriptInputApi::ActionValue(*context.scene, PlayerNumberFromArgs(arguments), ActionName(arguments));
         return ScriptFunctionCallResult{
             .executed = true,
             .outputs = {ScriptFunctionArgument{"x", ScriptValue{value.x}},
@@ -170,7 +171,7 @@ bool RegisterValueQueryXYZ(ScriptRuntimeHost& host, std::string name) {
         if (context.scene == nullptr) {
             return NoScene();
         }
-        const kb::input::InputValue value = context.scene->Input(PlayerFromArgs(arguments)).GetActionValue(ActionName(arguments));
+        const kb::input::InputValue value = ScriptInputApi::ActionValue(*context.scene, PlayerNumberFromArgs(arguments), ActionName(arguments));
         return ScriptFunctionCallResult{
             .executed = true,
             .outputs = {ScriptFunctionArgument{"x", ScriptValue{value.x}},
@@ -818,6 +819,10 @@ bool RegisterStopVibration(ScriptRuntimeHost& host) {
 
 kb::input::LocalUserId ScriptInputApi::UserForPlayer(int player) noexcept {
     return player > 0 ? kb::input::LocalUserId{static_cast<std::uint32_t>(player)} : kb::input::kPrimaryLocalUser;
+}
+
+kb::input::InputValue ScriptInputApi::ActionValue(kb::scene::Scene& scene, int player, std::string_view action) {
+    return scene.Input(UserForPlayer(player)).GetActionValue(action);
 }
 
 bool ScriptInputApi::Register(ScriptRuntimeHost& host) {

@@ -431,8 +431,18 @@ FetchContent_Declare(
     kb_lua
     URL https://www.lua.org/ftp/lua-5.4.8.tar.gz
     URL_HASH SHA256=4f18ddae154e793e46eeab727c59ef1c0c0c2b744e7b94219710d76f530629ae
+    PATCH_COMMAND ${CMAKE_COMMAND} -DLUA_SOURCE_DIR=<SOURCE_DIR>/src -P ${CMAKE_CURRENT_SOURCE_DIR}/CMake/PatchLuaRunaway.cmake
 )
 FetchContent_MakeAvailable(kb_lua)
+# A tree fetched before the patch step existed (or by a CMake that keeps populated content) is patched here; the script
+# changes nothing in a tree that already has the patch.
+execute_process(
+    COMMAND ${CMAKE_COMMAND} -DLUA_SOURCE_DIR=${kb_lua_SOURCE_DIR}/src -P ${CMAKE_CURRENT_SOURCE_DIR}/CMake/PatchLuaRunaway.cmake
+    RESULT_VARIABLE _kb_lua_patch_result
+)
+if(NOT _kb_lua_patch_result EQUAL 0)
+    message(FATAL_ERROR "The Lua runaway patch could not be applied to ${kb_lua_SOURCE_DIR}")
+endif()
 if(NOT TARGET kb_lua)
     add_library(kb_lua STATIC
         ${kb_lua_SOURCE_DIR}/src/lapi.c

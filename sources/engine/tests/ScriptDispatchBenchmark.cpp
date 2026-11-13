@@ -417,6 +417,44 @@ end
     Require(NearlyEqual(rig.scene.Transforms().Get(entity).worldPosition.y, 8.0F), "A written object without parent must have its world transform at once");
 }
 
+// The direct Input and Time bindings read what the registered functions read: the frame delta scaled by the scene's time scale
+// (zero while paused), and an action in every shape (a missing action reads as zero in all of them).
+void RunInputAndTimeBindingsTest() {
+    SmallRig rig(R"(
+function Tick(self, dt)
+  local x, y = Input.Vector2XY('NoSuchAction')
+  local t = Input.Vector2('NoSuchAction')
+  local t2 = Input.Action2D('NoSuchAction', 2)
+  Emit('Done', { dt = dt, delta = Time.delta(), upper = Time.Delta(), value = Input.Value('NoSuchAction'),
+                 flag = Input.ActionBool('NoSuchAction'), float = Input.ActionFloat('NoSuchAction'),
+                 zero = x == 0 and y == 0 and t.x == 0 and t.y == 0 and t2.x == 0 and t2.y == 0,
+                 refused = not pcall(Input.Value, nil) })
+end
+)");
+    static_cast<void>(rig.Add());
+    const auto frame = [&rig]() {
+        const kb::script::ScriptRuntimeExecutionResult& result = rig.Frame();
+        for (const kb::script::ScriptEvent& event : result.emittedEvents) {
+            if (event.name == "Done") return event;
+        }
+        Require(false, "The input and time script must finish");
+        return kb::script::ScriptEvent{};
+    };
+    kb::script::ScriptEvent done = frame();
+    Require(NearlyEqual(ArgumentOf(done, "delta"), ArgumentOf(done, "dt")) && NearlyEqual(ArgumentOf(done, "upper"), ArgumentOf(done, "dt")),
+        "Time.delta must be the frame delta at the default time scale");
+    Require(ArgumentOf(done, "value") == 0.0F && ArgumentOf(done, "flag") == 0.0F && ArgumentOf(done, "float") == 0.0F && ArgumentOf(done, "zero") == 1.0F,
+        "A missing action must read as zero in every shape");
+    Require(ArgumentOf(done, "refused") == 1.0F, "An action name that is not a string must be refused");
+    rig.scene.Runtime().SetTimeScale(0.5F);
+    done = frame();
+    Require(NearlyEqual(ArgumentOf(done, "delta"), ArgumentOf(done, "dt") * 0.5F) && NearlyEqual(ArgumentOf(done, "upper"), ArgumentOf(done, "delta")),
+        "Time.delta must follow the time scale");
+    rig.scene.Runtime().SetPlaying(false);
+    done = frame();
+    Require(ArgumentOf(done, "delta") == 0.0F && ArgumentOf(done, "upper") == 0.0F, "Time.delta must be zero while the scene is paused");
+}
+
 // `self` is one table for the life of an object: what a script writes into it stays there, separately for each object, a
 // destroyed object leaves nothing behind for the next one, and the exposed variables an object holds are still current in it.
 void RunSelfKeepsItsFieldsPerObjectTest() {
@@ -712,6 +750,7 @@ void RunScriptDispatchTests() {
     RunTargetedEventReachesOneBehaviourTest();
     RunYieldingEntriesShareThreadsSafelyTest();
     RunTransformBindingsTest();
+    RunInputAndTimeBindingsTest();
     RunSelfKeepsItsFieldsPerObjectTest();
     RunPhaseSeesChangesMadeInsideItTest();
     RunBehaviourChangeStampTest();
@@ -852,6 +891,17 @@ function Tick(self, dt)
 end
 )";
 
+// Movement: two input axes read as one 2D action, scaled by the frame delta and a speed, written to the position.
+constexpr const char* kFrameMovementLua = R"(
+local speed = 4.0
+function Tick(self, dt)
+  local move = Input.Vector2("move")
+  local delta = Time.delta()
+  local x, y, z = Transform.GetPositionXYZ(self.entity)
+  Transform.SetPosition(self.entity, x + move.x * speed * delta, y, z + move.y * speed * delta)
+end
+)";
+
 constexpr const char* kFrameHeavyLua = R"(
 local function fib(n)
   if n < 2 then return n end
@@ -974,7 +1024,7 @@ void RunScriptFrameBenchmark() {
         }
         const std::string customSource = scenario == "custom" ? EnvText("KB_BENCH_SOURCE", kEmptyScript) : std::string{};
         const char* source = scenario == "custom" ? customSource.c_str() : scenario == "empty" ? kEmptyScript : scenario == "typical" ? kFrameTypicalLua
-            : scenario == "typical-table" ? kFrameTypicalTableLua : scenario == "heavy" ? kFrameHeavyLua : kFrameEventLua;
+            : scenario == "typical-table" ? kFrameTypicalTableLua : scenario == "movement" ? kFrameMovementLua : scenario == "heavy" ? kFrameHeavyLua : kFrameEventLua;
         Require(host.LuaRuntime().LoadScript(kBenchAsset, source, "Bench.lua").succeeded, "script frame benchmark script did not load");
     }
     std::vector<kb::scene::SceneObjectDesc> descs(count);

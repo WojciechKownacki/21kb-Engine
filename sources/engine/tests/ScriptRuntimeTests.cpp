@@ -1238,6 +1238,12 @@ void RunPucLuaHostileScriptsTest() {
     constexpr kb::assets::AssetId kCoroutine{ 3606U };
     constexpr kb::assets::AssetId kCaught{ 3607U };
     constexpr kb::assets::AssetId kImported{ 3610U };
+    // Every way a script can go round without the allowance noticing: a conditional jump back, goto, a generic for, and
+    // a call that never returns to its caller.
+    constexpr kb::assets::AssetId kRepeat{ 3613U };
+    constexpr kb::assets::AssetId kGoto{ 3614U };
+    constexpr kb::assets::AssetId kGenericFor{ 3615U };
+    constexpr kb::assets::AssetId kTailCall{ 3616U };
     kb::tests::Require(host.luaRuntime.RegisterModule("BudgetLoop", "while true do end", "BudgetLoop.lua").succeeded,
         "The lazy module budget fixture must register");
     kb::tests::Require(host.luaRuntime.LoadScript(kProbe, R"(
@@ -1276,20 +1282,27 @@ function Tick(self, dt)
     SetShared("healthy.ticks", (GetShared("healthy.ticks") or 0) + 1)
 end
 )", "Healthy.lua").succeeded, "The healthy script did not load");
+    kb::tests::Require(host.luaRuntime.LoadScript(kRepeat, "function Tick(self, dt) local n = 0 repeat n = n + 1 until n < 0 end", "RepeatForever.lua").succeeded &&
+            host.luaRuntime.LoadScript(kGoto, "function Tick(self, dt) ::again:: goto again end", "GotoForever.lua").succeeded &&
+            host.luaRuntime.LoadScript(kGenericFor, "function Tick(self, dt) for _ in function() return true end do end end", "ForInForever.lua").succeeded &&
+            host.luaRuntime.LoadScript(kTailCall, "local function spin() return spin() end function Tick(self, dt) spin() end", "TailCallForever.lua").succeeded,
+        "The other endless script shapes did not load");
     host.Attach(kProbe);
     host.Attach(kForever);
     host.Attach(kCoroutine);
     host.Attach(kCaught);
     host.Attach(kImported);
     host.Attach(kHealthy);
+    for (const kb::assets::AssetId asset : { kRepeat, kGoto, kGenericFor, kTailCall }) host.Attach(asset);
     for (int tick = 0; tick < 3; ++tick) {
         const kb::script::ScriptRuntimeExecutionResult result = host.Tick();
         std::vector<std::uint64_t> failed;
         for (const auto& diagnostic : result.diagnostics)
             if (diagnostic.message.find("execution budget exceeded") != std::string::npos) failed.push_back(diagnostic.assetId.value);
         std::ranges::sort(failed);
-        kb::tests::Require(!result.Succeeded() && failed == std::vector<std::uint64_t>{kForever.value, kCoroutine.value, kCaught.value, kImported.value},
-            "Direct, coroutine, protected and imported loops must fail with budget diagnostics on every tick");
+        kb::tests::Require(!result.Succeeded() && failed == std::vector<std::uint64_t>{kForever.value, kCoroutine.value, kCaught.value, kImported.value,
+                kRepeat.value, kGoto.value, kGenericFor.value, kTailCall.value},
+            "Direct, coroutine, protected, imported, repeat, goto, generic for and tail call loops must fail with budget diagnostics on every tick");
     }
     kb::tests::Require(host.Shared("healthy.ticks") == 3, "A script that loops forever must not stop the other scripts");
     for (const char* name : { "sandbox.require", "sandbox.package", "sandbox.load", "sandbox.dofile", "sandbox.loadfile", "sandbox.os",

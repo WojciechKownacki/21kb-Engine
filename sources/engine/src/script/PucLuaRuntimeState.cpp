@@ -27,7 +27,6 @@ struct PucLuaScriptRuntime::RuntimeSnapshot final : kb::core::RuntimeStateSnapsh
     int suspendDepth = 0;
     bool suspendAllowed = false;
     ScriptExecutionBudgetSettings budget;
-    std::size_t remainingInstructions = 0U;
     bool budgetActive = false;
     [[nodiscard]] std::size_t PayloadBytes() const noexcept override { return heap->PayloadBytes(); }
 };
@@ -69,7 +68,6 @@ std::unique_ptr<kb::core::RuntimeStateSnapshot> PucLuaScriptRuntime::CaptureRunt
     snapshot->suspendDepth = debugSuspendDepth_;
     snapshot->suspendAllowed = debugSuspendAllowed_;
     snapshot->budget = executionBudgetSettings_;
-    snapshot->remainingInstructions = remainingLuaInstructions_;
     snapshot->budgetActive = executionBudgetActive_;
     snapshot->heap = memoryBudget_->arena->Capture(memoryBudget_->limitBytes, error);
     if (!snapshot->heap) return {};
@@ -106,8 +104,6 @@ bool PucLuaScriptRuntime::RestoreRuntimeStateImpl(const kb::core::RuntimeStateSn
     cachedScript_ = nullptr;
     callSites_.clear();
     ++callSiteRevision_;
-    // The restored heap holds the hook state the kept thread had when the snapshot was taken.
-    stateLifetime_->spareThreadHooked = false;
     scripts_ = snapshot.scripts;
     modules_ = snapshot.modules;
     exposedVariables_ = snapshot.exposedVariables;
@@ -125,7 +121,6 @@ bool PucLuaScriptRuntime::RestoreRuntimeStateImpl(const kb::core::RuntimeStateSn
     debugSuspendDepth_ = snapshot.suspendDepth;
     debugSuspendAllowed_ = snapshot.suspendAllowed;
     executionBudgetSettings_ = snapshot.budget;
-    remainingLuaInstructions_ = snapshot.remainingInstructions;
     executionBudgetActive_ = snapshot.budgetActive;
     generation_ = std::max(generation_, snapshot.generation);
     memoryBudget_->usedBytes = memoryBudget_->arena->LiveBytes();

@@ -170,6 +170,36 @@ void SceneTransformService::EndWrite(Scene& scene, const SceneTransformWrite& wr
     PublishTransformRow(state, current);
 }
 
+bool SceneTransformService::SetLocalPosition(Scene& scene, SceneEntity entity, const Vec3& position, std::uint8_t axes) {
+    if (!entity.IsValid()) {
+        return false;
+    }
+    SceneState& state = SceneAccess::State(scene);
+    const SceneTransformWrite write = OpenTransformRow(state, entity);
+    if (write.row != nullptr) {
+        // Nothing runs between the lookup and the publish, so the row cannot have moved (BeginWrite/EndWrite check that
+        // because the caller's code runs in between).
+        SceneHistoryService::NoteObjectChanging(scene, entity);
+        TransformComponent& row = *write.row;
+        if ((axes & kTransformAxisX) != 0U) row.localPosition.x = position.x;
+        if ((axes & kTransformAxisY) != 0U) row.localPosition.y = position.y;
+        if ((axes & kTransformAxisZ) != 0U) row.localPosition.z = position.z;
+        ++row.localVersion;
+        row.worldDirty = true;
+        PublishTransformRow(state, write);
+        return true;
+    }
+    if (!SceneEntityService::IsAlive(scene, entity)) {
+        return false;
+    }
+    TransformComponent transform{};
+    if ((axes & kTransformAxisX) != 0U) transform.localPosition.x = position.x;
+    if ((axes & kTransformAxisY) != 0U) transform.localPosition.y = position.y;
+    if ((axes & kTransformAxisZ) != 0U) transform.localPosition.z = position.z;
+    Set(scene, entity, transform);
+    return true;
+}
+
 void SceneTransformService::SetMany(Scene& scene, std::span<const SceneEntity> entities, std::span<const TransformComponent> transforms) {
     if (entities.size() != transforms.size()) {
         throw std::invalid_argument("Scene transform batch write requires one transform per entity");

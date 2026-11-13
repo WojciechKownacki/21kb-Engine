@@ -9,6 +9,7 @@
 #include "engine/script/ScriptApiCatalog.hpp"
 #include "engine/script/ScriptExecutionContext.hpp"
 #include "engine/script/ScriptInputApi.hpp"
+#include "engine/script/ScriptTimeApi.hpp"
 #include "engine/script/ScriptTransformApi.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/scene/Scene.hpp"
@@ -2117,12 +2118,7 @@ int LuaTransformSetPreciseWorldPosition(lua_State* state) {
 
 int LuaTimeDelta(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
-    if (context == nullptr) {
-        lua_pushnumber(state, 0.0);
-        return 1;
-    }
-    const ScriptFunctionCallResult result = context->CallFunction("Time.Delta", {});
-    lua_pushnumber(state, static_cast<lua_Number>(result.Output("delta").value_or(ScriptValue{ 0.0F }).AsFloat()));
+    lua_pushnumber(state, context == nullptr ? 0.0 : static_cast<lua_Number>(ScriptTimeApi::ScaledDelta(&context->GetScene(), context->DeltaSeconds())));
     return 1;
 }
 
@@ -2759,40 +2755,29 @@ int LuaPhysicsClosestPoint(lua_State* state) {
     return 1;
 }
 
-[[nodiscard]] std::vector<ScriptFunctionArgument> InputActionArgs(lua_State* state) {
-    const char* action = PucLuaCheckString(state, 1);
-    std::vector<ScriptFunctionArgument> arguments{ Arg("action", ScriptValue{ std::string{ action != nullptr ? action : "" } }) };
-    const int player = static_cast<int>(PucLuaOptInteger(state, 2, 0));
-    if (player > 0) {
-        arguments.push_back(Arg("player", ScriptValue{ player }));
-    }
-    return arguments;
+// The action reads take the action name and the optional player straight from the arguments, and read the input state
+// directly: Input.IsPressed, Input.Value and their siblings run in every frame of many scripts, and the registered
+// functions behind them read the same InputSubsystem queries (ScriptInputApi::ActionValue for the values).
+struct LuaInputRequest {
+    std::string_view action;
+    int player = 0;
+};
+
+[[nodiscard]] LuaInputRequest LuaInputRequestFromArguments(lua_State* state) {
+    std::size_t length = 0U;
+    const char* action = lua_tolstring(state, 1, &length);
+    if (action == nullptr) PucLuaArgumentError(state, 1, "string expected");
+    return LuaInputRequest{ std::string_view{ action, length }, lua_gettop(state) >= 2 ? static_cast<int>(PucLuaOptInteger(state, 2, 0)) : 0 };
 }
 
-int LuaInputBool(lua_State* state, std::string_view functionName, std::string_view outputName) {
-    ScriptExecutionContext* context = ContextFromUpvalue(state);
-    if (context == nullptr) {
-        lua_pushboolean(state, 0);
-        return 1;
-    }
-    const ScriptFunctionCallResult result = context->CallFunction(functionName, InputActionArgs(state));
-    lua_pushboolean(state, result.Output(outputName).value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
-    return 1;
-}
-
-// The action queries read the input state directly: Input.IsPressed and its siblings run in every frame of many
-// scripts, and the registered functions behind them read the same InputSubsystem queries.
 int LuaInputQuery(lua_State* state, bool (kb::input::InputSubsystem::*query)(std::string_view) const) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    std::size_t length = 0U;
-    const char* action = lua_tolstring(state, 1, &length);
-    if (action == nullptr) PucLuaArgumentError(state, 1, "string expected");
-    const int player = lua_gettop(state) >= 2 ? static_cast<int>(PucLuaOptInteger(state, 2, 0)) : 0;
-    lua_pushboolean(state, (context->GetScene().Input(ScriptInputApi::UserForPlayer(player)).*query)(std::string_view{ action, length }) ? 1 : 0);
+    const LuaInputRequest request = LuaInputRequestFromArguments(state);
+    lua_pushboolean(state, (context->GetScene().Input(ScriptInputApi::UserForPlayer(request.player)).*query)(request.action) ? 1 : 0);
     return 1;
 }
 
@@ -2821,7 +2806,14 @@ int LuaInputReleased(lua_State* state) {
 }
 
 int LuaInputActionBool(lua_State* state) {
-    return LuaInputBool(state, "Input.ActionBool", "value");
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const LuaInputRequest request = LuaInputRequestFromArguments(state);
+    lua_pushboolean(state, ScriptInputApi::ActionValue(context->GetScene(), request.player, request.action).AsBool() ? 1 : 0);
+    return 1;
 }
 
 int LuaInputValue(lua_State* state) {
@@ -2830,67 +2822,61 @@ int LuaInputValue(lua_State* state) {
         lua_pushnumber(state, 0.0);
         return 1;
     }
-    const ScriptFunctionCallResult result = context->CallFunction("Input.Value", InputActionArgs(state));
-    lua_pushnumber(state, static_cast<lua_Number>(result.Output("value").value_or(ScriptValue{ 0.0F }).AsFloat()));
+    const LuaInputRequest request = LuaInputRequestFromArguments(state);
+    lua_pushnumber(state, static_cast<lua_Number>(ScriptInputApi::ActionValue(context->GetScene(), request.player, request.action).AsAxis1D()));
     return 1;
 }
 
 int LuaInputActionFloat(lua_State* state) {
+    return LuaInputValue(state);
+}
+
+// A table with the first `components` axes of the action's value as x, y and z.
+int LuaInputAxes(lua_State* state, int components) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) {
-        lua_pushnumber(state, 0.0);
+        lua_pushnil(state);
         return 1;
     }
-    const ScriptFunctionCallResult result = context->CallFunction("Input.ActionFloat", InputActionArgs(state));
-    lua_pushnumber(state, static_cast<lua_Number>(result.Output("value").value_or(ScriptValue{ 0.0F }).AsFloat()));
+    const LuaInputRequest request = LuaInputRequestFromArguments(state);
+    const kb::input::InputValue value = ScriptInputApi::ActionValue(context->GetScene(), request.player, request.action);
+    lua_createtable(state, 0, components);
+    lua_pushnumber(state, static_cast<lua_Number>(value.x));
+    lua_setfield(state, -2, "x");
+    lua_pushnumber(state, static_cast<lua_Number>(value.y));
+    lua_setfield(state, -2, "y");
+    if (components > 2) {
+        lua_pushnumber(state, static_cast<lua_Number>(value.z));
+        lua_setfield(state, -2, "z");
+    }
     return 1;
 }
 
 int LuaInputVector2(lua_State* state) {
+    return LuaInputAxes(state, 2);
+}
+
+// Input.Vector2XY(action) -> x, y: the value Input.Vector2 reads, as two numbers instead of a table (no allocation).
+int LuaInputVector2XY(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) {
-        lua_pushnil(state);
-        return 1;
+        lua_pushnumber(state, 0.0);
+        lua_pushnumber(state, 0.0);
+        return 2;
     }
-    const ScriptFunctionCallResult result = context->CallFunction("Input.Vector2", InputActionArgs(state));
-    lua_createtable(state, 0, 2);
-    lua_pushnumber(state, static_cast<lua_Number>(result.Output("x").value_or(ScriptValue{ 0.0F }).AsFloat()));
-    lua_setfield(state, -2, "x");
-    lua_pushnumber(state, static_cast<lua_Number>(result.Output("y").value_or(ScriptValue{ 0.0F }).AsFloat()));
-    lua_setfield(state, -2, "y");
-    return 1;
+    const LuaInputRequest request = LuaInputRequestFromArguments(state);
+    const kb::input::InputValue value = ScriptInputApi::ActionValue(context->GetScene(), request.player, request.action);
+    lua_pushnumber(state, static_cast<lua_Number>(value.x));
+    lua_pushnumber(state, static_cast<lua_Number>(value.y));
+    return 2;
 }
 
 int LuaInputAction2D(lua_State* state) {
-    ScriptExecutionContext* context = ContextFromUpvalue(state);
-    if (context == nullptr) {
-        lua_pushnil(state);
-        return 1;
-    }
-    const ScriptFunctionCallResult result = context->CallFunction("Input.Action2D", InputActionArgs(state));
-    lua_createtable(state, 0, 2);
-    lua_pushnumber(state, static_cast<lua_Number>(result.Output("x").value_or(ScriptValue{ 0.0F }).AsFloat()));
-    lua_setfield(state, -2, "x");
-    lua_pushnumber(state, static_cast<lua_Number>(result.Output("y").value_or(ScriptValue{ 0.0F }).AsFloat()));
-    lua_setfield(state, -2, "y");
-    return 1;
+    return LuaInputAxes(state, 2);
 }
 
 int LuaInputVector3(lua_State* state) {
-    ScriptExecutionContext* context = ContextFromUpvalue(state);
-    if (context == nullptr) {
-        lua_pushnil(state);
-        return 1;
-    }
-    const ScriptFunctionCallResult result = context->CallFunction("Input.Vector3", InputActionArgs(state));
-    lua_createtable(state, 0, 3);
-    lua_pushnumber(state, static_cast<lua_Number>(result.Output("x").value_or(ScriptValue{ 0.0F }).AsFloat()));
-    lua_setfield(state, -2, "x");
-    lua_pushnumber(state, static_cast<lua_Number>(result.Output("y").value_or(ScriptValue{ 0.0F }).AsFloat()));
-    lua_setfield(state, -2, "y");
-    lua_pushnumber(state, static_cast<lua_Number>(result.Output("z").value_or(ScriptValue{ 0.0F }).AsFloat()));
-    lua_setfield(state, -2, "z");
-    return 1;
+    return LuaInputAxes(state, 3);
 }
 
 [[nodiscard]] std::string LuaContextId(lua_State* state, int index) {
@@ -3778,6 +3764,7 @@ constexpr auto kCatalogBindingAdapters = std::to_array<lua_CFunction>({
     &LuaUIPressed,
     &LuaUIFocused,
     &LuaTimeDelta,
+    &LuaTimeDelta,
     &LuaTransformGetPosition,
     &LuaTransformGetPositionXYZ,
     &LuaTransformSetPosition,
@@ -3822,6 +3809,7 @@ constexpr auto kCatalogBindingAdapters = std::to_array<lua_CFunction>({
     &LuaInputWasReleased,
     &LuaInputValue,
     &LuaInputVector2,
+    &LuaInputVector2XY,
     &LuaInputVector3,
     &LuaInputAddMappingContext,
     &LuaInputRemoveMappingContext,

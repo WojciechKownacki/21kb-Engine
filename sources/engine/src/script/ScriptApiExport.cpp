@@ -193,6 +193,15 @@ void AppendStubReturn(
             out += '\n';
         }
         return;
+    case ScriptApiCatalogLuaReturnKind::Values:
+        for (const ScriptApiPin& pin : function.outputs) {
+            out += "---@return ";
+            out += LuaTypeName(pin.type);
+            out += ' ';
+            out += pin.name;
+            out += '\n';
+        }
+        return;
     case ScriptApiCatalogLuaReturnKind::Default:
         break;
     }
@@ -318,6 +327,8 @@ void AppendStubResultClasses(std::string& out, const ScriptApiCatalog& catalog) 
         }
         return "values " + PinList(visible) + " or nil when " + binding.returnPin + " is false";
     }
+    case ScriptApiCatalogLuaReturnKind::Values:
+        return "values " + PinList(function->outputs);
     case ScriptApiCatalogLuaReturnKind::Default:
         break;
     }

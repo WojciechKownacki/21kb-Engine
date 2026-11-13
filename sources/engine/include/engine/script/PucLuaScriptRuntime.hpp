@@ -143,7 +143,6 @@ public:
     void SetExecutionBudgetSettings(ScriptExecutionBudgetSettings settings) noexcept;
     void BeginExecutionBudget() noexcept;
     void EndExecutionBudget() noexcept;
-    [[nodiscard]] bool ConsumeLuaInstructions(std::size_t count) noexcept;
     [[nodiscard]] kb::core::BudgetExceededPolicy ExecutionBudgetPolicy() const noexcept;
     [[nodiscard]] bool IsExecutionBudgetEnabled() const noexcept;
     [[nodiscard]] bool HasActiveExecutionBudget() const noexcept;
@@ -423,7 +422,6 @@ private:
     int debugSuspendDepth_ = 0;
     bool debugSuspendAllowed_ = false;
     ScriptExecutionBudgetSettings executionBudgetSettings_;
-    std::size_t remainingLuaInstructions_ = 0U;
     bool executionBudgetActive_ = false;
     std::uint64_t generation_ = 1U;
     PucLuaCollectionStats collectionStats_;

@@ -33,10 +33,9 @@ ScriptFunctionCallResult NoScene() {
 // the pre-LIB-094 "Time.Delta works without a scene" behavior rather than
 // making scale-awareness a new hard requirement.
 ScriptFunctionCallResult Delta(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument>) {
-    const float scale = context.scene == nullptr ? 1.0F : (context.scene->Runtime().IsPlaying() ? context.scene->Runtime().TimeScale() : 0.0F);
     return ScriptFunctionCallResult{
         .executed = true,
-        .outputs = { ScriptFunctionArgument{ "delta", ScriptValue{ context.deltaSeconds * scale } } },
+        .outputs = { ScriptFunctionArgument{ "delta", ScriptValue{ ScriptTimeApi::ScaledDelta(context.scene, context.deltaSeconds) } } },
         .errors = {},
     };
 }
@@ -197,6 +196,11 @@ bool RegisterFunction(ScriptRuntimeHost& host, std::string name, std::vector<Scr
 }
 
 } // namespace
+
+float ScriptTimeApi::ScaledDelta(const kb::scene::Scene* scene, float deltaSeconds) noexcept {
+    const float scale = scene == nullptr ? 1.0F : (scene->Runtime().IsPlaying() ? scene->Runtime().TimeScale() : 0.0F);
+    return deltaSeconds * scale;
+}
 
 bool ScriptTimeApi::Register(ScriptRuntimeHost& host) {
     bool ok = true;
