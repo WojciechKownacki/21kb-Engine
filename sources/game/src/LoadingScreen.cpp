@@ -241,6 +241,7 @@ bool LoadingScreen::Draw(kb::render::Renderer& renderer, float progress, bool he
     static_cast<void>(scene_->UI().SetViewport(
         static_cast<float>(renderer.BackbufferWidth()),
         static_cast<float>(renderer.BackbufferHeight())));
+    const auto started = std::chrono::steady_clock::now();
     if (!renderer.BeginFrame()) {
         return false;
     }
@@ -249,9 +250,35 @@ bool LoadingScreen::Draw(kb::render::Renderer& renderer, float progress, bool he
         : sync_.Submit(*scene_, renderer);
     renderer.EndFrame();
     if (submitted) {
-        drawn_.push_back(DrawnFrame{ .progress = progress, .held = held, .prewarm = prewarmed != nullptr });
+        drawn_.push_back(DrawnFrame{
+            .progress = progress,
+            .held = held,
+            .prewarm = prewarmed != nullptr,
+            .milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count(),
+        });
     }
     return submitted;
+}
+
+namespace {
+
+// The bar's share the stages of the load fill, up to the scene being placed; the resources the scene uses fill the
+// rest. The wait for them ends once it has lasted this long, so a resource that never arrives cannot keep the
+// screen up for good.
+constexpr float kScenePlaced = 0.9F;
+constexpr std::chrono::seconds kLongestResourceWait{ 60 };
+
+} // namespace
+
+void LoadingScreen::FollowResources(kb::render::Renderer& renderer) {
+    if (prewarmed_ == nullptr) {
+        return;
+    }
+    const kb::render::RuntimeSceneLoadProgress resources = renderer.RuntimeSceneResourceProgress(*prewarmed_);
+    const float filled = resources.Complete()
+        ? 1.0F
+        : kScenePlaced + (1.0F - kScenePlaced) * std::min(resources.Fraction(), 0.99F);
+    progress_ = std::max(progress_, filled);
 }
 
 void LoadingScreen::Report(kb::render::Renderer& renderer, float fraction, const kb::scene::Scene* loading) {
@@ -260,14 +287,20 @@ void LoadingScreen::Report(kb::render::Renderer& renderer, float fraction, const
     }
     fraction = std::clamp(fraction, 0.0F, 1.0F);
     if (!showing_ || finished_) {
-        // The first report of a load: the screen comes up, its clock starts and its bar starts from empty.
+        // The first report of a load: the screen comes up, its clock starts and its bar starts from empty. A game
+        // that has a loading screen has something that waits for its scene's resources, so they load in the
+        // background instead of inside the frame that first draws them.
+        renderer.ConfigureRuntimeResourceLoading(kb::render::RuntimeResourceLoadingSettings{ .asynchronous = true });
         showing_ = true;
         finished_ = false;
+        waited_ = false;
+        completeDrawn_ = false;
         progress_ = 0.0F;
         shownAt_ = std::chrono::steady_clock::now();
     }
-    progress_ = std::max(progress_, fraction);
     finished_ = fraction >= 1.0F;
+    // A load with a scene to draw ends with the scene's resources, not with its last stage.
+    progress_ = std::max(progress_, finished_ && loading != nullptr ? std::min(fraction, kScenePlaced) : fraction);
     if (!finished_ || loading == nullptr) {
         static_cast<void>(Draw(renderer, progress_, false, nullptr));
         return;
@@ -276,7 +309,9 @@ void LoadingScreen::Report(kb::render::Renderer& renderer, float fraction, const
     // states and GPU resources its first frame needs are made while the screen is still up and stay in use. The
     // second frame waits for the renderer to finish the first, which keeps that wait on the loading screen too.
     prewarmed_ = loading;
+    finishedAt_ = std::chrono::steady_clock::now();
     static_cast<void>(Draw(renderer, progress_, false, prewarmed_));
+    FollowResources(renderer);
     static_cast<void>(Draw(renderer, progress_, false, prewarmed_));
 }
 
@@ -284,7 +319,23 @@ bool LoadingScreen::PresentHeld(kb::render::Renderer& renderer) {
     if (!showing_ || !finished_) {
         return false;
     }
-    const auto held = std::chrono::steady_clock::now() - shownAt_;
+    const auto now = std::chrono::steady_clock::now();
+    if (prewarmed_ != nullptr) {
+        FollowResources(renderer);
+        if (!renderer.RuntimeSceneResourceProgress(*prewarmed_).Complete() && now - finishedAt_ < kLongestResourceWait) {
+            // Still arriving: the hidden draw creates the next ones, a few per frame.
+            waited_ = true;
+            static_cast<void>(Draw(renderer, progress_, false, prewarmed_));
+            return true;
+        }
+        if (waited_ && !completeDrawn_) {
+            completeDrawn_ = true;
+            progress_ = 1.0F;
+            static_cast<void>(Draw(renderer, progress_, false, prewarmed_));
+            return true;
+        }
+    }
+    const auto held = now - shownAt_;
     if (held >= std::chrono::milliseconds(settings_.minimumDisplayMilliseconds)) {
         showing_ = false;
         prewarmed_ = nullptr;

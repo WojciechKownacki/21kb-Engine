@@ -460,6 +460,26 @@ AssetPackReadStatus AssetPackReader::ReadBlock(const AssetPackArtifactEntry& art
     return DecodeStoredBlock(*block, out);
 }
 
+AssetPackReadStatus AssetPackReader::ReadBlock(const AssetPackArtifactEntry& artifact,
+                                               std::string_view blockName,
+                                               std::mutex& fileLock,
+                                               std::vector<std::uint8_t>& out) {
+    out.clear();
+    const AssetPackBlockEntry* block = nullptr;
+    if (const AssetPackReadStatus status = LocateBlock(artifact, blockName, block);
+        status != AssetPackReadStatus::Success) {
+        return status;
+    }
+    {
+        std::scoped_lock lock{ fileLock };
+        if (const AssetPackReadStatus status = ReadRange(block->offset, block->storedBytes, out);
+            status != AssetPackReadStatus::Success) {
+            return status;
+        }
+    }
+    return DecodeStoredBlock(*block, out);
+}
+
 AssetPackReadStatus AssetPackReader::ReadStoredBlock(const AssetPackArtifactEntry& artifact,
                                                      std::string_view blockName,
                                                      std::vector<std::uint8_t>& out) {

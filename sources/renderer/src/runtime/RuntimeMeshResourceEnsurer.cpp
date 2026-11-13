@@ -108,7 +108,8 @@ void RuntimeMeshResourceEnsurer::Ensure(
     const RuntimeRenderResourceEnsureContext& context,
     RuntimeMeshResourceMap& meshes,
     RuntimeMaterialResourceMap& embeddedMaterials,
-    RuntimeContentStreamer& streamer) {
+    RuntimeContentStreamer& streamer,
+    RuntimeResourceCreationBudget& creation) {
     kb::assets::AssetManager& manager = context.scene.Assets().Manager();
 
     const auto ensureMorphMesh = [&](const MeshRenderProxyDesc& proxy) {
@@ -223,6 +224,7 @@ void RuntimeMeshResourceEnsurer::Ensure(
             RuntimeMeshResource& cached = cacheIt->second;
             cached.lastReferencedFrame = context.currentFrame;
             context.sceneRenderer.ResourceMap().BindMesh(meshAssetId, cached.handle);
+            creation.NoteResolved();
             return;
         }
 
@@ -267,7 +269,20 @@ void RuntimeMeshResourceEnsurer::Ensure(
             return;
         }
 
-        const MeshRef asset = manager.Load<RenderMeshAssetData>(assetId);
+        MeshRef asset = manager.AcquireLoaded<RenderMeshAssetData>(assetId);
+        if (!asset.IsLoaded() && creation.Asynchronous() && cacheIt == meshes.end() &&
+            manager.AsyncLoadStatus(assetId) != kb::assets::AsyncAssetLoadStatus::Failed) {
+            // First use: the read, verification, decompression and decoding run on the background load workers and
+            // the mesh stays unbound (its draw is skipped) until it is ready. A load that failed falls through to
+            // the synchronous load below, which reports the failure the way it always did.
+            static_cast<void>(manager.RequestLoadAsync(assetId));
+            context.sceneRenderer.ResourceMap().UnbindMesh(meshAssetId);
+            creation.NoteWaiting();
+            return;
+        }
+        if (!asset.IsLoaded()) {
+            asset = manager.Load<RenderMeshAssetData>(assetId);
+        }
         if (!asset.IsLoaded()) {
             if (cacheIt != meshes.end()) {
                 context.sceneRenderer.ResourceMap().UnbindMeshHandle(cacheIt->second.handle);
@@ -438,6 +453,12 @@ void RuntimeMeshResourceEnsurer::Ensure(
             context.sceneRenderer.ResourceMap().UnbindMeshHandle(cacheIt->second.handle);
             context.sceneRenderer.Resources().DestroyMesh(cacheIt->second.handle);
             meshes.erase(cacheIt);
+        } else if (!creation.MayCreate()) {
+            // The data is here; this submit has spent its time on other resources, so the GPU resource is made in
+            // the next one.
+            context.sceneRenderer.ResourceMap().UnbindMesh(meshAssetId);
+            creation.NoteWaiting();
+            return;
         }
 
         std::vector<RenderMaterialSlotDesc> materialSlots = asset->materialSlots;
@@ -517,6 +538,7 @@ void RuntimeMeshResourceEnsurer::Ensure(
             .dynamicTerrainLayerUpdates = !asset->dynamicTerrainLayerWeightUpdates.empty(),
         };
         context.sceneRenderer.ResourceMap().BindMesh(meshAssetId, handle);
+        creation.NoteCreated();
         // A packaged mesh with streamed levels of detail was created from its coarsest level;
         // the finer levels stream.
         if (asset->streaming.has_value()) {

@@ -10,6 +10,7 @@
 #include "engine/assets/AssetImportService.hpp"
 #include "engine/assets/AssetKind.hpp"
 #include "engine/assets/AssetCompatibility.hpp"
+#include "assets/AssetFileSystem.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/assets/CollisionMeshAsset.hpp"
@@ -433,6 +434,109 @@ void RunCollisionMeshAssetTest() {
         "Terrain collision geometry lost heights, origin or holes");
 }
 
+[[nodiscard]] std::uint64_t Fnv1a64(std::string_view bytes) noexcept {
+    std::uint64_t hash = 14695981039346656037ULL;
+    for (const char byte : bytes) {
+        hash ^= static_cast<unsigned char>(byte);
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+// Red when: files hashed side by side get each other's hashes, a settled file is read again by every scan, or a file
+// written moments ago (whose time stamp may not move with a second write) is remembered.
+void RunAssetDiscoveryRemembersUnchangedFilesTest() {
+    ResetTestRoot();
+    const auto root = TestRoot() / "HashMemory";
+    constexpr std::size_t kFiles = 40U;
+    const auto content = [](std::size_t index, char fill) {
+        return std::to_string(index) + std::string(4096U, fill);
+    };
+    const auto settled = std::filesystem::file_time_type::clock::now() - std::chrono::hours{ 1 };
+    for (std::size_t index = 0U; index < kFiles; ++index) {
+        const auto path = root / ("Settled" + std::to_string(index) + ".txt");
+        WriteTextFile(path, content(index, 'a'));
+        std::filesystem::last_write_time(path, settled);
+    }
+    kb::assets::AssetManager manager;
+    kb::tests::Require(manager.RegisterLoader(std::make_unique<TextAssetLoader>()), "Hash memory loader registration failed");
+    kb::tests::Require(manager.Mounts().Mount("Game", root), "Hash memory mount failed");
+    kb::tests::Require(manager.DiscoverMountedAssets() == kFiles, "Hash memory discovery failed");
+    const auto hashOf = [&](std::size_t index) {
+        const auto* metadata = manager.Registry().FindByPath("/Game/Settled" + std::to_string(index) + ".txt");
+        kb::tests::Require(metadata != nullptr, "Hash memory asset is missing");
+        return metadata->contentHash;
+    };
+    for (std::size_t index = 0U; index < kFiles; ++index) {
+        kb::tests::Require(hashOf(index) == Fnv1a64(content(index, 'a')), "Files hashed together did not keep their own hashes");
+    }
+    const std::uint64_t before = hashOf(0U);
+    // Same size, same time stamp, other bytes: a scan that does not read the file keeps the remembered hash.
+    const auto first = root / "Settled0.txt";
+    WriteTextFile(first, content(0U, 'b'));
+    std::filesystem::last_write_time(first, settled);
+    kb::tests::Require(manager.DiscoverMountedAssets() == kFiles && hashOf(0U) == before,
+        "A settled, unchanged file was read again by a later scan");
+    // Another time stamp is a changed file.
+    std::filesystem::last_write_time(first, settled + std::chrono::seconds{ 5 });
+    kb::tests::Require(manager.DiscoverMountedAssets() == kFiles && hashOf(0U) == Fnv1a64(content(0U, 'b')),
+        "A file with a new time stamp kept its old hash");
+    // A file written just now is never remembered, so a second write of the same size is seen.
+    const auto fresh = root / "Fresh.txt";
+    WriteTextFile(fresh, content(1000U, 'a'));
+    kb::tests::Require(manager.DiscoverMountedAssets() == kFiles + 1U, "Hash memory fresh file was not discovered");
+    WriteTextFile(fresh, content(1000U, 'c'));
+    kb::tests::Require(manager.DiscoverMountedAssets() == kFiles + 1U, "Hash memory fresh file was lost");
+    const auto* freshMetadata = manager.Registry().FindByPath("/Game/Fresh.txt");
+    kb::tests::Require(freshMetadata != nullptr && freshMetadata->contentHash == Fnv1a64(content(1000U, 'c')),
+        "A file written moments ago was served from the hash memory");
+}
+
+// Prints what a project scan costs read one file after another (the way every scan once did), read by the load workers
+// together, and answered from the remembered hashes; and requires the last to be the fastest.
+void RunAssetDiscoveryScanTimingTest() {
+    ResetTestRoot();
+    const auto root = TestRoot() / "ScanTiming";
+    constexpr std::size_t kFiles = 48U;
+    constexpr std::size_t kBytes = 2U * 1024U * 1024U;
+    const auto settled = std::filesystem::file_time_type::clock::now() - std::chrono::hours{ 1 };
+    std::string bytes(kBytes, '\0');
+    for (std::size_t file = 0U; file < kFiles; ++file) {
+        for (std::size_t index = 0U; index < bytes.size(); index += 4096U) {
+            bytes[index] = static_cast<char>(file + index / 4096U);
+        }
+        const auto path = root / ("Blob" + std::to_string(file) + ".txt");
+        WriteTextFile(path, bytes);
+        std::filesystem::last_write_time(path, settled);
+    }
+    const auto milliseconds = [](auto since) {
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - since).count();
+    };
+    auto started = std::chrono::steady_clock::now();
+    std::uint64_t sequentialSum = 0U;
+    for (std::size_t file = 0U; file < kFiles; ++file) {
+        sequentialSum += kb::assets::AssetFileSystem::HashFile(root / ("Blob" + std::to_string(file) + ".txt"));
+    }
+    const double sequential = milliseconds(started);
+    kb::assets::AssetManager manager;
+    kb::tests::Require(manager.RegisterLoader(std::make_unique<TextAssetLoader>()) && manager.Mounts().Mount("Game", root),
+        "Scan timing fixture could not be mounted");
+    started = std::chrono::steady_clock::now();
+    kb::tests::Require(manager.DiscoverMountedAssets() == kFiles, "Scan timing discovery failed");
+    const double cold = milliseconds(started);
+    started = std::chrono::steady_clock::now();
+    kb::tests::Require(manager.DiscoverMountedAssets() == kFiles, "Scan timing rediscovery failed");
+    const double warm = milliseconds(started);
+    std::uint64_t discoveredSum = 0U;
+    for (std::size_t file = 0U; file < kFiles; ++file) {
+        discoveredSum += manager.Registry().FindByPath("/Game/Blob" + std::to_string(file) + ".txt")->contentHash;
+    }
+    kb::tests::Require(discoveredSum == sequentialSum, "A scan hashed files differently from reading them one by one");
+    std::cout << "{\"case\":\"discovery-scan\",\"files\":" << kFiles << ",\"megabytes\":" << kFiles * kBytes / (1024U * 1024U)
+              << ",\"sequentialHashMs\":" << sequential << ",\"coldScanMs\":" << cold << ",\"warmScanMs\":" << warm << "}\n";
+    kb::tests::Require(warm < cold, "A scan of unchanged files was not quicker than the scan that hashed them");
+}
+
 void RunAssetDiscoveryHashCompatibilityTest() {
     ResetTestRoot();
     const auto root = TestRoot() / "HashCompatibility";
@@ -737,6 +841,8 @@ void RunAssetManagerCancellationTelemetryTest() {
         gate->release = release.get_future().share();
         gate->cooperative = true;
         kb::assets::AssetManager manager;
+        // One load runs while the next waits in the lane: that is what the counts below tell apart.
+        kb::tests::Require(manager.SetAsyncLoadConcurrency(1U), "Cancellation fixture lane could not be limited to one");
         kb::tests::Require(manager.RegisterLoader(std::make_unique<GatedTextAssetLoader>(gate)) &&
             manager.Mounts().Mount("Game", root) && manager.DiscoverMountedAssets() == 2U,
             "Cancellation fixture discovery failed");
@@ -952,6 +1058,8 @@ void RunAssetManagerAsyncLoadsShareBackgroundServiceTest() {
     auto gate = std::make_shared<AsyncLoaderGate>();
     gate->release = releasePromise.get_future().share();
     auto manager = std::make_unique<kb::assets::AssetManager>();
+    // The second request has to wait behind the blocked first one for the cancellation below to have something to cancel.
+    kb::tests::Require(manager->SetAsyncLoadConcurrency(1U), "Shared-service fixture lane could not be limited to one");
     kb::tests::Require(manager->RegisterLoader(std::make_unique<GatedTextAssetLoader>(gate)) &&
             manager->Mounts().Mount("Game", assetsRoot) && manager->DiscoverMountedAssets() == 2U,
         "Shared-service fixture could not be registered");
@@ -3034,6 +3142,8 @@ namespace kb::tests {
 void RunAssetRuntimeTests() {
     RunCollisionMeshAssetTest();
     RunAssetDiscoveryHashCompatibilityTest();
+    RunAssetDiscoveryRemembersUnchangedFilesTest();
+    RunAssetDiscoveryScanTimingTest();
     RunAssetMemoryLifetimeTest();
     RunAssetManagerDiscoveryCacheAndManifestTest();
     RunSingleAssetRefreshTest();

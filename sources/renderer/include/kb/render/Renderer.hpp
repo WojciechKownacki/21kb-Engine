@@ -248,6 +248,12 @@ public:
     // Streaming of the finer mip levels and levels of detail of packaged textures and meshes:
     // the GPU memory budget, I/O and per-frame upload limits, and what it is doing.
     void ConfigureContentStreaming(const RuntimeContentStreamingSettings& settings);
+    // How the first use of a packaged mesh or texture reaches the GPU (RuntimeResourceLoadingSettings).
+    void ConfigureRuntimeResourceLoading(const RuntimeResourceLoadingSettings& settings) noexcept;
+    // The meshes and textures `scene` referenced in its last submit, and how many have their GPU resource; and the
+    // number still waiting over the last submit of every scene.
+    [[nodiscard]] RuntimeSceneLoadProgress RuntimeSceneResourceProgress(const kb::scene::Scene& scene) const noexcept;
+    [[nodiscard]] std::uint32_t RuntimeResourcesWaiting() const noexcept;
     [[nodiscard]] RuntimeContentStreamingStats ContentStreamingStats() const;
     void ReserveRuntimeSceneResources(const RuntimeSceneResourceReserveDesc& desc);
     void SetDefaultSceneDrawBudget(SceneRenderDrawBudget drawBudget) noexcept;

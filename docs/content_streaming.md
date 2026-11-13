@@ -210,9 +210,9 @@ The isolated Linux CI job runs it with AddressSanitizer and UndefinedBehaviorSan
 
 - **Load jobs** produce something a frame is waiting for: an asset loader with its dependency
   validation, an image decoder, a streamed scene's preparation. They run on the load workers
-  (3 by default), which also serve the reads. At most two load workers run jobs at once
-  (`jobWorkers`), so one always stays free for reads and a slow or blocked loader cannot starve
-  streaming; under that limit a free load worker takes a waiting job before reads, so a busy
+  (half the machine's hardware threads, between 3 and 6, by default), which also serve the
+  reads. All but one of them run jobs at once (`jobWorkers`), so one always stays free for reads
+  and a slow or blocked loader cannot starve streaming; under that limit a free load worker takes a waiting job before reads, so a busy
   stream cannot starve the jobs either.
 - **Long jobs** run for seconds to minutes or wait for another process: imports, cooks,
   packaging, thumbnail and preview rendering, PNG encoding, storage writes, the release of a
@@ -223,7 +223,9 @@ The isolated Linux CI job runs it with AddressSanitizer and UndefinedBehaviorSan
 
 Jobs submitted to a **lane** run at most the lane's concurrency at a time (one unless stated),
 highest priority first. Each `AssetManager` opens a load lane on its first asynchronous request
-(its loaders run one at a time, as they always have); texture decodes share one load lane; the
+(as many of its loads run at once as there are `jobWorkers`, unless `SetAsyncLoadConcurrency`
+says otherwise; a loader that cannot run beside another takes turns behind the loader mutex);
+texture decodes share one load lane; the
 editor's importer, packager and material cook service and the renderer's screenshot encoder
 each own a long lane, and the particle thumbnail service a long lane of two. A lane's owner can cancel what it queued
 and wait for what it has running, which is what every owner does before it changes what its

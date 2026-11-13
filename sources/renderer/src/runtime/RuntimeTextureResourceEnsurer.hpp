@@ -11,7 +11,8 @@ public:
         const RuntimeMaterialResourceMap& materials,
         const RuntimeMaterialResourceMap& embeddedMaterials,
         RuntimeTextureResourceMap& textures,
-        RuntimeContentStreamer& streamer);
+        RuntimeContentStreamer& streamer,
+        RuntimeResourceCreationBudget& creation);
 };
 
 } // namespace kb::render

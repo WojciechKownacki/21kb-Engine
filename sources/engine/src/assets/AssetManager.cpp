@@ -24,7 +24,9 @@
 
 namespace kb::assets {
 
-AssetManager::AssetManager() = default;
+// A manager loads as many assets at once as the shared service keeps load workers for jobs; the loaders that
+// cannot run side by side still take turns behind the loader mutex. SetAsyncLoadConcurrency overrides it.
+AssetManager::AssetManager() : asyncConcurrency_{ streaming::BackgroundLoadService::SharedOptions().jobWorkers } {}
 
 AssetManager::~AssetManager() {
     StopAsyncLoads();

@@ -2344,6 +2344,91 @@ void PackBlocksStreamAsynchronously() {
 
 } // namespace
 
+// Red when: payloads read from one mounted pack by several threads at once differ from the same payloads read one
+// after another, or the reads of a compressed, sealed pack do not overlap (the container lock then covers the whole
+// decode, not only the file read).
+void ConcurrentPackReadsDecodeOutsideTheReadLock() {
+    const std::filesystem::path root = Root() / "parallel-reads";
+    Purge(root);
+    std::filesystem::create_directories(root);
+    constexpr std::size_t kAssets = 48U;
+    constexpr std::size_t kBytes = 384U * 1024U;
+    SetPack description{};
+    description.assets.push_back(kStartMap);
+    for (std::size_t index = 0U; index < kAssets; ++index) {
+        std::string content;
+        content.reserve(kBytes);
+        std::uint32_t state = 0x9E3779B9U * static_cast<std::uint32_t>(index + 1U);
+        while (content.size() < kBytes) {
+            // Compressible but distinct per asset: runs of one letter picked by a small generator.
+            state = state * 1664525U + 1013904223U;
+            content.append(24U, static_cast<char>('a' + (state >> 27U) % 26U));
+        }
+        description.assets.push_back(SetAsset{ "/Game/Blob/Blob" + std::to_string(index) + ".kbdata", "DataTable", std::move(content), {} });
+    }
+    const std::filesystem::path path = root / "Game.kbpack";
+    WriteSetPack(path, description);
+
+    bake::RuntimeAssetPack pack;
+    Require(pack.Mount(path, bake::WindowsX64BakeTargetProfile()) == bake::RuntimeAssetPackStatus::Success,
+        "The fixture pack did not mount");
+    const auto readAll = [&](std::size_t first, std::size_t step, std::vector<std::string>& out) {
+        for (std::size_t index = first; index < kAssets; index += step) {
+            out[index] = ReadAssetText(pack, description.assets[index + 1U]);
+        }
+    };
+    std::vector<std::string> sequential(kAssets);
+    const auto sequentialStart = Clock::now();
+    readAll(0U, 1U, sequential);
+    const double sequentialMilliseconds = std::chrono::duration<double, std::milli>(Clock::now() - sequentialStart).count();
+    for (std::size_t index = 0U; index < kAssets; ++index) {
+        Require(sequential[index] == description.assets[index + 1U].content, "A sequential pack read returned other bytes than were stored");
+    }
+    constexpr std::size_t kThreads = 4U;
+    double best = sequentialMilliseconds;
+    for (int round = 0; round < 3; ++round) {
+        std::vector<std::string> parallel(kAssets);
+        std::vector<std::thread> readers;
+        const auto parallelStart = Clock::now();
+        for (std::size_t thread = 0U; thread < kThreads; ++thread) {
+            readers.emplace_back([&, thread] { readAll(thread, kThreads, parallel); });
+        }
+        for (std::thread& reader : readers) {
+            reader.join();
+        }
+        best = std::min(best, std::chrono::duration<double, std::milli>(Clock::now() - parallelStart).count());
+        for (std::size_t index = 0U; index < kAssets; ++index) {
+            Require(parallel[index] == sequential[index], "Concurrent pack reads returned other bytes than sequential ones");
+        }
+    }
+    // What the readers cost when one lock covers every read whole, as the pack's own lock once did.
+    std::mutex wholeReadLock;
+    std::vector<std::string> locked(kAssets);
+    std::vector<std::thread> lockedReaders;
+    const auto lockedStart = Clock::now();
+    for (std::size_t thread = 0U; thread < kThreads; ++thread) {
+        lockedReaders.emplace_back([&, thread] {
+            for (std::size_t index = thread; index < kAssets; index += kThreads) {
+                std::scoped_lock lock{ wholeReadLock };
+                locked[index] = ReadAssetText(pack, description.assets[index + 1U]);
+            }
+        });
+    }
+    for (std::thread& reader : lockedReaders) {
+        reader.join();
+    }
+    const double lockedMilliseconds = std::chrono::duration<double, std::milli>(Clock::now() - lockedStart).count();
+    std::cout << "{\"case\":\"parallel-pack-reads\",\"assets\":" << kAssets << ",\"sequentialMs\":" << sequentialMilliseconds
+              << ",\"wholeReadLockMs\":" << lockedMilliseconds << ",\"parallelBestMs\":" << best << "}\n";
+    // Only a machine that can run the readers side by side can show it.
+    if (std::thread::hardware_concurrency() >= 4U) {
+        Require(best < sequentialMilliseconds * 0.8,
+            "Reads of one pack did not overlap: its lock still covers verification and decompression");
+    }
+    pack.Unmount();
+    Purge(root);
+}
+
 void PackSetPathsRequireValidUtf8() {
     const auto root = Root() / "invalid-utf8";
     std::filesystem::create_directories(root);
@@ -2383,6 +2468,7 @@ void PackSetPathsRequireValidUtf8() {
 }
 
 void RunContentStreamingTests() {
+    ConcurrentPackReadsDecodeOutsideTheReadLock();
     PackSetPathsRequireValidUtf8();
     CompressedBlocksRoundTripWithRandomAccess();
     TamperedCompressedBlocksAreRefused();

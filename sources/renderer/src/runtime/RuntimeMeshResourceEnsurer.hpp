@@ -10,7 +10,8 @@ public:
         const RuntimeRenderResourceEnsureContext& context,
         RuntimeMeshResourceMap& meshes,
         RuntimeMaterialResourceMap& embeddedMaterials,
-        RuntimeContentStreamer& streamer);
+        RuntimeContentStreamer& streamer,
+        RuntimeResourceCreationBudget& creation);
 };
 
 } // namespace kb::render

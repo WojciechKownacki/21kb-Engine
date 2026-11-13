@@ -2339,6 +2339,18 @@ void Renderer::ConfigureContentStreaming(const RuntimeContentStreamingSettings& 
     runtimeResourceCache_.Streamer().Configure(settings);
 }
 
+void Renderer::ConfigureRuntimeResourceLoading(const RuntimeResourceLoadingSettings& settings) noexcept {
+    runtimeResourceCache_.ConfigureResourceLoading(settings);
+}
+
+RuntimeSceneLoadProgress Renderer::RuntimeSceneResourceProgress(const kb::scene::Scene& scene) const noexcept {
+    return runtimeResourceCache_.SceneLoadProgress(scene.Id());
+}
+
+std::uint32_t Renderer::RuntimeResourcesWaiting() const noexcept {
+    return runtimeResourceCache_.WaitingResourceCount();
+}
+
 RuntimeContentStreamingStats Renderer::ContentStreamingStats() const {
     return runtimeResourceCache_.Streamer().Stats();
 }

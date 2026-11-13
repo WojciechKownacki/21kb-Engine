@@ -42,7 +42,8 @@ void RuntimeTextureResourceEnsurer::Ensure(
     const RuntimeMaterialResourceMap& materials,
     const RuntimeMaterialResourceMap& embeddedMaterials,
     RuntimeTextureResourceMap& textures,
-    RuntimeContentStreamer& streamer) {
+    RuntimeContentStreamer& streamer,
+    RuntimeResourceCreationBudget& creation) {
     kb::assets::AssetManager& manager = context.scene.Assets().Manager();
 
     auto ensureTexture = [&](
@@ -82,6 +83,7 @@ void RuntimeTextureResourceEnsurer::Ensure(
             RuntimeTextureResource& cached = cacheIt->second;
             cached.lastReferencedFrame = context.currentFrame;
             context.sceneRenderer.ResourceMap().BindTexture(textureAssetId, colorSpace, cached.handle);
+            creation.NoteResolved();
             if (cached.dimension != expectedDimension) {
                 std::ostringstream row;
                 row << "texture-dimension-mismatch assetId=" << textureAssetId
@@ -113,6 +115,30 @@ void RuntimeTextureResourceEnsurer::Ensure(
         // streams in a frame or two later. When disabled (tests, headless captures) decode synchronously so a
         // texture is deterministically bound in the same submit.
         std::shared_ptr<const RenderTextureAssetData> asset = loadedAsset.Shared();
+        if (asset == nullptr && packaged && creation.Asynchronous()) {
+            // First use of a packaged texture: its blocks are read and decoded on the background load workers and the
+            // slot stays unbound until they are. A load that failed falls through to the synchronous one below, which
+            // reports the failure the way it always did.
+            const TextureRef prepared = manager.AcquireLoaded<RenderTextureAssetData>(assetId);
+            if (prepared.IsLoaded() && !creation.MayCreate()) {
+                // Decoded; this submit has spent its time on other resources, so the GPU resource is made in the
+                // next one.
+                context.sceneRenderer.ResourceMap().UnbindTexture(textureAssetId, colorSpace);
+                creation.NoteWaiting();
+                return;
+            }
+            if (prepared.IsLoaded()) {
+                asset = prepared.Shared();
+                // The decoded bytes are needed only until the GPU has them; this function and, for a streamed
+                // texture, the streamer hold them, so the manager need not keep a second copy.
+                static_cast<void>(manager.Unload(assetId));
+            } else if (manager.AsyncLoadStatus(assetId) != kb::assets::AsyncAssetLoadStatus::Failed) {
+                static_cast<void>(manager.RequestLoadAsync(assetId));
+                context.sceneRenderer.ResourceMap().UnbindTexture(textureAssetId, colorSpace);
+                creation.NoteWaiting();
+                return;
+            }
+        }
         if (asset == nullptr && packaged) {
             const bgfx::RendererType::Enum rendererType = bgfx::getRendererType();
             RenderTextureAssetLoader loader{ rendererType };
@@ -197,6 +223,7 @@ void RuntimeTextureResourceEnsurer::Ensure(
             .dimension = textureRef->dimension,
         };
         context.sceneRenderer.ResourceMap().BindTexture(textureAssetId, colorSpace, handle);
+        creation.NoteCreated();
         // A packaged texture with streamed mips was created from its tail; the rest streams.
         if (packaged && textureRef->streaming.has_value() && !generatedMipChain.has_value()) {
             streamer.TrackTexture(runtimeKey, handle, textureRef.Shared(), runtimePack);

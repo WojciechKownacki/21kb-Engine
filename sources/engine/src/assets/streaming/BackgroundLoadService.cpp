@@ -203,10 +203,17 @@ std::shared_ptr<BackgroundLoadService> BackgroundLoadService::Shared() {
     std::scoped_lock lock{ instance->mutex };
     std::shared_ptr<BackgroundLoadService> service = instance->service.lock();
     if (service == nullptr) {
-        service = std::make_shared<BackgroundLoadService>();
+        service = std::make_shared<BackgroundLoadService>(SharedOptions());
         instance->service = service;
     }
     return service;
+}
+
+BackgroundLoadServiceOptions BackgroundLoadService::SharedOptions() noexcept {
+    BackgroundLoadServiceOptions options{};
+    options.workerCount = std::clamp<std::uint32_t>(std::thread::hardware_concurrency() / 2U, 3U, 6U);
+    options.jobWorkers = options.workerCount - 1U;
+    return options;
 }
 
 BackgroundRequestHandle BackgroundLoadService::Read(

@@ -607,6 +607,9 @@ int RunGame(const GameOptions& options) {
         return EXIT_FAILURE;
     }
     renderer.SetRenderScale(display.renderScale);
+    // The project is discovered once by LoadGameProjectScene. A rescan from the renderer would cancel the loads that
+    // are in flight behind the loading screen, so the renderer never rescans here.
+    renderer.SetRuntimeAssetDiscoveryEnabled(false);
     {
         auto lighting = renderer.DefaultSceneLightingConfig();
         lighting.lightingPath = kb::render::ProjectLightingPath(projectRuntime.lightingPath, kb::game::kMobileDevice);
@@ -686,7 +689,6 @@ int RunGame(const GameOptions& options) {
             return EXIT_FAILURE;
         }
     }
-    renderer.SetRuntimeAssetDiscoveryEnabled(false);
     std::cout << "kb_game: project=" << kb::game::NarrowForDiagnostics(projectRuntime.projectRoot)
               << " scene=" << kb::game::NarrowForDiagnostics(scenePath)
               << " entities=" << scene.Entities().Count()
@@ -869,8 +871,10 @@ int RunGame(const GameOptions& options) {
             loadingFramesBeforeScene = loadingScreen.DrawnFrames().size();
         }
         const auto& renderStats = renderer.LastSceneSubmitStats();
+        // Meshes and textures still being read in the background are not missing: they are drawn once they arrive.
+        const bool missingResources = renderStats.HasMissingResources() && renderer.RuntimeResourcesWaiting() == 0U;
         const bool renderErrors = renderer.LastSceneDiagnostics().HasErrors() ||
-            renderStats.HasMissingResources() || renderStats.droppedInstanceCount != 0U;
+            missingResources || renderStats.droppedInstanceCount != 0U;
         const auto profileAfterSubmit = !options.profilePath.empty()
             ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
         if (submitted && !renderErrors && renderedFrames + 1U == options.screenshotFrame) {
@@ -1057,7 +1061,7 @@ int RunGame(const GameOptions& options) {
                 .shadowCasters = renderStats.shadowCasterCount,
                 .submittedMeshes = renderStats.submittedMeshCount,
                 .droppedInstances = renderStats.droppedInstanceCount,
-                .missingResources = renderStats.HasMissingResources() ? 1U : 0U,
+                .missingResources = missingResources ? 1U : 0U,
                 .fixedSteps = static_cast<std::uint32_t>(scene.Runtime().LastFixedStepCount()),
                 .exposureReadbackSubmitted = readbackSubmitted ? 1U : 0U,
                 .exposureSampleAvailable = exposureSampleAvailable ? 1U : 0U,
@@ -1106,7 +1110,7 @@ int RunGame(const GameOptions& options) {
         if (renderStats.droppedInstanceCount != 0U) {
             reportError("renderer dropped instances from the frame");
         }
-        if (renderStats.HasMissingResources()) {
+        if (missingResources) {
             reportError("renderer has missing resources: mesh bindings=" + std::to_string(renderStats.missingMeshBindingCount) +
                 " meshes=" + std::to_string(renderStats.missingMeshResourceCount) +
                 " vertex formats=" + std::to_string(renderStats.unsupportedMeshVertexFormatCount) +
@@ -1182,6 +1186,7 @@ int RunGame(const GameOptions& options) {
             frame.Set("progress", JsonValue::MakeNumber(drawn.progress));
             frame.Set("held", JsonValue::MakeBool(drawn.held));
             frame.Set("prewarm", JsonValue::MakeBool(drawn.prewarm));
+            frame.Set("ms", JsonValue::MakeNumber(drawn.milliseconds));
             frames.Append(std::move(frame));
         }
         JsonValue report = JsonValue::MakeObject();

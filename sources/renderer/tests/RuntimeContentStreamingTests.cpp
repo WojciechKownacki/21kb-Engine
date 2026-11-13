@@ -1,6 +1,7 @@
 #include "RendererTestSupport.hpp"
 
 #include "engine/assets/AssetId.hpp"
+#include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/IAssetLoader.hpp"
 #include "engine/assets/bake/AssetPackWriter.hpp"
@@ -8,6 +9,13 @@
 #include "engine/assets/bake/RuntimeAssetManifest.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
 #include "engine/assets/streaming/BackgroundLoadService.hpp"
+#include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneDocumentService.hpp"
+#include "engine/scene/SceneObject.hpp"
 #include "kb/render/DisplayConfig.hpp"
 #include "kb/render/RenderSurface.hpp"
 #include "kb/render/Renderer.hpp"
@@ -1119,7 +1127,292 @@ void MissingLevelDataKeepsTheTailDrawable() {
 
 } // namespace
 
+// A compressed pack of a scene and `count` distinct spheres, each with its own level-of-detail chain.
+struct MeshPack {
+    std::shared_ptr<asset_bake::RuntimeAssetPack> pack;
+    std::vector<kb::assets::AssetId> meshes;
+};
+
+[[nodiscard]] MeshPack BuildMeshPack(const std::filesystem::path& path, std::uint32_t count) {
+    const asset_bake::BakeTargetProfile profile = asset_bake::AndroidEtc2Arm64BakeTargetProfile();
+    asset_bake::AssetPackWriterOptions options{};
+    options.compression = asset_bake::AssetPackBlockCompression::Zstd;
+    asset_bake::AssetPackWriter writer{ path, profile, options };
+    const std::string scenePath = "/Game/Scenes/Main.21kbscene";
+    asset_bake::RuntimeAssetManifest manifest{
+        .targetProfileId = std::string{ profile.identifier },
+        .targetProfileHash = asset_bake::BakeTargetProfileFingerprint(profile),
+    };
+    manifest.descriptor.targetPlatforms = { "Windows" };
+    manifest.settings.name = "ResourceLoading";
+    manifest.settings.defaultMap = scenePath;
+    MeshPack result{};
+    for (std::uint32_t index = 0U; index < count; ++index) {
+        const bake::MeshBakeOutput baked = bake::BakeMesh(MakeSphere(24U + index, 16U + index), profile, writer);
+        Require(baked.status == bake::MeshBakeStatus::Success, "A resource loading sphere did not bake");
+        const std::string meshPath = "/Game/Meshes/Sphere" + std::to_string(index) + ".obj";
+        manifest.assets.push_back(asset_bake::RuntimeAssetManifestEntry{
+            .id = kb::assets::MakeAssetId(meshPath + ":RenderMesh"),
+            .type = "RenderMesh",
+            .name = "Sphere" + std::to_string(index),
+            .virtualPath = meshPath,
+            .sourceExtension = ".obj",
+            .contentHash = 0x5EF1U + index,
+            .artifacts = { asset_bake::RuntimeArtifactReference{
+                .digest = baked.key.Digest(), .encoding = asset_bake::RuntimeArtifactEncoding::BakedMesh } },
+        });
+        result.meshes.push_back(manifest.assets.back().id);
+    }
+    const std::array<std::uint8_t, 5U> sceneSource{ 's', 'c', 'e', 'n', 'e' };
+    std::vector<std::uint8_t> sceneBlob;
+    Require(asset_bake::EncodeRuntimeSourceBlob(sceneSource, sceneBlob), "The resource loading scene source did not encode");
+    const asset_bake::AssetBakeKey sceneKey = SourceKey(profile, sceneSource, scenePath);
+    Require(writer.BeginAsset({ .key = sceneKey, .assetTypeId = std::string{ asset_bake::kSourceAssetTypeId } }) ==
+                asset_bake::BakedAssetSinkStatus::Success &&
+            writer.WritePrimaryBlock(sceneBlob, profile.packageBlockAlignmentBytes) == asset_bake::BakedAssetSinkStatus::Success &&
+            writer.CommitAsset() == asset_bake::BakedAssetSinkStatus::Success,
+        "The resource loading scene could not be stored");
+    manifest.assets.push_back(asset_bake::RuntimeAssetManifestEntry{
+        .id = kb::assets::MakeAssetId(scenePath + ":Scene"),
+        .type = "Scene",
+        .name = "Main",
+        .virtualPath = scenePath,
+        .sourceExtension = ".21kbscene",
+        .contentHash = asset_bake::HashBakeBytes(sceneSource),
+        .artifacts = { asset_bake::RuntimeArtifactReference{
+            .digest = sceneKey.Digest(), .encoding = asset_bake::RuntimeArtifactEncoding::SourceBytes } },
+    });
+    std::vector<std::uint8_t> manifestBytes;
+    Require(asset_bake::EncodeRuntimeAssetManifest(manifest, manifestBytes) == asset_bake::RuntimeAssetManifestStatus::Success,
+        "The resource loading manifest did not encode");
+    asset_bake::AssetBakeKey manifestKey = SourceKey(profile, manifestBytes, "manifest");
+    manifestKey.bakerId = "RuntimeManifest";
+    Require(writer.BeginAsset({ .key = manifestKey, .assetTypeId = std::string{ asset_bake::kRuntimeManifestAssetTypeId } }) ==
+                asset_bake::BakedAssetSinkStatus::Success &&
+            writer.WritePrimaryBlock(manifestBytes, profile.packageBlockAlignmentBytes) ==
+                asset_bake::BakedAssetSinkStatus::Success &&
+            writer.CommitAsset() == asset_bake::BakedAssetSinkStatus::Success &&
+            writer.Finish() == asset_bake::BakedAssetSinkStatus::Success,
+        "The resource loading pack could not be published");
+    result.pack = std::make_shared<asset_bake::RuntimeAssetPack>();
+    Require(result.pack->Mount(path, profile) == asset_bake::RuntimeAssetPackStatus::Success, "The resource loading pack did not mount");
+    return result;
+}
+
+// What one pass over a scene of packaged spheres did to the render thread.
+struct ResourceLoadingRun {
+    std::uint32_t submits = 0U;
+    std::uint32_t meshes = 0U;
+    std::size_t loadedOnRenderThreadAfterFirstSubmit = 0U;
+    std::uint32_t waitingAfterFirstSubmit = 0U;
+    std::uint32_t mostCreatedInOneSubmit = 0U;
+    bool progressNeverWentBack = true;
+    double firstSubmitMilliseconds = 0.0;
+    double slowestSubmitMilliseconds = 0.0;
+    double totalMilliseconds = 0.0;
+    std::uint64_t meshBytes = 0U;
+};
+
+[[nodiscard]] ResourceLoadingRun RunSceneOfSpheres(const MeshPack& fixture, const RuntimeResourceLoadingSettings& settings) {
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.MountRuntimePack(fixture.pack), "The resource loading pack did not mount in the scene");
+    for (std::size_t index = 0U; index < fixture.meshes.size(); ++index) {
+        const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+            .name = "Sphere " + std::to_string(index) });
+        scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{ .meshAssetId = fixture.meshes[index].value });
+    }
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "The resource loading renderer did not initialize");
+    renderer.ConfigureRuntimeResourceLoading(settings);
+    const SceneRenderCamera camera = CameraAt(8.0F);
+    ResourceLoadingRun run{};
+    run.meshes = static_cast<std::uint32_t>(fixture.meshes.size());
+    std::uint32_t previouslyResolved = 0U;
+    std::uint32_t previousMeshes = 0U;
+    const Clock::time_point started = Clock::now();
+    const Clock::time_point deadline = started + std::chrono::seconds{ 60 };
+    for (;;) {
+        const Clock::time_point submitStarted = Clock::now();
+        Require(renderer.BeginFrame(), "The resource loading renderer did not begin a frame");
+        const RenderSceneSubmitDesc desc{
+            .target = RenderSceneTargetBinding{
+                .frameBuffer = BGFX_INVALID_HANDLE,
+                .colorTexture = BGFX_INVALID_HANDLE,
+                .viewport = RenderViewportDesc{ .id = RenderViewportId{ 1U }, .extent = RenderExtent{ 64U, 64U }, .viewportIndex = 0U },
+            },
+            .cameraOverride = camera,
+        };
+        Require(renderer.SubmitScene(scene, desc), "The resource loading scene did not submit");
+        renderer.EndFrame();
+        const double milliseconds = std::chrono::duration<double, std::milli>(Clock::now() - submitStarted).count();
+        ++run.submits;
+        const RuntimeSceneLoadProgress progress = renderer.RuntimeSceneResourceProgress(scene);
+        const Renderer::RuntimeSceneResourceStats stats = renderer.RuntimeResourceStats();
+        if (run.submits == 1U) {
+            run.firstSubmitMilliseconds = milliseconds;
+            run.loadedOnRenderThreadAfterFirstSubmit = manager.LoadedCount();
+            run.waitingAfterFirstSubmit = progress.waiting;
+        }
+        run.slowestSubmitMilliseconds = std::max(run.slowestSubmitMilliseconds, milliseconds);
+        run.mostCreatedInOneSubmit = std::max(run.mostCreatedInOneSubmit, stats.cachedMeshCount - previousMeshes);
+        run.progressNeverWentBack = run.progressNeverWentBack && progress.resolved >= previouslyResolved;
+        previouslyResolved = progress.resolved;
+        previousMeshes = stats.cachedMeshCount;
+        if (progress.Complete() && stats.cachedMeshCount == run.meshes) {
+            break;
+        }
+        Require(Clock::now() < deadline, "Packaged meshes did not finish loading in time");
+        std::this_thread::sleep_for(std::chrono::milliseconds{ 1 });
+    }
+    run.totalMilliseconds = std::chrono::duration<double, std::milli>(Clock::now() - started).count();
+    // Uploads the last submits queued count as pending until a few frames have passed.
+    for (int settle = 0; settle < 4; ++settle) {
+        Require(renderer.BeginFrame(), "The resource loading renderer did not begin a settling frame");
+        const RenderSceneSubmitDesc settling{
+            .target = RenderSceneTargetBinding{
+                .frameBuffer = BGFX_INVALID_HANDLE,
+                .colorTexture = BGFX_INVALID_HANDLE,
+                .viewport = RenderViewportDesc{ .id = RenderViewportId{ 1U }, .extent = RenderExtent{ 64U, 64U }, .viewportIndex = 0U },
+            },
+            .cameraOverride = camera,
+        };
+        Require(renderer.SubmitScene(scene, settling), "The resource loading scene did not submit while settling");
+        renderer.EndFrame();
+    }
+    run.meshBytes = renderer.RuntimeResourceStats().memory.RetainedBytes();
+    renderer.Shutdown();
+    return run;
+}
+
+// Red when: with background loading on, a submit reads a pack itself instead of leaving the mesh unbound; a submit
+// creates more GPU resources than its time budget or its per-frame count limit allows; the load progress ever goes
+// backwards or never completes; or the scene that finished loading in the background holds less than the one a
+// synchronous submit builds in one go.
+void PackagedMeshesLoadInTheBackground() {
+    const std::filesystem::path root = TestRoot();
+    std::error_code error;
+    std::filesystem::create_directories(root, error);
+    constexpr std::uint32_t kMeshes = 24U;
+    const MeshPack fixture = BuildMeshPack(root / "Game.kbpack", kMeshes);
+    const ResourceLoadingRun synchronous = RunSceneOfSpheres(fixture, RuntimeResourceLoadingSettings{});
+    Require(synchronous.submits == 1U && synchronous.waitingAfterFirstSubmit == 0U,
+        "A synchronous submit did not build the whole scene in one go");
+    // A budget of zero lets a submit create one resource and no more, which makes the spreading visible.
+    const ResourceLoadingRun background = RunSceneOfSpheres(fixture,
+        RuntimeResourceLoadingSettings{ .asynchronous = true, .creationBudgetMilliseconds = 0.0 });
+    Require(background.loadedOnRenderThreadAfterFirstSubmit == 0U && background.waitingAfterFirstSubmit == kMeshes,
+        "The first submit loaded packaged meshes on the render thread instead of leaving them to the workers");
+    Require(background.mostCreatedInOneSubmit <= 1U, "A submit created more GPU resources than its time budget allows");
+    Require(background.progressNeverWentBack, "The load progress went backwards");
+    Require(background.submits > kMeshes / 2U, "A submit created more than one resource although its budget was spent");
+    // With time to spare, the count limit alone spreads the creations.
+    constexpr std::uint32_t kCreationsPerFrame = 4U;
+    const ResourceLoadingRun counted = RunSceneOfSpheres(fixture, RuntimeResourceLoadingSettings{
+        .asynchronous = true, .creationBudgetMilliseconds = 60000.0, .maxCreationsPerFrame = kCreationsPerFrame });
+    Require(counted.mostCreatedInOneSubmit <= kCreationsPerFrame && counted.progressNeverWentBack,
+        "A submit created more GPU resources than the per-frame creation limit allows");
+    // The longer run has streamed finer levels in meanwhile, so it holds at least what the single submit built.
+    Require(synchronous.meshBytes != 0U && background.meshBytes >= synchronous.meshBytes,
+        ("Meshes loaded in the background are smaller than the ones a synchronous submit builds: " +
+            std::to_string(background.meshBytes) + " bytes against " + std::to_string(synchronous.meshBytes)).c_str());
+    std::cout << "{\"case\":\"packaged-meshes-background\",\"meshes\":" << kMeshes
+              << ",\"synchronousFirstSubmitMs\":" << synchronous.firstSubmitMilliseconds
+              << ",\"backgroundFirstSubmitMs\":" << background.firstSubmitMilliseconds
+              << ",\"backgroundSlowestSubmitMs\":" << background.slowestSubmitMilliseconds
+              << ",\"backgroundSubmits\":" << background.submits << ",\"backgroundTotalMs\":" << background.totalMilliseconds << "}\n";
+    std::filesystem::remove_all(root, error);
+}
+
+#if defined(_WIN32)
+// KB_LOAD_BENCH_PACK=<Game.kbpack>: how a cooked game's start scene reaches the GPU on this machine, the whole scene
+// at once inside the first submit and in the background under the creation budget. Prints one JSON line per mode;
+// KB_LOAD_BENCH_BACKGROUND_FIRST (any value) runs the background mode first.
+void PackedSceneLoadBench(const std::filesystem::path& packPath, bool backgroundFirst) {
+    // Whichever mode runs second finds the shader binaries and the file cache the first one warmed.
+    for (const bool background : { backgroundFirst, !backgroundFirst }) {
+        auto pack = std::make_shared<asset_bake::RuntimeAssetPack>();
+        Require(pack->Mount(packPath, asset_bake::WindowsX64BakeTargetProfile()) == asset_bake::RuntimeAssetPackStatus::Success,
+            "The bench pack did not mount");
+        kb::scene::Scene scene;
+        kb::assets::AssetManager& manager = scene.Assets().Manager();
+        Require(manager.MountRuntimePack(pack), "The bench pack did not mount in the scene");
+        const Clock::time_point loadStarted = Clock::now();
+        const kb::assets::AssetMetadata* map = manager.Registry().FindByPath(pack->Manifest().settings.defaultMap);
+        Require(map != nullptr, "The bench pack names no start scene");
+        const auto document = manager.Load<kb::scene::SceneDocument>(map->id);
+        Require(document.IsLoaded() && kb::scene::SceneDocumentService::LoadIntoScene(scene, *document), "The bench scene did not load");
+        const double sceneMilliseconds = std::chrono::duration<double, std::milli>(Clock::now() - loadStarted).count();
+        HeadlessSurface surface{ true };
+        DisplayConfig config{};
+        config.allowHeadlessNoop = true;
+        config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+        Renderer renderer;
+        Require(renderer.Initialize(surface, &config), "The bench renderer did not initialize");
+        if (background) {
+            renderer.ConfigureRuntimeResourceLoading(RuntimeResourceLoadingSettings{ .asynchronous = true });
+        }
+        const SceneRenderCamera camera = CameraAt(40.0F);
+        std::uint32_t submits = 0U;
+        double first = 0.0;
+        double slowest = 0.0;
+        const Clock::time_point started = Clock::now();
+        const Clock::time_point deadline = started + std::chrono::seconds{ 120 };
+        for (;;) {
+            const Clock::time_point submitStarted = Clock::now();
+            Require(renderer.BeginFrame(), "The bench renderer did not begin a frame");
+            const RenderSceneSubmitDesc desc{
+                .target = RenderSceneTargetBinding{
+                    .frameBuffer = BGFX_INVALID_HANDLE,
+                    .colorTexture = BGFX_INVALID_HANDLE,
+                    .viewport = RenderViewportDesc{ .id = RenderViewportId{ 1U }, .extent = RenderExtent{ 64U, 64U }, .viewportIndex = 0U },
+                },
+                .cameraOverride = camera,
+            };
+            Require(renderer.SubmitScene(scene, desc), "The bench scene did not submit");
+            renderer.EndFrame();
+            const double milliseconds = std::chrono::duration<double, std::milli>(Clock::now() - submitStarted).count();
+            ++submits;
+            first = submits == 1U ? milliseconds : first;
+            slowest = std::max(slowest, milliseconds);
+            if (renderer.RuntimeSceneResourceProgress(scene).Complete()) {
+                break;
+            }
+            Require(Clock::now() < deadline, "The bench scene did not finish loading in time");
+        }
+        const double total = std::chrono::duration<double, std::milli>(Clock::now() - started).count();
+        const Renderer::RuntimeSceneResourceStats stats = renderer.RuntimeResourceStats();
+        std::cout << "{\"case\":\"packed-scene\",\"mode\":\"" << (background ? "background" : "synchronous")
+                  << "\",\"sceneLoadMs\":" << sceneMilliseconds << ",\"firstSubmitMs\":" << first
+                  << ",\"slowestSubmitMs\":" << slowest << ",\"submits\":" << submits << ",\"totalMs\":" << total
+                  << ",\"meshes\":" << stats.cachedMeshCount << ",\"textures\":" << stats.cachedTextureCount
+                  << ",\"materials\":" << stats.cachedMaterialCount << "}\n";
+        renderer.Shutdown();
+    }
+}
+#endif
+
 void RunRuntimeContentStreamingTests() {
+#if defined(_WIN32)
+    char* benchPack = nullptr;
+    std::size_t benchPackSize = 0U;
+    if (_dupenv_s(&benchPack, &benchPackSize, "KB_LOAD_BENCH_PACK") == 0 && benchPack != nullptr && *benchPack != '\0') {
+        const std::filesystem::path benchPath{ benchPack };
+        std::free(benchPack);
+        char* order = nullptr;
+        std::size_t orderSize = 0U;
+        const bool backgroundFirst = _dupenv_s(&order, &orderSize, "KB_LOAD_BENCH_BACKGROUND_FIRST") == 0 && order != nullptr;
+        std::free(order);
+        PackedSceneLoadBench(benchPath, backgroundFirst);
+        return;
+    }
+    std::free(benchPack);
+#endif
+    PackagedMeshesLoadInTheBackground();
 #if defined(_WIN32)
     StreamingImagesSurviveZoomAndEviction();
 #endif

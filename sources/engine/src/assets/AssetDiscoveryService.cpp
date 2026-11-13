@@ -5,8 +5,13 @@
 #include "assets/AssetPathUtilities.hpp"
 #include "engine/assets/ImportedAssetHeaderReader.hpp"
 #include "engine/assets/bake/AssetPackReader.hpp"
+#include "engine/assets/streaming/BackgroundLoadService.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <condition_variable>
+#include <memory>
+#include <mutex>
 #include <set>
 #include <system_error>
 #include <unordered_map>
@@ -70,6 +75,72 @@ constexpr const char* kEditorLiveAssetOverrideCategory = "EditorLiveOverride";
     return owner;
 }
 
+// The content hashes of every file a loader claims, except baked packages (which may be gigabytes and are only hashed
+// once a loader accepts them). The files are read by the load workers and by the calling thread together, which takes
+// the next unhashed file whenever it is free, so it never waits for a worker that has not started.
+[[nodiscard]] std::unordered_map<std::filesystem::path::string_type, std::uint64_t> HashClaimedFiles(
+    const AssetMountTable& mounts,
+    const std::vector<std::unique_ptr<IAssetLoader>>& loaders) {
+    struct Batch {
+        std::vector<std::filesystem::path> paths;
+        std::vector<std::uint64_t> hashes;
+        std::atomic<std::size_t> next{ 0U };
+        std::atomic<std::size_t> done{ 0U };
+        std::mutex mutex;
+        std::condition_variable finished;
+    };
+    auto batch = std::make_shared<Batch>();
+    for (const AssetMount& mount : mounts.Mounts()) {
+        std::error_code error;
+        if (!std::filesystem::exists(mount.root, error) || error) {
+            continue;
+        }
+        for (const std::filesystem::directory_entry& entry : std::filesystem::recursive_directory_iterator{ mount.root, error }) {
+            if (error || !entry.is_regular_file() ||
+                AssetLoaderRegistry::FindByExtension(loaders, entry.path().extension()) == nullptr ||
+                AssetPathUtilities::LowerExtension(entry.path().extension()) == kb::assets::bake::kAssetPackFileExtension) {
+                continue;
+            }
+            batch->paths.push_back(entry.path());
+        }
+    }
+    batch->hashes.assign(batch->paths.size(), 0U);
+    const auto hashNext = [batch] {
+        const std::size_t count = batch->paths.size();
+        for (std::size_t index = batch->next.fetch_add(1U); index < count; index = batch->next.fetch_add(1U)) {
+            batch->hashes[index] = AssetFileSystem::HashFileUnlessUnchanged(batch->paths[index]);
+            if (batch->done.fetch_add(1U) + 1U == count) {
+                std::scoped_lock lock{ batch->mutex };
+                batch->finished.notify_all();
+            }
+        }
+    };
+    // A handful of files are quicker to read where they are asked for than to hand out.
+    constexpr std::size_t kSpreadFrom = 16U;
+    // Held until every file is hashed, so a service started only for this scan is not torn down under its helpers.
+    std::shared_ptr<kb::assets::streaming::BackgroundLoadService> service;
+    if (batch->paths.size() >= kSpreadFrom) {
+        service = kb::assets::streaming::BackgroundLoadService::Shared();
+        for (std::uint32_t helper = 0U; helper < service->JobWorkerLimit(); ++helper) {
+            static_cast<void>(service->Run([hashNext](std::string&) {
+                hashNext();
+                return true;
+            }, 0, kb::assets::streaming::BackgroundJobClass::Load));
+        }
+    }
+    hashNext();
+    {
+        std::unique_lock lock{ batch->mutex };
+        batch->finished.wait(lock, [&batch] { return batch->done.load() == batch->paths.size(); });
+    }
+    std::unordered_map<std::filesystem::path::string_type, std::uint64_t> hashes;
+    hashes.reserve(batch->paths.size());
+    for (std::size_t index = 0U; index < batch->paths.size(); ++index) {
+        hashes.emplace(batch->paths[index].native(), batch->hashes[index]);
+    }
+    return hashes;
+}
+
 } // namespace
 
 std::size_t AssetDiscoveryService::DiscoverMountedAssets(
@@ -88,6 +159,8 @@ std::size_t AssetDiscoveryService::DiscoverMountedAssets(
         previousById.emplace(metadata.id.value, metadata);
     }
 
+    const std::unordered_map<std::filesystem::path::string_type, std::uint64_t> fileHashes =
+        HashClaimedFiles(mounts, loaders);
     for (const AssetMount& mount : mounts.Mounts()) {
         std::error_code error;
         if (!std::filesystem::exists(mount.root, error) || error) {
@@ -116,7 +189,9 @@ std::size_t AssetDiscoveryService::DiscoverMountedAssets(
                 continue;
             }
 
-            const std::uint64_t contentHash = AssetFileSystem::HashFile(entry.path());
+            const auto hashed = fileHashes.find(entry.path().native());
+            const std::uint64_t contentHash =
+                hashed != fileHashes.end() ? hashed->second : AssetFileSystem::HashFileUnlessUnchanged(entry.path());
             std::string assetType{ loader->Type() };
             std::string importCategory;
             std::string browseTag;
