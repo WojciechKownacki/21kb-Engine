@@ -31,6 +31,29 @@ bool LuaScriptBackend::HasEntry(const kb::scene::BehaviourComponent& behaviour, 
     return runtime_.HasEntry(behaviour, name);
 }
 
+ScriptPhaseCall LuaScriptBackend::ResolvePhaseCall(
+    kb::scene::SceneEntity entity,
+    const kb::scene::BehaviourComponent& behaviour,
+    ScriptLifecycleEvent event) {
+    ScriptPhaseCall call;
+    if (runtime_.ResolvePhaseCall(entity, behaviour, event, call)) {
+        return call;
+    }
+    return IScriptBackend::ResolvePhaseCall(entity, behaviour, event);
+}
+
+std::uint64_t LuaScriptBackend::PhaseCallRevision() const noexcept {
+    return runtime_.PhaseCallRevision();
+}
+
+void LuaScriptBackend::BeginEventBroadcast(const ScriptEvent& event) {
+    runtime_.BeginEventBroadcast(event);
+}
+
+void LuaScriptBackend::EndEventBroadcast() noexcept {
+    runtime_.EndEventBroadcast();
+}
+
 void LuaScriptBackend::ResetAssetForHotReload(kb::assets::AssetId assetId, ScriptEventBus& events) noexcept {
     runtime_.ResetAssetForHotReload(assetId, events);
 }

@@ -9,6 +9,7 @@
 #include "engine/script/ScriptExecutionBudget.hpp"
 #include "engine/script/ScriptValue.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -192,6 +193,21 @@ public:
         const kb::scene::BehaviourComponent& behaviour,
         std::string_view name) override;
 
+    // An event delivered to many behaviours reaches each of them as the same Lua table: it is built for the first
+    // receiver and handed to the others, so a broadcast costs one table, not one per receiver. A handler that changes
+    // the table changes it for the receivers after it.
+    void BeginEventBroadcast(const ScriptEvent& event) override;
+    void EndEventBroadcast() noexcept override;
+
+    // The call a phase loop makes for an object: it keeps what the call needs (the script, the object's self table)
+    // so a frame does not look them up for every object. It stays valid until PhaseCallRevision moves.
+    [[nodiscard]] bool ResolvePhaseCall(
+        kb::scene::SceneEntity entity,
+        const kb::scene::BehaviourComponent& behaviour,
+        ScriptLifecycleEvent event,
+        ScriptPhaseCall& call) override;
+    [[nodiscard]] std::uint64_t PhaseCallRevision() const noexcept override;
+
     // Runs the collector for at most ScriptExecutionBudgetSettings::luaCollectionMicrosecondsPerFrame (the first
     // call also switches the state to generational mode, where a step is one collection of the objects created since
     // the last one - the per-frame garbage of scripts). The scene system host calls it once at the end of a frame.
@@ -234,7 +250,21 @@ private:
         std::string chunkName;
         std::uint64_t contentHash = 0U;
         std::uint64_t generation = 0U;
+        // The function set the environment has the execution API attached for (see PucLuaRuntimeApi::AttachExecutionApi).
+        long long attachedStamp = 0;
     };
+    // The record of an asset; the last one asked for is remembered, because the objects of one script are called one
+    // after another. Null when the asset has no script.
+    [[nodiscard]] ScriptRecord* FindScriptRecord(std::uint64_t assetId) noexcept;
+    ScriptRecord* cachedScript_ = nullptr;
+    std::uint64_t cachedScriptAsset_ = 0U;
+
+    // The event of each broadcast in progress and the registry reference of its table, once it was built.
+    struct EventBroadcast {
+        const ScriptEvent* event = nullptr;
+        int tableReference = -2;
+    };
+    std::vector<EventBroadcast> eventBroadcasts_;
 
     struct ModuleRecord {
         std::string source;
@@ -284,6 +314,54 @@ private:
         int depth = 0;
     };
 
+    // What the calls of one object share, kept across frames: the script record, the registry reference of its self table
+    // and whether it has exposed variables to bring in line. Refreshed when callSiteRevision_ moved.
+    struct CallSite;
+    // What a phase loop is handed for one phase of one object: the site and the name of the entry it runs.
+    struct PhaseTarget {
+        CallSite* site = nullptr;
+        const char* name = nullptr;
+    };
+    struct CallSite {
+        PucLuaScriptRuntime* runtime = nullptr;
+        InstanceKey key{};
+        ScriptRecord* script = nullptr;
+        int selfReference = -2;
+        std::uint64_t revision = 0U;
+        bool plain = false;
+        // The function set the script environment has to be attached for. Once the function registry is locked it cannot
+        // change, and the value is kept until the site is refreshed.
+        long long apiStamp = 0;
+        bool apiStampFinal = false;
+        std::array<PhaseTarget, static_cast<std::size_t>(ScriptLifecycleEvent::Destroyed) + 1U> phases{};
+    };
+    [[nodiscard]] CallSite& SiteFor(const InstanceKey& key);
+    void RefreshSite(CallSite& site);
+    // Runs one entry of an object on the kept coroutine when nothing special applies (no suspended entries, no
+    // debugger, an object with a self table and no exposed variables). False when the general path has to run it.
+    [[nodiscard]] bool TryLeanExecute(
+        CallSite& site,
+        const char* functionName,
+        const ScriptEvent* event,
+        ScriptExecutionContext& context,
+        std::vector<ScriptDiagnostic>& diagnostics,
+        bool& executed);
+    void FinishLeanResume(
+        CallSite& site,
+        lua_State* thread,
+        int status,
+        const char* functionName,
+        ScriptExecutionContext& context,
+        std::vector<ScriptDiagnostic>& diagnostics,
+        bool& executed);
+    // Pushes the event table of a handler on `target`: the shared one while a broadcast is in progress.
+    void PushEventValue(lua_State* target, const ScriptEvent& event);
+    [[nodiscard]] static bool InvokePhase(
+        void* target,
+        const kb::scene::BehaviourComponent& behaviour,
+        ScriptExecutionContext& context,
+        std::vector<ScriptDiagnostic>& diagnostics);
+
     void ReleaseDebugPause(DebugStepMode mode) noexcept;
     void ClearCoroutines(const InstanceKey& instanceKey) noexcept;
     void ClearCoroutinesForAsset(kb::assets::AssetId assetId) noexcept;
@@ -307,6 +385,9 @@ private:
     };
     std::unordered_map<InstanceKey, InstanceVariableSet, InstanceKeyHasher> instanceVariables_;
     std::uint64_t exposedRevision_ = 1U;
+    std::unordered_map<InstanceKey, CallSite, InstanceKeyHasher> callSites_;
+    // Moves when a script record or an exposed-variable definition changes, or the sites are dropped.
+    std::uint64_t callSiteRevision_ = 1U;
     // LIB-097: registry references own Lua generator threads. Each thread is
     // scoped to one behaviour instance and entry function, so yielding Tick
     // never suspends another entity or lifecycle callback.

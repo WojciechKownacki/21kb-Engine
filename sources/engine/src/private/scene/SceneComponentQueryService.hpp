@@ -62,6 +62,8 @@ public:
 
     [[nodiscard]] static bool HasBehaviour(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const BehaviourComponent* TryGetBehaviour(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const std::uint64_t* BehaviourRevisionCounter(const Scene& scene) noexcept;
+    [[nodiscard]] static std::uint64_t BehaviourChangeStamp(const Scene& scene) noexcept;
 
     [[nodiscard]] static bool HasCamera(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const CameraComponent* TryGetCamera(const Scene& scene, SceneEntity entity) noexcept;

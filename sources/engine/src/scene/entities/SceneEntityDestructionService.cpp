@@ -52,6 +52,7 @@ void SceneEntityDestructionService::DestroyEntity(Scene& scene, SceneEntity enti
             state.persistentEntities.erase(entity.Id());
             state.behaviourVariableOverrides.erase(entity.Id());
             state.prefabInstances.ForgetDestroyedObject(entity);
+            state.componentStorage.Behaviours().NoteEntityDestroyed(entity);
             const auto beforeRemoval = state.world.NativeStorage().RemovalVersion();
             state.world.DestroyEntity(entity);
             state.transformTopology.LeafRemovalHandled(beforeRemoval, state.world.NativeStorage().RemovalVersion());

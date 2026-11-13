@@ -301,6 +301,10 @@ public:
     [[nodiscard]] std::uint64_t ComponentVersion(Entity entity, ComponentId componentId) const;
     [[nodiscard]] std::uint64_t ArchetypeComponentVersion(std::size_t archetypeIndex, ComponentId componentId) const;
     [[nodiscard]] std::uint64_t StructuralVersion() const noexcept;
+    // Moves whenever an entity enters or leaves an archetype that holds the component, or a value of it is marked
+    // modified: a reader that remembers the stamp knows whether the entities that carry the component changed
+    // without visiting them. Entities of other archetypes, and writes to other components, do not move it.
+    [[nodiscard]] std::uint64_t ComponentChangeStamp(ComponentId componentId) const noexcept;
     // Latest successful entity/component removal; additions do not advance it.
     [[nodiscard]] std::uint64_t RemovalVersion() const noexcept;
     [[nodiscard]] std::size_t ChunkCount() const noexcept;

@@ -10,6 +10,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace kb::script {
@@ -40,6 +41,20 @@ struct ScriptBackendExecutionResult {
     [[nodiscard]] bool Succeeded() const noexcept {
         return diagnostics.empty();
     }
+};
+
+// One behaviour's resolved call for a per-frame phase: what the phase loops run every frame without looking anything
+// up. `invoke` runs it and says whether it ran and succeeded; a failure appends its diagnostics. A null `invoke` means
+// the behaviour has nothing to run in the phase.
+struct ScriptPhaseCall {
+    using Invoke = bool (*)(
+        void* target,
+        const kb::scene::BehaviourComponent& behaviour,
+        ScriptExecutionContext& context,
+        std::vector<ScriptDiagnostic>& diagnostics);
+
+    Invoke invoke = nullptr;
+    void* target = nullptr;
 };
 
 class IScriptBackend {
@@ -90,6 +105,34 @@ public:
         return true;
     }
 
+    // An event that reaches several behaviours (no target) is handed to them one after another between these two calls,
+    // so a backend that builds a value for the event can build it once for all receivers instead of once per receiver.
+    // The event outlives the broadcast; a backend that does not care keeps the defaults.
+    virtual void BeginEventBroadcast(const ScriptEvent& event) {
+        static_cast<void>(event);
+    }
+    virtual void EndEventBroadcast() noexcept {}
+
+    // The call the phase loops make for `behaviour` in `event` (FixedTick .. AfterRender), found once and kept in their
+    // dispatch lists until PhaseCallRevision moves or the behaviour changes. The default runs it through
+    // ExecuteLifecycle, which is right for a backend that has nothing to resolve.
+    [[nodiscard]] virtual ScriptPhaseCall ResolvePhaseCall(
+        kb::scene::SceneEntity entity,
+        const kb::scene::BehaviourComponent& behaviour,
+        ScriptLifecycleEvent event) {
+        static_cast<void>(entity);
+        static_cast<void>(behaviour);
+        static_cast<void>(event);
+        return ScriptPhaseCall{ &IScriptBackend::InvokeThroughExecuteLifecycle, this };
+    }
+
+    // Moves whenever a call ResolvePhaseCall returned may no longer be the right one (a registration or a reload
+    // changed, an object was made or destroyed); the dispatch lists are built again when it differs from the value they
+    // were built with.
+    [[nodiscard]] virtual std::uint64_t PhaseCallRevision() const noexcept {
+        return 0U;
+    }
+
     // Releases state owned by live instances of one behaviour asset after a
     // successful source/artifact replacement. Hot reload intentionally does
     // not invoke Deactivated/Destroyed: those callbacks would execute the new
@@ -100,6 +143,19 @@ public:
         ScriptEventBus& events) noexcept {
         static_cast<void>(assetId);
         static_cast<void>(events);
+    }
+
+protected:
+    [[nodiscard]] static bool InvokeThroughExecuteLifecycle(
+        void* target,
+        const kb::scene::BehaviourComponent& behaviour,
+        ScriptExecutionContext& context,
+        std::vector<ScriptDiagnostic>& diagnostics) {
+        ScriptBackendExecutionResult result = static_cast<IScriptBackend*>(target)->ExecuteLifecycle(behaviour, context);
+        for (ScriptDiagnostic& diagnostic : result.diagnostics) {
+            diagnostics.push_back(std::move(diagnostic));
+        }
+        return result.executed && result.diagnostics.empty();
     }
 };
 

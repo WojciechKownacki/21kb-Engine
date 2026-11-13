@@ -244,6 +244,7 @@ bool ScriptRuntimeHostState::RestoreRuntimeState(const kb::core::RuntimeStateSna
         auto& system = this->installedSceneSystem->System();
         system.lifecycleRecords_ = snapshot.lifecycle;
         system.phaseOrderDirty_ = true;
+        system.syncStampValid_ = false;
         system.frameSettings_ = snapshot.systemFrameSettings;
         system.fixedAccumulatorSeconds_ = snapshot.accumulator;
         system.lastGameplayEventSequence_ = snapshot.gameplaySequence;

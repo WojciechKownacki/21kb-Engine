@@ -201,6 +201,7 @@ void NativeScriptBackend::Clear() noexcept {
 }
 
 void NativeScriptBackend::ReleaseInstances(std::span<const std::string> symbols) {
+    ++instanceChanges_;
     savedInstances_.clear();
     for (auto& [assetId, entry] : entries_) {
         for (auto iter = entry.instances.begin(); iter != entry.instances.end();) {
@@ -226,6 +227,7 @@ void NativeScriptBackend::ReleaseInstances(std::span<const std::string> symbols)
 }
 
 void NativeScriptBackend::RestoreInstances() {
+    ++instanceChanges_;
     std::vector<SavedInstance> saved;
     saved.swap(savedInstances_);
     for (SavedInstance& item : saved) {
@@ -249,6 +251,7 @@ void NativeScriptBackend::RestoreInstances() {
 }
 
 void NativeScriptBackend::DestroyInstances(std::span<const std::string> symbols) noexcept {
+    ++instanceChanges_;
     for (auto& [assetId, entry] : entries_) {
         static_cast<void>(assetId);
         for (auto iter = entry.instances.begin(); iter != entry.instances.end();) {
@@ -287,6 +290,7 @@ NativeScriptBackend::AssetEntry& NativeScriptBackend::Resolve(std::uint64_t asse
     entry.epoch = epoch_;
     entry.symbol.clear();
     entry.lifecycle.fill(nullptr);
+    entry.lifecycleTargets.fill(CallbackTarget{});
     entry.events.clear();
     entry.script = nullptr;
     if (const auto symbol = assetSymbols_.find(assetId); symbol != assetSymbols_.end()) {
@@ -300,6 +304,9 @@ NativeScriptBackend::AssetEntry& NativeScriptBackend::Resolve(std::uint64_t asse
             if (const auto named = symbolLifecycleCallbacks_.find(SymbolLifecycleKey{ .symbol = entry.symbol, .event = event }); named != symbolLifecycleCallbacks_.end()) {
                 entry.lifecycle[index] = &named->second;
             }
+        }
+        if (entry.lifecycle[index] != nullptr) {
+            entry.lifecycleTargets[index] = CallbackTarget{ .callback = entry.lifecycle[index], .symbol = &entry.symbol };
         }
     }
     for (const auto& [key, callback] : eventCallbacks_) {
@@ -334,6 +341,7 @@ void NativeScriptBackend::ExecuteClassLifecycle(
         DestroyInstance(found->second);
         entry.instances.erase(found);
         found = entry.instances.end();
+        ++instanceChanges_;
     }
     if (found == entry.instances.end()) {
         if (event == ScriptLifecycleEvent::Destroyed) {
@@ -345,6 +353,7 @@ void NativeScriptBackend::ExecuteClassLifecycle(
             return;
         }
         found = entry.instances.emplace(entity, std::move(instance)).first;
+        ++instanceChanges_;
     }
     Instance& instance = found->second;
     if ((instance.script.hooks & (1U << static_cast<unsigned>(event))) != 0U) {
@@ -354,6 +363,7 @@ void NativeScriptBackend::ExecuteClassLifecycle(
         // Destroyed is the last call: the object goes with the behaviour.
         DestroyInstance(found->second);
         entry.instances.erase(entity);
+        ++instanceChanges_;
     }
 }
 
@@ -385,6 +395,100 @@ ScriptBackendExecutionResult NativeScriptBackend::ExecuteEvent(const kb::scene::
     const std::string_view module = entry.symbol.empty() ? "Native" : std::string_view{ entry.symbol };
     InvokeNativeCallback([&] { (*handler->second)(context, event); }, context, assetId, module, event.name, result);
     return result;
+}
+
+std::uint64_t NativeScriptBackend::PhaseCallRevision() const noexcept {
+    return epoch_ + instanceChanges_;
+}
+
+bool NativeScriptBackend::InvokeClassHook(
+    void* target,
+    const kb::scene::BehaviourComponent& behaviour,
+    ScriptExecutionContext& context,
+    std::vector<ScriptDiagnostic>& diagnostics) {
+    Instance& instance = *static_cast<Instance*>(target);
+    try {
+        instance.script.call(instance.object, context.Lifecycle(), &context);
+        return true;
+    } catch (const std::exception& exception) {
+        diagnostics.push_back(ScriptDiagnostic{
+            .entity = context.Self(),
+            .assetId = kb::assets::AssetId{ behaviour.behaviourAssetId },
+            .backend = context.Backend(),
+            .module = instance.symbol,
+            .function = std::string{ ToString(context.Lifecycle()) },
+            .lifecyclePhase = context.Lifecycle(),
+            .message = std::string{ "native script callback threw an exception: " } + exception.what(),
+        });
+    } catch (...) {
+        diagnostics.push_back(ScriptDiagnostic{
+            .entity = context.Self(),
+            .assetId = kb::assets::AssetId{ behaviour.behaviourAssetId },
+            .backend = context.Backend(),
+            .module = instance.symbol,
+            .function = std::string{ ToString(context.Lifecycle()) },
+            .lifecyclePhase = context.Lifecycle(),
+            .message = "native script callback threw a non-standard exception",
+        });
+    }
+    return false;
+}
+
+bool NativeScriptBackend::InvokeLifecycleCallback(
+    void* target,
+    const kb::scene::BehaviourComponent& behaviour,
+    ScriptExecutionContext& context,
+    std::vector<ScriptDiagnostic>& diagnostics) {
+    const CallbackTarget& resolved = *static_cast<const CallbackTarget*>(target);
+    try {
+        (*resolved.callback)(context);
+        return true;
+    } catch (const std::exception& exception) {
+        diagnostics.push_back(ScriptDiagnostic{
+            .entity = context.Self(),
+            .assetId = kb::assets::AssetId{ behaviour.behaviourAssetId },
+            .backend = context.Backend(),
+            .module = resolved.symbol->empty() ? std::string{ "Native" } : *resolved.symbol,
+            .function = std::string{ ToString(context.Lifecycle()) },
+            .lifecyclePhase = context.Lifecycle(),
+            .message = std::string{ "native script callback threw an exception: " } + exception.what(),
+        });
+    } catch (...) {
+        diagnostics.push_back(ScriptDiagnostic{
+            .entity = context.Self(),
+            .assetId = kb::assets::AssetId{ behaviour.behaviourAssetId },
+            .backend = context.Backend(),
+            .module = resolved.symbol->empty() ? std::string{ "Native" } : *resolved.symbol,
+            .function = std::string{ ToString(context.Lifecycle()) },
+            .lifecyclePhase = context.Lifecycle(),
+            .message = "native script callback threw a non-standard exception",
+        });
+    }
+    return false;
+}
+
+ScriptPhaseCall NativeScriptBackend::ResolvePhaseCall(
+    kb::scene::SceneEntity entity,
+    const kb::scene::BehaviourComponent& behaviour,
+    ScriptLifecycleEvent event) {
+    AssetEntry& entry = Resolve(behaviour.behaviourAssetId);
+    const auto index = static_cast<std::size_t>(event);
+    if (entry.script != nullptr) {
+        if ((entry.script->hooks & (1U << index)) == 0U) {
+            return {};
+        }
+        const auto found = entry.instances.find(entity.Id());
+        if (found == entry.instances.end()) {
+            // The object is made by the first call (a module reload drops the ones whose class went away): making it
+            // moves the revision, and the lists are built again.
+            return ScriptPhaseCall{ &IScriptBackend::InvokeThroughExecuteLifecycle, this };
+        }
+        return ScriptPhaseCall{ &NativeScriptBackend::InvokeClassHook, &found->second };
+    }
+    if (entry.lifecycleTargets[index].callback == nullptr) {
+        return {};
+    }
+    return ScriptPhaseCall{ &NativeScriptBackend::InvokeLifecycleCallback, &entry.lifecycleTargets[index] };
 }
 
 bool NativeScriptBackend::HasEntry(const kb::scene::BehaviourComponent& behaviour, std::string_view name) {

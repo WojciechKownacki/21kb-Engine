@@ -12,6 +12,7 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneAnimators.hpp"
@@ -49,6 +50,22 @@ struct RawBehaviourRecord {
     kb::scene::SceneEntity entity{};
     kb::scene::BehaviourComponent behaviour{};
 };
+
+// The call of a behaviour whose script backend is not registered: it reports that, and runs nothing.
+[[nodiscard]] bool ReportMissingBackend(
+    void* target,
+    const kb::scene::BehaviourComponent& behaviour,
+    ScriptExecutionContext& context,
+    std::vector<ScriptDiagnostic>& diagnostics) {
+    static_cast<void>(target);
+    diagnostics.push_back(ScriptDiagnostic{
+        .entity = context.Self(),
+        .assetId = kb::assets::AssetId{ behaviour.behaviourAssetId },
+        .backend = behaviour.backend,
+        .message = "script backend is not registered",
+    });
+    return false;
+}
 
 [[nodiscard]] bool SameBehaviour(const kb::scene::BehaviourComponent& lhs, const kb::scene::BehaviourComponent& rhs) noexcept {
     return lhs.behaviourAssetId == rhs.behaviourAssetId && lhs.backend == rhs.backend && lhs.enabled == rhs.enabled &&
@@ -311,100 +328,166 @@ void ScriptRuntimeSceneSystem::RestartReloadedBehaviours(kb::scene::Scene& scene
         return reloadedAssetIds.contains(entry.second.behaviour.behaviourAssetId);
     });
     phaseOrderDirty_ = true;
+    syncStampValid_ = false;
+}
+
+void ScriptRuntimeSceneSystem::RebuildPhaseOrder() {
+    // lifecycleRecords_ is the authoritative frame-start set. Structural changes are immediately visible to World
+    // APIs, but a Behaviour created by one phase must not enter a later phase before the next BeginFrame has
+    // prepared its asset and dispatched Created/Activated/Ready. The records only change in SyncBehaviourLifecycles
+    // and the restart of reloaded assets, so the sorted list is kept between phases instead of being rebuilt and
+    // sorted for each of them.
+    if (!phaseOrderDirty_) {
+        return;
+    }
+    phaseOrder_.clear();
+    phaseOrder_.reserve(lifecycleRecords_.size());
+    for (auto& [key, tracked] : lifecycleRecords_) {
+        (void)key;
+        if (tracked.created && tracked.active) {
+            phaseOrder_.push_back(&tracked);
+        }
+    }
+    std::ranges::sort(phaseOrder_, [](const BehaviourLifecycleRecord* lhs, const BehaviourLifecycleRecord* rhs) {
+        return kb::scene::BehaviourExecutionOrderLess(lhs->entity, lhs->behaviour, rhs->entity, rhs->behaviour);
+    });
+    // Each distinct script is asked once per phase, and each ordered behaviour knows which answer is its own.
+    phaseScripts_.clear();
+    phaseOrderScripts_.clear();
+    phaseOrderScripts_.reserve(phaseOrder_.size());
+    std::unordered_map<BehaviourLifecycleKey, std::uint32_t, BehaviourLifecycleKeyHasher> scriptIndices;
+    for (const BehaviourLifecycleRecord* tracked : phaseOrder_) {
+        const auto [iterator, inserted] = scriptIndices.try_emplace(
+            BehaviourLifecycleKey{ .entityId = 0U, .assetId = tracked->behaviour.behaviourAssetId, .backend = tracked->behaviour.backend },
+            static_cast<std::uint32_t>(phaseScripts_.size()));
+        if (inserted) {
+            phaseScripts_.push_back(PhaseScript{ tracked->behaviour.behaviourAssetId, tracked->behaviour.backend });
+        }
+        phaseOrderScripts_.push_back(iterator->second);
+    }
+    phaseOrderDirty_ = false;
+    ++phaseOrderVersion_;
+}
+
+bool ScriptRuntimeSceneSystem::PreparePhaseList(ScriptLifecycleEvent event, PhaseList& list) {
+    // Whether a script has anything to run in this phase is asked once per script, not once per instance. A script
+    // that gains or loses its entry while it runs (a function defined later, a reload) changes its answer, and the list
+    // is built again.
+    const std::string_view name = ToString(event);
+    bool changed = list.orderVersion != phaseOrderVersion_ || list.answers.size() != phaseScripts_.size();
+    bool anyEntry = false;
+    phaseAnswerScratch_.resize(phaseScripts_.size());
+    for (std::size_t index = 0U; index < phaseScripts_.size(); ++index) {
+        const PhaseScript& script = phaseScripts_[index];
+        kb::scene::BehaviourComponent probe{};
+        probe.behaviourAssetId = script.assetId;
+        probe.backend = script.backend;
+        IScriptBackend* backend = runtime_.FindBackend(script.backend);
+        const std::uint8_t has = backend == nullptr || backend->HasEntry(probe, name) ? 1U : 0U;
+        phaseAnswerScratch_[index] = has;
+        anyEntry = anyEntry || has != 0U;
+        changed = changed || list.answers.size() <= index || list.answers[index] != has;
+    }
+    if (!anyEntry) {
+        list.entries.clear();
+        list.answers.clear();
+        list.orderVersion = 0U;
+        return false;
+    }
+    std::array<std::uint64_t, 3> revisions{};
+    for (std::size_t backendIndex = 0U; backendIndex < revisions.size(); ++backendIndex) {
+        const IScriptBackend* backend = runtime_.FindBackend(static_cast<kb::scene::BehaviourBackend>(backendIndex));
+        revisions[backendIndex] = backend == nullptr ? 0U : backend->PhaseCallRevision();
+        changed = changed || revisions[backendIndex] != list.callRevisions[backendIndex];
+    }
+    if (!changed) {
+        return true;
+    }
+
+    list.entries.clear();
+    list.entries.reserve(phaseOrder_.size());
+    for (std::size_t index = 0U; index < phaseOrder_.size(); ++index) {
+        if (phaseAnswerScratch_[phaseOrderScripts_[index]] == 0U) {
+            continue;
+        }
+        const BehaviourLifecycleRecord& tracked = *phaseOrder_[index];
+        IScriptBackend* backend = runtime_.FindBackend(tracked.behaviour.backend);
+        // A behaviour whose backend is not registered is reported by its call, in every frame, as it always was.
+        const ScriptPhaseCall call = backend == nullptr ? ScriptPhaseCall{ &ReportMissingBackend, nullptr }
+                                                         : backend->ResolvePhaseCall(tracked.entity, tracked.behaviour, event);
+        if (call.invoke != nullptr) {
+            list.entries.push_back(PhaseEntry{ .entity = tracked.entity, .behaviour = tracked.behaviour, .call = call });
+        }
+    }
+    // Resolving can make objects (a native class script whose object is not there yet), so the revisions are read
+    // after: the next frame must not take that for a change.
+    for (std::size_t backendIndex = 0U; backendIndex < revisions.size(); ++backendIndex) {
+        const IScriptBackend* backend = runtime_.FindBackend(static_cast<kb::scene::BehaviourBackend>(backendIndex));
+        list.callRevisions[backendIndex] = backend == nullptr ? 0U : backend->PhaseCallRevision();
+    }
+    list.answers.assign(phaseAnswerScratch_.begin(), phaseAnswerScratch_.end());
+    list.orderVersion = phaseOrderVersion_;
+    return true;
 }
 
 void ScriptRuntimeSceneSystem::ExecuteTrackedBehaviourPhase(
     kb::scene::Scene& scene,
     ScriptLifecycleEvent event,
     float deltaSeconds) {
-    // lifecycleRecords_ is the authoritative frame-start set. Structural
-    // changes are immediately visible to World APIs, but a Behaviour created
-    // by one phase must not enter a later phase before the next BeginFrame has
-    // prepared its asset and dispatched Created/Activated/Ready. The records
-    // only change in SyncBehaviourLifecycles and the restart of reloaded
-    // assets, so the sorted list is kept between phases instead of being
-    // rebuilt and sorted for each of them.
-    if (phaseOrderDirty_) {
-        phaseOrder_.clear();
-        phaseOrder_.reserve(lifecycleRecords_.size());
-        for (auto& [key, tracked] : lifecycleRecords_) {
-            (void)key;
-            if (tracked.created && tracked.active) {
-                phaseOrder_.push_back(&tracked);
-            }
+    RebuildPhaseOrder();
+    PhaseList& list = phaseLists_[static_cast<std::size_t>(event)];
+    if (!PreparePhaseList(event, list)) {
+        lastResult_.visitedBehaviours += phaseOrder_.size();
+        return;
+    }
+
+    runtime_.Functions().Lock();
+    ScriptExecutionContext context{
+        scene,
+        kb::scene::SceneEntity{},
+        kb::assets::AssetId{},
+        kb::scene::BehaviourBackend::Native,
+        event,
+        deltaSeconds,
+        &phaseEmittedEvents_,
+        nullptr,
+        &runtime_.SharedState(),
+        &runtime_.Functions(),
+        &runtime_.Events(),
+    };
+    // The list is a snapshot of the order at the start of the frame. While the behaviours of the scene stay as they
+    // were, every entry is called as it stands. As soon as one call set, removed or changed a behaviour or destroyed an
+    // entity that had one, each remaining entry is checked against the live behaviour first, so a script destroyed or
+    // disabled by an earlier one in the phase does not run, and one made by it does not run before the next frame.
+    const std::uint64_t* const revision = scene.Components().Behaviours().RevisionCounter();
+    std::uint64_t seenRevision = *revision;
+    bool validate = false;
+    std::size_t passedOver = 0U;
+    const kb::scene::Scene& constScene = scene;
+    for (const PhaseEntry& entry : list.entries) {
+        if (!validate && *revision != seenRevision) {
+            validate = true;
         }
-        std::ranges::sort(phaseOrder_, [](const BehaviourLifecycleRecord* lhs, const BehaviourLifecycleRecord* rhs) {
-            return kb::scene::BehaviourExecutionOrderLess(lhs->entity, lhs->behaviour, rhs->entity, rhs->behaviour);
-        });
-        constexpr std::size_t kMaxPhaseScripts = 32U;
-        phaseScripts_.clear();
-        phaseScriptsOverflow_ = false;
-        for (const BehaviourLifecycleRecord* tracked : phaseOrder_) {
-            const PhaseScript script{ tracked->behaviour.behaviourAssetId, tracked->behaviour.backend };
-            if (std::ranges::any_of(phaseScripts_, [&](const PhaseScript& known) { return known.assetId == script.assetId && known.backend == script.backend; })) {
+        if (validate) {
+            const kb::scene::BehaviourComponent* live = constScene.Components().Behaviours().TryGet(entry.entity);
+            if (!scene.Entities().IsAlive(entry.entity) || live == nullptr || !live->enabled ||
+                live->behaviourAssetId != entry.behaviour.behaviourAssetId || live->backend != entry.behaviour.backend) {
+                ++passedOver;
                 continue;
             }
-            if (phaseScripts_.size() == kMaxPhaseScripts) {
-                phaseScriptsOverflow_ = true;
-                break;
-            }
-            phaseScripts_.push_back(script);
         }
-        phaseOrderDirty_ = false;
-    }
-
-    // Whether a script asset has anything to run in this phase is asked once per asset, not once per instance.
-    struct EntryAnswer {
-        std::uint64_t assetId = 0U;
-        kb::scene::BehaviourBackend backend = kb::scene::BehaviourBackend::Native;
-        bool hasEntry = true;
-    };
-    std::array<EntryAnswer, 16> answers{};
-    std::size_t answerCount = 0U;
-    const auto hasEntry = [&](const kb::scene::BehaviourComponent& behaviour) {
-        for (std::size_t index = 0U; index < answerCount; ++index) {
-            if (answers[index].assetId == behaviour.behaviourAssetId && answers[index].backend == behaviour.backend) {
-                return answers[index].hasEntry;
-            }
+        context.Rebind(entry.entity, kb::assets::AssetId{ entry.behaviour.behaviourAssetId }, entry.behaviour.backend);
+        if (entry.call.invoke(entry.call.target, entry.behaviour, context, lastResult_.diagnostics)) {
+            ++lastResult_.executedBehaviours;
         }
-        IScriptBackend* backend = runtime_.FindBackend(behaviour.backend);
-        const bool has = backend == nullptr || backend->HasEntry(behaviour, ToString(event));
-        if (answerCount < answers.size()) {
-            answers[answerCount++] = EntryAnswer{ behaviour.behaviourAssetId, behaviour.backend, has };
-        }
-        return has;
-    };
-
-    if (!phaseScriptsOverflow_) {
-        bool anyEntry = false;
-        for (const PhaseScript& script : phaseScripts_) {
-            kb::scene::BehaviourComponent probe{};
-            probe.behaviourAssetId = script.assetId;
-            probe.backend = script.backend;
-            anyEntry = hasEntry(probe) || anyEntry;
-        }
-        if (!anyEntry) {
-            lastResult_.visitedBehaviours += phaseOrder_.size();
-            return;
+        if (!phaseEmittedEvents_.empty()) {
+            lastResult_.emittedEvents.insert(lastResult_.emittedEvents.end(), phaseEmittedEvents_.begin(), phaseEmittedEvents_.end());
+            std::vector<ScriptEvent> pending = std::move(phaseEmittedEvents_);
+            phaseEmittedEvents_.clear();
+            MergeResult(lastResult_, runtime_.DrainEvents(scene, std::move(pending), deltaSeconds));
         }
     }
-
-    for (const BehaviourLifecycleRecord* tracked : phaseOrder_) {
-        if (!scene.Entities().IsAlive(tracked->entity)) {
-            continue;
-        }
-        const kb::scene::BehaviourComponent* live = scene.Components().Behaviours().TryGet(tracked->entity);
-        if (live == nullptr || !live->enabled ||
-            live->behaviourAssetId != tracked->behaviour.behaviourAssetId ||
-            live->backend != tracked->behaviour.backend) {
-            continue;
-        }
-        if (!hasEntry(*live)) {
-            ++lastResult_.visitedBehaviours;
-            continue;
-        }
-        ExecuteBehaviourPhase(scene, tracked->entity, *live, event, deltaSeconds);
-    }
+    lastResult_.visitedBehaviours += phaseOrder_.size() - passedOver;
 }
 
 void ScriptRuntimeSceneSystem::ConfigureSceneFixedStep(kb::scene::Scene& scene) noexcept {
@@ -739,6 +822,14 @@ void ScriptRuntimeSceneSystem::DispatchCompletedFixedStepTasks(kb::scene::Scene&
 }
 
 void ScriptRuntimeSceneSystem::SyncBehaviourLifecycles(kb::scene::Scene& scene, float deltaSeconds) {
+    // Nothing is looked at while the scene's behaviours are as the records last found them. The stamp is taken before
+    // the scan: a transition below that changes a behaviour moves it again, and the next frame looks.
+    const std::uint64_t stamp = scene.Components().Behaviours().ChangeStamp();
+    if (syncStampValid_ && stamp == syncStamp_) {
+        return;
+    }
+    syncStamp_ = stamp;
+    syncStampValid_ = true;
     // Only behaviours that appeared, changed or still have a transition to make are collected and put in order;
     // the rest of a scene's behaviours is found unchanged with one lookup each.
     struct Pass {
@@ -845,6 +936,7 @@ void ScriptRuntimeSceneSystem::ShutdownTrackedBehaviours(kb::scene::Scene& scene
     DispatchDeactivateAndDestroyInOrder(scene, remaining, deltaSeconds);
     lifecycleRecords_.clear();
     phaseOrderDirty_ = true;
+    syncStampValid_ = false;
 }
 
 // Shared by SyncBehaviourLifecycles (departing records) and

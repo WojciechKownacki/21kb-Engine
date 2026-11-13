@@ -21,6 +21,14 @@ void SceneBehaviourComponentQueries::ForEach(BehaviourVisitor visitor, void* con
     SceneIterationService::ForEachBehaviour(scene_, visitor, context);
 }
 
+const std::uint64_t* SceneBehaviourComponentQueries::RevisionCounter() const noexcept {
+    return SceneComponentQueryService::BehaviourRevisionCounter(scene_);
+}
+
+std::uint64_t SceneBehaviourComponentQueries::ChangeStamp() const noexcept {
+    return SceneComponentQueryService::BehaviourChangeStamp(scene_);
+}
+
 SceneBehaviourComponents::SceneBehaviourComponents(Scene& scene) noexcept
     : scene_(scene) {}
 
@@ -50,6 +58,14 @@ void SceneBehaviourComponents::MarkModified(SceneEntity entity) noexcept {
 
 void SceneBehaviourComponents::ForEach(BehaviourVisitor visitor, void* context) const {
     SceneIterationService::ForEachBehaviour(scene_, visitor, context);
+}
+
+const std::uint64_t* SceneBehaviourComponents::RevisionCounter() const noexcept {
+    return SceneComponentQueryService::BehaviourRevisionCounter(scene_);
+}
+
+std::uint64_t SceneBehaviourComponents::ChangeStamp() const noexcept {
+    return SceneComponentQueryService::BehaviourChangeStamp(scene_);
 }
 
 } // namespace kb::scene

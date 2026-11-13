@@ -2,12 +2,14 @@
 
 #include "engine/scene/BehaviourExecutionOrder.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
+#include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -73,7 +75,30 @@ void AddMissingBackendDiagnostic(DispatchContext& dispatch, kb::scene::SceneEnti
     return !behaviour.enabled && dispatch.lifecycle != ScriptLifecycleEvent::Deactivated && dispatch.lifecycle != ScriptLifecycleEvent::Destroyed;
 }
 
-void DispatchBehaviour(kb::scene::SceneEntity entity, const kb::scene::BehaviourComponent& behaviour, DispatchContext& dispatch) {
+// The context and the buffer for emitted events a dispatch of several behaviours shares: one object aimed at each
+// behaviour in turn.
+struct DispatchTarget {
+    std::vector<ScriptEvent> emittedEvents;
+    ScriptExecutionContext context;
+
+    explicit DispatchTarget(const DispatchContext& dispatch)
+        : context(
+              *dispatch.scene,
+              kb::scene::SceneEntity{},
+              kb::assets::AssetId{},
+              kb::scene::BehaviourBackend::Native,
+              dispatch.lifecycle,
+              dispatch.deltaSeconds,
+              &emittedEvents,
+              dispatch.event,
+              dispatch.sharedState,
+              dispatch.functions,
+              dispatch.runtime == nullptr ? nullptr : &dispatch.runtime->Events()) {}
+    DispatchTarget(const DispatchTarget&) = delete;
+    DispatchTarget& operator=(const DispatchTarget&) = delete;
+};
+
+void DispatchBehaviour(kb::scene::SceneEntity entity, const kb::scene::BehaviourComponent& behaviour, DispatchContext& dispatch, DispatchTarget& target) {
     ++dispatch.result->visitedBehaviours;
     if (ShouldSkipDisabled(behaviour, dispatch)) {
         return;
@@ -85,20 +110,9 @@ void DispatchBehaviour(kb::scene::SceneEntity entity, const kb::scene::Behaviour
         return;
     }
 
-    std::vector<ScriptEvent> emittedEvents;
-    ScriptExecutionContext scriptContext{
-        *dispatch.scene,
-        entity,
-        kb::assets::AssetId{behaviour.behaviourAssetId},
-        behaviour.backend,
-        dispatch.lifecycle,
-        dispatch.deltaSeconds,
-        &emittedEvents,
-        dispatch.event,
-        dispatch.sharedState,
-        dispatch.functions,
-        dispatch.runtime == nullptr ? nullptr : &dispatch.runtime->Events(),
-    };
+    ScriptExecutionContext& scriptContext = target.context;
+    std::vector<ScriptEvent>& emittedEvents = target.emittedEvents;
+    scriptContext.Rebind(entity, kb::assets::AssetId{ behaviour.behaviourAssetId }, behaviour.backend);
 
     const ScriptBackendExecutionResult backendResult = dispatch.event == nullptr
         ? backend->ExecuteLifecycle(behaviour, scriptContext)
@@ -108,24 +122,85 @@ void DispatchBehaviour(kb::scene::SceneEntity entity, const kb::scene::Behaviour
     }
     if (!emittedEvents.empty()) {
         AppendEvents(dispatch.result->emittedEvents, std::move(emittedEvents));
+        emittedEvents.clear();
     }
     if (!backendResult.diagnostics.empty()) {
         AppendDiagnostics(dispatch.result->diagnostics, backendResult.diagnostics);
     }
 }
 
+void DispatchBehaviour(kb::scene::SceneEntity entity, const kb::scene::BehaviourComponent& behaviour, DispatchContext& dispatch) {
+    DispatchTarget target{ dispatch };
+    DispatchBehaviour(entity, behaviour, dispatch, target);
+}
+
+// The behaviours a broadcast collects: the storage is kept between broadcasts, so each one does not allocate the list
+// of every behaviour in the scene again. A broadcast started while another one uses it (a handler that dispatches
+// events) collects into a list of its own.
+struct RecordScratch {
+    std::vector<BehaviourDispatchRecord> records;
+    bool inUse = false;
+};
+
+[[nodiscard]] RecordScratch& Scratch() noexcept {
+    thread_local RecordScratch scratch;
+    return scratch;
+}
+
+// Brackets the delivery of one event to many behaviours: each backend may build its value of the event once for all of
+// them.
+class EventBroadcastScope final {
+public:
+    EventBroadcastScope(ScriptRuntime& runtime, const ScriptEvent& event) {
+        for (std::size_t index = 0U; index < backends_.size(); ++index) {
+            backends_[index] = runtime.FindBackend(static_cast<kb::scene::BehaviourBackend>(index));
+            if (backends_[index] != nullptr) {
+                backends_[index]->BeginEventBroadcast(event);
+            }
+        }
+    }
+    ~EventBroadcastScope() {
+        for (IScriptBackend* backend : backends_) {
+            if (backend != nullptr) {
+                backend->EndEventBroadcast();
+            }
+        }
+    }
+    EventBroadcastScope(const EventBroadcastScope&) = delete;
+    EventBroadcastScope& operator=(const EventBroadcastScope&) = delete;
+
+private:
+    std::array<IScriptBackend*, 3> backends_{};
+};
+
 void DispatchSceneBehaviours(kb::scene::Scene& scene, DispatchContext& context) {
     if (context.event != nullptr && context.event->target.IsValid()) {
         // An event for one entity concerns that entity's behaviour only; there is nothing to collect and order.
         const kb::scene::SceneEntity target = context.event->target;
-        if (const kb::scene::BehaviourComponent* behaviour = scene.Components().Behaviours().TryGet(target);
+        if (const kb::scene::BehaviourComponent* behaviour = std::as_const(scene).Components().Behaviours().TryGet(target);
             behaviour != nullptr && scene.Entities().IsActive(target)) {
             const kb::scene::BehaviourComponent snapshot = *behaviour;
             DispatchBehaviour(target, snapshot, context);
         }
         return;
     }
-    std::vector<BehaviourDispatchRecord> behaviours;
+    std::vector<BehaviourDispatchRecord> ownRecords;
+    RecordScratch& scratch = Scratch();
+    const bool leased = !scratch.inUse;
+    std::vector<BehaviourDispatchRecord>& behaviours = leased ? scratch.records : ownRecords;
+    if (leased) {
+        scratch.inUse = true;
+        behaviours.clear();
+    }
+    struct Lease {
+        RecordScratch& scratch;
+        bool leased;
+        ~Lease() {
+            if (leased) {
+                scratch.inUse = false;
+            }
+        }
+    } lease{ scratch, leased };
     scene.Components().Behaviours().ForEach(&CollectBehaviour, &behaviours);
     if (context.event != nullptr) {
         // An event reaches the behaviours whose script handles it. The rest are passed over before the order is
@@ -160,6 +235,11 @@ void DispatchSceneBehaviours(kb::scene::Scene& scene, DispatchContext& context) 
     if (!std::ranges::is_sorted(behaviours, &ComesBefore)) {
         std::ranges::sort(behaviours, &ComesBefore);
     }
+    std::optional<EventBroadcastScope> broadcast;
+    if (context.event != nullptr && !behaviours.empty()) {
+        broadcast.emplace(*context.runtime, *context.event);
+    }
+    DispatchTarget target{ context };
     for (const BehaviourDispatchRecord& record : behaviours) {
         if (!scene.Entities().IsActive(record.entity)) {
             continue;
@@ -167,7 +247,7 @@ void DispatchSceneBehaviours(kb::scene::Scene& scene, DispatchContext& context) 
         if (context.event != nullptr && context.event->target.IsValid() && record.entity != context.event->target) {
             continue;
         }
-        DispatchBehaviour(record.entity, record.behaviour, context);
+        DispatchBehaviour(record.entity, record.behaviour, context, target);
     }
 }
 

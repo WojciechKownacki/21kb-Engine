@@ -103,6 +103,11 @@ bool PucLuaScriptRuntime::RestoreRuntimeStateImpl(const kb::core::RuntimeStateSn
     if (!ValidateRuntimeStateImpl(state, error, coordinatedHost)) return false;
     const auto& snapshot = static_cast<const RuntimeSnapshot&>(state);
     if (!memoryBudget_->arena->Restore(*snapshot.heap, error)) return false;
+    cachedScript_ = nullptr;
+    callSites_.clear();
+    ++callSiteRevision_;
+    // The restored heap holds the hook state the kept thread had when the snapshot was taken.
+    stateLifetime_->spareThreadHooked = false;
     scripts_ = snapshot.scripts;
     modules_ = snapshot.modules;
     exposedVariables_ = snapshot.exposedVariables;

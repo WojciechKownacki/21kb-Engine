@@ -96,12 +96,22 @@ std::optional<std::string> PucLuaRuntimeApi::AttachRuntimeFunctions(lua_State* s
     return PucLuaTaskApi::Attach(state, environmentIndex);
 }
 
-std::optional<std::string> PucLuaRuntimeApi::AttachExecutionApi(lua_State* state, int environmentIndex, ScriptExecutionContext& context, PucLuaScriptRuntime& runtime) {
+long long PucLuaRuntimeApi::ExecutionApiStamp(ScriptExecutionContext& context) noexcept {
+    return FunctionSetStamp(context);
+}
+
+std::optional<std::string> PucLuaRuntimeApi::AttachExecutionApi(lua_State* state, int environmentIndex, ScriptExecutionContext& context, PucLuaScriptRuntime& runtime, long long* attachedStamp) {
     // The functions this attaches read the running context from the shared slot, not from the table they sit in,
     // so one attachment serves every call; an environment is attached again only for another function set.
     const int absoluteEnvironment = lua_absindex(state, environmentIndex);
     const lua_Integer stamp = FunctionSetStamp(context);
+    if (attachedStamp != nullptr && *attachedStamp == stamp) {
+        return std::nullopt;
+    }
     if (IsAttached(state, absoluteEnvironment, stamp)) {
+        if (attachedStamp != nullptr) {
+            *attachedStamp = stamp;
+        }
         return std::nullopt;
     }
     if (std::optional<std::string> error = AttachRuntimeFunctions(state, environmentIndex, runtime)) {
@@ -115,6 +125,9 @@ std::optional<std::string> PucLuaRuntimeApi::AttachExecutionApi(lua_State* state
     // read/write routes to the current entity's exposed-variable instance.
     PucLuaSelfApi::AttachInspector(state, environmentIndex, &context);
     MarkAttached(state, absoluteEnvironment, stamp);
+    if (attachedStamp != nullptr) {
+        *attachedStamp = stamp;
+    }
     return std::nullopt;
 }
 

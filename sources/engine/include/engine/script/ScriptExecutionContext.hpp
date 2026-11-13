@@ -39,6 +39,13 @@ public:
         ScriptFunctionRegistry* functions = nullptr,
         ScriptEventBus* events = nullptr) noexcept;
 
+    // The next behaviour a phase loop runs: the same context, aimed at another object.
+    void Rebind(kb::scene::SceneEntity self, kb::assets::AssetId assetId, kb::scene::BehaviourBackend backend) noexcept {
+        self_ = self;
+        assetId_ = assetId;
+        backend_ = backend;
+    }
+
     [[nodiscard]] kb::scene::Scene& GetScene() noexcept;
     [[nodiscard]] const kb::scene::Scene& GetScene() const noexcept;
     // Convenience access to the scene's runtime input subsystem for native scripts.

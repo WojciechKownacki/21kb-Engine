@@ -5,6 +5,7 @@
 #include "engine/script/ScriptRuntime.hpp"
 #include "engine/script/ScriptRuntimeAssetPreparer.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -90,6 +91,7 @@ private:
     void PrepareScene(kb::scene::Scene& scene);
     void RestartReloadedBehaviours(kb::scene::Scene& scene);
     void ExecuteTrackedBehaviourPhase(kb::scene::Scene& scene, ScriptLifecycleEvent event, float deltaSeconds);
+    void RebuildPhaseOrder();
     // LIB-073: drains kb::scene::SceneLoadedContent's pending
     // SceneLoading/SceneLoaded/SceneActivated/SceneUnloading/SceneUnloaded
     // notifications and turns each into a real ScriptEvent broadcast via
@@ -174,14 +176,40 @@ private:
     // lifecycleRecords_ elements, so whoever replaces or erases records marks the order dirty.
     std::vector<BehaviourLifecycleRecord*> phaseOrder_;
     bool phaseOrderDirty_ = true;
-    // The scripts the ordered behaviours run, once each, so a phase that none of them has an entry for is skipped
-    // whole. When there are more distinct scripts than it keeps, every behaviour is asked as before.
+    // The scripts the ordered behaviours run, once each, and for every ordered behaviour the index of its script.
     struct PhaseScript {
         std::uint64_t assetId = 0U;
         kb::scene::BehaviourBackend backend = kb::scene::BehaviourBackend::Native;
     };
     std::vector<PhaseScript> phaseScripts_;
-    bool phaseScriptsOverflow_ = false;
+    std::vector<std::uint32_t> phaseOrderScripts_;
+    // Moves with every rebuild of the order; a dispatch list built from an older one is built again.
+    std::uint64_t phaseOrderVersion_ = 1U;
+
+    // One behaviour of a dispatch list with the call its backend resolved for the phase.
+    struct PhaseEntry {
+        kb::scene::SceneEntity entity{};
+        kb::scene::BehaviourComponent behaviour{};
+        ScriptPhaseCall call{};
+    };
+    // What one per-frame phase runs: the behaviours that have something to run in it, in execution order. Built again
+    // only when the order changed, a script gained or lost its entry, or a backend reports that its calls changed -
+    // never by looking at every behaviour of the scene.
+    struct PhaseList {
+        std::vector<PhaseEntry> entries;
+        std::vector<std::uint8_t> answers;
+        std::array<std::uint64_t, 3> callRevisions{};
+        std::uint64_t orderVersion = 0U;
+    };
+    [[nodiscard]] bool PreparePhaseList(ScriptLifecycleEvent event, PhaseList& list);
+    std::array<PhaseList, static_cast<std::size_t>(ScriptLifecycleEvent::Destroyed) + 1U> phaseLists_;
+    std::vector<std::uint8_t> phaseAnswerScratch_;
+    // Events the behaviours of a phase emitted, delivered after each call; kept to reuse its storage.
+    std::vector<ScriptEvent> phaseEmittedEvents_;
+    // The scene's behaviour change stamp the lifecycle records were last brought in line with. While it still holds, no
+    // behaviour appeared, went or changed, and the synchronization has nothing to look at.
+    std::uint64_t syncStamp_ = 0U;
+    bool syncStampValid_ = false;
     std::uint64_t syncEpoch_ = 0U;
 };
 

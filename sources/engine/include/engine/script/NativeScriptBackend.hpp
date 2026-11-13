@@ -56,6 +56,12 @@ public:
     [[nodiscard]] ScriptBackendExecutionResult ExecuteLifecycle(const kb::scene::BehaviourComponent& behaviour, ScriptExecutionContext& context) override;
     [[nodiscard]] ScriptBackendExecutionResult ExecuteEvent(const kb::scene::BehaviourComponent& behaviour, const ScriptEvent& event, EventId eventId, ScriptExecutionContext& context) override;
     [[nodiscard]] bool HasEntry(const kb::scene::BehaviourComponent& behaviour, std::string_view name) override;
+    // The object of a class script, or the registered function, is what the call runs: no lookup is left for the frame.
+    [[nodiscard]] ScriptPhaseCall ResolvePhaseCall(
+        kb::scene::SceneEntity entity,
+        const kb::scene::BehaviourComponent& behaviour,
+        ScriptLifecycleEvent event) override;
+    [[nodiscard]] std::uint64_t PhaseCallRevision() const noexcept override;
 
 private:
     static constexpr std::size_t kLifecycleCount = static_cast<std::size_t>(ScriptLifecycleEvent::Destroyed) + 1U;
@@ -120,6 +126,12 @@ private:
         std::string symbol;
     };
 
+    // A registered lifecycle function with the name its failures are reported under; the target of a resolved phase call.
+    struct CallbackTarget {
+        const NativeScriptLifecycleCallback* callback = nullptr;
+        const std::string* symbol = nullptr;
+    };
+
     // What a behaviour asset runs, found once: the callbacks by lifecycle event and by event id, and the
     // class, instead of once per call from the registration tables (which hash the symbol text each time).
     // It is looked at again when a registration changed (epoch_). The objects are kept across that.
@@ -127,6 +139,7 @@ private:
         std::uint64_t epoch = 0;
         std::string symbol;
         std::array<const NativeScriptLifecycleCallback*, kLifecycleCount> lifecycle{};
+        std::array<CallbackTarget, kLifecycleCount> lifecycleTargets{};
         std::vector<std::pair<EventId, const NativeScriptEventCallback*>> events;
         const NativeScriptClassApi* script = nullptr;
         std::unordered_map<std::uint64_t, Instance> instances;
@@ -140,6 +153,8 @@ private:
     };
 
     [[nodiscard]] AssetEntry& Resolve(std::uint64_t assetId);
+    [[nodiscard]] static bool InvokeClassHook(void* target, const kb::scene::BehaviourComponent& behaviour, ScriptExecutionContext& context, std::vector<ScriptDiagnostic>& diagnostics);
+    [[nodiscard]] static bool InvokeLifecycleCallback(void* target, const kb::scene::BehaviourComponent& behaviour, ScriptExecutionContext& context, std::vector<ScriptDiagnostic>& diagnostics);
     void ExecuteClassLifecycle(AssetEntry& entry, std::uint64_t assetId, ScriptExecutionContext& context, ScriptBackendExecutionResult& result);
     static void DestroyInstance(Instance& instance) noexcept;
 
@@ -152,6 +167,8 @@ private:
     std::unordered_map<std::uint64_t, AssetEntry> entries_;
     std::vector<SavedInstance> savedInstances_;
     std::uint64_t epoch_ = 1;
+    // Every object made or destroyed; with epoch_ it is what PhaseCallRevision reports.
+    std::uint64_t instanceChanges_ = 0;
 };
 
 } // namespace kb::script

@@ -21,7 +21,11 @@ public:
     [[nodiscard]] static ScriptExecutionContext* ContextFromUpvalue(lua_State* state) noexcept;
     static void PushContextSlot(lua_State* state, bool enabled = true);
     [[nodiscard]] static std::optional<std::string> AttachRuntimeFunctions(lua_State* state, int environmentIndex, PucLuaScriptRuntime& runtime);
-    [[nodiscard]] static std::optional<std::string> AttachExecutionApi(lua_State* state, int environmentIndex, ScriptExecutionContext& context, PucLuaScriptRuntime& runtime);
+    // The value AttachExecutionApi compares: it changes when the function set a script can call changes.
+    [[nodiscard]] static long long ExecutionApiStamp(ScriptExecutionContext& context) noexcept;
+    // `attachedStamp`, when given, remembers the function set the environment was last found attached for, so the next
+    // call for the same environment and set does not look it up again in the Lua state.
+    [[nodiscard]] static std::optional<std::string> AttachExecutionApi(lua_State* state, int environmentIndex, ScriptExecutionContext& context, PucLuaScriptRuntime& runtime, long long* attachedStamp = nullptr);
     static void PushSelf(lua_State* state, ScriptExecutionContext& context);
     static void RefreshSelfVariables(lua_State* state, int selfIndex, ScriptExecutionContext& context);
     static void PushEvent(lua_State* state, const ScriptEvent& event);

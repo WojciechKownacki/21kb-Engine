@@ -16,6 +16,14 @@ const BehaviourComponent* SceneComponentQueryService::TryGetBehaviour(const Scen
     return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.Behaviours().TryGet(entity) : nullptr;
 }
 
+const std::uint64_t* SceneComponentQueryService::BehaviourRevisionCounter(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).componentStorage.Behaviours().RevisionCounter();
+}
+
+std::uint64_t SceneComponentQueryService::BehaviourChangeStamp(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).componentStorage.Behaviours().ChangeStamp();
+}
+
 BehaviourComponent* SceneComponentMutationService::TryGetBehaviour(Scene& scene, SceneEntity entity) noexcept {
     SceneHistoryService::NoteObjectChanging(scene, entity);
     return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.Behaviours().TryGet(entity) : nullptr;

@@ -3,6 +3,8 @@
 
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneBehaviourComponents.hpp"
+#include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
@@ -477,6 +479,147 @@ void RunScriptErrorsReadInPlainWordsTest() {
     Require(line.find("Door.lua:3: in function", firstTrace) != std::string::npos, "The stack trace must show the line of the script that failed");
 }
 
+// A script that changes the scene in the middle of a phase: a behaviour it destroyed or disabled does not run after it, one
+// it made does not run before the next frame, and the next frame runs the scene as it is then.
+void RunPhaseSeesChangesMadeInsideItTest() {
+    SmallRig rig("function Tick(self, dt) Emit('Ran') end\n");
+    constexpr kb::assets::AssetId kChangerAsset{ 9702U };
+    std::vector<kb::scene::SceneEntity> scripted;
+    for (int index = 0; index < 5; ++index) scripted.push_back(rig.Add(kb::scene::BehaviourTickGroup::Gameplay, 10));
+    const kb::scene::SceneObject changer = rig.scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Changer" });
+    rig.scene.Components().Behaviours().Set(changer.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kChangerAsset.value, .backend = kb::scene::BehaviourBackend::Native, .enabled = true,
+        .tickGroup = kb::scene::BehaviourTickGroup::Gameplay, .executionOrder = -10 });
+    int frame = 0;
+    kb::scene::SceneEntity born{};
+    Require(rig.host.NativeBackend().RegisterLifecycle(kChangerAsset, kb::script::ScriptLifecycleEvent::Tick,
+        [&](kb::script::ScriptExecutionContext& context) {
+            if (++frame != 2) return;
+            kb::scene::Scene& scene = context.GetScene();
+            scene.Entities().Destroy(scripted[2]);
+            kb::scene::BehaviourComponent disabled = *std::as_const(scene).Components().Behaviours().TryGet(scripted[3]);
+            disabled.enabled = false;
+            scene.Components().Behaviours().Set(scripted[3], disabled);
+            born = rig.Add(kb::scene::BehaviourTickGroup::Gameplay, 10);
+        }), "the changing callback must register");
+
+    const auto ran = [&] {
+        std::vector<std::uint64_t> senders = SendersOf(rig.Frame(), "Ran");
+        std::sort(senders.begin(), senders.end());
+        return senders;
+    };
+    const auto ids = [&](std::initializer_list<kb::scene::SceneEntity> entities) {
+        std::vector<std::uint64_t> values;
+        for (const kb::scene::SceneEntity entity : entities) values.push_back(entity.Id());
+        std::sort(values.begin(), values.end());
+        return values;
+    };
+    Require(ran() == ids({ scripted[0], scripted[1], scripted[2], scripted[3], scripted[4] }), "The first frame runs every behaviour");
+    Require(ran() == ids({ scripted[0], scripted[1], scripted[4] }), "A behaviour destroyed or disabled by an earlier one in the phase must not run, and one it made must wait");
+    Require(ran() == ids({ scripted[0], scripted[1], scripted[4], born }), "The next frame runs the behaviour that was made, and not the ones that went");
+}
+
+// The change stamp of the behaviours moves for every change to them and stays put for everything else, so a frame in
+// which nothing about the behaviours changed has nothing to look at.
+void RunBehaviourChangeStampTest() {
+    SmallRig rig("function Tick(self, dt) end\n");
+    const kb::scene::SceneEntity first = rig.Add();
+    const kb::scene::SceneEntity second = rig.Add();
+    static_cast<void>(rig.Frame());
+    const auto stamp = [&] { return rig.scene.Components().Behaviours().ChangeStamp(); };
+    const auto revision = [&] { return *rig.scene.Components().Behaviours().RevisionCounter(); };
+
+    std::uint64_t before = stamp();
+    std::uint64_t revisionBefore = revision();
+    for (int index = 0; index < 3; ++index) static_cast<void>(rig.Frame());
+    Require(stamp() == before && revision() == revisionBefore, "Frames that change no behaviour must leave the stamp alone");
+
+    kb::scene::TransformComponent moved = rig.scene.Transforms().Get(first);
+    moved.localPosition.x += 1.0F;
+    rig.scene.Transforms().Set(first, moved);
+    Require(stamp() == before && revision() == revisionBefore, "Moving an object that carries a behaviour must leave the stamp alone");
+    const kb::scene::SceneObject plain = rig.scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Plain" });
+    Require(stamp() == before && revision() == revisionBefore, "Making an object without a behaviour must leave the stamp alone");
+    rig.scene.Entities().Destroy(plain.Entity());
+    Require(stamp() == before && revision() == revisionBefore, "Destroying an object without a behaviour must leave the stamp alone");
+
+    kb::scene::BehaviourComponent changed = *std::as_const(rig.scene).Components().Behaviours().TryGet(first);
+    changed.executionOrder = 5;
+    rig.scene.Components().Behaviours().Set(first, changed);
+    Require(stamp() != before && revision() != revisionBefore, "Setting a behaviour must move the stamp");
+    before = stamp();
+    revisionBefore = revision();
+
+    kb::scene::BehaviourComponent* writable = rig.scene.Components().Behaviours().TryGet(first);
+    writable->enabled = false;
+    rig.scene.Components().Behaviours().MarkModified(first);
+    Require(stamp() != before && revision() != revisionBefore, "Marking a behaviour modified must move the stamp");
+    before = stamp();
+    revisionBefore = revision();
+
+    rig.scene.Entities().Destroy(second);
+    Require(stamp() != before && revision() != revisionBefore, "Destroying an entity that carries a behaviour must move the stamp");
+    before = stamp();
+    revisionBefore = revision();
+
+    rig.scene.Components().Behaviours().Remove(first);
+    Require(stamp() != before && revision() != revisionBefore, "Removing a behaviour must move the stamp");
+}
+
+// A registration made after the behaviours were running takes effect in the next frame, and a replaced one is the one
+// that runs.
+void RunNativeRegistrationChangesReachRunningBehavioursTest() {
+    SmallRig rig("function Tick(self, dt) end\n");
+    constexpr kb::assets::AssetId kNativeAsset{ 9703U };
+    for (int index = 0; index < 3; ++index) {
+        const kb::scene::SceneObject object = rig.scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Native" });
+        rig.scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+            .behaviourAssetId = kNativeAsset.value, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+    }
+    Require(rig.Frame().executedBehaviours == 0U, "Behaviours without a callback run nothing");
+    int firstCalls = 0;
+    int secondCalls = 0;
+    Require(rig.host.NativeBackend().RegisterLifecycle(kNativeAsset, kb::script::ScriptLifecycleEvent::Tick,
+        [&](kb::script::ScriptExecutionContext&) { ++firstCalls; }), "the first callback must register");
+    Require(rig.Frame().executedBehaviours == 3U && firstCalls == 3, "A callback registered while the behaviours run must be called in the next frame");
+    Require(rig.host.NativeBackend().RegisterLifecycle(kNativeAsset, kb::script::ScriptLifecycleEvent::Tick,
+        [&](kb::script::ScriptExecutionContext&) { ++secondCalls; }), "the second callback must register");
+    static_cast<void>(rig.Frame());
+    Require(firstCalls == 3 && secondCalls == 3, "A replaced callback must no longer be called");
+}
+
+// An entry that fails does not stop the others in its phase, and the next frame runs them all again.
+void RunFailingEntryDoesNotStopTheOthersTest() {
+    SmallRig rig("function Tick(self, dt)\n  calls = (calls or 0) + 1\n  if calls % 2 == 0 then error('boom') end\n  Emit('Fine')\nend\n");
+    for (int index = 0; index < 12; ++index) rig.Add();
+    for (int frame = 0; frame < 3; ++frame) {
+        const kb::script::ScriptRuntimeExecutionResult& result = rig.system.ExecuteFrame(rig.scene, kFrameSeconds);
+        Require(result.diagnostics.size() == 6U && SendersOf(result, "Fine").size() == 6U && result.executedBehaviours == 6U,
+            "Half of the entries fail, the other half must run in every frame");
+        Require(result.diagnostics.front().message.find("boom") != std::string::npos, "A failure must report what the script raised");
+    }
+}
+
+// Every receiver of a broadcast reads the event as it was sent.
+void RunBroadcastCarriesTheEventToEveryReceiverTest() {
+    SmallRig rig("function Ping(self, event) Emit('Pong', { n = event.args.n, name = event.name }) end\n");
+    for (int index = 0; index < 30; ++index) rig.Add();
+    static_cast<void>(rig.Frame());
+    kb::script::ScriptEvent event;
+    event.name = "Ping";
+    event.arguments.push_back(kb::script::ScriptEventArgument{ .name = "n", .value = kb::script::ScriptValue{ 7 } });
+    const kb::script::ScriptRuntimeExecutionResult result = rig.host.Runtime().DispatchEvent(rig.scene, event, 0.0F);
+    std::size_t pongs = 0U;
+    for (const kb::script::ScriptEvent& emitted : result.emittedEvents) {
+        if (emitted.name != "Pong") continue;
+        ++pongs;
+        Require(ArgumentOf(emitted, "n") == 7.0F, "A receiver of a broadcast must read the arguments of the event");
+    }
+    Require(pongs == 30U, "Every receiver of a broadcast must run its handler");
+    const kb::script::ScriptRuntimeExecutionResult again = rig.host.Runtime().DispatchEvent(rig.scene, event, 0.0F);
+    Require(again.executedBehaviours == 30U, "A second broadcast must reach every receiver again");
+}
+
 } // namespace
 
 void RunScriptDispatchTests() {
@@ -490,6 +633,11 @@ void RunScriptDispatchTests() {
     RunYieldingEntriesShareThreadsSafelyTest();
     RunTransformBindingsTest();
     RunSelfKeepsItsFieldsPerObjectTest();
+    RunPhaseSeesChangesMadeInsideItTest();
+    RunBehaviourChangeStampTest();
+    RunNativeRegistrationChangesReachRunningBehavioursTest();
+    RunFailingEntryDoesNotStopTheOthersTest();
+    RunBroadcastCarriesTheEventToEveryReceiverTest();
 }
 
 // The numbers this runs are printed for comparison; the limits it requires are far looser than what the runtime does

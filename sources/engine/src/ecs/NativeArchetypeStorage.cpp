@@ -562,6 +562,19 @@ public:
         return index < componentVersions_.size() ? componentVersions_[index] : 0;
     }
 
+    // Zero for a table without the component. Otherwise a value that only grows: an entity entering the table adds one
+    // to its row count, one leaving it adds one to the component's version and takes one from the row count (net one
+    // more, because the version counts twice), and a value marked modified adds two. Writes to the other components of
+    // the table, which also move the table's row version, leave it alone.
+    [[nodiscard]] std::uint64_t ComponentChangeStamp(ComponentId componentId) const noexcept {
+        const ComponentLayout* column = FindColumn(componentId);
+        if (column == nullptr) {
+            return 0;
+        }
+        const std::size_t index = static_cast<std::size_t>(column - layout_.columns.data());
+        return 2U * (index < componentVersions_.size() ? componentVersions_[index] : 0U) + liveEntities_;
+    }
+
     [[nodiscard]] const std::unordered_map<EdgeKey, std::size_t, EdgeKeyHash, EdgeKeyEqual>& Edges() const noexcept {
         return edges_;
     }
@@ -3016,6 +3029,14 @@ public:
         return structuralVersion_;
     }
 
+    [[nodiscard]] std::uint64_t ComponentChangeStamp(ComponentId componentId) const noexcept {
+        std::uint64_t stamp = 0;
+        for (const ArchetypeTable& table : tables_) {
+            stamp += table.ComponentChangeStamp(componentId);
+        }
+        return stamp;
+    }
+
     [[nodiscard]] std::uint64_t RemovalVersion() const noexcept { return removalVersion_; }
 
     [[nodiscard]] std::size_t ChunkPayloadBytes() const noexcept {
@@ -4235,6 +4256,10 @@ std::uint64_t NativeArchetypeStorage::ArchetypeComponentVersion(std::size_t arch
 
 std::uint64_t NativeArchetypeStorage::StructuralVersion() const noexcept {
     return impl_ != nullptr ? impl_->StructuralVersion() : 0;
+}
+
+std::uint64_t NativeArchetypeStorage::ComponentChangeStamp(ComponentId componentId) const noexcept {
+    return impl_ != nullptr ? impl_->ComponentChangeStamp(componentId) : 0;
 }
 
 std::uint64_t NativeArchetypeStorage::RemovalVersion() const noexcept {

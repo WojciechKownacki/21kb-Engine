@@ -92,14 +92,16 @@ public:
         float deltaSeconds,
         ScriptRuntimeDispatchOptions options = {});
 
-private:
-    [[nodiscard]] static std::size_t BackendIndex(kb::scene::BehaviourBackend backend) noexcept;
-    static void MergeResult(ScriptRuntimeExecutionResult& target, ScriptRuntimeExecutionResult source);
+    // Delivers the events a script emitted, and those their handlers emit in turn (bounded by maxEventDepth).
     [[nodiscard]] ScriptRuntimeExecutionResult DrainEvents(
         kb::scene::Scene& scene,
         std::vector<ScriptEvent> initialEvents,
         float deltaSeconds,
-        ScriptRuntimeDispatchOptions options);
+        ScriptRuntimeDispatchOptions options = {});
+
+private:
+    [[nodiscard]] static std::size_t BackendIndex(kb::scene::BehaviourBackend backend) noexcept;
+    static void MergeResult(ScriptRuntimeExecutionResult& target, ScriptRuntimeExecutionResult source);
 
     std::array<std::unique_ptr<IScriptBackend>, 3> backends_{};
     ScriptSharedState sharedState_;

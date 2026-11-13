@@ -41,6 +41,9 @@ struct PucLuaStateLifetime {
     lua_State* spareThread = nullptr;
     int spareThreadReference = -2; // LUA_NOREF
     bool spareThreadBusy = false;
+    // The instruction budget's count hook stays on the kept thread between entries instead of being set and cleared
+    // around each one.
+    bool spareThreadHooked = false;
 };
 
 class PucLuaExecutionContextScope final {
