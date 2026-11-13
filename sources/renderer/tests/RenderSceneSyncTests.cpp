@@ -2757,6 +2757,56 @@ void RunDirectionalShadowCameraCoverageTest() {
         "Shadow coverage must include the animated bounds override");
 }
 
+// The sun's cascades are the same matrices frame after frame while the camera stays inside a texel of the cascade and
+// moves along the light, and the depth window absorbs casters coming and going near its ends: that is what lets a
+// cascade keep the shadow it rendered. A camera that crosses texels of a cascade moves that cascade, not the coarser ones.
+void RunDirectionalShadowCascadesStayPutTest() {
+    RenderScene scene;
+    MeshRenderProxyDesc mesh{ .entityId = 1U, .meshAssetId = 42U };
+    mesh.model[0] = mesh.model[5] = mesh.model[10] = mesh.model[15] = 1.0F;
+    mesh.model[14] = 0.1F;
+    static_cast<void>(scene.UpsertMesh(mesh));
+    mesh.entityId = 2U;
+    mesh.model[12] = 1000.0F;
+    static_cast<void>(scene.UpsertMesh(mesh));
+    static_cast<void>(scene.UpsertLight(LightRenderProxyDesc{ .entityId = 3U, .kind = RenderLightKind::Directional, .castsShadow = true }));
+    RenderResourceRegistry resources;
+    SceneRenderResourceMap resourceMap;
+    SceneRenderLightingConfig config;
+    config.shadowDistance = 50.0F;
+    config.shadowCascadeCount = 3U;
+    const auto build = [&](std::array<float, 3> eye) {
+        return DirectionalShadowPassPlanner{}.Build(scene, resources, resourceMap, config, BGFX_INVALID_HANDLE, 1U, &eye);
+    };
+    const auto same = [](const DirectionalShadowSetup& lhs, const DirectionalShadowSetup& rhs, std::uint32_t cascade) {
+        return lhs.cascadeCameras[cascade].view == rhs.cascadeCameras[cascade].view &&
+            lhs.cascadeCameras[cascade].projection == rhs.cascadeCameras[cascade].projection;
+    };
+    const auto base = build({ 10.0F, 5.0F, 0.0F });
+    Require(base.valid && base.binding.cascadeCount == 3U && base.cacheable, "The cascade stability test needs three cascades around the camera");
+    const auto slid = build({ 10.0F, 5.0F, 0.37F });
+    Require(same(base, slid, 0U) && same(base, slid, 1U) && same(base, slid, 2U),
+        "A camera moving along the light must not change the cascades");
+    const auto nudged = build({ 10.01F, 5.0F, 0.0F });
+    Require(!same(base, nudged, 0U) && same(base, nudged, 2U),
+        "A camera crossing texels of the finest cascade must move it and leave the coarsest cascade where it was");
+    // A caster inside the footprint but within the window's step of its end must not move the depth window.
+    mesh.entityId = 4U;
+    mesh.model[12] = 0.0F;
+    mesh.model[14] = 0.2F;
+    static_cast<void>(scene.UpsertMesh(mesh));
+    const auto grown = build({ 10.0F, 5.0F, 0.0F });
+    Require(same(base, grown, 0U) && same(base, grown, 2U), "A caster coming near the end of the depth window must not change the cascades");
+    mesh.entityId = 5U;
+    mesh.model[14] = 40.0F;
+    static_cast<void>(scene.UpsertMesh(mesh));
+    Require(!same(base, build({ 10.0F, 5.0F, 0.0F }), 2U), "A caster beyond the depth window must widen it");
+    for (std::uint32_t cascade = 0U; cascade < base.binding.cascadeCount; ++cascade) {
+        Require(NearlyEqual(base.cascadeHalfExtent[cascade], 1.0F / std::abs(base.cascadeCameras[cascade].projection[0])),
+            "Each cascade must report the half width of its window");
+    }
+}
+
 void RunRendererStoresRuntimeAssetDiscoveryIntervalTest() {
     Renderer renderer;
     Require(renderer.RuntimeAssetDiscoveryIntervalFrames() == Renderer::kRuntimeAssetDiscoveryIntervalFrames, "Renderer did not expose the default asset discovery interval");
@@ -4220,6 +4270,7 @@ void RunRenderSceneSyncTests() {
     RunSceneRendererReportsInvalidLightsSeparatelyFromBudgetSkipsTest();
     RunDirectionalShadowPlannerSkipsNonShadowCastingLightsTest();
     RunDirectionalShadowCameraCoverageTest();
+    RunDirectionalShadowCascadesStayPutTest();
     RunRendererStoresRuntimeAssetDiscoveryIntervalTest();
     RunDisabledRuntimeAssetDiscoverySkipsFirstRefreshTest();
     RunSceneRenderDiagnosticsAggregateFrameSubmissionsTest();

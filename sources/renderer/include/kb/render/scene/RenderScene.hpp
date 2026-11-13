@@ -367,6 +367,8 @@ public:
     void BeginMotionFrame(std::uint64_t rendererFrame) noexcept;
     // The current motion frame (never 0): what SceneRenderPreviousModel compares instance records against.
     [[nodiscard]] std::uint64_t MotionFrame() const noexcept { return motionFrame_; }
+    // Names this scene among every scene ever made, so a cache built for one cannot serve another that took its place.
+    [[nodiscard]] std::uint64_t InstanceStamp() const noexcept { return instanceStamp_; }
     // The motion frame of the last change to shadow casters that no mesh proxy accounts for (a removed mesh, a
     // generated swarm, a surface cast, a moved render origin): every cached local shadow of that frame is stale.
     [[nodiscard]] std::uint64_t ShadowCasterGlobalChangeFrame() const noexcept { return shadowGlobalChangeFrame_; }
@@ -539,6 +541,7 @@ private:
     void InvalidateDrawGroupsOfNonMeshProxy() noexcept;
 
     MeshProxyMap meshes_;
+    std::uint64_t instanceStamp_ = NextContentRevision();
     std::uint64_t meshContentRevision_ = NextContentRevision();
     std::uint64_t meshSetVersion_ = NextContentRevision();
     std::uint64_t lightContentRevision_ = NextContentRevision();

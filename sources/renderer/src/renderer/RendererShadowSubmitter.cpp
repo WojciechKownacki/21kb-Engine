@@ -4,8 +4,8 @@
 #include "kb/render/scene/SceneRenderer.hpp"
 #include "kb/render/shadow/DirectionalShadowPassPlanner.hpp"
 #include "kb/render/shadow/ShadowMapResource.hpp"
-#include "shadow/PointShadowCasterChanges.hpp"
 #include "shadow/PointShadowPassPlanner.hpp"
+#include "shadow/ShadowCasterChanges.hpp"
 #include "renderer/RendererViewConfigurator.hpp"
 
 #include <bx/math.h>
@@ -16,6 +16,17 @@
 namespace kb::render {
 
 namespace {
+
+// Folds what a cached shadow was rendered for into one key; 0 stays free for "nothing cached".
+class ShadowCacheKey {
+public:
+    void Mix(std::uint64_t value) noexcept { key_ = (key_ ^ value) * 1099511628211ULL; }
+    void Mix(float value) noexcept { Mix(static_cast<std::uint64_t>(std::bit_cast<std::uint32_t>(value))); }
+    [[nodiscard]] std::uint64_t Value() const noexcept { return key_ | 1U; }
+
+private:
+    std::uint64_t key_ = 1469598103934665603ULL;
+};
 
 [[nodiscard]] SceneRenderShadowMapBinding SubmitDirectionalShadows(
     const RendererShadowSubmitDesc& desc,
@@ -32,14 +43,44 @@ namespace {
         1U + static_cast<std::uint32_t>(std::ranges::count_if(
             desc.viewportPlan.viewIds.shadowCascadeViews, [](std::uint16_t view) { return ViewId::IsValid(view); })));
     if (!shadowSetup.valid || !desc.shadowMap.Ensure(shadowSetup.atlasSize)) {
+        desc.shadowMap.DiscardAllCachedCascades();
         return {};
     }
 
     shadowSetup.binding.depthTexture = desc.shadowMap.DepthTexture();
     shadowSetup.binding.params[2] = desc.shadowMap.Size() == 0U ? 0.0F : 1.0F / static_cast<float>(desc.shadowMap.Size());
     const std::uint32_t tileSize = shadowSetup.binding.cascadeCount > 1U ? desc.shadowMap.Size() / 2U : desc.shadowMap.Size();
+    // A cascade keeps what it rendered while its window, the casters over it and the resources stay the same; the
+    // sun's bias, filter and strength only change how the map is read.
+    const bool caching = desc.lightingConfig.perLightShadowCaching && shadowSetup.cacheable;
+    if (caching) {
+        ShadowCasterChanges::ApplyToCascades(
+            desc.renderScene, desc.sceneRenderer.Resources(), desc.sceneRenderer.ResourceMap(), desc.shadowMap);
+    } else {
+        desc.shadowMap.DiscardAllCachedCascades();
+    }
+    desc.aggregateSubmitStats.shadowLightEntityId = shadowSetup.lightEntityId;
+    desc.aggregateSubmitStats.shadowMapAllocationBytes = desc.shadowMap.AllocationBytes();
     std::uint32_t submittedCasters = 0U;
     for (std::uint32_t cascade = 0U; cascade < shadowSetup.binding.cascadeCount; ++cascade) {
+        const SceneRenderCamera& cascadeCamera = shadowSetup.cascadeCameras[cascade];
+        std::uint64_t key = 0U;
+        if (caching) {
+            ShadowCacheKey mixer;
+            mixer.Mix(shadowSetup.lightEntityId);
+            mixer.Mix(desc.sceneRenderer.Resources().Revision());
+            mixer.Mix(desc.sceneRenderer.ResourceMap().Revision());
+            mixer.Mix(static_cast<std::uint64_t>(cameraCullingMask));
+            mixer.Mix((static_cast<std::uint64_t>(tileSize) << 32U) ^ shadowSetup.atlasSize ^ (static_cast<std::uint64_t>(cascade) << 16U));
+            for (const float value : cascadeCamera.view) mixer.Mix(value);
+            for (const float value : cascadeCamera.projection) mixer.Mix(value);
+            key = mixer.Value();
+            const ShadowMapResource::CachedCascade& cached = desc.shadowMap.CachedCascadeAt(cascade);
+            if (cached.key == key) {
+                submittedCasters += cached.casterCount;
+                continue;
+            }
+        }
         const std::uint16_t viewId = cascade == 0U
             ? desc.viewportPlan.viewIds.shadowDepth
             : desc.viewportPlan.viewIds.shadowCascadeViews[cascade - 1U];
@@ -51,7 +92,7 @@ namespace {
             desc.renderScene,
             tileSize,
             tileSize,
-            &shadowSetup.cascadeCameras[cascade],
+            &cascadeCamera,
             desc.sceneDesc.drawBudget,
             desc.lightingConfig,
             nullptr,
@@ -62,6 +103,10 @@ namespace {
         shadowStats.shadowLightEntityId = shadowSetup.lightEntityId;
         shadowStats.shadowMapAllocationBytes = cascade == 0U ? desc.shadowMap.AllocationBytes() : 0U;
         submittedCasters += shadowStats.submittedShadowCasterCount;
+        if (caching) {
+            desc.shadowMap.SetCachedCascade(cascade, { .key = key, .casterCount = shadowStats.submittedShadowCasterCount,
+                .halfExtent = shadowSetup.cascadeHalfExtent[cascade], .view = cascadeCamera.view });
+        }
         desc.aggregateSubmitStats += shadowStats;
         desc.diagnostics += desc.sceneRenderer.LastDiagnostics();
         desc.passSubmitStats.push_back(SceneRenderPassSubmitStats{
@@ -100,7 +145,7 @@ void SubmitPointShadows(
     // stay the same, however its row moves in the camera's ordering.
     const bool caching = desc.lightingConfig.perLightShadowCaching;
     if (caching) {
-        PointShadowCasterChanges::Apply(
+        ShadowCasterChanges::ApplyToLocalLights(
             desc.renderScene, desc.sceneRenderer.Resources(), desc.sceneRenderer.ResourceMap(), setup, desc.pointShadowMap);
     }
     for (std::uint32_t light = 0U; light < setup.lightCount; ++light) {
@@ -109,19 +154,18 @@ void SubmitPointShadows(
         }
         std::uint64_t key = 0U;
         if (caching) {
-            key = 1469598103934665603ULL;
-            const auto mix = [&key](std::uint64_t value) noexcept { key = (key ^ value) * 1099511628211ULL; };
-            mix(setup.binding.entityId[light]);
-            mix(desc.sceneRenderer.Resources().Revision());
-            mix(desc.sceneRenderer.ResourceMap().Revision());
-            mix((static_cast<std::uint64_t>(setup.tileSize) << 32U) ^ setup.atlasWidth ^ (static_cast<std::uint64_t>(setup.atlasHeight) << 16U));
+            ShadowCacheKey mixer;
+            mixer.Mix(setup.binding.entityId[light]);
+            mixer.Mix(desc.sceneRenderer.Resources().Revision());
+            mixer.Mix(desc.sceneRenderer.ResourceMap().Revision());
+            mixer.Mix((static_cast<std::uint64_t>(setup.tileSize) << 32U) ^ setup.atlasWidth ^ (static_cast<std::uint64_t>(setup.atlasHeight) << 16U));
             for (std::uint32_t c = 0U; c < 4U; ++c) {
                 for (const float value : { setup.binding.positionRange[light * 4U + c], setup.binding.spot[light * 4U + c],
                          setup.binding.depthParams[light * 4U + c] }) {
-                    mix(std::bit_cast<std::uint32_t>(value));
+                    mixer.Mix(value);
                 }
             }
-            key |= 1U;
+            key = mixer.Value();
             if (desc.pointShadowMap.CachedTiles(light) == key) {
                 continue;
             }

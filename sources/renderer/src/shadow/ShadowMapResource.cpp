@@ -25,6 +25,7 @@ bool ShadowMapResource::Ensure(std::uint32_t width, std::uint32_t height) {
 
     Shutdown();
     cachedTiles_ = {};
+    DiscardAllCachedCascades();
 
     constexpr std::uint64_t textureFlags =
         BGFX_TEXTURE_RT |

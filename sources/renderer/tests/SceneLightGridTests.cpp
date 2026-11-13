@@ -1,7 +1,7 @@
 #include "RendererTestSupport.hpp"
 #include "scene/lighting/SceneLightGrid.hpp"
-#include "shadow/PointShadowCasterChanges.hpp"
 #include "shadow/PointShadowPassPlanner.hpp"
+#include "shadow/ShadowCasterChanges.hpp"
 
 #include <algorithm>
 #include <array>
@@ -224,7 +224,7 @@ void PointShadowCasterChangesDiscardOnlyTilesTheyReach() {
         scene.BeginMotionFrame(rendererFrame++);
         change();
         const PointShadowSetup setup = PointShadowPassPlanner::Build(scene, config, &camera, ~0U, BGFX_INVALID_HANDLE, map.RowOwners());
-        PointShadowCasterChanges::Apply(scene, resources, resourceMap, setup, map);
+        ShadowCasterChanges::ApplyToLocalLights(scene, resources, resourceMap, setup, map);
         return setup;
     };
     const auto cacheAll = [&map] { for (std::uint32_t row = 0U; row < 3U; ++row) map.SetCachedTiles(row, 100U + row); };
@@ -249,7 +249,62 @@ void PointShadowCasterChangesDiscardOnlyTilesTheyReach() {
     Require((cached() == std::array{ false, false, false }), "a frame the cache did not see must discard every tile");
 }
 
+// The same holds for the cascades of the sun: a cascade is discarded only by a caster change over its window, whatever
+// the depth, and a frame the cache did not see or a caster that left takes them all.
+void ShadowCasterChangesDiscardOnlyCascadesTheyReach() {
+    RenderScene scene;
+    static_cast<void>(scene.UpsertMesh(CasterAt(10U, 1.0F)));
+    static_cast<void>(scene.UpsertMesh(CasterAt(11U, 30.0F)));
+    static_cast<void>(scene.UpsertMesh(CasterAt(12U, 1000.0F)));
+    RenderResourceRegistry resources;
+    SceneRenderResourceMap resourceMap;
+    ShadowMapResource map;
+    std::uint64_t rendererFrame = 1U;
+    const auto frame = [&](auto&& change) {
+        scene.BeginMotionFrame(rendererFrame++);
+        change();
+        ShadowCasterChanges::ApplyToCascades(scene, resources, resourceMap, map);
+    };
+    const auto cacheAll = [&map] {
+        // Windows centred on the origin, looking along z: the finest 5 m wide on each side, the next 50 m.
+        for (std::uint32_t cascade = 0U; cascade < 2U; ++cascade) {
+            ShadowMapResource::CachedCascade entry{ .key = 100U + cascade, .casterCount = 1U, .halfExtent = cascade == 0U ? 5.0F : 50.0F };
+            entry.view[0] = entry.view[5] = entry.view[10] = entry.view[15] = 1.0F;
+            map.SetCachedCascade(cascade, entry);
+        }
+    };
+    const auto cached = [&map] { return std::array{ map.CachedCascadeAt(0U).key != 0U, map.CachedCascadeAt(1U).key != 0U }; };
+    frame([] {});
+    cacheAll();
+    frame([&] { Require(scene.UpdateMeshTransform(12U, CasterAt(12U, 1001.0F).model), "the far caster did not move"); });
+    Require((cached() == std::array{ true, true }), "a caster moving beyond every window must keep the cascades");
+    frame([&] { Require(scene.UpdateMeshTransform(11U, CasterAt(11U, 31.0F).model), "the caster did not move"); });
+    Require((cached() == std::array{ true, false }), "a caster moving over the wide window only must discard that cascade only");
+    cacheAll();
+    frame([] {});
+    Require((cached() == std::array{ true, true }), "a frame without changes must keep every cascade");
+    frame([&] { auto moved = CasterAt(10U, 1.0F).model; moved[14] = 500.0F; Require(scene.UpdateMeshTransform(10U, moved), "the caster did not move"); });
+    Require((cached() == std::array{ false, false }), "a caster moving along the light inside a window must discard it, whatever its depth");
+    cacheAll();
+    frame([&] { static_cast<void>(scene.UpsertMesh(CasterAt(13U, 4.0F))); });
+    Require((cached() == std::array{ false, false }), "a caster appearing over a window must discard it");
+    cacheAll();
+    frame([&] { Require(scene.RemoveMesh(13U), "the caster did not leave"); });
+    Require((cached() == std::array{ false, false }), "a removed caster must discard every cascade");
+    cacheAll();
+    scene.BeginMotionFrame(rendererFrame++);
+    frame([] {});
+    Require((cached() == std::array{ false, false }), "a frame the cache did not see must discard every cascade");
+    cacheAll();
+    RenderScene other;
+    static_cast<void>(other.UpsertMesh(CasterAt(10U, 1.0F)));
+    other.BeginMotionFrame(rendererFrame++);
+    ShadowCasterChanges::ApplyToCascades(other, resources, resourceMap, map);
+    Require((cached() == std::array{ false, false }), "a cache made for one scene must not serve another");
+}
+
 void RunSceneLightGridTests() {
+    ShadowCasterChangesDiscardOnlyCascadesTheyReach();
     PointShadowSelectionKeepsTheNearestAndCountsTheRest();
     PointShadowRowsFollowTheirLights();
     PointShadowLightsAreChosenByImportance();

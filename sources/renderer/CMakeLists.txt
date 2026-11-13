@@ -385,8 +385,8 @@ add_library(kb_renderer STATIC
     src/shadow/ShadowCasterBoundsCollector.cpp
     src/shadow/ShadowCasterBoundsCollector.hpp
     src/shadow/ShadowMapResource.cpp
-    src/shadow/PointShadowCasterChanges.cpp
-    src/shadow/PointShadowCasterChanges.hpp
+    src/shadow/ShadowCasterChanges.cpp
+    src/shadow/ShadowCasterChanges.hpp
     src/shadow/PointShadowPassPlanner.cpp
     src/gi/SceneGiHistory.cpp
     src/gi/SceneGiResolvePass.cpp

@@ -82,6 +82,10 @@ float KbPointShadowFactor(int lightSlot, vec3 worldPos, vec3 normal)
             return 1.0;
         }
         vec2 ndc = vec2(dot(d, right), dot(d, up)) / (z * tanHalf);
+        // A spot light shines nowhere outside its frustum, which is wider than its cone: no shadow to look up.
+        if (u_pointShadowSpot[s].w > 0.0 && (abs(ndc.x) > 1.0 || abs(ndc.y) > 1.0)) {
+            return 1.0;
+        }
         float tile = u_pointShadowAtlas.z;
         vec2 tilePx = vec2(0.5 + 0.5 * ndc.x, 0.5 + u_pointShadowInfo.y * ndc.y) * tile;
 #if BGFX_SHADER_LANGUAGE_GLSL

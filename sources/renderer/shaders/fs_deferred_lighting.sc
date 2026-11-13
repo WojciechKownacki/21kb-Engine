@@ -262,14 +262,16 @@ float SampleShadowVisibility(vec3 shadowCoord, float penumbraScale)
         }
         selectedShadow = occluders > 0.0 ? softShadow / 12.0 : 0.0;
     } else {
-        float hardShadow = biasedDepth < texture2DLod(s_deferredShadowMap, shadowCoord.xy, 0.0).x ? 1.0 : 0.0;
-        float shadowSamples = 0.0;
-        for (int y = -1; y <= 1; ++y) {
-            for (int x = -1; x <= 1; ++x) {
-                shadowSamples += biasedDepth < texture2DLod(s_deferredShadowMap, shadowCoord.xy + vec2(float(x), float(y)) * texelSize, 0.0).x ? 1.0 : 0.0;
+        selectedShadow = biasedDepth < texture2DLod(s_deferredShadowMap, shadowCoord.xy, 0.0).x ? 1.0 : 0.0;
+        if (u_deferredShadowParams.w >= 2.0) {
+            float shadowSamples = 0.0;
+            for (int y = -1; y <= 1; ++y) {
+                for (int x = -1; x <= 1; ++x) {
+                    shadowSamples += biasedDepth < texture2DLod(s_deferredShadowMap, shadowCoord.xy + vec2(float(x), float(y)) * texelSize, 0.0).x ? 1.0 : 0.0;
+                }
             }
+            selectedShadow = shadowSamples * 0.11111111;
         }
-        selectedShadow = u_deferredShadowParams.w < 2.0 ? hardShadow : shadowSamples * 0.11111111;
     }
     return mix(1.0, 1.0 - u_deferredShadowParams.y, selectedShadow);
 }

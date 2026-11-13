@@ -17,6 +17,9 @@ struct ShadowCasterBounds {
     float focusedDepthMinimum = std::numeric_limits<float>::max();
     float focusedDepthMaximum = std::numeric_limits<float>::lowest();
     std::uint32_t focusedCasterCount = 0U;
+    // Casters whose material may move their surface by itself (World Position Offset), within the focus when there
+    // is one: their shadow changes without a change of the scene, so a cached shadow cannot hold them.
+    std::uint32_t displacedCasterCount = 0U;
 };
 
 class ShadowCasterBoundsCollector {

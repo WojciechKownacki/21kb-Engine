@@ -20,6 +20,10 @@ struct DirectionalShadowSetup {
     SceneRenderShadowMapBinding binding{};
     std::uint64_t lightEntityId = 0;
     std::uint32_t casterCount = 0;
+    // Half the width of each cascade's orthographic window (m).
+    std::array<float, SceneRenderShadowMapBinding::kMaxCascades> cascadeHalfExtent{};
+    // Whether the cascades can be kept between frames: false while a caster's material moves its surface by itself.
+    bool cacheable = false;
     bool valid = false;
 };
 

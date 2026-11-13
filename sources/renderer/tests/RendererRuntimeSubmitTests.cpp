@@ -6855,6 +6855,16 @@ struct ShadowFloorScene {
     float pointIntensity = 3.0F;
     bx::Vec3 cameraPosition{ 0.0F, 2.0F, -14.0F };
     float fovDegrees = 40.0F;
+    // Sun only. After the shadow settles, what the cascades do while nothing changes and when the plate moves away.
+    struct CascadeReuse {
+        std::size_t steadyPasses = 0U;
+        std::size_t movedPasses = 0U;
+        int steadyBrightness = 0;
+        int movedBrightness = 0;
+        double cachedMilliseconds = 0.0;
+        double uncachedMilliseconds = 0.0;
+    };
+    CascadeReuse* cascadeReuse = nullptr;
 };
 
 [[nodiscard]] int RenderShadowFloorBrightness(const ShadowFloorScene& setup) {
@@ -6885,9 +6895,10 @@ struct ShadowFloorScene {
         });
         scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
             .meshAssetId = mesh->id.value, .castsShadow = true });
+        return entity;
     };
     addBox({ 0.0F, -0.5F, 0.0F }, { 40.0F, 1.0F, 40.0F });   // floor, top face at y = 0
-    addBox({ 0.0F, 3.0F, 0.0F }, { 4.0F, 0.2F, 4.0F });      // occluder plate
+    const kb::scene::SceneEntity plate = addBox({ 0.0F, 3.0F, 0.0F }, { 4.0F, 0.2F, 4.0F });      // occluder plate
     kb::scene::TransformComponent lightTransform = TransformAt(0.0F, 6.0F, 0.0F);
     if (!setup.point) {
         // A +90 degree turn about X points the light's forward axis straight down.
@@ -6952,6 +6963,39 @@ struct ShadowFloorScene {
         // The camera looks at the world origin, which is the centre pixel.
         const std::size_t center = (32U * 64U + 32U) * 4U;
         brightness = static_cast<int>(pixels[center]) + pixels[center + 1U] + pixels[center + 2U];
+        if (setup.cascadeReuse != nullptr) {
+            ShadowFloorScene::CascadeReuse& reuse = *setup.cascadeReuse;
+            const auto shadowPasses = [&renderer] {
+                std::size_t count = 0U;
+                for (const auto& pass : renderer.LastScenePassSubmitStats()) count += pass.pass == MeshPassType::ShadowDepth ? 1U : 0U;
+                return count;
+            };
+            const auto centerBrightness = [&] {
+                const std::vector<std::uint8_t> sample = target.ReadPixels();
+                return static_cast<int>(sample[center]) + sample[center + 1U] + sample[center + 2U];
+            };
+            // Resources still arriving change the cascades' key; a few frames settle them.
+            for (int settle = 0; settle < 4; ++settle) SubmitLifecycleFrame(renderer, scene, desc, "Cascade cache test did not settle");
+            SubmitLifecycleFrame(renderer, scene, desc, "Cascade cache test did not submit a steady frame");
+            reuse.steadyPasses = shadowPasses();
+            reuse.steadyBrightness = centerBrightness();
+            const auto frameMilliseconds = [&](const RenderSceneSubmitDesc& timed) {
+                const auto start = std::chrono::steady_clock::now();
+                for (int frame = 0; frame < 20; ++frame) SubmitLifecycleFrame(renderer, scene, timed, "Cascade cache test did not submit a timed frame");
+                return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() / 20.0;
+            };
+            reuse.cachedMilliseconds = frameMilliseconds(desc);
+            RenderSceneSubmitDesc uncached = desc;
+            uncached.lightingConfig.perLightShadowCaching = false;
+            reuse.uncachedMilliseconds = frameMilliseconds(uncached);
+            // The uncached frames forgot the cascades; two more settle them again before the plate moves out of view.
+            SubmitLifecycleFrame(renderer, scene, desc, "Cascade cache test did not render the cascades again");
+            SubmitLifecycleFrame(renderer, scene, desc, "Cascade cache test did not submit a second steady frame");
+            scene.Transforms().Set(plate, kb::scene::TransformComponent{ .localPosition = { 40.0F, 3.0F, 0.0F }, .localScale = { 4.0F, 0.2F, 4.0F } });
+            SubmitLifecycleFrame(renderer, scene, desc, "Cascade cache test did not submit the frame after the move");
+            reuse.movedPasses = shadowPasses();
+            reuse.movedBrightness = centerBrightness();
+        }
         if (setup.stressAtlas) {
             struct Stage { std::uint32_t count, size; };
             constexpr Stage stages[]{{41U, 2048U}, {6U, 512U}, {24U, 1024U}, {41U, 4096U}, {1U, 256U}, {41U, 2048U}};
@@ -7117,6 +7161,21 @@ void RunRendererRendersDirectionalCascadeShadowTest() {
     Require(shadowed * 10 < unshadowed * 8, "Cascade shadow test: the widest cascade must shadow the floor under a farScene occluder");
 }
 
+
+// The sun's cascades keep their shadow while nothing over them changes: a steady frame submits no shadow pass, a
+// plate that moves away is seen at once, and the cached frames cost less than rendering the cascades every frame.
+void RunRendererReusesSunCascadesTest() {
+    ShadowFloorScene::CascadeReuse reuse;
+    ShadowFloorScene scene{ .point = false, .cascadeReuse = &reuse };
+    static_cast<void>(RenderShadowFloorBrightness(scene));
+    std::fprintf(stderr, "sun_cascade_cache steady_passes=%zu moved_passes=%zu steady=%d moved=%d cached_ms=%.3f uncached_ms=%.3f%c",
+        reuse.steadyPasses, reuse.movedPasses, reuse.steadyBrightness, reuse.movedBrightness,
+        reuse.cachedMilliseconds, reuse.uncachedMilliseconds, 10);
+    Require(reuse.steadyBrightness > 60 && reuse.steadyBrightness * 10 < reuse.movedBrightness * 8,
+        "Cascade cache test: the steady frame must keep the plate's shadow and the moved plate must lift it");
+    Require(reuse.steadyPasses == 0U, "Cascade cache test: a frame that changed nothing must not render the cascades again");
+    Require(reuse.movedPasses > 0U, "Cascade cache test: a caster that moved over the cascades must render them again");
+}
 
 // Screen-space GI: a lit red wall must tint the nearby white floor, but only when GI is enabled.
 // Several frames are rendered so the pass can read the previous frame's lit colour.
@@ -10808,6 +10867,7 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
     RunRendererRendersSpotLightShadowTest();
     RunRendererRendersSixPointLightShadowsTest();
     RunRendererRendersDirectionalCascadeShadowTest();
+    RunRendererReusesSunCascadesTest();
     RunRendererBlendsShadowCascadesTest();
     RunRendererRendersScreenSpaceGiBounceTest();
     RunRendererSmoothsScreenSpaceGiOverTimeTest();
