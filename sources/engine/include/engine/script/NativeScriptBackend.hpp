@@ -50,6 +50,8 @@ public:
     // Destroys the objects of the classes of `symbols` without keeping them (the module goes away).
     void DestroyInstances(std::span<const std::string> symbols) noexcept;
     [[nodiscard]] std::size_t InstanceCount(std::string_view symbol) const noexcept;
+    // The registered class has data members but lists none in Serialize, so a rebuilt module starts them over.
+    [[nodiscard]] bool ClassLosesStateOnReload(std::string_view symbol) const;
 
     [[nodiscard]] ScriptBackendExecutionResult ExecuteLifecycle(const kb::scene::BehaviourComponent& behaviour, ScriptExecutionContext& context) override;
     [[nodiscard]] ScriptBackendExecutionResult ExecuteEvent(const kb::scene::BehaviourComponent& behaviour, const ScriptEvent& event, EventId eventId, ScriptExecutionContext& context) override;

@@ -58,9 +58,19 @@ private:
     int ticks_ = 0;
 };
 
+// Members but no Serialize: the load result says so, the editor tells the author.
+class ForgetfulObject {
+public:
+    void Tick(kb::script::ScriptExecutionContext*) { ++ticks_; }
+
+private:
+    int ticks_ = 0;
+};
+
 } // namespace
 
 KB_NATIVE_SCRIPT_PLUGIN_EXPORT bool kb_register_native_object_script(kb::script::NativeScriptPluginApi* api) {
     return api != nullptr && api->version == kb::script::kNativeScriptPluginApiVersion &&
-        kb::script::RegisterNativeScript<StatefulObject>(api, "tests.NativePluginObject");
+        kb::script::RegisterNativeScript<StatefulObject>(api, "tests.NativePluginObject") &&
+        kb::script::RegisterNativeScript<ForgetfulObject>(api, "tests.NativePluginForgetful");
 }

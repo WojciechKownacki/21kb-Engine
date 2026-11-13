@@ -14,7 +14,7 @@
 
 namespace kb::script {
 
-inline constexpr std::uint32_t kNativeScriptPluginApiVersion = 7U;
+inline constexpr std::uint32_t kNativeScriptPluginApiVersion = 8U;
 inline constexpr const char* kNativeScriptPluginDefaultEntryPoint = "kb_register_native_scripts";
 
 using NativeScriptPluginLifecycleProc = void (*)(ScriptExecutionContext* context);
@@ -96,6 +96,9 @@ struct NativeScriptClassApi {
     std::uint32_t hooks = 0U;
     // Null when the class keeps nothing across a rebuild.
     void (*fields)(void* object, NativeScriptArchive* archive) = nullptr;
+    // The class has data members of its own. With no `fields` they start over in a rebuilt module, which the
+    // editor tells the author once.
+    bool hasState = false;
 };
 
 struct NativeScriptPluginApi {
@@ -160,6 +163,7 @@ template <typename Script>
             static_cast<void>(object);
             static_cast<void>(context);
         };
+        script.hasState = !std::is_empty_v<Script>;
         if constexpr (requires(Script& object, NativeScriptArchive& archive) { object.Serialize(archive); }) {
             script.fields = [](void* object, NativeScriptArchive* archive) { static_cast<Script*>(object)->Serialize(*archive); };
         }

@@ -26,6 +26,8 @@ struct NativeScriptPluginLoadResult {
     std::vector<std::string> errors;
     // The module loaded without a signed release to verify it against (development build).
     std::vector<std::string> warnings;
+    // Classes of the module that have data members but no Serialize member.
+    std::vector<std::string> unsavedStateSymbols;
 
     [[nodiscard]] bool Succeeded() const noexcept {
         return loaded && errors.empty();

@@ -274,6 +274,11 @@ std::size_t NativeScriptBackend::InstanceCount(std::string_view symbol) const no
     return count;
 }
 
+bool NativeScriptBackend::ClassLosesStateOnReload(std::string_view symbol) const {
+    const auto script = classes_.find(std::string{ symbol });
+    return script != classes_.end() && script->second.hasState && script->second.fields == nullptr;
+}
+
 NativeScriptBackend::AssetEntry& NativeScriptBackend::Resolve(std::uint64_t assetId) {
     AssetEntry& entry = entries_[assetId];
     if (entry.epoch == epoch_) {

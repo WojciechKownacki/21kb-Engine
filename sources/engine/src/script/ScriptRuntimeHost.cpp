@@ -111,6 +111,8 @@ struct ScriptRuntimeHostState final : std::enable_shared_from_this<ScriptRuntime
     // the editor can surface why a behaviour is not running. De-duplicated so a
     // recurring per-frame error is reported once, not every frame.
     std::vector<std::string> pendingSceneSystemDiagnostics;
+    std::vector<std::string> pendingSceneSystemWarnings;
+    std::unordered_set<std::string> reportedSceneSystemWarnings;
     std::unordered_set<std::string> reportedSceneSystemDiagnostics;
 };
 
@@ -402,6 +404,12 @@ void ScriptRuntimeHostSceneSystem::CollectDiagnostics() {
     for (const ScriptRuntimeAssetPrepareDiagnostic& diagnostic : system_.LastPrepareResult().diagnostics) {
         push(ScriptName(state_->scene, diagnostic.assetId) + " could not be loaded: " + diagnostic.message);
     }
+    for (const ScriptRuntimeAssetPrepareDiagnostic& warning : system_.LastPrepareResult().warnings) {
+        std::string line = ScriptName(state_->scene, warning.assetId) + ": " + warning.message;
+        if (state_->reportedSceneSystemWarnings.insert(line).second) {
+            state_->pendingSceneSystemWarnings.push_back(std::move(line));
+        }
+    }
 }
 
 void ScriptRuntimeHostSceneSystem::DisableFailingBehaviour(const ScriptDiagnostic& diagnostic) {
@@ -470,6 +478,12 @@ const std::vector<std::string>& ScriptRuntimeHost::Diagnostics() const noexcept 
 std::vector<std::string> ScriptRuntimeHost::DrainSceneSystemDiagnostics() {
     std::vector<std::string> drained;
     drained.swap(state_->pendingSceneSystemDiagnostics);
+    return drained;
+}
+
+std::vector<std::string> ScriptRuntimeHost::DrainSceneSystemWarnings() {
+    std::vector<std::string> drained;
+    drained.swap(state_->pendingSceneSystemWarnings);
     return drained;
 }
 

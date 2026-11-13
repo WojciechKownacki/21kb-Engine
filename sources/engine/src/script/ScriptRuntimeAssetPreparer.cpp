@@ -43,6 +43,9 @@ void MergePrepareResult(ScriptRuntimeAssetPrepareResult& target, ScriptRuntimeAs
     for (ScriptRuntimeAssetPrepareDiagnostic& diagnostic : source.diagnostics) {
         target.diagnostics.push_back(std::move(diagnostic));
     }
+    for (ScriptRuntimeAssetPrepareDiagnostic& warning : source.warnings) {
+        target.warnings.push_back(std::move(warning));
+    }
 }
 
 void PrepareBehaviourVisitor(kb::scene::SceneEntity, const kb::scene::BehaviourComponent& behaviour, void* rawContext) {
@@ -619,6 +622,16 @@ ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareNativeBehavio
             const std::string message = loaded.errors.empty() ? "native script plugin could not be loaded" : loaded.errors.front();
             AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native, message);
             return result;
+        }
+        if (std::ranges::find(loaded.unsavedStateSymbols, descriptor->symbol) == loaded.unsavedStateSymbols.end()) {
+            unsavedStateWarned_.erase(metadata.id.value);
+        } else if (unsavedStateWarned_.insert(metadata.id.value).second) {
+            result.warnings.push_back(ScriptRuntimeAssetPrepareDiagnostic{
+                .assetId = metadata.id,
+                .backend = kb::scene::BehaviourBackend::Native,
+                .message = "this script keeps data in member variables but has no Serialize function, so they start over each "
+                           "time the script is rebuilt while the game runs. List the ones to keep in Serialize.",
+            });
         }
     }
     if (nativeBackend_ != nullptr && !nativeBackend_->BindAssetSymbol(metadata.id, descriptor->symbol)) {

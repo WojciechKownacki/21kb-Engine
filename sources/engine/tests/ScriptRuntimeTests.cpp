@@ -751,8 +751,10 @@ void RunNativeScriptPluginObjectReloadTest() {
     const kb::script::NativeScriptPluginLoadDesc desc{ .key = "object-plugin", .modulePath = pluginPath,
         .entryPoint = "kb_register_native_object_script", .shadowCopy = true, .shadowCopyDirectory = TestRoot() / "NativePluginShadow" };
     const kb::script::NativeScriptPluginLoadResult loaded = plugins.LoadOrReload(desc);
-    kb::tests::Require(loaded.Succeeded() && loaded.registeredSymbols.size() == 1U && loaded.registeredSymbols[0] == "tests.NativePluginObject",
+    kb::tests::Require(loaded.Succeeded() && loaded.registeredSymbols.size() == 2U && loaded.registeredSymbols[0] == "tests.NativePluginObject",
         "A script class from a library must register by its symbol");
+    kb::tests::Require(loaded.unsavedStateSymbols.size() == 1U && loaded.unsavedStateSymbols[0] == "tests.NativePluginForgetful",
+        "Only the class with members and no Serialize must be named as losing its state in a rebuilt library");
     kb::tests::Require(native->BindAssetSymbol(kObjectAsset, "tests.NativePluginObject") &&
             runtime.RegisterBackend(std::move(nativeBackend)), "The script class asset symbol binding failed");
     for (int tick = 1; tick <= 3; ++tick) {
@@ -1975,6 +1977,39 @@ void RunNativeBuildFailureDiagnosticsTest() {
     const kb::script::ScriptRuntimeAssetPrepareResult again = preparer.PrepareAsset(metadata->id);
     kb::tests::Require(again.diagnostics.size() == 2U && again.diagnostics[1].message == expectedLine,
         "A native build that failed must report the same rows again while its sources are unchanged");
+}
+
+// A script class that keeps data in members but has no Serialize is named in a warning when its library is loaded
+// (the script still runs); a class that lists its members is not.
+void RunNativeUnsavedStateWarningTest() {
+    ResetTestRoot();
+    const std::filesystem::path pluginPath = KB_NATIVE_SCRIPT_TEST_PLUGIN_PATH;
+    const std::filesystem::path projectRoot = TestRoot() / "NativeUnsavedStateProject";
+    const std::string module = "module = " + pluginPath.generic_string() + "\nentry = kb_register_native_object_script\n";
+    WriteTextFile(projectRoot / "Assets" / "Logic" / "Forgetful.native", "name = Forgetful\nsymbol = tests.NativePluginForgetful\n" + module);
+    WriteTextFile(projectRoot / "Assets" / "Logic" / "Kept.native", "name = Kept\nsymbol = tests.NativePluginObject\n" + module);
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot) && scene.Assets().Discover() == 2U, "Unsaved state project mount or discovery failed");
+    const kb::assets::AssetMetadata* forgetful = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/Forgetful.native");
+    const kb::assets::AssetMetadata* kept = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/Kept.native");
+    kb::tests::Require(forgetful != nullptr && kept != nullptr, "Unsaved state descriptors were not discovered");
+
+    kb::script::PucLuaScriptRuntime luaRuntime;
+    kb::visual::VisualGraphRuntimeRegistry visualArtifacts;
+    kb::script::ScriptRuntimeAssetPreparer preparer{ scene.Assets().Manager(), luaRuntime, visualArtifacts };
+    kb::script::NativeScriptBackend backend;
+    kb::script::NativeScriptPluginManager plugins{ backend };
+    preparer.SetNativeBackend(backend);
+    preparer.SetNativePluginManager(plugins);
+    preparer.SetNativeSettings(kb::script::ScriptRuntimeNativePrepareSettings{
+        .shadowCopyDirectory = TestRoot() / "NativeUnsavedStateShadow", .buildPlugins = false, .loadPlugins = true });
+    const kb::script::ScriptRuntimeAssetPrepareResult first = preparer.PrepareAsset(forgetful->id);
+    kb::tests::Require(first.Succeeded() && first.warnings.size() == 1U && first.warnings[0].assetId == forgetful->id &&
+            first.warnings[0].message.find("Serialize") != std::string::npos,
+        "A script class with members and no Serialize must give one warning that names Serialize");
+    kb::tests::Require(preparer.PrepareAsset(forgetful->id).warnings.empty(), "The warning must not repeat while the script is unchanged");
+    const kb::script::ScriptRuntimeAssetPrepareResult listed = preparer.PrepareAsset(kept->id);
+    kb::tests::Require(listed.Succeeded() && listed.warnings.empty(), "A script class that lists its members in Serialize must not be warned about");
 }
 
 // A C++ script is built on its own thread and process while the caller goes on: progress while it runs, a cancel
@@ -4785,6 +4820,38 @@ private:
     kb::scene::SceneEntity target_{};
     bool queued_ = false;
 };
+
+// The runtime that plays the scene hands the unsaved-state warning to the host's owner, once, with the script's path.
+void RunScriptHostWarnsAboutUnsavedStateTest() {
+    ResetTestRoot();
+    const std::filesystem::path pluginPath = KB_NATIVE_SCRIPT_TEST_PLUGIN_PATH;
+    const std::filesystem::path projectRoot = TestRoot() / "HostUnsavedStateProject";
+    WriteTextFile(projectRoot / "Assets" / "Logic" / "Forgetful.native",
+        "name = Forgetful\nsymbol = tests.NativePluginForgetful\nmodule = " + pluginPath.generic_string() +
+        "\nentry = kb_register_native_object_script\n");
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot) && scene.Assets().Discover() == 1U, "Host unsaved state project mount or discovery failed");
+    const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/Forgetful.native");
+    kb::tests::Require(metadata != nullptr, "Host unsaved state descriptor was not discovered");
+    const std::optional<kb::scene::BehaviourComponent> behaviour = kb::script::ScriptBehaviourAsset::CreateComponent(*metadata);
+    kb::tests::Require(behaviour.has_value(), "Host unsaved state behaviour could not be created");
+    scene.Components().Behaviours().Set(scene.Entities().CreateEntity(), *behaviour);
+    kb::script::ScriptRuntimeHostOptions options;
+    options.installSceneSystem = true;
+    options.nativePrepareSettings.shadowCopyDirectory = TestRoot() / "HostUnsavedStateShadow";
+    options.nativePrepareSettings.buildPlugins = false;
+    kb::script::ScriptRuntimeHost host{ scene, options };
+    std::vector<std::string> warnings;
+    for (int frame = 0; frame < 3; ++frame) {
+        static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+        for (std::string& warning : host.DrainSceneSystemWarnings()) {
+            warnings.push_back(std::move(warning));
+        }
+    }
+    kb::tests::Require(warnings.size() == 1U && warnings[0].find("/Game/Logic/Forgetful.native") != std::string::npos &&
+            warnings[0].find("Serialize") != std::string::npos && host.DrainSceneSystemDiagnostics().empty(),
+        "The host must give one warning that names the script and Serialize, and no error, for a class that keeps nothing across a rebuild");
+}
 
 // A shipped game host isolates a faulty script: the failing behaviour instance
 // is disabled after its first error while every other behaviour keeps ticking.
@@ -17965,6 +18032,7 @@ void RunScriptRuntimeTests() {
     RunNativeScriptBuildPipelineTest();
     RunNativeExposedFieldsTest();
     RunNativeBuildFailureDiagnosticsTest();
+    RunNativeUnsavedStateWarningTest();
     RunNativeBackgroundBuildTest();
     RunNativeBuildMessageLocationTest();
     RunNativeFieldMetadataTest();
@@ -18016,6 +18084,7 @@ void RunScriptRuntimeTests() {
     RunScriptParticleSystemApiTest();
     RunParticleEventPostFixedDispatchTest();
     RunScriptHostDisablesFailingBehaviourTest();
+    RunScriptHostWarnsAboutUnsavedStateTest();
     RunScriptMaterialInstanceApiTest();
     RunSceneMaterialInstancesParameterOverridesTest();
     RunScriptMaterialInstanceParameterApiTest();

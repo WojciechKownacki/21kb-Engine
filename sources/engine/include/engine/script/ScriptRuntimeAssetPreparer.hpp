@@ -42,6 +42,8 @@ struct ScriptRuntimeAssetPrepareResult {
     // safe lifecycle synchronization boundary.
     std::vector<kb::assets::AssetId> reloadedAssets;
     std::vector<ScriptRuntimeAssetPrepareDiagnostic> diagnostics;
+    // Things worth telling the author that do not stop the script from running.
+    std::vector<ScriptRuntimeAssetPrepareDiagnostic> warnings;
 
     [[nodiscard]] bool Succeeded() const noexcept {
         return diagnostics.empty();
@@ -136,6 +138,8 @@ private:
     ScriptRuntimeVisualGraphPrepareSettings visualGraphSettings_{};
     ScriptRuntimeNativePrepareSettings nativeSettings_{};
     std::unordered_map<std::uint64_t, std::uint64_t> preparedNativeAssetHashes_;
+    // Native scripts the author was told keep no data across a rebuild; told again only after they had a Serialize.
+    std::unordered_set<std::uint64_t> unsavedStateWarned_;
     struct NativeSourceObservation {
         std::uint64_t descriptorHash = 0;
         std::uint64_t signature = 0;

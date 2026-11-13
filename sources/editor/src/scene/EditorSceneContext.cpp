@@ -717,7 +717,16 @@ void EditorSceneContext::SurfaceScriptDiagnostics() {
     for (const std::string& diagnostic : scriptModule_->Host()->DrainSceneSystemDiagnostics()) {
         console_.Error("Scripts", diagnostic);
     }
+    for (std::string& warning : scriptModule_->Host()->DrainSceneSystemWarnings()) {
+        WarnScriptOnce(std::move(warning));
+    }
     AnnounceNativeScriptBuilds(*scriptModule_->Host());
+}
+
+void EditorSceneContext::WarnScriptOnce(std::string line) {
+    if (reportedScriptWarnings_.insert(line).second) {
+        console_.Warning("Scripts", std::move(line));
+    }
 }
 
 std::vector<EditorSceneContext::ScriptBuildStatus> EditorSceneContext::ScriptBuildsInProgress() const {
@@ -761,7 +770,8 @@ bool EditorSceneContext::CancelEntityScriptBuild(kb::scene::SceneEntity entity) 
         return false;
     }
     announcedScriptBuilds_.erase(build->assetId.value);
-    console_.Warning("Scripts", build->name + ": the build was cancelled. The script runs as it was built before.");
+    console_.Warning("Scripts", EditorLocalization::Format("scripts.buildCancelled",
+        "{name}: the build was cancelled. The script runs as it was built before.", { { "name", build->name } }));
     return true;
 }
 
@@ -770,13 +780,14 @@ void EditorSceneContext::AnnounceNativeScriptBuilds(kb::script::ScriptRuntimeHos
     for (const kb::script::ScriptRuntimeNativeBuildStatus& build : host.AssetPreparer().NativeBuildsInProgress()) {
         running.emplace(build.assetId.value, build.name);
         if (!announcedScriptBuilds_.contains(build.assetId.value)) {
-            console_.Info("Scripts", build.name + ": building in the background. The game keeps running the previous build until this one is ready.");
+            console_.Info("Scripts", EditorLocalization::Format("scripts.buildStarted",
+                "{name}: building in the background. The game keeps running the previous build until this one is ready.", { { "name", build.name } }));
             reportedEditScriptDiagnostics_.clear();
         }
     }
     for (const auto& [id, name] : announcedScriptBuilds_) {
         if (!running.contains(id)) {
-            console_.Info("Scripts", name + ": the background build ended.");
+            console_.Info("Scripts", EditorLocalization::Format("scripts.buildEnded", "{name}: the background build ended.", { { "name", name } }));
         }
     }
     announcedScriptBuilds_ = std::move(running);
@@ -842,6 +853,11 @@ void EditorSceneContext::TickEditModeScripts() {
         if (reportedEditScriptDiagnostics_.insert(line).second) {
             console_.Error("Scripts", std::move(line));
         }
+    }
+    for (const kb::script::ScriptRuntimeAssetPrepareDiagnostic& warning : prepared.warnings) {
+        // Named by its path in the project, as the Play runtime names it, so one warning is one line.
+        const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(warning.assetId);
+        WarnScriptOnce((metadata == nullptr ? std::string{} : metadata->virtualPath.generic_string() + ": ") + warning.message);
     }
 }
 

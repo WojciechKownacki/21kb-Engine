@@ -1648,6 +1648,8 @@ private:
     // The edit-mode runtime holds the open scene: it goes before that scene is replaced.
     void DropEditModeScripts();
     void AnnounceNativeScriptBuilds(kb::script::ScriptRuntimeHost& host);
+    // A script warning reaches the Console once, however many runtimes (edit mode, Play) report it.
+    void WarnScriptOnce(std::string line);
     [[nodiscard]] bool SaveProjectDescriptor();
     // Switches a plugin that new projects have on by default on for this project too.
     [[nodiscard]] bool SwitchOnDefaultPlugin(std::string_view pluginId, std::string_view notice);
@@ -1898,6 +1900,7 @@ private:
     std::chrono::steady_clock::time_point editScriptNextPoll_{};
     std::unordered_map<std::uint64_t, std::string> announcedScriptBuilds_;
     std::unordered_set<std::string> reportedEditScriptDiagnostics_;
+    std::unordered_set<std::string> reportedScriptWarnings_;
 };
 
 } // namespace kb::editor

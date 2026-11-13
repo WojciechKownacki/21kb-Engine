@@ -123,6 +123,12 @@ def main():
             # Saved scripts are built in the background while nothing plays; Play starts on the built module.
             steps += [dict(op='build_scripts_in_edit_mode'), dict(op='assert_console', contains='background build ended'),
                 dict(op='assert_no_errors')]
+            # A script that keeps data in members but lists none (no Serialize) is warned about, once, in the Console.
+            native_source = 'Source/NativeScripts/NativeProbe/NativeProbe.cpp'
+            steps += [dict(op='replace_in_file', path=native_source, replace_from='void Serialize(', replace_to='void Unsaved('),
+                dict(op='build_scripts_in_edit_mode'), dict(op='assert_console', contains='has no Serialize function'),
+                dict(op='replace_in_file', path=native_source, replace_from='void Unsaved(', replace_to='void Serialize('),
+                dict(op='build_scripts_in_edit_mode'), dict(op='assert_no_errors')]
             # The field declared in the descriptor shows with its default, and a value set as the Inspector sets it reaches the script.
             steps += [dict(op='bind_entity', id='native', name='NativeHost'), dict(op='bind_entity', id='lua', name='LuaHost'),
                 dict(op='assert_script_field', entity='native', name='lift', value=5),

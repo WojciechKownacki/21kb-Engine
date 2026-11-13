@@ -599,13 +599,21 @@ void InvalidateStatusBarOnChange(EditorApplicationState& state) noexcept {
     const std::uint64_t sequence = entries.empty() ? 0U : entries.back().sequence;
     const std::uint64_t count = static_cast<std::uint64_t>(entries.size());
     const bool rendererInitialized = state.sceneViewport.RendererInitialized();
+    std::uint64_t buildCount = 0U;
+    std::uint64_t longestBuildSeconds = 0U;
+    for (const EditorSceneContext::ScriptBuildStatus& build : state.sceneContext.ScriptBuildsInProgress()) {
+        ++buildCount;
+        longestBuildSeconds = std::max(longestBuildSeconds, static_cast<std::uint64_t>(build.elapsedSeconds));
+    }
+    const std::uint64_t buildSignature = (buildCount << 32U) | longestBuildSeconds;
     if (sequence == state.lastStatusConsoleEntrySequence && count == state.lastStatusConsoleEntryCount &&
-        rendererInitialized == state.lastStatusRendererInitialized) {
+        rendererInitialized == state.lastStatusRendererInitialized && buildSignature == state.lastStatusBuildSignature) {
         return;
     }
     state.lastStatusConsoleEntrySequence = sequence;
     state.lastStatusConsoleEntryCount = count;
     state.lastStatusRendererInitialized = rendererInitialized;
+    state.lastStatusBuildSignature = buildSignature;
     RECT client{};
     if (state.window == nullptr || GetClientRect(state.window, &client) == 0) {
         return;

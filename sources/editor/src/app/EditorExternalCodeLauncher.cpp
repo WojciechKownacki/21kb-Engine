@@ -2,6 +2,7 @@
 #include "engine/config/IniDocument.hpp"
 #include "engine/assets/AssetFileName.hpp"
 #include "engine/script/NativeScriptBuildPipeline.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -233,12 +234,13 @@ bool EditorExternalCodeLauncher::OpenBuildMessage(
     const std::filesystem::path& projectRoot, std::string_view message, std::string& error) {
     const std::optional<kb::script::NativeScriptSourceLocation> location = kb::script::ParseBuildMessageLocation(message);
     if (!location.has_value()) {
-        error = "This message names no source file and line.";
+        error = std::string{ EditorText("console.noSourceLocation", "This message names no source file and line.") };
         return false;
     }
     const std::filesystem::path file = ResolveSourceFile(projectRoot, kb::assets::Utf8Path(location->path));
     if (file.empty()) {
-        error = "The source file " + location->path + " was not found in the project.";
+        error = EditorLocalization::Format("console.sourceNotFound", "The source file {path} was not found in the project.",
+            { { "path", location->path } });
         return false;
     }
     return OpenProjectFile(projectRoot, file, error, location->line, location->column);

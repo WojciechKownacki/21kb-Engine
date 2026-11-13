@@ -67,6 +67,11 @@ NativeScriptPluginLoadResult NativeScriptPluginManager::LoadOrReload(NativeScrip
     result.loaded = true;
     result.loadedPath = loadedModule.loadedPath;
     result.registeredSymbols = registeredSymbols;
+    for (const std::string& symbol : registeredSymbols) {
+        if (backend_.ClassLosesStateOnReload(symbol)) {
+            result.unsavedStateSymbols.push_back(symbol);
+        }
+    }
     plugins_.push_back(LoadedPlugin{
         .key = desc.key,
         .originalPath = loadedModule.originalPath,

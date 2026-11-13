@@ -102,6 +102,19 @@ struct CounterNext {
         archive.Field("note", note);
     }
 };
+// Data members and no Serialize: a rebuilt module starts them over. A class with hooks only has nothing to lose.
+struct Forgetful {
+    int ticks = 0;
+    void Tick(kb::script::ScriptExecutionContext*) { ++ticks; }
+};
+struct Stateless {
+    void Tick(kb::script::ScriptExecutionContext*) {}
+};
+bool RegisterForgetfulAndStateless(kb::script::NativeScriptPluginApi* api) {
+    return api != nullptr && api->version == kb::script::kNativeScriptPluginApiVersion &&
+        kb::script::RegisterNativeScript<Forgetful>(api, "tests.Forgetful") &&
+        kb::script::RegisterNativeScript<Stateless>(api, "tests.Stateless");
+}
 bool RegisterCounter(kb::script::NativeScriptPluginApi* api) {
     return api != nullptr && api->version == kb::script::kNativeScriptPluginApiVersion &&
         kb::script::RegisterNativeScript<Counter>(api, "tests.Counter");
@@ -172,6 +185,12 @@ int main() {
         Require(native->BindAssetSymbol(counterAsset, "tests.Counter"), "Stateful class asset symbol binding failed");
         Require(runtime.ExecuteLifecycle(scene,kb::script::ScriptLifecycleEvent::Ready,0.0F).Succeeded(), "Stateful Ready failed");
         Require(native->InstanceCount("tests.Counter") == 2U, "An object was not made for each scene object");
+        // Which classes would lose their members in a rebuilt module (the editor warns about them once).
+        Require(modules.LoadLinked("forgetful", &RegisterForgetfulAndStateless).Succeeded(), "Warning fixture registration failed");
+        Require(native->ClassLosesStateOnReload("tests.Forgetful"), "A class with members and no Serialize was not reported");
+        Require(!native->ClassLosesStateOnReload("tests.Stateless"), "A class without members was reported");
+        Require(!native->ClassLosesStateOnReload("tests.Counter"), "A class that lists its members in Serialize was reported");
+        Require(!native->ClassLosesStateOnReload("tests.Missing"), "An unknown class was reported");
         for (int tick = 0; tick < 3; ++tick) {
             Require(runtime.ExecuteLifecycle(scene,kb::script::ScriptLifecycleEvent::Tick,1.0F).Succeeded(), "Stateful Tick failed");
         }

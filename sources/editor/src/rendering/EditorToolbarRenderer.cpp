@@ -569,7 +569,20 @@ void EditorToolbarRenderer::PaintStatusBar(
         EditorLocalization::Format("statusBar.warnings", "{count} warnings", { { "count", std::to_string(warnings) } }),
         warnings > 0U ? warning : secondary);
     item(bar.askAgent, HeroIconKind::Bolt, ThemeColor(theme.accent), EditorText("statusBar.askAgent", "Ask Agent"), ThemeColor(theme.textPrimary));
-    if (drawerCollapsed) {
+    if (const std::vector<EditorSceneContext::ScriptBuildStatus> builds = sceneContext.ScriptBuildsInProgress(); !builds.empty()) {
+        double longest = 0.0;
+        for (const EditorSceneContext::ScriptBuildStatus& build : builds) {
+            longest = build.elapsedSeconds > longest ? build.elapsedSeconds : longest;
+        }
+        const std::string seconds = std::to_string(static_cast<int>(longest));
+        item(bar.backend, HeroIconKind::WrenchScrewdriver, ThemeColor(theme.accent),
+            builds.size() == 1U
+                ? EditorLocalization::Format("statusBar.scriptBuilding", "Building {name}... {seconds} s",
+                    { { "name", builds.front().name }, { "seconds", seconds } })
+                : EditorLocalization::Format("statusBar.scriptsBuilding", "Building scripts ({count})... {seconds} s",
+                    { { "count", std::to_string(builds.size()) }, { "seconds", seconds } }),
+            ThemeColor(theme.textPrimary));
+    } else if (drawerCollapsed) {
         DrawStatusText(dc, bar.backend, EditorText("statusBar.drawerHint", "Ctrl+Space  Project Files / Console"), secondary, DT_LEFT);
     }
     DrawStatusText(dc, bar.backend, backendLabel, dim, DT_RIGHT);
