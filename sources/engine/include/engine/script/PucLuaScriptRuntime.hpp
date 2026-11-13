@@ -256,7 +256,8 @@ private:
         std::uint64_t contentHash = 0U;
         std::uint64_t generation = 0U;
         // The function set the environment has the execution API attached for (see PucLuaRuntimeApi::AttachExecutionApi).
-        long long attachedStamp = 0;
+        // The stamp of a context without a function registry is 0, so a new script starts below every stamp.
+        long long attachedStamp = -1;
     };
     // The record of an asset; the last one asked for is remembered, because the objects of one script are called one
     // after another. Null when the asset has no script.
