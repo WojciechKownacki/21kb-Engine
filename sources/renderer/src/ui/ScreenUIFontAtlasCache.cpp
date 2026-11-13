@@ -1,4 +1,5 @@
 #include "private/ui/ScreenUIFontMSDFGenerator.hpp"
+#include "private/ui/ScreenUIElementCulling.hpp"
 #include "private/ui/ScreenUIFontAtlasCache.hpp"
 #include "private/ui/ScreenUIFontPayloadValidator.hpp"
 #include "private/ui/ScreenUIFontDistanceField.hpp"
@@ -215,6 +216,39 @@ struct TextLine {
     return ShapedWidth(shaped, spacing, SafeBreaks(codepoints, shaped));
 }
 
+// Records everything but the text's colour that decides how a label is laid out. A label whose snapshot equals
+// last frame's has the same run, so the run is handed back instead of being broken into lines and shaped again.
+void FillRunInputs(ScreenUIFontAtlasCache::RunInputs& inputs, const kb::scene::SceneUIFrameElement& element,
+                   const std::string& frameLanguage, bool distanceFieldAvailable, float outline, float shadow) {
+    const kb::scene::UIText& text = *element.text;
+    inputs.content.assign(kb::scene::UITextContent(text));
+    inputs.variations.assign(kb::scene::UITextFontVariations(text));
+    inputs.language = element.textLanguage.empty() ? frameLanguage : element.textLanguage;
+    inputs.x = element.rect.x;
+    inputs.y = element.rect.y;
+    inputs.width = element.rect.width;
+    inputs.height = element.rect.height;
+    inputs.canvasScale = element.canvasScale;
+    inputs.fontSize = text.fontSize;
+    inputs.lineSpacing = text.lineSpacing;
+    inputs.characterSpacing = text.characterSpacing;
+    inputs.outline = outline;
+    inputs.shadow = shadow;
+    inputs.fontAssetId = text.fontAssetId;
+    inputs.fallbackFontAssetId = text.fallbackFontAssetId;
+    inputs.maxLines = text.maxLines;
+    inputs.horizontalAlignment = static_cast<std::uint8_t>(text.horizontalAlignment);
+    inputs.verticalAlignment = static_cast<std::uint8_t>(text.verticalAlignment);
+    inputs.wrapMode = static_cast<std::uint8_t>(text.wrapMode);
+    inputs.overflow = static_cast<std::uint8_t>(text.overflow);
+    inputs.renderMode = static_cast<std::uint8_t>(text.fontRenderMode);
+    inputs.richText = text.richText;
+    inputs.inputField = element.inputField.has_value();
+    inputs.distanceFieldAvailable = distanceFieldAvailable;
+}
+
+constexpr std::size_t kNoRetainedRun = static_cast<std::size_t>(-1);
+
 // Wrap logical shaping clusters, never individual combining characters or ligature components.
 // Each resulting line is reshaped with the original paragraph's direction and surrounding text.
 thread_local std::vector<TextLine> tTextLines;
@@ -370,7 +404,16 @@ ScreenUIFontPreparation ScreenUIFontAtlasCache::Prepare(std::uint64_t sceneId, k
         for (auto& [key, entry] : fonts_) { static_cast<void>(key); entry.lastUsedFrame = 0U; entry.lastCompactedFrame = 0U; }
     }
     textRuns_.clear();
+    textInputs_.clear();
+    textEpochs_.clear();
     textRuns_.reserve(frame.elements.size());
+    // The runs this scene was given last frame, in the order of their elements. An unchanged label takes its run back
+    // from here; the cursor finds it at once while the frame keeps its order, an index when elements came or went.
+    RetainedRuns& lastFrame = retained_[sceneId];
+    lastFrame.consumed.assign(lastFrame.runs.size(), 0U);
+    std::size_t previousCursor = 0U;
+    std::unordered_map<std::uint64_t, std::size_t> previousIndex;
+    bool previousIndexBuilt = false;
     std::uint64_t failedEntity = 0U;
     const char* failureReason = nullptr;
     // Keeps the first failure only: later ones are usually the same authoring mistake
@@ -390,19 +433,49 @@ ScreenUIFontPreparation ScreenUIFontAtlasCache::Prepare(std::uint64_t sceneId, k
             element.clipRect.width <= 0.0F || element.clipRect.height <= 0.0F) {
             continue;
         }
-        const float scaledSize = element.text->fontSize * std::max(element.canvasScale, 0.01F);
-        std::uint32_t pixelSize = static_cast<std::uint32_t>(std::clamp(std::lround(scaledSize), 4L, 256L));
-        const ScreenUITextMarkup parsed =
-            ScreenUITextMarkupParser{}.Parse(kb::scene::UITextContent(*element.text), element.text->richText,
-                                             !element.inputField.has_value(), !element.inputField.has_value());
-        if (!parsed.succeeded) {
-            fail(element.entity.Id(), "Text markup is malformed");
+        // An edited field keeps its layout wherever it is: the caret and the selection are read back from it.
+        if (!element.inputField.has_value() && !ScreenUIElementMayShow(element)) {
             continue;
         }
-        if (parsed.glyphs.empty() && !element.inputField)
-            continue;
+        const float scaledSize = element.text->fontSize * std::max(element.canvasScale, 0.01F);
+        std::uint32_t pixelSize = static_cast<std::uint32_t>(std::clamp(std::lround(scaledSize), 4L, 256L));
         const float outline = element.outline.has_value() ? element.outline->width * element.canvasScale : 0.0F;
         const float shadow = element.shadow.has_value() ? element.shadow->blur * element.canvasScale : 0.0F;
+        // Auto-sized text is measured against the atlas as it is fitted, so it is always prepared afresh.
+        std::size_t reused = kNoRetainedRun;
+        if (!element.text->autoSize) {
+            FillRunInputs(probeInputs_, element, frame.language, distanceFieldAvailable, outline, shadow);
+            std::size_t candidate = kNoRetainedRun;
+            if (previousCursor < lastFrame.runs.size() && !lastFrame.consumed[previousCursor] &&
+                lastFrame.runs[previousCursor].entity == element.entity.Id()) {
+                candidate = previousCursor;
+            } else {
+                if (!previousIndexBuilt) {
+                    for (std::size_t index = 0U; index < lastFrame.runs.size(); ++index)
+                        previousIndex.emplace(lastFrame.runs[index].entity, index);
+                    previousIndexBuilt = true;
+                }
+                const auto found = previousIndex.find(element.entity.Id());
+                if (found != previousIndex.end() && !lastFrame.consumed[found->second]) candidate = found->second;
+            }
+            if (candidate != kNoRetainedRun) {
+                previousCursor = candidate + 1U;
+                if (lastFrame.inputs[candidate] == probeInputs_) reused = candidate;
+            }
+        }
+        ScreenUITextMarkup parsed;
+        // False when the text cannot be drawn: malformed markup is reported, text with no glyphs is simply skipped.
+        const auto parse = [&] {
+            parsed = ScreenUITextMarkupParser{}.Parse(kb::scene::UITextContent(*element.text), element.text->richText,
+                                                      !element.inputField.has_value(), !element.inputField.has_value());
+            if (!parsed.succeeded) {
+                fail(element.entity.Id(), "Text markup is malformed");
+                return false;
+            }
+            return !parsed.glyphs.empty() || element.inputField.has_value();
+        };
+        if (reused == kNoRetainedRun && !parse())
+            continue;
         const float requiredPadding =
             std::ceil(std::max(outline, shadow)) * 2.0F + static_cast<float>(kMinimumGlyphPadding);
         if (requiredPadding > static_cast<float>(std::numeric_limits<std::uint16_t>::max())) {
@@ -474,6 +547,19 @@ ScreenUIFontPreparation ScreenUIFontAtlasCache::Prepare(std::uint64_t sceneId, k
                 }
             }
         }
+        if (reused != kNoRetainedRun) {
+            // The run is only as good as the atlas it was made against: if any atlas was repacked or reloaded since,
+            // for instance by the lookups above, the label is laid out again.
+            if (lastFrame.epochs[reused] == atlasEpoch_) {
+                lastFrame.consumed[reused] = 1U;
+                textRuns_.push_back(std::move(lastFrame.runs[reused]));
+                textInputs_.push_back(std::move(lastFrame.inputs[reused]));
+                textEpochs_.push_back(atlasEpoch_);
+                continue;
+            }
+            if (!parse())
+                continue;
+        }
         ScreenUITextRun run{.entity = element.entity.Id(),
                             .fontAssetId = key.assetId,
                             .pixelSize = key.pixelSize,
@@ -489,6 +575,8 @@ ScreenUIFontPreparation ScreenUIFontAtlasCache::Prepare(std::uint64_t sceneId, k
             continue;
         }
         textRuns_.push_back(std::move(run));
+        textInputs_.push_back(element.text->autoSize ? RunInputs{} : probeInputs_);
+        textEpochs_.push_back(atlasEpoch_);
     }
     // Compact crowded atlases once per key, using all currently drawable runs.
     // Rebuild keeps the previous texture and glyph map on failure.
@@ -518,8 +606,12 @@ ScreenUIFontPreparation ScreenUIFontAtlasCache::Prepare(std::uint64_t sceneId, k
         const auto codepoints = entry.codepoints;
         if (!Rebuild(key, entry, codepoints, entry.glyphPadding, resources)) entry.glyphIds = std::move(previous);
     }
-    // Later labels or compaction can move shared glyphs. Refresh against final packing.
-    for (auto& run : textRuns_) {
+    // Later labels or compaction can move shared glyphs. Refresh against final packing; a run prepared or refreshed
+    // since the last change to any atlas is already current.
+    for (std::size_t runIndex = 0U; runIndex < textRuns_.size(); ++runIndex) {
+        if (textEpochs_[runIndex] == atlasEpoch_) continue;
+        textEpochs_[runIndex] = atlasEpoch_;
+        auto& run = textRuns_[runIndex];
         const auto found = fonts_.find(FontKey{sceneId, run.fontAssetId, run.pixelSize, run.fontVariations, run.distanceField});
         if (found == fonts_.end()) continue;
         const auto& entry = found->second;
@@ -549,8 +641,12 @@ ScreenUIFontPreparation ScreenUIFontAtlasCache::Prepare(std::uint64_t sceneId, k
             it = fonts_.erase(it);
         } else ++it;
     }
+    // This frame's runs become next frame's retained ones; the caller reads them from there until the next call.
+    std::swap(lastFrame.runs, textRuns_);
+    std::swap(lastFrame.inputs, textInputs_);
+    std::swap(lastFrame.epochs, textEpochs_);
     return ScreenUIFontPreparation{
-        .runs = textRuns_, .failedEntity = failedEntity, .failureReason = failureReason};
+        .runs = lastFrame.runs, .failedEntity = failedEntity, .failureReason = failureReason};
 }
 
 bgfx::TextureHandle ScreenUIFontAtlasCache::Resolve(std::uint64_t sceneId, std::uint64_t fontAssetId,
@@ -569,6 +665,7 @@ bgfx::TextureHandle ScreenUIFontAtlasCache::Resolve(std::uint64_t sceneId, std::
 }
 
 void ScreenUIFontAtlasCache::ReleaseScene(std::uint64_t sceneId, RenderResourceRegistry& resources) noexcept {
+    retained_.erase(sceneId);
     for (auto it = fonts_.begin(); it != fonts_.end();) {
         if (it->first.sceneId == sceneId) {
             resources.DestroyTexture(it->second.texture);
@@ -586,6 +683,7 @@ void ScreenUIFontAtlasCache::Shutdown(RenderResourceRegistry& resources) noexcep
     }
     fonts_.clear();
     textRuns_.clear();
+    retained_.clear();
 }
 
 ScreenUIFontAtlasCache::TypographyCacheStats ScreenUIFontAtlasCache::TextCacheStats() const noexcept {
@@ -867,6 +965,7 @@ bool ScreenUIFontAtlasCache::Rebuild(const FontKey& key, FontEntry& entry, std::
     entry.glyphPadding = glyphPadding;
     entry.codepoints.assign(codepoints.begin(), codepoints.end());
     entry.glyphs = std::move(glyphs);
+    ++atlasEpoch_;
     entry.glyphIds = std::move(glyphIds);
     entry.nominalGlyphs = std::move(nominalGlyphs);
     return true;
@@ -948,6 +1047,14 @@ bool ScreenUIFontAtlasCache::Layout(const kb::scene::SceneUIFrameElement& elemen
         }
     }
     const auto ensureShapedGlyphs = [&](const FontKey& fontKey, FontEntry& fontEntry, bool useFallback) {
+        // Nearly always the atlas already holds every glyph of the text, and nothing needs to be gathered or sorted.
+        const bool complete = std::ranges::all_of(lines, [&](const TextLine& line) {
+            return std::ranges::all_of(line.shaped, [&](const kb::scene::UITextFontShapedGlyph& glyph) {
+                return glyph.fallback != useFallback ||
+                       std::ranges::find(fontEntry.glyphIds, glyph.glyph.glyphId) != fontEntry.glyphIds.end();
+            });
+        });
+        if (complete) return true;
         std::vector<std::uint32_t> needed = fontEntry.glyphIds;
         for (const auto& line : lines) for (const auto& glyph : line.shaped)
             if (glyph.fallback == useFallback) needed.push_back(glyph.glyph.glyphId);
@@ -993,6 +1100,8 @@ bool ScreenUIFontAtlasCache::Layout(const kb::scene::SceneUIFrameElement& elemen
     run.glyphs.clear();
     run.carets.clear();
     run.glyphs.reserve(markup.glyphs.size());
+    std::vector<std::uint32_t> stops;
+    const auto content = kb::scene::UITextContent(*element.text);
     for (std::size_t lineIndex = 0U; lineIndex < lines.size(); ++lineIndex) {
         const TextLine& line = lines[lineIndex];
         std::vector<std::uint32_t> lineCodepoints;
@@ -1025,8 +1134,7 @@ bool ScreenUIFontAtlasCache::Layout(const kb::scene::SceneUIFrameElement& elemen
                 for (std::size_t next = index; next < line.shaped.size() &&
                      line.shaped[next].glyph.clusterBegin == shaped.clusterBegin; ++next)
                     clusterWidth += line.shaped[next].glyph.advance;
-                std::vector<std::uint32_t> stops;
-                const auto content = kb::scene::UITextContent(*element.text);
+                stops.clear();
                 for (auto source = shaped.clusterBegin; source < shaped.clusterEnd; ++source) {
                     const auto offset = line.glyphs[source].sourceOffset;
                     if (source == shaped.clusterBegin ||

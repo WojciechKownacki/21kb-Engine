@@ -186,7 +186,9 @@ struct SceneUIFrameElement {
     std::optional<UISlider> slider;
     std::optional<UIScrollbar> scrollbar;
     std::optional<UIScrollView> scrollView;
-    std::optional<UIDropdown> dropdown;
+    // A dropdown carries its whole option list, which would double the size of every record in the frame; the few
+    // widgets that have one share an immutable copy instead.
+    std::shared_ptr<const UIDropdown> dropdown;
     std::optional<UIProgressBar> progressBar;
     std::optional<UIInputField> inputField;
     // Set on the element of a tooltip bubble and its label, which the frame adds over everything else.

@@ -3000,6 +3000,42 @@ void TestFrameNextToMillionRootsIsCheap() {
         "A small overlay next to a million plain roots must build in under 0.5 ms without allocations of 16 KB or more");
 }
 
+// Two frames are alive at once and trade their element storage, so once the first few updates are done an update
+// allocates no storage for its records - they are several KB each. A nested layout is measured once per container.
+void TestSteadyUpdatesReuseFrameStorage() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
+    for (int index = 0; index < 300; ++index) {
+        kb::scene::UIComponentSet text = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Text);
+        text.rectTransform = Rect(static_cast<float>(index % 20) * 40.0F, static_cast<float>(index / 20) * 20.0F, 38.0F, 18.0F);
+        static_cast<void>(AddUI(scene, canvas, text));
+    }
+    kb::scene::UIComponentSet column = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::VerticalBox);
+    column.rectTransform = Rect(0.0F, 400.0F, 300.0F, 200.0F);
+    const kb::scene::SceneObject box = AddUI(scene, canvas, column);
+    kb::scene::UIComponentSet row = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::HorizontalBox);
+    row.rectTransform = Rect(0.0F, 0.0F, 300.0F, 40.0F);
+    const kb::scene::SceneObject rowObject = AddUI(scene, box, row);
+    kb::scene::UIComponentSet leaf = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Text);
+    leaf.rectTransform = Rect(0.0F, 0.0F, 80.0F, 30.0F);
+    const kb::scene::SceneObject leafObject = AddUI(scene, rowObject, leaf);
+    const kb::scene::SceneUIInput input{.pointerAvailable = true};
+    for (int warmup = 0; warmup < 3; ++warmup)
+        kb::tests::Require(scene.UI().Update(1920.0F, 1080.0F, input, 0.016F), "A warm-up UI update must build");
+    const std::size_t elements = scene.UI().Frame().elements.size();
+    kb::tests::Require(elements == 304U, "The steady-update scene must lay out every widget");
+    kb::tests::BeginAllocationTally();
+    for (int frame = 0; frame < 10; ++frame)
+        kb::tests::Require(scene.UI().Update(1920.0F, 1080.0F, input, 0.016F), "A steady UI update must build");
+    const auto tally = kb::tests::EndAllocationTally();
+    kb::tests::Require(tally.largeCount == 0U, "A steady UI update must reuse its element storage instead of allocating it");
+    const SceneEntity leafEntity = leafObject.Entity();
+    const kb::scene::SceneUIFrameElement* laidOut = FindElement(scene.UI().Frame(), leafEntity);
+    kb::tests::Require(laidOut != nullptr && kb::tests::NearlyEqual(laidOut->rect.width, 80.0F) &&
+                           kb::tests::NearlyEqual(laidOut->rect.height, 30.0F),
+                       "A leaf in a nested layout must keep the size its container measured for it");
+}
+
 void RunSceneUITests() {
     TestAuthoredDimensionsAndVisibility();
     TestCatalogAndPresets();
@@ -3035,6 +3071,7 @@ void RunSceneUITests() {
     TestNestedModalsRestoreFocusAndBlockGameplayImmediately();
     TestFrameAmongManyRootsMatchesRecordedFrame();
     TestFrameNextToMillionRootsIsCheap();
+    TestSteadyUpdatesReuseFrameStorage();
     TestInputFieldEditsGraphemeClusters();
     TestNativeTextSnapshots();
     TestTextSelectionUsesVisualLayoutAndLogicalEdits();
@@ -3071,6 +3108,155 @@ void RunSceneUIBuildFrameBenchmark() {
     }
     std::ranges::sort(samples);
     std::cout << "ui_buildframe_roots=" << rootCount << " median_ms=" << samples[2] << '\n';
+}
+
+// Reference workloads for the UI frame cost: a HUD whose numbers change every frame, an inventory in a scroll
+// view, and a screen full of labels. Each prints the median time of a full UI update, of a bare frame build, and
+// of one hit test, with the heap allocations a steady frame makes.
+struct UIWorkload {
+    std::vector<SceneEntity> changingTexts;
+    std::size_t elements = 0U;
+};
+
+void SetWorkloadText(kb::scene::Scene& scene, SceneEntity entity, std::uint32_t value) {
+    kb::scene::UIText* text = scene.Components().UI().TryGet<kb::scene::UIText>(entity);
+    const std::string content = "Score " + std::to_string(value);
+    static_cast<void>(kb::scene::SetUITextContent(*text, content));
+}
+
+UIWorkload PopulateHudWorkload(kb::scene::Scene& scene) {
+    UIWorkload workload;
+    const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
+    for (int cluster = 0; cluster < 5; ++cluster) {
+        kb::scene::UIComponentSet panel = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::VerticalBox);
+        panel.rectTransform = Rect(20.0F + 360.0F * static_cast<float>(cluster), 20.0F, 340.0F, 300.0F);
+        const kb::scene::SceneObject box = AddUI(scene, canvas, panel);
+        for (int row = 0; row < 3; ++row) {
+            kb::scene::UIComponentSet line = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::HorizontalBox);
+            line.rectTransform = Rect(0.0F, 0.0F, 340.0F, 40.0F);
+            const kb::scene::SceneObject lineObject = AddUI(scene, box, line);
+            kb::scene::UIComponentSet icon = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Border);
+            icon.rectTransform = Rect(0.0F, 0.0F, 32.0F, 32.0F);
+            static_cast<void>(AddUI(scene, lineObject, icon));
+            kb::scene::UIComponentSet label = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Text);
+            label.rectTransform = Rect(0.0F, 0.0F, 200.0F, 32.0F);
+            const kb::scene::SceneObject labelObject = AddUI(scene, lineObject, label);
+            if (row < 2)
+                workload.changingTexts.push_back(labelObject.Entity());
+            kb::scene::UIComponentSet bar = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::ProgressBar);
+            bar.rectTransform = Rect(0.0F, 0.0F, 100.0F, 16.0F);
+            static_cast<void>(AddUI(scene, lineObject, bar));
+            workload.elements += 4U;
+        }
+        ++workload.elements;
+    }
+    ++workload.elements;
+    return workload;
+}
+
+UIWorkload PopulateInventoryWorkload(kb::scene::Scene& scene) {
+    UIWorkload workload;
+    const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
+    kb::scene::UIComponentSet view = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::ScrollView);
+    view.rectTransform = Rect(100.0F, 100.0F, 900.0F, 600.0F);
+    view.scrollView->horizontal = false;
+    const kb::scene::SceneObject viewObject = AddUI(scene, canvas, view);
+    kb::scene::UIComponentSet content = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Grid);
+    content.rectTransform = Rect(0.0F, 0.0F, 900.0F, 4000.0F);
+    content.gridLayout->columns = 6U;
+    content.gridLayout->cellSize = {140.0F, 120.0F};
+    const kb::scene::SceneObject grid = AddUI(scene, viewObject, content);
+    for (int slot = 0; slot < 166; ++slot) {
+        kb::scene::UIComponentSet cell = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Button);
+        cell.text.reset();
+        const kb::scene::SceneObject cellObject = AddUI(scene, grid, cell);
+        kb::scene::UIComponentSet icon = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Image);
+        icon.rectTransform = Rect(10.0F, 10.0F, 60.0F, 60.0F);
+        static_cast<void>(AddUI(scene, cellObject, icon));
+        kb::scene::UIComponentSet label = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Text);
+        label.rectTransform = Rect(10.0F, 80.0F, 100.0F, 24.0F);
+        const kb::scene::SceneObject labelObject = AddUI(scene, cellObject, label);
+        SetWorkloadText(scene, labelObject.Entity(), static_cast<std::uint32_t>(slot));
+        if (slot < 10)
+            workload.changingTexts.push_back(labelObject.Entity());
+        workload.elements += 3U;
+    }
+    workload.elements += 3U;
+    return workload;
+}
+
+UIWorkload PopulateLabelWorkload(kb::scene::Scene& scene) {
+    UIWorkload workload;
+    const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
+    for (int index = 0; index < 2000; ++index) {
+        kb::scene::UIComponentSet label = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Text);
+        label.rectTransform = Rect(static_cast<float>(index % 40) * 46.0F, static_cast<float>(index / 40) * 20.0F, 44.0F, 18.0F);
+        const kb::scene::SceneObject object = AddUI(scene, canvas, label);
+        SetWorkloadText(scene, object.Entity(), static_cast<std::uint32_t>(index));
+        if (index < 20)
+            workload.changingTexts.push_back(object.Entity());
+    }
+    workload.elements = 2001U;
+    return workload;
+}
+
+void RunUIWorkload(const char* name, UIWorkload (*populate)(kb::scene::Scene&)) {
+    kb::scene::Scene scene;
+    const UIWorkload workload = populate(scene);
+    kb::scene::SceneUIInput input{.pointerAvailable = true};
+    input.pointerPosition = {300.0F, 300.0F};
+    std::uint32_t tick = 0U;
+    const auto update = [&] {
+        for (const SceneEntity entity : workload.changingTexts)
+            SetWorkloadText(scene, entity, ++tick);
+        return scene.UI().Update(1920.0F, 1080.0F, input, 0.016F);
+    };
+    for (int warmup = 0; warmup < 3; ++warmup)
+        kb::tests::Require(update(), "UI workload must build");
+    kb::tests::Require(scene.UI().Frame().elements.size() >= workload.elements - 2U, "UI workload must produce its elements");
+    constexpr std::size_t frames = 40U;
+    std::array<double, frames> updateSamples{};
+    std::array<double, frames> buildSamples{};
+    std::array<double, frames> hitSamples{};
+    kb::scene::SceneUIFrame built;
+    std::size_t allocations = 0U;
+    std::size_t allocationBytes = 0U;
+    for (std::size_t frame = 0U; frame < frames; ++frame) {
+        for (const SceneEntity entity : workload.changingTexts)
+            SetWorkloadText(scene, entity, ++tick);
+        kb::tests::BeginAllocationTally();
+        const auto start = std::chrono::steady_clock::now();
+        const bool ok = scene.UI().Update(1920.0F, 1080.0F, input, 0.016F);
+        updateSamples[frame] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        const auto tally = kb::tests::EndAllocationTally();
+        allocations += tally.count;
+        allocationBytes += tally.bytes;
+        kb::tests::Require(ok, "UI workload update must build");
+        const kb::scene::SceneUIQueries ui{scene};
+        const auto buildStart = std::chrono::steady_clock::now();
+        kb::tests::Require(ui.BuildFrame(1920.0F, 1080.0F, built), "UI workload frame must build");
+        buildSamples[frame] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - buildStart).count();
+        const auto hitStart = std::chrono::steady_clock::now();
+        std::size_t hits = 0U;
+        for (int probe = 0; probe < 100; ++probe)
+            hits += scene.UI().HitTest({static_cast<float>(probe * 19 % 1900), static_cast<float>(probe * 7 % 1000)}).IsValid() ? 1U : 0U;
+        hitSamples[frame] = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - hitStart).count() / 100.0;
+        static_cast<void>(hits);
+    }
+    std::ranges::sort(updateSamples);
+    std::ranges::sort(buildSamples);
+    std::ranges::sort(hitSamples);
+    std::cout << "ui_workload name=" << name << " elements=" << scene.UI().Frame().elements.size()
+              << " update_ms=" << updateSamples[frames / 2U] << " build_ms=" << buildSamples[frames / 2U]
+              << " hit_us=" << hitSamples[frames / 2U] << " allocations_per_frame=" << allocations / frames
+              << " bytes_per_frame=" << allocationBytes / frames << " element_bytes=" << sizeof(kb::scene::SceneUIFrameElement)
+              << '\n';
+}
+
+void RunSceneUIWorkloadBenchmark() {
+    RunUIWorkload("hud50", PopulateHudWorkload);
+    RunUIWorkload("inventory500", PopulateInventoryWorkload);
+    RunUIWorkload("labels2000", PopulateLabelWorkload);
 }
 
 void RunSceneUIBuildFrameProfile() {

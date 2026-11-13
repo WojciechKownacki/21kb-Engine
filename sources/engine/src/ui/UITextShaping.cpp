@@ -10,11 +10,80 @@
 #include <limits>
 #include <memory>
 #include <type_traits>
+#include <vector>
 
 namespace kb::scene {
 namespace {
 template <class Pointer, auto Release>
 using Owned = std::unique_ptr<std::remove_pointer_t<Pointer>, decltype(Release)>;
+
+// Identifies the contents of a font file by its table directory, which lists the checksum, offset and length of every
+// table, together with the start of the data behind it.
+[[nodiscard]] std::uint64_t FontFingerprint(std::span<const std::byte> bytes) noexcept {
+    std::size_t covered = std::min<std::size_t>(bytes.size(), 1024U);
+    if (bytes.size() >= 12U) {
+        const std::size_t tables = (static_cast<std::size_t>(bytes[4]) << 8U) | static_cast<std::size_t>(bytes[5]);
+        covered = std::min<std::size_t>(bytes.size(), std::min<std::size_t>(4096U, std::max<std::size_t>(1024U, 12U + 16U * tables)));
+    }
+    std::uint64_t hash = 14695981039346656037ULL ^ bytes.size();
+    for (std::size_t index = 0U; index < covered; ++index) {
+        hash = (hash ^ static_cast<std::uint64_t>(bytes[index])) * 1099511628211ULL;
+    }
+    return hash;
+}
+
+// Reading a font's tables into a face, and building the lookups of its layout tables on first use, is most of what it
+// costs to shape a short string, so each thread keeps the faces it shaped with most recently. A face is found again by
+// where the font bytes are, how long they are and what their table directory says; it refers to those bytes only while
+// text is being shaped with them.
+class FaceCache {
+  public:
+    static FaceCache& ForThread() {
+        thread_local FaceCache cache;
+        return cache;
+    }
+    FaceCache() = default;
+    FaceCache(const FaceCache&) = delete;
+    FaceCache& operator=(const FaceCache&) = delete;
+    ~FaceCache() {
+        for (const Entry& entry : entries_) hb_face_destroy(entry.face);
+    }
+
+    // Null when the bytes are not a usable font. The face stays valid until the next two faces are acquired.
+    [[nodiscard]] hb_face_t* Acquire(std::span<const std::byte> bytes) {
+        const std::uint64_t fingerprint = FontFingerprint(bytes);
+        for (auto found = entries_.begin(); found != entries_.end(); ++found) {
+            if (found->data == bytes.data() && found->size == bytes.size() && found->fingerprint == fingerprint) {
+                std::rotate(found, found + 1, entries_.end());
+                return entries_.back().face;
+            }
+        }
+        hb_blob_t* blob = hb_blob_create(reinterpret_cast<const char*>(bytes.data()), static_cast<unsigned>(bytes.size()),
+                                         HB_MEMORY_MODE_READONLY, nullptr, nullptr);
+        hb_face_t* face = hb_face_create(blob, 0);
+        hb_blob_destroy(blob);
+        if (hb_face_get_glyph_count(face) == 0U) {
+            hb_face_destroy(face);
+            return nullptr;
+        }
+        if (entries_.size() >= kCapacity) {
+            hb_face_destroy(entries_.front().face);
+            entries_.erase(entries_.begin());
+        }
+        entries_.push_back(Entry{bytes.data(), bytes.size(), fingerprint, face});
+        return face;
+    }
+
+  private:
+    struct Entry {
+        const std::byte* data = nullptr;
+        std::size_t size = 0U;
+        std::uint64_t fingerprint = 0U;
+        hb_face_t* face = nullptr;
+    };
+    static constexpr std::size_t kCapacity = 8U;
+    std::vector<Entry> entries_;
+};
 
 struct ScriptSpan {
     std::size_t begin;
@@ -75,29 +144,25 @@ static bool ShapeUITextImpl(std::span<const std::byte> fontBytes, std::span<cons
         if (codepoint > 0x10FFFFU || (codepoint >= 0xD800U && codepoint <= 0xDFFFU)) return false;
     }
 
-    Owned<hb_blob_t*, hb_blob_destroy> blob(hb_blob_create(
-        reinterpret_cast<const char*>(fontBytes.data()), static_cast<unsigned>(fontBytes.size()),
-        HB_MEMORY_MODE_READONLY, nullptr, nullptr), hb_blob_destroy);
-    Owned<hb_face_t*, hb_face_destroy> face(hb_face_create(blob.get(), 0), hb_face_destroy);
-    if (hb_face_get_glyph_count(face.get()) == 0U) return false;
-    Owned<hb_font_t*, hb_font_destroy> font(hb_font_create(face.get()), hb_font_destroy);
+    hb_face_t* const face = FaceCache::ForThread().Acquire(fontBytes);
+    if (face == nullptr) return false;
+    Owned<hb_font_t*, hb_font_destroy> font(hb_font_create(face), hb_font_destroy);
     hb_ot_font_set_funcs(font.get());
-    if (variations.size() > hb_ot_var_get_axis_count(face.get())) return false;
+    if (variations.size() > hb_ot_var_get_axis_count(face)) return false;
     std::vector<hb_variation_t> axes;
     axes.reserve(variations.size());
     for (const auto& variation : variations) {
         hb_ot_var_axis_info_t info{};
-        if (!std::isfinite(variation.value) || !hb_ot_var_find_axis_info(face.get(), variation.tag, &info) ||
+        if (!std::isfinite(variation.value) || !hb_ot_var_find_axis_info(face, variation.tag, &info) ||
             variation.value < info.min_value || variation.value > info.max_value ||
             std::ranges::any_of(axes, [&](const auto& axis) { return axis.tag == variation.tag; })) return false;
         axes.push_back({variation.tag, variation.value});
     }
     if (!axes.empty()) hb_font_set_variations(font.get(), axes.data(), static_cast<unsigned>(axes.size()));
-    const int units = static_cast<int>(hb_face_get_upem(face.get()));
+    const int units = static_cast<int>(hb_face_get_upem(face));
     hb_font_set_scale(font.get(), units, units);
-    Owned<hb_blob_t*, hb_blob_destroy> fallbackBlob(nullptr, hb_blob_destroy);
-    Owned<hb_face_t*, hb_face_destroy> fallbackFace(nullptr, hb_face_destroy);
     Owned<hb_font_t*, hb_font_destroy> fallbackFont(nullptr, hb_font_destroy);
+    hb_face_t* fallbackFace = nullptr;
     if (!fallbackBytes.empty()) {
         if (fallbackBytes.size() > std::numeric_limits<unsigned>::max() ||
             !std::isfinite(fallbackUnitScale) || fallbackUnitScale <= 0.0F ||
@@ -105,13 +170,11 @@ static bool ShapeUITextImpl(std::span<const std::byte> fontBytes, std::span<cons
             graphemeBoundaries.back() != lineEnd ||
             std::adjacent_find(graphemeBoundaries.begin(), graphemeBoundaries.end(),
                 [](auto a, auto b) { return a >= b; }) != graphemeBoundaries.end()) return false;
-        fallbackBlob.reset(hb_blob_create(reinterpret_cast<const char*>(fallbackBytes.data()),
-            static_cast<unsigned>(fallbackBytes.size()), HB_MEMORY_MODE_READONLY, nullptr, nullptr));
-        fallbackFace.reset(hb_face_create(fallbackBlob.get(), 0));
-        if (hb_face_get_glyph_count(fallbackFace.get()) == 0U) return false;
-        fallbackFont.reset(hb_font_create(fallbackFace.get()));
+        fallbackFace = FaceCache::ForThread().Acquire(fallbackBytes);
+        if (fallbackFace == nullptr) return false;
+        fallbackFont.reset(hb_font_create(fallbackFace));
         hb_ot_font_set_funcs(fallbackFont.get());
-        const int fallbackUnits = static_cast<int>(hb_face_get_upem(fallbackFace.get()));
+        const int fallbackUnits = static_cast<int>(hb_face_get_upem(fallbackFace));
         hb_font_set_scale(fallbackFont.get(), fallbackUnits, fallbackUnits);
     }
     if (lineBegin == lineEnd) return true;

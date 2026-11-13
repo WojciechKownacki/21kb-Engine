@@ -485,7 +485,10 @@ class FrameBuilder {
         KB_VALIDATE_COPY(UIScrollbar, scrollbar);
         KB_VALIDATE_COPY(UIScrollView, scrollView);
         KB_VALIDATE_COPY(UIInputField, inputField);
-        KB_VALIDATE_COPY(UIDropdown, dropdown);
+        if (const UIDropdown* value = ui_.TryGet<UIDropdown>(entity)) {
+            if (!IsUIComponentValid(*value)) return "UIDropdown holds an invalid value";
+            element.dropdown = std::make_shared<const UIDropdown>(*value);
+        }
         KB_VALIDATE_COPY(UIProgressBar, progressBar);
         KB_VALIDATE(UIWidgetSwitcher);
         KB_VALIDATE(UIAccessibility);
@@ -533,7 +536,21 @@ class FrameBuilder {
             scene_.Localization().FormatPluralNumber(key, number));
     }
 
+    // A size depends on the entity's components alone, never on the rectangle it is given, so a container measured
+    // once for its parent's pass is not measured again by its own: nested layouts cost the tree once, not once per
+    // level. Leaves are cheap to measure and are not stored.
     [[nodiscard]] DesiredSize Measure(SceneEntity entity, bool minimumOnly = false) {
+        if (scene_.Hierarchy().ChildCount(entity) == 0U)
+            return MeasureUncached(entity, minimumOnly);
+        auto& memo = measured_[minimumOnly ? 1U : 0U];
+        if (const auto found = memo.find(entity.Id()); found != memo.end())
+            return found->second;
+        const DesiredSize size = MeasureUncached(entity, minimumOnly);
+        memo.emplace(entity.Id(), size);
+        return size;
+    }
+
+    [[nodiscard]] DesiredSize MeasureUncached(SceneEntity entity, bool minimumOnly) {
         const UIRectTransform* rect = ui_.TryGet<UIRectTransform>(entity);
         DesiredSize size{rect != nullptr ? Width(*rect) : 0.0F, rect != nullptr ? Height(*rect) : 0.0F};
         if (const UIText* text = ui_.TryGet<UIText>(entity)) {
@@ -716,7 +733,9 @@ class FrameBuilder {
                  Affine2D inheritedTransform, const std::vector<std::array<Vec2, 4U>>& inheritedClipQuads) {
         if (!valid_ || !scene_.Entities().IsActive(entity))
             return;
-        SceneUIFrameElement element;
+        // A record is several KB, so it is filled where it will stay instead of being built aside and moved in.
+        // Nothing appends to the frame before the children are arranged; a refusal discards the whole frame.
+        SceneUIFrameElement& element = frame_.elements.emplace_back();
         if (const char* invalid = ValidateComponents(entity, element); invalid != nullptr) {
             Refuse(entity, invalid);
             return;
@@ -928,18 +947,21 @@ class FrameBuilder {
             element.interactionEnabled && selectable->raycastTarget && group.blocksRaycasts && element.effectiveOpacity > 0.0F;
         if (selectable != nullptr)
             element.interactionTint = selectable->normalColor;
-        frame_.elements.push_back(std::move(element));
         const std::size_t elementIndex = frame_.elements.size() - 1U;
 
         Rect childClip = inheritedClip;
-        std::vector<std::array<Vec2, 4U>> childClipQuads = inheritedClipQuads;
+        // Only a mask adds a clip quad; every other element hands the ones it inherited on untouched.
+        std::vector<std::array<Vec2, 4U>> maskedClipQuads;
+        const std::vector<std::array<Vec2, 4U>>* childClipQuads = &inheritedClipQuads;
         if (const UIMask* mask = ui_.TryGet<UIMask>(entity)) {
             childClip = Intersect(childClip, Bounds(frame_.elements[elementIndex].corners));
-            childClipQuads.push_back(frame_.elements[elementIndex].corners);
+            maskedClipQuads = inheritedClipQuads;
+            maskedClipQuads.push_back(frame_.elements[elementIndex].corners);
+            childClipQuads = &maskedClipQuads;
             clipSoftness_ = mask->softness * scale;
         }
         ArrangeChildren(entity, rect, childClip, canvas, scale, sortingOrder, pixelPerfect, group, resolvedTransform,
-                        childClipQuads);
+                        *childClipQuads);
         player_ = outerPlayer;
         clipSoftness_ = outerSoftness;
     }
@@ -1348,6 +1370,8 @@ class FrameBuilder {
     std::unordered_map<std::uint64_t, const UIDropdown*> captionTexts_;
     std::unordered_map<std::uint64_t, const UIDropdown*> captionImages_;
     std::unordered_map<std::uint64_t, bool> toggleGraphics_;
+    // Sizes of the containers measured so far, for the natural and the minimum request.
+    std::array<std::unordered_map<std::uint64_t, DesiredSize>, 2U> measured_;
     SceneUIFrame frame_;
     SceneUIFrameRefusal refusal_{};
     std::uint32_t traversal_ = 0U;
@@ -1368,6 +1392,12 @@ void Queue(SceneState& state, const Scene& scene, SceneUIEventType type, SceneEn
     }
     std::copy(text.begin(), text.end(), event.text.begin());
     state.uiEvents.push_back(std::move(event));
+}
+// Keeps the larger of the spare buffers for the next frame build; the records inside are not needed any more.
+void KeepSpareStorage(SceneState& state, std::vector<SceneUIFrameElement>&& elements) {
+    elements.clear();
+    if (elements.capacity() > state.uiSpareElements.capacity())
+        state.uiSpareElements = std::move(elements);
 }
 [[nodiscard]] const SceneUIFrameElement* Find(const SceneUIFrame& frame, SceneEntity entity) noexcept {
     const auto found = std::ranges::find(frame.elements, entity, &SceneUIFrameElement::entity);
@@ -1488,6 +1518,18 @@ void Queue(SceneState& state, const Scene& scene, SceneUIEventType type, SceneEn
 
 void ResolveInteractionPresentation(const Scene& scene, const SceneState& state, bool primaryDown, float deltaSeconds,
                                     const SceneUIFrame& previous, SceneUIFrame& current, bool advanceTransition) {
+    // A frame lists its widgets in the order the last one did unless the layout changed, so the previous record is
+    // found at the same position; only a frame that moved things around pays for an index.
+    std::unordered_map<std::uint64_t, std::size_t> previousIndex;
+    const auto findPrevious = [&](std::size_t position, SceneEntity entity) -> const SceneUIFrameElement* {
+        if (position < previous.elements.size() && previous.elements[position].entity == entity)
+            return &previous.elements[position];
+        if (previousIndex.empty())
+            for (std::size_t index = 0U; index < previous.elements.size(); ++index)
+                previousIndex.emplace(previous.elements[index].entity.Id(), index);
+        const auto found = previousIndex.find(entity.Id());
+        return found == previousIndex.end() ? nullptr : &previous.elements[found->second];
+    };
     for (SceneUIFrameElement& element : current.elements) {
         const UISelectable* selectable = element.selectable ? &*element.selectable : nullptr;
         if (selectable == nullptr) {
@@ -1513,7 +1555,7 @@ void ResolveInteractionPresentation(const Scene& scene, const SceneState& state,
                                                element.interactionState == UIInteractionState::Normal
                                            ? selectable->selectedColor
                                            : InteractionColor(*selectable, element.interactionState);
-        const SceneUIFrameElement* prior = Find(previous, element.entity);
+        const SceneUIFrameElement* prior = findPrevious(static_cast<std::size_t>(&element - current.elements.data()), element.entity);
         if (prior == nullptr || !prior->selectable) {
             element.selectableTransitionTint = target;
             continue;
@@ -3051,6 +3093,9 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
     }
     UpdateUIMedia(scene_);
     SceneUIFrame frame;
+    // Two frames are alive at once, the one being built and the one it replaces, so their element storage trades
+    // places instead of being allocated and cleared again every frame.
+    frame.elements = std::move(SceneAccess::State(scene_).uiSpareElements);
     if (!FrameBuilder{scene_, {viewportWidth, viewportHeight}}.Build(frame)) {
         // Keep the last good frame so hit testing still answers, but carry the refusal on it
         // so the host can name what to fix. A later successful build replaces the whole frame
@@ -3069,6 +3114,7 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
             state.uiFrame.refusal = clampedFrame.refusal;
             return false;
         }
+        KeepSpareStorage(state, std::move(state.uiFrame.elements));
         state.uiFrame = std::move(clampedFrame);
         presentationDirty = false;
     }
@@ -3388,6 +3434,7 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
         SceneUIFrame refreshed;
         if (!FrameBuilder{scene_, {viewportWidth, viewportHeight}}.Build(refreshed))
             return false;
+        KeepSpareStorage(state, std::move(state.uiFrame.elements));
         state.uiFrame = std::move(refreshed);
     }
     bool revealFocus = previousFrame.viewportSize.x != viewportWidth || previousFrame.viewportSize.y != viewportHeight;
@@ -3410,9 +3457,11 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
         SceneUIFrame scrolled;
         if (!FrameBuilder{scene_, {viewportWidth, viewportHeight}}.Build(scrolled))
             return false;
+        KeepSpareStorage(state, std::move(state.uiFrame.elements));
         state.uiFrame = std::move(scrolled);
     }
     ResolveInteractionPresentation(scene_, state, input.primaryDown, deltaSeconds, previousFrame, state.uiFrame, true);
+    KeepSpareStorage(state, std::move(previousFrame.elements));
     UpdateUIReader(scene_);
     return true;
 }

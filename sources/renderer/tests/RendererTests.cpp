@@ -118,6 +118,7 @@ void RunTextureBakeTests();
 void RunRuntimeContentStreamingTests();
 void RunPackagedWebGpuTextureFallbackTestOnly();
 void RunScreenUIDrawBatchTests();
+void RunScreenUIWorkloadBenchmark();
 void RunLargeWorldRenderTests();
 }
 
@@ -243,6 +244,10 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "screen-ui-batch") {
         kb::render::tests::RunScreenUIDrawBatchTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "screen-ui-workloads") {
+        kb::render::tests::RunScreenUIWorkloadBenchmark();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "screen-ui-overdraw") {

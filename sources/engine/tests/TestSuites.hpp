@@ -14,6 +14,7 @@ void RunSceneHierarchyParentingTests();
 void RunTransformWriteBenchmark();
 void RunSceneUITests();
 void RunSceneUIBuildFrameBenchmark();
+void RunSceneUIWorkloadBenchmark();
 void RunSceneSystemTests();
 void RunScenePrefabTests();
 void RunProjectSceneTests();

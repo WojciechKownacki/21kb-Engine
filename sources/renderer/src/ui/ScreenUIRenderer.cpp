@@ -98,15 +98,21 @@ bool ScreenUIRenderer::Submit(const ScreenUISubmitDesc& desc) {
     // Text that cannot be prepared is dropped element by element, not frame by frame: a font
     // still streaming in, or one bad markup string, used to erase every rectangle, image and
     // border in the scene's UI.
-    ResolveFonts(desc, fonts.runs);
+    const std::span<const ScreenUITextRun> drawable = ResolveFonts(desc, fonts.runs);
     if (desc.scene != nullptr) {
         std::vector<kb::scene::SceneUITextLayout> layouts;
-        for (const auto& run : drawableRuns_) {
-            const auto element = std::ranges::find_if(desc.frame->elements, [&](const auto& candidate) {
-                return candidate.entity.Id() == run.entity && candidate.text &&
-                    (candidate.inputField || !run.links.empty());
-            });
-            if (element == desc.frame->elements.end()) continue;
+        // Runs follow their elements in the frame's order, so one forward walk finds every run's element; only a
+        // run out of order starts the search over.
+        const auto& elements = desc.frame->elements;
+        std::size_t elementCursor = 0U;
+        for (const auto& run : drawable) {
+            const auto ownedBy = [&run](const auto& candidate) { return candidate.entity.Id() == run.entity && candidate.text; };
+            auto element = std::find_if(elements.begin() + static_cast<std::ptrdiff_t>(elementCursor), elements.end(), ownedBy);
+            if (element == elements.end()) element = std::find_if(elements.begin(), elements.end(), ownedBy);
+            if (element == elements.end()) continue;
+            elementCursor = static_cast<std::size_t>(element - elements.begin()) + 1U;
+            // Only text that is edited or holds links reports its layout back.
+            if (!element->inputField && run.links.empty()) continue;
             kb::scene::SceneUITextLayout layout{element->entity, std::string{kb::scene::UITextContent(*element->text)}, {}};
             if (element->inputField) for (const auto& caret : run.carets) {
                 layout.carets.push_back({caret.sourceOffset, caret.x, caret.top, caret.bottom, caret.leading});
@@ -137,7 +143,7 @@ bool ScreenUIRenderer::Submit(const ScreenUISubmitDesc& desc) {
     if (lastTextFailure_.reason != nullptr) {
         WriteRendererDebugLog("screen_ui", "Submit dropped unpreparable text and kept the rest of the UI");
     }
-    const ScreenUIDrawList& drawList = batchBuilder_.Build(*desc.frame, imageBindings_, drawableRuns_);
+    const ScreenUIDrawList& drawList = batchBuilder_.Build(*desc.frame, imageBindings_, drawable);
     if (drawList.requiresBackgroundBlur) {
         if (!bgfx::isValid(desc.backgroundSource) ||
             !backgroundBlur_.Submit(desc.viewportIndex, desc.viewportPlan->viewport.extent, desc.backgroundFormat,
@@ -241,10 +247,13 @@ void ScreenUIRenderer::ResolveImages(const ScreenUISubmitDesc& desc) {
     }
 }
 
-void ScreenUIRenderer::ResolveFonts(const ScreenUISubmitDesc& desc, std::span<const ScreenUITextRun> textRuns) {
+std::span<const ScreenUITextRun> ScreenUIRenderer::ResolveFonts(const ScreenUISubmitDesc& desc,
+                                                                std::span<const ScreenUITextRun> textRuns) {
     drawableRuns_.clear();
-    drawableRuns_.reserve(textRuns.size());
-    for (const ScreenUITextRun& run : textRuns) {
+    // The runs are copied only once one of them cannot be drawn; until then they are used where they are.
+    bool filtered = false;
+    for (std::size_t runIndex = 0U; runIndex < textRuns.size(); ++runIndex) {
+        const ScreenUITextRun& run = textRuns[runIndex];
         const auto resolve = [&](std::uint64_t assetId, const std::string& variations, std::uint16_t width, std::uint16_t height) {
             const ScreenUITextureKey key{.source = ScreenUITextureSource::FontAtlas,
                                          .assetId = assetId, .pixelSize = run.pixelSize, .fontVariations = variations,
@@ -260,10 +269,15 @@ void ScreenUIRenderer::ResolveFonts(const ScreenUISubmitDesc& desc, std::span<co
             if (lastTextFailure_.reason == nullptr) {
                 lastTextFailure_ = TextFailure{.entityId = run.entity, .reason = "Font atlas texture is unavailable"};
             }
+            if (!filtered) {
+                drawableRuns_.assign(textRuns.begin(), textRuns.begin() + static_cast<std::ptrdiff_t>(runIndex));
+                filtered = true;
+            }
             continue;
         }
-        drawableRuns_.push_back(run);
+        if (filtered) drawableRuns_.push_back(run);
     }
+    return filtered ? std::span<const ScreenUITextRun>{drawableRuns_} : textRuns;
 }
 
 const ScreenUIRenderer::TextFailure& ScreenUIRenderer::LastTextFailure() const noexcept {

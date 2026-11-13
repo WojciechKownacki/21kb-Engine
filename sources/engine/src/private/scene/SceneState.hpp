@@ -893,6 +893,8 @@ public:
     kb::math::DVec3 particleSimulationOrigin{};
     mutable std::vector<kb::particles::ParticleRuntimeState> particleRuntimeStateScratch;
     SceneUIFrame uiFrame;
+    // Element storage left over from the frame before, lent to the next build so a steady frame allocates nothing.
+    std::vector<SceneUIFrameElement> uiSpareElements;
     std::vector<SceneUIEvent> uiEvents;
     SceneEntity uiHovered{};
     SceneEntity uiPressed{};

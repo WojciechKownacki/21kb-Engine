@@ -99,6 +99,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunSceneUITests();
     } else if (suite == "scene-ui-bench") {
         kb::tests::RunSceneUIBuildFrameBenchmark();
+    } else if (suite == "scene-ui-workloads") {
+        kb::tests::RunSceneUIWorkloadBenchmark();
     } else if (suite == "scene-ui-profile") {
         kb::tests::RunSceneUIBuildFrameProfile();
     } else if (suite == "scene-system") {

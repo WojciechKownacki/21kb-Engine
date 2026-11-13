@@ -80,8 +80,10 @@ class ScreenUIRenderer {
 
   private:
     void ResolveImages(const ScreenUISubmitDesc& desc);
-    // Keeps the runs whose atlas texture resolved, dropping the rest into `lastTextFailure_`.
-    void ResolveFonts(const ScreenUISubmitDesc& desc, std::span<const ScreenUITextRun> textRuns);
+    // The runs whose atlas texture resolved, dropping the rest into `lastTextFailure_`. When every run resolved these
+    // are the given runs themselves.
+    [[nodiscard]] std::span<const ScreenUITextRun> ResolveFonts(const ScreenUISubmitDesc& desc,
+                                                                std::span<const ScreenUITextRun> textRuns);
     void AppendResolvedTexture(ScreenUIResolvedTexture texture);
 
     struct DynamicTexture {std::uint64_t sceneId=0,assetId=0,revision=0;std::uint16_t width=0,height=0;bgfx::TextureHandle texture=BGFX_INVALID_HANDLE;};

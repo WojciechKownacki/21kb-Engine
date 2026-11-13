@@ -1,10 +1,12 @@
 #include "private/ui/ScreenUIDrawBatchBuilder.hpp"
+#include "private/ui/ScreenUIElementCulling.hpp"
 #include "private/ui/ScreenUIFontDistanceField.hpp"
 
 #include "engine/scene/SceneUI.hpp"
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <limits>
@@ -13,6 +15,45 @@
 
 namespace kb::render {
 namespace {
+
+// Side of the squares the surface is divided into to find the quads near a new one, and how many quads are compared
+// before the search for a batch to join gives up.
+constexpr float kOverlapCell = 32.0F;
+constexpr float kMaximumGridSide = 128.0F;
+constexpr std::size_t kMaximumOverlapTests = 512U;
+
+// Whether two quads can cover the same pixels; a pixel of slack on each side covers the antialiased fringe.
+[[nodiscard]] bool BoundsOverlap(const ScreenUIRect& a, const ScreenUIRect& b) noexcept {
+    return a.left < b.right + 1.0F && b.left < a.right + 1.0F && a.top < b.bottom + 1.0F && b.top < a.bottom + 1.0F;
+}
+
+// A cheap summary of what makes two batches one draw call; equal batches hash equal, so only those are compared in full.
+[[nodiscard]] std::uint64_t BatchKeyHash(const ScreenUITextureKey& texture, const ScreenUIRect& clip,
+                                         const ScreenUIDrawStyle& style) noexcept {
+    std::uint64_t hash = 14695981039346656037ULL;
+    const auto mix = [&hash](std::uint64_t value) noexcept { hash = (hash ^ value) * 1099511628211ULL; };
+    const auto mixFloat = [&mix](float value) noexcept { mix(std::bit_cast<std::uint32_t>(value)); };
+    mix(static_cast<std::uint64_t>(texture.source));
+    mix(texture.assetId);
+    mix(texture.pixelSize);
+    mix(texture.distanceField);
+    mixFloat(clip.left);
+    mixFloat(clip.top);
+    mixFloat(clip.right);
+    mixFloat(clip.bottom);
+    for (const auto& channels : {style.fillColor, style.borderColor, style.borderWidths, style.cornerRadii}) {
+        for (const float channel : channels) mixFloat(channel);
+    }
+    mixFloat(style.width);
+    mixFloat(style.height);
+    mixFloat(style.opacity);
+    mixFloat(style.feather);
+    mixFloat(style.fontOutlineWidth);
+    mixFloat(style.blurStrength);
+    mixFloat(style.clipSoftness);
+    mix(static_cast<std::uint64_t>(style.fragmentKind));
+    return hash;
+}
 
 [[nodiscard]] std::array<float, 4> TintedColor(const kb::scene::SceneUIFrameElement& element,
                                                const kb::math::Color& color) noexcept {
@@ -60,10 +101,19 @@ namespace {
     return found == images.end() ? nullptr : &*found;
 }
 
-[[nodiscard]] const ScreenUITextRun* FindTextRun(std::span<const ScreenUITextRun> runs,
+// Runs come in the order of their elements, so the next run is almost always the one wanted; a run out of order
+// is searched for and the walk continues after it.
+[[nodiscard]] const ScreenUITextRun* FindTextRun(std::span<const ScreenUITextRun> runs, std::size_t& cursor,
                                                  const kb::scene::SceneUIFrameElement& element) noexcept {
+    if (cursor < runs.size() && runs[cursor].entity == element.entity.Id()) {
+        return &runs[cursor++];
+    }
     const auto found = std::ranges::find(runs, element.entity.Id(), &ScreenUITextRun::entity);
-    return found == runs.end() ? nullptr : &*found;
+    if (found == runs.end()) {
+        return nullptr;
+    }
+    cursor = static_cast<std::size_t>(found - runs.begin()) + 1U;
+    return &*found;
 }
 
 [[nodiscard]] bool HasBorder(const ScreenUIDrawStyle& style) noexcept {
@@ -106,17 +156,31 @@ const ScreenUIDrawList& ScreenUIDrawBatchBuilder::Build(const kb::scene::SceneUI
                                                         std::span<const ScreenUIImageBinding> images,
                                                         std::span<const ScreenUITextRun> textRuns) {
     drawList_.Clear();
+    textRunCursor_ = 0U;
+    batchKeys_.clear();
+    latestBatchOfKey_.clear();
+    pieces_.clear();
+    pieceBounds_.clear();
+    for (const std::uint32_t cell : occupiedCells_) cellPieces_[cell].clear();
+    occupiedCells_.clear();
+    reordered_ = false;
     viewportWidth_ = static_cast<std::uint32_t>(std::max(frame.viewportSize.x, 0.0F));
     viewportHeight_ = static_cast<std::uint32_t>(std::max(frame.viewportSize.y, 0.0F));
+    // Squares grow with an enormous surface, so the grid never holds more than kMaximumGridSide squares along a side.
+    gridCell_ = std::max(kOverlapCell, std::ceil(static_cast<float>(std::max(viewportWidth_, viewportHeight_)) / kMaximumGridSide));
+    gridColumns_ = std::max<std::size_t>(1U, static_cast<std::size_t>(std::ceil(static_cast<float>(viewportWidth_) / gridCell_)));
+    gridRows_ = std::max<std::size_t>(1U, static_cast<std::size_t>(std::ceil(static_cast<float>(viewportHeight_) / gridCell_)));
+    cellPieces_.resize(gridColumns_ * gridRows_);
     drawList_.vertices.reserve(frame.elements.size() * 4U);
     drawList_.indices.reserve(frame.elements.size() * 6U);
     drawList_.batches.reserve(frame.elements.size());
     for (const kb::scene::SceneUIFrameElement& element : frame.elements) {
         if (element.rect.width > 0.0F && element.rect.height > 0.0F && element.clipRect.width > 0.0F &&
-            element.clipRect.height > 0.0F && element.effectiveOpacity > 0.0F) {
+            element.clipRect.height > 0.0F && element.effectiveOpacity > 0.0F && ScreenUIElementMayShow(element)) {
             AppendElement(element, images, textRuns);
         }
     }
+    GatherReorderedIndices();
     if (drawList_.maximumBackgroundBlur > 0.0F) {
         for (ScreenUIDrawBatch& batch : drawList_.batches) {
             if (batch.style.fragmentKind == ScreenUIFragmentKind::BackgroundBlur) {
@@ -300,7 +364,7 @@ void ScreenUIDrawBatchBuilder::AppendElement(const kb::scene::SceneUIFrameElemen
     }
 
     if (element.text.has_value() && (element.inputField || !kb::scene::UITextContent(*element.text).empty())) {
-        if (const ScreenUITextRun* run = FindTextRun(textRuns, element); run != nullptr) {
+        if (const ScreenUITextRun* run = FindTextRun(textRuns, textRunCursor_, element); run != nullptr) {
             if (element.shadow.has_value() && element.shadow->color.a > 0.0F) {
                 const float scale = std::max(element.canvasScale, 0.0F);
                 AppendTextLayer(element, *run, TintedColor(element, element.shadow->color),
@@ -732,35 +796,120 @@ void ScreenUIDrawBatchBuilder::AppendPolygon(const kb::scene::SceneUIFrameElemen
         return std::array<float, 2>{top.x + (bottom.x - top.x) * vertical, top.y + (bottom.y - top.y) * vertical};
     };
     const std::uint32_t firstVertex = static_cast<std::uint32_t>(drawList_.vertices.size());
+    ScreenUIRect bounds{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
+                        std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest()};
     for (const PolygonPoint& point : points) {
         const std::array<float, 2> screen = transform(point.x, point.y);
         drawList_.vertices.push_back(ScreenUIVertex{screen[0], screen[1], point.u, point.v,
                                                     (point.x - fullRect.left) / Width(fullRect),
                                                     (point.y - fullRect.top) / Height(fullRect)});
+        bounds.left = std::min(bounds.left, screen[0]);
+        bounds.top = std::min(bounds.top, screen[1]);
+        bounds.right = std::max(bounds.right, screen[0]);
+        bounds.bottom = std::max(bounds.bottom, screen[1]);
     }
     const std::uint32_t firstIndex = static_cast<std::uint32_t>(drawList_.indices.size());
     for (std::uint32_t index = 1U; index + 1U < points.size(); ++index) {
         drawList_.indices.insert(drawList_.indices.end(), {firstVertex, firstVertex + index, firstVertex + index + 1U});
     }
-    AppendIndices(element, firstIndex, static_cast<std::uint32_t>(drawList_.indices.size()) - firstIndex, texture, style);
+    AppendIndices(element, firstIndex, static_cast<std::uint32_t>(drawList_.indices.size()) - firstIndex, texture, style, bounds);
 }
 
 void ScreenUIDrawBatchBuilder::AppendIndices(const kb::scene::SceneUIFrameElement& element, std::uint32_t firstIndex,
                                              std::uint32_t count, const ScreenUITextureKey& texture,
-                                             const ScreenUIDrawStyle& style) {
+                                             const ScreenUIDrawStyle& style, const ScreenUIRect& bounds) {
     ScreenUIDrawStyle clipped = style;
     clipped.clipSoftness = std::max(element.clipSoftness, 0.0F);
     const ScreenUIRect clipRect = Rect(element.clipRect);
-    const bool canMerge = !drawList_.batches.empty() && drawList_.batches.back().texture == texture &&
-                          SameRect(drawList_.batches.back().clipRect, clipRect) &&
-                          drawList_.batches.back().style == clipped &&
-                          drawList_.batches.back().firstIndex + drawList_.batches.back().indexCount == firstIndex;
-    if (canMerge) {
-        drawList_.batches.back().indexCount += count;
-    } else {
-        drawList_.batches.push_back(ScreenUIDrawBatch{
-            .texture = texture, .clipRect = clipRect, .style = clipped, .firstIndex = firstIndex, .indexCount = count});
+    const std::uint64_t key = BatchKeyHash(texture, clipRect, clipped);
+    std::vector<ScreenUIDrawBatch>& batches = drawList_.batches;
+
+    // The squares of the surface this quad can touch, a pixel wider on every side for antialiasing.
+    const auto cellRange = [&](float low, float high, std::size_t cells) {
+        const float last = static_cast<float>(cells - 1U);
+        if (!std::isfinite(low) || !std::isfinite(high)) return std::pair<std::size_t, std::size_t>{0U, cells - 1U};
+        return std::pair<std::size_t, std::size_t>{
+            static_cast<std::size_t>(std::clamp(std::floor((low - 1.0F) / gridCell_), 0.0F, last)),
+            static_cast<std::size_t>(std::clamp(std::floor((high + 1.0F) / gridCell_), 0.0F, last))};
+    };
+    const auto [firstColumn, lastColumn] = cellRange(bounds.left, bounds.right, gridColumns_);
+    const auto [firstRow, lastRow] = cellRange(bounds.top, bounds.bottom, gridRows_);
+    const auto sameState = [&](std::size_t candidate) {
+        const ScreenUIDrawBatch& batch = batches[candidate];
+        return batchKeys_[candidate] == key && batch.texture == texture && SameRect(batch.clipRect, clipRect) &&
+               batch.style == clipped;
+    };
+    // The quad joins the latest batch of its state, provided every batch drawn after that one is clear of it: drawing
+    // the quad earlier then changes nothing about what ends up on top. Materials draw through their own path and never
+    // take part.
+    std::size_t target = batches.size();
+    if (texture.source != ScreenUITextureSource::Material && !batches.empty()) {
+        if (sameState(batches.size() - 1U)) {
+            target = batches.size() - 1U;
+        } else {
+            // The newest batch holding a quad that can overlap this one; the search gives up on crowded ground.
+            std::size_t blocker = 0U;
+            std::size_t tests = 0U;
+            for (std::size_t row = firstRow; row <= lastRow && tests <= kMaximumOverlapTests; ++row) {
+                for (std::size_t column = firstColumn; column <= lastColumn && tests <= kMaximumOverlapTests; ++column) {
+                    for (const std::uint32_t other : cellPieces_[row * gridColumns_ + column]) {
+                        ++tests;
+                        if (pieces_[other].batch > blocker && BoundsOverlap(pieceBounds_[other], bounds)) {
+                            blocker = pieces_[other].batch;
+                        }
+                    }
+                }
+            }
+            // Only the latest batch of a state can be joined, so one lookup finds it however far back it lies.
+            const auto latest = latestBatchOfKey_.find(key);
+            if (tests <= kMaximumOverlapTests && latest != latestBatchOfKey_.end() && latest->second >= blocker &&
+                sameState(latest->second)) {
+                target = latest->second;
+            }
+        }
     }
+    if (target == batches.size()) {
+        batches.push_back(ScreenUIDrawBatch{
+            .texture = texture, .clipRect = clipRect, .style = clipped, .firstIndex = firstIndex, .indexCount = count});
+        batchKeys_.push_back(key);
+        latestBatchOfKey_[key] = static_cast<std::uint32_t>(target);
+    } else {
+        batches[target].indexCount += count;
+        reordered_ = reordered_ || target + 1U != batches.size();
+    }
+    const auto piece = static_cast<std::uint32_t>(pieces_.size());
+    pieces_.push_back(IndexPiece{.firstIndex = firstIndex, .count = count, .batch = static_cast<std::uint32_t>(target)});
+    pieceBounds_.push_back(bounds);
+    for (std::size_t row = firstRow; row <= lastRow; ++row) {
+        for (std::size_t column = firstColumn; column <= lastColumn; ++column) {
+            const std::size_t cell = row * gridColumns_ + column;
+            if (cellPieces_[cell].empty()) occupiedCells_.push_back(static_cast<std::uint32_t>(cell));
+            cellPieces_[cell].push_back(piece);
+        }
+    }
+}
+
+// A quad that joined an earlier batch left its indices behind the later ones, so each batch's indices are brought
+// together again, the batches staying in draw order.
+void ScreenUIDrawBatchBuilder::GatherReorderedIndices() {
+    if (!reordered_) {
+        return;
+    }
+    std::vector<ScreenUIDrawBatch>& batches = drawList_.batches;
+    batchWriteOffsets_.resize(batches.size());
+    std::uint32_t offset = 0U;
+    for (std::size_t index = 0U; index < batches.size(); ++index) {
+        batches[index].firstIndex = offset;
+        batchWriteOffsets_[index] = offset;
+        offset += batches[index].indexCount;
+    }
+    gatheredIndices_.resize(drawList_.indices.size());
+    for (const IndexPiece& piece : pieces_) {
+        std::copy_n(drawList_.indices.begin() + piece.firstIndex, piece.count,
+                    gatheredIndices_.begin() + batchWriteOffsets_[piece.batch]);
+        batchWriteOffsets_[piece.batch] += piece.count;
+    }
+    drawList_.indices.swap(gatheredIndices_);
 }
 
 } // namespace kb::render

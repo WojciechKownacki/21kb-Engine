@@ -401,6 +401,7 @@ add_library(kb_renderer STATIC
     src/private/ui/ScreenUIRenderer.hpp
     src/private/ui/ScreenUIDrawData.hpp
     src/private/ui/ScreenUIDrawBatchBuilder.hpp
+    src/private/ui/ScreenUIElementCulling.hpp
     src/private/ui/ScreenUIFontPayloadValidator.hpp
     src/private/ui/ScreenUIFontDistanceField.hpp
     src/private/ui/ScreenUIFontAtlasCache.hpp
