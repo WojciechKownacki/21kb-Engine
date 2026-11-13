@@ -42,6 +42,17 @@ ScriptPhaseCall LuaScriptBackend::ResolvePhaseCall(
     return IScriptBackend::ResolvePhaseCall(entity, behaviour, event);
 }
 
+ScriptPhaseCall LuaScriptBackend::ResolveEventCall(
+    kb::scene::SceneEntity entity,
+    const kb::scene::BehaviourComponent& behaviour,
+    std::string_view name) {
+    ScriptPhaseCall call;
+    if (runtime_.ResolveEventCall(entity, behaviour, call)) {
+        return call;
+    }
+    return IScriptBackend::ResolveEventCall(entity, behaviour, name);
+}
+
 std::uint64_t LuaScriptBackend::PhaseCallRevision() const noexcept {
     return runtime_.PhaseCallRevision();
 }

@@ -181,6 +181,18 @@ void AppendStubReturn(
         out += StubResultClassName(binding);
         out += "|nil\n";
         return;
+    case ScriptApiCatalogLuaReturnKind::GuardedValues:
+        for (const ScriptApiPin& pin : function.outputs) {
+            if (pin.name == binding.returnPin) {
+                continue;
+            }
+            out += "---@return ";
+            out += LuaTypeName(pin.type);
+            out += "|nil ";
+            out += pin.name;
+            out += '\n';
+        }
+        return;
     case ScriptApiCatalogLuaReturnKind::Default:
         break;
     }
@@ -213,7 +225,7 @@ void AppendStubFunction(
         out += binding.functionName;
         out += "`.\n";
     }
-    if (binding.returnKind == ScriptApiCatalogLuaReturnKind::GuardedTable) {
+    if (binding.returnKind == ScriptApiCatalogLuaReturnKind::GuardedTable || binding.returnKind == ScriptApiCatalogLuaReturnKind::GuardedValues) {
         out += "---Returns nil when the engine reports `";
         out += binding.returnPin;
         out += "` as false.\n";
@@ -296,6 +308,15 @@ void AppendStubResultClasses(std::string& out, const ScriptApiCatalog& catalog) 
             }
         }
         return "table { " + PinList(visible) + " } or nil when " + binding.returnPin + " is false";
+    }
+    case ScriptApiCatalogLuaReturnKind::GuardedValues: {
+        std::vector<ScriptApiPin> visible;
+        for (const ScriptApiPin& pin : function->outputs) {
+            if (pin.name != binding.returnPin) {
+                visible.push_back(pin);
+            }
+        }
+        return "values " + PinList(visible) + " or nil when " + binding.returnPin + " is false";
     }
     case ScriptApiCatalogLuaReturnKind::Default:
         break;

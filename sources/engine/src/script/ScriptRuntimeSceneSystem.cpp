@@ -24,6 +24,8 @@
 #include "engine/scene/SceneSystemContext.hpp"
 #include "engine/scene/SceneTasks.hpp"
 #include "engine/scene/SceneTimers.hpp"
+#include "engine/scene/SceneTransforms.hpp"
+#include "engine/ecs/WorkerPool.hpp"
 
 #include <algorithm>
 #include <array>
@@ -32,6 +34,21 @@
 
 namespace kb::script {
 namespace {
+
+// Calls that may run on any thread (ScriptPhaseCall::runOnAnyThread) go to the scene's workers only when a run of them
+// is long enough to pay for handing the work over (about 80 us measured on a desktop, where 2048 short calls take about
+// 50 us inline and 10 000 take 255 us inline against 98 us on the workers); shorter runs, and machines with one core,
+// call them inline. Phones and tablets wake their workers more slowly and keep twice the minimum. Every range has at
+// least kMinimumPerRange objects, and there are about two ranges per core.
+struct ScriptWorkerTuning {
+#if defined(__ANDROID__) || defined(__APPLE__)
+    static constexpr std::size_t kMinimumRun = 4096U;
+    static constexpr std::size_t kMinimumPerRange = 512U;
+#else
+    static constexpr std::size_t kMinimumRun = 2048U;
+    static constexpr std::size_t kMinimumPerRange = 256U;
+#endif
+};
 
 void MergeResult(ScriptRuntimeExecutionResult& target, ScriptRuntimeExecutionResult source) {
     target.visitedBehaviours += source.visitedBehaviours;
@@ -464,9 +481,23 @@ void ScriptRuntimeSceneSystem::ExecuteTrackedBehaviourPhase(
     bool validate = false;
     std::size_t passedOver = 0U;
     const kb::scene::Scene& constScene = scene;
-    for (const PhaseEntry& entry : list.entries) {
+    // Entries before this one were already offered to the workers as part of a run that stays on this thread.
+    std::size_t inlineRunEnd = 0U;
+    for (std::size_t index = 0U; index < list.entries.size(); ++index) {
+        const PhaseEntry& entry = list.entries[index];
         if (!validate && *revision != seenRevision) {
             validate = true;
+        }
+        if (!validate && entry.call.runOnAnyThread && index >= inlineRunEnd) {
+            std::size_t end = index + 1U;
+            while (end < list.entries.size() && list.entries[end].call.runOnAnyThread) {
+                ++end;
+            }
+            if (RunOnWorkers(scene, event, deltaSeconds, list.entries, index, end)) {
+                index = end - 1U;
+                continue;
+            }
+            inlineRunEnd = end;
         }
         if (validate) {
             const kb::scene::BehaviourComponent* live = constScene.Components().Behaviours().TryGet(entry.entity);
@@ -480,6 +511,7 @@ void ScriptRuntimeSceneSystem::ExecuteTrackedBehaviourPhase(
         if (entry.call.invoke(entry.call.target, entry.behaviour, context, lastResult_.diagnostics)) {
             ++lastResult_.executedBehaviours;
         }
+        context.FinishSelfTransform();
         if (!phaseEmittedEvents_.empty()) {
             lastResult_.emittedEvents.insert(lastResult_.emittedEvents.end(), phaseEmittedEvents_.begin(), phaseEmittedEvents_.end());
             std::vector<ScriptEvent> pending = std::move(phaseEmittedEvents_);
@@ -488,6 +520,64 @@ void ScriptRuntimeSceneSystem::ExecuteTrackedBehaviourPhase(
         }
     }
     lastResult_.visitedBehaviours += phaseOrder_.size() - passedOver;
+}
+
+// The calls of a run only change their own objects, so they run in any order and the result is the one of the serial
+// loop; what they emit or report is delivered after the run, in the order of the entries. A run too short to pay for
+// the hand-over runs on this thread, still with the transform writes of the workers (one range), which publish less
+// per object than a write that may be followed by any other scene call.
+bool ScriptRuntimeSceneSystem::RunOnWorkers(kb::scene::Scene& scene, ScriptLifecycleEvent event, float deltaSeconds,
+    const std::vector<PhaseEntry>& entries, std::size_t begin, std::size_t end) {
+    const std::size_t count = end - begin;
+    const std::size_t cores = kb::ecs::WorkerPool::DefaultWorkerCount();
+    const bool parallel = count >= ScriptWorkerTuning::kMinimumRun && cores >= 2U;
+    const std::size_t grain = parallel ? std::max(ScriptWorkerTuning::kMinimumPerRange, (count + cores * 2U - 1U) / (cores * 2U)) : count;
+    const std::size_t ranges = (count + grain - 1U) / grain;
+    kb::scene::SceneTransformWorkerWrites writes(scene, ranges);
+    if (!writes.Enabled()) {
+        return false;
+    }
+    if (workerOutputs_.size() < ranges) {
+        workerOutputs_.resize(ranges);
+    }
+    const auto runRange = [&](std::size_t first, std::size_t last) {
+        const std::size_t range = first / grain;
+        WorkerRangeOutput& output = workerOutputs_[range];
+        output.executed = 0U;
+        ScriptExecutionContext context{ scene, kb::scene::SceneEntity{}, kb::assets::AssetId{}, kb::scene::BehaviourBackend::Native, event,
+            deltaSeconds, &output.events, nullptr, &runtime_.SharedState(), &runtime_.Functions(), &runtime_.Events() };
+        context.UseWorkerWrites(&writes, range);
+        for (std::size_t index = begin + first; index < begin + last; ++index) {
+            const PhaseEntry& entry = entries[index];
+            context.Rebind(entry.entity, kb::assets::AssetId{ entry.behaviour.behaviourAssetId }, entry.behaviour.backend);
+            if (entry.call.invoke(entry.call.target, entry.behaviour, context, output.diagnostics)) {
+                ++output.executed;
+            }
+            context.FinishSelfTransform();
+        }
+    };
+    if (parallel) {
+        scene.Runtime().ParallelFor(count, grain, runRange);
+    } else {
+        runRange(0U, count);
+    }
+    writes.Finish();
+    for (std::size_t range = 0U; range < ranges; ++range) {
+        WorkerRangeOutput& output = workerOutputs_[range];
+        lastResult_.executedBehaviours += output.executed;
+        output.executed = 0U;
+        for (ScriptDiagnostic& diagnostic : output.diagnostics) {
+            lastResult_.diagnostics.push_back(std::move(diagnostic));
+        }
+        output.diagnostics.clear();
+        if (!output.events.empty()) {
+            lastResult_.emittedEvents.insert(lastResult_.emittedEvents.end(), output.events.begin(), output.events.end());
+            std::vector<ScriptEvent> pending = std::move(output.events);
+            output.events.clear();
+            MergeResult(lastResult_, runtime_.DrainEvents(scene, std::move(pending), deltaSeconds));
+        }
+    }
+    return true;
 }
 
 void ScriptRuntimeSceneSystem::ConfigureSceneFixedStep(kb::scene::Scene& scene) noexcept {

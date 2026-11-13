@@ -852,6 +852,17 @@ bool PucLuaScriptRuntime::ResolvePhaseCall(
     return true;
 }
 
+bool PucLuaScriptRuntime::ResolveEventCall(
+    kb::scene::SceneEntity entity,
+    const kb::scene::BehaviourComponent& behaviour,
+    ScriptPhaseCall& call) {
+    if (state_ == nullptr) {
+        return false;
+    }
+    call = ScriptPhaseCall{ &PucLuaScriptRuntime::InvokeEventHandler, &SiteFor(InstanceKey{ entity.Id(), behaviour.behaviourAssetId }) };
+    return true;
+}
+
 std::uint64_t PucLuaScriptRuntime::PhaseCallRevision() const noexcept {
     return callSiteRevision_;
 }
@@ -862,7 +873,25 @@ bool PucLuaScriptRuntime::InvokePhase(
     ScriptExecutionContext& context,
     std::vector<ScriptDiagnostic>& diagnostics) {
     const PhaseTarget& phase = *static_cast<const PhaseTarget*>(target);
-    CallSite& site = *phase.site;
+    return InvokeEntry(*phase.site, phase.name, nullptr, behaviour, context, diagnostics);
+}
+
+bool PucLuaScriptRuntime::InvokeEventHandler(
+    void* target,
+    const kb::scene::BehaviourComponent& behaviour,
+    ScriptExecutionContext& context,
+    std::vector<ScriptDiagnostic>& diagnostics) {
+    const ScriptEvent& event = *context.IncomingEvent();
+    return InvokeEntry(*static_cast<CallSite*>(target), event.name.c_str(), &event, behaviour, context, diagnostics);
+}
+
+bool PucLuaScriptRuntime::InvokeEntry(
+    CallSite& site,
+    const char* name,
+    const ScriptEvent* event,
+    const kb::scene::BehaviourComponent& behaviour,
+    ScriptExecutionContext& context,
+    std::vector<ScriptDiagnostic>& diagnostics) {
     PucLuaScriptRuntime& runtime = *site.runtime;
     // What PucLuaExecutionContextScope does, without finding the state's slot again for every call.
     struct ActiveContext {
@@ -873,10 +902,10 @@ bool PucLuaScriptRuntime::InvokePhase(
     runtime.stateLifetime_->activeContext = &context;
     bool executed = false;
     const std::size_t before = diagnostics.size();
-    if (runtime.TryLeanExecute(site, phase.name, nullptr, context, diagnostics, executed)) {
+    if (runtime.TryLeanExecute(site, name, event, context, diagnostics, executed)) {
         return executed && diagnostics.size() == before;
     }
-    ScriptBackendExecutionResult result = runtime.ExecuteFunction(behaviour, phase.name, context, nullptr);
+    ScriptBackendExecutionResult result = runtime.ExecuteFunction(behaviour, name, context, event);
     for (ScriptDiagnostic& diagnostic : result.diagnostics) {
         diagnostics.push_back(std::move(diagnostic));
     }
@@ -1031,6 +1060,8 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
             instanceVariables_.erase(instanceKey);
             releaseSelf();
             callSites_.erase(instanceKey);
+            // Calls kept for the site (phase lists, broadcast receivers) must be resolved again.
+            ++callSiteRevision_;
             ClearCoroutines(instanceKey);
             if (ScriptEventBus* events = context.Events(); events != nullptr) {
                 ClearEventSubscriptions(instanceKey, *events);

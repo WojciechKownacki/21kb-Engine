@@ -14,7 +14,7 @@
 
 namespace kb::script {
 
-inline constexpr std::uint32_t kNativeScriptPluginApiVersion = 8U;
+inline constexpr std::uint32_t kNativeScriptPluginApiVersion = 9U;
 inline constexpr const char* kNativeScriptPluginDefaultEntryPoint = "kb_register_native_scripts";
 
 using NativeScriptPluginLifecycleProc = void (*)(ScriptExecutionContext* context);
@@ -99,6 +99,9 @@ struct NativeScriptClassApi {
     // The class has data members of its own. With no `fields` they start over in a rebuilt module, which the
     // editor tells the author once.
     bool hasState = false;
+    // The class's FixedTick, Tick and LateTick only change their own object (its members and SelfTransform), read
+    // input and time, and emit events: the host may run many objects of it at once on worker threads.
+    bool runOnAnyThread = false;
 };
 
 struct NativeScriptPluginApi {
@@ -120,7 +123,9 @@ using NativeScriptPluginRegisterProc = bool (*)(NativeScriptPluginApi* api);
 // hooks are all static has no state of its own. A class with ordinary member hooks is made once for each
 // object (when its Created hook is due), keeps its member variables from call to call, is destroyed with the
 // object, and is made again, with the values its Serialize member lists, when the module is rebuilt while the
-// game runs. A class that defines no hook is refused.
+// game runs. A class that defines no hook is refused. A class with `static constexpr bool kRunOnAnyThread = true;`
+// promises what NativeScriptClassApi::runOnAnyThread describes, and its per-frame hooks may then run on worker
+// threads, many objects at once; anything else they would change in the scene must wait for an ordinary hook.
 template <typename Script>
 [[nodiscard]] bool RegisterNativeScript(NativeScriptPluginApi* api, const char* symbol) {
     using Context = ScriptExecutionContext*;
@@ -164,6 +169,9 @@ template <typename Script>
             static_cast<void>(context);
         };
         script.hasState = !std::is_empty_v<Script>;
+        if constexpr (requires { Script::kRunOnAnyThread; }) {
+            script.runOnAnyThread = Script::kRunOnAnyThread;
+        }
         if constexpr (requires(Script& object, NativeScriptArchive& archive) { object.Serialize(archive); }) {
             script.fields = [](void* object, NativeScriptArchive* archive) { static_cast<Script*>(object)->Serialize(*archive); };
         }

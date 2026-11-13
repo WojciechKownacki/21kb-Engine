@@ -206,6 +206,11 @@ public:
         const kb::scene::BehaviourComponent& behaviour,
         ScriptLifecycleEvent event,
         ScriptPhaseCall& call) override;
+    // The same for the handlers of a broadcast: the name of the handler is the incoming event's.
+    [[nodiscard]] bool ResolveEventCall(
+        kb::scene::SceneEntity entity,
+        const kb::scene::BehaviourComponent& behaviour,
+        ScriptPhaseCall& call) override;
     [[nodiscard]] std::uint64_t PhaseCallRevision() const noexcept override;
 
     // Runs the collector for at most ScriptExecutionBudgetSettings::luaCollectionMicrosecondsPerFrame (the first
@@ -358,6 +363,18 @@ private:
     void PushEventValue(lua_State* target, const ScriptEvent& event);
     [[nodiscard]] static bool InvokePhase(
         void* target,
+        const kb::scene::BehaviourComponent& behaviour,
+        ScriptExecutionContext& context,
+        std::vector<ScriptDiagnostic>& diagnostics);
+    [[nodiscard]] static bool InvokeEventHandler(
+        void* target,
+        const kb::scene::BehaviourComponent& behaviour,
+        ScriptExecutionContext& context,
+        std::vector<ScriptDiagnostic>& diagnostics);
+    [[nodiscard]] static bool InvokeEntry(
+        CallSite& site,
+        const char* name,
+        const ScriptEvent* event,
         const kb::scene::BehaviourComponent& behaviour,
         ScriptExecutionContext& context,
         std::vector<ScriptDiagnostic>& diagnostics);

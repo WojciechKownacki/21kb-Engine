@@ -206,6 +206,17 @@ private:
     std::vector<std::uint8_t> phaseAnswerScratch_;
     // Events the behaviours of a phase emitted, delivered after each call; kept to reuse its storage.
     std::vector<ScriptEvent> phaseEmittedEvents_;
+    // Runs entries [begin, end) of a phase, all of them calls that may run on any thread, on the scene's workers (on this
+    // thread when the run is too short to pay for the hand-over); false when the scene cannot take writes from workers
+    // now, and the phase loop calls them one by one.
+    [[nodiscard]] bool RunOnWorkers(kb::scene::Scene& scene, ScriptLifecycleEvent event, float deltaSeconds, const std::vector<PhaseEntry>& entries, std::size_t begin, std::size_t end);
+    // What each worker range of RunOnWorkers leaves to the calling thread, delivered in range order after the join.
+    struct WorkerRangeOutput {
+        std::vector<ScriptEvent> events;
+        std::vector<ScriptDiagnostic> diagnostics;
+        std::size_t executed = 0U;
+    };
+    std::vector<WorkerRangeOutput> workerOutputs_;
     // The scene's behaviour change stamp the lifecycle records were last brought in line with. While it still holds, no
     // behaviour appeared, went or changed, and the synchronization has nothing to look at.
     std::uint64_t syncStamp_ = 0U;

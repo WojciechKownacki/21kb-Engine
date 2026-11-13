@@ -267,11 +267,21 @@ void InputSubsystem::EvaluateWithDeviceState(const InputDeviceState& physical, f
 }
 
 const InputActionState* InputSubsystem::FindState(std::string_view action) const {
-    const auto found = actionStates_.find(std::string{action});
+    const auto found = actionStates_.find(action);
+    return found != actionStates_.end() ? &found->second : nullptr;
+}
+
+const InputActionState* InputSubsystem::FindState(const InputActionName& action) const {
+    const auto found = actionStates_.find(action);
     return found != actionStates_.end() ? &found->second : nullptr;
 }
 
 bool InputSubsystem::IsActionPressed(std::string_view action) const {
+    const InputActionState* state = FindState(action);
+    return state != nullptr && state->combined == TriggerState::Triggered;
+}
+
+bool InputSubsystem::IsActionPressed(const InputActionName& action) const {
     const InputActionState* state = FindState(action);
     return state != nullptr && state->combined == TriggerState::Triggered;
 }

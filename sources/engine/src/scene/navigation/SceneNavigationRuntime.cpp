@@ -109,15 +109,14 @@ struct AgentState {
 }
 
 void WriteAgentTransform(Scene& scene, SceneState& state, const AgentState& agent, const kb::math::DVec3& origin) {
-    TransformComponent* transform = scene.Transforms().TryGet(agent.entity);
-    if (transform == nullptr) return;
-    TransformComponent updated = *transform;
+    const SceneTransformWrite write = scene.Transforms().BeginWrite(agent.entity);
+    if (write.row == nullptr) return;
     // The agent's world position, in double precision.
     kb::math::DVec3 local = origin + agent.position;
     Quat localRotation = agent.rotation;
     const SceneEntity parent = scene.Hierarchy().Parent(agent.entity);
     if (parent.IsValid()) {
-        if (const TransformComponent* parentTransform = scene.Transforms().TryGet(parent); parentTransform != nullptr) {
+        if (const TransformComponent* parentTransform = std::as_const(scene).Transforms().TryGet(parent); parentTransform != nullptr) {
             const Quat inverse = kb::math::Inverse(parentTransform->worldRotation);
             const Vec3 scale = parentTransform->worldScale;
             const kb::math::DVec3 parentWorld = scene.Transforms().WorldTranslation(parent, *parentTransform);
@@ -137,9 +136,9 @@ void WriteAgentTransform(Scene& scene, SceneState& state, const AgentState& agen
         }
     }
     Vec3 residual{};
-    SplitTranslation(local, updated.localPosition, residual);
-    updated.localRotation = localRotation;
-    scene.Transforms().Set(agent.entity, updated);
+    SplitTranslation(local, write.row->localPosition, residual);
+    write.row->localRotation = localRotation;
+    scene.Transforms().EndWrite(write);
     SceneTransformPrecision::StoreLocalResidual(state, agent.entity, residual);
 }
 

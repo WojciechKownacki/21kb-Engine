@@ -10,6 +10,8 @@
 #include "engine/script/ScriptLifecycle.hpp"
 #include "engine/script/ScriptSharedState.hpp"
 
+#include <cstddef>
+#include <cstdint>
 #include <span>
 #include <optional>
 #include <string>
@@ -21,6 +23,13 @@ namespace kb::input {
 class InputSubsystem;
 
 } // namespace kb::input
+
+namespace kb::scene {
+
+struct TransformComponent;
+class SceneTransformWorkerWrites;
+
+} // namespace kb::scene
 
 namespace kb::script {
 
@@ -39,11 +48,38 @@ public:
         ScriptFunctionRegistry* functions = nullptr,
         ScriptEventBus* events = nullptr) noexcept;
 
+    ~ScriptExecutionContext();
+    ScriptExecutionContext(const ScriptExecutionContext&) = delete;
+    ScriptExecutionContext& operator=(const ScriptExecutionContext&) = delete;
+
     // The next behaviour a phase loop runs: the same context, aimed at another object.
-    void Rebind(kb::scene::SceneEntity self, kb::assets::AssetId assetId, kb::scene::BehaviourBackend backend) noexcept {
+    void Rebind(kb::scene::SceneEntity self, kb::assets::AssetId assetId, kb::scene::BehaviourBackend backend) {
+        FinishSelfTransform();
         self_ = self;
         assetId_ = assetId;
         backend_ = backend;
+    }
+
+    // The object's own transform, to read and change in place without a lookup per access: change the local
+    // position, rotation or scale, and the host publishes the row (world transform, dirty flags) when the call
+    // returns. Null when the object has no transform. Taking it counts as a write. Making or destroying entities can
+    // move rows: take it again after that (every call hands out the row where it is now).
+    [[nodiscard]] kb::scene::TransformComponent* SelfTransform() {
+        if (!selfTransformOpen_ || SelfTransformMoved()) {
+            OpenSelfTransform();
+        }
+        return selfTransformRow_;
+    }
+    // A context that runs calls on a worker thread hands out SelfTransform through `writes` (worker range `range`).
+    void UseWorkerWrites(kb::scene::SceneTransformWorkerWrites* writes, std::size_t range) noexcept {
+        workerWrites_ = writes;
+        workerRange_ = range;
+    }
+    // Publishes the transform SelfTransform handed out; the host calls it when the script's call returns.
+    void FinishSelfTransform() {
+        if (selfTransformOpen_) {
+            PublishSelfTransform();
+        }
     }
 
     [[nodiscard]] kb::scene::Scene& GetScene() noexcept;
@@ -91,6 +127,16 @@ private:
     ScriptSharedState* sharedState_ = nullptr;
     ScriptFunctionRegistry* functions_ = nullptr;
     ScriptEventBus* events_ = nullptr;
+    void OpenSelfTransform();
+    [[nodiscard]] bool SelfTransformMoved() const noexcept;
+    void PublishSelfTransform();
+    kb::scene::TransformComponent* selfTransformRow_ = nullptr;
+    kb::scene::SceneTransformWorkerWrites* workerWrites_ = nullptr;
+    std::size_t workerRange_ = 0U;
+    std::uint64_t selfTransformStructure_ = 0U;
+    bool selfTransformOpen_ = false;
+    bool selfTransformComposes_ = false;
+    bool selfTransformMirrored_ = false;
 };
 
 } // namespace kb::script

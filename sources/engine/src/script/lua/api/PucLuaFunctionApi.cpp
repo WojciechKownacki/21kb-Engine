@@ -1923,6 +1923,29 @@ int LuaTransformGetPosition(lua_State* state) {
     return 1;
 }
 
+// Transform.GetPositionXYZ(entity) -> x, y, z: the position Transform.GetPosition reads, as three values instead of a
+// new table on every call (nil when the entity is gone).
+int LuaTransformGetPositionXYZ(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    const auto entity = static_cast<std::uint64_t>(PucLuaCheckInteger(state, 1));
+    float x = 0.0F;
+    float y = 0.0F;
+    float z = 0.0F;
+    if (!ScriptTransformApi::GetLocalPosition(context->GetScene(), kb::scene::SceneEntity{ entity }, x, y, z)) {
+        lua_pushnil(state);
+        return 1;
+    }
+    lua_pushnumber(state, static_cast<lua_Number>(x));
+    lua_pushnumber(state, static_cast<lua_Number>(y));
+    lua_pushnumber(state, static_cast<lua_Number>(z));
+    return 3;
+}
+
 // The target and the three axes of Transform.SetPosition and Transform.Translate: either positional (entity, x, y, z -
 // all required) or one table with the same names, where an axis may be left out. A table whose entity or axis is
 // not a number is not valid; the call then reports that nothing moved.
@@ -3735,6 +3758,7 @@ constexpr auto kCatalogBindingAdapters = std::to_array<lua_CFunction>({
     &LuaUIFocused,
     &LuaTimeDelta,
     &LuaTransformGetPosition,
+    &LuaTransformGetPositionXYZ,
     &LuaTransformSetPosition,
     &LuaTransformTranslate,
     &LuaTransformGetPrecisePosition,

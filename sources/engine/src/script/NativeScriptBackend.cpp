@@ -483,7 +483,8 @@ ScriptPhaseCall NativeScriptBackend::ResolvePhaseCall(
             // moves the revision, and the lists are built again.
             return ScriptPhaseCall{ &IScriptBackend::InvokeThroughExecuteLifecycle, this };
         }
-        return ScriptPhaseCall{ &NativeScriptBackend::InvokeClassHook, &found->second };
+        const bool perFrame = event == ScriptLifecycleEvent::FixedTick || event == ScriptLifecycleEvent::Tick || event == ScriptLifecycleEvent::LateTick;
+        return ScriptPhaseCall{ &NativeScriptBackend::InvokeClassHook, &found->second, perFrame && entry.script->runOnAnyThread };
     }
     if (entry.lifecycleTargets[index].callback == nullptr) {
         return {};

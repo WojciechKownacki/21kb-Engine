@@ -140,6 +140,7 @@ constexpr auto kLuaBindings = std::to_array<ScriptApiCatalogLuaBindingDefinition
     { "UI", "Focused", "UI.Focused", ScriptApiCatalogLuaReturnKind::SingleOutput, "entity" },
     { "Time", "delta", "Time.Delta", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Transform", "GetPosition", "Transform.GetPosition", ScriptApiCatalogLuaReturnKind::GuardedTable, "found" },
+    { "Transform", "GetPositionXYZ", "Transform.GetPosition", ScriptApiCatalogLuaReturnKind::GuardedValues, "found" },
     { "Transform", "SetPosition", "Transform.SetPosition", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Transform", "Translate", "Transform.Translate", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Transform", "GetPrecisePosition", "Transform.GetPrecisePosition", ScriptApiCatalogLuaReturnKind::GuardedTable, "found" },
@@ -392,6 +393,8 @@ const char* ToString(ScriptApiCatalogLuaReturnKind kind) noexcept {
         return "OutputsTable";
     case ScriptApiCatalogLuaReturnKind::GuardedTable:
         return "GuardedTable";
+    case ScriptApiCatalogLuaReturnKind::GuardedValues:
+        return "GuardedValues";
     }
     return "Default";
 }

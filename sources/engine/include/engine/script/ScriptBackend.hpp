@@ -55,6 +55,9 @@ struct ScriptPhaseCall {
 
     Invoke invoke = nullptr;
     void* target = nullptr;
+    // The call only changes its own object (see NativeScriptClassApi::runOnAnyThread): a phase may run it on a
+    // worker thread together with other such calls.
+    bool runOnAnyThread = false;
 };
 
 class IScriptBackend {
@@ -126,7 +129,20 @@ public:
         return ScriptPhaseCall{ &IScriptBackend::InvokeThroughExecuteLifecycle, this };
     }
 
-    // Moves whenever a call ResolvePhaseCall returned may no longer be the right one (a registration or a reload
+    // The call a broadcast of the event called `name` makes for `behaviour` (the event reaches it as the context's
+    // IncomingEvent), kept in the runtime's receiver list of that event as the phase loops keep ResolvePhaseCall's
+    // calls, and under the same PhaseCallRevision. The default runs it through ExecuteEvent.
+    [[nodiscard]] virtual ScriptPhaseCall ResolveEventCall(
+        kb::scene::SceneEntity entity,
+        const kb::scene::BehaviourComponent& behaviour,
+        std::string_view name) {
+        static_cast<void>(entity);
+        static_cast<void>(behaviour);
+        static_cast<void>(name);
+        return ScriptPhaseCall{ &IScriptBackend::InvokeThroughExecuteEvent, this };
+    }
+
+    // Moves whenever a call ResolvePhaseCall or ResolveEventCall returned may no longer be the right one (a registration or a reload
     // changed, an object was made or destroyed); the dispatch lists are built again when it differs from the value they
     // were built with.
     [[nodiscard]] virtual std::uint64_t PhaseCallRevision() const noexcept {
@@ -152,6 +168,18 @@ protected:
         ScriptExecutionContext& context,
         std::vector<ScriptDiagnostic>& diagnostics) {
         ScriptBackendExecutionResult result = static_cast<IScriptBackend*>(target)->ExecuteLifecycle(behaviour, context);
+        for (ScriptDiagnostic& diagnostic : result.diagnostics) {
+            diagnostics.push_back(std::move(diagnostic));
+        }
+        return result.executed && result.diagnostics.empty();
+    }
+    [[nodiscard]] static bool InvokeThroughExecuteEvent(
+        void* target,
+        const kb::scene::BehaviourComponent& behaviour,
+        ScriptExecutionContext& context,
+        std::vector<ScriptDiagnostic>& diagnostics) {
+        const ScriptEvent& event = *context.IncomingEvent();
+        ScriptBackendExecutionResult result = static_cast<IScriptBackend*>(target)->ExecuteEvent(behaviour, event, event.Id(), context);
         for (ScriptDiagnostic& diagnostic : result.diagnostics) {
             diagnostics.push_back(std::move(diagnostic));
         }

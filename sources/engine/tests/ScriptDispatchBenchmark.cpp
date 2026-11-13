@@ -395,8 +395,11 @@ function Tick(self, dt)
   local bad = Transform.SetPosition({ entity = self.entity, x = 'far' })
   local ok4 = Transform.Translate(self.entity, 1, 1, 1)
   local r = Transform.GetPosition(self.entity)
+  local sx, sy, sz = Transform.GetPositionXYZ(self.entity)
+  local gone = Transform.GetPositionXYZ(999999999)
   Emit('Done', { ok = ok1 and ok2 and ok3 and ok4 and not bad, px = p.x, py = p.y, pz = p.z, qx = q.x, qy = q.y, qz = q.z,
-                 rx = r.x, missing = missing == nil, pressed = Input.IsPressed('NoSuchAction') })
+                 rx = r.x, missing = missing == nil and gone == nil, pressed = Input.IsPressed('NoSuchAction'),
+                 same = sx == r.x and sy == r.y and sz == r.z })
 end
 )");
     const kb::scene::SceneEntity entity = rig.Add();
@@ -410,6 +413,8 @@ end
     Require(NearlyEqual(ArgumentOf(*done, "px"), 1.5F) && NearlyEqual(ArgumentOf(*done, "py"), 2.0F) && NearlyEqual(ArgumentOf(*done, "pz"), 3.0F), "SetPosition and Translate must move the entity");
     Require(NearlyEqual(ArgumentOf(*done, "qx"), 1.5F) && NearlyEqual(ArgumentOf(*done, "qy"), 7.0F) && NearlyEqual(ArgumentOf(*done, "qz"), 3.0F), "A table without an axis must leave that axis alone");
     Require(NearlyEqual(rig.scene.Transforms().Get(entity).localPosition.x, 2.5F) && NearlyEqual(ArgumentOf(*done, "rx"), 2.5F), "The scene must hold what the script wrote");
+    Require(ArgumentOf(*done, "same") == 1.0F, "Transform.GetPositionXYZ must read what Transform.GetPosition reads");
+    Require(NearlyEqual(rig.scene.Transforms().Get(entity).worldPosition.y, 8.0F), "A written object without parent must have its world transform at once");
 }
 
 // `self` is one table for the life of an object: what a script writes into it stays there, separately for each object, a
@@ -600,6 +605,81 @@ void RunFailingEntryDoesNotStopTheOthersTest() {
     }
 }
 
+// A native class that only changes its own object: it may run on the workers.
+struct AnyThreadMoverScript {
+    static constexpr bool kRunOnAnyThread = true;
+    int ticks = 0;
+    void Tick(kb::script::ScriptExecutionContext* context) {
+        ++ticks;
+        if (kb::scene::TransformComponent* transform = context->SelfTransform(); transform != nullptr) {
+            transform->localPosition.y = static_cast<float>(ticks);
+        }
+        if (context->Self().Id() % 97U == 0U) context->Emit("Moved");
+    }
+};
+
+bool RegisterAnyThreadMover(kb::script::NativeScriptPluginApi* api) {
+    return api != nullptr && api->version == kb::script::kNativeScriptPluginApiVersion &&
+        kb::script::RegisterNativeScript<AnyThreadMoverScript>(api, "test.AnyThreadMover");
+}
+
+// Native calls that may run on any thread give the result of the serial loop, on the workers (many objects) and in one
+// batch on the calling thread (few): every object moved once per frame, its world transform composed, the events it
+// emitted delivered in the execution order.
+void RunAnyThreadNativeScriptsTest() {
+    for (const std::size_t count : { std::size_t{ 300U }, std::size_t{ 6000U } }) {
+        kb::scene::Scene scene;
+        kb::script::ScriptRuntimeHost host{ scene };
+        kb::script::ScriptRuntimeSceneSystem system{ host.Runtime() };
+        Require(host.Succeeded() && host.NativePlugins().LoadLinked("anythread", &RegisterAnyThreadMover).Succeeded(), "the any-thread test script did not register");
+        Require(host.NativeBackend().BindAssetSymbol(kBenchAsset, "test.AnyThreadMover"), "the any-thread test symbol did not bind");
+        std::vector<kb::scene::SceneObjectDesc> descs(count);
+        std::vector<kb::scene::SceneEntity> entities;
+        for (const kb::scene::SceneObject& object : scene.Entities().CreateObjects(descs)) {
+            entities.push_back(object.Entity());
+            scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = kBenchAsset.value,
+                .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+        }
+        std::vector<std::uint64_t> expected;
+        for (const kb::scene::SceneEntity entity : entities) {
+            if (entity.Id() % 97U == 0U) expected.push_back(entity.Id());
+        }
+        for (int frame = 0; frame < 3; ++frame) {
+            const kb::script::ScriptRuntimeExecutionResult& result = system.ExecuteFrame(scene, kFrameSeconds);
+            Require(result.Succeeded(), "an any-thread frame must not fail");
+            Require(SendersOf(result, "Moved") == expected, "Events emitted on the workers must arrive in the execution order");
+        }
+        for (const kb::scene::SceneEntity entity : entities) {
+            const kb::scene::TransformComponent transform = scene.Transforms().Get(entity);
+            Require(transform.localPosition.y == 3.0F && transform.worldPosition.y == 3.0F, "Every any-thread object must move once a frame and be composed");
+        }
+    }
+}
+
+// A broadcast keeps its receivers between calls and still follows the scene: a new receiver is reached, a disabled or
+// removed one is not.
+void RunBroadcastReceiversFollowChangesTest() {
+    SmallRig rig("function Ping(self, event) Emit('Pong') end\n");
+    std::vector<kb::scene::SceneEntity> entities;
+    for (int index = 0; index < 10; ++index) entities.push_back(rig.Add());
+    static_cast<void>(rig.Frame());
+    kb::script::ScriptEvent event;
+    event.name = "Ping";
+    const auto pongs = [&]() { return SendersOf(rig.host.Runtime().DispatchEvent(rig.scene, event, 0.0F), "Pong").size(); };
+    Require(pongs() == 10U && pongs() == 10U, "Every receiver must be reached by every broadcast");
+    entities.push_back(rig.Add());
+    static_cast<void>(rig.Frame());
+    Require(pongs() == 11U, "A behaviour added since the last broadcast must be reached");
+    kb::scene::BehaviourComponent disabled = *std::as_const(rig.scene).Components().Behaviours().TryGet(entities[3]);
+    disabled.enabled = false;
+    rig.scene.Components().Behaviours().Set(entities[3], disabled);
+    static_cast<void>(rig.Frame());
+    Require(pongs() == 10U, "A disabled behaviour must not be reached");
+    rig.scene.Components().Behaviours().Remove(entities[4]);
+    static_cast<void>(rig.Frame());
+    Require(pongs() == 9U, "A removed behaviour must not be reached");
+}
+
 // Every receiver of a broadcast reads the event as it was sent.
 void RunBroadcastCarriesTheEventToEveryReceiverTest() {
     SmallRig rig("function Ping(self, event) Emit('Pong', { n = event.args.n, name = event.name }) end\n");
@@ -638,6 +718,8 @@ void RunScriptDispatchTests() {
     RunNativeRegistrationChangesReachRunningBehavioursTest();
     RunFailingEntryDoesNotStopTheOthersTest();
     RunBroadcastCarriesTheEventToEveryReceiverTest();
+    RunAnyThreadNativeScriptsTest();
+    RunBroadcastReceiversFollowChangesTest();
 }
 
 // The numbers this runs are printed for comparison; the limits it requires are far looser than what the runtime does
@@ -713,6 +795,7 @@ void RunScriptDispatchBenchmark() {
     const struct { const char* label; const char* statement; } bindings[] = {
         { "local", "local _ = i" },
         { "Transform.GetPosition", "local p = Transform.GetPosition(self.entity)" },
+        { "Transform.GetPositionXYZ", "local x, y, z = Transform.GetPositionXYZ(self.entity)" },
         { "Transform.SetPosition", "Transform.SetPosition(self.entity, 1, 2, 3)" },
         { "self:GetProperty", "local x = self:GetProperty('Transform', 'localPosition.x')" },
         { "self:SetProperty", "self:SetProperty('Transform', 'localPosition.x', 1.5)" },
@@ -747,6 +830,18 @@ namespace {
 
 // The same three scripts exist as Lua and as native classes; a scenario runs one of them on every object of the scene.
 constexpr const char* kFrameTypicalLua = R"(
+local speed = 2.0
+function Tick(self, dt)
+  local x, y, z = Transform.GetPositionXYZ(self.entity)
+  if Input.IsPressed("jump") then speed = -speed end
+  local len = math.sqrt(x * x + y * y + z * z) + 1.0
+  local d = (x / len) * 0.6 + (z / len) * 0.8
+  Transform.SetPosition(self.entity, x + 0.6 * speed * dt, y + d * dt, z + 0.8 * speed * dt)
+end
+)";
+
+// The typical script as written with the table form of Transform.GetPosition (scenario typical-table).
+constexpr const char* kFrameTypicalTableLua = R"(
 local speed = 2.0
 function Tick(self, dt)
   local p = Transform.GetPosition(self.entity)
@@ -785,22 +880,26 @@ function Ping(self, event)
 end
 )";
 
+const kb::input::InputActionName kFrameJumpAction{ "jump" };
+
+// The typical script only changes its own object, so it may run on the workers; the inline variant runs it on the
+// calling thread (scenario typical-inline) for comparison.
+template <bool AnyThread>
 struct FrameTypicalScript {
+    static constexpr bool kRunOnAnyThread = AnyThread;
     float speed = 2.0F;
     void Tick(kb::script::ScriptExecutionContext* context) {
-        auto transforms = context->GetScene().Transforms();
-        auto transform = transforms.Get(context->Self());
+        kb::scene::TransformComponent* transform = context->SelfTransform();
         const float dt = context->DeltaSeconds();
-        if (context->Input().IsActionPressed("jump")) speed = -speed;
-        const float x = transform.localPosition.x;
-        const float y = transform.localPosition.y;
-        const float z = transform.localPosition.z;
+        if (context->Input().IsActionPressed(kFrameJumpAction)) speed = -speed;
+        const float x = transform->localPosition.x;
+        const float y = transform->localPosition.y;
+        const float z = transform->localPosition.z;
         const float length = std::sqrt(x * x + y * y + z * z) + 1.0F;
         const float d = (x / length) * 0.6F + (z / length) * 0.8F;
-        transform.localPosition.x = x + 0.6F * speed * dt;
-        transform.localPosition.y = y + d * dt;
-        transform.localPosition.z = z + 0.8F * speed * dt;
-        transforms.Set(context->Self(), transform);
+        transform->localPosition.x = x + 0.6F * speed * dt;
+        transform->localPosition.y = y + d * dt;
+        transform->localPosition.z = z + 0.8F * speed * dt;
     }
 };
 
@@ -836,7 +935,8 @@ struct FrameEmptyScript {
 bool RegisterFrameScripts(kb::script::NativeScriptPluginApi* api) {
     return api != nullptr && api->version == kb::script::kNativeScriptPluginApiVersion &&
         kb::script::RegisterNativeScript<FrameEmptyScript>(api, "bench.Empty") &&
-        kb::script::RegisterNativeScript<FrameTypicalScript>(api, "bench.Typical") &&
+        kb::script::RegisterNativeScript<FrameTypicalScript<true>>(api, "bench.Typical") &&
+        kb::script::RegisterNativeScript<FrameTypicalScript<false>>(api, "bench.TypicalInline") &&
         kb::script::RegisterNativeScript<FrameHeavyScript>(api, "bench.Heavy") &&
         api->registerEvent(api->user, "bench.Event", "Ping", &FramePing);
 }
@@ -846,7 +946,8 @@ bool RegisterFrameScripts(kb::script::NativeScriptPluginApi* api) {
 // One scenario of the scripting comparison: `count` objects, each running the chosen script every frame (or one event
 // broadcast to all of them), measured as wall time per frame. Settings come from the environment so that every run is
 // a fresh process with its own peak memory: KB_BENCH_BACKEND (lua, native), KB_BENCH_SCENARIO (empty, typical, heavy,
-// event), KB_BENCH_COUNT, KB_BENCH_FRAMES, KB_BENCH_WARMUP.
+// event; native also typical-inline, Lua also typical-table), KB_BENCH_COUNT, KB_BENCH_FRAMES, KB_BENCH_WARMUP, and for Lua
+// KB_BENCH_LUA_INSTRUCTIONS (the per-call instruction budget; 0 turns it off, unset keeps the default).
 void RunScriptFrameBenchmark() {
     const std::string backend = EnvText("KB_BENCH_BACKEND", "lua");
     const std::string scenario = EnvText("KB_BENCH_SCENARIO", "typical");
@@ -862,10 +963,17 @@ void RunScriptFrameBenchmark() {
     Require(host.Succeeded(), "script frame benchmark host did not initialize");
     if (native) {
         Require(host.NativePlugins().LoadLinked("bench", &RegisterFrameScripts).Succeeded(), "native benchmark scripts did not register");
-        const char* symbol = scenario == "empty" ? "bench.Empty" : scenario == "typical" ? "bench.Typical" : scenario == "heavy" ? "bench.Heavy" : "bench.Event";
+        const char* symbol = scenario == "empty" ? "bench.Empty" : scenario == "typical" ? "bench.Typical" : scenario == "typical-inline" ? "bench.TypicalInline"
+            : scenario == "heavy" ? "bench.Heavy" : "bench.Event";
         Require(host.NativeBackend().BindAssetSymbol(kBenchAsset, symbol), "native benchmark symbol did not bind");
     } else {
-        const char* source = scenario == "empty" ? kEmptyScript : scenario == "typical" ? kFrameTypicalLua : scenario == "heavy" ? kFrameHeavyLua : kFrameEventLua;
+        if (const std::string budget = EnvText("KB_BENCH_LUA_INSTRUCTIONS", ""); !budget.empty()) {
+            kb::script::ScriptExecutionBudgetSettings settings;
+            settings.luaInstructionsPerBehaviour = static_cast<std::size_t>(std::strtoull(budget.c_str(), nullptr, 10));
+            host.LuaRuntime().SetExecutionBudgetSettings(settings);
+        }
+        const char* source = scenario == "empty" ? kEmptyScript : scenario == "typical" ? kFrameTypicalLua : scenario == "typical-table" ? kFrameTypicalTableLua
+            : scenario == "heavy" ? kFrameHeavyLua : kFrameEventLua;
         Require(host.LuaRuntime().LoadScript(kBenchAsset, source, "Bench.lua").succeeded, "script frame benchmark script did not load");
     }
     std::vector<kb::scene::SceneObjectDesc> descs(count);

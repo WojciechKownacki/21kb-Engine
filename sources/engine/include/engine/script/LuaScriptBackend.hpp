@@ -79,6 +79,17 @@ public:
         static_cast<void>(call);
         return false;
     }
+    // See IScriptBackend::ResolveEventCall: false when the runtime has no resolved call of its own, and the backend then
+    // runs the handler through ExecuteEvent.
+    [[nodiscard]] virtual bool ResolveEventCall(
+        kb::scene::SceneEntity entity,
+        const kb::scene::BehaviourComponent& behaviour,
+        ScriptPhaseCall& call) {
+        static_cast<void>(entity);
+        static_cast<void>(behaviour);
+        static_cast<void>(call);
+        return false;
+    }
     [[nodiscard]] virtual std::uint64_t PhaseCallRevision() const noexcept {
         return 0U;
     }
@@ -119,6 +130,10 @@ public:
         kb::scene::SceneEntity entity,
         const kb::scene::BehaviourComponent& behaviour,
         ScriptLifecycleEvent event) override;
+    [[nodiscard]] ScriptPhaseCall ResolveEventCall(
+        kb::scene::SceneEntity entity,
+        const kb::scene::BehaviourComponent& behaviour,
+        std::string_view name) override;
     [[nodiscard]] std::uint64_t PhaseCallRevision() const noexcept override;
     void ResetAssetForHotReload(kb::assets::AssetId assetId, ScriptEventBus& events) noexcept override;
 

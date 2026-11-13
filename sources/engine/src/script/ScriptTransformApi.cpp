@@ -765,40 +765,60 @@ bool RegisterFunction(
 } // namespace
 
 bool ScriptTransformApi::GetLocalPosition(kb::scene::Scene& scene, kb::scene::SceneEntity entity, float& x, float& y, float& z) {
-    if (!entity.IsValid() || !scene.Entities().IsAlive(entity)) {
+    if (!entity.IsValid()) {
         return false;
     }
-    const kb::scene::Vec3 position = scene.Transforms().Get(entity).localPosition;
-    x = position.x;
-    y = position.y;
-    z = position.z;
+    const kb::scene::TransformComponent* transform = std::as_const(scene).Transforms().TryGet(entity);
+    if (transform == nullptr) {
+        // A live entity without a stored transform reads as the origin.
+        if (!scene.Entities().IsAlive(entity)) {
+            return false;
+        }
+        x = y = z = 0.0F;
+        return true;
+    }
+    x = transform->localPosition.x;
+    y = transform->localPosition.y;
+    z = transform->localPosition.z;
     return true;
 }
 
-bool ScriptTransformApi::SetLocalPosition(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::optional<float> x, std::optional<float> y, std::optional<float> z) {
-    if (!entity.IsValid() || !scene.Entities().IsAlive(entity)) {
+namespace {
+
+// Changes the local position of a live entity in place; one without a stored transform gets one with the default
+// rotation and scale.
+template <typename Change>
+bool WriteLocalPosition(kb::scene::Scene& scene, kb::scene::SceneEntity entity, Change&& change) {
+    if (!entity.IsValid()) {
         return false;
     }
-    kb::scene::TransformComponent transform = scene.Transforms().Get(entity);
-    transform.localPosition = kb::scene::Vec3{
-        x.value_or(transform.localPosition.x),
-        y.value_or(transform.localPosition.y),
-        z.value_or(transform.localPosition.z),
-    };
+    const kb::scene::SceneTransformWrite write = scene.Transforms().BeginWrite(entity);
+    if (write.row != nullptr) {
+        write.row->localPosition = change(write.row->localPosition);
+        scene.Transforms().EndWrite(write);
+        return true;
+    }
+    if (!scene.Entities().IsAlive(entity)) {
+        return false;
+    }
+    kb::scene::TransformComponent transform{};
+    transform.localPosition = change(transform.localPosition);
     scene.Transforms().Set(entity, transform);
     return true;
+}
+
+} // namespace
+
+bool ScriptTransformApi::SetLocalPosition(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::optional<float> x, std::optional<float> y, std::optional<float> z) {
+    return WriteLocalPosition(scene, entity, [x, y, z](const kb::scene::Vec3& position) {
+        return kb::scene::Vec3{ x.value_or(position.x), y.value_or(position.y), z.value_or(position.z) };
+    });
 }
 
 bool ScriptTransformApi::TranslateLocalPosition(kb::scene::Scene& scene, kb::scene::SceneEntity entity, float x, float y, float z) {
-    if (!entity.IsValid() || !scene.Entities().IsAlive(entity)) {
-        return false;
-    }
-    kb::scene::TransformComponent transform = scene.Transforms().Get(entity);
-    transform.localPosition.x += x;
-    transform.localPosition.y += y;
-    transform.localPosition.z += z;
-    scene.Transforms().Set(entity, transform);
-    return true;
+    return WriteLocalPosition(scene, entity, [x, y, z](const kb::scene::Vec3& position) {
+        return kb::scene::Vec3{ position.x + x, position.y + y, position.z + z };
+    });
 }
 
 bool ScriptTransformApi::Register(ScriptRuntimeHost& host) {

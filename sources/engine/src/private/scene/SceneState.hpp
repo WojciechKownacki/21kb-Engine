@@ -58,6 +58,7 @@
 
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <limits>
@@ -743,6 +744,16 @@ public:
     // The update bits are cleared by the first writer after an Update (a transform pass or the next Update), so the
     // rows a pass composes before Update count for that Update.
     bool transformUpdatesResetPending = true;
+    // SceneTransformWorkerWrites: what each worker range leaves to the serial step after the join.
+    struct TransformWorkerRange {
+        std::vector<std::size_t> archetypes;
+        std::vector<SceneEntity> deferred;
+        std::size_t identityAffine = 0U;
+        // Keeps the fields that neighbouring ranges write on different cache lines.
+        std::array<std::byte, 64> separation{};
+    };
+    std::vector<TransformWorkerRange> transformWorkerRanges;
+    bool transformWorkerWritesOpen = false;
     // ParallelForEachRoot: its chunk records, kept while the storage structure and the extra components are unchanged.
     std::vector<kb::ecs::MutableQueryTableDispatchRecord> transformPassRecords;
     std::array<kb::ecs::ComponentId, 5U> transformPassRecordIds{};

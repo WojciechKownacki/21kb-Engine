@@ -388,6 +388,9 @@ ScriptRuntimeExecutionResult ScriptRuntime::DispatchEvent(kb::scene::Scene& scen
     if (!event.observationAlreadyNotified) {
         events_.NotifyObservations(event.name, event.target);
     }
+    if (!event.target.IsValid() && BroadcastToReceivers(scene, event, deltaSeconds, result)) {
+        return result;
+    }
     DispatchContext context{
         .scene = &scene,
         .runtime = this,
@@ -401,6 +404,130 @@ ScriptRuntimeExecutionResult ScriptRuntime::DispatchEvent(kb::scene::Scene& scen
     };
     DispatchSceneBehaviours(scene, context);
     return result;
+}
+
+void ScriptRuntime::RefreshEventReceivers(kb::scene::Scene& scene, std::string_view name, EventReceiverList& list) {
+    // Whether a script handles the event is asked once per script for every broadcast, so a handler defined or removed
+    // while the game runs is seen at the next one; the behaviours themselves are only gone through again when one of
+    // them, or a call a backend resolved, changed.
+    bool changed = !list.valid || list.scene != &scene || list.behaviourStamp != std::as_const(scene).Components().Behaviours().ChangeStamp();
+    for (std::size_t index = 0U; index < list.callRevisions.size(); ++index) {
+        const IScriptBackend* backend = FindBackend(static_cast<kb::scene::BehaviourBackend>(index));
+        changed = changed || list.callRevisions[index] != (backend == nullptr ? 0U : backend->PhaseCallRevision());
+    }
+    for (EventScriptAnswer& answer : list.answers) {
+        kb::scene::BehaviourComponent probe{};
+        probe.behaviourAssetId = answer.assetId;
+        probe.backend = answer.backend;
+        IScriptBackend* backend = FindBackend(answer.backend);
+        const bool handles = backend == nullptr || backend->HasEntry(probe, name);
+        changed = changed || handles != answer.handles;
+    }
+    if (!changed) {
+        return;
+    }
+
+    RecordScratch& scratch = Scratch();
+    std::vector<BehaviourDispatchRecord> ownRecords;
+    const bool leased = !scratch.inUse;
+    std::vector<BehaviourDispatchRecord>& behaviours = leased ? scratch.records : ownRecords;
+    behaviours.clear();
+    scene.Components().Behaviours().ForEach(&CollectBehaviour, &behaviours);
+    if (!std::ranges::is_sorted(behaviours, &ComesBefore)) {
+        std::ranges::sort(behaviours, &ComesBefore);
+    }
+    list.answers.clear();
+    list.receivers.clear();
+    list.passedOver = 0U;
+    for (const BehaviourDispatchRecord& record : behaviours) {
+        auto answer = std::ranges::find_if(list.answers, [&record](const EventScriptAnswer& known) {
+            return known.assetId == record.behaviour.behaviourAssetId && known.backend == record.behaviour.backend;
+        });
+        IScriptBackend* backend = FindBackend(record.behaviour.backend);
+        if (answer == list.answers.end()) {
+            list.answers.push_back(EventScriptAnswer{ record.behaviour.behaviourAssetId, record.behaviour.backend,
+                backend == nullptr || backend->HasEntry(record.behaviour, name) });
+            answer = list.answers.end() - 1;
+        }
+        if (!answer->handles) {
+            ++list.passedOver;
+            continue;
+        }
+        // A disabled behaviour, or one without a backend, keeps no call: the broadcast hands it to the general dispatch,
+        // which passes over the first and reports the second.
+        list.receivers.push_back(EventReceiver{ .entity = record.entity, .behaviour = record.behaviour,
+            .call = backend == nullptr || !record.behaviour.enabled ? ScriptPhaseCall{} : backend->ResolveEventCall(record.entity, record.behaviour, name) });
+    }
+    if (leased) {
+        behaviours.clear();
+    }
+    // Resolving can make objects, so the revisions are read after it.
+    for (std::size_t index = 0U; index < list.callRevisions.size(); ++index) {
+        const IScriptBackend* backend = FindBackend(static_cast<kb::scene::BehaviourBackend>(index));
+        list.callRevisions[index] = backend == nullptr ? 0U : backend->PhaseCallRevision();
+    }
+    list.scene = &scene;
+    list.behaviourStamp = std::as_const(scene).Components().Behaviours().ChangeStamp();
+    list.valid = true;
+}
+
+// A broadcast reaches the receivers its kept list names, in their order, each through the call its backend resolved -
+// unless a handler changed a behaviour in the meantime: the receivers after that are delivered the way a dispatch
+// that collects them is (each through its backend, skipping objects that are no longer active).
+bool ScriptRuntime::BroadcastToReceivers(kb::scene::Scene& scene, const ScriptEvent& event, float deltaSeconds, ScriptRuntimeExecutionResult& result) {
+    auto found = eventReceivers_.find(std::string_view{ event.name });
+    if (found == eventReceivers_.end()) {
+        found = eventReceivers_.try_emplace(event.name).first;
+    }
+    EventReceiverList& list = found->second;
+    if (list.inUse) {
+        return false;
+    }
+    RefreshEventReceivers(scene, found->first, list);
+    result.visitedBehaviours += list.passedOver;
+    if (list.receivers.empty()) {
+        return true;
+    }
+    list.inUse = true;
+    struct InUse {
+        EventReceiverList& list;
+        ~InUse() { list.inUse = false; }
+    } inUse{ list };
+    DispatchContext context{
+        .scene = &scene,
+        .runtime = this,
+        .sharedState = &sharedState_,
+        .functions = &functions_,
+        .lifecycle = ScriptLifecycleEvent::Tick,
+        .event = &event,
+        .eventId = event.Id(),
+        .deltaSeconds = deltaSeconds,
+        .result = &result,
+    };
+    const EventBroadcastScope broadcast{ *this, event };
+    DispatchTarget target{ context };
+    const std::uint64_t* const revision = scene.Components().Behaviours().RevisionCounter();
+    const std::uint64_t seenRevision = *revision;
+    for (const EventReceiver& receiver : list.receivers) {
+        if (!scene.Entities().IsActive(receiver.entity)) {
+            continue;
+        }
+        if (receiver.call.invoke == nullptr || *revision != seenRevision) {
+            DispatchBehaviour(receiver.entity, receiver.behaviour, context, target);
+            continue;
+        }
+        ++result.visitedBehaviours;
+        target.context.Rebind(receiver.entity, kb::assets::AssetId{ receiver.behaviour.behaviourAssetId }, receiver.behaviour.backend);
+        if (receiver.call.invoke(receiver.call.target, receiver.behaviour, target.context, result.diagnostics)) {
+            ++result.executedBehaviours;
+        }
+        target.context.FinishSelfTransform();
+        if (!target.emittedEvents.empty()) {
+            AppendEvents(result.emittedEvents, std::move(target.emittedEvents));
+            target.emittedEvents.clear();
+        }
+    }
+    return true;
 }
 
 ScriptRuntimeExecutionResult ScriptRuntime::ExecuteLifecycleAndDispatchEvents(

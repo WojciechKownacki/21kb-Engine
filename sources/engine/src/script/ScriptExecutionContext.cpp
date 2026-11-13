@@ -2,6 +2,8 @@
 
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 
 #include <array>
 #include <utility>
@@ -31,6 +33,44 @@ ScriptExecutionContext::ScriptExecutionContext(
     , sharedState_(sharedState)
     , functions_(functions)
     , events_(events) {}
+
+void ScriptExecutionContext::OpenSelfTransform() {
+    selfTransformOpen_ = true;
+    if (workerWrites_ != nullptr) {
+        selfTransformRow_ = workerWrites_->Open(workerRange_, self_);
+        return;
+    }
+    const kb::scene::SceneTransformWrite write = scene_.Transforms().BeginWrite(self_);
+    selfTransformRow_ = write.row;
+    selfTransformStructure_ = write.structure;
+    selfTransformComposes_ = write.composes;
+    selfTransformMirrored_ = write.mirrored;
+    selfTransformOpen_ = true;
+}
+
+// Calls on worker threads make no entities, so a row they took stays where it is.
+bool ScriptExecutionContext::SelfTransformMoved() const noexcept {
+    return workerWrites_ == nullptr && selfTransformStructure_ != scene_.Runtime().EcsWorld().NativeStorage().StructuralVersion();
+}
+
+void ScriptExecutionContext::PublishSelfTransform() {
+    selfTransformOpen_ = false;
+    if (workerWrites_ != nullptr) {
+        if (selfTransformRow_ != nullptr) {
+            workerWrites_->Publish(workerRange_, self_, *selfTransformRow_);
+        }
+        return;
+    }
+    scene_.Transforms().EndWrite(kb::scene::SceneTransformWrite{ .entity = self_, .row = selfTransformRow_, .structure = selfTransformStructure_,
+        .composes = selfTransformComposes_, .mirrored = selfTransformMirrored_ });
+}
+
+ScriptExecutionContext::~ScriptExecutionContext() {
+    try {
+        FinishSelfTransform();
+    } catch (...) {
+    }
+}
 
 kb::scene::Scene& ScriptExecutionContext::GetScene() noexcept {
     return scene_;

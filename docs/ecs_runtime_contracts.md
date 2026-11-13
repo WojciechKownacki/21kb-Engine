@@ -201,7 +201,7 @@ passes today, so all stay barriers; the scheduler runs them exactly as before.
 | System | Phase | What the code does | Verdict |
 | --- | --- | --- | --- |
 | Audio (`MiniaudioSceneSystem`) | update | `AudioPlayback` asserts the scene's owner thread in every entry point (`AudioPlayback.cpp`) | cannot run on a worker |
-| Navigation | update | moves agents with `scene.Transforms().Set` (`SceneNavigationRuntime.cpp:141`) and `PhysicsBackend::CharacterMove` (`:290`) | writes shared transforms and the physics backend |
+| Navigation | update | moves agents with in-place transform writes, `scene.Transforms().BeginWrite`/`EndWrite` (`SceneNavigationRuntime.cpp:111`) and `PhysicsBackend::CharacterMove` (`:290`) | writes shared transforms and the physics backend |
 | Content instances | update | `scene.Prefabs().Instantiate` and `scene.Entities().Destroy` (`SceneContentInstanceService.cpp:99,111`) | changes entity structure |
 | AI (`AIBrainSystem`) | update | `Transforms().Set`, `NavAgents().MarkModified`, `PhysicsBackend::CharacterMove`, `Animators().SetFloat`, reads combatants and the gameplay service (`AIBrainSystem.cpp`) | writes transforms, navigation, physics and animators |
 | Gameplay | update | marks `Combatants` modified and reads every transform (`SceneGameplayService.cpp:46,57,306`) | reads transforms that animation and navigation write |

@@ -47,6 +47,7 @@ enum class ScriptApiCatalogLuaReturnKind : std::uint8_t {
     SingleOutput, // returns only the pin named by returnPin, drops the rest
     OutputsTable, // always returns a table with every output pin as a field
     GuardedTable, // nil when the returnPin guard is false; table of the rest otherwise
+    GuardedValues, // nil when the returnPin guard is false; the rest as separate return values otherwise (no table)
 };
 
 // A callable field the Lua sandbox exposes on a global table (or as a global
