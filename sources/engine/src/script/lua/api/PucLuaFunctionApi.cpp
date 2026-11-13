@@ -1,6 +1,7 @@
 #include "script/lua/api/PucLuaFunctionApi.hpp"
 #include "script/lua/PucLuaArguments.hpp"
 #include "script/lua/PucLuaRuntimeApi.hpp"
+#include "script/lua/PucLuaStateUtilities.hpp"
 #include "engine/assets/AssetId.hpp"
 
 #include "engine/scene/PhysicsBackend.hpp"
@@ -34,8 +35,11 @@ extern "C" {
 namespace kb::script {
 namespace {
 
+// Every binding reads the running context from the shared slot of its Lua state, the first upvalue. Kept inline so a
+// hot binding does not pay a call for it.
 [[nodiscard]] ScriptExecutionContext* ContextFromUpvalue(lua_State* state) noexcept {
-    return PucLuaRuntimeApi::ContextFromUpvalue(state);
+    const auto* slot = static_cast<const PucLuaStateLifetime*>(lua_touserdata(state, lua_upvalueindex(1)));
+    return slot != nullptr ? slot->activeContext : nullptr;
 }
 
 [[nodiscard]] std::vector<ScriptFunctionArgument> ArgumentsFromTable(lua_State* state, int index) {
@@ -1997,6 +2001,21 @@ int LuaTransformSetPosition(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
+    // The positional form with numbers, the one gameplay scripts call every frame, is read without the general
+    // argument record; anything else (the table form, a missing or wrong argument) takes the full path below.
+    int isEntity = 0;
+    int isX = 0;
+    int isY = 0;
+    int isZ = 0;
+    const lua_Integer entity = lua_tointegerx(state, 1, &isEntity);
+    const lua_Number x = lua_tonumberx(state, 2, &isX);
+    const lua_Number y = lua_tonumberx(state, 3, &isY);
+    const lua_Number z = lua_tonumberx(state, 4, &isZ);
+    if ((isEntity & isX & isY & isZ) != 0) {
+        lua_pushboolean(state, ScriptTransformApi::SetLocalPosition(context->GetScene(), kb::scene::SceneEntity{ static_cast<std::uint64_t>(entity) },
+            static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)) ? 1 : 0);
+        return 1;
+    }
     const PositionArguments arguments = ReadPositionArguments(state);
     lua_pushboolean(state, arguments.valid && ScriptTransformApi::SetLocalPosition(context->GetScene(), arguments.entity, arguments.x, arguments.y, arguments.z) ? 1 : 0);
     return 1;
@@ -2769,9 +2788,11 @@ int LuaInputQuery(lua_State* state, bool (kb::input::InputSubsystem::*query)(std
         lua_pushboolean(state, 0);
         return 1;
     }
-    const char* action = PucLuaCheckString(state, 1);
-    const int player = static_cast<int>(PucLuaOptInteger(state, 2, 0));
-    lua_pushboolean(state, (context->GetScene().Input(ScriptInputApi::UserForPlayer(player)).*query)(action) ? 1 : 0);
+    std::size_t length = 0U;
+    const char* action = lua_tolstring(state, 1, &length);
+    if (action == nullptr) PucLuaArgumentError(state, 1, "string expected");
+    const int player = lua_gettop(state) >= 2 ? static_cast<int>(PucLuaOptInteger(state, 2, 0)) : 0;
+    lua_pushboolean(state, (context->GetScene().Input(ScriptInputApi::UserForPlayer(player)).*query)(std::string_view{ action, length }) ? 1 : 0);
     return 1;
 }
 

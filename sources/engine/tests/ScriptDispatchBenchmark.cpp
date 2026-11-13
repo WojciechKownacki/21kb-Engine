@@ -946,7 +946,7 @@ bool RegisterFrameScripts(kb::script::NativeScriptPluginApi* api) {
 // One scenario of the scripting comparison: `count` objects, each running the chosen script every frame (or one event
 // broadcast to all of them), measured as wall time per frame. Settings come from the environment so that every run is
 // a fresh process with its own peak memory: KB_BENCH_BACKEND (lua, native), KB_BENCH_SCENARIO (empty, typical, heavy,
-// event; native also typical-inline, Lua also typical-table), KB_BENCH_COUNT, KB_BENCH_FRAMES, KB_BENCH_WARMUP, and for Lua
+// event; native also typical-inline, Lua also typical-table and custom, whose script text is KB_BENCH_SOURCE), KB_BENCH_COUNT, KB_BENCH_FRAMES, KB_BENCH_WARMUP, and for Lua
 // KB_BENCH_LUA_INSTRUCTIONS (the per-call instruction budget; 0 turns it off, unset keeps the default).
 void RunScriptFrameBenchmark() {
     const std::string backend = EnvText("KB_BENCH_BACKEND", "lua");
@@ -972,8 +972,9 @@ void RunScriptFrameBenchmark() {
             settings.luaInstructionsPerBehaviour = static_cast<std::size_t>(std::strtoull(budget.c_str(), nullptr, 10));
             host.LuaRuntime().SetExecutionBudgetSettings(settings);
         }
-        const char* source = scenario == "empty" ? kEmptyScript : scenario == "typical" ? kFrameTypicalLua : scenario == "typical-table" ? kFrameTypicalTableLua
-            : scenario == "heavy" ? kFrameHeavyLua : kFrameEventLua;
+        const std::string customSource = scenario == "custom" ? EnvText("KB_BENCH_SOURCE", kEmptyScript) : std::string{};
+        const char* source = scenario == "custom" ? customSource.c_str() : scenario == "empty" ? kEmptyScript : scenario == "typical" ? kFrameTypicalLua
+            : scenario == "typical-table" ? kFrameTypicalTableLua : scenario == "heavy" ? kFrameHeavyLua : kFrameEventLua;
         Require(host.LuaRuntime().LoadScript(kBenchAsset, source, "Bench.lua").succeeded, "script frame benchmark script did not load");
     }
     std::vector<kb::scene::SceneObjectDesc> descs(count);
