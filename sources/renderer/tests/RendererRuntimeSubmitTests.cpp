@@ -4180,7 +4180,8 @@ void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest(bool testRetention = f
     Require(submitStats.shadowFilterSampleCount == 9U, "Runtime submit did not report PCF shadow filter sample count");
     Require(submitStats.shadowLightEntityId == light.Id(), "Runtime submit did not report selected shadow light entity");
     Require(submitStats.shadowMapAllocationBytes == ShadowMapResource::AllocationBytesFor(SceneRenderLightingConfig{}.shadowMapSize), "Runtime submit did not report shadow map allocation bytes");
-    Require(submitStats.submittedEnvironmentLightingCount == 3U, "Runtime submit did not report environment lighting for every mesh pass");
+    // The opaque and the transparent pass pack the lighting; the shadow pass only draws depth and reads none.
+    Require(submitStats.submittedEnvironmentLightingCount == 2U, "Runtime submit did not report environment lighting for every lit mesh pass");
     Require(submitStats.environmentLightingMode == static_cast<std::uint32_t>(SceneRenderEnvironmentMode::Constant) + 1U, "Runtime submit did not report default environment lighting mode");
     Require(submitStats.environmentLightingSampleCount == 1U, "Runtime submit did not report default environment sample count");
     Require(!submitStats.HasMissingResources(), "Runtime submit reported missing resources for discovered mesh asset");
@@ -6865,6 +6866,10 @@ struct ShadowFloorScene {
         double uncachedMilliseconds = 0.0;
     };
     CascadeReuse* cascadeReuse = nullptr;
+    // How the lighting reads the shadow maps (see SceneRenderLightingConfig): through comparison samplers or not, and
+    // with the handheld's 16-bit sun map and four-tap filter.
+    bool comparisonSampling = true;
+    bool compactShadows = false;
 };
 
 [[nodiscard]] int RenderShadowFloorBrightness(const ShadowFloorScene& setup) {
@@ -6928,11 +6933,15 @@ struct ShadowFloorScene {
     Renderer renderer;
     Require(renderer.Initialize(surface, &config), "Point shadow test could not initialize the renderer");
     renderer.SetRuntimeAssetDiscoveryEnabled(false);
-    if (setup.extraPointLights > 0) {
-        // The default lighting path lights four lights; many lights need the clustered one.
+    if (setup.extraPointLights > 0 || setup.compactShadows || !setup.comparisonSampling) {
         SceneRenderLightingConfig lighting{};
-        lighting.lightingPath = SceneRenderLightingPath::ClusteredForwardPlus;
-        lighting.maxForwardLights = kMaxSceneForwardPlusLights;
+        if (setup.extraPointLights > 0) {
+            // The default lighting path lights four lights; many lights need the clustered one.
+            lighting.lightingPath = SceneRenderLightingPath::ClusteredForwardPlus;
+            lighting.maxForwardLights = kMaxSceneForwardPlusLights;
+        }
+        lighting.compactShadows = setup.compactShadows;
+        lighting.shadowComparisonSampling = setup.comparisonSampling;
         renderer.SetDefaultSceneLightingConfig(lighting);
     }
 
@@ -7147,6 +7156,37 @@ void RunRendererBlendsShadowCascadesTest() {
     std::fprintf(stderr, "cascade_seam_jump hard=%.3f blended=%.3f%c", hard, blended, 10);
     Require(hard > 0.08, "Cascade blend test: the hard switch must show a visible seam for the comparison to mean anything");
     Require(blended * 2.0 < hard, "Cascade blend test: blending must clearly reduce the step at the cascade boundary");
+}
+
+// The shadow maps read through comparison samplers (the hardware filters four texels per tap) shadow the floor like the
+// stored-depth lookups do, with the handheld's 16-bit sun map and four-tap filter too: the sun, a point and a spot light.
+void RunRendererComparisonShadowSamplingTest() {
+    struct Case { const char* name; ShadowFloorScene scene; };
+    const bx::Vec3 farCamera{ 0.0F, 2.0F, -40.0F };
+    const std::array<Case, 3> cases{
+        Case{ "sun", ShadowFloorScene{ .point = false, .cameraPosition = farCamera, .fovDegrees = 8.0F } },
+        Case{ "point", ShadowFloorScene{} },
+        Case{ "spot", ShadowFloorScene{ .point = false, .spot = true } },
+    };
+    for (const Case& entry : cases) {
+        ShadowFloorScene scene = entry.scene;
+        scene.lightCastsShadow = false;
+        const int unshadowed = RenderShadowFloorBrightness(scene);
+        scene.lightCastsShadow = true;
+        const int compared = RenderShadowFloorBrightness(scene);
+        scene.comparisonSampling = false;
+        const int stored = RenderShadowFloorBrightness(scene);
+        scene.comparisonSampling = true;
+        scene.compactShadows = true;
+        const int compact = RenderShadowFloorBrightness(scene);
+        std::fprintf(stderr, "comparison_shadow %s unshadowed=%d compared=%d stored=%d compact=%d%c", entry.name, unshadowed, compared, stored, compact, 10);
+        Require(unshadowed > 60, "Comparison shadow test: the unshadowed floor must be visibly lit");
+        for (const int shadowed : { compared, stored, compact }) {
+            Require(shadowed * 10 < unshadowed * 8, "Comparison shadow test: every way of reading the map must shadow the floor under the plate");
+        }
+        Require(std::abs(compared - stored) * 5 < unshadowed && std::abs(compact - stored) * 5 < unshadowed,
+            "Comparison shadow test: the comparison lookups must agree with the stored-depth lookups");
+    }
 }
 
 void RunRendererRendersDirectionalCascadeShadowTest() {
@@ -10867,6 +10907,7 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
     RunRendererRendersSpotLightShadowTest();
     RunRendererRendersSixPointLightShadowsTest();
     RunRendererRendersDirectionalCascadeShadowTest();
+    RunRendererComparisonShadowSamplingTest();
     RunRendererReusesSunCascadesTest();
     RunRendererBlendsShadowCascadesTest();
     RunRendererRendersScreenSpaceGiBounceTest();

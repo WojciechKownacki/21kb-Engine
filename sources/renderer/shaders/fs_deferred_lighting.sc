@@ -14,7 +14,11 @@ SAMPLER2D(s_gbufferNormal, 1);
 SAMPLER2D(s_gbufferMaterial, 2);
 SAMPLER2D(s_gbufferSurface, 3);
 SAMPLER2D(s_gbufferDepth, 4);
+#if defined(KB_SHADOW_COMPARE)
+SAMPLER2DSHADOW(s_deferredShadowMap, 5);
+#else
 SAMPLER2D(s_deferredShadowMap, 5);
+#endif
 SAMPLER2D(s_deferredBackdropEnvironment, 6);
 SAMPLERCUBE(s_skyReflection, 12);
 // The G-buffer custom data (Subsurface Color / Fuzz Color, alpha 1 where given); read only when
@@ -235,10 +239,14 @@ vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos
 
 float SampleShadowVisibility(vec3 shadowCoord, float penumbraScale)
 {
+#if defined(KB_SHADOW_COMPARE)
+    float compared = KbCompareShadow(s_deferredShadowMap, shadowCoord, max(u_deferredShadowParams.z, 0.000001), u_deferredShadowParams.w, u_shadowCascadeInfo.w);
+    return mix(1.0, 1.0 - u_deferredShadowParams.y, compared);
+#else
     float biasedDepth = shadowCoord.z;
     float texelSize = max(u_deferredShadowParams.z, 0.000001);
     float selectedShadow = 0.0;
-    if (penumbraScale > 0.0 && u_deferredShadowParams.w >= 2.0) {
+    if (penumbraScale > 0.0 && u_deferredShadowParams.w >= 2.5) {
         // Soft shadows from the light's source angle (PCSS): the mean depth of
         // the occluders around the point sets the penumbra the filter covers.
         float turn = 6.2831853 * fract(52.9829189 * fract(dot(shadowCoord.xy, vec2(4211.0, 2203.0))));
@@ -274,6 +282,7 @@ float SampleShadowVisibility(vec3 shadowCoord, float penumbraScale)
         }
     }
     return mix(1.0, 1.0 - u_deferredShadowParams.y, selectedShadow);
+#endif
 }
 
 // Exponential height fog and volumetric fog. u_fogParams: density at the base height,

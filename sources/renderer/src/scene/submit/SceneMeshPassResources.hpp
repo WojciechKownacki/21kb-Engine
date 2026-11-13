@@ -106,6 +106,8 @@ struct SceneMeshPassProgramResolution {
     SceneRenderMaterialProgramStatus status = SceneRenderMaterialProgramStatus::None;
     bool graphProgram = false;
     bool fellBackToBuiltin = false;
+    // The built-in forward program that reads the shadow maps through comparison samplers (KB_SHADOW_COMPARE).
+    bool shadowCompare = false;
 };
 
 class SceneMeshPassResources {
@@ -121,9 +123,11 @@ public:
     [[nodiscard]] SceneLightGridResources& LightGrid() const noexcept { return lightGrid_; }
 
     void SetGraphShaderCacheRoot(std::string root) { graphShaderCacheRoot_ = std::move(root); }
+    // `shadowCompare` asks for the forward program that reads the shadow maps through comparison samplers; the
+    // resolution says whether it got it (the program is optional, and a material graph brings its own).
     [[nodiscard]] SceneMeshPassProgramResolution ResolveMeshPassProgram(
         const RenderMaterialResource* material, MeshPassType pass,
-        bool skinned = false) const noexcept;
+        bool skinned = false, bool shadowCompare = false) const noexcept;
     [[nodiscard]] SceneMeshPassProgramResolution LastProgramResolution() const noexcept { return lastProgramResolution_; }
     void ResetProgramBindStats() const noexcept;
     [[nodiscard]] SceneMeshProgramBindStats ProgramBindStats() const noexcept { return programBindStats_; }
@@ -200,6 +204,8 @@ private:
     bgfx::UniformHandle terrainLayerWeightSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle terrainLayerParamsUniform_ = BGFX_INVALID_HANDLE;
     mutable std::array<bool, 2> layeredGbufferUnavailable_{};
+    // The comparison forward program (rigid, skinned) failed to load: the stored-depth program lights instead.
+    mutable std::array<bool, 2> shadowCompareUnavailable_{};
     bgfx::UniformHandle clearcoatSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle clearcoatRoughnessSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle materialLayersUniform_ = BGFX_INVALID_HANDLE;

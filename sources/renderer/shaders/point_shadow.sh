@@ -5,8 +5,12 @@
 // A spot light (u_pointShadowSpot[s].w > 0) uses a single frustum along its axis in column 0.
 // Graph material shaders define KB_POINT_SHADOW_GRAPH: they own the stages from 6 up for their own
 // textures. (The stage has to be a literal here; some backends reject a macro as the register.)
+// Programs built with KB_SHADOW_COMPARE read the atlas through a comparison sampler (see shadow_cascades.sh); graph
+// material shaders never do.
 #if defined(KB_POINT_SHADOW_GRAPH)
 SAMPLER2D(s_pointShadowMap, 1);
+#elif defined(KB_SHADOW_COMPARE)
+SAMPLER2DSHADOW(s_pointShadowMap, 9);
 #else
 SAMPLER2D(s_pointShadowMap, 9);
 #endif
@@ -15,7 +19,7 @@ uniform vec4 u_pointShadowDepth[32]; // x = near plane, y = far plane, z = depth
 uniform vec4 u_pointShadowParams[32]; // x = shadow strength, y = normal bias (texels), z = filter (0 by source size, 1 hard, 2 PCF, 3 PCSS)
 uniform vec4 u_pointShadowSpot[32];  // xyz = spot axis, w = tan(half fov) (0 = cube light)
 uniform vec4 u_pointShadowAtlas;    // x,y = 1 / atlas size, z = tile px, w = tan(half fov)
-uniform vec4 u_pointShadowInfo;     // x = light count, y = texture v scale (+-0.5), z = strength
+uniform vec4 u_pointShadowInfo;     // x = light count, y = texture v scale (+-0.5), z = strength, w = 1 for the wide soft kernel
 
 // Reverse-z perspective depth back to distance along the face axis.
 float KbPointShadowLinearDepth(float stored, float nearPlane, float farPlane)
@@ -23,6 +27,22 @@ float KbPointShadowLinearDepth(float stored, float nearPlane, float farPlane)
     return nearPlane * farPlane / (nearPlane + stored * (farPlane - nearPlane));
 }
 
+#if defined(KB_SHADOW_COMPARE)
+// The reverse-z depth a point `z` along the face axis is stored as (the inverse of KbPointShadowLinearDepth).
+float KbPointShadowStoredDepth(float z, float nearPlane, float farPlane)
+{
+    return (nearPlane * farPlane / max(z, 0.0001) - nearPlane) / (farPlane - nearPlane);
+}
+
+// One compared tap: 1 where the receiver lies behind what the tile stored. The tap reads the four nearest texels, which
+// stay inside the face's tile.
+float KbPointShadowTap(vec2 tilePx, vec2 tileOrigin, float referenceDepth)
+{
+    float tile = u_pointShadowAtlas.z;
+    vec2 clamped = clamp(tilePx, vec2_splat(1.0), vec2_splat(tile - 1.0));
+    return shadow2D(s_pointShadowMap, vec3((tileOrigin + clamped) * u_pointShadowAtlas.xy, referenceDepth));
+}
+#else
 float KbPointShadowTap(vec2 tilePx, vec2 tileOrigin, float fragmentDepth, float nearPlane, float farPlane, float bias)
 {
     float tile = u_pointShadowAtlas.z;
@@ -31,6 +51,7 @@ float KbPointShadowTap(vec2 tilePx, vec2 tileOrigin, float fragmentDepth, float 
     float stored = texture2DLod(s_pointShadowMap, uv, 0.0).x;
     return fragmentDepth - bias > KbPointShadowLinearDepth(stored, nearPlane, farPlane) ? 1.0 : 0.0;
 }
+#endif
 
 // Returns 1.0 for lit and (1 - strength) for fully shadowed. lightSlot is the packed light index.
 float KbPointShadowFactor(int lightSlot, vec3 worldPos, vec3 normal)
@@ -98,11 +119,34 @@ float KbPointShadowFactor(int lightSlot, vec3 worldPos, vec3 normal)
         float bias = u_pointShadowDepth[s].z * (2.0 * z * tanHalf / tile) + 0.001;
         float strength = u_pointShadowInfo.z * u_pointShadowParams[s].x;
         float filterMode = u_pointShadowParams[s].z;
+#if defined(KB_SHADOW_COMPARE)
+        // Hard: one compared tap. Soft: the four-tap kernel of a handheld, or nine taps a pixel apart weighted 1-2-1.
+        float referenceDepth = KbPointShadowStoredDepth(z - bias, nearPlane, farPlane);
+        float shadowed;
+        if (filterMode > 0.5 && filterMode < 1.5) {
+            shadowed = KbPointShadowTap(tilePx, tileOrigin, referenceDepth);
+        } else if (u_pointShadowInfo.w < 0.5) {
+            shadowed = 0.25 * (KbPointShadowTap(tilePx + vec2(-0.5, -0.5), tileOrigin, referenceDepth) +
+                KbPointShadowTap(tilePx + vec2(0.5, -0.5), tileOrigin, referenceDepth) +
+                KbPointShadowTap(tilePx + vec2(-0.5, 0.5), tileOrigin, referenceDepth) +
+                KbPointShadowTap(tilePx + vec2(0.5, 0.5), tileOrigin, referenceDepth));
+        } else {
+            shadowed = 0.0;
+            for (int y = -1; y <= 1; ++y) {
+                for (int x = -1; x <= 1; ++x) {
+                    float weight = (2.0 - abs(float(x))) * (2.0 - abs(float(y)));
+                    shadowed += weight * KbPointShadowTap(tilePx + vec2(float(x), float(y)), tileOrigin, referenceDepth);
+                }
+            }
+            shadowed *= 0.0625;
+        }
+        return mix(1.0, 1.0 - strength, shadowed);
+#else
         float lit = 0.0;
         float sourceRadius = u_pointShadowDepth[s].w;
         // Pixels of this tile one metre across the light's view spans at the receiver.
         float pxPerMetre = 0.5 * tile / (z * tanHalf);
-        if (filterMode > 2.5 || (sourceRadius > 0.0 && filterMode < 1.5)) {
+        if (filterMode > 2.5 || (sourceRadius > 0.0 && filterMode < 0.5)) {
             // Soft shadows from the light's size (PCSS): the occluders' mean distance sets the penumbra.
             float turn = 6.2831853 * fract(52.9829189 * fract(dot(worldPos, vec3(0.0671, 0.0058, 0.0372))));
             float search = clamp(sourceRadius * pxPerMetre, 1.0, 12.0);
@@ -134,6 +178,7 @@ float KbPointShadowFactor(int lightSlot, vec3 worldPos, vec3 normal)
             }
         }
         return mix(1.0, 1.0 - strength, lit * 0.11111111);
+#endif
     }
     return 1.0;
 }

@@ -1,4 +1,5 @@
 #include "inspection/InspectorPanelInteraction.hpp"
+#include "inspection/InspectorLightModel.hpp"
 #include "scene/EditorMap2DService.hpp"
 #include "Map2DView.hpp"
 #include "app/EditorKeyState.hpp"
@@ -3361,7 +3362,8 @@ namespace {
 
 [[nodiscard]] bool IsComponentMenuProperty(InspectorPropertyId property) noexcept {
     return property == InspectorPropertyId::ComponentMenu || property == InspectorPropertyId::ComponentMenuItem ||
-        property == InspectorPropertyId::JointPreset || property == InspectorPropertyId::JointPresetItem;
+        property == InspectorPropertyId::JointPreset || property == InspectorPropertyId::JointPresetItem ||
+        property == InspectorPropertyId::LightPreset || property == InspectorPropertyId::LightPresetItem;
 }
 
 // The entries of the component menu and the Joint's presets. Each change is one undoable scene command; Copy
@@ -3417,6 +3419,21 @@ namespace {
     });
 }
 
+[[nodiscard]] bool ApplyLightPresetItem(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, int item) noexcept {
+    if (item < 0 || item >= kLightPresetCount) {
+        return false;
+    }
+    return sceneContext.ExecuteSceneCommand("Apply Light Preset", [&sceneContext, entity, item]() {
+        kb::scene::LightComponent* light = sceneContext.Scene().Components().Lights().TryGet(entity);
+        if (light == nullptr) {
+            return false;
+        }
+        ApplyLightPreset(*light, static_cast<LightPreset>(item));
+        sceneContext.Scene().Components().Lights().MarkModified(entity);
+        return true;
+    });
+}
+
 } // namespace
 
 bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneContext, const InspectorPanelRenderer::Hit& hit, int x, int y) noexcept {
@@ -3466,11 +3483,15 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
             sceneContext.Inspector().ToggleComponentMenu(hit.section);
         } else if (hit.property == InspectorPropertyId::JointPreset) {
             sceneContext.Inspector().ToggleMenu(InspectorMenuKind::JointPresets, hit.section);
+        } else if (hit.property == InspectorPropertyId::LightPreset) {
+            sceneContext.Inspector().ToggleMenu(InspectorMenuKind::LightPresets, hit.section);
         } else if (sceneContext.Scene().Entities().IsAlive(entity)) {
             const bool presetItem = hit.property == InspectorPropertyId::JointPresetItem;
+            const bool lightPresetItem = hit.property == InspectorPropertyId::LightPresetItem;
             sceneContext.Inspector().CloseComponentMenus();
             static_cast<void>(presetItem ? ApplyJointPresetItem(sceneContext, entity, hit.index)
-                                         : RunComponentMenuItem(sceneContext, entity, hit, x, y));
+                                         : (lightPresetItem ? ApplyLightPresetItem(sceneContext, entity, hit.index)
+                                                            : RunComponentMenuItem(sceneContext, entity, hit, x, y)));
         }
         return true;
     }

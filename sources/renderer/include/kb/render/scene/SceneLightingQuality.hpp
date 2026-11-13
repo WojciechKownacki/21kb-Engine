@@ -27,7 +27,8 @@ namespace kb::render {
 // never starts at desktop detail. Every other level overwrites the settings that decide what shadows and
 // bounce light cost, from the cheapest (Low) to the most detailed (Ultra), with smaller maps, fewer cascades
 // and a coarser voxel grid on phones and tablets. A handheld also draws no cube shadows of point and area
-// lights (six passes each, and there is no one-pass cube shadow) and at most four lights' shadows.
+// lights (six passes each, and there is no one-pass cube shadow), at most four lights' shadows, a 16-bit sun shadow
+// map and the four-tap soft shadow filter, which ignores a light's source size (only the PCSS filter softens by it).
 inline void ApplyProjectLightingQuality(
     SceneRenderLightingConfig& config,
     project::ProjectQualityLevel shadows,
@@ -39,6 +40,7 @@ inline void ApplyProjectLightingQuality(
         if (globalIllumination == Level::Auto) globalIllumination = Level::Medium;
         config.pointShadowCubeEnabled = false;
         config.pointShadowMaxLights = std::min(config.pointShadowMaxLights, 4U);
+        config.compactShadows = true;
     }
     struct ShadowPreset {
         std::uint32_t mapSize;

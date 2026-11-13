@@ -40,6 +40,8 @@ SceneRenderLightingConfig RendererSceneLightingConfigResolver::Resolve(SceneRend
         .shadowNormalBias = requested.shadowNormalBias != defaultConfig.shadowNormalBias ? requested.shadowNormalBias : fallback.shadowNormalBias,
         .shadowStrength = requested.shadowStrength != defaultConfig.shadowStrength ? requested.shadowStrength : fallback.shadowStrength,
         .shadowFilter = requested.shadowFilter != defaultConfig.shadowFilter ? requested.shadowFilter : fallback.shadowFilter,
+        .compactShadows = requested.compactShadows != defaultConfig.compactShadows ? requested.compactShadows : fallback.compactShadows,
+        .shadowComparisonSampling = requested.shadowComparisonSampling != defaultConfig.shadowComparisonSampling ? requested.shadowComparisonSampling : fallback.shadowComparisonSampling,
         .pointShadowMaxLights = requested.pointShadowMaxLights != defaultConfig.pointShadowMaxLights ? requested.pointShadowMaxLights : fallback.pointShadowMaxLights,
         .pointShadowCubeEnabled = requested.pointShadowCubeEnabled != defaultConfig.pointShadowCubeEnabled ? requested.pointShadowCubeEnabled : fallback.pointShadowCubeEnabled,
         .shadowCascadeBlend = requested.shadowCascadeBlend != defaultConfig.shadowCascadeBlend ? requested.shadowCascadeBlend : fallback.shadowCascadeBlend,

@@ -17,9 +17,10 @@ public:
     ShadowMapResource(const ShadowMapResource&) = delete;
     ShadowMapResource& operator=(const ShadowMapResource&) = delete;
 
-    [[nodiscard]] bool Ensure(std::uint32_t size);
+    // `compactDepth` stores 16-bit depth where the device allows it (half the memory and bandwidth).
+    [[nodiscard]] bool Ensure(std::uint32_t size, bool compactDepth = false);
     // Rectangular map, e.g. the point-light face atlas.
-    [[nodiscard]] bool Ensure(std::uint32_t width, std::uint32_t height);
+    [[nodiscard]] bool Ensure(std::uint32_t width, std::uint32_t height, bool compactDepth = false);
     void Shutdown() noexcept;
 
     [[nodiscard]] bgfx::TextureHandle DepthTexture() const noexcept;
@@ -29,8 +30,8 @@ public:
     [[nodiscard]] bool IsAllocated() const noexcept;
     [[nodiscard]] std::uint64_t AllocationBytes() const noexcept;
 
-    [[nodiscard]] static std::uint64_t AllocationBytesFor(std::uint32_t shadowMapSize) noexcept;
-    [[nodiscard]] static std::uint64_t AllocationBytesFor(std::uint32_t width, std::uint32_t height) noexcept;
+    [[nodiscard]] static std::uint64_t AllocationBytesFor(std::uint32_t shadowMapSize, std::uint32_t bytesPerTexel = 4U) noexcept;
+    [[nodiscard]] static std::uint64_t AllocationBytesFor(std::uint32_t width, std::uint32_t height, std::uint32_t bytesPerTexel) noexcept;
 
     // The rows of a point-light atlas: the entity of the light each row belongs to (0 = free), kept while the
     // light stays selected so its tiles survive a camera that reorders the lights.
@@ -86,6 +87,8 @@ private:
     bgfx::FrameBufferHandle frameBuffer_ = BGFX_INVALID_HANDLE;
     std::uint32_t size_ = 0;
     std::uint32_t height_ = 0;
+    std::uint32_t bytesPerTexel_ = 4U;
+    bool compactDepth_ = false;
 };
 
 } // namespace kb::render

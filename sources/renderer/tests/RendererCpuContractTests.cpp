@@ -1,4 +1,5 @@
 #include "kb/render/scene/SceneLightingQuality.hpp"
+#include "kb/render/shadow/ShadowMapResource.hpp"
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/ecs/World.hpp"
@@ -558,6 +559,11 @@ void RunLightingQuality() {
         "Auto quality on a phone must be the phone's Medium");
     Require(!handheldAuto.pointShadowCubeEnabled && handheldAuto.pointShadowMaxLights == 4U && !handheldMedium.pointShadowCubeEnabled,
         "A phone must draw no cube shadows and shadows for at most four lights");
+    // A phone stores the sun's shadow in 16 bits and filters it with four taps; a computer keeps 32 bits and nine taps.
+    Require(handheldAuto.compactShadows && handheldMedium.compactShadows && !automatic.compactShadows && !engine.compactShadows,
+        "A phone must take compact shadows and a computer the full ones");
+    Require(kb::render::ShadowMapResource::AllocationBytesFor(1024U, 2U) * 2U == kb::render::ShadowMapResource::AllocationBytesFor(1024U),
+        "A 16-bit shadow map must take half the memory of a 32-bit one");
     // Auto lighting is Deferred on a computer and Forward on a phone; a named path is drawn as written on both.
     using ProjectPath = kb::project::ProjectSceneLightingPath;
     using RenderPath = kb::render::SceneRenderLightingPath;
@@ -599,6 +605,45 @@ void RunLightingQuality() {
     }
 }
 
+// The lighting shaders read the shadow maps through comparison samplers (hardware filtering) unless a lookup needs the
+// stored depth itself: the sun's soft shadows from a source size, a PCSS filter, or a local light's source size.
+void RunShadowCompareSelection() {
+    kb::render::SceneRenderShadowMapBinding binding{};
+    Require(!binding.NeedsStoredDepth(), "No shadow needs the stored depth");
+    binding.depthTexture = bgfx::TextureHandle{ 1U };
+    binding.params = { 0.0F, 1.0F, 0.001F, 3.0F };
+    binding.cascadeCount = 2U;
+    Require(!binding.NeedsStoredDepth(), "A hard-edged sun with the default filter reads through comparison samplers");
+    binding.cascadeAtlas[3] = 0.25F;
+    Require(binding.NeedsStoredDepth(), "A sun with a source size under a soft filter needs the stored depth");
+    binding.params[3] = 2.0F;
+    Require(!binding.NeedsStoredDepth(), "A sun set to plain PCF ignores its source size");
+    binding.cascadeAtlas[3] = 0.0F;
+    binding.point.depthTexture = bgfx::TextureHandle{ 2U };
+    binding.point.lightCount = 2U;
+    binding.point.lightParams[2] = 2.0F;
+    binding.point.lightParams[4 + 2] = 1.0F;
+    Require(!binding.NeedsStoredDepth(), "Local lights set to PCF or hard read through comparison samplers");
+    binding.point.depthParams[4 + 2] = 0.2F;
+    Require(!binding.NeedsStoredDepth(), "A hard local light ignores its source size");
+    binding.point.lightParams[4 + 2] = 0.0F;
+    Require(binding.NeedsStoredDepth(), "A local light left to its source size needs the stored depth");
+    binding.point.lightParams[4 + 2] = 3.0F;
+    binding.point.depthParams[4 + 2] = 0.0F;
+    Require(binding.NeedsStoredDepth(), "A local light set to PCSS needs the stored depth");
+    // A handheld's compact shadows leave a light's source size out: only the PCSS filter asks for the stored depth.
+    binding.wideKernel = false;
+    Require(binding.NeedsStoredDepth(), "A local light set to PCSS needs the stored depth on a handheld too");
+    binding.point.lightParams[4 + 2] = 0.0F;
+    binding.point.depthParams[4 + 2] = 0.2F;
+    Require(!binding.NeedsStoredDepth(), "A handheld ignores a local light's source size");
+    binding.cascadeAtlas[3] = 0.25F;
+    binding.params[3] = 3.0F;
+    Require(!binding.NeedsStoredDepth(), "A handheld ignores the sun's source size under the default filter");
+    binding.params[3] = 6.0F;
+    Require(binding.NeedsStoredDepth(), "A handheld softens the sun by its source size under the PCSS filter");
+}
+
 struct Test { const char* name; void (*run)(); };
 } // namespace
 
@@ -606,6 +651,7 @@ int main(int argc, char** argv) {
     const std::array tests{
         Test{ "all-proxy", &RunAllProxyLifecycle }, Test{ "inherited", &RunInheritedAndNativeOnly },
         Test{ "mesh-slices", &RunMeshPullSlices }, Test{ "resources", &RunRuntimeResources }, Test{ "lighting-quality", &RunLightingQuality },
+        Test{ "shadow-compare", &RunShadowCompareSelection },
     };
     try {
         bool selected = false;

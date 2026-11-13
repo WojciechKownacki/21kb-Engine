@@ -14,7 +14,11 @@ SAMPLER2D(s_normal, 1);
 SAMPLER2D(s_metallicRoughness, 2);
 SAMPLER2D(s_occlusion, 3);
 SAMPLER2D(s_emissive, 4);
+#if defined(KB_SHADOW_COMPARE)
+SAMPLER2DSHADOW(s_shadowMap, 5);
+#else
 SAMPLER2D(s_shadowMap, 5);
+#endif
 SAMPLER2D(s_terrainLayerWeights, 15);
 SAMPLERCUBE(s_skyReflection, 12);
 uniform vec4 u_materialParams;
@@ -194,6 +198,10 @@ vec3 EvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic,
 
 float SampleShadowVisibility(vec3 shadowCoord, float penumbraScale)
 {
+#if defined(KB_SHADOW_COMPARE)
+    float compared = KbCompareShadow(s_shadowMap, shadowCoord, max(u_shadowParams.z, 0.000001), u_shadowParams.w, u_shadowCascadeInfo.w);
+    return mix(1.0, 1.0 - u_shadowParams.y, compared);
+#else
     float biasedDepth = shadowCoord.z;
     float texelSize = max(u_shadowParams.z, 0.000001);
     float selectedShadow = 0.0;
@@ -233,6 +241,7 @@ float SampleShadowVisibility(vec3 shadowCoord, float penumbraScale)
         }
     }
     return mix(1.0, 1.0 - u_shadowParams.y, selectedShadow);
+#endif
 }
 
 void main()

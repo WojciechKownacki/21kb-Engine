@@ -137,6 +137,7 @@ enum class InspectorMenuKind : std::uint8_t {
     None,
     Component,
     JointPresets,
+    LightPresets,
     // The project's navigation areas under a Nav Obstacle's area or a Nav Agent's walkable areas.
     NavAreas,
 };
@@ -546,6 +547,8 @@ enum class InspectorPropertyId : std::uint16_t {
     ComponentMenuItem, // one entry of that menu; the hit's index says which
     JointPreset,       // the Joint's Preset row
     JointPresetItem,   // one entry of its list; the hit's index is the JointPreset
+    LightPreset,       // the Light's Preset row
+    LightPresetItem,   // one entry of its list; the hit's index is the LightPreset
     AddComponentButton,
     AddComponentSearch,
     AddComponentOption,

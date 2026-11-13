@@ -42,7 +42,7 @@ private:
         cameraPosition,
         1U + static_cast<std::uint32_t>(std::ranges::count_if(
             desc.viewportPlan.viewIds.shadowCascadeViews, [](std::uint16_t view) { return ViewId::IsValid(view); })));
-    if (!shadowSetup.valid || !desc.shadowMap.Ensure(shadowSetup.atlasSize)) {
+    if (!shadowSetup.valid || !desc.shadowMap.Ensure(shadowSetup.atlasSize, desc.lightingConfig.compactShadows)) {
         desc.shadowMap.DiscardAllCachedCascades();
         return {};
     }
@@ -235,6 +235,11 @@ SceneRenderShadowMapBinding RendererShadowSubmitter::Submit(const RendererShadow
 
     SceneRenderShadowMapBinding binding = SubmitDirectionalShadows(desc, cameraCullingMask, cameraPositionPointer);
     SubmitPointShadows(desc, cameraCullingMask, cameraPositionPointer, binding);
+    // The lighting shaders read the maps through comparison samplers (the hardware filters) unless a lookup needs the
+    // stored depth itself; a handheld takes the four-tap soft kernel.
+    binding.wideKernel = !desc.lightingConfig.compactShadows;
+    binding.compareSampling = desc.lightingConfig.shadowComparisonSampling && bgfx::getRendererType() != bgfx::RendererType::Noop &&
+        !binding.NeedsStoredDepth();
     return binding;
 }
 

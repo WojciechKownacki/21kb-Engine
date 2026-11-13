@@ -63,6 +63,7 @@
 #include "inspection/InspectorComponentLabelFormatter.hpp"
 #include "inspection/InspectorMeshRendererMaterialSlotModel.hpp"
 #include "inspection/InspectorPhysicsModel.hpp"
+#include "inspection/InspectorLightModel.hpp"
 #include "inspection/ui/InspectorUIComponentModel.hpp"
 #include "inspection/InspectorMaterialTextureSlotFormatter.hpp"
 #include "inspection/EditorValueFormatter.hpp"
@@ -2449,8 +2450,25 @@ void PaintCameraSection(
     return kind == kb::scene::LightKind::AreaRect || kind == kb::scene::LightKind::AreaDisk || kind == kb::scene::LightKind::Tube;
 }
 
-[[nodiscard]] int LightSectionRows(const kb::scene::LightComponent& light) noexcept {
-    int rows = 15;
+// The Preset row and, opened, its list.
+[[nodiscard]] int LightPresetRows(const InspectorPanelState& state) noexcept {
+    return 1 + (state.IsMenuOpen(InspectorMenuKind::LightPresets, InspectorSectionId::Light) ? kLightPresetCount : 0);
+}
+
+[[nodiscard]] std::string_view LightPresetName(LightPreset preset) {
+    switch (preset) {
+    case LightPreset::Sun: return EditorText("inspector.light.preset.sun", "Sun");
+    case LightPreset::OvercastSky: return EditorText("inspector.light.preset.overcast", "Overcast sky");
+    case LightPreset::RoomBulb: return EditorText("inspector.light.preset.roomBulb", "Room bulb");
+    case LightPreset::Torch: return EditorText("inspector.light.preset.torch", "Torch or candle");
+    case LightPreset::StreetLamp: return EditorText("inspector.light.preset.streetLamp", "Street lamp");
+    case LightPreset::Spotlight: return EditorText("inspector.light.preset.spotlight", "Spotlight");
+    }
+    return {};
+}
+
+[[nodiscard]] int LightSectionRows(const kb::scene::LightComponent& light, const InspectorPanelState& state) noexcept {
+    int rows = 15 + LightPresetRows(state);
     if (LightUsesRange(light.kind)) {
         ++rows;
     }
@@ -2470,8 +2488,8 @@ void PaintCameraSection(
 }
 
 // The rows under the Light's "Advanced" row; the others are always shown.
-[[nodiscard]] int LightBasicRows(const kb::scene::LightComponent& light) noexcept {
-    return LightSectionRows(light) - 10 - (light.kind == kb::scene::LightKind::Directional ? 3 : 0) - (light.useColorTemperature ? 1 : 0);
+[[nodiscard]] int LightBasicRows(const kb::scene::LightComponent& light, const InspectorPanelState& state) noexcept {
+    return LightSectionRows(light, state) - 10 - (light.kind == kb::scene::LightKind::Directional ? 3 : 0) - (light.useColorTemperature ? 1 : 0);
 }
 
 void PaintLightSection(
@@ -2482,6 +2500,19 @@ void PaintLightSection(
     const InspectorPanelState& inspector,
     const kb::scene::LightComponent& light) {
     SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Light, HeroIconKind::Bolt, EditorText("inspector.light.title", "Light"), true);
+    // One row names the setup the light amounts to ("Custom" once a value was changed); choosing from its list sets the
+    // type, colour temperature, brightness and reach for a common use.
+    const std::optional<LightPreset> chosenPreset = MatchLightPreset(light);
+    const bool presetListOpen = inspector.IsMenuOpen(InspectorMenuKind::LightPresets, InspectorSectionId::Light);
+    section.Dropdown(EditorText("inspector.light.preset", "Preset"),
+        chosenPreset.has_value() ? LightPresetName(*chosenPreset) : EditorText("inspector.light.preset.custom", "Custom"),
+        InspectorPropertyId::LightPreset, presetListOpen);
+    if (presetListOpen) {
+        for (int preset = 0; preset < kLightPresetCount; ++preset) {
+            section.DropdownItem(LightPresetName(static_cast<LightPreset>(preset)), InspectorPropertyId::LightPresetItem, preset,
+                chosenPreset.has_value() && static_cast<int>(*chosenPreset) == preset);
+        }
+    }
     section.Field(EditorText("inspector.light.type", "Type"), InspectorComponentLabelFormatter::LightKindName(light.kind), InspectorPropertyId::LightKind);
     if (LightUsesAreaSize(light.kind)) {
         section.Field(EditorText("inspector.light.shape", "Shape"), InspectorComponentLabelFormatter::LightShapeName(light.kind), InspectorPropertyId::LightShape);
@@ -4097,7 +4128,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         }
     }
     if (const kb::scene::LightComponent* light = scene.Components().Lights().TryGet(selected); light != nullptr) {
-        const int h = AdvancedSectionHeight(inspector, InspectorSectionId::Light, InspectorDisclosureId::LightAdvanced, LightBasicRows(*light), LightSectionRows(*light));
+        const int h = AdvancedSectionHeight(inspector, InspectorSectionId::Light, InspectorDisclosureId::LightAdvanced, LightBasicRows(*light, inspector), LightSectionRows(*light, inspector));
         if (sectionVisible(y, h)) {
             PaintLightSection(dc, content, y, theme, inspector, *light);
         } else {
@@ -4453,7 +4484,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         height += CameraSectionHeight(inspector, *scene.Components().Cameras().TryGet(selected)) + kSectionGap;
     }
     if (const kb::scene::LightComponent* light = scene.Components().Lights().TryGet(selected); light != nullptr) {
-        height += AdvancedSectionHeight(inspector, InspectorSectionId::Light, InspectorDisclosureId::LightAdvanced, LightBasicRows(*light), LightSectionRows(*light)) + kSectionGap;
+        height += AdvancedSectionHeight(inspector, InspectorSectionId::Light, InspectorDisclosureId::LightAdvanced, LightBasicRows(*light, inspector), LightSectionRows(*light, inspector)) + kSectionGap;
     }
     if (scene.Components().ParticleEffects().TryGet(selected) != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::ParticleEffect, 3) + kSectionGap;
@@ -5196,6 +5227,22 @@ void AdvanceGroup(int& y) noexcept {
     if (auto hit = HitSectionHeader(content, y, state, section, x, yPoint, true); hit.kind != InspectorHitKind::None) return hit;
     if (state.IsCollapsed(section)) return {};
     using P = InspectorPropertyId;
+    {
+        const RECT button = RowRect(content, y);
+        if (Contains(button, x, yPoint)) return MakeHit(InspectorHitKind::Row, section, P::LightPreset, button);
+        AdvanceRow(y);
+        if (state.IsMenuOpen(InspectorMenuKind::LightPresets, section)) {
+            for (int preset = 0; preset < kLightPresetCount; ++preset) {
+                const RECT row = RowRect(content, y);
+                if (Contains(row, x, yPoint)) {
+                    InspectorPanelRenderer::Hit hit = MakeHit(InspectorHitKind::Row, section, P::LightPresetItem, row);
+                    hit.index = preset;
+                    return hit;
+                }
+                AdvanceRow(y);
+            }
+        }
+    }
     const std::array properties{P::LightKind, P::LightShape, P::LightColor, P::LightIntensity, P::LightRange,
         P::LightInnerCone, P::LightOuterCone, P::LightAreaWidth, P::LightAreaHeight, P::LightMobility,
         P::LightCastsShadow, P::LightAdvanced, P::LightShadowStrength, P::LightShadowBias, P::LightShadowNormalBias,

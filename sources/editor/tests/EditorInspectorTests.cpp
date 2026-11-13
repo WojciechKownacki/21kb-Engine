@@ -29,6 +29,7 @@
 #include "inspection/InspectorAudioComponentModel.hpp"
 #include "inspection/InspectorAudioScrubController.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
+#include "inspection/InspectorLightModel.hpp"
 #include "inspection/InspectorComponentDefaults.hpp"
 #include "inspection/InspectorFieldGuide.hpp"
 #include "inspection/InspectorGenericComponentModel.hpp"
@@ -265,6 +266,35 @@ void RunEditorConsoleStateTest() {
             state.Count(EditorConsoleLevel::Warning) == 1U && state.Entries().front().message == "2" &&
             state.Entries().back().message == "newest",
         "Editor Console capacity eviction must keep entries and per-level counters in step");
+}
+
+void RunLightPresetsTest() {
+    using kb::scene::LightComponent;
+    using kb::scene::LightKind;
+    const auto close = [](float a, float b) { return std::abs(a - b) <= 0.001F * std::max(1.0F, std::abs(b)); };
+    // Each preset reads back as itself and a changed value reads as custom.
+    for (int index = 0; index < kb::editor::kLightPresetCount; ++index) {
+        LightComponent light;
+        kb::editor::ApplyLightPreset(light, static_cast<kb::editor::LightPreset>(index));
+        const std::optional<kb::editor::LightPreset> match = kb::editor::MatchLightPreset(light);
+        kb::editor::tests::Require(light.useColorTemperature && light.intensity > 0.0F && match.has_value() && static_cast<int>(*match) == index,
+            "Light preset: every preset must be recognised again once applied");
+        light.intensity *= 1.5F;
+        kb::editor::tests::Require(!kb::editor::MatchLightPreset(light).has_value(), "Light preset: a changed brightness reads as Custom");
+    }
+    LightComponent noon;
+    kb::editor::ApplyLightPreset(noon, kb::editor::LightPreset::Sun);
+    kb::editor::tests::Require(noon.kind == LightKind::Directional && close(noon.colorTemperatureKelvin, 5600.0F) && close(noon.intensity, 3.125F),
+        "Light preset: the Sun is a directional light of 5600 K");
+    LightComponent lamp;
+    kb::editor::ApplyLightPreset(lamp, kb::editor::LightPreset::RoomBulb);
+    kb::editor::tests::Require(lamp.kind == LightKind::Point && close(lamp.colorTemperatureKelvin, 2700.0F) && close(lamp.range, 8.0F) &&
+            close(lamp.intensity, 6.4F),
+        "Light preset: the Room bulb is a warm 2700 K point light reaching 8 m");
+    LightComponent beam;
+    kb::editor::ApplyLightPreset(beam, kb::editor::LightPreset::Spotlight);
+    kb::editor::tests::Require(beam.kind == LightKind::Spot && beam.outerConeDegrees > beam.innerConeDegrees && beam.range > 0.0F,
+        "Light preset: the Spotlight is a spot light with a cone and a reach");
 }
 
 void RunInspectorTextEditDirtyStateTest() {
@@ -4279,6 +4309,7 @@ void RunEditorInspectorTests() {
     RunInspectorLabelColumnTest();
     RunInspectorUIComponentMenuTest();
     RunJointPresetTest();
+    RunLightPresetsTest();
     RunJointPlainRowsTest();
     RunInspectorFieldHelpTest();
     RunInspectorResetMarkerAndMenuStateTest();

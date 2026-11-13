@@ -57,6 +57,10 @@ constexpr auto kRequiredShaders = std::to_array<ShaderManifestEntry>({
     ShaderManifestEntry{.name = "fs_leui_rect.sc", .stage = ShaderStage::Fragment, .required = false},
     ShaderManifestEntry{.name = "fs_lit.sc", .stage = ShaderStage::Fragment, .required = false},
     ShaderManifestEntry{.name = "fs_deferred_lighting.sc", .stage = ShaderStage::Fragment},
+    // Optional: the same lighting shaders reading the shadow maps through comparison samplers (hardware filtering),
+    // used by frames without PCSS; without them the stored-depth shaders light every frame.
+    ShaderManifestEntry{.name = "fs_deferred_lighting_cmp.sc", .stage = ShaderStage::Fragment, .required = false},
+    ShaderManifestEntry{.name = "fs_mesh_instanced_cmp.sc", .stage = ShaderStage::Fragment, .required = false},
     // The world backdrop of the forward path.
     ShaderManifestEntry{.name = "fs_sky_backdrop.sc", .stage = ShaderStage::Fragment},
     // Optional: without it (no Metal variant is generated on Windows hosts) screen-space GI stays off.

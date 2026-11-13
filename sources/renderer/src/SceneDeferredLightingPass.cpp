@@ -111,6 +111,7 @@ bool SceneDeferredLightingPass::Initialize() {
     WriteRendererDebugLog("deferred_lighting", "Initialize begin");
     if (!lightGrid_.Initialize()) return false;
     program_ = ShaderLoader::LoadProgram("vs_present.sc", "fs_deferred_lighting.sc");
+    compareProgram_ = ShaderLoader::LoadProgram("vs_present.sc", "fs_deferred_lighting_cmp.sc");
     static_cast<void>(debugNormalPresentPass_.Initialize());
     albedoSampler_ = bgfx::createUniform("s_gbufferAlbedo", bgfx::UniformType::Sampler);
     normalSampler_ = bgfx::createUniform("s_gbufferNormal", bgfx::UniformType::Sampler);
@@ -322,6 +323,10 @@ void SceneDeferredLightingPass::Shutdown() noexcept {
         bgfx::destroy(albedoSampler_);
         albedoSampler_ = BGFX_INVALID_HANDLE;
     }
+    if (bgfx::isValid(compareProgram_)) {
+        bgfx::destroy(compareProgram_);
+        compareProgram_ = BGFX_INVALID_HANDLE;
+    }
     if (bgfx::isValid(program_)) {
         bgfx::destroy(program_);
         program_ = BGFX_INVALID_HANDLE;
@@ -481,8 +486,11 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
     if (desc.shadowMap != nullptr) {
         SceneLightingPacker::AssignPointShadowSlots(lighting, desc.shadowMap->point);
     }
+    // The program that reads the maps through comparison samplers, when the frame allows it and it shipped.
+    const bool shadowCompare = desc.shadowMap != nullptr && desc.shadowMap->compareSampling && bgfx::isValid(compareProgram_);
     pointShadows_.Set(desc.shadowMap != nullptr ? &desc.shadowMap->point : nullptr, lighting.pointShadowSlot,
-        fallbackShadowTexture_);
+        shadowCompare && shadowValid ? desc.shadowMap->depthTexture : fallbackShadowTexture_, PointShadowUniforms::kSamplerStage, shadowCompare,
+        desc.shadowMap == nullptr || desc.shadowMap->wideKernel);
     {
         std::ostringstream message;
         message << "bind-gbuffer viewId=" << desc.viewId
@@ -506,7 +514,12 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
     bgfx::setTexture(2U, materialSampler_, desc.gbuffer->MaterialTexture());
     bgfx::setTexture(3U, surfaceSampler_, desc.gbuffer->SurfaceTexture());
     bgfx::setTexture(4U, depthSampler_, desc.gbuffer->DepthTexture());
-    bgfx::setTexture(5U, shadowMapSampler_, shadowValid ? desc.shadowMap->depthTexture : fallbackShadowTexture_);
+    if (shadowCompare) {
+        // The comparison sampler needs a depth texture even when only the local lights have shadows.
+        bgfx::setTexture(5U, shadowMapSampler_, shadowValid ? desc.shadowMap->depthTexture : desc.shadowMap->point.depthTexture, kShadowCompareSamplerFlags);
+    } else {
+        bgfx::setTexture(5U, shadowMapSampler_, shadowValid ? desc.shadowMap->depthTexture : fallbackShadowTexture_);
+    }
     bgfx::setTexture(6U, backdropEnvironmentSampler_, environmentBackdrop ? desc.worldBackdropEnvironment : fallbackBackdropEnvironmentTexture_);
     // The custom data, or (none this frame) the albedo target, never read then.
     const bool customData = bgfx::isValid(desc.customData);
@@ -542,7 +555,7 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
         BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_ALWAYS;
     bgfx::setState(resolveState);
     bgfx::setVertexBuffer(0, &vertices);
-    bgfx::submit(desc.viewId, program_);
+    bgfx::submit(desc.viewId, shadowCompare ? compareProgram_ : program_);
 
     stats += lightingStats;
     ++stats.submittedDrawCallCount;

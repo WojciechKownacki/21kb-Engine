@@ -4,6 +4,8 @@
 
 #include <bgfx/bgfx.h>
 
+#include <array>
+
 namespace kb::render {
 
 // Uniforms read by shadow_cascades.sh. bgfx hands out one handle per uniform name, so the
@@ -41,7 +43,9 @@ struct ShadowCascadeUniforms {
         const SceneRenderShadowMapBinding& source = binding != nullptr && binding->IsValid() ? *binding : disabled;
         bgfx::setUniform(viewProjection, source.cascadeViewProjection.data(), SceneRenderShadowMapBinding::kMaxCascades);
         bgfx::setUniform(atlas, source.cascadeAtlas.data(), SceneRenderShadowMapBinding::kMaxCascades);
-        bgfx::setUniform(info, source.cascadeInfo.data());
+        std::array<float, 4> infoData = source.cascadeInfo;
+        infoData[3] = source.wideKernel ? 1.0F : 0.0F;
+        bgfx::setUniform(info, infoData.data());
         bgfx::setUniform(bias, source.cascadeBias.data(), SceneRenderShadowMapBinding::kMaxCascades);
     }
 };

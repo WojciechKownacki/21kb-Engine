@@ -226,14 +226,19 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         });
     }
     SceneRenderSubmitStats lightingStats{};
-    PackedSceneLighting lighting = SceneLightingPacker::Build(renderScene, lightingStats, lightingConfig, camera);
+    // A depth-only pass (shadow maps, the depth pre-pass) reads no light: picking and packing them would be wasted work.
+    const bool readsLights = pass != MeshPassType::ShadowDepth && pass != MeshPassType::Depth;
+    PackedSceneLighting lighting;
+    if (readsLights) {
+        lighting = SceneLightingPacker::Build(renderScene, lightingStats, lightingConfig, camera);
+    }
     if ((pass == MeshPassType::BaseOpaque || pass == MeshPassType::BaseTransparent) &&
         lightingConfig.lightingPath != SceneRenderLightingPath::Forward &&
         lightingConfig.maxForwardLights != 0U && lightingStats.skippedForwardLightCount != 0U) {
         lighting.lightGrid = passResources_.LightGrid().Prepare(renderScene, lightingConfig,
             camera != nullptr ? camera->cullingMask : 0xFFFFFFFFU, lighting.primaryLightId, lightingStats, diagnostics);
     }
-    if (shadowMap != nullptr) {
+    if (readsLights && shadowMap != nullptr) {
         SceneLightingPacker::AssignPointShadowSlots(lighting, shadowMap->point);
     }
     const std::array<float, 4> cameraPosition = SceneLightingPacker::CameraPosition(camera);

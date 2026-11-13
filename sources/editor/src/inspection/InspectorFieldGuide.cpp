@@ -245,6 +245,9 @@ std::string InspectorFieldGuide::Tooltip(InspectorSectionId section, InspectorPr
     if (property == P::JointPreset) {
         return std::string{ EditorText("inspector.tip.joint.preset", "A ready-made setup, such as a door or a rope. Pick one, then change the values you like.") };
     }
+    if (property == P::LightPreset) {
+        return std::string{ EditorText("inspector.tip.light.preset", "A ready-made light, such as the sun or a room bulb. Pick one, then change the values you like.") };
+    }
     if (const std::optional<kb::scene::UIComponentType> component = InspectorUIComponentModel::Component(section)) {
         const std::string_view name = InspectorUIComponentModel::PropertyNameAt(*component, index);
         for (const UiTip& tip : kUiTips) {

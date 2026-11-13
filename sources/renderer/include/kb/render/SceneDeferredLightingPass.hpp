@@ -68,6 +68,8 @@ public:
 private:
     mutable SceneLightGridResources lightGrid_;
     bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
+    // The same lighting reading the shadow maps through comparison samplers; invalid when not shipped.
+    bgfx::ProgramHandle compareProgram_ = BGFX_INVALID_HANDLE;
     FullscreenTexturePass debugNormalPresentPass_{};
     bgfx::UniformHandle albedoSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle normalSampler_ = BGFX_INVALID_HANDLE;

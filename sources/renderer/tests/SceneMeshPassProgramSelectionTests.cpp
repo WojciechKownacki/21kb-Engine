@@ -208,6 +208,23 @@ void RunSceneMeshPassProgramSelectionTest() {
                 motionVectorResolution.key.pass == "MotionVectors",
             "Static motion-vector draws must use the dedicated motion-vector shader program");
 
+        // A frame that reads the shadow maps through comparison samplers lights with its own program, rigid and skinned,
+        // opaque and transparent; every other pass, and a frame that does not ask, keeps the stored-depth program.
+        for (const bool skinned : { false, true }) {
+            for (const MeshPassType pass : { MeshPassType::BaseOpaque, MeshPassType::BaseTransparent }) {
+                const SceneMeshPassProgramResolution plain = passResources.ResolveMeshPassProgram(&builtinMaterial, pass, skinned, false);
+                const SceneMeshPassProgramResolution compared = passResources.ResolveMeshPassProgram(&builtinMaterial, pass, skinned, true);
+                Require(bgfx::isValid(plain.program) && !plain.shadowCompare,
+                    "Shadow comparison: a frame that does not ask for comparison samplers must keep the stored-depth program");
+                Require(bgfx::isValid(compared.program) && compared.shadowCompare && compared.program.idx != plain.program.idx &&
+                        compared.key.pass != plain.key.pass,
+                    "Shadow comparison: a frame that asks for comparison samplers must light with the comparison program");
+            }
+        }
+        Require(!passResources.ResolveMeshPassProgram(&builtinMaterial, MeshPassType::ShadowDepth, false, true).shadowCompare &&
+                !passResources.ResolveMeshPassProgram(&builtinMaterial, MeshPassType::GBuffer, false, true).shadowCompare,
+            "Shadow comparison: only the forward lighting passes take the comparison program");
+
         for (const MeshPassType pass : {
                  MeshPassType::BaseOpaque,
                  MeshPassType::GBuffer,

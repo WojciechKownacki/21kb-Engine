@@ -10,16 +10,16 @@ ShadowMapResource::~ShadowMapResource() {
     Shutdown();
 }
 
-bool ShadowMapResource::Ensure(std::uint32_t size) {
-    return Ensure(size, size);
+bool ShadowMapResource::Ensure(std::uint32_t size, bool compactDepth) {
+    return Ensure(size, size, compactDepth);
 }
 
-bool ShadowMapResource::Ensure(std::uint32_t width, std::uint32_t height) {
+bool ShadowMapResource::Ensure(std::uint32_t width, std::uint32_t height, bool compactDepth) {
     const std::uint32_t size = std::clamp(width, 64U, 8192U);
     height = std::clamp(height, 64U, 8192U);
     if (bgfx::isValid(frameBuffer_) &&
         bgfx::isValid(depthTexture_) &&
-        size_ == size && height_ == height) {
+        size_ == size && height_ == height && compactDepth_ == compactDepth) {
         return true;
     }
 
@@ -34,7 +34,10 @@ bool ShadowMapResource::Ensure(std::uint32_t width, std::uint32_t height) {
         BGFX_SAMPLER_MIP_POINT |
         BGFX_SAMPLER_U_CLAMP |
         BGFX_SAMPLER_V_CLAMP;
-    const SceneDepthFormatSelection depthSelection = SelectSceneDepthFormat(textureFlags);
+    SceneDepthFormatSelection depthSelection = SelectSceneDepthFormat(textureFlags);
+    if (compactDepth && bgfx::isTextureValid(0, false, 1, bgfx::TextureFormat::D16, textureFlags)) {
+        depthSelection = SceneDepthFormatSelection{bgfx::TextureFormat::D16, SceneTargetFormatSelectionStatus::Selected};
+    }
     if (!depthSelection.IsSupported()) {
         return false;
     }
@@ -54,6 +57,8 @@ bool ShadowMapResource::Ensure(std::uint32_t width, std::uint32_t height) {
 
     size_ = size;
     height_ = height;
+    compactDepth_ = compactDepth;
+    bytesPerTexel_ = depthSelection.format == bgfx::TextureFormat::D16 ? 2U : 4U;
     return true;
 }
 
@@ -67,6 +72,7 @@ void ShadowMapResource::Shutdown() noexcept {
     depthTexture_ = BGFX_INVALID_HANDLE;
     size_ = 0U;
     height_ = 0U;
+    bytesPerTexel_ = 4U;
 }
 
 bgfx::TextureHandle ShadowMapResource::DepthTexture() const noexcept {
@@ -90,15 +96,15 @@ bool ShadowMapResource::IsAllocated() const noexcept {
 }
 
 std::uint64_t ShadowMapResource::AllocationBytes() const noexcept {
-    return AllocationBytesFor(size_, height_);
+    return AllocationBytesFor(size_, height_, bytesPerTexel_);
 }
 
-std::uint64_t ShadowMapResource::AllocationBytesFor(std::uint32_t shadowMapSize) noexcept {
-    return AllocationBytesFor(shadowMapSize, shadowMapSize);
+std::uint64_t ShadowMapResource::AllocationBytesFor(std::uint32_t shadowMapSize, std::uint32_t bytesPerTexel) noexcept {
+    return AllocationBytesFor(shadowMapSize, shadowMapSize, bytesPerTexel);
 }
 
-std::uint64_t ShadowMapResource::AllocationBytesFor(std::uint32_t width, std::uint32_t height) noexcept {
-    return static_cast<std::uint64_t>(width) * static_cast<std::uint64_t>(height) * 4ULL;
+std::uint64_t ShadowMapResource::AllocationBytesFor(std::uint32_t width, std::uint32_t height, std::uint32_t bytesPerTexel) noexcept {
+    return static_cast<std::uint64_t>(width) * static_cast<std::uint64_t>(height) * bytesPerTexel;
 }
 
 } // namespace kb::render

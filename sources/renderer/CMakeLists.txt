@@ -514,10 +514,12 @@ set(KB_RENDERER_SHADER_MANIFEST
     fs_leui_rect.sc
     fs_lit.sc
     fs_deferred_lighting.sc
+    fs_deferred_lighting_cmp.sc
     fs_sky_backdrop.sc
     fs_mesh.sc
     fs_mesh_gbuffer_instanced.sc
     fs_mesh_instanced.sc
+    fs_mesh_instanced_cmp.sc
     fs_mesh_motion_vectors.sc
     fs_mesh_selection_instanced.sc
     fs_mesh_shadow_instanced.sc
@@ -638,6 +640,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_gbuffer_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_gbuffer_layered_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_instanced.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_instanced_cmp.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_motion_vectors.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_selection_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_shadow_instanced.sc
@@ -689,6 +692,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
         bgfx_compile_shaders(
             TYPE FRAGMENT
             SHADERS ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_deferred_lighting.sc
+                ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_deferred_lighting_cmp.sc
             VARYING_DEF ${KB_RENDERER_SHADER_VARYING_DEF}
             OUTPUT_DIR ${KB_RENDERER_GENERATED_SHADER_DIR}
             INCLUDE_DIRS ${KB_RENDERER_SHADER_INCLUDE_DIR} ${KB_RENDERER_BGFX_SHADER_INCLUDE_DIR}
@@ -742,17 +746,17 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             add_custom_command(OUTPUT "${_fog_shader_output}" APPEND
                 DEPENDS "${KB_RENDERER_SHADER_INCLUDE_DIR}/present_display.sh")
         endif()
-        if(_fog_shader_output MATCHES "/fs_(mesh_instanced|deferred_lighting)\\.sc\\.bin$")
+        if(_fog_shader_output MATCHES "/fs_(mesh_instanced|deferred_lighting)(_cmp)?\\.sc\\.bin$")
             add_custom_command(OUTPUT "${_fog_shader_output}" APPEND
                 DEPENDS "${KB_RENDERER_SHADER_INCLUDE_DIR}/height_fog.sh"
                     "${KB_RENDERER_SHADER_INCLUDE_DIR}/local_reflection.sh"
                     "${KB_RENDERER_SHADER_INCLUDE_DIR}/light_probes.sh")
         endif()
-        if(_fog_shader_output MATCHES "/fs_mesh_instanced\\.sc\\.bin$")
+        if(_fog_shader_output MATCHES "/fs_mesh_instanced(_cmp)?\\.sc\\.bin$")
             add_custom_command(OUTPUT "${_fog_shader_output}" APPEND
                 DEPENDS "${KB_RENDERER_SHADER_INCLUDE_DIR}/pbr_builtin_advanced.sh")
         endif()
-        if(_fog_shader_output MATCHES "/fs_(mesh_instanced|mesh_gbuffer_instanced|mesh_gbuffer_layered_instanced|deferred_lighting)\\.sc\\.bin$")
+        if(_fog_shader_output MATCHES "/fs_(mesh_instanced|mesh_gbuffer_instanced|mesh_gbuffer_layered_instanced|deferred_lighting)(_cmp)?\\.sc\\.bin$")
             add_custom_command(OUTPUT "${_fog_shader_output}" APPEND DEPENDS
                 "${KB_RENDERER_SHADER_INCLUDE_DIR}/gbuffer_contract.sh"
                 "${KB_RENDERER_SHADER_INCLUDE_DIR}/shading_models.sh"
@@ -761,13 +765,24 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
         endif()
     endforeach()
 
+    # The comparison-sampler programs are the lit shaders with a define: they follow them and the shadow lookups.
+    foreach(_compare_shader_output IN LISTS KB_RENDERER_GENERATED_FRAGMENT_SHADERS)
+        if(_compare_shader_output MATCHES "/(fs_mesh_instanced|fs_deferred_lighting)_cmp\\.sc\\.bin$")
+            string(REGEX REPLACE ".*/(fs_[a-z_]+)_cmp\\.sc\\.bin$" "\\1.sc" _compare_base_source "${_compare_shader_output}")
+            add_custom_command(OUTPUT "${_compare_shader_output}" APPEND DEPENDS
+                "${KB_RENDERER_SHADER_INCLUDE_DIR}/${_compare_base_source}"
+                "${KB_RENDERER_SHADER_INCLUDE_DIR}/shadow_cascades.sh"
+                "${KB_RENDERER_SHADER_INCLUDE_DIR}/point_shadow.sh")
+        endif()
+    endforeach()
+
     foreach(_position_shader_output IN LISTS KB_RENDERER_GENERATED_FRAGMENT_SHADERS KB_RENDERER_GENERATED_COMPUTE_SHADERS)
-        if(_position_shader_output MATCHES "/(fs_deferred_lighting|fs_ssgi_resolve|cs_particle_gpu_collide)\\.sc\\.bin$")
+        if(_position_shader_output MATCHES "/(fs_deferred_lighting(_cmp)?|fs_ssgi_resolve|cs_particle_gpu_collide)\\.sc\\.bin$")
             add_custom_command(OUTPUT "${_position_shader_output}" APPEND DEPENDS
                 "${KB_RENDERER_SHADER_INCLUDE_DIR}/gbuffer_position.sh"
                 "${KB_RENDERER_SHADER_INCLUDE_DIR}/screen_uv.sh")
         endif()
-        if(_position_shader_output MATCHES "/fs_(deferred_lighting|sky_capture)\\.sc\\.bin$")
+        if(_position_shader_output MATCHES "/fs_(deferred_lighting(_cmp)?|sky_capture)\\.sc\\.bin$")
             add_custom_command(OUTPUT "${_position_shader_output}" APPEND DEPENDS
                 "${KB_RENDERER_SHADER_INCLUDE_DIR}/sky_backdrop.sh")
         endif()

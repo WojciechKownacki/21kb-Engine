@@ -179,6 +179,10 @@ void AppendUniqueValue(std::vector<T>& values, const T& value) {
     }
 }
 
+// The built-in forward program variants that read the shadow maps through comparison samplers.
+constexpr const char* kShadowCompareOpaquePass = "BaseOpaqueShadowCompare";
+constexpr const char* kShadowCompareTransparentPass = "BaseTransparentShadowCompare";
+
 [[nodiscard]] bgfx::ProgramHandle LoadBuiltinMeshProgram(const MaterialProgramKey& key) {
     const bool skinned = key.skinned;
     const char* const meshVertexShader = skinned
@@ -189,6 +193,9 @@ void AppendUniqueValue(std::vector<T>& values, const T& value) {
         : "vs_mesh_shadow_instanced.sc";
     if (key.pass == "BaseOpaque") {
         return ShaderLoader::LoadProgram(meshVertexShader, "fs_mesh_instanced.sc");
+    }
+    if (key.pass == kShadowCompareOpaquePass || key.pass == kShadowCompareTransparentPass) {
+        return ShaderLoader::LoadProgram(meshVertexShader, "fs_mesh_instanced_cmp.sc");
     }
     if (key.pass == "BaseTransparent") {
         // Transparent reuses the forward shader; the alpha blend is a render state (MAT-80), not a shader.
@@ -1087,7 +1094,7 @@ void SceneMeshPassResources::EndFrame(std::uint64_t frameIndex) const {
 }
 
 SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(
-    const RenderMaterialResource* material, MeshPassType pass, bool skinned) const noexcept {
+    const RenderMaterialResource* material, MeshPassType pass, bool skinned, bool shadowCompare) const noexcept {
     SceneMeshPassProgramResolution resolution{};
     if (IsSelectionPass(pass)) {
         resolution.key = BuiltinMeshProgramKey("SelectionId", skinned);
@@ -1104,12 +1111,15 @@ SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(
         resolution.materialProgramIdentity = MaterialProgramKeyIdentityHash(resolution.key);
         resolution.status = SceneRenderMaterialProgramStatus::Builtin;
     } else {
+        const bool compareProgram = shadowCompare && !shadowCompareUnavailable_[skinned ? 1U : 0U] &&
+            (pass == MeshPassType::BaseOpaque || pass == MeshPassType::BaseTransparent);
         resolution.key = BuiltinMeshProgramKey(
+            compareProgram ? (pass == MeshPassType::BaseOpaque ? kShadowCompareOpaquePass : kShadowCompareTransparentPass) :
             pass == MeshPassType::Depth ? "Depth" :
                 (pass == MeshPassType::ShadowDepth ? "ShadowDepth" :
                     (pass == MeshPassType::MotionVectors ? "MotionVectors" : GraphMeshPassName(pass))),
             skinned);
-        const bool registryProgram = skinned || pass == MeshPassType::MotionVectors;
+        bool registryProgram = skinned || pass == MeshPassType::MotionVectors || compareProgram;
         resolution.program = registryProgram
             ? programRegistry_.Find(resolution.key)
             : ((pass == MeshPassType::ShadowDepth || pass == MeshPassType::Depth)
@@ -1120,6 +1130,21 @@ SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(
             if (bgfx::isValid(resolution.program)) {
                 AppendUniqueValue(residentProgramKeys_, resolution.key);
             }
+        }
+        if (compareProgram && !bgfx::isValid(resolution.program)) {
+            // The comparison program is optional: without it the frame is lit by the stored-depth program.
+            shadowCompareUnavailable_[skinned ? 1U : 0U] = true;
+            resolution.key = BuiltinMeshProgramKey(GraphMeshPassName(pass), skinned);
+            registryProgram = skinned;
+            resolution.program = registryProgram ? programRegistry_.Find(resolution.key) : meshProgram_;
+            if (registryProgram && !bgfx::isValid(resolution.program)) {
+                resolution.program = programRegistry_.Acquire(resolution.key);
+                if (bgfx::isValid(resolution.program)) {
+                    AppendUniqueValue(residentProgramKeys_, resolution.key);
+                }
+            }
+        } else {
+            resolution.shadowCompare = compareProgram;
         }
         if (registryProgram && bgfx::isValid(resolution.program)) {
             AppendUniqueValue(usedProgramKeys_, resolution.key);
@@ -1182,6 +1207,7 @@ SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(
                 AppendUniqueValue(residentProgramKeys_, key);
                 resolution.program = graphHandle;
                 resolution.graphProgram = true;
+                resolution.shadowCompare = false;
                 resolution.status = SceneRenderMaterialProgramStatus::GraphReady;
             } else {
                 const bool shadowRequiresGraphProgram = pass == MeshPassType::ShadowDepth &&
@@ -1265,7 +1291,8 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
     const RenderMaterialResource* material = desc.command.materialResource;
     const bool skinned = desc.command.meshResource != nullptr &&
         desc.command.meshResource->vertexFormat == RenderVertexFormat::SkinnedP3N3T4UV2J4W4;
-    const SceneMeshPassProgramResolution resolution = ResolveMeshPassProgram(material, desc.pass, skinned);
+    const SceneMeshPassProgramResolution resolution = ResolveMeshPassProgram(
+        material, desc.pass, skinned, desc.shadowMap != nullptr && desc.shadowMap->compareSampling);
     lastProgramResolution_ = resolution;
     if (skinned) {
         if (desc.skinningPaletteAllocator == nullptr ||
@@ -1445,7 +1472,15 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
     bgfx::setTexture(2U, metallicRoughnessSampler_, materialBinding.metallicRoughnessTexture);
     bgfx::setTexture(3U, occlusionSampler_, materialBinding.occlusionTexture);
     bgfx::setTexture(4U, emissiveSampler_, materialBinding.emissiveTexture, spriteSampler);
-    bgfx::setTexture(5U, shadowSampler_, desc.shadowMap != nullptr && desc.shadowMap->IsValid() ? desc.shadowMap->depthTexture : fallbackWhiteTexture_);
+    // A comparison sampler needs a depth texture at both stages: a map nobody samples borrows the other one.
+    constexpr bgfx::TextureHandle kNoTexture{ bgfx::kInvalidHandle };
+    const bgfx::TextureHandle sunDepth = desc.shadowMap != nullptr && desc.shadowMap->IsValid() ? desc.shadowMap->depthTexture : kNoTexture;
+    const bgfx::TextureHandle localDepth = desc.shadowMap != nullptr && desc.shadowMap->point.IsValid() ? desc.shadowMap->point.depthTexture : kNoTexture;
+    if (resolution.shadowCompare) {
+        bgfx::setTexture(5U, shadowSampler_, bgfx::isValid(sunDepth) ? sunDepth : localDepth, kShadowCompareSamplerFlags);
+    } else {
+        bgfx::setTexture(5U, shadowSampler_, desc.shadowMap != nullptr && desc.shadowMap->IsValid() ? desc.shadowMap->depthTexture : fallbackWhiteTexture_);
+    }
     if (desc.pass == MeshPassType::BaseOpaque || desc.pass == MeshPassType::BaseTransparent)
         lightGrid_.Bind(desc.lighting.lightGrid, 6U);
     bgfx::setTexture(7U, clearcoatSampler_, materialBinding.clearcoatTexture);
@@ -1483,7 +1518,8 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
     bgfx::setUniform(shadowParamsUniform_, desc.shadowMap != nullptr && desc.shadowMap->IsValid() ? desc.shadowMap->params.data() : disabledShadowParams.data());
     shadowCascades_.Set(desc.shadowMap);
     pointShadows_.Set(desc.shadowMap != nullptr ? &desc.shadowMap->point : nullptr, desc.lighting.pointShadowSlot,
-        fallbackWhiteTexture_);
+        resolution.shadowCompare ? sunDepth : fallbackWhiteTexture_, PointShadowUniforms::kSamplerStage, resolution.shadowCompare,
+        desc.shadowMap == nullptr || desc.shadowMap->wideKernel);
 
     return resolution.program;
 }

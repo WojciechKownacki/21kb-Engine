@@ -459,6 +459,7 @@ add_executable(kb_editor WIN32
     src/private/inspection/InspectorAddComponentBrowserModel.hpp
     src/private/inspection/InspectorEntitySummaryTextBuilder.hpp
     src/private/inspection/InspectorLightTextBuilder.hpp
+    src/private/inspection/InspectorLightModel.hpp
     src/private/inspection/EditorValueFormatter.hpp
     src/private/inspection/InspectorMaterialTextureSlotFormatter.hpp
     src/private/inspection/MaterialAssetFormatter.hpp
