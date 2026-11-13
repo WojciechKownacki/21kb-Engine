@@ -4038,14 +4038,37 @@ bool EditorSceneContext::EntityScriptEnabled(kb::scene::SceneEntity entity) cons
     return behaviour != nullptr && behaviour->enabled;
 }
 
+namespace {
+
+// The fields a script declares for the Inspector: a Lua script's `@expose` variables or a C++ script's
+// `expose =` lines. Both are edited and stored the same way.
+struct ScriptFieldDeclarations {
+    std::vector<kb::script::ScriptApiPin> pins;
+    std::vector<kb::script::ScriptValue> defaults;
+};
+
+[[nodiscard]] ScriptFieldDeclarations DeclaredScriptFields(kb::assets::AssetManager& manager, kb::assets::AssetId id) {
+    ScriptFieldDeclarations fields;
+    if (const kb::assets::AssetHandle<kb::script::LuaScriptAsset> lua = manager.Load<kb::script::LuaScriptAsset>(id); lua.IsLoaded()) {
+        fields.pins = lua.Get()->exposedVariables;
+        fields.defaults = lua.Get()->exposedVariableDefaults;
+    } else if (const kb::assets::AssetHandle<kb::script::NativeBehaviourDescriptor> native =
+                   manager.Load<kb::script::NativeBehaviourDescriptor>(id);
+               native.IsLoaded()) {
+        fields.pins = native.Get()->exposedVariables;
+        fields.defaults = native.Get()->exposedVariableDefaults;
+    }
+    return fields;
+}
+
+} // namespace
+
 std::size_t EditorSceneContext::EntityScriptExposedVariableCount(kb::scene::SceneEntity entity) const {
     const kb::scene::BehaviourComponent* behaviour = scene_->Components().Behaviours().TryGet(entity);
     if (behaviour == nullptr) {
         return 0U;
     }
-    const kb::assets::AssetHandle<kb::script::LuaScriptAsset> asset =
-        scene_->Assets().Manager().Load<kb::script::LuaScriptAsset>(kb::assets::AssetId{ behaviour->behaviourAssetId });
-    return asset.IsLoaded() ? asset.Get()->exposedVariables.size() : 0U;
+    return DeclaredScriptFields(scene_->Assets().Manager(), kb::assets::AssetId{ behaviour->behaviourAssetId }).pins.size();
 }
 
 std::vector<EditorSceneContext::EntityScriptVariable> EditorSceneContext::EntityScriptExposedVariables(kb::scene::SceneEntity entity) const {
@@ -4054,20 +4077,15 @@ std::vector<EditorSceneContext::EntityScriptVariable> EditorSceneContext::Entity
     if (behaviour == nullptr) {
         return result;
     }
-    const kb::assets::AssetHandle<kb::script::LuaScriptAsset> asset =
-        scene_->Assets().Manager().Load<kb::script::LuaScriptAsset>(kb::assets::AssetId{ behaviour->behaviourAssetId });
-    if (!asset.IsLoaded()) {
-        return result;
-    }
-    const kb::script::LuaScriptAsset& script = *asset.Get();
+    const ScriptFieldDeclarations script = DeclaredScriptFields(scene_->Assets().Manager(), kb::assets::AssetId{ behaviour->behaviourAssetId });
     const std::span<const kb::scene::BehaviourVariableOverride> overrides = scene_->Entities().BehaviourVariableOverrides(entity);
-    result.reserve(script.exposedVariables.size());
-    for (std::size_t index = 0U; index < script.exposedVariables.size(); ++index) {
-        const kb::script::ScriptApiPin& pin = script.exposedVariables[index];
+    result.reserve(script.pins.size());
+    for (std::size_t index = 0U; index < script.pins.size(); ++index) {
+        const kb::script::ScriptApiPin& pin = script.pins[index];
         // Effective value = the override delta if one is stored, else the
-        // script's declared @expose default.
-        kb::script::ScriptValue value = index < script.exposedVariableDefaults.size()
-            ? script.exposedVariableDefaults[index]
+        // script's declared default.
+        kb::script::ScriptValue value = index < script.defaults.size()
+            ? script.defaults[index]
             : kb::script::ScriptValue{};
         bool overridden = false;
         for (const kb::scene::BehaviourVariableOverride& entry : overrides) {
@@ -4096,16 +4114,12 @@ bool EditorSceneContext::SetEntityScriptVariable(kb::scene::SceneEntity entity, 
     kb::script::ScriptValue defaultValue;
     bool hasDefault = false;
     if (const kb::scene::BehaviourComponent* behaviour = scene_->Components().Behaviours().TryGet(entity); behaviour != nullptr) {
-        const kb::assets::AssetHandle<kb::script::LuaScriptAsset> asset =
-            scene_->Assets().Manager().Load<kb::script::LuaScriptAsset>(kb::assets::AssetId{ behaviour->behaviourAssetId });
-        if (asset.IsLoaded()) {
-            const kb::script::LuaScriptAsset& script = *asset.Get();
-            for (std::size_t index = 0U; index < script.exposedVariables.size(); ++index) {
-                if (script.exposedVariables[index].name == name && index < script.exposedVariableDefaults.size()) {
-                    defaultValue = script.exposedVariableDefaults[index];
-                    hasDefault = true;
-                    break;
-                }
+        const ScriptFieldDeclarations script = DeclaredScriptFields(scene_->Assets().Manager(), kb::assets::AssetId{ behaviour->behaviourAssetId });
+        for (std::size_t index = 0U; index < script.pins.size(); ++index) {
+            if (script.pins[index].name == name && index < script.defaults.size()) {
+                defaultValue = script.defaults[index];
+                hasDefault = true;
+                break;
             }
         }
     }

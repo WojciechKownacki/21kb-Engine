@@ -40,6 +40,32 @@ bool RejectAfterPartialRegistration(kb::script::NativeScriptPluginApi* api) {
     static_cast<void>(api->registerLifecycle(api->user, kSymbol, kb::script::ScriptLifecycleEvent::Tick, &Ready));
     return false;
 }
+
+// A script written as a class: the hooks it defines are found by name.
+int classDestroyed = 0;
+struct ClassStyle {
+    static void Ready(kb::script::ScriptExecutionContext* context) {
+        auto transform = context->GetScene().Transforms().Get(context->Self());
+        transform.localPosition.z = 2.0F;
+        context->GetScene().Transforms().Set(context->Self(), transform);
+    }
+    static void Tick(kb::script::ScriptExecutionContext* context) {
+        auto transform = context->GetScene().Transforms().Get(context->Self());
+        transform.localPosition.z += 1.0F;
+        context->GetScene().Transforms().Set(context->Self(), transform);
+    }
+    static void Destroyed(kb::script::ScriptExecutionContext*) { ++classDestroyed; }
+};
+struct NoHooks {
+    static void Helper(kb::script::ScriptExecutionContext*) {}
+};
+bool RegisterClassStyle(kb::script::NativeScriptPluginApi* api) {
+    return api != nullptr && api->version == kb::script::kNativeScriptPluginApiVersion &&
+        kb::script::RegisterNativeScript<ClassStyle>(api, "tests.ClassStyle");
+}
+bool RegisterNoHooks(kb::script::NativeScriptPluginApi* api) {
+    return api != nullptr && kb::script::RegisterNativeScript<NoHooks>(api, "tests.NoHooks");
+}
 }
 
 int main() {
@@ -73,6 +99,20 @@ int main() {
         modules.Unload("project");
         Require(!modules.IsLoaded("project"), "Linked module was not unloaded");
         Require(runtime.ExecuteLifecycle(scene,kb::script::ScriptLifecycleEvent::Tick,1.0F).executedBehaviours == 0U, "Callback survived unload");
+        // The same through RegisterNativeScript: Ready, Tick and Destroyed are found on the class, and a class
+        // that defines no hook is refused instead of registering nothing.
+        const auto classObject = scene.Entities().CreateObject({.name = "ClassCharacter"});
+        constexpr kb::assets::AssetId classAsset{1004U};
+        scene.Components().Behaviours().Set(classObject.Entity(), {.behaviourAssetId=classAsset.value,
+            .backend=kb::scene::BehaviourBackend::Native,.enabled=true});
+        Require(!modules.LoadLinked("hookless", &RegisterNoHooks).Succeeded(), "A class without hooks was accepted");
+        Require(modules.LoadLinked("class", &RegisterClassStyle).Succeeded(), "Class registration failed");
+        Require(native->BindAssetSymbol(classAsset, "tests.ClassStyle"), "Class asset symbol binding failed");
+        Require(runtime.ExecuteLifecycle(scene,kb::script::ScriptLifecycleEvent::Ready,0.0F).Succeeded(), "Class Ready failed");
+        Require(scene.Transforms().Get(classObject.Entity()).localPosition.z == 2.0F, "Class Ready was not found by name");
+        Require(runtime.ExecuteLifecycle(scene,kb::script::ScriptLifecycleEvent::Tick,1.0F).Succeeded(), "Class Tick failed");
+        Require(scene.Transforms().Get(classObject.Entity()).localPosition.z == 3.0F, "Class Tick was not found by name");
+        Require(runtime.ExecuteLifecycle(scene,kb::script::ScriptLifecycleEvent::Destroyed,0.0F).Succeeded() && classDestroyed == 1, "Class Destroyed was not found by name");
         std::cout << "Linked native Ready/Tick/event/Destroyed, replacement rollback and unload PASS\n";
         return 0;
     } catch (const std::exception& error) {

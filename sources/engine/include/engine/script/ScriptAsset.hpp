@@ -31,6 +31,10 @@ struct NativeBehaviourDescriptor {
     NativeScriptBuildDesc build;
     bool shadowCopy = true;
     std::vector<ScriptApiNameEntry> apiDeclarations;
+    // Fields the script shows in the Inspector, one `expose = name Type = default` line each. They are
+    // the same per-object values a Lua script's `@expose` variables are (BehaviourVariableOverride).
+    std::vector<ScriptApiPin> exposedVariables;
+    std::vector<ScriptValue> exposedVariableDefaults;
 };
 
 namespace ScriptAssetTypes {

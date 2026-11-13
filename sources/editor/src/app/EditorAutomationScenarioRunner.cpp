@@ -3109,6 +3109,24 @@ ReadScriptValue(
         if (*operation == "prefab_revert") return {state.context.RevertPrefabInstance(entity), *alias};
         return {state.context.Scene().Prefabs().SourcePrefab(entity).IsValid(), *alias};
     }
+    // A script field of the Inspector (Lua `@expose`, C++ `expose =`): set it as the Inspector does, or check what it reads.
+    if (*operation == "set_script_field" || *operation == "assert_script_field") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto name = StringMember(step, "name", error);
+        const auto number = NumberMember(step, "value", error);
+        if (!alias || !name || !number) return {false, error};
+        const auto entity = ResolveEntity(state, *alias);
+        if (!state.context.Scene().Entities().IsAlive(entity)) return {false, "entity alias is not alive"};
+        if (*operation == "set_script_field") {
+            return {state.context.SetEntityScriptVariable(entity, *name, kb::script::ScriptValue{static_cast<float>(*number)}), *name};
+        }
+        for (const auto& field : state.context.EntityScriptExposedVariables(entity)) {
+            if (field.name == *name) {
+                return {std::abs(field.value.AsFloat() - static_cast<float>(*number)) < 1.0e-4F, *name};
+            }
+        }
+        return {false, "script field is not declared by the entity's script"};
+    }
     if (*operation == "bind_entity") {
         const auto alias = StringMember(step, "id", error);
         const auto name = StringMember(step, "name", error);

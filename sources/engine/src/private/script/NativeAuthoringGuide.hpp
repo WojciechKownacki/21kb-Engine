@@ -19,8 +19,11 @@ kb_cli run --project . --frames 3
 
 `Source/NativeScripts/MotionProbe` contains a standalone CMake project.
 `script-build` incrementally builds that project, without rebuilding the engine.
-The generated registration checks the SDK ABI; keep that check. In its `Ready`
-callback, use public C++ API to change the scene:
+The generated registration checks the SDK ABI; keep that check. The class defines
+static functions named like the Lua hooks (`Created`, `Activated`, `Ready`,
+`FixedTick`, `Tick`, `LateTick`, `Deactivated`, `Destroyed`, each taking a
+`ScriptExecutionContext*`), and `kb::script::RegisterNativeScript<Class>` registers
+the ones it finds. In `Ready`, use public C++ API to change the scene:
 
 ```cpp
 #include "engine/scene/SceneTransforms.hpp"
@@ -32,9 +35,16 @@ transform.localPosition.x = 3.0F;
 transforms.Set(context->Self(), transform);
 ```
 
+A field shown in the Inspector is one line in the `.native` file, `expose = speed Float =
+2.5` (types as in Lua `@expose`: Bool, Int, Float, String...). Read it in a callback
+with `kb::script::NativeField(*context, "speed")` from
+`engine/script/NativeScriptFields.hpp`: the value set on that object, else the default.
+The values are saved with the scene, so a rebuilt module sees them unchanged.
+
 Other shared gameplay operations are available through `context->CallFunction`
 and the function-specific API topics. Script errors and build failures return
-diagnostics and a nonzero CLI exit code.
+diagnostics and a nonzero CLI exit code; a compiler error is listed with its file
+and line (`Probe.cpp(12): error ...`), also in the editor Console.
 
 For Lua, create `LuaProbe` with `--language lua`, edit
 `Assets/Scripts/LuaProbe.lua`, validate it with `kb_cli validate --project .

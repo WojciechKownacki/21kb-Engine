@@ -706,9 +706,19 @@ def _ensure_host_tools(args: argparse.Namespace, cmake: Path) -> tuple[Path, Pat
 _NATIVE_LINK_MANIFEST = "native-link.json"
 
 
-def _native_link_manifest(pack: Path) -> str:
+def _native_link_manifest(args: argparse.Namespace, pack: Path) -> str:
+    """The cooked project C++ list, copied to one fixed place per target. A path inside the job folder
+    differs on every run and the native build keys its configuration on what it is given, so each package
+    of a project with C++ would build the whole engine again."""
     manifest = pack.parent / _NATIVE_LINK_MANIFEST
-    return str(manifest) if manifest.is_file() else ""
+    if not manifest.is_file():
+        return ""
+    fixed = args.build_root / "package-cache" / args.target / _NATIVE_LINK_MANIFEST
+    content = manifest.read_bytes()
+    if not fixed.is_file() or fixed.read_bytes() != content:
+        fixed.parent.mkdir(parents=True, exist_ok=True)
+        fixed.write_bytes(content)
+    return str(fixed)
 
 
 def _cook(args: argparse.Namespace, snapshot_project: Path, job: Path, cooker: Path, validator: Path) -> Path:
@@ -1469,7 +1479,6 @@ def _stage_android(args: argparse.Namespace, pack: Path, stage: Path, job: Path)
         f"-PkbMinSdk={args.android_min_sdk}",
         f"-PkbTargetSdk={args.android_target_sdk}",
         f"-PkbAssetDelivery={str(bundle).lower()}",
-        f"-PkbProjectNativeManifest={_native_link_manifest(pack)}",
         "--no-daemon",
     ]
     jobs = os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL", "")
@@ -1485,9 +1494,16 @@ def _stage_android(args: argparse.Namespace, pack: Path, stage: Path, job: Path)
         command.append(f"-PkbSplashBackground=#{args.android_splash_background}")
     if getattr(args, "trust_anchor", None):
         command.append(f"-PkbTrustAnchor={args.trust_anchor}")
+    # The manifest reaches CMake through the environment: an argument would be part of the native
+    # configuration's identity, and the configuration made without one would no longer be reused.
+    gradle_environment = {key: value for key, value in os.environ.items() if key != "KB_PROJECT_NATIVE_MANIFEST"}
+    native_manifest = _native_link_manifest(args, pack)
+    if native_manifest:
+        gradle_environment["KB_PROJECT_NATIVE_MANIFEST"] = native_manifest
     run_checked(
         command,
         cwd=gradle_root,
+        env=gradle_environment,
         timeout_seconds=3600,
         on_line=lambda line: emit_diagnostic("Info", line),
     )
@@ -1762,7 +1778,7 @@ def _stage_web(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path, j
             "-DBUILD_TESTING=OFF",
             "-DBGFX_OPENGLES_VERSION=30",
             f"-DKB_WEB_RENDERER={backend}",
-            f"-DKB_PROJECT_NATIVE_MANIFEST={_native_link_manifest(pack)}",
+            f"-DKB_PROJECT_NATIVE_MANIFEST={_native_link_manifest(args, pack)}",
         ],
         cwd=args.engine_root,
         timeout_seconds=1800,

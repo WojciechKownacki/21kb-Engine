@@ -381,6 +381,22 @@ ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareLuaImportsRec
 ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareNativeBehaviourAsset(const kb::assets::AssetMetadata& metadata) {
     ScriptRuntimeAssetPrepareResult result{};
     ++result.visitedAssets;
+    // A failed build is kept as one text: what failed, then the compiler's lines (file and line) one per
+    // row, so the user reads each of them in the Console and not one wall of text.
+    const auto addBuildFailure = [&result, &metadata](const std::string& message) {
+        const std::size_t summaryEnd = message.find('\n');
+        AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native, message.substr(0U, summaryEnd));
+        for (std::size_t begin = summaryEnd; begin != std::string::npos;) {
+            ++begin;
+            const std::size_t end = message.find('\n', begin);
+            result.diagnostics.push_back(ScriptRuntimeAssetPrepareDiagnostic{
+                .assetId = metadata.id,
+                .backend = kb::scene::BehaviourBackend::Native,
+                .message = message.substr(begin, end == std::string::npos ? std::string::npos : end - begin),
+            });
+            begin = end;
+        }
+    };
     const auto now = std::chrono::steady_clock::now();
     const auto observation = nativeSourceObservations_.find(metadata.id.value);
     if (observation != nativeSourceObservations_.end() && observation->second.descriptorHash == metadata.contentHash &&
@@ -392,7 +408,7 @@ ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareNativeBehavio
         }
         const auto failed = failedNativeAssetBuilds_.find(metadata.id.value);
         if (failed != failedNativeAssetBuilds_.end() && failed->second.first == observation->second.signature) {
-            AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native, failed->second.second);
+            addBuildFailure(failed->second.second);
             return result;
         }
     }
@@ -443,7 +459,7 @@ ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareNativeBehavio
     }
     const auto failedBuild = failedNativeAssetBuilds_.find(metadata.id.value);
     if (failedBuild != failedNativeAssetBuilds_.end() && failedBuild->second.first == signature) {
-        AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native, failedBuild->second.second);
+        addBuildFailure(failedBuild->second.second);
         return result;
     }
     if (nativeSettings_.buildPlugins && descriptor->build.enabled) {
@@ -453,9 +469,13 @@ ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareNativeBehavio
         }
         NativeScriptBuildResult built = NativeScriptBuildPipeline::Build(build);
         if (!built.Succeeded()) {
-            const std::string message = built.errors.empty() ? "native script plugin build failed" : built.errors.front();
+            // The first entry says what failed; the others are the compiler's lines with file and line.
+            std::string message = built.errors.empty() ? "native script plugin build failed" : built.errors.front();
+            for (std::size_t index = 1U; index < built.errors.size(); ++index) {
+                message += '\n' + built.errors[index];
+            }
             failedNativeAssetBuilds_[metadata.id.value] = { signature, message };
-            AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native, message);
+            addBuildFailure(message);
             return result;
         }
     }

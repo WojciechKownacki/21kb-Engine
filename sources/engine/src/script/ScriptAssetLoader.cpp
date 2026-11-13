@@ -394,6 +394,32 @@ struct NativeBehaviourDescriptorParseResult {
             result.descriptor.build.workingDirectory = std::filesystem::path{ std::string{ value } };
         } else if (key == "shadow_copy") {
             result.descriptor.shadowCopy = ParseBool(value, true);
+        } else if (key == "expose") {
+            // `expose = speed Float = 2.5`: a name, a type and, after '=', an optional default.
+            std::string_view declaration = value;
+            std::string_view defaultText;
+            if (const std::size_t separator = declaration.find('='); separator != std::string_view::npos) {
+                defaultText = Trim(declaration.substr(separator + 1U));
+                declaration = Trim(declaration.substr(0U, separator));
+            }
+            std::istringstream fieldInput{ std::string{ declaration } };
+            std::string fieldName;
+            std::string fieldTypeName;
+            fieldInput >> fieldName >> fieldTypeName;
+            ScriptValueType fieldType = ScriptValueType::Void;
+            if (fieldName.empty() || !TryParseScriptValueType(fieldTypeName, fieldType)) {
+                result.errors.push_back("Native behaviour descriptor has invalid expose declaration at line " + std::to_string(lineNumber) +
+                    " (write: expose = name Type = default)");
+                continue;
+            }
+            result.descriptor.exposedVariables.push_back(ScriptApiPin{ .name = std::move(fieldName), .type = fieldType, .required = false });
+            ScriptValue fieldDefault = DefaultScriptValue(fieldType);
+            if (!defaultText.empty()) {
+                if (std::optional<ScriptValue> parsedDefault = TryParseScriptValue(defaultText, fieldType); parsedDefault.has_value()) {
+                    fieldDefault = std::move(*parsedDefault);
+                }
+            }
+            result.descriptor.exposedVariableDefaults.push_back(std::move(fieldDefault));
         } else if (key == "api") {
             std::optional<ScriptApiNameEntry> declaration = ScriptApiDeclarationParser::ParseDeclaration(value, result.descriptor.name, true);
             if (declaration.has_value()) {

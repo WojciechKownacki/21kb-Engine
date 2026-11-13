@@ -249,7 +249,29 @@ def check_android_cook(args):
         assert f'families={family} ' in summary and 'scenes=2' in summary, summary
         backends = re.search(r'shader-backends=(\S+)', summary).group(1).split(',')
         assert 'essl' in backends and not {'dxbc', 'dxil', 'glsl', 'metal', 'wgsl'} & set(backends), backends
+    check_native_link_manifest_location(context)
     print('android cook contract passed')
+
+
+def check_native_link_manifest_location(context):
+    """The cooked list of project C++ reaches the native build at one fixed place per target. A path inside the
+    job folder is different for every package, and the native build keys its configuration on it: each package of
+    a project with C++ would build the whole engine again."""
+    import package_game
+    namespace = argparse.Namespace(build_root=context.root / 'native-manifest-build', target='Android.ASTC.arm64')
+    places = set()
+    for index in range(2):
+        pack = context.root / f'native-job-{index}' / 'cook' / 'Game.kbpack'
+        pack.parent.mkdir(parents=True)
+        listed = json.dumps({'modules': [{'key': f'module_{index}', 'entry': 'kb_register_native_scripts', 'sources': [f'job{index}/Probe.cpp']}]})
+        (pack.parent / 'native-link.json').write_text(listed, encoding='utf-8')
+        place = Path(package_game._native_link_manifest(namespace, pack))
+        assert place.read_text(encoding='utf-8') == listed, 'the fixed manifest must hold the latest cooked list'
+        places.add(place)
+    assert len(places) == 1, f'the manifest path must not depend on the job: {places}'
+    bare = context.root / 'native-job-none' / 'cook' / 'Game.kbpack'
+    bare.parent.mkdir(parents=True)
+    assert package_game._native_link_manifest(namespace, bare) == '', 'a project without C++ passes no manifest'
 
 
 def android_toolchain_problem(engine_root):

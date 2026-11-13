@@ -79,6 +79,8 @@
 #include "engine/script/LuaScriptBackend.hpp"
 #include "engine/script/NativeScriptBuildPipeline.hpp"
 #include "engine/script/NativeScriptBackend.hpp"
+#include "engine/script/NativeScriptFields.hpp"
+#include "engine/script/ScriptAssetLoader.hpp"
 #include "engine/script/NativeScriptPlugin.hpp"
 #include "engine/script/NativeScriptPluginManager.hpp"
 #include "engine/script/PucLuaScriptRuntime.hpp"
@@ -781,6 +783,28 @@ void RunNativeScriptBuildPipelineTest() {
         .workingDirectory = projectRoot,
     });
     kb::tests::Require(!emptyCommand.Succeeded(), "Native script build pipeline accepted an empty build command");
+
+    // A compiler that fails: its error line, with file and line, reaches the caller (an editor has no
+    // console to read it from); a warning is counted but not listed as an error.
+#if defined(_WIN32)
+    const std::string failingCompile = "echo C:/proj/Probe.cpp(12): error C2065: 'x': undeclared identifier"
+        " & echo C:/proj/Probe.cpp(30): warning C4100: unused & exit /b 2";
+    const std::string errorLocation = "C:/proj/Probe.cpp(12): error C2065: 'x': undeclared identifier";
+#else
+    const std::string failingCompile = "echo 'Probe.cpp:12:5: error: use of undeclared identifier x'; echo 'Probe.cpp:30:1: warning: unused'; exit 2";
+    const std::string errorLocation = "Probe.cpp:12:5: error: use of undeclared identifier x";
+#endif
+    const kb::script::NativeScriptBuildResult failedCompile = kb::script::NativeScriptBuildPipeline::Build(kb::script::NativeScriptBuildDesc{
+        .enabled = true,
+        .command = failingCompile,
+        .workingDirectory = projectRoot,
+    });
+    kb::tests::Require(!failedCompile.Succeeded() && failedCompile.exitCode == 2 && failedCompile.errors.size() == 2U,
+        "A failing compile did not report its exit code and its error line");
+    kb::tests::Require(failedCompile.errors.front().find("exit code 2 (1 error, 1 warning)") != std::string::npos,
+        "A failing compile did not summarize its errors and warnings");
+    kb::tests::Require(failedCompile.errors.back() == errorLocation,
+        "A failing compile did not hand over the compiler's error line with its file and line");
 }
 
 void RunScriptRuntimeExecutionOrderTest() {
@@ -1814,6 +1838,96 @@ end
     kb::tests::Require(destroyed.Succeeded() && !luaRuntime.IsDebugPaused() && luaRuntime.LastDebugPause().valid && !luaRuntime.LastDebugPause().suspended &&
             luaRuntime.LastDebugPause().line == 10 && destroyedHit.has_value() && destroyedHit->AsInt() == 1,
         "Lua breakpoint in a Destroyed entry suspended a behaviour that is never resumed");
+}
+
+// A C++ script's `expose =` lines are fields the Inspector edits and the script reads: the default of the
+// declaration until a value is set on the object, then that value.
+void RunNativeExposedFieldsTest() {
+    ResetTestRoot();
+
+    const std::filesystem::path projectRoot = TestRoot() / "NativeFieldsProject";
+    WriteTextFile(projectRoot / "Assets" / "Logic" / "Fields.native",
+        "name = Fields\nsymbol = tests.Fields\nexpose = speed Float = 2.5\nexpose = label String = Runner\nexpose = lives Int\n");
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot), "Native fields project mount failed");
+    kb::tests::Require(scene.Assets().Discover() == 1U, "Native fields asset discovery failed");
+    const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/Fields.native");
+    kb::tests::Require(metadata != nullptr, "Native fields descriptor was not discovered");
+    const kb::assets::AssetHandle<kb::script::NativeBehaviourDescriptor> descriptor =
+        scene.Assets().Manager().Load<kb::script::NativeBehaviourDescriptor>(metadata->id);
+    kb::tests::Require(descriptor.IsLoaded() && descriptor->exposedVariables.size() == 3U &&
+            descriptor->exposedVariableDefaults.size() == 3U &&
+            descriptor->exposedVariables[0].name == "speed" && descriptor->exposedVariables[0].type == kb::script::ScriptValueType::Float &&
+            kb::tests::NearlyEqual(descriptor->exposedVariableDefaults[0].AsFloat(), 2.5F) &&
+            descriptor->exposedVariables[1].type == kb::script::ScriptValueType::String &&
+            descriptor->exposedVariableDefaults[1].AsString() == "Runner" &&
+            descriptor->exposedVariables[2].name == "lives" && descriptor->exposedVariableDefaults[2].AsInt(-1) == 0,
+        "The expose lines of a native descriptor were not read as fields with their defaults");
+
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Native Fields" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = metadata->id.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+    std::vector<kb::script::ScriptEvent> emitted;
+    kb::script::ScriptExecutionContext context{ scene, object.Entity(), metadata->id, kb::scene::BehaviourBackend::Native,
+        kb::script::ScriptLifecycleEvent::Tick, 0.0F, &emitted };
+    const std::optional<kb::script::ScriptValue> declared = kb::script::NativeField(context, "speed");
+    kb::tests::Require(declared.has_value() && kb::tests::NearlyEqual(declared->AsFloat(), 2.5F),
+        "A native field without a value on the object must read its declared default");
+    scene.Entities().SetBehaviourVariableOverride(object.Entity(), "speed", kb::script::ScriptValue{ 9.0F });
+    const std::optional<kb::script::ScriptValue> overridden = kb::script::NativeField(context, "speed");
+    kb::tests::Require(overridden.has_value() && kb::tests::NearlyEqual(overridden->AsFloat(), 9.0F),
+        "A native field set on the object must read that value, not the default");
+    kb::tests::Require(!kb::script::NativeField(context, "missing").has_value(), "An undeclared native field must read as absent");
+
+    const std::string invalid = "symbol = tests.Broken\nexpose = speed Nope = 1\n";
+    kb::script::NativeBehaviourDescriptorAssetLoader loader;
+    const kb::assets::AssetLoadResult refused = loader.Load(kb::assets::AssetLoadRequest{
+        .metadata = *metadata,
+        .resolvedPath = metadata->physicalPath,
+        .sourceBytes = std::span<const std::uint8_t>{ reinterpret_cast<const std::uint8_t*>(invalid.data()), invalid.size() },
+    });
+    kb::tests::Require(!refused.Succeeded() && refused.error.find("expose") != std::string::npos,
+        "A native descriptor with an expose line of an unknown type must be refused with a message naming expose");
+}
+
+// A C++ script that does not compile: the Console gets what failed and then each compiler error line with
+// its file and line, one row each, and asking again does not build again.
+void RunNativeBuildFailureDiagnosticsTest() {
+    ResetTestRoot();
+
+    const std::filesystem::path projectRoot = TestRoot() / "NativeBuildFailureProject";
+#if defined(_WIN32)
+    const std::string command = "echo Broken.cpp(7): error C2065: 'x': undeclared identifier & exit /b 2";
+    const std::string expectedLine = "Broken.cpp(7): error C2065: 'x': undeclared identifier";
+#else
+    const std::string command = "echo 'Broken.cpp:7:3: error: use of undeclared identifier x'; exit 2";
+    const std::string expectedLine = "Broken.cpp:7:3: error: use of undeclared identifier x";
+#endif
+    WriteTextFile(projectRoot / "Assets" / "Logic" / "Broken.native",
+        "name = Broken\nsymbol = tests.Broken\nbuild = " + command + "\nbuild_working_directory = .\n");
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot), "Native build failure project mount failed");
+    kb::tests::Require(scene.Assets().Discover() == 1U, "Native build failure asset discovery failed");
+    const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/Broken.native");
+    kb::tests::Require(metadata != nullptr, "Native build failure descriptor was not discovered");
+
+    kb::script::PucLuaScriptRuntime luaRuntime;
+    kb::visual::VisualGraphRuntimeRegistry visualArtifacts;
+    kb::script::ScriptRuntimeAssetPreparer preparer{ scene.Assets().Manager(), luaRuntime, visualArtifacts };
+    const kb::script::ScriptRuntimeAssetPrepareResult first = preparer.PrepareAsset(metadata->id);
+    kb::tests::Require(!first.Succeeded() && first.diagnostics.size() == 2U,
+        "A failing native build must give the summary and the compiler's error line");
+    kb::tests::Require(first.diagnostics[0].message.find("exit code 2 (1 error)") != std::string::npos &&
+            first.diagnostics[0].message.find("Fix:") != std::string::npos,
+        "The first row of a failing native build must say what failed and what to do");
+    kb::tests::Require(first.diagnostics[1].message == expectedLine,
+        "The second row of a failing native build must be the compiler's line with its file and line");
+    const kb::script::ScriptRuntimeAssetPrepareResult again = preparer.PrepareAsset(metadata->id);
+    kb::tests::Require(again.diagnostics.size() == 2U && again.diagnostics[1].message == expectedLine,
+        "A native build that failed must report the same rows again while its sources are unchanged");
 }
 
 void RunLuaExposedVariablesRuntimeTest() {
@@ -17622,6 +17736,8 @@ void RunScriptRuntimeTests() {
     RunNativeScriptRuntimeDispatchTest();
     RunNativeScriptPluginManagerDispatchTest();
     RunNativeScriptBuildPipelineTest();
+    RunNativeExposedFieldsTest();
+    RunNativeBuildFailureDiagnosticsTest();
     RunScriptRuntimeExecutionOrderTest();
     RunLuaScriptRuntimeDispatchTest();
     RunPucLuaScriptRuntimeDispatchTest();

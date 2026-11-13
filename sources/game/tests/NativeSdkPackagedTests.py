@@ -45,10 +45,15 @@ def main():
     assert 'context->GetScene().Transforms()' in guide and 'Transform.SetPosition' in guide
     source = project / "Source/NativeScripts/NativeProbe/NativeProbe.cpp"
     text = source.read_text(encoding="utf-8")
-    text = text.replace('#include <array>', '#include "engine/scene/SceneTransforms.hpp"\n#include <array>')
+    # A new class registers its hooks by name and shows the way to fields; the field itself is declared in the descriptor.
+    assert 'kb::script::RegisterNativeScript<NativeProbe>' in text and 'expose = speed Float' in text
+    descriptor = project / "Assets/Scripts/NativeProbe.native"
+    descriptor.write_text(descriptor.read_text(encoding="utf-8") + "expose = lift Float = 5\n", encoding="utf-8")
+    text = text.replace('#include <array>', '#include "engine/scene/SceneTransforms.hpp"\n#include "engine/script/NativeScriptFields.hpp"\n#include <array>')
     text = text.replace('        const std::array arguments{',
         '        auto transform = context->GetScene().Transforms().Get(context->Self());\n'
         '        transform.localPosition.x = 3.0F;\n'
+        '        transform.localPosition.y = kb::script::NativeField(*context, "lift").value_or(kb::script::ScriptValue{}).AsFloat();\n'
         '        context->GetScene().Transforms().Set(context->Self(), transform);\n'
         '        const std::array arguments{')
     assert 'transform.localPosition.x = 3.0F;' in text
@@ -103,9 +108,14 @@ def main():
                         ('/Game/Scripts/LuaProbe.lua', '.', 'Assets/Scripts/LuaProbe.lua')]:
                     steps.append(dict(op='verify_external_code_activation', asset=asset, editor=editor,
                         workspace=workspace, source=filename, visual_studio_installation=str(visual_studio.resolve())))
+            # The field declared in the descriptor shows with its default, and a value set as the Inspector sets it reaches the script.
             steps += [dict(op='bind_entity', id='native', name='NativeHost'), dict(op='bind_entity', id='lua', name='LuaHost'),
+                dict(op='assert_script_field', entity='native', name='lift', value=5),
+                dict(op='set_script_field', entity='native', name='lift', value=9),
+                dict(op='assert_script_field', entity='native', name='lift', value=9),
                 dict(op='play'), dict(op='step', frames=3),
                 dict(op='assert_property', entity='native', component='Transform', property='localPosition.x', value=value),
+                dict(op='assert_property', entity='native', component='Transform', property='localPosition.y', value=9),
                 dict(op='assert_property', entity='lua', component='Transform', property='localPosition.x', value=11),
                 dict(op='assert_console', contains='NativeProbe ready'), dict(op='assert_console', contains='LuaProbe ready'),
                 dict(op='stop'), dict(op='assert_no_errors')]

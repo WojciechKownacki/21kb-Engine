@@ -23,6 +23,35 @@ struct NativeScriptPluginApi {
 
 using NativeScriptPluginRegisterProc = bool (*)(NativeScriptPluginApi* api);
 
+// Registers the lifecycle hooks a script class defines, the way a Lua script's functions are found by
+// name: a static member called Created, Activated, Ready, FixedTick, Tick, LateTick, BeforeRender,
+// AfterRender, Deactivated or Destroyed that takes a ScriptExecutionContext* is called at that moment
+// for every object the script is attached to. A class that defines none is refused.
+template <typename Script>
+[[nodiscard]] bool RegisterNativeScript(NativeScriptPluginApi* api, const char* symbol) {
+    if (api == nullptr || api->registerLifecycle == nullptr || symbol == nullptr || symbol[0] == '\0') {
+        return false;
+    }
+    bool registered = false;
+    bool succeeded = true;
+    const auto add = [&](ScriptLifecycleEvent event, NativeScriptPluginLifecycleProc callback) {
+        registered = true;
+        succeeded = api->registerLifecycle(api->user, symbol, event, callback) && succeeded;
+    };
+    ScriptExecutionContext* const probe = nullptr;
+    if constexpr (requires { Script::Created(probe); }) add(ScriptLifecycleEvent::Created, &Script::Created);
+    if constexpr (requires { Script::Activated(probe); }) add(ScriptLifecycleEvent::Activated, &Script::Activated);
+    if constexpr (requires { Script::Ready(probe); }) add(ScriptLifecycleEvent::Ready, &Script::Ready);
+    if constexpr (requires { Script::FixedTick(probe); }) add(ScriptLifecycleEvent::FixedTick, &Script::FixedTick);
+    if constexpr (requires { Script::Tick(probe); }) add(ScriptLifecycleEvent::Tick, &Script::Tick);
+    if constexpr (requires { Script::LateTick(probe); }) add(ScriptLifecycleEvent::LateTick, &Script::LateTick);
+    if constexpr (requires { Script::BeforeRender(probe); }) add(ScriptLifecycleEvent::BeforeRender, &Script::BeforeRender);
+    if constexpr (requires { Script::AfterRender(probe); }) add(ScriptLifecycleEvent::AfterRender, &Script::AfterRender);
+    if constexpr (requires { Script::Deactivated(probe); }) add(ScriptLifecycleEvent::Deactivated, &Script::Deactivated);
+    if constexpr (requires { Script::Destroyed(probe); }) add(ScriptLifecycleEvent::Destroyed, &Script::Destroyed);
+    return registered && succeeded;
+}
+
 } // namespace kb::script
 
 #if defined(_WIN32)
