@@ -106,8 +106,12 @@ void DispatchBehaviour(kb::scene::SceneEntity entity, const kb::scene::Behaviour
     if (backendResult.executed && backendResult.Succeeded()) {
         ++dispatch.result->executedBehaviours;
     }
-    AppendEvents(dispatch.result->emittedEvents, std::move(emittedEvents));
-    AppendDiagnostics(dispatch.result->diagnostics, backendResult.diagnostics);
+    if (!emittedEvents.empty()) {
+        AppendEvents(dispatch.result->emittedEvents, std::move(emittedEvents));
+    }
+    if (!backendResult.diagnostics.empty()) {
+        AppendDiagnostics(dispatch.result->diagnostics, backendResult.diagnostics);
+    }
 }
 
 void DispatchSceneBehaviours(kb::scene::Scene& scene, DispatchContext& context) {
@@ -152,7 +156,10 @@ void DispatchSceneBehaviours(kb::scene::Scene& scene, DispatchContext& context) 
         });
         context.result->visitedBehaviours += passedOver;
     }
-    std::ranges::sort(behaviours, &ComesBefore);
+    // Behaviours usually come out of the storage in their execution order already; sorting them again is then a waste.
+    if (!std::ranges::is_sorted(behaviours, &ComesBefore)) {
+        std::ranges::sort(behaviours, &ComesBefore);
+    }
     for (const BehaviourDispatchRecord& record : behaviours) {
         if (!scene.Entities().IsActive(record.entity)) {
             continue;
@@ -261,6 +268,9 @@ ScriptRuntimeExecutionResult ScriptRuntime::ExecuteLifecycleForBehaviourAndDispa
     float deltaSeconds,
     ScriptRuntimeDispatchOptions options) {
     ScriptRuntimeExecutionResult result = ExecuteLifecycleForBehaviour(scene, entity, behaviour, event, deltaSeconds);
+    if (result.emittedEvents.empty()) {
+        return result;
+    }
     const std::vector<ScriptEvent> emittedEvents = result.emittedEvents;
     MergeResult(result, DrainEvents(scene, emittedEvents, deltaSeconds, options));
     return result;

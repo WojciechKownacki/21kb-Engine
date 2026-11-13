@@ -14,10 +14,33 @@ namespace kb::script {
 
 class PucLuaMemoryArena;
 class ScriptExecutionContext;
+// The object a `self` table belongs to: the entity and the script asset it runs.
+struct PucLuaSelfKey {
+    std::uint64_t entityId = 0U;
+    std::uint64_t assetId = 0U;
+
+    [[nodiscard]] bool operator==(const PucLuaSelfKey& other) const noexcept = default;
+};
+
+struct PucLuaSelfKeyHasher {
+    [[nodiscard]] std::size_t operator()(PucLuaSelfKey key) const noexcept {
+        std::uint64_t hash = key.entityId;
+        hash ^= key.assetId + 0x9e3779b97f4a7c15ULL + (hash << 6U) + (hash >> 2U);
+        return static_cast<std::size_t>(hash);
+    }
+};
+
 struct PucLuaStateLifetime {
     lua_State* state = nullptr;
     ScriptExecutionContext* activeContext = nullptr;
     std::unordered_map<int, const void*> eventReferenceOwners;
+    // Registry references to the `self` table of each object, kept for the life of the object.
+    std::unordered_map<PucLuaSelfKey, int, PucLuaSelfKeyHasher> selfReferences;
+    // The coroutine thread entries run on: one is kept anchored in the registry and handed to the next entry when
+    // the last one finished, so a call does not go through the table of idle threads.
+    lua_State* spareThread = nullptr;
+    int spareThreadReference = -2; // LUA_NOREF
+    bool spareThreadBusy = false;
 };
 
 class PucLuaExecutionContextScope final {

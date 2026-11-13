@@ -220,6 +220,17 @@ void PucLuaSelfApi::PushSelf(lua_State* state, ScriptExecutionContext& context) 
     lua_setmetatable(state, -2);
 }
 
+void PucLuaSelfApi::RefreshVariables(lua_State* state, int selfIndex, ScriptExecutionContext& context) {
+    selfIndex = lua_absindex(state, selfIndex);
+    PucLuaScriptRuntime* runtime = *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(state));
+    if (runtime != nullptr) {
+        PushVariables(state, runtime->InstanceVariables(context.Self(), context.Asset()));
+    } else {
+        lua_newtable(state);
+    }
+    lua_setfield(state, selfIndex, "variables");
+}
+
 void PucLuaSelfApi::AttachInspector(lua_State* state, int environmentIndex, ScriptExecutionContext* context) {
     lua_newtable(state); // the Inspector proxy table — kept empty so every field access hits the metatable
     lua_createtable(state, 0, 2);

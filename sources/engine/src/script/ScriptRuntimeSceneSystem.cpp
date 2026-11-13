@@ -336,6 +336,20 @@ void ScriptRuntimeSceneSystem::ExecuteTrackedBehaviourPhase(
         std::ranges::sort(phaseOrder_, [](const BehaviourLifecycleRecord* lhs, const BehaviourLifecycleRecord* rhs) {
             return kb::scene::BehaviourExecutionOrderLess(lhs->entity, lhs->behaviour, rhs->entity, rhs->behaviour);
         });
+        constexpr std::size_t kMaxPhaseScripts = 32U;
+        phaseScripts_.clear();
+        phaseScriptsOverflow_ = false;
+        for (const BehaviourLifecycleRecord* tracked : phaseOrder_) {
+            const PhaseScript script{ tracked->behaviour.behaviourAssetId, tracked->behaviour.backend };
+            if (std::ranges::any_of(phaseScripts_, [&](const PhaseScript& known) { return known.assetId == script.assetId && known.backend == script.backend; })) {
+                continue;
+            }
+            if (phaseScripts_.size() == kMaxPhaseScripts) {
+                phaseScriptsOverflow_ = true;
+                break;
+            }
+            phaseScripts_.push_back(script);
+        }
         phaseOrderDirty_ = false;
     }
 
@@ -360,6 +374,20 @@ void ScriptRuntimeSceneSystem::ExecuteTrackedBehaviourPhase(
         }
         return has;
     };
+
+    if (!phaseScriptsOverflow_) {
+        bool anyEntry = false;
+        for (const PhaseScript& script : phaseScripts_) {
+            kb::scene::BehaviourComponent probe{};
+            probe.behaviourAssetId = script.assetId;
+            probe.backend = script.backend;
+            anyEntry = hasEntry(probe) || anyEntry;
+        }
+        if (!anyEntry) {
+            lastResult_.visitedBehaviours += phaseOrder_.size();
+            return;
+        }
+    }
 
     for (const BehaviourLifecycleRecord* tracked : phaseOrder_) {
         if (!scene.Entities().IsAlive(tracked->entity)) {

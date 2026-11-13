@@ -9,6 +9,8 @@ class ScriptExecutionContext;
 class PucLuaSelfApi final {
 public:
     static void PushSelf(lua_State* state, ScriptExecutionContext& context);
+    // Puts the exposed variables the object holds now into the `variables` table of the `self` at `selfIndex`.
+    static void RefreshVariables(lua_State* state, int selfIndex, ScriptExecutionContext& context);
     // Installs the engine-provided `Inspector` global table into the environment.
     // `Inspector.name = value` at chunk top level (context == nullptr) is a no-op
     // proxy (the schema is parsed statically from the source), so declarations do

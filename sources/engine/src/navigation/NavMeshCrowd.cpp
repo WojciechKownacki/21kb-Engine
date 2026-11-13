@@ -4,6 +4,8 @@
 #include <DetourCrowd.h>
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -28,12 +30,12 @@ constexpr float kDetailHysteresis = 1.1F;
 // Members per piece of a parallel crowd pass; fewer members run on the calling thread.
 constexpr std::size_t kMembersPerPiece = 64U;
 
-// Calls `body(begin, end, worker)` over [0, count) in pieces on the pool's workers, or at once on
-// this thread (as worker 0) without a pool or with few items.
+// Calls `body(begin, end, worker)` over [0, count) in pieces of at least `minimumPiece` items on the pool's workers, or
+// at once on this thread (as worker 0) without a pool or with few items.
 template <typename Body>
-void ForEachPiece(kb::ecs::WorkerPool* pool, std::size_t count, Body&& body) {
+void ForEachPiece(kb::ecs::WorkerPool* pool, std::size_t count, Body&& body, std::size_t minimumPiece = kMembersPerPiece) {
     const std::size_t pieces = pool != nullptr ? pool->WorkerCount() * 4U : 1U;
-    const std::size_t size = std::max(kMembersPerPiece, (count + pieces - 1U) / pieces);
+    const std::size_t size = std::max(minimumPiece, (count + pieces - 1U) / pieces);
     if (pool == nullptr || count <= size) {
         if (count > 0U) body(std::size_t{ 0U }, count, std::size_t{ 0U });
         return;
@@ -43,11 +45,62 @@ void ForEachPiece(kb::ecs::WorkerPool* pool, std::size_t count, Body&& body) {
     });
 }
 
-// Runs a crowd pass over the engine's worker pool, in pieces of members.
+// Handing a pass to the workers and waiting for them costs about this much, whatever the pass does.
+constexpr double kHandOverNanoseconds = 60000.0;
+
+}
+
+// What one pass over the members costs per member, learned from the passes that ran: a pass goes to the workers only when
+// it takes clearly longer than the hand-over itself, and then in pieces that each take longer than the hand-over.
+struct CrowdPassTuning {
+    struct Pass {
+        dtCrowdPassRange range = nullptr;
+        double nanosecondsPerMember = 0.0;
+    };
+
+    kb::ecs::WorkerPool* pool = nullptr;
+    std::array<Pass, 16> passes{};
+    std::size_t known = 0U;
+
+    [[nodiscard]] Pass& Find(dtCrowdPassRange range) noexcept {
+        for (std::size_t index = 0U; index < known; ++index) {
+            if (passes[index].range == range) return passes[index];
+        }
+        const std::size_t slot = std::min(known, passes.size() - 1U);
+        if (known < passes.size()) ++known;
+        passes[slot] = Pass{ .range = range };
+        return passes[slot];
+    }
+
+    static void Learn(Pass& pass, double nanosecondsPerMember) noexcept {
+        pass.nanosecondsPerMember = pass.nanosecondsPerMember > 0.0 ? 0.75 * pass.nanosecondsPerMember + 0.25 * nanosecondsPerMember : nanosecondsPerMember;
+    }
+};
+
+namespace {
+
+// Runs a crowd pass over the engine's worker pool, in pieces of members. The result does not depend on how the members are
+// split, so a pass that is too small for the workers simply runs on this thread.
 void RunCrowdPass(void* user, int count, dtCrowdPassRange range, void* pass) {
-    ForEachPiece(static_cast<kb::ecs::WorkerPool*>(user), static_cast<std::size_t>(count), [&](std::size_t begin, std::size_t end, std::size_t worker) {
+    CrowdPassTuning& tuning = *static_cast<CrowdPassTuning*>(user);
+    CrowdPassTuning::Pass& cost = tuning.Find(range);
+    const std::size_t members = static_cast<std::size_t>(count);
+    using Clock = std::chrono::steady_clock;
+    const double learned = cost.nanosecondsPerMember;
+    if (learned > 0.0 && learned * static_cast<double>(members) < 2.0 * kHandOverNanoseconds) {
+        const Clock::time_point start = Clock::now();
+        range(pass, 0, count, 0);
+        CrowdPassTuning::Learn(cost, std::chrono::duration<double, std::nano>(Clock::now() - start).count() / static_cast<double>(members));
+        return;
+    }
+    const std::size_t minimumPiece = learned > 0.0 ? std::max(kMembersPerPiece, static_cast<std::size_t>(kHandOverNanoseconds / learned)) : kMembersPerPiece;
+    std::atomic<std::uint64_t> busy{ 0U };
+    ForEachPiece(tuning.pool, members, [&](std::size_t begin, std::size_t end, std::size_t worker) {
+        const Clock::time_point start = Clock::now();
         range(pass, static_cast<int>(begin), static_cast<int>(end), static_cast<int>(worker));
-    });
+        busy.fetch_add(static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - start).count()), std::memory_order_relaxed);
+    }, minimumPiece);
+    CrowdPassTuning::Learn(cost, static_cast<double>(busy.load(std::memory_order_relaxed)) / static_cast<double>(members));
 }
 
 [[nodiscard]] float HorizontalLength(Vec3 value) noexcept {
@@ -219,8 +272,11 @@ void NavMeshCrowd::UseWorkers(std::uint32_t requested) {
     if (count == workerCount_) return;
     workerCount_ = count;
     workers_.reset();
+    tuning_.reset();
     if (count > 1U && kMinAgentsOnWorkers != std::numeric_limits<std::size_t>::max()) {
         workers_ = std::make_unique<kb::ecs::WorkerPool>(kb::ecs::WorkerPoolConfig{ .workerCount = count });
+        tuning_ = std::make_shared<CrowdPassTuning>();
+        tuning_->pool = workers_.get();
     }
     for (ProfileCrowd& slot : crowds_) {
         if (slot.crowd) AttachWorkers(*slot.crowd);
@@ -233,7 +289,7 @@ kb::ecs::WorkerPool* NavMeshCrowd::Workers(std::uint32_t requested) {
 }
 
 void NavMeshCrowd::AttachWorkers(dtCrowd& crowd) {
-    if (pooled_ && workers_ && crowd.setParallelFor(&RunCrowdPass, workers_.get(), static_cast<int>(workers_->WorkerCount()))) return;
+    if (pooled_ && workers_ && crowd.setParallelFor(&RunCrowdPass, tuning_.get(), static_cast<int>(workers_->WorkerCount()))) return;
     // Without workers, or without memory for their query objects, the passes run on this thread.
     static_cast<void>(crowd.setParallelFor(nullptr, nullptr, 0));
 }

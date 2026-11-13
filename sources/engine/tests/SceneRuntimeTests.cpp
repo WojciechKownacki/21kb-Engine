@@ -147,6 +147,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunScriptDispatchTests();
     } else if (suite == "script-dispatch-bench") {
         kb::tests::RunScriptDispatchBenchmark();
+    } else if (suite == "script-frame-bench") {
+        kb::tests::RunScriptFrameBenchmark();
     } else if (suite == "script-collections") {
         kb::tests::RunScriptCollectionsTests();
     } else if (suite == "script-save") {
@@ -196,6 +198,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunNavigationCrowdBenchmark();
     } else if (suite == "navigation-horde-bench") {
         kb::tests::RunNavigationHordeBenchmark();
+    } else if (suite == "navigation-compare-bench") {
+        kb::tests::RunNavigationCompareBenchmark();
     } else if (suite == "portal-visibility") {
         kb::tests::RunPortalVisibilityTests();
     } else if (suite == "motion-skeleton-rule") {

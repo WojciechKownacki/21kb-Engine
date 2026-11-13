@@ -40,6 +40,8 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <memory>
@@ -1875,6 +1877,157 @@ void RunNavigationHordeBenchmark() {
     Check(tenThousandOne < 3.0 * kSanitizerTimeScale, "10000 horde agents after one target must step within 3 ms: " + std::to_string(tenThousandOne));
     Check(tenThousandHundred < 6.0 * kSanitizerTimeScale, "10000 horde agents after 100 targets must step within 6 ms: " + std::to_string(tenThousandHundred));
     Check(fiftyThousandHundred < 30.0 * kSanitizerTimeScale, "50000 horde agents must step within 30 ms: " + std::to_string(fiftyThousandHundred));
+}
+
+// ---- navigation comparison scenarios -------------------------------------------------------------------------------
+
+namespace {
+
+[[nodiscard]] std::string CompareEnvText(const char* name, const char* fallback) {
+#ifdef _WIN32
+    char* value = nullptr;
+    std::size_t length = 0U;
+    static_cast<void>(_dupenv_s(&value, &length, name));
+    std::string text = value != nullptr ? std::string{ value } : std::string{};
+    std::free(value);
+    return text.empty() ? std::string{ fallback } : text;
+#else
+    const char* value = std::getenv(name);
+    return value != nullptr && *value != '\0' ? std::string{ value } : std::string{ fallback };
+#endif
+}
+
+// A 256 m x 256 m ground with a 7 x 7 grid of 8 m x 8 m x 3 m boxes (centres 32 m apart).
+constexpr double kCompareHalf = 128.0;
+constexpr double kCompareBoxHalf = 4.0;
+constexpr int kCompareBoxGrid = 7;
+constexpr double kCompareBoxBase = -96.0;
+constexpr double kCompareBoxStep = 32.0;
+
+[[nodiscard]] bool InsideCompareBox(double x, double z, double margin) {
+    for (int i = 0; i < kCompareBoxGrid; ++i) {
+        for (int j = 0; j < kCompareBoxGrid; ++j) {
+            if (std::abs(x - (kCompareBoxBase + kCompareBoxStep * i)) < kCompareBoxHalf + margin &&
+                std::abs(z - (kCompareBoxBase + kCompareBoxStep * j)) < kCompareBoxHalf + margin) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] std::vector<scene::ScenePrefabNodeDesc> CompareLevelNodes() {
+    std::vector<scene::ScenePrefabNodeDesc> nodes{ Slab(-kCompareHalf, kCompareHalf, -kCompareHalf, kCompareHalf, 0.0) };
+    for (int i = 0; i < kCompareBoxGrid; ++i) {
+        for (int j = 0; j < kCompareBoxGrid; ++j) {
+            nodes.push_back(BoxNode(DVec3{ kCompareBoxBase + kCompareBoxStep * i, 1.5, kCompareBoxBase + kCompareBoxStep * j }, Vec3{ 8.0F, 3.0F, 8.0F }));
+        }
+    }
+    return nodes;
+}
+
+[[nodiscard]] nav::NavMeshBuildSettings CompareSettings() {
+    nav::NavMeshBuildSettings settings;
+    settings.cellSize = 0.25F;
+    settings.cellHeight = 0.25F;
+    settings.tileCells = 64U;
+    settings.profiles[0].radius = 0.5F;
+    settings.profiles[0].height = 2.0F;
+    settings.profiles[0].maxClimb = 0.25F;
+    settings.profiles[0].maxSlopeDegrees = 45.0F;
+    return settings;
+}
+
+} // namespace
+
+// One scenario of the navigation comparison, chosen by KB_BENCH_NAV_MODE: bake (time to bake the level), random or
+// chase (individual crowd agents with avoidance), horde-random or horde-chase (the same agents as a horde), with
+// KB_BENCH_COUNT agents, KB_BENCH_FRAMES measured frames after KB_BENCH_WARMUP. A frame is the whole scene update plus
+// the code that hands the agents their destinations.
+void RunNavigationCompareBenchmark() {
+    const std::string mode = CompareEnvText("KB_BENCH_NAV_MODE", "random");
+    const int count = std::atoi(CompareEnvText("KB_BENCH_COUNT", "1000").c_str());
+    const int frames = std::atoi(CompareEnvText("KB_BENCH_FRAMES", "600").c_str());
+    const int warmup = std::atoi(CompareEnvText("KB_BENCH_WARMUP", "60").c_str());
+    using Clock = std::chrono::steady_clock;
+    const auto since = [](Clock::time_point start) { return std::chrono::duration<double, std::milli>(Clock::now() - start).count(); };
+
+    const nav::NavMeshBuildSettings settings = CompareSettings();
+    const std::vector<scene::ScenePrefabNodeDesc> nodes = CompareLevelNodes();
+    nav::NavGeometry geometry;
+    nav::NavGeometryCollectStats collected;
+    nav::CollectNavGeometry(nodes, settings, nullptr, geometry, collected);
+    const Clock::time_point bakeStart = Clock::now();
+    const nav::NavMeshBakeResult baked = nav::NavMeshBuilder::Bake(settings, geometry, nullptr);
+    const double bakeMilliseconds = since(bakeStart);
+    Check(baked.succeeded, "the comparison level must bake: " + baked.error);
+    std::printf("BAKE backend=kb ms=%.2f tiles=%zu\n", bakeMilliseconds, baked.tiles.size());
+    if (mode == "bake") return;
+    auto asset = std::make_shared<nav::NavMeshAsset>();
+    asset->settings = settings;
+    asset->tiles = baked.tiles;
+
+    const bool horde = mode.starts_with("horde-");
+    const bool chase = mode.ends_with("chase");
+    scene::Scene world;
+    std::string error;
+    Check(world.Navigation().AddNavMesh(asset, &error) != 0U, "the comparison level must load: " + error);
+    world.Navigation().ConfigureCrowd(scene::NavigationCrowdSettings{ .workerThreads = static_cast<std::uint32_t>(std::atoi(CompareEnvText("KB_BENCH_THREADS", "0").c_str())) });
+    std::uint32_t seedState = 12345U;
+    const auto random = [&seedState]() {
+        seedState = seedState * 1664525U + 1013904223U;
+        return static_cast<double>(seedState) / 4294967296.0;
+    };
+    const int side = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(count) / 0.8)));
+    const double spacing = (2.0 * kCompareHalf - 8.0) / side;
+    std::vector<scene::SceneEntity> agents;
+    std::vector<Vec3> goals;
+    agents.reserve(static_cast<std::size_t>(count));
+    for (int k = 0; k < side * side && static_cast<int>(agents.size()) < count; ++k) {
+        const double x = -kCompareHalf + 4.0 + spacing * (k % side + 0.5);
+        const double z = -kCompareHalf + 4.0 + spacing * (k / side + 0.5);
+        if (InsideCompareBox(x, z, 1.5)) continue;
+        double goalX = 0.0;
+        double goalZ = 0.0;
+        do {
+            goalX = -kCompareHalf + 6.0 + (2.0 * kCompareHalf - 12.0) * random();
+            goalZ = -kCompareHalf + 6.0 + (2.0 * kCompareHalf - 12.0) * random();
+        } while (InsideCompareBox(goalX, goalZ, 1.5));
+        goals.push_back(Vec3{ static_cast<float>(goalX), 0.0F, static_cast<float>(goalZ) });
+        const scene::SceneObject object = world.Entities().CreateObject(scene::SceneObjectDesc{ .name = "Agent" });
+        world.Transforms().SetLocalTranslation(object.Entity(), DVec3{ x, 0.0, z });
+        world.Components().NavAgents().Set(object.Entity(), scene::NavAgent{ .radius = 0.4F, .maxSpeed = 3.5F, .acceleration = 10.0F,
+            .stoppingDistance = 1.0F, .destination = chase ? Vec3{ 16.0F, 0.0F, 16.0F } : goals.back(), .horde = horde });
+        agents.push_back(object.Entity());
+    }
+    Check(static_cast<int>(agents.size()) == count, "the comparison level must hold every agent");
+    world.Runtime().SynchronizeTransforms();
+
+    std::vector<double> times;
+    times.reserve(static_cast<std::size_t>(frames));
+    double stages[8] = {};
+    for (int step = 0; step < warmup + frames; ++step) {
+        const Clock::time_point start = Clock::now();
+        if (chase) {
+            const double angle = step * kFrame * 0.1;
+            const Vec3 target{ static_cast<float>(std::cos(angle) * 20.0 + 16.0), 0.0F, static_cast<float>(std::sin(angle) * 20.0 + 16.0) };
+            for (const scene::SceneEntity agent : agents) world.Components().NavAgents().TryGet(agent)->destination = target;
+        }
+        static_cast<void>(world.Runtime().Update(kFrame));
+        if (step >= warmup) {
+            times.push_back(since(start));
+            const scene::NavigationCrowdStats stats = world.Navigation().CrowdStats();
+            const double values[8] = { stats.milliseconds, stats.syncMilliseconds, stats.pathMilliseconds, stats.neighbourMilliseconds,
+                stats.cornerMilliseconds, stats.steeringMilliseconds, stats.avoidanceMilliseconds, stats.moveMilliseconds };
+            for (int index = 0; index < 8; ++index) stages[index] += values[index];
+        }
+    }
+    std::ranges::sort(times);
+    const auto at = [&](double q) { return times[std::min(times.size() - 1U, static_cast<std::size_t>(static_cast<double>(times.size()) * q))]; };
+    std::printf("RESULT backend=kb-nav scenario=%s count=%d frames=%d p50=%.4f p95=%.4f p99=%.4f max=%.4f\n",
+        mode.c_str(), count, frames, at(0.5), at(0.95), at(0.99), times.back());
+    std::printf("STAGES navigation=%.3f sync=%.3f path=%.3f neighbour=%.3f corner=%.3f steering=%.3f avoidance=%.3f move=%.3f (average ms)\n",
+        stages[0] / frames, stages[1] / frames, stages[2] / frames, stages[3] / frames, stages[4] / frames, stages[5] / frames, stages[6] / frames, stages[7] / frames);
 }
 
 } // namespace kb::tests

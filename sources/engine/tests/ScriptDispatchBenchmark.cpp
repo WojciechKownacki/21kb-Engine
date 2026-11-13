@@ -8,6 +8,9 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/input/InputSubsystem.hpp"
+#include "engine/script/NativeScriptPlugin.hpp"
+#include "engine/script/NativeScriptPluginManager.hpp"
 #include "engine/script/PucLuaScriptRuntime.hpp"
 #include "engine/script/ScriptEvent.hpp"
 #include "engine/script/ScriptRuntime.hpp"
@@ -16,11 +19,14 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <cstdlib>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace kb::tests {
@@ -404,6 +410,44 @@ end
     Require(NearlyEqual(rig.scene.Transforms().Get(entity).localPosition.x, 2.5F) && NearlyEqual(ArgumentOf(*done, "rx"), 2.5F), "The scene must hold what the script wrote");
 }
 
+// `self` is one table for the life of an object: what a script writes into it stays there, separately for each object, a
+// destroyed object leaves nothing behind for the next one, and the exposed variables an object holds are still current in it.
+void RunSelfKeepsItsFieldsPerObjectTest() {
+    SmallRig rig("function Tick(self, dt)\n  self.count = (self.count or 0) + 1\n  Emit('Count', { n = self.count, speed = self.variables.speed or -1 })\nend\n");
+    const std::vector<kb::script::ScriptApiPin> pins{ kb::script::ScriptApiPin{ .name = "speed", .type = kb::script::ScriptValueType::Float } };
+    const std::vector<kb::script::ScriptValue> defaults{ kb::script::ScriptValue{ 2.0F } };
+    const std::vector<std::uint8_t> hasDefaults{ 1U };
+    rig.host.LuaRuntime().SetScriptExposedVariables(kBenchAsset, pins, defaults, hasDefaults);
+    const kb::scene::SceneEntity first = rig.Add();
+    static_cast<void>(rig.Frame());
+    static_cast<void>(rig.Frame());
+    const kb::scene::SceneEntity second = rig.Add();
+    rig.host.LuaRuntime().SetInstanceVariableOverride(second, kBenchAsset, "speed", kb::script::ScriptValue{ 9.5F });
+
+    const auto countOf = [&](const kb::script::ScriptRuntimeExecutionResult& result, kb::scene::SceneEntity sender, std::string_view argument) {
+        for (const kb::script::ScriptEvent& event : result.emittedEvents) {
+            if (event.name == "Count" && event.sender.Id() == sender.Id()) return ArgumentOf(event, argument);
+        }
+        return -1000.0F;
+    };
+    const kb::script::ScriptRuntimeExecutionResult& third = rig.Frame();
+    Require(countOf(third, first, "n") == 3.0F && countOf(third, second, "n") == 1.0F, "Each object must keep its own fields in self between calls");
+    Require(countOf(third, first, "speed") == 2.0F && countOf(third, second, "speed") == 9.5F, "self.variables must hold the variables of its own object");
+    rig.host.LuaRuntime().SetInstanceVariableOverride(second, kBenchAsset, "speed", kb::script::ScriptValue{ 4.0F });
+    const kb::script::ScriptRuntimeExecutionResult& fourth = rig.Frame();
+    Require(countOf(fourth, second, "n") == 2.0F && countOf(fourth, second, "speed") == 4.0F, "A variable changed between calls must be current in self.variables");
+
+    rig.scene.Entities().Destroy(first);
+    const kb::scene::SceneEntity replacement = rig.Add();
+    const kb::script::ScriptRuntimeExecutionResult& fifth = rig.Frame();
+    Require(countOf(fifth, replacement, "n") == 1.0F && countOf(fifth, second, "n") == 3.0F, "An object made after another was destroyed must start with an empty self");
+
+    // A behaviour that starts over (as a reloaded one does) begins with an empty self again.
+    static_cast<void>(rig.host.Runtime().ExecuteLifecycle(rig.scene, kb::script::ScriptLifecycleEvent::Created, 0.0F));
+    const kb::script::ScriptRuntimeExecutionResult& sixth = rig.Frame();
+    Require(countOf(sixth, second, "n") == 1.0F && countOf(sixth, replacement, "n") == 1.0F, "An object that starts over must not keep what its earlier start left in self");
+}
+
 // A script error reaches the console with the object's name, the line, a plain explanation, and the stack trace once.
 void RunScriptErrorsReadInPlainWordsTest() {
     kb::scene::Scene scene;
@@ -445,6 +489,7 @@ void RunScriptDispatchTests() {
     RunTargetedEventReachesOneBehaviourTest();
     RunYieldingEntriesShareThreadsSafelyTest();
     RunTransformBindingsTest();
+    RunSelfKeepsItsFieldsPerObjectTest();
 }
 
 // The numbers this runs are printed for comparison; the limits it requires are far looser than what the runtime does
@@ -534,6 +579,184 @@ void RunScriptDispatchBenchmark() {
         if (std::string_view{ binding.label } == "Transform.SetPosition") Require(nanoseconds < 600.0, "Transform.SetPosition must not go through the function registry");
         if (std::string_view{ binding.label } == "Input.IsPressed") Require(nanoseconds < 400.0, "Input.IsPressed must not go through the function registry");
     }
+}
+
+namespace {
+
+[[nodiscard]] std::string EnvText(const char* name, const char* fallback) {
+#ifdef _WIN32
+    char* value = nullptr;
+    std::size_t length = 0U;
+    static_cast<void>(_dupenv_s(&value, &length, name));
+    std::string text = value != nullptr ? std::string{ value } : std::string{};
+    std::free(value);
+    return text.empty() ? std::string{ fallback } : text;
+#else
+    const char* value = std::getenv(name);
+    return value != nullptr && *value != '\0' ? std::string{ value } : std::string{ fallback };
+#endif
+}
+
+// The same three scripts exist as Lua and as native classes; a scenario runs one of them on every object of the scene.
+constexpr const char* kFrameTypicalLua = R"(
+local speed = 2.0
+function Tick(self, dt)
+  local p = Transform.GetPosition(self.entity)
+  if Input.IsPressed("jump") then speed = -speed end
+  local len = math.sqrt(p.x * p.x + p.y * p.y + p.z * p.z) + 1.0
+  local d = (p.x / len) * 0.6 + (p.z / len) * 0.8
+  Transform.SetPosition(self.entity, p.x + 0.6 * speed * dt, p.y + d * dt, p.z + 0.8 * speed * dt)
+end
+)";
+
+constexpr const char* kFrameHeavyLua = R"(
+local function fib(n)
+  if n < 2 then return n end
+  return fib(n - 1) + fib(n - 2)
+end
+function Tick(self, dt)
+  local phase = (self.acc or 0.0) * 1.0e-7
+  local total = 0.0
+  for i = 1, 100 do total = total + math.sin(i * 0.01 + phase) * math.sqrt(i) end
+  local arr = {}
+  for i = 1, 16 do arr[#arr + 1] = i * i end
+  local tbl = {}
+  for i = 1, 8 do tbl["k" .. i] = i end
+  local sum = 0
+  for _, v in pairs(tbl) do sum = sum + v end
+  local text = ""
+  for i = 1, 8 do text = text .. i .. "," end
+  total = total + fib(10 + (math.floor(total) & 1)) + sum + #text + arr[16]
+  self.acc = total
+end
+)";
+
+constexpr const char* kFrameEventLua = R"(
+function Ping(self, event)
+  self.count = (self.count or 0) + 1
+end
+)";
+
+struct FrameTypicalScript {
+    float speed = 2.0F;
+    void Tick(kb::script::ScriptExecutionContext* context) {
+        auto transforms = context->GetScene().Transforms();
+        auto transform = transforms.Get(context->Self());
+        const float dt = context->DeltaSeconds();
+        if (context->Input().IsActionPressed("jump")) speed = -speed;
+        const float x = transform.localPosition.x;
+        const float y = transform.localPosition.y;
+        const float z = transform.localPosition.z;
+        const float length = std::sqrt(x * x + y * y + z * z) + 1.0F;
+        const float d = (x / length) * 0.6F + (z / length) * 0.8F;
+        transform.localPosition.x = x + 0.6F * speed * dt;
+        transform.localPosition.y = y + d * dt;
+        transform.localPosition.z = z + 0.8F * speed * dt;
+        transforms.Set(context->Self(), transform);
+    }
+};
+
+[[nodiscard]] int FrameFib(int n) { return n < 2 ? n : FrameFib(n - 1) + FrameFib(n - 2); }
+
+struct FrameHeavyScript {
+    double acc = 0.0;
+    void Tick(kb::script::ScriptExecutionContext*) {
+        const double phase = acc * 1.0e-7;
+        double total = 0.0;
+        for (int i = 1; i <= 100; ++i) total += std::sin(i * 0.01 + phase) * std::sqrt(static_cast<double>(i));
+        std::vector<int> arr;
+        for (int i = 1; i <= 16; ++i) arr.push_back(i * i);
+        std::unordered_map<std::string, int> table;
+        for (int i = 1; i <= 8; ++i) table["k" + std::to_string(i)] = i;
+        int sum = 0;
+        for (const auto& entry : table) sum += entry.second;
+        std::string text;
+        for (int i = 1; i <= 8; ++i) text += std::to_string(i) + ",";
+        total += FrameFib(10 + (static_cast<int>(std::floor(total)) & 1)) + sum + static_cast<double>(text.size()) + arr[15];
+        acc = total;
+    }
+};
+
+std::uint64_t frameEventCount = 0U;
+void FramePing(kb::script::ScriptExecutionContext*, const kb::script::ScriptEvent*) { ++frameEventCount; }
+
+struct FrameEmptyScript {
+    float speed = 2.0F;
+    void Tick(kb::script::ScriptExecutionContext*) {}
+};
+
+bool RegisterFrameScripts(kb::script::NativeScriptPluginApi* api) {
+    return api != nullptr && api->version == kb::script::kNativeScriptPluginApiVersion &&
+        kb::script::RegisterNativeScript<FrameEmptyScript>(api, "bench.Empty") &&
+        kb::script::RegisterNativeScript<FrameTypicalScript>(api, "bench.Typical") &&
+        kb::script::RegisterNativeScript<FrameHeavyScript>(api, "bench.Heavy") &&
+        api->registerEvent(api->user, "bench.Event", "Ping", &FramePing);
+}
+
+} // namespace
+
+// One scenario of the scripting comparison: `count` objects, each running the chosen script every frame (or one event
+// broadcast to all of them), measured as wall time per frame. Settings come from the environment so that every run is
+// a fresh process with its own peak memory: KB_BENCH_BACKEND (lua, native), KB_BENCH_SCENARIO (empty, typical, heavy,
+// event), KB_BENCH_COUNT, KB_BENCH_FRAMES, KB_BENCH_WARMUP.
+void RunScriptFrameBenchmark() {
+    const std::string backend = EnvText("KB_BENCH_BACKEND", "lua");
+    const std::string scenario = EnvText("KB_BENCH_SCENARIO", "typical");
+    const std::size_t count = static_cast<std::size_t>(std::atoi(EnvText("KB_BENCH_COUNT", "1000").c_str()));
+    const int frames = std::atoi(EnvText("KB_BENCH_FRAMES", "600").c_str());
+    const int warmup = std::atoi(EnvText("KB_BENCH_WARMUP", "60").c_str());
+    const bool native = backend == "native";
+    Require(native || backend == "lua", "KB_BENCH_BACKEND must be lua or native");
+
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::script::ScriptRuntimeSceneSystem system{ host.Runtime() };
+    Require(host.Succeeded(), "script frame benchmark host did not initialize");
+    if (native) {
+        Require(host.NativePlugins().LoadLinked("bench", &RegisterFrameScripts).Succeeded(), "native benchmark scripts did not register");
+        const char* symbol = scenario == "empty" ? "bench.Empty" : scenario == "typical" ? "bench.Typical" : scenario == "heavy" ? "bench.Heavy" : "bench.Event";
+        Require(host.NativeBackend().BindAssetSymbol(kBenchAsset, symbol), "native benchmark symbol did not bind");
+    } else {
+        const char* source = scenario == "empty" ? kEmptyScript : scenario == "typical" ? kFrameTypicalLua : scenario == "heavy" ? kFrameHeavyLua : kFrameEventLua;
+        Require(host.LuaRuntime().LoadScript(kBenchAsset, source, "Bench.lua").succeeded, "script frame benchmark script did not load");
+    }
+    std::vector<kb::scene::SceneObjectDesc> descs(count);
+    for (std::size_t index = 0U; index < count; ++index) {
+        descs[index].transform.localPosition = kb::scene::Vec3{ static_cast<float>(index % 100U), 0.0F, static_cast<float>(index / 100U) };
+    }
+    for (const kb::scene::SceneObject& object : scene.Entities().CreateObjects(descs)) {
+        scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = kBenchAsset.value,
+            .backend = native ? kb::scene::BehaviourBackend::Native : kb::scene::BehaviourBackend::Lua, .enabled = true });
+    }
+    const bool event = scenario == "event";
+    kb::script::ScriptEvent ping;
+    ping.name = "Ping";
+    const auto runFrame = [&]() {
+        if (event) {
+            const kb::script::ScriptRuntimeExecutionResult& result = host.Runtime().DispatchEvent(scene, ping, 0.0F);
+            Require(result.executedBehaviours == count, "the event must reach every object");
+        } else {
+            static_cast<void>(system.ExecuteFrame(scene, kFrameSeconds));
+            if (!native) host.LuaRuntime().StepGarbageCollector();
+            Require(system.LastResult().Succeeded(), system.LastResult().diagnostics.empty() ? "script frame benchmark frame failed" : system.LastResult().diagnostics.front().message.c_str());
+        }
+    };
+    // The first frame creates the instances; it is reported separately and is not part of the percentiles.
+    const Clock::time_point first = Clock::now();
+    if (event) static_cast<void>(system.ExecuteFrame(scene, kFrameSeconds)); else runFrame();
+    const double firstMilliseconds = MillisecondsSince(first);
+    for (int frame = 0; frame < warmup; ++frame) runFrame();
+    std::vector<double> times;
+    times.reserve(static_cast<std::size_t>(frames));
+    for (int frame = 0; frame < frames; ++frame) {
+        const Clock::time_point start = Clock::now();
+        runFrame();
+        times.push_back(MillisecondsSince(start));
+    }
+    std::sort(times.begin(), times.end());
+    const auto at = [&](double q) { return times[std::min(times.size() - 1U, static_cast<std::size_t>(static_cast<double>(times.size()) * q))]; };
+    std::printf("RESULT backend=%s scenario=%s count=%zu frames=%d p50=%.4f p95=%.4f p99=%.4f max=%.4f first=%.3f\n",
+        backend.c_str(), scenario.c_str(), count, frames, at(0.5), at(0.95), at(0.99), times.back(), firstMilliseconds);
 }
 
 } // namespace kb::tests

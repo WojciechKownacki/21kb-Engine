@@ -174,6 +174,14 @@ private:
     // lifecycleRecords_ elements, so whoever replaces or erases records marks the order dirty.
     std::vector<BehaviourLifecycleRecord*> phaseOrder_;
     bool phaseOrderDirty_ = true;
+    // The scripts the ordered behaviours run, once each, so a phase that none of them has an entry for is skipped
+    // whole. When there are more distinct scripts than it keeps, every behaviour is asked as before.
+    struct PhaseScript {
+        std::uint64_t assetId = 0U;
+        kb::scene::BehaviourBackend backend = kb::scene::BehaviourBackend::Native;
+    };
+    std::vector<PhaseScript> phaseScripts_;
+    bool phaseScriptsOverflow_ = false;
     std::uint64_t syncEpoch_ = 0U;
 };
 

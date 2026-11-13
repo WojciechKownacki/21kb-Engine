@@ -18,6 +18,8 @@ class dtCrowd;
 
 namespace kb::navigation {
 
+struct CrowdPassTuning;
+
 struct NavMeshCrowdAgentInput {
     std::uint64_t id = 0U;
     kb::scene::NavAgent agent{};
@@ -136,6 +138,8 @@ private:
     std::map<std::uint64_t, ObstacleRecord> obstacles_;
     // Workers of the crowds' per-member passes; none when they run on the calling thread.
     std::unique_ptr<kb::ecs::WorkerPool> workers_;
+    // What the passes over members cost, learned while they run, so a pass too small for the workers stays on this thread.
+    std::shared_ptr<CrowdPassTuning> tuning_;
     std::size_t workerCount_ = 1U;
     // Whether the crowds' passes run on the workers this step (enough agents, see kMinAgentsOnWorkers).
     bool pooled_ = false;

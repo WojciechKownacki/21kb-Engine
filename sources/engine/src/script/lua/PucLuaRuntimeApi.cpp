@@ -122,6 +122,10 @@ void PucLuaRuntimeApi::PushSelf(lua_State* state, ScriptExecutionContext& contex
     PucLuaSelfApi::PushSelf(state, context);
 }
 
+void PucLuaRuntimeApi::RefreshSelfVariables(lua_State* state, int selfIndex, ScriptExecutionContext& context) {
+    PucLuaSelfApi::RefreshVariables(state, selfIndex, context);
+}
+
 void PucLuaRuntimeApi::PushEvent(lua_State* state, const ScriptEvent& event) {
     PucLuaEventApi::PushEvent(state, event);
 }
