@@ -1,4 +1,5 @@
 #include "engine/scene/SceneAnimators.hpp"
+#include "engine/scene/SceneAnimatorPoseRate.hpp"
 
 #include "scene/SceneAnimatorService.hpp"
 
@@ -56,6 +57,8 @@ std::optional<float> SceneAnimators::Curve(SceneEntity entity, std::string_view 
 std::optional<AnimatorStateInfo> SceneAnimators::State(SceneEntity entity, std::string_view layer) const { return SceneAnimatorService::State(scene_, entity, layer); }
 std::shared_ptr<const AnimatorDebugSnapshot> SceneAnimators::DebugSnapshot() const { return SceneAnimatorService::DebugSnapshot(scene_); }
 void SceneAnimators::WaitForDebugSnapshot() { SceneAnimatorService::WaitForDebugSnapshot(scene_); }
+void SceneAnimatorPoseRate::SetPolicy(Scene& scene, const AnimatorPoseRatePolicy& policy) { SceneAnimatorService::SetPoseRatePolicy(scene, policy); }
+AnimatorPoseRatePolicy SceneAnimatorPoseRate::Policy(const Scene& scene) noexcept { return SceneAnimatorService::PoseRatePolicy(scene); }
 std::vector<AnimationEventRecord> SceneAnimators::DrainEvents() { return SceneAnimatorService::DrainEvents(scene_); }
 std::vector<std::string> SceneAnimators::SocketNames(SceneEntity entity) const { return SceneAnimatorService::SocketNames(scene_, entity); }
 SocketAttachmentStatus SceneAnimators::SocketAttachment(SceneEntity attachedEntity) const { return SceneAnimatorService::SocketAttachment(scene_, attachedEntity); }

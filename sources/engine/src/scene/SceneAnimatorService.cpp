@@ -14,6 +14,7 @@
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/scene/SkeletonBindingComponent.hpp"
 #include "engine/scene/SkeletonNames.hpp"
 #include "engine/scene/SocketAttachmentComponent.hpp"
@@ -116,6 +117,8 @@ constexpr std::size_t kAnimatorParallelEvaluationThreshold =
 // animator worker pool so the animation hot path never pays for diagnostics.
 constexpr std::size_t kAnimatorDebugSnapshotAsyncThreshold =
     kAnimatorParallelEvaluationThreshold;
+// Updates a debug snapshot read keeps the snapshot current for (about two seconds at 60 updates a second).
+constexpr std::uint32_t kAnimatorDebugSnapshotLeaseTicks = 120U;
 
 void EnsureAnimatorWorkerPool(SceneState& state) {
     if (state.animatorWorkerPool == nullptr) {
@@ -127,28 +130,101 @@ void EnsureAnimatorWorkerPool(SceneState& state) {
     }
 }
 
-[[nodiscard]] bool CanEvaluateSkeletalPoseInParallel(
-    const AnimatorRuntimeRecord& record, AnimatorRootMotionOwner rootMotionOwner) noexcept {
-    return record.skeleton.has_value() && record.bindings.empty() &&
-        record.rigConstraints.empty() && !record.motionSkeletonRule.has_value() &&
-        rootMotionOwner == AnimatorRootMotionOwner::None;
+// The share of a view's height that a bounding sphere fills, from the renderer's last frame: the sphere's
+// diameter over the height the view spans at the sphere's depth (a sphere around the camera counts as filling it).
+[[nodiscard]] float ViewHeightCoverage(
+    const SceneRenderVisibilityFrame& frame, const SceneRenderBounds& bounds) noexcept {
+    const float scale = frame.projection[5];
+    if (!(scale > 0.0F)) return 1.0F;
+    if (frame.projection[15] != 0.0F) return bounds.radius * scale;
+    const float depth = frame.view[2] * bounds.center.x + frame.view[6] * bounds.center.y +
+        frame.view[10] * bounds.center.z + frame.view[14];
+    return depth <= bounds.radius ? 1.0F : bounds.radius * scale / depth;
 }
 
+// Whether a sphere is inside the frustum of the renderer's last frame once grown by its own size and a
+// few metres: the character that is about to turn up gets its pose before it is rendered.
+[[nodiscard]] bool NearViewFrustum(
+    const SceneRenderVisibilityFrame& frame, const SceneRenderBounds& bounds) noexcept {
+    if (!frame.frustumValid) return true;
+    const float grown = bounds.radius * 2.0F + 2.0F;
+    for (const SceneRenderFrustumPlane& plane : frame.frustumPlanes) {
+        if (plane.x * bounds.center.x + plane.y * bounds.center.y + plane.z * bounds.center.z + plane.w < -grown) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Frames between two pose evaluations of a skeletal character from what the renderer's last frame(s) showed of
+// it (AnimatorPoseRatePolicy); 1 when it is not known to the renderer, 0 when it is not posed while unseen.
+[[nodiscard]] std::uint32_t PoseFrameInterval(
+    const SceneState& state, const AnimatorRuntimeRecord& record) noexcept {
+    const AnimatorPoseRatePolicy& policy = state.animatorPoseRatePolicy;
+    if (!policy.enabled || record.poseUpdateRateHz > 0.0F || !record.physicsPose.empty() ||
+        record.motionSkeletonRule.has_value() || state.renderVisibilityFrames.empty()) {
+        return 1U;
+    }
+    bool known = false;
+    bool inView = false;
+    float coverage = 0.0F;
+    for (const auto& [localUser, frame] : state.renderVisibilityFrames) {
+        static_cast<void>(localUser);
+        const auto entry = std::lower_bound(
+            frame.entries.begin(), frame.entries.end(), record.entity.Id(),
+            [](const SceneRenderVisibilityEntry& value, std::uint64_t id) { return value.entityId < id; });
+        if (entry == frame.entries.end() || entry->entityId != record.entity.Id()) continue;
+        known = true;
+        if (!entry->visible && !NearViewFrustum(frame, entry->worldBounds)) continue;
+        inView = true;
+        coverage = std::max(coverage, ViewHeightCoverage(frame, entry->worldBounds));
+    }
+    if (!known) return 1U;
+    if (!inView) return policy.offScreenFrameInterval;
+    if (coverage >= policy.fullRateCoverage) return 1U;
+    if (coverage >= policy.halfRateCoverage) return 2U;
+    return coverage >= policy.thirdRateCoverage ? 3U : 4U;
+}
+
+// Whether the skeletal pose is evaluated this tick: at the authored Pose Rate when there is one, else at the
+// view-driven interval, staggered per character so evaluations spread over the frames. A character that has
+// never been posed is posed at once, one that waited its whole interval is posed even if its slot has not come.
 [[nodiscard]] bool ShouldEvaluateSkeletalPose(
-    AnimatorRuntimeRecord& record, float deltaSeconds) noexcept {
-    if (!record.skeleton.has_value() || record.poseUpdateRateHz <= 0.0F) {
+    AnimatorRuntimeRecord& record, float deltaSeconds, std::uint32_t viewInterval, std::uint64_t tick) noexcept {
+    if (!record.skeleton.has_value()) {
         record.hasEvaluatedPose = true;
+        return true;
+    }
+    if (record.poseUpdateRateHz <= 0.0F) {
+        if (!record.hasEvaluatedPose) {
+            record.hasEvaluatedPose = true;
+            record.poseTicksSinceEvaluation = 0U;
+            return true;
+        }
+        ++record.poseTicksSinceEvaluation;
+        if (viewInterval == 0U) return false;
+        // A fixed per-character offset spreads the evaluations of one interval over its frames.
+        const std::uint64_t stagger = (record.entity.Id() * 0x9E3779B97F4A7C15ULL) >> 33U;
+        if (viewInterval > 1U && record.poseTicksSinceEvaluation < viewInterval && (tick + stagger) % viewInterval != 0U) {
+            return false;
+        }
+        record.poseTicksSinceEvaluation = 0U;
         return true;
     }
     if (!record.hasEvaluatedPose) {
         record.hasEvaluatedPose = true;
         record.poseUpdateAccumulatorSeconds = 0.0;
+        record.poseTicksSinceEvaluation = 0U;
         return true;
     }
     const double interval = 1.0 / static_cast<double>(record.poseUpdateRateHz);
     record.poseUpdateAccumulatorSeconds += static_cast<double>(deltaSeconds);
-    if (record.poseUpdateAccumulatorSeconds + 1.0e-12 < interval) return false;
+    if (record.poseUpdateAccumulatorSeconds + 1.0e-12 < interval) {
+        ++record.poseTicksSinceEvaluation;
+        return false;
+    }
     record.poseUpdateAccumulatorSeconds = std::fmod(record.poseUpdateAccumulatorSeconds, interval);
+    record.poseTicksSinceEvaluation = 0U;
     return true;
 }
 
@@ -1476,9 +1552,49 @@ void EvaluateIndexedSkeletalState(
     }
 }
 
+// The shown pose moves `alpha` of the way from `from` to the skeleton's interpolation target; the component
+// pose and skin matrices follow from the result.
+void ShowPoseTowardTarget(
+    AnimatorInstanceSkeleton& skeleton, const AnimatorInstanceSkeleton::PoseBuffer& from,
+    const std::vector<float>& fromMorphWeights, AnimatorInstanceSkeleton::PoseBuffer& shown,
+    std::vector<float>& shownMorphWeights, float alpha) {
+    const std::size_t boneCount = skeleton.asset->bones.size();
+    for (std::size_t index = 0U; index < boneCount; ++index) {
+        WritePose(shown.local, index, Blend(ReadPose(from.local, index), ReadPose(skeleton.interpolationTarget, index), alpha));
+    }
+    for (std::size_t index = 0U; index < shownMorphWeights.size(); ++index) {
+        shownMorphWeights[index] = std::lerp(
+            fromMorphWeights[index], skeleton.interpolationTargetMorphWeights[index], alpha);
+    }
+    SolveComponentPose(*skeleton.asset, shown);
+}
+
+void EnsureInterpolationStorage(AnimatorInstanceSkeleton& skeleton) {
+    const std::size_t boneCount = skeleton.asset->bones.size();
+    if (skeleton.interpolationTarget.positions.size() == boneCount &&
+        skeleton.interpolationTargetMorphWeights.size() == skeleton.morphTargetNames.size()) {
+        return;
+    }
+    skeleton.interpolationTarget.positions.resize(boneCount);
+    skeleton.interpolationTarget.rotations.resize(boneCount);
+    skeleton.interpolationTarget.scales.resize(boneCount);
+    skeleton.interpolationTargetMorphWeights.resize(skeleton.morphTargetNames.size());
+}
+
+// A tick without an evaluation of a character posed less often than every frame: the shown pose moves on
+// toward the last evaluated one, reaching it on the last tick before the next evaluation.
+void InterpolateSkeletalPose(AnimatorRuntimeRecord& instance, float alpha) {
+    AnimatorInstanceSkeleton& skeleton = *instance.skeleton;
+    skeleton.currentPose ^= 1U;
+    ShowPoseTowardTarget(
+        skeleton, skeleton.poses[skeleton.currentPose ^ 1U], skeleton.morphWeights[skeleton.currentPose ^ 1U],
+        skeleton.poses[skeleton.currentPose], skeleton.morphWeights[skeleton.currentPose], alpha);
+    ++skeleton.hierarchySolveCount;
+}
+
 void EvaluateIndexedSkeletalPose(
     Scene& scene, AnimatorRuntimeRecord& instance,
-    std::optional<std::uint32_t> extractedRootMotionBone) {
+    std::optional<std::uint32_t> extractedRootMotionBone, float interpolationAlpha = 0.0F) {
     AnimatorInstanceSkeleton& skeleton = *instance.skeleton;
     if (skeleton.evaluationCount ==
             std::numeric_limits<std::uint64_t>::max() ||
@@ -1591,7 +1707,26 @@ void EvaluateIndexedSkeletalPose(
     ApplyMotionSkeletonRule(
         scene, instance, current, extractedRootMotionBone);
     ApplyPhysicsPose(scene,instance,current);
+    if (interpolationAlpha > 0.0F) {
+        skeleton.interpolationTarget.positions = current.local.positions;
+        skeleton.interpolationTarget.rotations = current.local.rotations;
+        skeleton.interpolationTarget.scales = current.local.scales;
+        skeleton.interpolationTargetMorphWeights = currentMorphWeights;
+        if (interpolationAlpha < 1.0F) {
+            ShowPoseTowardTarget(
+                skeleton, skeleton.poses[skeleton.currentPose ^ 1U], skeleton.morphWeights[skeleton.currentPose ^ 1U],
+                current, currentMorphWeights, interpolationAlpha);
+        }
+    }
     ++skeleton.hierarchySolveCount;
+}
+
+void RunPoseJob(Scene& scene, const SceneState::AnimatorPoseJob& job) {
+    if (job.kind == SceneState::AnimatorPoseJobKind::Interpolate) {
+        InterpolateSkeletalPose(*job.record, job.alpha);
+    } else {
+        EvaluateIndexedSkeletalPose(scene, *job.record, job.rootMotionBone, job.alpha);
+    }
 }
 
 bool ConditionMatches(
@@ -2825,8 +2960,12 @@ SceneAnimatorService::InstanceSkeleton(
     const AnimatorInstanceSkeleton& skeleton = *resolved;
     const AnimatorInstanceSkeleton::PoseBuffer& current =
         skeleton.poses[skeleton.currentPose];
-    const AnimatorInstanceSkeleton::PoseBuffer& previous =
-        skeleton.poses[skeleton.currentPose ^ 1U];
+    // A pose held over a skipped tick did not move: its previous pose is itself, so motion vectors stay zero.
+    const AnimatorRuntimeRecord* animator = Find(SceneAccess::State(scene), entity);
+    const bool held = animator != nullptr && animator->poseTicksSinceEvaluation > 0U &&
+        animator->poseInterpolationInterval == 0U;
+    const std::uint32_t previousIndex = held ? skeleton.currentPose : skeleton.currentPose ^ 1U;
+    const AnimatorInstanceSkeleton::PoseBuffer& previous = skeleton.poses[previousIndex];
     const auto view = [](const AnimatorInstanceSkeleton::PoseSoa& pose) {
         return AnimatorPoseSoaView{
             .positions = pose.positions,
@@ -2848,7 +2987,7 @@ SceneAnimatorService::InstanceSkeleton(
         .morphWeights = {
             .targetNames = skeleton.morphTargetNames,
             .currentWeights = skeleton.morphWeights[skeleton.currentPose],
-            .previousWeights = skeleton.morphWeights[skeleton.currentPose ^ 1U],
+            .previousWeights = skeleton.morphWeights[previousIndex],
         },
         .evaluationCount = skeleton.evaluationCount,
         .hierarchySolveCount = skeleton.hierarchySolveCount,
@@ -3373,7 +3512,22 @@ std::optional<AnimatorStateInfo> SceneAnimatorService::State(const Scene& scene,
 
 std::shared_ptr<const AnimatorDebugSnapshot> SceneAnimatorService::DebugSnapshot(
     const Scene& scene) noexcept {
-    return SceneAccess::State(scene).animatorDebugSnapshots.Read();
+    const SceneState& state = SceneAccess::State(scene);
+    state.animatorDebugSnapshotDemandTicks.store(kAnimatorDebugSnapshotLeaseTicks, std::memory_order_relaxed);
+    return state.animatorDebugSnapshots.Read();
+}
+
+void SceneAnimatorService::SetPoseRatePolicy(Scene& scene, const AnimatorPoseRatePolicy& policy) {
+    if (!std::isfinite(policy.fullRateCoverage) || !std::isfinite(policy.halfRateCoverage) ||
+        !std::isfinite(policy.thirdRateCoverage) || policy.fullRateCoverage < policy.halfRateCoverage ||
+        policy.halfRateCoverage < policy.thirdRateCoverage || policy.thirdRateCoverage < 0.0F) {
+        throw std::invalid_argument("AnimatorPoseRatePolicy coverages must be finite and not increase from full to third rate");
+    }
+    SceneAccess::State(scene).animatorPoseRatePolicy = policy;
+}
+
+AnimatorPoseRatePolicy SceneAnimatorService::PoseRatePolicy(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).animatorPoseRatePolicy;
 }
 
 void SceneAnimatorService::PublishDebugSnapshot(Scene& scene) {
@@ -3383,6 +3537,12 @@ void SceneAnimatorService::PublishDebugSnapshot(Scene& scene) {
 
 void SceneAnimatorService::SubmitDebugSnapshot(Scene& scene) {
     SceneState& state = SceneAccess::State(scene);
+    ++state.animatorDebugSnapshotUpdateSerial;
+    // Nobody read the snapshot lately: building it every update would only copy every character's bones.
+    std::uint32_t leaseTicks = state.animatorDebugSnapshotDemandTicks.load(std::memory_order_relaxed);
+    if (leaseTicks == 0U) return;
+    state.animatorDebugSnapshotDemandTicks.store(leaseTicks - 1U, std::memory_order_relaxed);
+    state.animatorDebugSnapshotBuiltSerial = state.animatorDebugSnapshotUpdateSerial;
     if (!state.animatorDebugSnapshotJob.IsReady()) {
         // The previous build is still running; diagnostics stay one snapshot
         // behind rather than blocking the animation hot path, and at most one
@@ -3420,7 +3580,13 @@ void SceneAnimatorService::SubmitDebugSnapshot(Scene& scene) {
 }
 
 void SceneAnimatorService::WaitForDebugSnapshot(Scene& scene) {
-    JoinAnimatorDebugSnapshotJob(SceneAccess::State(scene));
+    SceneState& state = SceneAccess::State(scene);
+    state.animatorDebugSnapshotDemandTicks.store(kAnimatorDebugSnapshotLeaseTicks, std::memory_order_relaxed);
+    JoinAnimatorDebugSnapshotJob(state);
+    if (state.animatorDebugSnapshotBuiltSerial != state.animatorDebugSnapshotUpdateSerial) {
+        state.animatorDebugSnapshotBuiltSerial = state.animatorDebugSnapshotUpdateSerial;
+        BuildAndPublishDebugSnapshot(scene, state);
+    }
 }
 
 std::vector<AnimationEventRecord> SceneAnimatorService::DrainEvents(Scene& scene) {
@@ -3471,7 +3637,7 @@ void SceneAnimatorService::SyncComponents(Scene& scene) {
                 { .entity = entity, .binding = binding });
         }, &authoredSkeletonBindings);
 
-    std::map<std::uint64_t, bool> retained;
+    const std::uint64_t syncSerial = ++sceneState.animatorSyncSerial;
     for (const AuthoredAnimator& value : authored) {
         if (sceneState.timelineAnimatorControls.contains(value.entity.Id())) continue;
         if (!value.animator.enabled) continue;
@@ -3479,7 +3645,6 @@ void SceneAnimatorService::SyncComponents(Scene& scene) {
             !std::isfinite(value.animator.poseUpdateRateHz) || value.animator.poseUpdateRateHz < 0.0F) {
             throw std::runtime_error("Enabled Animator component has an invalid controller, speed, or pose update rate");
         }
-        retained[value.entity.Id()] = true;
         AnimatorRuntimeRecord* record = Find(SceneAccess::State(scene), value.entity);
         SceneState& state = SceneAccess::State(scene);
         const kb::assets::AssetId controllerAssetId{
@@ -3538,6 +3703,7 @@ void SceneAnimatorService::SyncComponents(Scene& scene) {
             record->observedHierarchyTopologyVersion =
                 state.hierarchyTopologyVersion;
         }
+        record->syncSerial = syncSerial;
         if (record->lastAppliedComponentSpeed != value.animator.speed) {
             record->lastAppliedComponentSpeed = value.animator.speed;
             record->speed = value.animator.speed;
@@ -3562,20 +3728,18 @@ void SceneAnimatorService::SyncComponents(Scene& scene) {
     }
     SceneState& state = SceneAccess::State(scene);
     for (auto it = state.animators.begin(); it != state.animators.end();) {
-        if (!retained.contains(it->first) && !state.timelineAnimatorControls.contains(it->first)) {
+        if (it->second.syncSerial != syncSerial && !state.timelineAnimatorControls.contains(it->first)) {
             it = state.animators.erase(it);
         } else {
             ++it;
         }
     }
 
-    std::map<std::uint64_t, bool> retainedSkeletonBindings;
     for (const AuthoredSkeletonBinding& value : authoredSkeletonBindings) {
         if (!value.binding.enabled) continue;
         if (!IsSkeletonBindingComponentValid(value.binding)) {
             throw std::runtime_error("Enabled SkeletonBinding component is invalid");
         }
-        retainedSkeletonBindings[value.entity.Id()] = true;
         auto existing = state.skeletonBindingPoses.find(value.entity.Id());
         const bool current = existing != state.skeletonBindingPoses.end() &&
             existing->second.entity == value.entity &&
@@ -3583,7 +3747,10 @@ void SceneAnimatorService::SyncComponents(Scene& scene) {
             existing->second.skeleton.compatibilitySignature == value.binding.skeletonCompatibilitySignature &&
             existing->second.skeleton.loadGeneration == scene.Assets().Manager().LoadGeneration(
                 kb::assets::AssetId{ value.binding.skeletonAssetId });
-        if (current) continue;
+        if (current) {
+            existing->second.syncSerial = syncSerial;
+            continue;
+        }
 
         std::optional<AnimatorInstanceSkeleton> pose = LoadSkeletonBindingPose(scene, value.binding);
         if (!pose.has_value()) {
@@ -3596,11 +3763,12 @@ void SceneAnimatorService::SyncComponents(Scene& scene) {
         state.skeletonBindingPoses.insert_or_assign(value.entity.Id(), SkeletonBindingRuntimePose{
             .entity = value.entity,
             .runtimeBindingGeneration = state.nextAnimatorRuntimeBindingGeneration++,
+            .syncSerial = syncSerial,
             .skeleton = std::move(*pose),
         });
     }
     for (auto it = state.skeletonBindingPoses.begin(); it != state.skeletonBindingPoses.end();) {
-        if (!scene.Entities().IsAlive(it->second.entity) || !retainedSkeletonBindings.contains(it->first)) {
+        if (!scene.Entities().IsAlive(it->second.entity) || it->second.syncSerial != syncSerial) {
             it = state.skeletonBindingPoses.erase(it);
         } else {
             ++it;
@@ -3625,6 +3793,7 @@ void SceneAnimatorService::Advance(Scene& scene, float deltaSeconds) {
     state.lastAnimatorParallelWorkerCount = 1U;
     state.lastAnimatorUpdateRateSkippedPoseCount = 0U;
     state.animatorParallelPoseScratch.clear();
+    ++state.animatorPoseTick;
 
     for (auto& [id, record] : state.animators) {
         static_cast<void>(id);
@@ -3842,15 +4011,27 @@ void SceneAnimatorService::Advance(Scene& scene, float deltaSeconds) {
                 }
                 extractedRootMotionBone = boneIndex;
             }
-            if (CanEvaluateSkeletalPoseInParallel(record, rootMotionOwner)) {
-                if (ShouldEvaluateSkeletalPose(record, deltaSeconds)) {
-                    state.animatorParallelPoseScratch.push_back(&record);
+            const std::uint32_t viewInterval = PoseFrameInterval(state, record);
+            SceneState::AnimatorPoseJob job{ .record = &record, .rootMotionBone = extractedRootMotionBone };
+            if (ShouldEvaluateSkeletalPose(record, deltaSeconds, viewInterval, state.animatorPoseTick)) {
+                if (record.poseUpdateRateHz <= 0.0F && (viewInterval == 2U || viewInterval == 3U)) {
+                    // Posed every 2nd or 3rd frame: the ticks between show a pose moving toward this one.
+                    EnsureInterpolationStorage(*record.skeleton);
+                    job.alpha = record.poseInterpolationInterval == 0U ? 1.0F : 1.0F / static_cast<float>(viewInterval);
+                    record.poseInterpolationInterval = viewInterval;
                 } else {
-                    ++state.lastAnimatorUpdateRateSkippedPoseCount;
+                    record.poseInterpolationInterval = 0U;
                 }
+                state.animatorParallelPoseScratch.push_back(job);
             } else {
-                EvaluateIndexedSkeletalPose(
-                    scene, record, extractedRootMotionBone);
+                ++state.lastAnimatorUpdateRateSkippedPoseCount;
+                if (record.poseInterpolationInterval != 0U && record.poseInterpolationInterval == viewInterval) {
+                    job.kind = SceneState::AnimatorPoseJobKind::Interpolate;
+                    job.alpha = 1.0F / static_cast<float>(viewInterval - record.poseTicksSinceEvaluation);
+                    state.animatorParallelPoseScratch.push_back(job);
+                } else {
+                    record.poseInterpolationInterval = 0U;
+                }
             }
         }
         for (AnimatorRuntimeBinding& binding : record.bindings) {
@@ -3878,8 +4059,8 @@ void SceneAnimatorService::Advance(Scene& scene, float deltaSeconds) {
     }
     if (!state.animatorParallelPoseScratch.empty()) {
         if (state.animatorParallelPoseScratch.size() < kAnimatorParallelEvaluationThreshold) {
-            for (AnimatorRuntimeRecord* record : state.animatorParallelPoseScratch) {
-                EvaluateIndexedSkeletalPose(scene, *record, std::nullopt);
+            for (const SceneState::AnimatorPoseJob& job : state.animatorParallelPoseScratch) {
+                RunPoseJob(scene, job);
             }
         } else {
             EnsureAnimatorWorkerPool(state);
@@ -3888,10 +4069,7 @@ void SceneAnimatorService::Advance(Scene& scene, float deltaSeconds) {
                 kAnimatorParallelEvaluationGrainSize,
                 [&scene, &state](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
                     for (std::size_t offset = 0U; offset < chunk.count; ++offset) {
-                        EvaluateIndexedSkeletalPose(
-                            scene,
-                            *state.animatorParallelPoseScratch[chunk.begin + offset],
-                            std::nullopt);
+                        RunPoseJob(scene, state.animatorParallelPoseScratch[chunk.begin + offset]);
                     }
                 });
             state.lastAnimatorParallelEvaluationCount =

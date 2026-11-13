@@ -5275,13 +5275,9 @@ bool EditorSceneContext::HasAnimatorEditorAsset() const noexcept {
 bool EditorSceneContext::AnimatorEditorDebuggingPreview() const noexcept {
     if (!animatorEditorDebugTarget_.IsValid() || !HasAnimatorEditorAsset()) return true;
     if (!scene_->Entities().IsAlive(animatorEditorDebugTarget_)) return true;
-    const std::shared_ptr<const kb::scene::AnimatorDebugSnapshot> snapshot =
-        scene_->Animators().DebugSnapshot();
-    const kb::scene::AnimatorDebugInstanceSnapshot* instance = snapshot == nullptr
-        ? nullptr
-        : snapshot->Find(animatorEditorDebugTarget_);
-    return instance == nullptr ||
-        instance->controllerAssetId != animatorEditorAssetId_.value;
+    // Asked of the runtime instance itself: the debug snapshot is only built while somebody reads it, so it
+    // can still lack the target here, and this decides which scene's snapshot is read at all.
+    return scene_->Animators().Controller(animatorEditorDebugTarget_) != animatorEditorAssetId_.value;
 }
 
 kb::scene::SceneEntity EditorSceneContext::AnimatorEditorDebugTarget() const noexcept {

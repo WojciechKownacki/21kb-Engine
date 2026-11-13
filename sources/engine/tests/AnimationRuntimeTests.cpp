@@ -13,6 +13,7 @@
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAnimatorPoseRate.hpp"
 #include "engine/scene/SceneAnimators.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -24,6 +25,7 @@
 #include "engine/scene/ScenePrefab.hpp"
 #include "engine/scene/ScenePrefabInstance.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
+#include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
@@ -33,7 +35,9 @@
 #include "engine/script/ScriptRuntimeHost.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <atomic>
 #include <filesystem>
@@ -592,7 +596,229 @@ void RunCombatGameplayTest(const std::filesystem::path& root) {
             health(front) == 12.0F, "Gameplay.Revive did not apply the requested health");
 }
 
+// Pose work follows what the renderer last showed of each character (AnimatorPoseRatePolicy): skipped
+// poses, interpolation between evaluations, resuming when a character is seen again, parallel evaluation of
+// characters with rig constraints and the debug snapshot being produced only for a reader.
+void RunAnimatorPoseRateTest(const std::filesystem::path& root) {
+    kb::scene::SkeletonAsset skeleton{};
+    skeleton.bones = {
+        { .id = 700U, .parentIndex = -1, .name = "Root", .referencePose = { .position = { 3.0F, 0.0F, 0.0F } }, .inverseBind = {} },
+        { .id = 101U, .parentIndex = 0, .name = "Spine", .referencePose = { .position = { 0.0F, 1.0F, 0.0F } }, .inverseBind = {} },
+        { .id = 900U, .parentIndex = 1, .name = "Hand", .referencePose = { .position = { 1.0F, 0.0F, 0.0F } }, .inverseBind = {} },
+    };
+    const std::uint64_t signature = kb::scene::SkeletonCompatibilitySignature(skeleton);
+    Require(kb::scene::SkeletonAssetIO::Save(root / "Assets" / "Skeletal" / "Rate.kbskeleton", skeleton),
+        "Pose rate fixture could not save its Skeleton");
+    std::uint64_t skeletonId = 0U;
+    {
+        kb::scene::Scene bootstrap;
+        Require(bootstrap.Assets().MountProject(root) && bootstrap.Assets().Discover() == 1U,
+            "Pose rate fixture could not discover its Skeleton");
+        skeletonId = bootstrap.Assets().Manager().Registry().FindByPath("/Game/Skeletal/Rate.kbskeleton")->id.value;
+    }
+    kb::scene::AnimationClip clip{};
+    clip.durationSeconds = 4.0F;
+    clip.looping = true;
+    clip.targetSkeletonAssetId = skeletonId;
+    clip.targetSkeletonCompatibilitySignature = signature;
+    clip.skeletalTracks = { {
+        .boneId = 900U,
+        .bindingMask = 1U,
+        .keyframes = { { .timeSeconds = 0.0F, .transform = {} },
+                       { .timeSeconds = 4.0F, .transform = { .position = { 8.0F, 0.0F, 0.0F } } } },
+    } };
+    kb::scene::AnimatorController plain{};
+    plain.layers = { { .name = "Base", .defaultState = "Move", .weight = 1.0F, .mask = 7U,
+        .states = { { .name = "Move", .clipReference = "/Game/Animation/Rate.kbanim" } } } };
+    kb::scene::AnimatorController aimed = plain;
+    aimed.rigConstraints = { { .name = "Aim", .type = kb::scene::AnimatorRigConstraintType::Aim, .target = "AimTarget",
+                               .constrainedBoneId = 900U } };
+    Require(kb::scene::AnimationAssetIO::SaveClip(root / "Assets" / "Animation" / "Rate.kbanim", clip) &&
+            kb::scene::AnimationAssetIO::SaveController(root / "Assets" / "Animation" / "Plain.kbanimcontroller", plain) &&
+            kb::scene::AnimationAssetIO::SaveController(root / "Assets" / "Animation" / "Aimed.kbanimcontroller", aimed),
+        "Pose rate fixture could not save its clip and controllers");
+
+    const auto buildScene = [&](const char* controllerPath, std::size_t count, std::size_t workers, std::vector<kb::scene::SceneEntity>& rigs) {
+        kb::ecs::WorldConfig config;
+        config.workerThreadLimit = workers;
+        auto scene = std::make_unique<kb::scene::Scene>(config);
+        Require(scene->Assets().MountProject(root) && scene->Assets().Discover() == 4U,
+            "Pose rate fixture could not discover its assets");
+        const std::uint64_t controllerId = scene->Assets().Manager().Registry().FindByPath(controllerPath)->id.value;
+        for (std::size_t index = 0U; index < count; ++index) {
+            const kb::scene::SceneObject object = scene->Entities().CreateObject({ .name = "Rate Rig" });
+            Require(scene->Components().SkeletonBindings().Set(object.Entity(), kb::scene::SkeletonBindingComponent{
+                        .skeletonAssetId = skeletonId, .skeletonCompatibilitySignature = signature, .enabled = true }),
+                "Pose rate fixture could not author SkeletonBinding");
+            scene->Components().Animators().Set(object.Entity(), kb::scene::Animator{
+                .controllerAssetId = controllerId, .speed = 1.0F, .enabled = true });
+            rigs.push_back(object.Entity());
+        }
+        scene->Runtime().SetPlaying(true);
+        return scene;
+    };
+    // What the renderer's last frame showed: a camera at the origin looking down +Z with a 90 degree view, so a
+    // sphere of radius r at depth z fills r / z of the view height. Depth below zero is behind the camera.
+    struct Shown { kb::scene::SceneEntity entity; float depth = 1.0F; float radius = 1.0F; bool visible = true; };
+    const auto publish = [](kb::scene::Scene& scene, std::vector<Shown> shown) {
+        std::sort(shown.begin(), shown.end(), [](const Shown& a, const Shown& b) { return a.entity.Id() < b.entity.Id(); });
+        kb::scene::SceneRenderVisibilityFrame frame{};
+        frame.frustumValid = true;
+        frame.cameraValid = true;
+        frame.viewportWidth = 1280U;
+        frame.viewportHeight = 720U;
+        frame.view = { 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F };
+        frame.projection = { 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F };
+        frame.frustumPlanes.fill({ 0.0F, 0.0F, 1.0F, 0.0F });
+        for (const Shown& value : shown) {
+            frame.entries.push_back({ .entityId = value.entity.Id(),
+                .worldBounds = { .center = { 0.0F, 0.0F, value.depth }, .radius = value.radius }, .visible = value.visible });
+        }
+        kb::scene::SceneRenderFeedback::Publish(scene, frame);
+    };
+    const auto evaluations = [](kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+        return scene.Animators().InstanceSkeleton(entity)->evaluationCount;
+    };
+    const auto handX = [](kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+        return scene.Animators().InstanceSkeleton(entity)->currentLocalPose.positions[2].x;
+    };
+
+    // Skipped poses by coverage, and a character seen again is posed at once on its true playhead.
+    {
+        std::vector<kb::scene::SceneEntity> rigs;
+        const auto scene = buildScene("/Game/Animation/Plain.kbanimcontroller", 5U, 1U, rigs);
+        static_cast<void>(scene->Runtime().Update(1.0F / 60.0F));
+        // full view, 0.15 of the view height, 0.02, behind the camera, never reported by the renderer
+        publish(*scene, { { rigs[0], 2.0F }, { rigs[1], 6.6F }, { rigs[2], 50.0F }, { rigs[3], -40.0F, 1.0F, false } });
+        std::array<std::uint64_t, 5> before{};
+        for (std::size_t index = 0U; index < rigs.size(); ++index) before[index] = evaluations(*scene, rigs[index]);
+        std::size_t skippedPoses = 0U;
+        for (std::uint32_t tick = 0U; tick < 24U; ++tick) {
+            const std::uint64_t posedBefore = evaluations(*scene, rigs[2]);
+            static_cast<void>(scene->Runtime().Update(1.0F / 60.0F));
+            skippedPoses += scene->Runtime().HotPathReport().animatorUpdateRateSkippedPoseCount;
+            // A pose held over a skipped tick did not move: it reports itself as its previous pose.
+            const auto view = scene->Animators().InstanceSkeleton(rigs[2]);
+            Require((view->previousSkinMatrices.data() == view->currentSkinMatrices.data()) ==
+                        (evaluations(*scene, rigs[2]) == posedBefore),
+                "A held pose must report itself as its previous pose and a new pose must not");
+        }
+        const auto spent = [&](std::size_t index) { return evaluations(*scene, rigs[index]) - before[index]; };
+        Require(spent(0) == 24U, "A character filling the view must be posed every frame");
+        Require(spent(1) >= 11U && spent(1) <= 13U, "A character at 15 percent of the view must be posed every 2nd frame");
+        Require(spent(2) >= 5U && spent(2) <= 7U, "A tiny character must be posed every 4th frame");
+        Require(spent(3) >= 5U && spent(3) <= 7U, "A character behind the camera must be posed every 4th frame");
+        Require(spent(4) == 24U, "A character the renderer never reported must keep being posed every frame");
+        // 12 + 18 + 18 poses skipped over the 24 ticks by the three reduced characters.
+        Require(skippedPoses >= 46U && skippedPoses <= 50U, "Skipped poses must be counted");
+
+        // Not posed at all while unseen, posed again with the true playhead as soon as it is seen.
+        kb::scene::AnimatorPoseRatePolicy policy = kb::scene::SceneAnimatorPoseRate::Policy(*scene);
+        policy.offScreenFrameInterval = 0U;
+        kb::scene::SceneAnimatorPoseRate::SetPolicy(*scene, policy);
+        publish(*scene, { { rigs[0], 2.0F }, { rigs[3], -40.0F, 1.0F, false } });
+        const std::uint64_t hidden = evaluations(*scene, rigs[3]);
+        for (std::uint32_t tick = 0U; tick < 30U; ++tick) static_cast<void>(scene->Runtime().Update(1.0F / 60.0F));
+        Require(evaluations(*scene, rigs[3]) == hidden, "A character nobody sees must not be posed when the policy says so");
+        publish(*scene, { { rigs[0], 2.0F }, { rigs[3], 2.0F } });
+        static_cast<void>(scene->Runtime().Update(1.0F / 60.0F));
+        Require(evaluations(*scene, rigs[3]) == hidden + 1U && NearlyEqual(handX(*scene, rigs[3]), handX(*scene, rigs[0])),
+            "A character seen again must be posed at once on the playhead it would have had");
+
+        // A disabled policy poses every frame.
+        policy.enabled = false;
+        kb::scene::SceneAnimatorPoseRate::SetPolicy(*scene, policy);
+        publish(*scene, { { rigs[2], 50.0F } });
+        const std::uint64_t tiny = evaluations(*scene, rigs[2]);
+        for (std::uint32_t tick = 0U; tick < 8U; ++tick) static_cast<void>(scene->Runtime().Update(1.0F / 60.0F));
+        Require(evaluations(*scene, rigs[2]) == tiny + 8U, "A disabled policy must pose every frame");
+    }
+
+    // The shown pose moves toward the last evaluated one on skipped frames and never runs ahead of the exact pose.
+    {
+        std::vector<kb::scene::SceneEntity> rigs;
+        const auto scene = buildScene("/Game/Animation/Plain.kbanimcontroller", 2U, 1U, rigs);
+        static_cast<void>(scene->Runtime().Update(1.0F / 60.0F));
+        publish(*scene, { { rigs[0], 2.0F }, { rigs[1], 6.6F } });
+        for (std::uint32_t tick = 0U; tick < 6U; ++tick) static_cast<void>(scene->Runtime().Update(1.0F / 60.0F));
+        float previous = handX(*scene, rigs[1]);
+        std::uint32_t standStill = 0U;
+        for (std::uint32_t tick = 0U; tick < 40U; ++tick) {
+            static_cast<void>(scene->Runtime().Update(1.0F / 60.0F));
+            const float exact = handX(*scene, rigs[0]);
+            const float shown = handX(*scene, rigs[1]);
+            // The clip moves 2 units a second: the shown pose may trail by at most two frames and never leads.
+            Require(shown <= exact + 1.0e-4F && shown >= exact - 2.0F * 2.0F / 60.0F - 1.0e-4F && shown >= previous,
+                "An interpolated pose must stay between the previous shown pose and the exact one");
+            if (shown == previous) ++standStill;
+            previous = shown;
+        }
+        Require(standStill <= 1U, "An interpolated pose must move on every frame instead of standing still between evaluations");
+    }
+
+    // Characters with rig constraints are posed on the worker pool with the same result as on one thread.
+    {
+        std::array<std::vector<float>, 2> skin;
+        std::size_t parallelCount = 0U;
+        for (std::size_t run = 0U; run < 2U; ++run) {
+            std::vector<kb::scene::SceneEntity> rigs;
+            const auto scene = buildScene("/Game/Animation/Aimed.kbanimcontroller", 64U, run == 0U ? 1U : 4U, rigs);
+            static_cast<void>(scene->Runtime().Update(1.0F / 30.0F));
+            for (const kb::scene::SceneEntity entity : rigs) {
+                Require(scene->Animators().SetIkTarget(entity, "AimTarget",
+                            { .worldPosition = { 1.0F + static_cast<float>(entity.Id() % 5U), 2.0F, 3.0F } }),
+                    "Pose rate fixture could not set the aim target");
+            }
+            for (std::uint32_t tick = 0U; tick < 5U; ++tick) static_cast<void>(scene->Runtime().Update(1.0F / 30.0F));
+            Require(scene->Runtime().DrainSceneSystemErrors().empty(), "Constrained characters failed to pose");
+            if (run == 1U) parallelCount = scene->Runtime().HotPathReport().animatorParallelEvaluationCount;
+            for (const kb::scene::SceneEntity entity : rigs) {
+                for (const kb::math::Mat4& matrix : scene->Animators().InstanceSkeleton(entity)->currentSkinMatrices) {
+                    for (const auto& column : matrix.columns) {
+                        skin[run].insert(skin[run].end(), { column.x, column.y, column.z, column.w });
+                    }
+                }
+            }
+        }
+        Require(parallelCount == 64U, "Characters with rig constraints must be posed on the worker pool");
+        Require(skin[0].size() == skin[1].size() &&
+                std::memcmp(skin[0].data(), skin[1].data(), skin[0].size() * sizeof(float)) == 0,
+            "Parallel posing of constrained characters must match single-threaded posing bit for bit");
+    }
+
+    // The debug snapshot is only produced for a reader, and keeps being produced while it is read.
+    {
+        std::vector<kb::scene::SceneEntity> rigs;
+        const auto scene = buildScene("/Game/Animation/Plain.kbanimcontroller", 40U, 1U, rigs);
+        for (std::uint32_t tick = 0U; tick < 3U; ++tick) static_cast<void>(scene->Runtime().Update(1.0F / 60.0F));
+        Require(scene->Runtime().HotPathReport().animatorDebugSnapshotAsyncSubmissionCount == 0U,
+            "A game that never reads the animator debug snapshot must not build it");
+        static_cast<void>(scene->Animators().DebugSnapshot());
+        static_cast<void>(scene->Runtime().Update(1.0F / 60.0F));
+        scene->Animators().WaitForDebugSnapshot();
+        const auto first = scene->Animators().DebugSnapshot();
+        Require(first != nullptr && first->instances.size() == 40U, "The first read must start the snapshot");
+        const std::uint64_t submitted = scene->Runtime().HotPathReport().animatorDebugSnapshotAsyncSubmissionCount;
+        static_cast<void>(scene->Runtime().Update(1.0F / 60.0F));
+        scene->Animators().WaitForDebugSnapshot();
+        Require(scene->Animators().DebugSnapshot()->revision > first->revision &&
+                scene->Runtime().HotPathReport().animatorDebugSnapshotAsyncSubmissionCount > submitted,
+            "A snapshot that is being read must follow the animation");
+        for (std::uint32_t tick = 0U; tick < 130U; ++tick) static_cast<void>(scene->Runtime().Update(1.0F / 60.0F));
+        const std::uint64_t idle = scene->Runtime().HotPathReport().animatorDebugSnapshotAsyncSubmissionCount;
+        for (std::uint32_t tick = 0U; tick < 10U; ++tick) static_cast<void>(scene->Runtime().Update(1.0F / 60.0F));
+        Require(scene->Runtime().HotPathReport().animatorDebugSnapshotAsyncSubmissionCount == idle,
+            "A snapshot nobody has read for a while must stop being built");
+    }
+}
+
 void RunAnimationRuntimeTests() {
+    {
+        const std::filesystem::path poseRateRoot = std::filesystem::temp_directory_path() / "21kb-animator-pose-rate-tests";
+        std::filesystem::remove_all(poseRateRoot);
+        RunAnimatorPoseRateTest(poseRateRoot);
+        std::filesystem::remove_all(poseRateRoot);
+    }
     {
         const std::filesystem::path stateMachineRoot = std::filesystem::temp_directory_path() / "21kb-animation-state-machine-tests";
         std::filesystem::remove_all(stateMachineRoot);
@@ -2380,6 +2606,8 @@ end
                 NearlyEqual(transitionedSkinOrigin.w, 1.0F),
             "Compact skeletal state/layer/mask/blend/transition evaluation diverged from controller semantics");
 
+        // The snapshot is only produced for a reader: this read asks for it and builds the current one.
+        scene.Animators().WaitForDebugSnapshot();
         const std::shared_ptr<const kb::scene::AnimatorDebugSnapshot> transitionedDebug =
             scene.Animators().DebugSnapshot();
         const kb::scene::AnimatorDebugInstanceSnapshot* transitionedDebugInstance =
@@ -3047,6 +3275,7 @@ end
         };
 
         const std::unique_ptr<kb::scene::Scene> sceneA = buildScene();
+        static_cast<void>(sceneA->Animators().DebugSnapshot());
         sceneA->Runtime().SetPlaying(false);
         static_cast<void>(sceneA->Runtime().Update(0.0F));
         sceneA->Runtime().SetPlaying(true);
@@ -3090,6 +3319,7 @@ end
             "A retained async debug snapshot must stay immutable while newer revisions publish");
 
         const std::unique_ptr<kb::scene::Scene> sceneB = buildScene();
+        static_cast<void>(sceneB->Animators().DebugSnapshot());
         sceneB->Runtime().SetPlaying(false);
         static_cast<void>(sceneB->Runtime().Update(0.0F));
         sceneB->Runtime().SetPlaying(true);
@@ -3192,6 +3422,7 @@ end
         std::uint64_t teardownAsyncSubmissions = 0U;
         for (std::uint32_t iteration = 0U; iteration < 8U; ++iteration) {
             const std::unique_ptr<kb::scene::Scene> ephemeral = buildScene();
+            static_cast<void>(ephemeral->Animators().DebugSnapshot());
             ephemeral->Runtime().SetPlaying(true);
             static_cast<void>(ephemeral->Runtime().Update(1.0F / 60.0F));
             teardownAsyncSubmissions +=

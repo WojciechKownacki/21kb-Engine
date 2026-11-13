@@ -4,6 +4,7 @@
 #include "engine/scene/SceneSurfaceGeometry.hpp"
 #include "engine/scene/VectorShape2DAsset.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/SceneAnimatorPoseRate.hpp"
 #include "engine/scene/SceneAnimators.hpp"
 #include "engine/core/ReadSnapshotQueue.hpp"
 #include "engine/scene/AnimationAssets.hpp"
@@ -56,6 +57,7 @@
 #include "scene/transform/SceneTransformTopologyCache.hpp"
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <limits>
@@ -185,6 +187,10 @@ struct AnimatorInstanceSkeleton {
     std::array<std::vector<float>, 2U> stateMorphScratch;
     std::vector<float> motionMorphScratch;
     std::array<std::vector<std::uint8_t>, 2U> stateMorphTouched;
+    // The last evaluated pose the shown one moves toward while the character is posed less often than every
+    // frame (AnimatorPoseRatePolicy); sized on first use.
+    PoseSoa interpolationTarget;
+    std::vector<float> interpolationTargetMorphWeights;
     std::uint32_t currentPose = 0U;
     std::uint64_t evaluationCount = 0U;
     std::uint64_t hierarchySolveCount = 0U;
@@ -197,6 +203,7 @@ struct AnimatorInstanceSkeleton {
 struct SkeletonBindingRuntimePose {
     SceneEntity entity{};
     std::uint64_t runtimeBindingGeneration = 0U;
+    std::uint64_t syncSerial = 0U;
     AnimatorInstanceSkeleton skeleton;
 };
 
@@ -225,6 +232,12 @@ struct AnimatorInstance {
     float lastAppliedComponentPoseUpdateRateHz = 0.0F;
     double poseUpdateAccumulatorSeconds = 0.0;
     bool hasEvaluatedPose = false;
+    // View-driven pose rate (AnimatorPoseRatePolicy): ticks since the last evaluation, and, while skipped
+    // ticks show a pose moving toward the last evaluated one, the interval it was evaluated for.
+    std::uint32_t poseTicksSinceEvaluation = 0U;
+    std::uint32_t poseInterpolationInterval = 0U;
+    // The SyncComponents pass that last found this record's Animator enabled; older ones are dropped.
+    std::uint64_t syncSerial = 0U;
     // The entity's enabled, valid MotionSkeletonRule as read for this update, applied to the skeletal pose
     // after the controller's rig constraints, and the update's delta for its Spring kind.
     std::optional<MotionSkeletonRuleComponent> motionSkeletonRule;
@@ -361,7 +374,21 @@ public:
     GameplayRuntimeState gameplay;
     std::vector<AnimationEventRecord> pendingAnimationEvents;
     std::unique_ptr<kb::ecs::WorkerPool> animatorWorkerPool;
-    std::vector<AnimatorRuntimeRecord*> animatorParallelPoseScratch;
+    // A pose due this tick: the record and, for root-motion clips, the bone whose motion the pose must leave out.
+    // A pose job evaluates the pose, or (a skipped tick of a character whose shown pose moves toward the last
+    // evaluated one) only moves the shown pose toward it. `alpha` is the share of the way the shown pose
+    // covers this tick; an evaluation with alpha > 0 keeps its pose as that target (alpha 1 shows it as is).
+    enum class AnimatorPoseJobKind : std::uint8_t { Evaluate, Interpolate };
+    struct AnimatorPoseJob {
+        AnimatorRuntimeRecord* record = nullptr;
+        std::optional<std::uint32_t> rootMotionBone;
+        AnimatorPoseJobKind kind = AnimatorPoseJobKind::Evaluate;
+        float alpha = 0.0F;
+    };
+    std::vector<AnimatorPoseJob> animatorParallelPoseScratch;
+    AnimatorPoseRatePolicy animatorPoseRatePolicy;
+    std::uint64_t animatorPoseTick = 0U;
+    std::uint64_t animatorSyncSerial = 0U;
     std::size_t lastAnimatorParallelEvaluationCount = 0U;
     std::size_t lastAnimatorParallelWorkerCount = 1U;
     std::size_t lastAnimatorUpdateRateSkippedPoseCount = 0U;
@@ -442,6 +469,11 @@ public:
     std::uint64_t runtimeSnapshotRevision = 0U;
     kb::core::ReadSnapshotPublisher<SceneRuntimeReadSnapshot> runtimeSnapshots;
     std::uint64_t animatorDebugSnapshotRevision = 0U;
+    // Ticks left in which the debug snapshot is kept current. A reader (DebugSnapshot,
+    // WaitForDebugSnapshot) renews it; nobody reading for that long stops the per-tick snapshot work.
+    mutable std::atomic<std::uint32_t> animatorDebugSnapshotDemandTicks{ 0U };
+    std::uint64_t animatorDebugSnapshotUpdateSerial = 0U;
+    std::uint64_t animatorDebugSnapshotBuiltSerial = 0U;
     kb::core::ReadSnapshotPublisher<AnimatorDebugSnapshot> animatorDebugSnapshots;
     std::unordered_map<std::uint64_t, kb::assets::AssetCompatibilityReport> animatorCompatibilityReports;
     std::uint64_t animatorCompatibilityRegistryGeneration = 0U;

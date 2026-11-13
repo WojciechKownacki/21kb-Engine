@@ -791,6 +791,7 @@ struct EditorHeadlessAutomation::Impl {
             EditorSceneBgfxViewport::PresentSettings previewSettings{};
             previewSettings.viewportKey = animatorPreviewKey;
             previewSettings.editorSceneOverlaysEnabled = true;
+            context.WaitForAnimatorEditorDebugSnapshot();
             const auto debugSnapshot = context.AnimatorEditorDebugSnapshot();
             const auto* debugInstance = debugSnapshot ? debugSnapshot->Find(context.AnimatorEditorResolvedDebugTarget()) : nullptr;
             if (debugInstance) previewSettings.physicsDebugLines = AnimatorEditorPanelRenderer::TargetMarkers(*debugInstance);

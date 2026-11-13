@@ -214,6 +214,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneAudioListenerComponents.hpp
     include/engine/scene/SceneAudioSourceComponents.hpp
     include/engine/scene/SceneAnimatorComponents.hpp
+    include/engine/scene/SceneAnimatorPoseRate.hpp
     include/engine/scene/SceneSkeletonBindingComponents.hpp
     include/engine/scene/SceneSocketAttachmentComponents.hpp
     include/engine/scene/SceneCombatantComponents.hpp

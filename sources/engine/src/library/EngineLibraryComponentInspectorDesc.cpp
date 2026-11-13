@@ -356,7 +356,7 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
             .fields = {
                 LibraryComponentInspectorFieldDesc{ "controllerAssetId", "Controller", "The Animator Controller (state machine) that picks the character's animation." },
                 LibraryComponentInspectorFieldDesc{ "speed", "Speed", "Playback speed multiplier (1 = authored speed)." },
-                LibraryComponentInspectorFieldDesc{ "poseUpdateRateHz", "Pose Rate", "How often a pose is evaluated per second (0 = every frame)." },
+                LibraryComponentInspectorFieldDesc{ "poseUpdateRateHz", "Pose Rate", "How often a pose is evaluated per second (0 = automatic: every frame, less often while the character is small on screen or off screen)." },
                 LibraryComponentInspectorFieldDesc{ "enabled", "Enabled", "Whether the Animator plays." },
                 LibraryComponentInspectorFieldDesc{ "rootMotionOwner", "Root Motion", "What moves the object with the animation's root motion." },
             },

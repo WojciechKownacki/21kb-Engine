@@ -145,11 +145,16 @@ public:
     // Samples a named curve from the current blend trees, transition and weighted layers.
     [[nodiscard]] std::optional<float> Curve(SceneEntity entity, std::string_view name) const;
     [[nodiscard]] std::optional<AnimatorStateInfo> State(SceneEntity entity, std::string_view layer) const;
+    // The snapshot is only produced while someone reads it: each read renews a
+    // lease of a couple of seconds during which every update refreshes it (one
+    // update of latency), so a game that never reads it pays nothing.
     [[nodiscard]] std::shared_ptr<const AnimatorDebugSnapshot> DebugSnapshot() const;
-    // Joins the in-flight asynchronous debug snapshot build, so the next
-    // DebugSnapshot() read observes the newest published revision. Used by
-    // headless automation and tests which need a deterministic read point;
-    // live editor panels simply tolerate one snapshot of latency.
+    // Renews the lease, joins the in-flight asynchronous build and builds the
+    // snapshot of the current animator state now when the published one is
+    // older, so the next DebugSnapshot() read observes the newest published
+    // revision. Used by headless automation and tests which need a
+    // deterministic read point; live editor panels simply tolerate one
+    // snapshot of latency.
     void WaitForDebugSnapshot();
     [[nodiscard]] std::vector<AnimationEventRecord> DrainEvents();
 
