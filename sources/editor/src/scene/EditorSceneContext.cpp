@@ -514,6 +514,7 @@ EditorSceneContext::~EditorSceneContext() {
     // member order would otherwise destroy console_ before scene_ and leave the
     // registered Log callback pointing at released storage.
     prefabEdit_ = {};
+    editScriptHost_.reset();
     scene_ = nullptr;
     documentScene_.reset();
     scriptModule_ = nullptr;
@@ -547,6 +548,9 @@ void EditorSceneContext::EnsureScriptRuntime() {
     // Play mode persists script saves and settings beside the project, in the
     // same per-game layout a packaged game uses under the player's profile.
     scriptOptions.runtimeOptions.userStorageRoot = EditorProjectPaths::ProjectRoot() / "Saves";
+    // A C++ script saved while the game plays is built in the background and the running module stays in
+    // use until the new one is ready; one that was never loaded is waited for, since its first calls need it.
+    scriptOptions.runtimeOptions.nativePrepareSettings.buildInBackground = true;
     scriptOptions.configureHost = [console](kb::script::ScriptRuntimeHost& host) {
         // Log("...") in any script prints to the editor Console. console_ outlives
         // scriptModuleHost_ (declared last, destroyed first), so capturing it is safe.
@@ -698,6 +702,9 @@ void EditorSceneContext::ResetScriptRuntimeStateForPlayMode() {
     }
     kb::script::ScriptRuntimeHost& host = *scriptModule_->Host();
     host.AssetPreparer().InvalidateNativeSourceObservations();
+    // A host kept from an earlier Play still has its old modules loaded: Play starts on the current sources, so
+    // the first pass waits for the build; later saves are built in the background (TickPlayModeSceneSession).
+    host.AssetPreparer().SetNativeBuildMode(false, false);
     host.LuaRuntime().Clear();
     host.VisualGraphInstances().Clear();
     host.SharedState().Clear();
@@ -709,6 +716,132 @@ void EditorSceneContext::SurfaceScriptDiagnostics() {
     }
     for (const std::string& diagnostic : scriptModule_->Host()->DrainSceneSystemDiagnostics()) {
         console_.Error("Scripts", diagnostic);
+    }
+    AnnounceNativeScriptBuilds(*scriptModule_->Host());
+}
+
+std::vector<EditorSceneContext::ScriptBuildStatus> EditorSceneContext::ScriptBuildsInProgress() const {
+    std::vector<ScriptBuildStatus> builds;
+    // While the game plays its runtime builds; otherwise the edit-mode runtime does (the play runtime outlives Play).
+    const kb::script::ScriptRuntimeHost* host = HasPlayModeSceneSession() && scriptModule_ != nullptr && scriptModule_->Host() != nullptr
+        ? scriptModule_->Host() : editScriptHost_.get();
+    if (host == nullptr) {
+        return builds;
+    }
+    for (const kb::script::ScriptRuntimeNativeBuildStatus& build : host->AssetPreparer().NativeBuildsInProgress()) {
+        builds.push_back(ScriptBuildStatus{
+            .assetId = build.assetId,
+            .name = build.name,
+            .elapsedSeconds = build.progress.elapsedSeconds,
+            .outputLines = build.progress.outputLines,
+            .lastLine = build.progress.lastLine,
+        });
+    }
+    return builds;
+}
+
+std::optional<EditorSceneContext::ScriptBuildStatus> EditorSceneContext::EntityScriptBuild(kb::scene::SceneEntity entity) const {
+    const kb::scene::BehaviourComponent* behaviour = scene_->Components().Behaviours().TryGet(entity);
+    if (behaviour == nullptr || behaviour->backend != kb::scene::BehaviourBackend::Native) {
+        return std::nullopt;
+    }
+    for (ScriptBuildStatus& build : ScriptBuildsInProgress()) {
+        if (build.assetId.value == behaviour->behaviourAssetId) {
+            return std::move(build);
+        }
+    }
+    return std::nullopt;
+}
+
+bool EditorSceneContext::CancelEntityScriptBuild(kb::scene::SceneEntity entity) {
+    const std::optional<ScriptBuildStatus> build = EntityScriptBuild(entity);
+    kb::script::ScriptRuntimeHost* host = HasPlayModeSceneSession() && scriptModule_ != nullptr && scriptModule_->Host() != nullptr
+        ? scriptModule_->Host() : editScriptHost_.get();
+    if (!build.has_value() || host == nullptr || !host->AssetPreparer().CancelNativeBuild(build->assetId)) {
+        return false;
+    }
+    announcedScriptBuilds_.erase(build->assetId.value);
+    console_.Warning("Scripts", build->name + ": the build was cancelled. The script runs as it was built before.");
+    return true;
+}
+
+void EditorSceneContext::AnnounceNativeScriptBuilds(kb::script::ScriptRuntimeHost& host) {
+    std::unordered_map<std::uint64_t, std::string> running;
+    for (const kb::script::ScriptRuntimeNativeBuildStatus& build : host.AssetPreparer().NativeBuildsInProgress()) {
+        running.emplace(build.assetId.value, build.name);
+        if (!announcedScriptBuilds_.contains(build.assetId.value)) {
+            console_.Info("Scripts", build.name + ": building in the background. The game keeps running the previous build until this one is ready.");
+            reportedEditScriptDiagnostics_.clear();
+        }
+    }
+    for (const auto& [id, name] : announcedScriptBuilds_) {
+        if (!running.contains(id)) {
+            console_.Info("Scripts", name + ": the background build ended.");
+        }
+    }
+    announcedScriptBuilds_ = std::move(running);
+}
+
+void EditorSceneContext::ReleaseEditModeScripts() {
+    if (editScriptHost_ == nullptr) {
+        return;
+    }
+    // A build that is almost done is finished rather than thrown away; Play then finds it built.
+    static_cast<void>(editScriptHost_->AssetPreparer().FinishNativeBuilds());
+    DropEditModeScripts();
+}
+
+void EditorSceneContext::DropEditModeScripts() {
+    editScriptHost_.reset();
+    editScriptScene_ = nullptr;
+    announcedScriptBuilds_.clear();
+}
+
+namespace {
+
+void NoteNativeBehaviour(kb::scene::SceneEntity, const kb::scene::BehaviourComponent& behaviour, void* found) {
+    if (behaviour.enabled && behaviour.backend == kb::scene::BehaviourBackend::Native) {
+        *static_cast<bool*>(found) = true;
+    }
+}
+
+} // namespace
+
+void EditorSceneContext::TickEditModeScripts() {
+    if (scene_ == nullptr || HasPlayModeSceneSession()) {
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now < editScriptNextPoll_) {
+        return;
+    }
+    if (editScriptHost_ != nullptr && editScriptScene_ != scene_) {
+        // Another scene is open: the runtime that belonged to the old one goes with it.
+        DropEditModeScripts();
+    }
+    const bool building = editScriptHost_ != nullptr && !editScriptHost_->AssetPreparer().NativeBuildsInProgress().empty();
+    editScriptNextPoll_ = now + std::chrono::milliseconds{ building ? 100 : 250 };
+    if (editScriptHost_ == nullptr) {
+        bool hasNative = false;
+        scene_->Components().Behaviours().ForEach(&NoteNativeBehaviour, &hasNative);
+        if (!hasNative) {
+            return;
+        }
+        kb::script::ScriptRuntimeHostOptions options;
+        options.nativePrepareSettings.buildInBackground = true;
+        options.nativePrepareSettings.backgroundFirstBuild = true;
+        editScriptHost_ = std::make_unique<kb::script::ScriptRuntimeHost>(*scene_, std::move(options));
+        editScriptScene_ = scene_;
+    }
+    const kb::script::ScriptRuntimeAssetPrepareResult prepared = editScriptHost_->AssetPreparer().PrepareNativeSceneBehaviours(*scene_);
+    AnnounceNativeScriptBuilds(*editScriptHost_);
+    for (const kb::script::ScriptRuntimeAssetPrepareDiagnostic& diagnostic : prepared.diagnostics) {
+        const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(diagnostic.assetId);
+        const std::string name = metadata == nullptr ? std::string{} : (metadata->name.empty() ? metadata->virtualPath.filename().string() : metadata->name);
+        std::string line = name.empty() ? diagnostic.message : name + ": " + diagnostic.message;
+        if (reportedEditScriptDiagnostics_.insert(line).second) {
+            console_.Error("Scripts", std::move(line));
+        }
     }
 }
 
@@ -735,6 +868,9 @@ bool EditorSceneContext::TickPlayModeSceneSession(float deltaSeconds) {
         pendingRenderUpdates.begin(), pendingRenderUpdates.end() };
     static_cast<void>(scene_->UI().SetViewport(uiAuthoringViewportSize_.x, uiAuthoringViewportSize_.y));
     static_cast<void>(runtime.Update(deltaSeconds));
+    if (scriptModule_ != nullptr && scriptModule_->Host() != nullptr) {
+        scriptModule_->Host()->AssetPreparer().SetNativeBuildMode(true, false);
+    }
     // Ready may create the camera on the first tick of an already attached
     // script module. A destroyed or disabled camera also needs a new selection.
     if (!PlayCameraEntity().IsValid()) {
@@ -4045,6 +4181,7 @@ namespace {
 struct ScriptFieldDeclarations {
     std::vector<kb::script::ScriptApiPin> pins;
     std::vector<kb::script::ScriptValue> defaults;
+    std::vector<kb::script::NativeFieldMetadata> metadata;
 };
 
 [[nodiscard]] ScriptFieldDeclarations DeclaredScriptFields(kb::assets::AssetManager& manager, kb::assets::AssetId id) {
@@ -4057,6 +4194,7 @@ struct ScriptFieldDeclarations {
                native.IsLoaded()) {
         fields.pins = native.Get()->exposedVariables;
         fields.defaults = native.Get()->exposedVariableDefaults;
+        fields.metadata = native.Get()->exposedVariableMetadata;
     }
     return fields;
 }
@@ -4095,12 +4233,22 @@ std::vector<EditorSceneContext::EntityScriptVariable> EditorSceneContext::Entity
                 break;
             }
         }
-        result.push_back(EntityScriptVariable{
+        EntityScriptVariable variable{
             .name = pin.name,
             .type = pin.type,
             .value = std::move(value),
             .overridden = overridden,
-        });
+        };
+        if (index < script.metadata.size()) {
+            const kb::script::NativeFieldMetadata& meta = script.metadata[index];
+            variable.unit = meta.unit;
+            variable.tooltip = meta.tooltip;
+            variable.hasMinimum = meta.hasMinimum;
+            variable.hasMaximum = meta.hasMaximum;
+            variable.minimum = meta.minimum;
+            variable.maximum = meta.maximum;
+        }
+        result.push_back(std::move(variable));
     }
     return result;
 }
@@ -4119,6 +4267,21 @@ bool EditorSceneContext::SetEntityScriptVariable(kb::scene::SceneEntity entity, 
             if (script.pins[index].name == name && index < script.defaults.size()) {
                 defaultValue = script.defaults[index];
                 hasDefault = true;
+                if (index < script.metadata.size()) {
+                    // A number declared with min= or max= stays inside them, however it was typed.
+                    const kb::script::NativeFieldMetadata& meta = script.metadata[index];
+                    const auto clamped = [&meta](double number) {
+                        if (meta.hasMinimum) number = std::max(number, meta.minimum);
+                        if (meta.hasMaximum) number = std::min(number, meta.maximum);
+                        return number;
+                    };
+                    switch (value.Type()) {
+                    case kb::script::ScriptValueType::Float: value = kb::script::ScriptValue{ static_cast<float>(clamped(value.AsFloat())) }; break;
+                    case kb::script::ScriptValueType::Double: value = kb::script::ScriptValue{ clamped(value.AsDouble()) }; break;
+                    case kb::script::ScriptValueType::Int: value = kb::script::ScriptValue{ static_cast<int>(std::lround(clamped(value.AsInt()))) }; break;
+                    default: break;
+                    }
+                }
                 break;
             }
         }

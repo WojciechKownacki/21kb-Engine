@@ -278,6 +278,7 @@ bool EditorSceneContext::BeginPlayModeSceneSession() {
     ActivateProjectInput();
     trace.Phase(phaseStarted, "transition=begin phase=input-setup");
     phaseStarted = std::chrono::steady_clock::now();
+    ReleaseEditModeScripts();
     if (HasSceneBehaviours(*scene_)) {
         EnsureScriptRuntime();
     }
@@ -373,6 +374,7 @@ bool EditorSceneContext::ReloadSceneFromProject() {
         edited = kb::scene::SceneDocumentService::Capture(*scene_, SceneDocumentName(currentScenePath_));
     }
 
+    DropEditModeScripts();
     if (scriptModuleHost_ != nullptr) {
         scriptModuleHost_->DetachScene(*scene_);
         scriptModuleHost_->Unload();
@@ -850,6 +852,7 @@ bool EditorSceneContext::OpenPrefabEditMode(const std::filesystem::path& prefabP
     std::swap(commandStack_, documentCommands_);
     prefabEdit_ = std::move(edit);
     prefabEditPath_ = prefabPath;
+    DropEditModeScripts();
     scene_ = &prefabEdit_.EditScene();
     ResetSceneEditState();
     InvalidateHierarchyRows();
@@ -888,6 +891,7 @@ bool EditorSceneContext::ClosePrefabEditMode() {
     }
     ReleaseRenderedSceneResources();
     ResetSceneEditState();
+    DropEditModeScripts();
     scene_ = documentScene_.get();
     prefabEdit_ = {};
     prefabEditPath_.clear();

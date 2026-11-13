@@ -1486,6 +1486,7 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
 }
 
 [[nodiscard]] bool TickEditorFrame(EditorApplicationState& state, float deltaSeconds) {
+    state.sceneContext.TickEditModeScripts();
     const bool asyncAssetsPending = state.sceneContext.HasPendingSkeletalMeshEditorOpen() ||
         EditorMeshPreviewCache().HasPendingPreviewWork();
     if (asyncAssetsPending) {

@@ -3848,7 +3848,8 @@ struct PrefabSectionModel {
 // The hover help under the row the pointer rests on: the label of a row that has some, or a changed value's reset
 // arrow. The row bounds come from the hit test, which works on the content before it is scrolled; `shift` is how far
 // the painted content sits from there.
-void PaintFieldTooltip(HDC dc, const RECT& viewport, int shift, const EditorTheme& theme, const InspectorPanelState& inspector) {
+void PaintFieldTooltip(HDC dc, const RECT& viewport, int shift, const EditorTheme& theme, const InspectorPanelState& inspector,
+    const EditorSceneContext& sceneContext, kb::scene::SceneEntity selected) {
     if (inspector.IsTextEditing()) {
         return;
     }
@@ -3857,6 +3858,13 @@ void PaintFieldTooltip(HDC dc, const RECT& viewport, int shift, const EditorThem
         text = EditorText("inspector.resetToDefault", "Reset to default");
     } else if (inspector.HoveredKind() == InspectorHitKind::Row) {
         text = InspectorFieldGuide::Tooltip(inspector.HoveredSection(), inspector.HoveredProperty(), inspector.HoveredIndex());
+        if (text.empty() && inspector.HoveredProperty() == InspectorPropertyId::ScriptVariable && inspector.HoveredIndex() >= 0) {
+            // The hover help of a C++ script field comes from the tip= option of its `expose =` line.
+            const std::vector<EditorSceneContext::EntityScriptVariable> variables = sceneContext.EntityScriptExposedVariables(selected);
+            if (static_cast<std::size_t>(inspector.HoveredIndex()) < variables.size()) {
+                text = variables[static_cast<std::size_t>(inspector.HoveredIndex())].tooltip;
+            }
+        }
     }
     const InspectorRowBounds row = inspector.HoveredRowBounds();
     if (text.empty() || row.Empty()) {
@@ -4042,11 +4050,17 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
 
     if (sceneContext.HasEntityScript(selected)) {
         const std::vector<EditorSceneContext::EntityScriptVariable> scriptVariables = sceneContext.EntityScriptExposedVariables(selected);
-        const int h = SectionHeight(inspector, InspectorSectionId::Script, 2 + static_cast<int>(scriptVariables.size()));
+        const std::optional<EditorSceneContext::ScriptBuildStatus> scriptBuild = sceneContext.EntityScriptBuild(selected);
+        const int h = SectionHeight(inspector, InspectorSectionId::Script, 2 + static_cast<int>(scriptVariables.size()) + (scriptBuild.has_value() ? 1 : 0));
         if (sectionVisible(y, h)) {
             SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Script, HeroIconKind::CommandLine, EditorText("inspector.script.title", "Script"), true);
             section.AssetField(EditorText("inspector.script.script", "Script"), sceneContext.EntityScriptName(selected), InspectorPropertyId::ScriptName, InspectorPropertyId::ScriptPicker);
             section.Bool(EditorText("inspector.enabled", "Enabled"), sceneContext.EntityScriptEnabled(selected), InspectorPropertyId::ScriptEnabled);
+            if (scriptBuild.has_value()) {
+                // The script is being built in the background: how long, and a click stops it.
+                section.Action(EditorLocalization::Format("inspector.script.building", "Building... {seconds} s (click to cancel)",
+                    { { "seconds", std::to_string(static_cast<int>(scriptBuild->elapsedSeconds)) } }), InspectorPropertyId::ScriptBuildCancel);
+            }
             // One editable row per exposed ("@expose") variable. A leading dot marks
             // an overridden variable: its value differs from the script default.
             for (int index = 0; index < static_cast<int>(scriptVariables.size()); ++index) {
@@ -4057,7 +4071,16 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
                 } else {
                     // The row index keeps hover + the inline editor buffer in only the
                     // variable being edited (all rows share the ScriptVariable id).
-                    section.Field(label, FormatScriptVariableValue(variable.value, variable.type), InspectorPropertyId::ScriptVariable, index);
+                    // A declared range fills the row like a slider; the unit follows the value.
+                    float fill = -1.0F;
+                    if (variable.hasMinimum && variable.hasMaximum && variable.maximum > variable.minimum &&
+                        (variable.type == kb::script::ScriptValueType::Float || variable.type == kb::script::ScriptValueType::Int ||
+                            variable.type == kb::script::ScriptValueType::Double)) {
+                        const double number = variable.type == kb::script::ScriptValueType::Int ? variable.value.AsInt()
+                            : variable.type == kb::script::ScriptValueType::Double ? variable.value.AsDouble() : variable.value.AsFloat();
+                        fill = static_cast<float>(std::clamp((number - variable.minimum) / (variable.maximum - variable.minimum), 0.0, 1.0));
+                    }
+                    section.Field(label, FormatScriptVariableValue(variable.value, variable.type), InspectorPropertyId::ScriptVariable, index, variable.unit, fill);
                 }
             }
         }
@@ -4254,7 +4277,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     }
     DrawAddComponent(dc, content, theme, inspector, y);
     PaintTagsDropdown(dc, content, theme, sceneContext, selected);
-    PaintFieldTooltip(dc, viewport, static_cast<int>(content.top - viewport.top), theme, inspector);
+    PaintFieldTooltip(dc, viewport, static_cast<int>(content.top - viewport.top), theme, inspector, sceneContext, selected);
 }
 
 [[nodiscard]] int SectionHeight(const InspectorPanelState& inspector, InspectorSectionId section, int rows) noexcept {
@@ -4422,7 +4445,8 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (scene.Components().SpaceStrokes().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::SpaceStroke, 10) + kSectionGap;
     if (scene.Components().HistoryRibbons().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::HistoryRibbon, 9) + kSectionGap;
     if (sceneContext.HasEntityScript(selected)) {
-        const int scriptRows = 2 + static_cast<int>(sceneContext.EntityScriptExposedVariableCount(selected));
+        const int scriptRows = 2 + static_cast<int>(sceneContext.EntityScriptExposedVariableCount(selected)) +
+            (sceneContext.EntityScriptBuild(selected).has_value() ? 1 : 0);
         height += SectionHeight(inspector, InspectorSectionId::Script, scriptRows) + kSectionGap;
     }
     if (scene.Components().Cameras().Has(selected)) {
@@ -6181,6 +6205,11 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTestRows(const RECT& cont
                 return hit;
             }
             AdvanceRow(y);
+            if (sceneContext.EntityScriptBuild(selected).has_value()) {
+                const RECT row = RowRect(viewport, y);
+                if (Contains(row, x, scrolledY)) return MakeHit(InspectorHitKind::TextField, InspectorSectionId::Script, InspectorPropertyId::ScriptBuildCancel, row);
+                AdvanceRow(y);
+            }
             // One row per exposed variable, in the same order the renderer draws
             // them; the row index identifies which variable was hit.
             const std::vector<EditorSceneContext::EntityScriptVariable> scriptVariables = sceneContext.EntityScriptExposedVariables(selected);

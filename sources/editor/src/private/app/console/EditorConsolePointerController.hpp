@@ -6,6 +6,7 @@
 #include <Windows.h>
 #endif
 
+#include <cstdint>
 #include <optional>
 
 namespace kb::editor {
@@ -27,8 +28,13 @@ public:
     [[nodiscard]] bool UpdateHoverOrClear(const std::optional<RECT>& content, int x, int y);
 
 private:
+    // Opens the selected row's source line (a compiler message) in the code editor.
+    void OpenSelectedSource();
+
     HWND owner_ = nullptr;
     EditorSceneContext& sceneContext_;
+    std::uint64_t lastClickedSequence_ = 0;
+    ULONGLONG lastClickTick_ = 0;
 };
 #endif
 

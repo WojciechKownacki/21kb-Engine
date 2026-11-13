@@ -7,6 +7,7 @@
 #include "engine/ecs/SystemSchedulerTrace.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorExternalCodeLauncher.hpp"
 #include "console/EditorConsoleLayout.hpp"
 #include "rendering/ConsoleDetailTextOverlay.hpp"
 #include "rendering/gdi/CutTextAudit.hpp"
@@ -260,6 +261,10 @@ void DrawConsoleRow(HDC dc, RECT row, const EditorTheme& theme, const EditorCons
     {
         const CutTextDataScope logMessage;
         DrawText(dc, RECT{ row.left + 230, row.top, messageRight, row.bottom }, entry.message.c_str(), MessageColor(entry.level), 12);
+    }
+    if (EditorExternalCodeLauncher::HasBuildMessageLocation(entry.message)) {
+        // A compiler message that names a source line: a double click opens it in the code editor.
+        GdiDrawing::FillRectColor(dc, RECT{ row.left + 224, row.top + 4, row.left + 227, row.bottom - 4 }, Color(theme.textSecondary));
     }
 
     GdiDrawing::FillRectColor(dc, RECT{ row.left, row.bottom - 1, row.right, row.bottom }, Color(theme.borderChrome));

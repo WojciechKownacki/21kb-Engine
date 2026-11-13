@@ -48,7 +48,7 @@ def main():
     # A new class registers its hooks by name and shows the way to fields; the field itself is declared in the descriptor.
     assert 'kb::script::RegisterNativeScript<NativeProbe>' in text and 'expose = speed Float' in text
     descriptor = project / "Assets/Scripts/NativeProbe.native"
-    descriptor.write_text(descriptor.read_text(encoding="utf-8") + "expose = lift Float = 5\n", encoding="utf-8")
+    descriptor.write_text(descriptor.read_text(encoding="utf-8") + "expose = lift Float = 5 unit=m min=0 max=10 tip=\"Lift in metres\"\n", encoding="utf-8")
     text = text.replace('#include <array>', '#include "engine/scene/SceneTransforms.hpp"\n#include "engine/script/NativeScriptFields.hpp"\n#include <array>')
     text = text.replace('        const std::array arguments{',
         '        auto transform = context->GetScene().Transforms().Get(context->Self());\n'
@@ -56,6 +56,13 @@ def main():
         '        transform.localPosition.y = kb::script::NativeField(*context, "lift").value_or(kb::script::ScriptValue{}).AsFloat();\n'
         '        context->GetScene().Transforms().Set(context->Self(), transform);\n'
         '        const std::array arguments{')
+    # Each Tick publishes the object's own counter, so a reload that lost the object's members would show.
+    text = text.replace('        static_cast<void>(context);\n        ++ticks_;',
+        '        ++ticks_;\n'
+        '        auto tickTransform = context->GetScene().Transforms().Get(context->Self());\n'
+        '        tickTransform.localPosition.z = static_cast<float>(ticks_);\n'
+        '        context->GetScene().Transforms().Set(context->Self(), tickTransform);')
+    assert 'tickTransform.localPosition.z' in text
     assert 'transform.localPosition.x = 3.0F;' in text
     source.write_text(text, encoding="utf-8")
     # An unavailable real compiler exercises CMake's toolchain diagnostics through
@@ -108,9 +115,19 @@ def main():
                         ('/Game/Scripts/LuaProbe.lua', '.', 'Assets/Scripts/LuaProbe.lua')]:
                     steps.append(dict(op='verify_external_code_activation', asset=asset, editor=editor,
                         workspace=workspace, source=filename, visual_studio_installation=str(visual_studio.resolve())))
+                # A compiler message of the Console opens its file at its line: VS Code gets file:line:column, Visual Studio its GoTo command.
+                located = root / f'EditorSource{value}' / 'Source/NativeScripts/NativeProbe/NativeProbe.cpp'
+                steps.append(dict(op='open_console_source', editor=editor, message=f'NativeProbe: {located}(12,3): error C2065: x',
+                    expect=f'{located}:12:3"' if editor == 'VSCode' else '/Command "Edit.GoTo 12"',
+                    visual_studio_installation=str(visual_studio.resolve())))
+            # Saved scripts are built in the background while nothing plays; Play starts on the built module.
+            steps += [dict(op='build_scripts_in_edit_mode'), dict(op='assert_console', contains='background build ended'),
+                dict(op='assert_no_errors')]
             # The field declared in the descriptor shows with its default, and a value set as the Inspector sets it reaches the script.
             steps += [dict(op='bind_entity', id='native', name='NativeHost'), dict(op='bind_entity', id='lua', name='LuaHost'),
                 dict(op='assert_script_field', entity='native', name='lift', value=5),
+                dict(op='set_script_field', entity='native', name='lift', value=50),
+                dict(op='assert_script_field', entity='native', name='lift', value=10),
                 dict(op='set_script_field', entity='native', name='lift', value=9),
                 dict(op='assert_script_field', entity='native', name='lift', value=9),
                 dict(op='play'), dict(op='step', frames=3),
@@ -118,6 +135,15 @@ def main():
                 dict(op='assert_property', entity='native', component='Transform', property='localPosition.y', value=9),
                 dict(op='assert_property', entity='lua', component='Transform', property='localPosition.x', value=11),
                 dict(op='assert_console', contains='NativeProbe ready'), dict(op='assert_console', contains='LuaProbe ready'),
+                # Saved while the game plays: built in the background, the object keeps its counter through the reload.
+                dict(op='native_reload_in_play', entity='native', source='Source/NativeScripts/NativeProbe/NativeProbe.cpp',
+                    replace_from='++ticks_;', replace_to='ticks_ += 1000;', gain=1000),
+                dict(op='stop'), dict(op='assert_no_errors'),
+                # Saved while nothing plays, then Play again: the first frames already run the saved version.
+                dict(op='replace_in_file', path='Source/NativeScripts/NativeProbe/NativeProbe.cpp',
+                    replace_from='ticks_ += 1000;', replace_to='ticks_ += 5000;'),
+                dict(op='play'), dict(op='step', frames=2),
+                dict(op='assert_position_z_at_least', entity='native', value=5000),
                 dict(op='stop'), dict(op='assert_no_errors')]
             scenario = root / f'Authoring{value}.json'
             editor_source = root / f'EditorSource{value}'

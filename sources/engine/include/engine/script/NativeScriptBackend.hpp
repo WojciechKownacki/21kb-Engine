@@ -1,13 +1,20 @@
 #pragma once
 
 #include "engine/assets/AssetId.hpp"
+#include "engine/script/NativeScriptPlugin.hpp"
 #include "engine/script/ScriptBackend.hpp"
+#include "engine/script/ScriptEventId.hpp"
 #include "engine/script/ScriptLifecycle.hpp"
 
+#include <array>
+#include <cstddef>
 #include <functional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace kb::script {
 
@@ -16,21 +23,41 @@ using NativeScriptEventCallback = std::function<void(ScriptExecutionContext&, co
 
 class NativeScriptBackend final : public IScriptBackend {
 public:
+    NativeScriptBackend() = default;
+    ~NativeScriptBackend() override;
+    NativeScriptBackend(const NativeScriptBackend&) = delete;
+    NativeScriptBackend& operator=(const NativeScriptBackend&) = delete;
+
     [[nodiscard]] kb::scene::BehaviourBackend Backend() const noexcept override;
 
     [[nodiscard]] bool RegisterLifecycle(kb::assets::AssetId assetId, ScriptLifecycleEvent event, NativeScriptLifecycleCallback callback);
     [[nodiscard]] bool RegisterLifecycleSymbol(std::string symbol, ScriptLifecycleEvent event, NativeScriptLifecycleCallback callback);
     [[nodiscard]] bool RegisterEvent(kb::assets::AssetId assetId, std::string eventName, NativeScriptEventCallback callback);
     [[nodiscard]] bool RegisterEventSymbol(std::string symbol, std::string eventName, NativeScriptEventCallback callback);
+    // A script class with per-object state (NativeScriptClassApi): an object of it is made when the first hook
+    // of a behaviour runs, kept until its Destroyed hook has run, and carried over a module reload.
+    [[nodiscard]] bool RegisterClassSymbol(std::string symbol, const NativeScriptClassApi& script);
     [[nodiscard]] bool BindAssetSymbol(kb::assets::AssetId assetId, std::string symbol);
     void UnregisterSymbolCallbacks(std::string_view symbol) noexcept;
     void UnregisterSymbol(std::string_view symbol) noexcept;
     void Clear() noexcept;
 
+    // Module reload: the objects of the classes of `symbols` are saved (their Serialize member) and destroyed by the code
+    // that made them - call this while that module is still loaded - and RestoreInstances makes them again with
+    // the classes now registered and puts the saved values back. Objects whose class is no longer there are dropped.
+    void ReleaseInstances(std::span<const std::string> symbols);
+    void RestoreInstances();
+    // Destroys the objects of the classes of `symbols` without keeping them (the module goes away).
+    void DestroyInstances(std::span<const std::string> symbols) noexcept;
+    [[nodiscard]] std::size_t InstanceCount(std::string_view symbol) const noexcept;
+
     [[nodiscard]] ScriptBackendExecutionResult ExecuteLifecycle(const kb::scene::BehaviourComponent& behaviour, ScriptExecutionContext& context) override;
     [[nodiscard]] ScriptBackendExecutionResult ExecuteEvent(const kb::scene::BehaviourComponent& behaviour, const ScriptEvent& event, EventId eventId, ScriptExecutionContext& context) override;
+    [[nodiscard]] bool HasEntry(const kb::scene::BehaviourComponent& behaviour, std::string_view name) override;
 
 private:
+    static constexpr std::size_t kLifecycleCount = static_cast<std::size_t>(ScriptLifecycleEvent::Destroyed) + 1U;
+
     struct LifecycleKey {
         std::uint64_t assetId = 0;
         ScriptLifecycleEvent event = ScriptLifecycleEvent::Tick;
@@ -83,11 +110,46 @@ private:
         [[nodiscard]] std::size_t operator()(const SymbolEventKey& key) const noexcept;
     };
 
+    // One object of a script class; it keeps the class's functions it was made with, so it can be
+    // destroyed by them even after the class is registered again by a newer module.
+    struct Instance {
+        void* object = nullptr;
+        NativeScriptClassApi script;
+        std::string symbol;
+    };
+
+    // What a behaviour asset runs, found once: the callbacks by lifecycle event and by event id, and the
+    // class, instead of once per call from the registration tables (which hash the symbol text each time).
+    // It is looked at again when a registration changed (epoch_). The objects are kept across that.
+    struct AssetEntry {
+        std::uint64_t epoch = 0;
+        std::string symbol;
+        std::array<const NativeScriptLifecycleCallback*, kLifecycleCount> lifecycle{};
+        std::vector<std::pair<EventId, const NativeScriptEventCallback*>> events;
+        const NativeScriptClassApi* script = nullptr;
+        std::unordered_map<std::uint64_t, Instance> instances;
+    };
+
+    struct SavedInstance {
+        std::uint64_t assetId = 0;
+        std::uint64_t entity = 0;
+        std::string symbol;
+        std::vector<NativeScriptSavedField> fields;
+    };
+
+    [[nodiscard]] AssetEntry& Resolve(std::uint64_t assetId);
+    void ExecuteClassLifecycle(AssetEntry& entry, std::uint64_t assetId, ScriptExecutionContext& context, ScriptBackendExecutionResult& result);
+    static void DestroyInstance(Instance& instance) noexcept;
+
     std::unordered_map<LifecycleKey, NativeScriptLifecycleCallback, LifecycleKeyHasher> lifecycleCallbacks_;
     std::unordered_map<EventKey, NativeScriptEventCallback, EventKeyHasher> eventCallbacks_;
     std::unordered_map<SymbolLifecycleKey, NativeScriptLifecycleCallback, SymbolLifecycleKeyHasher> symbolLifecycleCallbacks_;
     std::unordered_map<SymbolEventKey, NativeScriptEventCallback, SymbolEventKeyHasher> symbolEventCallbacks_;
+    std::unordered_map<std::string, NativeScriptClassApi> classes_;
     std::unordered_map<std::uint64_t, std::string> assetSymbols_;
+    std::unordered_map<std::uint64_t, AssetEntry> entries_;
+    std::vector<SavedInstance> savedInstances_;
+    std::uint64_t epoch_ = 1;
 };
 
 } // namespace kb::script

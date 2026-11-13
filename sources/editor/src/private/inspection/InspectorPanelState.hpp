@@ -343,6 +343,8 @@ enum class InspectorPropertyId : std::uint16_t {
     // One row per exposed ("@expose") script variable; the specific variable is
     // identified by the Hit's/edit's row index (like InputMapping entries).
     ScriptVariable,
+    // The row of a C++ script that is being built in the background; a click stops the build.
+    ScriptBuildCancel,
     // One row per physics-component field, keyed by row index (the "one id +
     // index" model as ScriptVariable). One id per component so an in-flight float
     // edit is unambiguous even when an entity carries several physics components.

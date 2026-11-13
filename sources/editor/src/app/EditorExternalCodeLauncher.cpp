@@ -1,10 +1,13 @@
 #include "app/EditorExternalCodeLauncher.hpp"
 #include "engine/config/IniDocument.hpp"
 #include "engine/assets/AssetFileName.hpp"
+#include "engine/script/NativeScriptBuildPipeline.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <cwchar>
 #include <initializer_list>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -189,6 +192,58 @@ thread_local EditorExternalCodeLauncher::ProcessLauncher g_processLauncher = nul
 
 } // namespace
 
+std::filesystem::path EditorExternalCodeLauncher::ResolveSourceFile(
+    const std::filesystem::path& projectRoot, const std::filesystem::path& named) {
+    std::error_code error;
+    const auto exists = [&error](const std::filesystem::path& path) {
+        return std::filesystem::is_regular_file(path, error) && !error;
+    };
+    if (named.empty()) {
+        return {};
+    }
+    if (named.is_absolute()) {
+        return exists(named) ? named : std::filesystem::path{};
+    }
+    if (const std::filesystem::path fromRoot = (projectRoot / named).lexically_normal(); exists(fromRoot)) {
+        return fromRoot;
+    }
+    // A build run from its own folder names the file from there; the one file of that name in Source is it.
+    std::filesystem::path found;
+    const std::filesystem::path source = projectRoot / "Source";
+    if (!std::filesystem::is_directory(source, error) || error) {
+        return {};
+    }
+    for (std::filesystem::recursive_directory_iterator it{ source, std::filesystem::directory_options::skip_permission_denied, error }, end;
+         !error && it != end; it.increment(error)) {
+        if (it->is_regular_file(error) && it->path().filename() == named.filename()) {
+            if (!found.empty()) {
+                return {};
+            }
+            found = it->path();
+        }
+    }
+    return found;
+}
+
+bool EditorExternalCodeLauncher::HasBuildMessageLocation(std::string_view message) {
+    return kb::script::ParseBuildMessageLocation(message).has_value();
+}
+
+bool EditorExternalCodeLauncher::OpenBuildMessage(
+    const std::filesystem::path& projectRoot, std::string_view message, std::string& error) {
+    const std::optional<kb::script::NativeScriptSourceLocation> location = kb::script::ParseBuildMessageLocation(message);
+    if (!location.has_value()) {
+        error = "This message names no source file and line.";
+        return false;
+    }
+    const std::filesystem::path file = ResolveSourceFile(projectRoot, kb::assets::Utf8Path(location->path));
+    if (file.empty()) {
+        error = "The source file " + location->path + " was not found in the project.";
+        return false;
+    }
+    return OpenProjectFile(projectRoot, file, error, location->line, location->column);
+}
+
 std::string EditorExternalCodeLauncher::Preference(const std::filesystem::path& projectRoot, std::string& error) {
     kb::config::IniDocument document;
     if (!LoadPreferences(projectRoot, document, error)) return {};
@@ -218,7 +273,9 @@ EditorExternalCodeLauncher::ProcessLauncher EditorExternalCodeLauncher::Exchange
 bool EditorExternalCodeLauncher::OpenProjectFile(
     const std::filesystem::path& projectRoot,
     const std::filesystem::path& filePath,
-    std::string& error) {
+    std::string& error,
+    int line,
+    int column) {
     error.clear();
 #if defined(_WIN32)
     if (projectRoot.empty() || filePath.empty()) {
@@ -259,9 +316,15 @@ bool EditorExternalCodeLauncher::OpenProjectFile(
         if (std::filesystem::is_regular_file(folder / "CMakeLists.txt", fileError) && !fileError) { workspace = folder; break; }
         if (folder == absoluteProjectRoot || folder == folder.parent_path()) break;
     }
+    // VS Code takes the position as part of the file ("file:line:column"); Visual Studio is asked for the file and
+    // then for the line with its Edit.GoTo command.
+    const std::filesystem::path target = !visualStudio && line > 0
+        ? std::filesystem::path{ absoluteFilePath.wstring() + L":" + std::to_wstring(line) + L":" + std::to_wstring(std::max(column, 1)) }
+        : absoluteFilePath;
     std::wstring command = QuotePath(executable) + L" "
         + (visualStudio ? std::wstring{} : L"--reuse-window ") + QuotePath(workspace)
-        + (visualStudio ? L" /Edit " : L" --goto ") + QuotePath(absoluteFilePath);
+        + (visualStudio ? L" /Edit " : L" --goto ") + QuotePath(target)
+        + (visualStudio && line > 0 ? L" /Command \"Edit.GoTo " + std::to_wstring(line) + L"\"" : std::wstring{});
     if (g_processLauncher != nullptr) return g_processLauncher(executable, command, workspace, error);
     std::vector<wchar_t> environment = ChildEnvironment();
     if (environment.empty()) {
@@ -284,6 +347,8 @@ bool EditorExternalCodeLauncher::OpenProjectFile(
 #else
     static_cast<void>(projectRoot);
     static_cast<void>(filePath);
+    static_cast<void>(line);
+    static_cast<void>(column);
     error = "External code editor integration is unavailable on this platform.";
     return false;
 #endif

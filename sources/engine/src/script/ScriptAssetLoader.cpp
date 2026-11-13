@@ -7,6 +7,8 @@
 #include "engine/assets/AssetPayloadMemory.hpp"
 
 #include <algorithm>
+#include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <cstdint>
 #include <memory>
@@ -357,6 +359,84 @@ struct NativeBehaviourDescriptorParseResult {
     std::vector<std::string> errors;
 };
 
+struct ExposeOptions {
+    std::string_view declaration;
+    NativeFieldMetadata metadata;
+    std::string error;
+};
+
+// `name Type = default unit=m/s min=0 max=20 tip="Hover help"`: the options after the default, each `key=value`
+// where a value with spaces is written in quotes. The text before the first option is the declaration.
+[[nodiscard]] ExposeOptions SplitExposeOptions(std::string_view value) {
+    ExposeOptions options;
+    // The options start at the first word followed by '=' after the default's own '=' (so a mistyped option name
+    // is reported instead of being taken for part of the default).
+    std::size_t cut = std::string_view::npos;
+    const std::size_t defaultSeparator = value.find('=');
+    for (std::size_t at = defaultSeparator == std::string_view::npos ? 0U : defaultSeparator + 1U; at < value.size(); ++at) {
+        if (value[at] != ' ' && value[at] != '\t') {
+            continue;
+        }
+        std::size_t word = at + 1U;
+        while (word < value.size() && (std::isalnum(static_cast<unsigned char>(value[word])) != 0 || value[word] == '_')) {
+            ++word;
+        }
+        if (word > at + 1U && word < value.size() && value[word] == '=') {
+            cut = at + 1U;
+            break;
+        }
+    }
+    options.declaration = Trim(value.substr(0U, cut));
+    if (cut == std::string_view::npos) {
+        return options;
+    }
+    std::string_view rest = value.substr(cut);
+    while (!(rest = Trim(rest)).empty()) {
+        const std::size_t equals = rest.find('=');
+        if (equals == std::string_view::npos || equals == 0U) {
+            options.error = "an option is written key=value";
+            return options;
+        }
+        const std::string_view key = rest.substr(0U, equals);
+        rest.remove_prefix(equals + 1U);
+        std::string text;
+        if (!rest.empty() && rest.front() == '"') {
+            const std::size_t closing = rest.find('"', 1U);
+            if (closing == std::string_view::npos) {
+                options.error = "the quote of " + std::string{ key } + " is not closed";
+                return options;
+            }
+            text.assign(rest.substr(1U, closing - 1U));
+            rest.remove_prefix(closing + 1U);
+        } else {
+            const std::size_t end = rest.find_first_of(" \t");
+            text.assign(rest.substr(0U, end));
+            rest = end == std::string_view::npos ? std::string_view{} : rest.substr(end);
+        }
+        if (key == "unit") {
+            options.metadata.unit = std::move(text);
+        } else if (key == "tip") {
+            options.metadata.tooltip = std::move(text);
+        } else if (key == "min" || key == "max") {
+            char* end = nullptr;
+            const double number = std::strtod(text.c_str(), &end);
+            if (text.empty() || end != text.c_str() + text.size() || !std::isfinite(number)) {
+                options.error = std::string{ key } + " is not a number";
+                return options;
+            }
+            (key == "min" ? options.metadata.hasMinimum : options.metadata.hasMaximum) = true;
+            (key == "min" ? options.metadata.minimum : options.metadata.maximum) = number;
+        } else {
+            options.error = "unknown option " + std::string{ key } + " (use unit, min, max or tip)";
+            return options;
+        }
+    }
+    if (options.metadata.hasMinimum && options.metadata.hasMaximum && options.metadata.minimum > options.metadata.maximum) {
+        options.error = "min is above max";
+    }
+    return options;
+}
+
 [[nodiscard]] NativeBehaviourDescriptorParseResult ParseNativeBehaviourDescriptor(std::string_view source) {
     NativeBehaviourDescriptorParseResult result{};
     std::istringstream input{ std::string{ source } };
@@ -396,7 +476,13 @@ struct NativeBehaviourDescriptorParseResult {
             result.descriptor.shadowCopy = ParseBool(value, true);
         } else if (key == "expose") {
             // `expose = speed Float = 2.5`: a name, a type and, after '=', an optional default.
-            std::string_view declaration = value;
+            ExposeOptions options = SplitExposeOptions(value);
+            if (!options.error.empty()) {
+                result.errors.push_back("Native behaviour descriptor has invalid expose option at line " + std::to_string(lineNumber) +
+                    ": " + options.error);
+                continue;
+            }
+            std::string_view declaration = options.declaration;
             std::string_view defaultText;
             if (const std::size_t separator = declaration.find('='); separator != std::string_view::npos) {
                 defaultText = Trim(declaration.substr(separator + 1U));
@@ -420,6 +506,7 @@ struct NativeBehaviourDescriptorParseResult {
                 }
             }
             result.descriptor.exposedVariableDefaults.push_back(std::move(fieldDefault));
+            result.descriptor.exposedVariableMetadata.push_back(std::move(options.metadata));
         } else if (key == "api") {
             std::optional<ScriptApiNameEntry> declaration = ScriptApiDeclarationParser::ParseDeclaration(value, result.descriptor.name, true);
             if (declaration.has_value()) {

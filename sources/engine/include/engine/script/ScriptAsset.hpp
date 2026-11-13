@@ -20,6 +20,17 @@ struct LuaScriptAsset {
     std::vector<std::uint8_t> exposedVariableHasDefault;
 };
 
+// What the Inspector shows with a field: `expose = speed Float = 3 unit=m/s min=0 max=20 tip="Metres per second"`.
+// A range clamps what is typed and fills the row like a slider; the unit follows the value; the tip is the hover help.
+struct NativeFieldMetadata {
+    std::string unit;
+    std::string tooltip;
+    bool hasMinimum = false;
+    bool hasMaximum = false;
+    double minimum = 0.0;
+    double maximum = 0.0;
+};
+
 struct NativeBehaviourDescriptor {
     std::string name;
     std::string symbol;
@@ -35,6 +46,7 @@ struct NativeBehaviourDescriptor {
     // the same per-object values a Lua script's `@expose` variables are (BehaviourVariableOverride).
     std::vector<ScriptApiPin> exposedVariables;
     std::vector<ScriptValue> exposedVariableDefaults;
+    std::vector<NativeFieldMetadata> exposedVariableMetadata;
 };
 
 namespace ScriptAssetTypes {

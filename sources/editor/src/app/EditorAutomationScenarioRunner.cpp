@@ -5125,6 +5125,136 @@ ReadScriptValue(
         return {passed, passed ? "double-click resolved selected IDE, CMake workspace and source; launch intercepted" : "incorrect code editor launch request"};
     }
 
+    if (*operation == "open_console_source") {
+        // A compiler message of the Console opens its file at its line in the chosen code editor.
+        const auto message = StringMember(step, "message", error);
+        const auto editor = StringMember(step, "editor", error);
+        const auto expected = StringMember(step, "expect", error);
+        if (!message || !editor || !expected) return {false, error};
+        const auto installation = StringMember(step, "visual_studio_installation", error, false);
+        if (!error.empty()) return {false, error};
+        std::array<wchar_t, 32768> previousInstallation{};
+        const DWORD priorSize = GetEnvironmentVariableW(L"VSINSTALLDIR", previousInstallation.data(),
+            static_cast<DWORD>(previousInstallation.size()));
+        struct RestoreInstallation {
+            std::wstring previous;
+            bool restore;
+            ~RestoreInstallation() { if (restore) SetEnvironmentVariableW(L"VSINSTALLDIR", previous.empty() ? nullptr : previous.c_str()); }
+        } restoreInstallation{std::wstring{previousInstallation.data()}, installation.has_value()};
+        if (priorSize >= previousInstallation.size() || (installation &&
+            !SetEnvironmentVariableW(L"VSINSTALLDIR", std::filesystem::path{*installation}.c_str())))
+            return {false, "Visual Studio discovery fixture could not be installed"};
+        const auto root = EditorProjectPaths::ProjectRoot();
+        if (!EditorExternalCodeLauncher::SetPreference(root, *editor, error)) return {false, error};
+        if (!EditorExternalCodeLauncher::HasBuildMessageLocation(*message)) return {false, "the message names no source line"};
+        static thread_local std::wstring launchedCommand;
+        launchedCommand.clear();
+        const auto previous = EditorExternalCodeLauncher::ExchangeProcessLauncher(
+            [](const auto&, const auto& command, const auto&, std::string&) { launchedCommand = command; return true; });
+        struct RestoreLauncher {
+            EditorExternalCodeLauncher::ProcessLauncher previous;
+            ~RestoreLauncher() { EditorExternalCodeLauncher::ExchangeProcessLauncher(previous); }
+        } restore{previous};
+        const bool opened = EditorExternalCodeLauncher::OpenBuildMessage(root, *message, error);
+        const bool passed = opened && launchedCommand.find(std::filesystem::path{*expected}.wstring()) != std::wstring::npos;
+        return {passed, passed ? "the compiler message opened its source line; launch intercepted" : "incorrect source line launch request: " + error};
+    }
+
+    if (*operation == "replace_in_file") {
+        // Saves a change to a text file of the project, as the user does in a code editor.
+        const auto pathText = StringMember(step, "path", error);
+        const auto from = StringMember(step, "replace_from", error);
+        const auto to = StringMember(step, "replace_to", error);
+        if (!pathText || !from || !to) return {false, error};
+        const std::filesystem::path file = EditorProjectPaths::ProjectRoot() / *pathText;
+        std::string text;
+        {
+            std::ifstream input(file, std::ios::binary);
+            text.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+        }
+        const std::size_t at = text.find(*from);
+        if (at == std::string::npos) return {false, "the text to replace is not in the file"};
+        text.replace(at, from->size(), *to);
+        std::ofstream output(file, std::ios::binary | std::ios::trunc);
+        output << text;
+        return {static_cast<bool>(output), "file text replaced"};
+    }
+
+    if (*operation == "assert_position_z_at_least") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto minimum = NumberMember(step, "value", error);
+        if (!alias || !minimum) return {false, error};
+        const auto entity = ResolveEntity(state, *alias);
+        if (!state.context.Scene().Entities().IsAlive(entity)) return {false, "entity alias is not alive"};
+        const float z = state.context.Scene().Transforms().Get(entity).localPosition.z;
+        return {z >= static_cast<float>(*minimum), "localPosition.z is " + std::to_string(z)};
+    }
+
+    if (*operation == "native_reload_in_play") {
+        // A C++ script saved while the game plays: it is built in the background, the running module stays in use until
+        // the new one is ready, and the script's object keeps its members through the reload.
+        const auto alias = StringMember(step, "entity", error);
+        const auto sourceText = StringMember(step, "source", error);
+        const auto from = StringMember(step, "replace_from", error);
+        const auto to = StringMember(step, "replace_to", error);
+        const auto gain = NumberMember(step, "gain", error);
+        if (!alias || !sourceText || !from || !to || !gain) return {false, error};
+        const auto entity = ResolveEntity(state, *alias);
+        if (!state.context.HasPlayModeSceneSession() || !state.context.Scene().Entities().IsAlive(entity)) {
+            return {false, "Play is not running or the entity is gone"};
+        }
+        const auto height = [&state, entity] { return state.context.Scene().Transforms().Get(entity).localPosition.z; };
+        const float before = height();
+        const std::filesystem::path source = EditorProjectPaths::ProjectRoot() / *sourceText;
+        std::string text;
+        {
+            std::ifstream input(source, std::ios::binary);
+            text.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+        }
+        const std::size_t at = text.find(*from);
+        if (at == std::string::npos) return {false, "the text to replace is not in the script source"};
+        text.replace(at, from->size(), *to);
+        {
+            std::ofstream output(source, std::ios::binary | std::ios::trunc);
+            output << text;
+        }
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 180 };
+        bool sawBuild = false;
+        float after = before;
+        while (std::chrono::steady_clock::now() < deadline && after < before + static_cast<float>(*gain)) {
+            if (!state.context.TickPlayModeSceneSession(1.0F / 60.0F)) return {false, "Play ended during the reload"};
+            sawBuild = sawBuild || !state.context.ScriptBuildsInProgress().empty();
+            after = height();
+            std::this_thread::sleep_for(std::chrono::milliseconds{ 10 });
+        }
+        const bool passed = sawBuild && after >= before + static_cast<float>(*gain);
+        return {passed, passed ? "the script was rebuilt in the background and its object kept its members through the reload"
+                              : "the reload did not happen or the members were lost: before=" + std::to_string(before) + " after=" + std::to_string(after) +
+                                  (sawBuild ? "" : " (no background build was seen)")};
+    }
+
+    if (*operation == "build_scripts_in_edit_mode") {
+        // The editor builds the scene's C++ scripts in the background while nothing plays; wait for that build to end.
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 240 };
+        bool sawBuild = false;
+        bool building = false;
+        while (std::chrono::steady_clock::now() < deadline) {
+            state.context.TickEditModeScripts();
+            building = !state.context.ScriptBuildsInProgress().empty();
+            sawBuild = sawBuild || building;
+            if (sawBuild && !building) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds{ 20 });
+        }
+        // The pass that takes a finished build and loads its module follows the end of the build process.
+        const auto settled = std::chrono::steady_clock::now() + std::chrono::milliseconds{ 800 };
+        while (std::chrono::steady_clock::now() < settled) {
+            state.context.TickEditModeScripts();
+            std::this_thread::sleep_for(std::chrono::milliseconds{ 20 });
+        }
+        const bool passed = sawBuild && !building && state.context.ScriptBuildsInProgress().empty();
+        return {passed, passed ? "the C++ scripts were built in the background in edit mode" : "no background build ran or it did not end"};
+    }
+
     if (*operation == "open_asset") {
         const auto asset = StringMember(step, "asset", error);
         if (!asset) return { false, error };

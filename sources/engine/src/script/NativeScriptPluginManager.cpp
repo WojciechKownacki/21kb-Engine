@@ -57,7 +57,11 @@ NativeScriptPluginLoadResult NativeScriptPluginManager::LoadOrReload(NativeScrip
     }
 
     if (previous.has_value()) {
+        // The objects the old module made are saved and destroyed by its own code, and only then does it
+        // go; the new module's classes make them again and take the saved values back.
+        backend_.ReleaseInstances(previous->registeredSymbols);
         previous->library.Reset();
+        backend_.RestoreInstances();
     }
 
     result.loaded = true;
@@ -94,6 +98,10 @@ NativeScriptPluginLoadResult NativeScriptPluginManager::LoadLinked(std::string k
         if (previous.has_value()) RestoreOrClose(std::move(*previous), result.errors);
         return result;
     }
+    if (previous.has_value()) {
+        backend_.ReleaseInstances(previous->registeredSymbols);
+        backend_.RestoreInstances();
+    }
     result.loaded = true;
     plugins_.push_back(LoadedPlugin{
         .key = std::move(key),
@@ -109,6 +117,7 @@ NativeScriptPluginLoadResult NativeScriptPluginManager::LoadLinked(std::string k
 
 void NativeScriptPluginManager::Unload(std::string_view key) noexcept {
     while (std::optional<LoadedPlugin> plugin = Detach(key)) {
+        backend_.DestroyInstances(plugin->registeredSymbols);
         for (const std::string& symbol : plugin->registeredSymbols) {
             backend_.UnregisterSymbol(symbol);
         }
@@ -118,6 +127,7 @@ void NativeScriptPluginManager::Unload(std::string_view key) noexcept {
 
 void NativeScriptPluginManager::Clear() noexcept {
     for (LoadedPlugin& plugin : plugins_) {
+        backend_.DestroyInstances(plugin.registeredSymbols);
         for (const std::string& symbol : plugin.registeredSymbols) {
             backend_.UnregisterSymbol(symbol);
         }
@@ -196,6 +206,7 @@ void NativeScriptPluginManager::RestoreOrClose(LoadedPlugin plugin, std::vector<
 
     errors.push_back("native script plugin rollback failed; previous plugin was unloaded");
     errors.insert(errors.end(), restoreErrors.begin(), restoreErrors.end());
+    backend_.DestroyInstances(plugin.registeredSymbols);
     plugin.library.Reset();
 }
 

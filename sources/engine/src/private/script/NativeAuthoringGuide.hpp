@@ -20,10 +20,13 @@ kb_cli run --project . --frames 3
 `Source/NativeScripts/MotionProbe` contains a standalone CMake project.
 `script-build` incrementally builds that project, without rebuilding the engine.
 The generated registration checks the SDK ABI; keep that check. The class defines
-static functions named like the Lua hooks (`Created`, `Activated`, `Ready`,
+functions named like the Lua hooks (`Created`, `Activated`, `Ready`,
 `FixedTick`, `Tick`, `LateTick`, `Deactivated`, `Destroyed`, each taking a
 `ScriptExecutionContext*`), and `kb::script::RegisterNativeScript<Class>` registers
-the ones it finds. In `Ready`, use public C++ API to change the scene:
+the ones it finds. The functions are ordinary members: one object of the class is made
+for each scene object, keeps its member variables and is destroyed with the scene
+object. Member variables listed in `Serialize(kb::script::NativeScriptArchive&)`
+survive a rebuild while the game runs. In `Ready`, use public C++ API to change the scene:
 
 ```cpp
 #include "engine/scene/SceneTransforms.hpp"

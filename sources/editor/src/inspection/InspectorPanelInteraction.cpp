@@ -241,6 +241,9 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
     case InspectorPropertyId::ScriptEnabled:
         static_cast<void>(sceneContext.ToggleEntityScriptEnabled(entity));
         return true;
+    case InspectorPropertyId::ScriptBuildCancel:
+        static_cast<void>(sceneContext.CancelEntityScriptBuild(entity));
+        return true;
     case InspectorPropertyId::ScriptName:
     case InspectorPropertyId::ScriptPicker:
         // Reveal the bound Lua asset in Project Files (same affordance as the

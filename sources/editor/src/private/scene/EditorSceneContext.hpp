@@ -93,6 +93,7 @@
 #include <string_view>
 #include <cstddef>
 #include <cstdint>
+#include <chrono>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -101,6 +102,7 @@
 #include <span>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -122,6 +124,8 @@ class EngineModuleHost;
 namespace kb::script {
 
 class ScriptModule;
+class ScriptRuntimeHost;
+struct ScriptRuntimeAssetPrepareResult;
 
 } // namespace kb::script
 
@@ -322,6 +326,21 @@ public:
     // installed scene system produced to the Console, so a behaviour that
     // silently fails to run during play surfaces a reason instead of nothing.
     void SurfaceScriptDiagnostics();
+    // A C++ script that is being built in the background, as the Inspector and the Console show it.
+    struct ScriptBuildStatus {
+        kb::assets::AssetId assetId{};
+        std::string name;
+        double elapsedSeconds = 0.0;
+        std::size_t outputLines = 0;
+        std::string lastLine;
+    };
+    [[nodiscard]] std::vector<ScriptBuildStatus> ScriptBuildsInProgress() const;
+    [[nodiscard]] std::optional<ScriptBuildStatus> EntityScriptBuild(kb::scene::SceneEntity entity) const;
+    // Stops the background build of the script on `entity`; its running module, if any, stays in use.
+    bool CancelEntityScriptBuild(kb::scene::SceneEntity entity);
+    // While nothing plays: builds the scene's C++ scripts in the background when their sources change and
+    // loads the result, so errors show in the Console as the file is saved and Play starts on a built module.
+    void TickEditModeScripts();
     static void ConfigureLuaDebugger(std::filesystem::path directory);
     [[nodiscard]] bool StartLuaDebugger(const std::filesystem::path& directory, std::string& error);
     void PollLuaDebugger();
@@ -1465,6 +1484,13 @@ public:
         kb::script::ScriptValueType type = kb::script::ScriptValueType::Void;
         kb::script::ScriptValue value;
         bool overridden = false;
+        // From the options of a C++ script's `expose =` line (unit=, min=, max=, tip=); empty for a Lua variable.
+        std::string unit;
+        std::string tooltip;
+        bool hasMinimum = false;
+        bool hasMaximum = false;
+        double minimum = 0.0;
+        double maximum = 0.0;
     };
     [[nodiscard]] std::vector<EntityScriptVariable> EntityScriptExposedVariables(kb::scene::SceneEntity entity) const;
     // How many rows the script section shows. The panel's height and its hit testing
@@ -1617,6 +1643,11 @@ private:
     void EnsureScriptRuntime();
     void SurfaceScriptLibraryStartupReport();
     void ResetScriptRuntimeStateForPlayMode();
+    // Play brings its own script runtime: the edit-mode one (with its modules) is finished and dropped first.
+    void ReleaseEditModeScripts();
+    // The edit-mode runtime holds the open scene: it goes before that scene is replaced.
+    void DropEditModeScripts();
+    void AnnounceNativeScriptBuilds(kb::script::ScriptRuntimeHost& host);
     [[nodiscard]] bool SaveProjectDescriptor();
     // Switches a plugin that new projects have on by default on for this project too.
     [[nodiscard]] bool SwitchOnDefaultPlugin(std::string_view pluginId, std::string_view notice);
@@ -1861,6 +1892,12 @@ private:
     // script Destroyed callbacks may log during scene shutdown.
     kb::script::ScriptModule* scriptModule_ = nullptr;
     std::unique_ptr<kb::modules::EngineModuleHost> scriptModuleHost_;
+    // The script runtime of edit mode: it only prepares (builds, loads) the scene's C++ scripts.
+    std::unique_ptr<kb::script::ScriptRuntimeHost> editScriptHost_;
+    const kb::scene::Scene* editScriptScene_ = nullptr;
+    std::chrono::steady_clock::time_point editScriptNextPoll_{};
+    std::unordered_map<std::uint64_t, std::string> announcedScriptBuilds_;
+    std::unordered_set<std::string> reportedEditScriptDiagnostics_;
 };
 
 } // namespace kb::editor

@@ -733,6 +733,53 @@ void RunNativeScriptPluginManagerDispatchTest() {
 #endif
 }
 
+// A script class from a real library: its object survives a reload of the library (the old library's code
+// saves and destroys it before it is unmapped), and goes with the library when that is unloaded.
+void RunNativeScriptPluginObjectReloadTest() {
+    ResetTestRoot();
+    const std::filesystem::path pluginPath = KB_NATIVE_SCRIPT_TEST_PLUGIN_PATH;
+    kb::tests::Require(std::filesystem::is_regular_file(pluginPath), "Native script test plugin DLL is missing");
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Native Plugin Object" });
+    constexpr kb::assets::AssetId kObjectAsset{ 1007U };
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kObjectAsset.value, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+    kb::script::ScriptRuntime runtime;
+    auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+    kb::script::NativeScriptBackend* native = nativeBackend.get();
+    kb::script::NativeScriptPluginManager plugins{ *native };
+    const kb::script::NativeScriptPluginLoadDesc desc{ .key = "object-plugin", .modulePath = pluginPath,
+        .entryPoint = "kb_register_native_object_script", .shadowCopy = true, .shadowCopyDirectory = TestRoot() / "NativePluginShadow" };
+    const kb::script::NativeScriptPluginLoadResult loaded = plugins.LoadOrReload(desc);
+    kb::tests::Require(loaded.Succeeded() && loaded.registeredSymbols.size() == 1U && loaded.registeredSymbols[0] == "tests.NativePluginObject",
+        "A script class from a library must register by its symbol");
+    kb::tests::Require(native->BindAssetSymbol(kObjectAsset, "tests.NativePluginObject") &&
+            runtime.RegisterBackend(std::move(nativeBackend)), "The script class asset symbol binding failed");
+    for (int tick = 1; tick <= 3; ++tick) {
+        kb::tests::Require(runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F).Succeeded(), "A script class Tick failed");
+    }
+    kb::tests::Require(runtime.SharedState().Get("nativeObject.Ticks")->AsInt() == 3 && native->InstanceCount("tests.NativePluginObject") == 1U,
+        "The object of a script class must keep its members between calls");
+    std::filesystem::path previousPath = loaded.loadedPath;
+    double reloadMilliseconds = 0.0;
+    for (int reload = 1; reload <= 5; ++reload) {
+        const auto reloadStart = std::chrono::steady_clock::now();
+        const kb::script::NativeScriptPluginLoadResult replacement = plugins.LoadOrReload(desc);
+        reloadMilliseconds += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - reloadStart).count();
+        kb::tests::Require(replacement.Succeeded() && replacement.loadedPath != previousPath, "Reloading a script class library must load a distinct copy");
+#if defined(_WIN32)
+        kb::tests::Require(GetModuleHandleW(previousPath.c_str()) == nullptr, "The old library must be unmapped after its objects were destroyed");
+#endif
+        previousPath = replacement.loadedPath;
+        kb::tests::Require(runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F).Succeeded() &&
+                runtime.SharedState().Get("nativeObject.Ticks")->AsInt() == 3 + reload,
+            "The object made by the new library must continue with the saved members");
+    }
+    std::printf("native_object_reload average_ms=%.2f\n", reloadMilliseconds / 5.0);
+    plugins.Unload("object-plugin");
+    kb::tests::Require(native->InstanceCount("tests.NativePluginObject") == 0U, "The objects of an unloaded library must be destroyed with it");
+}
+
 void RunNativeScriptBuildPipelineTest() {
     ResetTestRoot();
     const std::filesystem::path projectRoot = TestRoot() / "NativeBuildProject";
@@ -1929,6 +1976,185 @@ void RunNativeBuildFailureDiagnosticsTest() {
     kb::tests::Require(again.diagnostics.size() == 2U && again.diagnostics[1].message == expectedLine,
         "A native build that failed must report the same rows again while its sources are unchanged");
 }
+
+// A C++ script is built on its own thread and process while the caller goes on: progress while it runs, a cancel
+// that stops it, and the finished build taken by the next pass.
+void RunNativeBackgroundBuildTest() {
+    ResetTestRoot();
+    const std::filesystem::path projectRoot = TestRoot() / "NativeBackgroundProject";
+    std::error_code error;
+    std::filesystem::create_directories(projectRoot, error);
+    kb::tests::Require(!error, "Native background build project directory could not be created");
+
+    // A build that runs: output seen while it runs, then stopped, and the whole process tree with it.
+    const auto started = std::chrono::steady_clock::now();
+    kb::script::NativeScriptBuildJob running{ kb::script::NativeScriptBuildDesc{
+        .enabled = true, .command = "cmake -E echo compiling && cmake -E sleep 30", .workingDirectory = projectRoot } };
+    kb::script::NativeScriptBuildProgress progress;
+    for (int attempt = 0; attempt < 200 && progress.outputLines == 0U; ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{ 50 });
+        progress = running.Progress();
+    }
+    kb::tests::Require(!progress.finished && progress.outputLines >= 1U && progress.lastLine == "compiling",
+        "A running native build must report its output while it runs");
+    running.Cancel();
+    const kb::script::NativeScriptBuildResult cancelled = running.Wait();
+    kb::tests::Require(cancelled.cancelled && !cancelled.Succeeded() && cancelled.errors.empty() && running.Finished(),
+        "A cancelled native build must end as cancelled, without compiler errors");
+    kb::tests::Require(std::chrono::steady_clock::now() - started < std::chrono::seconds{ 20 },
+        "Cancelling a native build must not wait for the build to end");
+
+    // The working directory belongs to the build, not to the process: this thread's directory is unchanged.
+    const std::filesystem::path before = std::filesystem::current_path();
+    kb::script::NativeScriptBuildJob inFolder{ kb::script::NativeScriptBuildDesc{
+        .enabled = true, .command = "cmake -E touch here.marker", .workingDirectory = projectRoot } };
+    kb::tests::Require(inFolder.Wait().Succeeded() && std::filesystem::is_regular_file(projectRoot / "here.marker") &&
+            std::filesystem::current_path() == before,
+        "A native build must run in its own folder without changing the process's folder");
+
+    // Through the preparer: the first pass starts the build and returns, a later pass takes the result.
+    const std::filesystem::path marker = projectRoot / "built.marker";
+    WriteTextFile(projectRoot / "Assets" / "Logic" / "Slow.native",
+        "name = Slow\nsymbol = tests.Slow\nbuild = cmake -E sleep 1 && cmake -E touch \"" + marker.generic_string() +
+        "\"\nbuild_working_directory = .\n");
+    WriteTextFile(projectRoot / "Assets" / "Logic" / "Short.native",
+        "name = Short\nsymbol = tests.Short\nbuild = cmake -E sleep 1 && cmake -E touch \"" + (projectRoot / "short.marker").generic_string() +
+        "\"\nbuild_working_directory = .\n");
+    WriteTextFile(projectRoot / "Assets" / "Logic" / "Forever.native",
+        "name = Forever\nsymbol = tests.Forever\nbuild = cmake -E sleep 60\nbuild_working_directory = .\n");
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot), "Native background project mount failed");
+    kb::tests::Require(scene.Assets().Discover() == 3U, "Native background asset discovery failed");
+    const kb::assets::AssetMetadata* slow = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/Slow.native");
+    const kb::assets::AssetMetadata* forever = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/Forever.native");
+    kb::tests::Require(slow != nullptr && forever != nullptr, "Native background descriptors were not discovered");
+
+    kb::script::PucLuaScriptRuntime luaRuntime;
+    kb::visual::VisualGraphRuntimeRegistry visualArtifacts;
+    kb::script::ScriptRuntimeAssetPreparer preparer{ scene.Assets().Manager(), luaRuntime, visualArtifacts };
+    preparer.SetNativeBuildMode(true, true);
+    const auto begin = std::chrono::steady_clock::now();
+    const kb::script::ScriptRuntimeAssetPrepareResult first = preparer.PrepareAsset(slow->id);
+    const auto startCall = std::chrono::steady_clock::now() - begin;
+    kb::tests::Require(first.Succeeded() && first.buildingAssets == 1U && first.preparedAssets == 0U &&
+            startCall < std::chrono::milliseconds{ 900 } && !std::filesystem::exists(marker),
+        "A native build in the background must return at once and report that it is building");
+    std::printf("native_background_build start_call_ms=%.2f\n", std::chrono::duration<double, std::milli>(startCall).count());
+    kb::tests::Require(preparer.NativeBuildsInProgress().size() == 1U && preparer.NativeBuildsInProgress().front().name == "Slow",
+        "A running native build must be listed with its name");
+    const kb::script::ScriptRuntimeAssetPrepareResult duringBuild = preparer.PrepareAsset(slow->id);
+    kb::tests::Require(duringBuild.Succeeded() && duringBuild.buildingAssets == 1U, "A pass during the build must not start another or fail");
+    kb::script::ScriptRuntimeAssetPrepareResult finished;
+    for (int attempt = 0; attempt < 400 && finished.preparedAssets == 0U && finished.Succeeded(); ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{ 50 });
+        finished = preparer.PrepareAsset(slow->id);
+    }
+    kb::tests::Require(finished.Succeeded() && finished.preparedAssets == 1U && std::filesystem::is_regular_file(marker) &&
+            preparer.NativeBuildsInProgress().empty(),
+        "A finished native build must be taken by the next pass");
+
+    // A build that never ends can be stopped.
+    const kb::script::ScriptRuntimeAssetPrepareResult foreverStarted = preparer.PrepareAsset(forever->id);
+    kb::tests::Require(foreverStarted.buildingAssets == 1U && preparer.NativeBuildsInProgress().size() == 1U,
+        "The second native script must build in the background too");
+    kb::tests::Require(preparer.CancelNativeBuild(forever->id) && preparer.NativeBuildsInProgress().empty(),
+        "Cancelling a native build in the background must stop it");
+    const kb::script::ScriptRuntimeAssetPrepareResult afterCancel = preparer.PrepareAsset(forever->id);
+    kb::tests::Require(!afterCancel.Succeeded() && afterCancel.buildingAssets == 0U && preparer.NativeBuildsInProgress().empty() &&
+            afterCancel.diagnostics.front().message.find("cancelled") != std::string::npos,
+        "A cancelled native build must be reported once and not started again until its sources change");
+
+    // FinishNativeBuilds waits for what runs (Play starts) and applies it.
+    const kb::assets::AssetMetadata* shortBuild = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/Short.native");
+    kb::tests::Require(shortBuild != nullptr, "The short native descriptor was not discovered");
+    const std::filesystem::path shortMarker = projectRoot / "short.marker";
+    kb::tests::Require(preparer.PrepareAsset(shortBuild->id).buildingAssets == 1U, "The short native script must start building");
+    const kb::script::ScriptRuntimeAssetPrepareResult waited = preparer.FinishNativeBuilds();
+    kb::tests::Require(waited.Succeeded() && waited.preparedAssets == 1U && std::filesystem::is_regular_file(shortMarker) &&
+            preparer.NativeBuildsInProgress().empty(),
+        "Waiting for the native builds must end with them built and applied");
+}
+
+// A compiler message names where the problem is; the Console opens that line in the code editor.
+void RunNativeBuildMessageLocationTest() {
+    const auto parsed = [](std::string_view message) { return kb::script::ParseBuildMessageLocation(message); };
+    auto location = parsed("C:\\proj\\Source\\Probe.cpp(12): error C2065: 'x': undeclared identifier");
+    kb::tests::Require(location.has_value() && location->path == "C:\\proj\\Source\\Probe.cpp" && location->line == 12 && location->column == 0,
+        "A Visual C++ message must give its file and line");
+    location = parsed("C:\\proj\\Probe.cpp(30,7): warning C4100: unused");
+    kb::tests::Require(location.has_value() && location->line == 30 && location->column == 7, "A Visual C++ message must give its column");
+    location = parsed("/home/dev/proj/Probe.cpp:12:5: error: use of undeclared identifier");
+    kb::tests::Require(location.has_value() && location->path == "/home/dev/proj/Probe.cpp" && location->line == 12 && location->column == 5,
+        "A Clang or GCC message must give its file, line and column");
+    location = parsed("Probe.cpp:9: error: expected ';'");
+    kb::tests::Require(location.has_value() && location->path == "Probe.cpp" && location->line == 9 && location->column == 0,
+        "A message with a line and no column must give its line");
+    location = parsed("C:/proj/Probe.cpp:41:3: error: no member named y");
+    kb::tests::Require(location.has_value() && location->path == "C:/proj/Probe.cpp" && location->line == 41,
+        "A drive letter's colon must not be taken for the line separator");
+    location = parsed("NativeProbe: C:\\proj\\Probe.cpp(12): error C2065: 'x'");
+    kb::tests::Require(location.has_value() && location->path == "C:\\proj\\Probe.cpp" && location->line == 12,
+        "The name a Console row puts in front must not become part of the path");
+    kb::tests::Require(!parsed("native script build command failed with exit code 2 (1 error)").has_value() &&
+            !parsed("LINK : fatal error LNK1104: cannot open file").has_value() && !parsed("").has_value(),
+        "A message without a source line must not give one");
+}
+
+// What the Inspector shows with a C++ script's field: unit, range and hover help from the expose line.
+void RunNativeFieldMetadataTest() {
+    ResetTestRoot();
+    const std::filesystem::path projectRoot = TestRoot() / "NativeFieldMetadataProject";
+    WriteTextFile(projectRoot / "Assets" / "Logic" / "Meta.native",
+        "name = Meta\nsymbol = tests.Meta\n"
+        "expose = speed Float = 3 unit=m/s min=0 max=20 tip=\"Metres per second, 0 to 20\"\n"
+        "expose = lives Int = 3 min=1\n"
+        "expose = label String = Runner\n");
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot), "Native field metadata project mount failed");
+    kb::tests::Require(scene.Assets().Discover() == 1U, "Native field metadata asset discovery failed");
+    const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/Meta.native");
+    kb::tests::Require(metadata != nullptr, "Native field metadata descriptor was not discovered");
+    const auto descriptor = scene.Assets().Manager().Load<kb::script::NativeBehaviourDescriptor>(metadata->id);
+    kb::tests::Require(descriptor.IsLoaded() && descriptor->exposedVariables.size() == 3U &&
+            descriptor->exposedVariableMetadata.size() == 3U, "The expose options were not read with their fields");
+    const kb::script::NativeFieldMetadata& speed = descriptor->exposedVariableMetadata[0];
+    kb::tests::Require(speed.unit == "m/s" && speed.tooltip == "Metres per second, 0 to 20" && speed.hasMinimum && speed.hasMaximum &&
+            speed.minimum == 0.0 && speed.maximum == 20.0 && kb::tests::NearlyEqual(descriptor->exposedVariableDefaults[0].AsFloat(), 3.0F),
+        "A field's unit, tip and range must be read next to its default");
+    const kb::script::NativeFieldMetadata& lives = descriptor->exposedVariableMetadata[1];
+    kb::tests::Require(lives.hasMinimum && !lives.hasMaximum && lives.minimum == 1.0 && lives.unit.empty() &&
+            descriptor->exposedVariableDefaults[1].AsInt() == 3, "A field with only a minimum must have only a minimum");
+    const kb::script::NativeFieldMetadata& label = descriptor->exposedVariableMetadata[2];
+    kb::tests::Require(label.unit.empty() && label.tooltip.empty() && !label.hasMinimum && !label.hasMaximum, "A field without options has no metadata");
+
+    kb::script::NativeBehaviourDescriptorAssetLoader loader;
+    for (const char* invalid : { "symbol = a\nexpose = speed Float = 3 unit=m/s min=high\n", "symbol = a\nexpose = speed Float = 3 min=5 max=1\n",
+             "symbol = a\nexpose = speed Float = 3 colour=red\n", "symbol = a\nexpose = speed Float = 3 tip=\"open\n" }) {
+        const std::string text = invalid;
+        const kb::assets::AssetLoadResult refused = loader.Load(kb::assets::AssetLoadRequest{
+            .metadata = *metadata,
+            .resolvedPath = metadata->physicalPath,
+            .sourceBytes = std::span<const std::uint8_t>{ reinterpret_cast<const std::uint8_t*>(text.data()), text.size() },
+        });
+        kb::tests::Require(!refused.Succeeded() && refused.error.find("expose option") != std::string::npos,
+            "An expose line with a wrong option must be refused with a message naming the option");
+    }
+}
+
+#if defined(_WIN32)
+// vcvars64.bat looks for vswhere on PATH: a build finds it where Visual Studio installs it.
+void RunNativeBuildFindsVswhereTest() {
+    wchar_t programFiles[MAX_PATH]{};
+    const DWORD length = GetEnvironmentVariableW(L"ProgramFiles(x86)", programFiles, MAX_PATH);
+    if (length == 0 || length >= MAX_PATH ||
+        !std::filesystem::is_regular_file(std::filesystem::path{ programFiles } / L"Microsoft Visual Studio" / L"Installer" / L"vswhere.exe")) {
+        return;
+    }
+    const kb::script::NativeScriptBuildResult found = kb::script::NativeScriptBuildPipeline::Build(kb::script::NativeScriptBuildDesc{
+        .enabled = true, .command = "where vswhere.exe >nul 2>nul", .workingDirectory = {} });
+    kb::tests::Require(found.Succeeded(), "A native build must find vswhere in Visual Studio's installer folder");
+}
+#endif
 
 void RunLuaExposedVariablesRuntimeTest() {
     ResetTestRoot();
@@ -17735,9 +17961,16 @@ void RunScriptRuntimeTests() {
     RunScriptTouchApiTest();
     RunNativeScriptRuntimeDispatchTest();
     RunNativeScriptPluginManagerDispatchTest();
+    RunNativeScriptPluginObjectReloadTest();
     RunNativeScriptBuildPipelineTest();
     RunNativeExposedFieldsTest();
     RunNativeBuildFailureDiagnosticsTest();
+    RunNativeBackgroundBuildTest();
+    RunNativeBuildMessageLocationTest();
+    RunNativeFieldMetadataTest();
+#if defined(_WIN32)
+    RunNativeBuildFindsVswhereTest();
+#endif
     RunScriptRuntimeExecutionOrderTest();
     RunLuaScriptRuntimeDispatchTest();
     RunPucLuaScriptRuntimeDispatchTest();

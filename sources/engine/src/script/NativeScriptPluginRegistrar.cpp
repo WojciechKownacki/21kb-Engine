@@ -14,6 +14,7 @@ NativeScriptPluginApi NativeScriptPluginRegistrar::CreateApi() noexcept {
         .user = this,
         .registerLifecycle = &NativeScriptPluginRegistrar::RegisterLifecycleThunk,
         .registerEvent = &NativeScriptPluginRegistrar::RegisterEventThunk,
+        .registerClass = &NativeScriptPluginRegistrar::RegisterClassThunk,
     };
 }
 
@@ -49,6 +50,20 @@ bool NativeScriptPluginRegistrar::RegisterEvent(const char* symbol, const char* 
     return true;
 }
 
+bool NativeScriptPluginRegistrar::RegisterClass(const char* symbol, const NativeScriptClassApi* script) {
+    if (symbol == nullptr || symbol[0] == '\0' || script == nullptr) {
+        AddError("native script plugin class registration is invalid");
+        return false;
+    }
+    const std::string symbolName{ symbol };
+    if (!backend_.RegisterClassSymbol(symbolName, *script)) {
+        AddError("native script plugin class could not be registered (it needs create, destroy and at least one hook)");
+        return false;
+    }
+    TrackSymbol(symbolName);
+    return true;
+}
+
 const std::vector<std::string>& NativeScriptPluginRegistrar::RegisteredSymbols() const noexcept {
     return registeredSymbols_;
 }
@@ -65,6 +80,11 @@ bool NativeScriptPluginRegistrar::RegisterLifecycleThunk(void* user, const char*
 bool NativeScriptPluginRegistrar::RegisterEventThunk(void* user, const char* symbol, const char* eventName, NativeScriptPluginEventProc callback) {
     auto* registrar = static_cast<NativeScriptPluginRegistrar*>(user);
     return registrar != nullptr && registrar->RegisterEvent(symbol, eventName, callback);
+}
+
+bool NativeScriptPluginRegistrar::RegisterClassThunk(void* user, const char* symbol, const NativeScriptClassApi* script) {
+    auto* registrar = static_cast<NativeScriptPluginRegistrar*>(user);
+    return registrar != nullptr && registrar->RegisterClass(symbol, script);
 }
 
 void NativeScriptPluginRegistrar::TrackSymbol(std::string symbol) {
