@@ -1013,7 +1013,6 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
     set(KB_RENDER_EFFECT_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/include")
     add_subdirectory("${CMAKE_SOURCE_DIR}/samples/RenderEffectPlugin" "${CMAKE_CURRENT_BINARY_DIR}/external_render_effect")
     add_dependencies(kb_renderer_tests sample_render_effect)
-    file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/render_effect_plugin_path.txt" CONTENT "$<TARGET_FILE:sample_render_effect>")
 
     # The file-to-pixel particle test loads the real particle provider as a module.
     if(KB_BUILD_PROVIDER_MODULES_AS_DLL AND TARGET kb_21kb_particle_plugin)

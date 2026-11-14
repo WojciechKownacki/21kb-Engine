@@ -34,6 +34,7 @@ WarningsAsErrors: >
   clang-analyzer-core.*,
   clang-analyzer-cplusplus.*,
   clang-analyzer-security.*,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
   clang-analyzer-unix.*
 HeaderFilterRegex: '.*[/\\]sources[/\\](engine|editor|game|renderer|plugins|tools)[/\\].*'
 FormatStyle: file

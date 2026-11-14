@@ -192,13 +192,13 @@ if(CMAKE_HOST_WIN32)
         string(REGEX REPLACE "^-D" "/D" define "${define}")
         list(APPEND defines "${define}")
     endforeach()
-    lj_host_run(cl /nologo /O2 /D_CRT_SECURE_NO_DEPRECATE ${defines} "/I${src_native}" "/I${src_native}\\..\\dynasm" "/I${gen_native}\\host"
+    lj_host_run(cl /nologo /O2 /D_CRT_SECURE_NO_DEPRECATE ${defines} "/I${src_native}" "/I${src_native}\\..\\dynasm" "/I${gen_native}\\host" "/I${gen_native}"
         "/Fo${gen_native}\\host\\" "/Fe${gen_native}\\host\\buildvm.exe" "${src_native}\\host\\buildvm.c" "${src_native}\\host\\buildvm_asm.c"
         "${src_native}\\host\\buildvm_peobj.c" "${src_native}\\host\\buildvm_lib.c" "${src_native}\\host\\buildvm_fold.c")
     set(buildvm ${LJ_GEN}/host/buildvm.exe)
 else()
     execute_process(
-        COMMAND ${host_cc} -O2 ${host_defines} -I${LJ_SRC} -I${LJ_SRC}/../dynasm -I${LJ_GEN}/host -o ${LJ_GEN}/host/buildvm
+        COMMAND ${host_cc} -O2 ${host_defines} -I${LJ_SRC} -I${LJ_SRC}/../dynasm -I${LJ_GEN}/host -I${LJ_GEN} -o ${LJ_GEN}/host/buildvm
             ${LJ_SRC}/host/buildvm.c ${LJ_SRC}/host/buildvm_asm.c ${LJ_SRC}/host/buildvm_peobj.c ${LJ_SRC}/host/buildvm_lib.c ${LJ_SRC}/host/buildvm_fold.c -lm
         RESULT_VARIABLE result ERROR_VARIABLE err)
     if(NOT result EQUAL 0)

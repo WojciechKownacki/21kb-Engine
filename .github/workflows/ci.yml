@@ -387,6 +387,17 @@ jobs:
             exit $LASTEXITCODE
           }
 
+      # The script VM and the WebSocket library write headers during their build; sources that include them
+      # cannot be analysed before those exist.
+      - name: Generate third-party headers
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+          cmd /c "call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul && cmake --build build/tidy --target kb_luajit_build GENHDR"
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
       # Pushes and pull requests check what they change; the weekly run checks every source.
       - name: clang-tidy
         shell: pwsh
