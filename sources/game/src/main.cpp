@@ -773,6 +773,7 @@ int RunGame(const GameOptions& options) {
     kb::input::InputHaptics::RegisterBackend(scene, hapticsBackend);
 
     std::uint32_t renderedFrames = 0U;
+    bool frameLimitedLoadingSet = false;
     std::uint32_t submittedFrames = 0U;
     std::uint32_t observedParticleCompute = 0U;
     std::uint32_t observedParticleDraws = 0U;
@@ -830,6 +831,12 @@ int RunGame(const GameOptions& options) {
         if (loadingScreen.PresentHeld(renderer)) {
             continue;
         }
+        // A run of a set number of frames (a capture, a test, a benchmark) must show the same thing in the same frame
+        // every time, so once its loading screen is gone a resource is loaded inside the frame that first uses it.
+        if (options.frameLimit != 0U && !frameLimitedLoadingSet) {
+            renderer.ConfigureRuntimeResourceLoading(kb::render::RuntimeResourceLoadingSettings{});
+            frameLimitedLoadingSet = true;
+        }
 
         const auto now = std::chrono::steady_clock::now();
         const auto profileBegin = !options.profilePath.empty()
@@ -872,9 +879,19 @@ int RunGame(const GameOptions& options) {
         }
         const auto& renderStats = renderer.LastSceneSubmitStats();
         // Meshes and textures still being read in the background are not missing: they are drawn once they arrive.
-        const bool missingResources = renderStats.HasMissingResources() && renderer.RuntimeResourcesWaiting() == 0U;
-        const bool renderErrors = renderer.LastSceneDiagnostics().HasErrors() ||
-            missingResources || renderStats.droppedInstanceCount != 0U;
+        const bool resourcesWaiting = renderer.RuntimeResourcesWaiting() != 0U;
+        const bool missingResources = renderStats.HasMissingResources() && !resourcesWaiting;
+        // The same holds for the diagnostics of the draws that were skipped for them.
+        const auto reportable = [resourcesWaiting](const kb::render::SceneRenderDiagnosticEvent& event) {
+            return event.severity != kb::render::SceneRenderDiagnosticSeverity::Info &&
+                !(resourcesWaiting && (event.kind == kb::render::SceneRenderDiagnosticKind::MissingMeshBinding ||
+                    event.kind == kb::render::SceneRenderDiagnosticKind::MissingTextureBinding));
+        };
+        const bool diagnosticErrors = std::ranges::any_of(renderer.LastSceneDiagnostics().events,
+            [&reportable](const kb::render::SceneRenderDiagnosticEvent& event) {
+                return event.severity == kb::render::SceneRenderDiagnosticSeverity::Error && reportable(event);
+            });
+        const bool renderErrors = diagnosticErrors || missingResources || renderStats.droppedInstanceCount != 0U;
         const auto profileAfterSubmit = !options.profilePath.empty()
             ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
         if (submitted && !renderErrors && renderedFrames + 1U == options.screenshotFrame) {
@@ -1122,7 +1139,7 @@ int RunGame(const GameOptions& options) {
         }
         if (renderErrors) {
             for (const auto& event : renderer.LastSceneDiagnostics().events) {
-                if (event.severity != kb::render::SceneRenderDiagnosticSeverity::Info) {
+                if (reportable(event)) {
                     reportError(std::string{ event.severity == kb::render::SceneRenderDiagnosticSeverity::Error ? "render error" : "render warning" }
                         + " kind=" + std::to_string(static_cast<unsigned>(event.kind))
                         + " entity=" + std::to_string(event.entityId) + " mesh=" + std::to_string(event.meshAssetId)
