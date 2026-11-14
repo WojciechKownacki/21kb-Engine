@@ -206,6 +206,9 @@ struct RenderSceneSubmitDesc {
     SceneRenderLightingConfig lightingConfig{};
     RenderMaterialGraphBuildContext materialGraphContext{};
     SceneRenderMeshPassMode meshPassMode = SceneRenderMeshPassMode::OpaqueAndTransparent;
+    // false for a draw that only prepares a scene nobody sees yet: effects simulated on the GPU are set up but their
+    // time does not advance, so the scene starts from the same state whatever number of such draws came before.
+    bool advanceSimulation = true;
     std::span<const std::uint64_t> selectedEntityIds{};
     std::span<const std::uint64_t> dirtySceneEntityIds{};
     std::span<const EditorCameraWireframeDesc> editorCameraWireframes{};

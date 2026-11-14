@@ -553,6 +553,7 @@ bool Renderer::SubmitRuntimeSceneWithPrewarm(const kb::scene::Scene& scene, cons
     hidden.target.viewport.id = RenderViewportId{ 2U };
     hidden.target.viewport.viewportIndex = 1U;
     hidden.finalComposite.enabled = false;
+    hidden.advanceSimulation = false;
     const std::array<SceneFrameSubmission, 2U> submissions{
         SceneFrameSubmission{ .scene = &scene, .desc = *desc },
         SceneFrameSubmission{ .scene = &prewarmed, .desc = hidden },
@@ -1129,7 +1130,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport particle sync begin");
     particleRenderSynchronizer_->SetGpuVisualAvailability(sceneRenderer_->ParticleGpuVisualAvailability());
     particleRenderSynchronizer_->Sync(scene, renderScene);
-    sceneRenderer_->SyncGpuParticleEmitters(const_cast<kb::scene::Scene&>(scene), frameDeltaSeconds_,
+    sceneRenderer_->SyncGpuParticleEmitters(const_cast<kb::scene::Scene&>(scene), desc.advanceSimulation ? frameDeltaSeconds_ : 0.0F,
         static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL, renderScene.RenderOrigin());
     for (const auto& rejection : sceneRenderer_->RejectedGpuParticleUpdates(scene.Id())) {
         lastSceneDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
