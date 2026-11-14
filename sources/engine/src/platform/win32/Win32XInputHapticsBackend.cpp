@@ -39,11 +39,10 @@ InputHapticsCapability Win32XInputHapticsBackend::Capability(
         };
     }
     const auto user = Win32GamepadXInputIndex(gamepadIndex);
-    // A slot nothing is plugged into is still one a rumble-capable controller can take; it is only not connected.
-    const bool supported = user < XUSER_MAX_COUNT || !Win32GamepadSlotHoldsOtherController(gamepadIndex);
+    const bool supported = user < XUSER_MAX_COUNT;
     return InputHapticsCapability{
         .supported = supported,
-        .connected = user < XUSER_MAX_COUNT && IsConnected(user),
+        .connected = supported && IsConnected(user),
         .dualMotor = supported,
         .maxGamepads = InputDeviceState::kMaxGamepads,
         .disabledReason = supported ? "" : "controller has no XInput actuator",

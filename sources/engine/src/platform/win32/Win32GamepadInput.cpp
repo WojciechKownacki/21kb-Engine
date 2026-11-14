@@ -225,12 +225,4 @@ std::uint32_t Win32GamepadXInputIndex(std::uint32_t slot) noexcept {
         return slot < registry.slots.size() ? registry.slots[slot].user : noUser;
     } catch (...) { return noUser; }
 }
-
-bool Win32GamepadSlotHoldsOtherController(std::uint32_t slot) noexcept {
-    try {
-        auto& registry = Devices();
-        std::lock_guard lock{registry.mutex};
-        return slot < registry.slots.size() && registry.slots[slot].user == noUser && registry.slots[slot].device;
-    } catch (...) { return false; }
-}
 } // namespace kb::input
