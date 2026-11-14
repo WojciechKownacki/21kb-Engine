@@ -4964,6 +4964,9 @@ void RunCliJsonTests() {
     Require(helpJson.exitCode == 0 && ParseCliResult(helpJson).Find("ok")->AsBool() &&
             Contains(ParseCliResult(helpJson).Find("output")->AsString(), "Exit codes:"),
         "help --json must wrap the usage");
+    const CliRun commandHelp = RunCliProgram({ "new", "--help" });
+    Require(commandHelp.exitCode == 0 && commandHelp.out == RunCliProgram({ "help", "new" }).out && Contains(commandHelp.out, "--template"),
+        "a command followed by --help must print that command's usage");
     Require(RunCliProgram({}).exitCode == 0, "no command must print the usage and exit 0");
 
     // A command with JSON of its own keeps it, not wrapped; its failures are still a result.

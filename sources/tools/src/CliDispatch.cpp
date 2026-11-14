@@ -955,6 +955,12 @@ int RunCli(std::span<const std::string> args, std::istream& in, CommandIo io) {
         words.erase(words.begin());
         words.emplace_back("--json");
     }
+    // kb_cli <command> --help is kb_cli help <command>.
+    if (words.size() > 1U && FindCliCommand(words.front()) != nullptr &&
+        std::ranges::any_of(words.begin() + 1, words.end(), [](const std::string& word) { return word == "--help" || word == "-h"; })) {
+        PrintCommandUsage(io.out, words.front());
+        return 0;
+    }
     const std::string_view command{ words.front() };
     const std::vector<std::string> rest{ words.begin() + 1, words.end() };
     std::vector<std::string_view> flagNames{kFlagNames.begin(), kFlagNames.end()};
