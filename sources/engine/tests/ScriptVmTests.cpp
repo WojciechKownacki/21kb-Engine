@@ -334,6 +334,19 @@ void RunWatchdogCoreTest() {
     FakePlatform::ticks += 600U;
     Require(!core.Poll() && !core.Interrupted(), "time used before the entry's first look must not be charged to it");
     static_cast<void>(core.End());
+    // Time the thread spends inside a function of the host is not the entry's.
+    static bool inHost = false;
+    core.SetHostProbe([](void*) noexcept { return inHost; }, nullptr);
+    core.Begin(100U);
+    static_cast<void>(core.Poll());
+    inHost = true;
+    FakePlatform::ticks += 50'000U;
+    Require(!core.Poll() && !core.Interrupted(), "time inside a host function must not be charged to the entry");
+    inHost = false;
+    FakePlatform::ticks += 1'200U;
+    Require(core.Poll() && core.Interrupted(), "the entry's own time is still charged after a host function");
+    static_cast<void>(core.End());
+    core.SetHostProbe(nullptr, nullptr);
     // An entry that ended before the interruption lands is not interrupted.
     core.Begin(100U);
     static_cast<void>(core.Poll());

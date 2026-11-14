@@ -65,6 +65,13 @@ public:
         raiseData_ = data;
     }
 
+    // Tells whether the runtime thread is inside a function of the host right now. The time of a tick that ends there
+    // is the host's work (a level load, an offline audio render), not the script's, and is not charged to the entry.
+    void SetHostProbe(bool (*probe)(void*) noexcept, void* data) noexcept {
+        hostProbe_ = probe;
+        hostProbeData_ = data;
+    }
+
     // Called by the platform while the runtime thread cannot run the entry on (stopped, or about to run a signal
     // handler): when `sequence` is still the running entry, it is recorded as interrupted and the VM is asked to stop it.
     bool Raise(std::uint64_t sequence) noexcept {
@@ -100,7 +107,7 @@ public:
             used_ = 0U;
             return false;
         }
-        used_ += ticks - lastTicks_;
+        if (hostProbe_ == nullptr || !hostProbe_(hostProbeData_)) used_ += ticks - lastTicks_;
         lastTicks_ = ticks;
         if (used_ < limit) return false;
         used_ = 0U;
@@ -121,6 +128,8 @@ private:
     std::atomic<std::uint64_t> pending_{ 0U };
     void (*raise_)(void*) noexcept = nullptr;
     void* raiseData_ = nullptr;
+    bool (*hostProbe_)(void*) noexcept = nullptr;
+    void* hostProbeData_ = nullptr;
     std::atomic<Thread> owner_{};
     std::atomic<bool> ownerSet_{ false };
     std::uint64_t currentSequence_ = 0U; // runtime thread only

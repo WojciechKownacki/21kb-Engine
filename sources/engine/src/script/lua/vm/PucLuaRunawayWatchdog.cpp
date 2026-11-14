@@ -8,6 +8,11 @@
 
 #include "script/lua/PucLuaWatchdogCore.hpp"
 
+// The VM's own record of what the thread is running (interpreter, compiled code, a C function) is not in its public API.
+extern "C" {
+#include <lj_obj.h>
+}
+
 #include "engine/script/PucLuaScriptRuntime.hpp"
 
 #include <atomic>
@@ -162,6 +167,12 @@ void WatchdogHook(lua_State* state, lua_Debug* record) {
     luaL_error(state, "lua execution budget exceeded");
 }
 
+// A sample read from the watchdog thread: the field is one word the VM stores on every switch between Lua and C.
+bool InHostFunction(void* data) noexcept {
+    const auto* impl = static_cast<const PucLuaRunaway::Impl*>(data);
+    return G(impl->state)->vmstate == ~LJ_VMST_C;
+}
+
 void RaiseInterruption(void* data) noexcept {
     auto* impl = static_cast<PucLuaRunaway::Impl*>(data);
     lua_sethook(impl->state, &WatchdogHook, LUA_MASKCOUNT, 1);
@@ -180,6 +191,7 @@ std::unique_ptr<PucLuaRunaway> PucLuaRunaway::Create(lua_State* state, PucLuaScr
     impl->state = state;
     impl->runtime = &runtime;
     impl->core.SetRaise(&RaiseInterruption, impl.get());
+    impl->core.SetHostProbe(&InHostFunction, impl.get());
     LuaStateSlot(state)->runaway = impl.get();
     return std::unique_ptr<PucLuaRunaway>(new PucLuaRunaway(std::move(impl)));
 }
