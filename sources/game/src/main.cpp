@@ -773,7 +773,7 @@ int RunGame(const GameOptions& options) {
     kb::input::InputHaptics::RegisterBackend(scene, hapticsBackend);
 
     std::uint32_t renderedFrames = 0U;
-    bool frameLimitedLoadingSet = false;
+    bool sceneStarted = false;
     std::uint32_t submittedFrames = 0U;
     std::uint32_t observedParticleCompute = 0U;
     std::uint32_t observedParticleDraws = 0U;
@@ -831,11 +831,15 @@ int RunGame(const GameOptions& options) {
         if (loadingScreen.PresentHeld(renderer)) {
             continue;
         }
-        // A run of a set number of frames (a capture, a test, a benchmark) must show the same thing in the same frame
-        // every time, so once its loading screen is gone a resource is loaded inside the frame that first uses it.
-        if (options.frameLimit != 0U && !frameLimitedLoadingSet) {
-            renderer.ConfigureRuntimeResourceLoading(kb::render::RuntimeResourceLoadingSettings{});
-            frameLimitedLoadingSet = true;
+        if (!sceneStarted) {
+            sceneStarted = true;
+            // The scene's shader clock starts with the scene, not with the loading screen before it.
+            renderer.RestartFrameTime();
+            // A run of a set number of frames (a capture, a test, a benchmark) must show the same thing in the same
+            // frame every time, so from here on a resource is loaded inside the frame that first uses it.
+            if (options.frameLimit != 0U) {
+                renderer.ConfigureRuntimeResourceLoading(kb::render::RuntimeResourceLoadingSettings{});
+            }
         }
 
         const auto now = std::chrono::steady_clock::now();

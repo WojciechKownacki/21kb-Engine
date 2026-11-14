@@ -92,6 +92,8 @@ public:
     // MAT-72: advance per-frame material time (seconds accumulate, frame index increments) and
     // expose it as the u_time vec4 (time, deltaTime, frameIndex, 0) bound during mesh submit.
     void AdvanceFrameTime(float deltaSeconds) noexcept;
+    // Starts the time and the frame count the shaders read from zero again.
+    void RestartFrameTime() noexcept;
     [[nodiscard]] std::array<float, 4> FrameTimeConstants() const noexcept;
     // MAT-30: graph DynamicParameter node source, bound as u_dynamicParameter for graph shaders.
     void SetDynamicParameter(std::array<float, 4> parameter) noexcept;

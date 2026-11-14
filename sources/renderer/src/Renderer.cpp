@@ -1531,6 +1531,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
         (resolvedPostProcessSettings.has_value()
                 ? resolvedPostProcessSettings->motionBlurEnabled
                 : defaultPostProcessSettings_.motionBlurEnabled));
+    std::uint64_t jitterSequence = 0U;
     {
         auto& history = TemporalStateFor(desc.target.viewport.id, desc.target.viewport.viewportIndex);
         const auto* cameraProxy = desc.cameraOverride.has_value() ? nullptr :
@@ -1552,6 +1553,11 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
             history.historyFrame + 1U != frameIndex) {
             history.hasHistory = false;
         }
+        // The pattern restarts with the scene; a history reset inside a scene (a camera cut) keeps its place in it.
+        if (history.sceneId != scene.Id()) {
+            history.jitterSequence = 0U;
+        }
+        jitterSequence = ++history.jitterSequence;
         history.sceneId = scene.Id();
         history.cameraEntityId = cameraEntityId;
         history.cameraOverride = desc.cameraOverride.has_value();
@@ -1580,7 +1586,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
         }
         WriteRendererBreadcrumb("aa_trace", message.str());
     }
-    const std::array<float, 2> jitter = RendererTemporalJitter::Compute(frameIndex, desc.target.viewport.extent, temporalJitterEnabled);
+    const std::array<float, 2> jitter = RendererTemporalJitter::Compute(jitterSequence, desc.target.viewport.extent, temporalJitterEnabled);
     if (RendererDebugLogEnabled("aa_trace")) {
         std::ostringstream message;
         message << "Temporal jitter resolve"
@@ -2481,6 +2487,12 @@ bool Renderer::SetShaderBinaryProvider(
 
 void Renderer::SetFrameDeltaSeconds(float seconds) noexcept {
     frameDeltaSeconds_ = seconds;
+}
+
+void Renderer::RestartFrameTime() noexcept {
+    if (sceneRenderer_ != nullptr) {
+        sceneRenderer_->RestartFrameTime();
+    }
 }
 
 float Renderer::FrameDeltaSeconds() const noexcept {

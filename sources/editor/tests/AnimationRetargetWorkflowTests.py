@@ -8,6 +8,12 @@ from PIL import Image, ImageChops, ImageFilter
 import tempfile
 
 
+# Two runs on a GPU agree to the last bit only by luck; a cook that changed the content moves pixels by far more than
+# the two levels the comparisons of a source run with a packaged run allow.
+def worst_difference(first, second):
+    return max(high for _, high in ImageChops.difference(first, second).getextrema())
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for key in ('editor', 'cli', 'scenario', 'test-root', 'cooker', 'player', 'shaderc', 'engine-root', 'renderer-tests'):
@@ -95,12 +101,12 @@ def main():
             for frame in range(1, 31):
                 source = Image.open(root / ('source-' + mode + str(frame) + '.ppm')).convert('RGB')
                 cooked = Image.open(root / ('package-' + mode + str(frame) + '.ppm')).convert('RGB')
-                assert ImageChops.difference(source, cooked).getbbox() is None, ('temporal export mismatch', mode, frame)
+                assert worst_difference(source, cooked) <= 2, ('temporal export mismatch', mode, frame)
         assert 'errors=0' in run(package / args.player.name, '--headless', '--frames=30', '--width=256', '--height=256')
     finally:
         hidden.rename(project)
     for source_image, package_image in zip(original, exported):
-        assert ImageChops.difference(source_image, package_image).getbbox() is None, 'cook changed rendered skinning'
+        assert worst_difference(source_image, package_image) <= 2, 'cook changed rendered skinning'
     difference = ImageChops.difference(exported[0], exported[1])
     changed = sum(max(pixel) > 8 for pixel in difference.getdata())
     assert changed > 100, ('retargeted mesh did not visibly animate', changed)

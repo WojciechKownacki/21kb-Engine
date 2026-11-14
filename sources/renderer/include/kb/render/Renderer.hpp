@@ -273,6 +273,9 @@ public:
         std::shared_ptr<const ShaderBinaryProvider> provider) noexcept;
     // MAT-72: seconds advanced per completed frame; drives material u_time (Time/animation nodes).
     void SetFrameDeltaSeconds(float seconds) noexcept;
+    // Starts the time and the frame count the shaders read from zero: a host calls it when its scene begins, so what
+    // the scene shows does not depend on how many frames (a loading screen, say) were drawn before it.
+    void RestartFrameTime() noexcept;
     [[nodiscard]] float FrameDeltaSeconds() const noexcept;
     void SetDefaultPostProcessSettings(ScenePostProcessSettings settings) noexcept;
     // Fraction (0.5..1) of the backbuffer the runtime scene renders at before it is upscaled; 1 keeps
@@ -330,6 +333,9 @@ private:
         std::uint64_t sceneId = 0;
         std::uint64_t cameraEntityId = 0;
         std::uint64_t historyFrame = 0;
+        // Frames drawn since the history last started: the place in the jitter pattern, so a view shows the same
+        // sequence whatever number of frames the renderer drew before it began.
+        std::uint64_t jitterSequence = 0;
         bool cameraOverride = false;
         bool orthographic = false;
         bool taaEnabled = false;

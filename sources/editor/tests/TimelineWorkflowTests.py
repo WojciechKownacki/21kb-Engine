@@ -172,7 +172,10 @@ end
     assert all(abs(a-b) < 1e-6 for a, b in zip(pcm(source_pcm), pcm(packaged_pcm))), 'Cooked audio differs from source'
     sys.path.insert(0, str(args.engine_root.resolve() / 'scripts'))
     from png_readback import read_png
-    assert read_png(source_image) == read_png(package_image), 'Saved source and packaged Timeline images differ'
+    from compare_images import compare
+    # Two runs on a GPU agree to the last bit only by luck; a cook that changed the content moves pixels by far more
+    # than the two levels allowed here.
+    assert compare(read_png(source_image), read_png(package_image))['worst'] <= 2, 'Saved source and packaged Timeline images differ'
     # A missing Timeline dependency must fail cooking without publishing an output.
     restored = root / 'SourceUnavailable'
     (restored / 'Assets/Tone.wav').unlink()

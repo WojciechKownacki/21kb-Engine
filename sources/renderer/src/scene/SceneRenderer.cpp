@@ -447,6 +447,12 @@ void SceneRenderer::AdvanceFrameTime(float deltaSeconds) noexcept {
     ++frameTimeIndex_;
 }
 
+void SceneRenderer::RestartFrameTime() noexcept {
+    frameTimeSeconds_ = 0.0F;
+    frameTimeIndex_ = 0U;
+    previousFrameTime_ = FrameTimeConstants();
+}
+
 std::array<float, 4> SceneRenderer::FrameTimeConstants() const noexcept {
     return { frameTimeSeconds_, frameDeltaSeconds_, static_cast<float>(frameTimeIndex_), 0.0F };
 }
