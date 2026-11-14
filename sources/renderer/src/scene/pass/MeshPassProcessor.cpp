@@ -1,6 +1,7 @@
 #include "scene/pass/MeshPassProcessor.hpp"
 #include "scene/cache/SceneMeshBatchCommandCache.hpp"
 
+#include "engine/ecs/WorkerPool.hpp"
 #include "engine/scene/ScenePortalVisibility.hpp"
 #include "kb/render/scene/cache/SceneCachedDrawCommand.hpp"
 #include "scene/cache/SceneCachedDrawCommandMaterializer.hpp"
@@ -13,6 +14,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <optional>
@@ -186,319 +188,671 @@ void ResolveDetailSwitchLevels(const MeshPassProcessorDesc& desc, MeshPipelineBu
     }
 }
 
+constexpr std::uint8_t kLevelNotChosen = UINT8_MAX;
+
+// A pass is split into at most this many chunks, none of fewer instances than the minimum: chunks small enough that the
+// calling thread can start writing the first while the rest are scanned, and large enough to be worth taking one by one.
+constexpr std::size_t kMaxChunks = 32U;
+constexpr std::size_t kMinChunkInstances = 256U;
+
+// A pass of fewer chunks is built on the calling thread: it has too little to scan side by side.
+constexpr std::size_t kMinChunks = 4U;
+
+// The workers that scan a pass beside the calling thread. Scanning costs a few times what writing the draw commands does,
+// so a few workers keep ahead of the calling thread, and every worker woken costs it time.
+constexpr std::size_t kMaxScanWorkers = 8U;
+
+// What every thread scanning batches reads and none of them changes.
+struct MeshScanContext {
+    const MeshPassProcessorDesc& desc;
+    const MeshPipelineFrustum& frustum;
+    std::uint32_t cullingMask;
+    const std::unordered_map<std::uint64_t, std::uint8_t>& detailSwitchLevels;
+};
+
+// What one thread scanning batches writes. Threads own their state, so no two of them share any.
+struct MeshScanState {
+    SceneRenderSubmitStats& stats;
+    SceneRenderDiagnostics* diagnostics;
+    std::unordered_map<std::uint64_t, MeshPipelineMaterialResolution>& materialResolutions;
+    std::vector<std::unordered_map<std::uint64_t, MeshPipelineMaterialResolution>::node_type>& materialResolutionNodes;
+    // The level each instance of the batch being scanned draws; empty for a mesh without a chain of levels.
+    std::vector<std::uint8_t>& chainLevels;
+    std::uint32_t culledInstanceCount = 0U;
+};
+
+// What the scan of one section of a batch keeps the same for every instance.
+struct MeshSectionScope {
+    RenderMeshHandle mesh{};
+    const RenderMeshResource* meshResource = nullptr;
+    RenderMeshSection section{};
+    std::uint32_t sectionIndex = 0U;
+    std::uint32_t sectionVertexCount = 0U;
+    std::pair<std::uint32_t, std::uint32_t> meshletRange{};
+    bool gpuFrustumCull = false;
+    bool gpuDrivenCandidate = false;
+};
+
+[[nodiscard]] std::uint32_t CountCandidates(const MeshScanContext& context, const SceneMeshBatch& batch) noexcept {
+    const bool wholeBatchIsCandidate = context.cullingMask == 0xFFFFFFFFU && !PassNeedsPerInstanceCandidateFilter(context.desc.pass);
+    return wholeBatchIsCandidate
+        ? static_cast<std::uint32_t>(batch.instances.size())
+        : MeshPipelinePassPolicy::CountCandidateInstances(context.desc.pass, batch, context.desc.selectedEntityIds, context.cullingMask);
+}
+
+// Resolves the mesh of a batch that has candidate instances. A batch that is not drawn builds nothing: its mesh is
+// missing, which is counted in `stats` and reported to `diagnostics`, or the pass leaves it out.
+[[nodiscard]] MeshPipelineScanBatch ResolveBatchMesh(const MeshScanContext& context, const SceneMeshBatch& batch,
+    std::uint32_t candidateCount, SceneRenderSubmitStats& stats, SceneRenderDiagnostics* diagnostics) noexcept {
+    const MeshPassProcessorDesc& desc = context.desc;
+    MeshPipelineScanBatch resolved;
+    if (desc.resourceValidation == MeshPipelineResourceValidation::ResolveAndValidate) {
+        const MeshPipelineResolvedMesh resolvedMesh = MeshPipelineResourceResolver::ResolveMeshBatch(
+            desc.pass,
+            batch,
+            candidateCount,
+            *desc.resources,
+            *desc.resourceMap,
+            stats,
+            diagnostics,
+            desc.selectedEntityIds,
+            context.cullingMask);
+        resolved.mesh = resolvedMesh.handle;
+        resolved.meshResource = resolvedMesh.resource;
+        if (resolved.meshResource == nullptr) {
+            return resolved;
+        }
+    } else {
+        resolved.meshResource = desc.resolvedMeshResource;
+    }
+    resolved.drawn = !(desc.terrainLayersOnly &&
+        (desc.pass != MeshPassType::BaseTransparent || resolved.meshResource == nullptr || resolved.meshResource->terrainLayerCount <= 1U));
+    return resolved;
+}
+
+[[nodiscard]] std::uint32_t SectionCountOf(const RenderMeshResource* mesh) noexcept {
+    return mesh == nullptr || mesh->sections.empty() ? 1U : static_cast<std::uint32_t>(mesh->sections.size());
+}
+
+[[nodiscard]] MeshSectionScope MakeSectionScope(const MeshPassProcessorDesc& desc, const MeshPipelineScanBatch& resolved,
+    std::uint32_t sectionIndex) noexcept {
+    const RenderMeshResource* mesh = resolved.meshResource;
+    MeshSectionScope scope;
+    scope.mesh = resolved.mesh;
+    scope.meshResource = mesh;
+    scope.sectionIndex = sectionIndex;
+    scope.section = mesh == nullptr || mesh->sections.empty()
+        ? RenderMeshSection{
+              .indexStart = 0U,
+              .indexCount = mesh == nullptr ? 0U : mesh->indexCount,
+              .vertexStart = 0U,
+              .vertexCount = mesh == nullptr ? 0U : mesh->vertexCount,
+              .materialSlot = 0U,
+              .bounds = mesh == nullptr ? RenderBoundsSphere{} : mesh->bounds,
+          }
+        : mesh->sections[sectionIndex];
+    scope.sectionVertexCount = scope.section.vertexCount != 0U
+        ? scope.section.vertexCount
+        : (mesh != nullptr && scope.section.vertexStart < mesh->vertexCount ? mesh->vertexCount - scope.section.vertexStart : 0U);
+    scope.meshletRange = MeshPipelineVisibility::MeshletRangeForSection(mesh, sectionIndex);
+    scope.gpuFrustumCull = mesh != nullptr &&
+        (mesh->gpuCullingEnabled || mesh->indirectDrawsEnabled) &&
+        desc.gpuDrivenSupport.computeCullingSupported && desc.gpuDrivenSupport.indirectDrawSupported &&
+        desc.gpuDrivenSupport.runtimeGpuDispatchSupported &&
+        desc.maxDrawCommands == 0U && desc.maxVisibleInstances == 0U &&
+        (desc.pass == MeshPassType::BaseOpaque || desc.pass == MeshPassType::GBuffer ||
+         desc.pass == MeshPassType::Depth || desc.pass == MeshPassType::ShadowDepth);
+    scope.gpuDrivenCandidate = MeshPipelineGpuDrivenRecorder::IsCandidate(mesh);
+    return scope;
+}
+
+[[nodiscard]] bool SectionIsDrawn(const MeshPassProcessorDesc& desc, const RenderMeshSection& section) noexcept {
+    return !(desc.terrainLayersOnly && (section.terrainLayerIndex == UINT8_MAX || section.terrainLayerIndex == 0U));
+}
+
+// Scans the instances of a batch for one section and hands each one the pass draws to `sink`, with the draw command it
+// joins. Nothing is written but the state of the thread, so batches can be scanned on several threads.
+template <typename Sink>
+void ScanSection(const MeshScanContext& context, MeshScanState& state, const SceneMeshBatch& batch,
+    const MeshSectionScope& scope, Sink&& sink) {
+    const MeshPassProcessorDesc& desc = context.desc;
+    const bool validateResources = desc.resourceValidation == MeshPipelineResourceValidation::ResolveAndValidate;
+    const RenderMeshResource* meshResource = scope.meshResource;
+    const RenderMeshSection& section = scope.section;
+    std::uint64_t lastMaterialAssetId = 0U;
+    MeshPipelineMaterialResolution lastMaterialResolution{};
+    std::size_t clusterIndex = 0U;
+    for (std::size_t instanceIndex = 0U; instanceIndex < batch.instances.size(); ++instanceIndex) {
+        const SceneRenderMeshInstance& instance = batch.instances[instanceIndex];
+        if (!MeshPipelinePassPolicy::CanEverContain(desc.pass, instance, desc.selectedEntityIds, context.cullingMask)) {
+            continue;
+        }
+        // A mesh with a chain of levels is scanned once per section of every level; the level an instance
+        // draws does not depend on the section, so it is chosen the first time and kept for the batch.
+        std::uint8_t selectedLod = state.chainLevels.empty() ? std::uint8_t{ 0U } : state.chainLevels[instanceIndex];
+        if (selectedLod == kLevelNotChosen || state.chainLevels.empty()) {
+            selectedLod = MeshPipelineVisibility::SelectLodLevel(meshResource, instance, desc.camera);
+            if (instance.detailSwitchEnabled) {
+                if (const auto selected = context.detailSwitchLevels.find(DetailSwitchKey(instance)); selected != context.detailSwitchLevels.end()) {
+                    selectedLod = static_cast<std::uint8_t>(std::min<std::uint32_t>(selected->second, meshResource == nullptr || meshResource->lods.empty() ? 0U : static_cast<std::uint32_t>(meshResource->lods.size() - 1U)));
+                }
+            }
+            if (!state.chainLevels.empty()) state.chainLevels[instanceIndex] = selectedLod;
+        }
+        if (meshResource != nullptr && !meshResource->lods.empty()) {
+            ++state.stats.lodSelectionCount;
+        }
+        if (selectedLod != section.lodLevel) {
+            continue;
+        }
+        const std::uint64_t materialAssetId = MeshPipelineResourceResolver::MaterialAssetForSectionInstance(batch, instance, meshResource, section);
+        RenderMaterialHandle materialHandle{};
+        const RenderMaterialResource* materialResource = validateResources ? nullptr : desc.resolvedMaterialResource;
+        if (validateResources) {
+            if (materialAssetId == lastMaterialAssetId && lastMaterialResolution.resource != nullptr) {
+                materialHandle = lastMaterialResolution.handle;
+                materialResource = lastMaterialResolution.resource;
+            } else {
+                const auto cached = state.materialResolutions.find(materialAssetId);
+                if (cached != state.materialResolutions.end()) {
+                    materialHandle = cached->second.handle;
+                    materialResource = cached->second.resource;
+                } else {
+                    materialResource = MeshPipelineResourceResolver::ResolveMaterialOrFallback(instance, materialAssetId, *desc.resources, *desc.resourceMap, materialHandle, state.stats, state.diagnostics);
+                    MeshPipelineResourceResolver::ValidateMaterialTextureOrFallback(instance, materialAssetId, materialResource, *desc.resources, *desc.resourceMap, state.stats, state.diagnostics);
+                    if (materialHandle.IsValid() && materialResource != nullptr) {
+                        EmplaceKeptNode(state.materialResolutions, state.materialResolutionNodes, materialAssetId, MeshPipelineMaterialResolution{
+                            .handle = materialHandle,
+                            .resource = materialResource,
+                        });
+                    }
+                }
+                lastMaterialAssetId = materialAssetId;
+                lastMaterialResolution = MeshPipelineMaterialResolution{
+                    .handle = materialHandle,
+                    .resource = materialHandle.IsValid() ? materialResource : nullptr,
+                };
+            }
+        }
+        if (PassDisablesAlphaBlend(desc.pass) && MeshPipelinePassPolicy::UsesDisabledAlphaBlend(materialResource)) {
+            // Blended materials are skipped from opaque/depth/shadow and render in the transparent
+            // pass instead (MAT-80); this is correct routing, not an unsupported-material error.
+            continue;
+        }
+        if (!MeshPipelinePassPolicy::Accepts(desc.pass, instance, materialResource, desc.selectedEntityIds, context.cullingMask, &section)) {
+            continue;
+        }
+        if (desc.pass == MeshPassType::MotionVectors && desc.motionFrame != 0U &&
+            !MeshPipelinePassPolicy::HasOwnMotion(instance, materialResource, desc.motionFrame)) {
+            continue;
+        }
+        // The material's World Position Offset reach (Max World Position Offset Displacement).
+        const float boundsMargin = MeshPipelineVisibility::MaterialBoundsMargin(materialResource);
+        const RenderBoundsSphere localBounds = instance.boundsOverride.IsValid()
+            ? instance.boundsOverride
+            : (section.bounds.IsValid() ? section.bounds : (meshResource == nullptr ? RenderBoundsSphere{} : meshResource->bounds));
+        while (clusterIndex < batch.visibilityClusters.size() &&
+            batch.visibilityClusters[clusterIndex].firstInstance < instanceIndex) ++clusterIndex;
+        if (!scope.gpuFrustumCull && clusterIndex < batch.visibilityClusters.size() &&
+            batch.visibilityClusters[clusterIndex].firstInstance == instanceIndex &&
+            localBounds.IsValid() && meshResource != nullptr && meshResource->lods.size() <= 1U &&
+            !instance.detailSwitchEnabled && !batch.hasMaterialSlotOverrides &&
+            desc.pass != MeshPassType::SelectionId && desc.pass != MeshPassType::EditorSelection &&
+            !state.stats.HasMissingResources()) {
+            const auto& cluster = batch.visibilityClusters[clusterIndex];
+            auto bounds = cluster.origins;
+            const auto& center = localBounds.center;
+            bounds.radius += cluster.maximumScale * (localBounds.radius +
+                std::sqrt(center[0]*center[0] + center[1]*center[1] + center[2]*center[2])) + boundsMargin;
+            if (cluster.instanceCount != 0U && cluster.instanceCount <= batch.instances.size()-instanceIndex &&
+                !MeshPipelineVisibility::IsInsideFrustum(context.frustum, bounds)) {
+                state.culledInstanceCount += cluster.instanceCount;
+                if (!meshResource->lods.empty()) state.stats.lodSelectionCount += cluster.instanceCount - 1U;
+                instanceIndex += cluster.instanceCount - 1U;
+                continue;
+            }
+        }
+        const RenderBoundsSphere worldBounds = MeshPipelineVisibility::GrowBounds(
+            MeshPipelineVisibility::TransformBounds(localBounds, instance.model), boundsMargin);
+        if (!scope.gpuFrustumCull && !MeshPipelineVisibility::IsInsideFrustum(context.frustum, worldBounds)) {
+            ++state.culledInstanceCount;
+            continue;
+        }
+        if (desc.pass != MeshPassType::ShadowDepth && desc.pass != MeshPassType::Gizmo &&
+            MeshPipelineVisibility::IsOccludedByVisibilityBlockers(desc.camera, worldBounds, desc.visibilityBlockers)) {
+            ++state.culledInstanceCount;
+            continue;
+        }
+        if (desc.portalVisibility != nullptr && desc.pass != MeshPassType::ShadowDepth && desc.pass != MeshPassType::Gizmo &&
+            desc.portalVisibility->Hides(kb::math::Vec3{ worldBounds.center[0], worldBounds.center[1], worldBounds.center[2] }, instance.layer)) {
+            ++state.culledInstanceCount;
+            continue;
+        }
+        const float viewDepth = MeshPipelineVisibility::ViewDepth(desc.camera, worldBounds);
+        sink(MeshPipelineScanTarget{
+                 .key = MeshCommandLookupKey{
+                     .meshAssetId = batch.meshAssetId, .sectionIndex = scope.sectionIndex,
+                     .materialAssetId = materialAssetId,
+                     .materialHandleValue = materialHandle.value,
+                     .currentSkinningPalette = instance.currentSkinningPalette,
+                     .previousSkinningPalette = instance.previousSkinningPalette,
+                     .reversedWinding = !(meshResource != nullptr && meshResource->doubleSided) &&
+                         !(materialResource != nullptr && materialResource->doubleSided) && ReversesWinding(instance.model),
+                 },
+                 .material = materialHandle,
+                 .materialResource = materialResource,
+             },
+             MeshPipelineScanInstance{
+                 .instanceIndex = static_cast<std::uint32_t>(instanceIndex),
+                 .lodLevel = selectedLod,
+                 .depthBucket = MeshPipelineVisibility::DepthBucket(viewDepth),
+                 .viewDepth = viewDepth,
+                 .worldBounds = worldBounds,
+             });
+    }
+}
+
+// Scans every section of a batch whose mesh resolved. `beginSection` runs before each section that is scanned and
+// `sink` takes each admitted instance with the scope of its section.
+template <typename BeginSection, typename Sink>
+void ScanBatch(const MeshScanContext& context, MeshScanState& state, const SceneMeshBatch& batch,
+    const MeshPipelineScanBatch& resolved, BeginSection&& beginSection, Sink&& sink) {
+    if (resolved.meshResource != nullptr && resolved.meshResource->lods.size() > 1U) state.chainLevels.assign(batch.instances.size(), kLevelNotChosen);
+    else state.chainLevels.clear();
+    const std::uint32_t sectionCount = SectionCountOf(resolved.meshResource);
+    for (std::uint32_t sectionIndex = 0U; sectionIndex < sectionCount; ++sectionIndex) {
+        const MeshSectionScope scope = MakeSectionScope(context.desc, resolved, sectionIndex);
+        if (!SectionIsDrawn(context.desc, scope.section)) {
+            continue;
+        }
+        beginSection();
+        ScanSection(context, state, batch, scope, [&](const MeshPipelineScanTarget& target, const MeshPipelineScanInstance& admitted) {
+            sink(scope, target, admitted);
+        });
+    }
+}
+
+// Writes admitted instances into the draw commands, in the order the scan admitted them.
+struct MeshCommandWriter {
+    const MeshPassProcessorDesc& desc;
+    MeshPipelineBuildResult& result;
+    std::size_t commandCount = 0U;
+    std::uint32_t acceptedInstanceCount = 0U;
+    std::optional<MeshCommandLookupKey> lastCommandKey{};
+    std::uint32_t lastCommandIndex = 0U;
+
+    // Creates the draw command that the first instance joining it takes.
+    MeshDrawCommand& CreateCommand(const MeshSectionScope& scope, const SceneRenderMeshInstance& instance,
+        const MeshPipelineScanTarget& target, std::uint32_t& drawCommandIndex) {
+        const MeshCommandLookupKey& commandKey = target.key;
+        std::uint64_t commandState = MeshPipelinePassPolicy::State(desc.pass, scope.meshResource, target.materialResource, &scope.section);
+        if (commandKey.reversedWinding) {
+            const auto cull = commandState & BGFX_STATE_CULL_MASK;
+            if (cull == BGFX_STATE_CULL_CCW || cull == BGFX_STATE_CULL_CW) {
+                commandState = (commandState & ~BGFX_STATE_CULL_MASK) |
+                    (cull == BGFX_STATE_CULL_CCW ? BGFX_STATE_CULL_CW : BGFX_STATE_CULL_CCW);
+            }
+        }
+        const std::uint64_t materialTextureDependencySignature = PassUsesMaterialTextureDependencies(desc.pass)
+            ? SceneMaterialTextureDependencySignature::Build(SceneMaterialTextureDependencyDesc{
+                  .material = target.materialResource,
+                  .resources = desc.resources,
+                  .resourceMap = desc.resourceMap,
+              })
+            : 0U;
+        const SceneCachedDrawCommandDesc cachedCommandDesc{
+            .pass = desc.pass,
+            .meshAssetId = commandKey.meshAssetId,
+            .materialAssetId = commandKey.materialAssetId,
+            .sectionIndex = commandKey.sectionIndex,
+            .materialSlot = scope.section.materialSlot,
+            .firstMeshlet = scope.meshletRange.first,
+            .meshletCount = scope.meshletRange.second,
+            .indexStart = scope.section.indexStart,
+            .indexCount = scope.section.indexCount,
+            .vertexStart = scope.section.vertexStart,
+            .vertexCount = scope.sectionVertexCount,
+            .lodLevel = scope.section.lodLevel,
+            .terrainLayerIndex = scope.section.terrainLayerIndex,
+            .mesh = scope.mesh,
+            .material = target.material,
+            .meshResource = scope.meshResource,
+            .materialResource = target.materialResource,
+            .meshResourceVersion = scope.meshResource == nullptr ? 0U : scope.meshResource->version,
+            .materialResourceVersion = target.materialResource == nullptr ? 0U : target.materialResource->version,
+            .materialTextureDependencySignature = materialTextureDependencySignature,
+            .state = commandState,
+        };
+        const SceneCachedDrawCommand& cachedCommand =
+            SceneDrawCommandCache::Resolve(result.drawCommandCache, cachedCommandDesc, result.stats);
+        MeshDrawCommand* command = &MeshPipelineCommandBuilder::WritableCommand(result, commandCount);
+        SceneCachedDrawCommandMaterializer::ApplyTemplate(cachedCommand, *command);
+        command->currentSkinningPalette = instance.currentSkinningPalette;
+        command->previousSkinningPalette = instance.previousSkinningPalette;
+        EmplaceKeptNode(result.commandLookupScratch, result.commandLookupNodes, commandKey, commandCount);
+        result.stats.meshCommandLookupCapacity = std::max<std::uint32_t>(
+            result.stats.meshCommandLookupCapacity,
+            static_cast<std::uint32_t>(result.commandLookupScratch.bucket_count()));
+        drawCommandIndex = static_cast<std::uint32_t>(commandCount);
+        ++commandCount;
+        return *command;
+    }
+
+    // The draw command an admitted instance joins, created for the first instance that takes it. Null when a budget
+    // drops the instance, which is then recorded.
+    MeshDrawCommand* CommandFor(const MeshSectionScope& scope, const SceneRenderMeshInstance& instance,
+        const MeshPipelineScanTarget& target, const MeshPipelineScanInstance& admitted, std::uint32_t& drawCommandIndex) {
+        const MeshCommandLookupKey& commandKey = target.key;
+        drawCommandIndex = static_cast<std::uint32_t>(commandCount);
+        const bool joinsLastCommand = lastCommandKey && *lastCommandKey == commandKey;
+        if (joinsLastCommand) {
+            drawCommandIndex = lastCommandIndex;
+        } else if (const auto found = result.commandLookupScratch.find(commandKey); found != result.commandLookupScratch.end()) {
+            drawCommandIndex = static_cast<std::uint32_t>(found->second);
+        }
+        MeshDrawCommand* command = drawCommandIndex < commandCount ? &result.commands[drawCommandIndex] : nullptr;
+        if ((command == nullptr && desc.maxDrawCommands != 0U && commandCount >= desc.maxDrawCommands) ||
+            (desc.maxVisibleInstances != 0U && acceptedInstanceCount >= desc.maxVisibleInstances)) {
+            if (scope.gpuDrivenCandidate) {
+                MeshPipelineGpuDrivenRecorder::Record(result, instance.entityId, admitted.worldBounds, UINT32_MAX, admitted.lodLevel, scope.meshletRange, true);
+            }
+            ++result.stats.droppedInstanceCount;
+            EmitInstanceDiagnostic(desc.diagnostics, SceneRenderDiagnosticKind::DroppedInstances, SceneRenderDiagnosticSeverity::Warning, instance, commandKey.materialAssetId);
+            return nullptr;
+        }
+        if (command == nullptr) {
+            command = &CreateCommand(scope, instance, target, drawCommandIndex);
+        }
+        command->gpuFrustumCull = scope.gpuFrustumCull;
+        if (!joinsLastCommand) {
+            lastCommandKey = commandKey;
+            lastCommandIndex = drawCommandIndex;
+        }
+        return command;
+    }
+
+    void Append(const MeshSectionScope& scope, MeshDrawCommand& command, std::uint32_t drawCommandIndex,
+        const SceneRenderMeshInstance& instance, const MeshPipelineScanInstance& admitted) {
+        std::uint32_t gpuDrivenRecordIndex = UINT32_MAX;
+        if (scope.gpuDrivenCandidate) {
+            MeshPipelineGpuDrivenRecorder::AccumulateCandidateStats(result.stats, scope.meshResource, scope.meshletRange);
+            gpuDrivenRecordIndex = static_cast<std::uint32_t>(result.gpuDrivenInputRecords.size());
+            MeshPipelineGpuDrivenRecorder::Record(result, instance.entityId, admitted.worldBounds, drawCommandIndex, admitted.lodLevel, scope.meshletRange, false);
+        }
+        command.sortKey += admitted.depthBucket;
+        SceneRenderMeshInstance& accepted = command.instances.emplace_back(instance);
+        accepted.worldBounds = admitted.worldBounds;
+        accepted.depthBucket = admitted.depthBucket;
+        if (desc.pass == MeshPassType::BaseTransparent) {
+            const float viewDepth = std::abs(admitted.viewDepth);
+            result.transparentInstanceScratch.push_back(MeshPipelineTransparentInstanceRef{
+                .commandIndex = drawCommandIndex,
+                .instanceIndex = static_cast<std::uint32_t>(command.instances.size() - 1U),
+                .gpuDrivenRecordIndex = gpuDrivenRecordIndex,
+                .viewDepth = std::isfinite(viewDepth) ? viewDepth : 0.0F,
+            });
+        }
+        ++acceptedInstanceCount;
+    }
+
+    void Add(const MeshSectionScope& scope, const SceneRenderMeshInstance& instance,
+        const MeshPipelineScanTarget& target, const MeshPipelineScanInstance& admitted) {
+        std::uint32_t drawCommandIndex = 0U;
+        if (MeshDrawCommand* command = CommandFor(scope, instance, target, admitted, drawCommandIndex)) {
+            Append(scope, *command, drawCommandIndex, instance, admitted);
+        }
+    }
+};
+
+// Builds one batch into the draw commands on the calling thread.
+void BuildBatch(const MeshScanContext& context, MeshScanState& state, MeshCommandWriter& writer, const SceneMeshBatch& batch) {
+    const MeshPassProcessorDesc& desc = context.desc;
+    SceneMeshBatchCommandCache::BatchScope batchScope(desc.batchCommandCache, writer.result, batch,
+        writer.commandCount, writer.acceptedInstanceCount, desc.diagnostics);
+    if (batchScope.TryReuse()) return;
+    batchScope.RecycleStorage();
+    const std::uint32_t candidateCount = CountCandidates(context, batch);
+    if (candidateCount == 0U) {
+        return;
+    }
+    const MeshPipelineScanBatch resolved = ResolveBatchMesh(context, batch, candidateCount, state.stats, state.diagnostics);
+    if (!resolved.drawn) {
+        return;
+    }
+    ScanBatch(context, state, batch, resolved,
+        [&] {
+            if (desc.batchCommandCache != nullptr) ClearKeepingNodes(writer.result.commandLookupScratch, writer.result.commandLookupNodes);
+            writer.lastCommandKey.reset();
+            writer.lastCommandIndex = 0U;
+        },
+        [&](const MeshSectionScope& scope, const MeshPipelineScanTarget& target, const MeshPipelineScanInstance& admitted) {
+            writer.Add(scope, batch.instances[admitted.instanceIndex], target, admitted);
+        });
+    writer.result.stats.culledInstanceCount += std::exchange(state.culledInstanceCount, 0U);
+}
+
+// Scans the batches of a chunk on a worker into the chunk's own storage.
+void ScanChunk(const MeshScanContext& context, MeshPipelineScanChunk& chunk) {
+    chunk.runs.clear();
+    chunk.instances.clear();
+    chunk.stats = SceneRenderSubmitStats{};
+    ClearKeepingNodes(chunk.materialResolutions, chunk.materialResolutionNodes);
+    MeshScanState state{
+        .stats = chunk.stats,
+        .diagnostics = nullptr,
+        .materialResolutions = chunk.materialResolutions,
+        .materialResolutionNodes = chunk.materialResolutionNodes,
+        .chainLevels = chunk.chainLevels,
+    };
+    for (std::size_t offset = 0U; offset < chunk.batchCount; ++offset) {
+        const MeshPipelineScanBatch& resolved = chunk.batches[offset];
+        if (!resolved.drawn) {
+            continue;
+        }
+        const std::size_t batchIndex = chunk.firstBatch + offset;
+        ScanBatch(context, state, context.desc.meshBatches[batchIndex], resolved, [] {},
+            [&](const MeshSectionScope&, const MeshPipelineScanTarget& target, const MeshPipelineScanInstance& admitted) {
+                if (chunk.runs.empty() || chunk.runs.back().batchIndex != batchIndex ||
+                    !(chunk.runs.back().target.key == target.key)) {
+                    chunk.runs.push_back(MeshPipelineScanRun{ .batchIndex = batchIndex, .instanceCount = 0U, .target = target });
+                }
+                ++chunk.runs.back().instanceCount;
+                chunk.instances.push_back(admitted);
+            });
+    }
+    chunk.culledInstanceCount = state.culledInstanceCount;
+    chunk.clean = !chunk.stats.HasMissingResources();
+    chunk.ready.store(true, std::memory_order_release);
+}
+
+// Writes what a chunk admitted into the draw commands, as building its batches one after the other would have.
+void MergeChunk(const MeshScanContext& context, const MeshPipelineScanChunk& chunk, MeshCommandWriter& writer) {
+    MeshSectionScope scope;
+    std::size_t scopeBatch = SIZE_MAX;
+    std::uint32_t scopeSection = UINT32_MAX;
+    std::size_t instanceCursor = 0U;
+    const bool budgeted = context.desc.maxDrawCommands != 0U || context.desc.maxVisibleInstances != 0U;
+    for (const MeshPipelineScanRun& run : chunk.runs) {
+        if (run.batchIndex != scopeBatch || run.target.key.sectionIndex != scopeSection) {
+            scope = MakeSectionScope(context.desc, chunk.batches[run.batchIndex - chunk.firstBatch], run.target.key.sectionIndex);
+            scopeBatch = run.batchIndex;
+            scopeSection = run.target.key.sectionIndex;
+        }
+        const SceneMeshBatch& batch = context.desc.meshBatches[run.batchIndex];
+        // Without a budget, the first instance of a run settles its command and the rest join it.
+        MeshDrawCommand* command = nullptr;
+        std::uint32_t drawCommandIndex = 0U;
+        for (std::uint32_t index = 0U; index < run.instanceCount; ++index) {
+            const MeshPipelineScanInstance& admitted = chunk.instances[instanceCursor++];
+            const SceneRenderMeshInstance& instance = batch.instances[admitted.instanceIndex];
+            if (index == 0U || budgeted) {
+                command = writer.CommandFor(scope, instance, run.target, admitted, drawCommandIndex);
+            }
+            if (command != nullptr) {
+                writer.Append(scope, *command, drawCommandIndex, instance, admitted);
+            }
+        }
+    }
+    writer.result.stats.lodSelectionCount += chunk.stats.lodSelectionCount;
+    writer.result.stats.culledInstanceCount += chunk.culledInstanceCount;
+}
+
+// Splits the batches of a large pass into chunks of consecutive batches, which `result.scanChunks` then holds, and
+// returns their number; 0 when the pass is built on this thread. A batch that is built serially (a missing mesh reports
+// in order, visibility clusters read what the scan has counted) ends the chunk it follows.
+[[nodiscard]] std::size_t PlanScanChunks(const MeshScanContext& context, MeshPipelineBuildResult& result) {
+    const MeshPassProcessorDesc& desc = context.desc;
+    if (desc.workerPool == nullptr || desc.batchCommandCache != nullptr || !desc.workerPool->Running()) {
+        return 0U;
+    }
+    std::size_t instanceCount = 0U;
+    for (const SceneMeshBatch& batch : desc.meshBatches) {
+        instanceCount += batch.instances.size();
+    }
+    if (instanceCount < MeshPassProcessor::ParallelThreshold) {
+        return 0U;
+    }
+    const std::size_t chunkInstances = std::max(kMinChunkInstances, (instanceCount + kMaxChunks - 1U) / kMaxChunks);
+    SceneRenderSubmitStats probeStats;
+    std::size_t chunkCount = 0U;
+    MeshPipelineScanChunk* open = nullptr;
+    std::size_t openInstances = 0U;
+    for (std::size_t batchIndex = 0U; batchIndex < desc.meshBatches.size(); ++batchIndex) {
+        const SceneMeshBatch& batch = desc.meshBatches[batchIndex];
+        MeshPipelineScanBatch resolved;
+        if (!batch.instances.empty()) {
+            // Resolving a mesh that is there changes nothing. A batch whose mesh is not there is built by BuildBatch,
+            // which reports it, or skips the batch without resolving the mesh when the pass draws none of its instances.
+            resolved = ResolveBatchMesh(context, batch, static_cast<std::uint32_t>(batch.instances.size()), probeStats, nullptr);
+            if (!resolved.drawn || !batch.visibilityClusters.empty()) {
+                open = nullptr;
+                continue;
+            }
+        } else if (open == nullptr) {
+            continue;
+        }
+        if (open == nullptr) {
+            if (chunkCount == result.scanChunks.size()) {
+                result.scanChunks.emplace_back();
+            }
+            open = &result.scanChunks[chunkCount++];
+            open->firstBatch = batchIndex;
+            open->batchCount = 0U;
+            open->batches.clear();
+            open->ready.store(false, std::memory_order_relaxed);
+            openInstances = 0U;
+        }
+        open->batches.push_back(resolved);
+        ++open->batchCount;
+        openInstances += batch.instances.size();
+        if (openInstances >= chunkInstances) {
+            open = nullptr;
+        }
+    }
+    return chunkCount < kMinChunks ? 0U : chunkCount;
+}
+
+// Scans the chunks on the workers of the pass and on the calling thread, which would otherwise wait for workers that
+// are still waking: whoever is free takes the next chunk no one has taken. The calling thread writes the chunks into the
+// draw commands in order, as they are scanned.
+class MeshChunkScanner {
+public:
+    MeshChunkScanner(const MeshScanContext& context, MeshPipelineBuildResult& result, std::size_t chunkCount)
+        : context_(context), result_(result), chunkCount_(chunkCount) {
+        if (chunkCount_ == 0U) {
+            return;
+        }
+        const std::size_t workerCount = std::min(context.desc.workerPool->WorkerCount(), kMaxScanWorkers);
+        std::vector<kb::ecs::WorkerPoolChunk> drains(workerCount);
+        for (std::size_t index = 0U; index < workerCount; ++index) {
+            drains[index] = kb::ecs::WorkerPoolChunk{
+                .index = index, .begin = index, .count = 1U, .preferredWorkerIndex = index, .workerCountLimit = workerCount };
+        }
+        job_ = context.desc.workerPool->SubmitParallelForChunks(std::move(drains), &MeshChunkScanner::Drain, this);
+    }
+
+    // Waits until no worker uses the chunks any more.
+    ~MeshChunkScanner() {
+        job_.Wait();
+    }
+
+    MeshChunkScanner(const MeshChunkScanner&) = delete;
+    MeshChunkScanner& operator=(const MeshChunkScanner&) = delete;
+
+    // The chunk once it is scanned. The thread scans other chunks meanwhile, if no worker has taken them.
+    [[nodiscard]] const MeshPipelineScanChunk& Await(std::size_t index) {
+        const MeshPipelineScanChunk& chunk = result_.scanChunks[index];
+        while (!chunk.ready.load(std::memory_order_acquire)) {
+            ScanNext();
+        }
+        return chunk;
+    }
+
+private:
+    static void Drain(kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk&, void* self) {
+        auto& scanner = *static_cast<MeshChunkScanner*>(self);
+        while (scanner.ScanNext()) {
+        }
+    }
+
+    bool ScanNext() {
+        if (next_.load(std::memory_order_relaxed) >= chunkCount_) {
+            return false;
+        }
+        const std::size_t index = next_.fetch_add(1U, std::memory_order_relaxed);
+        if (index >= chunkCount_) {
+            return false;
+        }
+        ScanChunk(context_, result_.scanChunks[index]);
+        return true;
+    }
+
+    const MeshScanContext& context_;
+    MeshPipelineBuildResult& result_;
+    std::size_t chunkCount_;
+    std::atomic<std::size_t> next_{ 0U };
+    kb::ecs::JobHandle job_;
+};
+
 } // namespace
 
 void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, MeshPipelineBuildResult& result) noexcept {
-    const bool validateResources = desc.resourceValidation == MeshPipelineResourceValidation::ResolveAndValidate;
     const MeshPipelineFrustum frustum = MeshPipelineVisibility::BuildFrustum(desc.camera);
     const std::uint32_t cullingMask = desc.camera != nullptr ? desc.camera->cullingMask : 0xFFFFFFFFU;
     ResolveDetailSwitchLevels(desc, result);
     result.commands.reserve(desc.meshBatches.size());
 
-    std::size_t writeCommandCount = 0U;
-    std::uint32_t acceptedInstanceCount = 0U;
+    const MeshScanContext context{
+        .desc = desc,
+        .frustum = frustum,
+        .cullingMask = cullingMask,
+        .detailSwitchLevels = result.detailSwitchLevels,
+    };
+    const std::size_t chunkCount = PlanScanChunks(context, result);
+    MeshChunkScanner scanner(context, result, chunkCount);
+    MeshCommandWriter writer{ .desc = desc, .result = result };
     std::vector<std::uint8_t> chainLevels;
-    for (const SceneMeshBatch& batch : desc.meshBatches) {
-        SceneMeshBatchCommandCache::BatchScope batchScope(desc.batchCommandCache, result, batch,
-            writeCommandCount, acceptedInstanceCount, desc.diagnostics);
-        if (batchScope.TryReuse()) continue;
-        batchScope.RecycleStorage();
-        const bool wholeBatchIsCandidate = cullingMask == 0xFFFFFFFFU && !PassNeedsPerInstanceCandidateFilter(desc.pass);
-        const std::uint32_t instanceCount = wholeBatchIsCandidate
-            ? static_cast<std::uint32_t>(batch.instances.size())
-            : MeshPipelinePassPolicy::CountCandidateInstances(desc.pass, batch, desc.selectedEntityIds, cullingMask);
-        if (instanceCount == 0U) {
-            continue;
-        }
-
-        RenderMeshHandle meshHandle{};
-        const RenderMeshResource* meshResource = nullptr;
-        if (validateResources) {
-            const MeshPipelineResolvedMesh resolvedMesh = MeshPipelineResourceResolver::ResolveMeshBatch(
-                desc.pass,
-                batch,
-                instanceCount,
-                *desc.resources,
-                *desc.resourceMap,
-                result.stats,
-                desc.diagnostics,
-                desc.selectedEntityIds,
-                cullingMask);
-            meshHandle = resolvedMesh.handle;
-            meshResource = resolvedMesh.resource;
-            if (meshResource == nullptr) {
+    MeshScanState state{
+        .stats = result.stats,
+        .diagnostics = desc.diagnostics,
+        .materialResolutions = result.materialResolutionScratch,
+        .materialResolutionNodes = result.materialResolutionNodes,
+        .chainLevels = chainLevels,
+    };
+    std::size_t nextChunk = 0U;
+    for (std::size_t batchIndex = 0U; batchIndex < desc.meshBatches.size(); ++batchIndex) {
+        if (nextChunk < chunkCount && result.scanChunks[nextChunk].firstBatch == batchIndex) {
+            const MeshPipelineScanChunk& chunk = scanner.Await(nextChunk++);
+            if (chunk.clean) {
+                MergeChunk(context, chunk, writer);
+                batchIndex += chunk.batchCount - 1U;
                 continue;
             }
         }
-        if (!validateResources) {
-            meshResource = desc.resolvedMeshResource;
-        }
-        if (desc.terrainLayersOnly &&
-            (desc.pass != MeshPassType::BaseTransparent || meshResource == nullptr || meshResource->terrainLayerCount <= 1U)) {
-            continue;
-        }
-
-        const RenderMeshSection fallbackSection{
-            .indexStart = 0U,
-            .indexCount = meshResource == nullptr ? 0U : meshResource->indexCount,
-            .vertexStart = 0U,
-            .vertexCount = meshResource == nullptr ? 0U : meshResource->vertexCount,
-            .materialSlot = 0U,
-            .bounds = meshResource == nullptr ? RenderBoundsSphere{} : meshResource->bounds,
-        };
-        const std::vector<RenderMeshSection>* sections = meshResource == nullptr ? nullptr : &meshResource->sections;
-        constexpr std::uint8_t kLevelNotChosen = UINT8_MAX;
-        if (meshResource != nullptr && meshResource->lods.size() > 1U) chainLevels.assign(batch.instances.size(), kLevelNotChosen);
-        else chainLevels.clear();
-        const std::uint32_t sectionCount = sections == nullptr || sections->empty() ? 1U : static_cast<std::uint32_t>(sections->size());
-        for (std::uint32_t sectionIndex = 0U; sectionIndex < sectionCount; ++sectionIndex) {
-            const RenderMeshSection& section = sections == nullptr || sections->empty() ? fallbackSection : (*sections)[sectionIndex];
-            const std::uint32_t sectionVertexCount = section.vertexCount != 0U
-                ? section.vertexCount
-                : (meshResource != nullptr && section.vertexStart < meshResource->vertexCount
-                      ? meshResource->vertexCount - section.vertexStart
-                      : 0U);
-            if (desc.terrainLayersOnly &&
-                (section.terrainLayerIndex == UINT8_MAX || section.terrainLayerIndex == 0U)) {
-                continue;
-            }
-            const std::pair<std::uint32_t, std::uint32_t> meshletRange = MeshPipelineVisibility::MeshletRangeForSection(meshResource, sectionIndex);
-            if (desc.batchCommandCache != nullptr) ClearKeepingNodes(result.commandLookupScratch, result.commandLookupNodes);
-            std::uint32_t culledForSection = 0U;
-            std::uint64_t lastMaterialAssetId = 0U;
-            MeshPipelineMaterialResolution lastMaterialResolution{};
-            std::optional<MeshCommandLookupKey> lastCommandKey;
-            std::uint32_t lastCommandIndex = 0U;
-            std::size_t clusterIndex = 0U;
-            for (std::size_t instanceIndex = 0U; instanceIndex < batch.instances.size(); ++instanceIndex) {
-                const SceneRenderMeshInstance& instance = batch.instances[instanceIndex];
-                if (!MeshPipelinePassPolicy::CanEverContain(desc.pass, instance, desc.selectedEntityIds, cullingMask)) {
-                    continue;
-                }
-                // A mesh with a chain of levels is scanned once per section of every level; the level an instance
-                // draws does not depend on the section, so it is chosen the first time and kept for the batch.
-                std::uint8_t selectedLod = chainLevels.empty() ? std::uint8_t{ 0U } : chainLevels[instanceIndex];
-                if (selectedLod == kLevelNotChosen || chainLevels.empty()) {
-                    selectedLod = MeshPipelineVisibility::SelectLodLevel(meshResource, instance, desc.camera);
-                    if (instance.detailSwitchEnabled) {
-                        if (const auto selected = result.detailSwitchLevels.find(DetailSwitchKey(instance)); selected != result.detailSwitchLevels.end()) {
-                            selectedLod = static_cast<std::uint8_t>(std::min<std::uint32_t>(selected->second, meshResource == nullptr || meshResource->lods.empty() ? 0U : static_cast<std::uint32_t>(meshResource->lods.size() - 1U)));
-                        }
-                    }
-                    if (!chainLevels.empty()) chainLevels[instanceIndex] = selectedLod;
-                }
-                if (meshResource != nullptr && !meshResource->lods.empty()) {
-                    ++result.stats.lodSelectionCount;
-                }
-                if (selectedLod != section.lodLevel) {
-                    continue;
-                }
-                const std::uint64_t materialAssetId = MeshPipelineResourceResolver::MaterialAssetForSectionInstance(batch, instance, meshResource, section);
-                RenderMaterialHandle materialHandle{};
-                const RenderMaterialResource* materialResource = validateResources ? nullptr : desc.resolvedMaterialResource;
-                if (validateResources) {
-                    if (materialAssetId == lastMaterialAssetId && lastMaterialResolution.resource != nullptr) {
-                        materialHandle = lastMaterialResolution.handle;
-                        materialResource = lastMaterialResolution.resource;
-                    } else {
-                        const auto cached = result.materialResolutionScratch.find(materialAssetId);
-                        if (cached != result.materialResolutionScratch.end()) {
-                            materialHandle = cached->second.handle;
-                            materialResource = cached->second.resource;
-                        } else {
-                            materialResource = MeshPipelineResourceResolver::ResolveMaterialOrFallback(instance, materialAssetId, *desc.resources, *desc.resourceMap, materialHandle, result.stats, desc.diagnostics);
-                            MeshPipelineResourceResolver::ValidateMaterialTextureOrFallback(instance, materialAssetId, materialResource, *desc.resources, *desc.resourceMap, result.stats, desc.diagnostics);
-                            if (materialHandle.IsValid() && materialResource != nullptr) {
-                                EmplaceKeptNode(result.materialResolutionScratch, result.materialResolutionNodes, materialAssetId, MeshPipelineMaterialResolution{
-                                    .handle = materialHandle,
-                                    .resource = materialResource,
-                                });
-                            }
-                        }
-                        lastMaterialAssetId = materialAssetId;
-                        lastMaterialResolution = MeshPipelineMaterialResolution{
-                            .handle = materialHandle,
-                            .resource = materialHandle.IsValid() ? materialResource : nullptr,
-                        };
-                    }
-                }
-                if (PassDisablesAlphaBlend(desc.pass) && MeshPipelinePassPolicy::UsesDisabledAlphaBlend(materialResource)) {
-                    // Blended materials are skipped from opaque/depth/shadow and render in the transparent
-                    // pass instead (MAT-80); this is correct routing, not an unsupported-material error.
-                    continue;
-                }
-                if (!MeshPipelinePassPolicy::Accepts(desc.pass, instance, materialResource, desc.selectedEntityIds, cullingMask, &section)) {
-                    continue;
-                }
-                if (desc.pass == MeshPassType::MotionVectors && desc.motionFrame != 0U &&
-                    !MeshPipelinePassPolicy::HasOwnMotion(instance, materialResource, desc.motionFrame)) {
-                    continue;
-                }
-                // The material's World Position Offset reach (Max World Position Offset Displacement).
-                const float boundsMargin = MeshPipelineVisibility::MaterialBoundsMargin(materialResource);
-                const RenderBoundsSphere localBounds = instance.boundsOverride.IsValid()
-                    ? instance.boundsOverride
-                    : (section.bounds.IsValid() ? section.bounds : (meshResource == nullptr ? RenderBoundsSphere{} : meshResource->bounds));
-                const bool gpuFrustumCull = meshResource != nullptr &&
-                    (meshResource->gpuCullingEnabled || meshResource->indirectDrawsEnabled) &&
-                    desc.gpuDrivenSupport.computeCullingSupported && desc.gpuDrivenSupport.indirectDrawSupported &&
-                    desc.gpuDrivenSupport.runtimeGpuDispatchSupported &&
-                    desc.maxDrawCommands == 0U && desc.maxVisibleInstances == 0U &&
-                    (desc.pass == MeshPassType::BaseOpaque || desc.pass == MeshPassType::GBuffer ||
-                     desc.pass == MeshPassType::Depth || desc.pass == MeshPassType::ShadowDepth);
-                while (clusterIndex < batch.visibilityClusters.size() &&
-                    batch.visibilityClusters[clusterIndex].firstInstance < instanceIndex) ++clusterIndex;
-                if (!gpuFrustumCull && clusterIndex < batch.visibilityClusters.size() &&
-                    batch.visibilityClusters[clusterIndex].firstInstance == instanceIndex &&
-                    localBounds.IsValid() && meshResource != nullptr && meshResource->lods.size() <= 1U &&
-                    !instance.detailSwitchEnabled && !batch.hasMaterialSlotOverrides &&
-                    desc.pass != MeshPassType::SelectionId && desc.pass != MeshPassType::EditorSelection &&
-                    !result.stats.HasMissingResources()) {
-                    const auto& cluster = batch.visibilityClusters[clusterIndex];
-                    auto bounds = cluster.origins;
-                    const auto& center = localBounds.center;
-                    bounds.radius += cluster.maximumScale * (localBounds.radius +
-                        std::sqrt(center[0]*center[0] + center[1]*center[1] + center[2]*center[2])) + boundsMargin;
-                    if (cluster.instanceCount != 0U && cluster.instanceCount <= batch.instances.size()-instanceIndex &&
-                        !MeshPipelineVisibility::IsInsideFrustum(frustum, bounds)) {
-                        culledForSection += cluster.instanceCount;
-                        if (!meshResource->lods.empty()) result.stats.lodSelectionCount += cluster.instanceCount - 1U;
-                        instanceIndex += cluster.instanceCount - 1U;
-                        continue;
-                    }
-                }
-                const RenderBoundsSphere worldBounds = MeshPipelineVisibility::GrowBounds(
-                    MeshPipelineVisibility::TransformBounds(localBounds, instance.model), boundsMargin);
-                const bool gpuDrivenCandidate = MeshPipelineGpuDrivenRecorder::IsCandidate(meshResource);
-                if (!gpuFrustumCull && !MeshPipelineVisibility::IsInsideFrustum(frustum, worldBounds)) {
-                    ++culledForSection;
-                    continue;
-                }
-                if (desc.pass != MeshPassType::ShadowDepth && desc.pass != MeshPassType::Gizmo &&
-                    MeshPipelineVisibility::IsOccludedByVisibilityBlockers(desc.camera, worldBounds, desc.visibilityBlockers)) {
-                    ++culledForSection;
-                    continue;
-                }
-                if (desc.portalVisibility != nullptr && desc.pass != MeshPassType::ShadowDepth && desc.pass != MeshPassType::Gizmo &&
-                    desc.portalVisibility->Hides(kb::math::Vec3{ worldBounds.center[0], worldBounds.center[1], worldBounds.center[2] }, instance.layer)) {
-                    ++culledForSection;
-                    continue;
-                }
-                const std::uint16_t depthBucket = MeshPipelineVisibility::DepthBucket(MeshPipelineVisibility::ViewDepth(desc.camera, worldBounds));
-                const MeshCommandLookupKey commandKey{
-                    .meshAssetId = batch.meshAssetId, .sectionIndex = sectionIndex,
-                    .materialAssetId = materialAssetId,
-                    .materialHandleValue = materialHandle.value,
-                    .currentSkinningPalette = instance.currentSkinningPalette,
-                    .previousSkinningPalette = instance.previousSkinningPalette,
-                    .reversedWinding = !(meshResource != nullptr && meshResource->doubleSided) &&
-                        !(materialResource != nullptr && materialResource->doubleSided) && ReversesWinding(instance.model),
-                };
-                std::uint32_t drawCommandIndex = static_cast<std::uint32_t>(writeCommandCount);
-                if (lastCommandKey && *lastCommandKey == commandKey) {
-                    drawCommandIndex = lastCommandIndex;
-                } else if (const auto found = result.commandLookupScratch.find(commandKey); found != result.commandLookupScratch.end()) {
-                    drawCommandIndex = static_cast<std::uint32_t>(found->second);
-                }
-                MeshDrawCommand* command = drawCommandIndex < writeCommandCount ? &result.commands[drawCommandIndex] : nullptr;
-                if (command == nullptr && desc.maxDrawCommands != 0U && writeCommandCount >= desc.maxDrawCommands) {
-                    if (gpuDrivenCandidate) {
-                        MeshPipelineGpuDrivenRecorder::Record(result, instance.entityId, worldBounds, UINT32_MAX, selectedLod, meshletRange, true);
-                    }
-                    ++result.stats.droppedInstanceCount;
-                    EmitInstanceDiagnostic(desc.diagnostics, SceneRenderDiagnosticKind::DroppedInstances, SceneRenderDiagnosticSeverity::Warning, instance, materialAssetId);
-                    continue;
-                }
-                if (desc.maxVisibleInstances != 0U && acceptedInstanceCount >= desc.maxVisibleInstances) {
-                    if (gpuDrivenCandidate) {
-                        MeshPipelineGpuDrivenRecorder::Record(result, instance.entityId, worldBounds, UINT32_MAX, selectedLod, meshletRange, true);
-                    }
-                    ++result.stats.droppedInstanceCount;
-                    EmitInstanceDiagnostic(desc.diagnostics, SceneRenderDiagnosticKind::DroppedInstances, SceneRenderDiagnosticSeverity::Warning, instance, materialAssetId);
-                    continue;
-                }
-                if (command == nullptr) {
-                    std::uint64_t commandState = MeshPipelinePassPolicy::State(desc.pass, meshResource, materialResource, &section);
-                    if (commandKey.reversedWinding) {
-                        const auto cull = commandState & BGFX_STATE_CULL_MASK;
-                        if (cull == BGFX_STATE_CULL_CCW || cull == BGFX_STATE_CULL_CW) {
-                            commandState = (commandState & ~BGFX_STATE_CULL_MASK) |
-                                (cull == BGFX_STATE_CULL_CCW ? BGFX_STATE_CULL_CW : BGFX_STATE_CULL_CCW);
-                        }
-                    }
-                    const std::uint64_t materialTextureDependencySignature = PassUsesMaterialTextureDependencies(desc.pass)
-                        ? SceneMaterialTextureDependencySignature::Build(SceneMaterialTextureDependencyDesc{
-                              .material = materialResource,
-                              .resources = desc.resources,
-                              .resourceMap = desc.resourceMap,
-                          })
-                        : 0U;
-                    const SceneCachedDrawCommandDesc cachedCommandDesc{
-                        .pass = desc.pass,
-                        .meshAssetId = batch.meshAssetId,
-                        .materialAssetId = materialAssetId,
-                        .sectionIndex = sectionIndex,
-                        .materialSlot = section.materialSlot,
-                        .firstMeshlet = meshletRange.first,
-                        .meshletCount = meshletRange.second,
-                        .indexStart = section.indexStart,
-                        .indexCount = section.indexCount,
-                        .vertexStart = section.vertexStart,
-                        .vertexCount = sectionVertexCount,
-                        .lodLevel = section.lodLevel,
-                        .terrainLayerIndex = section.terrainLayerIndex,
-                        .mesh = meshHandle,
-                        .material = materialHandle,
-                        .meshResource = meshResource,
-                        .materialResource = materialResource,
-                        .meshResourceVersion = meshResource == nullptr ? 0U : meshResource->version,
-                        .materialResourceVersion = materialResource == nullptr ? 0U : materialResource->version,
-                        .materialTextureDependencySignature = materialTextureDependencySignature,
-                        .state = commandState,
-                    };
-                    const SceneCachedDrawCommand& cachedCommand =
-                        SceneDrawCommandCache::Resolve(result.drawCommandCache, cachedCommandDesc, result.stats);
-                    command = &MeshPipelineCommandBuilder::WritableCommand(result, writeCommandCount);
-                    SceneCachedDrawCommandMaterializer::ApplyTemplate(cachedCommand, *command);
-                    command->currentSkinningPalette = instance.currentSkinningPalette;
-                    command->previousSkinningPalette = instance.previousSkinningPalette;
-                    EmplaceKeptNode(result.commandLookupScratch, result.commandLookupNodes, commandKey, writeCommandCount);
-                    result.stats.meshCommandLookupCapacity = std::max<std::uint32_t>(
-                        result.stats.meshCommandLookupCapacity,
-                        static_cast<std::uint32_t>(result.commandLookupScratch.bucket_count()));
-                    drawCommandIndex = static_cast<std::uint32_t>(writeCommandCount);
-                    ++writeCommandCount;
-                }
-                command->gpuFrustumCull = gpuFrustumCull;
-                MeshPipelineGpuDrivenRecorder::AccumulateCandidateStats(result.stats, meshResource, meshletRange);
-                lastCommandKey = commandKey;
-                lastCommandIndex = drawCommandIndex;
-                const std::uint32_t gpuDrivenRecordIndex = gpuDrivenCandidate
-                    ? static_cast<std::uint32_t>(result.gpuDrivenInputRecords.size()) : UINT32_MAX;
-                if (gpuDrivenCandidate) {
-                    MeshPipelineGpuDrivenRecorder::Record(result, instance.entityId, worldBounds, drawCommandIndex, selectedLod, meshletRange, false);
-                }
-                command->sortKey += depthBucket;
-                SceneRenderMeshInstance& accepted = command->instances.emplace_back(instance);
-                accepted.worldBounds = worldBounds;
-                accepted.depthBucket = depthBucket;
-                if (desc.pass == MeshPassType::BaseTransparent) {
-                    const float viewDepth = std::abs(MeshPipelineVisibility::ViewDepth(desc.camera, worldBounds));
-                    result.transparentInstanceScratch.push_back(MeshPipelineTransparentInstanceRef{
-                        .commandIndex = drawCommandIndex,
-                        .instanceIndex = static_cast<std::uint32_t>(command->instances.size() - 1U),
-                        .gpuDrivenRecordIndex = gpuDrivenRecordIndex,
-                        .viewDepth = std::isfinite(viewDepth) ? viewDepth : 0.0F,
-                    });
-                }
-                ++acceptedInstanceCount;
-            }
-
-            result.stats.culledInstanceCount += culledForSection;
-        }
+        BuildBatch(context, state, writer, desc.meshBatches[batchIndex]);
     }
 
-    MeshPipelineCommandBuilder::FinalizeCommands(result, desc.pass, writeCommandCount,
+    MeshPipelineCommandBuilder::FinalizeCommands(result, desc.pass, writer.commandCount,
         desc.maxDrawCommands, desc.diagnostics);
 }
 

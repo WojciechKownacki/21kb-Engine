@@ -21,6 +21,10 @@ namespace kb::scene {
 class Scene;
 }
 
+namespace kb::ecs {
+class WorkerPool;
+}
+
 namespace kb::render {
 
 class SceneMeshSubmitter;
@@ -114,6 +118,9 @@ public:
         std::uint64_t frame, std::uint64_t completedFrame) noexcept;
     [[nodiscard]] RenderSkinningPaletteAllocator& SkinningPalettes() noexcept;
     [[nodiscard]] bool IsInitialized() const noexcept;
+    // The workers that scan the mesh passes of large scenes; null scans them on the submitting thread. Set after
+    // Initialize; the pool must outlive the submissions that use it.
+    void SetWorkerPool(kb::ecs::WorkerPool* workerPool) noexcept;
     void SetMeshCoverageEnabled(bool enabled) noexcept;
     void BeginMeshCoverageFrame(std::uint64_t frame);
     void EndMeshCoverageFrame();

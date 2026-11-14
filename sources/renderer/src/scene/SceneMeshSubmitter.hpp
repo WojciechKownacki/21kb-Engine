@@ -25,6 +25,10 @@
 #include <utility>
 #include <vector>
 
+namespace kb::ecs {
+class WorkerPool;
+}
+
 namespace kb::render {
 
 class ParticleGpuRenderer;
@@ -84,6 +88,7 @@ public:
     [[nodiscard]] bool SubmitScreenMaterial(const SceneMeshScreenMaterialDesc& desc) const { return passResources_.SubmitScreenMaterial(desc); }
     void SetSkinningPaletteAllocator(const RenderSkinningPaletteAllocator* allocator) noexcept { skinningPaletteAllocator_ = allocator; }
     void SetCoverageProbe(SceneMeshCoverageProbe* probe) noexcept { coverageProbe_ = probe; }
+    void SetWorkerPool(kb::ecs::WorkerPool* workerPool) noexcept { workerPool_ = workerPool; }
 
 private:
     SceneMeshPassResources passResources_;
@@ -106,6 +111,7 @@ private:
     mutable const RenderScene* detailSwitchScene_ = nullptr;
     const RenderSkinningPaletteAllocator* skinningPaletteAllocator_ = nullptr;
     SceneMeshCoverageProbe* coverageProbe_ = nullptr;
+    kb::ecs::WorkerPool* workerPool_ = nullptr;
 };
 
 } // namespace kb::render

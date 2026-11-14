@@ -103,6 +103,7 @@ void RunRendererParticleVolumetricSnapshotSubmitTest();
 void RunRendererDetachedViewportFinalCompositePixelsTest();
 void RunRendererCapabilityReportTests();
 void RunMeshPipelineTests();
+void RunMeshPipelineBuildScaleBenchmark();
 void RunSceneDisplayCompositeTests();
 void RunSceneExposureMeterTests();
 void RunExposureReadbackResetTest();
@@ -288,6 +289,10 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "mesh-pipeline") {
         kb::render::tests::RunMeshPipelineTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "mesh-pipeline-scale") {
+        kb::render::tests::RunMeshPipelineBuildScaleBenchmark();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "transparent-gpu-readback") {

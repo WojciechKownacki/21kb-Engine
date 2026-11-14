@@ -32,6 +32,7 @@
 #include "kb/render/post/SceneExposureMeter.hpp"
 #include "private/ui/ScreenUIRenderer.hpp"
 #include "scene/SceneRenderVisibilityPublisher.hpp"
+#include "scene/pass/MeshPassProcessor.hpp"
 #include "renderer/RendererScreenCapture.hpp"
 #include "renderer/RendererEditorOverlaySubmitter.hpp"
 #include "renderer/RendererExposureSubmitter.hpp"
@@ -1485,7 +1486,8 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
     // during its own submit. Mesh resources were ensured above, so bounds resolve this same
     // frame; when the same scene is submitted to several viewports, the last submit in the
     // frame's deterministic plan order wins (see SceneRenderFeedback.hpp's contract).
-    if (renderScene.MeshProxyCount() >= SceneRenderVisibilityPublisher::ParallelThreshold) {
+    // The pool also scans the mesh passes of a large scene, so it starts at the smaller of the two thresholds.
+    if (renderScene.MeshProxyCount() >= std::min(SceneRenderVisibilityPublisher::ParallelThreshold, MeshPassProcessor::ParallelThreshold)) {
         if (renderSyncWorkerPool_ == nullptr) {
             renderSyncWorkerPool_ = std::make_unique<kb::ecs::WorkerPool>(kb::ecs::WorkerPoolConfig{});
         }
@@ -1493,6 +1495,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
             renderSyncWorkerPool_->Start(kb::ecs::WorkerPoolConfig{});
         }
     }
+    sceneRenderer_->SetWorkerPool(renderSyncWorkerPool_.get());
     const auto visibilityBuildBegin = std::chrono::steady_clock::now();
     SceneRenderVisibilityPublisher::BuildFrame(
         renderScene,

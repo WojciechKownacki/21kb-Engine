@@ -58,6 +58,10 @@ namespace {
 
 SceneRenderer::SceneRenderer() = default;
 
+void SceneRenderer::SetWorkerPool(kb::ecs::WorkerPool* workerPool) noexcept {
+    if (meshSubmitter_ != nullptr) meshSubmitter_->SetWorkerPool(workerPool);
+}
+
 void SceneRenderer::SetMeshCoverageEnabled(bool enabled) noexcept {
     if (meshCoverage_) meshCoverage_->SetEnabled(enabled);
 }

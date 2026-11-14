@@ -316,6 +316,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         .terrainLayersOnly = terrainLayersOnly,
         .batchCommandCache = retainBatches ? &batchReuse : nullptr,
         .motionFrame = motionVectors != nullptr ? motionVectors->motionFrame : 0U,
+        .workerPool = workerPool_,
         }, pipelineScratch_);
         if (reuseAllowed && (diagnostics == nullptr || diagnosticCount == diagnostics->events.size())) {
             auto committedKey = reuseKey;

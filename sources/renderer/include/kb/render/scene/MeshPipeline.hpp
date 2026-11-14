@@ -9,8 +9,10 @@
 #include "kb/render/scene/batch/SceneMeshBatch.hpp"
 #include "kb/render/scene/cache/SceneCachedDrawCommand.hpp"
 
+#include <atomic>
 #include <cstdint>
 #include <cstddef>
+#include <deque>
 #include <optional>
 #include <span>
 #include <unordered_map>
@@ -18,6 +20,10 @@
 
 namespace kb::scene {
 class ScenePortalVisibility;
+}
+
+namespace kb::ecs {
+class WorkerPool;
 }
 
 namespace kb::render {
@@ -98,6 +104,8 @@ struct MeshPipelineBuildDesc {
     // motion of their own are drawn, the rest keep the camera motion the full-screen pass derives from depth.
     // 0 draws every instance.
     std::uint64_t motionFrame = 0U;
+    // Scans the batches of a large pass on these workers; null scans them on the calling thread.
+    kb::ecs::WorkerPool* workerPool = nullptr;
 };
 
 struct MeshCommandLookupKey {
@@ -150,6 +158,56 @@ void EmplaceKeptNode(Map& map, std::vector<typename Map::node_type>& nodes, cons
     map.insert(std::move(node));
 }
 
+// What a worker takes from one instance it admitted to a pass, besides the instance itself.
+struct MeshPipelineScanInstance {
+    std::uint32_t instanceIndex = 0U;
+    std::uint8_t lodLevel = 0U;
+    std::uint16_t depthBucket = 0U;
+    float viewDepth = 0.0F;
+    RenderBoundsSphere worldBounds{};
+};
+
+// The draw command admitted instances join: instances with equal keys share one command.
+struct MeshPipelineScanTarget {
+    MeshCommandLookupKey key{};
+    RenderMaterialHandle material{};
+    const RenderMaterialResource* materialResource = nullptr;
+};
+
+// Consecutive admitted instances of one batch and section that join the same draw command.
+struct MeshPipelineScanRun {
+    std::size_t batchIndex = 0U;
+    std::uint32_t instanceCount = 0U;
+    MeshPipelineScanTarget target{};
+};
+
+// What resolving the mesh of a batch found. A batch that is not drawn builds nothing.
+struct MeshPipelineScanBatch {
+    RenderMeshHandle mesh{};
+    const RenderMeshResource* meshResource = nullptr;
+    bool drawn = false;
+};
+
+// Consecutive batches of a pass that one thread scans ahead of their merge into draw commands, which reads the chunks in
+// batch order. Renderer-owned scratch that keeps its storage between builds.
+struct MeshPipelineScanChunk {
+    std::size_t firstBatch = 0U;
+    std::size_t batchCount = 0U;
+    std::vector<MeshPipelineScanBatch> batches;
+    std::vector<MeshPipelineScanRun> runs;
+    std::vector<MeshPipelineScanInstance> instances;
+    std::vector<std::uint8_t> chainLevels;
+    std::unordered_map<std::uint64_t, MeshPipelineMaterialResolution> materialResolutions;
+    std::vector<std::unordered_map<std::uint64_t, MeshPipelineMaterialResolution>::node_type> materialResolutionNodes;
+    // What the scan counted. A chunk whose scan found a resource missing is not clean: the scan reported nothing, and
+    // the batches of the chunk are built again on the calling thread, which reports in order.
+    SceneRenderSubmitStats stats{};
+    std::uint32_t culledInstanceCount = 0U;
+    bool clean = false;
+    // Set, after the rest, by the thread that scanned the chunk.
+    std::atomic<bool> ready{ false };
+};
+
 struct MeshPipelineBuildResult {
     std::vector<MeshDrawCommand> commands;
     std::vector<MeshDrawCommand> transparentSourceCommands;
@@ -169,6 +227,8 @@ struct MeshPipelineBuildResult {
     std::unordered_map<std::uint64_t, std::uint8_t> detailSwitchLevels;
     std::unordered_map<std::uint64_t, std::uint8_t> detailSwitchPreviousLevels;
     std::uint64_t detailSwitchHistoryRevision = 1U;
+    // A deque, so that the chunks, which a worker is scanning, never move.
+    std::deque<MeshPipelineScanChunk> scanChunks;
     SceneRenderSubmitStats stats{};
 };
 

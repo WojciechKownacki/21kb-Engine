@@ -3,8 +3,13 @@
 #include "kb/render/scene/MeshPipeline.hpp"
 #include "kb/render/scene/batch/SceneMeshBatch.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <span>
+
+namespace kb::ecs {
+class WorkerPool;
+}
 
 namespace kb::render {
 
@@ -27,11 +32,16 @@ struct MeshPassProcessorDesc {
     SceneMeshBatchCommandCache* batchCommandCache = nullptr;
     SceneGpuDrivenFeatureSupport gpuDrivenSupport{};
     std::uint64_t motionFrame = 0U;
+    kb::ecs::WorkerPool* workerPool = nullptr;
 };
 
 class MeshPassProcessor {
 public:
     MeshPassProcessor() = delete;
+
+    // A pass over fewer instances than this is scanned on the calling thread: handing it to workers costs more than
+    // it saves.
+    static constexpr std::size_t ParallelThreshold = 2048U;
 
     static void BuildCommandsInto(const MeshPassProcessorDesc& desc, MeshPipelineBuildResult& result) noexcept;
 };

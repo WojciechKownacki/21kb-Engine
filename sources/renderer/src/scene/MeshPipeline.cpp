@@ -213,6 +213,7 @@ void MeshPipelineProcessor::BuildInto(const MeshPipelineBuildDesc& desc, MeshPip
         .batchCommandCache = batchCache,
         .gpuDrivenSupport = desc.gpuDrivenSupport,
         .motionFrame = desc.motionFrame,
+        .workerPool = desc.workerPool,
     }, result);
     ExpandMeshletCommands(desc, result);
     SceneDrawCommandCache::EndBuild(result.drawCommandCache, desc.pass, result.stats);
