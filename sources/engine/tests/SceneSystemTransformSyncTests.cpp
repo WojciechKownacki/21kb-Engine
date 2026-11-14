@@ -1796,6 +1796,20 @@ void RunSceneBulkMarkModifiedTest() {
     kb::tests::Require(scene.Runtime().TransformRenderProxyUpdateEntities().size() >= objects.size(), "Bulk mark did not emit render proxy updates for the marked entities");
 }
 
+void RunSceneDestroyDuringIterationIsDeferredTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject parent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Parent" });
+    const kb::scene::SceneObject child = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Child", .parent = parent });
+    {
+        const kb::ecs::StructuralChangeValidator::Guard iteration = scene.Runtime().EcsWorld().EnterIteration();
+        scene.Entities().Destroy(parent);
+        kb::tests::Require(scene.Entities().IsAlive(parent) && scene.Entities().IsAlive(child), "Destroy under an active iteration must wait for the end of the update");
+        kb::tests::Require(scene.Hierarchy().Parent(child.Entity()) == parent.Entity(),"A deferred destroy must leave the hierarchy untouched until it is applied");
+    }
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    kb::tests::Require(!scene.Entities().IsAlive(parent) && !scene.Entities().IsAlive(child), "The scene update did not apply a destroy deferred by an active iteration");
+}
+
 void RunSceneBulkCreateObjectsTest() {
     // H8: bulk scene spawn creates one object per descriptor in one call; the
     // structural changes batch through the world's lazy query-plan invalidation.
@@ -2393,6 +2407,7 @@ void RunSceneSystemTransformSyncTests() {
     RunSceneRuntimeTransformHierarchyUsesUnsafeQueryPlanTest();
     RunSceneSystemPhysicsBodyQueryAccessTest();
     RunSceneBulkMarkModifiedTest();
+    RunSceneDestroyDuringIterationIsDeferredTest();
     RunSceneBulkCreateObjectsTest();
     RunSceneTransformGoldenTests();
     RunTransformPassContractTest();

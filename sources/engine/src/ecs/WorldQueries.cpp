@@ -270,6 +270,10 @@ StructuralChangeValidator::Guard World::EnterIteration() const noexcept {
     return structuralChangeValidator_ != nullptr ? structuralChangeValidator_->EnterIteration() : StructuralChangeValidator::Guard{};
 }
 
+bool World::IterationActive() const noexcept {
+    return structuralChangeValidator_ != nullptr && structuralChangeValidator_->ActiveIterationCount() != 0U;
+}
+
 void World::RecordStructuralChange(std::size_t count) const noexcept {
     telemetryState_->counters.structuralChangesSinceReset += count;
     telemetryState_->counters.totalStructuralChanges += count;

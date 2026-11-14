@@ -54,6 +54,7 @@ public:
     [[nodiscard]] SceneEntity CreateEntity(const SceneObjectDesc& desc);
     [[nodiscard]] SceneObject Duplicate(SceneObject object);
     [[nodiscard]] std::vector<SceneObject> Duplicate(std::span<const SceneObject> objects);
+    // Destroys the object and its children now, or at the end of the scene update when the world is being iterated.
     void Destroy(SceneObject object) noexcept;
     void Destroy(SceneEntity entity) noexcept;
     void Destroy(std::span<const SceneObject> objects) noexcept;
