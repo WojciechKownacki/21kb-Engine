@@ -4967,6 +4967,19 @@ void RunCliJsonTests() {
     const CliRun commandHelp = RunCliProgram({ "new", "--help" });
     Require(commandHelp.exitCode == 0 && commandHelp.out == RunCliProgram({ "help", "new" }).out && Contains(commandHelp.out, "--template"),
         "a command followed by --help must print that command's usage");
+    // code: the engine source answers where things are without being read whole.
+    const CliRun codeMap = RunCliProgram({ "code", "map", "--depth", "1" });
+    Require(codeMap.exitCode == 0 && Contains(codeMap.out, "sources/engine/") && Contains(codeMap.out, "sources/renderer/") &&
+            Contains(codeMap.out, " lines)"), "code map must list the engine's folders with their size: " + codeMap.out + codeMap.err);
+    const CliRun codeFind = RunCliProgram({ "code", "find", "--text", "argument list positionals", "--limit", "5" });
+    Require(codeFind.exitCode == 0 && Contains(codeFind.out, "sources/tools/src/private/CliCommon.hpp"),
+        "code find must name the file that deals with the words: " + codeFind.out + codeFind.err);
+    const CliRun codeShow = RunCliProgram({ "code", "show", "--symbol", "ArgumentList" });
+    Require(codeShow.exitCode == 0 && Contains(codeShow.out, "CliCommon.hpp") && Contains(codeShow.out, "class ArgumentList") &&
+            Contains(codeShow.out, "Used in "), "code show must print a declaration and its users: " + codeShow.out + codeShow.err);
+    Require(RunCliProgram({ "code", "show", "--symbol", "NoSuchSymbolAnywhere" + std::string{ "Xq" } }).exitCode == 1 &&
+            RunCliProgram({ "code", "find" }).exitCode == 1 && RunCliProgram({ "code" }).exitCode == 1,
+        "code must fail on an unknown symbol, missing words and a missing action");
     Require(RunCliProgram({}).exitCode == 0, "no command must print the usage and exit 0");
 
     // A command with JSON of its own keeps it, not wrapped; its failures are still a result.

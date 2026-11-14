@@ -390,6 +390,17 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                physics, scripts, characters, combat and AI, 2D maps, checking your
                work); without --topic, the list of guides.
                  [--topic <name>]
+  code         Find your way in the engine's own source without reading all of it; read
+               from the source tree when asked, so it is never out of date.
+                 map  [--path <folder>] [--depth <1-8>]   folders, their size and purpose,
+                                                          and the files of --path
+                 find --text <words> [--path <folder>] [--limit <n>]
+                                                          the files that deal with a topic,
+                                                          each with the line to start at
+                 show --symbol <Name>                     where a type or function is
+                                                          declared, its comment, its
+                                                          declaration, who uses it, its tests
+                 [--engine-root <dir>]  (default: found from kb_cli or the current folder)
   api-check    Compare the current API surface against a committed baseline
                and fail on breaking changes (CI compatibility gate).
                  --baseline <path> [--project <dir>] [--update-baseline]
@@ -670,7 +681,7 @@ std::size_t EditDistance(std::string_view a, std::string_view b) {
 
 // A misspelled option must fail, not be ignored: for these commands the options accepted are the
 // ones their usage block names, plus the global ones. The other commands check their own.
-constexpr std::string_view kUsageCheckedCommands[]{ "entity", "component", "schema", "guide", "api", "validate", "scene-list",
+constexpr std::string_view kUsageCheckedCommands[]{ "entity", "component", "schema", "guide", "code", "api", "validate", "scene-list",
     "scene-attach", "scene-new", "scene-duplicate", "run", "material-new", "material-set", "material-show", "input-action", "prefab", "build", "capture" };
 
 bool RejectUnknownOptions(std::string_view command, const ArgumentList& arguments, std::ostream& err) {
@@ -714,6 +725,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"ai", &RunAiCommand, CliCommandKind::Normal, true, ""},
     {"api", &RunApiCommand, CliCommandKind::Normal, true, "api_reference"},
     {"guide", &RunGuideCommand, CliCommandKind::Normal, true, "guide"},
+    {"code", &RunCodeCommand, CliCommandKind::Normal, true, "code"},
     {"api-check", &RunApiCheckCommand, CliCommandKind::Normal, true, ""},
     {"entity", &RunEntityCommand, CliCommandKind::Normal, true, "entity_edit"},
     {"component", &RunComponentCommand, CliCommandKind::Normal, true, "component_edit"},

@@ -18,6 +18,14 @@ For security problems use [SECURITY.md](SECURITY.md), not a public issue.
 | `scripts/` | packaging, localization, notices; Python tests in `scripts/tests` |
 | `docs/` | topic documents; [docs/library_support_matrix.md](docs/library_support_matrix.md) lists what CI builds and tests |
 
+To find your way without reading the tree, ask the command line; it reads the source when asked, so it is never out of date:
+
+```
+kb_cli code map --path sources/renderer        # folders, their size and purpose, and the files of one folder
+kb_cli code find --text "cascade shadow"         # the files that deal with a topic and the line to start at
+kb_cli code show --symbol NavMeshCrowd           # declaration, comment, users and tests of a type or function
+```
+
 ## Build
 
 Requirements: CMake 3.27 or newer and a C++20 compiler. The configure step downloads Lua, Zstandard,
