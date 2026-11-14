@@ -46,7 +46,7 @@ void ForEachPiece(kb::ecs::WorkerPool* pool, std::size_t count, Body&& body, std
 }
 
 // Handing a pass to the workers and waiting for them costs about this much, whatever the pass does.
-constexpr double kHandOverNanoseconds = 60000.0;
+constexpr double kHandOverNanoseconds = 15000.0;
 
 }
 

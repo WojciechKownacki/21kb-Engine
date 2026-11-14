@@ -16,6 +16,12 @@
 #include <utility>
 #include <vector>
 
+#if defined(_M_X64) || defined(_M_IX86) || defined(__x86_64__) || defined(__i386__)
+#include <immintrin.h>
+#elif defined(_MSC_VER) && defined(_M_ARM64)
+#include <intrin.h>
+#endif
+
 #if defined(_WIN32)
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -179,6 +185,41 @@ void JobFence::Wait() const {
     }
 }
 
+namespace {
+
+// How long a thread watches for the next wake before it sleeps. Waking a sleeping thread costs tens of microseconds,
+// which is more than many passes take; a phone gets a shorter watch for its battery.
+#if defined(__ANDROID__) || (defined(__APPLE__) && !defined(__MACH__))
+constexpr std::chrono::microseconds kSpinBeforeSleep{ 20 };
+#else
+constexpr std::chrono::microseconds kSpinBeforeSleep{ 50 };
+#endif
+
+inline void RelaxProcessor() noexcept {
+#if defined(_M_X64) || defined(_M_IX86) || defined(__x86_64__) || defined(__i386__)
+    _mm_pause();
+#elif defined(__aarch64__) || defined(_M_ARM64)
+#if defined(_MSC_VER)
+    __yield();
+#else
+    __asm__ __volatile__("yield");
+#endif
+#endif
+}
+
+void SpinWhileUnchanged(const std::atomic<std::uint64_t>& epoch, std::uint64_t seen) noexcept {
+    const auto deadline = std::chrono::steady_clock::now() + kSpinBeforeSleep;
+    for (;;) {
+        for (int round = 0; round < 64; ++round) {
+            if (epoch.load(std::memory_order_acquire) != seen) return;
+            RelaxProcessor();
+        }
+        if (std::chrono::steady_clock::now() >= deadline) return;
+    }
+}
+
+} // namespace
+
 class WorkerPool::WorkerPoolState {
 public:
     using DispatchClock = std::chrono::steady_clock;
@@ -233,6 +274,7 @@ public:
             }
         } catch (...) {
             stopping_ = true;
+            workEpoch_.fetch_add(1U, std::memory_order_release);
             batchAvailable_.notify_all();
             lock.unlock();
             JoinWorkers();
@@ -250,6 +292,7 @@ public:
 
         if (startupException_ != nullptr) {
             stopping_ = true;
+            workEpoch_.fetch_add(1U, std::memory_order_release);
             batchAvailable_.notify_all();
             lock.unlock();
             JoinWorkers();
@@ -273,6 +316,7 @@ public:
                 return;
             }
             stopping_ = true;
+            workEpoch_.fetch_add(1U, std::memory_order_release);
             batchAvailable_.notify_all();
         }
 
@@ -322,6 +366,7 @@ public:
         if (cancelledCompletion != nullptr) {
             cancelledCompletion->Complete(cancelledCompletionException);
         }
+        finishEpoch_.fetch_add(1U, std::memory_order_release);
         batchFinished_.notify_all();
     }
 
@@ -345,7 +390,7 @@ public:
             if (!running_) {
                 throw std::logic_error("ECS worker pool must be started before running jobs");
             }
-            batchFinished_.wait(lock, [this] {
+            WaitFinished(lock, [this] {
                 return !batchActive_;
             });
             jobs_ = jobs.data();
@@ -360,11 +405,12 @@ public:
             batchActive_ = true;
         }
 
+        workEpoch_.fetch_add(1U, std::memory_order_release);
         batchAvailable_.notify_all();
         EndDispatchScheduleTiming(dispatchStartedAt);
 
         std::unique_lock lock{ mutex_ };
-        batchFinished_.wait(lock, [this] {
+        WaitFinished(lock, [this] {
             return !batchActive_;
         });
 
@@ -402,7 +448,7 @@ public:
             if (!running_) {
                 throw std::logic_error("ECS worker pool must be started before running batches");
             }
-            batchFinished_.wait(lock, [this] {
+            WaitFinished(lock, [this] {
                 return !batchActive_;
             });
 
@@ -432,11 +478,12 @@ public:
             batchActive_ = true;
         }
 
+        workEpoch_.fetch_add(1U, std::memory_order_release);
         batchAvailable_.notify_all();
         EndDispatchScheduleTiming(dispatchStartedAt);
 
         std::unique_lock lock{ mutex_ };
-        batchFinished_.wait(lock, [this] {
+        WaitFinished(lock, [this] {
             return !batchActive_;
         });
 
@@ -474,7 +521,7 @@ public:
             if (!running_) {
                 throw std::logic_error("ECS worker pool must be started before running chunks");
             }
-            batchFinished_.wait(lock, [this] {
+            WaitFinished(lock, [this] {
                 return !batchActive_;
             });
 
@@ -504,11 +551,12 @@ public:
             batchActive_ = true;
         }
 
+        workEpoch_.fetch_add(1U, std::memory_order_release);
         batchAvailable_.notify_all();
         EndDispatchScheduleTiming(dispatchStartedAt);
 
         std::unique_lock lock{ mutex_ };
-        batchFinished_.wait(lock, [this] {
+        WaitFinished(lock, [this] {
             return !batchActive_;
         });
 
@@ -543,7 +591,7 @@ public:
             if (!running_) {
                 throw std::logic_error("ECS worker pool must be started before submitting jobs");
             }
-            batchFinished_.wait(lock, [this] {
+            WaitFinished(lock, [this] {
                 return !batchActive_;
             });
 
@@ -561,6 +609,7 @@ public:
             batchActive_ = true;
         }
 
+        workEpoch_.fetch_add(1U, std::memory_order_release);
         batchAvailable_.notify_all();
         return JobHandle{ std::move(completion) };
     }
@@ -586,7 +635,7 @@ public:
             if (!running_) {
                 throw std::logic_error("ECS worker pool must be started before submitting batches");
             }
-            batchFinished_.wait(lock, [this] {
+            WaitFinished(lock, [this] {
                 return !batchActive_;
             });
 
@@ -618,6 +667,7 @@ public:
             batchActive_ = true;
         }
 
+        workEpoch_.fetch_add(1U, std::memory_order_release);
         batchAvailable_.notify_all();
         return JobHandle{ std::move(completion) };
     }
@@ -643,7 +693,7 @@ public:
             if (!running_) {
                 throw std::logic_error("ECS worker pool must be started before submitting chunks");
             }
-            batchFinished_.wait(lock, [this] {
+            WaitFinished(lock, [this] {
                 return !batchActive_;
             });
 
@@ -675,6 +725,7 @@ public:
             batchActive_ = true;
         }
 
+        workEpoch_.fetch_add(1U, std::memory_order_release);
         batchAvailable_.notify_all();
         return JobHandle{ std::move(completion) };
     }
@@ -1065,6 +1116,13 @@ private:
             std::size_t workerCount = config_.workerCount;
             {
                 std::unique_lock lock{ mutex_ };
+                if (!stopping_ && !HasPendingWorkLocked(workerIndex)) {
+                    // The next pass of a frame usually follows within microseconds: stay awake for it.
+                    const std::uint64_t seen = workEpoch_.load(std::memory_order_acquire);
+                    lock.unlock();
+                    SpinWhileUnchanged(workEpoch_, seen);
+                    lock.lock();
+                }
                 batchAvailable_.wait(lock, [this, workerIndex] {
                     return stopping_ || HasPendingWorkLocked(workerIndex);
                 });
@@ -1147,8 +1205,10 @@ private:
                     CompleteDispatchTelemetryLocked();
                     CompleteActiveWorkLocked();
                     ClearActiveWorkLocked();
+                    finishEpoch_.fetch_add(1U, std::memory_order_release);
                     batchFinished_.notify_all();
                 } else if (HasAnyPendingWorkLocked()) {
+                    workEpoch_.fetch_add(1U, std::memory_order_release);
                     batchAvailable_.notify_one();
                 }
             }
@@ -1304,6 +1364,7 @@ private:
         }
 
         remainingWork_ = pendingWork > remainingWork_ ? 0U : remainingWork_ - pendingWork;
+        workEpoch_.fetch_add(1U, std::memory_order_release);
         batchAvailable_.notify_all();
     }
 
@@ -1346,6 +1407,21 @@ private:
 
     WorkerPoolConfig config_;
     mutable std::mutex mutex_;
+    // Waits for `finished` like the condition does, after watching a moment for the workers to get there.
+    template <typename Finished>
+    void WaitFinished(std::unique_lock<std::mutex>& lock, Finished finished) {
+        if (!finished()) {
+            const std::uint64_t seen = finishEpoch_.load(std::memory_order_acquire);
+            lock.unlock();
+            SpinWhileUnchanged(finishEpoch_, seen);
+            lock.lock();
+        }
+        batchFinished_.wait(lock, finished);
+    }
+
+    // Counted up with every wake of the two conditions below, so a waiter can watch for the next one without sleeping.
+    std::atomic<std::uint64_t> workEpoch_{ 0U };
+    std::atomic<std::uint64_t> finishEpoch_{ 0U };
     std::condition_variable batchAvailable_;
     std::condition_variable batchFinished_;
     std::condition_variable startupComplete_;

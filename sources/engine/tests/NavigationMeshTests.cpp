@@ -1801,7 +1801,7 @@ void RunNavigationCrowdBenchmark() {
               << " ms (slowest " << twentyThousand.worst << " ms over 600 steps)\n";
     const CrowdRun fiveThousandStages = RunCrowd(arena, kHalf, 5000, 240);
     const CrowdRun fiveThousandLodStages = RunCrowd(arena, kHalf, 5000, 240, { DVec3{ -50.0, 0.0, -50.0 } });
-    for (const auto& [label, stages] : { std::pair{ "5000 agents", fiveThousandStages.stages }, std::pair{ "5000 agents with level of detail", fiveThousandLodStages.stages },
+    for (const auto& [label, stages] : { std::pair{ "1000 agents", thousand.stages }, std::pair{ "5000 agents", fiveThousandStages.stages }, std::pair{ "5000 agents with level of detail", fiveThousandLodStages.stages },
              std::pair{ "10000 agents", tenThousand.stages }, std::pair{ "10000 agents on one thread", tenThousandOneThread.stages },
              std::pair{ "the slowest of 20000 agents", twentyThousand.worstStages } }) {
         std::cout << "navigation: stages of a step, " << label << ": sync " << stages.syncMilliseconds << " ms, paths " << stages.pathMilliseconds
