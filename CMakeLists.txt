@@ -14,6 +14,12 @@ set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS deployment ta
 
 project(Engine21kb LANGUAGES C CXX)
 
+# Outside a developer command prompt every configure check fails to link and the
+# wrong answers stay in the cache, which later breaks third-party builds.
+if(MSVC AND CMAKE_GENERATOR MATCHES "Ninja|Makefiles" AND "$ENV{LIB}" STREQUAL "")
+    message(FATAL_ERROR "The MSVC environment is not set (LIB is empty). Configure from a developer command prompt or through scripts/build_with_lock.py.")
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
