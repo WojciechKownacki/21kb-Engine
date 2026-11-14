@@ -9,9 +9,17 @@
 #include "script/lua/PucLuaWatchdogCore.hpp"
 
 // The VM's own record of what the thread is running (interpreter, compiled code, a C function) is not in its public API.
+// The header is C that uses compiler extensions the strict first-party warnings reject.
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
+#endif
 extern "C" {
 #include <lj_obj.h>
 }
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
 #include "engine/script/PucLuaScriptRuntime.hpp"
 
