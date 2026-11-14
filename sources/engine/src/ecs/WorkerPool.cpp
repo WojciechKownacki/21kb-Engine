@@ -41,6 +41,29 @@ namespace {
     return static_cast<std::size_t>(std::max(1U, std::thread::hardware_concurrency()));
 }
 
+// The logical processors this process may run on: fewer than the machine has when the process is confined to some of
+// them (an affinity mask, a container), and workers beyond that number only take turns on the same cores.
+[[nodiscard]] std::size_t UsableThreadCount() noexcept {
+    const std::size_t hardware = HardwareThreadCount();
+#if defined(_WIN32)
+    DWORD_PTR processMask = 0;
+    DWORD_PTR systemMask = 0;
+    if (GetProcessAffinityMask(GetCurrentProcess(), &processMask, &systemMask) != 0 && processMask != 0) {
+        std::size_t allowed = 0U;
+        for (DWORD_PTR mask = processMask; mask != 0; mask &= mask - 1U) ++allowed;
+        return std::min(hardware, allowed);
+    }
+#elif defined(__linux__)
+    cpu_set_t allowed;
+    CPU_ZERO(&allowed);
+    if (sched_getaffinity(0, sizeof(allowed), &allowed) == 0) {
+        const int count = CPU_COUNT(&allowed);
+        if (count > 0) return std::min(hardware, static_cast<std::size_t>(count));
+    }
+#endif
+    return hardware;
+}
+
 void PinCurrentThreadToCore(std::size_t coreIndex) {
 #if defined(_WIN32)
     if (coreIndex >= std::numeric_limits<DWORD_PTR>::digits) {
@@ -1657,8 +1680,8 @@ WorkerPoolDispatchTelemetry WorkerPool::DispatchTelemetry() const noexcept {
 }
 
 std::size_t WorkerPool::DefaultWorkerCount() noexcept {
-    const std::size_t hardwareThreads = HardwareThreadCount();
-    return hardwareThreads <= 1U ? 1U : hardwareThreads - 1U;
+    const std::size_t usableThreads = UsableThreadCount();
+    return usableThreads <= 1U ? 1U : usableThreads - 1U;
 }
 
 std::size_t WorkerPool::ResolveWorkerCount(std::size_t requestedWorkerCount) noexcept {
