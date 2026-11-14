@@ -195,6 +195,9 @@ constexpr std::chrono::microseconds kSpinBeforeSleep{ 20 };
 constexpr std::chrono::microseconds kSpinBeforeSleep{ 50 };
 #endif
 
+// Two dispatches closer than this belong to one burst of passes.
+constexpr std::int64_t kCloseSuccessionNanoseconds = 300'000;
+
 inline void RelaxProcessor() noexcept {
 #if defined(_M_X64) || defined(_M_IX86) || defined(__x86_64__) || defined(__i386__)
     _mm_pause();
@@ -274,7 +277,7 @@ public:
             }
         } catch (...) {
             stopping_ = true;
-            workEpoch_.fetch_add(1U, std::memory_order_release);
+            NoteWorkPublished();
             batchAvailable_.notify_all();
             lock.unlock();
             JoinWorkers();
@@ -292,7 +295,7 @@ public:
 
         if (startupException_ != nullptr) {
             stopping_ = true;
-            workEpoch_.fetch_add(1U, std::memory_order_release);
+            NoteWorkPublished();
             batchAvailable_.notify_all();
             lock.unlock();
             JoinWorkers();
@@ -316,7 +319,7 @@ public:
                 return;
             }
             stopping_ = true;
-            workEpoch_.fetch_add(1U, std::memory_order_release);
+            NoteWorkPublished();
             batchAvailable_.notify_all();
         }
 
@@ -405,7 +408,7 @@ public:
             batchActive_ = true;
         }
 
-        workEpoch_.fetch_add(1U, std::memory_order_release);
+        NoteWorkPublished();
         batchAvailable_.notify_all();
         EndDispatchScheduleTiming(dispatchStartedAt);
 
@@ -478,7 +481,7 @@ public:
             batchActive_ = true;
         }
 
-        workEpoch_.fetch_add(1U, std::memory_order_release);
+        NoteWorkPublished();
         batchAvailable_.notify_all();
         EndDispatchScheduleTiming(dispatchStartedAt);
 
@@ -551,7 +554,7 @@ public:
             batchActive_ = true;
         }
 
-        workEpoch_.fetch_add(1U, std::memory_order_release);
+        NoteWorkPublished();
         batchAvailable_.notify_all();
         EndDispatchScheduleTiming(dispatchStartedAt);
 
@@ -609,7 +612,7 @@ public:
             batchActive_ = true;
         }
 
-        workEpoch_.fetch_add(1U, std::memory_order_release);
+        NoteWorkPublished();
         batchAvailable_.notify_all();
         return JobHandle{ std::move(completion) };
     }
@@ -667,7 +670,7 @@ public:
             batchActive_ = true;
         }
 
-        workEpoch_.fetch_add(1U, std::memory_order_release);
+        NoteWorkPublished();
         batchAvailable_.notify_all();
         return JobHandle{ std::move(completion) };
     }
@@ -725,7 +728,7 @@ public:
             batchActive_ = true;
         }
 
-        workEpoch_.fetch_add(1U, std::memory_order_release);
+        NoteWorkPublished();
         batchAvailable_.notify_all();
         return JobHandle{ std::move(completion) };
     }
@@ -1116,8 +1119,8 @@ private:
             std::size_t workerCount = config_.workerCount;
             {
                 std::unique_lock lock{ mutex_ };
-                if (!stopping_ && !HasPendingWorkLocked(workerIndex)) {
-                    // The next pass of a frame usually follows within microseconds: stay awake for it.
+                if (!stopping_ && !HasPendingWorkLocked(workerIndex) && passesFollowClosely_.load(std::memory_order_relaxed)) {
+                    // Passes are coming one right after another: stay awake for the next one.
                     const std::uint64_t seen = workEpoch_.load(std::memory_order_acquire);
                     lock.unlock();
                     SpinWhileUnchanged(workEpoch_, seen);
@@ -1208,7 +1211,7 @@ private:
                     finishEpoch_.fetch_add(1U, std::memory_order_release);
                     batchFinished_.notify_all();
                 } else if (HasAnyPendingWorkLocked()) {
-                    workEpoch_.fetch_add(1U, std::memory_order_release);
+                    NoteWorkPublished();
                     batchAvailable_.notify_one();
                 }
             }
@@ -1364,7 +1367,7 @@ private:
         }
 
         remainingWork_ = pendingWork > remainingWork_ ? 0U : remainingWork_ - pendingWork;
-        workEpoch_.fetch_add(1U, std::memory_order_release);
+        NoteWorkPublished();
         batchAvailable_.notify_all();
     }
 
@@ -1407,6 +1410,17 @@ private:
 
     WorkerPoolConfig config_;
     mutable std::mutex mutex_;
+    // Counts a wake of the workers and notes whether work is arriving in quick succession (the passes of one update)
+    // or now and then (one dispatch a frame). Workers watch for the next wake only in the first case, so an idle pool
+    // sleeps at once and many pools on one machine do not keep its cores busy for nothing.
+    void NoteWorkPublished() noexcept {
+        const std::int64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        const std::int64_t previous = lastPublishNanoseconds_.exchange(now, std::memory_order_relaxed);
+        passesFollowClosely_.store(now - previous < kCloseSuccessionNanoseconds, std::memory_order_relaxed);
+        workEpoch_.fetch_add(1U, std::memory_order_release);
+    }
+
     // Waits for `finished` like the condition does, after watching a moment for the workers to get there.
     template <typename Finished>
     void WaitFinished(std::unique_lock<std::mutex>& lock, Finished finished) {
@@ -1422,6 +1436,8 @@ private:
     // Counted up with every wake of the two conditions below, so a waiter can watch for the next one without sleeping.
     std::atomic<std::uint64_t> workEpoch_{ 0U };
     std::atomic<std::uint64_t> finishEpoch_{ 0U };
+    std::atomic<std::int64_t> lastPublishNanoseconds_{ 0 };
+    std::atomic<bool> passesFollowClosely_{ false };
     std::condition_variable batchAvailable_;
     std::condition_variable batchFinished_;
     std::condition_variable startupComplete_;

@@ -134,7 +134,10 @@ private:
     void AttachWorkers(dtCrowd& crowd);
 
     std::vector<ProfileCrowd> crowds_;
-    std::map<std::uint64_t, AgentRecord> agents_;
+    // Sorted by id, like the agents of a step: the usual step, with the same agents as the last, walks it in order.
+    std::vector<std::pair<std::uint64_t, AgentRecord>> agents_;
+    std::vector<std::pair<std::uint64_t, AgentRecord>> nextAgents_;
+    [[nodiscard]] const AgentRecord* FindAgent(std::uint64_t id) const noexcept;
     std::map<std::uint64_t, ObstacleRecord> obstacles_;
     // Workers of the crowds' per-member passes; none when they run on the calling thread.
     std::unique_ptr<kb::ecs::WorkerPool> workers_;

@@ -235,19 +235,24 @@ void NavMeshCrowd::Clear() {
     stats_ = {};
 }
 
+const NavMeshCrowd::AgentRecord* NavMeshCrowd::FindAgent(std::uint64_t id) const noexcept {
+    const auto found = std::ranges::lower_bound(agents_, id, {}, [](const auto& entry) { return entry.first; });
+    return found != agents_.end() && found->first == id ? &found->second : nullptr;
+}
+
 bool NavMeshCrowd::OnLink(std::uint64_t id) const noexcept {
-    const auto found = agents_.find(id);
-    return found != agents_.end() && found->second.onLink;
+    const AgentRecord* found = FindAgent(id);
+    return found != nullptr && found->onLink;
 }
 
 std::vector<Vec3> NavMeshCrowd::Corners(std::uint64_t id) const {
     std::vector<Vec3> corners;
-    const auto found = agents_.find(id);
-    if (found == agents_.end() || found->second.index < 0 || found->second.arrived || found->second.onLink ||
-        found->second.profile >= crowds_.size() || !crowds_[found->second.profile].crowd) {
+    const AgentRecord* found = FindAgent(id);
+    if (found == nullptr || found->index < 0 || found->arrived || found->onLink ||
+        found->profile >= crowds_.size() || !crowds_[found->profile].crowd) {
         return corners;
     }
-    const dtCrowdAgent* member = crowds_[found->second.profile].crowd->getAgent(found->second.index);
+    const dtCrowdAgent* member = crowds_[found->profile].crowd->getAgent(found->index);
     if (member == nullptr || member->state != DT_CROWDAGENT_STATE_WALKING) return corners;
     for (int corner = 0; corner < member->ncorners; ++corner) {
         corners.push_back(FromArray(&member->cornerVerts[static_cast<std::size_t>(corner) * 3U]));
@@ -325,21 +330,32 @@ void NavMeshCrowd::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
     // id order, so one walk over them does it.
     std::vector<AgentRecord*>& records = records_;
     records.assign(agents.size(), nullptr);
-    auto known = agents_.begin();
-    for (std::size_t index = 0U; index < agents.size(); ++index) {
-        const std::uint64_t id = agents[index].id;
-        while (known != agents_.end() && known->first < id) {
-            Detach(known->second);
-            known = agents_.erase(known);
+    bool sameAgents = agents_.size() == agents.size();
+    for (std::size_t index = 0U; sameAgents && index < agents.size(); ++index) {
+        sameAgents = agents_[index].first == agents[index].id;
+    }
+    if (!sameAgents) {
+        // Agents came or went: the records are merged into a new list in id order.
+        std::vector<std::pair<std::uint64_t, AgentRecord>>& next = nextAgents_;
+        next.clear();
+        next.reserve(agents.size());
+        auto known = agents_.begin();
+        for (const NavMeshCrowdAgentInput& input : agents) {
+            while (known != agents_.end() && known->first < input.id) {
+                Detach(known->second);
+                ++known;
+            }
+            if (known != agents_.end() && known->first == input.id) {
+                next.push_back(std::move(*known));
+                ++known;
+            } else {
+                next.emplace_back(input.id, AgentRecord{});
+            }
         }
-        if (known == agents_.end() || known->first != id) known = agents_.emplace_hint(known, id, AgentRecord{});
-        records[index] = &known->second;
-        ++known;
+        for (; known != agents_.end(); ++known) Detach(known->second);
+        agents_.swap(next);
     }
-    while (known != agents_.end()) {
-        Detach(known->second);
-        known = agents_.erase(known);
-    }
+    for (std::size_t index = 0U; index < agents.size(); ++index) records[index] = &agents_[index].second;
     for (auto record = obstacles_.begin(); record != obstacles_.end();) {
         if (std::ranges::binary_search(obstacles, record->first, {}, &NavMeshCrowdObstacle::id)) {
             ++record;
@@ -450,6 +466,15 @@ void NavMeshCrowd::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
 
     // 5. Members follow their agents: join, follow moves made outside the crowd, take parameters.
     NavAreaFilter filter;
+    // Only an agent that joins, returns from a link or asks for a path searches the mesh, so the filter is set up
+    // for an area set when one of them needs it, not for every agent.
+    std::optional<kb::scene::NavAreaMask> filterAreas;
+    const auto useFilter = [&](kb::scene::NavAreaMask areas) {
+        if (filterAreas != areas) {
+            runtime.ConfigureFilter(filter, areas);
+            filterAreas = areas;
+        }
+    };
     std::vector<std::size_t>& waiting = waiting_;
     waiting.clear();
     for (std::size_t index = 0U; index < agents.size(); ++index) {
@@ -467,7 +492,6 @@ void NavMeshCrowd::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
             output.status = record.status;
             continue;
         }
-        runtime.ConfigureFilter(filter, input.agent.areaMask);
         float focusDistance = 0.0F;
         if (!focuses.empty()) {
             focusDistance = std::numeric_limits<float>::max();
@@ -495,6 +519,7 @@ void NavMeshCrowd::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
         const dtCrowdAgentParams params = AgentParams(input.agent, record.filter, static_cast<unsigned char>(flags), settings);
         const auto attach = [&](Vec3 position) {
             Detach(record);
+            useFilter(input.agent.areaMask);
             const auto nearest = runtime.Nearest(record.profile, position, kSearchExtents, filter);
             if (!nearest) {
                 record.status = NavPathStatus::Failed;
@@ -517,6 +542,7 @@ void NavMeshCrowd::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
             const auto* link = record.activeLink ? runtime.LinkById(record.activeLink->id) : nullptr;
             const float radius = record.activeLink ? std::max(record.activeLink->radius, 0.1F) : 0.1F;
             const Vec3 extents{ radius, std::max(input.agent.height, 1.0F), radius };
+            useFilter(input.agent.areaMask);
             if (link == nullptr || !record.activeLink || !(*link == *record.activeLink) ||
                 !runtime.Nearest(record.profile, record.linkEnd, extents, filter)) {
                 // Detour's in-flight animation otherwise continues toward a removed
@@ -594,7 +620,7 @@ void NavMeshCrowd::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
         }
         ++stats_.pathRequests;
         dtCrowd& crowd = *crowds_[record.profile].crowd;
-        runtime.ConfigureFilter(filter, agents[index].agent.areaMask);
+        useFilter(agents[index].agent.areaMask);
         const auto target = runtime.Nearest(record.profile, agents[index].agent.destination, kSearchExtents, filter);
         record.requested = true;
         record.arrived = false;
