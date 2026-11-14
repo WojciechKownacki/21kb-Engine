@@ -141,7 +141,7 @@ namespace {
 
 // The hook raises the error at the first instruction after the interruption, and at every later one while the entry
 // runs, so a script cannot catch the error and carry on.
-void WatchdogHook(lua_State* state, lua_Debug* /*record*/) {
+void WatchdogHook(lua_State* state, lua_Debug* record) {
     auto* impl = static_cast<PucLuaRunaway::Impl*>(LuaStateSlot(state)->runaway);
     if (impl == nullptr || !impl->core.Interrupted()) { // an interruption of an entry that has ended
         lua_sethook(state, nullptr, 0, 0);
@@ -153,6 +153,11 @@ void WatchdogHook(lua_State* state, lua_Debug* /*record*/) {
         lua_sethook(state, nullptr, 0, 0);
         static_cast<void>(lua_yield(state, 0));
         return;
+    }
+    // A hook is not a frame, so the position luaL_error would add is the caller's; the record names the line that ran.
+    if (lua_getinfo(state, "Sl", record) != 0 && record->currentline > 0) {
+        lua_pushfstring(state, "%s:%d: lua execution budget exceeded", record->short_src, record->currentline);
+        lua_error(state);
     }
     luaL_error(state, "lua execution budget exceeded");
 }

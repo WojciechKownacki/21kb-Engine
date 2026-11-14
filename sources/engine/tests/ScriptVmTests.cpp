@@ -211,6 +211,8 @@ void RunBudgetTest() {
         const kb::script::ScriptRuntimeExecutionResult& result = rig.Frame();
         Require(!result.diagnostics.empty() && Contains(result.diagnostics.front().message, "budget"), "A loop that never ends must be stopped by the execution budget");
         Require(!result.emittedEvents.empty(), "The objects that stay within the budget must still run");
+        const std::string& trace = result.diagnostics.front().stackTrace;
+        Require(Contains(trace, "Test.lua:3:") || Contains(trace, "Test.lua:4:"), ("The trace of a stopped loop must name its line: " + trace).c_str());
     }
     const kb::script::PucLuaLoadResult load = rig.host.LuaRuntime().LoadScript(kb::assets::AssetId{ 9703U }, "while true do end\n", "Spin.lua");
     Require(!load.succeeded && Contains(load.error, "budget"), "Code at the top of a script runs under the budget too");
