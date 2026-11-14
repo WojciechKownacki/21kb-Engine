@@ -320,7 +320,9 @@ void TestBuildFingerprintRejectedBeforeCreate() {
     const auto marker = std::filesystem::temp_directory_path() / "21kb_build_fingerprint_create.marker";
     std::filesystem::remove(marker);
     const ScopedEnvironmentVariable environment{"KB_OLD_ENGINE_MODULE_ABI_CREATE_MARKER", marker.string()};
-    for (const auto& [path, expected] : fixtures) {
+    for (const auto& fixture : fixtures) {
+        const char* const path = fixture.first;
+        const char* const expected = fixture.second;
         Require(std::filesystem::is_regular_file(path), "ABI fixture missing");
         kb::project::ProjectDescriptor descriptor;
         descriptor.disableEnginePluginsByDefault = true;

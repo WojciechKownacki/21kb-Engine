@@ -20,9 +20,9 @@ public:
         const auto pending = state_->pending.fetch_add(size) + size;
         auto peak = state_->peak.load();
         while (peak < pending && !state_->peak.compare_exchange_weak(peak, pending)) {}
-        const auto* memory = bgfx::makeRef(block->bytes.get(), size, &Release, block.get());
-        static_cast<void>(block.release());
-        return memory;
+        // The renderer frees the block through Release once the upload is done.
+        Block* const owned = block.release();
+        return bgfx::makeRef(owned->bytes.get(), size, &Release, owned);
     }
 
     [[nodiscard]] std::uint64_t PendingBytes() const noexcept { return state_->pending.load(); }

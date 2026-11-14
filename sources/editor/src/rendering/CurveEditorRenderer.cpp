@@ -60,13 +60,15 @@ void CurveEditorRenderer::Paint(HDC dc, const RECT& rect, const CurveEditorState
 
     const COLORREF gridColor = ThemeColor(theme.gridLine);
     const float timeStep = GridStep(state.TimeEnd() - state.TimeStart(), 8.0F);
-    for (float time = std::ceil(state.TimeStart() / timeStep) * timeStep; time <= state.TimeEnd(); time += timeStep) {
+    for (long line = std::lround(std::ceil(state.TimeStart() / timeStep)); static_cast<float>(line) * timeStep <= state.TimeEnd(); ++line) {
+        const float time = static_cast<float>(line) * timeStep;
         const int x = static_cast<int>(std::lround(state.XAt(time)));
         GdiDrawing::FillRectColor(dc, RECT{ x, rect.top, x + 1, rect.bottom }, gridColor);
         Label(dc, RECT{ x + 3, rect.bottom - 16, x + 70, rect.bottom }, std::abs(time) < timeStep * 1.0e-3F ? 0.0F : time, DT_LEFT | DT_BOTTOM);
     }
     const float valueStep = GridStep(state.ValueEnd() - state.ValueStart(), 6.0F);
-    for (float value = std::ceil(state.ValueStart() / valueStep) * valueStep; value <= state.ValueEnd(); value += valueStep) {
+    for (long line = std::lround(std::ceil(state.ValueStart() / valueStep)); static_cast<float>(line) * valueStep <= state.ValueEnd(); ++line) {
+        const float value = static_cast<float>(line) * valueStep;
         const int y = static_cast<int>(std::lround(state.YAt(value)));
         GdiDrawing::FillRectColor(dc, RECT{ rect.left, y, rect.right, y + 1 }, gridColor);
         Label(dc, RECT{ rect.left + 3, y - 14, rect.left + 70, y }, std::abs(value) < valueStep * 1.0e-3F ? 0.0F : value, DT_LEFT | DT_BOTTOM);

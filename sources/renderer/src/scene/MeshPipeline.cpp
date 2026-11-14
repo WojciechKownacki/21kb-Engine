@@ -45,8 +45,8 @@ void ExpandMeshletCommands(const MeshPipelineBuildDesc& desc, MeshPipelineBuildR
             valid = valid && nextIndex == static_cast<std::uint64_t>(command.indexStart) + command.indexCount;
         }
         if (!valid) {
-            expanded.push_back(std::move(command));
             if (command.gpuFrustumCull && mesh != nullptr && mesh->meshletCullingEnabled) ++result.stats.gpuDrivenFallbackCount;
+            expanded.push_back(std::move(command));
             continue;
         }
         for (std::uint32_t i = 0U; i < command.meshletCount; ++i) {

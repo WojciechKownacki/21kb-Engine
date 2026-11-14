@@ -31,7 +31,9 @@ bool Build(const VectorShape2DAsset& shape,std::vector<SurfaceGeometryVertex>& v
         for(const auto p:polygon.points) vertices.push_back(Vertex(p,(p[0]-low[0])/std::max(high[0]-low[0],0.00001F),(p[1]-low[1])/std::max(high[1]-low[1],0.00001F)));
         indices=std::move(polygon.indices);return true;
     }
-    const std::size_t count=shape.closed?shape.points.size():shape.points.size()-1;
+    const std::size_t pointCount=shape.points.size();
+    if(pointCount<2U) {error="vector shape needs at least two points";return false;}
+    const std::size_t count=shape.closed?pointCount:pointCount-1U;
     std::vector<Point> normals;normals.reserve(count);
     std::vector<float> distances{0};float total=0;
     for(std::size_t i=0;i<count;++i) {

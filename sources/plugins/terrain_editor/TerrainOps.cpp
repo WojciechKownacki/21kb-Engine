@@ -336,10 +336,11 @@ void ReadBrushSettings(Reader& reader, TerrainOpContext& context, TerrainBrushSe
         const float length = std::hypot(to.x - from.x, to.z - from.z);
         float travelled = untilNext;
         sinceLast += length;
-        for (; travelled <= length; travelled += step) {
+        while (travelled <= length) {
             const float t = travelled / length;
             stamp({ std::lerp(from.x, to.x, t), std::lerp(from.z, to.z, t) });
             sinceLast = length - travelled;
+            travelled += step;
         }
         untilNext = travelled - length;
     }

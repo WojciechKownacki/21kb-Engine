@@ -176,7 +176,7 @@ private:
         }
         auto wrapper = std::make_unique<DynamicEngineModule>(loaded.loadedPath,
             std::move(loaded.library), module.get(), destroy, std::move(metadata));
-        static_cast<void>(module.release());
+        [[maybe_unused]] auto* const adopted = module.release(); // the wrapper destroys it from here on
         return wrapper;
     } catch (const std::exception& error) {
         diagnostics.push_back("plugin '" + path.string() + "' failed during " + step + ": " + error.what());

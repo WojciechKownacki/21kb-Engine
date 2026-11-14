@@ -802,7 +802,8 @@ void RunCurveTangentTest() {
     Curve legacy;
     kb::tests::Require(kb::math::Deserialize(legacyBytes, legacy) && legacy.keyframes.size() == 3U &&
             legacy.keyframes[0].tangentMode == CurveTangentMode::Easing, "Version 1 curve bytes must load with easing keys");
-    for (float t = -0.5F; t <= 3.5F; t += 0.0625F) {
+    for (int sample = 0; sample <= 64; ++sample) {
+        const float t = -0.5F + static_cast<float>(sample) * 0.0625F;
         const float expected = kb::math::Evaluate(eased, t);
         const float loaded = kb::math::Evaluate(legacy, t);
         kb::tests::Require(std::memcmp(&expected, &loaded, sizeof(float)) == 0, "A version 1 curve must evaluate bit-identically after loading");

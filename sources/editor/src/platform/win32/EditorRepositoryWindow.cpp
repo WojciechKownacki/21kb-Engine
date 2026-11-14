@@ -211,10 +211,11 @@ private:
         ShowStatus(StatusKind::Busy, std::move(busyText));
         std::thread([target = window_, job = std::move(job)]() {
             auto* result = new EditorRepositoryResult(job());
+            // The window deletes the result when it handles the message.
             if (PostMessageW(target, kJobDoneMessage, 0U, reinterpret_cast<LPARAM>(result)) == FALSE) {
                 delete result;
             }
-        }).detach();
+        }).detach(); // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
     }
 
     void FinishJob(const EditorRepositoryResult& result) {
