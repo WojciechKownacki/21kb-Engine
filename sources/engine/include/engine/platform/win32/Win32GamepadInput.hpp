@@ -26,5 +26,7 @@ void ConfigureWin32GamepadMapping(const GUID& product, const Win32GamepadMapping
 void CollectWin32Gamepads(InputDeviceState& state, HWND window) noexcept;
 // Returns UINT32_MAX for an empty slot or a controller without XInput motors.
 std::uint32_t Win32GamepadXInputIndex(std::uint32_t slot) noexcept;
+// True when the slot holds a controller that is not an XInput one, which has no actuator this backend can drive.
+bool Win32GamepadSlotHoldsOtherController(std::uint32_t slot) noexcept;
 } // namespace kb::input
 #endif
