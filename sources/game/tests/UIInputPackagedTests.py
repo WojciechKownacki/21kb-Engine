@@ -188,7 +188,7 @@ end''' for event in ('Clicked', 'Changed', 'Canceled', 'Submitted')), encoding='
     require(len(changed('Track')) == 1 and abs(changed('Track')[0] - .75) < .001,
             'Scrollbar pointer mapping is incorrect')
     require(changed('Choice') == [1.0], 'Dropdown navigation did not select the second option')
-    scroll = re.search(r'Scroll:Changed:0\.0::([0-9.e+-]+)', text)
+    scroll = re.search(r'Scroll:Changed:0(?:\.0)?::([0-9.e+-]+)', text)
     require(scroll and abs(float(scroll[1]) - 24) < .001, 'Scroll wheel did not move content by its configured sensitivity')
     require(':Aż😀' in text and ':Z' in text and 'script: Entry:Canceled:' in text,
             'Unicode typing, selection replacement or cancel did not reach the input field')
