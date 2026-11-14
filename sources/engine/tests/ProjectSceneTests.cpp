@@ -779,6 +779,12 @@ void RunProjectTagsReachSceneCatalogTest() {
     const std::vector<std::string> invalid{ "Fine", "a;b" };
     Require(!late.Tags().SetProjectDefinitions(invalid) && late.Tags().ProjectDefinitions().size() == 2U,
         "a list with an invalid tag must change nothing");
+
+    // A scene-only definition goes when no object carries it and stays while one does.
+    const kb::scene::SceneObject carrier = late.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Carrier" });
+    Require(late.Tags().SetAssigned(carrier.Entity(), "Kept", true) && late.Tags().UndefineUnused() == 1U &&
+            late.Tags().Contains("Kept") && !late.Tags().Contains("OnlyHere") && late.Tags().Contains("Boss"),
+        "only the unused tags that the scene alone defines must be dropped");
 }
 
 // A project directory deep enough to leave no room for the files that go inside it is refused at

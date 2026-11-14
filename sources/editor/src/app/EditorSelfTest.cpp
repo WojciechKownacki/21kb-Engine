@@ -641,14 +641,16 @@ void RunProjectSettingsSuite(Report& report) {
         "A tag made while tagging an object is added to the project's list");
     report.Check(context.DeleteSceneTag("Chest") && project.tags == std::vector<std::string>{ "Boss" } && !context.Scene().Tags().Contains("Chest"),
         "Deleting a tag in the Inspector takes it out of the project's list");
-    // A tag only a scene file defines is added to the list when the editor opens that scene.
-    report.Check(context.Scene().Tags().Define("OnlyInScene") && std::ranges::find(project.tags, std::string{ "OnlyInScene" }) == project.tags.end(),
+    // A tag only a scene file defines is added to the list when the editor opens that scene, as long as an object
+    // of the scene carries it; one nothing carries, such as a tag the project dropped since, stays out.
+    report.Check(context.Scene().Tags().SetAssigned(tagged, "OnlyInScene", true) && context.Scene().Tags().Define("StaleInScene") &&
+            std::ranges::find(project.tags, std::string{ "OnlyInScene" }) == project.tags.end(),
         "A tag defined in the scene alone is not in the project's list yet");
     const std::filesystem::path tagScenePath = EditorProjectPaths::AssetsRoot() / "Scenes" / "TagPage.21kbscene";
     report.Check(context.SaveCurrentSceneAs(tagScenePath) && context.OpenScene(tagScenePath, EditorDirtySceneResolution::Discard) &&
             project.tags == std::vector<std::string>{ "Boss", "OnlyInScene" } && stored().settings.tags == project.tags &&
-            context.Scene().Tags().Contains("OnlyInScene"),
-        "Opening a scene adds the tags its file defines to the project's list");
+            context.Scene().Tags().Contains("OnlyInScene") && !context.Scene().Tags().Contains("StaleInScene"),
+        "Opening a scene adds the tags its objects carry to the project's list and drops the unused ones");
     const std::vector<std::string> names{ context.Scene().Tags().Names().begin(), context.Scene().Tags().Names().end() };
     report.Check(names.size() >= 8U && names[6] == "Boss" && names[7] == "OnlyInScene",
         "A scene defines the built-in tags, then the project's");

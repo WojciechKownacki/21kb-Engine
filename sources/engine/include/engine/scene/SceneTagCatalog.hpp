@@ -54,6 +54,9 @@ public:
     // Removes a custom definition and every matching assignment in this scene.
     // Built-in definitions are immutable and cannot be removed.
     [[nodiscard]] bool Undefine(std::string_view name);
+    // Removes the definitions only this scene has (not built in, not the project's) that no object carries, such as a
+    // tag the project dropped while the scene was closed. Returns how many it removed.
+    std::size_t UndefineUnused();
     // Replaces the scene's definitions with the built-in ones, the project's (see SetProjectDefinitions) and
     // then `names`. Built-in and project names in `names` are not repeated.
     [[nodiscard]] bool ReplaceDefinitions(std::span<const std::string> names);

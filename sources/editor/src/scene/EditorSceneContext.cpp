@@ -3557,6 +3557,8 @@ void EditorSceneContext::ApplyProjectAudioAndTags(kb::scene::Scene& scene) {
 }
 
 void EditorSceneContext::AdoptSceneTagsIntoProject() {
+    // A tag the project no longer lists comes back only when objects of this scene still carry it.
+    static_cast<void>(scene_->Tags().UndefineUnused());
     bool grew = false;
     for (const std::string& tag : scene_->Tags().Names()) {
         grew = kb::project::AddProjectTag(projectConfig_, tag) || grew;

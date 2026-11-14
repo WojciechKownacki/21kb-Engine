@@ -101,6 +101,24 @@ void RemoveAssignmentVisitor(SceneEntity entity, const TransformComponent&, void
     }
 }
 
+struct CollectAssignedContext {
+    Scene* scene = nullptr;
+    std::vector<std::string> names;
+};
+
+void CollectAssignedVisitor(SceneEntity entity, const TransformComponent&, void* raw) {
+    auto* context = static_cast<CollectAssignedContext*>(raw);
+    const TagsComponent* tags = context->scene->Components().Tags().TryGet(entity);
+    if (tags == nullptr) {
+        return;
+    }
+    for (std::string& tag : Parse(TagsText(*tags))) {
+        if (std::find(context->names.begin(), context->names.end(), tag) == context->names.end()) {
+            context->names.push_back(std::move(tag));
+        }
+    }
+}
+
 } // namespace
 
 SceneTagCatalogQueries::SceneTagCatalogQueries(const Scene& scene) noexcept
@@ -172,6 +190,16 @@ bool SceneTagCatalog::Undefine(std::string_view name) {
     RemoveAssignmentContext context{ .scene = &scene_, .name = normalized };
     scene_.Transforms().ForEach(&RemoveAssignmentVisitor, &context);
     return true;
+}
+
+std::size_t SceneTagCatalog::UndefineUnused() {
+    CollectAssignedContext assigned{ .scene = &scene_ };
+    scene_.Transforms().ForEach(&CollectAssignedVisitor, &assigned);
+    const std::vector<std::string>& project = SceneAccess::State(scene_).projectTagDefinitions;
+    return std::erase_if(Definitions(scene_), [&](const std::string& name) {
+        return !IsBuiltIn(name) && std::find(project.begin(), project.end(), name) == project.end() &&
+            std::find(assigned.names.begin(), assigned.names.end(), name) == assigned.names.end();
+    });
 }
 
 bool SceneTagCatalog::ReplaceDefinitions(std::span<const std::string> names) {
