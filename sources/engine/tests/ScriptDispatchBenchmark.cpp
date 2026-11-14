@@ -515,11 +515,11 @@ void RunScriptErrorsReadInPlainWordsTest() {
     Require(doorLines == 1, "A script error that repeats every frame must be reported once");
     const std::string& line = *std::find_if(lines.begin(), lines.end(), [](const std::string& text) { return text.find("'Door'") != std::string::npos; });
     Require(line.find("'Door'") != std::string::npos, "The console line must name the object");
-    Require(line.find("line 3: attempt to index a nil value") != std::string::npos, "The console line must name the line of the script");
+    Require(line.find("line 3: attempt to index") != std::string::npos && line.find("nil value") != std::string::npos, "The console line must name the line of the script");
     Require(line.find("has no value yet") != std::string::npos, "The console line must explain the usual cause in plain words");
     const std::size_t firstTrace = line.find("stack traceback:");
     Require(firstTrace != std::string::npos && line.find("stack traceback:", firstTrace + 1U) == std::string::npos, "The stack trace must be shown once");
-    Require(line.find("Door.lua:3: in function", firstTrace) != std::string::npos, "The stack trace must show the line of the script that failed");
+    Require(line.find("Door.lua:3: in function", firstTrace) != std::string::npos, ("The stack trace must show the line of the script that failed: " + line).c_str());
 }
 
 // A script that changes the scene in the middle of a phase: a behaviour it destroyed or disabled does not run after it, one
@@ -902,6 +902,17 @@ function Tick(self, dt)
 end
 )";
 
+// The same with the two axes as two numbers (Input.Vector2XY), which builds no table.
+constexpr const char* kFrameMovementXYLua = R"(
+local speed = 4.0
+function Tick(self, dt)
+  local mx, my = Input.Vector2XY("move")
+  local delta = Time.delta()
+  local x, y, z = Transform.GetPositionXYZ(self.entity)
+  Transform.SetPosition(self.entity, x + mx * speed * delta, y, z + my * speed * delta)
+end
+)";
+
 constexpr const char* kFrameHeavyLua = R"(
 local function fib(n)
   if n < 2 then return n end
@@ -919,7 +930,7 @@ function Tick(self, dt)
   for _, v in pairs(tbl) do sum = sum + v end
   local text = ""
   for i = 1, 8 do text = text .. i .. "," end
-  total = total + fib(10 + (math.floor(total) & 1)) + sum + #text + arr[16]
+  total = total + fib(10 + (math.floor(total) % 2)) + sum + #text + arr[16]
   self.acc = total
 end
 )";
@@ -1024,8 +1035,9 @@ void RunScriptFrameBenchmark() {
         }
         const std::string customSource = scenario == "custom" ? EnvText("KB_BENCH_SOURCE", kEmptyScript) : std::string{};
         const char* source = scenario == "custom" ? customSource.c_str() : scenario == "empty" ? kEmptyScript : scenario == "typical" ? kFrameTypicalLua
-            : scenario == "typical-table" ? kFrameTypicalTableLua : scenario == "movement" ? kFrameMovementLua : scenario == "heavy" ? kFrameHeavyLua : kFrameEventLua;
-        Require(host.LuaRuntime().LoadScript(kBenchAsset, source, "Bench.lua").succeeded, "script frame benchmark script did not load");
+            : scenario == "typical-table" ? kFrameTypicalTableLua : scenario == "movement" ? kFrameMovementLua : scenario == "movement-xy" ? kFrameMovementXYLua : scenario == "heavy" ? kFrameHeavyLua : kFrameEventLua;
+        const kb::script::PucLuaLoadResult loaded = host.LuaRuntime().LoadScript(kBenchAsset, source, "Bench.lua");
+        Require(loaded.succeeded, loaded.error.c_str());
     }
     std::vector<kb::scene::SceneObjectDesc> descs(count);
     for (std::size_t index = 0U; index < count; ++index) {

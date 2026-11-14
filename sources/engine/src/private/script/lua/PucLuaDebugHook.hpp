@@ -4,7 +4,7 @@
 
 #include <vector>
 
-struct lua_State;
+#include "script/lua/LuaVm.hpp"
 
 namespace kb::script {
 
@@ -12,10 +12,8 @@ class PucLuaDebugHook final {
 public:
     static void Install(lua_State* state, const PucLuaScriptRuntime& runtime);
     static void Clear(lua_State* state);
-    // Gives the Lua state `limit` loop iterations and calls (zero: no limit) before the hook is armed on the running
-    // thread; the hook then fails or suspends the script by the execution budget policy. DisarmRunaway ends the allowance.
-    static void ArmRunaway(lua_State* state, std::size_t limit) noexcept;
-    static void DisarmRunaway(lua_State* state) noexcept;
+    // The hook function itself: the Lua 5.4 interpreter arms it when an entry has spent its allowance of work.
+    [[nodiscard]] static lua_Hook HookFunction() noexcept;
     [[nodiscard]] static PucLuaDebugEvaluationResult Evaluate(lua_State* paused, std::string_view expression, int frame);
     // Frames of `state` from the innermost outwards, with their named locals when `collectLocals` is set. Works
     // on the running thread and on a coroutine suspended at a pause.

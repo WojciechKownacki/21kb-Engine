@@ -534,6 +534,7 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptMicrophoneApi.hpp
     include/engine/script/ScriptPhysicsApi.hpp
     include/engine/script/ScriptRendererApi.hpp
+    include/engine/script/ScriptLanguageSubset.hpp
     include/engine/script/ScriptLifecycle.hpp
     include/engine/script/UISceneValidation.hpp
     include/engine/script/ScriptModule.hpp
@@ -1357,6 +1358,7 @@ add_library(kb_engine STATIC
     src/script/ScriptPhysicsAssemblyApi.cpp
     src/script/ScriptMap2DGeometryApi.cpp
     src/script/ScriptRendererApi.cpp
+    src/script/ScriptLanguageSubset.cpp
     src/script/ScriptLifecycle.cpp
     src/script/UISceneValidation.cpp
     src/script/ScriptModule.cpp
@@ -1407,7 +1409,10 @@ add_library(kb_engine STATIC
     src/private/script/lua/api/PucLuaSelfApi.hpp
     src/private/script/lua/api/PucLuaSharedApi.hpp
     src/private/script/lua/api/PucLuaTaskApi.hpp
+    src/private/script/lua/LuaVm.hpp
     src/private/script/lua/PucLuaDebugHook.hpp
+    src/private/script/lua/PucLuaHotApi.hpp
+    src/private/script/lua/PucLuaRunaway.hpp
     src/private/script/lua/PucLuaRuntimeApi.hpp
     src/private/script/lua/PucLuaSandboxEnvironment.hpp
     src/private/script/lua/PucLuaStateUtilities.hpp
@@ -1889,7 +1894,7 @@ set_source_files_properties(src/scene/CsgAsset.cpp PROPERTIES
 target_link_libraries(kb_engine
     PRIVATE
         flecs::flecs_static
-        kb_lua
+        $<LINK_ONLY:kb_script_vm>
         kb_monocypher
         kb_recast
         kb_ufbx
@@ -1922,6 +1927,54 @@ set_source_files_properties(src/ecs/HierarchyDepthGuard.cpp PROPERTIES
     COMPILE_DEFINITIONS "KB_ECS_HIERARCHY_DEPTH_LIMIT=${KB_ECS_HIERARCHY_DEPTH_LIMIT}"
 )
 kb_apply_quality_gates(kb_engine)
+
+# The script VM (KB_SCRIPT_VM, root CMakeLists.txt). Only the sources that use the Lua API (script/lua/LuaVm.hpp maps the
+# calls that differ between the VMs) see its headers and its definition, so no other source of the engine depends on which
+# VM is built. Some sources exist for one VM only: the execution budget (PucLuaRunaway), the fast engine calls of LuaJIT and
+# the bit library Lua 5.4 lacks.
+if(kb_script_vm STREQUAL "LuaJIT")
+    target_sources(kb_engine PRIVATE
+        src/script/lua/vm/PucLuaHotApi.cpp
+        src/script/lua/vm/PucLuaRunawayWatchdog.cpp
+        src/private/script/lua/PucLuaWatchdogCore.hpp
+    )
+else()
+    target_sources(kb_engine PRIVATE
+        src/script/lua/vm/PucLuaBitLibrary.cpp
+        src/script/lua/vm/PucLuaRunawayInterpreter.cpp
+        src/private/script/lua/PucLuaBitLibrary.hpp
+    )
+endif()
+if(KB_SCRIPT_VM_BUILD_TARGET)
+    # The script VM's headers (luajit.h) are made by its build.
+    add_dependencies(kb_engine ${KB_SCRIPT_VM_BUILD_TARGET})
+endif()
+set(kb_engine_lua_sources
+    src/script/PucLuaRuntimeState.cpp
+    src/script/PucLuaScriptRuntime.cpp
+    src/script/lua/PucLuaDebugHook.cpp
+    src/script/lua/PucLuaMemoryArena.cpp
+    src/script/lua/PucLuaRuntimeApi.cpp
+    src/script/lua/PucLuaSafeCall.cpp
+    src/script/lua/PucLuaSandboxEnvironment.cpp
+    src/script/lua/PucLuaStateUtilities.cpp
+    src/script/lua/PucLuaValueBridge.cpp
+    src/script/lua/api/PucLuaEventApi.cpp
+    src/script/lua/api/PucLuaEventsApi.cpp
+    src/script/lua/api/PucLuaFunctionApi.cpp
+    src/script/lua/api/PucLuaModuleApi.cpp
+    src/script/lua/api/PucLuaSelfApi.cpp
+    src/script/lua/api/PucLuaSharedApi.cpp
+    src/script/lua/api/PucLuaTaskApi.cpp
+    src/script/lua/vm/PucLuaBitLibrary.cpp
+    src/script/lua/vm/PucLuaHotApi.cpp
+    src/script/lua/vm/PucLuaRunawayInterpreter.cpp
+    src/script/lua/vm/PucLuaRunawayWatchdog.cpp
+)
+set_source_files_properties(${kb_engine_lua_sources} PROPERTIES INCLUDE_DIRECTORIES "${KB_SCRIPT_VM_INCLUDE_DIR}")
+if(kb_script_vm STREQUAL "LuaJIT")
+    set_source_files_properties(${kb_engine_lua_sources} PROPERTIES COMPILE_DEFINITIONS KB_SCRIPT_VM_LUAJIT=1)
+endif()
 
 if(MSVC)
     # Under AddressSanitizer this test translation unit exceeds the default object-file section limit.
@@ -2229,6 +2282,10 @@ if(BUILD_TESTING)
             flecs::flecs_static
     )
     target_include_directories(kb_engine_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/private)
+    target_sources(kb_engine_tests PRIVATE tests/ScriptVmTests.cpp)
+    if(kb_script_vm STREQUAL "LuaJIT")
+        set_source_files_properties(tests/ScriptRuntimeTests.cpp tests/ScriptVmTests.cpp PROPERTIES COMPILE_DEFINITIONS KB_SCRIPT_VM_LUAJIT=1)
+    endif()
 
     add_dependencies(kb_engine_tests kb_native_script_test_plugin)
     target_compile_definitions(kb_engine_tests
@@ -2245,6 +2302,8 @@ if(BUILD_TESTING)
     add_test(NAME kb_engine_scene_ui COMMAND $<TARGET_FILE:kb_engine_tests> scene-ui)
     add_test(NAME kb_engine_script_dispatch COMMAND $<TARGET_FILE:kb_engine_tests> script-dispatch)
     set_tests_properties(kb_engine_script_dispatch PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300 LABELS "engine;script")
+    add_test(NAME kb_engine_script_vm COMMAND $<TARGET_FILE:kb_engine_tests> script-vm)
+    set_tests_properties(kb_engine_script_vm PROPERTIES TIMEOUT 120 LABELS "engine;script;vm")
     add_test(NAME kb_engine_video_conversion COMMAND $<TARGET_FILE:kb_engine_tests> video-conversion)
     set_tests_properties(kb_engine_video_conversion PROPERTIES TIMEOUT 60 LABELS "engine;video")
     if(WIN32)

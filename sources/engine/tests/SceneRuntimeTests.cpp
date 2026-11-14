@@ -13,6 +13,7 @@
 #include <string_view>
 
 namespace kb::tests {
+void RunScriptVmTests();
 void RunEcsHierarchyDepthTests();
 void RunSceneHierarchyDepthTests();
 void RunPrefabHierarchyDepthTests();
@@ -149,6 +150,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunScriptDispatchBenchmark();
     } else if (suite == "script-frame-bench") {
         kb::tests::RunScriptFrameBenchmark();
+    } else if (suite == "script-vm") {
+        kb::tests::RunScriptVmTests();
     } else if (suite == "script-collections") {
         kb::tests::RunScriptCollectionsTests();
     } else if (suite == "script-save") {

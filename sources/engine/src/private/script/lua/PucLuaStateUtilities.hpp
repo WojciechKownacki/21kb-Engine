@@ -1,8 +1,6 @@
 #pragma once
 
-extern "C" {
-#include <lua.h>
-}
+#include "script/lua/LuaVm.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -41,6 +39,10 @@ struct PucLuaStateLifetime {
     lua_State* spareThread = nullptr;
     int spareThreadReference = -2; // LUA_NOREF
     bool spareThreadBusy = false;
+    // LuaJIT: the scalar locals of the innermost frame of the entry a debugger pause suspended, copied into a table when the
+    // hook paused it (the thread reports the position of the instruction before the pause, which hides the local the
+    // previous statement declared). LUA_NOREF when there is none.
+    int pausedFrameLocals = -2;
 };
 
 class PucLuaExecutionContextScope final {
@@ -58,7 +60,7 @@ private:
 // refusal surfaces as a catchable LUA_ERRMEM. Host-side stack set-up between
 // protected calls is never refused: Lua turns an allocation failure outside a
 // protected call into a panic that ends the process.
-struct PucLuaMemoryBudget final {
+struct PucLuaMemoryBudget final : PucLuaOwnerSlot {
     std::size_t usedBytes = 0U;
     // Blocks the state asked its allocator for since it was created.
     std::uint64_t allocationCount = 0U;

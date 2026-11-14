@@ -497,7 +497,7 @@ end
 
 constexpr std::string_view kLuarcTemplate = R"json({
     "$schema": "https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json",
-    "runtime.version": "Lua 5.4",
+    "runtime.version": "LuaJIT",
     "workspace.library": [".kb/api"],
     "workspace.ignoreDir": [".kb"],
     "diagnostics.globals": [

@@ -332,22 +332,24 @@ void ScriptRuntimeHostSceneSystem::ExecuteShutdown(kb::scene::Scene& scene, floa
     return name.empty() ? "entity #" + std::to_string(entity.Id()) : "'" + name + "'";
 }
 
-// What the usual Lua runtime errors mean, in words for someone who does not read Lua; empty for the rest.
+// What the usual Lua runtime errors mean, in words for someone who does not read Lua; empty for the rest. The two script
+// VMs word them differently ("attempt to index a nil value (field 'x')" and "attempt to index field 'x' (a nil value)").
 [[nodiscard]] std::string_view PlainErrorHint(std::string_view message) {
     const auto mentions = [message](std::string_view text) { return message.find(text) != std::string_view::npos; };
-    if (mentions("attempt to index a nil value")) {
+    const bool nilValue = mentions("a nil value");
+    if (mentions("attempt to index") && nilValue) {
         return "Something that has no value yet was used as if it had fields (name.field). It was never set, or a call that should have given it a value returned nothing.";
     }
-    if (mentions("attempt to call a nil value")) {
+    if (mentions("attempt to call") && nilValue) {
         return "A function that does not exist was called. Check the spelling, and that the module it comes from is imported.";
     }
-    if (mentions("attempt to perform arithmetic on a nil value") || (mentions("attempt to compare") && mentions("nil"))) {
+    if ((mentions("attempt to perform arithmetic") && nilValue) || (mentions("attempt to compare") && mentions("nil"))) {
         return "A number is missing: a variable or field used in this calculation has no value yet.";
     }
-    if (mentions("attempt to concatenate a nil value")) {
+    if (mentions("attempt to concatenate") && nilValue) {
         return "A text is missing: a variable or field joined into this text has no value yet.";
     }
-    if (mentions("attempt to index a number value") || mentions("attempt to index a string value") || mentions("attempt to index a boolean value")) {
+    if (mentions("attempt to index") && (mentions("a number value") || mentions("a string value") || mentions("a boolean value"))) {
         return "A single value was used as if it were a table with fields (name.field).";
     }
     return {};

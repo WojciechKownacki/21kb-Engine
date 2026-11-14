@@ -47,7 +47,9 @@ and rejection of incompatible provider lifetimes and authored definitions.
 execution boundary it copies every live Lua allocation and pins its address until
 the image is released. Restore copies those bytes back, including suspended thread
 stacks, instruction state, closures, tables, registry, garbage collector and standard
-library RNG/iterator userdata. It also restores the script/module code catalog,
+library RNG/iterator userdata. LuaJIT's compiled code lives outside the Lua heap, so the
+compiler's traces are dropped before an image is taken and before one is put back; the scripts
+compile again as they run. It also restores the script/module code catalog,
 coroutine references, exposed values and debugger state. Retained API closures use
 the current execution context when a coroutine resumes in another frame.
 

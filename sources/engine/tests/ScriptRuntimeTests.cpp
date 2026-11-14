@@ -129,6 +129,16 @@
 #include <psapi.h>
 #endif
 
+// A loop a budget of 100 units stops on either script VM: Lua 5.4 counts the passes of a loop, LuaJIT ends a call that has
+// used that many units of processor time, so it needs a loop that runs for milliseconds.
+#if defined(KB_SCRIPT_VM_LUAJIT)
+#define KB_TEST_LONG_LOOP "100000000"
+#define KB_TEST_HEAVY_LOOP "1000000000"
+#else
+#define KB_TEST_LONG_LOOP "10000"
+#define KB_TEST_HEAVY_LOOP "10000000"
+#endif
+
 namespace {
 
 #ifndef KB_NATIVE_SCRIPT_TEST_PLUGIN_PATH
@@ -1137,7 +1147,7 @@ void RunPucLuaExecutionBudgetPolicyTest() {
     const char* source = R"(
 function Tick(self, dt)
     local total = 0
-    for index = 1, 10000 do
+    for index = 1, )" KB_TEST_LONG_LOOP R"( do
         total = total + index
     end
     SetShared("lua.executionBudget.finished", total)
@@ -1314,7 +1324,7 @@ end
     kb::tests::Require(!atLoad.succeeded && atLoad.error.find("execution budget exceeded") != std::string::npos,
         "An endless loop in the code at the top of a script must fail the load with the budget diagnostic");
     const kb::script::PucLuaLoadResult nested = host.luaRuntime.LoadScript(kb::assets::AssetId{ 3605U },
-        "local n = 0 for i = 1, 10000000 do n = n + i end", "LoadHeavy.lua");
+        "local n = 0 for i = 1, " KB_TEST_HEAVY_LOOP " do n = n + i end", "LoadHeavy.lua");
     kb::tests::Require(!nested.succeeded, "Top-level work beyond the instruction budget must fail the load");
     const auto caughtAtLoad = host.luaRuntime.LoadScript(kb::assets::AssetId{3608U},
         "while true do pcall(function() while true do end end) end", "CaughtLoadForever.lua");
@@ -1531,7 +1541,7 @@ end
     constexpr kb::assets::AssetId kDefaultHuge{ 3213U };
     constexpr kb::assets::AssetId kLooping{ 3214U };
     kb::tests::Require(defaultRuntime.LoadScript(kDefaultHuge, "function Tick(self, dt) local text = string.rep('x', 512 * 1024 * 1024) end\n", "LuaMemoryDefault.lua").succeeded &&
-            defaultRuntime.LoadScript(kLooping, "function Tick(self, dt) local total = 0 for index = 1, 10000 do total = total + index end end\n", "LuaMemoryLoop.lua").succeeded,
+            defaultRuntime.LoadScript(kLooping, "function Tick(self, dt) local total = 0 for index = 1, " KB_TEST_LONG_LOOP " do total = total + index end end\n", "LuaMemoryLoop.lua").succeeded,
         "Lua default memory limit scripts did not load");
     kb::scene::Scene defaultScene;
     for (const kb::assets::AssetId asset : { kDefaultHuge, kLooping }) {
@@ -1773,7 +1783,9 @@ end
     kb::tests::Require(luaRuntime.IsDebugPaused() && shared("lua.pause.ticker") == 3 && shared("lua.pause.done") == 0,
         "Lua paused script ran on, or the other scripts stopped, while the debugger held the pause");
     kb::script::PucLuaDebugPauseSnapshot inspected = luaRuntime.InspectDebugPause();
-    kb::tests::Require(inspected.valid && inspected.callStack.size() == 1U && inspected.callStack.front().line == 6, "Lua paused script call stack is not inspectable");
+    std::string stackInfo = std::to_string(inspected.callStack.size()) + " frames:";
+    for (const auto& frame : inspected.callStack) stackInfo += " [" + frame.name + " " + frame.chunkName + ":" + std::to_string(frame.line) + "]";
+    kb::tests::Require(inspected.valid && inspected.callStack.size() == 1U && inspected.callStack.front().line == 6, ("Lua paused script call stack is not inspectable: " + stackInfo).c_str());
     const kb::script::PucLuaDebugVariableSnapshot* delta = FindDebugLocal(inspected.callStack.front(), "dt");
     kb::tests::Require(delta != nullptr && delta->type == kb::script::ScriptValueType::Float && delta->value.starts_with("0.25"),
         "Lua paused script locals are not inspectable");
@@ -1784,9 +1796,9 @@ end
         !command("unknown").Find("succeeded")->AsBool(), "Debug protocol did not expose stack/locals or reject invalid commands");
     const auto protocolEvaluation = session.Execute(R"({"schema":"21kb.lua-debug/v1","command":"evaluate","expression":"dt * 4"})");
     kb::tests::Require(protocolEvaluation.Find("succeeded")->AsBool() &&
-        protocolEvaluation.Find("result")->Find("value")->AsString().starts_with("1."), "Debug protocol evaluation failed");
+        protocolEvaluation.Find("result")->Find("value")->AsString().starts_with("1"), "Debug protocol evaluation failed");
     const auto evaluated = luaRuntime.EvaluateDebugExpression("dt * 4");
-    kb::tests::Require(evaluated.succeeded && evaluated.value.value.starts_with("1."), "Debugger could not evaluate paused scalar locals");
+    kb::tests::Require(evaluated.succeeded && evaluated.value.value.starts_with("1"), "Debugger could not evaluate paused scalar locals");
     const auto wideInteger = luaRuntime.EvaluateDebugExpression("4294967296");
     kb::tests::Require(wideInteger.succeeded && wideInteger.value.value == "4294967296", "Debugger truncated a Lua integer");
     kb::tests::Require(!luaRuntime.EvaluateDebugExpression("dt +").succeeded &&
@@ -1805,7 +1817,13 @@ end
     const kb::script::PucLuaDebugVariableSnapshot* a = inspected.callStack.empty() ? nullptr : FindDebugLocal(inspected.callStack.front(), "a");
     kb::tests::Require(luaRuntime.IsDebugPaused() && luaRuntime.LastDebugPause().reason == kb::script::PucLuaDebugPauseReason::Step &&
             luaRuntime.LastDebugPause().line == 7 && a != nullptr && a->value == "1" && a->type == kb::script::ScriptValueType::Int,
-        "Lua step over did not stop on the next line with the updated locals");
+        ("Lua step over did not stop on the next line with the updated locals: paused=" + std::to_string(luaRuntime.IsDebugPaused()) + " reason=" +
+            std::to_string(static_cast<int>(luaRuntime.LastDebugPause().reason)) + " line=" + std::to_string(luaRuntime.LastDebugPause().line) +
+            " a=" + (a != nullptr ? a->value + "/" + std::to_string(static_cast<int>(a->type)) : std::string{ "none" })).c_str());
+
+    // The local the line just before the pause declared is part of the innermost frame.
+    const auto declaredJustBefore = luaRuntime.EvaluateDebugExpression("a + 2");
+    kb::tests::Require(declaredJustBefore.succeeded && declaredJustBefore.value.value == "3", "Debugger could not evaluate the local the previous line declared");
 
     kb::tests::Require(command("step_into").Find("succeeded")->AsBool(), "Debug protocol step_into failed");
     tick("Lua step into raised an error");
@@ -1813,7 +1831,9 @@ end
     const kb::script::PucLuaDebugVariableSnapshot* v = inspected.callStack.empty() ? nullptr : FindDebugLocal(inspected.callStack.front(), "v");
     kb::tests::Require(luaRuntime.IsDebugPaused() && luaRuntime.LastDebugPause().line == 2 && inspected.callStack.size() == 2U &&
             inspected.callStack[1].line == 7 && v != nullptr && v->value == "1",
-        "Lua step into did not stop inside the called function");
+        ("Lua step into did not stop inside the called function: paused=" + std::to_string(luaRuntime.IsDebugPaused()) + " line=" + std::to_string(luaRuntime.LastDebugPause().line) +
+            " frames=" + std::to_string(inspected.callStack.size()) + " v=" + (v != nullptr ? v->value : std::string{ "none" }) +
+            (inspected.callStack.size() > 1U ? " caller line=" + std::to_string(inspected.callStack[1].line) : std::string{})).c_str());
 
     kb::tests::Require(command("step_out").Find("succeeded")->AsBool(), "Debug protocol step_out failed");
     tick("Lua step out raised an error");

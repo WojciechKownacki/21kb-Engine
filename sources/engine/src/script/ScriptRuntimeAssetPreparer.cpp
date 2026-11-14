@@ -7,6 +7,7 @@
 #include "engine/script/PucLuaScriptRuntime.hpp"
 #include "engine/script/ScriptAsset.hpp"
 #include "engine/script/ScriptBehaviourAsset.hpp"
+#include "engine/script/ScriptLanguageSubset.hpp"
 #include "engine/visual/VisualGraphCompileCoordinator.hpp"
 
 #include <algorithm>
@@ -341,8 +342,19 @@ ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareLuaAsset(cons
     const LuaScriptLoadResult loaded = dynamic_cast<PucLuaScriptRuntime*>(&luaScripts_) == nullptr
         ? luaScripts_.LoadScript(metadata.id, asset->source, chunkName)
         : runtime->LoadScript(metadata.id, asset->source, chunkName, metadata.contentHash);
+    // What only one of the two script VMs has: on the other one it is a syntax or a runtime error, or means something else.
+    const auto warnAboutSubset = [&] {
+        for (const ScriptSubsetFinding& finding : FindOutOfSubsetConstructs(asset->source)) {
+            result.warnings.push_back(ScriptRuntimeAssetPrepareDiagnostic{
+                .assetId = metadata.id,
+                .backend = kb::scene::BehaviourBackend::Lua,
+                .message = "line " + std::to_string(finding.line) + ": " + finding.message,
+            });
+        }
+    };
     if (!loaded.succeeded) {
         AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Lua, loaded.error.empty() ? "Lua script could not be prepared" : loaded.error);
+        warnAboutSubset();
         return result;
     }
 
@@ -352,6 +364,7 @@ ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareLuaAsset(cons
         runtime->SetScriptExposedVariables(metadata.id, asset->exposedVariables, asset->exposedVariableDefaults, asset->exposedVariableHasDefault);
     }
 
+    warnAboutSubset();
     result.reloadedAssets.push_back(metadata.id);
     ++result.preparedAssets;
     return result;

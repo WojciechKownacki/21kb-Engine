@@ -1,9 +1,5 @@
+#include "script/lua/LuaVm.hpp"
 #include "engine/script/PucLuaSafeCall.hpp"
-
-extern "C" {
-#include <lauxlib.h>
-#include <lua.h>
-}
 
 #include <exception>
 

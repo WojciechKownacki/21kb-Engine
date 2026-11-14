@@ -124,6 +124,10 @@ kb_cli validate --project . Assets/Scripts/Spinner.lua
   does not exist.
 - The sandbox has no `io`, `os`, `require` or `load`; share code with `-- @import` modules and
   `Import("Module.Name")`.
+- Write the Lua every platform runs (LuaJIT or Lua 5.4, chosen by the platform): Lua 5.1 with the `bit`
+  library and `unpack`. No `//` (use `math.floor(a / b)`), no `&` `|` `~` `<<` `>>` (use `bit.band`,
+  `bit.bor`, `bit.bxor`, `bit.lshift`, `bit.rshift`), no `<const>`, no `utf8`, no `math.type`; every number is
+  a double, exact up to 2^53. `validate` warns with file and line about each construct outside that subset.
 - Ready-made controllers live in `Assets/Samples/` (third person, top down, platformer,
   shooter).
 

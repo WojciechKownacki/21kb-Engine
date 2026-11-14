@@ -1,3 +1,4 @@
+#include "script/lua/LuaVm.hpp"
 #include "script/lua/api/PucLuaSharedApi.hpp"
 #include "script/lua/PucLuaArguments.hpp"
 #include "script/lua/PucLuaRuntimeApi.hpp"
@@ -6,10 +7,6 @@
 #include "engine/script/ScriptExecutionContext.hpp"
 #include "script/lua/PucLuaValueBridge.hpp"
 
-extern "C" {
-#include <lauxlib.h>
-#include <lua.h>
-}
 
 #include <optional>
 

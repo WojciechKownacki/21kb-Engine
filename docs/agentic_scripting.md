@@ -109,8 +109,8 @@ graphs refuse the copy without modifying the source.
 ## What a script is allowed to do
 
 Lua scripts run in a sandbox. A script gets its own copy of `assert`, `error`, `ipairs`, `pairs`,
-`pcall`, `select`, `tonumber`, `tostring`, `type` and the `coroutine`, `table`, `string`, `math` and
-`utf8` libraries. There is no `os`, `io`, `debug` or `package`, and `load`, `loadfile`, `dofile`,
+`pcall`, `select`, `tonumber`, `tostring`, `type`, `unpack` and the `coroutine`, `table`, `string`,
+`math` and `bit` libraries. There is no `os`, `io`, `debug` or `package`, and `load`, `loadfile`, `dofile`,
 `require` and `collectgarbage` do not exist; text chunks only. Persistent writes use `Save.*` and
 `Settings.*` slots under the host's configured user-storage root, with a shared quota. Slot names
 cannot specify filesystem paths. `Import` resolves registered Lua assets, not arbitrary files.
@@ -123,14 +123,41 @@ mods: scripts in one game share save slots, exposed gameplay APIs and the networ
 a mod authenticates its publisher; it does not grant extra Lua capabilities. Native host code and
 custom registered functions are trusted and must preserve these boundaries themselves.
 
-Limits, per behaviour call: the execution budget (`luaInstructionsPerBehaviour`, one million loop iterations and calls by default; also applied to the
+Limits, per behaviour call: the execution budget (`luaInstructionsPerBehaviour`, one million units of script work by
+default; also applied to the
 code at the top of a script while it loads, so a loop there fails the load) and a memory cap per Lua
 runtime (256 MiB by default). A script that exceeds a limit fails with a diagnostic naming the limit and
 the script; the shipped hosts then disable that behaviour (`disableFailingBehaviours`), and the other
 scripts keep running. Trusted hosts can explicitly disable the cap by setting it to zero.
-The cap also applies to script-created coroutines. It counts loop iterations and calls (every pass of a loop and every
-Lua or native function call), not elapsed time;
-native API calls are not preempted, and there is no wall-clock limit.
+The cap also applies to script-created coroutines. One unit is about one loop pass or function call of script
+code: Lua 5.4 counts those exactly, LuaJIT, whose compiled code has no instruction to count, stops the call when it
+has used that many units of processor time on its thread (about ten nanoseconds each, so the default is about
+ten milliseconds of one entry), checked every millisecond. Both end the call with the same diagnostic, also when
+the script catches the error, and both suspend it instead (the next frame goes on where it stopped) under the
+Suspend policy. Native API calls are not preempted, and there is no wall-clock limit.
+
+### The language every platform runs
+
+Scripts run on LuaJIT on Windows, Linux and Android and on Lua 5.4 where the platform does not allow a program to
+generate machine code (iOS, the web, consoles); the engine picks the VM when it is built, there is no setting.
+A script must behave the same on both, so write the language they share: Lua 5.1 with the `bit` library, `unpack`
+and `goto`. The editor and `kb_cli validate` warn, with file and line, about each construct outside it:
+
+- operators: no `//` (write `math.floor(a / b)`), no `&`, `|`, `~`, `<<`, `>>` (use `bit.band`, `bit.bor`,
+  `bit.bxor`, `bit.bnot`, `bit.lshift`, `bit.rshift`), no `<const>` or `<close>` attributes;
+- numbers: every number is a double and integers are exact up to 2^53; there is no `math.type`,
+  `math.tointeger`, `math.maxinteger`, `math.mininteger`, `math.ult`, no integer literal above 2^53, and a float
+  with a whole value may print as `5` on one VM and `5.0` on the other (use `string.format("%d", n)` to print a
+  whole number);
+- libraries: `unpack`, not `table.unpack`; no `utf8`, `string.pack`, `string.unpack`, `string.packsize`,
+  `table.pack`, `table.move`, `coroutine.close`, `coroutine.isyieldable`, `rawlen`, `_ENV`; and none of the names
+  only LuaJIT has (`math.pow`, `math.log10`, `math.cosh`, `math.sinh`, `math.tanh`, `math.ldexp`, `math.frexp`,
+  `math.mod`, `table.maxn`, `table.getn`, `table.foreach`, `table.foreachi`, `string.gfind`, `loadstring`,
+  `setfenv`, `getfenv`, `newproxy`).
+
+The `bit` library gives signed 32-bit results on both VMs, takes shift counts modulo 32 and rounds its operands the
+same way, so bit arithmetic gives the same numbers everywhere. To check a script on the other VM, build the engine with
+`-DKB_SCRIPT_VM=Lua54` (or `LuaJIT`) for the platform; the script tests of the engine run on both.
 
 **Native C++ scripts and plugins are not sandboxed.** They run inside the game process with all of its
 rights and can do anything the game can. Load them only from projects you trust; the engine
@@ -552,7 +579,9 @@ kb_cli debug --endpoint DebugSession --command disconnect
 `points.json` is an array such as `[{"chunk":"DebugProbe.lua","line":7}]`.
 Lines are one-based; chunk names match the full source name or its suffix. An empty
 array clears breakpoints. `pause` stops at the next executed Lua line. The coroutine
-yields at a breakpoint, leaving the editor message loop and other behaviours running.
+yields at a breakpoint, leaving the editor message loop and other behaviours running. On LuaJIT a debugger that is
+attached keeps the scripts in the interpreter (compiled code has no lines to stop at), and the compiler is back as
+soon as the last breakpoint is cleared.
 Stack/locals responses include frame names, chunks, lines and scalar snapshots;
 tables and functions are identified by type. Snapshots cap at 32 frames, 64 locals
 per frame and 512 bytes per local string (long strings have an ellipsis).

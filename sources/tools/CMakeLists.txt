@@ -278,7 +278,7 @@ if(BUILD_TESTING)
             "-DPARTICLES_PLUGIN=$<TARGET_FILE:kb_21kb_particle_plugin>"
             "-DAI_PLUGIN=$<TARGET_FILE:kb_ai_plugin>"
             "-DWORLD2D_PLUGIN=$<TARGET_FILE:kb_world2d_plugin>"
-            "-Dlua_LIBRARY=$<TARGET_FILE:kb_lua>"
+            "-Dlua_LIBRARY=$<TARGET_FILE:${KB_SCRIPT_VM_LIBRARY}>"
             "-Dufbx_LIBRARY=$<TARGET_FILE:kb_ufbx>"
             "-Dmonocypher_LIBRARY=$<TARGET_FILE:kb_monocypher>"
             "-Dzstd_LIBRARY=$<TARGET_FILE:kb_zstd>"

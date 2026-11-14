@@ -1,8 +1,12 @@
+#include "script/lua/LuaVm.hpp"
+
 #include "script/lua/PucLuaMemoryArena.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
 #include <limits>
 
 namespace kb::script {
@@ -16,6 +20,52 @@ struct alignas(std::max_align_t) PucLuaMemoryBlock {
     bool live = true;
 };
 
+namespace {
+void* SystemAllocate(void*, void* block, std::size_t, std::size_t newSize) {
+    if (newSize == 0U) { std::free(block); return nullptr; }
+    return std::realloc(block, newSize);
+}
+#if defined(KB_SCRIPT_VM_LUAJIT)
+// Several blocks of different sizes are held at once, so that pointers whose tag is chosen per allocation cannot pass by chance.
+bool SystemAllocatorStaysBelow47Bits() noexcept {
+    constexpr std::size_t kSizes[] = { 16U, 100U, 4096U, 262144U, 2097152U };
+    constexpr std::size_t kRounds = 4U;
+    void* blocks[std::size(kSizes) * kRounds] = {};
+    bool low = true;
+    for (std::size_t index = 0U; index < std::size(blocks); ++index) {
+        blocks[index] = std::malloc(kSizes[index % std::size(kSizes)]);
+        low = low && blocks[index] != nullptr && (reinterpret_cast<std::uintptr_t>(blocks[index]) >> 47U) == 0U;
+    }
+    for (void* block : blocks) std::free(block);
+    return low;
+}
+#endif
+} // namespace
+
+PucLuaRawHeap::PucLuaRawHeap([[maybe_unused]] bool alwaysUseVmAllocator) noexcept {
+#if defined(KB_SCRIPT_VM_LUAJIT)
+    static const bool systemIsUsable = SystemAllocatorStaysBelow47Bits();
+    if (!alwaysUseVmAllocator && systemIsUsable) {
+        allocate_ = &SystemAllocate;
+        return;
+    }
+    lua_State* host = luaL_newstate();
+    if (host == nullptr) return;
+    host_ = host;
+    allocate_ = lua_getallocf(host, &allocatorData_);
+#else
+    allocate_ = &SystemAllocate;
+#endif
+}
+PucLuaRawHeap::~PucLuaRawHeap() {
+#if defined(KB_SCRIPT_VM_LUAJIT)
+    if (host_ != nullptr) lua_close(static_cast<lua_State*>(host_));
+#endif
+}
+void* PucLuaRawHeap::Resize(void* block, std::size_t oldSize, std::size_t newSize) noexcept {
+    return allocate_ != nullptr ? allocate_(allocatorData_, block, oldSize, newSize) : nullptr;
+}
+
 PucLuaMemoryArena::~PucLuaMemoryArena() {
     while (blocks_ != nullptr) Free(blocks_);
 }
@@ -25,7 +75,7 @@ void PucLuaMemoryArena::Free(PucLuaMemoryBlock* block) noexcept {
     else blocks_ = block->next;
     if (block->next != nullptr) block->next->previous = block->previous;
     residentBytes_ -= sizeof(PucLuaMemoryBlock) + block->capacity;
-    std::free(block);
+    static_cast<void>(heap_.Resize(block, sizeof(PucLuaMemoryBlock) + block->capacity, 0U));
 }
 
 void PucLuaMemoryArena::Release(PucLuaMemoryBlock* block) noexcept {
@@ -55,7 +105,7 @@ void* PucLuaMemoryArena::Resize(void* pointer, std::size_t size, std::size_t lim
     if (old != nullptr && old->pins == 0U) {
         const std::size_t previousSize = old->size;
         const std::size_t previousCapacity = old->capacity;
-        auto* resized = static_cast<PucLuaMemoryBlock*>(std::realloc(old, sizeof(PucLuaMemoryBlock) + size));
+        auto* resized = static_cast<PucLuaMemoryBlock*>(heap_.Resize(old, sizeof(PucLuaMemoryBlock) + old->capacity, sizeof(PucLuaMemoryBlock) + size));
         if (resized == nullptr) return nullptr;
         if (resized->previous != nullptr) resized->previous->next = resized;
         else blocks_ = resized;
@@ -65,7 +115,7 @@ void* PucLuaMemoryArena::Resize(void* pointer, std::size_t size, std::size_t lim
         liveBytes_ = liveBytes_ - previousSize + size;
         return resized + 1;
     }
-    auto* created = static_cast<PucLuaMemoryBlock*>(std::malloc(sizeof(PucLuaMemoryBlock) + size));
+    auto* created = static_cast<PucLuaMemoryBlock*>(heap_.Resize(nullptr, 0U, sizeof(PucLuaMemoryBlock) + size));
     if (created == nullptr) return nullptr;
     *created = PucLuaMemoryBlock{.next = blocks_, .capacity = size, .size = size};
     if (blocks_ != nullptr) blocks_->previous = created;

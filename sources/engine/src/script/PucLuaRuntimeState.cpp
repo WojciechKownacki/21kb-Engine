@@ -1,3 +1,4 @@
+#include "script/lua/LuaVm.hpp"
 #include "engine/script/PucLuaScriptRuntime.hpp"
 #include "script/lua/PucLuaMemoryArena.hpp"
 #include "script/lua/PucLuaStateUtilities.hpp"
@@ -69,6 +70,7 @@ std::unique_ptr<kb::core::RuntimeStateSnapshot> PucLuaScriptRuntime::CaptureRunt
     snapshot->suspendAllowed = debugSuspendAllowed_;
     snapshot->budget = executionBudgetSettings_;
     snapshot->budgetActive = executionBudgetActive_;
+    kb_lua_flush_compiled_code(state_);
     snapshot->heap = memoryBudget_->arena->Capture(memoryBudget_->limitBytes, error);
     if (!snapshot->heap) return {};
     return snapshot;
@@ -100,9 +102,12 @@ bool PucLuaScriptRuntime::RestoreRuntimeState(const kb::core::RuntimeStateSnapsh
 bool PucLuaScriptRuntime::RestoreRuntimeStateImpl(const kb::core::RuntimeStateSnapshot& state, std::string& error, bool coordinatedHost) {
     if (!ValidateRuntimeStateImpl(state, error, coordinatedHost)) return false;
     const auto& snapshot = static_cast<const RuntimeSnapshot&>(state);
+    kb_lua_flush_compiled_code(state_);
     if (!memoryBudget_->arena->Restore(*snapshot.heap, error)) return false;
     cachedScript_ = nullptr;
     callSites_.clear();
+    stateLifetime_->pausedFrameLocals = LUA_NOREF; // the saved registry has no such table
+    phaseNameReferences_.fill(0); // the registry is the saved one: the names are interned again as they are asked for
     ++callSiteRevision_;
     scripts_ = snapshot.scripts;
     modules_ = snapshot.modules;

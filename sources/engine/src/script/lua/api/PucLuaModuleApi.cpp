@@ -1,13 +1,9 @@
+#include "script/lua/LuaVm.hpp"
 #include "script/lua/api/PucLuaModuleApi.hpp"
 #include "script/lua/PucLuaArguments.hpp"
 
 #include "engine/script/PucLuaSafeCall.hpp"
 #include "engine/script/PucLuaScriptRuntime.hpp"
-
-extern "C" {
-#include <lauxlib.h>
-#include <lua.h>
-}
 
 #include <string>
 

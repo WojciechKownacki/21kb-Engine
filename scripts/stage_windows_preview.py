@@ -96,7 +96,9 @@ def stage(build: Path, output: Path) -> None:
         copy(build / "engine/kb_engine.lib", "build/engine/Release/kb_engine.lib")
         copy(build / "third_party/flecs/flecs_static.lib", "build/third_party/flecs/Release/flecs_static.lib")
         for name in ("lua", "ufbx", "monocypher", "zstd", "recast", "ui_text_shaping", "harfbuzz", "sheenbidi", "csg_geometry"):
-            copy(build / ("kb_" + name + ".lib"), "build/Release/kb_" + name + ".lib")
+            # The script VM library is LuaJIT's on Windows; the SDK names it kb_lua.lib whichever VM it holds.
+            library = build / "kb_luajit_gen" / "luajit.lib" if name == "lua" and (build / "kb_luajit_gen" / "luajit.lib").is_file() else build / ("kb_" + name + ".lib")
+            copy(library, "build/Release/kb_" + name + ".lib")
         manifest = dict(schema=prebuilt_engine.SCHEMA, target="Windows.x64",
                         engineConfiguration="Release", files=files)
         (output / prebuilt_engine.MANIFEST).write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")

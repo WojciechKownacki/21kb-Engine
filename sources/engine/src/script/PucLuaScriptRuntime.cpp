@@ -1,16 +1,13 @@
+#include "script/lua/LuaVm.hpp"
 #include "engine/script/PucLuaScriptRuntime.hpp"
 
 #include "script/lua/PucLuaDebugHook.hpp"
+#include "script/lua/PucLuaRunaway.hpp"
 #include "script/lua/PucLuaRuntimeApi.hpp"
 #include "script/lua/PucLuaSandboxEnvironment.hpp"
 #include "script/lua/PucLuaStateUtilities.hpp"
 #include "script/lua/PucLuaValueBridge.hpp"
 #include "script/lua/PucLuaMemoryArena.hpp"
-
-extern "C" {
-#include <lauxlib.h>
-#include <lua.h>
-}
 
 #include <algorithm>
 #include <chrono>
@@ -54,6 +51,12 @@ constexpr std::size_t kMaxIdleThreads = 8U;
     return frame.what != nullptr && std::string_view{ frame.what } != "C";
 }
 
+// Drops the copy of the innermost frame's locals made at a debugger pause (see PucLuaStateLifetime::pausedFrameLocals).
+void ForgetPausedFrameLocals(lua_State* state, PucLuaStateLifetime& lifetime) noexcept {
+    if (state != nullptr && lifetime.pausedFrameLocals != LUA_NOREF) luaL_unref(state, LUA_REGISTRYINDEX, lifetime.pausedFrameLocals);
+    lifetime.pausedFrameLocals = LUA_NOREF;
+}
+
 // The message luaL_newstate's panic handler prints before Lua aborts.
 int Panic(lua_State* state) {
     const char* message = lua_type(state, -1) == LUA_TSTRING ? lua_tostring(state, -1) : "error object is not a string";
@@ -71,16 +74,20 @@ PucLuaScriptRuntime::PucLuaScriptRuntime()
     stateLifetime_->state = state_;
     if (state_ != nullptr) {
         lua_atpanic(state_, &Panic);
-        *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(state_)) = this;
+        memoryBudget_->owner = this;
+        runaway_ = PucLuaRunaway::Create(state_, *this);
         PucLuaSandboxEnvironment::OpenSafeLibraries(state_);
+#if !defined(KB_SCRIPT_VM_LUAJIT)
         // Scripts make a stream of short-lived tables (self, events, results); the generational collector reclaims
         // those without marking the long-lived heap again.
         static_cast<void>(lua_gc(state_, LUA_GCGEN, 0, 0));
+#endif
     }
 }
 
 PucLuaScriptRuntime::~PucLuaScriptRuntime() {
     stateLifetime_->state = nullptr;
+    runaway_.reset();
     if (state_ != nullptr) {
         lua_close(state_);
         state_ = nullptr;
@@ -119,7 +126,7 @@ PucLuaLoadResult PucLuaScriptRuntime::ReloadScript(kb::assets::AssetId assetId, 
     }
 
     lua_pushvalue(state_, environmentIndex);
-    static_cast<void>(lua_setupvalue(state_, -2, 1));
+    kb_lua_set_chunk_environment(state_);
     lua_pushcfunction(state_, &PucLuaErrorReporter::Traceback);
     const int errorHandlerIndex = lua_gettop(state_) - 1;
     lua_insert(state_, errorHandlerIndex);
@@ -207,6 +214,12 @@ void PucLuaScriptRuntime::Clear() noexcept {
             luaL_unref(state_, LUA_REGISTRYINDEX, stateLifetime_->spareThreadReference);
         }
     }
+    if (state_ != nullptr) {
+        for (const int reference : phaseNameReferences_) {
+            if (reference != 0) luaL_unref(state_, LUA_REGISTRYINDEX, reference);
+        }
+    }
+    phaseNameReferences_.fill(0);
     stateLifetime_->selfReferences.clear();
     stateLifetime_->spareThread = nullptr;
     stateLifetime_->spareThreadReference = -2;
@@ -214,6 +227,7 @@ void PucLuaScriptRuntime::Clear() noexcept {
     cachedScript_ = nullptr;
     callSites_.clear();
     ++callSiteRevision_;
+    ForgetPausedFrameLocals(state_, *stateLifetime_);
     scripts_.clear();
     modules_.clear();
     exposedVariables_.clear();
@@ -432,12 +446,12 @@ void PucLuaScriptRuntime::SetExecutionBudgetSettings(ScriptExecutionBudgetSettin
 }
 
 void PucLuaScriptRuntime::BeginExecutionBudget() noexcept {
-    if (state_ != nullptr) PucLuaDebugHook::ArmRunaway(state_, executionBudgetSettings_.luaInstructionsPerBehaviour);
+    if (runaway_) runaway_->Arm(executionBudgetSettings_.luaInstructionsPerBehaviour);
     executionBudgetActive_ = true;
 }
 
 void PucLuaScriptRuntime::EndExecutionBudget() noexcept {
-    if (state_ != nullptr) PucLuaDebugHook::DisarmRunaway(state_);
+    if (runaway_) runaway_->Disarm();
     executionBudgetActive_ = false;
 }
 
@@ -492,6 +506,9 @@ void PucLuaScriptRuntime::ReleaseDebugPause(DebugStepMode mode) noexcept {
     debugStepThread_ = nullptr;
     debugStepDepth_ = 0;
     if (debugPause_.has_value()) {
+        ForgetPausedFrameLocals(state_, *stateLifetime_);
+        debugResumedThread_ = debugPause_->thread;
+        debugResumedLine_ = lastDebugPause_.line;
         if (mode != DebugStepMode::Run) {
             debugStepThread_ = debugPause_->thread;
             debugStepDepth_ = debugPause_->depth;
@@ -510,6 +527,12 @@ PucLuaDebugPauseSnapshot PucLuaScriptRuntime::InspectDebugPause() const {
         return snapshot;
     }
     snapshot = lastDebugPause_;
+#if defined(KB_SCRIPT_VM_LUAJIT)
+    // A thread LuaJIT suspended in a hook reports the position of the instruction before the one it stopped at (the line,
+    // and the locals the statement before it declared are missing). The stack recorded when the hook paused it, which is
+    // the stack as it still is, has them right.
+    if (!lastDebugPause_.callStack.empty() && debugSettings_.collectLocals) return snapshot;
+#endif
     snapshot.callStack = PucLuaDebugHook::CaptureCallStack(debugPause_->thread, true);
     return snapshot;
 }
@@ -569,6 +592,12 @@ std::optional<PucLuaDebugPauseReason> PucLuaScriptRuntime::ConsumeRequestedDebug
     return PucLuaDebugPauseReason::Step;
 }
 
+bool PucLuaScriptRuntime::ConsumeResumedLine(lua_State* thread, int line) noexcept {
+    if (debugResumedThread_ != thread) return false;
+    debugResumedThread_ = nullptr;
+    return line == debugResumedLine_;
+}
+
 bool PucLuaScriptRuntime::BeginDebugSuspend(lua_State* thread) noexcept {
     if (!debugSuspendAllowed_) {
         return false;
@@ -592,6 +621,7 @@ const PucLuaDebugPauseSnapshot& PucLuaScriptRuntime::LastDebugPause() const noex
 }
 
 void PucLuaScriptRuntime::ClearDebugPause() noexcept {
+    ForgetPausedFrameLocals(state_, *stateLifetime_);
     lastDebugPause_ = {};
 }
 
@@ -628,7 +658,7 @@ bool PucLuaScriptRuntime::PushModuleForImport(std::string_view name, std::string
         return false;
     }
     lua_pushvalue(state_, environmentIndex);
-    static_cast<void>(lua_setupvalue(state_, -2, 1));
+    kb_lua_set_chunk_environment(state_);
     lua_pushcfunction(state_, &PucLuaErrorReporter::Traceback);
     const int errorHandlerIndex = lua_gettop(state_) - 1;
     lua_insert(state_, errorHandlerIndex);
@@ -645,6 +675,7 @@ bool PucLuaScriptRuntime::PushModuleForImport(std::string_view name, std::string
     // is not part of the hook: an exhausted budget stops the importing script
     // again at its next loop or call, so protected calls cannot swallow it.
     lua_sethook(state_, previousHook, previousMask, previousCount);
+    PucLuaRunaway::Rearm(state_);
     if (status != LUA_OK) {
         error = PucLuaErrorReporter::ErrorFromTop(state_);
         module.loading = false;
@@ -710,6 +741,7 @@ void PucLuaScriptRuntime::PushEventValue(lua_State* target, const ScriptEvent& e
 bool PucLuaScriptRuntime::TryLeanExecute(
     CallSite& site,
     const char* functionName,
+    int nameReference,
     const ScriptEvent* event,
     ScriptExecutionContext& context,
     std::vector<ScriptDiagnostic>& diagnostics,
@@ -738,7 +770,12 @@ bool PucLuaScriptRuntime::TryLeanExecute(
     // function, the self table and the argument, and nothing is left on the state's own stack.
     lua_State* const thread = lifetime.spareThread;
     lua_rawgeti(thread, LUA_REGISTRYINDEX, site.script->environmentRef);
-    lua_getfield(thread, -1, functionName);
+    if (nameReference != 0) {
+        lua_rawgeti(thread, LUA_REGISTRYINDEX, nameReference);
+        lua_rawget(thread, -2);
+    } else {
+        lua_getfield(thread, -1, functionName);
+    }
     if (lua_isfunction(thread, -1) == 0) {
         const bool missing = lua_isnil(thread, -1) != 0;
         lua_settop(thread, 0);
@@ -829,7 +866,7 @@ bool PucLuaScriptRuntime::ResolvePhaseCall(
     }
     CallSite& site = SiteFor(InstanceKey{ entity.Id(), behaviour.behaviourAssetId });
     PhaseTarget& target = site.phases[static_cast<std::size_t>(event)];
-    target = PhaseTarget{ .site = &site, .name = ToString(event) };
+    target = PhaseTarget{ .site = &site, .name = ToString(event), .nameReference = PhaseNameReference(event) };
     call = ScriptPhaseCall{ &PucLuaScriptRuntime::InvokePhase, &target };
     return true;
 }
@@ -855,7 +892,7 @@ bool PucLuaScriptRuntime::InvokePhase(
     ScriptExecutionContext& context,
     std::vector<ScriptDiagnostic>& diagnostics) {
     const PhaseTarget& phase = *static_cast<const PhaseTarget*>(target);
-    return InvokeEntry(*phase.site, phase.name, nullptr, behaviour, context, diagnostics);
+    return InvokeEntry(*phase.site, phase.name, phase.nameReference, nullptr, behaviour, context, diagnostics);
 }
 
 bool PucLuaScriptRuntime::InvokeEventHandler(
@@ -864,12 +901,14 @@ bool PucLuaScriptRuntime::InvokeEventHandler(
     ScriptExecutionContext& context,
     std::vector<ScriptDiagnostic>& diagnostics) {
     const ScriptEvent& event = *context.IncomingEvent();
-    return InvokeEntry(*static_cast<CallSite*>(target), event.name.c_str(), &event, behaviour, context, diagnostics);
+    CallSite& site = *static_cast<CallSite*>(target);
+    return InvokeEntry(site, event.name.c_str(), site.runtime->EventNameReference(event), &event, behaviour, context, diagnostics);
 }
 
 bool PucLuaScriptRuntime::InvokeEntry(
     CallSite& site,
     const char* name,
+    int nameReference,
     const ScriptEvent* event,
     const kb::scene::BehaviourComponent& behaviour,
     ScriptExecutionContext& context,
@@ -884,7 +923,7 @@ bool PucLuaScriptRuntime::InvokeEntry(
     runtime.stateLifetime_->activeContext = &context;
     bool executed = false;
     const std::size_t before = diagnostics.size();
-    if (runtime.TryLeanExecute(site, name, event, context, diagnostics, executed)) {
+    if (runtime.TryLeanExecute(site, name, nameReference, event, context, diagnostics, executed)) {
         return executed && diagnostics.size() == before;
     }
     ScriptBackendExecutionResult result = runtime.ExecuteFunction(behaviour, name, context, event);
@@ -907,6 +946,37 @@ PucLuaScriptRuntime::ScriptRecord* PucLuaScriptRuntime::FindScriptRecord(std::ui
     return cachedScript_;
 }
 
+int PucLuaScriptRuntime::PhaseNameReference(ScriptLifecycleEvent event) {
+#if defined(KB_SCRIPT_VM_LUAJIT)
+    int& reference = phaseNameReferences_[static_cast<std::size_t>(event)];
+    if (reference == 0 && state_ != nullptr) {
+        lua_pushstring(state_, ToString(event));
+        reference = luaL_ref(state_, LUA_REGISTRYINDEX);
+    }
+    return reference;
+#else
+    static_cast<void>(event);
+    return 0;
+#endif
+}
+
+int PucLuaScriptRuntime::EventNameReference(const ScriptEvent& event) {
+#if defined(KB_SCRIPT_VM_LUAJIT)
+    if (eventBroadcasts_.empty() || eventBroadcasts_.back().event != &event || state_ == nullptr) {
+        return 0;
+    }
+    EventBroadcast& broadcast = eventBroadcasts_.back();
+    if (broadcast.nameReference == 0) {
+        lua_pushlstring(state_, event.name.data(), event.name.size());
+        broadcast.nameReference = luaL_ref(state_, LUA_REGISTRYINDEX);
+    }
+    return broadcast.nameReference;
+#else
+    static_cast<void>(event);
+    return 0;
+#endif
+}
+
 void PucLuaScriptRuntime::BeginEventBroadcast(const ScriptEvent& event) {
     eventBroadcasts_.push_back(EventBroadcast{ .event = &event, .tableReference = kNoReference });
 }
@@ -917,6 +987,9 @@ void PucLuaScriptRuntime::EndEventBroadcast() noexcept {
     }
     if (eventBroadcasts_.back().tableReference != kNoReference && state_ != nullptr) {
         luaL_unref(state_, LUA_REGISTRYINDEX, eventBroadcasts_.back().tableReference);
+    }
+    if (eventBroadcasts_.back().nameReference != 0 && state_ != nullptr) {
+        luaL_unref(state_, LUA_REGISTRYINDEX, eventBroadcasts_.back().nameReference);
     }
     eventBroadcasts_.pop_back();
 }
@@ -943,10 +1016,16 @@ void PucLuaScriptRuntime::StepGarbageCollector() noexcept {
     }
     using Clock = std::chrono::steady_clock;
     const Clock::time_point start = Clock::now();
+#if defined(KB_SCRIPT_VM_LUAJIT)
+    // Incremental: one slice of collector work (its size is bounded by the VM's step size); the allocations of the scripts
+    // pay for the rest as they go, so the allowance is never the reason to keep collecting.
+    static_cast<void>(lua_gc(state_, LUA_GCSTEP, 0));
+#else
     // Generational: a step collects the objects created since the last one, the temporary tables of a frame's
     // scripts, instead of marking the whole heap again; the mode is applied once and stays.
     static_cast<void>(lua_gc(state_, LUA_GCGEN, 0, 0));
     static_cast<void>(lua_gc(state_, LUA_GCSTEP, 0));
+#endif
     const auto elapsed = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - start).count());
     ++collectionStats_.steps;
     collectionStats_.totalMicroseconds += elapsed;
@@ -978,7 +1057,6 @@ lua_State* PucLuaScriptRuntime::AcquireThread() {
     if (thread == nullptr) {
         lua_pop(state_, 1);
         thread = lua_newthread(state_);
-        *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(thread)) = this;
     }
     if (lifetime.spareThread == nullptr) {
         // This thread becomes the one that is kept: anchored once, handed out again after every finished entry.
@@ -1053,7 +1131,7 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
     if (const ScriptLifecycleEvent lifecycle = context.Lifecycle();
         lifecycle != ScriptLifecycleEvent::Created && lifecycle != ScriptLifecycleEvent::Destroyed) {
         bool executed = false;
-        if (TryLeanExecute(SiteFor(instanceKey), functionName.data(), event, context, result.diagnostics, executed)) {
+        if (TryLeanExecute(SiteFor(instanceKey), functionName.data(), 0, event, context, result.diagnostics, executed)) {
             result.executed = executed;
             return result;
         }
@@ -1241,8 +1319,8 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
     }();
     debugSuspendAllowed_ = false;
     std::string coroutineError =
-        status == LUA_OK ? std::string{} : PucLuaErrorReporter::ErrorWithTracebackFromTop(coroutine);
-    if (status != LUA_OK && coroutineError.find("stack traceback") == std::string::npos) {
+        status == LUA_OK || status == LUA_YIELD ? std::string{} : PucLuaErrorReporter::ErrorWithTracebackFromTop(coroutine);
+    if (status != LUA_OK && status != LUA_YIELD && coroutineError.find("stack traceback") == std::string::npos) {
         const auto chunkName = std::string_view{ script->chunkName };
         coroutineError += "\nstack traceback:\n\t[entry " + std::string{ functionName } + " in " + std::string{ chunkName } + "]";
     }

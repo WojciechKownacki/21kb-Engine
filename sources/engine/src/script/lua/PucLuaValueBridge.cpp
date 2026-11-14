@@ -1,8 +1,6 @@
+#include "script/lua/LuaVm.hpp"
 #include "script/lua/PucLuaValueBridge.hpp"
 
-extern "C" {
-#include <lua.h>
-}
 
 #include <algorithm>
 #include <cstdint>

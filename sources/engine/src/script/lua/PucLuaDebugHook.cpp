@@ -1,12 +1,11 @@
+#include "script/lua/LuaVm.hpp"
 #include "script/lua/PucLuaDebugHook.hpp"
 
 #include "engine/script/PucLuaScriptRuntime.hpp"
+#include "script/lua/PucLuaMemoryArena.hpp"
+#include "script/lua/PucLuaRunaway.hpp"
+#include "script/lua/PucLuaRuntimeApi.hpp"
 #include "script/lua/PucLuaStateUtilities.hpp"
-
-extern "C" {
-#include <lauxlib.h>
-#include <lua.h>
-}
 
 #include <optional>
 #include <climits>
@@ -82,6 +81,28 @@ namespace {
     return snapshot;
 }
 
+#if defined(KB_SCRIPT_VM_LUAJIT)
+// Copies the scalar locals of the innermost frame into a table kept in the registry (see PucLuaStateLifetime::pausedFrameLocals).
+void KeepTopFrameLocals(lua_State* state) {
+    PucLuaStateLifetime* lifetime = PucLuaRuntimeApi::ContextSlot(state);
+    lua_Debug frame{};
+    if (lifetime == nullptr || lua_getstack(state, 0, &frame) == 0 || lua_checkstack(state, 4) == 0) return;
+    if (lifetime->pausedFrameLocals != LUA_NOREF) luaL_unref(state, LUA_REGISTRYINDEX, lifetime->pausedFrameLocals);
+    lua_newtable(state);
+    for (int index = 1; index <= 128; ++index) {
+        const char* name = lua_getlocal(state, &frame, index);
+        if (name == nullptr) break;
+        const int type = lua_type(state, -1);
+        if (name[0] != '(' && (type == LUA_TBOOLEAN || type == LUA_TNUMBER || (type == LUA_TSTRING && lua_objlen(state, -1) <= 4096U))) {
+            lua_setfield(state, -2, name);
+        } else {
+            lua_pop(state, 1);
+        }
+    }
+    lifetime->pausedFrameLocals = luaL_ref(state, LUA_REGISTRYINDEX);
+}
+#endif
+
 // The actual hook logic, split out from Hook() below so the latter can
 // wrap it in a try/catch. Builds std::string/std::vector snapshots
 // (CapturePause, ChunkFromDebug) that can in principle throw (std::
@@ -90,34 +111,24 @@ namespace {
 void Hook(lua_State* state, lua_Debug* debug);
 
 void HookImpl(lua_State* state, lua_Debug* debug) {
-    auto* runtime = *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(state));
+    auto* runtime = static_cast<PucLuaScriptRuntime*>(LuaStateOwner(state));
     if (runtime == nullptr || debug == nullptr) {
         return;
     }
     if (debug->event == LUA_HOOKCOUNT) {
-        // The interpreter arms a count hook on the running thread when the allowance of loop iterations and calls
-        // given by ArmRunaway is spent. One that fires while the allowance is not spent (armed in an earlier entry
-        // and not cleared) is dropped.
-        const int mask = lua_gethookmask(state);
-        if (lua_getrunaway(state) > 0 || !runtime->HasActiveExecutionBudget()) {
-            lua_sethook(state, &Hook, mask & ~LUA_MASKCOUNT, 0);
-            return;
-        }
-        if (runtime->ExecutionBudgetPolicy() ==
-            kb::core::BudgetExceededPolicy::Suspend && lua_isyieldable(state) != 0) {
-            lua_sethook(state, &Hook, mask & ~LUA_MASKCOUNT, 0);
-            static_cast<void>(lua_yieldk(state, 0, 0, nullptr));
-            return;
-        }
-        // A script can catch a hook error with pcall. The count hook stays armed with the spent allowance, so the
-        // very next instruction stops it again and it cannot keep the host occupied by catching the error forever.
-        luaL_error(state, "lua execution budget exceeded");
+        PucLuaRunaway::OnCountHook(state, *runtime, &Hook);
+        return;
     }
     // Breakpoints and steps act on line events only, and not while another script is suspended at a pause.
     if (debug->event != LUA_HOOKLINE || runtime->IsDebugPaused()) {
         return;
     }
     lua_getinfo(state, "Sl", debug);
+#if defined(KB_SCRIPT_VM_LUAJIT)
+    if (runtime->ConsumeResumedLine(state, debug->currentline)) {
+        return;
+    }
+#endif
     const std::string chunk = PucLuaErrorReporter::ChunkFromDebug(*debug);
     const PucLuaDebugSettings& settings = runtime->DebugSettings();
     bool shouldPause = false;
@@ -146,6 +157,9 @@ void HookImpl(lua_State* state, lua_Debug* debug) {
     const bool suspend = snapshot.suspended;
     runtime->RecordDebugPause(std::move(snapshot));
     if (suspend) {
+#if defined(KB_SCRIPT_VM_LUAJIT)
+        KeepTopFrameLocals(state);
+#endif
         static_cast<void>(lua_yield(state, 0));
     }
 }
@@ -202,20 +216,22 @@ std::vector<PucLuaDebugFrameSnapshot> PucLuaDebugHook::CaptureCallStack(lua_Stat
 }
 
 namespace {
-struct EvaluationMemory { std::size_t used = 0U; };
+struct EvaluationMemory { PucLuaRawHeap heap; std::size_t used = 0U; unsigned remaining = 0U; };
 void* EvaluationAllocate(void* context, void* pointer, std::size_t oldSize, std::size_t newSize) {
     auto& memory = *static_cast<EvaluationMemory*>(context);
     const auto previous = pointer == nullptr ? 0U : oldSize;
-    if (newSize == 0U) { std::free(pointer); memory.used -= previous; return nullptr; }
+    if (newSize == 0U) { static_cast<void>(memory.heap.Resize(pointer, previous, 0U)); memory.used -= previous; return nullptr; }
     if (newSize > 1024U * 1024U || memory.used - previous > 1024U * 1024U - newSize) return nullptr;
-    auto* result = std::realloc(pointer, newSize);
+    void* result = memory.heap.Resize(pointer, previous, newSize);
     if (result != nullptr) memory.used = memory.used - previous + newSize;
     return result;
 }
 void EvaluationHook(lua_State* state, lua_Debug*) {
-    auto* remaining = *static_cast<unsigned**>(lua_getextraspace(state));
-    if (*remaining <= 100U) luaL_error(state, "debug expression instruction limit exceeded");
-    *remaining -= 100U;
+    void* userData = nullptr;
+    static_cast<void>(lua_getallocf(state, &userData));
+    unsigned& remaining = static_cast<EvaluationMemory*>(userData)->remaining;
+    if (remaining <= 100U) luaL_error(state, "debug expression instruction limit exceeded");
+    remaining -= 100U;
 }
 struct EvaluationInput { lua_State* paused; const char* source; std::size_t size; int frame; };
 // No owning C++ locals: Lua errors unwind this protected callback with longjmp.
@@ -256,13 +272,26 @@ int EvaluateProtected(lua_State* state) {
         }
         lua_pop(input->paused, 1);
     }
+#if defined(KB_SCRIPT_VM_LUAJIT)
+    // The innermost frame of a thread suspended in a hook is read from the copy made at the pause.
+    const PucLuaStateLifetime* lifetime = PucLuaRuntimeApi::ContextSlot(input->paused);
+    if (input->frame == 0 && lifetime != nullptr && lifetime->pausedFrameLocals != LUA_NOREF) {
+        lua_rawgeti(input->paused, LUA_REGISTRYINDEX, lifetime->pausedFrameLocals);
+        lua_pushnil(input->paused);
+        while (lua_next(input->paused, -2) != 0) {
+            copyScalar(lua_tostring(input->paused, -2));
+            lua_pop(input->paused, 1);
+        }
+        lua_pop(input->paused, 1);
+    } else
+#endif
     for (int index = 1; index <= 128; ++index) {
         const char* name = lua_getlocal(input->paused, &frame, index);
         if (!name) break;
         copyScalar(name);
         lua_pop(input->paused, 1);
     }
-    if (lua_setupvalue(state, -2, 1) == nullptr) lua_pop(state, 1);
+    kb_lua_set_chunk_environment(state);
     lua_call(state, 0, 1);
     return 1;
 }
@@ -274,10 +303,9 @@ PucLuaDebugEvaluationResult PucLuaDebugHook::Evaluate(lua_State* paused, std::st
     if (lua_checkstack(paused, 2) == 0) return {.error = "cannot inspect paused Lua stack"};
     const std::string source = "return (" + std::string{expression} + ")";
     EvaluationMemory memory;
+    memory.remaining = 10000U;
     lua_State* state = lua_newstate(&EvaluationAllocate, &memory);
     if (!state) return {.error = "cannot allocate debug expression state"};
-    unsigned remaining = 10000U;
-    *static_cast<unsigned**>(lua_getextraspace(state)) = &remaining;
     lua_sethook(state, &EvaluationHook, LUA_MASKCOUNT, 100);
     EvaluationInput input{paused, source.data(), source.size(), frame};
     const int savedTop = lua_gettop(paused);
@@ -308,16 +336,13 @@ void PucLuaDebugHook::Install(lua_State* state, const PucLuaScriptRuntime& runti
     }
 }
 
-void PucLuaDebugHook::ArmRunaway(lua_State* state, std::size_t limit) noexcept {
-    lua_setrunaway(state, &Hook, static_cast<int>(std::min<std::size_t>(limit, static_cast<std::size_t>(INT_MAX))));
-}
-
-void PucLuaDebugHook::DisarmRunaway(lua_State* state) noexcept {
-    lua_setrunaway(state, nullptr, 0);
+lua_Hook PucLuaDebugHook::HookFunction() noexcept {
+    return &Hook;
 }
 
 void PucLuaDebugHook::Clear(lua_State* state) {
     lua_sethook(state, nullptr, 0, 0);
+    PucLuaRunaway::Rearm(state);
 }
 
 } // namespace kb::script

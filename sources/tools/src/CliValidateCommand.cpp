@@ -5,6 +5,7 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/script/PucLuaScriptRuntime.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
+#include "engine/script/ScriptLanguageSubset.hpp"
 #include "engine/script/ScriptLifecycle.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/script/UISceneValidation.hpp"
@@ -157,6 +158,10 @@ int RunValidateCommand(const ArgumentList& arguments, CommandIo io) {
             path.filename().string());
         if (!loaded.succeeded) {
             io.err << "FAIL " << positional << ": " << loaded.error << '\n';
+            // A construct only one of the two script VMs has is often the reason the other one refuses the script.
+            for (const kb::script::ScriptSubsetFinding& finding : kb::script::FindOutOfSubsetConstructs(source)) {
+                io.err << "WARN " << positional << ':' << finding.line << ": " << finding.message << '\n';
+            }
             ++failures;
             continue;
         }
@@ -171,11 +176,17 @@ int RunValidateCommand(const ArgumentList& arguments, CommandIo io) {
         }
         // Loads fine, but a callback named for another lifecycle is never called: say so instead of a bare OK.
         const std::vector<kb::script::ForeignLifecycleName> foreign = kb::script::FindForeignLifecycleNames(source);
+        // The script runs on the two script VMs; what only one of them has would fail on a platform that uses the other.
+        const std::vector<kb::script::ScriptSubsetFinding> outsideSubset = kb::script::FindOutOfSubsetConstructs(source);
+        const std::size_t warnings = foreign.size() + outsideSubset.size();
         io.out << "OK   " << positional;
-        if (!foreign.empty()) {
-            io.out << " (" << foreign.size() << (foreign.size() == 1U ? " warning)" : " warnings)");
+        if (warnings != 0U) {
+            io.out << " (" << warnings << (warnings == 1U ? " warning)" : " warnings)");
         }
         io.out << '\n';
+        for (const kb::script::ScriptSubsetFinding& finding : outsideSubset) {
+            io.out << "WARN " << positional << ':' << finding.line << ": " << finding.message << '\n';
+        }
         for (const kb::script::ForeignLifecycleName& name : foreign) {
             const char* hook = kb::script::ToString(name.hook);
             io.out << "WARN " << positional << ':' << name.line << ": " << name.name

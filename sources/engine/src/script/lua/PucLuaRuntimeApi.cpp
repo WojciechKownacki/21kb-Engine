@@ -1,6 +1,8 @@
+#include "script/lua/LuaVm.hpp"
 #include "script/lua/PucLuaRuntimeApi.hpp"
 
 #include "engine/script/PucLuaScriptRuntime.hpp"
+#include "script/lua/PucLuaHotApi.hpp"
 #include "script/lua/PucLuaStateUtilities.hpp"
 #include "script/lua/api/PucLuaEventApi.hpp"
 #include "script/lua/api/PucLuaEventsApi.hpp"
@@ -11,10 +13,6 @@
 #include "script/lua/api/PucLuaTaskApi.hpp"
 
 #include "engine/script/ScriptFunctionRegistry.hpp"
-
-extern "C" {
-#include <lua.h>
-}
 
 #include <cstdint>
 
@@ -69,13 +67,13 @@ void MarkAttached(lua_State* state, int absoluteIndex, lua_Integer stamp) {
 
 std::shared_ptr<PucLuaStateLifetime> PucLuaRuntimeApi::Lifetime(lua_State* state) noexcept {
     if (state == nullptr) return {};
-    auto* runtime = *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(state));
+    auto* runtime = static_cast<PucLuaScriptRuntime*>(LuaStateOwner(state));
     return runtime != nullptr ? runtime->stateLifetime_ : nullptr;
 }
 
 PucLuaStateLifetime* PucLuaRuntimeApi::ContextSlot(lua_State* state) noexcept {
     if (state == nullptr) return nullptr;
-    auto* runtime = *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(state));
+    auto* runtime = static_cast<PucLuaScriptRuntime*>(LuaStateOwner(state));
     return runtime != nullptr ? runtime->stateLifetime_.get() : nullptr;
 }
 
@@ -121,6 +119,7 @@ std::optional<std::string> PucLuaRuntimeApi::AttachExecutionApi(lua_State* state
     PucLuaEventsApi::Attach(state, environmentIndex, context, runtime);
     PucLuaSharedApi::Attach(state, environmentIndex, context);
     PucLuaFunctionApi::Attach(state, environmentIndex, context);
+    PucLuaHotApi::Attach(state, environmentIndex);
     // Re-attach `Inspector` bound to THIS execution's context so `Inspector.x`
     // read/write routes to the current entity's exposed-variable instance.
     PucLuaSelfApi::AttachInspector(state, environmentIndex, &context);

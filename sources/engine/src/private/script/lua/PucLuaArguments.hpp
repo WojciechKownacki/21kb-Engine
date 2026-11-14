@@ -1,9 +1,6 @@
 #pragma once
 
-extern "C" {
-#include <lauxlib.h>
-#include <lua.h>
-}
+#include "script/lua/LuaVm.hpp"
 
 #include <cstddef>
 #include <stdexcept>

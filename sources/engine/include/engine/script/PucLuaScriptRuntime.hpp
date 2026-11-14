@@ -25,6 +25,7 @@ struct lua_State;
 
 namespace kb::script {
 
+class PucLuaRunaway;
 struct PucLuaMemoryBudget;
 struct PucLuaStateLifetime;
 
@@ -173,6 +174,9 @@ public:
     // Line hook side: whether `thread` may yield from the hook to stay suspended at a pause; true marks it as
     // suspending. False while a Destroyed entry runs, which is never invoked again to resume.
     [[nodiscard]] bool BeginDebugSuspend(lua_State* thread) noexcept;
+    // LuaJIT runs the hook again for the line a thread was suspended at when it is resumed; true once for that first event,
+    // which is not a new line to stop at.
+    [[nodiscard]] bool ConsumeResumedLine(lua_State* thread, int line) noexcept;
     void RecordDebugPause(PucLuaDebugPauseSnapshot snapshot);
     [[nodiscard]] std::optional<PucLuaDebugPauseReason> ConsumeRequestedDebugPause() noexcept;
     [[nodiscard]] bool NeedsDebugLineHook() const noexcept;
@@ -268,6 +272,9 @@ private:
     struct EventBroadcast {
         const ScriptEvent* event = nullptr;
         int tableReference = -2;
+        // The event's name as an interned string anchored in the registry (LuaJIT: the receivers find their handler without
+        // hashing the name again); zero when there is none.
+        int nameReference = 0;
     };
     std::vector<EventBroadcast> eventBroadcasts_;
 
@@ -326,6 +333,7 @@ private:
     struct PhaseTarget {
         CallSite* site = nullptr;
         const char* name = nullptr;
+        int nameReference = 0;
     };
     struct CallSite {
         PucLuaScriptRuntime* runtime = nullptr;
@@ -347,6 +355,7 @@ private:
     [[nodiscard]] bool TryLeanExecute(
         CallSite& site,
         const char* functionName,
+        int nameReference,
         const ScriptEvent* event,
         ScriptExecutionContext& context,
         std::vector<ScriptDiagnostic>& diagnostics,
@@ -361,6 +370,11 @@ private:
         bool& executed);
     // Pushes the event table of a handler on `target`: the shared one while a broadcast is in progress.
     void PushEventValue(lua_State* target, const ScriptEvent& event);
+    // The registry reference of an interned entry name (zero: none is kept). A lifecycle name is kept for the life of the
+    // state; an event name only while its broadcast is in progress.
+    [[nodiscard]] int PhaseNameReference(ScriptLifecycleEvent event);
+    [[nodiscard]] int EventNameReference(const ScriptEvent& event);
+    std::array<int, static_cast<std::size_t>(ScriptLifecycleEvent::Destroyed) + 1U> phaseNameReferences_{};
     [[nodiscard]] static bool InvokePhase(
         void* target,
         const kb::scene::BehaviourComponent& behaviour,
@@ -374,6 +388,7 @@ private:
     [[nodiscard]] static bool InvokeEntry(
         CallSite& site,
         const char* name,
+        int nameReference,
         const ScriptEvent* event,
         const kb::scene::BehaviourComponent& behaviour,
         ScriptExecutionContext& context,
@@ -391,6 +406,8 @@ private:
     std::unique_ptr<PucLuaMemoryBudget> memoryBudget_;
     std::shared_ptr<PucLuaStateLifetime> stateLifetime_;
     lua_State* state_ = nullptr;
+    // Ends an entry that has run past the execution budget (see PucLuaRunaway.hpp).
+    std::unique_ptr<PucLuaRunaway> runaway_;
     std::unordered_map<std::uint64_t, ScriptRecord> scripts_;
     std::unordered_map<std::string, ModuleRecord> modules_;
     std::unordered_map<std::uint64_t, std::vector<ExposedVariableRecord>> exposedVariables_;
@@ -421,6 +438,9 @@ private:
     lua_State* debugSuspendThread_ = nullptr;
     int debugSuspendDepth_ = 0;
     bool debugSuspendAllowed_ = false;
+    // The thread last released from a pause and the line it paused at, until its first line event after the release.
+    lua_State* debugResumedThread_ = nullptr;
+    int debugResumedLine_ = 0;
     ScriptExecutionBudgetSettings executionBudgetSettings_;
     bool executionBudgetActive_ = false;
     std::uint64_t generation_ = 1U;

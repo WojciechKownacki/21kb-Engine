@@ -427,6 +427,33 @@ if(NOT WIN32)
 endif()
 kb_apply_fuzz_instrumentation(kb_ufbx)
 
+# The script VM. Scripts run on LuaJIT where the platform allows the program to generate machine code (Windows, Linux and
+# Android) and on Lua 5.4 where it does not (iOS, the web, consoles). The VM is chosen here, once: there is no runtime
+# switch, and the engine's script sources are written for both (script/lua/LuaVm.hpp maps the few calls that differ).
+# KB_SCRIPT_VM overrides the platform default, for example to build the Lua 5.4 VM on Windows to test the language subset
+# both VMs share.
+set(KB_SCRIPT_VM "" CACHE STRING "Script VM: LuaJIT or Lua54 (empty: LuaJIT on Windows with MSVC, Linux and Android, Lua54 elsewhere)")
+set_property(CACHE KB_SCRIPT_VM PROPERTY STRINGS "" LuaJIT Lua54)
+if(KB_SCRIPT_VM STREQUAL "")
+    if((WIN32 AND MSVC) OR ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        set(kb_script_vm LuaJIT)
+    else()
+        set(kb_script_vm Lua54)
+    endif()
+elseif(KB_SCRIPT_VM MATCHES "^(LuaJIT|Lua54)$")
+    set(kb_script_vm ${KB_SCRIPT_VM})
+else()
+    message(FATAL_ERROR "KB_SCRIPT_VM must be LuaJIT or Lua54, not '${KB_SCRIPT_VM}'")
+endif()
+message(STATUS "Script VM: ${kb_script_vm}")
+
+FetchContent_Declare(
+    kb_luajit
+    URL https://github.com/LuaJIT/LuaJIT/archive/63c8f1a9b479ba5518cf6a170ff7729178bc3cfd.tar.gz
+    URL_HASH SHA256=8cad76f444b76001b7123dc626c5d0bfc24f1f790333737443345f7e6b41bb5f
+    SOURCE_SUBDIR kb_luajit_has_no_cmake_entry
+)
+if(kb_script_vm STREQUAL "Lua54")
 FetchContent_Declare(
     kb_lua
     URL https://www.lua.org/ftp/lua-5.4.8.tar.gz
@@ -484,6 +511,94 @@ if(NOT TARGET kb_lua)
     elseif(UNIX)
         target_compile_definitions(kb_lua PRIVATE LUA_USE_POSIX)
     endif()
+endif()
+
+    add_library(kb_script_vm INTERFACE)
+    target_link_libraries(kb_script_vm INTERFACE kb_lua)
+    set(KB_SCRIPT_VM_LIBRARY kb_lua)
+    set(KB_SCRIPT_VM_INCLUDE_DIR ${kb_lua_SOURCE_DIR}/src)
+else()
+    # LuaJIT (MIT), built from the pinned archive into a static library with LUAJIT_ENABLE_CHECKHOOK: compiled code checks
+    # for an interrupting hook in its loops, which the execution budget of the runtime relies on (PucLuaRunaway).
+    FetchContent_MakeAvailable(kb_luajit)
+    set(kb_luajit_gen_dir ${CMAKE_BINARY_DIR}/kb_luajit_gen)
+    file(MAKE_DIRECTORY ${kb_luajit_gen_dir})
+    if(MSVC)
+        # The Windows build uses src/msvcbuild.bat in the active MSVC environment. The script ships with LF line endings,
+        # which the Windows command interpreter mishandles.
+        file(READ ${kb_luajit_SOURCE_DIR}/src/msvcbuild.bat kb_luajit_script)
+        if(NOT kb_luajit_script MATCHES "\r\n")
+            string(REPLACE "\n" "\r\n" kb_luajit_script "${kb_luajit_script}")
+            file(WRITE ${kb_luajit_SOURCE_DIR}/src/msvcbuild.bat "${kb_luajit_script}")
+        endif()
+        file(TO_NATIVE_PATH ${kb_luajit_SOURCE_DIR}/src kb_luajit_src_native)
+        set(kb_luajit_library ${kb_luajit_gen_dir}/luajit.lib)
+        file(TO_NATIVE_PATH ${kb_luajit_library} kb_luajit_library_native)
+        file(CONFIGURE OUTPUT ${kb_luajit_gen_dir}/build_luajit.bat @ONLY NEWLINE_STYLE WIN32 CONTENT
+            "@echo off
+set NoDefaultCurrentDirectoryInExePath=
+set CL=/MD /DLUAJIT_ENABLE_CHECKHOOK
+cd /d \"@kb_luajit_src_native@\"
+call msvcbuild.bat static
+if errorlevel 1 exit /b 1
+copy /y lua51.lib \"@kb_luajit_library_native@\" >nul
+")
+        add_custom_command(
+            OUTPUT ${kb_luajit_library}
+            COMMAND cmd /c ${kb_luajit_gen_dir}/build_luajit.bat
+            DEPENDS ${kb_luajit_gen_dir}/build_luajit.bat
+            WORKING_DIRECTORY ${kb_luajit_SOURCE_DIR}/src
+            COMMENT "Building LuaJIT with msvcbuild.bat"
+            VERBATIM)
+        add_custom_target(kb_luajit_build DEPENDS ${kb_luajit_library})
+        set(KB_SCRIPT_VM_BUILD_TARGET kb_luajit_build)
+        add_library(kb_luajit STATIC IMPORTED GLOBAL)
+        set_target_properties(kb_luajit PROPERTIES IMPORTED_LOCATION ${kb_luajit_library})
+        add_dependencies(kb_luajit kb_luajit_build)
+        target_include_directories(kb_luajit SYSTEM INTERFACE ${kb_luajit_SOURCE_DIR}/src)
+    else()
+        # Android and Linux: LuaJIT's own host tools generate the VM (assembler for the target) and the headers, then the
+        # toolchain of this build compiles the library like any other target, so it gets the flags of the platform
+        # (CMake/GenerateLuaJitVm.cmake does what LuaJIT's Makefile does for a cross build).
+        enable_language(ASM)
+        set(kb_luajit_target_flags "${CMAKE_C_FLAGS}")
+        if(CMAKE_C_COMPILER_TARGET)
+            string(APPEND kb_luajit_target_flags " --target=${CMAKE_C_COMPILER_TARGET}")
+        endif()
+        if(CMAKE_SYSROOT)
+            string(APPEND kb_luajit_target_flags " --sysroot=${CMAKE_SYSROOT}")
+        endif()
+        set(kb_luajit_generated
+            ${kb_luajit_gen_dir}/lj_vm.S ${kb_luajit_gen_dir}/lj_bcdef.h ${kb_luajit_gen_dir}/lj_ffdef.h
+            ${kb_luajit_gen_dir}/lj_libdef.h ${kb_luajit_gen_dir}/lj_recdef.h ${kb_luajit_gen_dir}/lj_folddef.h ${kb_luajit_gen_dir}/luajit.h)
+        add_custom_command(
+            OUTPUT ${kb_luajit_generated}
+            COMMAND ${CMAKE_COMMAND} -DLJ_SRC=${kb_luajit_SOURCE_DIR}/src -DLJ_GEN=${kb_luajit_gen_dir}
+                -DLJ_TARGET_CC=${CMAKE_C_COMPILER} "-DLJ_TARGET_FLAGS=${kb_luajit_target_flags}" -DLJ_TARGET_OS=Linux
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/CMake/GenerateLuaJitVm.cmake
+            DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/CMake/GenerateLuaJitVm.cmake
+            COMMENT "Generating the LuaJIT VM"
+            VERBATIM)
+        file(GLOB kb_luajit_sources CONFIGURE_DEPENDS ${kb_luajit_SOURCE_DIR}/src/lj_*.c ${kb_luajit_SOURCE_DIR}/src/lib_*.c)
+        add_custom_target(kb_luajit_generate DEPENDS ${kb_luajit_generated})
+        set(KB_SCRIPT_VM_BUILD_TARGET kb_luajit_generate)
+        add_library(kb_luajit STATIC ${kb_luajit_sources} ${kb_luajit_gen_dir}/lj_vm.S)
+        add_dependencies(kb_luajit kb_luajit_generate)
+        set_source_files_properties(${kb_luajit_gen_dir}/lj_vm.S PROPERTIES GENERATED TRUE)
+        set_target_properties(kb_luajit PROPERTIES OUTPUT_NAME kb_lua POSITION_INDEPENDENT_CODE ON)
+        target_include_directories(kb_luajit PRIVATE ${kb_luajit_gen_dir})
+        target_include_directories(kb_luajit SYSTEM PUBLIC ${kb_luajit_SOURCE_DIR}/src ${kb_luajit_gen_dir})
+        target_compile_definitions(kb_luajit PRIVATE LUAJIT_ENABLE_CHECKHOOK _FILE_OFFSET_BITS=64 _LARGEFILE_SOURCE)
+        target_compile_options(kb_luajit PRIVATE -U_FORTIFY_SOURCE -fno-stack-protector -w)
+        if(NOT ANDROID)
+            target_link_libraries(kb_luajit PUBLIC m ${CMAKE_DL_LIBS})
+        endif()
+    endif()
+    add_library(kb_script_vm INTERFACE)
+    target_link_libraries(kb_script_vm INTERFACE kb_luajit)
+    set(KB_SCRIPT_VM_LIBRARY kb_luajit)
+    # luajit.h is generated by the LuaJIT build, into its source folder (Windows) or the generated folder (the others).
+    set(KB_SCRIPT_VM_INCLUDE_DIR ${kb_luajit_SOURCE_DIR}/src ${kb_luajit_gen_dir})
 endif()
 
 # Every cryptographic primitive the engine uses (Ed25519, SHA-512, HMAC-SHA512,
