@@ -1084,8 +1084,9 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;material" TIMEOUT 240)
         foreach(_fog_backend d3d11 d3d12 vulkan opengl)
             add_test(NAME kb_renderer_material_matrix_${_fog_backend} COMMAND $<TARGET_FILE:kb_renderer_tests> material-matrix --backend ${_fog_backend})
+            # The matrix fills the GPU for a minute; beside other GPU tests the driver can drop their device.
             set_tests_properties(kb_renderer_material_matrix_${_fog_backend} PROPERTIES
-                WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;material" TIMEOUT 240)
+                WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;material" TIMEOUT 240 RUN_SERIAL TRUE)
             add_test(NAME kb_renderer_fog_${_fog_backend} COMMAND $<TARGET_FILE:kb_renderer_tests> fog-profiles --backend ${_fog_backend})
             set_tests_properties(kb_renderer_fog_${_fog_backend} PROPERTIES
                 WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;fog" TIMEOUT 180)

@@ -1789,6 +1789,8 @@ if(BUILD_TESTING)
         endif()
     endif()
     set_tests_properties(kb_editor_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+    # Both run the graph cook suite, which clears and fills one cache directory.
+    set_tests_properties(kb_editor_tests kb_editor_material_cook PROPERTIES RESOURCE_LOCK kb_editor_graph_cook_cache)
 
     if(TARGET kb_cli AND TARGET kb_cooker AND TARGET kb_game AND KB_BUILD_PROVIDER_MODULES_AS_DLL
         AND TARGET kb_physics_jolt_plugin AND TARGET kb_audio_miniaudio_plugin

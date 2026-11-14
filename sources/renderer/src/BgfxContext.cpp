@@ -171,8 +171,10 @@ class BgfxEngineCallback final : public bgfx::CallbackI {
 public:
     BgfxEngineCallback(
         std::filesystem::path cacheRoot,
-        std::string_view writableStorageRoot)
+        std::string_view writableStorageRoot,
+        void* window)
         : cacheRoot_(std::move(cacheRoot)),
+          window_(window),
           fatalLogPath_(BgfxLogPath(writableStorageRoot)),
           psoTracePath_(BgfxPsoTracePath(writableStorageRoot)) {
         if (!cacheRoot_.empty()) {
@@ -196,8 +198,15 @@ public:
 #pragma clang diagnostic pop
 #endif
 #if defined(_WIN32)
+        // A dialog tells a player why the game closed. A run nobody watches (a hidden window: tests, captures, servers)
+        // has nobody to close it and would hang on it, so it reports on the error stream instead.
         if (code == bgfx::Fatal::DeviceLost) {
-            MessageBoxA(nullptr, message != nullptr ? message : "bgfx device lost", "21kb Engine - bgfx fatal", MB_OK | MB_ICONERROR);
+            const char* const text = message != nullptr ? message : "bgfx device lost";
+            if (window_ != nullptr && IsWindowVisible(static_cast<HWND>(window_)) != FALSE) {
+                MessageBoxA(nullptr, text, "21kb Engine - bgfx fatal", MB_OK | MB_ICONERROR);
+            } else {
+                std::fprintf(stderr, "21kb Engine - bgfx fatal: %s\n", text);
+            }
         }
 #else
         (void)message;
@@ -367,6 +376,7 @@ private:
     }
 
     std::filesystem::path cacheRoot_;
+    [[maybe_unused]] void* window_ = nullptr; // read on Windows only
     std::filesystem::path fatalLogPath_;
     std::filesystem::path psoTracePath_;
     std::mutex cacheMutex_;
@@ -399,7 +409,8 @@ bool BgfxContext::InitializeImpl(std::uint32_t width, std::uint32_t height, void
 
     callback_ = std::make_unique<BgfxEngineCallback>(
         BgfxCacheRoot(preferredBackend, config.writableStorageRoot),
-        config.writableStorageRoot);
+        config.writableStorageRoot,
+        nwh);
     nativeWindowHandle_ = nwh;
     nativeDisplayHandle_ = ndt;
 
