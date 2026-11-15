@@ -300,9 +300,13 @@ public:
     void CaptureChunkedSnapshot(std::span<const ComponentTypeInfo> componentTypes, ChunkedWorldSnapshot& snapshot) const;
     // False after removals or migrations (including adding components to existing entities).
     [[nodiscard]] bool IsAppendOnlySince(std::uint64_t structuralVersion) const noexcept;
-    // Extend an earlier collection for the same query and report the first changed record.
-    // Existing full chunks retain their metadata snapshots; dirty queries read live counts from storage.
-    [[nodiscard]] bool RefreshMutableQueryRecordsAfterAppends(
+    // False after a change that destroyed a chunk or reset a table (the memory that an earlier collection points at can be
+    // gone); appends, removals and migrations that leave every chunk in place keep it true.
+    [[nodiscard]] bool IsTailChangeOnlySince(std::uint64_t structuralVersion) const noexcept;
+    // Bring an earlier collection for the same query up to date after appends and removals, and report the first changed
+    // record; false when IsTailChangeOnlySince is false. Chunks that did not change size retain their metadata snapshots;
+    // dirty queries read live counts from storage.
+    [[nodiscard]] bool RefreshMutableQueryRecords(
         std::span<const ComponentId> componentIds,
         std::span<const ComponentId> requiredComponentIds,
         std::span<const ComponentId> excludedComponentIds,

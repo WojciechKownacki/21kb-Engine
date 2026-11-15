@@ -318,6 +318,33 @@ struct SceneTransformValueCacheEntry {
     bool dirty = false;
 };
 
+// One entity of a level of the dirty-frontier pass: the pass finds its row and its parent's row, composes the row where it
+// is stored, and the next level takes the children of the rows composed, whose parent row is the composed one.
+struct SceneTransformFrontierItem {
+    SceneEntity entity;
+    SceneEntity parent;
+    TransformComponent* row = nullptr;
+    const TransformComponent* parentRow = nullptr;
+    std::size_t archetype = 0U;
+};
+
+// One chunk of the bit set that the render-proxy lists are built from: its share of the lists, the room it was given
+// (one slot for each bit set) and how much of it holds entities, and its share of each list of indices.
+struct SceneTransformProxyChunk {
+    std::size_t bound = 0U;
+    std::size_t boundFirst = 0U;
+    std::size_t written = 0U;
+    std::size_t first = 0U;
+    std::size_t meshCount = 0U;
+    std::size_t visibleMeshCount = 0U;
+    std::size_t cameraCount = 0U;
+    std::size_t lightCount = 0U;
+    std::size_t meshFirst = 0U;
+    std::size_t visibleMeshFirst = 0U;
+    std::size_t cameraFirst = 0U;
+    std::size_t lightFirst = 0U;
+};
+
 struct SceneTransformApplyChunkStats {
     std::size_t updated = 0U;
     std::size_t rootFastPath = 0U;
@@ -326,6 +353,10 @@ struct SceneTransformApplyChunkStats {
     std::size_t unitScaleParentFastPath = 0U;
     std::size_t uniformScaleParentFastPath = 0U;
     std::size_t staticLocalRotationFastPath = 0U;
+    // The first tables that the chunk's rows were in (more are found by scanning the chunk's rows).
+    std::array<std::size_t, 4U> archetypes{};
+    std::size_t archetypeCount = 0U;
+    bool archetypesOverflow = false;
 };
 
 struct VectorShape2DRuntimeRecord {
@@ -701,11 +732,6 @@ public:
     std::uint64_t transformValueCacheBuildVersion = 1U;
     std::vector<SceneTransformValueCacheEntry> transformValueDenseScratch;
     std::unordered_map<SceneEntity::IdType, SceneTransformValueCacheEntry> transformValueSparseScratch;
-    std::vector<SceneEntity> transformValueCacheLoadEntitiesScratch;
-    std::vector<SceneEntity> transformValueCacheLoadDenseMarkedEntities;
-    std::vector<std::uint32_t> transformValueCacheLoadDenseMarkEpochs;
-    std::unordered_map<SceneEntity::IdType, std::uint32_t> transformValueCacheLoadSparseMarkEpochs;
-    std::uint32_t transformValueCacheLoadMarkEpoch = 1U;
     std::vector<SceneTransformBatchEntry> transformHierarchyEntriesScratch;
     std::vector<SceneEntity> transformHierarchyUpdatedEntitiesScratch;
     std::vector<TransformComponent, kb::ecs::NoInitAllocator<TransformComponent>> transformHierarchyUpdatedTransformsScratch;
@@ -717,8 +743,11 @@ public:
     std::vector<std::uint32_t> transformDirtyFrontierDenseMarkEpochs;
     std::unordered_map<SceneEntity::IdType, std::uint32_t> transformDirtyFrontierSparseMarkEpochs;
     std::uint32_t transformDirtyFrontierMarkEpoch = 1U;
-    std::vector<SceneEntity> transformDirtyFrontierLevelScratch;
-    std::vector<SceneEntity> transformDirtyFrontierNextScratch;
+    std::vector<SceneTransformFrontierItem, kb::ecs::NoInitAllocator<SceneTransformFrontierItem>> transformFrontierItemsScratch;
+    std::vector<SceneTransformFrontierItem, kb::ecs::NoInitAllocator<SceneTransformFrontierItem>> transformFrontierNextItemsScratch;
+    std::vector<std::size_t> transformFrontierChunkChildrenScratch;
+    std::vector<std::uint8_t> transformFrontierTopFlagsScratch;
+    std::vector<std::size_t> transformFrontierArchetypesScratch;
     std::vector<std::uint8_t> renderProxyDenseComponentMasks;
     std::unordered_map<SceneEntity::IdType, std::uint8_t> renderProxySparseComponentMasks;
     // One bit per dense entity index: the transform sync composed the entity's world transform during this frame
@@ -761,12 +790,14 @@ public:
     std::uint64_t transformPassRecordsVersion = 0U;
     bool transformPassRunning = false;
     bool transformRenderProxyListsStale = false;
-    std::vector<SceneEntity> transformRenderProxyUpdateEntities;
-    std::vector<WorldTransformAffine3x4> transformRenderProxyWorldAffine3x4;
-    std::vector<std::size_t> transformRenderProxyMeshRendererIndices;
-    std::vector<std::size_t> transformRenderProxyVisibleMeshRendererIndices;
-    std::vector<std::size_t> transformRenderProxyCameraIndices;
-    std::vector<std::size_t> transformRenderProxyLightIndices;
+    // Overwritten by the build of the lists, which sizes them for all the bits set before it knows how many entities remain.
+    std::vector<SceneEntity, kb::ecs::NoInitAllocator<SceneEntity>> transformRenderProxyUpdateEntities;
+    std::vector<WorldTransformAffine3x4, kb::ecs::NoInitAllocator<WorldTransformAffine3x4>> transformRenderProxyWorldAffine3x4;
+    std::vector<std::size_t, kb::ecs::NoInitAllocator<std::size_t>> transformRenderProxyMeshRendererIndices;
+    std::vector<std::size_t, kb::ecs::NoInitAllocator<std::size_t>> transformRenderProxyVisibleMeshRendererIndices;
+    std::vector<std::size_t, kb::ecs::NoInitAllocator<std::size_t>> transformRenderProxyCameraIndices;
+    std::vector<std::size_t, kb::ecs::NoInitAllocator<std::size_t>> transformRenderProxyLightIndices;
+    std::vector<SceneTransformProxyChunk> transformRenderProxyChunksScratch;
     std::vector<SceneEntity> renderProxyUpdateEntities;
     std::unordered_set<SceneEntity::IdType> renderProxyUpdateEntityIds;
     std::vector<SceneEntity> renderProxyDirtyTraversalScratch;

@@ -20,6 +20,8 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
+#include <cstdlib>
 #include <iostream>
 #include <span>
 #include <stdexcept>
@@ -1070,12 +1072,10 @@ void RunTransformSparseFlushReportTest() {
     scene.Runtime().SynchronizeTransforms();
 
     const kb::scene::SceneRuntimeHotPathReport report = scene.Runtime().HotPathReport();
-    kb::tests::Require(report.transformHierarchySparseFlushCount == 1U, "Transform runtime did not report sparse dirty flush");
     kb::tests::Require(report.transformHierarchyBatchFlushCount == 0U, "Transform runtime used a batch flush for sparse dirty roots");
     kb::tests::Require(report.transformHierarchyFlushedEntityCount == 1U, "Transform runtime reported an unexpected sparse flush entity count");
-    kb::tests::Require(report.transformHierarchyDirtyFrontierCount == 1U &&
-            report.transformHierarchyDirtyListFlushCount == 1U,
-        "Transform runtime lost the sparse dirty frontier while rebuilding its query cache");
+    kb::tests::Require(report.transformHierarchyDirtyFrontierCount == 0U,
+        "A dirty row without links next to hierarchies must be composed by the root lane, not the frontier");
     kb::tests::Require(report.transformHierarchyUpdatedCount == 1U, "Transform runtime updated more than the moved sparse root");
     kb::tests::Require(report.transformHierarchyInspectedCount == 1U, "Transform runtime inspected clean roots during sparse flush");
     kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(roots.front()).worldPosition.x, 42.0F), "Sparse flush did not write the moved root");
@@ -1086,7 +1086,7 @@ void RunTransformSparseFlushReportTest() {
     scene.Transforms().MarkModified(roots.front().Entity());
     scene.Runtime().SynchronizeTransforms();
     const kb::scene::SceneRuntimeHotPathReport warmReport = scene.Runtime().HotPathReport();
-    kb::tests::Require(warmReport.transformHierarchyDirtyFrontierCount == 1U &&
+    kb::tests::Require(warmReport.transformHierarchyDirtyFrontierCount == 0U &&
             warmReport.transformHierarchyUpdatedCount == 1U &&
             warmReport.transformHierarchyInspectedCount == 1U &&
             kb::tests::NearlyEqual(scene.Transforms().Get(roots.front()).worldPosition.x, 43.0F),
@@ -1131,7 +1131,6 @@ void RunTransformHierarchyDirtyFrontierReportTest() {
     kb::tests::Require(report.transformHierarchyDirtyFrontierCount == 2U, "Transform hierarchy did not propagate root dirty frontier to the child level");
     kb::tests::Require(report.transformHierarchyInspectedCount == 2U, "Transform hierarchy dirty frontier inspected unrelated clean branches");
     kb::tests::Require(report.transformHierarchyUpdatedCount == 2U, "Transform hierarchy dirty frontier did not update root and child");
-    kb::tests::Require(report.transformHierarchySparseFlushCount == 1U, "Transform hierarchy dirty frontier did not use sparse flush");
     kb::tests::Require(report.transformHierarchyFlushedEntityCount == 2U, "Transform hierarchy dirty frontier flushed an unexpected entity count");
     kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(children.front()).worldPosition.x, 25.0F), "Transform hierarchy dirty frontier did not update the child world position");
 }
@@ -1173,7 +1172,6 @@ void RunTransformHierarchyDeepDirtyFrontierReportTest() {
     kb::tests::Require(report.transformHierarchyDirtyFrontierCount == 8U, "Deep transform frontier did not visit exactly one dirty chain");
     kb::tests::Require(report.transformHierarchyInspectedCount == 8U, "Deep transform frontier inspected unrelated clean chains");
     kb::tests::Require(report.transformHierarchyUpdatedCount == 8U, "Deep transform frontier did not update the full dirty chain");
-    kb::tests::Require(report.transformHierarchySparseFlushCount == 1U, "Deep transform frontier did not use sparse flush");
     kb::tests::Require(report.transformHierarchyFlushedEntityCount == 8U, "Deep transform frontier flushed an unexpected entity count");
     kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(leaves.front()).worldPosition.x, 17.0F), "Deep transform frontier did not update the leaf world position");
 }
@@ -1217,7 +1215,6 @@ void RunTransformHierarchyNestedDirtyFrontierReportTest() {
     kb::tests::Require(report.transformHierarchyDirtyFrontierCount == 5U, "Nested transform frontier did not visit exactly the dirty subtree");
     kb::tests::Require(report.transformHierarchyInspectedCount == 5U, "Nested transform frontier inspected clean ancestors or unrelated chains");
     kb::tests::Require(report.transformHierarchyUpdatedCount == 5U, "Nested transform frontier did not update the full dirty subtree");
-    kb::tests::Require(report.transformHierarchySparseFlushCount == 1U, "Nested transform frontier did not use sparse flush");
     kb::tests::Require(report.transformHierarchyFlushedEntityCount == 5U, "Nested transform frontier flushed an unexpected entity count");
     kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(dirtyChain.back()).worldPosition.x, 26.0F), "Nested transform frontier did not update the leaf world position");
 }
@@ -1288,7 +1285,6 @@ void RunTransformHierarchyMultiRootDirtyFrontierReportTest() {
     kb::tests::Require(report.transformHierarchyDirtyFrontierCount == 32U, "Multi-root transform frontier did not visit exactly four dirty chains");
     kb::tests::Require(report.transformHierarchyInspectedCount == 32U, "Multi-root transform frontier inspected unrelated clean chains");
     kb::tests::Require(report.transformHierarchyUpdatedCount == 32U, "Multi-root transform frontier did not update all dirty chains");
-    kb::tests::Require(report.transformHierarchySparseFlushCount == 1U, "Multi-root transform frontier did not use sparse flush");
     kb::tests::Require(report.transformHierarchyFlushedEntityCount == 32U, "Multi-root transform frontier flushed an unexpected entity count");
     kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(leaves[3]).worldPosition.x, 40.0F), "Multi-root transform frontier did not update the fourth dirty leaf");
 }
@@ -1330,9 +1326,6 @@ void RunTransformHierarchyWideFanoutDirtyFrontierReportTest() {
     kb::tests::Require(report.transformHierarchyDirtyFrontierCount == fanout + 1U, "Wide fanout transform frontier did not visit one root and its children");
     kb::tests::Require(report.transformHierarchyInspectedCount == fanout + 1U, "Wide fanout transform frontier inspected unrelated clean branches");
     kb::tests::Require(report.transformHierarchyUpdatedCount == fanout + 1U, "Wide fanout transform frontier did not update root and children");
-    kb::tests::Require(report.transformHierarchySparseFlushCount == 1U, "Wide fanout transform frontier did not use sparse flush");
-    kb::tests::Require(report.transformHierarchyDirtyListFlushCount == 1U, "Wide fanout transform frontier did not use dirty-list flush");
-    kb::tests::Require(report.transformHierarchyDirtyListFlushEntityCount == fanout + 1U, "Wide fanout transform frontier reported an unexpected dirty-list flush count");
     kb::tests::Require(report.transformHierarchyBatchFlushCount == 0U, "Wide fanout transform frontier used batch flush for a sparse branch");
     kb::tests::Require(report.transformHierarchyFlushedEntityCount == fanout + 1U, "Wide fanout transform frontier flushed an unexpected entity count");
     kb::tests::Require(report.transformHierarchyParallelBatchCount == 0U, "Wide fanout transform frontier used parallel batch below the grain size");
@@ -1383,8 +1376,6 @@ void RunTransformHierarchyParallelFanoutDirtyFrontierReportTest() {
     kb::tests::Require(report.transformHierarchyInspectedCount == fanout + 1U, "Parallel fanout transform frontier inspected unrelated branches");
     kb::tests::Require(report.transformHierarchyUpdatedCount == fanout + 1U, "Parallel fanout transform frontier did not update root and children");
     kb::tests::Require(report.transformHierarchySparseFlushCount == 0U, "Parallel fanout transform frontier used sparse flush above the sparse threshold");
-    kb::tests::Require(report.transformHierarchyDirtyListFlushCount == 1U, "Parallel fanout transform frontier did not use dirty-list flush for a medium dirty subtree");
-    kb::tests::Require(report.transformHierarchyDirtyListFlushEntityCount == fanout + 1U, "Parallel fanout transform frontier reported an unexpected dirty-list flush count");
     kb::tests::Require(report.transformHierarchyBatchFlushCount == 0U, "Parallel fanout transform frontier used full batch flush for a medium dirty subtree");
     kb::tests::Require(report.transformHierarchyFlushedEntityCount == fanout + 1U, "Parallel fanout transform frontier flushed an unexpected entity count");
     kb::tests::Require(report.transformHierarchyParallelBatchCount == 1U, "Parallel fanout transform frontier did not report one parallel batch");
@@ -2050,6 +2041,68 @@ void RunSceneBehaviourIterationUsesUnsafeHotQueryTest() {
     kb::tests::Require(after.queryExecutions == before.queryExecutions, "Scene behaviour iterator used the safe query executor");
 }
 
+[[nodiscard]] std::string ScaleEnvText(const char* name, const char* fallback) {
+#ifdef _WIN32
+    char* value = nullptr;
+    std::size_t length = 0U;
+    static_cast<void>(_dupenv_s(&value, &length, name));
+    std::string text = value != nullptr ? std::string{ value } : std::string{};
+    std::free(value);
+    return text.empty() ? std::string{ fallback } : text;
+#else
+    const char* value = std::getenv(name);
+    return value != nullptr && *value != '\0' ? std::string{ value } : std::string{ fallback };
+#endif
+}
+
+[[nodiscard]] std::vector<std::size_t> ScaleEnvList(const char* name, const char* fallback) {
+    std::vector<std::size_t> values;
+    const std::string text = ScaleEnvText(name, fallback);
+    for (std::size_t begin = 0U; begin < text.size();) {
+        std::size_t end = text.find(',', begin);
+        if (end == std::string::npos) end = text.size();
+        values.push_back(static_cast<std::size_t>(std::stoull(text.substr(begin, end - begin))));
+        begin = end + 1U;
+    }
+    return values;
+}
+
+// `count` objects: flat (depth 0), or clusters of 64 objects (more when the depth needs it) whose chain is `depth`
+// links deep and whose other objects hang from the chain, so that no object is deeper than `depth`. The objects are
+// made as roots, cluster roots first, and parented from the last one down, so that each leaves the root list from its end.
+void BuildTransformScaleObjects(kb::scene::Scene& scene, std::size_t count, std::size_t depth, std::vector<kb::scene::SceneObject>& objects) {
+    constexpr std::size_t kBatch = 1U << 20U;
+    objects.reserve(count);
+    std::vector<kb::scene::SceneObjectDesc> descs;
+    descs.reserve(std::min(count, kBatch));
+    for (std::size_t first = 0U; first < count; first += kBatch) {
+        descs.clear();
+        for (std::size_t index = first; index < std::min(count, first + kBatch); ++index) {
+            descs.push_back(kb::scene::SceneObjectDesc{ .transform = kb::scene::TransformComponent{
+                .localPosition = kb::scene::Vec3{ static_cast<float>(index % 1000U), 0.5F, static_cast<float>(index / 1000U % 1000U) } } });
+        }
+        for (const kb::scene::SceneObject& object : scene.Entities().CreateObjects(descs)) objects.push_back(object);
+    }
+    const std::size_t clusterSize = std::max<std::size_t>(64U, depth + 1U);
+    const std::size_t clusters = depth == 0U ? 0U : count / clusterSize;
+    const std::size_t plainRoots = count - clusters * clusterSize;
+    const std::size_t nodesPerCluster = clusterSize - 1U;
+    const std::size_t inner = plainRoots + clusters;
+    // chain object k (1..depth) hangs from k-1, leaf j (0-based) from the chain object j % depth
+    const auto node = [&](std::size_t cluster, std::size_t local) { return local == 0U ? plainRoots + cluster : inner + cluster * nodesPerCluster + local - 1U; };
+    for (std::size_t cluster = clusters; cluster-- > 0U;) {
+        for (std::size_t local = clusterSize; local-- > 1U;) {
+            const std::size_t parentLocal = local <= depth ? local - 1U : (local - depth - 1U) % depth;
+            if (!scene.Hierarchy().SetParent(objects[node(cluster, local)], objects[node(cluster, parentLocal)])) throw std::runtime_error("transform scale scene could not parent an object");
+        }
+    }
+}
+
+[[nodiscard]] double MedianOf(std::vector<double> values) {
+    std::ranges::sort(values);
+    return values.empty() ? 0.0 : values[values.size() / 2U];
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -2107,6 +2160,102 @@ void RunTransformWriteBenchmark() {
         const double syncMedian = syncMilliseconds[syncMilliseconds.size() / 2U];
         kb::tests::Require(parented ? setMedian < syncMedian * 7.0 : syncMedian < setMedian * 0.5,
             "Setting the transforms of 30000 objects must not cost much more than synchronizing them (in-place write path)");
+    }
+}
+
+// The transform frame at scale: every n-th object is written (SetMany, one Set per object, or a ParallelForEachRoot
+// pass), the transforms are synchronized, the frame's Update closes, and the render-proxy lists that the renderer reads
+// are built. Flat scenes and
+// scenes of the given depth (see BuildTransformScaleObjects), medians of the measured frames. Sizes, depths, the
+// moving fractions (0 = nothing moves), the frame count and the write mode come from KB_TSCALE_SIZES,
+// KB_TSCALE_DEPTHS, KB_TSCALE_MOVE, KB_TSCALE_ROUNDS and KB_TSCALE_WRITE; KB_TSCALE_CHURN objects are also born and
+// destroyed in every frame. A scene that cannot be built is reported.
+void RunSceneTransformScaleBenchmark() {
+    using Clock = std::chrono::steady_clock;
+    const std::vector<std::size_t> sizes = ScaleEnvList("KB_TSCALE_SIZES", "1000,10000,100000,1000000,2000000,5000000");
+    const std::vector<std::size_t> depths = ScaleEnvList("KB_TSCALE_DEPTHS", "0,1,8,64");
+    const std::vector<std::size_t> moves = ScaleEnvList("KB_TSCALE_MOVE", "1,100,0");
+    const std::size_t rounds = ScaleEnvList("KB_TSCALE_ROUNDS", "7").front();
+    const std::string write = ScaleEnvText("KB_TSCALE_WRITE", "setmany");
+    const std::size_t churn = ScaleEnvList("KB_TSCALE_CHURN", "0").front();
+    constexpr std::size_t kWarmupFrames = 3U;
+    for (const std::size_t size : sizes) {
+        for (const std::size_t depth : depths) {
+            try {
+                const auto buildStart = Clock::now();
+                kb::scene::Scene scene;
+                std::vector<kb::scene::SceneObject> objects;
+                BuildTransformScaleObjects(scene, size, depth, objects);
+                scene.Runtime().SynchronizeTransforms();
+                static_cast<void>(scene.Runtime().TransformRenderProxyUpdateEntities());
+                const double buildSeconds = std::chrono::duration<double>(Clock::now() - buildStart).count();
+                for (const std::size_t move : moves) {
+                    std::vector<kb::scene::SceneEntity> movedEntities;
+                    std::vector<kb::scene::TransformComponent> movedValues;
+                    if (write != "pass" && move != 0U) {
+                        for (const kb::scene::SceneObject& object : objects) {
+                            if (kb::ecs::GeneratedEntityIndex(object.Entity()) % move != 0U) continue;
+                            movedEntities.push_back(object.Entity());
+                            const float angle = 0.005F * static_cast<float>(movedEntities.size() % 628U);
+                            movedValues.push_back(scene.Transforms().Get(object.Entity()));
+                            movedValues.back().localRotation = kb::scene::Quat{ 0.0F, std::sin(angle), 0.0F, std::cos(angle) };
+                        }
+                    }
+                    std::vector<double> churnMs, setMs, syncMs, updateMs, proxyMs, totalMs;
+                    std::vector<kb::scene::SceneObject> churned;
+                    std::size_t updated = 0U;
+                    std::size_t inspected = 0U;
+                    std::size_t proxyCount = 0U;
+                    for (std::size_t frame = 0U; frame < kWarmupFrames + rounds; ++frame) {
+                        for (kb::scene::TransformComponent& value : movedValues) value.localPosition.x += 0.03F;
+                        // objects born and destroyed every frame: the previous frame's are destroyed, the same number is made
+                        const auto churnStart = Clock::now();
+                        if (churn != 0U) {
+                            for (const kb::scene::SceneObject& object : churned) scene.Entities().Destroy(object);
+                            churned = scene.Entities().CreateObjects(std::vector<kb::scene::SceneObjectDesc>(churn));
+                        }
+                        const auto setStart = Clock::now();
+                        if (move != 0U && write == "pass") {
+                            scene.Transforms().ParallelForEachRoot(2048U, [move](kb::scene::TransformRowRange& range) {
+                                for (std::size_t row = 0U; row < range.Count(); ++row) {
+                                    if (kb::ecs::GeneratedEntityIndex(range.Entity(row)) % move != 0U) continue;
+                                    const kb::scene::TransformComponent& current = range.Get(row);
+                                    range.SetLocal(row, kb::scene::Vec3{ current.localPosition.x + 0.03F, current.localPosition.y, current.localPosition.z },
+                                        kb::scene::Quat{ 0.0F, 0.1F, 0.0F, 0.99498743F }, kb::scene::Vec3{ 1.0F, 1.0F, 1.0F });
+                                }
+                            });
+                        } else if (move != 0U && write == "set") {
+                            for (std::size_t index = 0U; index < movedEntities.size(); ++index) scene.Transforms().Set(movedEntities[index], movedValues[index]);
+                        } else if (move != 0U) {
+                            scene.Transforms().SetMany(movedEntities, movedValues);
+                        }
+                        const auto syncStart = Clock::now();
+                        scene.Runtime().SynchronizeTransforms();
+                        const kb::scene::SceneRuntimeHotPathReport report = scene.Runtime().HotPathReport();
+                        const auto updateStart = Clock::now();
+                        static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+                        const auto proxyStart = Clock::now();
+                        proxyCount = scene.Runtime().TransformRenderProxyUpdateEntities().size() + scene.Runtime().TransformRenderProxyWorldAffine3x4().size();
+                        const auto end = Clock::now();
+                        if (frame < kWarmupFrames) continue;
+                        updated = report.transformHierarchyUpdatedCount;
+                        inspected = report.transformHierarchyInspectedCount;
+                        churnMs.push_back(std::chrono::duration<double, std::milli>(setStart - churnStart).count());
+                        setMs.push_back(std::chrono::duration<double, std::milli>(syncStart - setStart).count());
+                        syncMs.push_back(std::chrono::duration<double, std::milli>(updateStart - syncStart).count());
+                        updateMs.push_back(std::chrono::duration<double, std::milli>(proxyStart - updateStart).count());
+                        proxyMs.push_back(std::chrono::duration<double, std::milli>(end - proxyStart).count());
+                        totalMs.push_back(std::chrono::duration<double, std::milli>(end - setStart).count());
+                    }
+                    std::cout << "scene_scale size=" << size << " depth=" << depth << " moving=" << (move == 0U ? "none" : "1/" + std::to_string(move)) << " write=" << write
+                              << " rounds=" << rounds << " build_s=" << buildSeconds << " churn=" << churn << " churn_ms=" << MedianOf(churnMs) << " set_ms=" << MedianOf(setMs) << " sync_ms=" << MedianOf(syncMs)
+                              << " update_ms=" << MedianOf(updateMs) << " proxy_ms=" << MedianOf(proxyMs) << " total_ms=" << MedianOf(totalMs) << " updated=" << updated << " inspected=" << inspected
+                              << " proxy=" << proxyCount << '\n' << std::flush;
+                }
+            } catch (const std::exception& error) {
+                std::cout << "scene_scale size=" << size << " depth=" << depth << " FAILED " << error.what() << '\n' << std::flush;
+            }
+        }
     }
 }
 

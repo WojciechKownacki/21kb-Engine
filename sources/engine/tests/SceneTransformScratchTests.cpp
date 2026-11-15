@@ -213,11 +213,14 @@ void RunNativeRootsAndHierarchyTransitionTest(bool expectLazy) {
         parent.localScale = {1.5F, 2.0F, 0.75F};
         scene->Transforms().Set(roots[0], parent);
     }
+    // The frontier composes in place; the bounded algorithm is the generic lane that owns the scratch.
+    actual.Runtime().SetTransformPropagationBudget({.maxInspectedEntitiesPerSync = 100000U});
     actual.Runtime().SynchronizeTransforms();
     reference.Runtime().SynchronizeTransforms();
     RequirePreparedDenseScratch(actual);
     RequireSameTransforms(actual, actualRoots, reference, referenceRoots);
     PrintFootprint("first_hierarchy", actual);
+    actual.Runtime().SetTransformPropagationBudget({});
     const auto allocated = Footprint(actual);
     const auto child = actual.Transforms().Get(actualRoots[1]);
     const auto grandchild = actual.Transforms().Get(actualRoots[2]);
@@ -322,6 +325,7 @@ void RunScratchEpochWrapTest(bool expectLazy) {
     const auto epochBeforeGeneric = state.denseTransformWorldScratchEpoch;
     kb::tests::Require(actual.Hierarchy().SetParent(actualRoots[1], actualRoots[0]) &&
         reference.Hierarchy().SetParent(referenceRoots[1], referenceRoots[0]), "Epoch scratch fixture could not form a hierarchy");
+    actual.Runtime().SetTransformPropagationBudget({.maxInspectedEntitiesPerSync = 100000U});
     actual.Runtime().SynchronizeTransforms();
     reference.Runtime().SynchronizeTransforms();
     RequireSameTransforms(actual, actualRoots, reference, referenceRoots);
@@ -373,10 +377,12 @@ void RunMixedNativeExternalScratchTest(bool expectLazy) {
             SceneEntity{(11ULL << 32U) | (kb::ecs::kGeneratedEntityIndexBase + 127U)}, objects[1].Entity(), 3.0F));
         objects.push_back(scene->Entities().CreateObject({.parent = objects[2], .transform = {.localPosition = {4.0F, 0.0F, 0.0F}}}));
     }
+    actual.Runtime().SetTransformPropagationBudget({.maxInspectedEntitiesPerSync = 100000U});
     actual.Runtime().SynchronizeTransforms();
     reference.Runtime().SynchronizeTransforms();
     RequireSameTransforms(actual, actualObjects, reference, referenceObjects);
     RequirePreparedDenseScratch(actual);
+    actual.Runtime().SetTransformPropagationBudget({});
     const auto& state = kb::scene::SceneAccess::State(actual);
     kb::tests::Require(state.denseHierarchyParents.size() == 128U &&
         state.denseTransformWorldScratchValid[64U] == state.denseTransformWorldScratchEpoch &&
@@ -439,19 +445,14 @@ void RunTransformQueueUnequalSizesTest(bool epochsLong, bool wrapEpoch) {
     kb::scene::ClearSceneTransformDirtyFrontier(state);
     state.transformDirtyFrontierDenseMarkEpochs.assign(epochsLong ? retainedSize : 0U, 0U);
     state.transformDirtyFrontierDenseMarkedEntities.assign(epochsLong ? 0U : retainedSize, SceneEntity{});
-    state.transformValueCacheLoadDenseMarkEpochs.assign(epochsLong ? retainedSize : 0U, 0U);
-    state.transformValueCacheLoadDenseMarkedEntities.assign(epochsLong ? 0U : retainedSize, SceneEntity{});
     constexpr std::uint32_t retainedEpoch = 0x13579U;
     if (epochsLong) {
         state.transformDirtyFrontierDenseMarkEpochs.back() = retainedEpoch;
-        state.transformValueCacheLoadDenseMarkEpochs.back() = retainedEpoch;
     } else {
         state.transformDirtyFrontierDenseMarkedEntities.back() = previousChild;
-        state.transformValueCacheLoadDenseMarkedEntities.back() = previousChild;
     }
     if (wrapEpoch) {
         state.transformDirtyFrontierMarkEpoch = std::numeric_limits<std::uint32_t>::max();
-        state.transformValueCacheLoadMarkEpoch = std::numeric_limits<std::uint32_t>::max();
     }
 
     for (auto* scene : {&actual, &reference}) {
@@ -479,22 +480,9 @@ void RunTransformQueueUnequalSizesTest(bool epochsLong, bool wrapEpoch) {
     RequireSameTransforms(actual, actualObjects, reference, referenceObjects);
     kb::tests::Require(actual.Transforms().Get(actualObjects.back()).worldPosition.x == 17.0F,
         "Queue growth must preserve the child's normal parent composition");
-    kb::tests::Require(state.transformValueCacheLoadDenseMarkEpochs.size() >= requiredSize &&
-        state.transformValueCacheLoadDenseMarkedEntities.size() >= requiredSize &&
-        state.transformValueCacheLoadDenseMarkedEntities[childIndex] == child &&
-        state.transformValueCacheLoadDenseMarkEpochs[childIndex] == state.transformValueCacheLoadMarkEpoch &&
-        std::ranges::count(state.transformValueCacheLoadEntitiesScratch, child) == 1,
-        "Cache load queue must grow each mark vector and retain the current full ID");
-    kb::tests::Require(epochsLong ?
-        state.transformValueCacheLoadDenseMarkEpochs.size() == retainedSize &&
-            state.transformValueCacheLoadDenseMarkEpochs.back() == (wrapEpoch ? 0U : retainedEpoch) :
-        state.transformValueCacheLoadDenseMarkedEntities.size() == retainedSize &&
-            state.transformValueCacheLoadDenseMarkedEntities.back() == previousChild,
-        "Growing cache queue marks must preserve its retained prefix except epoch reset");
     if (wrapEpoch) {
-        kb::tests::Require(state.transformDirtyFrontierMarkEpoch == 1U &&
-            state.transformValueCacheLoadMarkEpoch == 1U,
-            "Both transform queue epochs must retain their rollover behavior");
+        kb::tests::Require(state.transformDirtyFrontierMarkEpoch == 1U,
+            "The transform queue epoch must retain its rollover behavior");
     }
     const auto actualComponent = actual.Runtime().EcsWorld().Component<TransformComponent>();
     const auto referenceComponent = reference.Runtime().EcsWorld().Component<TransformComponent>();

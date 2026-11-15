@@ -33,8 +33,8 @@ void Query<Components...>::PrepareMutableBatchExecution(QueryExecutionSettings s
 }
 
 template <typename... Components>
-bool Query<Components...>::RefreshMutableChunksAfterAppends(std::uint64_t structuralVersion, QueryBatchExecutionScratch& scratch, std::size_t& firstChangedRecord) const {
-    return RefreshQueryStateMutableChunksAfterAppends(state_.get(), structuralVersion, scratch, firstChangedRecord);
+bool Query<Components...>::RefreshMutableChunks(std::uint64_t structuralVersion, QueryBatchExecutionScratch& scratch, std::size_t& firstChangedRecord) const {
+    return RefreshQueryStateMutableChunks(state_.get(), structuralVersion, scratch, firstChangedRecord);
 }
 
 template <typename... Components>

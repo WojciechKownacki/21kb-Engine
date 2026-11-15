@@ -715,20 +715,19 @@ public:
         return true;
     }
 
-    // Refresh the same source query after appends. Retained chunks keep their metadata snapshots;
-    // dirty-range iteration reads current counts from storage.
-    // A migration or removal falls back to a full rebuild before any stored pointer is used.
-    [[nodiscard]] bool RefreshAfterAppends(const Query<ComponentTypes...>& query) {
+    // Refresh the same source query after entities were added, removed or moved between tables. Retained chunks keep
+    // their metadata snapshots; dirty-range iteration reads current counts from storage.
+    // A change that destroyed a chunk or reset a table falls back to a full rebuild before any stored pointer is used.
+    [[nodiscard]] bool Refresh(const Query<ComponentTypes...>& query) {
         if (!valid_) {
             return Rebuild(query, settings_);
         }
         std::size_t firstChangedRecord = 0U;
-        if (!query.RefreshMutableChunksAfterAppends(cachedStructuralVersion_, scratch_, firstChangedRecord)) {
+        if (!query.RefreshMutableChunks(cachedStructuralVersion_, scratch_, firstChangedRecord)) {
             return Rebuild(query, settings_);
         }
-        if (firstChangedRecord < scratch_.mutableRecords_.size()) {
-            BuildCachedRangePlan(cachedRangeSize_, firstChangedRecord);
-        }
+        // a removal can have dropped the last records, whose ranges the plan must lose too
+        BuildCachedRangePlan(cachedRangeSize_, firstChangedRecord);
         cachedStructuralVersion_ = query.StructuralVersion();
         return true;
     }

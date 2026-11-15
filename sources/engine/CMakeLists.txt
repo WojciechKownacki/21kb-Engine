@@ -1280,7 +1280,6 @@ add_library(kb_engine STATIC
     src/scene/transform/SceneTransformHierarchySystem.cpp
     src/scene/transform/ExactRootNormalize4.cpp
     src/scene/transform/SceneTransformTopologyCache.cpp
-    src/scene/transform/SceneTransformLeafBatchUpdater.cpp
     src/scene/transform/SceneTransformRootCollector.cpp
     src/scene/transform/SceneTransformResiduals.cpp
     src/scene/transform/SceneTransformPrecision.cpp

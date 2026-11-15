@@ -2017,17 +2017,17 @@ void RunUnsafeHotQueryAppendRefreshTest() {
         static_cast<void>(world.CreateEntities(count, moving));
         static_cast<void>(world.CreateEntities(3U, excluded));
         kb::tests::Require(world.NativeStorage().IsAppendOnlySince(version), "Entity appends were reported as migrations");
-        kb::tests::Require(hot.RefreshAfterAppends(query), "Hot query could not refresh appended chunks");
+        kb::tests::Require(hot.Refresh(query), "Hot query could not refresh appended chunks");
         verify();
     }
     // Growing the earlier archetype above shifts the later group's record/range indices; extend that group too.
     static_cast<void>(world.CreateEntities(83U, marked));
-    kb::tests::Require(hot.RefreshAfterAppends(query), "Hot query could not extend another archetype");
+    kb::tests::Require(hot.Refresh(query), "Hot query could not extend another archetype");
     verify();
     const EcsAlignedQueryPayload aligned{};
     const std::array newArchetype{ moving[0], moving[1], kb::ecs::World::MakeBulkComponentBroadcastView(aligned) };
     static_cast<void>(world.CreateEntities(29U, newArchetype));
-    kb::tests::Require(hot.RefreshAfterAppends(query), "Hot query could not append a new matching archetype");
+    kb::tests::Require(hot.Refresh(query), "Hot query could not append a new matching archetype");
     verify();
     auto& storage = const_cast<kb::ecs::NativeArchetypeStorage&>(world.NativeStorage());
     kb::ecs::QueryBatchExecutionScratch dirtyReference;
@@ -2063,31 +2063,109 @@ void RunUnsafeHotQueryAppendRefreshTest() {
     auto version = world.NativeStorage().StructuralVersion();
     world.Set(original[0], marker);
     kb::tests::Require(!world.NativeStorage().IsAppendOnlySince(version), "Single component addition hid a row migration");
-    kb::tests::Require(hot.RefreshAfterAppends(query), "Hot query could not rebuild after a migration");
+    kb::tests::Require(hot.Refresh(query), "Hot query could not rebuild after a migration");
     verify();
     version = world.NativeStorage().StructuralVersion();
     const std::array markers{ marker, marker, marker };
     world.SetMany<EcsQueryMarker>(std::span<const kb::ecs::Entity>{ original.data() + 1U, 3U }, markers);
     kb::tests::Require(!world.NativeStorage().IsAppendOnlySince(version), "Bulk component addition hid row migrations");
-    kb::tests::Require(hot.RefreshAfterAppends(query), "Hot query could not rebuild after bulk migration");
+    kb::tests::Require(hot.Refresh(query), "Hot query could not rebuild after bulk migration");
     verify();
     world.DestroyEntity(original[4]);
-    kb::tests::Require(hot.RefreshAfterAppends(query), "Hot query could not rebuild after destruction");
+    kb::tests::Require(hot.Refresh(query), "Hot query could not rebuild after destruction");
     verify();
     world.Remove<EcsVelocity>(original[5]);
-    kb::tests::Require(hot.RefreshAfterAppends(query), "Hot query could not rebuild after required-component removal");
+    kb::tests::Require(hot.Refresh(query), "Hot query could not rebuild after required-component removal");
     verify();
     version = storage.StructuralVersion();
     storage.ClearRetainingCapacity();
     kb::tests::Require(!storage.IsAppendOnlySince(version), "Retained clear was treated as an append");
-    kb::tests::Require(hot.RefreshAfterAppends(query), "Hot query could not rebuild after retained clear");
+    kb::tests::Require(hot.Refresh(query), "Hot query could not rebuild after retained clear");
     verify();
     // The first bulk append reuses an early retained chunk; the next append can fill the retained tail.
     for (int append = 0; append < 3; ++append) {
         static_cast<void>(world.CreateEntities(1U, moving));
-        kb::tests::Require(hot.RefreshAfterAppends(query), "Hot query could not refresh retained chunks");
+        kb::tests::Require(hot.Refresh(query), "Hot query could not refresh retained chunks");
         verify();
     }
+}
+
+void RunUnsafeHotQueryRemovalRefreshTest() {
+    kb::ecs::World world(kb::ecs::WorldConfig{ .chunkSizeProfile = kb::ecs::ChunkSizeProfile::Chunk4KB });
+    const EcsPosition position{ .x = 3.0F, .y = 5.0F };
+    const EcsQueryMarker marker{};
+    const std::array view{ kb::ecs::World::MakeBulkComponentBroadcastView(position) };
+    const auto entities = world.CreateEntities(2000U, view);
+    auto query = world.CreateQuery<EcsPosition>();
+    kb::ecs::UnsafeHotQuery<EcsPosition> hot;
+    kb::tests::Require(hot.Rebuild(query, kb::ecs::QueryExecutionSettings{ .maxBatchSize = 17U }), "Removal test could not build a hot query");
+    auto& storage = const_cast<kb::ecs::NativeArchetypeStorage&>(world.NativeStorage());
+    kb::ecs::WorkerPool pool(kb::ecs::WorkerPoolConfig{ .workerCount = 2U });
+    const auto verify = [&](const char* message) {
+        kb::ecs::QueryBatchExecutionScratch reference;
+        query.PrepareMutableBatchExecution({}, reference);
+        std::vector<kb::ecs::Entity::IdType> expected;
+        std::size_t expectedRanges = 0U;
+        for (const auto& record : reference.mutableRecords_) {
+            expected.insert(expected.end(), record.entityIds, record.entityIds + record.entityCount);
+            expectedRanges += (record.entityCount + 16U) / 17U;
+        }
+        std::vector<kb::ecs::Entity::IdType> actual;
+        hot.ForEachMutableChunkWithCurrentDirtyCounts(storage, [&](auto& chunk) {
+            for (std::size_t row = 0U; row < chunk.Count(); ++row) {
+                actual.push_back(chunk.EntityAt(row).Id());
+                kb::tests::Require(chunk.template Components<0>()[row].x == position.x, "Removal refresh retained an invalid component pointer");
+            }
+        });
+        kb::tests::Require(actual == expected, message);
+        std::atomic_size_t visited{ 0U };
+        const auto stats = hot.ForEachMutableRangeParallel(17U, pool, 2U, [&](auto& chunk, auto) {
+            visited.fetch_add(chunk.Count(), std::memory_order_relaxed);
+        });
+        kb::tests::Require(visited == expected.size() && stats.ranges == expectedRanges, "Removal refresh retained an invalid parallel range plan");
+        kb::tests::Require(!hot.IsStale(query), "Removal refresh did not capture the new structural version");
+    };
+    verify("A new hot query lost its rows");
+
+    // Removals and migrations inside the table leave its chunks in place: the plan is refreshed at its end.
+    auto version = storage.StructuralVersion();
+    world.DestroyEntity(entities[3]);
+    world.DestroyEntity(entities[1000]);
+    world.DestroyEntity(entities[7]);
+    world.Set(entities[50], marker);
+    kb::tests::Require(storage.IsTailChangeOnlySince(version) && !storage.IsAppendOnlySince(version), "Removals inside a table were reported as chunk changes");
+    kb::tests::Require(hot.Refresh(query), "Hot query could not refresh after removals");
+    verify("Removal refresh lost, duplicated or reordered query rows");
+
+    // Entities appended after a removal take the freed room at the end of the table.
+    version = storage.StructuralVersion();
+    static_cast<void>(world.CreateEntities(40U, view));
+    world.DestroyEntity(entities[11]);
+    kb::tests::Require(storage.IsTailChangeOnlySince(version), "Appends and removals inside a table were reported as chunk changes");
+    kb::tests::Require(hot.Refresh(query), "Hot query could not refresh after appends and removals");
+    verify("Mixed refresh lost, duplicated or reordered query rows");
+
+    // Destroying the rows of whole chunks releases them: the refresh rebuilds.
+    version = storage.StructuralVersion();
+    for (std::size_t index = entities.size(); index-- > 1200U;) {
+        if (world.IsAlive(entities[index])) world.DestroyEntity(entities[index]);
+    }
+    kb::tests::Require(!storage.IsTailChangeOnlySince(version), "Destroying whole chunks was reported as a tail change");
+    kb::tests::Require(hot.Refresh(query), "Hot query could not rebuild after chunks were released");
+    verify("Rebuild after released chunks lost, duplicated or reordered query rows");
+
+    // After the rebuild the chunks that remain are tracked again.
+    version = storage.StructuralVersion();
+    world.DestroyEntity(entities[20]);
+    kb::tests::Require(storage.IsTailChangeOnlySince(version), "A removal after a rebuild was reported as a chunk change");
+    kb::tests::Require(hot.Refresh(query), "Hot query could not refresh after the rebuild");
+    verify("Refresh after a rebuild lost, duplicated or reordered query rows");
+
+    version = storage.StructuralVersion();
+    storage.ClearRetainingCapacity();
+    kb::tests::Require(!storage.IsTailChangeOnlySince(version), "A retained clear was reported as a tail change");
+    kb::tests::Require(hot.Refresh(query), "Hot query could not rebuild after a retained clear");
+    verify("Rebuild after a retained clear lost, duplicated or reordered query rows");
 }
 
 void RunTypedEcsQueryComponentFilterTest() {
@@ -2681,6 +2759,7 @@ void RunEcsQueryTests() {
     RunTypedEcsQueryStructuralChangeValidationTest();
     RunTypedEcsQueryComponentFilterTest();
     RunUnsafeHotQueryAppendRefreshTest();
+    RunUnsafeHotQueryRemovalRefreshTest();
     RunTypedEcsQueryChangeFilterTest();
     RunEcsChangedQueryTests();
     RunTypedEcsQueryFilterValidationTest();

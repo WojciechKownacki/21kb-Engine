@@ -2386,6 +2386,8 @@ public:
         DestroyAllLiveEntities(true);
         BumpStructuralVersion(removedCount);
         removalVersion_ = structuralVersion_;
+        // the chunks stay but their rows are all gone
+        reshapeVersion_ = structuralVersion_;
     }
 
     [[nodiscard]] bool IsAlive(Entity entity) const noexcept {
@@ -3054,14 +3056,20 @@ public:
         return version != 0U && version <= structuralVersion_ && removalVersion_ <= version && migrationVersion_ <= version;
     }
 
-    [[nodiscard]] bool RefreshMutableQueryRecordsAfterAppends(
+    // True while every structural change since `version` was an append or a removal at the end of a table: no chunk was
+    // destroyed and no table was reset, so the storage that the query records of that version point at is intact.
+    [[nodiscard]] bool IsTailChangeOnlySince(std::uint64_t version) const noexcept {
+        return version != 0U && version <= structuralVersion_ && reshapeVersion_ <= version;
+    }
+
+    [[nodiscard]] bool RefreshMutableQueryRecords(
         std::span<const ComponentId> componentIds,
         std::span<const ComponentId> requiredComponentIds,
         std::span<const ComponentId> excludedComponentIds,
         std::uint64_t structuralVersion,
         std::vector<MutableQueryTableDispatchRecord>& records,
         std::size_t& firstChangedRecord) {
-        if (!IsAppendOnlySince(structuralVersion) || componentIds.empty() || componentIds.size() > kQueryExecutionScratchMaxTerms) {
+        if (!IsTailChangeOnlySince(structuralVersion) || componentIds.empty() || componentIds.size() > kQueryExecutionScratchMaxTerms) {
             return false;
         }
         firstChangedRecord = records.size();
@@ -3077,28 +3085,45 @@ public:
         if (!requiredSignature.has_value()) {
             return true;
         }
+        const auto refreshFields = [&](MutableQueryTableDispatchRecord& record, const ArchetypeTable& table) {
+            for (std::size_t field = 0U; field < componentIds.size(); ++field) {
+                record.componentVersions[field] = table.ComponentVersionOrZero(componentIds[field]);
+                record.componentDirtyCounts[field] = table.ComponentDirtyCount(record.nativeChunkIndex, componentIds[field]);
+            }
+        };
+        bool emptied = false;
         for (std::size_t tableIndex = 0U; tableIndex < tables_.size(); ++tableIndex) {
             ArchetypeTable& table = tables_[tableIndex];
-            if (table.LiveEntities() == 0U || !table.Matches(*requiredSignature) || HasExcludedComponent(table, excludedIds.Values())) {
+            if (!table.Matches(*requiredSignature) || HasExcludedComponent(table, excludedIds.Values())) {
                 continue;
             }
             const auto end = std::upper_bound(records.begin(), records.end(), tableIndex,
                 [](std::size_t index, const MutableQueryTableDispatchRecord& record) { return index < record.nativeArchetypeIndex; });
-            std::size_t insertIndex = static_cast<std::size_t>(end - records.begin());
-            std::size_t firstNewChunk = 0U;
-            if (insertIndex != 0U && records[insertIndex - 1U].nativeArchetypeIndex == tableIndex) {
-                MutableQueryTableDispatchRecord& last = records[insertIndex - 1U];
-                const std::size_t rowCount = table.ChunkRowCount(last.nativeChunkIndex);
-                if (last.entityCount != rowCount) {
-                    last.entityCount = rowCount;
-                    for (std::size_t field = 0U; field < componentIds.size(); ++field) {
-                        last.componentVersions[field] = table.ComponentVersionOrZero(componentIds[field]);
-                        last.componentDirtyCounts[field] = table.ComponentDirtyCount(last.nativeChunkIndex, componentIds[field]);
-                    }
-                    firstChangedRecord = std::min(firstChangedRecord, insertIndex - 1U);
+            const std::size_t insertIndex = static_cast<std::size_t>(end - records.begin());
+            const std::size_t tableFirstRecord = static_cast<std::size_t>(std::lower_bound(records.begin(), end, tableIndex,
+                [](const MutableQueryTableDispatchRecord& record, std::size_t index) { return record.nativeArchetypeIndex < index; }) - records.begin());
+            // The rows of a table are a dense prefix of its chunks (all full but the last), so only the last records can
+            // differ from the chunks: an append or a removal changes the size of the end of the prefix.
+            for (std::size_t recordIndex = insertIndex; recordIndex > tableFirstRecord; --recordIndex) {
+                MutableQueryTableDispatchRecord& record = records[recordIndex - 1U];
+                if (record.nativeChunkIndex >= table.ChunkCount()) {
+                    return false;
                 }
-                firstNewChunk = last.nativeChunkIndex + 1U;
+                const std::size_t rowCount = table.ChunkRowCount(record.nativeChunkIndex);
+                const bool changed = record.entityCount != rowCount;
+                if (changed) {
+                    record.entityCount = rowCount;
+                    emptied = emptied || rowCount == 0U;
+                    if (rowCount != 0U) record.firstEntityId = table.ChunkEntityIds(record.nativeChunkIndex)[0];
+                    refreshFields(record, table);
+                    firstChangedRecord = std::min(firstChangedRecord, recordIndex - 1U);
+                }
+                if (!changed && rowCount == table.Capacity()) {
+                    break;
+                }
             }
+            std::size_t insertAt = insertIndex;
+            const std::size_t firstNewChunk = insertIndex != tableFirstRecord ? records[insertIndex - 1U].nativeChunkIndex + 1U : 0U;
             for (std::size_t chunkIndex = firstNewChunk; chunkIndex < table.ChunkCount(); ++chunkIndex) {
                 const std::size_t rowCount = table.ChunkRowCount(chunkIndex);
                 if (rowCount == 0U) {
@@ -3113,12 +3138,17 @@ public:
                 };
                 for (std::size_t field = 0U; field < componentIds.size(); ++field) {
                     record.fieldComponents[field] = table.MutableComponentColumnData(chunkIndex, componentIds[field]);
-                    record.componentVersions[field] = table.ComponentVersionOrZero(componentIds[field]);
-                    record.componentDirtyCounts[field] = table.ComponentDirtyCount(chunkIndex, componentIds[field]);
                 }
-                firstChangedRecord = std::min(firstChangedRecord, insertIndex);
-                records.insert(records.begin() + static_cast<std::ptrdiff_t>(insertIndex++), record);
+                refreshFields(record, table);
+                firstChangedRecord = std::min(firstChangedRecord, insertAt);
+                records.insert(records.begin() + static_cast<std::ptrdiff_t>(insertAt++), record);
             }
+        }
+        if (emptied) {
+            // A removal emptied the last chunk of a table without releasing it: its record goes, as a new collection has none.
+            const auto removed = std::remove_if(records.begin() + static_cast<std::ptrdiff_t>(firstChangedRecord), records.end(),
+                [](const MutableQueryTableDispatchRecord& record) { return record.entityCount == 0U; });
+            records.erase(removed, records.end());
         }
         for (std::size_t index = firstChangedRecord; index < records.size(); ++index) {
             records[index].sequence = index;
@@ -3985,6 +4015,11 @@ private:
         if (structuralVersion_ == 0U) {
             structuralVersion_ = 1U;
         }
+        if (pool_.ReleaseCount() != observedReleaseCount_) {
+            // a chunk was destroyed by the change that this version counts
+            observedReleaseCount_ = pool_.ReleaseCount();
+            reshapeVersion_ = structuralVersion_;
+        }
     }
 
     [[nodiscard]] bool ExternalRangeOverlaps(Entity::IdType firstId, Entity::IdType lastIdExclusive) const noexcept {
@@ -4177,6 +4212,9 @@ private:
     std::uint64_t structuralVersion_ = 1;
     std::uint64_t removalVersion_ = 0;
     std::uint64_t migrationVersion_ = 0;
+    // The version of the last change that destroyed a chunk or reset a table; the chunks released so far when it was last looked at.
+    std::uint64_t reshapeVersion_ = 0;
+    std::size_t observedReleaseCount_ = 0;
     EntityIndexAvailabilityPolicy entityIndexAvailabilityPolicy_ = nullptr;
     void* entityIndexAvailabilityContext_ = nullptr;
 };
@@ -4414,14 +4452,18 @@ bool NativeArchetypeStorage::IsAppendOnlySince(std::uint64_t structuralVersion) 
     return impl_ != nullptr && impl_->IsAppendOnlySince(structuralVersion);
 }
 
-bool NativeArchetypeStorage::RefreshMutableQueryRecordsAfterAppends(
+bool NativeArchetypeStorage::IsTailChangeOnlySince(std::uint64_t structuralVersion) const noexcept {
+    return impl_ != nullptr && impl_->IsTailChangeOnlySince(structuralVersion);
+}
+
+bool NativeArchetypeStorage::RefreshMutableQueryRecords(
     std::span<const ComponentId> componentIds,
     std::span<const ComponentId> requiredComponentIds,
     std::span<const ComponentId> excludedComponentIds,
     std::uint64_t structuralVersion,
     std::vector<MutableQueryTableDispatchRecord>& records,
     std::size_t& firstChangedRecord) {
-    return impl_ != nullptr && impl_->RefreshMutableQueryRecordsAfterAppends(
+    return impl_ != nullptr && impl_->RefreshMutableQueryRecords(
         componentIds, requiredComponentIds, excludedComponentIds, structuralVersion, records, firstChangedRecord);
 }
 

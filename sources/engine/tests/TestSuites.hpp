@@ -12,6 +12,7 @@ void RunEcsRuntimeTests();
 void RunSceneHierarchyTests();
 void RunSceneHierarchyParentingTests();
 void RunTransformWriteBenchmark();
+void RunSceneTransformScaleBenchmark();
 void RunSceneUITests();
 void RunSceneUIBuildFrameBenchmark();
 void RunSceneUIWorkloadBenchmark();
