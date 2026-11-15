@@ -6,6 +6,7 @@ add_library(kb_cli_core STATIC
     src/CliAbilityCommands.cpp
     src/CliApiCommands.cpp
     src/CliCodeCommands.cpp
+    src/CliCodeModules.cpp
     src/CliLuaDebugCommand.cpp
     src/CliAudioCommands.cpp
     src/CliBatchCommand.cpp

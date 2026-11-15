@@ -433,7 +433,16 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                work); without --topic, the list of guides.
                  [--topic <name>]
   code         Find your way in the engine's own source without reading all of it; read
-               from the source tree when asked, so it is never out of date.
+               from the source tree when asked, so it is never out of date. modules
+               prints its own JSON: start there.
+                 modules [--topic <words>] [--limit <n>] [--check]
+                                                          the code map: every module and
+                                                          first-level subsystem with its
+                                                          responsibility, entry points, include
+                                                          root, build and test targets, ctest
+                                                          pattern and dependencies; --topic
+                                                          keeps the entries about those words;
+                                                          --check fails when the map is stale
                  map  [--path <folder>] [--depth <1-8>]   folders, their size and purpose,
                                                           and the files of --path
                  find --text <words> [--path <folder>] [--limit <n>]
@@ -725,9 +734,9 @@ bool RejectUnknownOptions(std::string_view command, const ArgumentList& argument
     return true;
 }
 
-constexpr std::array<std::string_view, 17> kFlagNames{
+constexpr std::array<std::string_view, 18> kFlagNames{
     "--anti-rollback", "--disabled", "--quiet", "--update-baseline", "--require-gpu", "--allow-fallback", "--as-ground", "--no-borders", "--items",
-    "--diff", "--list-backups", "--allow-unsigned", "--deny-unsigned", "--replace", "--realtime", "--deterministic", "--all" };
+    "--diff", "--list-backups", "--allow-unsigned", "--deny-unsigned", "--replace", "--realtime", "--deterministic", "--all", "--check" };
 
 #if KB_CLI_RENDERER
 constexpr bool kRendererAvailable = true;
@@ -745,7 +754,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"ai", &RunAiCommand, CliCommandKind::Normal, true, ""},
     {"api", &RunApiCommand, CliCommandKind::Normal, true, "api_reference", CliJsonOutput::Partial},
     {"guide", &RunGuideCommand, CliCommandKind::Normal, true, "guide"},
-    {"code", &RunCodeCommand, CliCommandKind::Normal, true, "code"},
+    {"code", &RunCodeCommand, CliCommandKind::Normal, true, "code", CliJsonOutput::Partial},
     {"api-check", &RunApiCheckCommand, CliCommandKind::Normal, true, ""},
     {"entity", &RunEntityCommand, CliCommandKind::Normal, true, "entity_edit"},
     {"component", &RunComponentCommand, CliCommandKind::Normal, true, "component_edit"},

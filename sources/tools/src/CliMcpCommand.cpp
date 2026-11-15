@@ -21,7 +21,7 @@ namespace {
 
 constexpr std::string_view kProtocolVersion = "2024-11-05";
 constexpr std::string_view kServerVersion = "0.1.0";
-constexpr std::string_view kCodeActions[]{"map", "find", "show"};
+constexpr std::string_view kCodeActions[]{"modules", "map", "find", "show"};
 constexpr std::string_view kEntityActions[]{"add", "set", "remove", "rename", "attach", "detach", "show"};
 constexpr std::string_view kComponentActions[]{"add", "set", "remove"};
 constexpr std::string_view kSceneTemplates[]{"Basic3D", "Basic2D", "FirstPerson", "ThirdPerson", "Empty", "Basic"};
@@ -139,16 +139,19 @@ thread_local bool tDiscovery = false;
             ToolProperty{ "topic", "string", "The guide's name, or 'index'.", false, "--topic" },
         });
     if (command.name == "code") return MakeToolDescriptor(command.mcpTool,
-        "Finds your way in the engine's own source without reading all of it: map lists folders with their size and purpose "
+        "Finds your way in the engine's own source without reading all of it: modules returns the code map as JSON (every module and "
+        "subsystem with its responsibility, entry points, build and test targets, ctest pattern and dependencies; topic keeps the entries "
+        "about those words), map lists folders with their size and purpose "
         "(and the files of one folder), find names the files that deal with a topic and the line to start at, show prints where a "
         "type or function is declared, its comment, its declaration, the files that use it and its tests.",
         {
-            ToolProperty{ "action", "string", "map, find or show.", true, "", kCodeActions },
+            ToolProperty{ "action", "string", "modules, map, find or show.", true, "", kCodeActions },
+            ToolProperty{ "topic", "string", "Words the returned entries must be about, for example shadow or navmesh (modules).", false, "--topic" },
             ToolProperty{ "path", "string", "Folder to map or to search in, for example sources/renderer.", false, "--path" },
             ToolProperty{ "depth", "string", "How many folder levels map prints (1-8).", false, "--depth" },
             ToolProperty{ "text", "string", "Words every found file must mention (find).", false, "--text" },
             ToolProperty{ "symbol", "string", "Exact name of a type or function (show).", false, "--symbol" },
-            ToolProperty{ "limit", "string", "How many files find lists.", false, "--limit" },
+            ToolProperty{ "limit", "string", "How many files find lists, or entries modules returns.", false, "--limit" },
         });
     if (command.name == "import") return MakeToolDescriptor(command.mcpTool,
         "Imports an external source asset into a project's runtime asset format and registers it.",

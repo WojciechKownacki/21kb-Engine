@@ -1,5 +1,6 @@
 // kb_cli code: a map of the engine's source for a reader that cannot read all of it. Everything is read from
-// the source tree when the command runs, so the answers are never older than the code.
+// the source tree when the command runs, so the answers are never older than the code. modules (CliCodeModules.cpp)
+// is the machine-readable map; map, find and show are the text views down to files and declarations.
 #include "CliCommands.hpp"
 
 #include "engine/platform/FileSystemPath.hpp"
@@ -239,7 +240,7 @@ int RunMap(const fs::path& root, const ArgumentList& arguments, CommandIo io) {
         if (!file.summary.empty()) io.out << " - " << file.summary;
         io.out << '\n';
     }
-    io.out << "Next: kb_cli code map --path <folder>, kb_cli code find --text <words>, kb_cli code show --symbol <Name>\n";
+    io.out << "Next: kb_cli code modules --topic <words>, kb_cli code map --path <folder>, kb_cli code find --text <words>, kb_cli code show --symbol <Name>\n";
     return 0;
 }
 
@@ -370,8 +371,8 @@ int RunShow(const fs::path& root, const ArgumentList& arguments, CommandIo io) {
 
 int RunCodeCommand(const ArgumentList& arguments, CommandIo io) {
     const std::string action = arguments.Positionals().empty() ? std::string{} : arguments.Positionals().front();
-    if (action != "map" && action != "find" && action != "show") {
-        io.err << "error: code takes map, find or show (kb_cli help code)\n";
+    if (action != "map" && action != "find" && action != "show" && action != "modules") {
+        io.err << "error: code takes modules, map, find or show (kb_cli help code)\n";
         return 1;
     }
     const fs::path root = EngineRoot(arguments);
@@ -379,6 +380,7 @@ int RunCodeCommand(const ArgumentList& arguments, CommandIo io) {
         io.err << "error: the engine source was not found; pass --engine-root <folder with CMakeLists.txt and sources/>\n";
         return 1;
     }
+    if (action == "modules") return RunCodeModules(root, arguments, io);
     return action == "map" ? RunMap(root, arguments, io) : action == "find" ? RunFind(root, arguments, io) : RunShow(root, arguments, io);
 }
 

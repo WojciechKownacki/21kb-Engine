@@ -288,11 +288,40 @@ Behind the scenes the agent validates its scripts, attaches them to the scene, a
 the scene headless to catch errors — then fixes them on its own. When it's done, open the
 scene in the editor and press Play.
 
+## The first three commands an agent should run
+
+An agent that has never seen the repository needs three answers: which commands exist, where in
+the source to work, and which files and declarations to read there.
+
+1. `kb_cli commands --json` lists every command with its purpose, options and JSON output kind.
+2. `kb_cli code modules --topic <words>` (for example `shadow`, `navmesh`, `prefab`,
+   `post-process`) returns the code map entries about the topic, best first, as one JSON object.
+   Without `--topic` it returns the whole map.
+3. `kb_cli code find --text <words>` names the files that deal with the topic and the line to
+   start at; `kb_cli code show --symbol <Name>` prints a declaration, who uses it and its tests.
+
+The map has an entry for every module of `sources/` (plugins one by one) and for the first-level
+subsystems of the modules that have them (engine, renderer, editor, game). `coverage` says how many
+folders there are and how many have an entry. An entry gives the `responsibility` in one line, a few
+`entryPoints` (type or file names), the `directories`, the public `includeRoot` and `includePrefix`
+(the path in an `#include`), the `buildTargets`, the `testTargets`, the `ctestPattern` for
+`ctest -R`, and `dependsOn` (the modules or subsystems whose headers it includes). A subsystem
+whose `testsFrom` is `module` has no test named after it; run the module's tests.
+
+Only the responsibility lines and entry points are written by hand, in `sources/tools/code_map.json`.
+Everything else is read from the source tree and the CMake files when the command runs.
+`kb_cli code modules --check` prints `21kb.code-map-check/v1` and exits 1 when a module or
+subsystem folder has no entry, an entry has no folder, an entry point is gone from the source or a
+module builds no target; the `code-map` suite of `kb_cli_tests` runs it. Add the entry when you add
+the folder.
+
 ## Commands (mostly used by the agent)
 
 | Command | Purpose |
 |---|---|
 | `kb_cli init-agent --project <dir>` | prepare a project for AI agents |
+| `kb_cli code modules [--topic <words>]` | print the engine's code map as JSON: modules and subsystems with their entry points, targets, tests and dependencies |
+| `kb_cli code map\|find\|show` | the text views of the engine source: folders, files that deal with a topic, a declaration with its users |
 | `kb_cli api --project <dir>` | refresh the API reference pages after engine updates |
 | `kb_cli api --topic <name>` / `--search <text>` | print one page of the API reference, or the topics matching a text |
 | `kb_cli guide [--topic <name>]` | print one how-to guide, or the list of them |

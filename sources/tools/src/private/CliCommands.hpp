@@ -17,6 +17,8 @@ namespace kb::cli {
 [[nodiscard]] int RunApiCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunGuideCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunCodeCommand(const ArgumentList& arguments, CommandIo io);
+// code modules: the code map of the source tree under `root` as JSON (CliCodeModules.cpp).
+[[nodiscard]] int RunCodeModules(const std::filesystem::path& root, const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunAudioMixerCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunSceneAudioMixerCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunAnimatorCommand(const ArgumentList& arguments, CommandIo io);

@@ -55,6 +55,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <initializer_list>
 #include <iterator>
 #include <map>
@@ -4995,6 +4996,103 @@ void RunCliJsonTests() {
         "a failing command with JSON of its own must report the failure as a result");
 }
 
+// code modules: the code map names every module and first-level subsystem of the source tree, and a map that no
+// longer matches the tree fails `modules --check`.
+void RunCodeMapTests() {
+    const CliRun check = RunCliProgram({ "code", "modules", "--check" });
+    Require(check.exitCode == 0, "the code map must match the source tree (every folder has an entry, every entry a folder): " + check.out + check.err);
+
+    const CliRun all = RunCliProgram({ "code", "modules" });
+    JsonValue map;
+    std::string error;
+    Require(all.exitCode == 0 && JsonValue::Parse(all.out, map, error) && map.Find("schema")->AsString() == "21kb.code-map/v1",
+        "code modules must print the code map as JSON: " + all.err + error);
+    const JsonValue* coverage = map.Find("coverage");
+    Require(coverage->Find("directories")->AsNumber() >= 30.0 && coverage->Find("directories")->AsNumber() == coverage->Find("withEntry")->AsNumber() &&
+            coverage->Find("directories")->AsNumber() == static_cast<double>(map.Find("entries")->Size()),
+        "every directory of the map must have an entry: " + coverage->Dump());
+    std::set<std::string> names;
+    for (std::size_t index = 0U; index < map.Find("entries")->Size(); ++index) {
+        const JsonValue* entry = map.Find("entries")->At(index);
+        names.insert(entry->Find("name")->AsString());
+        Require(!entry->Find("responsibility")->AsString().empty() && entry->Find("entryPoints")->Size() != 0U &&
+                entry->Find("directories")->Size() != 0U && entry->Find("buildTargets")->Size() != 0U,
+            "an entry must give its responsibility, entry points, folders and build target: " + entry->Dump());
+    }
+    for (const char* name : { "engine", "renderer", "editor", "tools", "game", "net", "http", "hub", "plugins/world_2d", "engine/scene", "renderer/shadow" }) {
+        Require(names.contains(name), std::string{ "the code map must have an entry for " } + name);
+    }
+    // The derived fields come from the tree: the engine's public headers, its tests and what it depends on.
+    const auto entryNamed = [&map](std::string_view name) -> const JsonValue* {
+        for (std::size_t index = 0U; index < map.Find("entries")->Size(); ++index) {
+            if (map.Find("entries")->At(index)->Find("name")->AsString() == name) return map.Find("entries")->At(index);
+        }
+        return nullptr;
+    };
+    const JsonValue* engine = entryNamed("engine");
+    Require(engine->Find("includeRoot")->AsString() == "sources/engine/include" && Contains(engine->Dump(), "\"kb_engine\"") &&
+            Contains(engine->Find("ctestPattern")->AsString(), "kb_engine") && engine->Find("subsystems")->Size() >= 20U,
+        "the engine entry must name its include root, target and ctest pattern: " + engine->Dump());
+    Require(Contains(entryNamed("renderer")->Find("dependsOn")->Dump(), "\"engine\"") && Contains(entryNamed("renderer/scene")->Find("dependsOn")->Dump(), "\"engine/"),
+        "the renderer must depend on the engine and its scene code on engine subsystems: " + entryNamed("renderer/scene")->Dump());
+
+    // A topic returns the entries about it, best first; words that match nothing fail.
+    const auto firstFor = [](std::string_view topic) {
+        const CliRun run = RunCliProgram({ "code", "modules", "--topic", topic, "--limit", "3" });
+        JsonValue found;
+        std::string parseError;
+        Require(run.exitCode == 0 && JsonValue::Parse(run.out, found, parseError) && found.Find("entries")->Size() != 0U,
+            "code modules --topic " + std::string{ topic } + " must find entries: " + run.out + run.err);
+        return std::string{ found.Find("entries")->At(0U)->Find("name")->AsString() };
+    };
+    Require(firstFor("shadow") == "renderer/shadow" && firstFor("navmesh") == "engine/navigation" && firstFor("post-process") == "renderer/post" &&
+            firstFor("prefab") == "engine/scene", "topics must lead to the subsystem that owns them");
+    Require(RunCliProgram({ "code", "modules", "--topic", "nosuchtopic" + std::string{ "xq" } }).exitCode == 1,
+        "a topic that nothing is about must fail");
+
+    // A tree whose map is stale fails the check: a folder without an entry, an entry without a folder, an entry
+    // point that is gone, a module that builds nothing.
+    const std::filesystem::path tree = TestRoot() / "code_map_tree";
+    std::error_code removeError;
+    std::filesystem::remove_all(tree, removeError);
+    const auto write = [&tree](const std::string& relative, const std::string& text) {
+        const std::filesystem::path file = tree / relative;
+        std::filesystem::create_directories(file.parent_path());
+        std::ofstream{ file, std::ios::binary | std::ios::trunc } << text;
+    };
+    const std::string cmake = "add_library(kb_fake STATIC src/alpha/A.cpp src/beta/B.cpp)\nadd_executable(kb_fake_tests tests/T.cpp)\n"
+                              "add_test(NAME kb_fake_tests COMMAND kb_fake_tests)\n";
+    write("CMakeLists.txt", "# fake engine\n");
+    write("sources/engine/CMakeLists.txt", cmake);
+    write("sources/engine/src/alpha/A.cpp", "struct AlphaThing {};\n");
+    write("sources/engine/src/beta/B.cpp", "struct BetaThing {};\n");
+    write("sources/tools/CMakeLists.txt", "add_executable(kb_fake_cli main.cpp)\n");
+    write("sources/tools/main.cpp", "struct ToolThing {};\n");
+    const auto entry = [](std::string_view name, std::string_view point) {
+        return "{ \"name\": \"" + std::string{ name } + "\", \"responsibility\": \"Fake.\", \"entryPoints\": [\"" + std::string{ point } + "\"] }";
+    };
+    const std::string alpha = entry("engine", "AlphaThing") + "," + entry("engine/alpha", "AlphaThing") + "," + entry("tools", "ToolThing");
+    const std::string beta = entry("engine/beta", "BetaThing");
+    const std::string root = tree.string();
+    const auto checkTree = [&root](const std::string& entries) {
+        std::ofstream{ std::filesystem::path{ root } / "sources/tools/code_map.json", std::ios::binary | std::ios::trunc } << "{ \"entries\": [" << entries << "] }";
+        return RunCliProgram({ "code", "modules", "--check", "--engine-root", root });
+    };
+    write("sources/tools/code_map.json", "");
+    const CliRun good = checkTree(alpha + "," + beta);
+    Require(good.exitCode == 0 && Contains(good.out, "\"ok\":true") && Contains(good.out, "\"directories\":4"), "a map that matches the tree must pass: " + good.out + good.err);
+    const CliRun missing = checkTree(alpha);
+    Require(missing.exitCode == 1 && Contains(missing.out, "no map entry for engine/beta"), "a subsystem folder without an entry must fail: " + missing.out);
+    const CliRun stale = checkTree(alpha + "," + beta + "," + entry("engine/gone", "AlphaThing"));
+    Require(stale.exitCode == 1 && Contains(stale.out, "map entry engine/gone names no module or subsystem folder"), "an entry without a folder must fail: " + stale.out);
+    const CliRun renamed = checkTree(alpha + "," + entry("engine/beta", "BetaRenamed"));
+    Require(renamed.exitCode == 1 && Contains(renamed.out, "entry point BetaRenamed is not in the source"), "an entry point that is gone must fail: " + renamed.out);
+    write("sources/engine/CMakeLists.txt", "# nothing builds\n");
+    const CliRun untargeted = checkTree(alpha + "," + beta);
+    Require(untargeted.exitCode == 1 && Contains(untargeted.out, "names no library or executable"), "a module without a build target must fail: " + untargeted.out);
+    std::filesystem::remove_all(tree, removeError);
+}
+
 void RunCommandCatalogTests() {
     PrepareProject();
     const auto root = TestRoot().string();
@@ -5902,6 +6000,10 @@ int main(int argc, char** argv) {
         RunCommandCatalogTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{argv[1]} == "code-map") {
+        RunCodeMapTests();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{argv[1]} == "audio-mixer") {
         RunAudioMixerCommandTests();
         return EXIT_SUCCESS;
@@ -5965,6 +6067,7 @@ int main(int argc, char** argv) {
     RunAudioMixerCommandTests();
     RunCliJsonTests();
     RunCommandCatalogTests();
+    RunCodeMapTests();
     RunBatchCommandTests();
     RunBatchSceneSessionTests();
     RunSceneDuplicateCommandTests();
