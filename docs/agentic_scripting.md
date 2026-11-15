@@ -348,7 +348,7 @@ More commands, each with its options in `kb_cli help`:
 | `kb_cli import` | import external source assets into the project |
 | `kb_cli import-preset-new` | create an import preset |
 | `kb_cli mcp` | serve the commands as MCP tools over stdio |
-| `kb_cli commands` | list registered commands, build availability and MCP tool names as JSON |
+| `kb_cli commands` | list every command as JSON: purpose, subcommands, options (name, type, required, default), JSON output kind, build availability and MCP tool name |
 | `kb_cli keys` | generate release signing keys and print public keys |
 | `kb_cli pack` | sign, verify, inspect, recompress, split and patch asset packs |
 | `kb_cli release` | sign or verify the manifest of a finished release directory |
@@ -461,8 +461,15 @@ bound project; relative paths are anchored there even when the output file is ne
 These path checks do not sandbox code executed by a trusted project.
 
 CLI dispatch and MCP discovery use one command catalog. `kb_cli commands` returns
-`21kb.cli-commands/v1`; a null `mcpTool` means that operation is available only
+`21kb.cli-commands/v1`: one entry for every command the CLI dispatches, with its
+`purpose`, its `subcommands` (each with its own `options`), the `options` of the command itself
+(each with `name`, `type` of flag, number, path, string or enum, `required`, `default` and
+`choices`), what `--json` gives (`json`: `envelope`, `native`, `partial` or `protocol`), the
+global options and the exit codes. A null `mcpTool` means that operation is available only
 through the CLI, and `available` reflects the current build's capabilities.
+The entries are read from the usage text that `kb_cli help` prints, so a command is described
+once for people and for agents, and a test fails when a dispatched command has no entry or
+an entry names a command that is not dispatched.
 The server retains its original tools and also exposes `component_schema`,
 `scene_create`, `script_create`, `entity_edit` and `component_edit`. Authoring tools
 use the bound project and invoke the same command handlers and save validation as

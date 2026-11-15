@@ -8,10 +8,15 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace kb::cli {
 
 enum class CliCommandKind { Normal, Particle, Batch, Mcp, Help, Catalog };
+
+// What --json gives for a command: Envelope wraps its text in the common result object, Native is its own
+// versioned JSON, Partial is native for some forms only, Protocol is a JSON protocol on stdin and stdout.
+enum class CliJsonOutput { Envelope, Native, Partial, Protocol };
 
 struct CliCommandDescriptor {
     std::string_view name;
@@ -19,10 +24,21 @@ struct CliCommandDescriptor {
     CliCommandKind kind = CliCommandKind::Normal;
     bool available = true;
     std::string_view mcpTool;
+    CliJsonOutput json = CliJsonOutput::Envelope;
 };
 
 [[nodiscard]] std::span<const CliCommandDescriptor> CliCommandCatalog() noexcept;
 [[nodiscard]] const CliCommandDescriptor* FindCliCommand(std::string_view name) noexcept;
+
+// The usage text `kb_cli help` prints: the one description of every command. The machine-readable catalog
+// (`kb_cli commands`) is read from it, so a command is described once, for people and for agents.
+[[nodiscard]] std::string CliUsageText();
+// One command's usage lines (empty when the text names no such command); the names of all described commands.
+[[nodiscard]] std::string CliCommandUsageBlock(std::string_view command);
+[[nodiscard]] std::vector<std::string> CliUsageCommandNames();
+// The catalog as one JSON object: every command of the table with its purpose, subcommands and options
+// (name, type, required, default), its --json output kind, availability and MCP tool name.
+[[nodiscard]] std::string CliCatalogJson();
 
 // The kb_cli program: `args` are the command line after the program name. Exits 0 on success and
 // 1 on any failure. With --json, prints one result object instead of the command's text.

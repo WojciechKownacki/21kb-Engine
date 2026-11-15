@@ -10,6 +10,7 @@ add_library(kb_cli_core STATIC
     src/CliAudioCommands.cpp
     src/CliBatchCommand.cpp
     src/CliBuildCommands.cpp
+    src/CliCommandCatalog.cpp
     src/CliLayoutCommands.cpp
     src/CliCommon.cpp
     src/CliUiReport.cpp

@@ -28,7 +28,10 @@ R"(kb_cli — 21kb Engine headless tooling for developers and AI coding agents
 Usage: kb_cli <command> [options]
 
 Commands:
-  commands     List registered commands, availability and MCP tool names as JSON.
+  commands     List every command as JSON: purpose, subcommands, options (name, type,
+               required, default), JSON output kind, availability and MCP tool name.
+  help         Print this text, or the usage of one command.
+                 [<command>]
   new          Create a project, the same one the Hub creates, in a new or empty
                folder. Its startup scene Assets/Scenes/Main.21kbscene is made from
                a template: Basic3D (camera, sun, sky, floor; default; "Basic" works
@@ -52,7 +55,10 @@ Commands:
                  --project <dir> --name <Name> --language lua|cpp
                  [--folder Assets/Scripts]
   scene-lightmap Bake static diffuse lighting and ray shadows into a UV0 texture.
+                 --project <dir> --entity <receiver> --out /Game/<path>.tga [--scene <path>] [--resolution 128]
   scene-bake-lighting Bake the whole scene: static lights, bounces, generated lightmap UVs and light probes.
+                 --project <dir> [--scene <path>] [--resolution <16..1024>] [--bounces <0..4>]
+                 [--max-probes <1..65536>] [--probe-spacing <metres>]
   material-new Create a material, as the editor's Create > Material does, with
                its values set at once. Existing files are never overwritten.
                  --project <dir> --name <Name> [--folder Assets/Materials]
@@ -135,17 +141,18 @@ R"(  audio-mixer  Create, edit and assign an audio bus graph (.kbmixer).
                  show --project <dir> --mixer <path>
                  assign --project <dir> [--scene <path>] --mixer <path>|none
                      [--snapshot <Name>]   (parent '-' means the implicit master)
-               Snapshot edits for new/set: [--add-snapshot <Name> ...]
-                     [--snapshot <Name> --set-snapshot Bus=volume ...]
-               Additional set edits: [--remove-snapshot <Name> ...]
-                     [--snapshot <Name> --clear-snapshot-bus <Bus> ...]
-               DSP edits for new/set: --effect-bus <Bus>
+               Snapshot edits:
+                 new|set [--add-snapshot <Name> ...] [--snapshot <Name> --set-snapshot Bus=volume ...]
+                 set [--remove-snapshot <Name> ...] [--snapshot <Name> --clear-snapshot-bus <Bus> ...]
+               DSP edits (indexes start at 0):
+                 new|set [--effect-bus <Bus>]
                      [--add-effect Id=lowpass|highpass|equalizer|delay|reverb|compressor|limiter ...]
-                     [--remove-effect <Id> ...] [--move-effect Id=index ...]
-                     [--set-effect Id.parameter=value ...]  (indexes start at 0)
+                     [--set-effect Id.parameter=value ...]
+                 set [--remove-effect <Id> ...] [--move-effect Id=index ...]
                new/set accept --dry-run; new/set/show accept --json.
+                 new|set [--dry-run]
+                 new|set|show [--json]
   blend-space  Author a 2D animation blend asset; every edit is validated and atomic.
-  graph        Author gameplay nodes, typed values and connections; validate and save atomically.
                  new|show --project <dir> --space /Game/Animation/Motion.kbblend2d
                  add --project <dir> --space <path> --at x,y --clip <path>
                  set --project <dir> --space <path> --index <0..255> [--at x,y] [--clip <path>]
@@ -155,6 +162,17 @@ R"(  audio-mixer  Create, edit and assign an audio bus graph (.kbmixer).
                      --x-param <FloatParameter> --y-param <FloatParameter> [--layer <Name>]
                assign replaces the named state's motion and creates missing Float axes.
                Outputs versioned JSON with sample indices, triangles and query weights.
+  graph        Author gameplay nodes, typed values and connections; validate and save atomically.
+                 catalog [--project <dir>] [--filter <text>]
+                 new --project <dir> --graph <path>.kbgraph [--name <Name>]
+                 show|check --project <dir> --graph <path>
+                 add --project <dir> --graph <path> --entry <id> [--x <n>] [--y <n>] [--value <text>]
+                 remove --project <dir> --graph <path> --node <id>
+                 move --project <dir> --graph <path> --node <id> --x <n> --y <n>
+                 literal|event|symbol --project <dir> --graph <path> --node <id> --value <text>
+                 connect --project <dir> --graph <path> --from <id> --out <pin> --to <id> --in <pin>
+                 disconnect --project <dir> --graph <path> --edge <index>
+               Catalog, show and check print JSON.
   animator     Build an Animator Controller, the state machine that picks a character's
                animation; every change is validated and saved at once.
                  new --project <dir> --name <Name> --clip <clip> [--clip ...]
@@ -211,9 +229,21 @@ R"(  audio-mixer  Create, edit and assign an audio bus graph (.kbmixer).
                e.g. a goblin pack: entity add --name Goblin --create Capsule; ai make --entity Goblin
                --preset Melee --health 60 --ability1 /Game/Abilities/Slash.kbability
 )"
-R"(  rig2d new/show/set/build --project <dir> [--name <Name> | --rig <path>] [--data <source object>]
-  vector2d-new --project <dir> --name <Name> [--kind Polygon|Line] [--points <JSON array>]
-  vector2d-set/show --project <dir> --shape <path> [--points <JSON array>] [--width <number>]
+R"(  rig2d        Author a 2D skeletal rig (.kbrig2d) from a source object, or build it.
+                 new --project <dir> --name <Name> [--folder /Game/Rigs]
+                 show|build --project <dir> --rig /Game/<path>.kbrig2d
+                 set --project <dir> --rig /Game/<path>.kbrig2d --data <source object>
+  vector2d-new Create a 2D vector shape (.kbvector2d), a polygon or a line.
+                 --project <dir> --name <Name> [--folder /Game/Shapes] [--kind Polygon|Line] [--points <JSON array>]
+  vector2d-set Change the points or the width of a 2D vector shape.
+                 --project <dir> --shape /Game/<path>.kbvector2d [--points <JSON array>] [--width <number>]
+  vector2d-show Print a 2D vector shape.
+                 --project <dir> --shape /Game/<path>.kbvector2d
+  csg          Author a constructive solid geometry source (.kbcsg) and build it into a mesh.
+                 new --project <dir> --name <Name> [--folder /Game/Geometry] [--data <JSON> | --data-file <file>]
+                 show --project <dir> --source /Game/<path>.kbcsg
+                 set --project <dir> --source /Game/<path>.kbcsg (--data <JSON> | --data-file <file>)
+                 build --project <dir> --source /Game/<path>.kbcsg --output /Game/<folder>
 )"
 R"(  mesh-lod     Levels of detail of an imported model: how many levels, how many triangles each keeps and how
                much deviation it may add. Stored in the model asset, so the editor, the cooker and a game
@@ -264,7 +294,7 @@ R"(  terrain      Terrain files (.kbterrain): what the Terrain Editor does - bru
                  import --terrain <file> --source <heightmap.png|.raw|.r16> [--min -32] [--max 32] [--size 512[x256]] [--flip yes] [--replace]
                  export --terrain <file> --out <file.png|.raw|.r16> [--min <n> --max <n>]    (16 bit)
                  preview --terrain <file> --out <file.png> [--kind height|slope|splat] [--pixels 512]
-                 --terrain is /Game/Terrains/Hills.kbterrain, Assets/..., or a file path; --project is needed for /Game paths.
+                 (--terrain is /Game/Terrains/Hills.kbterrain, Assets/..., or a file path; --project is needed for /Game paths.)
 )"
 R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): what the editor's World 2D
                Map component and Map Editor window do - grounds with automatic borders,
@@ -300,14 +330,19 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                  --project <dir> --name <Name> [--folder Assets/Particles] [--set key=value ...]
   vfx-show     Print a particle effect: every key=value of its file.
                  --project <dir> --effect /Game/<path>.kbvfx
-  particle-process-cook  Compile a particle simulation: --source <file.particle.sc> --output <file.kbpsim> [--profile all]
-  render-effect-run  Run a native compute effect in a hidden renderer: --manifest <effect.kbfx> [--frames 8] (Windows)
-  render-effect-export  Export a native compute effect and compiled shader variants: --manifest <effect.kbfx> --output <directory>
+  particle-process-cook  Compile a particle simulation into a .kbpsim file.
+                 --source <file.particle.sc> --output <file.kbpsim> [--profile all]
+  render-effect-run  Run a native compute effect in a hidden renderer (Windows).
+                 --manifest <effect.kbfx> [--frames 8]
+  render-effect-export  Export a native compute effect and compiled shader variants.
+                 --manifest <effect.kbfx> --output <directory>
   renderer-info  Print the graphics backend a hidden bgfx host selects as JSON: capabilities, limits,
                  formats and the reason for every quality fallback (Windows).
                  [--backend auto|d3d11|d3d12|vulkan|opengl] [--allow-fallback]
                  Exits 1 when an explicit backend is not the one selected, unless --allow-fallback.
   debug        Control a local Lua debugger endpoint (connect, breakpoints, step_into/over/out, continue, stack, locals, evaluate, disconnect).
+                 --endpoint <dir> --command <command> [--expression <expression>] [--frame 0]
+                 [--breakpoints <json-file>] [--timeout-ms 5000]
   vfx-profile  Profile an isolated effect with a hidden bgfx GPU host (Windows).
                  --project <dir> --effect /Game/<path>.kbvfx
                  [--backend d3d11|d3d12|vulkan|opengl] [--warmup 60] [--frames 180]
@@ -318,12 +353,15 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
   vfx-set      Change values of a particle effect (keys as vfx-show prints them, e.g.
                effect.emitter[0].spawn.shape.type=Sphere).
                  --project <dir> --effect <path> --set key=value [...]
-  vfx-emitter-add / vfx-emitter-remove   Add an emitter / remove one by id.
-                 --project <dir> --effect <path> [--name <Name>] | --emitter <id>
-  vfx-module-add / vfx-module-remove     Add a module (Gravity, Wind, Drag, Noise,
-               TorusSwirl, Separation, ...) to an emitter / remove one by id.
+  vfx-emitter-add     Add an emitter to a particle effect.
+                 --project <dir> --effect <path> [--name <Name>]
+  vfx-emitter-remove  Remove an emitter of a particle effect by id.
+                 --project <dir> --effect <path> --emitter <id>
+  vfx-module-add      Add a module (Gravity, Wind, Drag, Noise, TorusSwirl, Separation, ...)
+               to an emitter of a particle effect.
                  --project <dir> --effect <path> --emitter <id> --type <Type> [--target <id>]
-                 | --module <id>
+  vfx-module-remove   Remove a module of a particle effect by id.
+                 --project <dir> --effect <path> --module <id>
   batch        Run many kb_cli commands as one transaction on a project: all of them
                take effect, or none (one fails: every file below the project is put back
                and the exit code is 1). --dry-run runs them the same way, then puts the
@@ -348,6 +386,7 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                      [--body Static|Dynamic|Kinematic (adds a Rigidbody)]
                      [--look-at x,y,z|<Entity> (turns forward, +Z, toward it; for cameras and lights)]
                      [--body2d Static|Kinematic|Dynamic (2D physics: a Body 2D and a Collider 2D that follows --scale)]
+                     [--physics 2d|3d (the physics of --create 'Platformer Player' or 'Top Down Player'; 2d is the default)]
                      [--count <n> [--offset x,y,z] (n entities Name1..Name<n>, each offset further; default 0,1,0)]
                  (--create makes what the editor's Create menu makes: Cube, Sphere, Capsule,
                  Cylinder, Cone, Plane, Quad, Directional Light, Point Light, Spot Light,
@@ -636,30 +675,8 @@ void PrintUsage(std::ostream& output) {
     for (const auto part : kUsageParts) output << part;
 }
 
-// `help <command>`: only that command's lines of the usage text (its row and the indented
-// lines under it), so asking about one command does not print all of them.
-std::string CommandUsageBlock(std::string_view command) {
-    std::string usage;
-    for (const auto part : kUsageParts) usage += part;
-    std::istringstream lines{ usage };
-    std::string block;
-    bool inside = false;
-    for (std::string line; std::getline(lines, line);) {
-        const bool commandRow = line.size() > 2U && line[0] == ' ' && line[1] == ' ' && line[2] != ' ';
-        if (commandRow) {
-            if (inside) break;
-            const std::string_view name = std::string_view{ line }.substr(2U, line.find(' ', 2U) - 2U);
-            inside = name == command;
-        } else if (inside && line.find_first_not_of(' ') == std::string::npos) {
-            break;
-        }
-        if (inside) block += line + '\n';
-    }
-    return block;
-}
-
 void PrintCommandUsage(std::ostream& output, std::string_view command) {
-    const std::string block = CommandUsageBlock(command);
+    const std::string block = CliCommandUsageBlock(command);
     if (block.empty()) {
         output << "kb_cli has no command '" << command << "'; kb_cli commands lists them\n";
         return;
@@ -689,7 +706,7 @@ constexpr std::string_view kUsageCheckedCommands[]{ "entity", "component", "sche
 
 bool RejectUnknownOptions(std::string_view command, const ArgumentList& arguments, std::ostream& err) {
     if (std::ranges::find(kUsageCheckedCommands, command) == std::end(kUsageCheckedCommands)) return false;
-    const std::string block = CommandUsageBlock(command);
+    const std::string block = CliCommandUsageBlock(command);
     if (block.empty()) return false;
     std::vector<std::string> known{ "--json", "--dry-run", "--project", "--help", "--command-timeout-ms", "--command-cancel-file" };
     for (std::size_t at = block.find("--"); at != std::string::npos; at = block.find("--", at + 2U)) {
@@ -719,20 +736,20 @@ constexpr bool kRendererAvailable = false;
 #endif
 
 constexpr CliCommandDescriptor kCommands[]{
-    {"debug", &RunLuaDebugCommand, CliCommandKind::Normal, true, ""},
+    {"debug", &RunLuaDebugCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Native},
     {"animator", &RunAnimatorCommand, CliCommandKind::Normal, true, ""},
-    {"blend-space", &RunBlendSpace2DCommand, CliCommandKind::Normal, true, "blend_space"},
-    {"graph", &RunVisualGraphCommand, CliCommandKind::Normal, true, "visual_graph"},
+    {"blend-space", &RunBlendSpace2DCommand, CliCommandKind::Normal, true, "blend_space", CliJsonOutput::Native},
+    {"graph", &RunVisualGraphCommand, CliCommandKind::Normal, true, "visual_graph", CliJsonOutput::Native},
     {"skeleton", &RunSkeletonCommand, CliCommandKind::Normal, true, ""},
     {"ability", &RunAbilityCommand, CliCommandKind::Normal, true, ""},
     {"ai", &RunAiCommand, CliCommandKind::Normal, true, ""},
-    {"api", &RunApiCommand, CliCommandKind::Normal, true, "api_reference"},
+    {"api", &RunApiCommand, CliCommandKind::Normal, true, "api_reference", CliJsonOutput::Partial},
     {"guide", &RunGuideCommand, CliCommandKind::Normal, true, "guide"},
     {"code", &RunCodeCommand, CliCommandKind::Normal, true, "code"},
     {"api-check", &RunApiCheckCommand, CliCommandKind::Normal, true, ""},
     {"entity", &RunEntityCommand, CliCommandKind::Normal, true, "entity_edit"},
     {"component", &RunComponentCommand, CliCommandKind::Normal, true, "component_edit"},
-    {"audio-mixer", &RunAudioMixerCommand, CliCommandKind::Normal, true, ""},
+    {"audio-mixer", &RunAudioMixerCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Native},
     {"schema", &RunSchemaCommand, CliCommandKind::Normal, true, "component_schema"},
     {"new", &RunNewCommand, CliCommandKind::Normal, true, ""},
     {"init-agent", &RunInitAgentCommand, CliCommandKind::Normal, true, ""},
@@ -748,7 +765,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"scene-duplicate", &RunSceneDuplicateCommand, CliCommandKind::Normal, true, ""},
     {"script-new", &RunScriptNewCommand, CliCommandKind::Normal, true, "script_create"},
     {"script-build", &RunScriptBuildCommand, CliCommandKind::Normal, true, ""},
-    {"run", &RunRunCommand, CliCommandKind::Normal, true, "run_scene"},
+    {"run", &RunRunCommand, CliCommandKind::Normal, true, "run_scene", CliJsonOutput::Partial},
     {"keys", &RunKeysCommand, CliCommandKind::Normal, true, ""},
     {"pack", &RunPackCommand, CliCommandKind::Normal, true, ""},
     {"mod", &RunModCommand, CliCommandKind::Normal, true, ""},
@@ -765,7 +782,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"vector2d-new", &RunVectorShapeNewCommand, CliCommandKind::Normal, true, {}},
     {"vector2d-show", &RunVectorShapeShowCommand, CliCommandKind::Normal, true, {}},
     {"vector2d-set", &RunVectorShapeSetCommand, CliCommandKind::Normal, true, {}},
-    {"map2d", &RunMap2DCommand, CliCommandKind::Normal, true, {}},
+    {"map2d", &RunMap2DCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Partial},
     {"terrain", &RunTerrainCommand, CliCommandKind::Normal, true, {}},
     {"mesh-lod", &RunMeshLodCommand, CliCommandKind::Normal, true, {}},
     {"scene-lightmap", &RunSceneLightmapCommand, CliCommandKind::Normal, true, {}},
@@ -783,10 +800,15 @@ constexpr CliCommandDescriptor kCommands[]{
     {"particle-process-cook", &RunParticleProcessCookCommand, CliCommandKind::Normal, true, {}},
     {"render-effect-run", &RunRenderEffectRunCommand, CliCommandKind::Normal, true, {}},
     {"render-effect-export", &RunRenderEffectExportCommand, CliCommandKind::Normal, true, {}},
-    {"renderer-info", &RunRendererInfoCommand, CliCommandKind::Normal, true, {}},
-    {"vfx-profile", &RunVfxProfileCommand, CliCommandKind::Normal, true, {}},
+    {"renderer-info", &RunRendererInfoCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Native},
+    {"vfx-profile", &RunVfxProfileCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Native},
 #else
-    {"map2d", nullptr, CliCommandKind::Normal, false, {}},
+    {"csg", nullptr, CliCommandKind::Normal, false, {}},
+    {"rig2d", nullptr, CliCommandKind::Normal, false, {}},
+    {"vector2d-new", nullptr, CliCommandKind::Normal, false, {}},
+    {"vector2d-show", nullptr, CliCommandKind::Normal, false, {}},
+    {"vector2d-set", nullptr, CliCommandKind::Normal, false, {}},
+    {"map2d", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Partial},
     {"terrain", nullptr, CliCommandKind::Normal, false, {}},
     {"mesh-lod", nullptr, CliCommandKind::Normal, false, {}},
     {"scene-lightmap", nullptr, CliCommandKind::Normal, false, {}},
@@ -804,8 +826,8 @@ constexpr CliCommandDescriptor kCommands[]{
     {"particle-process-cook", nullptr, CliCommandKind::Normal, false, {}},
     {"render-effect-run", nullptr, CliCommandKind::Normal, false, {}},
     {"render-effect-export", nullptr, CliCommandKind::Normal, false, {}},
-    {"renderer-info", nullptr, CliCommandKind::Normal, false, {}},
-    {"vfx-profile", nullptr, CliCommandKind::Normal, false, {}},
+    {"renderer-info", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Native},
+    {"vfx-profile", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Native},
 #endif
     {"vfx-new", nullptr, CliCommandKind::Particle, kRendererAvailable, {}},
     {"vfx-show", nullptr, CliCommandKind::Particle, kRendererAvailable, {}},
@@ -814,10 +836,10 @@ constexpr CliCommandDescriptor kCommands[]{
     {"vfx-emitter-remove", nullptr, CliCommandKind::Particle, kRendererAvailable, {}},
     {"vfx-module-add", nullptr, CliCommandKind::Particle, kRendererAvailable, {}},
     {"vfx-module-remove", nullptr, CliCommandKind::Particle, kRendererAvailable, {}},
-    {"batch", nullptr, CliCommandKind::Batch, true, {}},
-    {"mcp", nullptr, CliCommandKind::Mcp, true, {}},
+    {"batch", nullptr, CliCommandKind::Batch, true, {}, CliJsonOutput::Native},
+    {"mcp", nullptr, CliCommandKind::Mcp, true, {}, CliJsonOutput::Protocol},
     {"help", nullptr, CliCommandKind::Help, true, {}},
-    {"commands", nullptr, CliCommandKind::Catalog, true, {}},
+    {"commands", nullptr, CliCommandKind::Catalog, true, {}, CliJsonOutput::Native},
 };
 
 // CLI dispatch and MCP discovery resolve operations through this same catalog.
@@ -847,22 +869,9 @@ std::optional<int> RunNamedCommand(
         if (!arguments.Positionals().empty()) PrintCommandUsage(io.out, arguments.Positionals().front());
         else PrintUsage(io.out);
         return 0;
-    case CliCommandKind::Catalog: {
-        using kb::core::JsonValue;
-        auto result = JsonValue::MakeObject();
-        result.Set("schema", JsonValue::MakeString("21kb.cli-commands/v1"));
-        auto operations = JsonValue::MakeArray();
-        for (const auto& entry : CliCommandCatalog()) {
-            auto row = JsonValue::MakeObject();
-            row.Set("name", JsonValue::MakeString(std::string{entry.name}));
-            row.Set("available", JsonValue::MakeBool(entry.available));
-            row.Set("mcpTool", entry.mcpTool.empty() ? JsonValue::MakeNull() : JsonValue::MakeString(std::string{entry.mcpTool}));
-            operations.Append(std::move(row));
-        }
-        result.Set("commands", std::move(operations));
-        io.out << result.Dump() << '\n';
+    case CliCommandKind::Catalog:
+        io.out << CliCatalogJson() << '\n';
         return 0;
-    }
     }
     return std::nullopt;
 }
@@ -870,6 +879,12 @@ std::optional<int> RunNamedCommand(
 } // namespace
 
 std::span<const CliCommandDescriptor> CliCommandCatalog() noexcept { return kCommands; }
+
+std::string CliUsageText() {
+    std::string usage;
+    for (const auto part : kUsageParts) usage += part;
+    return usage;
+}
 
 const CliCommandDescriptor* FindCliCommand(std::string_view name) noexcept {
     for (const auto& command : CliCommandCatalog())

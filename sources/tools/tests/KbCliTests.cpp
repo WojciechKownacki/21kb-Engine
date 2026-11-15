@@ -5016,6 +5016,69 @@ void RunCommandCatalogTests() {
             tools.push_back(entry.mcpTool);
         }
     }
+    // The catalog is complete: every dispatched command is described, and only dispatched commands are.
+    // The usage text is its one source, so a command added to the table without a usage entry fails here,
+    // and so does a usage entry whose command is no longer dispatched.
+    const std::vector<std::string> documented = kb::cli::CliUsageCommandNames();
+    for (const auto& name : documented)
+        Require(kb::cli::FindCliCommand(name) != nullptr, "The usage text describes '" + name + "', which kb_cli does not dispatch");
+    const auto* rows = described.Find("commands");
+    std::vector<std::string> rowNames;
+    for (std::size_t index = 0U; index < rows->Size(); ++index) {
+        const auto& row = *rows->At(index);
+        const std::string name = row.Find("name")->AsString();
+        rowNames.push_back(name);
+        Require(kb::cli::FindCliCommand(name) != nullptr, "The catalog lists '" + name + "', which kb_cli does not dispatch");
+        Require(std::ranges::find(documented, name) != documented.end(), "Dispatched command '" + name + "' has no entry in the usage text");
+        Require(!row.Find("purpose")->AsString().empty(), "Catalog entry '" + name + "' has no purpose");
+        const std::string& jsonKind = row.Find("json")->AsString();
+        Require(jsonKind == "envelope" || jsonKind == "native" || jsonKind == "partial" || jsonKind == "protocol",
+            "Catalog entry '" + name + "' must say how --json answers");
+        Require(row.Find("options")->Size() + row.Find("subcommands")->Size() > 0U || name == "commands" || name == "mcp",
+            "Catalog entry '" + name + "' lists no options or subcommands");
+        const auto checkOptions = [&](const JsonValue& list) {
+            for (std::size_t option = 0U; option < list.Size(); ++option) {
+                const auto& spec = *list.At(option);
+                Require(spec.Find("name") != nullptr && spec.Find("type") != nullptr && spec.Find("required") != nullptr && spec.Find("default") != nullptr,
+                    "Every catalog option has a name, type, required and default: " + name);
+            }
+        };
+        checkOptions(*row.Find("options"));
+        for (std::size_t sub = 0U; sub < row.Find("subcommands")->Size(); ++sub) checkOptions(*row.Find("subcommands")->At(sub)->Find("options"));
+        const auto block = RunCliProgram({ name, "--help" });
+        Require(block.exitCode == 0 && block.out == kb::cli::CliCommandUsageBlock(name) && Contains(block.out, "  " + name),
+            "kb_cli " + name + " --help must print that command's usage");
+    }
+    for (const auto& entry : kb::cli::CliCommandCatalog())
+        Require(std::ranges::find(rowNames, std::string{ entry.name }) != rowNames.end(), "Dispatched command '" + std::string{ entry.name } + "' is missing from the catalog");
+    const auto findRow = [&](std::string_view name) -> const JsonValue& {
+        for (std::size_t index = 0U; index < rows->Size(); ++index)
+            if (rows->At(index)->Find("name")->AsString() == name) return *rows->At(index);
+        Require(false, "Catalog has no entry for " + std::string{ name });
+        return *rows->At(0U);
+    };
+    const auto findNamed = [](const JsonValue& list, std::string_view name) -> const JsonValue* {
+        for (std::size_t index = 0U; index < list.Size(); ++index)
+            if (list.At(index)->Find("name")->AsString() == name) return list.At(index);
+        return nullptr;
+    };
+    const JsonValue& newRow = findRow("new");
+    const JsonValue* templateOption = findNamed(*newRow.Find("options"), "--template");
+    Require(templateOption != nullptr && templateOption->Find("type")->AsString() == "enum" && !templateOption->Find("required")->AsBool() &&
+            templateOption->Find("choices")->Size() == 5U, "new --template must be an optional enum of the five templates");
+    const JsonValue* nameOption = findNamed(*newRow.Find("options"), "--name");
+    Require(nameOption != nullptr && nameOption->Find("required")->AsBool(), "new --name must be required");
+    const JsonValue* entityAdd = findNamed(*findRow("entity").Find("subcommands"), "add");
+    Require(entityAdd != nullptr && findNamed(*entityAdd->Find("options"), "--project") != nullptr &&
+            findNamed(*entityAdd->Find("options"), "--project")->Find("required")->AsBool() &&
+            !findNamed(*entityAdd->Find("options"), "--position")->Find("required")->AsBool(), "entity add must list its own options with required flags");
+    Require(findNamed(*findRow("terrain").Find("subcommands"), "brush") != nullptr && findNamed(*findRow("pack").Find("subcommands"), "sign") != nullptr,
+        "Subcommands must be listed");
+    Require(findRow("run").Find("json")->AsString() == "partial" && findRow("audio-mixer").Find("json")->AsString() == "native" &&
+            findRow("entity").Find("json")->AsString() == "envelope" && findRow("mcp").Find("json")->AsString() == "protocol",
+        "Catalog must say which commands print their own JSON");
+    Require(described.Find("globalOptions")->Size() > 0U && described.Find("exitCodes")->Size() > 0U, "Catalog must list the global options and exit codes");
+
     const auto mcp = [&](std::string request) {
         std::istringstream input{std::move(request)};
         std::ostringstream output, diagnostics;
@@ -5835,6 +5898,10 @@ int main(int argc, char** argv) {
 #else
     static_cast<void>(argv);
 #endif
+    if (argc == 2 && std::string_view{argv[1]} == "command-catalog") {
+        RunCommandCatalogTests();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{argv[1]} == "audio-mixer") {
         RunAudioMixerCommandTests();
         return EXIT_SUCCESS;
