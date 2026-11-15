@@ -47,6 +47,33 @@ void ForEachPiece(kb::ecs::WorkerPool* pool, std::size_t count, Body&& body, std
 
 // Handing a pass to the workers and waiting for them costs about this much, whatever the pass does.
 constexpr double kHandOverNanoseconds = 15000.0;
+// The light passes of a step (reading members back and the like) go to the workers once they take this many hand-overs
+// on one thread: the pieces are uneven and the hand-over is slower than for the crowd's own passes.
+constexpr double kLightPassHandOvers = 8.0;
+
+// ForEachPiece for a light pass over the agents of a step: `cost` is the pass's learned CPU time per agent (0 until it
+// ran), and the pass stays on this thread while it is too small to pay for the workers.
+template <typename Body>
+void ForEachPieceLearned(kb::ecs::WorkerPool* pool, std::size_t count, double& cost, Body&& body) {
+    using Clock = std::chrono::steady_clock;
+    const auto learn = [&](double nanoseconds) {
+        const double each = nanoseconds / static_cast<double>(std::max<std::size_t>(count, 1U));
+        cost = cost > 0.0 ? 0.75 * cost + 0.25 * each : each;
+    };
+    if (pool == nullptr || (cost > 0.0 && cost * static_cast<double>(count) < kLightPassHandOvers * kHandOverNanoseconds)) {
+        const Clock::time_point start = Clock::now();
+        if (count > 0U) body(std::size_t{ 0U }, count, std::size_t{ 0U });
+        learn(std::chrono::duration<double, std::nano>(Clock::now() - start).count());
+        return;
+    }
+    std::atomic<std::uint64_t> busy{ 0U };
+    ForEachPiece(pool, count, [&](std::size_t begin, std::size_t end, std::size_t worker) {
+        const Clock::time_point start = Clock::now();
+        body(begin, end, worker);
+        busy.fetch_add(static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - start).count()), std::memory_order_relaxed);
+    });
+    learn(static_cast<double>(busy.load(std::memory_order_relaxed)));
+}
 
 }
 
@@ -638,7 +665,7 @@ void NavMeshCrowd::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
 
     // 7. Step every crowd; note which link each member heads for, to know the link it starts crossing.
     // This and reading the members back touch only the agent's own record, output and member.
-    ForEachPiece(pooled_ ? workers_.get() : nullptr, agents.size(), [&](std::size_t begin, std::size_t end, std::size_t) {
+    ForEachPieceLearned(pooled_ ? workers_.get() : nullptr, agents.size(), linkScanCost_, [&](std::size_t begin, std::size_t end, std::size_t) {
         for (std::size_t index = begin; index < end; ++index) {
             AgentRecord& record = *records[index];
             record.nextLink = 0U;
@@ -666,7 +693,7 @@ void NavMeshCrowd::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
     // 8. Read the members back.
     std::atomic<std::size_t> linkCrossings{ 0U };
     std::atomic<std::size_t> waitingMembers{ 0U };
-    ForEachPiece(pooled_ ? workers_.get() : nullptr, agents.size(), [&](std::size_t begin, std::size_t end, std::size_t) {
+    ForEachPieceLearned(pooled_ ? workers_.get() : nullptr, agents.size(), readBackCost_, [&](std::size_t begin, std::size_t end, std::size_t) {
         std::size_t onLinks = 0U;
         std::size_t waitingForPath = 0U;
         for (std::size_t index = begin; index < end; ++index) {

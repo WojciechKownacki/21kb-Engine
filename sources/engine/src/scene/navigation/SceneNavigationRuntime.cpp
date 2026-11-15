@@ -1,6 +1,7 @@
 #include "engine/scene/SceneNavigation.hpp"
 
 #include "engine/assets/AssetManager.hpp"
+#include "engine/ecs/NativeArchetypeStorage.hpp"
 #include "engine/ecs/WorkerPool.hpp"
 #include "engine/navigation/NavGeometryCollector.hpp"
 #include "engine/navigation/NavMeshAsset.hpp"
@@ -30,6 +31,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -41,6 +43,27 @@
 #include <vector>
 
 namespace kb::scene {
+
+struct NavigationStepBuffers {
+    struct AgentState {
+        SceneEntity entity{};
+        NavAgent agent{};
+        kb::math::Vec3 position{};
+        kb::math::Quat rotation{};
+        bool character = false;
+    };
+    // The agents as the scene authored them, in id order, and as the step reads them.
+    std::vector<std::pair<SceneEntity, NavAgent>> authored;
+    std::vector<AgentState> agents;
+    std::vector<std::uint8_t> placed;
+    // What the crowd and the horde take and give back.
+    std::vector<kb::navigation::NavMeshCrowdAgentInput> inputs;
+    std::vector<kb::navigation::NavMeshCrowdAgentInput> hordeInputs;
+    std::vector<kb::navigation::NavMeshCrowdAgentOutput> outputs;
+    std::vector<kb::navigation::NavMeshCrowdAgentOutput> crowdOutputs;
+    std::vector<kb::navigation::NavMeshCrowdAgentOutput> hordeOutputs;
+};
+
 namespace {
 
 namespace nav = kb::navigation;
@@ -60,17 +83,52 @@ struct ObstacleVolume {
     float halfHeight = 0.5F;
 };
 
-struct AgentState {
-    SceneEntity entity{};
-    NavAgent agent{};
-    Vec3 position{};
-    Quat rotation{};
-    bool character = false;
-};
+using AgentState = NavigationStepBuffers::AgentState;
 
 [[nodiscard]] float HorizontalLength(Vec3 value) noexcept {
     return std::sqrt(value.x * value.x + value.z * value.z);
 }
+
+[[nodiscard]] bool SameBits(const void* a, const void* b, std::size_t size) noexcept {
+    return std::memcmp(a, b, size) == 0;
+}
+
+// What the step left in the agent's NavAgent: its velocity, remaining distance and path status.
+[[nodiscard]] bool NavAgentResultChanged(const NavAgent& current, const nav::NavMeshCrowdAgentOutput& output) noexcept {
+    const Vec3 velocity = current.enabled ? output.velocity : Vec3{};
+    return !(current.velocity.x == velocity.x && current.velocity.y == velocity.y && current.velocity.z == velocity.z) ||
+        current.remainingDistance != output.remainingDistance || current.pathStatus != output.status;
+}
+
+void ApplyNavAgentResult(NavAgent& component, bool enabled, const nav::NavMeshCrowdAgentOutput& output) noexcept {
+    component.velocity = enabled ? output.velocity : Vec3{};
+    component.remainingDistance = output.remainingDistance;
+    component.pathStatus = output.status;
+}
+
+// Adds a row to a list of runs of consecutive rows.
+void AppendRun(std::vector<kb::ecs::NativeComponentRows>& runs, const kb::ecs::NativeComponentRows& row) {
+    if (!runs.empty()) {
+        kb::ecs::NativeComponentRows& last = runs.back();
+        if (last.archetypeIndex == row.archetypeIndex && last.chunkIndex == row.chunkIndex && last.firstRow + last.count == row.firstRow) {
+            ++last.count;
+            return;
+        }
+    }
+    runs.push_back(row);
+}
+
+// What a piece of the parallel write-back leaves for the serial work after the join.
+struct WriteBackPiece {
+    std::vector<kb::ecs::NativeComponentRows> navAgentRows;
+    std::vector<std::pair<SceneEntity, Vec3>> residuals;
+    // Agents whose transform is written on the calling thread (character controllers, children).
+    std::vector<std::size_t> serial;
+};
+
+// Agents from which the write-back runs on the crowd's workers, and the fewest agents of one piece.
+constexpr std::size_t kMinAgentsToWriteOnWorkers = 512U;
+constexpr std::size_t kMinAgentsPerWritePiece = 256U;
 
 // Obstacles are placed in the navigation space (world space minus `origin`).
 [[nodiscard]] std::vector<ObstacleVolume> CollectObstacles(Scene& scene, SceneState& state, const kb::math::DVec3& origin) {
@@ -243,10 +301,19 @@ void StepPolygonNavigation(Scene& scene, SceneState& state, std::span<const std:
 
     // Reading the agents' transforms only reads the scene, so large crowds read them on the crowd's
     // workers; agents without a transform are dropped afterwards, keeping the id order.
-    std::vector<AgentState> agents(authored.size());
-    std::vector<std::uint8_t> placed(authored.size(), 0U);
+    NavigationStepBuffers& buffers = *navigation.stepBuffers;
+    std::vector<AgentState>& agents = buffers.agents;
+    std::vector<nav::NavMeshCrowdAgentInput>& inputs = buffers.inputs;
+    std::vector<std::uint8_t>& placed = buffers.placed;
+    agents.resize(authored.size());
+    inputs.resize(authored.size());
+    placed.assign(authored.size(), 0U);
+    std::atomic<std::size_t> placedCount{ 0U };
+    std::atomic<std::size_t> hordeCount{ 0U };
     const SceneState& readState = state;
     const auto readAgents = [&](std::size_t begin, std::size_t end) {
+        std::size_t blockPlaced = 0U;
+        std::size_t blockHorde = 0U;
         for (std::size_t index = begin; index < end; ++index) {
             const auto& [entity, agent] = authored[index];
             const TransformComponent* transform = readState.componentStorage.Transforms().TryGet(entity);
@@ -258,8 +325,13 @@ void StepPolygonNavigation(Scene& scene, SceneState& state, std::span<const std:
                 .rotation = transform->worldRotation,
                 .character = readState.componentStorage.CharacterControllers().Has(entity),
             };
+            inputs[index] = nav::NavMeshCrowdAgentInput{ .id = entity.Id(), .agent = agent, .position = agents[index].position };
             placed[index] = 1U;
+            ++blockPlaced;
+            blockHorde += agent.horde ? 1U : 0U;
         }
+        placedCount.fetch_add(blockPlaced, std::memory_order_relaxed);
+        hordeCount.fetch_add(blockHorde, std::memory_order_relaxed);
     };
     constexpr std::size_t kAgentsPerRead = 1024U;
     kb::ecs::WorkerPool* readers = authored.size() > std::max(kAgentsPerRead, nav::kMinAgentsOnWorkers)
@@ -271,14 +343,16 @@ void StepPolygonNavigation(Scene& scene, SceneState& state, std::span<const std:
     } else {
         readAgents(0U, authored.size());
     }
-    std::size_t kept = 0U;
-    for (std::size_t index = 0U; index < agents.size(); ++index) {
-        if (placed[index] != 0U) agents[kept++] = agents[index];
-    }
-    agents.resize(kept);
-    std::vector<nav::NavMeshCrowdAgentInput> inputs(agents.size());
-    for (std::size_t index = 0U; index < agents.size(); ++index) {
-        inputs[index] = nav::NavMeshCrowdAgentInput{ .id = agents[index].entity.Id(), .agent = agents[index].agent, .position = agents[index].position };
+    if (placedCount.load(std::memory_order_relaxed) != agents.size()) {
+        std::size_t kept = 0U;
+        for (std::size_t index = 0U; index < agents.size(); ++index) {
+            if (placed[index] == 0U) continue;
+            agents[kept] = agents[index];
+            inputs[kept] = inputs[index];
+            ++kept;
+        }
+        agents.resize(kept);
+        inputs.resize(kept);
     }
     // Obstacles that neither carve nor repaint an area are circles the crowd steers around.
     std::vector<nav::NavMeshCrowdObstacle> circles;
@@ -292,10 +366,19 @@ void StepPolygonNavigation(Scene& scene, SceneState& state, std::span<const std:
     }
     const std::vector<Vec3> focuses = CrowdFocuses(scene, state);
     // Horde agents step apart from the crowd, over shared navigation fields.
-    std::vector<nav::NavMeshCrowdAgentInput> hordeInputs;
+    std::vector<nav::NavMeshCrowdAgentInput>& hordeInputs = buffers.hordeInputs;
+    hordeInputs.clear();
     std::vector<std::size_t> crowdIndices;
     std::vector<std::size_t> hordeIndices;
-    if (std::ranges::any_of(inputs, [](const nav::NavMeshCrowdAgentInput& input) { return input.agent.horde; })) {
+    // Every agent in one mode: the crowd or the horde takes the whole list and hands back its outputs as they are.
+    const std::size_t hordeAgents = hordeCount.load(std::memory_order_relaxed);
+    const bool onlyHorde = hordeAgents == inputs.size() && !inputs.empty();
+    const bool onlyCrowd = hordeAgents == 0U;
+    if (onlyHorde) {
+        hordeInputs.swap(inputs);
+        inputs.clear();
+        if (!navigation.horde) navigation.horde = std::make_shared<nav::NavMeshHorde>();
+    } else if (!onlyCrowd) {
         std::vector<nav::NavMeshCrowdAgentInput> crowdInputs;
         for (std::size_t index = 0U; index < inputs.size(); ++index) {
             (inputs[index].agent.horde ? hordeIndices : crowdIndices).push_back(index);
@@ -306,13 +389,14 @@ void StepPolygonNavigation(Scene& scene, SceneState& state, std::span<const std:
     } else if (navigation.horde) {
         navigation.horde->Clear();
     }
-    std::vector<nav::NavMeshCrowdAgentOutput> crowdOutputs;
-    std::vector<nav::NavMeshCrowdAgentOutput> hordeOutputs;
+    std::vector<nav::NavMeshCrowdAgentOutput>& crowdOutputs = buffers.crowdOutputs;
+    std::vector<nav::NavMeshCrowdAgentOutput>& hordeOutputs = buffers.hordeOutputs;
     // What pushes horde agents apart besides each other: the crowd's agents and the obstacles agents steer around.
     std::vector<nav::NavMeshBody> hordeBodies;
-    std::vector<nav::NavMeshCrowdAgentOutput> outputs(agents.size());
+    std::vector<nav::NavMeshCrowdAgentOutput>& outputs = buffers.outputs;
     std::vector<bool> restoredPositions(agents.size(), false);
     for (std::uint32_t step = 0U; step < steps; ++step) {
+        const bool lastStep = step + 1U == steps;
         navigation.crowd->Step(runtime, inputs, circles, focuses, navigation.crowdSettings, deltaSeconds, crowdOutputs);
         if (!hordeInputs.empty()) {
             hordeBodies.clear();
@@ -323,32 +407,40 @@ void StepPolygonNavigation(Scene& scene, SceneState& state, std::span<const std:
             navigation.horde->Step(runtime, hordeInputs, hordeBodies, focuses, navigation.crowdSettings, deltaSeconds,
                 navigation.crowd->Workers(navigation.crowdSettings.workerThreads), hordeOutputs);
         }
-        for (std::size_t index = 0U; index < inputs.size(); ++index) {
-            const std::size_t agent = hordeInputs.empty() ? index : crowdIndices[index];
-            inputs[index].position = crowdOutputs[index].position;
-            outputs[agent] = crowdOutputs[index];
-            restoredPositions[agent] = restoredPositions[agent] || crowdOutputs[index].restorePosition;
-        }
-        for (std::size_t index = 0U; index < hordeInputs.size(); ++index) {
-            hordeInputs[index].position = hordeOutputs[index].position;
-            outputs[hordeIndices[index]] = hordeOutputs[index];
-        }
-    }
-    const float elapsed = deltaSeconds * static_cast<float>(steps);
-    for (std::size_t index = 0U; index < agents.size(); ++index) {
-        AgentState& agent = agents[index];
-        const nav::NavMeshCrowdAgentOutput& output = outputs[index];
-        if (NavAgent* component = state.componentStorage.Navigation().TryGetNavAgent(agent.entity); component != nullptr) {
-            component->velocity = agent.agent.enabled ? output.velocity : Vec3{};
-            component->remainingDistance = output.remainingDistance;
-            component->pathStatus = output.status;
-            state.componentStorage.Navigation().MarkNavAgentModified(agent.entity);
-        }
-        if (!agent.agent.enabled || (output.status == NavPathStatus::Failed && !output.onLink &&
-            !restoredPositions[index] && HorizontalLength(output.velocity) <= 0.0F)) {
+        // The agents start the next step where this one left them; only the last step's results are reported.
+        if (onlyHorde) {
+            if (lastStep) {
+                outputs.swap(hordeOutputs);
+            } else {
+                for (std::size_t index = 0U; index < hordeInputs.size(); ++index) hordeInputs[index].position = hordeOutputs[index].position;
+            }
             continue;
         }
-        if (agent.character && !output.onLink && !restoredPositions[index] && PhysicsBackend::CharacterMove(scene, agent.entity, output.velocity)) continue;
+        for (std::size_t index = 0U; index < inputs.size(); ++index) {
+            if (crowdOutputs[index].restorePosition) restoredPositions[onlyCrowd ? index : crowdIndices[index]] = true;
+            if (!lastStep) inputs[index].position = crowdOutputs[index].position;
+        }
+        if (onlyCrowd) {
+            if (lastStep) outputs.swap(crowdOutputs);
+            continue;
+        }
+        if (!lastStep) {
+            for (std::size_t index = 0U; index < hordeInputs.size(); ++index) hordeInputs[index].position = hordeOutputs[index].position;
+            continue;
+        }
+        outputs.resize(agents.size());
+        for (std::size_t index = 0U; index < inputs.size(); ++index) outputs[crowdIndices[index]] = crowdOutputs[index];
+        for (std::size_t index = 0U; index < hordeInputs.size(); ++index) outputs[hordeIndices[index]] = hordeOutputs[index];
+    }
+    const float elapsed = deltaSeconds * static_cast<float>(steps);
+    // An agent that cannot move leaves its transform alone.
+    const auto moves = [&](std::size_t index) {
+        const nav::NavMeshCrowdAgentOutput& output = outputs[index];
+        return agents[index].agent.enabled && !(output.status == NavPathStatus::Failed && !output.onLink &&
+            !restoredPositions[index] && HorizontalLength(output.velocity) <= 0.0F);
+    };
+    // Takes the step's position and turns the agent toward where it goes.
+    const auto place = [&](AgentState& agent, const nav::NavMeshCrowdAgentOutput& output) {
         agent.position = output.position;
         const float speed = HorizontalLength(output.velocity);
         if (!agent.character && speed > kEpsilon) {
@@ -357,7 +449,88 @@ void StepPolygonNavigation(Scene& scene, SceneState& state, std::span<const std:
             agent.rotation = kb::math::RotateTowards(agent.rotation, facing,
                 kb::math::ToRadians(kb::math::Degrees{ std::max(agent.agent.angularSpeedDegrees, 0.0F) * elapsed }));
         }
+    };
+    const auto writeResult = [&](std::size_t index) {
+        const nav::NavMeshCrowdAgentOutput& output = outputs[index];
+        if (!NavAgentResultChanged(agents[index].agent, output)) return;
+        if (NavAgent* component = state.componentStorage.Navigation().TryGetNavAgent(agents[index].entity); component != nullptr) {
+            ApplyNavAgentResult(*component, agents[index].agent.enabled, output);
+            state.componentStorage.Navigation().MarkNavAgentModified(agents[index].entity);
+        }
+    };
+    const auto writeTransform = [&](std::size_t index) {
+        AgentState& agent = agents[index];
+        const nav::NavMeshCrowdAgentOutput& output = outputs[index];
+        if (!moves(index)) return;
+        if (agent.character && !output.onLink && !restoredPositions[index] && PhysicsBackend::CharacterMove(scene, agent.entity, output.velocity)) return;
+        place(agent, output);
         WriteAgentTransform(scene, state, agent, navigation.origin);
+    };
+
+    // Large crowds write their results on the crowd's workers: every agent writes its own rows, and what touches
+    // shared bookkeeping (the rows to flag, stored residuals, character controllers, children) follows in agent order.
+    const std::size_t count = agents.size();
+    kb::ecs::WorkerPool* writers = count >= kMinAgentsToWriteOnWorkers ? navigation.crowd->Workers(navigation.crowdSettings.workerThreads) : nullptr;
+    const kb::ecs::ComponentId navAgentId = state.components.NavAgentComponentId();
+    const std::size_t piece = writers != nullptr ? std::max(kMinAgentsPerWritePiece, (count + writers->WorkerCount() * 4U - 1U) / (writers->WorkerCount() * 4U)) : count;
+    const std::size_t pieceCount = piece > 0U ? (count + piece - 1U) / piece : 0U;
+    SceneTransformWorkerWrites writes(scene, writers != nullptr && !state.world.MirrorsValueWrites(navAgentId) ? pieceCount : 0U);
+    if (!writes.Enabled()) {
+        for (std::size_t index = 0U; index < count; ++index) {
+            writeResult(index);
+            writeTransform(index);
+        }
+        return;
+    }
+    std::vector<WriteBackPiece> pieces(pieceCount);
+    auto& storage = const_cast<kb::ecs::NativeArchetypeStorage&>(state.world.NativeStorage());
+    const bool residualsKept = !state.transformResiduals.Empty();
+    const kb::math::DVec3& origin = navigation.origin;
+    writers->ParallelForChunks(count, piece, [&](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
+        WriteBackPiece& left = pieces[chunk.index];
+        for (std::size_t index = chunk.begin; index < chunk.begin + chunk.count; ++index) {
+            AgentState& agent = agents[index];
+            const nav::NavMeshCrowdAgentOutput& output = outputs[index];
+            if (NavAgentResultChanged(agent.agent, output)) {
+                kb::ecs::NativeComponentRows row;
+                if (void* data = storage.TryGetMutableComponentRow(agent.entity, navAgentId, row); data != nullptr) {
+                    ApplyNavAgentResult(*static_cast<NavAgent*>(data), agent.agent.enabled, output);
+                    AppendRun(left.navAgentRows, row);
+                }
+            }
+            if (!moves(index)) continue;
+            if (agent.character || std::as_const(scene).Hierarchy().Parent(agent.entity).IsValid()) {
+                left.serial.push_back(index);
+                continue;
+            }
+            place(agent, output);
+            const TransformComponent* current = readState.componentStorage.Transforms().TryGet(agent.entity);
+            if (current == nullptr) continue;
+            Vec3 view{};
+            Vec3 residual{};
+            SplitTranslation(origin + agent.position, view, residual);
+            const bool residualMatters = residualsKept || residual.x != 0.0F || residual.y != 0.0F || residual.z != 0.0F;
+            if (!residualMatters && SameBits(&current->localPosition, &view, sizeof(Vec3)) &&
+                SameBits(&current->localRotation, &agent.rotation, sizeof(Quat))) {
+                continue;
+            }
+            TransformComponent* row = writes.Open(chunk.index, agent.entity);
+            if (row == nullptr) continue;
+            row->localPosition = view;
+            row->localRotation = agent.rotation;
+            writes.Publish(chunk.index, agent.entity, *row);
+            if (residualMatters) left.residuals.emplace_back(agent.entity, residual);
+        }
+    });
+    writes.Finish();
+    std::vector<kb::ecs::NativeComponentRows> flagged;
+    for (const WriteBackPiece& left : pieces) flagged.insert(flagged.end(), left.navAgentRows.begin(), left.navAgentRows.end());
+    storage.MarkComponentRowsModified(navAgentId, flagged);
+    for (const WriteBackPiece& left : pieces) {
+        for (const auto& [entity, residual] : left.residuals) SceneTransformPrecision::StoreLocalResidual(state, entity, residual);
+    }
+    for (const WriteBackPiece& left : pieces) {
+        for (const std::size_t index : left.serial) writeTransform(index);
     }
 }
 
@@ -414,12 +587,17 @@ void SynchronizePlacedNavMeshes(Scene& scene, SceneState& state, bool playing) {
 void StepSceneNavigation(Scene& scene, float deltaSeconds, std::uint32_t steps) {
     SceneState& state = SceneAccess::State(scene);
     SceneNavigationState& navigation = state.navigation;
-    std::vector<std::pair<SceneEntity, NavAgent>> authored;
+    if (!navigation.stepBuffers) navigation.stepBuffers = std::make_shared<NavigationStepBuffers>();
+    std::vector<std::pair<SceneEntity, NavAgent>>& authored = navigation.stepBuffers->authored;
+    authored.clear();
+    authored.reserve(SceneEntityCounter::CountWithComponent(state.world, state.components.NavAgentComponentId()));
     state.world.CreateQuery<NavAgent>().ForEach(
         [](SceneEntity entity, const NavAgent& agent, void* context) {
             static_cast<std::vector<std::pair<SceneEntity, NavAgent>>*>(context)->emplace_back(entity, agent);
         }, &authored);
-    std::ranges::sort(authored, {}, [](const auto& entry) { return entry.first.Id(); });
+    // Agents made one after the other come back in id order already.
+    const auto agentId = [](const auto& entry) { return entry.first.Id(); };
+    if (!std::ranges::is_sorted(authored, {}, agentId)) std::ranges::sort(authored, {}, agentId);
     if (authored.empty() || !(deltaSeconds > 0.0F) || steps == 0U) return;
     if (HasPolygons(navigation)) {
         StepPolygonNavigation(scene, state, authored, deltaSeconds, steps);
@@ -445,6 +623,7 @@ void NavigationSceneSystem::OnUpdate(SceneSystemContext& context) {
     if (!state.isPlaying || SceneEntityCounter::CountWithComponent(state.world, state.components.NavAgentComponentId()) == 0U) {
         navigation.stepAccumulator = 0.0F;
         if (SceneEntityCounter::CountWithComponent(state.world, state.components.NavAgentComponentId()) == 0U) {
+            navigation.stepBuffers.reset();
             if (navigation.crowd) navigation.crowd->Clear();
             if (navigation.horde) navigation.horde->Clear();
         }

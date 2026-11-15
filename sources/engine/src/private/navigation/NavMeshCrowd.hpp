@@ -146,6 +146,9 @@ private:
     std::size_t workerCount_ = 1U;
     // Whether the crowds' passes run on the workers this step (enough agents, see kMinAgentsOnWorkers).
     bool pooled_ = false;
+    // CPU time per agent of the step's light passes (nextLink scan, reading members back), learned while they run.
+    double linkScanCost_ = 0.0;
+    double readBackCost_ = 0.0;
     // Per-step lists, kept to reuse their storage.
     std::vector<kb::scene::NavAreaMask> masks_;
     std::vector<AgentRecord*> records_;

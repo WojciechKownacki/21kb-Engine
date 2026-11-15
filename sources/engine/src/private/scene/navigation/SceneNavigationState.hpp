@@ -26,6 +26,9 @@ struct PlacedNavMeshRecord {
     bool failed = false;
 };
 
+// What one navigation step builds per agent, kept between steps (defined with the step).
+struct NavigationStepBuffers;
+
 // The scene's polygon navigation meshes, the crowd moving its agents and what the navigation system
 // keeps across steps.
 struct SceneNavigationState {
@@ -38,6 +41,8 @@ struct SceneNavigationState {
     // Agents in horde mode, moved by shared navigation fields instead of the crowd.
     std::shared_ptr<kb::navigation::NavMeshHorde> horde;
     NavigationCrowdSettings crowdSettings{};
+    // Per-agent lists of the step, kept so a large crowd does not allocate and fault in its memory again every step.
+    std::shared_ptr<NavigationStepBuffers> stepBuffers;
     std::vector<kb::math::DVec3> crowdFocuses;
     bool crowdFocusesSet = false;
     // Keyed by the ContentInstance owner's entity id.
