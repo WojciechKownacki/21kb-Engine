@@ -73,6 +73,77 @@ void ExpandMeshletCommands(const MeshPipelineBuildDesc& desc, MeshPipelineBuildR
     result.stats.meshPipelineCommandCapacity = static_cast<std::uint32_t>(result.commands.capacity());
     result.stats.meshPipelineSortKeyCount = result.stats.meshPipelineCommandCount;
 }
+
+// Readies `result` for a build of `desc` and resolves its batches. False when there is nothing to build, which the
+// result then says.
+[[nodiscard]] bool BeginPass(const MeshPipelineBuildDesc& desc, MeshPipelineBuildResult& result,
+    SceneMeshBatchCommandCache* batchCache, std::span<const SceneMeshBatch>& meshBatches) {
+    if (batchCache != nullptr) batchCache->BeginBuild(desc.pass, result);
+    else for (MeshDrawCommand& command : result.commands) command.instances.clear();
+    result.gpuDrivenInputRecords.clear();
+    result.transparentInstanceScratch.clear();
+    ClearKeepingNodes(result.commandLookupScratch, result.commandLookupNodes);
+    ClearKeepingNodes(result.materialResolutionScratch, result.materialResolutionNodes);
+    result.stats = SceneRenderSubmitStats{};
+    const bool hasBatchSource = desc.meshBatches != nullptr || desc.drawGroups != nullptr;
+    meshBatches = SceneMeshBatchSourceResolver::Resolve(SceneMeshBatchSourceDesc{
+        .meshBatches = desc.meshBatches,
+        .drawGroups = desc.drawGroups,
+    }, result.meshBatchScratch);
+    if (meshBatches.empty()) {
+        result.commands.clear();
+        if (hasBatchSource) {
+            SceneDrawCommandCache::BeginBuild(result.drawCommandCache, desc.pass);
+            SceneDrawCommandCache::EndBuild(result.drawCommandCache, desc.pass, result.stats);
+        }
+        if (batchCache != nullptr) batchCache->EndBuild(result);
+        return false;
+    }
+
+    if (desc.resourceValidation == MeshPipelineResourceValidation::ResolveAndValidate &&
+        (desc.resources == nullptr || desc.resourceMap == nullptr)) {
+        result.commands.clear();
+        if (batchCache != nullptr) batchCache->EndBuild(result);
+        return false;
+    }
+
+    SceneDrawCommandCache::BeginBuild(result.drawCommandCache, desc.pass);
+    return true;
+}
+
+[[nodiscard]] MeshPassProcessorDesc ProcessorDesc(const MeshPipelineBuildDesc& desc, std::span<const SceneMeshBatch> meshBatches,
+    SceneMeshBatchCommandCache* batchCache, kb::ecs::WorkerPool* workerPool) noexcept {
+    return MeshPassProcessorDesc{
+        .pass = desc.pass,
+        .meshBatches = meshBatches,
+        .resources = desc.resources,
+        .resourceMap = desc.resourceMap,
+        .resolvedMeshResource = desc.resolvedMeshResource,
+        .resolvedMaterialResource = desc.resolvedMaterialResource,
+        .camera = desc.camera,
+        .visibilityBlockers = desc.visibilityBlockers,
+        .portalVisibility = desc.portalVisibility,
+        .diagnostics = desc.diagnostics,
+        .maxDrawCommands = desc.maxDrawCommands,
+        .maxVisibleInstances = desc.maxVisibleInstances,
+        .selectedEntityIds = desc.selectedEntityIds,
+        .resourceValidation = desc.resourceValidation,
+        .terrainLayersOnly = desc.terrainLayersOnly,
+        .batchCommandCache = batchCache,
+        .gpuDrivenSupport = desc.gpuDrivenSupport,
+        .motionFrame = desc.motionFrame,
+        .workerPool = workerPool,
+    };
+}
+
+// What a build leaves to do once its commands are written.
+void EndPass(const MeshPipelineBuildDesc& desc, MeshPipelineBuildResult& result, SceneMeshBatchCommandCache* batchCache) {
+    ExpandMeshletCommands(desc, result);
+    SceneDrawCommandCache::EndBuild(result.drawCommandCache, desc.pass, result.stats);
+    result.meshBatchScratch.clear();
+    MeshPipelineGpuDrivenRecorder::Finalize(result, desc.gpuDrivenSupport, desc.maxDroppedInstances);
+    if (batchCache != nullptr) batchCache->EndBuild(result);
+}
 } // namespace
 
 
@@ -164,62 +235,31 @@ void MeshPipelineProcessor::BuildInto(const MeshPipelineBuildDesc& desc, MeshPip
         desc.pass != MeshPassType::BaseTransparent && desc.selectedEntityIds.empty() &&
         desc.visibilityBlockers.empty() && desc.portalVisibility == nullptr ? desc.batchCommandCache : nullptr;
     if (batchCache == nullptr && desc.batchCommandCache != nullptr) desc.batchCommandCache->Reset();
-    if (batchCache != nullptr) batchCache->BeginBuild(desc.pass, result);
-    else for (MeshDrawCommand& command : result.commands) command.instances.clear();
-    result.gpuDrivenInputRecords.clear();
-    result.transparentInstanceScratch.clear();
-    ClearKeepingNodes(result.commandLookupScratch, result.commandLookupNodes);
-    ClearKeepingNodes(result.materialResolutionScratch, result.materialResolutionNodes);
-    result.stats = SceneRenderSubmitStats{};
-    const bool hasBatchSource = desc.meshBatches != nullptr || desc.drawGroups != nullptr;
-    const std::span<const SceneMeshBatch> meshBatches = SceneMeshBatchSourceResolver::Resolve(SceneMeshBatchSourceDesc{
-        .meshBatches = desc.meshBatches,
-        .drawGroups = desc.drawGroups,
-    }, result.meshBatchScratch);
-    if (meshBatches.empty()) {
-        result.commands.clear();
-        if (hasBatchSource) {
-            SceneDrawCommandCache::BeginBuild(result.drawCommandCache, desc.pass);
-            SceneDrawCommandCache::EndBuild(result.drawCommandCache, desc.pass, result.stats);
+    std::span<const SceneMeshBatch> meshBatches;
+    if (!BeginPass(desc, result, batchCache, meshBatches)) return;
+    MeshPassProcessor::BuildCommandsInto(ProcessorDesc(desc, meshBatches, batchCache, desc.workerPool), result);
+    EndPass(desc, result, batchCache);
+}
+
+void MeshPipelineProcessor::BuildPassesInto(std::span<const MeshPipelinePassBuild> passes) noexcept {
+    std::vector<MeshPassBuild> builds;
+    std::vector<const MeshPipelinePassBuild*> built;
+    builds.reserve(passes.size());
+    built.reserve(passes.size());
+    for (const MeshPipelinePassBuild& pass : passes) {
+        const MeshPipelineBuildDesc& desc = pass.desc;
+        if (desc.batchCommandCache != nullptr) desc.batchCommandCache->Reset();
+        std::span<const SceneMeshBatch> meshBatches;
+        if (BeginPass(desc, *pass.result, nullptr, meshBatches)) {
+            builds.push_back(MeshPassBuild{
+                .desc = ProcessorDesc(desc, meshBatches, nullptr, passes.front().desc.workerPool), .result = pass.result });
+            built.push_back(&pass);
         }
-        if (batchCache != nullptr) batchCache->EndBuild(result);
-        return;
     }
-
-    if (desc.resourceValidation == MeshPipelineResourceValidation::ResolveAndValidate &&
-        (desc.resources == nullptr || desc.resourceMap == nullptr)) {
-        result.commands.clear();
-        if (batchCache != nullptr) batchCache->EndBuild(result);
-        return;
+    MeshPassProcessor::BuildCommandsInto(builds);
+    for (const MeshPipelinePassBuild* pass : built) {
+        EndPass(pass->desc, *pass->result, nullptr);
     }
-
-    SceneDrawCommandCache::BeginBuild(result.drawCommandCache, desc.pass);
-    MeshPassProcessor::BuildCommandsInto(MeshPassProcessorDesc{
-        .pass = desc.pass,
-        .meshBatches = meshBatches,
-        .resources = desc.resources,
-        .resourceMap = desc.resourceMap,
-        .resolvedMeshResource = desc.resolvedMeshResource,
-        .resolvedMaterialResource = desc.resolvedMaterialResource,
-        .camera = desc.camera,
-        .visibilityBlockers = desc.visibilityBlockers,
-        .portalVisibility = desc.portalVisibility,
-        .diagnostics = desc.diagnostics,
-        .maxDrawCommands = desc.maxDrawCommands,
-        .maxVisibleInstances = desc.maxVisibleInstances,
-        .selectedEntityIds = desc.selectedEntityIds,
-        .resourceValidation = desc.resourceValidation,
-        .terrainLayersOnly = desc.terrainLayersOnly,
-        .batchCommandCache = batchCache,
-        .gpuDrivenSupport = desc.gpuDrivenSupport,
-        .motionFrame = desc.motionFrame,
-        .workerPool = desc.workerPool,
-    }, result);
-    ExpandMeshletCommands(desc, result);
-    SceneDrawCommandCache::EndBuild(result.drawCommandCache, desc.pass, result.stats);
-    result.meshBatchScratch.clear();
-    MeshPipelineGpuDrivenRecorder::Finalize(result, desc.gpuDrivenSupport, desc.maxDroppedInstances);
-    if (batchCache != nullptr) batchCache->EndBuild(result);
 }
 
 void MeshPipelineProcessor::CountCommandsAsSubmitted(SceneRenderSubmitStats& stats, const std::vector<MeshDrawCommand>& commands) noexcept {

@@ -198,6 +198,10 @@ constexpr std::size_t kMinChunkInstances = 256U;
 // A pass of fewer chunks is built on the calling thread: it has too little to scan side by side.
 constexpr std::size_t kMinChunks = 4U;
 
+// Passes built together are written side by side once their instances add up to this many; fewer take less to build one
+// after the other than to hand to the workers.
+constexpr std::size_t kMinSideBySideInstances = 512U;
+
 // The workers that scan a pass beside the calling thread. Scanning costs a few times what writing the draw commands does,
 // so a few workers keep ahead of the calling thread, and every worker woken costs it time.
 constexpr std::size_t kMaxScanWorkers = 8U;
@@ -700,16 +704,11 @@ void MergeChunk(const MeshScanContext& context, const MeshPipelineScanChunk& chu
 // Splits the batches of a large pass into chunks of consecutive batches, which `result.scanChunks` then holds, and
 // returns their number; 0 when the pass is built on this thread. A batch that is built serially (a missing mesh reports
 // in order, visibility clusters read what the scan has counted) ends the chunk it follows.
-[[nodiscard]] std::size_t PlanScanChunks(const MeshScanContext& context, MeshPipelineBuildResult& result) {
+[[nodiscard]] std::size_t PlanScanChunks(const MeshScanContext& context, MeshPipelineBuildResult& result, std::size_t instanceCount,
+    const kb::ecs::WorkerPool* pool) {
     const MeshPassProcessorDesc& desc = context.desc;
-    if (desc.workerPool == nullptr || desc.batchCommandCache != nullptr || !desc.workerPool->Running()) {
-        return 0U;
-    }
-    std::size_t instanceCount = 0U;
-    for (const SceneMeshBatch& batch : desc.meshBatches) {
-        instanceCount += batch.instances.size();
-    }
-    if (instanceCount < MeshPassProcessor::ParallelThreshold) {
+    if (pool == nullptr || desc.batchCommandCache != nullptr || !pool->Running() ||
+        instanceCount < MeshPassProcessor::ParallelThreshold) {
         return 0U;
     }
     const std::size_t chunkInstances = std::max(kMinChunkInstances, (instanceCount + kMaxChunks - 1U) / kMaxChunks);
@@ -752,108 +751,198 @@ void MergeChunk(const MeshScanContext& context, const MeshPipelineScanChunk& chu
     return chunkCount < kMinChunks ? 0U : chunkCount;
 }
 
-// Scans the chunks on the workers of the pass and on the calling thread, which would otherwise wait for workers that
-// are still waking: whoever is free takes the next chunk no one has taken. The calling thread writes the chunks into the
-// draw commands in order, as they are scanned.
-class MeshChunkScanner {
+// The build of one pass: what its scan reads, the result it writes and the chunks planned for it.
+class PassBuild {
 public:
-    MeshChunkScanner(const MeshScanContext& context, MeshPipelineBuildResult& result, std::size_t chunkCount)
-        : context_(context), result_(result), chunkCount_(chunkCount) {
-        if (chunkCount_ == 0U) {
+    PassBuild(const MeshPassProcessorDesc& desc, MeshPipelineBuildResult& result, const kb::ecs::WorkerPool* pool)
+        : frustum_(MeshPipelineVisibility::BuildFrustum(desc.camera)),
+          context_{
+              .desc = desc,
+              .frustum = frustum_,
+              .cullingMask = desc.camera != nullptr ? desc.camera->cullingMask : 0xFFFFFFFFU,
+              .detailSwitchLevels = result.detailSwitchLevels,
+          },
+          result_(result) {
+        ResolveDetailSwitchLevels(desc, result);
+        result.commands.reserve(desc.meshBatches.size());
+        for (const SceneMeshBatch& batch : desc.meshBatches) {
+            instanceCount_ += batch.instances.size();
+        }
+        chunkCount_ = PlanScanChunks(context_, result, instanceCount_, pool);
+    }
+
+    PassBuild(const PassBuild&) = delete;
+    PassBuild& operator=(const PassBuild&) = delete;
+
+    [[nodiscard]] std::size_t InstanceCount() const noexcept { return instanceCount_; }
+    [[nodiscard]] std::size_t ChunkCount() const noexcept { return chunkCount_; }
+    [[nodiscard]] const MeshPipelineScanChunk& Chunk(std::size_t index) const noexcept { return result_.scanChunks[index]; }
+    void Scan(std::size_t index) { ScanChunk(context_, result_.scanChunks[index]); }
+
+    // Writes the batches into the draw commands in order. `await(index)` returns the chunk once it is scanned.
+    template <typename Await>
+    void Build(Await&& await) {
+        const MeshPassProcessorDesc& desc = context_.desc;
+        MeshCommandWriter writer{ .desc = desc, .result = result_ };
+        std::vector<std::uint8_t> chainLevels;
+        MeshScanState state{
+            .stats = result_.stats,
+            .diagnostics = desc.diagnostics,
+            .materialResolutions = result_.materialResolutionScratch,
+            .materialResolutionNodes = result_.materialResolutionNodes,
+            .chainLevels = chainLevels,
+        };
+        std::size_t nextChunk = 0U;
+        for (std::size_t batchIndex = 0U; batchIndex < desc.meshBatches.size(); ++batchIndex) {
+            if (nextChunk < chunkCount_ && result_.scanChunks[nextChunk].firstBatch == batchIndex) {
+                const MeshPipelineScanChunk& chunk = await(nextChunk++);
+                if (chunk.clean) {
+                    MergeChunk(context_, chunk, writer);
+                    batchIndex += chunk.batchCount - 1U;
+                    continue;
+                }
+            }
+            BuildBatch(context_, state, writer, desc.meshBatches[batchIndex]);
+        }
+        MeshPipelineCommandBuilder::FinalizeCommands(result_, desc.pass, writer.commandCount,
+            desc.maxDrawCommands, desc.diagnostics);
+    }
+
+private:
+    MeshPipelineFrustum frustum_;
+    MeshScanContext context_;
+    MeshPipelineBuildResult& result_;
+    std::size_t instanceCount_ = 0U;
+    std::size_t chunkCount_ = 0U;
+};
+
+// Builds passes on the calling thread and on the workers of a pool. Whoever is free takes the next chunk of any pass
+// that no one has taken, which the calling thread would otherwise wait for while workers are still waking. Passes that are
+// built together are also written into their draw commands side by side: the calling thread takes the first, workers the
+// others, and a thread that waits for a chunk of its pass scans chunks of any pass meanwhile. A pass is written in
+// order, as its chunks are scanned.
+class MeshPassScheduler {
+public:
+    MeshPassScheduler(std::span<std::optional<PassBuild>> builds, kb::ecs::WorkerPool* pool)
+        : builds_(builds) {
+        std::size_t chunkCount = 0U;
+        std::size_t instanceCount = 0U;
+        for (const std::optional<PassBuild>& build : builds_) {
+            chunkCount += build->ChunkCount();
+            instanceCount += build->InstanceCount();
+        }
+        // Passes with no chunk of their own are still built side by side once together they are worth the workers.
+        const bool sideBySide = builds_.size() > 1U && instanceCount >= kMinSideBySideInstances;
+        if (pool == nullptr || !pool->Running() || (chunkCount == 0U && !sideBySide)) {
             return;
         }
-        const std::size_t workerCount = std::min(context.desc.workerPool->WorkerCount(), kMaxScanWorkers);
+        // One chunk of each pass in turn, so that every pass can start to be written early.
+        scanOrder_.reserve(chunkCount);
+        for (std::size_t round = 0U; scanOrder_.size() < chunkCount; ++round) {
+            for (std::size_t pass = 0U; pass < builds_.size(); ++pass) {
+                if (round < builds_[pass]->ChunkCount()) {
+                    scanOrder_.push_back(ChunkRef{ .pass = pass, .index = round });
+                }
+            }
+        }
+        const std::size_t workerCount = std::min(pool->WorkerCount(), kMaxScanWorkers);
         std::vector<kb::ecs::WorkerPoolChunk> drains(workerCount);
         for (std::size_t index = 0U; index < workerCount; ++index) {
             drains[index] = kb::ecs::WorkerPoolChunk{
                 .index = index, .begin = index, .count = 1U, .preferredWorkerIndex = index, .workerCountLimit = workerCount };
         }
-        job_ = context.desc.workerPool->SubmitParallelForChunks(std::move(drains), &MeshChunkScanner::Drain, this);
+        job_ = pool->SubmitParallelForChunks(std::move(drains), &MeshPassScheduler::Drain, this);
     }
 
-    // Waits until no worker uses the chunks any more.
-    ~MeshChunkScanner() {
+    // Waits until no worker uses the passes any more.
+    ~MeshPassScheduler() {
         job_.Wait();
     }
 
-    MeshChunkScanner(const MeshChunkScanner&) = delete;
-    MeshChunkScanner& operator=(const MeshChunkScanner&) = delete;
+    MeshPassScheduler(const MeshPassScheduler&) = delete;
+    MeshPassScheduler& operator=(const MeshPassScheduler&) = delete;
 
-    // The chunk once it is scanned. The thread scans other chunks meanwhile, if no worker has taken them.
-    [[nodiscard]] const MeshPipelineScanChunk& Await(std::size_t index) {
-        const MeshPipelineScanChunk& chunk = result_.scanChunks[index];
-        while (!chunk.ready.load(std::memory_order_acquire)) {
-            ScanNext();
+    // Builds every pass; returns once all are written.
+    void Run() {
+        BuildPass(0U);
+        BuildTakenPasses();
+        while (ScanNext()) {
         }
-        return chunk;
+        job_.Wait();
     }
 
 private:
     static void Drain(kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk&, void* self) {
-        auto& scanner = *static_cast<MeshChunkScanner*>(self);
-        while (scanner.ScanNext()) {
+        auto& scheduler = *static_cast<MeshPassScheduler*>(self);
+        scheduler.BuildTakenPasses();
+        while (scheduler.ScanNext()) {
         }
+    }
+
+    // The calling thread builds the first pass; every other goes to whichever thread asks first.
+    void BuildTakenPasses() {
+        for (std::size_t pass = nextPass_.fetch_add(1U, std::memory_order_relaxed); pass < builds_.size();
+             pass = nextPass_.fetch_add(1U, std::memory_order_relaxed)) {
+            BuildPass(pass);
+        }
+    }
+
+    void BuildPass(std::size_t pass) {
+        builds_[pass]->Build([this, pass](std::size_t index) -> const MeshPipelineScanChunk& {
+            const MeshPipelineScanChunk& chunk = builds_[pass]->Chunk(index);
+            while (!chunk.ready.load(std::memory_order_acquire)) {
+                ScanNext();
+            }
+            return chunk;
+        });
     }
 
     bool ScanNext() {
-        if (next_.load(std::memory_order_relaxed) >= chunkCount_) {
+        if (next_.load(std::memory_order_relaxed) >= scanOrder_.size()) {
             return false;
         }
-        const std::size_t index = next_.fetch_add(1U, std::memory_order_relaxed);
-        if (index >= chunkCount_) {
+        const std::size_t next = next_.fetch_add(1U, std::memory_order_relaxed);
+        if (next >= scanOrder_.size()) {
             return false;
         }
-        ScanChunk(context_, result_.scanChunks[index]);
+        builds_[scanOrder_[next].pass]->Scan(scanOrder_[next].index);
         return true;
     }
 
-    const MeshScanContext& context_;
-    MeshPipelineBuildResult& result_;
-    std::size_t chunkCount_;
+    struct ChunkRef {
+        std::size_t pass;
+        std::size_t index;
+    };
+
+    std::span<std::optional<PassBuild>> builds_;
+    // The chunks of all passes in the order the threads take them.
+    std::vector<ChunkRef> scanOrder_;
     std::atomic<std::size_t> next_{ 0U };
+    std::atomic<std::size_t> nextPass_{ 1U };
     kb::ecs::JobHandle job_;
 };
 
 } // namespace
 
-void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, MeshPipelineBuildResult& result) noexcept {
-    const MeshPipelineFrustum frustum = MeshPipelineVisibility::BuildFrustum(desc.camera);
-    const std::uint32_t cullingMask = desc.camera != nullptr ? desc.camera->cullingMask : 0xFFFFFFFFU;
-    ResolveDetailSwitchLevels(desc, result);
-    result.commands.reserve(desc.meshBatches.size());
-
-    const MeshScanContext context{
-        .desc = desc,
-        .frustum = frustum,
-        .cullingMask = cullingMask,
-        .detailSwitchLevels = result.detailSwitchLevels,
-    };
-    const std::size_t chunkCount = PlanScanChunks(context, result);
-    MeshChunkScanner scanner(context, result, chunkCount);
-    MeshCommandWriter writer{ .desc = desc, .result = result };
-    std::vector<std::uint8_t> chainLevels;
-    MeshScanState state{
-        .stats = result.stats,
-        .diagnostics = desc.diagnostics,
-        .materialResolutions = result.materialResolutionScratch,
-        .materialResolutionNodes = result.materialResolutionNodes,
-        .chainLevels = chainLevels,
-    };
-    std::size_t nextChunk = 0U;
-    for (std::size_t batchIndex = 0U; batchIndex < desc.meshBatches.size(); ++batchIndex) {
-        if (nextChunk < chunkCount && result.scanChunks[nextChunk].firstBatch == batchIndex) {
-            const MeshPipelineScanChunk& chunk = scanner.Await(nextChunk++);
-            if (chunk.clean) {
-                MergeChunk(context, chunk, writer);
-                batchIndex += chunk.batchCount - 1U;
-                continue;
-            }
-        }
-        BuildBatch(context, state, writer, desc.meshBatches[batchIndex]);
+void MeshPassProcessor::BuildCommandsInto(std::span<const MeshPassBuild> passes) noexcept {
+    if (passes.empty()) {
+        return;
     }
+    kb::ecs::WorkerPool* const pool = passes.front().desc.workerPool;
+    // A pass built alone needs no storage on the heap.
+    std::optional<PassBuild> single;
+    std::vector<std::optional<PassBuild>> many(passes.size() > 1U ? passes.size() : 0U);
+    const std::span<std::optional<PassBuild>> builds = passes.size() > 1U ? std::span{ many } : std::span{ &single, 1U };
+    for (std::size_t index = 0U; index < passes.size(); ++index) {
+        builds[index].emplace(passes[index].desc, *passes[index].result, pool);
+    }
+    MeshPassScheduler scheduler(builds, pool);
+    scheduler.Run();
+}
 
-    MeshPipelineCommandBuilder::FinalizeCommands(result, desc.pass, writer.commandCount,
-        desc.maxDrawCommands, desc.diagnostics);
+void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, MeshPipelineBuildResult& result) noexcept {
+    const MeshPassBuild pass{ .desc = desc, .result = &result };
+    BuildCommandsInto(std::span<const MeshPassBuild>{ &pass, 1U });
 }
 
 } // namespace kb::render

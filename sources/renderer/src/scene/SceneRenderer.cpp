@@ -171,6 +171,21 @@ void SceneRenderer::Submit(bgfx::ViewId viewId, const RenderScene& renderScene, 
     SubmitMeshPass(viewId, MeshPassType::BaseOpaque, renderScene, viewportWidth, viewportHeight, cameraOverride, drawBudget, lightingConfig);
 }
 
+void SceneRenderer::PrepareMeshPasses(
+    MeshPassType pass,
+    const RenderScene& renderScene,
+    std::span<const SceneRenderCamera* const> cameras,
+    SceneRenderDrawBudget drawBudget,
+    const SceneGpuDrivenFeatureSupport* gpuDrivenSupportOverride,
+    bool terrainLayersOnly) const {
+    if (!initialized_ || meshSubmitter_ == nullptr) {
+        return;
+    }
+    meshSubmitter_->PrebuildPasses(renderScene, resources_, resourceMap_, pass, cameras,
+        ResolveDrawBudget(drawBudget, defaultDrawBudget_),
+        gpuDrivenSupportOverride == nullptr ? gpuDrivenRuntimeSupport_ : *gpuDrivenSupportOverride, terrainLayersOnly);
+}
+
 void SceneRenderer::SubmitMeshPass(
     bgfx::ViewId viewId,
     MeshPassType pass,

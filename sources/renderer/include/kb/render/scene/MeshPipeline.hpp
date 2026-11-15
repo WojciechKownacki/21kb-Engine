@@ -232,12 +232,21 @@ struct MeshPipelineBuildResult {
     SceneRenderSubmitStats stats{};
 };
 
+// A pass to build and the result it fills.
+struct MeshPipelinePassBuild {
+    MeshPipelineBuildDesc desc;
+    MeshPipelineBuildResult* result = nullptr;
+};
+
 class MeshPipelineProcessor {
 public:
     MeshPipelineProcessor() = delete;
 
     [[nodiscard]] static MeshPipelineBuildResult Build(const MeshPipelineBuildDesc& desc) noexcept;
     static void BuildInto(const MeshPipelineBuildDesc& desc, MeshPipelineBuildResult& result) noexcept;
+    // Builds several passes at once, each as BuildInto builds it alone, on the workers of the first pass. Their results
+    // must be distinct. No pass uses a batch command cache; one that is given is reset.
+    static void BuildPassesInto(std::span<const MeshPipelinePassBuild> passes) noexcept;
     static void CountCommandsAsSubmitted(SceneRenderSubmitStats& stats, const std::vector<MeshDrawCommand>& commands) noexcept;
 };
 

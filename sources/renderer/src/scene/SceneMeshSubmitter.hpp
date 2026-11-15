@@ -20,6 +20,7 @@
 #include <bgfx/bgfx.h>
 
 #include <array>
+#include <deque>
 #include <span>
 #include <string>
 #include <utility>
@@ -59,6 +60,20 @@ public:
         ParticleGpuRenderer* particleRenderer = nullptr,
         const kb::particles::ParticleRenderSnapshot* particleSnapshot = nullptr,
         std::span<const ParticleGpuMeshDraw> gpuMeshDraws = {}) const;
+    // Builds the commands of `pass` for each of `cameras` together, on the workers, ahead of the Submit calls that follow
+    // for the same scene with the same budget and GPU-driven support: each takes the commands built for its camera
+    // instead of building them. Does nothing for fewer than two cameras, while mesh particles join the pass (their
+    // batches depend on the camera), or when the pass holds the same commands for every camera because the GPU culls
+    // them; Submit then builds as usual. Submit finds the commands by the value of its camera.
+    void PrebuildPasses(
+        const RenderScene& renderScene,
+        const RenderResourceRegistry& resources,
+        const SceneRenderResourceMap& resourceMap,
+        MeshPassType pass,
+        std::span<const SceneRenderCamera* const> cameras,
+        SceneRenderDrawBudget drawBudget,
+        SceneGpuDrivenFeatureSupport gpuDrivenSupport,
+        bool terrainLayersOnly = false) const;
     [[nodiscard]] static SceneRenderSubmitStats ValidateResourcesInto(
         const RenderScene& renderScene,
         const RenderResourceRegistry& resources,
@@ -80,6 +95,7 @@ public:
     void ResetGraphMaterialDrawStats() const noexcept { passResources_.ResetGraphMaterialDrawStats(); }
     [[nodiscard]] SceneMeshGraphMaterialDrawStats GraphMaterialDrawStats() const noexcept { return passResources_.GraphMaterialDrawStats(); }
     void EndFrame(std::uint64_t frameIndex) const {
+        for (PrebuiltPass& prebuilt : prebuiltPasses_) prebuilt.ready = false;
         gpuDrivenCullingPass_.EndFrame();
         instanceBuffers_.EndFrame();
         passResources_.EndFrame(frameIndex);
@@ -91,6 +107,21 @@ public:
     void SetWorkerPool(kb::ecs::WorkerPool* workerPool) noexcept { workerPool_ = workerPool; }
 
 private:
+    // The commands of one pass that PrebuildPasses built, until the Submit call for its camera takes them.
+    struct PrebuiltPass {
+        const RenderScene* scene = nullptr;
+        MeshPassType pass = MeshPassType::BaseOpaque;
+        SceneMeshCommandReuseKey key;
+        MeshPipelineBuildResult result;
+        SceneRenderDiagnostics diagnostics;
+        bool ready = false;
+    };
+
+    [[nodiscard]] SceneGpuDrivenFeatureSupport EffectiveGpuSupport(SceneGpuDrivenFeatureSupport support) const noexcept;
+    // The detail-switch levels shared by the passes of a scene start over with each scene.
+    void BindDetailSwitchScene(const RenderScene& renderScene) const noexcept;
+    [[nodiscard]] PrebuiltPass* FindPrebuiltPass(const RenderScene& renderScene, MeshPassType pass, const SceneMeshCommandReuseKey& key) const noexcept;
+
     SceneMeshPassResources passResources_;
     SceneGpuDrivenCullingPass gpuDrivenCullingPass_;
     mutable SceneMeshInstanceBufferPool instanceBuffers_;
@@ -98,6 +129,7 @@ private:
     mutable MeshPipelineBuildResult gpuMeshScratch_;
     mutable std::vector<MeshDrawCommand> gpuMeshCommandScratch_;
     mutable std::vector<MeshDrawCommand> mergedCommandScratch_;
+    mutable std::deque<PrebuiltPass> prebuiltPasses_;
     mutable std::vector<SceneMeshBatch> gpuMeshBatchScratch_;
     mutable std::vector<SceneRenderMeshInstance> gpuMeshInstanceScratch_;
     mutable std::array<std::vector<MeshDrawCommand>, static_cast<std::size_t>(MeshPassType::Gizmo) + 1U> passCommandScratch_;

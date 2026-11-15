@@ -11,7 +11,10 @@
 #include <bx/math.h>
 
 #include <algorithm>
+#include <array>
 #include <bit>
+#include <span>
+#include <vector>
 
 namespace kb::render {
 
@@ -27,6 +30,22 @@ public:
 private:
     std::uint64_t key_ = 1469598103934665603ULL;
 };
+
+// What the tiles a point light rendered were rendered for.
+[[nodiscard]] std::uint64_t PointShadowCacheKey(const RendererShadowSubmitDesc& desc, const PointShadowSetup& setup, std::uint32_t light) {
+    ShadowCacheKey mixer;
+    mixer.Mix(setup.binding.entityId[light]);
+    mixer.Mix(desc.sceneRenderer.Resources().Revision());
+    mixer.Mix(desc.sceneRenderer.ResourceMap().Revision());
+    mixer.Mix((static_cast<std::uint64_t>(setup.tileSize) << 32U) ^ setup.atlasWidth ^ (static_cast<std::uint64_t>(setup.atlasHeight) << 16U));
+    for (std::uint32_t c = 0U; c < 4U; ++c) {
+        for (const float value : { setup.binding.positionRange[light * 4U + c], setup.binding.spot[light * 4U + c],
+                 setup.binding.depthParams[light * 4U + c] }) {
+            mixer.Mix(value);
+        }
+    }
+    return mixer.Value();
+}
 
 [[nodiscard]] SceneRenderShadowMapBinding SubmitDirectionalShadows(
     const RendererShadowSubmitDesc& desc,
@@ -62,6 +81,11 @@ private:
     desc.aggregateSubmitStats.shadowLightEntityId = shadowSetup.lightEntityId;
     desc.aggregateSubmitStats.shadowMapAllocationBytes = desc.shadowMap.AllocationBytes();
     std::uint32_t submittedCasters = 0U;
+    // The cascades that render this frame have their commands built together before the first is submitted.
+    struct CascadePass { std::uint32_t cascade; std::uint64_t key; };
+    std::array<CascadePass, SceneRenderShadowMapBinding::kMaxCascades> passes{};
+    std::array<const SceneRenderCamera*, SceneRenderShadowMapBinding::kMaxCascades> cameras{};
+    std::size_t passCount = 0U;
     for (std::uint32_t cascade = 0U; cascade < shadowSetup.binding.cascadeCount; ++cascade) {
         const SceneRenderCamera& cascadeCamera = shadowSetup.cascadeCameras[cascade];
         std::uint64_t key = 0U;
@@ -81,6 +105,14 @@ private:
                 continue;
             }
         }
+        passes[passCount] = CascadePass{ cascade, key };
+        cameras[passCount++] = &cascadeCamera;
+    }
+    desc.sceneRenderer.PrepareMeshPasses(MeshPassType::ShadowDepth, desc.renderScene,
+        std::span<const SceneRenderCamera* const>{ cameras.data(), passCount }, desc.sceneDesc.drawBudget, &desc.gpuDrivenSupport);
+    for (std::size_t pass = 0U; pass < passCount; ++pass) {
+        const auto [cascade, key] = passes[pass];
+        const SceneRenderCamera& cascadeCamera = shadowSetup.cascadeCameras[cascade];
         const std::uint16_t viewId = cascade == 0U
             ? desc.viewportPlan.viewIds.shadowDepth
             : desc.viewportPlan.viewIds.shadowCascadeViews[cascade - 1U];
@@ -148,28 +180,33 @@ void SubmitPointShadows(
         ShadowCasterChanges::ApplyToLocalLights(
             desc.renderScene, desc.sceneRenderer.Resources(), desc.sceneRenderer.ResourceMap(), setup, desc.pointShadowMap);
     }
+    // The lights that render this frame have the commands of their faces built together before the first is submitted.
+    std::array<std::uint64_t, ScenePointShadowBinding::kMaxLights> keys{};
+    std::array<bool, ScenePointShadowBinding::kMaxLights> renders{};
+    std::vector<const SceneRenderCamera*> cameras;
     for (std::uint32_t light = 0U; light < setup.lightCount; ++light) {
         if (setup.faceCount[light] == 0U) {
             continue;
         }
-        std::uint64_t key = 0U;
         if (caching) {
-            ShadowCacheKey mixer;
-            mixer.Mix(setup.binding.entityId[light]);
-            mixer.Mix(desc.sceneRenderer.Resources().Revision());
-            mixer.Mix(desc.sceneRenderer.ResourceMap().Revision());
-            mixer.Mix((static_cast<std::uint64_t>(setup.tileSize) << 32U) ^ setup.atlasWidth ^ (static_cast<std::uint64_t>(setup.atlasHeight) << 16U));
-            for (std::uint32_t c = 0U; c < 4U; ++c) {
-                for (const float value : { setup.binding.positionRange[light * 4U + c], setup.binding.spot[light * 4U + c],
-                         setup.binding.depthParams[light * 4U + c] }) {
-                    mixer.Mix(value);
-                }
-            }
-            key = mixer.Value();
-            if (desc.pointShadowMap.CachedTiles(light) == key) {
+            keys[light] = PointShadowCacheKey(desc, setup, light);
+            if (desc.pointShadowMap.CachedTiles(light) == keys[light]) {
                 continue;
             }
         }
+        renders[light] = true;
+        for (std::uint32_t face = 0U; face < setup.faceCount[light]; ++face) {
+            if (ViewId::IsValid(desc.viewportPlan.viewIds.pointShadowViews[light * ScenePointShadowBinding::kFaceCount + face])) {
+                cameras.push_back(&setup.faces[light][face].camera);
+            }
+        }
+    }
+    desc.sceneRenderer.PrepareMeshPasses(MeshPassType::ShadowDepth, desc.renderScene, cameras, desc.sceneDesc.drawBudget, &desc.gpuDrivenSupport);
+    for (std::uint32_t light = 0U; light < setup.lightCount; ++light) {
+        if (!renders[light]) {
+            continue;
+        }
+        const std::uint64_t key = keys[light];
         desc.pointShadowMap.DiscardCachedTiles(light);
         for (std::uint32_t face = 0U; face < setup.faceCount[light]; ++face) {
             const std::uint32_t index = light * ScenePointShadowBinding::kFaceCount + face;

@@ -78,6 +78,17 @@ public:
         std::span<const std::uint64_t> selectedEntityIds = {},
         const SceneGpuDrivenFeatureSupport* gpuDrivenSupportOverride = nullptr,
         bool terrainLayersOnly = false) const;
+    // Builds the commands of `pass` for each of `cameras` together on the workers (SetWorkerPool), ahead of the
+    // SubmitMeshPass calls that follow with those cameras and the same scene, budget and GPU-driven support: each takes
+    // the commands built for its camera instead of building them after the pass before it. Passes that cannot be built
+    // ahead (fewer than two cameras, mesh particles) are built by their SubmitMeshPass as usual.
+    void PrepareMeshPasses(
+        MeshPassType pass,
+        const RenderScene& renderScene,
+        std::span<const SceneRenderCamera* const> cameras,
+        SceneRenderDrawBudget drawBudget = {},
+        const SceneGpuDrivenFeatureSupport* gpuDrivenSupportOverride = nullptr,
+        bool terrainLayersOnly = false) const;
     // Draws the Post Process materials of `renderScene` (Mesh Renderers whose material is of that domain, in entity
     // order, at most one per view) over `chain.input`; returns the texture holding the result.
     [[nodiscard]] bgfx::TextureHandle SubmitPostProcessMaterials(const RenderScene& renderScene, const ScenePostProcessMaterialChainDesc& chain) const;
