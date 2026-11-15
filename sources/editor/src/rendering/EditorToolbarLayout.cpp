@@ -667,8 +667,8 @@ HeroIconKind EditorToolbarLayout::DropdownIcon(EditorMenuCommand menu, int row) 
         return pick(std::array{ HeroIconKind::Plus, HeroIconKind::Folder, HeroIconKind::Save,
             HeroIconKind::DocumentText, HeroIconKind::RocketLaunch });
     case EditorMenuCommand::Edit:
-        return pick(std::array{ HeroIconKind::Undo, HeroIconKind::Redo, HeroIconKind::XMark,
-            HeroIconKind::DocumentText, HeroIconKind::Download, HeroIconKind::Duplicate });
+        return pick(std::array{ HeroIconKind::Undo, HeroIconKind::Redo, HeroIconKind::Scissors,
+            HeroIconKind::ClipboardCopy, HeroIconKind::ClipboardPaste, HeroIconKind::Duplicate });
     case EditorMenuCommand::Options:
         return pick(std::array{ HeroIconKind::Monitor, HeroIconKind::AdjustmentsHorizontal,
             HeroIconKind::WrenchScrewdriver, HeroIconKind::Plug, HeroIconKind::Activity, HeroIconKind::SpeakerWave, HeroIconKind::Bolt });

@@ -600,6 +600,7 @@ add_executable(kb_editor WIN32
     src/private/app/docking/EditorDockTabMenu.hpp
     src/private/app/panels/EditorPanelCloser.hpp
     src/private/rendering/EditorToolbarMenuOverlayWindow.hpp
+    src/private/rendering/DockTabTooltipOverlayWindow.hpp
     src/private/rendering/InspectorAddComponentOverlayWindow.hpp
     src/private/rendering/MaterialEditorPanelRenderer.hpp
     src/private/rendering/material_graph/EditorMaterialGraphPinPresentation.hpp
@@ -851,6 +852,7 @@ add_executable(kb_editor WIN32
     src/app/docking/EditorDockTabMenu.cpp
     src/app/panels/EditorPanelCloser.cpp
     src/rendering/EditorToolbarMenuOverlayWindow.cpp
+    src/rendering/DockTabTooltipOverlayWindow.cpp
     src/rendering/InspectorAddComponentOverlayWindow.cpp
     src/rendering/MaterialEditorPanelRenderer.cpp
     src/rendering/EditorMaterialThumbnailService.cpp

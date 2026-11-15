@@ -115,6 +115,18 @@ bool EditorShellInteractionState::SetHoveredTopBarItem(EditorTopBarItem item) no
     return true;
 }
 
+bool EditorShellInteractionState::SetHoveredTab(std::uint32_t panelId) noexcept {
+    if (hoveredTab_ == panelId) {
+        return false;
+    }
+    hoveredTab_ = panelId;
+    return true;
+}
+
+std::uint32_t EditorShellInteractionState::HoveredTab() const noexcept {
+    return hoveredTab_;
+}
+
 EditorTopBarItem EditorShellInteractionState::HoveredTopBarItem() const noexcept {
     return hoveredTopBarItem_;
 }

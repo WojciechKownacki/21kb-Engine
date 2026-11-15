@@ -194,6 +194,31 @@ static constexpr std::array<HeroIconPath, 4> kGitBranch{
     HeroIconPath{ "M9 18A3 3 0 1 1 3 18A3 3 0 1 1 9 18Z", false },
     HeroIconPath{ "M18 9A9 9 0 0 1 9 18", false },
 };
+// Edit command glyphs for Cut, Copy and Paste, drawn in the same 24 px, 2 px stroke style as the
+// other command glyphs: two rings and the blades crossing between them.
+static constexpr std::array<HeroIconPath, 5> kScissors{
+    HeroIconPath{ "M9 6A3 3 0 1 1 3 6A3 3 0 1 1 9 6Z", false },
+    HeroIconPath{ "M9 18A3 3 0 1 1 3 18A3 3 0 1 1 9 18Z", false },
+    HeroIconPath{ "M8.12 8.12L12 12", false },
+    HeroIconPath{ "M20 4L8.12 15.88", false },
+    HeroIconPath{ "M14.8 14.8L20 20", false },
+};
+// A clipboard with its clip on top and an arrow going into it.
+static constexpr std::array<HeroIconPath, 5> kClipboardCopy{
+    HeroIconPath{ "M9 2H15A1 1 0 0 1 16 3V5A1 1 0 0 1 15 6H9A1 1 0 0 1 8 5V3A1 1 0 0 1 9 2Z", false },
+    HeroIconPath{ "M8 4H6A2 2 0 0 0 4 6V20A2 2 0 0 0 6 22H18A2 2 0 0 0 20 20V18", false },
+    HeroIconPath{ "M16 4H18A2 2 0 0 1 20 6V10", false },
+    HeroIconPath{ "M21 14H11", false },
+    HeroIconPath{ "M15 10L11 14L15 18", false },
+};
+// The same clipboard with the arrow coming out of it.
+static constexpr std::array<HeroIconPath, 5> kClipboardPaste{
+    HeroIconPath{ "M9 2H15A1 1 0 0 1 16 3V5A1 1 0 0 1 15 6H9A1 1 0 0 1 8 5V3A1 1 0 0 1 9 2Z", false },
+    HeroIconPath{ "M8 4H6A2 2 0 0 0 4 6V20A2 2 0 0 0 6 22H18A2 2 0 0 0 19.793 20.887", false },
+    HeroIconPath{ "M16 4H18A2 2 0 0 1 20 6V7.344", false },
+    HeroIconPath{ "M11 14H21", false },
+    HeroIconPath{ "M17 18L21 14L17 10", false },
+};
 // Lucide "copy" (ISC).
 static constexpr std::array<HeroIconPath, 2> kDuplicate{
     HeroIconPath{ "M10 8H20A2 2 0 0 1 22 10V20A2 2 0 0 1 20 22H10A2 2 0 0 1 8 20V10A2 2 0 0 1 10 8Z", false },
@@ -649,6 +674,18 @@ HeroIconGlyph HeroIconAssets::GitHub() noexcept {
 
 HeroIconGlyph HeroIconAssets::GitBranch() noexcept {
     return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kGitBranch }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::Scissors() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kScissors }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::ClipboardCopy() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kClipboardCopy }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::ClipboardPaste() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kClipboardPaste }, .strokeWidth = 2.0F };
 }
 
 HeroIconGlyph HeroIconAssets::Monitor() noexcept {

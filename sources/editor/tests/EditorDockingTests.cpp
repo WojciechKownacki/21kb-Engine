@@ -475,6 +475,31 @@ void RunWorldMenuTest() {
         "The World menu sits between Options and Help and opens its eleven rows");
 }
 
+void RunEditAndOptionsMenuTest() {
+    // The pointer handler acts on Edit and Options rows by index; the labels must stay in that order,
+    // and no two Edit rows may share an icon.
+    using kb::editor::EditorMenuCommand;
+    using kb::editor::EditorToolbarLayout;
+    kb::editor::tests::Require(EditorToolbarLayout::FixedRowCount(EditorMenuCommand::Edit) == 6 &&
+            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::Edit, 0) == "Undo" &&
+            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::Edit, 1) == "Redo" &&
+            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::Edit, 2) == "Cut" &&
+            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::Edit, 3) == "Copy" &&
+            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::Edit, 4) == "Paste" &&
+            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::Edit, 5) == "Duplicate",
+        "Edit menu rows must match the rows the pointer handler executes");
+    for (int first = 0; first < 6; ++first) {
+        for (int second = first + 1; second < 6; ++second) {
+            kb::editor::tests::Require(
+                EditorToolbarLayout::DropdownIcon(EditorMenuCommand::Edit, first) != EditorToolbarLayout::DropdownIcon(EditorMenuCommand::Edit, second),
+                "Every Edit row has an icon of its own");
+        }
+    }
+    kb::editor::tests::Require(EditorToolbarLayout::DropdownLabel(EditorMenuCommand::Options, 2) == "Editor Settings" &&
+            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::Options, 3) == "Plugins",
+        "Options lists Editor Settings and Plugins, the rows that open those pages of the Settings window");
+}
+
 void RunBuildGameMenuAndWorkspaceActivationTest() {
     // The panel is only ever reached through File > Build Game, so the row has to be
     // there and has to be the one the handler acts on.
@@ -1618,6 +1643,7 @@ void RunEditorDockingTests() {
     RunClosedUtilityPanelsReopenInRightDockTest();
     RunBuildGameMenuAndWorkspaceActivationTest();
     RunWorldMenuTest();
+    RunEditAndOptionsMenuTest();
     RunSkeletalMeshEditorWorkspaceActivationTest();
     RunAnimationClipEditorWorkspaceActivationTest();
     RunAnimatorEditorWorkspaceActivationTest();

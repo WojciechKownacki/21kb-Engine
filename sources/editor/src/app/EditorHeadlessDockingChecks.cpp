@@ -5,12 +5,18 @@
 #include "app/EditorWindowUnderTest.hpp"
 #include "app/docking/EditorDockTabMenu.hpp"
 #include "rendering/DockTabControlGeometry.hpp"
+#include "rendering/DockTabTooltipOverlayWindow.hpp"
+#include "rendering/DockWorkspaceTabStripRenderer.hpp"
 #include "rendering/EditorToolbarLayout.hpp"
 #include "rendering/EditorToolbarRenderer.hpp"
 #include "rendering/GamePanelContentRenderer.hpp"
+#include "rendering/HeroIconCatalog.hpp"
+#include "rendering/ProjectSettingsPanelRenderer.hpp"
+#include "rendering/gdi/EditorTextMeasure.hpp"
 #include "windowing/FloatingWindowControlLayout.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -415,6 +421,96 @@ EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::VerifyDockingInteracti
         dock.Commands().ResetWorkspace();
     }
 
+    // A tab whose title is cut short shows the whole title under the pointer; a tab that fits shows nothing.
+    {
+        for (const DockPanelKind kind : { DockPanelKind::ProjectSettings, DockPanelKind::Plugins, DockPanelKind::EditorSettings }) {
+            static_cast<void>(dock.Commands().ActivatePanelKind(kind, DockArea::Right));
+        }
+        InvalidateRect(main, nullptr, FALSE);
+        editor.Pump();
+        const DockLayout layout = editor.Layout();
+        std::optional<DockPanelLayout> cutShort;
+        for (const DockPanelLayout& panel : layout.panels) {
+            const DockPanel* model = dock.Queries().FindPanel(panel.panelId);
+            if (model != nullptr && !DockWorkspaceTabStripRenderer::CutShortTitle(panel, *model).empty()) {
+                cutShort = panel;
+                break;
+            }
+        }
+        const auto fitting = tabOf(DockPanelKind::Scene);
+        const auto tooltip = [&]() -> HWND {
+            const HWND popup = FindWindowExW(nullptr, nullptr, DockTabTooltipOverlayWindow::ClassName, nullptr);
+            return popup != nullptr && IsWindowVisible(popup) != FALSE ? popup : nullptr;
+        };
+        const auto hover = [&](POINT point) {
+            SendMessageW(main, WM_MOUSEMOVE, 0, PointParam(point.x, point.y));
+            editor.Pump();
+            UpdateWindow(main);
+            editor.Pump();
+        };
+        if (fitting.has_value()) {
+            // Off every tab: whatever an earlier check left hovered is put away.
+            hover(ContentCenter(*fitting));
+        }
+        expect(tooltip() == nullptr, "no tab tooltip before the pointer rests on a tab");
+        if (expect(cutShort.has_value() && fitting.has_value(), "crowded strip has a cut-short tab and the Scene View tab fits")) {
+            const DockPanel* model = dock.Queries().FindPanel(cutShort->panelId);
+            hover(TabGrip(*cutShort));
+            expect(editor.Shell().HoveredTab() == cutShort->panelId, "the pointer on a cut-short tab marks it hovered");
+            const HWND popup = tooltip();
+            if (expect(popup != nullptr, "a cut-short tab shows its tooltip")) {
+                RECT box{};
+                GetWindowRect(popup, &box);
+                expect(box.right - box.left >= MeasureTextWidth(model->title, 12), "the tooltip is wide enough for the whole title");
+                capture(popup, "dock-tab-tooltip");
+            }
+            hover(TabGrip(*fitting));
+            expect(editor.Shell().HoveredTab() == 0U && tooltip() == nullptr, "a tab whose title fits shows no tooltip");
+            hover(TabGrip(*cutShort));
+            expect(tooltip() != nullptr, "the tooltip returns on the cut-short tab");
+            hover(ContentCenter(*fitting));
+            expect(editor.Shell().HoveredTab() == 0U && tooltip() == nullptr, "moving off the tab puts the tooltip away");
+            // A button held down (the start of a drag) puts the tooltip away too.
+            hover(TabGrip(*cutShort));
+            SendMessageW(main, WM_MOUSEMOVE, MK_LBUTTON, PointParam(TabGrip(*cutShort).x + 1, TabGrip(*cutShort).y));
+            editor.Pump();
+            expect(editor.Shell().HoveredTab() == 0U, "a button held down hides the tab tooltip");
+        }
+        dock.Commands().ResetWorkspace();
+        InvalidateRect(main, nullptr, FALSE);
+        editor.Pump();
+        expect(tooltip() == nullptr, "no tab tooltip once the workspace is reset");
+    }
+
+    // Edit > Cut, Copy and Paste act on the selected object, each from its own row, and each row has its own icon.
+    {
+        constexpr std::array<HeroIconKind, 3> kIcons{ HeroIconKind::Scissors, HeroIconKind::ClipboardCopy, HeroIconKind::ClipboardPaste };
+        for (std::size_t index = 0; index < kIcons.size(); ++index) {
+            const HeroIconKind icon = EditorToolbarLayout::DropdownIcon(EditorMenuCommand::Edit, static_cast<int>(index) + 2);
+            expect(icon == kIcons[index] && !HeroIconCatalog::Glyph(icon).paths.empty(), "Cut, Copy and Paste rows have their own drawn icons");
+        }
+        const auto clickEditRow = [&](int row) {
+            const EditorMenuRects bar = EditorToolbarRenderer::ResolveMenu(ToRect(editor.Layout().menu), EditorMenuCommand::None, 0);
+            editor.Click(main, Center(EditorToolbarLayout::MenuRectByCommand(bar, EditorMenuCommand::Edit)));
+            const EditorMenuRects rects = EditorToolbarRenderer::ResolveMenu(
+                ToRect(editor.Layout().menu), EditorMenuCommand::Edit, editor.Shell().MenuRowCount(EditorMenuCommand::Edit));
+            expect(editor.Shell().OpenMenu() == EditorMenuCommand::Edit, "the Edit menu opens");
+            editor.Click(main, Center(rects.dropdownRows[static_cast<std::size_t>(row)]));
+            expect(editor.Shell().OpenMenu() == EditorMenuCommand::None, "an Edit row closes the menu");
+        };
+        const auto objects = [&] { return sceneContext.Scene().Entities().Count(); };
+        sceneContext.SelectEntity(sceneContext.CreateHierarchyObject());
+        const std::size_t before = objects();
+        clickEditRow(3);
+        expect(objects() == before, "Edit > Copy leaves the object where it is");
+        clickEditRow(4);
+        expect(objects() == before + 1U, "Edit > Paste adds the copied object");
+        clickEditRow(2);
+        expect(objects() == before, "Edit > Cut removes the selected object");
+        clickEditRow(4);
+        expect(objects() == before + 1U, "Edit > Paste adds the cut object back");
+    }
+
     // Settings opens in a window of its own, wide enough for its pages, and closes from its title.
     {
         const EditorMenuRects bar = EditorToolbarRenderer::ResolveMenu(ToRect(editor.Layout().menu), EditorMenuCommand::None, 0);
@@ -437,6 +533,37 @@ EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::VerifyDockingInteracti
             expect(!PanelOfKind(dock, DockPanelKind::ProjectSettings)->visible, "Settings window closes from its title");
         }
         expect(dock.Commands().SerializeWorkspace() == defaultTree, "Settings leaves the docked arrangement alone");
+    }
+
+    // Editor Settings and Plugins are pages of the one Settings window; their Options rows open it on the right page.
+    {
+        const auto clickOptionsRow = [&](int row) {
+            const EditorMenuRects bar = EditorToolbarRenderer::ResolveMenu(ToRect(editor.Layout().menu), EditorMenuCommand::None, 0);
+            editor.Click(main, Center(EditorToolbarLayout::MenuRectByCommand(bar, EditorMenuCommand::Options)));
+            const EditorMenuRects rects = EditorToolbarRenderer::ResolveMenu(
+                ToRect(editor.Layout().menu), EditorMenuCommand::Options, editor.Shell().MenuRowCount(EditorMenuCommand::Options));
+            editor.Click(main, Center(rects.dropdownRows[static_cast<std::size_t>(row)]));
+        };
+        expect(EditorToolbarLayout::DropdownLabel(EditorMenuCommand::Options, 2) == "Editor Settings" &&
+                EditorToolbarLayout::DropdownLabel(EditorMenuCommand::Options, 3) == "Plugins",
+            "Options lists Editor Settings and Plugins");
+        const DockPanel* settings = PanelOfKind(dock, DockPanelKind::ProjectSettings);
+        clickOptionsRow(2);
+        expect(settings->visible && floatingWindow(DockPanelKind::ProjectSettings) != nullptr &&
+                sceneContext.ProjectSettings().SelectedCategory() == static_cast<int>(ProjectSettingsCategory::EditorGeneral),
+            "Options > Editor Settings opens the Settings window on the editor page");
+        clickOptionsRow(3);
+        expect(settings->visible && floatingWindow(DockPanelKind::ProjectSettings) != nullptr &&
+                sceneContext.ProjectSettings().SelectedCategory() == static_cast<int>(ProjectSettingsCategory::Plugins),
+            "Options > Plugins turns the open Settings window to the plugins page");
+        if (const HWND window = floatingWindow(DockPanelKind::ProjectSettings); window != nullptr) {
+            RECT client{};
+            GetClientRect(window, &client);
+            const DockRect close = FloatingWindowControlLayout::Rect(editor.Metrics(), client.right, FloatingWindowControlKind::Close);
+            pointer.Down(window, POINT{ close.x + (close.width / 2), close.y + (close.height / 2) });
+            editor.Pump();
+        }
+        expect(!settings->visible && dock.Commands().SerializeWorkspace() == defaultTree, "Settings closes and leaves the docked arrangement alone");
     }
 
     // Dragging the seam between two panels resizes both.

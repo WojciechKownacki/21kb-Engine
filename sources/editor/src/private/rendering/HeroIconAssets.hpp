@@ -77,6 +77,9 @@ public:
     [[nodiscard]] static HeroIconGlyph ExternalLink() noexcept;
     [[nodiscard]] static HeroIconGlyph GitHub() noexcept;
     [[nodiscard]] static HeroIconGlyph GitBranch() noexcept;
+    [[nodiscard]] static HeroIconGlyph Scissors() noexcept;
+    [[nodiscard]] static HeroIconGlyph ClipboardCopy() noexcept;
+    [[nodiscard]] static HeroIconGlyph ClipboardPaste() noexcept;
 };
 
 } // namespace kb::editor

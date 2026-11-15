@@ -4,7 +4,9 @@
 #include "app/EditorWindowResizeInteraction.hpp"
 #include "app/agent/EditorAgentBarOverlay.hpp"
 #include "rendering/DockDropPreviewOverlayWindow.hpp"
+#include "rendering/DockTabTooltipOverlayWindow.hpp"
 #include "rendering/DockWorkspaceRenderer.hpp"
+#include "rendering/DockWorkspaceTabStripRenderer.hpp"
 #include "rendering/EditorDragOverlayRenderer.hpp"
 #include "rendering/EditorHostSurfaceLayoutResolver.hpp"
 #include "rendering/EditorScriptEditorOverlay.hpp"
@@ -24,6 +26,7 @@
 
 #include <algorithm>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace kb::editor {
@@ -271,6 +274,11 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
     return overlay;
 }
 
+[[nodiscard]] DockTabTooltipOverlayWindow& MainTabTooltipOverlay() {
+    static DockTabTooltipOverlayWindow overlay;
+    return overlay;
+}
+
 } // namespace
 
 void MainWindowBackBufferPainter::HideAllOverlays() noexcept {
@@ -281,6 +289,7 @@ void MainWindowBackBufferPainter::HideAllOverlays() noexcept {
     MainProfilerSelectionOverlay().Hide();
     MainAddComponentOverlay().Hide();
     MainToolbarMenuOverlay().Hide();
+    MainTabTooltipOverlay().Hide();
     MainAgentBarOverlay().Hide();
 }
 
@@ -355,6 +364,25 @@ void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dock
         MainToolbarMenuOverlay().Show(window, ToRect(layout.menu), theme, shellInteraction);
     } else {
         MainToolbarMenuOverlay().Hide();
+    }
+    // The pointer rests on a tab whose title is cut short: its whole title, unless a menu is open over it.
+    bool tabTooltipShown = false;
+    if (shellInteraction.OpenMenu() == EditorMenuCommand::None && shellInteraction.HoveredTab() != 0U) {
+        for (const DockPanelLayout& panelLayout : layout.panels) {
+            const DockPanel* panel = panelLayout.panelId == shellInteraction.HoveredTab() ? dockModel.Queries().FindPanel(panelLayout.panelId) : nullptr;
+            if (panel == nullptr) {
+                continue;
+            }
+            const std::string title = DockWorkspaceTabStripRenderer::CutShortTitle(panelLayout, *panel);
+            if (!title.empty()) {
+                MainTabTooltipOverlay().Show(window, ToRect(panelLayout.tab), title, theme);
+                tabTooltipShown = true;
+            }
+            break;
+        }
+    }
+    if (!tabTooltipShown) {
+        MainTabTooltipOverlay().Hide();
     }
 }
 

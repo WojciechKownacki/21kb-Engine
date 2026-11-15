@@ -43,7 +43,8 @@ public:
         int y,
         EditorDockModel& dockModel,
         EditorShellInteractionState& shellInteraction,
-        const EditorMetrics& metrics);
+        const EditorMetrics& metrics,
+        bool pointerDown = false);
 
     static void ClearHover(EditorShellInteractionState& shellInteraction) noexcept;
 #endif

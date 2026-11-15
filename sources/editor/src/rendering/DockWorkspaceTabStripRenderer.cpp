@@ -5,6 +5,7 @@
 #include "rendering/EditorPanelStyle.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/HeroIconPainter.hpp"
+#include "rendering/gdi/EditorTextMeasure.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
 #include "platform/win32/Utf8Gdi.hpp"
@@ -54,6 +55,24 @@ void DrawTabChrome(HDC dc, const RECT& tab, bool active, const EditorTheme& them
     titleRect.right -= 8;
     titleRect.top += kTabTextVerticalOffset;
     return titleRect;
+}
+
+// Where a tab's title is drawn and in which weight. Painting and the test for a cut-short title share it.
+struct TabTitleSlot {
+    RECT rect{};
+    int weight = FW_NORMAL;
+};
+
+[[nodiscard]] TabTitleSlot TitleSlot(const DockRect& tab, bool hasIcon) {
+    if (!hasIcon) {
+        RECT titleRect = TabTitleRect(tab);
+        titleRect.right -= DockTabControlGeometry::TextRightPadding;
+        return TabTitleSlot{ titleRect, FW_NORMAL };
+    }
+    const int left = tab.x + kTabHorizontalPadding + kTabIconSize + kTabIconGap;
+    return TabTitleSlot{
+        RECT{ left, tab.y + kTabTextVerticalOffset, tab.x + tab.width - DockTabControlGeometry::TextRightPadding, tab.y + tab.height },
+        FW_SEMIBOLD };
 }
 
 [[nodiscard]] bool TabIconForPanel(DockPanelKind kind, HeroIconKind& icon) noexcept {
@@ -134,9 +153,7 @@ void DrawTabClose(HDC dc, const DockRect& tab, bool active, const EditorTheme& t
 void DrawTabContent(HDC dc, const DockPanelLayout& panelLayout, const DockPanel& panel, const EditorTheme& theme) {
     HeroIconKind icon{};
     if (!TabIconForPanel(panel.kind, icon)) {
-        RECT titleRect = TabTitleRect(panelLayout.tab);
-        titleRect.right -= DockTabControlGeometry::TextRightPadding;
-        GdiDrawing::DrawTabText(dc, titleRect, panel.title.c_str(), GdiDrawing::ToColorRef(panelLayout.active ? theme.textPrimary : theme.textSecondary));
+        GdiDrawing::DrawTabText(dc, TitleSlot(panelLayout.tab, false).rect, panel.title.c_str(), GdiDrawing::ToColorRef(panelLayout.active ? theme.textPrimary : theme.textSecondary));
         DrawTabClose(dc, panelLayout.tab, panelLayout.active, theme);
         return;
     }
@@ -150,8 +167,7 @@ void DrawTabContent(HDC dc, const DockPanelLayout& panelLayout, const DockPanel&
     const RECT iconRect{ groupLeft, iconTop, groupLeft + kTabIconSize, iconTop + kTabIconSize };
     HeroIconPainter::Draw(dc, iconRect, icon, iconColor, icon == HeroIconKind::Gamepad2 ? 2 : 1);
 
-    RECT textRect{ iconRect.right + kTabIconGap, tab.top + kTabTextVerticalOffset, tab.right - DockTabControlGeometry::TextRightPadding, tab.bottom };
-    DrawTabLabel(dc, textRect, panel.title.c_str(), textColor);
+    DrawTabLabel(dc, TitleSlot(panelLayout.tab, true).rect, panel.title.c_str(), textColor);
     DrawTabClose(dc, panelLayout.tab, panelLayout.active, theme);
 }
 
@@ -290,6 +306,13 @@ void PaintRenderedTab(HDC dc, const RenderedTab& tab, const EditorTheme& theme) 
 }
 
 } // namespace
+
+std::string DockWorkspaceTabStripRenderer::CutShortTitle(const DockPanelLayout& panelLayout, const DockPanel& panel) {
+    HeroIconKind icon{};
+    const TabTitleSlot slot = TitleSlot(panelLayout.tab, TabIconForPanel(panel.kind, icon));
+    const int room = static_cast<int>(slot.rect.right - slot.rect.left);
+    return MeasureTextWidth(panel.title, kTabFontSize, slot.weight) > room ? panel.title : std::string{};
+}
 
 void DockWorkspaceTabStripRenderer::Paint(HWND owner, HDC dc, const DockLayout& layout, const EditorDockModel& dockModel, const DockPointerDrag* dockDrag, const EditorTheme& theme) const {
     ScopedFont titleFont(kTabFontSize, FW_SEMIBOLD);

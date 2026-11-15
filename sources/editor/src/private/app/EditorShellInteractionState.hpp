@@ -78,6 +78,9 @@ public:
     [[nodiscard]] const std::vector<EditorPathMenuRow>& PublishRows() const noexcept;
     [[nodiscard]] bool SetHoveredTopBarItem(EditorTopBarItem item) noexcept;
     [[nodiscard]] EditorTopBarItem HoveredTopBarItem() const noexcept;
+    // The panel whose tab the pointer rests on (0 for none); a tab whose title is cut short shows it in full.
+    [[nodiscard]] bool SetHoveredTab(std::uint32_t panelId) noexcept;
+    [[nodiscard]] std::uint32_t HoveredTab() const noexcept;
     [[nodiscard]] bool SetHoveredMenu(EditorMenuCommand menu) noexcept;
     [[nodiscard]] bool SetOpenMenu(EditorMenuCommand menu) noexcept;
     [[nodiscard]] bool SetHoveredMenuRow(std::optional<int> row) noexcept;
@@ -109,6 +112,7 @@ public:
 
 private:
     EditorTopBarItem hoveredTopBarItem_ = EditorTopBarItem::None;
+    std::uint32_t hoveredTab_ = 0;
     EditorMenuCommand hoveredMenu_ = EditorMenuCommand::None;
     EditorMenuCommand openMenu_ = EditorMenuCommand::None;
     std::optional<int> hoveredMenuRow_{};

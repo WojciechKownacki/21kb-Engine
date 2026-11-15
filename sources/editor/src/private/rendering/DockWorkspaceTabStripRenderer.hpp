@@ -4,6 +4,8 @@
 #include "docking/DockPointerDrag.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
 
+#include <string>
+
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -16,6 +18,8 @@ class DockWorkspaceTabStripRenderer {
 public:
 #if defined(_WIN32)
     void Paint(HWND owner, HDC dc, const DockLayout& layout, const EditorDockModel& dockModel, const DockPointerDrag* dockDrag, const EditorTheme& theme) const;
+    // The full title of a tab whose title is drawn cut short; empty when it fits in its tab.
+    [[nodiscard]] static std::string CutShortTitle(const DockPanelLayout& panelLayout, const DockPanel& panel);
 #endif
 };
 

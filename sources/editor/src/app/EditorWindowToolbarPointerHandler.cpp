@@ -27,6 +27,7 @@
 #include "project/EditorProjectPaths.hpp"
 #include "rendering/SceneViewportPresentationPolicy.hpp"
 #include "rendering/EditorToolbarRenderer.hpp"
+#include "rendering/DockWorkspaceTabStripRenderer.hpp"
 #include "rendering/ProjectSettingsPanelRenderer.hpp"
 #include "platform/win32/Utf8Gdi.hpp"
 
@@ -952,9 +953,15 @@ bool EditorWindowToolbarPointerHandler::HandleMouseMove(
     int y,
     EditorDockModel& dockModel,
     EditorShellInteractionState& shellInteraction,
-    const EditorMetrics& metrics) {
+    const EditorMetrics& metrics,
+    bool pointerDown) {
     if (messageWindow != mainWindow) {
+        const bool hadTabTooltip = shellInteraction.HoveredTab() != 0U;
         ClearHover(shellInteraction);
+        if (hadTabTooltip && mainWindow != nullptr) {
+            // The tooltip is a window of its own: the main window repaints to put it away.
+            InvalidateRect(mainWindow, nullptr, FALSE);
+        }
         return false;
     }
 
@@ -980,6 +987,33 @@ bool EditorWindowToolbarPointerHandler::HandleMouseMove(
         IncludeRect(rect, ToRect(layout->toolbar));
         InvalidateMainRect(mainWindow, rect);
     }
+
+    // A tab whose title is cut short shows it in full while the pointer rests on the tab: not during a
+    // drag, and not while a menu is open over it.
+    std::uint32_t hoveredTab = 0;
+    if (!pointerDown && shellInteraction.OpenMenu() == EditorMenuCommand::None) {
+        for (const DockPanelLayout& panelLayout : layout->panels) {
+            if (!panelLayout.tab.Contains(x, y)) {
+                continue;
+            }
+            const DockPanel* panel = dockModel.Queries().FindPanel(panelLayout.panelId);
+            if (panel != nullptr && !DockWorkspaceTabStripRenderer::CutShortTitle(panelLayout, *panel).empty()) {
+                hoveredTab = panelLayout.panelId;
+            }
+            break;
+        }
+    }
+    const std::uint32_t previousTab = shellInteraction.HoveredTab();
+    if (shellInteraction.SetHoveredTab(hoveredTab)) {
+        // The tooltip follows the main window's paint, so the tab is repainted for it to be shown or put away.
+        for (const DockPanelLayout& panelLayout : layout->panels) {
+            if (panelLayout.panelId == (hoveredTab != 0U ? hoveredTab : previousTab)) {
+                InvalidateMainRect(mainWindow, ToRect(panelLayout.tab));
+                break;
+            }
+        }
+        changed = true;
+    }
     return changed;
 }
 
@@ -988,6 +1022,7 @@ void EditorWindowToolbarPointerHandler::ClearHover(EditorShellInteractionState& 
     shellInteraction.ClearSaveHover();
     shellInteraction.ClearTransportHover();
     static_cast<void>(shellInteraction.SetHoveredTopBarItem(EditorTopBarItem::None));
+    static_cast<void>(shellInteraction.SetHoveredTab(0));
 }
 
 } // namespace kb::editor

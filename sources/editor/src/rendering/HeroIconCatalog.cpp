@@ -144,6 +144,12 @@ HeroIconGlyph HeroIconCatalog::Glyph(HeroIconKind icon) noexcept {
         return HeroIconAssets::GitHub();
     case HeroIconKind::GitBranch:
         return HeroIconAssets::GitBranch();
+    case HeroIconKind::Scissors:
+        return HeroIconAssets::Scissors();
+    case HeroIconKind::ClipboardCopy:
+        return HeroIconAssets::ClipboardCopy();
+    case HeroIconKind::ClipboardPaste:
+        return HeroIconAssets::ClipboardPaste();
     default:
         return {};
     }
