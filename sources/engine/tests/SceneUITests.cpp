@@ -3058,6 +3058,147 @@ void TestKeptLayoutMatchesFullLayout() {
     step("element destroyed");
 }
 
+// A change to one element lays out only that element, or the parent whose layout depends on it, where it stands: the
+// element storage must not move, and the frame must still equal a layout computed from scratch.
+void TestPatchedLayoutMatchesFullLayout() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
+    kb::scene::UIComponentSet column = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::VerticalBox);
+    column.rectTransform = Rect(20.0F, 20.0F, 200.0F, 100.0F);
+    column.contentSizeFitter.emplace();
+    column.contentSizeFitter->horizontalFit = kb::scene::UIFitMode::PreferredSize;
+    column.contentSizeFitter->verticalFit = kb::scene::UIFitMode::PreferredSize;
+    const kb::scene::SceneObject panel = AddUI(scene, canvas, column);
+    std::vector<kb::scene::SceneObject> labels;
+    for (int index = 0; index < 4; ++index) {
+        kb::scene::UIComponentSet label = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Text);
+        label.rectTransform = Rect(0.0F, 0.0F, 100.0F, 20.0F);
+        if (index == 1) {
+            label.layoutElement.emplace();
+            label.layoutElement->preferredHeight = 30.0F;
+        }
+        labels.push_back(AddUI(scene, panel, label));
+    }
+    kb::scene::UIComponentSet sliderSet = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Slider);
+    const kb::scene::SceneObject slider = AddUI(scene, panel, sliderSet);
+    kb::scene::UIComponentSet toggleSet = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Toggle);
+    const kb::scene::SceneObject toggle = AddUI(scene, panel, toggleSet);
+    kb::scene::UIComponentSet single = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Text);
+    single.rectTransform = Rect(300.0F, 20.0F, 200.0F, 24.0F);
+    const kb::scene::SceneObject leaf = AddUI(scene, canvas, single);
+    kb::scene::UIComponentSet plain;
+    plain.rectTransform = Rect(300.0F, 80.0F, 200.0F, 100.0F);
+    const kb::scene::SceneObject second = AddUI(scene, canvas, plain);
+    kb::scene::UIComponentSet tile = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Border);
+    tile.rectTransform = Rect(10.0F, 10.0F, 50.0F, 50.0F);
+    const kb::scene::SceneObject tileObject = AddUI(scene, second, tile);
+    kb::scene::UIComponentSet view = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::ScrollView);
+    view.rectTransform = Rect(560.0F, 20.0F, 300.0F, 200.0F);
+    view.scrollView->horizontal = false;
+    const kb::scene::SceneObject viewObject = AddUI(scene, canvas, view);
+    kb::scene::UIComponentSet content = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::VerticalBox);
+    content.rectTransform = Rect(0.0F, 0.0F, 300.0F, 500.0F);
+    const kb::scene::SceneObject contentObject = AddUI(scene, viewObject, content);
+    std::vector<kb::scene::SceneObject> rows;
+    for (int index = 0; index < 12; ++index) {
+        kb::scene::UIComponentSet row = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Text);
+        row.rectTransform = Rect(0.0F, 0.0F, 300.0F, 30.0F);
+        rows.push_back(AddUI(scene, contentObject, row));
+    }
+    // Enough other elements that laying out a few again is cheaper than laying out the frame.
+    for (int index = 0; index < 300; ++index) {
+        kb::scene::UIComponentSet filler = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Border);
+        filler.rectTransform = Rect(static_cast<float>(index % 30) * 12.0F, 300.0F + static_cast<float>(index / 30) * 12.0F, 10.0F, 10.0F);
+        static_cast<void>(AddUI(scene, canvas, filler));
+    }
+
+    const kb::scene::SceneUIInput input{};
+    for (int pass = 0; pass < 3; ++pass)
+        kb::tests::Require(scene.UI().Update(1280.0F, 720.0F, input, 1.0F), "A UI update must lay out");
+    const auto step = [&](const char* what) {
+        const void* storage = scene.UI().Frame().elements.data();
+        for (int pass = 0; pass < 3; ++pass)
+            kb::tests::Require(scene.UI().Update(1280.0F, 720.0F, input, 1.0F), "A UI update must lay out");
+        kb::scene::SceneUIFrame full;
+        kb::tests::Require(kb::scene::SceneUIQueries{scene}.BuildFrame(1280.0F, 720.0F, full), "A full UI layout must build");
+        if (HashUIFrame(scene.UI().Frame()) != HashUIFrame(full))
+            std::cerr << "patched layout differs after: " << what << '\n';
+        kb::tests::Require(HashUIFrame(scene.UI().Frame()) == HashUIFrame(full),
+            "A patched frame must equal a layout computed from scratch");
+        return storage == scene.UI().Frame().elements.data();
+    };
+    const auto setText = [&](const kb::scene::SceneObject& object, std::string_view value) {
+        kb::scene::UIText* text = scene.Components().UI().TryGet<kb::scene::UIText>(object.Entity());
+        static_cast<void>(kb::scene::SetUITextContent(*text, value));
+    };
+    const auto rect = [&](const kb::scene::SceneObject& object) {
+        return scene.Components().UI().TryGet<kb::scene::UIRectTransform>(object.Entity());
+    };
+
+    setText(leaf, "A leaf with a different caption");
+    kb::tests::Require(step("text of a leaf"), "A text change on a leaf must be laid out in place");
+
+    rect(leaf)->offsetMin.x += 15.0F;
+    rect(leaf)->offsetMax.x += 15.0F;
+    kb::tests::Require(step("leaf moved"), "A moved leaf must be laid out in place");
+
+    rect(labels[2])->offsetMax.x += 60.0F;
+    rect(labels[2])->offsetMax.y += 14.0F;
+    kb::tests::Require(step("size under an auto-sized parent"),
+        "A resized child must be laid out with its auto-sized parent in place");
+
+    setText(labels[0], "A caption long enough to widen the auto-sized panel around it");
+    kb::tests::Require(step("text under an auto-sized parent"),
+        "A text change under an auto-sized parent must be laid out in place");
+
+    kb::scene::UILayoutElement* element = scene.Components().UI().TryGet<kb::scene::UILayoutElement>(labels[1].Entity());
+    element->preferredHeight = 44.0F;
+    static_cast<void>(step("layout element changed"));
+    element = scene.Components().UI().TryGet<kb::scene::UILayoutElement>(labels[1].Entity());
+    element->ignoreLayout = true;
+    static_cast<void>(step("element leaves the layout"));
+    element = scene.Components().UI().TryGet<kb::scene::UILayoutElement>(labels[1].Entity());
+    element->ignoreLayout = false;
+    static_cast<void>(step("element rejoins the layout"));
+
+    setText(rows[5], "A row of the list that changed");
+    kb::tests::Require(step("text inside a scroll view"), "A text change inside a scroll view must be laid out in place");
+
+    rect(rows[3])->offsetMax.y += 25.0F;
+    kb::tests::Require(step("row height inside a scroll view"),
+        "A resized row inside a scroll view must be laid out in place");
+
+    kb::scene::UIScrollView* scroll = scene.Components().UI().TryGet<kb::scene::UIScrollView>(viewObject.Entity());
+    scroll->scrollY = 40.0F;
+    kb::tests::Require(step("scroll offset"), "A scroll offset must be laid out in place");
+
+    kb::scene::UISlider* sliderValue = scene.Components().UI().TryGet<kb::scene::UISlider>(slider.Entity());
+    sliderValue->value = 0.75F;
+    kb::tests::Require(step("slider value"), "A slider value must be laid out in place");
+
+    kb::scene::UIToggle* toggleValue = scene.Components().UI().TryGet<kb::scene::UIToggle>(toggle.Entity());
+    toggleValue->toggled = true;
+    kb::tests::Require(step("toggle value"), "A toggle value must be laid out in place");
+
+    // Two subtrees written in one update, one of them under a layout and one under a plain parent.
+    setText(labels[3], "Second line");
+    scene.Components().UI().TryGet<kb::scene::UIBorder>(tileObject.Entity())->backgroundColor = {0.9F, 0.2F, 0.1F, 1.0F};
+    setText(rows[8], "Another row");
+    kb::tests::Require(step("two subtrees"), "Writes in different subtrees must be laid out in place together");
+
+    // Adding and removing elements takes the full layout and must still give the same frame.
+    kb::scene::UIComponentSet extra = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Text);
+    extra.rectTransform = Rect(0.0F, 0.0F, 100.0F, 20.0F);
+    const kb::scene::SceneObject added = AddUI(scene, panel, extra);
+    static_cast<void>(step("element added"));
+    scene.Entities().Destroy(added);
+    static_cast<void>(step("element destroyed"));
+    kb::scene::UIRectTransform* movedRect = rect(second);
+    movedRect->offsetMin.y += 10.0F;
+    movedRect->offsetMax.y += 10.0F;
+    kb::tests::Require(step("container moved"), "A moved container must be laid out in place with what it holds");
+}
+
 void PopulateMillionRootOverlay(kb::scene::Scene& scene) {
     const std::vector<kb::scene::SceneObjectDesc> descs(1'000'000U);
     static_cast<void>(scene.Entities().CreateObjects(descs));
@@ -3169,6 +3310,7 @@ void RunSceneUITests() {
     TestNestedModalsRestoreFocusAndBlockGameplayImmediately();
     TestFrameAmongManyRootsMatchesRecordedFrame();
     TestKeptLayoutMatchesFullLayout();
+    TestPatchedLayoutMatchesFullLayout();
     TestFrameNextToMillionRootsIsCheap();
     TestSteadyUpdatesReuseFrameStorage();
     TestInputFieldEditsGraphemeClusters();
@@ -3478,6 +3620,15 @@ void RunLayoutBenchCase(std::size_t count, bool nested) {
             NudgeLeaf(scene, leaf, amount);
         amount = -amount;
         all.push_back(TimedUpdate(scene, input));
+    }
+    // After the timings, so the check does not disturb them: one more change must still equal a layout from scratch.
+    if (count <= 100'000U) {
+        NudgeLeaf(scene, middle, amount);
+        static_cast<void>(TimedUpdate(scene, input));
+        kb::scene::SceneUIFrame full;
+        kb::tests::Require(kb::scene::SceneUIQueries{scene}.BuildFrame(1920.0F, 1080.0F, full), "A full UI layout must build");
+        kb::tests::Require(HashUIFrame(scene.UI().Frame()) == HashUIFrame(full),
+            "A frame with one element changed must equal a layout computed from scratch");
     }
     std::cout << "ui_layout_bench shape=" << shape << " n=" << count << " depth=" << depth << " setup_ms=" << buildMs
               << " first_ms=" << firstMs << " unchanged_ms=" << MedianOf(unchanged) << " one_ms=" << MedianOf(one)

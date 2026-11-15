@@ -95,6 +95,33 @@ void MarkComponentModified(Scene& scene, SceneEntity entity) noexcept {
     return nullptr;
 }
 
+// Moves the write revision and remembers what was written, so a layout can visit only that. Past a few hundred writes
+// the list is dropped and the next layout starts over.
+constexpr std::size_t kMaxRecordedUIWrites = 256U;
+void NoteWrite(Scene& scene, SceneEntity entity, UIComponentType type, bool structural) noexcept {
+    SceneState& state = SceneAccess::State(scene);
+    ++state.uiWriteRevision;
+    if (state.uiWritesOverflow)
+        return;
+    const auto code = static_cast<std::uint8_t>(type);
+    if (!state.uiWrites.empty()) {
+        SceneState::UIWrite& last = state.uiWrites.back();
+        if (last.entity == entity.Id() && last.type == code) {
+            last.structural = last.structural || structural;
+            return;
+        }
+    }
+    if (state.uiWrites.size() >= kMaxRecordedUIWrites) {
+        state.uiWritesOverflow = true;
+        return;
+    }
+    try {
+        state.uiWrites.push_back({entity.Id(), code, structural});
+    } catch (...) {
+        state.uiWritesOverflow = true;
+    }
+}
+
 } // namespace
 
 SceneUIComponentQueries::SceneUIComponentQueries(const Scene& scene) noexcept : scene_(scene) {}
@@ -118,13 +145,13 @@ const void* SceneUIComponents::TryGetRaw(SceneEntity entity, UIComponentType typ
 }
 
 void* SceneUIComponents::TryGetMutableRaw(SceneEntity entity, UIComponentType type) noexcept {
-    ++SceneAccess::State(scene_).uiWriteRevision;
+    NoteWrite(scene_, entity, type, false);
     SceneHistoryService::NoteObjectChanging(scene_, entity);
     return TryGetByType(scene_, entity, type);
 }
 
 void SceneUIComponents::SetRaw(SceneEntity entity, UIComponentType type, const void* component, std::size_t size) {
-    ++SceneAccess::State(scene_).uiWriteRevision;
+    NoteWrite(scene_, entity, type, !HasByType(scene_, entity, type));
     SceneHistoryService::NoteObjectChanging(scene_, entity);
     switch (type) {
 #define KB_UI_SET_CASE(Value, Component) case UIComponentType::Value: SetComponent<Component>(scene_, entity, component, size); return;
@@ -134,7 +161,7 @@ void SceneUIComponents::SetRaw(SceneEntity entity, UIComponentType type, const v
 }
 
 void SceneUIComponents::RemoveRaw(SceneEntity entity, UIComponentType type) noexcept {
-    ++SceneAccess::State(scene_).uiWriteRevision;
+    NoteWrite(scene_, entity, type, true);
     SceneHistoryService::NoteObjectChanging(scene_, entity);
     switch (type) {
 #define KB_UI_REMOVE_CASE(Value, Component) case UIComponentType::Value: RemoveComponent<Component>(scene_, entity); return;
@@ -144,7 +171,7 @@ void SceneUIComponents::RemoveRaw(SceneEntity entity, UIComponentType type) noex
 }
 
 void SceneUIComponents::MarkModifiedRaw(SceneEntity entity, UIComponentType type) noexcept {
-    ++SceneAccess::State(scene_).uiWriteRevision;
+    NoteWrite(scene_, entity, type, false);
     switch (type) {
 #define KB_UI_MARK_CASE(Value, Component) case UIComponentType::Value: MarkComponentModified<Component>(scene_, entity); return;
         KB_UI_COMPONENTS(KB_UI_MARK_CASE)

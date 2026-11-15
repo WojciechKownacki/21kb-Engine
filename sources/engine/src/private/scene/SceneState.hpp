@@ -970,6 +970,31 @@ public:
     kb::math::DVec3 particleSimulationOrigin{};
     mutable std::vector<kb::particles::ParticleRuntimeState> particleRuntimeStateScratch;
     SceneUIFrame uiFrame;
+    // What one element of the frame was handed by its parent, which is all that is needed to lay it and its subtree out
+    // again without visiting the rest of the frame.
+    struct UIElementContext {
+        kb::math::Rect allocated{};
+        // The element's own rectangle, in which its children are placed.
+        kb::math::Rect area{};
+        std::array<float, 6U> transform{1.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F};
+        float groupOpacity = 1.0F;
+        bool groupInteractable = true;
+        bool groupBlocksRaycasts = true;
+        // Traversal order after the element's last descendant.
+        std::uint32_t end = 0U;
+    };
+    // One slot of the table that finds an element's position in the frame from its entity.
+    struct UIPositionSlot {
+        std::uint64_t entity = 0U;
+        std::uint32_t position = 0U;
+    };
+    // A write to a UI component since the frame was laid out, so a layout can visit only what was written.
+    struct UIWrite {
+        std::uint64_t entity = 0U;
+        std::uint8_t type = 0U;
+        // The write added or removed a component, which can change which elements the frame holds.
+        bool structural = false;
+    };
     // What the current frame was laid out from, so an update whose inputs are all unchanged keeps it instead of
     // laying out again. The revisions only grow: a write to a UI component, a change of which entities are
     // active, and a published image opacity each move one.
@@ -1000,6 +1025,15 @@ public:
         // Positions of the scroll views in the frame, found while laying out, so their per-frame upkeep does not
         // visit every element.
         std::vector<std::size_t> scrollViews;
+        // Whether a changed element can be laid out again where it stands: no modal canvas, and no widget whose value
+        // drives another widget, which would also have to move.
+        bool patchable = false;
+        // A selectable tints a widget other than itself, so the tint of one element can sit on another's record.
+        bool crossTargets = false;
+        // What each element was handed by its parent, by traversal order, and where each element sits in the frame.
+        std::vector<UIElementContext> contexts;
+        bool positionsBuilt = false;
+        std::vector<UIPositionSlot> positions;
         // The selection state the widgets were last tinted for, and whether every colour had arrived.
         SceneEntity interactionPressed{};
         SceneEntity interactionHovered{};
@@ -1011,6 +1045,10 @@ public:
     };
     UILayoutCache uiLayoutCache;
     std::uint64_t uiWriteRevision = 1U;
+    // The writes since the revision `uiWritesBase`, unless there were too many to keep.
+    std::vector<UIWrite> uiWrites;
+    std::uint64_t uiWritesBase = 1U;
+    bool uiWritesOverflow = false;
     std::uint64_t uiActivityRevision = 1U;
     std::uint64_t uiImageAlphaRevision = 1U;
     // Element storage left over from the frame before, lent to the next build so a steady frame allocates nothing.
