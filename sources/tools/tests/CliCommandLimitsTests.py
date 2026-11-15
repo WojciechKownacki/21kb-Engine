@@ -163,10 +163,12 @@ else:
     checks.append('normal completion preserves command JSON and cleans background descendants')
 
     configure('flood')
-    limited = result_json(run('--json', '--command-timeout-ms', '10000', *command, expected=125), 125)
-    assert limited['reason'] == 'supervisor-error' and '16 MiB' in '\n'.join(limited['errors'])
+    # The build keeps the first megabyte of what its tool prints and drops the rest, so a tool that floods its
+    # output cannot grow the reply; the deadline still ends it.
+    flooded = run('--json', '--command-timeout-ms', '3000', *command, expected=124)
+    assert result_json(flooded, 124)['reason'] == 'timeout' and len(flooded.stdout) < 4 * 1024 * 1024
     stopped()
-    checks.append('bounded JSON capture rejects excessive external output and cleans process tree')
+    checks.append('excessive external output stays bounded in the JSON reply and the process tree is cleaned')
 
     run('--json', '--command-cancel-file', cancel, '--command-timeout-ms', '10000', 'help')
     checks.append('next invocation does not inherit cancellation')

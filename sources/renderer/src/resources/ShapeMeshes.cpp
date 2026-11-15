@@ -194,7 +194,7 @@ RenderMeshAssetData ShapeMeshes::Sphere(float radius, std::string_view materialN
 }
 
 RenderMeshAssetData ShapeMeshes::Capsule(float radius, float height, std::string_view materialName) {
-    // Two hemispheres of a sphere pushed apart by the straight part, like Unity's capsule.
+    // Two hemispheres of a sphere pushed apart by the straight part.
     Builder builder;
     const float straightHalf = std::max(0.0F, height * 0.5F - radius);
     constexpr std::uint32_t kHemisphereRings = kRings / 2U;

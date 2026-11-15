@@ -96,11 +96,11 @@ enum class ParticleModuleType : std::uint8_t {
     CollisionGeometry,
 };
 // WhileAlive: every live particle of the source keeps emitting the target at the binding's rate
-// (smoke behind debris; Niagara's spawn per particle).
+// (smoke behind debris).
 enum class ParticleEventTrigger : std::uint8_t { Birth, Death, Collision, WhileAlive };
-// Where a particle is born (Unity's Shape module, Niagara's shape location), around the emitter's
+// Where a particle is born, around the emitter's
 // position and turned by its rotation.
-// Mesh: on the surface of spawn.shapeMesh, area-weighted (Unity's Mesh shape, Niagara's Static Mesh Location).
+// Mesh: on the surface of spawn.shapeMesh, area-weighted.
 enum class ParticleSpawnShape : std::uint8_t { Point, Sphere, Box, Cone, Circle, Disc, Line, Spiral, Mesh };
 // Start velocity: Cone around the direction (speed range, spread), Radial along the shape's normal at
 // the birth point, Spiral2D along one of spiralArms directions in the XY plane turning with time.
@@ -187,7 +187,7 @@ struct ParticleSpawnAsset {
     kb::math::Vec3 angularVelocityMaxDegrees{};
     // Each particle's size at birth is startSize x (1 - sizeRandom x r), r random in [0, 1].
     float sizeRandom = 0.0F;
-    // The emitter's own clock (Unity's per-system Start Delay, Duration and Looping): nothing before
+    // The emitter's own clock (start delay, duration and looping): nothing before
     // startDelaySeconds; with cycleSeconds > 0 the rate runs and the bursts repeat every cycle while
     // cycleLooping, or run one cycle only; 0 = the effect's duration and looping.
     float startDelaySeconds = 0.0F;
@@ -259,7 +259,7 @@ struct ParticleNoiseModule {
     float strength = 1.0F;
     float frequency = 1.0F;
 };
-// Positions and velocities turn about an axis through the emitter (Niagara's rotate around point).
+// Positions and velocities turn about an axis through the emitter.
 struct ParticleAxisRotationModule {
     kb::math::Vec3 axis{0.0F, 1.0F, 0.0F};
     float degreesPerSecond = 90.0F;
@@ -277,8 +277,8 @@ struct ParticleTorusSwirlModule {
     float radius = 2.0F;
     float degreesPerSecond = 180.0F;
 };
-// Particles of one emitter push apart when closer than `distance` (Niagara's neighbour grid,
-// Verth's Separation card): strength x (1 - d / distance) along the line between them.
+// Particles of one emitter push apart when closer than `distance` (neighbour grid):
+// strength x (1 - d / distance) along the line between them.
 struct ParticleSeparationModule {
     float strength = 2.0F;
     float distance = 0.5F;
@@ -379,10 +379,10 @@ struct ParticleOutputAsset {
     bool antiAliasing = false;
     ParticleAlignment alignment = ParticleAlignment::CameraFacing;
     ParticleOutputPayload payload = ParticleBillboardOutput{};
-    // HDR multiplier of the particle colour (Niagara's emissive colour above 1): the gradient stays
+    // HDR multiplier of the particle colour (emissive colour above 1): the gradient stays
     // in [0, 1], the drawn colour is gradient x colorIntensity.
     float colorIntensity = 1.0F;
-    // Particle lights (Niagara's light renderer): the first lightMaxCount particles of the emitter
+    // Particle lights: the first lightMaxCount particles of the emitter
     // light the scene as point lights of their colour x alpha x lightIntensity, lightRadius metres.
     bool lightEnabled = false;
     float lightRadius = 4.0F;

@@ -206,6 +206,10 @@ public:
     // The process's service, created with default options when no user holds one. Every
     // engine and renderer user shares it; the last handle to go joins the threads.
     [[nodiscard]] static std::shared_ptr<BackgroundLoadService> Shared();
+    // The options Shared() starts the service with: load workers scale with the machine (half its hardware threads,
+    // between 3 and 6) and all but one may run jobs, the last one staying free for reads. Computed without starting
+    // anything, so an owner can size its lanes before the service exists.
+    [[nodiscard]] static BackgroundLoadServiceOptions SharedOptions() noexcept;
 
     // Reads `length` bytes at `offset` of the file. The file is opened once, by the first request
     // that needs it, and kept open until Forget or destruction.

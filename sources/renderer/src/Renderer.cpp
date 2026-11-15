@@ -17,6 +17,7 @@
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/ScenePortalVisibility.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
+#include "engine/scene/SceneLightProbeAccess.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -31,6 +32,7 @@
 #include "kb/render/post/SceneExposureMeter.hpp"
 #include "private/ui/ScreenUIRenderer.hpp"
 #include "scene/SceneRenderVisibilityPublisher.hpp"
+#include "scene/pass/MeshPassProcessor.hpp"
 #include "renderer/RendererScreenCapture.hpp"
 #include "renderer/RendererEditorOverlaySubmitter.hpp"
 #include "renderer/RendererExposureSubmitter.hpp"
@@ -54,6 +56,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -439,6 +442,8 @@ void Renderer::Shutdown() {
     giVoxelGrid_.Shutdown();
     giResolvePass_.Shutdown();
     skyReflection_.Shutdown();
+    skyBackdropPass_.Shutdown();
+    lightProbes_.Shutdown();
     if (deferredLightingPass_ != nullptr) {
         deferredLightingPass_->Shutdown();
         deferredLightingPass_.reset();
@@ -532,27 +537,54 @@ bool Renderer::SubmitScene(const kb::scene::Scene& scene) {
 }
 
 bool Renderer::SubmitRuntimeScene(const kb::scene::Scene& scene, const RuntimeSceneSynchronization& synchronization) {
+    const std::optional<RenderSceneSubmitDesc> desc = RuntimeSceneSubmitDesc(synchronization);
+    return desc.has_value() && SubmitScene(scene, *desc);
+}
+
+bool Renderer::SubmitRuntimeSceneWithPrewarm(const kb::scene::Scene& scene, const kb::scene::Scene& prewarmed) {
+    const std::optional<RenderSceneSubmitDesc> desc = RuntimeSceneSubmitDesc({});
+    if (!desc.has_value()) {
+        return false;
+    }
+    // The same scene targets as the visible frames, so the pipeline states made match theirs (formats and sample
+    // count), in a viewport of its own. Its views follow every view of the screen's viewport, so it reuses the shared
+    // targets only after the screen has been composited from them. Without a final composite nothing of it reaches
+    // the screen and no post-process history is written.
+    RenderSceneSubmitDesc hidden = *desc;
+    hidden.target.viewport.id = RenderViewportId{ 2U };
+    hidden.target.viewport.viewportIndex = 1U;
+    hidden.finalComposite.enabled = false;
+    hidden.advanceSimulation = false;
+    const std::array<SceneFrameSubmission, 2U> submissions{
+        SceneFrameSubmission{ .scene = &scene, .desc = *desc },
+        SceneFrameSubmission{ .scene = &prewarmed, .desc = hidden },
+    };
+    return SubmitScenes(submissions);
+}
+
+std::optional<RenderSceneSubmitDesc> Renderer::RuntimeSceneSubmitDesc(const RuntimeSceneSynchronization& synchronization) {
     if (!frameActive_) {
-        return false;
+        return std::nullopt;
     }
-    const RenderExtent extent{ BackbufferWidth(), BackbufferHeight() };
-    if (!extent.IsValid()) {
-        return false;
+    const RenderExtent outputExtent{ BackbufferWidth(), BackbufferHeight() };
+    if (!outputExtent.IsValid()) {
+        return std::nullopt;
     }
+    const RenderExtent extent = ScaledRenderExtent(outputExtent, renderScale_);
     if (!defaultSceneTarget_.Ensure(SceneRenderTargetDesc{
             .extent = extent,
             .colorPolicy = SceneColorFormatPolicy::Auto,
         })) {
-        return false;
+        return std::nullopt;
     }
     if (!defaultPostProcessTargets_.Ensure(ScenePostProcessTargetsDesc{
             .extent = extent,
             .colorPolicy = SceneColorFormatPolicy::Auto,
         })) {
-        return false;
+        return std::nullopt;
     }
 
-    const RenderSceneSubmitDesc desc{
+    return RenderSceneSubmitDesc{
         .target = RenderSceneTargetBinding{
             .frameBuffer = defaultSceneTarget_.FrameBuffer(),
             .colorTexture = defaultSceneTarget_.ColorTexture(),
@@ -569,9 +601,10 @@ bool Renderer::SubmitRuntimeScene(const kb::scene::Scene& scene, const RuntimeSc
         .postProcess = defaultPostProcessTargets_.Binding(),
         .finalComposite = RenderFinalCompositeTargetBinding{
             .frameBuffer = BGFX_INVALID_HANDLE,
-            .extent = extent,
+            .extent = outputExtent,
             .enabled = true,
         },
+        .upscaledExtent = extent == outputExtent ? RenderExtent{} : outputExtent,
         .drawBudget = defaultSceneDrawBudget_,
         .lightingConfig = defaultSceneLightingConfig_,
         .dirtySceneEntityIds = synchronization.dirtySceneEntityIds,
@@ -579,7 +612,6 @@ bool Renderer::SubmitRuntimeScene(const kb::scene::Scene& scene, const RuntimeSc
         .structuralSync = synchronization.structuralSync,
         .transformAffineSync = !synchronization.fullSync,
     };
-    return SubmitScene(scene, desc);
 }
 
 bool Renderer::SubmitScene(const kb::scene::Scene& scene, const RenderSceneSubmitDesc& desc) {
@@ -939,6 +971,8 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
     if (desc.screenUIEnabled) {
         PublishUIImageAlpha(const_cast<kb::scene::Scene&>(scene));
     }
+    // A scene rendered at a reduced render scale still lays its UI out at the full output size.
+    const RenderExtent uiExtent = desc.upscaledExtent.IsValid() ? desc.upscaledExtent : desc.target.viewport.extent;
     kb::scene::SceneUIFrame& screenUIFrame = screenUIFrameScratch_;
     screenUIFrame.viewportSize = {};
     screenUIFrame.elements.clear();
@@ -946,7 +980,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
     // An editor viewport laying out the world asks for no UI layer. Skipping the build, rather
     // than discarding its result, also skips the layout pass the frame would have cost.
     if (desc.screenUIEnabled &&
-        !scene.UI().BuildFrame(static_cast<float>(width), static_cast<float>(height), screenUIFrame)) {
+        !scene.UI().BuildFrame(static_cast<float>(uiExtent.width), static_cast<float>(uiExtent.height), screenUIFrame)) {
         // A widget the author can fix must not cost the whole frame. The UI layer is dropped,
         // the 3D scene still renders, and the refusal is published by name with the offending
         // entity so it is diagnosable instead of appearing as a dead renderer.
@@ -1097,7 +1131,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport particle sync begin");
     particleRenderSynchronizer_->SetGpuVisualAvailability(sceneRenderer_->ParticleGpuVisualAvailability());
     particleRenderSynchronizer_->Sync(scene, renderScene);
-    sceneRenderer_->SyncGpuParticleEmitters(const_cast<kb::scene::Scene&>(scene), frameDeltaSeconds_,
+    sceneRenderer_->SyncGpuParticleEmitters(const_cast<kb::scene::Scene&>(scene), desc.advanceSimulation ? frameDeltaSeconds_ : 0.0F,
         static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL, renderScene.RenderOrigin());
     for (const auto& rejection : sceneRenderer_->RejectedGpuParticleUpdates(scene.Id())) {
         lastSceneDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
@@ -1148,13 +1182,14 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
         const auto asset = effectiveLightingConfig.ibl.reflectionProbes[index].radianceAssetId;
         if (asset != 0U) frameReferences_.MarkTexture({.sceneId = scene.Id(), .assetId = asset, .colorSpace = RenderTextureColorSpace::Linear});
     }
-    // The resolved profile (or a default the application set with ambient occlusion on) decides
-    // the screen-space ambient occlusion; without either, the lighting config keeps its own.
+    // The resolved profile (or a default the application set with one of them on) decides ambient
+    // occlusion, reflections, global illumination and fog; without either, the lighting config keeps its own.
     if (resolvedPostProcessSettings.has_value()) {
-        RendererSceneLightingConfigResolver::ApplyPostProcessAmbientOcclusion(effectiveLightingConfig, *resolvedPostProcessSettings);
-    } else if (defaultPostProcessSettings_.ambientOcclusionEnabled || defaultPostProcessSettings_.fogEnabled ||
+        RendererSceneLightingConfigResolver::ApplyPostProcessLighting(effectiveLightingConfig, *resolvedPostProcessSettings);
+    } else if (defaultPostProcessSettings_.ambientOcclusionEnabled || defaultPostProcessSettings_.screenSpaceReflectionsEnabled ||
+               defaultPostProcessSettings_.fogEnabled ||
                defaultPostProcessSettings_.globalIllumination != ScenePostProcessSettings::GlobalIlluminationMethod::Off) {
-        RendererSceneLightingConfigResolver::ApplyPostProcessAmbientOcclusion(effectiveLightingConfig, defaultPostProcessSettings_);
+        RendererSceneLightingConfigResolver::ApplyPostProcessLighting(effectiveLightingConfig, defaultPostProcessSettings_);
     }
     RendererSceneLightingConfigResolver::ResolveFogProfile(effectiveLightingConfig, bgfx::getRendererType());
     effectiveLightingConfig.fogBaseHeight -= static_cast<float>(renderScene.RenderOrigin().y);
@@ -1181,12 +1216,8 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
             .colorSpace = RenderTextureColorSpace::Linear,
         });
     }
-    const bool backdropRequiresDeferredPass = worldBackdrop.has_value() &&
-        (worldBackdrop->mode == SceneRenderWorldBackdropMode::VerticalGradient ||
-         worldBackdrop->mode == SceneRenderWorldBackdropMode::ProceduralSky ||
-         worldBackdrop->mode == SceneRenderWorldBackdropMode::EnvironmentMap);
     const bool deferredLighting = UsesDeferredLighting(effectiveLightingConfig.lightingPath) ||
-        effectiveLightingConfig.debugView == SceneRenderDebugView::GBufferNormal || backdropRequiresDeferredPass ||
+        effectiveLightingConfig.debugView == SceneRenderDebugView::GBufferNormal ||
         // Screen-space GI, ambient occlusion and reflections read the G-buffer, so they imply the deferred path.
         // Fog is applied by the deferred lighting pass too: without this a profile that turns fog on would be
         // ignored without a word on the forward path.
@@ -1360,15 +1391,27 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
             worldBackdropEnvironment = texture->texture;
         }
     }
+    // The sky behind the scene, for the forward backdrop pass and the sky light.
+    const SceneBackdropUniformValues backdropUniforms = BuildSceneBackdropUniforms(
+        worldBackdrop.has_value() ? &*worldBackdrop : nullptr, bgfx::isValid(worldBackdropEnvironment), renderScene);
     {
-        // Reflections of the sky the camera sees (Unreal's SkyLight, Unity's skybox reflections): the
+        // Reflections of the sky the camera sees: the
         // backdrop is captured over a few frames; until then the lighting uses the environment colour.
-        const SceneBackdropUniformValues backdropUniforms = BuildSceneBackdropUniforms(
-            worldBackdrop.has_value() ? &*worldBackdrop : nullptr, bgfx::isValid(worldBackdropEnvironment), renderScene);
         // vs_present.sc already turns the OpenGL rows around, so the faces need no flip of their own.
         skyReflection_.Update(backdropUniforms, worldBackdropEnvironment, false);
         effectiveLightingConfig.skyReflection = skyReflection_.ReflectionFor(backdropUniforms, worldBackdropEnvironment);
         effectiveLightingConfig.skyReflectionMaxMip = SceneSkyReflection::MaxMip();
+    }
+    {
+        // The scene's baked probe grid, uploaded when it loads or changes.
+        std::shared_ptr<const LightProbeGrid> grid;
+        if (const std::uint64_t gridAssetId = kb::scene::SceneLightProbeAccess::Grid(scene); gridAssetId != 0U) {
+            const kb::assets::AssetHandle<LightProbeGrid> handle =
+                const_cast<kb::scene::Scene&>(scene).Assets().Manager().Load<LightProbeGrid>(kb::assets::AssetId{ gridAssetId });
+            if (handle.IsLoaded()) grid = handle.Shared();
+        }
+        lightProbes_.Update(std::move(grid));
+        lightProbes_.Apply(effectiveLightingConfig, renderScene.RenderOrigin());
     }
     if (deferredLighting) {
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Configure GBuffer clear begin");
@@ -1443,7 +1486,8 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
     // during its own submit. Mesh resources were ensured above, so bounds resolve this same
     // frame; when the same scene is submitted to several viewports, the last submit in the
     // frame's deterministic plan order wins (see SceneRenderFeedback.hpp's contract).
-    if (renderScene.MeshProxyCount() >= SceneRenderVisibilityPublisher::ParallelThreshold) {
+    // The pool also scans the mesh passes of a large scene, so it starts at the smaller of the two thresholds.
+    if (renderScene.MeshProxyCount() >= std::min(SceneRenderVisibilityPublisher::ParallelThreshold, MeshPassProcessor::ParallelThreshold)) {
         if (renderSyncWorkerPool_ == nullptr) {
             renderSyncWorkerPool_ = std::make_unique<kb::ecs::WorkerPool>(kb::ecs::WorkerPoolConfig{});
         }
@@ -1451,6 +1495,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
             renderSyncWorkerPool_->Start(kb::ecs::WorkerPoolConfig{});
         }
     }
+    sceneRenderer_->SetWorkerPool(renderSyncWorkerPool_.get());
     const auto visibilityBuildBegin = std::chrono::steady_clock::now();
     SceneRenderVisibilityPublisher::BuildFrame(
         renderScene,
@@ -1484,6 +1529,12 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
         (resolvedPostProcessSettings.has_value()
                 ? resolvedPostProcessSettings->temporalJitterEnabled
                 : defaultPostProcessSettings_.temporalJitterEnabled);
+    // Motion blur reads the camera motion since the previous frame, so it keeps the temporal history as TAA does.
+    const bool motionHistoryEnabled = temporalAntiAliasingEnabled || (desc.postProcessEnabled &&
+        (resolvedPostProcessSettings.has_value()
+                ? resolvedPostProcessSettings->motionBlurEnabled
+                : defaultPostProcessSettings_.motionBlurEnabled));
+    std::uint64_t jitterSequence = 0U;
     {
         auto& history = TemporalStateFor(desc.target.viewport.id, desc.target.viewport.viewportIndex);
         const auto* cameraProxy = desc.cameraOverride.has_value() ? nullptr :
@@ -1501,15 +1552,20 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
             frameIndex, desc.resetTemporalHistory);
         if (desc.resetTemporalHistory || history.sceneId != scene.Id() ||
             history.cameraEntityId != cameraEntityId || history.cameraOverride != desc.cameraOverride.has_value() ||
-            history.orthographic != orthographic || !history.taaEnabled || !temporalAntiAliasingEnabled ||
+            history.orthographic != orthographic || !history.taaEnabled || !motionHistoryEnabled ||
             history.historyFrame + 1U != frameIndex) {
             history.hasHistory = false;
         }
+        // The pattern restarts with the scene; a history reset inside a scene (a camera cut) keeps its place in it.
+        if (history.sceneId != scene.Id()) {
+            history.jitterSequence = 0U;
+        }
+        jitterSequence = ++history.jitterSequence;
         history.sceneId = scene.Id();
         history.cameraEntityId = cameraEntityId;
         history.cameraOverride = desc.cameraOverride.has_value();
         history.orthographic = orthographic;
-        history.taaEnabled = temporalAntiAliasingEnabled;
+        history.taaEnabled = motionHistoryEnabled;
     }
     {
         std::ostringstream message;
@@ -1533,7 +1589,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
         }
         WriteRendererBreadcrumb("aa_trace", message.str());
     }
-    const std::array<float, 2> jitter = RendererTemporalJitter::Compute(frameIndex, desc.target.viewport.extent, temporalJitterEnabled);
+    const std::array<float, 2> jitter = RendererTemporalJitter::Compute(jitterSequence, desc.target.viewport.extent, temporalJitterEnabled);
     if (RendererDebugLogEnabled("aa_trace")) {
         std::ostringstream message;
         message << "Temporal jitter resolve"
@@ -1593,7 +1649,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
         const SceneRenderPassSubmitStats* gbufferPassStats = lastScenePassSubmitStats_.empty()
             ? nullptr
             : &lastScenePassSubmitStats_.back();
-        // Unreal's custom data (Subsurface Color / Fuzz Color) only in frames drawing a material that
+        // Custom data (Subsurface Color / Fuzz Color) only in frames drawing a material that
         // writes it: the G-buffer view then renders into the framebuffer with the fifth target.
         bgfx::TextureHandle customDataTexture = BGFX_INVALID_HANDLE;
         if (gbufferPassStats != nullptr && gbufferPassStats->stats.shadingModelColorDrawCallCount > 0U) {
@@ -1699,14 +1755,27 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
             MeshPassType::BaseOpaque,
             shadowBinding.HasAny() ? &shadowBinding : nullptr);
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport opaque pass end");
+        // The backdrop after the opaque geometry (the opaque view is sequential): only pixels left at the far plane
+        // run its shader. The deferred lighting draws the same backdrop on its background pixels.
+        if (backdropUniforms.HasSky() && sceneCamera != nullptr) {
+            if (!skyBackdropPass_.Initialize() ||
+                !skyBackdropPass_.Submit(viewportPlan.viewIds.opaqueScene, backdropUniforms, worldBackdropEnvironment, sceneCamera)) {
+                lastSceneDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
+                    .severity = SceneRenderDiagnosticSeverity::Error,
+                    .kind = SceneRenderDiagnosticKind::SkyBackdropUnavailable,
+                    .instanceCount = 1U,
+                });
+                WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport forward sky backdrop unavailable");
+            }
+        }
     }
     if (desc.meshPassMode != SceneRenderMeshPassMode::OpaqueOnly) {
         const bool terrainLayersOnly = desc.meshPassMode == SceneRenderMeshPassMode::OpaqueAndTerrainLayers;
-        if (!terrainLayersOnly && bgfx::isValid(desc.target.colorTexture) && bgfx::isValid(desc.postProcess.pingTexture)) {
-            WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport transparent sceneColor blit begin");
-            bgfx::blit(viewportPlan.viewIds.transparentScene, bgfx::TextureRegion{ .handle = desc.postProcess.pingTexture }, bgfx::TextureRegion{ .handle = desc.target.colorTexture });
+        // The transparent draws that sample the scene colour read a copy of it in the post-process ping texture.
+        const bool sceneColorCopyAvailable = !terrainLayersOnly && bgfx::isValid(desc.target.colorTexture) &&
+            bgfx::isValid(desc.postProcess.pingTexture);
+        if (sceneColorCopyAvailable) {
             sceneRenderer_->SetSceneColorTexture(desc.postProcess.pingTexture);
-            WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport transparent sceneColor blit end");
         }
         if (sceneCamera != nullptr) {
             // The lighting view is unused by the forward path and binds no scene depth in the deferred one.
@@ -1734,6 +1803,11 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
             MeshPassType::BaseTransparent,
             shadowBinding.HasAny() ? &shadowBinding : nullptr,
             terrainLayersOnly);
+        if (sceneColorCopyAvailable && sceneRenderer_->LastSubmitStats().sceneColorReadDrawCallCount != 0U) {
+            // Copied only when a draw of the frame samples it. The blits of a view run before its draws.
+            WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport transparent sceneColor blit");
+            bgfx::blit(viewportPlan.viewIds.transparentScene, bgfx::TextureRegion{ .handle = desc.postProcess.pingTexture }, bgfx::TextureRegion{ .handle = desc.target.colorTexture });
+        }
         if (!terrainLayersOnly && sceneRenderer_->LastSubmitStats().failedParticleBatchCount == 0U) {
             const auto& particleSnapshot = renderScene.ParticleRenderSnapshot();
             if (particleSnapshot != nullptr) {
@@ -1987,7 +2061,8 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
                 .input = scenePostProcessOutput,
                 .depth = sampledSceneDesc.SceneOverlayDepthTexture(),
             });
-            if (postProcessOutput.temporalAntiAliasingEnabled && overlayCamera != nullptr &&
+            if ((postProcessOutput.temporalAntiAliasingEnabled || postProcessOutput.postProcessSettings.motionBlurEnabled) &&
+                overlayCamera != nullptr &&
                 bgfx::isValid(sampledSceneDesc.postProcess.motionVectorFrameBuffer) &&
                 bgfx::isValid(sampledSceneDesc.SceneOverlayDepthTexture())) {
                 sceneRenderer_->SetMotionVectorViewProjections(currentUnjitteredViewProjection, previousMotionViewProjection);
@@ -2274,6 +2349,18 @@ void Renderer::ConfigureContentStreaming(const RuntimeContentStreamingSettings& 
     runtimeResourceCache_.Streamer().Configure(settings);
 }
 
+void Renderer::ConfigureRuntimeResourceLoading(const RuntimeResourceLoadingSettings& settings) noexcept {
+    runtimeResourceCache_.ConfigureResourceLoading(settings);
+}
+
+RuntimeSceneLoadProgress Renderer::RuntimeSceneResourceProgress(const kb::scene::Scene& scene) const noexcept {
+    return runtimeResourceCache_.SceneLoadProgress(scene.Id());
+}
+
+std::uint32_t Renderer::RuntimeResourcesWaiting() const noexcept {
+    return runtimeResourceCache_.WaitingResourceCount();
+}
+
 RuntimeContentStreamingStats Renderer::ContentStreamingStats() const {
     return runtimeResourceCache_.Streamer().Stats();
 }
@@ -2405,6 +2492,12 @@ void Renderer::SetFrameDeltaSeconds(float seconds) noexcept {
     frameDeltaSeconds_ = seconds;
 }
 
+void Renderer::RestartFrameTime() noexcept {
+    if (sceneRenderer_ != nullptr) {
+        sceneRenderer_->RestartFrameTime();
+    }
+}
+
 float Renderer::FrameDeltaSeconds() const noexcept {
     return frameDeltaSeconds_;
 }
@@ -2440,6 +2533,11 @@ void Renderer::SetDefaultPostProcessSettings(ScenePostProcessSettings settings) 
     settings.vignetteIntensity = std::clamp(settings.vignetteIntensity, 0.0F, 1.0F);
     settings.ambientOcclusionIntensity = std::max(settings.ambientOcclusionIntensity, 0.0F);
     settings.ambientOcclusionRadius = std::max(settings.ambientOcclusionRadius, 0.01F);
+    settings.screenSpaceReflectionsIntensity = std::clamp(settings.screenSpaceReflectionsIntensity, 0.0F, 1.0F);
+    settings.screenSpaceReflectionsMaxDistance = std::max(settings.screenSpaceReflectionsMaxDistance, 0.1F);
+    settings.motionBlurIntensity = std::clamp(settings.motionBlurIntensity, 0.0F, 1.0F);
+    settings.motionBlurSamples = std::clamp(settings.motionBlurSamples, ScenePostProcessSettings::kMotionBlurSamplesMin,
+        ScenePostProcessSettings::kMotionBlurSamplesMax);
     defaultPostProcessSettings_ = settings;
     if (std::optional<PostProcessPass> antiAliasing = postProcessChain_.FindPass(PostProcessPassKind::AntiAliasing); antiAliasing.has_value()) {
         antiAliasing->enabled = settings.temporalAntiAliasingEnabled;
@@ -2483,6 +2581,25 @@ void Renderer::SetDefaultPostProcessSettings(ScenePostProcessSettings settings) 
 
 ScenePostProcessSettings Renderer::DefaultPostProcessSettings() const noexcept {
     return defaultPostProcessSettings_;
+}
+
+void Renderer::SetRenderScale(float scale) noexcept {
+    renderScale_ = std::isfinite(scale) ? std::clamp(scale, 0.5F, 1.0F) : 1.0F;
+}
+
+float Renderer::RenderScale() const noexcept {
+    return renderScale_;
+}
+
+RenderExtent Renderer::ScaledRenderExtent(RenderExtent extent, float scale) noexcept {
+    const float clamped = std::isfinite(scale) ? std::clamp(scale, 0.5F, 1.0F) : 1.0F;
+    if (clamped >= 1.0F) {
+        return extent;
+    }
+    const auto side = [clamped](std::uint32_t value) {
+        return std::max(1U, static_cast<std::uint32_t>(std::lround(static_cast<float>(value) * clamped)));
+    };
+    return RenderExtent{ side(extent.width), side(extent.height) };
 }
 
 bool Renderer::ConfigurePostProcessChain(const PostProcessChainDesc& desc) {

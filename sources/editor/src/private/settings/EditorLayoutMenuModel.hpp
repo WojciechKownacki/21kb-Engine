@@ -1,5 +1,6 @@
 #pragma once
 
+#include "kb/editor/docking/DockTypes.hpp"
 #include "settings/EditorLayoutLibrary.hpp"
 
 #include <cstddef>
@@ -20,6 +21,15 @@ enum class EditorLayoutMenuAction {
     Delete,
     // Remove this one.
     Remove,
+    // Open a panel that is closed, or close one that is open.
+    TogglePanel,
+};
+
+// One of the everyday panels as the menu lists it.
+struct EditorLayoutMenuPanel {
+    DockPanelKind kind = DockPanelKind::Generic;
+    std::string title;
+    bool open = false;
 };
 
 struct EditorLayoutMenuRow {
@@ -31,6 +41,8 @@ struct EditorLayoutMenuRow {
     bool active = false;
     // A caption row that only says what the list is for.
     bool enabled = true;
+    // The panel a TogglePanel row opens or closes.
+    DockPanelKind panelKind = DockPanelKind::Generic;
 };
 
 // The Layout menu: the default arrangement, then every saved layout, then the two
@@ -41,9 +53,12 @@ public:
     // The list the menu is built from is bounded by the library, so the menu cannot
     // grow past the screen no matter what the layouts folder holds: the default
     // arrangement, every saved layout, and the two commands.
-    static constexpr std::size_t MaximumRows = EditorLayoutLibrary::MaximumLayouts + 3U;
+    // The everyday panels listed under the layouts, each marked while it is open, and the caption above them.
+    static constexpr std::size_t MaximumPanels = 7U;
+    static constexpr std::size_t MaximumRows = EditorLayoutLibrary::MaximumLayouts + 3U + MaximumPanels + 1U;
 
-    void Rebuild(const std::vector<std::string>& savedLayouts, std::string_view activeLayout);
+    void Rebuild(const std::vector<std::string>& savedLayouts, std::string_view activeLayout,
+        const std::vector<EditorLayoutMenuPanel>& panels = {});
     // The same list turned into the second step of Delete Layout: pick which one goes.
     void RebuildForDelete(const std::vector<std::string>& savedLayouts);
 

@@ -71,16 +71,21 @@ struct State {
     std::unordered_map<std::string, std::string> texts;
 };
 
-// Every catalog loaded in this run stays in memory, so the text views EditorText hands out never
-// dangle after a language switch (a menu or a panel may still hold one).
-[[nodiscard]] std::vector<std::unique_ptr<const State>>& LoadedStates() {
-    static std::vector<std::unique_ptr<const State>> states;
+// A catalog loaded in this run stays in memory, so the text views EditorText hands out never
+// dangle after a language switch (a menu or a panel may still hold one); switching back to it
+// reuses it, so each catalog file is held once.
+[[nodiscard]] std::unordered_map<std::string, std::unique_ptr<const State>>& LoadedStates() {
+    static std::unordered_map<std::string, std::unique_ptr<const State>> states;
     return states;
 }
 
-[[nodiscard]] const State*& CurrentPointer() {
+[[nodiscard]] const State& English() {
     static const State english;
-    static const State* current = &english;
+    return english;
+}
+
+[[nodiscard]] const State*& CurrentPointer() {
+    static const State* current = &English();
     return current;
 }
 
@@ -234,29 +239,35 @@ bool EditorLocalization::SetLanguage(std::string_view code, const std::filesyste
     }
     State next;
     next.language = std::string{ language->code };
-    if (next.language != "en") {
-        const std::filesystem::path file = catalogFolder / (next.language + ".kbloc");
-        const std::optional<kb::localization::LocalizationCatalog> catalog = kb::localization::LocalizationCatalogIO::Load(file);
-        if (!catalog.has_value()) {
-            error = "The " + std::string{ language->englishName } + " translation could not be read: " + file.generic_string();
-            return false;
+    if (next.language == "en") {
+        CurrentPointer() = &English();
+        return true;
+    }
+    const std::filesystem::path file = catalogFolder / (next.language + ".kbloc");
+    const std::string cacheKey = file.lexically_normal().generic_string();
+    if (const auto loaded = LoadedStates().find(cacheKey); loaded != LoadedStates().end()) {
+        CurrentPointer() = loaded->second.get();
+        return true;
+    }
+    const std::optional<kb::localization::LocalizationCatalog> catalog = kb::localization::LocalizationCatalogIO::Load(file);
+    if (!catalog.has_value()) {
+        error = "The " + std::string{ language->englishName } + " translation could not be read: " + file.generic_string();
+        return false;
+    }
+    const auto entries = catalog->languages.find(next.language);
+    if (entries == catalog->languages.end()) {
+        error = "The catalog " + file.generic_string() + " has no " + std::string{ language->englishName } + " text.";
+        return false;
+    }
+    for (const auto& [key, message] : entries->second) {
+        if (!message.text.empty()) {
+            next.texts.emplace(key, message.text);
         }
-        const auto entries = catalog->languages.find(next.language);
-        if (entries == catalog->languages.end()) {
-            error = "The catalog " + file.generic_string() + " has no " + std::string{ language->englishName } + " text.";
-            return false;
-        }
-        for (const auto& [key, message] : entries->second) {
-            if (!message.text.empty()) {
-                next.texts.emplace(key, message.text);
-            }
-            for (const auto& [category, text] : message.plurals) {
-                next.texts.emplace(key + "#" + category, text);
-            }
+        for (const auto& [category, text] : message.plurals) {
+            next.texts.emplace(key + "#" + category, text);
         }
     }
-    LoadedStates().push_back(std::make_unique<const State>(std::move(next)));
-    CurrentPointer() = LoadedStates().back().get();
+    CurrentPointer() = LoadedStates().emplace(cacheKey, std::make_unique<const State>(std::move(next))).first->second.get();
     return true;
 }
 

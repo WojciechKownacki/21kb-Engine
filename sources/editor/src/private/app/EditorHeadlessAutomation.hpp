@@ -24,6 +24,7 @@
 namespace kb::editor {
 
 class EditorSceneContext;
+struct EditorStartupSnapshot;
 
 // Deterministic, windowless driver for the production editor interaction
 // paths. It resolves controls from the live Inspector layout and sends the
@@ -189,20 +190,33 @@ public:
     [[nodiscard]] bool VerifyToolbarMenuOverlay();
     [[nodiscard]] bool VerifyParticleControls();
     [[nodiscard]] bool VerifyWorkspaceControls();
+    [[nodiscard]] bool VerifyDockingInteractions();
+    // What the last check that reports through here found, for the scenario report.
+    [[nodiscard]] const std::string& LastCheckDetail() const noexcept { return lastCheckDetail_; }
     [[nodiscard]] bool VerifyDebuggerInteraction();
     // Clicking the Add Component browser's search box on a real editor window and
     // typing filters the components, whether the keys reach the window or the popup.
     [[nodiscard]] bool VerifyAddComponentSearchInput();
+    // A mouse click on the Scene View of a real editor window; see EditorHeadlessPopupChecks::ClickSceneView.
+    [[nodiscard]] bool ClickSceneView(float x, float y, float z, float offsetX, float focusRadius);
     [[nodiscard]] bool CaptureEditorScene(std::string_view checkpoint, bool editorOverlaysEnabled = true);
     // The Scene panel's viewport exactly as the editor presents it: its own camera and the
     // production present settings, editor overlays included (grid lines, the world cell grid).
     [[nodiscard]] bool CaptureSceneViewport(std::string_view checkpoint);
+    // The Game View's picture while the game runs: the game camera at the chosen resolution, with the
+    // panel's render area (below its bar) `areaWidth` x `areaHeight`, read back to a PNG.
+    [[nodiscard]] bool CaptureGameView(std::string_view checkpoint, int areaWidth, int areaHeight);
+    // Checks the settings the Game View hands the renderer for that area: the game camera, no editor overlay of
+    // any kind, the project's render scale. The text says what was found.
+    [[nodiscard]] std::pair<bool, std::string> VerifyGameViewSettings(int areaWidth, int areaHeight);
     // The "What to show" window of the profiler, and the profiler's counters and graph laid over an
     // earlier scene viewport capture.
     [[nodiscard]] kb::render::SceneRenderSubmitStats SceneSubmitStats() const;
     [[nodiscard]] bool CaptureProfilerWindow(std::string_view checkpoint, int width, int height);
     [[nodiscard]] bool ClickProfilerWindow(int x, int y, int width, int height);
     [[nodiscard]] bool CaptureProfilerOverlay(std::string_view checkpoint, std::string_view sceneCheckpoint);
+    // The startup screen in the state `snapshot`, painted for `dpi` into <checkpoint>.bmp.
+    [[nodiscard]] bool CaptureStartupSplash(std::string_view checkpoint, int dpi, const EditorStartupSnapshot& snapshot);
     [[nodiscard]] bool CaptureTimelinePreview(std::string_view checkpoint);
     [[nodiscard]] bool CaptureBlendSpace2DPreview(std::string_view checkpoint);
     // The Material Editor's preview of the open material, presented as the panel presents it.
@@ -227,7 +241,8 @@ public:
 
 private:
     // Requests a screen capture, renders with `render` until it completes, validates the PNG.
-    [[nodiscard]] bool CaptureScene(std::string_view operation, std::string_view checkpoint, const std::function<bool()>& render);
+    [[nodiscard]] bool CaptureScene(std::string_view operation, std::string_view checkpoint, const std::function<bool()>& render,
+        bool requireNonUniform = true);
 
     struct Impl;
 
@@ -235,6 +250,7 @@ private:
     EditorSceneContext& context_;
     std::filesystem::path artifactRoot_;
     std::filesystem::path tracePath_;
+    std::string lastCheckDetail_;
     std::unique_ptr<Impl> impl_;
 };
 

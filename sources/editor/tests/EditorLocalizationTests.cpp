@@ -85,6 +85,12 @@ void RunCatalogTranslatesTest() {
     BackToEnglish();
     Require(EditorText("test.rename", "Rename") == "Rename", "Switching back should show English again");
     Require(polish == "Zmie\xC5\x84 nazw\xC4\x99", "A text taken before the switch should stay valid");
+    // Switching back reuses the catalog already loaded instead of holding another copy.
+    for (int round = 0; round < 3; ++round) {
+        Require(EditorLocalization::SetLanguage("pl", folder, error) && EditorText("test.rename", "Rename").data() == polish.data(),
+            "Switching back to a language should reuse its loaded catalog");
+        BackToEnglish();
+    }
 }
 
 void RunDamagedCatalogRefusedTest() {

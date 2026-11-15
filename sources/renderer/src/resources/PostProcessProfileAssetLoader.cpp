@@ -162,6 +162,21 @@ enum class FieldResult { Applied, Invalid, Unknown };
     if (keyword == "ambientOcclusionEnabled") return Applied(ParseBoolToken(rest, settings.ambientOcclusionEnabled));
     if (keyword == "ambientOcclusionIntensity") return Applied(ParseNonNegativeFloat(Trim(rest), settings.ambientOcclusionIntensity));
     if (keyword == "ambientOcclusionRadius") return Applied(ParsePositiveFloat(Trim(rest), settings.ambientOcclusionRadius));
+    if (keyword == "screenSpaceReflectionsEnabled") return Applied(ParseBoolToken(rest, settings.screenSpaceReflectionsEnabled));
+    if (keyword == "screenSpaceReflectionsIntensity") return Applied(ParseUnitFloat(Trim(rest), settings.screenSpaceReflectionsIntensity));
+    if (keyword == "screenSpaceReflectionsMaxDistance") return Applied(ParsePositiveFloat(Trim(rest), settings.screenSpaceReflectionsMaxDistance));
+    if (keyword == "motionBlurEnabled") return Applied(ParseBoolToken(rest, settings.motionBlurEnabled));
+    if (keyword == "motionBlurIntensity") return Applied(ParseUnitFloat(Trim(rest), settings.motionBlurIntensity));
+    if (keyword == "motionBlurSamples") {
+        float value = 0.0F;
+        if (!ParseFiniteMaterialFloatToken(Trim(rest), value) || value != static_cast<float>(static_cast<int>(value)) ||
+            value < static_cast<float>(ScenePostProcessSettings::kMotionBlurSamplesMin) ||
+            value > static_cast<float>(ScenePostProcessSettings::kMotionBlurSamplesMax)) {
+            return FieldResult::Invalid;
+        }
+        settings.motionBlurSamples = static_cast<std::uint32_t>(value);
+        return FieldResult::Applied;
+    }
     if (keyword == "globalIllumination") {
         const std::string_view value = Trim(rest);
         using Method = ScenePostProcessSettings::GlobalIlluminationMethod;
@@ -252,6 +267,12 @@ void WriteProfile(std::ostream& output, const ScenePostProcessSettings& settings
     output << "ambientOcclusionEnabled " << (settings.ambientOcclusionEnabled ? 1 : 0) << '\n';
     output << "ambientOcclusionIntensity " << settings.ambientOcclusionIntensity << '\n';
     output << "ambientOcclusionRadius " << settings.ambientOcclusionRadius << '\n';
+    output << "screenSpaceReflectionsEnabled " << (settings.screenSpaceReflectionsEnabled ? 1 : 0) << '\n';
+    output << "screenSpaceReflectionsIntensity " << settings.screenSpaceReflectionsIntensity << '\n';
+    output << "screenSpaceReflectionsMaxDistance " << settings.screenSpaceReflectionsMaxDistance << '\n';
+    output << "motionBlurEnabled " << (settings.motionBlurEnabled ? 1 : 0) << '\n';
+    output << "motionBlurIntensity " << settings.motionBlurIntensity << '\n';
+    output << "motionBlurSamples " << settings.motionBlurSamples << '\n';
     using Method = ScenePostProcessSettings::GlobalIlluminationMethod;
     output << "globalIllumination " << (settings.globalIllumination == Method::ScreenSpace ? "ScreenSpace"
         : settings.globalIllumination == Method::Voxel ? "Voxel" : "Off") << '\n';

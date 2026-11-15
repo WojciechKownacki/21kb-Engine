@@ -427,6 +427,134 @@ void TestSharedFixedSchedulerDeterminism() {
     return states;
 }
 
+struct ParticleClockRun {
+    std::uint64_t hash = 0U;
+    std::uint32_t liveCount = 0U;
+    std::uint64_t snapshotStepIndex = 0U;
+    std::size_t systemErrors = 0U;
+};
+
+[[nodiscard]] kb::scene::ParticleEffectAsset MakeClockEffect() {
+    auto effect = Fixture::MakeEffect(60.0F, 4096U);
+    effect.durationSeconds = 8.0F;
+    return effect;
+}
+
+constexpr std::uint64_t kClockSeed = 0x0DDC0FFEE5EED123ULL;
+
+// One second of play through the real scene runtime with a project fixed step of sceneHz.
+[[nodiscard]] ParticleClockRun RunParticleClock(std::uint32_t sceneHz) {
+    RuntimeFixture runtime(MakeClockEffect());
+    kb::scene::Scene& scene = runtime.fixture.scene;
+    const float sceneStep = 1.0F / static_cast<float>(sceneHz);
+    scene.Runtime().SetFixedStepSettings({.fixedDeltaSeconds = sceneStep});
+    Require(kb::particles::ParticlePlayback::SetSeed(scene, runtime.instanceId, kClockSeed).Succeeded() &&
+            kb::particles::ParticlePlayback::Play(scene, runtime.instanceId).Succeeded(),
+        "particle clock setup failed");
+    for (std::uint32_t step = 0U; step < sceneHz; ++step) {
+        static_cast<void>(scene.Runtime().Update(sceneStep));
+    }
+    Require(scene.Runtime().FixedStepIndex() == sceneHz, "particle clock run took the wrong number of scene steps");
+    const auto snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(scene);
+    return {
+        .hash = HashParticles(scene, runtime.instanceId),
+        .liveCount = kb::particles::ParticlePlayback::Query(scene, runtime.instanceId).liveParticleCount,
+        .snapshotStepIndex = snapshot ? snapshot->FixedStepIndex() : 0U,
+        .systemErrors = scene.Runtime().DrainSceneSystemErrors().size(),
+    };
+}
+
+void TestParticleClockIndependentOfSceneFixedStep() {
+    // The single-step path: sixty particle steps driven straight into the backend.
+    Fixture direct(MakeClockEffect());
+    kb::particle_plugin::CpuParticleBackend backend;
+    backend.Warmup();
+    const auto created = backend.Create(direct.scene, direct.effectAssetId, direct.owner);
+    Require(created.Succeeded() && backend.SetSeed(direct.scene, created.instanceId, kClockSeed).Succeeded() &&
+            backend.Play(direct.scene, created.instanceId).Succeeded(),
+        "single-step particle path setup failed");
+    for (std::uint32_t step = 0U; step < 60U; ++step) {
+        Require(backend.Step(direct.scene, kb::particle_plugin::CpuParticleBackend::kStepSeconds).Succeeded(),
+            "single-step particle path rejected a particle step");
+    }
+    const std::uint64_t singleStepHash = HashStateSpan(CopyBackendStates(backend, direct, created.instanceId));
+    const std::uint32_t singleStepCount = backend.Query(direct.scene, created.instanceId).liveParticleCount;
+    Require(singleStepCount != 0U, "single-step particle path emitted nothing");
+
+    // At the default 60 Hz the scene system takes exactly one particle step per scene step.
+    const ParticleClockRun at60 = RunParticleClock(60U);
+    Require(at60.hash == singleStepHash && at60.liveCount == singleStepCount && at60.snapshotStepIndex == 60U &&
+            at60.systemErrors == 0U,
+        "60 Hz scene steps diverged from the single-step particle path");
+
+    // Rates that divide into the particle step evenly give the same particles, bit for bit.
+    for (const std::uint32_t hz : {30U, 120U, 240U}) {
+        const ParticleClockRun run = RunParticleClock(hz);
+        const std::string label = std::to_string(hz) + " Hz scene step: ";
+        Require(run.systemErrors == 0U, label + "the particle system reported an error");
+        Require(run.hash == at60.hash && run.liveCount == at60.liveCount && run.snapshotStepIndex == 60U,
+            label + "particles depend on the scene fixed step (live " + std::to_string(run.liveCount) +
+                ", particle step " + std::to_string(run.snapshotStepIndex) + ")");
+    }
+    // Other rates differ from the particle step by float rounding: at most one step of remainder.
+    for (const std::uint32_t hz : {10U, 90U, 144U}) {
+        const ParticleClockRun run = RunParticleClock(hz);
+        const std::string label = std::to_string(hz) + " Hz scene step: ";
+        Require(run.systemErrors == 0U, label + "the particle system reported an error");
+        Require(run.liveCount + 1U >= at60.liveCount && run.liveCount <= at60.liveCount &&
+                run.snapshotStepIndex + 1U >= 60U && run.snapshotStepIndex <= 60U,
+            label + "particle count over one second drifted by more than a step (live " +
+                std::to_string(run.liveCount) + ", particle step " + std::to_string(run.snapshotStepIndex) + ")");
+    }
+
+    // At 120 Hz every second scene step owes no particle step, so it publishes no snapshot.
+    RuntimeFixture slow(MakeClockEffect());
+    slow.fixture.scene.Runtime().SetFixedStepSettings({.fixedDeltaSeconds = 1.0F / 120.0F});
+    Require(kb::particles::ParticlePlayback::Play(slow.fixture.scene, slow.instanceId).Succeeded(),
+        "half-rate particle clock setup failed");
+    static_cast<void>(slow.fixture.scene.Runtime().Update(1.0F / 120.0F));
+    Require(slow.fixture.scene.Runtime().LastFixedStepCount() == 1U &&
+            !kb::particles::ParticlePlayback::ReadRenderSnapshot(slow.fixture.scene),
+        "a scene step that owes no particle step still published a snapshot");
+    static_cast<void>(slow.fixture.scene.Runtime().Update(1.0F / 120.0F));
+    const auto firstSnapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(slow.fixture.scene);
+    Require(firstSnapshot && firstSnapshot->FixedStepIndex() == 1U && firstSnapshot->Revision() == 1U,
+        "the second 120 Hz scene step did not publish the first particle step");
+}
+
+void TestParticleCatchUpIsBounded() {
+    Fixture fixture(MakeClockEffect());
+    fixture.scene.Components().ParticleEffects().Set(fixture.owner, {.effectAssetId = fixture.effectAssetId});
+    kb::particle_plugin::ParticleSceneSystem system;
+    kb::scene::SceneSystemContext hitch{fixture.scene, 1.0F};
+    system.OnCreate(hitch);
+    const auto stepIndex = [&] {
+        const auto snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
+        return snapshot ? snapshot->FixedStepIndex() : std::uint64_t{0U};
+    };
+    // One second owed in a single scene step runs at most the runtime's fixed-step limit...
+    system.OnFixedUpdate(hitch);
+    Require(stepIndex() == kb::scene::kSceneRuntimeDefaultMaxFixedStepsPerFrame,
+        "a long scene step ran more particle steps than the fixed-step limit");
+    // ...and the rest of the debt is dropped but for one step, so it cannot snowball.
+    kb::scene::SceneSystemContext normal{fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds};
+    system.OnFixedUpdate(normal);
+    Require(stepIndex() == kb::scene::kSceneRuntimeDefaultMaxFixedStepsPerFrame + 2U,
+        "the debt left after a long scene step was not bounded to one particle step");
+    system.OnFixedUpdate(normal);
+    Require(stepIndex() == kb::scene::kSceneRuntimeDefaultMaxFixedStepsPerFrame + 3U,
+        "particle steps did not return to one per 1/60 s after a long scene step");
+
+    bool rejectedZero = false;
+    bool rejectedNaN = false;
+    kb::scene::SceneSystemContext zero{fixture.scene, 0.0F};
+    kb::scene::SceneSystemContext notANumber{fixture.scene, std::numeric_limits<float>::quiet_NaN()};
+    try { system.OnFixedUpdate(zero); } catch (const std::logic_error&) { rejectedZero = true; }
+    try { system.OnFixedUpdate(notANumber); } catch (const std::logic_error&) { rejectedNaN = true; }
+    Require(rejectedZero && rejectedNaN, "an invalid scene step was accepted by the particle system");
+    system.OnDestroy(hitch);
+}
+
 void TestUniformSolidAngleConeGolden() {
     auto effect = Fixture::MakeEffect(0.0F, 8192U);
     kb::scene::ParticleEmitterAsset& emitter = effect.emitters[0];
@@ -4075,6 +4203,8 @@ int main(int argc, char** argv) {
         TestCpuPreviewRenderSnapshotPublicationAndLifecycle();
         TestTerminalSnapshotRetentionFailurePreservesBackendOwnership();
         TestSharedFixedSchedulerDeterminism();
+        TestParticleClockIndependentOfSceneFixedStep();
+        TestParticleCatchUpIsBounded();
         TestUniformSolidAngleConeGolden();
         TestVisualModulesObservableGoldenAndDefaults();
         TestStartColorAndSizeWithoutModules();

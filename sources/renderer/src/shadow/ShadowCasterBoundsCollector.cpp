@@ -62,9 +62,12 @@ ShadowCasterBounds ShadowCasterBoundsCollector::Collect(
     const std::array<float, 16>* focusView,
     float focusHalfExtent) noexcept {
     ShadowCasterBounds result{};
-    const auto accumulate = [&](const RenderBoundsSphere& worldBounds, std::uint32_t casters) {
+    const auto accumulate = [&](const RenderBoundsSphere& worldBounds, std::uint32_t casters, bool displaced) {
         result.bounds = MergeBounds(result.bounds, worldBounds);
         result.casterCount += casters;
+        if (focusView == nullptr && displaced) {
+            result.displacedCasterCount += casters;
+        }
         if (focusView != nullptr) {
             const auto& view = *focusView;
             const auto& center = worldBounds.center;
@@ -76,6 +79,9 @@ ShadowCasterBounds ShadowCasterBoundsCollector::Collect(
                 result.focusedDepthMinimum = std::min(result.focusedDepthMinimum, z - worldBounds.radius);
                 result.focusedDepthMaximum = std::max(result.focusedDepthMaximum, z + worldBounds.radius);
                 result.focusedCasterCount += casters;
+                if (displaced) {
+                    result.displacedCasterCount += casters;
+                }
             }
         }
     };
@@ -106,13 +112,13 @@ ShadowCasterBounds ShadowCasterBoundsCollector::Collect(
                     const auto& center = localBounds.center;
                     bounds.radius += cluster.maximumScale * (localBounds.radius +
                         std::sqrt(center[0]*center[0] + center[1]*center[1] + center[2]*center[2])) + boundsMargin;
-                    accumulate(bounds, instance.castsShadow ? cluster.instanceCount : 0U);
+                    accumulate(bounds, instance.castsShadow ? cluster.instanceCount : 0U, boundsMargin > 0.0F);
                     index += cluster.instanceCount-1U;
                     continue;
                 }
             }
             accumulate(MeshPipelineVisibility::GrowBounds(TransformBoundsForShadow(localBounds, instance.model), boundsMargin),
-                instance.castsShadow ? 1U : 0U);
+                instance.castsShadow ? 1U : 0U, boundsMargin > 0.0F);
         }
     }
     return result;

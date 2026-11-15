@@ -40,7 +40,7 @@ bool SceneGiUniforms::IsValid() const noexcept {
         bgfx::isValid(temporalUniform_) && bgfx::isValid(aoParamsUniform_) && bgfx::isValid(ssrParamsUniform_);
 }
 
-void SceneGiUniforms::Set(const SceneGiBinding* binding, const SceneRenderLightingConfig& config,
+bool SceneGiUniforms::Set(const SceneGiBinding* binding, const SceneRenderLightingConfig& config,
     const std::array<float, 16>& viewProjection, bgfx::TextureHandle unavailableTexture) const {
     const bool present = binding != nullptr;
     const bool giEnabled = present && UsesGatheredGi(config);
@@ -62,7 +62,11 @@ void SceneGiUniforms::Set(const SceneGiBinding* binding, const SceneRenderLighti
     bgfx::setUniform(ssrParamsUniform_, ssrParams.data());
     bgfx::setTexture(kAccumStage, accumSampler_, active ? binding->accum : unavailableTexture);
     bgfx::setTexture(kAoStage, aoSampler_, active && bgfx::isValid(binding->aoAccum) ? binding->aoAccum : unavailableTexture);
+    if (UsesBakedLightProbes(config)) {
+        return false;
+    }
     bgfx::setTexture(kLitStage, litSampler_, active && bgfx::isValid(binding->lit) ? binding->lit : unavailableTexture);
+    return true;
 }
 
 } // namespace kb::render

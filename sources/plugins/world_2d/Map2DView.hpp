@@ -32,7 +32,7 @@ void SetUpMap2DComponents(kb::scene::Scene& scene, kb::scene::SceneEntity entity
     kb::scene::Scene& scene, kb::scene::SceneEntity mapEntity, const kb::assets::Map2DAsset& map,
     bool* changed = nullptr, std::string* error = nullptr, std::vector<kb::assets::AssetId>* runtimeAssets = nullptr);
 
-// How a player sees the map, as Remere's client box shows it: an orthographic "Map Camera" under
+// How a player sees the map: an orthographic "Map Camera" under
 // the map entity framing viewHeight tiles vertically at the map's centre (straight down on a flat
 // map, straight at a wall); horizontal coverage follows the viewport aspect ratio. This becomes
 // the primary camera for Play. A scene with no post-process profile also

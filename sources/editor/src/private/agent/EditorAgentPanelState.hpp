@@ -21,6 +21,13 @@ enum class EditorAgentEntryKind : std::uint8_t {
     Error,
 };
 
+// How much the agent may do with a request: change the project, only say how it would, or only answer.
+enum class EditorAgentMode : std::uint8_t {
+    Agent,
+    Plan,
+    Ask,
+};
+
 struct EditorAgentEntry {
     EditorAgentEntryKind kind = EditorAgentEntryKind::Info;
     std::string text;
@@ -93,6 +100,8 @@ public:
     [[nodiscard]] const std::string& Effort() const noexcept { return effort_; }
     void SelectModel(std::string model);
     void SelectEffort(std::string effort);
+    [[nodiscard]] EditorAgentMode Mode() const noexcept { return mode_; }
+    void SelectMode(EditorAgentMode mode) noexcept { mode_ = mode; }
 
     // Whether the selected profile is signed in, and its plan; never the account's address, so
     // the panel can be shown on a stream or a screenshot.
@@ -168,6 +177,7 @@ private:
     int current_ = -1;
     std::string model_;
     std::string effort_;
+    EditorAgentMode mode_ = EditorAgentMode::Agent;
     std::string plan_;
     bool signedIn_ = false;
     bool checkingAccount_ = false;

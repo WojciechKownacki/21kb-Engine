@@ -415,6 +415,7 @@ void AuxFrameRenderer::Collect(
         desc.editorCameraWireframes = {};
         desc.editorLightWireframes = {};
         desc.physicsDebugLines = {};
+        desc.debugFillTriangles = {};
         desc.editorSceneOverlaysEnabled = false;
         desc.selectionMaskEnabled = false;
         desc.selectionOutlineEnabled = false;

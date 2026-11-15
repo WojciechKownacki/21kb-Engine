@@ -224,7 +224,7 @@ struct SceneRenderMeshInstance {
 };
 
 // The model an instance was drawn with in the previous motion frame, as seen from `motionFrame`: what it
-// recorded when it moved in this frame, its current model otherwise (Unreal's PreviousLocalToWorld).
+// recorded when it moved in this frame, its current model otherwise.
 [[nodiscard]] inline const std::array<float, 16>& SceneRenderPreviousModel(
     const SceneRenderMeshInstance& instance, std::uint64_t motionFrame) noexcept {
     return instance.previousModelFrame != 0U && instance.previousModelFrame == motionFrame
@@ -372,6 +372,11 @@ struct SceneRenderLightingConfig {
     float shadowNormalBias = 1.0F;
     float shadowStrength = 1.0F;
     SceneRenderShadowFilter shadowFilter = SceneRenderShadowFilter::Pcf3x3;
+    // Shadows sized for a handheld: a 16-bit sun map and the four-tap soft filter instead of the nine-tap one.
+    bool compactShadows = false;
+    // Read the shadow maps through comparison samplers, where the hardware filters (the frames that need the stored depth
+    // for PCSS read them as plain textures either way).
+    bool shadowComparisonSampling = true;
     // Point, spot and area lights that get a shadow map (at most 32, the atlas rows), picked by their importance in the
     // frame. A point or area light's cube shadow takes six passes; a phone-class device draws none of them (its
     // spot lights keep their single pass), because it has no one-pass cube shadow.
@@ -399,12 +404,21 @@ struct SceneRenderLightingConfig {
     // none, and reflections then use the environment colour.
     bgfx::TextureHandle skyReflection = BGFX_INVALID_HANDLE;
     float skyReflectionMaxMip = 0.0F;
+    // The baked light probe grid (SceneLightProbeTexture, light_probes.sh): its texture, origin and inverse
+    // spacing, and dimensions. Invalid when the scene has none; surfaces then use the flat ambient.
+    bgfx::TextureHandle lightProbes = BGFX_INVALID_HANDLE;
+    std::array<float, 4> lightProbeGrid{};
+    std::array<float, 4> lightProbeSize{};
 };
 
 // Cube shadows of up to 32 lights (point, spot, area and tube) share one depth atlas: face f of light s
 // occupies the tile at column f, row s. Faces use a slightly wider than 90 degree frustum so that filtering
 // near a face edge stays inside the tile. A spot light takes a slot too but renders only column 0,
 // one frustum along its axis that covers the cone.
+// The sampler state of the shadow lookups made through a comparison sampler (KB_SHADOW_COMPARE shaders): the compared
+// texels are filtered linearly, and the maps keep reversed depth, so "less or equal" passes where the receiver is shadowed.
+inline constexpr std::uint32_t kShadowCompareSamplerFlags = BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP | BGFX_SAMPLER_COMPARE_LEQUAL;
+
 struct ScenePointShadowBinding {
     static constexpr std::uint32_t kMaxLights = 32U;
     static constexpr std::uint32_t kFaceCount = 6U;
@@ -427,6 +441,22 @@ struct ScenePointShadowBinding {
     [[nodiscard]] bool IsValid() const noexcept {
         return lightCount != 0U && bgfx::isValid(depthTexture);
     }
+
+    // Whether a light's lookup reads the stored depth itself (the PCSS filter, or soft shadows from its source size when
+    // `bySourceSize`): a comparison sampler cannot.
+    [[nodiscard]] bool NeedsStoredDepth(bool bySourceSize = true) const noexcept {
+        if (!IsValid()) {
+            return false;
+        }
+        for (std::uint32_t light = 0U; light < lightCount && light < kMaxLights; ++light) {
+            const float filter = lightParams[light * 4U + 2U];
+            const float sourceRadius = depthParams[light * 4U + 2U];
+            if (filter > 2.5F || (bySourceSize && sourceRadius > 0.0F && filter < 0.5F)) {
+                return true;
+            }
+        }
+        return false;
+    }
 };
 
 struct SceneRenderShadowMapBinding {
@@ -443,8 +473,27 @@ struct SceneRenderShadowMapBinding {
     // Per cascade: x = depth bias (shadow depth units), y = normal offset (m); both follow the cascade's texel size.
     std::array<float, 4U * kMaxCascades> cascadeBias{};
 
+    // How the lighting shaders read the maps: through comparison samplers, where the hardware filters (see
+    // NeedsStoredDepth for the lookups that cannot), and with the nine-tap soft kernel instead of the four-tap one.
+    bool compareSampling = false;
+    bool wideKernel = true;
+
     [[nodiscard]] bool IsValid() const noexcept {
         return bgfx::isValid(depthTexture) && params[3] > 0.0F;
+    }
+
+    // Whether any lookup reads the stored depth itself: the sun with a source size under a soft filter, or a light of
+    // ScenePointShadowBinding::NeedsStoredDepth. A comparison sampler cannot serve it. The handheld's compact shadows
+    // (not `wideKernel`) leave a light's source size out and soften only what asks for the PCSS filter.
+    [[nodiscard]] bool NeedsStoredDepth() const noexcept {
+        if (IsValid() && params[3] >= (wideKernel ? 2.5F : 5.5F)) {
+            for (std::uint32_t cascade = 0U; cascade < cascadeCount && cascade < kMaxCascades; ++cascade) {
+                if (cascadeAtlas[cascade * 4U + 3U] > 0.0F) {
+                    return true;
+                }
+            }
+        }
+        return point.NeedsStoredDepth(wideKernel);
     }
 
     // Whether any shadow (directional or point) is bound for lighting.
@@ -482,6 +531,9 @@ struct SceneRenderSubmitStats {
     std::uint32_t submittedDrawCallCount = 0;
     // G-buffer draws that write model color/layer data to the optional fifth target.
     std::uint32_t shadingModelColorDrawCallCount = 0;
+    // Transparent draws whose material samples the scene colour behind it (refraction, transmission): the frame
+    // copies the scene colour only when there is one.
+    std::uint32_t sceneColorReadDrawCallCount = 0;
     // Motion vector instances drawn with an uploaded previous model (draws with an instance that moved).
     std::uint32_t motionVectorMovedInstanceCount = 0;
     std::uint32_t droppedInstanceCount = 0;
@@ -661,6 +713,8 @@ enum class SceneRenderDiagnosticKind : std::uint8_t {
     GiBoundingBoxFallback,
     MaterialShadingFallback,
     ReflectionProbeUnavailable,
+    // The forward path could not draw the world backdrop (no shader variant or no transient vertices).
+    SkyBackdropUnavailable,
 };
 
 enum class SceneRenderMaterialProgramStatus : std::uint8_t {
@@ -722,6 +776,7 @@ struct SceneRenderDiagnostics {
     lhs.submittedDrawGroupCount += rhs.submittedDrawGroupCount;
     lhs.submittedDrawCallCount += rhs.submittedDrawCallCount;
     lhs.shadingModelColorDrawCallCount += rhs.shadingModelColorDrawCallCount;
+    lhs.sceneColorReadDrawCallCount += rhs.sceneColorReadDrawCallCount;
     lhs.motionVectorMovedInstanceCount += rhs.motionVectorMovedInstanceCount;
     lhs.droppedInstanceCount += rhs.droppedInstanceCount;
     lhs.meshPipelineCommandCount += rhs.meshPipelineCommandCount;

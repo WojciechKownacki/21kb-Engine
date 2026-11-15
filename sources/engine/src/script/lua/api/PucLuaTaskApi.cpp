@@ -1,12 +1,8 @@
+#include "script/lua/LuaVm.hpp"
 #include "script/lua/api/PucLuaTaskApi.hpp"
 
 #include "engine/script/ScriptApiCatalog.hpp"
 #include "script/lua/PucLuaStateUtilities.hpp"
-
-extern "C" {
-#include <lauxlib.h>
-#include <lua.h>
-}
 
 #include <string>
 #include <string_view>
@@ -74,7 +70,7 @@ std::optional<std::string> PucLuaTaskApi::Attach(lua_State* state, int environme
             return PucLuaErrorReporter::ErrorFromTop(state);
         }
         lua_pushvalue(state, absoluteEnvironment);
-        static_cast<void>(lua_setupvalue(state, -2, 1));
+        kb_lua_set_chunk_environment(state);
         if (lua_pcall(state, 0, 1, 0) != LUA_OK) {
             return PucLuaErrorReporter::ErrorFromTop(state);
         }

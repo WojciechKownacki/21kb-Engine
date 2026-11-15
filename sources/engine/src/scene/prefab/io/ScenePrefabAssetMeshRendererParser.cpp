@@ -22,13 +22,16 @@ template <typename T>
         return iterator == fields.end() || ScenePrefabAssetFieldParser::ParseNumber(iterator->second, output);
     };
     int lodEnabled = meshRenderer.lodEnabled ? 1 : 0;
+    int affectsNavigation = meshRenderer.affectsNavigation ? 1 : 0;
     std::uint32_t mobility = static_cast<std::uint32_t>(meshRenderer.mobility);
     if (!parse("meshRenderer.lodBias", meshRenderer.lodBias) || !parse("meshRenderer.lodEnabled", lodEnabled) ||
         (lodEnabled != 0 && lodEnabled != 1) || !parse("meshRenderer.mobility", mobility) ||
-        mobility > static_cast<std::uint32_t>(MeshMobility::Static)) {
+        mobility > static_cast<std::uint32_t>(MeshMobility::Static) ||
+        !parse("meshRenderer.affectsNavigation", affectsNavigation) || (affectsNavigation != 0 && affectsNavigation != 1)) {
         return false;
     }
     meshRenderer.lodEnabled = lodEnabled != 0;
+    meshRenderer.affectsNavigation = affectsNavigation != 0;
     meshRenderer.mobility = static_cast<MeshMobility>(mobility);
     return IsMeshRendererComponentValid(meshRenderer);
 }

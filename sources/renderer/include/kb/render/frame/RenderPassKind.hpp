@@ -29,7 +29,7 @@ enum class RenderPassKind : std::uint8_t {
     ScreenUIComposite,
     EditorUiComposite,
     EditorGizmoOverlay,
-    // Unreal's post-process materials (blendables), after the HDR finalize and before the tonemap.
+    // Post-process materials (blendables), after the HDR finalize and before the tonemap.
     PostProcessMaterial0,
     PostProcessMaterial1,
     PostProcessMaterial2,

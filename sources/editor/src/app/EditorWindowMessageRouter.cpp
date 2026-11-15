@@ -4,6 +4,7 @@
 #include "app/EditorKeyState.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorCurveEditorPointerHandler.hpp"
 #include "app/EditorEditCommandInputHandler.hpp"
 #include "app/EditorSceneFileCommands.hpp"
 #include "app/EditorWindowInvalidator.hpp"
@@ -11,11 +12,14 @@
 #include "app/EditorSkeletalMeshTreeSearchInputHandler.hpp"
 #include "app/EditorTextInputShortcuts.hpp"
 #include "app/agent/EditorAgentPanelController.hpp"
+#include "app/project_settings/EditorProjectSettingsPointerController.hpp"
 #include "rendering/ProjectSettingsPanelRenderer.hpp"
 #include "app/EditorBuildGameInputHandler.hpp"
 #include "packaging/EditorProjectPackageService.hpp"
 #include "app/EditorAssetBrowserInputHandler.hpp"
 #include "app/EditorWindowHitTestHandler.hpp"
+#include "app/EditorProjectCommands.hpp"
+#include "app/EditorPlayCommands.hpp"
 #include "app/EditorWindowLifecycleHandler.hpp"
 #include "app/EditorPaintDispatcher.hpp"
 #include "app/ParticleEditorPanelInteraction.hpp"
@@ -27,6 +31,7 @@
 #include "inspection/InspectorPanelInteraction.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/FloatingWindowBackBufferPainter.hpp"
+#include "rendering/GdiBackBufferRenderer.hpp"
 #include "rendering/MainWindowBackBufferPainter.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "scene/EditorTerrainService.hpp"
@@ -34,6 +39,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace kb::editor {
 namespace {
@@ -448,6 +454,15 @@ template <typename Changed>
         }
     }
 
+    if (key == VK_HOME && !ModifierDown(VK_CONTROL) && !ModifierDown(VK_MENU) && !ModifierDown(VK_SHIFT)) {
+        static_cast<void>(sceneContext.FrameAllMaterialGraphNodes(sceneContext.MaterialGraphCanvasWidth(), sceneContext.MaterialGraphCanvasHeight()));
+        InvalidateRect(messageWindow, nullptr, FALSE);
+        if (messageWindow != mainWindow) {
+            InvalidateRect(mainWindow, nullptr, FALSE);
+        }
+        return true;
+    }
+
     if (key == 'F' && !ModifierDown(VK_CONTROL) && !ModifierDown(VK_MENU) && !ModifierDown(VK_SHIFT)) {
         static_cast<void>(sceneContext.FrameSelectedMaterialGraphNodes());
         InvalidateRect(messageWindow, nullptr, FALSE);
@@ -552,6 +567,11 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         SetBkColor(controlDc, RGB(20, 22, 24));
         static HBRUSH consoleDetailBrush = CreateSolidBrush(RGB(20, 22, 24));
         return reinterpret_cast<LRESULT>(consoleDetailBrush);
+    }
+    case WM_PRINTCLIENT: {
+        // The same painters, drawing the whole window into the device context the message carries.
+        const GdiBackBufferRenderer::PrintScope print(messageWindow, reinterpret_cast<HDC>(wparam));
+        return Handle(messageWindow, WM_PAINT, 0, 0);
     }
     case WM_PAINT:
         EditorPaintDispatcher{
@@ -669,6 +689,9 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         return 0;
     }
     case WM_KILLFOCUS:
+        if (EditorProjectSettingsPointerController::CommitNumberEdit(context_.sceneContext)) {
+            InvalidateRect(messageWindow, nullptr, FALSE);
+        }
         if (context_.sceneContext.IsBuildGameTextEditing()) {
             static_cast<void>(context_.sceneContext.CommitBuildGameTextEdit());
             InvalidateRect(messageWindow, nullptr, FALSE);
@@ -676,6 +699,16 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         break;
     case WM_CHAR:
         if (EditorAgentPanelController{ context_.sceneContext }.HandleChar(wparam)) {
+            InvalidateRect(messageWindow, nullptr, FALSE);
+            if (messageWindow != context_.mainWindow) InvalidateRect(context_.mainWindow, nullptr, FALSE);
+            return 0;
+        }
+        if (EditorProjectSettingsState& settings = context_.sceneContext.ProjectSettings(); settings.IsNumberEditing()) {
+            // A number takes digits, a minus and a decimal point or comma; anything else typed is ignored. A tag or
+            // navigation area name takes any character.
+            constexpr std::string_view kNumberCharacters = "0123456789.,-";
+            const bool accepted = settings.IsTextEditing() || wparam < 0x20U || (wparam < 0x80U && kNumberCharacters.find(static_cast<char>(wparam)) != std::string_view::npos);
+            static_cast<void>(accepted && HandleSearchFieldChar(settings.NumberEdit(), wparam, [] {}));
             InvalidateRect(messageWindow, nullptr, FALSE);
             if (messageWindow != context_.mainWindow) InvalidateRect(context_.mainWindow, nullptr, FALSE);
             return 0;
@@ -722,6 +755,12 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         }
         break;
     case WM_KEYDOWN:
+        if (EditorCurveEditorPointerHandler{ context_ }.HandleKey(messageWindow, wparam)) return 0;
+        if (wparam == VK_ESCAPE && context_.dockController.CancelDragAndRestore()) {
+            context_.sceneViewport.RequestPresent();
+            InvalidateRect(context_.mainWindow, nullptr, FALSE);
+            return 0;
+        }
         if (wparam == '1' && ModifierDown(VK_CONTROL) && !ModifierDown(VK_MENU) &&
             !ModifierDown(VK_SHIFT)) {
             if (context_.dockModel.Commands().ActivatePanelKind(DockPanelKind::Scene, DockArea::Center)) {
@@ -731,14 +770,11 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
             return 0;
         }
         if (wparam == 'K' && ModifierDown(VK_CONTROL) && !ModifierDown(VK_MENU) && !ModifierDown(VK_SHIFT)) {
-            // From anywhere: the request box gets the keyboard - the docked Agent panel's when it is
-            // on screen, otherwise the bar over the Scene View; with neither, the panel comes forward.
+            // From anywhere: the Agent panel comes forward and its request box gets the keyboard.
             const bool docked = EditorPanelContentResolver::Resolve(DockPanelKind::Agent, context_.mainWindow, context_.mainWindow,
                 context_.dockModel, context_.floatingWindows, context_.metrics).has_value();
-            const bool sceneShown = EditorPanelContentResolver::Resolve(DockPanelKind::Scene, context_.mainWindow, context_.mainWindow,
-                context_.dockModel, context_.floatingWindows, context_.metrics).has_value();
-            if (!docked && !sceneShown) {
-                static_cast<void>(context_.dockModel.Commands().ActivatePanelKind(DockPanelKind::Agent, DockArea::Bottom));
+            if (!docked) {
+                static_cast<void>(context_.dockModel.Commands().ActivatePanelKind(DockPanelKind::Agent, DockArea::Right));
             }
             context_.sceneContext.AgentPanel().Prepare();
             context_.sceneContext.AgentPanel().FocusInput(true);
@@ -774,16 +810,31 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         if (wparam == 'P' && ModifierDown(VK_CONTROL) && !ModifierDown(VK_MENU) &&
             !ModifierDown(VK_SHIFT) && !context_.sceneContext.IsAnyInlineTextEditActive()) {
             if (context_.playMode.Mode() == EditorPlayMode::Stopped) {
-                if (context_.sceneContext.BeginPlayModeSceneSession()) {
-                    context_.playMode.Play();
-                }
+                static_cast<void>(EditorPlayCommands::Start(context_.mainWindow, context_.dockModel, context_.sceneContext, context_.playMode));
             } else {
                 context_.playMode.Stop();
                 static_cast<void>(context_.sceneContext.RestorePlayModeSceneSession());
+                EditorPlayCommands::RestoreWorkspace(context_.dockModel);
             }
             context_.sceneViewport.RequestPresent();
             InvalidateRect(context_.mainWindow, nullptr, FALSE);
             return 0;
+        }
+        if (EditorProjectSettingsState& settings = context_.sceneContext.ProjectSettings(); settings.IsNumberEditing()) {
+            // Enter applies the typed number (or adds the typed tag) and Esc drops it; the other keys edit the text like a search box.
+            bool handled = true;
+            if (wparam == VK_RETURN) {
+                static_cast<void>(EditorProjectSettingsPointerController::CommitNumberEdit(context_.sceneContext));
+            } else if (wparam == VK_ESCAPE) {
+                settings.EndNumberEdit();
+            } else {
+                handled = HandleSearchFieldKeyDown(settings.NumberEdit(), messageWindow, wparam, [] {});
+            }
+            if (handled) {
+                InvalidateRect(messageWindow, nullptr, FALSE);
+                if (messageWindow != context_.mainWindow) InvalidateRect(context_.mainWindow, nullptr, FALSE);
+                return 0;
+            }
         }
         if (EditorBuildGameInputHandler{ context_.sceneContext }.HandleKeyDown(messageWindow, wparam)) {
             InvalidateRect(messageWindow, nullptr, FALSE);
@@ -904,7 +955,7 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         }
         break;
     case WM_NCCALCSIZE:
-        if (context_.floatingWindows.Queries().IsFloatingWindow(messageWindow)) {
+        if (messageWindow == context_.mainWindow || context_.floatingWindows.Queries().IsFloatingWindow(messageWindow)) {
             return EditorFloatingWindowFrame::HandleNonClientCalcSize(messageWindow, wparam, lparam);
         }
         break;
@@ -920,7 +971,7 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
     case WM_MBUTTONUP:
     case WM_SETCURSOR:
         if (message == WM_NCHITTEST) {
-            return EditorWindowHitTestHandler::Handle(messageWindow, lparam, context_.floatingWindows);
+            return EditorWindowHitTestHandler::Handle(messageWindow, lparam, context_.floatingWindows, context_.mainWindow, EditorMetrics{}.menuHeight);
         }
         if (context_.sceneContext.Inspector().IsListeningForKey() &&
             (message == WM_LBUTTONDOWN || message == WM_RBUTTONDOWN || message == WM_MBUTTONDOWN)) {
@@ -935,8 +986,14 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         return EditorWindowPointerMessageDispatcher{ context_ }.Dispatch(messageWindow, message, wparam, lparam);
     case WM_CONTEXTMENU:
         return 0;
-    case WM_CLOSE:
-        return EditorWindowLifecycleHandler{ context_.mainWindow, context_.running, context_.dockModel, context_.floatingWindows, context_.sceneContext }.HandleClose(messageWindow);
+    case WM_CLOSE: {
+        const LRESULT closed = EditorWindowLifecycleHandler{ context_.mainWindow, context_.running, context_.dockModel, context_.floatingWindows, context_.sceneContext }.HandleClose(messageWindow);
+        if (context_.running) {
+            // Still open: a question about unsaved work was cancelled, so no project switch either.
+            EditorProjectCommands::AbandonPendingSwitch();
+        }
+        return closed;
+    }
     case WM_DESTROY:
         return EditorWindowLifecycleHandler{ context_.mainWindow, context_.running, context_.dockModel, context_.floatingWindows, context_.sceneContext }.HandleDestroy(messageWindow);
     default:

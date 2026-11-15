@@ -6,9 +6,8 @@
 namespace kb::scene {
 
 SceneBehaviourComponentStore::SceneBehaviourComponentStore(kb::ecs::World& world, std::uint64_t componentId) noexcept
-    : world_(&world) {
-    static_cast<void>(componentId);
-}
+    : world_(&world)
+    , componentId_(componentId) {}
 
 bool SceneBehaviourComponentStore::Has(SceneEntity entity) const noexcept {
     return SceneComponentStorageAccess::Has<BehaviourComponent>(world_, entity);
@@ -23,15 +22,28 @@ BehaviourComponent* SceneBehaviourComponentStore::TryGet(SceneEntity entity) noe
 }
 
 void SceneBehaviourComponentStore::Set(SceneEntity entity, const BehaviourComponent& behaviour) {
+    ++revision_;
     SceneComponentStorageAccess::Set<BehaviourComponent>(world_, entity, behaviour);
 }
 
 void SceneBehaviourComponentStore::Remove(SceneEntity entity) noexcept {
+    ++revision_;
     SceneComponentStorageAccess::Remove<BehaviourComponent>(world_, entity);
 }
 
 void SceneBehaviourComponentStore::MarkModified(SceneEntity entity) noexcept {
+    ++revision_;
     SceneComponentStorageAccess::MarkModified<BehaviourComponent>(world_, entity);
+}
+
+void SceneBehaviourComponentStore::NoteEntityDestroyed(SceneEntity entity) noexcept {
+    if (Has(entity)) {
+        ++revision_;
+    }
+}
+
+std::uint64_t SceneBehaviourComponentStore::ChangeStamp() const noexcept {
+    return revision_ + world_->NativeStorage().ComponentChangeStamp(componentId_);
 }
 
 } // namespace kb::scene

@@ -1534,9 +1534,10 @@ using StandaloneProjectRuntimeConfig = kb::game::GameProjectRuntime;
         audioMixerControlsValid &&
         audioOcclusionValid &&
         audioMarkerValid;
+    // With no rumble controller in the slot the backend says so; with one it must offer both motors.
     const bool hapticsRuntimeValid =
-        sharedBool("runtimeHapticsSupported") &&
-        sharedBool("runtimeHapticsDualMotor") &&
+        (sharedBool("runtimeHapticsSupported") ? sharedBool("runtimeHapticsDualMotor")
+                                               : !sharedBool("runtimeHapticsConnected")) &&
         static_cast<std::uint32_t>(
             sharedInt("runtimeHapticsMaxGamepads")) ==
             kb::input::InputDeviceState::kMaxGamepads &&

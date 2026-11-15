@@ -12,6 +12,7 @@
 #include "scene/EditorPlayCameraResolver.hpp"
 
 #include "app/EditorCrashBreadcrumbs.hpp"
+#include "app/EditorStartupProgress.hpp"
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/assets/CollisionMeshAsset.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -41,6 +42,7 @@
 #include "engine/scene/HistoryRibbonComponent.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "engine/scene/SceneTagCatalog.hpp"
+#include "engine/scene/SceneNavigation.hpp"
 #include "engine/scene/LensEchoComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
@@ -85,6 +87,7 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneInputActivation.hpp"
+#include "engine/scene/SceneLightProbeAccess.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetKind.hpp"
@@ -346,6 +349,22 @@ void LogAssetImportReport(EditorConsoleState& console, const kb::assets::AssetIm
     }
 }
 
+// The two longest steps of the member initialisation below tell the startup screen where they are.
+[[nodiscard]] EditorProjectBootstrapResult BootstrapProjectReportingProgress() {
+    EditorStartupProgress::Begin(EditorStartupStage::Project);
+    return EditorProjectBootstrap::BootstrapDefaultProject();
+}
+
+[[nodiscard]] std::unique_ptr<kb::scene::Scene> CreateDocumentSceneReportingProgress(
+    const kb::project::ProjectDescriptor& project) {
+    EditorStartupProgress::Begin(EditorStartupStage::Modules);
+    EditorStartupProgress::Note(EditorStartupProgress::PluginsText(static_cast<std::size_t>(std::count_if(
+        project.plugins.begin(), project.plugins.end(), [](const kb::project::ProjectPluginReference& plugin) {
+            return plugin.enabled;
+        }))));
+    return std::make_unique<kb::scene::Scene>(project);
+}
+
 void ApplySavingPreferences(
     const EditorSavingPreferences& preferences,
     EditorAutosaveState& autosave) noexcept {
@@ -357,13 +376,13 @@ void ApplySavingPreferences(
 EditorSceneContext::EditorSceneContext()
     // Load the project descriptor first, then construct the scene from it so the
     // scene's engine module host honours the project's enabled/disabled module set.
-    : projectBootstrap_(EditorProjectBootstrap::BootstrapDefaultProject())
+    : projectBootstrap_(BootstrapProjectReportingProgress())
     , project_(projectBootstrap_.succeeded ? projectBootstrap_.descriptor : kb::project::ProjectDescriptor{})
     , projectConfig_(projectBootstrap_.settings)
     // A project that failed to load has no file to write back to: saving the empty fallback
     // descriptor over it would erase its plugins and settings.
     , projectFile_(projectBootstrap_.succeeded ? projectBootstrap_.projectFile : std::filesystem::path{})
-    , documentScene_(std::make_unique<kb::scene::Scene>(project_))
+    , documentScene_(CreateDocumentSceneReportingProgress(project_))
     , scene_(documentScene_.get())
     , inspectorMaterialPreviewScene_(std::make_unique<EditorMaterialPreviewScene>())
     , materialPreviewScene_(std::make_unique<EditorMaterialPreviewScene>())
@@ -399,6 +418,7 @@ EditorSceneContext::EditorSceneContext()
         console_.Error("Project", projectBootstrap_.error.empty() ? "Project descriptor bootstrap failed." : projectBootstrap_.error);
     }
 
+    EditorStartupProgress::Begin(EditorStartupStage::Assets);
     if (scene_->Assets().MountProject(EditorProjectPaths::ProjectRoot())) {
         console_.Info("Project", "Mounted project assets.");
     } else {
@@ -415,7 +435,9 @@ EditorSceneContext::EditorSceneContext()
     const std::size_t discovered = scene_->Assets().Discover();
     console_.Info("Assets", "Asset discovery completed. Found " + std::to_string(discovered) + " asset(s).");
     static_cast<void>(ActivateProjectPhysicsLayers(*scene_));
-    // Like Unity: the scene that was open when the editor was last closed, else the startup scene.
+    scene_->Runtime().ApplyProjectSimulation(projectConfig_.simulation);
+    ApplyProjectAudioAndTags(*scene_);
+    // The scene that was open when the editor was last closed, else the startup scene.
     std::error_code error;
     currentScenePath_ = ResolveDefaultScenePath();
     std::string_view openedAs = "startup scene";
@@ -427,6 +449,11 @@ EditorSceneContext::EditorSceneContext()
             openedAs = "last scene";
         }
     }
+    EditorStartupProgress::Begin(EditorStartupStage::Scene);
+    {
+        const std::u8string sceneName = currentScenePath_.stem().u8string();
+        EditorStartupProgress::Note(std::string{ sceneName.begin(), sceneName.end() });
+    }
     kb::scene::SceneDocumentLoadResult loaded;
     const bool sceneFileExists = !currentScenePath_.empty() && std::filesystem::is_regular_file(currentScenePath_, error) && !error;
     if (sceneFileExists) {
@@ -434,6 +461,8 @@ EditorSceneContext::EditorSceneContext()
     }
     if (loaded.succeeded && kb::scene::SceneDocumentService::LoadIntoScene(*scene_, loaded.document)) {
         EditorSceneAudioSettingsService::PrepareDocument(*scene_);
+        kb::scene::SceneLightProbeAccess::AssignBakedGrid(*scene_, currentScenePath_.stem().generic_string());
+        AdoptSceneTagsIntoProject();
         SelectFirstSceneEntityOrClear();
         console_.Info("Project", "Opened the " + std::string{ openedAs } + ": " + currentScenePath_.generic_string());
         UpgradePrefabLinksOnSave(loaded.document);
@@ -485,6 +514,7 @@ EditorSceneContext::~EditorSceneContext() {
     // member order would otherwise destroy console_ before scene_ and leave the
     // registered Log callback pointing at released storage.
     prefabEdit_ = {};
+    editScriptHost_.reset();
     scene_ = nullptr;
     documentScene_.reset();
     scriptModule_ = nullptr;
@@ -518,6 +548,9 @@ void EditorSceneContext::EnsureScriptRuntime() {
     // Play mode persists script saves and settings beside the project, in the
     // same per-game layout a packaged game uses under the player's profile.
     scriptOptions.runtimeOptions.userStorageRoot = EditorProjectPaths::ProjectRoot() / "Saves";
+    // A C++ script saved while the game plays is built in the background and the running module stays in
+    // use until the new one is ready; one that was never loaded is waited for, since its first calls need it.
+    scriptOptions.runtimeOptions.nativePrepareSettings.buildInBackground = true;
     scriptOptions.configureHost = [console](kb::script::ScriptRuntimeHost& host) {
         // Log("...") in any script prints to the editor Console. console_ outlives
         // scriptModuleHost_ (declared last, destroyed first), so capturing it is safe.
@@ -669,6 +702,9 @@ void EditorSceneContext::ResetScriptRuntimeStateForPlayMode() {
     }
     kb::script::ScriptRuntimeHost& host = *scriptModule_->Host();
     host.AssetPreparer().InvalidateNativeSourceObservations();
+    // A host kept from an earlier Play still has its old modules loaded: Play starts on the current sources, so
+    // the first pass waits for the build; later saves are built in the background (TickPlayModeSceneSession).
+    host.AssetPreparer().SetNativeBuildMode(false, false);
     host.LuaRuntime().Clear();
     host.VisualGraphInstances().Clear();
     host.SharedState().Clear();
@@ -680,6 +716,148 @@ void EditorSceneContext::SurfaceScriptDiagnostics() {
     }
     for (const std::string& diagnostic : scriptModule_->Host()->DrainSceneSystemDiagnostics()) {
         console_.Error("Scripts", diagnostic);
+    }
+    for (std::string& warning : scriptModule_->Host()->DrainSceneSystemWarnings()) {
+        WarnScriptOnce(std::move(warning));
+    }
+    AnnounceNativeScriptBuilds(*scriptModule_->Host());
+}
+
+void EditorSceneContext::WarnScriptOnce(std::string line) {
+    if (reportedScriptWarnings_.insert(line).second) {
+        console_.Warning("Scripts", std::move(line));
+    }
+}
+
+std::vector<EditorSceneContext::ScriptBuildStatus> EditorSceneContext::ScriptBuildsInProgress() const {
+    std::vector<ScriptBuildStatus> builds;
+    // While the game plays its runtime builds; otherwise the edit-mode runtime does (the play runtime outlives Play).
+    const kb::script::ScriptRuntimeHost* host = HasPlayModeSceneSession() && scriptModule_ != nullptr && scriptModule_->Host() != nullptr
+        ? scriptModule_->Host() : editScriptHost_.get();
+    if (host == nullptr) {
+        return builds;
+    }
+    for (const kb::script::ScriptRuntimeNativeBuildStatus& build : host->AssetPreparer().NativeBuildsInProgress()) {
+        builds.push_back(ScriptBuildStatus{
+            .assetId = build.assetId,
+            .name = build.name,
+            .elapsedSeconds = build.progress.elapsedSeconds,
+            .outputLines = build.progress.outputLines,
+            .lastLine = build.progress.lastLine,
+        });
+    }
+    return builds;
+}
+
+std::optional<EditorSceneContext::ScriptBuildStatus> EditorSceneContext::EntityScriptBuild(kb::scene::SceneEntity entity) const {
+    const kb::scene::BehaviourComponent* behaviour = scene_->Components().Behaviours().TryGet(entity);
+    if (behaviour == nullptr || behaviour->backend != kb::scene::BehaviourBackend::Native) {
+        return std::nullopt;
+    }
+    for (ScriptBuildStatus& build : ScriptBuildsInProgress()) {
+        if (build.assetId.value == behaviour->behaviourAssetId) {
+            return std::move(build);
+        }
+    }
+    return std::nullopt;
+}
+
+bool EditorSceneContext::CancelEntityScriptBuild(kb::scene::SceneEntity entity) {
+    const std::optional<ScriptBuildStatus> build = EntityScriptBuild(entity);
+    kb::script::ScriptRuntimeHost* host = HasPlayModeSceneSession() && scriptModule_ != nullptr && scriptModule_->Host() != nullptr
+        ? scriptModule_->Host() : editScriptHost_.get();
+    if (!build.has_value() || host == nullptr || !host->AssetPreparer().CancelNativeBuild(build->assetId)) {
+        return false;
+    }
+    announcedScriptBuilds_.erase(build->assetId.value);
+    console_.Warning("Scripts", EditorLocalization::Format("scripts.buildCancelled",
+        "{name}: the build was cancelled. The script runs as it was built before.", { { "name", build->name } }));
+    return true;
+}
+
+void EditorSceneContext::AnnounceNativeScriptBuilds(kb::script::ScriptRuntimeHost& host) {
+    std::unordered_map<std::uint64_t, std::string> running;
+    for (const kb::script::ScriptRuntimeNativeBuildStatus& build : host.AssetPreparer().NativeBuildsInProgress()) {
+        running.emplace(build.assetId.value, build.name);
+        if (!announcedScriptBuilds_.contains(build.assetId.value)) {
+            console_.Info("Scripts", EditorLocalization::Format("scripts.buildStarted",
+                "{name}: building in the background. The game keeps running the previous build until this one is ready.", { { "name", build.name } }));
+            reportedEditScriptDiagnostics_.clear();
+        }
+    }
+    for (const auto& [id, name] : announcedScriptBuilds_) {
+        if (!running.contains(id)) {
+            console_.Info("Scripts", EditorLocalization::Format("scripts.buildEnded", "{name}: the background build ended.", { { "name", name } }));
+        }
+    }
+    announcedScriptBuilds_ = std::move(running);
+}
+
+void EditorSceneContext::ReleaseEditModeScripts() {
+    if (editScriptHost_ == nullptr) {
+        return;
+    }
+    // A build that is almost done is finished rather than thrown away; Play then finds it built.
+    static_cast<void>(editScriptHost_->AssetPreparer().FinishNativeBuilds());
+    DropEditModeScripts();
+}
+
+void EditorSceneContext::DropEditModeScripts() {
+    editScriptHost_.reset();
+    editScriptScene_ = nullptr;
+    announcedScriptBuilds_.clear();
+}
+
+namespace {
+
+void NoteNativeBehaviour(kb::scene::SceneEntity, const kb::scene::BehaviourComponent& behaviour, void* found) {
+    if (behaviour.enabled && behaviour.backend == kb::scene::BehaviourBackend::Native) {
+        *static_cast<bool*>(found) = true;
+    }
+}
+
+} // namespace
+
+void EditorSceneContext::TickEditModeScripts() {
+    if (scene_ == nullptr || HasPlayModeSceneSession()) {
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now < editScriptNextPoll_) {
+        return;
+    }
+    if (editScriptHost_ != nullptr && editScriptScene_ != scene_) {
+        // Another scene is open: the runtime that belonged to the old one goes with it.
+        DropEditModeScripts();
+    }
+    const bool building = editScriptHost_ != nullptr && !editScriptHost_->AssetPreparer().NativeBuildsInProgress().empty();
+    editScriptNextPoll_ = now + std::chrono::milliseconds{ building ? 100 : 250 };
+    if (editScriptHost_ == nullptr) {
+        bool hasNative = false;
+        scene_->Components().Behaviours().ForEach(&NoteNativeBehaviour, &hasNative);
+        if (!hasNative) {
+            return;
+        }
+        kb::script::ScriptRuntimeHostOptions options;
+        options.nativePrepareSettings.buildInBackground = true;
+        options.nativePrepareSettings.backgroundFirstBuild = true;
+        editScriptHost_ = std::make_unique<kb::script::ScriptRuntimeHost>(*scene_, std::move(options));
+        editScriptScene_ = scene_;
+    }
+    const kb::script::ScriptRuntimeAssetPrepareResult prepared = editScriptHost_->AssetPreparer().PrepareNativeSceneBehaviours(*scene_);
+    AnnounceNativeScriptBuilds(*editScriptHost_);
+    for (const kb::script::ScriptRuntimeAssetPrepareDiagnostic& diagnostic : prepared.diagnostics) {
+        const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(diagnostic.assetId);
+        const std::string name = metadata == nullptr ? std::string{} : (metadata->name.empty() ? metadata->virtualPath.filename().string() : metadata->name);
+        std::string line = name.empty() ? diagnostic.message : name + ": " + diagnostic.message;
+        if (reportedEditScriptDiagnostics_.insert(line).second) {
+            console_.Error("Scripts", std::move(line));
+        }
+    }
+    for (const kb::script::ScriptRuntimeAssetPrepareDiagnostic& warning : prepared.warnings) {
+        // Named by its path in the project, as the Play runtime names it, so one warning is one line.
+        const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(warning.assetId);
+        WarnScriptOnce((metadata == nullptr ? std::string{} : metadata->virtualPath.generic_string() + ": ") + warning.message);
     }
 }
 
@@ -706,6 +884,9 @@ bool EditorSceneContext::TickPlayModeSceneSession(float deltaSeconds) {
         pendingRenderUpdates.begin(), pendingRenderUpdates.end() };
     static_cast<void>(scene_->UI().SetViewport(uiAuthoringViewportSize_.x, uiAuthoringViewportSize_.y));
     static_cast<void>(runtime.Update(deltaSeconds));
+    if (scriptModule_ != nullptr && scriptModule_->Host() != nullptr) {
+        scriptModule_->Host()->AssetPreparer().SetNativeBuildMode(true, false);
+    }
     // Ready may create the camera on the first tick of an already attached
     // script module. A destroyed or disabled camera also needs a new selection.
     if (!PlayCameraEntity().IsValid()) {
@@ -1966,6 +2147,7 @@ bool EditorSceneContext::IsAnyInlineTextEditActive() const noexcept {
         || IsMaterialEditorFindFocused()
         || console_.Filter().IsFocused()
         || projectSettings_.Search().IsFocused()
+        || projectSettings_.IsNumberEditing()
         || agentPanel_.InputFocused();
 }
 
@@ -2206,7 +2388,24 @@ EditorProtectedScenes EditorSceneContext::ProtectedScenes() const {
 }
 
 bool EditorSceneContext::CommitAssetTextEdit() {
+    // A scene renamed here, or the scenes of a renamed folder, keep their place in the package list under the new name.
+    std::filesystem::path renamedFrom;
+    std::filesystem::path renamedTo;
+    if (assetBrowser_.TextEditMode() == EditorAssetTextEditMode::RenameAsset) {
+        const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(assetBrowser_.TextEditTargetAsset());
+        if (metadata != nullptr && metadata->virtualPath.extension() == ".21kbscene") {
+            renamedFrom = metadata->virtualPath;
+            renamedTo = metadata->virtualPath.parent_path() /
+                (std::string{ assetBrowser_.TextEditValue() } + metadata->virtualPath.extension().string());
+        }
+    } else if (assetBrowser_.TextEditMode() == EditorAssetTextEditMode::RenameFolder) {
+        renamedFrom = assetBrowser_.TextEditTargetFolder();
+        renamedTo = renamedFrom.parent_path() / std::string{ assetBrowser_.TextEditValue() };
+    }
     const bool committed = EditorSceneAssetBrowserCommands::CommitTextEdit(*scene_, assetBrowser_, ProtectedScenes());
+    if (committed && !renamedFrom.empty()) {
+        RetargetBuildScenes(renamedFrom, renamedTo);
+    }
     if (committed) {
         console_.Info("Assets", "Asset browser text edit committed.");
     } else {
@@ -2219,9 +2418,53 @@ void EditorSceneContext::CancelAssetTextEdit() noexcept {
     assetBrowser_.CancelTextEdit();
 }
 
+std::vector<std::string> EditorSceneContext::ListedScenesOnDisk() const {
+    std::vector<std::string> present;
+    std::error_code error;
+    for (const std::string& scene : projectConfig_.additionalScenes) {
+        const std::optional<std::filesystem::path> file = scene_->Assets().Manager().Mounts().Resolve(std::filesystem::path{ scene });
+        if (file.has_value() && std::filesystem::is_regular_file(*file, error)) {
+            present.push_back(scene);
+        }
+    }
+    return present;
+}
+
+void EditorSceneContext::DropDeletedBuildScenes(const std::vector<std::string>& before) {
+    const std::vector<std::string> after = ListedScenesOnDisk();
+    const std::size_t listed = projectConfig_.additionalScenes.size();
+    for (const std::string& scene : before) {
+        if (std::ranges::find(after, scene) == after.end()) {
+            std::erase(projectConfig_.additionalScenes, scene);
+        }
+    }
+    if (projectConfig_.additionalScenes.size() != listed) {
+        static_cast<void>(SaveProjectConfiguration());
+    }
+}
+
+void EditorSceneContext::RetargetBuildScenes(const std::filesystem::path& from, const std::filesystem::path& to) {
+    const std::string source = from.generic_string();
+    if (source.empty()) {
+        return;
+    }
+    bool changed = false;
+    for (std::string& scene : projectConfig_.additionalScenes) {
+        if (scene == source || (scene.starts_with(source) && scene.size() > source.size() && scene[source.size()] == '/')) {
+            scene = to.generic_string() + scene.substr(source.size());
+            changed = true;
+        }
+    }
+    if (changed) {
+        static_cast<void>(SaveProjectConfiguration());
+    }
+}
+
 bool EditorSceneContext::DeleteSelectedAssetBrowserItem() {
+    const std::vector<std::string> scenesBefore = ListedScenesOnDisk();
     const bool deleted = EditorSceneAssetBrowserCommands::DeleteSelected(*scene_, assetBrowser_, ProtectedScenes());
     if (deleted) {
+        DropDeletedBuildScenes(scenesBefore);
         console_.Info("Assets", "Moved the selection to the Recycle Bin.");
     } else {
         console_.Warning("Assets", AssetErrorOr(scene_->Assets().Manager(), "Nothing was deleted."));
@@ -2393,8 +2636,10 @@ bool EditorSceneContext::DeleteAssetBrowserItem(kb::assets::AssetId id) {
         }
     }
 
+    const std::vector<std::string> scenesBefore = ListedScenesOnDisk();
     const bool deleted = EditorSceneAssetBrowserCommands::DeleteAsset(*scene_, assetBrowser_, id, ProtectedScenes());
     if (deleted) {
+        DropDeletedBuildScenes(scenesBefore);
         console_.Info("Assets", "Asset deleted.");
     } else {
         console_.Error("Assets", AssetErrorOr(scene_->Assets().Manager(), "Asset delete failed."));
@@ -2403,8 +2648,10 @@ bool EditorSceneContext::DeleteAssetBrowserItem(kb::assets::AssetId id) {
 }
 
 bool EditorSceneContext::DeleteAssetBrowserFolder(const std::filesystem::path& virtualFolder) {
+    const std::vector<std::string> scenesBefore = ListedScenesOnDisk();
     const bool deleted = EditorSceneAssetBrowserCommands::DeleteFolder(*scene_, assetBrowser_, virtualFolder, ProtectedScenes());
     if (deleted) {
+        DropDeletedBuildScenes(scenesBefore);
         console_.Info("Assets", "Folder deleted: " + virtualFolder.generic_string());
     } else {
         console_.Error("Assets", AssetErrorOr(scene_->Assets().Manager(), "Folder delete failed."));
@@ -2413,8 +2660,11 @@ bool EditorSceneContext::DeleteAssetBrowserFolder(const std::filesystem::path& v
 }
 
 bool EditorSceneContext::MoveAssetToFolder(kb::assets::AssetId id, const std::filesystem::path& destinationVirtualFolder) {
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(id);
+    const std::filesystem::path movedFrom = metadata != nullptr ? metadata->virtualPath : std::filesystem::path{};
     const bool moved = EditorSceneAssetBrowserCommands::MoveAssetToFolder(*scene_, assetBrowser_, id, destinationVirtualFolder, ProtectedScenes());
     if (moved) {
+        RetargetBuildScenes(movedFrom, destinationVirtualFolder / movedFrom.filename());
         console_.Info("Assets", "Asset moved to " + destinationVirtualFolder.generic_string());
     } else {
         console_.Error("Assets", AssetErrorOr(scene_->Assets().Manager(), "Asset move failed."));
@@ -2425,6 +2675,7 @@ bool EditorSceneContext::MoveAssetToFolder(kb::assets::AssetId id, const std::fi
 bool EditorSceneContext::MoveAssetFolderToFolder(const std::filesystem::path& sourceVirtualFolder, const std::filesystem::path& destinationVirtualFolder) {
     const bool moved = EditorSceneAssetBrowserCommands::MoveFolderToFolder(*scene_, assetBrowser_, sourceVirtualFolder, destinationVirtualFolder, ProtectedScenes());
     if (moved) {
+        RetargetBuildScenes(sourceVirtualFolder, destinationVirtualFolder / sourceVirtualFolder.filename());
         console_.Info("Assets", "Folder moved to " + destinationVirtualFolder.generic_string());
     } else {
         console_.Error("Assets", AssetErrorOr(scene_->Assets().Manager(), "Folder move failed."));
@@ -3224,6 +3475,106 @@ bool EditorSceneContext::SetProjectQualityLevel(int row, kb::project::ProjectQua
         return false;
     }
     *target = level;
+    const bool saved = SaveProjectConfiguration();
+    if (saved) {
+        MarkSceneRenderDirty();
+    }
+    return saved;
+}
+
+bool EditorSceneContext::SetProjectDisplay(const kb::project::ProjectDisplaySettings& display) {
+    if (projectConfig_.display == display) {
+        return false;
+    }
+    projectConfig_.display = display;
+    return SaveProjectConfiguration();
+}
+
+bool EditorSceneContext::SetProjectBuildScenes(std::vector<std::string> scenes) {
+    kb::project::ProjectSettings next = projectConfig_;
+    kb::project::SetProjectBuildScenes(next, std::move(scenes));
+    if (next.defaultMap == projectConfig_.defaultMap && next.additionalScenes == projectConfig_.additionalScenes) {
+        return false;
+    }
+    projectConfig_ = std::move(next);
+    return SaveProjectConfiguration();
+}
+
+bool EditorSceneContext::SetProjectMasterVolume(float volume) {
+    if (!kb::audio::IsAudioMasterVolumeValid(volume) || projectConfig_.masterVolume == volume) {
+        return false;
+    }
+    projectConfig_.masterVolume = volume;
+    static_cast<void>(kb::audio::AudioPlayback::SetMasterVolume(*scene_, volume));
+    return SaveProjectConfiguration();
+}
+
+bool EditorSceneContext::SetProjectNavigationAreas(std::vector<kb::scene::NavAreaDefinition> areas) {
+    if (!kb::scene::AreNavAreaDefinitionsValid(areas) || projectConfig_.navigationAreas == areas) {
+        return false;
+    }
+    projectConfig_.navigationAreas = std::move(areas);
+    kb::scene::SceneNavigation{ *scene_ }.SetAreaDefinitions(projectConfig_.navigationAreas);
+    RefreshNavigationView();
+    return SaveProjectConfiguration();
+}
+
+bool EditorSceneContext::SetProjectNavigationCrowd(float nearDistance, float midDistance, std::uint32_t farPathInterval) {
+    const auto distance = [](float value) { return std::isfinite(value) && value >= 0.0F && value <= kb::project::kProjectNavigationDistanceMax; };
+    if (!distance(nearDistance) || !distance(midDistance) || farPathInterval < 1U || farPathInterval > kb::project::kProjectNavigationFarPathIntervalMax ||
+        (projectConfig_.navigationNearDistance == nearDistance && projectConfig_.navigationMidDistance == midDistance &&
+            projectConfig_.navigationFarPathInterval == farPathInterval)) {
+        return false;
+    }
+    projectConfig_.navigationNearDistance = nearDistance;
+    projectConfig_.navigationMidDistance = midDistance;
+    projectConfig_.navigationFarPathInterval = farPathInterval;
+    kb::scene::SceneNavigation{ *scene_ }.ConfigureCrowd(projectConfig_.NavigationCrowd());
+    return SaveProjectConfiguration();
+}
+
+bool EditorSceneContext::SetProjectMicrophone(bool enabled) {
+    if (projectConfig_.microphone == enabled) {
+        return false;
+    }
+    projectConfig_.microphone = enabled;
+    return SaveProjectConfiguration();
+}
+
+bool EditorSceneContext::AddProjectTag(std::string_view name) {
+    if (!kb::project::AddProjectTag(projectConfig_, name)) {
+        return false;
+    }
+    static_cast<void>(scene_->Tags().SetProjectDefinitions(projectConfig_.tags));
+    return SaveProjectConfiguration();
+}
+
+void EditorSceneContext::ApplyProjectAudioAndTags(kb::scene::Scene& scene) {
+    static_cast<void>(kb::audio::AudioPlayback::SetMasterVolume(scene, projectConfig_.masterVolume));
+    static_cast<void>(scene.Tags().SetProjectDefinitions(projectConfig_.tags));
+    kb::scene::SceneNavigation{ scene }.SetAreaDefinitions(projectConfig_.navigationAreas);
+    kb::scene::SceneNavigation{ scene }.ConfigureCrowd(projectConfig_.NavigationCrowd());
+}
+
+void EditorSceneContext::AdoptSceneTagsIntoProject() {
+    // A tag the project no longer lists comes back only when objects of this scene still carry it.
+    static_cast<void>(scene_->Tags().UndefineUnused());
+    bool grew = false;
+    for (const std::string& tag : scene_->Tags().Names()) {
+        grew = kb::project::AddProjectTag(projectConfig_, tag) || grew;
+    }
+    if (grew) {
+        static_cast<void>(scene_->Tags().SetProjectDefinitions(projectConfig_.tags));
+        static_cast<void>(SaveProjectConfiguration());
+    }
+}
+
+bool EditorSceneContext::SetProjectSimulation(const kb::project::ProjectSimulationSettings& simulation) {
+    if (projectConfig_.simulation == simulation) {
+        return false;
+    }
+    projectConfig_.simulation = simulation;
+    scene_->Runtime().ApplyProjectSimulation(projectConfig_.simulation);
     return SaveProjectConfiguration();
 }
 
@@ -3278,6 +3629,17 @@ std::vector<std::string> EditorSceneContext::ProjectPhysicsLayersAssetOptions() 
     std::vector<std::string> options{ std::string{} };
     for (const kb::assets::AssetMetadata& metadata : scene_->Assets().Manager().Registry().All()) {
         if (metadata.type == "PhysicsLayers") {
+            options.push_back(kb::assets::NormalizeAssetPath(metadata.virtualPath));
+        }
+    }
+    std::sort(options.begin() + 1, options.end());
+    return options;
+}
+
+std::vector<std::string> EditorSceneContext::ProjectSplashImageOptions() const {
+    std::vector<std::string> options{ std::string{} };
+    for (const kb::assets::AssetMetadata& metadata : scene_->Assets().Manager().Registry().All()) {
+        if (metadata.type == "RenderTexture" || metadata.type == "Texture" || metadata.importCategory == "Texture") {
             options.push_back(kb::assets::NormalizeAssetPath(metadata.virtualPath));
         }
     }
@@ -3830,14 +4192,39 @@ bool EditorSceneContext::EntityScriptEnabled(kb::scene::SceneEntity entity) cons
     return behaviour != nullptr && behaviour->enabled;
 }
 
+namespace {
+
+// The fields a script declares for the Inspector: a Lua script's `@expose` variables or a C++ script's
+// `expose =` lines. Both are edited and stored the same way.
+struct ScriptFieldDeclarations {
+    std::vector<kb::script::ScriptApiPin> pins;
+    std::vector<kb::script::ScriptValue> defaults;
+    std::vector<kb::script::NativeFieldMetadata> metadata;
+};
+
+[[nodiscard]] ScriptFieldDeclarations DeclaredScriptFields(kb::assets::AssetManager& manager, kb::assets::AssetId id) {
+    ScriptFieldDeclarations fields;
+    if (const kb::assets::AssetHandle<kb::script::LuaScriptAsset> lua = manager.Load<kb::script::LuaScriptAsset>(id); lua.IsLoaded()) {
+        fields.pins = lua.Get()->exposedVariables;
+        fields.defaults = lua.Get()->exposedVariableDefaults;
+    } else if (const kb::assets::AssetHandle<kb::script::NativeBehaviourDescriptor> native =
+                   manager.Load<kb::script::NativeBehaviourDescriptor>(id);
+               native.IsLoaded()) {
+        fields.pins = native.Get()->exposedVariables;
+        fields.defaults = native.Get()->exposedVariableDefaults;
+        fields.metadata = native.Get()->exposedVariableMetadata;
+    }
+    return fields;
+}
+
+} // namespace
+
 std::size_t EditorSceneContext::EntityScriptExposedVariableCount(kb::scene::SceneEntity entity) const {
     const kb::scene::BehaviourComponent* behaviour = scene_->Components().Behaviours().TryGet(entity);
     if (behaviour == nullptr) {
         return 0U;
     }
-    const kb::assets::AssetHandle<kb::script::LuaScriptAsset> asset =
-        scene_->Assets().Manager().Load<kb::script::LuaScriptAsset>(kb::assets::AssetId{ behaviour->behaviourAssetId });
-    return asset.IsLoaded() ? asset.Get()->exposedVariables.size() : 0U;
+    return DeclaredScriptFields(scene_->Assets().Manager(), kb::assets::AssetId{ behaviour->behaviourAssetId }).pins.size();
 }
 
 std::vector<EditorSceneContext::EntityScriptVariable> EditorSceneContext::EntityScriptExposedVariables(kb::scene::SceneEntity entity) const {
@@ -3846,20 +4233,15 @@ std::vector<EditorSceneContext::EntityScriptVariable> EditorSceneContext::Entity
     if (behaviour == nullptr) {
         return result;
     }
-    const kb::assets::AssetHandle<kb::script::LuaScriptAsset> asset =
-        scene_->Assets().Manager().Load<kb::script::LuaScriptAsset>(kb::assets::AssetId{ behaviour->behaviourAssetId });
-    if (!asset.IsLoaded()) {
-        return result;
-    }
-    const kb::script::LuaScriptAsset& script = *asset.Get();
+    const ScriptFieldDeclarations script = DeclaredScriptFields(scene_->Assets().Manager(), kb::assets::AssetId{ behaviour->behaviourAssetId });
     const std::span<const kb::scene::BehaviourVariableOverride> overrides = scene_->Entities().BehaviourVariableOverrides(entity);
-    result.reserve(script.exposedVariables.size());
-    for (std::size_t index = 0U; index < script.exposedVariables.size(); ++index) {
-        const kb::script::ScriptApiPin& pin = script.exposedVariables[index];
+    result.reserve(script.pins.size());
+    for (std::size_t index = 0U; index < script.pins.size(); ++index) {
+        const kb::script::ScriptApiPin& pin = script.pins[index];
         // Effective value = the override delta if one is stored, else the
-        // script's declared @expose default.
-        kb::script::ScriptValue value = index < script.exposedVariableDefaults.size()
-            ? script.exposedVariableDefaults[index]
+        // script's declared default.
+        kb::script::ScriptValue value = index < script.defaults.size()
+            ? script.defaults[index]
             : kb::script::ScriptValue{};
         bool overridden = false;
         for (const kb::scene::BehaviourVariableOverride& entry : overrides) {
@@ -3869,12 +4251,22 @@ std::vector<EditorSceneContext::EntityScriptVariable> EditorSceneContext::Entity
                 break;
             }
         }
-        result.push_back(EntityScriptVariable{
+        EntityScriptVariable variable{
             .name = pin.name,
             .type = pin.type,
             .value = std::move(value),
             .overridden = overridden,
-        });
+        };
+        if (index < script.metadata.size()) {
+            const kb::script::NativeFieldMetadata& meta = script.metadata[index];
+            variable.unit = meta.unit;
+            variable.tooltip = meta.tooltip;
+            variable.hasMinimum = meta.hasMinimum;
+            variable.hasMaximum = meta.hasMaximum;
+            variable.minimum = meta.minimum;
+            variable.maximum = meta.maximum;
+        }
+        result.push_back(std::move(variable));
     }
     return result;
 }
@@ -3888,16 +4280,27 @@ bool EditorSceneContext::SetEntityScriptVariable(kb::scene::SceneEntity entity, 
     kb::script::ScriptValue defaultValue;
     bool hasDefault = false;
     if (const kb::scene::BehaviourComponent* behaviour = scene_->Components().Behaviours().TryGet(entity); behaviour != nullptr) {
-        const kb::assets::AssetHandle<kb::script::LuaScriptAsset> asset =
-            scene_->Assets().Manager().Load<kb::script::LuaScriptAsset>(kb::assets::AssetId{ behaviour->behaviourAssetId });
-        if (asset.IsLoaded()) {
-            const kb::script::LuaScriptAsset& script = *asset.Get();
-            for (std::size_t index = 0U; index < script.exposedVariables.size(); ++index) {
-                if (script.exposedVariables[index].name == name && index < script.exposedVariableDefaults.size()) {
-                    defaultValue = script.exposedVariableDefaults[index];
-                    hasDefault = true;
-                    break;
+        const ScriptFieldDeclarations script = DeclaredScriptFields(scene_->Assets().Manager(), kb::assets::AssetId{ behaviour->behaviourAssetId });
+        for (std::size_t index = 0U; index < script.pins.size(); ++index) {
+            if (script.pins[index].name == name && index < script.defaults.size()) {
+                defaultValue = script.defaults[index];
+                hasDefault = true;
+                if (index < script.metadata.size()) {
+                    // A number declared with min= or max= stays inside them, however it was typed.
+                    const kb::script::NativeFieldMetadata& meta = script.metadata[index];
+                    const auto clamped = [&meta](double number) {
+                        if (meta.hasMinimum) number = std::max(number, meta.minimum);
+                        if (meta.hasMaximum) number = std::min(number, meta.maximum);
+                        return number;
+                    };
+                    switch (value.Type()) {
+                    case kb::script::ScriptValueType::Float: value = kb::script::ScriptValue{ static_cast<float>(clamped(value.AsFloat())) }; break;
+                    case kb::script::ScriptValueType::Double: value = kb::script::ScriptValue{ clamped(value.AsDouble()) }; break;
+                    case kb::script::ScriptValueType::Int: value = kb::script::ScriptValue{ static_cast<int>(std::lround(clamped(value.AsInt()))) }; break;
+                    default: break;
+                    }
                 }
+                break;
             }
         }
     }
@@ -4662,9 +5065,14 @@ bool EditorSceneContext::SetEntityTagSelected(kb::scene::SceneEntity entity, std
         return false;
     }
     const std::string tag{ tagText };
-    return ExecuteSceneCommand(selected ? "Assign Tag" : "Remove Tag", [this, entity, tag, selected]() {
+    const bool changed = ExecuteSceneCommand(selected ? "Assign Tag" : "Remove Tag", [this, entity, tag, selected]() {
         return scene_->Tags().SetAssigned(entity, tag, selected);
     });
+    // Assigning a tag the scene did not know defines it, and the project owns the list of defined tags.
+    if (changed && selected) {
+        AdoptSceneTagsIntoProject();
+    }
+    return changed;
 }
 
 bool EditorSceneContext::RemoveTagsFromEntity(kb::scene::SceneEntity entity) {
@@ -4678,9 +5086,20 @@ bool EditorSceneContext::DeleteSceneTag(std::string_view tagText) {
     if (tag.empty()) {
         return false;
     }
-    return ExecuteSceneCommand("Delete Tag", [this, tag]() {
-        return scene_->Tags().Undefine(tag);
-    });
+    // The scene forgets the tag and clears it from its objects (Undefine); the project's list loses it too, so no
+    // scene opened afterwards defines it again. Undoing the step brings it back to the scene, not to the list.
+    bool removed = false;
+    if (scene_->Tags().Contains(tag)) {
+        removed = ExecuteSceneCommand("Delete Tag", [this, tag]() {
+            return scene_->Tags().Undefine(tag);
+        });
+    }
+    if (kb::project::RemoveProjectTag(projectConfig_, tag)) {
+        static_cast<void>(scene_->Tags().SetProjectDefinitions(projectConfig_.tags));
+        static_cast<void>(SaveProjectConfiguration());
+        removed = true;
+    }
+    return removed;
 }
 
 bool EditorSceneContext::SetAudioSourceClipAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId) {
@@ -4858,13 +5277,9 @@ bool EditorSceneContext::HasAnimatorEditorAsset() const noexcept {
 bool EditorSceneContext::AnimatorEditorDebuggingPreview() const noexcept {
     if (!animatorEditorDebugTarget_.IsValid() || !HasAnimatorEditorAsset()) return true;
     if (!scene_->Entities().IsAlive(animatorEditorDebugTarget_)) return true;
-    const std::shared_ptr<const kb::scene::AnimatorDebugSnapshot> snapshot =
-        scene_->Animators().DebugSnapshot();
-    const kb::scene::AnimatorDebugInstanceSnapshot* instance = snapshot == nullptr
-        ? nullptr
-        : snapshot->Find(animatorEditorDebugTarget_);
-    return instance == nullptr ||
-        instance->controllerAssetId != animatorEditorAssetId_.value;
+    // Asked of the runtime instance itself: the debug snapshot is only built while somebody reads it, so it
+    // can still lack the target here, and this decides which scene's snapshot is read at all.
+    return scene_->Animators().Controller(animatorEditorDebugTarget_) != animatorEditorAssetId_.value;
 }
 
 kb::scene::SceneEntity EditorSceneContext::AnimatorEditorDebugTarget() const noexcept {

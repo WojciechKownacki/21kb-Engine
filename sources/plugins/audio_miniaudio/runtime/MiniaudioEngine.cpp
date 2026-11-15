@@ -126,7 +126,15 @@ void MiniaudioEngine::Initialize(bool forceNoDevice, ma_context* context) {
         for (ma_uint32 listener = 0U; listener < ma_engine_get_listener_count(&engine_); ++listener) {
             engine_.listeners[listener].config.handedness = ma_handedness_left;
         }
+        static_cast<void>(ma_engine_set_volume(&engine_, masterVolume_));
         graphReady_.store(true, std::memory_order_release);
+    }
+}
+
+void MiniaudioEngine::SetMasterVolume(float volume) noexcept {
+    masterVolume_ = volume;
+    if (initialized_) {
+        static_cast<void>(ma_engine_set_volume(&engine_, volume));
     }
 }
 

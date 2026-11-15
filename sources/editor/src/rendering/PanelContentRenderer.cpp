@@ -7,6 +7,7 @@
 #include "engine/ecs/SystemSchedulerTrace.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorExternalCodeLauncher.hpp"
 #include "console/EditorConsoleLayout.hpp"
 #include "rendering/ConsoleDetailTextOverlay.hpp"
 #include "rendering/gdi/CutTextAudit.hpp"
@@ -31,6 +32,7 @@
 #include "rendering/EditorSettingsPanelRenderer.hpp"
 #include "rendering/ScriptEditorPanelRenderer.hpp"
 #include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
+#include "rendering/GamePanelContentRenderer.hpp"
 #include "rendering/ScenePanelContentRenderer.hpp"
 #include "rendering/StaticMeshEditorPanel.hpp"
 #include "rendering/StaticMeshEditorViewport.hpp"
@@ -238,10 +240,7 @@ void DrawConsoleToolbar(HDC dc, const EditorConsoleLayoutRects& layout, const Ed
 
 void DrawConsoleRow(HDC dc, RECT row, const EditorTheme& theme, const EditorConsoleEntry& entry, std::uint32_t repeat, int visibleIndex, bool selected) {
     const bool zebra = (visibleIndex & 1) != 0;
-    GdiDrawing::FillRectColor(dc, row, selected ? Blend(Color(theme.panel), Color(theme.accent), 16) : RowBackground(theme, entry.level, zebra));
-    if (selected) {
-        GdiDrawing::FillRectColor(dc, RECT{ row.left, row.top, row.left + 3, row.bottom }, Color(theme.accent));
-    }
+    GdiDrawing::FillRectColor(dc, row, selected ? Color(theme.accent) : RowBackground(theme, entry.level, zebra));
 
     const std::string time = FormatTimestamp(entry.timestampMs);
     DrawText(dc, RECT{ row.left + 10, row.top, row.left + 90, row.bottom }, time.c_str(), Color(theme.textDisabled), 12);
@@ -262,6 +261,10 @@ void DrawConsoleRow(HDC dc, RECT row, const EditorTheme& theme, const EditorCons
     {
         const CutTextDataScope logMessage;
         DrawText(dc, RECT{ row.left + 230, row.top, messageRight, row.bottom }, entry.message.c_str(), MessageColor(entry.level), 12);
+    }
+    if (EditorExternalCodeLauncher::HasBuildMessageLocation(entry.message)) {
+        // A compiler message that names a source line: a double click opens it in the code editor.
+        GdiDrawing::FillRectColor(dc, RECT{ row.left + 224, row.top + 4, row.left + 227, row.bottom - 4 }, Color(theme.textSecondary));
     }
 
     GdiDrawing::FillRectColor(dc, RECT{ row.left, row.bottom - 1, row.right, row.bottom }, Color(theme.borderChrome));
@@ -390,9 +393,13 @@ void PanelContentRenderer::Paint(
     case DockPanelKind::Inspector:
         InspectorPanelRenderer{}.Paint(dc, content, theme, sceneContext);
         break;
-    case DockPanelKind::MaterialEditor:
+    case DockPanelKind::MaterialEditor: {
+        // The first paint of a newly opened material is the first moment its canvas size is known.
+        const RECT canvas = MaterialEditorPanelRenderer::ResolveLayout(visibleContent).graphCanvas;
+        static_cast<void>(sceneContext.FrameNewlyOpenedMaterialGraph(canvas.right - canvas.left, canvas.bottom - canvas.top));
         MaterialEditorPanelRenderer{}.Paint(dc, visibleContent, theme, sceneContext);
         break;
+    }
     case DockPanelKind::SkeletalMeshEditor:
         SkeletalMeshEditorPanelRenderer{}.Paint(
             dc, sceneViewportHost, visibleContent, panel, theme, sceneContext,
@@ -445,6 +452,9 @@ void PanelContentRenderer::Paint(
         break;
     case DockPanelKind::Scene:
         ScenePanelContentRenderer{}.Paint(dc, content, panel, theme, sceneContext, renderBackendSettings, sceneViewport, sceneViewportHost);
+        break;
+    case DockPanelKind::Game:
+        GamePanelContentRenderer{}.Paint(dc, content, panel, theme, sceneContext, renderBackendSettings, sceneViewport, sceneViewportHost);
         break;
     case DockPanelKind::ProjectSettings:
         ProjectSettingsPanelRenderer{}.Paint(dc, content, theme, sceneContext, renderBackendSettings);

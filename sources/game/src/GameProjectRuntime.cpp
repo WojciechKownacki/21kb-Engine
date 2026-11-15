@@ -5,6 +5,7 @@
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
+#include "engine/audio/AudioPlayback.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/mods/ModRuntime.hpp"
 #include "engine/project/ParticleProjectPolicy.hpp"
@@ -15,9 +16,14 @@
 #include "engine/security/ReleaseManifest.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneLoadedContent.hpp"
+#include "engine/scene/SceneNavigation.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneLightProbeAccess.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneInputActivation.hpp"
+#include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneTagCatalog.hpp"
 #include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
@@ -42,6 +48,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <limits>
 #include <memory>
 #include <ostream>
@@ -418,6 +425,12 @@ bool ReadMountedGameProjectRuntime(
     packaged.lightingPath = manifest.settings.lightingPath;
     packaged.shadowQuality = kMobileDevice ? manifest.settings.shadowQualityMobile : manifest.settings.shadowQuality;
     packaged.giQuality = kMobileDevice ? manifest.settings.giQualityMobile : manifest.settings.giQuality;
+    packaged.display = manifest.settings.display;
+    packaged.simulation = manifest.settings.simulation;
+    packaged.masterVolume = manifest.settings.masterVolume;
+    packaged.tags = manifest.settings.tags;
+    packaged.navigationAreas = manifest.settings.navigationAreas;
+    packaged.navigationCrowd = manifest.settings.NavigationCrowd();
     for (const kb::project::ProjectPluginReference& plugin : packaged.descriptor.plugins) {
         if (plugin.enabled && !plugin.name.empty()) {
             packaged.requiredModules.push_back(plugin.name);
@@ -647,6 +660,10 @@ bool ReadGameProjectRuntime(
     runtime.lightingPath = resolved.lightingPath;
     runtime.shadowQuality = kMobileDevice ? resolved.shadowQualityMobile : resolved.shadowQuality;
     runtime.giQuality = kMobileDevice ? resolved.giQualityMobile : resolved.giQuality;
+    runtime.display = resolved.display;
+    runtime.simulation = resolved.simulation;
+    runtime.masterVolume = resolved.masterVolume;
+    runtime.tags = resolved.tags;
     runtime.descriptor = std::move(loaded.descriptor);
     return true;
 }
@@ -699,6 +716,8 @@ bool LoadGameProjectScene(
     std::filesystem::path& loadedScenePath,
     std::size_t& discoveredAssets,
     std::ostream& err) {
+    // The stages of the load, reported to the scene's load observer as they finish so a loading screen can follow.
+    scene.LoadedContent().ReportLoadProgress(0.0F);
     for (const std::string& warning : scene.ModuleWarnings()) {
         err << "module warning: " << warning << '\n';
     }
@@ -717,6 +736,7 @@ bool LoadGameProjectScene(
     if (!RegisterGameAssetLoaders(scene, err)) {
         return false;
     }
+    scene.LoadedContent().ReportLoadProgress(0.1F);
     if (runtime.IsPackaged()) {
         if (!scene.Assets().Manager().MountRuntimePack(runtime.assetPack)) {
             err << "runtime package registry could not be mounted: "
@@ -731,11 +751,20 @@ bool LoadGameProjectScene(
         }
         discoveredAssets = scene.Assets().Discover();
     }
+    scene.LoadedContent().ReportLoadProgress(0.3F);
     if (!runtime.physicsLayersAsset.empty() &&
         !kb::scene::PhysicsBackend::LoadAndConfigureLayers(scene, runtime.physicsLayersAsset)) {
         err << "project physics layers could not be applied: " << runtime.physicsLayersAsset << '\n';
         return false;
     }
+    scene.Runtime().ApplyProjectSimulation(runtime.simulation);
+    // The master gain, and the tags, navigation areas and crowd level of detail every scene of the project starts
+    // from, before any scene is loaded.
+    static_cast<void>(kb::audio::AudioPlayback::SetMasterVolume(scene, runtime.masterVolume));
+    static_cast<void>(scene.Tags().SetProjectDefinitions(runtime.tags));
+    kb::scene::SceneNavigation{ scene }.SetAreaDefinitions(runtime.navigationAreas);
+    kb::scene::SceneNavigation{ scene }.ConfigureCrowd(runtime.navigationCrowd);
+    scene.LoadedContent().ReportLoadProgress(0.4F);
 
     if (!runtime.sceneReference.empty() && runtime.sceneReference.front() == '/') {
         const kb::assets::AssetMetadata* metadata =
@@ -746,6 +775,8 @@ bool LoadGameProjectScene(
         }
         const kb::assets::AssetHandle<kb::scene::SceneDocument> document =
             scene.Assets().Manager().Load<kb::scene::SceneDocument>(metadata->id);
+        // The document is read and decoded; what is left is placing it in the scene.
+        scene.LoadedContent().ReportLoadProgress(0.6F);
         if (!document.IsLoaded() ||
             !kb::scene::SceneDocumentService::LoadIntoScene(scene, *document)) {
             err << "project scene could not be loaded: " << runtime.sceneReference;
@@ -756,6 +787,7 @@ bool LoadGameProjectScene(
             err << '\n';
             return false;
         }
+        scene.LoadedContent().ReportLoadProgress(0.9F);
         // Instantiation has transferred the scene data to its runtime owners.
         // Retain the decoded document only while an external handle still needs it,
         // matching the lifetime of documents loaded by scene streaming.
@@ -778,6 +810,7 @@ bool LoadGameProjectScene(
             return false;
         }
     }
+    kb::scene::SceneLightProbeAccess::AssignBakedGrid(scene, loadedScenePath.stem().generic_string());
 
     kb::scene::SceneInputActivation::Apply(scene);
     if (runtime.inputEnabled && !runtime.inputMappingContext.empty()) {
@@ -790,7 +823,25 @@ bool LoadGameProjectScene(
             return false;
         }
     }
+    scene.LoadedContent().ReportLoadProgress(1.0F);
     return true;
+}
+
+void DescribeAppliedProjectSettings(
+    const GameProjectRuntime& runtime,
+    kb::scene::Scene& scene,
+    std::ostream& out) {
+    const kb::scene::Vec3 gravity = kb::scene::PhysicsBackend::Gravity(scene);
+    const float fixedDelta = scene.Runtime().FixedStepSettings().fixedDeltaSeconds;
+    out << "kb_game: settings window="
+        << (runtime.display.windowMode == kb::project::ProjectWindowMode::BorderlessFullscreen ? "borderless" : "windowed")
+        << " resizable=" << runtime.display.resizable
+        << " frame_cap=" << runtime.display.frameRateCap
+        << " fixed_step_hz=" << std::lround(1.0F / fixedDelta)
+        << " time_scale=" << scene.Runtime().TimeScale()
+        << " gravity=" << gravity.x << ',' << gravity.y << ',' << gravity.z
+        << " master_volume=" << kb::audio::AudioPlayback::MasterVolume(scene)
+        << " tags=" << scene.Tags().ProjectDefinitions().size() << '\n';
 }
 
 } // namespace kb::game

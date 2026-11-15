@@ -316,12 +316,6 @@ void SceneViewportToolbarRenderer::PaintTerrainPopup(
             selected
                 ? EditorDialogStyle::Blend(EditorDialogStyle::Color(theme.panel), EditorDialogStyle::Color(theme.accent), 18)
                 : EditorDialogStyle::Color(hovered ? theme.toolbarButton : theme.panel));
-        if (selected) {
-            GdiDrawing::FillRectColor(
-                dc,
-                RECT{card.left, card.top, card.left + 3, card.bottom},
-                EditorDialogStyle::Color(theme.accent));
-        }
         EditorDialogStyle::PaintDivider(dc, RECT{card.left, card.bottom - 1, card.right, card.bottom}, theme);
         const RECT preview{card.left + 7, card.top + 7, card.left + (shapes ? 57 : 45), card.bottom - 7};
         if (shapes) {

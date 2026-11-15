@@ -122,9 +122,16 @@ bool MeshPipelinePassPolicy::UsesDisabledAlphaBlend(const RenderMaterialResource
 
 bool MeshPipelinePassPolicy::UsesAdvancedBuiltinPbr(const RenderMaterialResource* material) noexcept {
     return material != nullptr && !material->graphProgram.active &&
-        (material->bakedLightmap || material->sheenColor[0] > 0.0F || material->sheenColor[1] > 0.0F || material->sheenColor[2] > 0.0F ||
+        (material->sheenColor[0] > 0.0F || material->sheenColor[1] > 0.0F || material->sheenColor[2] > 0.0F ||
          material->sheenRoughnessFactor > 0.0F || material->transmissionFactor > 0.0F || material->thicknessFactor > 0.0F ||
          material->anisotropyStrength > 0.0F || material->anisotropyRotation != 0.0F);
+}
+
+bool MeshPipelinePassPolicy::SamplesSceneColor(const RenderMaterialResource* material, bool graphProgram) noexcept {
+    if (material == nullptr) {
+        return false;
+    }
+    return graphProgram ? material->graphProgram.usesSceneColor : material->transmissionFactor > 0.0F;
 }
 
 namespace {
@@ -139,7 +146,7 @@ namespace {
     case RenderMaterialTranslucencyBlend::Alpha:
         return SceneColorAlphaPolicy::HidingBlend(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA);
     case RenderMaterialTranslucencyBlend::Additive:
-        // Light added in proportion to the material's opacity, as Unity's and Godot's additive
+        // Light added in proportion to the material's opacity
         // (SrcAlpha, One): a fading additive mesh fades instead of staying at full strength.
         return SceneColorAlphaPolicy::HidingBlend(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_ONE);
     case RenderMaterialTranslucencyBlend::Modulate:

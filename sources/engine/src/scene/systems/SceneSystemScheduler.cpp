@@ -4,6 +4,7 @@
 #include "engine/ecs/World.hpp"
 #include "engine/scene/ParallelSceneSystem.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneSystem.hpp"
 #include "engine/scene/StatelessSceneSystem.hpp"
@@ -92,6 +93,23 @@ public:
 
 private:
     bool& dispatching_;
+};
+
+class DeferredDestroyDrain final {
+public:
+    explicit DeferredDestroyDrain(Scene* scene) noexcept
+        : scene_(scene) {}
+    DeferredDestroyDrain(const DeferredDestroyDrain&) = delete;
+    DeferredDestroyDrain& operator=(const DeferredDestroyDrain&) = delete;
+
+    ~DeferredDestroyDrain() {
+        if (scene_ != nullptr) {
+            static_cast<void>(scene_->Entities().DrainDeferredDestroys());
+        }
+    }
+
+private:
+    Scene* scene_;
 };
 
 // ---- Parallel execution of systems that declare their access (IParallelSceneSystem).
@@ -504,6 +522,8 @@ void SceneSystemScheduler::EndUpdate(Scene& scene, float deltaSeconds) {
 
 void SceneSystemScheduler::Update(Scene& scene, float deltaSeconds, SceneUpdatePhase phase) {
     DispatchScope dispatchScope{ dispatching_ };
+    // Destroys requested while a system iterated the world are applied once the last update phase has returned.
+    const DeferredDestroyDrain deferredDestroys{ phase == SceneUpdatePhase::PostFixed ? &scene : nullptr };
     const char* tracePhase = phase == SceneUpdatePhase::PreFixed ? "scene.update.pre_fixed" : "scene.update.post_fixed";
     if (ParallelState* state = FindState(this); state != nullptr) {
         std::vector<SceneSystem*> selected;

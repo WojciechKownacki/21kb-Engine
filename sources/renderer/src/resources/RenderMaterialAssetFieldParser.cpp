@@ -201,6 +201,7 @@ bool RenderMaterialAssetFieldParser::IsKnown(std::string_view keyword) noexcept 
         keyword == "layerBlendMode" ||
         keyword == "translucencyBlend" ||
         keyword == "bakedLightmap" ||
+        keyword == "bakedLightmapUv1" ||
         keyword == "doubleSided" ||
         keyword == "writesDepth" || keyword == "pointSampling";
 }
@@ -293,6 +294,7 @@ bool RenderMaterialAssetFieldParser::Apply(std::string_view keyword, std::string
         return ParseTranslucencyBlend(rest, asset.desc.translucencyBlend);
     }
     if (keyword == "bakedLightmap") return ParseBool(rest, asset.desc.bakedLightmap);
+    if (keyword == "bakedLightmapUv1") return ParseBool(rest, asset.desc.bakedLightmapUv1);
     if (keyword == "doubleSided") {
         return ParseBool(rest, asset.desc.doubleSided);
     }

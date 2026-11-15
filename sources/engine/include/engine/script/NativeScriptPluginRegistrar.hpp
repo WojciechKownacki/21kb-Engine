@@ -15,12 +15,14 @@ public:
     [[nodiscard]] NativeScriptPluginApi CreateApi() noexcept;
     [[nodiscard]] bool RegisterLifecycle(const char* symbol, ScriptLifecycleEvent event, NativeScriptPluginLifecycleProc callback);
     [[nodiscard]] bool RegisterEvent(const char* symbol, const char* eventName, NativeScriptPluginEventProc callback);
+    [[nodiscard]] bool RegisterClass(const char* symbol, const NativeScriptClassApi* script);
     [[nodiscard]] const std::vector<std::string>& RegisteredSymbols() const noexcept;
     [[nodiscard]] const std::vector<std::string>& Errors() const noexcept;
 
 private:
     static bool RegisterLifecycleThunk(void* user, const char* symbol, ScriptLifecycleEvent event, NativeScriptPluginLifecycleProc callback);
     static bool RegisterEventThunk(void* user, const char* symbol, const char* eventName, NativeScriptPluginEventProc callback);
+    static bool RegisterClassThunk(void* user, const char* symbol, const NativeScriptClassApi* script);
     void TrackSymbol(std::string symbol);
     void AddError(std::string message);
 

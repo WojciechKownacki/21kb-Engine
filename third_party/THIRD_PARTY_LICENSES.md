@@ -250,9 +250,16 @@ Compiled only into the editor, the cooker and the shader compiler:
 ## Lua
 
 - Website: https://www.lua.org
-- Version: 5.4.8, fetched at configure time with a pinned SHA-256 (root `CMakeLists.txt`)
+- Version: 5.4.8, fetched at configure time with a pinned SHA-256 (root `CMakeLists.txt`); the script VM on platforms that do not allow a program to generate machine code (the web, iOS, consoles), and a build option for tests elsewhere
 - License: MIT
 - License file: `third_party/licenses/lua-5.4.8.txt`
+
+## LuaJIT
+
+- Website: https://luajit.org
+- Version: 2.1, commit 63c8f1a, fetched at configure time with a pinned SHA-256 (root `CMakeLists.txt`); the script VM on Windows, Linux and Android, built into a static library
+- License: MIT
+- License file: `third_party/licenses/luajit-63c8f1a.txt`
 
 ## Editor icons
 

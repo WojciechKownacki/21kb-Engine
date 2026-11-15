@@ -1,5 +1,7 @@
 #include "GameProjectRuntime.hpp"
 #include "GameProjectLighting.hpp"
+#include "LoadingScreen.hpp"
+#include "AndroidGraphicsApi.hpp"
 #include "PackagedGameRuntime.hpp"
 #include "PackagedRuntimeModules.hpp"
 #include "RuntimeSceneFrameSync.hpp"
@@ -10,7 +12,9 @@
 #include "AndroidWindowInsets.hpp"
 
 #include "engine/assets/bake/BakeTargetProfile.hpp"
+#include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
+#include "engine/audio/AudioCapture.hpp"
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/audio/AudioDiagnostics.hpp"
 #include "engine/input/InputDeviceState.hpp"
@@ -40,8 +44,11 @@
 #include <android/keycodes.h>
 #include <game-activity/native_app_glue/android_native_app_glue.h>
 
+#include <dlfcn.h>
 #include <sys/mman.h>
+#include <sys/system_properties.h>
 #include <unistd.h>
+#include <vulkan/vulkan.h>
 
 #include <algorithm>
 #include <array>
@@ -50,6 +57,7 @@
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
 #include <limits>
 #include <memory>
@@ -65,6 +73,42 @@ namespace {
 constexpr std::string_view kLogTag = "21kb";
 constexpr std::string_view kPackagedAssetPack = "game.kbpack";
 std::atomic<bool> audioFocusGranted{false};
+// The microphone permission: unknown until a script starts the microphone, then asked (the dialog is open),
+// then the user's answer. A refusal is reported once and the next start asks again.
+enum MicrophoneState : int { kMicrophoneUnknown, kMicrophoneAsked, kMicrophoneGranted, kMicrophoneDenied };
+std::atomic<int> microphoneState{kMicrophoneUnknown};
+android_app* microphoneApp = nullptr;
+
+// Asks the activity for the record-audio permission; false when the Java side cannot be reached.
+bool RequestMicrophonePermission() noexcept {
+    if (microphoneApp == nullptr || microphoneApp->activity == nullptr) return false;
+    JNIEnv* environment = nullptr;
+    if (microphoneApp->activity->vm->GetEnv(reinterpret_cast<void**>(&environment), JNI_VERSION_1_6) != JNI_OK) return false;
+    const auto activityClass = environment->GetObjectClass(microphoneApp->activity->javaGameActivity);
+    const auto request = activityClass == nullptr ? nullptr : environment->GetMethodID(activityClass, "requestMicrophone", "()V");
+    if (request != nullptr) environment->CallVoidMethod(microphoneApp->activity->javaGameActivity, request);
+    const bool exception = environment->ExceptionCheck();
+    if (exception) environment->ExceptionClear();
+    if (activityClass != nullptr) environment->DeleteLocalRef(activityClass);
+    return request != nullptr && !exception;
+}
+
+kb::audio::AudioCapturePermission MicrophonePermission() noexcept {
+    switch (microphoneState.load(std::memory_order_acquire)) {
+    case kMicrophoneGranted:
+        return kb::audio::AudioCapturePermission::Granted;
+    case kMicrophoneDenied:
+        microphoneState.store(kMicrophoneUnknown, std::memory_order_release);
+        return kb::audio::AudioCapturePermission::Denied;
+    case kMicrophoneAsked:
+        return kb::audio::AudioCapturePermission::Pending;
+    default:
+        microphoneState.store(kMicrophoneAsked, std::memory_order_release);
+        if (RequestMicrophonePermission()) return kb::audio::AudioCapturePermission::Pending;
+        microphoneState.store(kMicrophoneUnknown, std::memory_order_release);
+        return kb::audio::AudioCapturePermission::Denied;
+    }
+}
 
 void LogError(std::string_view message) noexcept {
     const std::size_t length =
@@ -306,6 +350,54 @@ private:
     }
 }
 
+// Asks the Vulkan loader which device the renderer would start on, without starting the renderer: an instance
+// with no extensions, the first physical device's properties, then the instance is released again.
+[[nodiscard]] kb::game::AndroidVulkanDevice ProbeAndroidVulkanDevice() noexcept {
+    kb::game::AndroidVulkanDevice device;
+    char release[PROP_VALUE_MAX] = {};
+    if (__system_property_get("ro.build.version.sdk", release) > 0) {
+        device.androidApiLevel = static_cast<std::uint32_t>(std::strtoul(release, nullptr, 10));
+    }
+    void* const library = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
+    if (library == nullptr) {
+        return device;
+    }
+    const auto getInstanceProc = reinterpret_cast<PFN_vkGetInstanceProcAddr>(dlsym(library, "vkGetInstanceProcAddr"));
+    const auto createInstance = getInstanceProc == nullptr ? nullptr
+        : reinterpret_cast<PFN_vkCreateInstance>(getInstanceProc(VK_NULL_HANDLE, "vkCreateInstance"));
+    if (createInstance == nullptr) {
+        return device;
+    }
+    VkApplicationInfo application{ VK_STRUCTURE_TYPE_APPLICATION_INFO };
+    application.apiVersion = VK_API_VERSION_1_0;
+    VkInstanceCreateInfo instanceInfo{ VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
+    instanceInfo.pApplicationInfo = &application;
+    VkInstance instance = VK_NULL_HANDLE;
+    if (createInstance(&instanceInfo, nullptr, &instance) != VK_SUCCESS || instance == VK_NULL_HANDLE) {
+        return device;
+    }
+    const auto destroyInstance = reinterpret_cast<PFN_vkDestroyInstance>(getInstanceProc(instance, "vkDestroyInstance"));
+    const auto enumerate = reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(getInstanceProc(instance, "vkEnumeratePhysicalDevices"));
+    const auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(getInstanceProc(instance, "vkGetPhysicalDeviceProperties"));
+    if (enumerate != nullptr && properties != nullptr) {
+        std::uint32_t count = 1U;
+        VkPhysicalDevice physical = VK_NULL_HANDLE;
+        const VkResult result = enumerate(instance, &count, &physical);
+        if ((result == VK_SUCCESS || result == VK_INCOMPLETE) && count > 0U && physical != VK_NULL_HANDLE) {
+            VkPhysicalDeviceProperties found{};
+            properties(physical, &found);
+            device.known = true;
+            device.vendorId = found.vendorID;
+            device.deviceId = found.deviceID;
+            device.driverVersion = found.driverVersion;
+        }
+    }
+    if (destroyInstance != nullptr) {
+        destroyInstance(instance, nullptr);
+    }
+    return device;
+}
+
 class AndroidGameHost {
 public:
     explicit AndroidGameHost(android_app& app) noexcept
@@ -390,19 +482,15 @@ public:
             }
             return false;
         }
-        std::filesystem::path scenePath;
-        std::size_t discoveredAssets = 0U;
-        if (!kb::game::LoadGameProjectScene(
-                projectRuntime_, *scene_, scenePath, discoveredAssets, projectError)) {
+        // The window shows the launch screen's colour until the renderer is up. The scene loads once it is, behind the
+        // loading screen, which every later scene change reports to as well.
+        if (!loadingScreen_.Initialize(projectRuntime_, projectError)) {
             LogError(projectError.str());
             return false;
         }
-        std::ostringstream ready;
-        ready << "Android project loaded: scene=" << scenePath.generic_string()
-              << " entities=" << scene_->Entities().Count()
-              << " assets=" << discoveredAssets
-              << " modules=" << scene_->ActiveModuleCount();
-        LogInfo(ready.str());
+        scene_->LoadedContent().SetLoadProgressObserver([this](float fraction) {
+            if (renderer_.IsInitialized()) loadingScreen_.Report(renderer_, fraction, scene_.get());
+        });
 
         app_.userData = this;
         app_.onAppCmd = &AndroidGameHost::OnAppCommand;
@@ -412,6 +500,8 @@ public:
         }
         kb::input::InputHaptics::RegisterBackend(*scene_, gamepads_);
         audioEnabled_ = kb::audio::AudioPlayback::HasBackend(*scene_);
+        microphoneApp = &app_;
+        kb::audio::SetAudioCapturePermissionProvider(&MicrophonePermission);
         if (audioEnabled_) {
             ApplyAudioState();
             JNIEnv* environment = nullptr;
@@ -546,6 +636,50 @@ private:
         }
     }
 
+    // Starts the renderer with the graphics API the project names. An API this build does not offer or this device
+    // cannot start gives way to the other one, and the log says so.
+    [[nodiscard]] bool InitializeRenderer(kb::render::DisplayConfig& config) {
+        using Api = kb::project::ProjectAndroidGraphicsApi;
+        const Api api = projectRuntime_.display.androidGraphicsApi;
+        std::array<bgfx::RendererType::Enum, bgfx::RendererType::Count> supported{};
+        const std::uint8_t supportedCount = bgfx::getSupportedRenderers(
+            static_cast<std::uint8_t>(supported.size()), supported.data());
+        const bool vulkanOffered = std::find(supported.data(), supported.data() + supportedCount, bgfx::RendererType::Vulkan)
+            != supported.data() + supportedCount;
+        const kb::game::AndroidVulkanDevice vulkanDevice = api == Api::Auto && vulkanOffered
+            ? ProbeAndroidVulkanDevice() : kb::game::AndroidVulkanDevice{};
+        const kb::game::AndroidRendererCandidates candidates =
+            kb::game::ResolveAndroidRenderers(api, supported.data(), supportedCount, vulkanDevice);
+        if (candidates.unreliableRule >= 0) {
+            std::ostringstream reason;
+            reason << "graphics api auto chose OpenGL ES: the Vulkan device is on the unreliable list (rule "
+                   << candidates.unreliableRule << ") vendor=0x" << std::hex << vulkanDevice.vendorId
+                   << " device=0x" << vulkanDevice.deviceId << " driver=0x" << vulkanDevice.driverVersion << std::dec
+                   << " android=" << vulkanDevice.androidApiLevel;
+            LogInfo(reason.str());
+        }
+        for (std::uint8_t index = 0U; index < candidates.count; ++index) {
+            config.preferredBgfxRendererType = candidates.types[index];
+            if (!renderer_.Initialize(surface_, &config)) {
+                if (index + 1U < candidates.count) {
+                    LogInfo(std::string{"graphics api "} +
+                        bgfx::getRendererName(static_cast<bgfx::RendererType::Enum>(candidates.types[index])) +
+                        " could not start on this device, trying the other one");
+                }
+                continue;
+            }
+            if (api != Api::Auto) {
+                const char* const requested = bgfx::getRendererName(
+                    api == Api::Vulkan ? bgfx::RendererType::Vulkan : bgfx::RendererType::OpenGLES);
+                const char* const started = renderer_.CapabilityReport().selectedBackendName;
+                LogInfo(std::string{"graphics api requested="} + requested + " backend=" + started +
+                    (std::string_view{requested} == started ? "" : " substituted=1"));
+            }
+            return true;
+        }
+        return false;
+    }
+
     void ApplyWindowState() {
         if (memoryPressure_) {
             DrainStorageWrites();
@@ -567,7 +701,7 @@ private:
             kb::render::DisplayConfig config{};
             config.writableStorageRoot = storageRoot_;
             config.enableEditorRendering = false;
-            if (!renderer_.Initialize(surface_, &config)) {
+            if (!InitializeRenderer(config)) {
                 LogError("renderer initialization failed");
                 failed_ = true;
                 return;
@@ -699,11 +833,36 @@ private:
         }
     }
 
+    // Loads the project's startup scene behind the loading screen; the first frame the renderer can draw.
+    [[nodiscard]] bool LoadStartupScene() {
+        loadingScreen_.Report(renderer_, 0.0F, scene_.get());
+        std::filesystem::path scenePath;
+        std::size_t discoveredAssets = 0U;
+        std::ostringstream projectError;
+        if (!kb::game::LoadGameProjectScene(
+                projectRuntime_, *scene_, scenePath, discoveredAssets, projectError)) {
+            LogError(projectError.str());
+            failed_ = true;
+            return false;
+        }
+        std::ostringstream ready;
+        ready << "Android project loaded: scene=" << scenePath.generic_string()
+              << " entities=" << scene_->Entities().Count()
+              << " assets=" << discoveredAssets
+              << " modules=" << scene_->ActiveModuleCount();
+        LogInfo(ready.str());
+        startupSceneLoaded_ = true;
+        return true;
+    }
+
     void RenderFrame() {
         if (scene_ == nullptr) {
             failed_ = true;
             return;
         }
+        if (!startupSceneLoaded_ && !LoadStartupScene()) return;
+        // A load that has finished is held for the project's minimum display time before the scene shows.
+        if (loadingScreen_.PresentHeld(renderer_)) return;
         const auto now = std::chrono::steady_clock::now();
         const float deltaSeconds = tickClockReady_
             ? kb::game::RuntimeDeltaSeconds(previousTick_, now)
@@ -824,6 +983,7 @@ private:
             if (scene_ != nullptr) {
                 renderer_.ReleaseScene(*scene_);
             }
+            loadingScreen_.Release(renderer_);
             renderer_.Shutdown();
             const auto resources = renderer_.RuntimeResourceStats();
             std::ostringstream message;
@@ -885,6 +1045,8 @@ private:
     AndroidRenderSurface surface_;
     kb::render::Renderer renderer_;
     kb::game::RuntimeSceneFrameSync renderSceneSync_;
+    kb::game::LoadingScreen loadingScreen_;
+    bool startupSceneLoaded_ = false;
     std::string storageRoot_;
     std::string targetProfileId_;
     bool resumed_ = false;
@@ -915,6 +1077,11 @@ private:
 extern "C" JNIEXPORT void JNICALL
 Java_com_kbengine_runtime_MainActivity_setAudioFocusGranted(JNIEnv*, jclass, jboolean granted) {
     audioFocusGranted.store(granted == JNI_TRUE, std::memory_order_release);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_kbengine_runtime_MainActivity_setMicrophonePermission(JNIEnv*, jclass, jboolean granted) {
+    microphoneState.store(granted == JNI_TRUE ? kMicrophoneGranted : kMicrophoneDenied, std::memory_order_release);
 }
 
 extern "C" void android_main(android_app* app) {

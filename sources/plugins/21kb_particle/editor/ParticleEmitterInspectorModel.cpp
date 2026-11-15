@@ -138,6 +138,10 @@ template <typename T>
         const auto& key = curve.keyframes[index];
         text += FloatText(key.time) + ',' + FloatText(key.value) + ',' +
             std::to_string(static_cast<std::uint32_t>(key.easing));
+        if (key.tangentMode != kb::math::CurveTangentMode::Easing) {
+            text += ',' + std::to_string(static_cast<std::uint32_t>(key.tangentMode)) + ',' +
+                FloatText(key.inTangent) + ',' + FloatText(key.outTangent);
+        }
     }
     return text;
 }
@@ -276,6 +280,10 @@ std::string ParticleEmitterInspectorModel::FormatGradient(const kb::math::Gradie
     return GradientText(gradient);
 }
 
+std::string ParticleEmitterInspectorModel::FormatCurve(const kb::math::Curve& curve) {
+    return CurveText(curve);
+}
+
 namespace {
 
 [[nodiscard]] bool ParseFloatToken(std::string_view text, float& value) noexcept {
@@ -367,15 +375,22 @@ bool ParticleEmitterInspectorModel::ParseCurve(std::string_view text, kb::math::
         const std::size_t end = text.find(';', start);
         const std::string_view token =
             text.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start);
-        std::string_view fields[3]{};
-        if (!SplitDelimited(token, ',', fields, 3U)) return false;
+        // time,value,easing[,tangentMode,inTangent,outTangent]
+        const bool hasTangents = std::count(token.begin(), token.end(), ',') == 5;
+        std::string_view fields[6]{};
+        if (!SplitDelimited(token, ',', fields, hasTangents ? 6U : 3U)) return false;
         kb::math::CurveKeyframe keyframe;
         std::uint32_t easing = 0U;
+        std::uint32_t mode = 0U;
         if (!ParseFloatToken(fields[0], keyframe.time) || !ParseFloatToken(fields[1], keyframe.value) ||
             !ParseUIntToken(fields[2], easing) ||
             easing > static_cast<std::uint32_t>(kb::math::Easing::InOutBounce))
             return false;
+        if (hasTangents && (!ParseUIntToken(fields[3], mode) || mode > static_cast<std::uint32_t>(kb::math::CurveTangentMode::Free) ||
+            !ParseFloatToken(fields[4], keyframe.inTangent) || !ParseFloatToken(fields[5], keyframe.outTangent)))
+            return false;
         keyframe.easing = static_cast<kb::math::Easing>(easing);
+        keyframe.tangentMode = static_cast<kb::math::CurveTangentMode>(mode);
         keyframes.push_back(keyframe);
         if (end == std::string_view::npos) break;
         start = end + 1U;

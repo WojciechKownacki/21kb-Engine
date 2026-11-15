@@ -6,7 +6,10 @@ $input v_texcoord0
 SAMPLER2D(s_source, 0);
 SAMPLER2D(s_bloom, 1);
 SAMPLER2D(s_depth, 2);
+SAMPLER2D(s_velocity, 3);
 uniform vec4 u_postParams;
+// x: shutter fraction of the frame (0 leaves motion blur off), y: samples, z: longest blur in pixels.
+uniform vec4 u_motionBlurParams;
 uniform vec4 u_dofParams; // focus distance, full-blur distance from focus, maximum radius, homogeneous depth
 uniform vec4 u_dofViewDepthPlane;
 uniform mat4 u_inverseViewProjection;
@@ -24,6 +27,28 @@ float KbFocusDepth(vec2 uv)
 void main()
 {
     vec4 scene = texture2D(s_source, v_texcoord0);
+    if (u_motionBlurParams.x > 0.0) {
+        // Average the image along the pixel's screen motion over the open shutter. The motion is
+        // clamped to a longest length, so a fast camera turn does not smear the whole screen.
+        vec2 motion = texture2DLod(s_velocity, v_texcoord0, 0.0).xy * u_motionBlurParams.x;
+        float lengthPixels = length(motion / u_viewTexel.xy);
+        if (lengthPixels > u_motionBlurParams.z) {
+            motion *= u_motionBlurParams.z / lengthPixels;
+        }
+        if (lengthPixels > 0.5) {
+            float samples = u_motionBlurParams.y;
+            vec3 sum = scene.rgb;
+            float weights = 1.0;
+            for (int sampleIndex = 0; sampleIndex < 16; ++sampleIndex) {
+                if (float(sampleIndex) >= samples) break;
+                float t = (float(sampleIndex) + 0.5) / samples - 0.5;
+                vec2 uv = clamp(v_texcoord0 - motion * t, vec2_splat(0.0), vec2_splat(1.0));
+                sum += texture2DLod(s_source, uv, 0.0).rgb;
+                weights += 1.0;
+            }
+            scene.rgb = sum / weights;
+        }
+    }
     if (u_dofParams.z > 0.0) {
         float centerDepth = KbFocusDepth(v_texcoord0);
         float radius = clamp(abs(centerDepth - u_dofParams.x) / max(u_dofParams.y,0.0001),0.0,1.0) * u_dofParams.z;
@@ -43,26 +68,10 @@ void main()
         }
         scene.rgb = sum / weights;
     }
-    float mipCount = max(u_postParams.y, 1.0);
+    // Mip 0 of the bloom pyramid already holds the upsampled sum of every mip.
     vec3 bloom = vec3_splat(0.0);
     if (u_postParams.x > 0.0) {
-    bloom = texture2DLod(s_bloom, v_texcoord0, 0.0).rgb * 0.42;
-    if (mipCount > 1.5) {
-        bloom += texture2DLod(s_bloom, v_texcoord0, 1.0).rgb * 0.26;
-    }
-    if (mipCount > 2.5) {
-        bloom += texture2DLod(s_bloom, v_texcoord0, 2.0).rgb * 0.16;
-    }
-    if (mipCount > 3.5) {
-        bloom += texture2DLod(s_bloom, v_texcoord0, 3.0).rgb * 0.09;
-    }
-    if (mipCount > 4.5) {
-        bloom += texture2DLod(s_bloom, v_texcoord0, 4.0).rgb * 0.05;
-    }
-    if (mipCount > 5.5) {
-        bloom += texture2DLod(s_bloom, v_texcoord0, 5.0).rgb * 0.02;
-    }
-    bloom *= u_postParams.x;
+        bloom = texture2DLod(s_bloom, v_texcoord0, 0.0).rgb * u_postParams.x;
     }
     // The next target is RGBA16F: keep highlights finite before tone mapping.
     gl_FragColor = vec4(clamp(scene.rgb + bloom, vec3_splat(0.0), vec3_splat(65504.0)), scene.a);

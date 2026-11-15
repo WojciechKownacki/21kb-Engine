@@ -71,6 +71,9 @@
 #include <Jolt/Physics/Constraints/FixedConstraint.h>
 #include <Jolt/Physics/Constraints/HingeConstraint.h>
 #include <Jolt/Physics/Constraints/PointConstraint.h>
+#include <Jolt/Physics/Constraints/SixDOFConstraint.h>
+#include <Jolt/Physics/Constraints/SliderConstraint.h>
+#include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
 #include <Jolt/Physics/Constraints/TwoBodyConstraint.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Body/BodyLock.h>
@@ -111,7 +114,10 @@ namespace kb::physics_jolt {
 using kb::scene::CharacterControllerComponent;
 using kb::scene::ColliderComponent;
 using kb::scene::ColliderShape;
+using kb::scene::JointAxis;
+using kb::scene::JointAxisMode;
 using kb::scene::JointComponent;
+using kb::scene::JointFreedom;
 using kb::scene::JointMotor;
 using kb::scene::JointSpring;
 using kb::scene::JointType;
@@ -326,6 +332,19 @@ struct BodyRecord {
     return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
 }
 
+[[nodiscard]] bool IsFiniteFreedom(const JointFreedom& freedom) noexcept {
+    if (!IsFinite(freedom.secondaryAxis) || !std::isfinite(freedom.swing1Limit) || !std::isfinite(freedom.swing2Limit)) {
+        return false;
+    }
+    for (const JointAxis& axis : freedom.axes) {
+        if (!std::isfinite(axis.minLimit) || !std::isfinite(axis.maxLimit) || !std::isfinite(axis.motor.targetVelocity) ||
+            !std::isfinite(axis.motor.force)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 [[nodiscard]] bool IsFinite(const kb::math::DVec3& value) noexcept {
     return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
 }
@@ -473,6 +492,7 @@ struct JointSignature {
     JointMotor motor{};
     JointSpring spring{};
     float breakForce = 0.0F;
+    JointFreedom freedom{};
     JPH::BodyID ownerBodyId;
     JPH::BodyID connectedBodyId; // invalid BodyID when connectedEntity is invalid (joint connects to the static world).
 };
@@ -490,13 +510,30 @@ struct JointSignature {
         .motor = joint.motor,
         .spring = joint.spring,
         .breakForce = joint.breakForce,
+        // Kinds that do not read the freedom settings must not be rebuilt when only those change.
+        .freedom = kb::scene::JointUsesFreedom(joint.type) ? joint.freedom : JointFreedom{},
         .ownerBodyId = ownerBodyId,
         .connectedBodyId = connectedBodyId,
     };
 }
 
+[[nodiscard]] bool SameFreedom(const JointFreedom& lhs, const JointFreedom& rhs) noexcept {
+    if (!SameVec3(lhs.secondaryAxis, rhs.secondaryAxis) || lhs.swing1Limit != rhs.swing1Limit || lhs.swing2Limit != rhs.swing2Limit) {
+        return false;
+    }
+    for (std::size_t index = 0; index < lhs.axes.size(); ++index) {
+        const JointAxis& a = lhs.axes[index];
+        const JointAxis& b = rhs.axes[index];
+        if (a.mode != b.mode || a.minLimit != b.minLimit || a.maxLimit != b.maxLimit || a.motor.targetVelocity != b.motor.targetVelocity ||
+            a.motor.force != b.motor.force) {
+            return false;
+        }
+    }
+    return true;
+}
+
 [[nodiscard]] bool operator==(const JointSignature& lhs, const JointSignature& rhs) noexcept {
-    return lhs.type == rhs.type && lhs.connectedEntity == rhs.connectedEntity && SameVec3(lhs.anchor, rhs.anchor) &&
+    return SameFreedom(lhs.freedom, rhs.freedom) && lhs.type == rhs.type && lhs.connectedEntity == rhs.connectedEntity && SameVec3(lhs.anchor, rhs.anchor) &&
         SameVec3(lhs.connectedAnchor, rhs.connectedAnchor) && SameVec3(lhs.axis, rhs.axis) &&
         lhs.minLimit == rhs.minLimit && lhs.maxLimit == rhs.maxLimit && lhs.enableLimit == rhs.enableLimit &&
         lhs.motor.targetVelocity == rhs.motor.targetVelocity && lhs.motor.force == rhs.motor.force &&
@@ -509,10 +546,43 @@ struct JointRecord {
     JointSignature signature;
 };
 
-// LIB-130: builds the real Jolt constraint for one of the "faktycznie
-// obslugiwane typy" (Fixed/Hinge/Distance/Point - JointComponent::type's
-// full enum, all four have a direct Jolt TwoBodyConstraint equivalent, so
-// none are excluded). mSpace=LocalToBodyCOM makes anchor/connectedAnchor
+// The orthonormal frame of a Slider, Cone or SixDof joint in the local space of
+// the owning body (x = axis, y = secondary axis made perpendicular to it) and
+// the same frame in the connected body local space, chosen so both frames
+// coincide in world space right now - the pose the limits are measured from.
+struct JointFrames {
+    JPH::Vec3 x1;
+    JPH::Vec3 y1;
+    JPH::Vec3 x2;
+    JPH::Vec3 y2;
+};
+
+[[nodiscard]] JointFrames MakeJointFrames(const JointComponent& joint, const JPH::Body& body1, const JPH::Body& body2) {
+    const JPH::Vec3 x1 = ToJolt(joint.axis).Normalized();
+    JPH::Vec3 y1 = ToJolt(joint.freedom.secondaryAxis);
+    y1 -= x1 * y1.Dot(x1);
+    // Parallel or zero secondary axis: any perpendicular is as good as another.
+    y1 = y1.LengthSq() < 1.0e-6F ? x1.GetNormalizedPerpendicular() : y1.Normalized();
+    const JPH::Quat toBody2 = body2.GetRotation().Conjugated() * body1.GetRotation();
+    return JointFrames{ .x1 = x1, .y1 = y1, .x2 = toBody2 * x1, .y2 = toBody2 * y1 };
+}
+
+[[nodiscard]] JPH::SpringSettings MakeJointSpring(const JointSpring& spring) {
+    JPH::SpringSettings settings;
+    settings.mMode = JPH::ESpringMode::StiffnessAndDamping;
+    settings.mStiffness = spring.spring;
+    settings.mDamping = spring.damper;
+    return settings;
+}
+
+// Degrees to the radian range Jolt accepts for an angular limit.
+[[nodiscard]] float ToJoltAngle(float degrees) noexcept {
+    return kb::math::Clamp(JPH::DegreesToRadians(degrees), -JPH::JPH_PI, JPH::JPH_PI);
+}
+
+// LIB-130: builds the real Jolt constraint for every JointType (Fixed, Hinge,
+// Distance, Point, Slider, Cone, SixDof and Rope each map onto one Jolt
+// TwoBodyConstraint, so none are excluded). mSpace=LocalToBodyCOM makes anchor/connectedAnchor
 // local offsets on each body, matching JointComponent's own doc comment;
 // every collider shape this engine creates (CreateShape above) is centered
 // on its body's origin, so "local to body COM" and "local to body origin"
@@ -550,7 +620,7 @@ struct JointRecord {
         if (joint.enableLimit) {
             // Jolt's own documented range: mLimitsMin in [-pi, 0], mLimitsMax in [0, pi]. Jolt
             // measures the angle of body2 (connected) relative to body1 (owner); the component's
-            // limits are the owner's rotation about the axis, as Unity's HingeJoint - so negated.
+            // limits are the owner's rotation about the axis - so negated.
             settings.mLimitsMin = kb::math::Clamp(-JPH::DegreesToRadians(joint.maxLimit), -JPH::JPH_PI, 0.0F);
             settings.mLimitsMax = kb::math::Clamp(-JPH::DegreesToRadians(joint.minLimit), 0.0F, JPH::JPH_PI);
         }
@@ -561,7 +631,7 @@ struct JointRecord {
         JPH::Ref<JPH::Constraint> constraint = settings.Create(body1, body2);
         auto* hinge = static_cast<JPH::HingeConstraint*>(constraint.GetPtr());
         hinge->SetMotorState(JPH::EMotorState::Velocity);
-        // Jolt drives body2 relative to body1; the motor turns the owner (body1), as Unity's.
+        // Jolt drives body2 relative to body1; the motor turns the owner (body1).
         hinge->SetTargetAngularVelocity(-JPH::DegreesToRadians(joint.motor.targetVelocity));
         return constraint;
     }
@@ -590,6 +660,135 @@ struct JointRecord {
         settings.mSpace = JPH::EConstraintSpace::LocalToBodyCOM;
         settings.mPoint1 = ToJoltPosition(joint.anchor);
         settings.mPoint2 = ToJoltPosition(joint.connectedAnchor);
+        return settings.Create(body1, body2);
+    }
+    case JointType::Slider: {
+        const JointFrames frames = MakeJointFrames(joint, body1, body2);
+        JPH::SliderConstraintSettings settings;
+        settings.mSpace = JPH::EConstraintSpace::LocalToBodyCOM;
+        settings.mAutoDetectPoint = false;
+        settings.mPoint1 = ToJoltPosition(joint.anchor);
+        settings.mPoint2 = ToJoltPosition(joint.connectedAnchor);
+        settings.mSliderAxis1 = frames.x1;
+        settings.mNormalAxis1 = frames.y1;
+        settings.mSliderAxis2 = frames.x2;
+        settings.mNormalAxis2 = frames.y2;
+        if (joint.enableLimit) {
+            // Jolt measures the position of the connected body relative to the owner; the component
+            // limits are the owner travel - so negated, like the hinge limits.
+            settings.mLimitsMin = -joint.maxLimit;
+            settings.mLimitsMax = -joint.minLimit;
+        }
+        if (joint.spring.spring > 0.0F) {
+            settings.mLimitsSpringSettings = MakeJointSpring(joint.spring);
+        }
+        if (joint.motor.force > 0.0F) {
+            settings.mMotorSettings.SetForceLimit(joint.motor.force);
+        }
+        JPH::Ref<JPH::Constraint> constraint = settings.Create(body1, body2);
+        if (joint.motor.force > 0.0F) {
+            auto* slider = static_cast<JPH::SliderConstraint*>(constraint.GetPtr());
+            slider->SetMotorState(JPH::EMotorState::Velocity);
+            slider->SetTargetVelocity(-joint.motor.targetVelocity);
+        }
+        return constraint;
+    }
+    case JointType::Cone: {
+        const JointFrames frames = MakeJointFrames(joint, body1, body2);
+        JPH::SwingTwistConstraintSettings settings;
+        settings.mSpace = JPH::EConstraintSpace::LocalToBodyCOM;
+        settings.mPosition1 = ToJoltPosition(joint.anchor);
+        settings.mPosition2 = ToJoltPosition(joint.connectedAnchor);
+        settings.mTwistAxis1 = frames.x1;
+        settings.mPlaneAxis1 = frames.y1;
+        settings.mTwistAxis2 = frames.x2;
+        settings.mPlaneAxis2 = frames.y2;
+        settings.mSwingType = JPH::ESwingType::Cone;
+        settings.mPlaneHalfConeAngle = kb::math::Clamp(JPH::DegreesToRadians(joint.freedom.swing1Limit), 0.0F, JPH::JPH_PI);
+        settings.mNormalHalfConeAngle = kb::math::Clamp(JPH::DegreesToRadians(joint.freedom.swing2Limit), 0.0F, JPH::JPH_PI);
+        // Without enableLimit the twist is free. Jolt measures the connected body relative to the owner: negated.
+        settings.mTwistMinAngle = joint.enableLimit ? -ToJoltAngle(joint.maxLimit) : -JPH::JPH_PI;
+        settings.mTwistMaxAngle = joint.enableLimit ? -ToJoltAngle(joint.minLimit) : JPH::JPH_PI;
+        return settings.Create(body1, body2);
+    }
+    case JointType::SixDof: {
+        const JointFrames frames = MakeJointFrames(joint, body1, body2);
+        JPH::SixDOFConstraintSettings settings;
+        settings.mSpace = JPH::EConstraintSpace::LocalToBodyCOM;
+        settings.mPosition1 = ToJoltPosition(joint.anchor);
+        settings.mPosition2 = ToJoltPosition(joint.connectedAnchor);
+        settings.mAxisX1 = frames.x1;
+        settings.mAxisY1 = frames.y1;
+        settings.mAxisX2 = frames.x2;
+        settings.mAxisY2 = frames.y2;
+        settings.mSwingType = JPH::ESwingType::Pyramid;
+        bool driven = false;
+        for (std::size_t index = 0; index < joint.freedom.axes.size(); ++index) {
+            const JointAxis& axis = joint.freedom.axes[index];
+            const auto jointAxis = static_cast<JPH::SixDOFConstraintSettings::EAxis>(index);
+            const bool translation = index < JPH::SixDOFConstraintSettings::NumTranslation;
+            switch (axis.mode) {
+            case JointAxisMode::Locked:
+                settings.MakeFixedAxis(jointAxis);
+                continue;
+            case JointAxisMode::Free:
+                settings.MakeFreeAxis(jointAxis);
+                break;
+            case JointAxisMode::Limited:
+                // Jolt measures the connected body relative to the owner: negated and swapped.
+                if (translation) {
+                    settings.SetLimitedAxis(jointAxis, -axis.maxLimit, -axis.minLimit);
+                } else {
+                    settings.SetLimitedAxis(jointAxis, -ToJoltAngle(axis.maxLimit), -ToJoltAngle(axis.minLimit));
+                }
+                break;
+            }
+            if (translation && joint.spring.spring > 0.0F) {
+                settings.mLimitsSpringSettings[index] = MakeJointSpring(joint.spring);
+            }
+            if (axis.motor.force > 0.0F) {
+                if (translation) {
+                    settings.mMotorSettings[index].SetForceLimit(axis.motor.force);
+                } else {
+                    settings.mMotorSettings[index].SetTorqueLimit(axis.motor.force);
+                }
+                driven = true;
+            }
+        }
+        JPH::Ref<JPH::Constraint> constraint = settings.Create(body1, body2);
+        if (driven) {
+            auto* sixDof = static_cast<JPH::SixDOFConstraint*>(constraint.GetPtr());
+            JPH::Vec3 velocity = JPH::Vec3::sZero();
+            JPH::Vec3 angularVelocity = JPH::Vec3::sZero();
+            for (std::size_t index = 0; index < joint.freedom.axes.size(); ++index) {
+                const JointAxis& axis = joint.freedom.axes[index];
+                if (axis.mode == JointAxisMode::Locked || axis.motor.force <= 0.0F) {
+                    continue;
+                }
+                sixDof->SetMotorState(static_cast<JPH::SixDOFConstraintSettings::EAxis>(index), JPH::EMotorState::Velocity);
+                // Jolt drives the connected body relative to the owner, the component drives the owner.
+                if (index < JPH::SixDOFConstraintSettings::NumTranslation) {
+                    velocity.SetComponent(static_cast<JPH::uint>(index), -axis.motor.targetVelocity);
+                } else {
+                    angularVelocity.SetComponent(static_cast<JPH::uint>(index - JPH::SixDOFConstraintSettings::NumTranslation),
+                        -JPH::DegreesToRadians(axis.motor.targetVelocity));
+                }
+            }
+            sixDof->SetTargetVelocityCS(velocity);
+            sixDof->SetTargetAngularVelocityCS(angularVelocity);
+        }
+        return constraint;
+    }
+    case JointType::Rope: {
+        JPH::DistanceConstraintSettings settings;
+        settings.mSpace = JPH::EConstraintSpace::LocalToBodyCOM;
+        settings.mPoint1 = ToJoltPosition(joint.anchor);
+        settings.mPoint2 = ToJoltPosition(joint.connectedAnchor);
+        settings.mMinDistance = joint.minLimit;
+        settings.mMaxDistance = joint.maxLimit;
+        if (joint.spring.spring > 0.0F) {
+            settings.mLimitsSpringSettings = MakeJointSpring(joint.spring);
+        }
         return settings.Create(body1, body2);
     }
     }
@@ -649,11 +848,11 @@ struct CharacterRecord {
     float stepOffset = 0.4F;
     float gravityScale = 1.0F;
     bool useGravity = true;
-    // Velocity the character actually moved with in the last step (Unity's
-    // CharacterController.velocity); Jolt's own linear velocity is the requested one.
+    // Velocity the character actually moved with in the last step;
+    // Jolt's own linear velocity is the requested one.
     Vec3 velocity{};
     // The rotation last written back to the Transform: a different one there means a script or
-    // the AI turned the character (as Unity's CharacterController, rotation is the Transform's).
+    // the AI turned the character (the rotation is the Transform's).
     Quat writtenRotation{};
     bool hasWrittenRotation = false;
 };
@@ -1079,7 +1278,7 @@ struct ActiveBodyContact {
     // when the final sub-shape contact disappears.
     std::map<JPH::SubShapeIDPair, ContactPayload> subShapes;
     // Jolt reports OnContactRemoved when both bodies fall asleep while still touching
-    // (ContactListener.h). Like PhysX/Unity, that is no Exit: the pair is kept until a
+    // (ContactListener.h). That is no Exit: the pair is kept until a
     // body wakes up and the contact is either detected again (Stay) or not (Exit).
     // 1 = asleep, 2 = a body woke up last step and the contact was not reported yet.
     std::uint8_t sleeping = 0U;
@@ -1237,7 +1436,7 @@ public:
         }
         physicsSystem_.Init(MaxBodies, NumBodyMutexes, MaxBodyPairs, MaxContactConstraints, broadPhaseLayers_, objectVsBroadPhaseFilter_, objectLayerPairFilter_);
         physicsSystem_.SetGravity(JPH::Vec3(0.0F, -9.81F, 0.0F));
-        // Unity/UE defaults instead of Jolt's: materials combine by average (Jolt: friction
+        // The engine's defaults instead of Jolt's: materials combine by average (Jolt: friction
         // sqrt(a*b), restitution max), and bodies may sink only 1 mm (Jolt: 2 cm - a 1 cm
         // object would rest fully inside the floor).
         physicsSystem_.SetCombineFriction([](const JPH::Body& a, const JPH::SubShapeID&, const JPH::Body& b, const JPH::SubShapeID&) {
@@ -1282,6 +1481,21 @@ public:
                     }
                 }
             }
+        }
+        return true;
+    }
+
+    bool SetGravity(Vec3 gravity) noexcept override {
+        if (!IsFinite(gravity)) return false;
+        JoinStep();
+        const JPH::Vec3 next(gravity.x, gravity.y, gravity.z);
+        if (next == physicsSystem_.GetGravity()) return true;
+        physicsSystem_.SetGravity(next);
+        // A body asleep on the old gravity would stay asleep on the new one.
+        JPH::BodyInterface& bodyInterface = physicsSystem_.GetBodyInterface();
+        for (const auto& [entityId, record] : bodies_) {
+            static_cast<void>(entityId);
+            if (record.signature.bodyType == RigidbodyBodyType::Dynamic) bodyInterface.ActivateBody(record.bodyId);
         }
         return true;
     }
@@ -1489,7 +1703,7 @@ public:
     }
 
     // A Dynamic Rigidbody whose Jolt body is created by the next synchronization (the first
-    // fixed step runs scripts before it, as Start in Unity runs before the first physics step):
+    // fixed step runs scripts before it):
     // the force/impulse is applied to the body as soon as it exists.
     bool AddTorque(SceneEntity entity, Vec3 torque) noexcept override {
         JoinStep();
@@ -1530,7 +1744,7 @@ public:
 
     [[nodiscard]] kb::scene::PhysicsVectorResult GetVelocity(SceneEntity entity) const noexcept override {
         JoinStep();
-        // A kinematic body reports the velocity MoveKinematic gives it, as Unity's MovePosition does.
+        // A kinematic body reports the velocity MoveKinematic gives it.
         const BodyRecord* body = FindDynamicBody(entity);
         body = body != nullptr ? body : FindLiveBody(entity, RigidbodyBodyType::Kinematic);
         if (body == nullptr) {
@@ -2210,7 +2424,7 @@ private:
         }
     }
 
-    // Unity's Joint.breakForce: a joint whose constraint force in the last step exceeded its
+    // Break force: a joint whose constraint force in the last step exceeded its
     // break force is removed at once; the engine removes its component after this fixed update
     // (a plugin makes no structural ECS changes), until then it is not rebuilt.
     void BreakOverloadedJoints(SceneSystemContext& context) {
@@ -2237,6 +2451,15 @@ private:
         case JointType::Hinge: return static_cast<JPH::HingeConstraint*>(constraint)->GetTotalLambdaPosition().Length();
         case JointType::Distance: return std::abs(static_cast<JPH::DistanceConstraint*>(constraint)->GetTotalLambdaPosition());
         case JointType::Point: return static_cast<JPH::PointConstraint*>(constraint)->GetTotalLambdaPosition().Length();
+        case JointType::Slider: {
+            const auto* slider = static_cast<JPH::SliderConstraint*>(constraint);
+            const auto position = slider->GetTotalLambdaPosition();
+            const float limits = slider->GetTotalLambdaPositionLimits();
+            return std::sqrt(position[0] * position[0] + position[1] * position[1] + limits * limits);
+        }
+        case JointType::Cone: return static_cast<JPH::SwingTwistConstraint*>(constraint)->GetTotalLambdaPosition().Length();
+        case JointType::SixDof: return static_cast<JPH::SixDOFConstraint*>(constraint)->GetTotalLambdaPosition().Length();
+        case JointType::Rope: return std::abs(static_cast<JPH::DistanceConstraint*>(constraint)->GetTotalLambdaPosition());
         }
         return 0.0F;
     }
@@ -2265,18 +2488,37 @@ private:
     // until its first SynchronizeBody call.
     void SynchronizeJoint(SceneEntity entity, const JointComponent& joint) {
         if (!IsFinite(joint.anchor) || !IsFinite(joint.connectedAnchor) || !IsFinite(joint.axis) ||
-            !std::isfinite(joint.minLimit) || !std::isfinite(joint.maxLimit)) {
+            !std::isfinite(joint.minLimit) || !std::isfinite(joint.maxLimit) || !IsFiniteFreedom(joint.freedom)) {
             throw std::invalid_argument("Physics joint contains non-finite values");
         }
         if (joint.connectedEntity == entity) {
             throw std::invalid_argument("Physics joint cannot connect a body to itself");
         }
-        if (joint.type == JointType::Hinge && joint.axis.x == 0.0F && joint.axis.y == 0.0F && joint.axis.z == 0.0F) {
-            throw std::invalid_argument("Physics hinge axis must be nonzero");
+        const bool axisKind = joint.type == JointType::Hinge || joint.type == JointType::Slider || joint.type == JointType::Cone ||
+            joint.type == JointType::SixDof;
+        if (axisKind && joint.axis.x == 0.0F && joint.axis.y == 0.0F && joint.axis.z == 0.0F) {
+            throw std::invalid_argument("Physics joint axis must be nonzero");
         }
         if (joint.type == JointType::Distance && joint.enableLimit &&
             (joint.minLimit < 0.0F || joint.maxLimit < joint.minLimit)) {
             throw std::invalid_argument("Physics joint distance limits are invalid");
+        }
+        if (joint.type == JointType::Rope && (joint.minLimit < 0.0F || joint.maxLimit < joint.minLimit)) {
+            throw std::invalid_argument("Physics rope length limits are invalid");
+        }
+        // Jolt measures a slider from the pose where the anchors coincide, so the travel must include it.
+        if (joint.type == JointType::Slider && joint.enableLimit && (joint.minLimit > 0.0F || joint.maxLimit < 0.0F)) {
+            throw std::invalid_argument("Physics slider limits must include the neutral position");
+        }
+        if (joint.type == JointType::Cone && joint.enableLimit && joint.maxLimit < joint.minLimit) {
+            throw std::invalid_argument("Physics cone twist limits are invalid");
+        }
+        if (joint.type == JointType::SixDof) {
+            for (const JointAxis& axis : joint.freedom.axes) {
+                if (axis.mode == JointAxisMode::Limited && axis.maxLimit < axis.minLimit) {
+                    throw std::invalid_argument("Physics six-degrees-of-freedom joint limits are invalid");
+                }
+            }
         }
         const JPH::BodyID* ownerBodyId = FindBodyId(entity);
         if (ownerBodyId == nullptr) {
@@ -2325,7 +2567,7 @@ private:
         }
         // A body on a long arm (pendulum) has very different effective masses for rotation and
         // motion: with Jolt's default 10/2 solver steps a hinge limit lets it through by 5 deg and
-        // bounces. Jolt recommends more steps for such constraints - the limit holds as in Unity.
+        // bounces. Jolt recommends more steps for such constraints - the limit then holds.
         constraint->SetNumVelocityStepsOverride(40U);
         constraint->SetNumPositionStepsOverride(10U);
         physicsSystem_.AddConstraint(constraint);
@@ -2531,8 +2773,8 @@ private:
             // Physics.CharacterMove pins do not even accept a Y value).
             const JPH::Vec3 desiredVelocity = ToJolt(record.moveInput);
             JPH::Vec3 horizontalVelocity = desiredVelocity - desiredVelocity.Dot(up) * up;
-            // On walkable ground the move follows the slope keeping its horizontal speed (as
-            // Unity's CharacterController and UE's walking mode); Jolt alone would project it
+            // On walkable ground the move follows the slope keeping its horizontal speed
+            // Jolt alone would project it
             // onto the slope and walk slower uphill.
             if (character->GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround) {
                 const JPH::Vec3 groundNormal = SurfaceBelow(*character, characterLayer);
@@ -2598,7 +2840,7 @@ private:
         }
     }
 
-    // Unity's CharacterController contacts, reported by ExtendedUpdate on the main thread:
+    // Character controller contacts, reported by ExtendedUpdate on the main thread:
     // a trigger raises OnTrigger* on both sides, a solid collider raises
     // OnControllerColliderHit on the controller for every step it moves into it.
     bool OnContactValidate(const JPH::CharacterVirtual* character, const JPH::CharacterContact& contact) override {
@@ -2802,7 +3044,7 @@ private:
         bodySettings.mLinearVelocity = ToJolt(rigidbody.linearVelocity);
         bodySettings.mAngularVelocity = ToJolt(rigidbody.angularVelocity);
         bodySettings.mGravityFactor = rigidbody.useGravity ? rigidbody.gravityScale : 0.0F;
-        // No hidden speed cap (Jolt: 500 m/s); angular cap as Unity's default 50 rad/s.
+        // No hidden speed cap (Jolt: 500 m/s); angular cap 50 rad/s.
         bodySettings.mMaxLinearVelocity = 1.0e5F;
         bodySettings.mMaxAngularVelocity = 50.0F;
         bodySettings.mLinearDamping = rigidbody.linearDamping;

@@ -24,16 +24,17 @@
 namespace kb::editor {
 namespace {
 
+// The first kSourceBasicRows rows are what most authors set; the rest sit behind the section's Advanced row.
+constexpr int kSourceBasicRows = 6;
 constexpr std::array<InspectorAudioRow, 17U> kSourceRows{ {
     { InspectorPropertyId::AudioSourceClip, InspectorAudioControlKind::Asset, InspectorPropertyId::AudioSourceClipPicker },
-    { InspectorPropertyId::AudioSourceClipClear, InspectorAudioControlKind::Action },
     { InspectorPropertyId::AudioSourceVolume, InspectorAudioControlKind::Float },
-    { InspectorPropertyId::AudioSourcePitch, InspectorAudioControlKind::Float },
-    { InspectorPropertyId::AudioSourceEnabled, InspectorAudioControlKind::Bool },
-    { InspectorPropertyId::AudioSourceAutoplay, InspectorAudioControlKind::Bool },
     { InspectorPropertyId::AudioSourceLoop, InspectorAudioControlKind::Bool },
-    { InspectorPropertyId::AudioSourceMute, InspectorAudioControlKind::Bool },
+    { InspectorPropertyId::AudioSourceAutoplay, InspectorAudioControlKind::Bool },
     { InspectorPropertyId::AudioSourceSpatial, InspectorAudioControlKind::Bool },
+    { InspectorPropertyId::AudioSourceEnabled, InspectorAudioControlKind::Bool },
+    { InspectorPropertyId::AudioSourceMute, InspectorAudioControlKind::Bool },
+    { InspectorPropertyId::AudioSourcePitch, InspectorAudioControlKind::Float },
     { InspectorPropertyId::AudioSourcePan, InspectorAudioControlKind::Float },
     { InspectorPropertyId::AudioSourceSpatialBlend, InspectorAudioControlKind::Float },
     { InspectorPropertyId::AudioSourceAttenuation, InspectorAudioControlKind::Enum },
@@ -42,6 +43,7 @@ constexpr std::array<InspectorAudioRow, 17U> kSourceRows{ {
     { InspectorPropertyId::AudioSourceRolloff, InspectorAudioControlKind::Float },
     { InspectorPropertyId::AudioSourceDopplerFactor, InspectorAudioControlKind::Float },
     { InspectorPropertyId::AudioSourceOutputBus, InspectorAudioControlKind::Route },
+    { InspectorPropertyId::AudioSourceClipClear, InspectorAudioControlKind::Action },
 } };
 
 constexpr std::array<InspectorAudioRow, 4U> kListenerRows{ {
@@ -115,6 +117,10 @@ constexpr std::array<InspectorAudioRow, 4U> kListenerRows{ {
 
 std::span<const InspectorAudioRow> InspectorAudioComponentModel::SourceRows() noexcept {
     return kSourceRows;
+}
+
+int InspectorAudioComponentModel::SourceBasicCount() noexcept {
+    return kSourceBasicRows;
 }
 
 std::span<const InspectorAudioRow> InspectorAudioComponentModel::ListenerRows() noexcept {

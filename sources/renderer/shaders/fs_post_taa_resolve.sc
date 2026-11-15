@@ -101,7 +101,7 @@ void main()
     float clampError = length(rawHistory - historyRgb);
     float clampRejection = smoothstep(0.25, 1.0, clampError / max(boxExtent, 0.0001));
     blend *= 1.0 - clampRejection;
-    // Reactive rejection (FSR2's auto-reactive mask, Unreal's Responsive AA): the scene colour alpha is the
+    // Reactive rejection: the scene colour alpha is the
     // share of the opaque surface still visible through translucency (SceneColorAlphaPolicy). Motion vectors
     // follow that opaque surface, so what a translucent layer over it shows - glass, water, particles - has
     // no valid history; trust the history only by the visible share.

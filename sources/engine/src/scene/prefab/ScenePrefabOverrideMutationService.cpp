@@ -170,7 +170,8 @@ struct LivePrefabComponentReaders {
 
 [[nodiscard]] bool Equals(const MeshRendererComponent& lhs, const MeshRendererComponent& rhs) noexcept {
     return lhs.meshAssetId == rhs.meshAssetId && lhs.materialAssetId == rhs.materialAssetId && lhs.materialSlotAssetIds == rhs.materialSlotAssetIds
-        && lhs.materialSlotOverrideCount == rhs.materialSlotOverrideCount && lhs.castsShadow == rhs.castsShadow && lhs.receivesShadow == rhs.receivesShadow && lhs.lodBias == rhs.lodBias && lhs.lodEnabled == rhs.lodEnabled && lhs.mobility == rhs.mobility;
+        && lhs.materialSlotOverrideCount == rhs.materialSlotOverrideCount && lhs.castsShadow == rhs.castsShadow && lhs.receivesShadow == rhs.receivesShadow && lhs.lodBias == rhs.lodBias && lhs.lodEnabled == rhs.lodEnabled && lhs.mobility == rhs.mobility
+        && lhs.affectsNavigation == rhs.affectsNavigation;
 }
 
 [[nodiscard]] bool Equals(const LightComponent& lhs, const LightComponent& rhs) noexcept {
@@ -359,6 +360,7 @@ void MixLiveSceneComponents(std::uint64_t& hash, SceneComponents components, Sce
         ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint32_t>(meshRenderer->lodBias));
         ScenePrefabHashBuilder::Mix(hash, meshRenderer->lodEnabled ? 1U : 0U);
         ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint32_t>(meshRenderer->mobility));
+        if (!meshRenderer->affectsNavigation) ScenePrefabHashBuilder::Mix(hash, 0x4E415646U);
     }
 
     const LightComponent* light = components.Lights().TryGet(entity);

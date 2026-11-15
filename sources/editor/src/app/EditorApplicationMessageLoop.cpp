@@ -27,6 +27,7 @@
 #include "scene/material_preview/EditorMaterialPreviewMeshFactory.hpp"
 #include "project/EditorProjectPaths.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
+#include "app/EditorPlayCommands.hpp"
 #include "profiler/EditorProfilerSampler.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MaterialPreviewPresentSettings.hpp"
@@ -34,6 +35,7 @@
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/MaterialPreviewRenderPolicy.hpp"
 #include "rendering/EditorHostSurfaceLayoutResolver.hpp"
+#include "rendering/GamePanelContentRenderer.hpp"
 #include "rendering/ScenePanelContentRenderer.hpp"
 #include "rendering/SceneViewportPresentationPolicy.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
@@ -54,8 +56,8 @@
 #include "app/EditorWindowInvalidator.hpp"
 #include "app/EditorEditCommandPolicy.hpp"
 #include "scene/EditorTerrainService.hpp"
-#include "diagnostics/EditorLagTrace.hpp"
 #include "scene/StaticMeshEditorSession.hpp"
+#include "diagnostics/EditorLagTrace.hpp"
 #include "localization/EditorLocalization.hpp"
 #include "platform/win32/Utf8Gdi.hpp"
 
@@ -258,7 +260,7 @@ void InvalidateSceneToolbars(EditorApplicationState& state) {
 }
 
 // The window title names the open scene, with * while it has unsaved changes, and the project,
-// like Unity's "Level1* - MyGame - Unity".
+// as in "Level1* - MyGame".
 void SyncWindowTitle(const EditorApplicationState& state) {
     if (state.window == nullptr) {
         return;
@@ -309,7 +311,6 @@ void InvalidatePanelKind(EditorApplicationState& state, DockPanelKind kind) noex
         state.window, state.dockModel, state.floatingWindows, state.metrics, kind);
 }
 
-void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
 // Shows the Static Mesh window an Open asked for, closes its session once its tab is gone, and advances it; true
 // while the window keeps changing.
 [[nodiscard]] bool TickStaticMeshEditor(EditorApplicationState& state, float deltaSeconds) {
@@ -332,6 +333,7 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
     return true;
 }
 
+void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
     InvalidatePanelKind(state, DockPanelKind::Inspector);
 }
 
@@ -428,6 +430,9 @@ void InvalidateMeshPreviewPanels(EditorApplicationState& state) noexcept {
         const RECT content = ToRect(panelLayout.content);
         if (panel->kind == DockPanelKind::Scene) {
             scenePresented = PresentScenePanel(state, state.window, *panel, content, refreshToolbar) || scenePresented;
+        } else if (panel->kind == DockPanelKind::Game) {
+            scenePresented = GamePanelContentRenderer::PresentViewport(
+                state.sceneViewport, state.window, content, *panel, state.sceneContext, state.renderBackendSettings) || scenePresented;
         } else if (panel->kind == DockPanelKind::SkeletalMeshEditor) {
             documentPresented = SkeletalMeshEditorPanelRenderer::PresentViewport(
                 state.sceneViewport, state.window, content, *panel,
@@ -594,13 +599,21 @@ void InvalidateStatusBarOnChange(EditorApplicationState& state) noexcept {
     const std::uint64_t sequence = entries.empty() ? 0U : entries.back().sequence;
     const std::uint64_t count = static_cast<std::uint64_t>(entries.size());
     const bool rendererInitialized = state.sceneViewport.RendererInitialized();
+    std::uint64_t buildCount = 0U;
+    std::uint64_t longestBuildSeconds = 0U;
+    for (const EditorSceneContext::ScriptBuildStatus& build : state.sceneContext.ScriptBuildsInProgress()) {
+        ++buildCount;
+        longestBuildSeconds = std::max(longestBuildSeconds, static_cast<std::uint64_t>(build.elapsedSeconds));
+    }
+    const std::uint64_t buildSignature = (buildCount << 32U) | longestBuildSeconds;
     if (sequence == state.lastStatusConsoleEntrySequence && count == state.lastStatusConsoleEntryCount &&
-        rendererInitialized == state.lastStatusRendererInitialized) {
+        rendererInitialized == state.lastStatusRendererInitialized && buildSignature == state.lastStatusBuildSignature) {
         return;
     }
     state.lastStatusConsoleEntrySequence = sequence;
     state.lastStatusConsoleEntryCount = count;
     state.lastStatusRendererInitialized = rendererInitialized;
+    state.lastStatusBuildSignature = buildSignature;
     RECT client{};
     if (state.window == nullptr || GetClientRect(state.window, &client) == 0) {
         return;
@@ -642,8 +655,7 @@ void PumpAgentPanel(EditorApplicationState& state) {
     // View and the Agent tab of the bottom drawer, which comes forward or steps back.
     switch (agent.TakeDockRequest()) {
     case EditorAgentPanelState::DockRequest::Dock:
-        static_cast<void>(state.dockModel.Commands().SetDrawerCollapsed(false));
-        static_cast<void>(state.dockModel.Commands().ActivatePanelKind(DockPanelKind::Agent, DockArea::Bottom));
+        static_cast<void>(state.dockModel.Commands().ActivatePanelKind(DockPanelKind::Agent, DockArea::Right));
         agent.FocusInput(true);
         state.sceneViewport.RequestPresent();
         InvalidateRect(state.window, nullptr, FALSE);
@@ -748,6 +760,10 @@ void RefreshAssetUsersForList(EditorApplicationState& state) {
         state.sceneViewport.RequestPresent();
         InvalidateRect(state.window, nullptr, FALSE);
     }
+    // A navigation bake or tile update finished on its worker: the new mesh in the view.
+    if (state.sceneContext.PumpNavigationBake()) {
+        state.sceneViewport.RequestPresent();
+    }
     const auto cookStart = std::chrono::steady_clock::now();
     const std::size_t cookResults = state.sceneContext.PumpMaterialGraphCookResults();
     const double cookMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - cookStart).count();
@@ -842,9 +858,27 @@ void RefreshAssetUsersForList(EditorApplicationState& state) {
     return mainPresented || floatingPresented;
 }
 
+// Where the pointer is mapped to the game's picture: the Game View when Play runs there, the Scene View otherwise.
+[[nodiscard]] bool PlayInGameView(const EditorApplicationState& state) noexcept {
+    return state.sceneContext.EditorConfig().play.target == EditorPlayTarget::GameView;
+}
+
+// The keyboard, mouse and gamepad reach the game while its picture has the focus. Played in the Game View, a press
+// anywhere else in the editor takes the input back until the Game View is clicked again.
+void CollectPlayModeInput(EditorApplicationState& state) {
+    if (!PlayInGameView(state) || state.playMode.GameHasInput()) {
+        state.inputCollector.Collect(state.sceneContext.Scene(), state.window);
+        return;
+    }
+    kb::input::InputDeviceState& input = state.sceneContext.Scene().Input().MutableDeviceState();
+    input.Reset();
+    input.SetHasFocus(false);
+}
+
 void ConfigurePlayModePointerViewport(EditorApplicationState& state) {
     HWND coordinateWindow = state.window;
     std::optional<EditorResolvedPanelContent> scenePanel;
+    const DockPanelKind viewKind = PlayInGameView(state) ? DockPanelKind::Game : DockPanelKind::Scene;
 
     POINT cursor{};
     if (GetCursorPos(&cursor) != 0) {
@@ -854,7 +888,7 @@ void ConfigurePlayModePointerViewport(EditorApplicationState& state) {
             : nullptr;
         if (rootWindow != nullptr && rootWindow != state.window) {
             scenePanel = EditorPanelContentResolver::ResolvePanel(
-                DockPanelKind::Scene,
+                viewKind,
                 rootWindow,
                 state.window,
                 state.dockModel,
@@ -868,7 +902,7 @@ void ConfigurePlayModePointerViewport(EditorApplicationState& state) {
     if (!scenePanel.has_value()) {
         coordinateWindow = state.window;
         scenePanel = EditorPanelContentResolver::ResolvePanel(
-            DockPanelKind::Scene,
+            viewKind,
             state.window,
             state.window,
             state.dockModel,
@@ -877,6 +911,19 @@ void ConfigurePlayModePointerViewport(EditorApplicationState& state) {
     }
     if (!scenePanel.has_value()) {
         state.inputCollector.ClearPointerViewport();
+        return;
+    }
+
+    if (viewKind == DockPanelKind::Game) {
+        // The picture sits inside the panel with bars around it, so the pointer is mapped through the picture.
+        const GameViewRects rects = GamePanelContentRenderer::Resolve(
+            scenePanel->content, GamePanelContentRenderer::ListOpen(state.sceneContext, scenePanel->panelId));
+        const GameViewPicture picture = GamePanelContentRenderer::ResolvePicture(rects.renderArea, state.sceneContext);
+        if (picture.destination.right <= picture.destination.left || picture.destination.bottom <= picture.destination.top) {
+            state.inputCollector.ClearPointerViewport();
+            return;
+        }
+        state.inputCollector.ConfigurePointerViewport(coordinateWindow, picture.destination, picture.renderWidth, picture.renderHeight);
         return;
     }
 
@@ -1402,7 +1449,7 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     const auto pointerStart = std::chrono::steady_clock::now();
     ConfigurePlayModePointerViewport(state);
     const auto collectStart = std::chrono::steady_clock::now();
-    state.inputCollector.Collect(state.sceneContext.Scene(), state.window);
+    CollectPlayModeInput(state);
     const auto runtimeStart = std::chrono::steady_clock::now();
     state.sceneViewport.PrepareParticleScene(state.sceneContext.Scene());
     const bool continuePlaying = state.sceneContext.TickPlayModeSceneSession(deltaSeconds);
@@ -1434,6 +1481,7 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
         const bool previousPlayModeSceneActive = state.sceneContext.HasPlayModeSceneSession();
         state.playMode.Stop();
         static_cast<void>(state.sceneContext.RestorePlayModeSceneSession());
+        EditorPlayCommands::RestoreWorkspace(state.dockModel);
         if (SceneViewportPresentationPolicy::RequiresPresent(
                 previousPlayModeSceneActive,
                 state.sceneContext.HasPlayModeSceneSession())) {
@@ -1446,6 +1494,7 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
 }
 
 [[nodiscard]] bool TickEditorFrame(EditorApplicationState& state, float deltaSeconds) {
+    state.sceneContext.TickEditModeScripts();
     const bool asyncAssetsPending = state.sceneContext.HasPendingSkeletalMeshEditorOpen() ||
         EditorMeshPreviewCache().HasPendingPreviewWork();
     if (asyncAssetsPending) {
@@ -1532,13 +1581,13 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
         !state.playMode.IsPlaying() && state.sceneContext.TickEditorSceneParticles(deltaSeconds);
     if (sceneParticlesChanged) state.sceneViewport.RequestPresent();
 
+    const bool staticMeshEditorChanged = TickStaticMeshEditor(state, deltaSeconds);
     const bool audioPreviewChanged = EditorAudioAssetPreview::Tick(state.sceneContext.Scene());
     if (state.sceneContext.ConsumeGameplayGraphOpenRequest()) {
         static_cast<void>(state.dockModel.Commands().ActivatePanelKind(DockPanelKind::GameplayGraphEditor,DockArea::Center));
         InvalidateRect(state.window,nullptr,FALSE);
     }
     if (auto* graph=state.sceneContext.GameplayGraphEditor(); graph && !graph->manualPreview && graph->Execute(std::min(deltaSeconds,0.25F))) {
-    const bool staticMeshEditorChanged = TickStaticMeshEditor(state, deltaSeconds);
         EditorWindowInvalidator::InvalidateDockPanel(state.window,state.dockModel,state.floatingWindows,state.metrics,DockPanelKind::GameplayGraphEditor);
     }
     if (state.sceneContext.ConsumeBlendSpace2DEditorOpenRequest()) {
@@ -1611,7 +1660,7 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     return viewportsPresented || navigationChanged || gizmoChanged || focusChanged ||
         animationPreviewCameraChanged || animationPreviewPlaybackChanged || particlePreviewChanged ||
         sceneParticlesChanged || scriptSaved || timelinePreviewChanged ||
-        audioPreviewChanged || audioMetersChanged || addComponentSliding || disclosureSliding || caretBlinking || skeletalMeshEditorOpenChanged ||
+        staticMeshEditorChanged || audioPreviewChanged || audioMetersChanged || addComponentSliding || disclosureSliding || caretBlinking || skeletalMeshEditorOpenChanged ||
         EditorTerrainService::ToolState().strokeActive;
 }
 
@@ -1847,6 +1896,7 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
             if (state.sceneContext.MaterialEditor().OpenAssetId().IsValid() ||
                 EditorAudioAssetPreview::HasActivePreview() ||
                 state.sceneContext.AssetImportInProgress() ||
+                state.sceneContext.NavigationBakeInProgress() ||
                 state.sceneContext.HasPendingSkeletalMeshEditorOpen() ||
                 state.sceneContext.AgentPanel().AnyRunning() || state.sceneContext.AgentPanel().CheckingAccount() ||
                 EditorMeshPreviewCache().HasPendingPreviewWork()) {

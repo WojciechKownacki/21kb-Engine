@@ -13,7 +13,7 @@ void EditorFloatingWindowSync::Reconcile(
             static_cast<void>(floatingWindows.Commands().Create(
                 panel.id, panel.title, panel.floatingRect));
             if (const HWND window = floatingWindows.Queries().WindowForPanel(panel.id)) {
-                const auto rect = RecoverNativeDisplayRect(panel.floatingRect);
+                const auto rect = RecoverOwnedDisplayRect(GetWindow(window, GW_OWNER), panel.floatingRect);
                 SetWindowPos(window, nullptr, rect.x, rect.y, rect.width, rect.height, SWP_NOZORDER | SWP_NOACTIVATE);
             }
             continue;

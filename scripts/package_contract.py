@@ -663,7 +663,8 @@ def tool_fingerprint(path: Path) -> dict[str, object]:
     resolved = path.resolve(strict=True)
     if not resolved.is_file():
         raise PackagingError(f"tool is not a regular file: {resolved}")
-    return {"path": str(resolved), "size": resolved.stat().st_size, "sha256": sha256_file(resolved)}
+    # The receipt ships inside the package, so it names the tool, never the folder it was found in.
+    return {"name": resolved.name, "size": resolved.stat().st_size, "sha256": sha256_file(resolved)}
 
 
 def tree_fingerprint(root: Path) -> str:

@@ -15,6 +15,13 @@ namespace kb::render {
         config.globalIllumination == SceneRenderGlobalIlluminationMode::VoxelGrid;
 }
 
+// Whether the baked light probes light the frame. Gathered GI owns the bounce light, and the deferred lighting
+// shader reads the probe texture through the stage of the reflections' lit colour (light_probes.sh), so screen-space
+// reflections keep that stage for themselves.
+[[nodiscard]] inline bool UsesBakedLightProbes(const SceneRenderLightingConfig& config) noexcept {
+    return bgfx::isValid(config.lightProbes) && !UsesGatheredGi(config) && !config.screenSpaceReflectionsEnabled;
+}
+
 // Whether the frame needs the screen-space resolve (GI, ambient occlusion) or the previous frame's lit
 // colour (reflections). All of them read the G-buffer, so they imply the deferred path.
 [[nodiscard]] constexpr bool UsesScreenSpaceEffects(const SceneRenderLightingConfig& config) noexcept {
@@ -33,8 +40,9 @@ public:
     void Destroy() noexcept;
     [[nodiscard]] bool IsValid() const noexcept;
     // `binding` may be null; `unavailableTexture` stands in for the textures then. Each effect's
-    // intensity is zero unless it is enabled, which switches its shader path off.
-    void Set(const SceneGiBinding* binding, const SceneRenderLightingConfig& config,
+    // intensity is zero unless it is enabled, which switches its shader path off. A frame lit by the baked
+    // probes leaves kLitStage to them (UsesBakedLightProbes); returns whether kLitStage was bound.
+    bool Set(const SceneGiBinding* binding, const SceneRenderLightingConfig& config,
         const std::array<float, 16>& viewProjection, bgfx::TextureHandle unavailableTexture) const;
 
 private:

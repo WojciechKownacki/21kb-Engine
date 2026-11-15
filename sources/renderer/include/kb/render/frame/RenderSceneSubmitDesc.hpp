@@ -6,7 +6,8 @@
 #include "kb/render/frame/RenderViewportDesc.hpp"
 #include "kb/render/overlay/EditorCameraWireframe.hpp"
 #include "kb/render/overlay/EditorLightWireframe.hpp"
-#include "kb/render/overlay/EditorParticleIcon.hpp"
+#include "kb/render/overlay/EditorSceneIcon.hpp"
+#include "kb/render/overlay/DebugFillTriangle.hpp"
 #include "kb/render/overlay/PhysicsDebugLine.hpp"
 #include "kb/render/post/ScenePostProcessSettings.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
@@ -188,13 +189,16 @@ struct RenderSceneSubmitDesc {
     RenderSceneTargetBinding target{};
     RenderPostProcessTargetBinding postProcess{};
     RenderFinalCompositeTargetBinding finalComposite{};
+    // Set when the scene renders at a reduced render scale: the full-resolution size the screen UI lays out
+    // in and the final composite upscales the scene to. Empty renders and lays out at target.viewport.extent.
+    RenderExtent upscaledExtent{};
     // A world-space camera (view in world coordinates); the renderer makes it relative to its render origin.
     std::optional<SceneRenderCamera> cameraOverride{};
     // The double-precision world position of cameraOverride's eye. Far from the origin the view matrix alone carries
     // its translation in float; with this the render-space view is rebuilt exactly (docs/large_worlds.md).
     std::optional<kb::math::DVec3> cameraOverrideEye{};
     // The world position the editor overlay positions of this submit (gizmo target, camera and light wireframes,
-    // particle icons, physics debug lines) are relative to; zero for world-space overlays. A host working relative
+    // scene icons, physics debug lines) are relative to; zero for world-space overlays. A host working relative
     // to an origin near its camera hands its overlays over without leaving that space.
     kb::math::DVec3 overlayOrigin{};
     std::optional<ScenePostProcessSettings> postProcessSettings{};
@@ -202,12 +206,16 @@ struct RenderSceneSubmitDesc {
     SceneRenderLightingConfig lightingConfig{};
     RenderMaterialGraphBuildContext materialGraphContext{};
     SceneRenderMeshPassMode meshPassMode = SceneRenderMeshPassMode::OpaqueAndTransparent;
+    // false for a draw that only prepares a scene nobody sees yet: effects simulated on the GPU are set up but their
+    // time does not advance, so the scene starts from the same state whatever number of such draws came before.
+    bool advanceSimulation = true;
     std::span<const std::uint64_t> selectedEntityIds{};
     std::span<const std::uint64_t> dirtySceneEntityIds{};
     std::span<const EditorCameraWireframeDesc> editorCameraWireframes{};
     std::span<const EditorLightWireframeDesc> editorLightWireframes{};
-    std::span<const EditorParticleIconDesc> editorParticleIcons{};
+    std::span<const EditorSceneIconDesc> editorSceneIcons{};
     std::span<const PhysicsDebugLine> physicsDebugLines{};
+    std::span<const DebugFillTriangle> debugFillTriangles{};
     std::span<const kb::scene::SceneUIFrameElement> editorUIOverlays{};
     float editorUIScale = 1.0F;
     kb::math::Vec2 editorUIOffset{};

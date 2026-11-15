@@ -68,6 +68,7 @@ bool ScenePostProcessRenderer::Initialize() {
     temporalParamsUniform_ = bgfx::createUniform("u_temporalParams", bgfx::UniformType::Vec4);
     dofParamsUniform_ = bgfx::createUniform("u_dofParams", bgfx::UniformType::Vec4);
     dofViewDepthPlaneUniform_ = bgfx::createUniform("u_dofViewDepthPlane", bgfx::UniformType::Vec4);
+    motionBlurParamsUniform_ = bgfx::createUniform("u_motionBlurParams", bgfx::UniformType::Vec4);
     fullscreenLayout_ = FullscreenLayout();
 
     constexpr std::array<PosTexVertex, 3U> triangle{
@@ -90,7 +91,7 @@ bool ScenePostProcessRenderer::Initialize() {
 }
 
 void ScenePostProcessRenderer::Shutdown() noexcept {
-    for (auto* uniform : {&dofParamsUniform_, &dofViewDepthPlaneUniform_}) {
+    for (auto* uniform : {&dofParamsUniform_, &dofViewDepthPlaneUniform_, &motionBlurParamsUniform_}) {
         if (bgfx::isValid(*uniform)) { bgfx::destroy(*uniform); *uniform = BGFX_INVALID_HANDLE; }
     }
     if (bgfx::isValid(fullscreenVertexBuffer_)) {
@@ -168,7 +169,7 @@ bool ScenePostProcessRenderer::IsInitialized() const noexcept {
            bgfx::isValid(postParams_) && bgfx::isValid(inverseViewProjectionUniform_) &&
            bgfx::isValid(previousViewProjectionUniform_) && bgfx::isValid(temporalParamsUniform_) &&
            bgfx::isValid(dofParamsUniform_) && bgfx::isValid(dofViewDepthPlaneUniform_) &&
-           bgfx::isValid(fullscreenVertexBuffer_);
+           bgfx::isValid(motionBlurParamsUniform_) && bgfx::isValid(fullscreenVertexBuffer_);
 }
 
 } // namespace kb::render

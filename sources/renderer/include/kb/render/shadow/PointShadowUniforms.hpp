@@ -50,9 +50,12 @@ struct PointShadowUniforms {
     }
 
     // Publishes zero lights when `binding` is null or invalid, which the shader treats as "no shadow".
-    // lightSlots holds the packed light slot of each shadow light (negative = not packed).
+    // lightSlots holds the packed light slot of each shadow light (negative = not packed). `compare` reads the atlas
+    // through the comparison sampler of the KB_SHADOW_COMPARE programs (then `fallbackTexture` is a depth texture),
+    // `wideKernel` takes their nine-tap soft kernel.
     void Set(const ScenePointShadowBinding* binding, const std::array<float, ScenePointShadowBinding::kMaxLights>& lightSlots,
-        bgfx::TextureHandle fallbackTexture, std::uint8_t samplerStage = kSamplerStage) const {
+        bgfx::TextureHandle fallbackTexture, std::uint8_t samplerStage = kSamplerStage, bool compare = false,
+        bool wideKernel = true) const {
         const bool enabled = binding != nullptr && binding->IsValid();
         std::array<float, 4U * ScenePointShadowBinding::kMaxLights> lightData{};
         std::array<float, 4U * ScenePointShadowBinding::kMaxLights> depthData{};
@@ -72,9 +75,16 @@ struct PointShadowUniforms {
             }
             atlasData = binding->atlas;
             const bgfx::Caps* caps = bgfx::getCaps();
-            infoData = { static_cast<float>(binding->lightCount), caps != nullptr && caps->originBottomLeft ? 0.5F : -0.5F, binding->strength, 0.0F };
+            infoData = { static_cast<float>(binding->lightCount), caps != nullptr && caps->originBottomLeft ? 0.5F : -0.5F, binding->strength,
+                wideKernel ? 1.0F : 0.0F };
         }
-        bgfx::setTexture(samplerStage, sampler, enabled ? binding->depthTexture : fallbackTexture);
+        // A comparison sampler needs a depth texture even when no light has a shadow (the shader never reads it then):
+        // the caller passes the other map as the fallback.
+        if (compare) {
+            bgfx::setTexture(samplerStage, sampler, enabled ? binding->depthTexture : fallbackTexture, kShadowCompareSamplerFlags);
+        } else {
+            bgfx::setTexture(samplerStage, sampler, enabled ? binding->depthTexture : fallbackTexture);
+        }
         bgfx::setUniform(light, lightData.data(), ScenePointShadowBinding::kMaxLights);
         bgfx::setUniform(depth, depthData.data(), ScenePointShadowBinding::kMaxLights);
         bgfx::setUniform(spot, enabled ? binding->spot.data() : noSpot.data(), ScenePointShadowBinding::kMaxLights);

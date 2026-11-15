@@ -1,5 +1,12 @@
 #pragma once
 
+#include "engine/input/InputLocalUser.hpp"
+#include "engine/input/InputValue.hpp"
+
+#include <string_view>
+
+namespace kb::scene { class Scene; }
+
 namespace kb::script {
 
 class ScriptRuntimeHost;
@@ -108,6 +115,11 @@ class ScriptRuntimeHost;
 // unplugged) and react, e.g. auto-pause or show a reconnect prompt.
 struct ScriptInputApi {
     [[nodiscard]] static bool Register(ScriptRuntimeHost& host);
+    // The local user a script's optional `player` argument selects: none or <= 0 is the primary user.
+    [[nodiscard]] static kb::input::LocalUserId UserForPlayer(int player) noexcept;
+    // The resolved value of `action` for that local user. Input.Value, Input.ActionFloat, Input.ActionBool, Input.Vector2,
+    // Input.Action2D and Input.Vector3 all read it here, both as registered functions and from the Lua bindings.
+    [[nodiscard]] static kb::input::InputValue ActionValue(kb::scene::Scene& scene, int player, std::string_view action);
 };
 
 } // namespace kb::script

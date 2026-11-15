@@ -50,7 +50,8 @@ namespace {
 
 [[nodiscard]] bool Equals(const MeshRendererComponent& lhs, const MeshRendererComponent& rhs) noexcept {
     return lhs.meshAssetId == rhs.meshAssetId && lhs.materialAssetId == rhs.materialAssetId && lhs.materialSlotAssetIds == rhs.materialSlotAssetIds
-        && lhs.materialSlotOverrideCount == rhs.materialSlotOverrideCount && lhs.castsShadow == rhs.castsShadow && lhs.receivesShadow == rhs.receivesShadow && lhs.lodBias == rhs.lodBias && lhs.lodEnabled == rhs.lodEnabled && lhs.mobility == rhs.mobility;
+        && lhs.materialSlotOverrideCount == rhs.materialSlotOverrideCount && lhs.castsShadow == rhs.castsShadow && lhs.receivesShadow == rhs.receivesShadow && lhs.lodBias == rhs.lodBias && lhs.lodEnabled == rhs.lodEnabled && lhs.mobility == rhs.mobility
+        && lhs.affectsNavigation == rhs.affectsNavigation;
 }
 
 [[nodiscard]] bool Equals(const LightComponent& lhs, const LightComponent& rhs) noexcept {
@@ -179,7 +180,7 @@ namespace {
     return lhs.radius == rhs.radius && lhs.height == rhs.height && lhs.maxSpeed == rhs.maxSpeed && lhs.acceleration == rhs.acceleration &&
         lhs.angularSpeedDegrees == rhs.angularSpeedDegrees && lhs.stoppingDistance == rhs.stoppingDistance && lhs.areaMask == rhs.areaMask &&
         Equals(lhs.destination, rhs.destination) && Equals(lhs.velocity, rhs.velocity) && lhs.remainingDistance == rhs.remainingDistance &&
-        lhs.pathStatus == rhs.pathStatus && lhs.enabled == rhs.enabled;
+        lhs.pathStatus == rhs.pathStatus && lhs.enabled == rhs.enabled && lhs.horde == rhs.horde;
 }
 
 [[nodiscard]] bool Equals(const NavObstacle& lhs, const NavObstacle& rhs) noexcept {
@@ -190,6 +191,11 @@ namespace {
 [[nodiscard]] bool Equals(const NavLink& lhs, const NavLink& rhs) noexcept {
     return Equals(lhs.start, rhs.start) && Equals(lhs.end, rhs.end) && lhs.radius == rhs.radius && lhs.kind == rhs.kind &&
         lhs.area == rhs.area && lhs.bidirectional == rhs.bidirectional && lhs.enabled == rhs.enabled;
+}
+
+[[nodiscard]] bool Equals(const NavBounds& lhs, const NavBounds& rhs) noexcept {
+    return Equals(lhs.center, rhs.center) && Equals(lhs.size, rhs.size) && lhs.agentRadius == rhs.agentRadius && lhs.agentHeight == rhs.agentHeight &&
+        lhs.maxStepHeight == rhs.maxStepHeight && lhs.maxSlopeDegrees == rhs.maxSlopeDegrees && lhs.cellSize == rhs.cellSize && lhs.tileSize == rhs.tileSize;
 }
 
 [[nodiscard]] bool Equals(const AuxFrameComponent& lhs, const AuxFrameComponent& rhs) noexcept {
@@ -367,6 +373,7 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , navAgents(scene.Components().NavAgents())
     , navObstacles(scene.Components().NavObstacles())
     , navLinks(scene.Components().NavLinks())
+    , navBounds(scene.Components().NavBounds())
     , ui(scene.Components().UI()) {
     state.suppressPrefabDirtyTracking = true;
 }
@@ -494,6 +501,7 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     WriteOptionalComponent(context.navAgents, entity, node.components.navAgent);
     WriteOptionalComponent(context.navObstacles, entity, node.components.navObstacle);
     WriteOptionalComponent(context.navLinks, entity, node.components.navLink);
+    WriteOptionalComponent(context.navBounds, entity, node.components.navBounds);
 }
 
 } // namespace kb::scene

@@ -37,6 +37,9 @@ public:
         std::uint64_t motionFrame) noexcept;
     [[nodiscard]] static bool UsesDisabledAlphaBlend(const RenderMaterialResource* material) noexcept;
     [[nodiscard]] static bool UsesAdvancedBuiltinPbr(const RenderMaterialResource* material) noexcept;
+    // The material reads the copy of the scene colour behind it: a graph with a scene colour, refraction or
+    // translucent model input, or a built-in material with transmission (pbr_builtin_advanced.sh).
+    [[nodiscard]] static bool SamplesSceneColor(const RenderMaterialResource* material, bool graphProgram) noexcept;
     [[nodiscard]] static std::uint64_t State(
         MeshPassType pass,
         const RenderMeshResource* mesh,

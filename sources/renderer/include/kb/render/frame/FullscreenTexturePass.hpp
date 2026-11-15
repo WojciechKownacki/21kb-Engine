@@ -48,10 +48,13 @@ struct FullscreenTexturePassDesc {
     const char* viewName = "KB Fullscreen Texture";
     // 0 = none; 1 = corners fully dark (display composite vignette).
     float vignetteIntensity = 0.0F;
-    // FXAA on the display image, after the tonemap (Unreal's order); `sourceExtent` is then the size of
+    // FXAA on the display image, after the tonemap; `sourceExtent` is then the size of
     // `sourceTexture`, whose texels it filters.
     bool antiAliasing = false;
     RenderExtent sourceExtent{};
+    // The source was rendered below the output resolution: an edge-aware, lightly sharpened upscale
+    // (fs_present_upscale.sc) replaces the plain bilinear read; `sourceExtent` is then the source size.
+    bool upscale = false;
     // Display output has opaque alpha; ordinary texture copies preserve source alpha.
     bool forceOpaqueAlpha = false;
 
@@ -73,6 +76,7 @@ public:
 
 private:
     bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
+    bgfx::ProgramHandle upscaleProgram_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle colorSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle colorGradeSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle tonemapParams_ = BGFX_INVALID_HANDLE;

@@ -133,7 +133,7 @@ void Activate(HWND owner, const ProfilerPanelGeometry& geometry, const ProfilerP
         for (std::size_t counter = 0U; counter < registry.CounterCount(); ++counter) selection.SetInPanel(registry.Info(counter).id, hit.action == Action::CountersAll);
         break;
     case Action::Area: selection.SetAreaMeasured(static_cast<ProfilerArea>(hit.argument), !selection.AreaMeasured(static_cast<ProfilerArea>(hit.argument))); break;
-    case Action::LeftCounter: case Action::CounterPanel: {
+    case Action::CounterPanel: {
         const std::string_view id = registry.Info(static_cast<std::size_t>(hit.argument)).id;
         selection.SetInPanel(id, !selection.InPanel(id));
         break;
@@ -149,8 +149,7 @@ void Activate(HWND owner, const ProfilerPanelGeometry& geometry, const ProfilerP
         break;
     case Action::PickFrame: {
         const std::size_t samples = registry.Stats(ProfilerRegistry::Id(ProfilerBuiltIn::FrameTime)).samples;
-        const ProfilerChartRow& chart = geometry.charts[static_cast<std::size_t>(hit.argument)];
-        if (samples > 0U) panel.selectedFrame = profiler.Frame() - static_cast<std::uint64_t>(ProfilerFrameOffsetAt(chart.plot, x, samples));
+        if (samples > 0U) panel.selectedFrame = profiler.Frame() - static_cast<std::uint64_t>(ProfilerFrameOffsetAt(geometry.framePlot, x, samples));
         selectionChanged = false;
         break;
     }
@@ -202,11 +201,6 @@ bool ProfilerPanel::Wheel(const RECT& content, int x, int y, int delta, EditorSc
     const std::vector<ProfilerCounterRow> counters = ProfilerCounterRows(profiler.Registry());
     const int groups = static_cast<int>(std::ranges::count_if(counters, &ProfilerCounterRow::startsGroup));
     const auto height = [](const RECT& rect) { return static_cast<int>(rect.bottom - rect.top); };
-    if (panel.tab != ProfilerPanelTab::Diagnosis && Contains(geometry.countersList, x, y)) {
-        const int contentHeight = (static_cast<int>(counters.size()) + groups) * rowHeight;
-        panel.leftScroll = Clamp(panel.leftScroll + notches * 3 * rowHeight, contentHeight, height(geometry.countersList));
-        return true;
-    }
     if (panel.tab == ProfilerPanelTab::Measurements && Contains(geometry.hierarchyRows, x, y)) {
         const std::optional<std::uint64_t> shown = ProfilerShownFrame(profiler);
         const kb::core::ProfilerFrameRecord* record = shown ? profiler.FrameRegions().Find(*shown) : nullptr;

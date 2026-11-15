@@ -22,6 +22,7 @@
 #if KB_CLI_RENDERER
 #include "engine/render/StaticLightmapBaker.hpp"
 #include "kb/render/runtime/RuntimeRenderAssetDiscovery.hpp"
+#include "kb/render/bake/SceneLightingBaker.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/resources/RenderMeshAssetBuilder.hpp"
 #include "engine/scene/SceneLightComponents.hpp"
@@ -1197,7 +1198,7 @@ void ListProperties(std::string_view component, std::ostream& out) {
 }
 
 // entity attach: hangs an object on a character's socket (or bone) - parented under the
-// character and held there every frame after animation, as Unreal's AttachToComponent.
+// character and held there every frame after animation.
 [[nodiscard]] int EntityAttach(const ArgumentList& arguments, CommandIo io) {
     const std::optional<std::string> name = arguments.Option("--name");
     const std::optional<std::string> characterName = arguments.Option("--to");
@@ -1971,7 +1972,7 @@ int RunSceneLightmapCommand(const ArgumentList& arguments, CommandIo io) {
     if(relative.empty()||*relative.begin()=="..") {io.err << "error: --out must be inside Assets\n";return 1;}
     auto materialPath=texturePath;materialPath.replace_extension(".kbmat");
     if(std::filesystem::exists(texturePath)||std::filesystem::exists(materialPath)) {io.err << "error: lightmap output already exists; choose a new asset path\n";return 1;}
-    kb::render::StaticLightmapSettings settings;
+    kb::render::StaticLightmapSettings settings;settings.bounces=0;
     if(const auto resolution=arguments.Option("--resolution")) {
         unsigned value=0;const auto [end,error]=std::from_chars(resolution->data(),resolution->data()+resolution->size(),value);
         if(error!=std::errc{}||end!=resolution->data()+resolution->size()||value<4||value>1024) {io.err << "error: resolution must be 4..1024\n";return 1;}
@@ -1986,13 +1987,7 @@ int RunSceneLightmapCommand(const ArgumentList& arguments, CommandIo io) {
         const auto original=assets.Load<kb::render::RenderMaterialAssetData>(kb::assets::AssetId{receiverMesh->materialAssetId});
         if(!original.IsLoaded()) {io.err << "error: receiver material cannot be loaded\n";return 1;}
         material=*original.Shared();
-        if(material.materialType!="builtin.pbr"||!material.graph.nodes.empty()||material.desc.metallicFactor!=0||
-            material.desc.alphaMode!=kb::render::RenderMaterialAlphaMode::Opaque||material.desc.transmissionFactor!=0||
-            material.desc.emissiveTextureAssetId!=0||!material.emissiveTexturePath.empty()||material.desc.normalTextureAssetId!=0||
-            !material.normalTexturePath.empty()||material.desc.occlusionTextureAssetId!=0||!material.occlusionTexturePath.empty()||
-            material.desc.clearcoatFactor!=0||material.desc.anisotropyStrength!=0||material.desc.sheenColor[0]!=0||
-            material.desc.sheenColor[1]!=0||material.desc.sheenColor[2]!=0||
-            (material.desc.emissiveStrength>0&&(material.desc.emissiveColor[0]!=0||material.desc.emissiveColor[1]!=0||material.desc.emissiveColor[2]!=0))) {io.err << "error: bake receiver must use opaque matte builtin PBR without emission or normal maps\n";return 1;}
+        if(!kb::render::IsBakeReceiverMaterial(material)) {io.err << "error: bake receiver must use opaque matte builtin PBR without emission or normal maps\n";return 1;}
     }
     scene.Runtime().SynchronizeTransforms();
     std::vector<kb::render::LightmapTriangle> triangles,occluders;
@@ -2068,6 +2063,35 @@ int RunSceneLightmapCommand(const ArgumentList& arguments, CommandIo io) {
     return 0;
 }
 #endif
+
+int RunSceneBakeLightingCommand(const ArgumentList& arguments, CommandIo io) {
+    kb::render::SceneLightingBakeSettings settings;
+    const auto number=[&](const char* name,unsigned low,unsigned high,unsigned& out) {
+        const auto text=arguments.Option(name);if(!text) return true;
+        const auto [end,error]=std::from_chars(text->data(),text->data()+text->size(),out);
+        if(error!=std::errc{}||end!=text->data()+text->size()||out<low||out>high) {io.err << "error: " << name << " must be " << low << ".." << high << '\n';return false;}
+        return true;
+    };
+    unsigned resolution=settings.resolution,bounces=settings.bounces,maxProbes=settings.maxProbes;
+    if(!number("--resolution",16,1024,resolution)||!number("--bounces",0,4,bounces)||!number("--max-probes",1,65536,maxProbes)) return 1;
+    settings.resolution=static_cast<std::uint16_t>(resolution);settings.bounces=static_cast<std::uint8_t>(bounces);settings.maxProbes=maxProbes;
+    if(const auto text=arguments.Option("--probe-spacing")) {
+        // Metres between light probes; 0 bakes none.
+        const auto [end,error]=std::from_chars(text->data(),text->data()+text->size(),settings.probeSpacing);
+        if(error!=std::errc{}||end!=text->data()+text->size()||!(settings.probeSpacing==0.0F||(settings.probeSpacing>=0.05F&&settings.probeSpacing<=1000.0F))) {
+            io.err << "error: --probe-spacing must be 0 or 0.05..1000 metres\n";return 1;
+        }
+    }
+    const SceneSessionPtr session=OpenScene(arguments,io);if(!session) return 1;
+    const auto sceneName=session->path.stem().generic_u8string();
+    const auto baked=kb::render::BakeSceneLighting(*session->scene,std::string_view{reinterpret_cast<const char*>(sceneName.data()),sceneName.size()},settings);
+    if(!baked.Succeeded()) {io.err << "error: " << baked.error << '\n';return 1;}
+    if(!session->Save()) {io.err << "error: scene " << session->path.generic_string() << " could not be written\n";return 1;}
+    io.out << "baked " << baked.receivers << " receivers (" << baked.texels << " texels, " << baked.generatedMeshes << " generated lightmap UV meshes) with "
+        << baked.lights << " static lights and " << baked.probes << " light probes";
+    io.out << '\n';
+    return 0;
+}
 
 int RunMap2DSceneCommand(std::string_view action, const ArgumentList& arguments, CommandIo io) {
     if (action == "new") return Map2DNew(arguments, io);

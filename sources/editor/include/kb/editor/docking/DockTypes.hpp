@@ -41,6 +41,8 @@ enum class DockPanelKind : std::uint8_t {
     Agent,
     // The levels of detail, materials and statistics of a static mesh asset.
     StaticMeshEditor,
+    // What the player sees through the game's camera, at a chosen resolution, while the game runs.
+    Game,
 };
 
 enum class DockSplitAxis : std::uint8_t {
@@ -77,6 +79,10 @@ struct DockRect {
     [[nodiscard]] bool Contains(int px, int py) const noexcept;
     [[nodiscard]] bool Empty() const noexcept;
 };
+
+// Panels an editor extension registers at run time take their ids from here up; the ids
+// below belong to the panels the editor is built with.
+inline constexpr std::uint32_t kFirstToolPanelId = 1000000U;
 
 struct DockPanel {
     std::uint32_t id = 0;

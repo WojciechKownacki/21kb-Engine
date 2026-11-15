@@ -40,6 +40,8 @@ SceneRenderLightingConfig RendererSceneLightingConfigResolver::Resolve(SceneRend
         .shadowNormalBias = requested.shadowNormalBias != defaultConfig.shadowNormalBias ? requested.shadowNormalBias : fallback.shadowNormalBias,
         .shadowStrength = requested.shadowStrength != defaultConfig.shadowStrength ? requested.shadowStrength : fallback.shadowStrength,
         .shadowFilter = requested.shadowFilter != defaultConfig.shadowFilter ? requested.shadowFilter : fallback.shadowFilter,
+        .compactShadows = requested.compactShadows != defaultConfig.compactShadows ? requested.compactShadows : fallback.compactShadows,
+        .shadowComparisonSampling = requested.shadowComparisonSampling != defaultConfig.shadowComparisonSampling ? requested.shadowComparisonSampling : fallback.shadowComparisonSampling,
         .pointShadowMaxLights = requested.pointShadowMaxLights != defaultConfig.pointShadowMaxLights ? requested.pointShadowMaxLights : fallback.pointShadowMaxLights,
         .pointShadowCubeEnabled = requested.pointShadowCubeEnabled != defaultConfig.pointShadowCubeEnabled ? requested.pointShadowCubeEnabled : fallback.pointShadowCubeEnabled,
         .shadowCascadeBlend = requested.shadowCascadeBlend != defaultConfig.shadowCascadeBlend ? requested.shadowCascadeBlend : fallback.shadowCascadeBlend,
@@ -57,14 +59,26 @@ SceneRenderLightingConfig RendererSceneLightingConfigResolver::Resolve(SceneRend
         .volumetricFogEnabled = requested.volumetricFogEnabled != defaultConfig.volumetricFogEnabled ? requested.volumetricFogEnabled : fallback.volumetricFogEnabled,
         .fogAnisotropy = requested.fogAnisotropy != defaultConfig.fogAnisotropy ? requested.fogAnisotropy : fallback.fogAnisotropy,
         .debugView = requested.debugView != defaultConfig.debugView ? requested.debugView : fallback.debugView,
+        // The frame's sky cube and probe grid have no default to fall back to.
+        .skyReflection = requested.skyReflection,
+        .skyReflectionMaxMip = requested.skyReflectionMaxMip,
+        .lightProbes = requested.lightProbes,
+        .lightProbeGrid = requested.lightProbeGrid,
+        .lightProbeSize = requested.lightProbeSize,
     };
 }
 
-void RendererSceneLightingConfigResolver::ApplyPostProcessAmbientOcclusion(
+void RendererSceneLightingConfigResolver::ApplyPostProcessLighting(
     SceneRenderLightingConfig& config, const ScenePostProcessSettings& settings) noexcept {
     config.ambientOcclusionEnabled = settings.ambientOcclusionEnabled;
     config.aoIntensity = settings.ambientOcclusionIntensity;
     config.aoRadius = settings.ambientOcclusionRadius;
+    // Reflections the profile turns on (Off leaves the lighting config's own, as for global illumination).
+    if (settings.screenSpaceReflectionsEnabled) {
+        config.screenSpaceReflectionsEnabled = true;
+        config.ssrIntensity = settings.screenSpaceReflectionsIntensity;
+        config.ssrMaxDistance = settings.screenSpaceReflectionsMaxDistance;
+    }
     // Global illumination and fog the profile turns on (Off leaves the lighting config's own).
     using Method = ScenePostProcessSettings::GlobalIlluminationMethod;
     if (settings.globalIllumination != Method::Off) {

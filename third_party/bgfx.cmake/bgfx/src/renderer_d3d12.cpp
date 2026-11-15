@@ -2836,6 +2836,9 @@ namespace bgfx { namespace d3d12
 				&&  m_frameBuffers[handle.idx].m_nwh == _desc.nwh)
 				{
 					destroyFrameBuffer(handle);
+					// The API's own destroy of this handle is still on its way (creates run before destroys
+					// in a frame); releasing it twice would free its neighbours in the arena.
+					m_windowReplaced[handle.idx] = true;
 				}
 			}
 
@@ -2861,6 +2864,12 @@ namespace bgfx { namespace d3d12
 
 		void destroyFrameBuffer(FrameBufferHandle _handle) override
 		{
+			if (m_windowReplaced[_handle.idx])
+			{
+				m_windowReplaced[_handle.idx] = false;
+				return;
+			}
+
 			FrameBufferD3D12& frameBuffer = m_frameBuffers[_handle.idx];
 
 			if (NULL != frameBuffer.m_swapChain)
@@ -4796,6 +4805,7 @@ namespace bgfx { namespace d3d12
 		HandleArenaT<TextureD3D12,      BGFX_CONFIG_MAX_TEXTURES>        m_textures;
 		VertexLayout m_vertexLayouts[BGFX_CONFIG_MAX_VERTEX_LAYOUTS];
 		HandleArenaT<FrameBufferD3D12,  BGFX_CONFIG_MAX_FRAME_BUFFERS+1> m_frameBuffers;
+		bool m_windowReplaced[BGFX_CONFIG_MAX_FRAME_BUFFERS+1] = {};
 		Matrix4 m_predefinedUniforms[PredefinedUniform::Count];
 
 		StateCacheT<ID3D12PipelineState*> m_pipelineStateCache;

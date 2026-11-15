@@ -37,6 +37,11 @@
 #include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/SceneLightingAccess.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
+#include "engine/scene/SceneLightProbeAccess.hpp"
+#include "engine/render/LightProbeGridAssetLoader.hpp"
+#include "engine/render/StaticLightmapBaker.hpp"
+#include "engine/assets/AssetRegistry.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "engine/visual/VisualGraphAssetLoader.hpp"
 
 #include "scene/SceneAccess.hpp"
@@ -123,6 +128,7 @@ Scene::Scene(
     static_cast<void>(state_->assets.RegisterLoader(std::make_unique<kb::scene::VectorShape2DAssetLoader>()));
     const bool registeredPhysicsLayersLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::PhysicsLayersAssetLoader>());
     const bool registeredParticleEffectLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::ParticleEffectAssetLoader>());
+    static_cast<void>(state_->assets.RegisterLoader(std::make_unique<kb::render::LightProbeGridAssetLoader>()));
     const bool registeredAiBehaviourLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::AiBehaviourAssetLoader>());
     const bool registeredSkeletonLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::SkeletonAssetLoader>());
     const bool registeredSkeletalMeshLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::SkeletalMeshAssetLoader>());
@@ -344,6 +350,20 @@ void ScenePostProcessAccess::SetActiveProfile(Scene& scene, std::uint64_t profil
 
 std::uint64_t ScenePostProcessAccess::ActiveProfile(const Scene& scene) noexcept {
     return SceneAccess::State(scene).postProcessProfileAssetId;
+}
+
+void SceneLightProbeAccess::SetGrid(Scene& scene, std::uint64_t gridAssetId) noexcept {
+    SceneAccess::State(scene).lightProbeGridAssetId = gridAssetId;
+}
+
+std::uint64_t SceneLightProbeAccess::Grid(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).lightProbeGridAssetId;
+}
+
+void SceneLightProbeAccess::AssignBakedGrid(Scene& scene, std::string_view sceneName) {
+    const kb::assets::AssetMetadata* grid = scene.Assets().Manager().Registry().FindByPath(
+        std::filesystem::path{ kb::render::LightProbeGridVirtualPath(sceneName) });
+    SetGrid(scene, grid != nullptr && grid->type == kb::render::kLightProbeGridAssetType ? grid->id.value : 0U);
 }
 
 void SceneAudioMixerAccess::SetActiveMixer(Scene& scene, std::uint64_t mixerAssetId) noexcept {

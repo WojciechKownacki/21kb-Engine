@@ -693,6 +693,7 @@ void RuntimeManifestIsCanonicalAndHostileInputSafe() {
     first.settings.name = "CookedProject";
     first.settings.gameName = "Cooked Game";
     first.settings.defaultMap = "/Game/Scenes/Main.21kbscene";
+    first.settings.lightingPath = kb::project::ProjectSceneLightingPath::Auto;
     first.settings.shadowQuality = kb::project::ProjectQualityLevel::High;
     first.settings.shadowQualityMobile = kb::project::ProjectQualityLevel::Low;
     first.settings.giQuality = kb::project::ProjectQualityLevel::Ultra;
@@ -756,6 +757,140 @@ void RuntimeManifestIsCanonicalAndHostileInputSafe() {
             }) &&
             decoded.auxiliaryFiles.size() == 1U,
         "A runtime manifest changed its project or asset catalogue during the round trip");
+
+    // The window, frame pacing, fixed step, gravity and time scale travel in the manifest; settings that are all
+    // defaults leave the bytes as they always were, and a value outside its bounds is refused.
+    bake::RuntimeAssetManifest configured = first;
+    configured.settings.display = { .windowWidth = 1920U, .windowHeight = 1080U,
+        .windowMode = kb::project::ProjectWindowMode::BorderlessFullscreen, .resizable = false, .vsync = false, .frameRateCap = 90U };
+    configured.settings.simulation = { .fixedStepHz = 120U, .gravity = { 0.0F, -1.62F, 0.5F }, .timeScale = 0.5F };
+    std::vector<std::uint8_t> configuredBytes;
+    bake::RuntimeAssetManifest configuredDecoded{};
+    Require(bake::EncodeRuntimeAssetManifest(configured, configuredBytes) == bake::RuntimeAssetManifestStatus::Success &&
+            configuredBytes.size() > firstBytes.size() &&
+            bake::DecodeRuntimeAssetManifest(configuredBytes, configuredDecoded) == bake::RuntimeAssetManifestStatus::Success &&
+            configuredDecoded.settings == configured.settings,
+        "A runtime manifest lost the display or simulation settings during the round trip");
+    // The render scale travels on its own flag, only while it differs from 1, and a scale below 0.5 is refused.
+    bake::RuntimeAssetManifest scaled = first;
+    scaled.settings.display.renderScale = 0.5F;
+    std::vector<std::uint8_t> scaledBytes;
+    bake::RuntimeAssetManifest scaledDecoded{};
+    Require(bake::EncodeRuntimeAssetManifest(scaled, scaledBytes) == bake::RuntimeAssetManifestStatus::Success &&
+            scaledBytes.size() > firstBytes.size() &&
+            bake::DecodeRuntimeAssetManifest(scaledBytes, scaledDecoded) == bake::RuntimeAssetManifestStatus::Success &&
+            scaledDecoded.settings == scaled.settings && scaledDecoded.settings.display.renderScale == 0.5F,
+        "A runtime manifest lost the render scale during the round trip");
+    bake::RuntimeAssetManifest tooSmall = first;
+    tooSmall.settings.display.renderScale = 0.25F;
+    std::vector<std::uint8_t> tooSmallBytes;
+    Require(bake::EncodeRuntimeAssetManifest(tooSmall, tooSmallBytes) == bake::RuntimeAssetManifestStatus::InvalidProject,
+        "A runtime manifest accepted a render scale below 0.5");
+    bake::RuntimeAssetManifest outOfBounds = first;
+    outOfBounds.settings.display.windowWidth = 10U;
+    std::vector<std::uint8_t> outOfBoundsBytes;
+    Require(bake::EncodeRuntimeAssetManifest(outOfBounds, outOfBoundsBytes) == bake::RuntimeAssetManifestStatus::InvalidProject,
+        "A runtime manifest accepted a window narrower than the supported minimum");
+
+    // The master volume and the project's tags travel too, each only while it differs from the default, and
+    // alongside the display settings; a volume above 1 or a tag that cannot be listed is refused.
+    bake::RuntimeAssetManifest audible = first;
+    audible.settings.masterVolume = 0.4F;
+    audible.settings.tags = { "Boss", "Loot Chest" };
+    std::vector<std::uint8_t> audibleBytes;
+    bake::RuntimeAssetManifest audibleDecoded{};
+    Require(bake::EncodeRuntimeAssetManifest(audible, audibleBytes) == bake::RuntimeAssetManifestStatus::Success &&
+            audibleBytes.size() > firstBytes.size() &&
+            bake::DecodeRuntimeAssetManifest(audibleBytes, audibleDecoded) == bake::RuntimeAssetManifestStatus::Success &&
+            audibleDecoded.settings == audible.settings,
+        "A runtime manifest lost the master volume or the tags during the round trip");
+    bake::RuntimeAssetManifest everything = configured;
+    everything.settings.masterVolume = 0.4F;
+    everything.settings.tags = { "Boss" };
+    std::vector<std::uint8_t> everythingBytes;
+    bake::RuntimeAssetManifest everythingDecoded{};
+    Require(bake::EncodeRuntimeAssetManifest(everything, everythingBytes) == bake::RuntimeAssetManifestStatus::Success &&
+            bake::DecodeRuntimeAssetManifest(everythingBytes, everythingDecoded) == bake::RuntimeAssetManifestStatus::Success &&
+            everythingDecoded.settings == everything.settings,
+        "A runtime manifest lost a setting when the display, the volume and the tags were written together");
+    // The microphone setting is a flag with no data: it travels only while it is on, and changes the bytes, not their number.
+    bake::RuntimeAssetManifest recording = first;
+    recording.settings.microphone = true;
+    std::vector<std::uint8_t> recordingBytes;
+    bake::RuntimeAssetManifest recordingDecoded{};
+    Require(bake::EncodeRuntimeAssetManifest(recording, recordingBytes) == bake::RuntimeAssetManifestStatus::Success &&
+            recordingBytes.size() == firstBytes.size() && recordingBytes != firstBytes &&
+            bake::DecodeRuntimeAssetManifest(recordingBytes, recordingDecoded) == bake::RuntimeAssetManifestStatus::Success &&
+            recordingDecoded.settings.microphone && recordingDecoded.settings == recording.settings,
+        "A runtime manifest lost the microphone setting during the round trip");
+    bake::RuntimeAssetManifest silentDecoded{};
+    Require(bake::DecodeRuntimeAssetManifest(firstBytes, silentDecoded) == bake::RuntimeAssetManifestStatus::Success &&
+            !silentDecoded.settings.microphone,
+        "A runtime manifest without the microphone flag must read as not recording");
+    // The Android graphics API travels on its own flag as one byte, only while it is not Auto.
+    bake::RuntimeAssetManifest gles = first;
+    gles.settings.display.androidGraphicsApi = kb::project::ProjectAndroidGraphicsApi::OpenGLES;
+    std::vector<std::uint8_t> glesBytes;
+    bake::RuntimeAssetManifest glesDecoded{};
+    Require(bake::EncodeRuntimeAssetManifest(gles, glesBytes) == bake::RuntimeAssetManifestStatus::Success &&
+            glesBytes.size() > firstBytes.size() &&
+            bake::DecodeRuntimeAssetManifest(glesBytes, glesDecoded) == bake::RuntimeAssetManifestStatus::Success &&
+            glesDecoded.settings == gles.settings &&
+            glesDecoded.settings.display.androidGraphicsApi == kb::project::ProjectAndroidGraphicsApi::OpenGLES,
+        "A runtime manifest lost the Android graphics API during the round trip");
+    bake::RuntimeAssetManifest glesEverything = everything;
+    glesEverything.settings.display.androidGraphicsApi = kb::project::ProjectAndroidGraphicsApi::Vulkan;
+    glesEverything.settings.microphone = true;
+    std::vector<std::uint8_t> glesEverythingBytes;
+    bake::RuntimeAssetManifest glesEverythingDecoded{};
+    Require(bake::EncodeRuntimeAssetManifest(glesEverything, glesEverythingBytes) == bake::RuntimeAssetManifestStatus::Success &&
+            bake::DecodeRuntimeAssetManifest(glesEverythingBytes, glesEverythingDecoded) == bake::RuntimeAssetManifestStatus::Success &&
+            glesEverythingDecoded.settings == glesEverything.settings,
+        "A runtime manifest lost a setting when the Android graphics API was written with the others");
+    bake::RuntimeAssetManifest unknownApi = first;
+    unknownApi.settings.display.androidGraphicsApi = static_cast<kb::project::ProjectAndroidGraphicsApi>(kb::project::kProjectAndroidGraphicsApiCount);
+    std::vector<std::uint8_t> unknownApiBytes;
+    Require(bake::EncodeRuntimeAssetManifest(unknownApi, unknownApiBytes) == bake::RuntimeAssetManifestStatus::InvalidProject,
+        "A runtime manifest accepted an Android graphics API it does not know");
+    // The launch screen travels on its own flag, only while it differs from the defaults.
+    bake::RuntimeAssetManifest launch = first;
+    launch.settings.display.splash = { .image = "/Game/Branding/Logo.png", .backgroundColor = { 0.1F, 0.2F, 0.3F },
+        .scale = kb::project::ProjectSplashScale::Center, .minimumDisplayMilliseconds = 2000U, .showProgress = false };
+    std::vector<std::uint8_t> launchBytes;
+    bake::RuntimeAssetManifest launchDecoded{};
+    Require(bake::EncodeRuntimeAssetManifest(launch, launchBytes) == bake::RuntimeAssetManifestStatus::Success &&
+            launchBytes.size() > firstBytes.size() &&
+            bake::DecodeRuntimeAssetManifest(launchBytes, launchDecoded) == bake::RuntimeAssetManifestStatus::Success &&
+            launchDecoded.settings == launch.settings &&
+            launchDecoded.settings.display.splash.image == "/Game/Branding/Logo.png" &&
+            launchDecoded.settings.display.splash.scale == kb::project::ProjectSplashScale::Center &&
+            launchDecoded.settings.display.splash.minimumDisplayMilliseconds == 2000U &&
+            !launchDecoded.settings.display.splash.showProgress,
+        "A runtime manifest lost the launch screen during the round trip");
+    bake::RuntimeAssetManifest launchEverything = glesEverything;
+    launchEverything.settings.display.splash = launch.settings.display.splash;
+    std::vector<std::uint8_t> launchEverythingBytes;
+    bake::RuntimeAssetManifest launchEverythingDecoded{};
+    Require(bake::EncodeRuntimeAssetManifest(launchEverything, launchEverythingBytes) == bake::RuntimeAssetManifestStatus::Success &&
+            bake::DecodeRuntimeAssetManifest(launchEverythingBytes, launchEverythingDecoded) == bake::RuntimeAssetManifestStatus::Success &&
+            launchEverythingDecoded.settings == launchEverything.settings,
+        "A runtime manifest lost a setting when the launch screen was written with the others");
+    bake::RuntimeAssetManifest badScale = first;
+    badScale.settings.display.splash.scale = static_cast<kb::project::ProjectSplashScale>(kb::project::kProjectSplashScaleCount);
+    bake::RuntimeAssetManifest badColor = first;
+    badColor.settings.display.splash.backgroundColor[1] = 1.5F;
+    std::vector<std::uint8_t> badLaunchBytes;
+    Require(bake::EncodeRuntimeAssetManifest(badScale, badLaunchBytes) == bake::RuntimeAssetManifestStatus::InvalidProject &&
+            bake::EncodeRuntimeAssetManifest(badColor, badLaunchBytes) == bake::RuntimeAssetManifestStatus::InvalidProject,
+        "A runtime manifest accepted a launch screen scale it does not know or a background colour outside 0 to 1");
+    bake::RuntimeAssetManifest tooLoud = first;
+    tooLoud.settings.masterVolume = 1.5F;
+    std::vector<std::uint8_t> tooLoudBytes;
+    bake::RuntimeAssetManifest badTag = first;
+    badTag.settings.tags = { "a,b" };
+    Require(bake::EncodeRuntimeAssetManifest(tooLoud, tooLoudBytes) == bake::RuntimeAssetManifestStatus::InvalidProject &&
+            bake::EncodeRuntimeAssetManifest(badTag, tooLoudBytes) == bake::RuntimeAssetManifestStatus::InvalidProject,
+        "A runtime manifest accepted a master volume above 1 or a tag that cannot be listed");
 
     std::vector<std::uint8_t> unsupported = firstBytes;
     PokeUInt32(unsupported, 8U, bake::kRuntimeAssetManifestVersion + 1U);

@@ -17,6 +17,7 @@ class AssetManager;
 }
 
 namespace kb::scene {
+struct NavBounds;
 struct ScenePrefabNodeDesc;
 }
 
@@ -72,7 +73,8 @@ struct NavGeometryCollectStats {
 // parents before children) to `geometry`. Static means: no dynamic or kinematic rigidbody on the
 // node or above it, and no NavAgent, NavObstacle or character controller on the node. Trigger
 // colliders and hidden mesh renderers are skipped; without a source only primitive colliders
-// (box, sphere, capsule) are collected.
+// (box, sphere, capsule) are collected. The world-space bounds of every Navigation Bounds box are
+// added as bake boxes.
 void CollectNavGeometry(std::span<const kb::scene::ScenePrefabNodeDesc> nodes, const NavMeshBuildSettings& settings,
     INavGeometrySource* source, NavGeometry& geometry, NavGeometryCollectStats& stats);
 
@@ -84,8 +86,29 @@ struct NavSceneBakeResult {
     std::string error;
 };
 
-// Bakes the static geometry of a saved scene (.21kbscene) with `settings`. The editor, kb_cli and
-// tools call this with the same source, so a scene bakes to the same bytes everywhere.
+// The build settings a Navigation Bounds holds: one agent profile and its cell and tile size.
+[[nodiscard]] NavMeshBuildSettings NavBoundsBuildSettings(const kb::scene::NavBounds& bounds);
+
+// What a scene bakes from: the settings and the static geometry of its nodes.
+struct NavScenePreparation {
+    bool succeeded = false;
+    NavMeshBuildSettings settings;
+    NavGeometry geometry;
+    NavGeometryCollectStats stats;
+    std::string error;
+};
+
+// Collects a scene's geometry for a bake. A scene with Navigation Bounds bakes with their settings
+// (they must all agree) inside their boxes; one without bakes with `settings` everywhere. Reads
+// assets through `source`, so it runs where the source may be used.
+[[nodiscard]] NavScenePreparation PrepareSceneNavBake(std::span<const kb::scene::ScenePrefabNodeDesc> nodes, const NavMeshBuildSettings& settings,
+    INavGeometrySource* source);
+// Bakes prepared geometry; touches nothing but `prepared` (and `progress`), so it may run on any thread.
+[[nodiscard]] NavSceneBakeResult BakePreparedSceneNavMesh(const NavScenePreparation& prepared, NavBakeProgress* progress = nullptr);
+
+// Bakes the static geometry of a saved scene (.21kbscene): PrepareSceneNavBake, then
+// BakePreparedSceneNavMesh. The editor, kb_cli and tools bake through these with the same source, so
+// a scene bakes to the same bytes everywhere.
 [[nodiscard]] NavSceneBakeResult BakeSceneNavMesh(const std::filesystem::path& scenePath, const NavMeshBuildSettings& settings,
     INavGeometrySource* source);
 // Where a scene's navigation mesh lives: <scene>.21kbnavmesh beside it.

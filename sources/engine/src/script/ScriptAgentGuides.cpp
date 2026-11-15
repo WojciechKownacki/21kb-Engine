@@ -124,6 +124,10 @@ kb_cli validate --project . Assets/Scripts/Spinner.lua
   does not exist.
 - The sandbox has no `io`, `os`, `require` or `load`; share code with `-- @import` modules and
   `Import("Module.Name")`.
+- Write the Lua every platform runs (LuaJIT or Lua 5.4, chosen by the platform): Lua 5.1 with the `bit`
+  library and `unpack`. No `//` (use `math.floor(a / b)`), no `&` `|` `~` `<<` `>>` (use `bit.band`,
+  `bit.bor`, `bit.bxor`, `bit.lshift`, `bit.rshift`), no `<const>`, no `utf8`, no `math.type`; every number is
+  a double, exact up to 2^53. `validate` warns with file and line about each construct outside that subset.
 - Ready-made controllers live in `Assets/Samples/` (third person, top down, platformer,
   shooter).
 
@@ -177,7 +181,7 @@ kb_cli entity add --project . --name Sword --create Cube
 kb_cli entity attach --project . --name Sword --to Hero --socket weapon_r --scale 0.05,0.8,0.05
 ```
 
-- Clips of another rig (Mixamo, Unreal, Rigify) play too: bones are matched by name and role;
+- Clips of another rig (common rig naming schemes) play too: bones are matched by name and role;
   `animator check --character` shows how many bones follow each clip.
 - Scripts drive animation with `Animator.<Function>(inputs in order)`; the functions are
   `api_reference` topic `Animator`.
@@ -381,6 +385,11 @@ kb_cli component set --project . --entity Sparks --type "Particle Effect" --set 
 - A button that runs a script, and what `validate` says about UI: guide `menus-and-buttons`.
 - Check sound and particles: `kb_cli run --project . --frames 60 --report audio` (or
   `--report particles`).
+- Microphone: `Microphone.Start()` (or `Microphone.Start("Device name")`; `Microphone.Devices()` and
+  `Microphone.Device(i)` list the inputs), then `Microphone.Level()` and `Microphone.Peak()` each frame, and
+  `Microphone.RecordToClip(2.0)` for a clip of the last two seconds, which `Audio.Play` takes. `Microphone.Stop()` ends it.
+  A project that records turns `Microphone` on in Project Settings > Audio; an Android package then declares the
+  permission and the first `Start` asks for it (it answers "being requested" until the user decides).
 )md";
 
 constexpr std::string_view kWaterAndLook = R"md(# Water, sky, fog and post-processing

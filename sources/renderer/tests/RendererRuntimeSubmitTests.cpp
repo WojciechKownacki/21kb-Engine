@@ -16,6 +16,10 @@
 #include "engine/scene/AuxFrameComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
+#include "engine/scene/SkeletalMeshAssetIO.hpp"
+#include "engine/scene/SkeletonAssetIO.hpp"
+#include "engine/scene/SkeletonBindingComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -24,6 +28,8 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneLightingAccess.hpp"
+#include "engine/scene/SceneLightProbeAccess.hpp"
+#include "engine/render/StaticLightmapBaker.hpp"
 #include "engine/scene/SceneMaterialInstances.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
@@ -1928,6 +1934,12 @@ void RunPostProcessProfileAssetSaveLoadRoundTripTest() {
     settings.ambientOcclusionEnabled = true;
     settings.ambientOcclusionIntensity = 1.5F;
     settings.ambientOcclusionRadius = 0.9F;
+    settings.screenSpaceReflectionsEnabled = true;
+    settings.screenSpaceReflectionsIntensity = 0.6F;
+    settings.screenSpaceReflectionsMaxDistance = 12.5F;
+    settings.motionBlurEnabled = true;
+    settings.motionBlurIntensity = 0.75F;
+    settings.motionBlurSamples = 12U;
     settings.fogEnabled = true;
     settings.fogProfile = SceneFogProfile::Web;
     settings.fogDensity = 0.071F;
@@ -1961,6 +1973,11 @@ void RunPostProcessProfileAssetSaveLoadRoundTripTest() {
     Require(loaded->ambientOcclusionEnabled && NearlyEqual(loaded->ambientOcclusionIntensity, 1.5F) &&
             NearlyEqual(loaded->ambientOcclusionRadius, 0.9F),
         "PostProcess profile asset round trip lost the ambient occlusion");
+    Require(loaded->screenSpaceReflectionsEnabled && NearlyEqual(loaded->screenSpaceReflectionsIntensity, 0.6F) &&
+            NearlyEqual(loaded->screenSpaceReflectionsMaxDistance, 12.5F),
+        "PostProcess profile asset round trip lost the screen-space reflections");
+    Require(loaded->motionBlurEnabled && NearlyEqual(loaded->motionBlurIntensity, 0.75F) && loaded->motionBlurSamples == 12U,
+        "PostProcess profile asset round trip lost the motion blur");
 
     Require(loaded->fogProfile == SceneFogProfile::Web && loaded->fogEnabled && loaded->volumetricFogEnabled &&
             NearlyEqual(loaded->fogDensity, 0.071F) && NearlyEqual(loaded->fogHeightFalloff, 0.31F) &&
@@ -1969,7 +1986,27 @@ void RunPostProcessProfileAssetSaveLoadRoundTripTest() {
     Require(!PostProcessProfileAssetLoader::SetField(settings, "fogProfile", "Unknown"),
         "Unknown fog profile was accepted");
     SceneRenderLightingConfig fogConfig{};
-    RendererSceneLightingConfigResolver::ApplyPostProcessAmbientOcclusion(fogConfig, *loaded);
+    RendererSceneLightingConfigResolver::ApplyPostProcessLighting(fogConfig, *loaded);
+    Require(fogConfig.screenSpaceReflectionsEnabled && NearlyEqual(fogConfig.ssrIntensity, 0.6F) &&
+            NearlyEqual(fogConfig.ssrMaxDistance, 12.5F),
+        "A profile with reflections on must set the lighting config's reflections");
+    {
+        // A profile that leaves reflections off keeps what the lighting config asked for.
+        SceneRenderLightingConfig requested{};
+        requested.screenSpaceReflectionsEnabled = true;
+        requested.ssrMaxDistance = 7.0F;
+        RendererSceneLightingConfigResolver::ApplyPostProcessLighting(requested, ScenePostProcessSettings{});
+        Require(requested.screenSpaceReflectionsEnabled && NearlyEqual(requested.ssrMaxDistance, 7.0F),
+            "A profile with reflections off must not override the lighting config's reflections");
+    }
+    {
+        SceneRenderLightingConfig requested{};
+        requested.skyReflection = bgfx::TextureHandle{ 7U };
+        requested.skyReflectionMaxMip = 5.0F;
+        const SceneRenderLightingConfig resolved = RendererSceneLightingConfigResolver::Resolve(requested, SceneRenderLightingConfig{});
+        Require(resolved.skyReflection.idx == 7U && NearlyEqual(resolved.skyReflectionMaxMip, 5.0F),
+            "A requested sky reflection must survive lighting config resolution");
+    }
     RendererSceneLightingConfigResolver::ResolveFogProfile(fogConfig, bgfx::RendererType::Direct3D11);
     Require(fogConfig.fogProfile == SceneFogProfile::Web && !fogConfig.volumetricFogEnabled &&
         NearlyEqual(fogConfig.fogDensity, loaded->fogDensity), "Profile application lost its fallback policy");
@@ -1990,6 +2027,12 @@ void RunPostProcessProfileAssetSaveLoadRoundTripTest() {
             NearlyEqual(legacy->ambientOcclusionRadius, SceneRenderLightingConfig{}.aoRadius) &&
             NearlyEqual(legacy->ambientOcclusionIntensity, SceneRenderLightingConfig{}.aoIntensity),
         "A profile without the vignette and ambient occlusion keys must keep them off at the renderer's defaults");
+    Require(!legacy->screenSpaceReflectionsEnabled &&
+            NearlyEqual(legacy->screenSpaceReflectionsIntensity, SceneRenderLightingConfig{}.ssrIntensity) &&
+            NearlyEqual(legacy->screenSpaceReflectionsMaxDistance, SceneRenderLightingConfig{}.ssrMaxDistance),
+        "A profile without the reflection keys must keep reflections off at the lighting config's defaults");
+    Require(!legacy->motionBlurEnabled && NearlyEqual(legacy->motionBlurIntensity, 0.5F) && legacy->motionBlurSamples == 8U,
+        "A profile without the motion blur keys must keep motion blur off at its defaults");
     ScenePostProcessSettings edited{};
     Require(PostProcessProfileAssetLoader::SetField(edited, "vignetteIntensity", "0.8") && NearlyEqual(edited.vignetteIntensity, 0.8F) &&
             PostProcessProfileAssetLoader::SetField(edited, "ambientOcclusionEnabled", "1") && edited.ambientOcclusionEnabled,
@@ -1997,9 +2040,38 @@ void RunPostProcessProfileAssetSaveLoadRoundTripTest() {
     Require(!PostProcessProfileAssetLoader::SetField(edited, "vignetteIntensity", "1.5") &&
             !PostProcessProfileAssetLoader::SetField(edited, "ambientOcclusionRadius", "0") && NearlyEqual(edited.vignetteIntensity, 0.8F),
         "SetField must refuse a vignette intensity above 1 and a zero occlusion radius");
+    Require(PostProcessProfileAssetLoader::SetField(edited, "screenSpaceReflectionsEnabled", "1") && edited.screenSpaceReflectionsEnabled &&
+            PostProcessProfileAssetLoader::SetField(edited, "screenSpaceReflectionsIntensity", "0.5") &&
+            NearlyEqual(edited.screenSpaceReflectionsIntensity, 0.5F) &&
+            PostProcessProfileAssetLoader::SetField(edited, "screenSpaceReflectionsMaxDistance", "40") &&
+            NearlyEqual(edited.screenSpaceReflectionsMaxDistance, 40.0F),
+        "SetField must take the screen-space reflection fields");
+    Require(!PostProcessProfileAssetLoader::SetField(edited, "screenSpaceReflectionsIntensity", "1.5") &&
+            !PostProcessProfileAssetLoader::SetField(edited, "screenSpaceReflectionsIntensity", "-0.1") &&
+            !PostProcessProfileAssetLoader::SetField(edited, "screenSpaceReflectionsMaxDistance", "0") &&
+            !PostProcessProfileAssetLoader::SetField(edited, "screenSpaceReflectionsMaxDistance", "-3") &&
+            !PostProcessProfileAssetLoader::SetField(edited, "screenSpaceReflectionsEnabled", "maybe") &&
+            NearlyEqual(edited.screenSpaceReflectionsIntensity, 0.5F) && NearlyEqual(edited.screenSpaceReflectionsMaxDistance, 40.0F),
+        "SetField must refuse a reflection intensity outside 0..1, a non-positive reflection distance and a non-boolean toggle");
+    Require(PostProcessProfileAssetLoader::SetField(edited, "motionBlurEnabled", "1") && edited.motionBlurEnabled &&
+            PostProcessProfileAssetLoader::SetField(edited, "motionBlurIntensity", "0.25") && NearlyEqual(edited.motionBlurIntensity, 0.25F) &&
+            PostProcessProfileAssetLoader::SetField(edited, "motionBlurSamples", "16") && edited.motionBlurSamples == 16U &&
+            PostProcessProfileAssetLoader::SetField(edited, "motionBlurSamples", "4") && edited.motionBlurSamples == 4U,
+        "SetField must take the motion blur fields");
+    Require(!PostProcessProfileAssetLoader::SetField(edited, "motionBlurIntensity", "1.5") &&
+            !PostProcessProfileAssetLoader::SetField(edited, "motionBlurIntensity", "-0.1") &&
+            !PostProcessProfileAssetLoader::SetField(edited, "motionBlurSamples", "3") &&
+            !PostProcessProfileAssetLoader::SetField(edited, "motionBlurSamples", "17") &&
+            !PostProcessProfileAssetLoader::SetField(edited, "motionBlurSamples", "8.5") &&
+            !PostProcessProfileAssetLoader::SetField(edited, "motionBlurEnabled", "maybe") &&
+            NearlyEqual(edited.motionBlurIntensity, 0.25F) && edited.motionBlurSamples == 4U,
+        "SetField must refuse a shutter outside 0..1, samples outside 4..16 or fractional, and a non-boolean toggle");
     const std::vector<std::string> names = PostProcessProfileAssetLoader::FieldNames();
-    Require(std::ranges::find(names, "vignetteEnabled") != names.end() && std::ranges::find(names, "ambientOcclusionRadius") != names.end(),
-        "FieldNames must list the vignette and ambient occlusion fields");
+    Require(std::ranges::find(names, "vignetteEnabled") != names.end() && std::ranges::find(names, "ambientOcclusionRadius") != names.end() &&
+            std::ranges::find(names, "screenSpaceReflectionsEnabled") != names.end() &&
+            std::ranges::find(names, "screenSpaceReflectionsMaxDistance") != names.end() &&
+            std::ranges::find(names, "motionBlurEnabled") != names.end() && std::ranges::find(names, "motionBlurSamples") != names.end(),
+        "FieldNames must list the vignette, ambient occlusion, screen-space reflection and motion blur fields");
 
     const std::optional<ScenePostProcessSettings> missing = PostProcessProfileAssetLoader::LoadProfile(
         std::filesystem::temp_directory_path() / "21kb_post_process_profile_does_not_exist.kbppfx");
@@ -4108,7 +4180,8 @@ void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest(bool testRetention = f
     Require(submitStats.shadowFilterSampleCount == 9U, "Runtime submit did not report PCF shadow filter sample count");
     Require(submitStats.shadowLightEntityId == light.Id(), "Runtime submit did not report selected shadow light entity");
     Require(submitStats.shadowMapAllocationBytes == ShadowMapResource::AllocationBytesFor(SceneRenderLightingConfig{}.shadowMapSize), "Runtime submit did not report shadow map allocation bytes");
-    Require(submitStats.submittedEnvironmentLightingCount == 3U, "Runtime submit did not report environment lighting for every mesh pass");
+    // The opaque and the transparent pass pack the lighting; the shadow pass only draws depth and reads none.
+    Require(submitStats.submittedEnvironmentLightingCount == 2U, "Runtime submit did not report environment lighting for every lit mesh pass");
     Require(submitStats.environmentLightingMode == static_cast<std::uint32_t>(SceneRenderEnvironmentMode::Constant) + 1U, "Runtime submit did not report default environment lighting mode");
     Require(submitStats.environmentLightingSampleCount == 1U, "Runtime submit did not report default environment sample count");
     Require(!submitStats.HasMissingResources(), "Runtime submit reported missing resources for discovered mesh asset");
@@ -6783,6 +6856,20 @@ struct ShadowFloorScene {
     float pointIntensity = 3.0F;
     bx::Vec3 cameraPosition{ 0.0F, 2.0F, -14.0F };
     float fovDegrees = 40.0F;
+    // Sun only. After the shadow settles, what the cascades do while nothing changes and when the plate moves away.
+    struct CascadeReuse {
+        std::size_t steadyPasses = 0U;
+        std::size_t movedPasses = 0U;
+        int steadyBrightness = 0;
+        int movedBrightness = 0;
+        double cachedMilliseconds = 0.0;
+        double uncachedMilliseconds = 0.0;
+    };
+    CascadeReuse* cascadeReuse = nullptr;
+    // How the lighting reads the shadow maps (see SceneRenderLightingConfig): through comparison samplers or not, and
+    // with the handheld's 16-bit sun map and four-tap filter.
+    bool comparisonSampling = true;
+    bool compactShadows = false;
 };
 
 [[nodiscard]] int RenderShadowFloorBrightness(const ShadowFloorScene& setup) {
@@ -6813,9 +6900,10 @@ struct ShadowFloorScene {
         });
         scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
             .meshAssetId = mesh->id.value, .castsShadow = true });
+        return entity;
     };
     addBox({ 0.0F, -0.5F, 0.0F }, { 40.0F, 1.0F, 40.0F });   // floor, top face at y = 0
-    addBox({ 0.0F, 3.0F, 0.0F }, { 4.0F, 0.2F, 4.0F });      // occluder plate
+    const kb::scene::SceneEntity plate = addBox({ 0.0F, 3.0F, 0.0F }, { 4.0F, 0.2F, 4.0F });      // occluder plate
     kb::scene::TransformComponent lightTransform = TransformAt(0.0F, 6.0F, 0.0F);
     if (!setup.point) {
         // A +90 degree turn about X points the light's forward axis straight down.
@@ -6845,11 +6933,15 @@ struct ShadowFloorScene {
     Renderer renderer;
     Require(renderer.Initialize(surface, &config), "Point shadow test could not initialize the renderer");
     renderer.SetRuntimeAssetDiscoveryEnabled(false);
-    if (setup.extraPointLights > 0) {
-        // The default lighting path lights four lights; many lights need the clustered one.
+    if (setup.extraPointLights > 0 || setup.compactShadows || !setup.comparisonSampling) {
         SceneRenderLightingConfig lighting{};
-        lighting.lightingPath = SceneRenderLightingPath::ClusteredForwardPlus;
-        lighting.maxForwardLights = kMaxSceneForwardPlusLights;
+        if (setup.extraPointLights > 0) {
+            // The default lighting path lights four lights; many lights need the clustered one.
+            lighting.lightingPath = SceneRenderLightingPath::ClusteredForwardPlus;
+            lighting.maxForwardLights = kMaxSceneForwardPlusLights;
+        }
+        lighting.compactShadows = setup.compactShadows;
+        lighting.shadowComparisonSampling = setup.comparisonSampling;
         renderer.SetDefaultSceneLightingConfig(lighting);
     }
 
@@ -6880,6 +6972,39 @@ struct ShadowFloorScene {
         // The camera looks at the world origin, which is the centre pixel.
         const std::size_t center = (32U * 64U + 32U) * 4U;
         brightness = static_cast<int>(pixels[center]) + pixels[center + 1U] + pixels[center + 2U];
+        if (setup.cascadeReuse != nullptr) {
+            ShadowFloorScene::CascadeReuse& reuse = *setup.cascadeReuse;
+            const auto shadowPasses = [&renderer] {
+                std::size_t count = 0U;
+                for (const auto& pass : renderer.LastScenePassSubmitStats()) count += pass.pass == MeshPassType::ShadowDepth ? 1U : 0U;
+                return count;
+            };
+            const auto centerBrightness = [&] {
+                const std::vector<std::uint8_t> sample = target.ReadPixels();
+                return static_cast<int>(sample[center]) + sample[center + 1U] + sample[center + 2U];
+            };
+            // Resources still arriving change the cascades' key; a few frames settle them.
+            for (int settle = 0; settle < 4; ++settle) SubmitLifecycleFrame(renderer, scene, desc, "Cascade cache test did not settle");
+            SubmitLifecycleFrame(renderer, scene, desc, "Cascade cache test did not submit a steady frame");
+            reuse.steadyPasses = shadowPasses();
+            reuse.steadyBrightness = centerBrightness();
+            const auto frameMilliseconds = [&](const RenderSceneSubmitDesc& timed) {
+                const auto start = std::chrono::steady_clock::now();
+                for (int frame = 0; frame < 20; ++frame) SubmitLifecycleFrame(renderer, scene, timed, "Cascade cache test did not submit a timed frame");
+                return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() / 20.0;
+            };
+            reuse.cachedMilliseconds = frameMilliseconds(desc);
+            RenderSceneSubmitDesc uncached = desc;
+            uncached.lightingConfig.perLightShadowCaching = false;
+            reuse.uncachedMilliseconds = frameMilliseconds(uncached);
+            // The uncached frames forgot the cascades; two more settle them again before the plate moves out of view.
+            SubmitLifecycleFrame(renderer, scene, desc, "Cascade cache test did not render the cascades again");
+            SubmitLifecycleFrame(renderer, scene, desc, "Cascade cache test did not submit a second steady frame");
+            scene.Transforms().Set(plate, kb::scene::TransformComponent{ .localPosition = { 40.0F, 3.0F, 0.0F }, .localScale = { 4.0F, 0.2F, 4.0F } });
+            SubmitLifecycleFrame(renderer, scene, desc, "Cascade cache test did not submit the frame after the move");
+            reuse.movedPasses = shadowPasses();
+            reuse.movedBrightness = centerBrightness();
+        }
         if (setup.stressAtlas) {
             struct Stage { std::uint32_t count, size; };
             constexpr Stage stages[]{{41U, 2048U}, {6U, 512U}, {24U, 1024U}, {41U, 4096U}, {1U, 256U}, {41U, 2048U}};
@@ -7033,6 +7158,37 @@ void RunRendererBlendsShadowCascadesTest() {
     Require(blended * 2.0 < hard, "Cascade blend test: blending must clearly reduce the step at the cascade boundary");
 }
 
+// The shadow maps read through comparison samplers (the hardware filters four texels per tap) shadow the floor like the
+// stored-depth lookups do, with the handheld's 16-bit sun map and four-tap filter too: the sun, a point and a spot light.
+void RunRendererComparisonShadowSamplingTest() {
+    struct Case { const char* name; ShadowFloorScene scene; };
+    const bx::Vec3 farCamera{ 0.0F, 2.0F, -40.0F };
+    const std::array<Case, 3> cases{
+        Case{ "sun", ShadowFloorScene{ .point = false, .cameraPosition = farCamera, .fovDegrees = 8.0F } },
+        Case{ "point", ShadowFloorScene{} },
+        Case{ "spot", ShadowFloorScene{ .point = false, .spot = true } },
+    };
+    for (const Case& entry : cases) {
+        ShadowFloorScene scene = entry.scene;
+        scene.lightCastsShadow = false;
+        const int unshadowed = RenderShadowFloorBrightness(scene);
+        scene.lightCastsShadow = true;
+        const int compared = RenderShadowFloorBrightness(scene);
+        scene.comparisonSampling = false;
+        const int stored = RenderShadowFloorBrightness(scene);
+        scene.comparisonSampling = true;
+        scene.compactShadows = true;
+        const int compact = RenderShadowFloorBrightness(scene);
+        std::fprintf(stderr, "comparison_shadow %s unshadowed=%d compared=%d stored=%d compact=%d%c", entry.name, unshadowed, compared, stored, compact, 10);
+        Require(unshadowed > 60, "Comparison shadow test: the unshadowed floor must be visibly lit");
+        for (const int shadowed : { compared, stored, compact }) {
+            Require(shadowed * 10 < unshadowed * 8, "Comparison shadow test: every way of reading the map must shadow the floor under the plate");
+        }
+        Require(std::abs(compared - stored) * 5 < unshadowed && std::abs(compact - stored) * 5 < unshadowed,
+            "Comparison shadow test: the comparison lookups must agree with the stored-depth lookups");
+    }
+}
+
 void RunRendererRendersDirectionalCascadeShadowTest() {
     // The occluder is 40 m from the camera: outside the two nearest cascades, inside the widest one.
     ShadowFloorScene farScene{ .point = false, .cameraPosition = bx::Vec3{ 0.0F, 2.0F, -40.0F }, .fovDegrees = 8.0F };
@@ -7045,6 +7201,21 @@ void RunRendererRendersDirectionalCascadeShadowTest() {
     Require(shadowed * 10 < unshadowed * 8, "Cascade shadow test: the widest cascade must shadow the floor under a farScene occluder");
 }
 
+
+// The sun's cascades keep their shadow while nothing over them changes: a steady frame submits no shadow pass, a
+// plate that moves away is seen at once, and the cached frames cost less than rendering the cascades every frame.
+void RunRendererReusesSunCascadesTest() {
+    ShadowFloorScene::CascadeReuse reuse;
+    ShadowFloorScene scene{ .point = false, .cascadeReuse = &reuse };
+    static_cast<void>(RenderShadowFloorBrightness(scene));
+    std::fprintf(stderr, "sun_cascade_cache steady_passes=%zu moved_passes=%zu steady=%d moved=%d cached_ms=%.3f uncached_ms=%.3f%c",
+        reuse.steadyPasses, reuse.movedPasses, reuse.steadyBrightness, reuse.movedBrightness,
+        reuse.cachedMilliseconds, reuse.uncachedMilliseconds, 10);
+    Require(reuse.steadyBrightness > 60 && reuse.steadyBrightness * 10 < reuse.movedBrightness * 8,
+        "Cascade cache test: the steady frame must keep the plate's shadow and the moved plate must lift it");
+    Require(reuse.steadyPasses == 0U, "Cascade cache test: a frame that changed nothing must not render the cascades again");
+    Require(reuse.movedPasses > 0U, "Cascade cache test: a caster that moved over the cascades must render them again");
+}
 
 // Screen-space GI: a lit red wall must tint the nearby white floor, but only when GI is enabled.
 // Several frames are rendered so the pass can read the previous frame's lit colour.
@@ -7100,7 +7271,7 @@ struct GiFloorStats {
     addBox({ 3.0F, 3.0F, 0.0F }, { 0.5F, 6.0F, 20.0F }, redId.value); // red wall, floor-side face at x = 2.75
     const kb::scene::SceneEntity light = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
         .name = "Point Light", .transform = TransformAt(-1.0F, 5.0F, 0.0F) });
-    // 1.27 in Unity's light convention is the 4 this scene was tuned with before (4 / pi).
+    // 1.27 in the normalized light convention is the 4 this scene was tuned with before (4 / pi).
     scene.Components().Lights().Set(light, kb::scene::LightComponent{
         .kind = kb::scene::LightKind::Point, .intensity = 1.27F, .range = 40.0F, .castsShadow = false });
 
@@ -7198,6 +7369,8 @@ struct SsMaterialOptions {
     std::vector<SsSolidTexture> solidTextures;
     bool cameraInside=false;
     std::optional<RenderMaterialGraphDocument> graph;
+    // Draws the boxes as the one-bone skinned form of the sphere (needs `sphere`), in the rest pose.
+    bool skinnedSphere = false;
 };
 
 void WriteMaterialSphereObj(const std::filesystem::path& path) {
@@ -7219,6 +7392,49 @@ void WriteMaterialSphereObj(const std::filesystem::path& path) {
         if(ring+1<rings) face(c,d,b);
     }
     Require(out.good(),"Material sphere fixture write failed");
+}
+
+// The sphere of WriteMaterialSphereObj as a skeletal mesh on a one-bone skeleton; returns the mesh asset id.
+[[nodiscard]] std::uint64_t PublishSkinnedMaterialSphere(kb::scene::Scene& scene, std::uint64_t& skeletonId, std::uint64_t& signature) {
+    constexpr unsigned rings=32, slices=64;
+    auto skeleton = std::make_shared<kb::scene::SkeletonAsset>();
+    skeleton->bones.push_back({ .id = 1U, .name = "Root" });
+    signature = kb::scene::SkeletonCompatibilitySignature(*skeleton);
+    const kb::assets::AssetId skeletonAssetId = kb::assets::MakeAssetId("SsSkinnedSphereSkeleton");
+    const kb::assets::AssetId meshAssetId = kb::assets::MakeAssetId("SsSkinnedSphereMesh");
+    auto mesh = std::make_shared<kb::scene::SkeletalMeshAsset>();
+    mesh->skeletonAssetId = skeletonAssetId.value;
+    mesh->skeletonCompatibilitySignature = signature;
+    mesh->conservativeBounds = { .center = { 0.0F, 0.0F, 0.0F }, .extents = { 1.0F, 1.0F, 1.0F } };
+    mesh->fixedBounds = mesh->conservativeBounds;
+    kb::scene::SkeletalMeshLod lod;
+    for(unsigned ring=0;ring<=rings;++ring) for(unsigned slice=0;slice<=slices;++slice) {
+        const double theta=3.141592653589793*ring/rings, phi=6.283185307179586*slice/slices;
+        const kb::math::Vec3 point{ static_cast<float>(std::sin(theta)*std::cos(phi)), static_cast<float>(std::cos(theta)),
+            static_cast<float>(std::sin(theta)*std::sin(phi)) };
+        lod.vertices.push_back({ .position = point, .normal = point,
+            .uv = { static_cast<float>(double(slice)/slices), static_cast<float>(double(ring)/rings) } });
+    }
+    const auto triangle=[&](unsigned a,unsigned b,unsigned c) { lod.indices.insert(lod.indices.end(), { a, b, c }); };
+    for(unsigned ring=0;ring<rings;++ring) for(unsigned slice=0;slice<slices;++slice) {
+        const unsigned a=ring*(slices+1)+slice,b=a+slices+1,c=a+1,d=b+1;
+        if(ring>0) triangle(a,c,b);
+        if(ring+1<rings) triangle(c,d,b);
+    }
+    lod.sections.push_back({ .indexCount = static_cast<std::uint32_t>(lod.indices.size()), .boneMap = { 1U } });
+    lod.requiredBones = { 1U };
+    kb::scene::BuildSkeletalMeshLodBoneBounds(lod);
+    mesh->lods.push_back(std::move(lod));
+    Require(kb::scene::ValidateSkeletalMeshAsset(*mesh).valid, "Skinned sphere fixture is not a valid skeletal mesh");
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterAsset({ .id = skeletonAssetId, .type = kb::scene::kSkeletonAssetType, .name = "SsSkinnedSphereSkeleton",
+                .virtualPath = "/Game/SsSkinnedSphere.kbskeleton", .runtimeLoadable = true }) &&
+            manager.RegisterAsset({ .id = meshAssetId, .type = kb::scene::kSkeletalMeshAssetType, .name = "SsSkinnedSphereMesh",
+                .virtualPath = "/Game/SsSkinnedSphere.kbskeletalmesh", .runtimeLoadable = true }) &&
+            manager.PublishRuntimeAsset(skeletonAssetId, skeleton) && manager.PublishRuntimeAsset(meshAssetId, mesh),
+        "Skinned sphere fixture could not be published");
+    skeletonId = skeletonAssetId.value;
+    return meshAssetId.value;
 }
 
 [[nodiscard]] std::vector<std::uint8_t> RenderScreenSpaceScene(
@@ -7288,17 +7504,28 @@ void WriteMaterialSphereObj(const std::filesystem::path& path) {
     const std::uint64_t blend = publishMaterial("SsBlend", { 1.0F, 1.0F, 1.0F }, 0.9F, RenderMaterialAlphaMode::Blend);
     const std::uint64_t red = publishMaterial("SsRed", { 0.8F, 0.05F, 0.05F }, 0.9F);
     const std::uint64_t glossy = publishMaterial("SsGlossy", { 0.9F, 0.9F, 0.9F }, glossyRoughness);
+    const bool skinnedSphere = materialOptions && materialOptions->skinnedSphere;
+    std::uint64_t skeletonId = 0U, skeletonSignature = 0U, skinnedMeshId = 0U;
+    if (skinnedSphere) skinnedMeshId = PublishSkinnedMaterialSphere(scene, skeletonId, skeletonSignature);
     for (const SsBox& box : boxes) {
         const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
             .name = "Box",
             .transform = kb::scene::TransformComponent{ .localPosition = box.position, .localScale = box.scale },
         });
         scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
-            .meshAssetId = meshId.value,
+            .meshAssetId = skinnedSphere ? skinnedMeshId : meshId.value,
             .materialAssetId = box.material == SsMaterial::Red ? red : box.material == SsMaterial::Glossy ? glossy
                 : box.material == SsMaterial::Blend ? blend : 0U,
             .castsShadow = false });
+        if (skinnedSphere) {
+            Require(scene.Components().SkeletonBindings().Set(entity, { .skeletonAssetId = skeletonId,
+                        .skeletonCompatibilitySignature = skeletonSignature, .enabled = true }) &&
+                    scene.Components().DeformedGeometries().Set(entity, { .skeletalMeshAssetId = skinnedMeshId,
+                        .fixedBounds = true, .castsShadow = false, .enabled = true }),
+                "Screen-space test could not skin its sphere");
+        }
     }
+    if (skinnedSphere) static_cast<void>(scene.Runtime().Update(0.0F));
     for (const kb::scene::Vec3& position : pointLights) {
         const kb::scene::SceneEntity light = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
             .name = "Point Light", .transform = TransformAt(position.x, position.y, position.z) });
@@ -7855,8 +8082,42 @@ void RunFogProfilePixelsTest(bgfx::RendererType::Enum backend) {
         bgfx::getRendererName(backend),mean(height),mean(volume),mean(forwardPhase),mean(backwardPhase),mean(high));
 }
 
+// A profile asset saved in a temporary folder, and the per-frame hook that registers it and makes it the
+// scene's active profile on the first frame. It does not rescan the mounts: a rescan drops the materials a test
+// published at runtime.
+struct ScenePostProcessProfileFixture {
+    std::filesystem::path root;
+    std::function<void(kb::scene::Scene&, int)> assign;
+};
+
+[[nodiscard]] ScenePostProcessProfileFixture MakeScenePostProcessProfile(const char* tag, const ScenePostProcessSettings& settings) {
+    ScenePostProcessProfileFixture fixture;
+    fixture.root = std::filesystem::temp_directory_path() / (std::string("21kb_") + tag + "_profile_" + std::to_string(GetCurrentProcessId()));
+    std::error_code error;
+    std::filesystem::remove_all(fixture.root, error);
+    std::filesystem::create_directories(fixture.root, error);
+    Require(!error, "Profile fixture could not create its profile folder");
+    Require(PostProcessProfileAssetLoader::SaveProfile(fixture.root / "Profile.kbppfx", settings),
+        "Profile fixture could not save its profile");
+    fixture.assign = [root = fixture.root](kb::scene::Scene& scene, int frame) {
+        if (frame != 0) {
+            return;
+        }
+        kb::assets::AssetManager& manager = scene.Assets().Manager();
+        const kb::assets::AssetId id = kb::assets::MakeAssetId("/Fx/Profile.kbppfx");
+        Require(manager.RegisterLoader(std::make_unique<PostProcessProfileAssetLoader>()) &&
+                manager.RegisterAsset(kb::assets::AssetMetadata{ .id = id, .type = std::string{ kPostProcessProfileAssetType },
+                    .name = "Profile", .virtualPath = "/Fx/Profile.kbppfx", .physicalPath = root / "Profile.kbppfx",
+                    .contentHash = 1U, .runtimeLoadable = true }),
+            "Profile fixture could not register its profile");
+        kb::scene::ScenePostProcessAccess::SetActiveProfile(scene, id.value);
+    };
+    return fixture;
+}
+
 // A glossy floor in front of a lit red wall must show the wall's reflection once screen-space
 // reflections are on: the floor region where the mirror image of the wall appears turns red.
+// The scene's post-process profile turns them on the same way, with its own intensity and distance.
 void RunRendererRendersScreenSpaceReflectionsTest() {
     constexpr std::uint16_t kSize = 128U;
     const std::vector<SsBox> boxes{
@@ -7890,6 +8151,30 @@ void RunRendererRendersScreenSpaceReflectionsTest() {
     const double with = redExcess(on);
     std::fprintf(stderr, "ssr_pixels red_minus_blue without=%.1f with=%.1f%c", without, with, 10);
     Require(with > without + 15.0, "SSR test: the glossy floor must reflect the red wall when screen-space reflections are on");
+
+    // The lighting config stays off; only the scene's profile asks for reflections.
+    const auto viaProfile = [&](float intensity, float maxDistance) {
+        ScenePostProcessSettings profile{};
+        profile.screenSpaceReflectionsEnabled = true;
+        profile.screenSpaceReflectionsIntensity = intensity;
+        profile.screenSpaceReflectionsMaxDistance = maxDistance;
+        const ScenePostProcessProfileFixture fixture = MakeScenePostProcessProfile("ssr", profile);
+        const auto pixels = RenderScreenSpaceScene(boxes, lights, eye, target, 40.0F, SceneRenderLightingConfig{}, 8, kSize,
+            SceneRenderMeshPassMode::OpaqueOnly, fixture.assign, false, kWallLightIntensity);
+        std::error_code removeError;
+        std::filesystem::remove_all(fixture.root, removeError);
+        return redExcess(pixels);
+    };
+    const SceneRenderLightingConfig defaults{};
+    const double profiled = viaProfile(defaults.ssrIntensity, defaults.ssrMaxDistance);
+    const double faded = viaProfile(0.0F, defaults.ssrMaxDistance);
+    const double shortRange = viaProfile(defaults.ssrIntensity, 0.2F);
+    std::fprintf(stderr, "ssr_profile_pixels red_minus_blue profile=%.1f intensity0=%.1f short_range=%.1f%c",
+        profiled, faded, shortRange, 10);
+    Require(profiled > without + 15.0 && std::abs(profiled - with) < 3.0,
+        "SSR test: a profile with reflections on must draw the reflection the lighting config draws");
+    Require(std::abs(faded - without) < 3.0, "SSR test: a profile with zero reflection intensity must draw no reflection");
+    Require(shortRange < profiled - 10.0, "SSR test: a profile's reflection distance must limit how far a reflection ray travels");
 }
 
 // Missing or invalid history must fall back to the environment without stale reflections.
@@ -7971,34 +8256,17 @@ void RunRendererPostProcessProfileDrivesAmbientOcclusionTest() {
         { { 3.0F, 3.0F, 0.0F }, { 0.5F, 6.0F, 20.0F } },
     };
     const SceneRenderLightingConfig lighting{};
-    const std::filesystem::path profileRoot = std::filesystem::temp_directory_path() /
-        ("21kb_ao_profile_" + std::to_string(GetCurrentProcessId()));
-    std::error_code error;
-    std::filesystem::remove_all(profileRoot, error);
-    std::filesystem::create_directories(profileRoot, error);
-    Require(!error, "AO profile test could not create its profile folder");
     ScenePostProcessSettings profile{};
     profile.ambientOcclusionEnabled = true;
     profile.ambientOcclusionIntensity = 1.0F;
     profile.ambientOcclusionRadius = 1.0F;
-    Require(PostProcessProfileAssetLoader::SaveProfile(profileRoot / "Occlusion.kbppfx", profile),
-        "AO profile test could not save its profile");
-    const auto assignProfile = [&](kb::scene::Scene& scene, int frame) {
-        if (frame != 0) {
-            return;
-        }
-        kb::assets::AssetManager& manager = scene.Assets().Manager();
-        Require(manager.RegisterLoader(std::make_unique<PostProcessProfileAssetLoader>()) &&
-                manager.Mounts().Mount("Fx", profileRoot) && manager.DiscoverMountedAssets() >= 1U,
-            "AO profile test could not discover its profile");
-        const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath("/Fx/Occlusion.kbppfx");
-        Require(metadata != nullptr, "AO profile test lost its profile metadata");
-        kb::scene::ScenePostProcessAccess::SetActiveProfile(scene, metadata->id.value);
-    };
+    const ScenePostProcessProfileFixture fixture = MakeScenePostProcessProfile("ao", profile);
+    const auto assignProfile = fixture.assign;
     const auto without = RenderScreenSpaceScene(boxes, {}, bx::Vec3{ -2.0F, 4.0F, -8.0F }, bx::Vec3{ 2.55F, 0.0F, 0.0F }, 30.0F, lighting, 30, kSize);
     const auto with = RenderScreenSpaceScene(boxes, {}, bx::Vec3{ -2.0F, 4.0F, -8.0F }, bx::Vec3{ 2.55F, 0.0F, 0.0F }, 30.0F, lighting, 30, kSize,
         SceneRenderMeshPassMode::OpaqueOnly, assignProfile);
-    std::filesystem::remove_all(profileRoot, error);
+    std::error_code error;
+    std::filesystem::remove_all(fixture.root, error);
     const double nearWithout = MeanBrightness(without, kSize, 28, 30, 36, 38);
     const double nearWith = MeanBrightness(with, kSize, 28, 30, 36, 38);
     const double farWithout = MeanBrightness(without, kSize, 4, 44, 12, 52);
@@ -8085,6 +8353,209 @@ void RunBloomOutputProfilePixelsTest() {
         bgfx::destroy(source);
     }
     renderer.Shutdown();
+}
+
+// A lit triangle rendered through the full scene, post-process and display composite path into a 64x64
+// output. `sceneExtent` is the size of the scene and post-process targets; below the output size the frame
+// takes the reduced render scale path (upscaledExtent). `moveX` moves the triangle (or, with `moveCamera`,
+// the camera the other way) by that much each frame.
+struct PostProcessedTriangleCapture {
+    std::vector<std::uint8_t> pixels;
+    RenderExtent sceneTargetExtent{};
+    RenderExtent postTargetExtent{};
+};
+
+[[nodiscard]] PostProcessedTriangleCapture RenderPostProcessedTriangle(
+    const ScenePostProcessSettings& settings, RenderExtent sceneExtent, float moveX, const char* tag, bool moveCamera = false) {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() /
+        (std::string("21kb_post_triangle_") + tag + "_" + std::to_string(GetCurrentProcessId()));
+    LifecycleSceneFixture fixture;
+    PrepareLifecycleScene(fixture, root);
+    kb::scene::SceneLightingAccess::SetBasicLightingEnabled(fixture.scene, true);
+    const auto placeAt = [&](float x) {
+        kb::scene::TransformComponent transform = TransformAt(x, 0.0F, 0.0F);
+        transform.localScale = { 8.0F, 8.0F, 8.0F };
+        fixture.scene.Transforms().Set(fixture.entity, transform);
+    };
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "Post-processed triangle test could not create a hidden native surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Post-processed triangle test renderer did not initialize");
+    PostProcessedTriangleCapture capture;
+    {
+        SceneRenderTarget sceneTarget;
+        ScenePostProcessTargets postTargets;
+        FinalCompositeReadbackTarget output;
+        Require(sceneTarget.Ensure(SceneRenderTargetDesc{ .extent = sceneExtent }) &&
+                postTargets.Ensure(ScenePostProcessTargetsDesc{ .extent = sceneExtent }) && output.Initialize(),
+            "Post-processed triangle test could not allocate its targets");
+        capture.sceneTargetExtent = RenderExtent{ sceneExtent.width, sceneExtent.height };
+        capture.postTargetExtent = postTargets.Extent();
+        const RenderExtent outputExtent{ NativeTestSurface::kExtent, NativeTestSurface::kExtent };
+        SceneRenderCamera camera{};
+        bx::mtxLookAt(camera.view.data(), bx::Vec3{ 0.0F, 0.0F, 3.0F }, bx::Vec3{ 0.0F, 0.0F, 0.0F });
+        SceneDepthPolicy::MakePerspective(camera.projection.data(), 60.0F, 1.0F, 0.05F, 100.0F, SceneDepthPolicy::HomogeneousDepth());
+        RenderSceneSubmitDesc desc{
+            .target = RenderSceneTargetBinding{
+                .frameBuffer = sceneTarget.FrameBuffer(),
+                .colorTexture = sceneTarget.ColorTexture(),
+                .resolvedColorTexture = sceneTarget.ResolvedColorTexture(),
+                .depthTexture = sceneTarget.DepthTextureSampled() ? sceneTarget.DepthTexture() : bgfx::TextureHandle{ bgfx::kInvalidHandle },
+                .viewport = RenderViewportDesc{ .id = RenderViewportId{ 1U }, .extent = sceneExtent, .viewportIndex = 0U },
+                .msaaSamples = sceneTarget.MsaaSamples(),
+                .colorFormat = sceneTarget.ColorSelection().format,
+            },
+            .postProcess = postTargets.Binding(),
+            .finalComposite = output.Binding(),
+            .upscaledExtent = sceneExtent == outputExtent ? RenderExtent{} : outputExtent,
+            .cameraOverride = camera,
+            .postProcessSettings = settings,
+            .clearRgba = 0x000000FFU,
+            .editorSceneOverlaysEnabled = false,
+            .screenUIEnabled = false,
+            .shadowPassEnabled = false,
+            .postProcessEnabled = true,
+            .selectionMaskEnabled = false,
+            .selectionOutlineEnabled = false,
+        };
+        for (int frame = 0; frame < 6; ++frame) {
+            const float shift = -0.9F + moveX * static_cast<float>(frame);
+            placeAt(moveCamera ? 0.0F : shift);
+            if (moveCamera) {
+                bx::mtxLookAt(camera.view.data(), bx::Vec3{ -shift, 0.0F, 3.0F }, bx::Vec3{ -shift, 0.0F, 0.0F });
+                desc.cameraOverride = camera;
+            }
+            SubmitLifecycleFrame(renderer, fixture.scene, desc, "Post-processed triangle test did not submit a frame");
+        }
+        capture.pixels = output.ReadPixels();
+    }
+    renderer.Shutdown();
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    return capture;
+}
+
+[[nodiscard]] ScenePostProcessSettings PlainPostProcessSettings() {
+    ScenePostProcessSettings settings{};
+    settings.bloomEnabled = false;
+    settings.temporalAntiAliasingEnabled = false;
+    settings.temporalJitterEnabled = false;
+    settings.fxaaEnabled = false;
+    settings.outputTransform.autoExposure.enabled = false;
+    return settings;
+}
+
+[[nodiscard]] int CapturedLuminance(const std::vector<std::uint8_t>& pixels, std::uint32_t x, std::uint32_t y) {
+    const std::size_t offset = (static_cast<std::size_t>(y) * NativeTestSurface::kExtent + x) * 4U;
+    return static_cast<int>(pixels[offset]) + pixels[offset + 1U] + pixels[offset + 2U];
+}
+
+// Pixels between 15% and 85% of the brightest: the soft border a blur leaves around a hard edge.
+[[nodiscard]] int CountPartialPixels(const std::vector<std::uint8_t>& pixels) {
+    int brightest = 0;
+    for (std::uint32_t y = 0; y < NativeTestSurface::kExtent; ++y)
+        for (std::uint32_t x = 0; x < NativeTestSurface::kExtent; ++x) brightest = std::max(brightest, CapturedLuminance(pixels, x, y));
+    int partial = 0;
+    for (std::uint32_t y = 0; y < NativeTestSurface::kExtent; ++y) {
+        for (std::uint32_t x = 0; x < NativeTestSurface::kExtent; ++x) {
+            const int value = CapturedLuminance(pixels, x, y);
+            if (value * 100 > brightest * 15 && value * 100 < brightest * 85) ++partial;
+        }
+    }
+    return partial;
+}
+
+// Lit pixels of the row through the triangle's middle.
+[[nodiscard]] int LitRowWidth(const std::vector<std::uint8_t>& pixels, std::uint32_t y) {
+    int lit = 0;
+    for (std::uint32_t x = 0; x < NativeTestSurface::kExtent; ++x) lit += CapturedLuminance(pixels, x, y) > 24 ? 1 : 0;
+    return lit;
+}
+
+// A triangle moving across the screen leaves a soft trail along its motion only with motion blur on; a still
+// one stays sharp, and the trail is no longer than the clamped blur length.
+void RunRendererMotionBlurSmearsMovingObjectsTest() {
+    const RenderExtent full{ NativeTestSurface::kExtent, NativeTestSurface::kExtent };
+    ScenePostProcessSettings off = PlainPostProcessSettings();
+    ScenePostProcessSettings on = off;
+    on.motionBlurEnabled = true;
+    on.motionBlurIntensity = 1.0F;
+    on.motionBlurSamples = 12U;
+    // The camera pans, so the triangle sweeps across the screen.
+    const auto movingOff = RenderPostProcessedTriangle(off, full, 0.3F, "blur_off", true);
+    const auto movingOn = RenderPostProcessedTriangle(on, full, 0.3F, "blur_on", true);
+    const auto stillOn = RenderPostProcessedTriangle(on, full, 0.0F, "blur_still", true);
+    const auto stillOff = RenderPostProcessedTriangle(off, full, 0.0F, "blur_still_off", true);
+    const int partialOff = CountPartialPixels(movingOff.pixels);
+    const int partialOn = CountPartialPixels(movingOn.pixels);
+    const int partialStill = CountPartialPixels(stillOn.pixels);
+    const int partialStillOff = CountPartialPixels(stillOff.pixels);
+    const std::uint32_t row = NativeTestSurface::kExtent / 2U;
+    const int widthOff = LitRowWidth(movingOff.pixels, row);
+    const int widthOn = LitRowWidth(movingOn.pixels, row);
+    std::fprintf(stderr, "motion_blur_pixels partial off=%d on=%d still=%d still_off=%d row_width off=%d on=%d%c",
+        partialOff, partialOn, partialStill, partialStillOff, widthOff, widthOn, 10);
+    Require(widthOff > 8, "Motion blur test: the triangle must be drawn");
+    Require(partialOn > partialOff + 20, "Motion blur test: a moving object must blur with motion blur on");
+    Require(std::abs(partialStill - partialStillOff) <= 4, "Motion blur test: a still object must stay sharp with motion blur on");
+    // The trail grows the lit row by at most the longest blur (4 pixels at this size) and a pixel of filtering.
+    Require(widthOn <= widthOff + 6, "Motion blur test: the blur length must be clamped");
+}
+
+// At render scale 0.5 the scene and post-process targets are half the output size and the display composite
+// upscales the scene to the full output: the triangle lands where the full-resolution frame draws it.
+void RunRendererRenderScaleUpscalesSceneTest() {
+    const RenderExtent full{ NativeTestSurface::kExtent, NativeTestSurface::kExtent };
+    Require(Renderer::ScaledRenderExtent(full, 1.0F) == full && Renderer::ScaledRenderExtent(full, 2.0F) == full,
+        "Render scale 1 (and above) must keep the output extent");
+    const RenderExtent half = Renderer::ScaledRenderExtent(full, 0.5F);
+    Require(half == RenderExtent{ full.width / 2U, full.height / 2U } && Renderer::ScaledRenderExtent(full, 0.1F) == half &&
+            Renderer::ScaledRenderExtent(RenderExtent{ 1U, 1U }, 0.5F) == RenderExtent{ 1U, 1U },
+        "Render scale must halve the extent at 0.5, clamp below it and keep at least one pixel");
+    {
+        Renderer renderer;
+        Require(renderer.RenderScale() == 1.0F, "The renderer must default to render scale 1");
+        renderer.SetRenderScale(0.25F);
+        Require(renderer.RenderScale() == 0.5F, "SetRenderScale must clamp to 0.5");
+        renderer.SetRenderScale(std::numeric_limits<float>::quiet_NaN());
+        Require(renderer.RenderScale() == 1.0F, "SetRenderScale must reject a non-finite scale");
+    }
+    const ScenePostProcessSettings settings = PlainPostProcessSettings();
+    const auto fullFrame = RenderPostProcessedTriangle(settings, full, 0.0F, "scale_full");
+    const auto halfFrame = RenderPostProcessedTriangle(settings, half, 0.0F, "scale_half");
+    Require(fullFrame.postTargetExtent == full && halfFrame.postTargetExtent == half && halfFrame.sceneTargetExtent == half,
+        "Render scale test: the scene and post-process targets must be the scaled size");
+    const auto coverage = [](const std::vector<std::uint8_t>& pixels, double& centreX, double& centreY) {
+        int count = 0;
+        centreX = 0.0;
+        centreY = 0.0;
+        for (std::uint32_t y = 0; y < NativeTestSurface::kExtent; ++y) {
+            for (std::uint32_t x = 0; x < NativeTestSurface::kExtent; ++x) {
+                if (CapturedLuminance(pixels, x, y) > 24) {
+                    ++count;
+                    centreX += x;
+                    centreY += y;
+                }
+            }
+        }
+        if (count > 0) {
+            centreX /= count;
+            centreY /= count;
+        }
+        return count;
+    };
+    double fullX = 0.0, fullY = 0.0, halfX = 0.0, halfY = 0.0;
+    const int fullCount = coverage(fullFrame.pixels, fullX, fullY);
+    const int halfCount = coverage(halfFrame.pixels, halfX, halfY);
+    std::fprintf(stderr, "render_scale_pixels full=%d (%.1f,%.1f) half=%d (%.1f,%.1f)%c",
+        fullCount, fullX, fullY, halfCount, halfX, halfY, 10);
+    Require(fullCount > 40, "Render scale test: the full-resolution frame must draw the triangle");
+    Require(std::abs(halfCount - fullCount) * 5 < fullCount, "Render scale test: the upscaled triangle must cover the full output area");
+    Require(std::abs(halfX - fullX) < 1.5 && std::abs(halfY - fullY) < 1.5,
+        "Render scale test: the upscaled triangle must land where the full-resolution one does");
 }
 
 void RunRendererVignetteDarkensFinalCompositeCornersTest() {
@@ -9753,7 +10224,7 @@ void RunRendererRendersSpotLightShadowTest() {
 // The share of light that survives the plate is measured for four lights (the old limit) and for six; it must
 // not grow when lights are added.
 [[nodiscard]] double PointShadowSurvivingShare(int extraPointLights) {
-    // 0.16 in Unity's light convention is the 0.5 this scene was tuned with before (0.5 / pi).
+    // 0.16 in the normalized light convention is the 0.5 this scene was tuned with before (0.5 / pi).
     ShadowFloorScene scene{ .extraPointLights = extraPointLights, .pointIntensity = 0.16F };
     scene.lightCastsShadow = false;
     const int unshadowed = RenderShadowFloorBrightness(scene);
@@ -10280,6 +10751,123 @@ void RunRendererSkyReflectionTests() {
 #endif
 }
 
+void RunRendererLightProbeTests() {
+#if defined(_WIN32)
+    // A probe grid baked next to a lit red wall over a white floor; the rendered dynamic sphere is not baked.
+    const auto quad = [](kb::math::Vec3 a, kb::math::Vec3 b, kb::math::Vec3 c, kb::math::Vec3 d, kb::math::Vec3 normal,
+                          kb::math::Vec3 albedo) {
+        const auto corner = [&](kb::math::Vec3 p, float u, float v) {
+            return LightmapVertex{ .position = p, .normal = normal, .u = u, .v = v, .albedo = albedo };
+        };
+        return std::vector<LightmapTriangle>{ { corner(a, 0, 0), corner(b, 1, 0), corner(c, 1, 1) },
+            { corner(a, 0, 0), corner(c, 1, 1), corner(d, 0, 1) } };
+    };
+    const auto wall = quad({ -2, 0, -3 }, { -2, 0, 3 }, { -2, 4, 3 }, { -2, 4, -3 }, { 1, 0, 0 }, { 0.8F, 0.05F, 0.05F });
+    const auto floor = quad({ -3, 0, -3 }, { 3, 0, -3 }, { 3, 0, 3 }, { -3, 0, 3 }, { 0, 1, 0 }, { 0.8F, 0.8F, 0.8F });
+    const std::vector<std::uint8_t> lit(4U * 4U * 4U, 230U);
+    const std::array<BakedLightmapSurface, 2> surfaces{ BakedLightmapSurface{ wall, lit, 4 }, BakedLightmapSurface{ floor, lit, 4 } };
+    LightProbeSettings settings;
+    settings.spacing = 1.0F;
+    const LightProbeGrid grid = BakeLightProbes(surfaces, { -1.5F, 0.5F, -2.5F }, { 2.5F, 3.5F, 2.5F }, settings);
+    Require(grid.Succeeded(), "Light probe test grid could not be baked");
+    const LightProbeGrid parsed = ParseLightProbeGrid(SerializeLightProbeGrid(grid));
+    Require(parsed.Succeeded() && parsed.probes.size() == grid.probes.size(), "Light probe test grid did not survive its file form");
+
+    const auto render = [&](bool withGrid, SceneRenderLightingPath path, bool reflections = false, SceneRenderSubmitStats* statsOut = nullptr, bool skinned = false) {
+        SsMaterialOptions options;
+        options.sphere = true;
+        options.skinnedSphere = skinned;
+        SceneRenderLightingConfig lighting{};
+        lighting.lightingPath = path;
+        lighting.screenSpaceReflectionsEnabled = reflections;
+        const auto assign = [&](kb::scene::Scene& scene, int frame) {
+            if (frame != 0 || !withGrid) return;
+            const kb::assets::AssetId id = kb::assets::MakeAssetId("ProbeTestGrid");
+            kb::assets::AssetManager& manager = scene.Assets().Manager();
+            Require(manager.RegisterAsset(kb::assets::AssetMetadata{ .id = id, .type = std::string{ kLightProbeGridAssetType },
+                        .name = "LightProbes", .virtualPath = LightProbeGridVirtualPath("ProbeTest"),
+                        .physicalPath = std::filesystem::temp_directory_path() / "ProbeTestGrid.kblp", .contentHash = 1U,
+                        .runtimeLoadable = true }) &&
+                    manager.PublishRuntimeAsset(id, std::make_shared<LightProbeGrid>(parsed)),
+                "Light probe test grid could not be published");
+            kb::scene::SceneLightProbeAccess::AssignBakedGrid(scene, "ProbeTest");
+            Require(kb::scene::SceneLightProbeAccess::Grid(scene) == id.value, "The scene did not find its baked probe grid");
+        };
+        return RenderScreenSpaceScene({ { { 0.0F, 1.2F, 0.0F }, { 1.0F, 1.0F, 1.0F } } }, {}, { 0.0F, 1.2F, -6.0F }, { 0.0F, 1.2F, 0.0F },
+            30.0F, lighting, 4, 64U, SceneRenderMeshPassMode::OpaqueOnly, assign, false, 1.27F, 40.0F, nullptr, {}, 0.05F,
+            bgfx::RendererType::Direct3D11, statsOut, &options);
+    };
+    // Red minus blue over the sphere's wall-facing half (the wall is at -x, on the left of the image).
+    const auto redShift = [](const std::vector<std::uint8_t>& pixels) {
+        double sum = 0.0;
+        for (unsigned y = 26U; y < 38U; ++y) for (unsigned x = 22U; x < 32U; ++x) {
+            const std::size_t at = (static_cast<std::size_t>(y) * 64U + x) * 4U;
+            sum += static_cast<double>(pixels[at]) - static_cast<double>(pixels[at + 2U]);
+        }
+        return sum / 120.0;
+    };
+    // The forward path, and the deferred lighting pass that the desktop project default selects.
+    std::array<std::uint32_t, 2> drawCalls{};
+    for (const SceneRenderLightingPath path : { SceneRenderLightingPath::Forward, SceneRenderLightingPath::Deferred }) {
+        SceneRenderSubmitStats stats{};
+        const auto without = render(false, path);
+        const auto before = SceneDeferredLightingPass::LitStageBindings();
+        const auto withProbes = render(true, path, false, &stats);
+        const auto after = SceneDeferredLightingPass::LitStageBindings();
+        if (path == SceneRenderLightingPath::Deferred) {
+            // The grid and the reflections share one stage: each lighting draw binds it exactly once.
+            Require(after.draws > before.draws && after.bindings - before.bindings == after.draws - before.draws,
+                "A deferred frame with the baked grid must bind the shared reflection/probe stage once per draw");
+        }
+        const auto again = render(false, path);
+        drawCalls[path == SceneRenderLightingPath::Deferred ? 1U : 0U] = stats.submittedDrawCallCount;
+        std::fprintf(stderr, "light_probe_pixels path=%u without=%.3f with=%.3f\n", static_cast<unsigned>(path), redShift(without), redShift(withProbes));
+        Require(redShift(withProbes) > redShift(without) + 10.0, "A baked probe grid next to a red wall did not red-shift the dynamic sphere");
+        Require(without == again, "A scene without a probe grid must render the same image every time");
+    }
+    Require(drawCalls[1] > drawCalls[0], "The deferred case did not run the G-buffer and lighting passes");
+    // A skinned sphere in the forward passes reads its palette and the grid in one draw: the grid must not take
+    // the palette's stage, so the sphere keeps its shape and still takes the wall's light.
+    {
+        const auto silhouette = [](const std::vector<std::uint8_t>& pixels) {
+            std::vector<bool> mask(pixels.size() / 4U);
+            for (std::size_t at = 0U; at < mask.size(); ++at) mask[at] = pixels[at * 4U] + pixels[at * 4U + 1U] + pixels[at * 4U + 2U] > 0;
+            return mask;
+        };
+        const auto differing = [](const std::vector<bool>& a, const std::vector<bool>& b) {
+            std::size_t count = 0U;
+            for (std::size_t at = 0U; at < a.size(); ++at) count += a[at] != b[at] ? 1U : 0U;
+            return count;
+        };
+        const auto rigid = silhouette(render(false, SceneRenderLightingPath::Forward));
+        const auto skinnedWithout = render(false, SceneRenderLightingPath::Forward, false, nullptr, true);
+        const auto skinnedWith = render(true, SceneRenderLightingPath::Forward, false, nullptr, true);
+        const std::size_t covered = static_cast<std::size_t>(std::count(rigid.begin(), rigid.end(), true));
+        std::fprintf(stderr, "light_probe_skinned covered=%zu rigidDiff=%zu gridDiff=%zu without=%.3f with=%.3f\n", covered,
+            differing(rigid, silhouette(skinnedWith)), differing(silhouette(skinnedWithout), silhouette(skinnedWith)),
+            redShift(skinnedWithout), redShift(skinnedWith));
+        Require(covered > 500U, "The rigid sphere of the skinned probe test did not draw");
+        Require(differing(rigid, silhouette(skinnedWithout)) <= 8U && differing(rigid, silhouette(skinnedWith)) <= 8U,
+            "A skinned sphere in the rest pose did not cover the pixels of the rigid sphere");
+        Require(silhouette(skinnedWithout) == silhouette(skinnedWith),
+            "A baked probe grid changed the shape of a skinned mesh in the forward passes");
+        Require(redShift(skinnedWith) > redShift(skinnedWithout) + 10.0,
+            "A skinned mesh in the forward passes did not take the baked probe light");
+    }
+    // Screen-space reflections keep the stage the deferred pass would give the grid: the grid stands aside.
+    const auto reflectionsWithout = render(false, SceneRenderLightingPath::Deferred, true);
+    const auto reflectionsBefore = SceneDeferredLightingPass::LitStageBindings();
+    Require(reflectionsWithout == render(true, SceneRenderLightingPath::Deferred, true),
+        "A deferred frame with screen-space reflections must not use the probe grid");
+    const auto reflectionsAfter = SceneDeferredLightingPass::LitStageBindings();
+    Require(reflectionsAfter.draws > reflectionsBefore.draws &&
+            reflectionsAfter.bindings - reflectionsBefore.bindings == reflectionsAfter.draws - reflectionsBefore.draws,
+        "A deferred frame with reflections and a baked grid must bind the shared stage once per draw");
+#else
+    throw std::runtime_error("Light probe readback requires a supported native GPU test surface");
+#endif
+}
+
 void RunRendererGiResolveTests() {
 #if defined(_WIN32)
     {
@@ -10319,6 +10907,8 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
     RunRendererRendersSpotLightShadowTest();
     RunRendererRendersSixPointLightShadowsTest();
     RunRendererRendersDirectionalCascadeShadowTest();
+    RunRendererComparisonShadowSamplingTest();
+    RunRendererReusesSunCascadesTest();
     RunRendererBlendsShadowCascadesTest();
     RunRendererRendersScreenSpaceGiBounceTest();
     RunRendererSmoothsScreenSpaceGiOverTimeTest();
@@ -11767,6 +12357,8 @@ void RunRendererPostProcessProfileAuthoringTests() {
     RunRendererPostProcessProfileDrivesAmbientOcclusionTest();
     RunBloomOutputProfilePixelsTest();
     RunRendererVignetteDarkensFinalCompositeCornersTest();
+    RunRendererMotionBlurSmearsMovingObjectsTest();
+    RunRendererRenderScaleUpscalesSceneTest();
 #endif
 }
 

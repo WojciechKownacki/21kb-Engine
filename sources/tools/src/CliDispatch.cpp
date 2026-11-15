@@ -31,13 +31,17 @@ Commands:
   commands     List registered commands, availability and MCP tool names as JSON.
   new          Create a project, the same one the Hub creates, in a new or empty
                folder. Its startup scene Assets/Scenes/Main.21kbscene is made from
-               a template: Basic (camera, sun, sky, floor; default) or Empty.
-                 --parent <dir> --name <Name> [--template Basic|Empty]
+               a template: Basic3D (camera, sun, sky, floor; default; "Basic" works
+               too), Basic2D (orthographic camera, sprite floor), FirstPerson or
+               ThirdPerson (a walking character with its script and input), or Empty.
+                 --parent <dir> --name <Name>
+                 [--template Basic3D|Basic2D|FirstPerson|ThirdPerson|Empty]
   layout       Save, restore or reset the editor workspace for the next session.
                  list|save|restore|reset --project <dir> [--name <name>]
   scene-new    Create a scene from a template, as File > New Scene does.
                  --project <dir> --name <Name> [--folder Assets/Scenes]
-                 [--template Basic|Empty] [--default yes|no]
+                 [--template Basic3D|Basic2D|FirstPerson|ThirdPerson|Empty]
+                 [--default yes|no]
                (--default yes makes it the scene the game starts in)
   scene-duplicate Copy a scene under a new name, with an identity of its own, as File >
                Save Scene As does. The scene is --scene, or the one the game starts in.
@@ -48,6 +52,7 @@ Commands:
                  --project <dir> --name <Name> --language lua|cpp
                  [--folder Assets/Scripts]
   scene-lightmap Bake static diffuse lighting and ray shadows into a UV0 texture.
+  scene-bake-lighting Bake the whole scene: static lights, bounces, generated lightmap UVs and light probes.
   material-new Create a material, as the editor's Create > Material does, with
                its values set at once. Existing files are never overwritten.
                  --project <dir> --name <Name> [--folder Assets/Materials]
@@ -97,7 +102,7 @@ Commands:
                its material: component set ... --set material=<path>.kbmatinst)
   post-process-new Create a post-process profile: the image settings (tonemapping,
                exposure, bloom, anti-aliasing, vignette, ambient occlusion) a scene
-               can use, as a Unity Volume Profile. Existing files are never overwritten.
+               can use. Existing files are never overwritten.
                  --project <dir> --name <Name> [--folder Assets/PostProcess]
                  [--set field=value ...]
   post-process-set Change values of a post-process profile.
@@ -107,6 +112,9 @@ Commands:
                outputTransform.exposureStops=0, bloomEnabled=0, vignetteEnabled=1,
                vignetteIntensity=0.3, ambientOcclusionEnabled=1,
                ambientOcclusionIntensity=1, ambientOcclusionRadius=0.6,
+               screenSpaceReflectionsEnabled=1, screenSpaceReflectionsIntensity=1,
+               screenSpaceReflectionsMaxDistance=25, motionBlurEnabled=1,
+               motionBlurIntensity=0.5, motionBlurSamples=8,
                globalIllumination=Off|ScreenSpace|Voxel, globalIlluminationIntensity=1,
                fogEnabled=1, fogDensity=0.02, fogHeightFalloff=0.2, fogBaseHeight=0,
                fogColor.r=0.6, fogColor.g=0.65, fogColor.b=0.7, volumetricFogEnabled=1,
@@ -168,7 +176,7 @@ R"(  audio-mixer  Create, edit and assign an audio bus graph (.kbmixer).
                (draws it with its skeleton), component add --type Animator and
                component set --type Animator --set controller=<.kbanimcontroller>.
                Its clips may come from another character, even one rigged and named another
-               way (Mixamo, Unreal, Blender/Rigify): bones are matched by name and role and the
+               way: bones are matched by name and role and the
                motion is retargeted; check --character shows how many bones follow each clip.
   skeleton     Read a character's bones and edit its sockets (named grip points on a bone).
                  show --project <dir> --skeleton <.kbskeleton | .kbskeletalmesh>
@@ -256,8 +264,8 @@ R"(  terrain      Terrain files (.kbterrain): what the Terrain Editor does - bru
                  --terrain is /Game/Terrains/Hills.kbterrain, Assets/..., or a file path; --project is needed for /Game paths.
 )"
 R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): what the editor's World 2D
-               Map component and Map Editor window do - grounds with automatic borders (Remere's Map
-               Editor style), sprites as items or grounds, floors -50..50, a Map Camera for Play.
+               Map component and Map Editor window do - grounds with automatic borders,
+               sprites as items or grounds, floors -50..50, a Map Camera for Play.
                  new --project <dir> --name <Entity> [--scene <path>] [--size 64x64]
                      [--orientation flat|wall] [--topology rectangular|isometric|hexagonal] [--view 15x11]   (map file, Mesh Renderer, Map Camera)
                  ground new --project <dir> --name Grass --texture "/Game/2D Map Sprites/terrain.png"
@@ -382,6 +390,17 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                physics, scripts, characters, combat and AI, 2D maps, checking your
                work); without --topic, the list of guides.
                  [--topic <name>]
+  code         Find your way in the engine's own source without reading all of it; read
+               from the source tree when asked, so it is never out of date.
+                 map  [--path <folder>] [--depth <1-8>]   folders, their size and purpose,
+                                                          and the files of --path
+                 find --text <words> [--path <folder>] [--limit <n>]
+                                                          the files that deal with a topic,
+                                                          each with the line to start at
+                 show --symbol <Name>                     where a type or function is
+                                                          declared, its comment, its
+                                                          declaration, who uses it, its tests
+                 [--engine-root <dir>]  (default: found from kb_cli or the current folder)
   api-check    Compare the current API surface against a committed baseline
                and fail on breaking changes (CI compatibility gate).
                  --baseline <path> [--project <dir>] [--update-baseline]
@@ -394,8 +413,8 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                  [--preset /Game/<path>.kbimportpreset] [--scale <factor>]
                  [--rotation x,y,z (degrees)] [--import-materials yes|no]
                  [--import-textures yes|no] [--skeletal auto|yes|no]
-               (a model keeps its scale and rotation in its import, as Unity's
-               Scale Factor; flags override the preset. --skeletal auto, the default,
+               (a model keeps its scale and rotation in its import;
+               flags override the preset. --skeletal auto, the default,
                imports a skinned model - or an armature with animations and no mesh -
                as a character: Skeleton, Skeletal Mesh and one Animation Clip per
                source animation, named after it, all listed with '+'; FBX, glTF and
@@ -662,7 +681,7 @@ std::size_t EditDistance(std::string_view a, std::string_view b) {
 
 // A misspelled option must fail, not be ignored: for these commands the options accepted are the
 // ones their usage block names, plus the global ones. The other commands check their own.
-constexpr std::string_view kUsageCheckedCommands[]{ "entity", "component", "schema", "guide", "api", "validate", "scene-list",
+constexpr std::string_view kUsageCheckedCommands[]{ "entity", "component", "schema", "guide", "code", "api", "validate", "scene-list",
     "scene-attach", "scene-new", "scene-duplicate", "run", "material-new", "material-set", "material-show", "input-action", "prefab", "build", "capture" };
 
 bool RejectUnknownOptions(std::string_view command, const ArgumentList& arguments, std::ostream& err) {
@@ -706,6 +725,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"ai", &RunAiCommand, CliCommandKind::Normal, true, ""},
     {"api", &RunApiCommand, CliCommandKind::Normal, true, "api_reference"},
     {"guide", &RunGuideCommand, CliCommandKind::Normal, true, "guide"},
+    {"code", &RunCodeCommand, CliCommandKind::Normal, true, "code"},
     {"api-check", &RunApiCheckCommand, CliCommandKind::Normal, true, ""},
     {"entity", &RunEntityCommand, CliCommandKind::Normal, true, "entity_edit"},
     {"component", &RunComponentCommand, CliCommandKind::Normal, true, "component_edit"},
@@ -746,6 +766,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"terrain", &RunTerrainCommand, CliCommandKind::Normal, true, {}},
     {"mesh-lod", &RunMeshLodCommand, CliCommandKind::Normal, true, {}},
     {"scene-lightmap", &RunSceneLightmapCommand, CliCommandKind::Normal, true, {}},
+    {"scene-bake-lighting", &RunSceneBakeLightingCommand, CliCommandKind::Normal, true, {}},
     {"material-new", &RunMaterialNewCommand, CliCommandKind::Normal, true, {}},
     {"material-set", &RunMaterialSetCommand, CliCommandKind::Normal, true, {}},
     {"material-show", &RunMaterialShowCommand, CliCommandKind::Normal, true, {}},
@@ -766,6 +787,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"terrain", nullptr, CliCommandKind::Normal, false, {}},
     {"mesh-lod", nullptr, CliCommandKind::Normal, false, {}},
     {"scene-lightmap", nullptr, CliCommandKind::Normal, false, {}},
+    {"scene-bake-lighting", nullptr, CliCommandKind::Normal, false, {}},
     {"material-new", nullptr, CliCommandKind::Normal, false, {}},
     {"material-set", nullptr, CliCommandKind::Normal, false, {}},
     {"material-show", nullptr, CliCommandKind::Normal, false, {}},
@@ -944,6 +966,12 @@ int RunCli(std::span<const std::string> args, std::istream& in, CommandIo io) {
     if (words.size() > 1U && words.front() == "--json") {
         words.erase(words.begin());
         words.emplace_back("--json");
+    }
+    // kb_cli <command> --help is kb_cli help <command>.
+    if (words.size() > 1U && FindCliCommand(words.front()) != nullptr &&
+        std::ranges::any_of(words.begin() + 1, words.end(), [](const std::string& word) { return word == "--help" || word == "-h"; })) {
+        PrintCommandUsage(io.out, words.front());
+        return 0;
     }
     const std::string_view command{ words.front() };
     const std::vector<std::string> rest{ words.begin() + 1, words.end() };

@@ -11,7 +11,7 @@ namespace kb::editor {
 HWND FloatingWindowFactory::Create(HINSTANCE instance, HWND owner, const wchar_t* className, const std::string& titleText, const DockRect& rect) noexcept {
     const std::wstring title(titleText.begin(), titleText.end());
     const LONG_PTR ownerApplication = GetWindowLongPtrW(owner, GWLP_USERDATA);
-    const auto recovered = RecoverNativeDisplayRect(rect);
+    const auto recovered = RecoverOwnedDisplayRect(owner, rect);
     HWND floating = CreateWindowExW(
         ExtendedStyle,
         className,

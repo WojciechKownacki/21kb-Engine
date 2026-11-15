@@ -14,7 +14,11 @@ SAMPLER2D(s_normal, 1);
 SAMPLER2D(s_metallicRoughness, 2);
 SAMPLER2D(s_occlusion, 3);
 SAMPLER2D(s_emissive, 4);
+#if defined(KB_SHADOW_COMPARE)
+SAMPLER2DSHADOW(s_shadowMap, 5);
+#else
 SAMPLER2D(s_shadowMap, 5);
+#endif
 SAMPLER2D(s_terrainLayerWeights, 15);
 SAMPLERCUBE(s_skyReflection, 12);
 uniform vec4 u_materialParams;
@@ -34,6 +38,7 @@ uniform vec4 u_environmentGround;
 uniform vec4 u_environmentParams;
 #include "sky_reflection.sh"
 #include "local_reflection.sh"
+#include "light_probes.sh"
 #include "height_fog.sh"
 uniform vec4 u_shadowParams;
 uniform vec4 u_terrainLayerParams;
@@ -157,7 +162,7 @@ vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos
     vec3 specular = (distribution * geometry * fresnel) / max(4.0 * nDotV * nDotL, 0.0001);
     vec3 diffuse = (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * albedo * (0.31830989 * DiffuseBurley(nDotV, nDotL, lDotH, roughness));
     diffuse *= 1.0 - u_materialOptics.x;
-    // Light intensity follows the Unity convention: a light of intensity 1 shining straight onto a
+    // Light intensity is normalized: a light of intensity 1 shining straight onto a
     // surface returns its albedo, so the physical BRDF above is taken times pi.
     vec3 radiance = colorIntensity.rgb * (colorIntensity.a * attenuation * 3.14159265);
     return (KbLayeredPbrLight(layers.x, layers.y, layers.z, u_materialSubsurface.rgb, normal, viewDir, lightVector,
@@ -181,7 +186,8 @@ vec3 EvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic,
     float nDotV = max(dot(normal, viewDir), 0.0);
     vec3 f0 = mix(vec3(0.04, 0.04, 0.04), albedo, metallic);
     vec3 fresnel = FresnelSchlickRoughness(nDotV, f0, roughness);
-    vec3 diffuseEnv = EnvironmentColor(normal) * albedo * (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * occlusion * u_environmentParams.y;
+    // A baked probe grid gives the surroundings' diffuse light where the scene has one.
+    vec3 diffuseEnv = KbDiffuseAmbient(worldPos, normal, EnvironmentColor(normal)) * albedo * (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * occlusion * u_environmentParams.y;
     diffuseEnv *= 1.0 - u_materialOptics.x;
     vec3 reflectionDir = reflect(-viewDir, normal);
     float specularEnergy = mix(1.0, 0.18, roughness * roughness);
@@ -192,6 +198,10 @@ vec3 EvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic,
 
 float SampleShadowVisibility(vec3 shadowCoord, float penumbraScale)
 {
+#if defined(KB_SHADOW_COMPARE)
+    float compared = KbCompareShadow(s_shadowMap, shadowCoord, max(u_shadowParams.z, 0.000001), u_shadowParams.w, u_shadowCascadeInfo.w);
+    return mix(1.0, 1.0 - u_shadowParams.y, compared);
+#else
     float biasedDepth = shadowCoord.z;
     float texelSize = max(u_shadowParams.z, 0.000001);
     float selectedShadow = 0.0;
@@ -219,16 +229,19 @@ float SampleShadowVisibility(vec3 shadowCoord, float penumbraScale)
         }
         selectedShadow = occluders > 0.0 ? softShadow / 12.0 : 0.0;
     } else {
-        float hardShadow = biasedDepth < texture2DLod(s_shadowMap, shadowCoord.xy, 0.0).x ? 1.0 : 0.0;
-        float shadowSamples = 0.0;
-        for (int y = -1; y <= 1; ++y) {
-            for (int x = -1; x <= 1; ++x) {
-                shadowSamples += biasedDepth < texture2DLod(s_shadowMap, shadowCoord.xy + vec2(float(x), float(y)) * texelSize, 0.0).x ? 1.0 : 0.0;
+        selectedShadow = biasedDepth < texture2DLod(s_shadowMap, shadowCoord.xy, 0.0).x ? 1.0 : 0.0;
+        if (u_shadowParams.w >= 1.5) {
+            float shadowSamples = 0.0;
+            for (int y = -1; y <= 1; ++y) {
+                for (int x = -1; x <= 1; ++x) {
+                    shadowSamples += biasedDepth < texture2DLod(s_shadowMap, shadowCoord.xy + vec2(float(x), float(y)) * texelSize, 0.0).x ? 1.0 : 0.0;
+                }
             }
+            selectedShadow = shadowSamples * 0.11111111;
         }
-        selectedShadow = u_shadowParams.w < 1.5 ? hardShadow : shadowSamples * 0.11111111;
     }
     return mix(1.0, 1.0 - u_shadowParams.y, selectedShadow);
+#endif
 }
 
 void main()
@@ -239,7 +252,9 @@ void main()
     }
     vec2 materialUv = v_texcoord0 * u_materialUvTransform.xy + u_materialUvTransform.zw;
     vec4 albedo = texture2D(s_albedo, materialUv) * v_color0;
-    if (u_materialFlags.x > 0.5 && u_materialFlags.x < 1.5 && albedo.a < u_materialParams.w) {
+    // One per-fragment compare: some ES drivers skip a discard whose test is nested in uniform-only branches.
+    float alphaCutoff = u_materialFlags.x > 0.5 && u_materialFlags.x < 1.5 ? u_materialParams.w : 0.0;
+    if (albedo.a < alphaCutoff) {
         discard;
     }
 
@@ -292,7 +307,7 @@ void main()
     }
     vec3 emissive = texture2D(s_emissive, materialUv).rgb * u_materialEmissive.rgb * u_materialEmissive.a;
     if (u_materialFlags.w > 0.5) {
-        lighting = albedo.rgb * texture2D(s_emissive, materialUv).rgb;
+        lighting = albedo.rgb * texture2D(s_emissive, u_materialFlags.w > 1.5 ? v_shadowFlags.zw : materialUv).rgb;
         emissive = vec3_splat(0.0);
     }
     // Opaque and masked surfaces cover what is behind them (the scene colour alpha is 1, SceneColorAlphaPolicy);

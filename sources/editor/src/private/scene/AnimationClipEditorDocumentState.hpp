@@ -115,6 +115,23 @@ public:
         });
     }
 
+    // Replaces the keys of one curve channel; times must stay ordered inside the clip.
+    [[nodiscard]] bool SetCurveKeyframes(const std::string& name, const std::vector<kb::scene::AnimationCurveKeyframe>& keyframes) {
+        if (keyframes.empty()) return false;
+        for (std::size_t index = 0U; index < keyframes.size(); ++index) {
+            if (!ValidTime(keyframes[index].time) || !std::isfinite(keyframes[index].value) ||
+                (index > 0U && keyframes[index].time < keyframes[index - 1U].time)) return false;
+        }
+        return Edit([&](kb::scene::AnimationClip& clip) {
+            const auto track = std::find_if(clip.curves.begin(), clip.curves.end(), [&name](const kb::scene::AnimationCurveTrack& value) {
+                return value.name == name;
+            });
+            if (track == clip.curves.end()) return false;
+            track->keyframes = keyframes;
+            return true;
+        });
+    }
+
 private:
     [[nodiscard]] bool ValidTime(float timeSeconds) const noexcept {
         const kb::scene::AnimationClip* clip = WorkingCopy();

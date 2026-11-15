@@ -1,4 +1,5 @@
 #include "inspection/InspectorPanelInteraction.hpp"
+#include "inspection/InspectorLightModel.hpp"
 #include "scene/EditorMap2DService.hpp"
 #include "Map2DView.hpp"
 #include "app/EditorKeyState.hpp"
@@ -51,6 +52,7 @@
 #include "inspection/InspectorAddComponentBrowserModel.hpp"
 #include "inspection/InspectorAudioComponentModel.hpp"
 #include "inspection/InspectorAudioScrubController.hpp"
+#include "inspection/InspectorComponentDefaults.hpp"
 #include "inspection/InspectorInputInteraction.hpp"
 #include "inspection/InspectorPhysicsModel.hpp"
 #include "inspection/ui/InspectorUIComponentModel.hpp"
@@ -239,6 +241,9 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
     switch (hit.property) {
     case InspectorPropertyId::ScriptEnabled:
         static_cast<void>(sceneContext.ToggleEntityScriptEnabled(entity));
+        return true;
+    case InspectorPropertyId::ScriptBuildCancel:
+        static_cast<void>(sceneContext.CancelEntityScriptBuild(entity));
         return true;
     case InspectorPropertyId::ScriptName:
     case InspectorPropertyId::ScriptPicker:
@@ -698,6 +703,18 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
 
 [[nodiscard]] bool HandleMeshRendererClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
     sceneContext.Inspector().EndTextEdit();
+    if (hit.property == InspectorPropertyId::MeshRendererAffectsNavigation) {
+        if (!sceneContext.BeginSceneEditTransaction("Edit Mesh Affects Navigation")) return true;
+        kb::scene::MeshRendererComponent* renderer = sceneContext.Scene().Components().MeshRenderers().TryGet(entity);
+        if (renderer == nullptr) {
+            sceneContext.CancelSceneEditTransaction();
+            return true;
+        }
+        renderer->affectsNavigation = !renderer->affectsNavigation;
+        sceneContext.Scene().Components().MeshRenderers().MarkModified(entity);
+        static_cast<void>(sceneContext.CommitSceneEditTransaction());
+        return true;
+    }
     if (hit.property == InspectorPropertyId::MeshRendererLodBias || hit.property == InspectorPropertyId::MeshRendererLodEnabled ||
         hit.property == InspectorPropertyId::MeshRendererMobility) {
         const kb::scene::MeshRendererComponent* current = sceneContext.Scene().Components().MeshRenderers().TryGet(entity);
@@ -1870,7 +1887,6 @@ template <typename Mutator>
     case InspectorPropertyId::NavAgentAcceleration: return FormatCompactFloat(agent.acceleration);
     case InspectorPropertyId::NavAgentAngularSpeed: return FormatCompactFloat(agent.angularSpeedDegrees);
     case InspectorPropertyId::NavAgentStoppingDistance: return FormatCompactFloat(agent.stoppingDistance);
-    case InspectorPropertyId::NavAgentAreaMask: return std::to_string(agent.areaMask);
     case InspectorPropertyId::NavAgentDestinationX: return FormatCompactFloat(agent.destination.x);
     case InspectorPropertyId::NavAgentDestinationY: return FormatCompactFloat(agent.destination.y);
     case InspectorPropertyId::NavAgentDestinationZ: return FormatCompactFloat(agent.destination.z);
@@ -1882,7 +1898,6 @@ template <typename Mutator>
     switch (property) {
     case InspectorPropertyId::NavObstacleRadius: return FormatCompactFloat(obstacle.radius);
     case InspectorPropertyId::NavObstacleHeight: return FormatCompactFloat(obstacle.height);
-    case InspectorPropertyId::NavObstacleArea: return std::to_string(obstacle.area);
     case InspectorPropertyId::NavObstacleCenterX: return FormatCompactFloat(obstacle.center.x);
     case InspectorPropertyId::NavObstacleCenterY: return FormatCompactFloat(obstacle.center.y);
     case InspectorPropertyId::NavObstacleCenterZ: return FormatCompactFloat(obstacle.center.z);
@@ -2016,6 +2031,22 @@ template <typename Mutator>
     if (hit.property == InspectorPropertyId::NavAgentEnabled) {
         return EditNavAgent(sceneContext, entity, "Toggle Nav Agent", [](kb::scene::NavAgent& value) { value.enabled = !value.enabled; return true; });
     }
+    if (hit.property == InspectorPropertyId::NavAgentHorde) {
+        return EditNavAgent(sceneContext, entity, "Toggle Nav Agent Horde Movement", [](kb::scene::NavAgent& value) { value.horde = !value.horde; return true; });
+    }
+    // The walkable areas: the row opens the project's areas, an area switches on or off and the list stays open.
+    if (hit.property == InspectorPropertyId::NavAgentAreaMask) {
+        sceneContext.Inspector().EndTextEdit();
+        sceneContext.Inspector().ToggleMenu(InspectorMenuKind::NavAreas, InspectorSectionId::NavAgent);
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::NavAgentAreaMaskItem) {
+        const kb::scene::NavAreaMask bit = kb::scene::NavAreaBit(static_cast<kb::scene::NavAreaId>(hit.index));
+        return bit != 0U && EditNavAgent(sceneContext, entity, "Edit Nav Agent Walkable Areas", [bit](kb::scene::NavAgent& value) {
+            value.areaMask ^= bit;
+            return true;
+        });
+    }
     if (IsNavAgentProperty(hit.property)) {
         sceneContext.Inspector().BeginTextEdit(hit.property, NavAgentFieldValue(*agent, hit.property));
     }
@@ -2030,6 +2061,21 @@ template <typename Mutator>
     }
     if (hit.property == InspectorPropertyId::NavObstacleEnabled) {
         return EditNavObstacle(sceneContext, entity, "Toggle Nav Obstacle", [](kb::scene::NavObstacle& value) { value.enabled = !value.enabled; return true; });
+    }
+    // The area: the row opens the project's areas and choosing one sets it and closes the list.
+    if (hit.property == InspectorPropertyId::NavObstacleArea) {
+        sceneContext.Inspector().EndTextEdit();
+        sceneContext.Inspector().ToggleMenu(InspectorMenuKind::NavAreas, InspectorSectionId::NavObstacle);
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::NavObstacleAreaItem) {
+        sceneContext.Inspector().CloseComponentMenus();
+        const int area = hit.index;
+        return area >= 0 && kb::scene::IsValidNavArea(static_cast<kb::scene::NavAreaId>(area)) &&
+            EditNavObstacle(sceneContext, entity, "Edit Nav Obstacle Area", [area](kb::scene::NavObstacle& value) {
+                value.area = static_cast<kb::scene::NavAreaId>(area);
+                return true;
+            });
     }
     if (hit.property == InspectorPropertyId::NavObstacleShape) {
         return EditNavObstacle(sceneContext, entity, "Change Nav Obstacle Shape", [](kb::scene::NavObstacle& value) {
@@ -2432,12 +2478,6 @@ template <typename Mutator>
 
 [[nodiscard]] bool ApplyNavAgentText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
     float value = 0.0F;
-    if (property == InspectorPropertyId::NavAgentAreaMask) {
-        std::uint32_t mask = 0U;
-        const auto parsed = std::from_chars(text.data(), text.data() + text.size(), mask);
-        if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) return false;
-        return EditNavAgent(sceneContext, entity, "Edit Nav Agent Area Mask", [mask](kb::scene::NavAgent& agent) { agent.areaMask = static_cast<kb::scene::NavAreaMask>(mask); return true; });
-    }
     if (!ParseFloat(text, value) || !std::isfinite(value)) return false;
     return EditNavAgent(sceneContext, entity, "Edit Nav Agent", [property, value](kb::scene::NavAgent& agent) {
         switch (property) {
@@ -2456,12 +2496,6 @@ template <typename Mutator>
 }
 
 [[nodiscard]] bool ApplyNavObstacleText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
-    if (property == InspectorPropertyId::NavObstacleArea) {
-        unsigned int area = 0U;
-        const auto parsed = std::from_chars(text.data(), text.data() + text.size(), area);
-        if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size() || area > 255U) return false;
-        return EditNavObstacle(sceneContext, entity, "Edit Nav Obstacle Area", [area](kb::scene::NavObstacle& obstacle) { obstacle.area = static_cast<kb::scene::NavAreaId>(area); return true; });
-    }
     float value = 0.0F;
     if (!ParseFloat(text, value) || !std::isfinite(value)) return false;
     return EditNavObstacle(sceneContext, entity, "Edit Nav Obstacle", [property, value](kb::scene::NavObstacle& obstacle) {
@@ -3248,6 +3282,12 @@ void ApplyEntityFloatField(EditorSceneContext& sceneContext, kb::scene::SceneEnt
         return InspectorDisclosureId::RigidbodyAdvanced;
     case InspectorPropertyId::ColliderAdvanced:
         return InspectorDisclosureId::ColliderAdvanced;
+    case InspectorPropertyId::JointAdvanced:
+        return InspectorDisclosureId::JointAdvanced;
+    case InspectorPropertyId::AudioSourceAdvanced:
+        return InspectorDisclosureId::AudioSourceAdvanced;
+    case InspectorPropertyId::GenericAdvanced:
+        return InspectorDisclosureId::GenericAdvanced;
     case InspectorPropertyId::TerrainAdvanced:
         return InspectorDisclosureId::TerrainAdvanced;
     case InspectorPropertyId::UIAnchorPresets:
@@ -3318,6 +3358,84 @@ namespace {
 
 } // namespace
 
+namespace {
+
+[[nodiscard]] bool IsComponentMenuProperty(InspectorPropertyId property) noexcept {
+    return property == InspectorPropertyId::ComponentMenu || property == InspectorPropertyId::ComponentMenuItem ||
+        property == InspectorPropertyId::JointPreset || property == InspectorPropertyId::JointPresetItem ||
+        property == InspectorPropertyId::LightPreset || property == InspectorPropertyId::LightPresetItem;
+}
+
+// The entries of the component menu and the Joint's presets. Each change is one undoable scene command; Copy
+// only keeps the settings for a later Paste.
+[[nodiscard]] bool RunComponentMenuItem(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit, int x, int y) noexcept {
+    const InspectorSectionId section = hit.section;
+    const std::span<const InspectorComponentMenuItem> items = InspectorComponentMenuItems(section);
+    if (hit.index < 0 || hit.index >= static_cast<int>(items.size())) {
+        return false;
+    }
+    const InspectorComponentMenuItem item = items[static_cast<std::size_t>(hit.index)];
+    switch (item) {
+    case InspectorComponentMenuItem::ResetPosition:
+    case InspectorComponentMenuItem::ResetRotation:
+    case InspectorComponentMenuItem::ResetScale:
+        return sceneContext.ExecuteSceneCommand("Reset Transform", [&sceneContext, entity, item]() {
+            return InspectorComponentDefaults::ResetTransformPart(sceneContext.Scene(), entity, item);
+        });
+    case InspectorComponentMenuItem::Reset:
+        return sceneContext.ExecuteSceneCommand("Reset Component", [&sceneContext, entity, section]() {
+            return InspectorComponentDefaults::ResetComponent(sceneContext.Scene(), entity, section);
+        });
+    case InspectorComponentMenuItem::Remove:
+        // The same removal the component's own header button has always done.
+        return InspectorPanelInteraction::HandlePointerDown(sceneContext,
+            InspectorPanelRenderer::Hit{ .kind = InspectorHitKind::ComponentMenuButton, .section = section,
+                .property = InspectorPropertyId::ComponentRemove, .index = -1, .rect = hit.rect }, x, y);
+    case InspectorComponentMenuItem::Copy:
+        return InspectorComponentDefaults::CopyComponent(sceneContext.Scene(), entity, section);
+    case InspectorComponentMenuItem::Paste:
+        if (!InspectorComponentDefaults::CanPaste(section)) {
+            return false;
+        }
+        return sceneContext.ExecuteSceneCommand("Paste Settings", [&sceneContext, entity, section]() {
+            return InspectorComponentDefaults::PasteComponent(sceneContext.Scene(), entity, section);
+        });
+    }
+    return false;
+}
+
+[[nodiscard]] bool ApplyJointPresetItem(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, int item) noexcept {
+    if (item < 0 || item >= kJointPresetCount) {
+        return false;
+    }
+    return sceneContext.ExecuteSceneCommand("Apply Joint Preset", [&sceneContext, entity, item]() {
+        kb::scene::JointComponent* joint = sceneContext.Scene().Components().Joints().TryGet(entity);
+        if (joint == nullptr) {
+            return false;
+        }
+        ApplyJointPreset(*joint, static_cast<JointPreset>(item));
+        sceneContext.Scene().Components().Joints().MarkModified(entity);
+        return true;
+    });
+}
+
+[[nodiscard]] bool ApplyLightPresetItem(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, int item) noexcept {
+    if (item < 0 || item >= kLightPresetCount) {
+        return false;
+    }
+    return sceneContext.ExecuteSceneCommand("Apply Light Preset", [&sceneContext, entity, item]() {
+        kb::scene::LightComponent* light = sceneContext.Scene().Components().Lights().TryGet(entity);
+        if (light == nullptr) {
+            return false;
+        }
+        ApplyLightPreset(*light, static_cast<LightPreset>(item));
+        sceneContext.Scene().Components().Lights().MarkModified(entity);
+        return true;
+    });
+}
+
+} // namespace
+
 bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneContext, const InspectorPanelRenderer::Hit& hit, int x, int y) noexcept {
     if (hit.kind == InspectorHitKind::None) {
         sceneContext.Inspector().EndTextEdit();
@@ -3346,6 +3464,37 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     }
 
     kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
+    if (!IsComponentMenuProperty(hit.property)) {
+        sceneContext.Inspector().CloseComponentMenus();
+    }
+    if (hit.kind == InspectorHitKind::ResetField) {
+        sceneContext.Inspector().EndTextEdit();
+        if (sceneContext.Scene().Entities().IsAlive(entity)) {
+            static_cast<void>(sceneContext.ExecuteSceneCommand("Reset Value", [&sceneContext, entity, hit]() {
+                return InspectorComponentDefaults::ResetField(sceneContext.Scene(), entity,
+                    InspectorFieldKey{ .section = hit.section, .property = hit.property, .index = hit.index });
+            }));
+        }
+        return true;
+    }
+    if (IsComponentMenuProperty(hit.property) && (hit.kind == InspectorHitKind::ComponentMenuButton || hit.kind == InspectorHitKind::Row)) {
+        sceneContext.Inspector().EndTextEdit();
+        if (hit.property == InspectorPropertyId::ComponentMenu) {
+            sceneContext.Inspector().ToggleComponentMenu(hit.section);
+        } else if (hit.property == InspectorPropertyId::JointPreset) {
+            sceneContext.Inspector().ToggleMenu(InspectorMenuKind::JointPresets, hit.section);
+        } else if (hit.property == InspectorPropertyId::LightPreset) {
+            sceneContext.Inspector().ToggleMenu(InspectorMenuKind::LightPresets, hit.section);
+        } else if (sceneContext.Scene().Entities().IsAlive(entity)) {
+            const bool presetItem = hit.property == InspectorPropertyId::JointPresetItem;
+            const bool lightPresetItem = hit.property == InspectorPropertyId::LightPresetItem;
+            sceneContext.Inspector().CloseComponentMenus();
+            static_cast<void>(presetItem ? ApplyJointPresetItem(sceneContext, entity, hit.index)
+                                         : (lightPresetItem ? ApplyLightPresetItem(sceneContext, entity, hit.index)
+                                                            : RunComponentMenuItem(sceneContext, entity, hit, x, y)));
+        }
+        return true;
+    }
     if (const std::optional<InspectorDisclosureId> disclosure = DisclosureForProperty(hit.property);
         hit.kind == InspectorHitKind::Row && disclosure.has_value()) {
         sceneContext.Inspector().EndTextEdit();
@@ -3519,6 +3668,11 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
             } else if (hit.section == InspectorSectionId::HistoryRibbon && sceneContext.Scene().Components().HistoryRibbons().Has(entity)) {
                 if (sceneContext.BeginSceneEditTransaction("Remove Trail Renderer")) {
                     sceneContext.Scene().Components().HistoryRibbons().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
+            } else if (hit.section == InspectorSectionId::Light && sceneContext.Scene().Components().Lights().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Light")) {
+                    sceneContext.Scene().Components().Lights().Remove(entity);
                     static_cast<void>(sceneContext.CommitSceneEditTransaction());
                 }
             } else if (const std::optional<PhysicsComponentKind> kind = PhysicsKindForSection(hit.section); kind.has_value()) {

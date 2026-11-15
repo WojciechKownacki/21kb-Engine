@@ -191,8 +191,8 @@ void ExposureSubmissionUsesElapsedFrameTime() {
         "Exposure adaptation over one second must agree at 30 and 60 rendered frames");
 }
 
-// A profile with tonemapping off still shows the scene at its exposure and display-encoded, as
-// Unity, Unreal and Godot do; only the tone curve goes.
+// A profile with tonemapping off still shows the scene at its exposure and display-encoded;
+// only the tone curve goes.
 void SuddenBrightnessChangesConvergeWithoutOscillation() {
     SceneExposureMeter meter;
     meter.Prime(0.18F);

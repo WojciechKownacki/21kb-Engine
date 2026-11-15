@@ -68,7 +68,8 @@ void ValidateCurve(const kb::math::Curve& curve, std::string path, ParticleEffec
     for (std::size_t index = 0U; index < curve.keyframes.size(); ++index) {
         const kb::math::CurveKeyframe& key = curve.keyframes[index];
         if (!Finite(key.time) || !Finite(key.value) || key.time < 0.0F || key.time > 1.0F || key.time <= previous ||
-            (requireNonNegativeValue && key.value < 0.0F) || !EnumInRange(key.easing, kb::math::Easing::InOutBounce)) {
+            (requireNonNegativeValue && key.value < 0.0F) || !EnumInRange(key.easing, kb::math::Easing::InOutBounce) ||
+            !EnumInRange(key.tangentMode, kb::math::CurveTangentMode::Free) || !Finite(key.inTangent) || !Finite(key.outTangent)) {
             Add(result, ParticleEffectDiagnosticCode::InvalidCurve, path + ".key[" + std::to_string(index) + "]",
                 "curve keys must be finite, strictly ordered, and within their range", emitterId, moduleId);
         }

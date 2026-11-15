@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Material domains from the command line to the picture (Unreal's Material Domain).
+"""Material domains from the command line to the picture (the material domain).
 
 Deferred Decal: a material of that domain on a Mesh Renderer with the engine Cube colours the ground inside the box
 (projected along the box's Y axis); a vertex output in that domain is refused by name.

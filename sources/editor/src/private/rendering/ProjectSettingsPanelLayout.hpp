@@ -30,6 +30,7 @@ struct ProjectSettingsPanelLayoutRects {
     RECT backendDx12Button{};
     RECT backendVulkanButton{};
     RECT lightingPathLabel{};
+    RECT lightingPathAutoButton{};
     RECT lightingPathForwardButton{};
     RECT lightingPathForwardPlusButton{};
     RECT lightingPathDeferredButton{};
@@ -58,6 +59,46 @@ struct ProjectSettingsPanelLayoutRects {
     // with one button per level (Auto, Low, Medium, High, Ultra).
     RECT qualityLabel[4]{};
     RECT qualityButton[4][5]{};
+    // Display page, one row per setting: window mode, window size, resizable, vsync, frame rate limit, render scale,
+    // Android graphics API, then the launch screen: image scale, background colour, minimum time, progress bar, image.
+    RECT displayLabel[12]{};
+    RECT splashScaleButton[3]{};
+    RECT splashColorButton[6]{};
+    RECT splashMinimumButton[5]{};
+    RECT splashProgressCheckbox{};
+    // The launch screen image row cell (its selector lives inset within).
+    RECT splashImageField{};
+    RECT windowModeButton[2]{};
+    RECT androidGraphicsApiButton[3]{};
+    RECT windowSizeButton[4]{};
+    RECT resizableCheckbox{};
+    RECT vsyncCheckbox{};
+    RECT frameRateButton[5]{};
+    // The cells that take a typed window width, window height and frame rate limit, right of their presets.
+    RECT windowWidthValue{};
+    RECT windowHeightValue{};
+    RECT frameRateValue{};
+    RECT renderScaleValue{};
+    // Scenes page: a line of explanation, the button that adds a scene, and the area the build list fills
+    // (one row per scene, each with a move up and a remove button).
+    RECT scenesIntro{};
+    RECT sceneAddButton{};
+    RECT sceneList{};
+    // Tags page: the cell that takes a new tag's name and the button that adds it, where the Scenes page has its add
+    // button; the list of tags fills sceneList.
+    RECT tagNameField{};
+    RECT tagAddButton{};
+    // Physics page, under the collision layers row: fixed step, gravity X, Y and Z, and time scale are steppers
+    // (a minus button, the value, a plus button); the gravity presets sit between the axes and the time scale.
+    // The sixth stepper is the Audio page's master volume, in its first row.
+    RECT stepperLabel[6]{};
+    RECT stepperValue[6]{};
+    RECT stepperButton[6][2]{};
+    // Audio page, second row: the microphone checkbox and its label (the first row is the master volume).
+    RECT microphoneLabel{};
+    RECT microphoneCheckbox{};
+    RECT gravityPresetLabel{};
+    RECT gravityPresetButton[3]{};
 };
 
 class ProjectSettingsPanelLayout {
@@ -68,8 +109,8 @@ public:
 
     // The sidebar groups its categories under captions: Project from the first category,
     // Editor from kEditorGroupStart, Plugins from kPluginsGroupStart.
-    static constexpr int kEditorGroupStart = 4;
-    static constexpr int kPluginsGroupStart = 6;
+    static constexpr int kEditorGroupStart = 9;
+    static constexpr int kPluginsGroupStart = 11;
     // A category row in the left sidebar (index 0 is the first category).
     [[nodiscard]] static RECT CategoryRow(const RECT& sidebar, int index) noexcept;
     // The caption above group 0 (Project), 1 (Editor) or 2 (Plugins).
@@ -79,6 +120,8 @@ public:
 
     // The visible Mapping Context selector box, inset within its row cell.
     [[nodiscard]] static RECT MappingFieldBox(const ProjectSettingsPanelLayoutRects& rects) noexcept;
+    // The visible launch screen image selector box on the Display page, inset within its row cell.
+    [[nodiscard]] static RECT SplashImageFieldBox(const ProjectSettingsPanelLayoutRects& rects) noexcept;
 
     // A row inside the open Mapping Context dropdown list, stacked under the box.
     [[nodiscard]] static RECT OptionRow(const RECT& fieldBox, int index) noexcept;
@@ -93,6 +136,16 @@ public:
     [[nodiscard]] static RECT AntiAliasingModeButton(const ProjectSettingsPanelLayoutRects& rects, int index) noexcept;
     [[nodiscard]] static RECT MsaaOptionButton(const ProjectSettingsPanelLayoutRects& rects, int index) noexcept;
     [[nodiscard]] static RECT QualityOptionButton(const ProjectSettingsPanelLayoutRects& rects, int row, int level) noexcept;
+
+    // The build list of the Scenes page: how many rows fit, and the parts of the row at `visibleRow`
+    // (0 is the first row on view): its whole width, the label, and the two buttons.
+    [[nodiscard]] static int SceneRowCapacity(const ProjectSettingsPanelLayoutRects& rects) noexcept;
+    [[nodiscard]] static RECT SceneRow(const ProjectSettingsPanelLayoutRects& rects, int visibleRow) noexcept;
+    [[nodiscard]] static RECT SceneRowLabel(const ProjectSettingsPanelLayoutRects& rects, int visibleRow) noexcept;
+    [[nodiscard]] static RECT SceneMoveUpButton(const ProjectSettingsPanelLayoutRects& rects, int visibleRow) noexcept;
+    [[nodiscard]] static RECT SceneRemoveButton(const ProjectSettingsPanelLayoutRects& rects, int visibleRow) noexcept;
+    // The Tags page uses the same rows: the tag's name fills the row up to the remove button.
+    [[nodiscard]] static RECT TagRowLabel(const ProjectSettingsPanelLayoutRects& rects, int visibleRow) noexcept;
 };
 
 #endif

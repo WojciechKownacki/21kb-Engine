@@ -24,6 +24,8 @@ struct FinalCompositePassDesc {
     // postProcessColor.
     bool antiAliasing = false;
     RenderExtent postProcessExtent{};
+    // The scene was rendered at a reduced render scale and is upscaled to the output.
+    bool upscale = false;
 
     [[nodiscard]] bool IsValid() const noexcept;
 };

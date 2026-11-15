@@ -671,6 +671,7 @@ namespace kb::tests {
 
 void RunAudioSceneSystemTests() {
     RunMiniaudioPluginUpdatesSceneSourcesTest();
+    RunAudioCaptureTests();
 }
 
 } // namespace kb::tests

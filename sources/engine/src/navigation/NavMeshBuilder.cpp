@@ -1,6 +1,7 @@
 #include "engine/navigation/NavMeshBuild.hpp"
 
 #include "engine/ecs/WorkerPool.hpp"
+#include "engine/navigation/NavMeshAsset.hpp"
 
 #include <Recast.h>
 
@@ -8,10 +9,13 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
+#include <unordered_map>
 #include <utility>
 
 namespace kb::navigation {
@@ -190,6 +194,24 @@ struct ProfileVoxels {
         error = "could not erode the walkable area of tile " + std::to_string(coord.x) + "," + std::to_string(coord.z);
         return false;
     }
+    // Walkable ground outside every bake box is dropped, so the mesh ends at the boxes' sides.
+    if (const std::span<const NavBakeBox> boxes = geometry.BakeBoxes(); !boxes.empty()) {
+        for (int z = 0; z < compact->height; ++z) {
+            for (int x = 0; x < compact->width; ++x) {
+                const double worldX = tileMinX + static_cast<double>(bmin[0]) + (static_cast<double>(x) + 0.5) * cellSize;
+                const double worldZ = tileMinZ + static_cast<double>(bmin[2]) + (static_cast<double>(z) + 0.5) * cellSize;
+                const rcCompactCell& cell = compact->cells[x + z * compact->width];
+                for (unsigned int span = cell.index; span < cell.index + cell.count; ++span) {
+                    const double worldY = static_cast<double>(bmin[1]) + static_cast<double>(compact->spans[span].y) * cellHeight;
+                    const bool inside = std::ranges::any_of(boxes, [&](const NavBakeBox& box) {
+                        return worldX >= box.min.x && worldX <= box.max.x && worldZ >= box.min.z && worldZ <= box.max.z &&
+                            worldY >= box.min.y - cellHeight && worldY <= box.max.y;
+                    });
+                    if (!inside) compact->areas[span] = RC_NULL_AREA;
+                }
+            }
+        }
+    }
     std::unique_ptr<rcHeightfieldLayerSet, LayerSetDeleter> layers{ rcAllocHeightfieldLayerSet() };
     if (!layers || !rcBuildHeightfieldLayers(&context, *compact, voxels.border, voxels.height, *layers)) {
         error = "could not build the walkable layers of tile " + std::to_string(coord.x) + "," + std::to_string(coord.z);
@@ -217,6 +239,16 @@ struct ProfileVoxels {
         tile.layers.push_back(std::move(layer));
     }
     return true;
+}
+
+// Whether the bake builds the tile at all: always without bake boxes, else when the tile touches one.
+[[nodiscard]] bool TileInBakeBoxes(const NavGeometry& geometry, NavTileCoord coord, double tileSize) {
+    const std::span<const NavBakeBox> boxes = geometry.BakeBoxes();
+    const double minX = static_cast<double>(coord.x) * tileSize;
+    const double minZ = static_cast<double>(coord.z) * tileSize;
+    return boxes.empty() || std::ranges::any_of(boxes, [&](const NavBakeBox& box) {
+        return box.max.x >= minX && box.min.x <= minX + tileSize && box.max.z >= minZ && box.min.z <= minZ + tileSize;
+    });
 }
 
 [[nodiscard]] std::map<NavTileCoord, std::vector<TriangleRef>> BucketTriangles(const NavMeshBuildSettings& settings,
@@ -250,10 +282,128 @@ struct ProfileVoxels {
             }
         }
     }
+    std::erase_if(buckets, [&](const auto& entry) { return !TileInBakeBoxes(geometry, entry.first, tileSize); });
     return buckets;
 }
 
+// Runs build(job) for every job, in parallel on `workers` when it is running, else on a pool started for the call.
+void RunTileJobs(std::size_t jobs, kb::ecs::WorkerPool* workers, const std::function<void(std::size_t)>& build) {
+    if (jobs == 1U) {
+        build(0U);
+    } else if (jobs > 1U) {
+        // Without a running pool from the caller the bake starts the engine's own for its duration.
+        std::optional<kb::ecs::WorkerPool> local;
+        if (workers == nullptr || !workers->Running()) {
+            local.emplace(kb::ecs::WorkerPoolConfig{ .workerCount = NavMeshBuilder::DefaultBakeWorkerCount() });
+            workers = &*local;
+        }
+        // One tile per chunk: tiles differ widely in cost, so the pool balances them one by one.
+        workers->ParallelForChunks(jobs, 1U, [&build](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
+            for (std::size_t job = chunk.begin; job < chunk.begin + chunk.count; ++job) build(job);
+        });
+    }
+}
+
+[[nodiscard]] std::uint64_t ChunkHash(const NavGeometryChunk& chunk) noexcept {
+    std::uint64_t hash = 14695981039346656037ULL;
+    const auto mix = [&hash](const void* data, std::size_t bytes) {
+        const auto* byte = static_cast<const unsigned char*>(data);
+        for (std::size_t index = 0U; index < bytes; ++index) {
+            hash = (hash ^ byte[index]) * 1099511628211ULL;
+        }
+    };
+    const std::array<double, 3> origin{ chunk.origin.x, chunk.origin.y, chunk.origin.z };
+    mix(origin.data(), sizeof(origin));
+    mix(chunk.vertices.data(), chunk.vertices.size() * sizeof(float));
+    mix(chunk.indices.data(), chunk.indices.size() * sizeof(std::uint32_t));
+    return hash;
+}
+
+// The chunks of `from` with no equal chunk in `other`; each chunk of `other` matches one chunk at most.
+[[nodiscard]] std::vector<const NavGeometryChunk*> UnmatchedChunks(std::span<const NavGeometryChunk> from, std::span<const NavGeometryChunk> other) {
+    std::unordered_multimap<std::uint64_t, std::size_t> index;
+    for (std::size_t chunk = 0U; chunk < other.size(); ++chunk) index.emplace(ChunkHash(other[chunk]), chunk);
+    std::vector<bool> used(other.size(), false);
+    std::vector<const NavGeometryChunk*> unmatched;
+    for (const NavGeometryChunk& chunk : from) {
+        const auto [first, last] = index.equal_range(ChunkHash(chunk));
+        const auto match = std::find_if(first, last, [&](const auto& entry) {
+            const NavGeometryChunk& candidate = other[entry.second];
+            return !used[entry.second] && candidate.origin.x == chunk.origin.x && candidate.origin.y == chunk.origin.y &&
+                candidate.origin.z == chunk.origin.z && candidate.vertices == chunk.vertices && candidate.indices == chunk.indices;
+        });
+        if (match == last) {
+            unmatched.push_back(&chunk);
+        } else {
+            used[match->second] = true;
+        }
+    }
+    return unmatched;
+}
+
+[[nodiscard]] std::vector<const NavBakeBox*> UnmatchedBoxes(std::span<const NavBakeBox> from, std::span<const NavBakeBox> other) {
+    std::vector<bool> used(other.size(), false);
+    std::vector<const NavBakeBox*> unmatched;
+    for (const NavBakeBox& box : from) {
+        std::size_t match = 0U;
+        while (match < other.size() && (used[match] || other[match].min.x != box.min.x || other[match].min.y != box.min.y ||
+            other[match].min.z != box.min.z || other[match].max.x != box.max.x || other[match].max.y != box.max.y || other[match].max.z != box.max.z)) {
+            ++match;
+        }
+        if (match == other.size()) {
+            unmatched.push_back(&box);
+        } else {
+            used[match] = true;
+        }
+    }
+    return unmatched;
+}
+
 } // namespace
+
+std::optional<std::vector<NavTileCoord>> ChangedNavTiles(const NavMeshBuildSettings& settings, const NavGeometry& before, const NavGeometry& after) {
+    if (before.BakeBoxes().empty() != after.BakeBoxes().empty() || !ValidateNavMeshBuildSettings(settings).empty()) {
+        return std::nullopt;
+    }
+    const double tileSize = settings.TileWorldSize();
+    const double border = BorderWorld(settings);
+    const std::size_t maxTiles = NavMeshAsset::MaxTiles;
+    std::set<NavTileCoord> tiles;
+    bool everything = false;
+    const auto addRange = [&](NavTileCoord low, NavTileCoord high) {
+        if (static_cast<double>(high.x - low.x + 1) * static_cast<double>(high.z - low.z + 1) > static_cast<double>(maxTiles)) {
+            everything = true;
+            return;
+        }
+        for (std::int64_t z = low.z; z <= high.z && !everything; ++z) {
+            for (std::int64_t x = low.x; x <= high.x; ++x) tiles.insert(NavTileCoord{ x, z });
+        }
+        everything = everything || tiles.size() > maxTiles;
+    };
+    const auto addChanges = [&](const NavGeometry& from, const NavGeometry& other) {
+        for (const NavGeometryChunk* chunk : UnmatchedChunks(from.Chunks(), other.Chunks())) {
+            const auto triangleCount = static_cast<std::uint32_t>(chunk->indices.size() / 3U);
+            for (std::uint32_t triangle = 0U; triangle < triangleCount && !everything; ++triangle) {
+                NavTileCoord low{};
+                NavTileCoord high{};
+                if (TriangleTiles(*chunk, triangle, tileSize, border, low, high)) addRange(low, high);
+            }
+        }
+        // A box moves the clipping of the cells around it, and the erosion of the tiles near them.
+        for (const NavBakeBox* box : UnmatchedBoxes(from.BakeBoxes(), other.BakeBoxes())) {
+            if (!everything) {
+                addRange({ TileIndex(box->min.x - border, tileSize), TileIndex(box->min.z - border, tileSize) },
+                    { TileIndex(box->max.x + border, tileSize), TileIndex(box->max.z + border, tileSize) });
+            }
+        }
+    };
+    addChanges(before, after);
+    addChanges(after, before);
+    if (everything) {
+        return std::nullopt;
+    }
+    return std::vector<NavTileCoord>(tiles.begin(), tiles.end());
+}
 
 std::string ValidateNavMeshBuildSettings(const NavMeshBuildSettings& settings) {
     if (!InRange(settings.cellSize, 0.01F, 10.0F)) return "navigation cell size must be between 0.01 and 10 metres";
@@ -315,6 +465,14 @@ void NavGeometry::Add(NavGeometryChunk chunk) {
     chunks_.push_back(std::move(chunk));
 }
 
+void NavGeometry::AddBakeBox(const NavBakeBox& box) {
+    const bool finite = std::isfinite(box.min.x) && std::isfinite(box.min.y) && std::isfinite(box.min.z) &&
+        std::isfinite(box.max.x) && std::isfinite(box.max.y) && std::isfinite(box.max.z);
+    if (finite && box.min.x <= box.max.x && box.min.y <= box.max.y && box.min.z <= box.max.z) {
+        bakeBoxes_.push_back(box);
+    }
+}
+
 std::size_t NavGeometry::TriangleCount() const noexcept {
     std::size_t count = 0U;
     for (const NavGeometryChunk& chunk : chunks_) {
@@ -355,7 +513,8 @@ std::size_t NavMeshBuilder::DefaultBakeWorkerCount() noexcept {
     return std::min<std::size_t>(8U, kb::ecs::WorkerPool::DefaultWorkerCount());
 }
 
-NavMeshBakeResult NavMeshBuilder::Bake(const NavMeshBuildSettings& settings, const NavGeometry& geometry, kb::ecs::WorkerPool* workers) {
+NavMeshBakeResult NavMeshBuilder::Bake(const NavMeshBuildSettings& settings, const NavGeometry& geometry, kb::ecs::WorkerPool* workers,
+    NavBakeProgress* progress) {
     const auto start = std::chrono::steady_clock::now();
     NavMeshBakeResult result;
     if (std::string invalid = ValidateNavMeshBuildSettings(settings); !invalid.empty()) {
@@ -385,26 +544,14 @@ NavMeshBakeResult NavMeshBuilder::Bake(const NavMeshBuildSettings& settings, con
     std::vector<NavTile> built(jobs.size());
     std::vector<std::string> errors(jobs.size());
     std::atomic<bool> failed{ false };
-    const auto build = [&](std::size_t job) {
+    if (progress != nullptr) progress->total.store(jobs.size());
+    RunTileJobs(jobs.size(), workers, [&](std::size_t job) {
         if (!failed.load() &&
             !BuildTileFromTriangles(settings, jobs[job].profile, *jobs[job].coord, geometry, *jobs[job].triangles, built[job], errors[job])) {
             failed.store(true);
         }
-    };
-    if (jobs.size() == 1U) {
-        build(0U);
-    } else if (jobs.size() > 1U) {
-        // Without a running pool from the caller the bake starts the engine's own for its duration.
-        std::optional<kb::ecs::WorkerPool> local;
-        if (workers == nullptr || !workers->Running()) {
-            local.emplace(kb::ecs::WorkerPoolConfig{ .workerCount = DefaultBakeWorkerCount() });
-            workers = &*local;
-        }
-        // One tile per chunk: tiles differ widely in cost, so the pool balances them one by one.
-        workers->ParallelForChunks(jobs.size(), 1U, [&build](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
-            for (std::size_t job = chunk.begin; job < chunk.begin + chunk.count; ++job) build(job);
-        });
-    }
+        if (progress != nullptr) progress->built.fetch_add(1U);
+    });
     for (std::size_t job = 0U; job < jobs.size(); ++job) {
         if (!errors[job].empty()) {
             result.error = std::move(errors[job]);
@@ -417,6 +564,60 @@ NavMeshBakeResult NavMeshBuilder::Bake(const NavMeshBuildSettings& settings, con
             result.tiles.push_back(std::move(tile));
         }
     }
+    result.stats.tiles = result.tiles.size();
+    result.stats.milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    result.succeeded = true;
+    return result;
+}
+
+NavMeshBakeResult NavMeshBuilder::RebuildTiles(const NavMeshBuildSettings& settings, const NavGeometry& geometry, std::vector<NavTile> tiles,
+    std::span<const NavTileCoord> coords, kb::ecs::WorkerPool* workers, NavBakeProgress* progress) {
+    const auto start = std::chrono::steady_clock::now();
+    NavMeshBakeResult result;
+    if (std::string invalid = ValidateNavMeshBuildSettings(settings); !invalid.empty()) {
+        result.error = std::move(invalid);
+        return result;
+    }
+    result.stats.sourceTriangles = geometry.TriangleCount();
+    const double tileSize = settings.TileWorldSize();
+    const std::set<NavTileCoord> wanted(coords.begin(), coords.end());
+    struct Job {
+        std::uint32_t profile = 0U;
+        NavTileCoord coord{};
+    };
+    // Tiles a bake would not build (outside every bake box) are dropped like the bake leaves them out.
+    std::vector<Job> jobs;
+    for (std::uint32_t profile = 0U; profile < settings.profiles.size(); ++profile) {
+        for (const NavTileCoord& coord : wanted) {
+            if (TileInBakeBoxes(geometry, coord, tileSize)) jobs.push_back({ profile, coord });
+        }
+    }
+    std::erase_if(tiles, [&wanted](const NavTile& tile) { return wanted.contains(tile.coord); });
+    std::vector<NavTile> built(jobs.size());
+    std::vector<std::string> errors(jobs.size());
+    std::atomic<bool> failed{ false };
+    if (progress != nullptr) progress->total.store(jobs.size());
+    RunTileJobs(jobs.size(), workers, [&](std::size_t job) {
+        if (!failed.load() && !BuildTile(settings, jobs[job].profile, jobs[job].coord, geometry, built[job], errors[job])) {
+            failed.store(true);
+        }
+        if (progress != nullptr) progress->built.fetch_add(1U);
+    });
+    for (std::size_t job = 0U; job < jobs.size(); ++job) {
+        if (!errors[job].empty()) {
+            result.error = std::move(errors[job]);
+            return result;
+        }
+    }
+    for (NavTile& tile : built) {
+        if (!tile.layers.empty()) tiles.push_back(std::move(tile));
+    }
+    // The order a bake gives: by profile, then tile x, then tile z.
+    std::ranges::sort(tiles, [](const NavTile& a, const NavTile& b) {
+        return a.profile != b.profile ? a.profile < b.profile : a.coord < b.coord;
+    });
+    for (const NavTile& tile : tiles) result.stats.layers += tile.layers.size();
+    result.tiles = std::move(tiles);
     result.stats.tiles = result.tiles.size();
     result.stats.milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     result.succeeded = true;

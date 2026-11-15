@@ -1,3 +1,4 @@
+#include "script/lua/LuaVm.hpp"
 #include "script/lua/api/PucLuaEventsApi.hpp"
 #include "script/lua/PucLuaArguments.hpp"
 
@@ -9,11 +10,6 @@
 #include "script/lua/PucLuaRuntimeApi.hpp"
 #include "script/lua/PucLuaStateUtilities.hpp"
 #include "script/lua/api/PucLuaEventApi.hpp"
-
-extern "C" {
-#include <lauxlib.h>
-#include <lua.h>
-}
 
 #include <cstdint>
 #include <limits>
@@ -83,20 +79,12 @@ struct SubscriberInvocation {
 };
 
 void BindSubscriberExecutionApi(const std::shared_ptr<SubscriberInvocation>& invocation) {
-    const int functionIndex = lua_absindex(invocation->state, -1);
-    for (int upvalueIndex = 1;; ++upvalueIndex) {
-        const char* name = lua_getupvalue(invocation->state, functionIndex, upvalueIndex);
-        if (name == nullptr) break;
-        if (std::string_view{ name } == "_ENV" && lua_istable(invocation->state, -1) != 0) {
-            const int environmentIndex = lua_gettop(invocation->state);
-            const std::optional<std::string> error = PucLuaRuntimeApi::AttachExecutionApi(
-                invocation->state, environmentIndex, invocation->context, *invocation->runtime);
-            lua_pop(invocation->state, 1);
-            if (error.has_value()) throw std::runtime_error(*error);
-            return;
-        }
-        lua_pop(invocation->state, 1);
-    }
+    if (!kb_lua_push_function_environment(invocation->state, -1)) return;
+    const int environmentIndex = lua_gettop(invocation->state);
+    const std::optional<std::string> error = PucLuaRuntimeApi::AttachExecutionApi(
+        invocation->state, environmentIndex, invocation->context, *invocation->runtime);
+    lua_pop(invocation->state, 1);
+    if (error.has_value()) throw std::runtime_error(*error);
 }
 
 void InvokeSubscriber(const std::shared_ptr<SubscriberInvocation>& invocation, const ScriptEvent& event) {

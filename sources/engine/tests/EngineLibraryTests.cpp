@@ -58,7 +58,6 @@
 #include "engine/platform/PlatformCapabilities.hpp"
 #include "engine/platform/PlatformServices.hpp"
 #include "engine/platform/UserStorage.hpp"
-#include "engine/platform/SettingsTransaction.hpp"
 #include "engine/platform/PlatformAdapters.hpp"
 #include "engine/platform/PlatformLocale.hpp"
 #include "engine/core/EngineLog.hpp"
@@ -250,6 +249,7 @@ void RunModuleInstallCoversAllDomainsTest() {
         "Timeline.Create",
         "Navigation.FindPath",
         "Map2D.PaintGround",
+        "Microphone.Start",
     };
     for (const char* const name : kExpectedFunctions) {
         kb::tests::Require(
@@ -281,7 +281,7 @@ void RunModuleInstallReportsDuplicateDiagnosticsTest() {
 // into this build).
 void RunModuleCatalogTest() {
     const std::vector<kb::library::LibraryModuleDesc>& catalog = kb::library::EngineLibraryModule::Catalog();
-    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Task", "Events", "Physics", "Transform", "Math", "Scene", "UI", "MeshRenderer", "MaterialInstance", "PostProcess", "Particles", "Animator", "Gameplay", "Timeline", "Localization", "Renderer", "Assets", "Save", "Collections", "Text", "Navigation", "Map2D", "Physics2D", "Net", "Mods" };
+    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Task", "Events", "Physics", "Transform", "Math", "Scene", "UI", "MeshRenderer", "MaterialInstance", "PostProcess", "Particles", "Animator", "Gameplay", "Timeline", "Localization", "Renderer", "Assets", "Save", "Collections", "Text", "Navigation", "Map2D", "Physics2D", "Net", "Microphone", "Mods" };
     kb::tests::Require(catalog.size() == expectedNames.size(), "Engine21kbLibrary module catalog must list every domain module");
     for (std::size_t index = 0; index < catalog.size(); ++index) {
         kb::tests::Require(catalog[index].name == expectedNames[index], "Engine21kbLibrary module catalog order/name drifted from the historical registration order");
@@ -3547,12 +3547,14 @@ void RunComponentInspectorDescCatalogTest() {
     // 117 described fields across 12 components.
     // 3D Radiance Emitter remains a public compatibility alias for Light and
     // intentionally reuses the canonical inspector metadata for its 16 fields.
-    // WorldBackdrop grew eleven procedural sky fields (Unity Skybox/Procedural).
+    // WorldBackdrop grew eleven procedural sky fields.
     // Particle Effect contributes nine authoring and playback fields.
     // NavLink adds eleven (start, end, radius, kind, area, bidirectional, enabled).
     // Rigidbody damping adds two; Joint motor, spring and break force add five.
+    // Joint freedom adds thirty-five (secondary axis, swing limits and six axes of five settings).
     // Audio Source contributes sixteen fields and Audio Listener four.
-    kb::tests::Require(fieldsChecked == 838U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (838, including text rendering, themes, collision mesh and the compatibility alias) across all components");
+    // NavBounds adds twelve (size, center, agent size, cell and tile size).
+    kb::tests::Require(fieldsChecked == 907U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (907, including text rendering, themes, collision mesh and the compatibility alias) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();
@@ -5599,7 +5601,6 @@ void RunGameInstanceLifetimeTest() {
     kb::core::EngineLog engineLog{ 5U }; const kb::core::LogRecord logRecord{ .category="AI", .message="event", .entity=1U, .world=2U, .fields={{"state",std::string{"alert"}},{"attempt",std::int64_t{3}},{"visible",true}} }; kb::tests::Require(engineLog.Trace(logRecord, 1U, 1U) && engineLog.Debug(logRecord, 2U, 1U) && engineLog.Info(logRecord, 3U, 1U) && engineLog.Warn(logRecord, 4U, 1U) && engineLog.Error(logRecord, 5U, 1U) && !engineLog.Warn(logRecord, 4U, 1U) && engineLog.Records().size()==5U && engineLog.Records().front().level==kb::core::LogLevel::Trace && engineLog.Records().back().level==kb::core::LogLevel::Error && engineLog.Records().front().entity==1U && engineLog.Records().front().world==2U && engineLog.Records().front().fields.front().key=="state" && std::get<std::int64_t>(engineLog.Records().front().fields[1U].value)==3 && std::get<bool>(engineLog.Records().front().fields[2U].value) && !kb::core::EngineLog{0U}.Info(logRecord,1U,1U), "Engine log did not retain levels, typed structured context or rate limit duplicate keys");
     constexpr kb::platform::SafeDateTime date{ .unixSeconds = 1000 }; const kb::platform::PlatformLocale locale{ .language="pl", .region="PL", .utcOffsetMinutes=120 }; const kb::platform::PlatformLocale invalidLocale{ .language="p1", .region="P1", .utcOffsetMinutes=900 }; constexpr kb::platform::SafeDateTime maximumDate{ .unixSeconds=std::numeric_limits<std::int64_t>::max() }; kb::tests::Require(locale.IsValid()&&date.ToLocalSeconds(locale)==std::optional<std::int64_t>{8200}&&!invalidLocale.IsValid()&&!date.ToLocalSeconds(invalidLocale).has_value()&&!maximumDate.ToLocalSeconds(locale).has_value(), "Platform locale and safe date-time contract is invalid");
     TestPlatformAdapter adapter; kb::tests::Require(adapter.IsAvailable(kb::platform::OptionalPlatformService::Achievements)&&!adapter.IsAvailable(kb::platform::OptionalPlatformService::CloudSave)&&!adapter.IsAvailable(kb::platform::OptionalPlatformService::Dlc)&&!adapter.IsAvailable(kb::platform::OptionalPlatformService::User)&&adapter.UnlockAchievement("first")&&!adapter.UnlockAchievement(""), "Optional platform adapter did not expose capability availability");
-    kb::platform::SettingsTransaction settings{ kb::platform::RuntimeSettings{} }; settings.Pending().vibration=true; kb::tests::Require(!settings.Apply({}) && (settings.Revert(),!settings.Pending().vibration) && (settings.Pending().masterVolume=0.5F,settings.Pending().videoWidth=1920U,settings.Pending().videoHeight=1080U,settings.Pending().fullscreen=true,settings.Pending().mouseSensitivity=2.0F,settings.Apply({ .flags=static_cast<std::uint32_t>(kb::platform::PlatformCapability::Vibration) }, { .maximumVideoWidth=1920U,.maximumVideoHeight=1080U,.fullscreen=true })) && settings.Current().masterVolume==0.5F && settings.Current().videoWidth==1920U && settings.Current().fullscreen && (settings.Pending().videoWidth=2560U,!settings.Apply({}, { .maximumVideoWidth=1920U,.maximumVideoHeight=1080U })) && (settings.Revert(),settings.Pending().videoWidth==1920U) && (settings.Pending().mouseSensitivity=0.0F,!settings.Apply({})) && (settings.Revert(),settings.Pending().mouseSensitivity==2.0F), "Settings transaction did not validate audio, video, input and device capabilities");
     const std::filesystem::path storageRoot = std::filesystem::temp_directory_path() / "21kb-user-storage-test";
     std::error_code storageError;
     std::filesystem::remove_all(storageRoot, storageError);

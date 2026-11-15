@@ -1,4 +1,7 @@
 #include "RendererTestSupport.hpp"
+#include "kb/render/DisplayConfig.hpp"
+#include "kb/render/RenderSurface.hpp"
+#include "kb/render/Renderer.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 
 #include "kb/render/resources/RenderResourceRegistry.hpp"
@@ -18,6 +21,7 @@
 #include "../src/renderer/RendererTemporalJitter.hpp"
 #include "../src/scene/SceneRenderVisibilityPublisher.hpp"
 
+#include "engine/ecs/WorkerPool.hpp"
 #include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/Scene.hpp"
@@ -32,7 +36,14 @@
 #include "engine/scene/SceneVisibilityCellComponents.hpp"
 #include "engine/scene/VisibilityCellComponent.hpp"
 
+#include <bgfx/bgfx.h>
+#include <bx/math.h>
+
+#include <algorithm>
 #include <array>
+#include <chrono>
+#include <cstdio>
+#include <span>
 #include <string_view>
 
 namespace kb::render::tests {
@@ -2278,7 +2289,647 @@ void RunRenderScenePropagatesMeshPassFlagsTest() {
     Require(!groups[0].instances[0].receivesShadow, "RenderScene did not propagate receivesShadow to mesh pipeline instances");
 }
 
+// Mesh objects of a scene spread over `combinations` mesh and material pairs, all in front of the camera at depths that
+// put them on different levels of a mesh with levels of detail. RenderScene groups them by pair and by blocks of 1024
+// entities, as a scene does when it renders.
+void FillBenchmarkScene(RenderScene& scene, std::size_t objectCount, std::size_t combinations) {
+    for (std::size_t index = 0U; index < objectCount; ++index) {
+        const float x = static_cast<float>(index % 100U) - 50.0F;
+        const float y = static_cast<float>((index / 100U) % 100U) - 50.0F;
+        const float z = 100.0F + static_cast<float>(index % 21U);
+        static_cast<void>(scene.UpsertMesh(MeshRenderProxyDesc{
+            .entityId = index + 1U,
+            .meshAssetId = 1000U + index % combinations,
+            .materialAssetId = 2000U + index % combinations,
+            .model = TranslationMatrix(x, y, z),
+        }));
+    }
+}
+
+// A mesh of one section, or of three levels of detail with two sections each.
+RenderMeshResource BenchmarkMesh(bool levelsOfDetail) {
+    RenderMeshResource mesh{};
+    mesh.indexCount = 3U;
+    mesh.bounds = RenderBoundsSphere{ .center = { 0.0F, 0.0F, 0.0F }, .radius = 0.5F };
+    if (!levelsOfDetail) {
+        mesh.sections = { RenderMeshSection{ .indexStart = 0U, .indexCount = 3U, .bounds = mesh.bounds } };
+        return mesh;
+    }
+    const std::array<float, 3> coverage{ 0.0052F, 0.0045F, 0.0F };
+    for (std::uint8_t level = 0U; level < 3U; ++level) {
+        mesh.lods.push_back(RenderMeshLodDesc{ .firstSection = level * 2U, .sectionCount = 2U, .minScreenCoverage = coverage[level] });
+        for (std::uint32_t slot = 0U; slot < 2U; ++slot) {
+            mesh.sections.push_back(RenderMeshSection{ .indexStart = 0U, .indexCount = 3U, .materialSlot = slot, .bounds = mesh.bounds, .lodLevel = level });
+        }
+    }
+    return mesh;
+}
+
+class HeadlessSurface final : public RenderSurface {
+public:
+    [[nodiscard]] std::uint32_t Width() const noexcept override { return 64U; }
+    [[nodiscard]] std::uint32_t Height() const noexcept override { return 64U; }
+    [[nodiscard]] void* NativeWindowHandle() const noexcept override { return nullptr; }
+    [[nodiscard]] void* NativeDisplayHandle() const noexcept override { return nullptr; }
+};
+
+[[nodiscard]] bool SameBounds(const RenderBoundsSphere& left, const RenderBoundsSphere& right) noexcept {
+    return left.center == right.center && left.radius == right.radius;
+}
+
+// Whether two builds produced the same draw commands with the same instances, GPU-driven records and counters.
+[[nodiscard]] bool SameBuild(const MeshPipelineBuildResult& left, const MeshPipelineBuildResult& right) noexcept {
+    const SceneRenderSubmitStats& a = left.stats;
+    const SceneRenderSubmitStats& b = right.stats;
+    if (left.commands.size() != right.commands.size() || left.gpuDrivenInputRecords.size() != right.gpuDrivenInputRecords.size() ||
+        a.visibleMeshCount != b.visibleMeshCount || a.visibleDrawGroupCount != b.visibleDrawGroupCount ||
+        a.culledInstanceCount != b.culledInstanceCount || a.droppedInstanceCount != b.droppedInstanceCount ||
+        a.lodSelectionCount != b.lodSelectionCount || a.meshCommandLookupCapacity != b.meshCommandLookupCapacity ||
+        a.meshPipelineCommandCount != b.meshPipelineCommandCount || a.meshPipelineScratchInstanceCapacity != b.meshPipelineScratchInstanceCapacity ||
+        a.meshCachedDrawCommandCount != b.meshCachedDrawCommandCount || a.meshDrawCommandCacheHitCount != b.meshDrawCommandCacheHitCount ||
+        a.meshDrawCommandCacheMissCount != b.meshDrawCommandCacheMissCount || a.meshDrawCommandCacheBuildCount != b.meshDrawCommandCacheBuildCount ||
+        a.gpuDrivenDrawCandidateCount != b.gpuDrivenDrawCandidateCount || a.indirectDrawCandidateCount != b.indirectDrawCandidateCount ||
+        a.meshletCullingCandidateCount != b.meshletCullingCandidateCount || a.gpuDrivenInputInstanceCount != b.gpuDrivenInputInstanceCount ||
+        a.gpuDrivenFeatureState != b.gpuDrivenFeatureState || a.missingMeshBindingCount != b.missingMeshBindingCount ||
+        a.missingMeshResourceCount != b.missingMeshResourceCount || a.missingMaterialBindingCount != b.missingMaterialBindingCount ||
+        a.missingMaterialResourceCount != b.missingMaterialResourceCount || a.missingTextureBindingCount != b.missingTextureBindingCount ||
+        a.missingTextureResourceCount != b.missingTextureResourceCount || a.textureDimensionMismatchCount != b.textureDimensionMismatchCount) {
+        return false;
+    }
+    for (std::size_t index = 0U; index < left.commands.size(); ++index) {
+        const MeshDrawCommand& x = left.commands[index];
+        const MeshDrawCommand& y = right.commands[index];
+        if (x.pass != y.pass || x.meshAssetId != y.meshAssetId || x.materialAssetId != y.materialAssetId ||
+            x.sectionIndex != y.sectionIndex || x.materialSlot != y.materialSlot || x.indexStart != y.indexStart ||
+            x.indexCount != y.indexCount || x.vertexStart != y.vertexStart || x.vertexCount != y.vertexCount ||
+            x.lodLevel != y.lodLevel || x.depthBucket != y.depthBucket || x.mesh != y.mesh || x.material != y.material ||
+            x.meshResource != y.meshResource || x.materialResource != y.materialResource || x.state != y.state ||
+            x.sortKey != y.sortKey || x.currentSkinningPalette != y.currentSkinningPalette ||
+            x.gpuFrustumCull != y.gpuFrustumCull || x.instances.size() != y.instances.size()) {
+            return false;
+        }
+        for (std::size_t instance = 0U; instance < x.instances.size(); ++instance) {
+            const SceneRenderMeshInstance& p = x.instances[instance];
+            const SceneRenderMeshInstance& q = y.instances[instance];
+            if (p.entityId != q.entityId || p.meshAssetId != q.meshAssetId || p.materialAssetId != q.materialAssetId ||
+                p.model != q.model || !SameBounds(p.worldBounds, q.worldBounds) || p.depthBucket != q.depthBucket) {
+                return false;
+            }
+        }
+    }
+    for (std::size_t index = 0U; index < left.gpuDrivenInputRecords.size(); ++index) {
+        const SceneGpuDrivenInputRecord& x = left.gpuDrivenInputRecords[index];
+        const SceneGpuDrivenInputRecord& y = right.gpuDrivenInputRecords[index];
+        if (x.entityId != y.entityId || x.worldBounds != y.worldBounds || x.drawCommandIndex != y.drawCommandIndex ||
+            x.lodLevel != y.lodLevel || x.firstMeshlet != y.firstMeshlet || x.meshletCount != y.meshletCount) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool SameDiagnostics(const SceneRenderDiagnostics& left, const SceneRenderDiagnostics& right) noexcept {
+    if (left.events.size() != right.events.size()) {
+        return false;
+    }
+    for (std::size_t index = 0U; index < left.events.size(); ++index) {
+        const SceneRenderDiagnosticEvent& x = left.events[index];
+        const SceneRenderDiagnosticEvent& y = right.events[index];
+        if (x.severity != y.severity || x.kind != y.kind || x.entityId != y.entityId || x.meshAssetId != y.meshAssetId ||
+            x.materialAssetId != y.materialAssetId || x.textureAssetId != y.textureAssetId || x.instanceCount != y.instanceCount) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Builds a pass twice into one result on the calling thread and twice into another with workers, and requires the
+// same commands, counters and diagnostics each time: the second build reuses what the first left in the results.
+// `expectScan` says whether the workers scan chunks that are written into the commands.
+template <typename MakeDesc>
+void RequireParallelBuildMatchesSerial(kb::ecs::WorkerPool& pool, MakeDesc&& makeDesc, bool expectScan, const char* message) {
+    MeshPipelineBuildResult serial;
+    MeshPipelineBuildResult parallel;
+    for (int build = 0; build < 2; ++build) {
+        SceneRenderDiagnostics serialDiagnostics;
+        SceneRenderDiagnostics parallelDiagnostics;
+        MeshPipelineProcessor::BuildInto(makeDesc(nullptr, &serialDiagnostics), serial);
+        MeshPipelineProcessor::BuildInto(makeDesc(&pool, &parallelDiagnostics), parallel);
+        Require(SameBuild(serial, parallel) && SameDiagnostics(serialDiagnostics, parallelDiagnostics), message);
+        Require(serial.scanChunks.empty(), "A build without workers scanned chunks");
+        const bool scanned = std::ranges::any_of(parallel.scanChunks, [](const MeshPipelineScanChunk& chunk) { return chunk.clean; });
+        Require(scanned == expectScan, "The workers did not scan the pass as the test expects");
+    }
+}
+
+// Builds `passCount` passes twice each, together into results of their own with workers and one by one on the calling
+// thread, and requires the same commands, counters and diagnostics for every pass each time: the second build reuses what
+// the first left in the results. `makeDesc(index, workers, diagnostics)` describes one pass.
+template <typename MakeDesc>
+void RequireTogetherBuildMatchesSerial(kb::ecs::WorkerPool& pool, MakeDesc&& makeDesc, std::size_t passCount, const char* message) {
+    std::vector<MeshPipelineBuildResult> serial(passCount);
+    std::vector<MeshPipelineBuildResult> together(passCount);
+    for (int build = 0; build < 2; ++build) {
+        std::vector<SceneRenderDiagnostics> serialDiagnostics(passCount);
+        std::vector<SceneRenderDiagnostics> togetherDiagnostics(passCount);
+        std::vector<MeshPipelinePassBuild> passes;
+        for (std::size_t index = 0U; index < passCount; ++index) {
+            MeshPipelineProcessor::BuildInto(makeDesc(index, nullptr, &serialDiagnostics[index]), serial[index]);
+            passes.push_back(MeshPipelinePassBuild{ .desc = makeDesc(index, &pool, &togetherDiagnostics[index]), .result = &together[index] });
+        }
+        MeshPipelineProcessor::BuildPassesInto(passes);
+        for (std::size_t index = 0U; index < passCount; ++index) {
+            Require(SameBuild(serial[index], together[index]) && SameDiagnostics(serialDiagnostics[index], togetherDiagnostics[index]), message);
+        }
+    }
+}
+
+// Objects of every kind a pass tells apart: layers, shadow casting, slot overrides, and positions in and out of the
+// frustum, spread over enough batches for the workers to share.
+void FillMixedScene(RenderScene& scene, std::size_t objectCount) {
+    for (std::size_t index = 0U; index < objectCount; ++index) {
+        MeshRenderProxyDesc proxy{
+            .entityId = index + 1U,
+            .meshAssetId = 1000U + index % 3U,
+            .materialAssetId = 2000U + (index / 3U) % 2U,
+            .model = TranslationMatrix(static_cast<float>(index % 100U) - 50.0F + (index % 7U == 0U ? 90.0F : 0.0F),
+                static_cast<float>((index / 100U) % 100U) - 50.0F, 100.0F + static_cast<float>(index % 21U)),
+            .castsShadow = index % 5U != 0U,
+            .layer = index % 11U == 0U ? 4U : 1U,
+        };
+        if (index % 13U == 0U) {
+            proxy.materialSlotAssetIds[0] = 3000U + index % 3U;
+            proxy.materialSlotOverrideCount = 1U;
+        }
+        static_cast<void>(scene.UpsertMesh(proxy));
+    }
+}
+
+void RunMeshPipelineParallelScanMatchesSerialTest() {
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 8U } };
+    pool.Start(kb::ecs::WorkerPoolConfig{ .workerCount = 8U });
+    RenderScene scene;
+    FillMixedScene(scene, 6000U);
+    const std::vector<SceneMeshBatch> batches = SceneMeshBatchBuilder::Build(scene.DrawGroups());
+    Require(batches.size() > 6U, "The parallel scan test scene has too few batches to share");
+
+    RenderMeshResource mesh = BenchmarkMesh(true);
+    RenderMeshResource gpuMesh = mesh;
+    gpuMesh.gpuCullingEnabled = true;
+    RenderMaterialResource opaque{};
+    RenderMaterialResource blended{};
+    blended.alphaMode = RenderMaterialAlphaMode::Blend;
+    auto camera = PerspectiveCamera();
+    SceneDepthPolicy::MakePerspective(camera.projection.data(), 90.0F, 1.0F, 0.1F, 1000.0F, SceneDepthPolicy::HomogeneousDepth());
+    camera.cullingMask = 0x3U;
+    std::vector<std::uint64_t> selected;
+    for (std::uint64_t entity = 1U; entity <= 6000U; entity += 3U) selected.push_back(entity);
+
+    const auto require = [&](MeshPassType pass, const RenderMeshResource& meshResource, const RenderMaterialResource& material,
+                             std::uint32_t maxDrawCommands, std::uint32_t maxVisibleInstances, const char* message) {
+        RequireParallelBuildMatchesSerial(pool, [&](kb::ecs::WorkerPool* workerPool, SceneRenderDiagnostics* diagnostics) {
+            return MeshPipelineBuildDesc{
+                .pass = pass,
+                .meshBatches = &batches,
+                .resolvedMeshResource = &meshResource,
+                .resolvedMaterialResource = &material,
+                .camera = &camera,
+                .diagnostics = diagnostics,
+                .maxDrawCommands = maxDrawCommands,
+                .maxVisibleInstances = maxVisibleInstances,
+                .selectedEntityIds = selected,
+                .resourceValidation = MeshPipelineResourceValidation::Skip,
+                .workerPool = workerPool,
+            };
+        }, true, message);
+    };
+    require(MeshPassType::BaseOpaque, mesh, opaque, 0U, 0U, "Workers built the opaque pass differently from the calling thread");
+    require(MeshPassType::BaseOpaque, gpuMesh, opaque, 0U, 0U, "Workers built the GPU-driven candidates differently from the calling thread");
+    require(MeshPassType::ShadowDepth, mesh, opaque, 0U, 0U, "Workers built the shadow pass differently from the calling thread");
+    require(MeshPassType::SelectionId, mesh, opaque, 0U, 0U, "Workers built the selection pass differently from the calling thread");
+    require(MeshPassType::BaseTransparent, mesh, blended, 0U, 0U, "Workers built the transparent pass differently from the calling thread");
+    require(MeshPassType::BaseOpaque, mesh, opaque, 5U, 0U, "Workers did not drop to the draw command budget as the calling thread does");
+    require(MeshPassType::BaseOpaque, gpuMesh, opaque, 0U, 4000U, "Workers did not drop to the instance budget as the calling thread does");
+}
+
+// Passes built together, of every pass kind, with cameras that see different objects, budgets and masks, in scenes too
+// small for any worker, too small for a pass to be scanned in chunks but large together, and large.
+void RunMeshPipelineBuildsPassesTogetherMatchesSerialTest() {
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 8U } };
+    pool.Start(kb::ecs::WorkerPoolConfig{ .workerCount = 8U });
+    RenderMeshResource mesh = BenchmarkMesh(true);
+    RenderMeshResource gpuMesh = mesh;
+    gpuMesh.gpuCullingEnabled = true;
+    const RenderMaterialResource opaque{};
+    std::array<SceneRenderCamera, 4> cameras{};
+    for (std::size_t index = 0U; index < cameras.size(); ++index) {
+        cameras[index] = PerspectiveCamera();
+        SceneDepthPolicy::MakePerspective(cameras[index].projection.data(), 90.0F, 1.0F, 0.1F, 1000.0F, SceneDepthPolicy::HomogeneousDepth());
+        cameras[index].view[12] = 40.0F * static_cast<float>(index) - 60.0F;
+        cameras[index].cullingMask = index == 3U ? 0x1U : 0x3U;
+    }
+    for (const std::size_t objectCount : { std::size_t{ 100U }, std::size_t{ 700U }, std::size_t{ 6000U } }) {
+        RenderScene scene;
+        FillMixedScene(scene, objectCount);
+        const std::vector<SceneMeshBatch> batches = SceneMeshBatchBuilder::Build(scene.DrawGroups());
+        std::vector<std::uint64_t> selected;
+        for (std::uint64_t entity = 1U; entity <= objectCount; entity += 3U) selected.push_back(entity);
+        const std::array<MeshPassType, 4> passKinds{ MeshPassType::ShadowDepth, MeshPassType::ShadowDepth, MeshPassType::BaseOpaque, MeshPassType::SelectionId };
+        for (const RenderMeshResource* meshResource : { &mesh, &gpuMesh }) {
+            RequireTogetherBuildMatchesSerial(pool, [&](std::size_t index, kb::ecs::WorkerPool* workers, SceneRenderDiagnostics* diagnostics) {
+                return MeshPipelineBuildDesc{
+                    .pass = passKinds[index],
+                    .meshBatches = &batches,
+                    .resolvedMeshResource = meshResource,
+                    .resolvedMaterialResource = &opaque,
+                    .camera = &cameras[index],
+                    .diagnostics = diagnostics,
+                    .maxVisibleInstances = index == 1U ? static_cast<std::uint32_t>(objectCount / 2U) : 0U,
+                    .selectedEntityIds = passKinds[index] == MeshPassType::SelectionId ? std::span<const std::uint64_t>{ selected } : std::span<const std::uint64_t>{},
+                    .resourceValidation = MeshPipelineResourceValidation::Skip,
+                    .workerPool = workers,
+                };
+            }, passKinds.size(), "Passes built together differ from the same passes built one by one");
+        }
+    }
+}
+
+// Resources the workers cannot resolve cleanly are reported by the calling thread, which builds the batches that use
+// them in order: the same counters and the same diagnostics in the same order as without workers.
+void RunMeshPipelineParallelScanReportsMissingResourcesInOrderTest() {
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "The parallel scan test could not initialize bgfx");
+    {
+        const std::array<RenderStaticMeshVertexP3N3UV2, 3> vertices{ {
+            { .x = 0.0F, .y = 0.0F, .z = 0.0F }, { .x = 1.0F, .y = 0.0F, .z = 0.0F }, { .x = 0.0F, .y = 1.0F, .z = 0.0F } } };
+        const std::array<std::uint16_t, 6> indices{ 0U, 1U, 2U, 0U, 2U, 1U };
+        const std::array<RenderMeshSectionDesc, 2> sections{ {
+            { .indexStart = 0U, .indexCount = 3U, .vertexStart = 0U, .vertexCount = 3U, .materialSlot = 0U, .bounds = { .radius = 1.0F } },
+            { .indexStart = 3U, .indexCount = 3U, .vertexStart = 0U, .vertexCount = 3U, .materialSlot = 1U, .bounds = { .radius = 1.0F } } } };
+        RenderResourceRegistry registry;
+        SceneRenderResourceMap resourceMap;
+        // Meshes 1000 and 1001 resolve, 1002 has no binding at all.
+        for (std::uint64_t meshAssetId = 1000U; meshAssetId <= 1001U; ++meshAssetId) {
+            resourceMap.BindMesh(meshAssetId, registry.RegisterMesh(RenderMeshDesc{
+                .vertexData = vertices.data(), .vertexCount = 3U, .indices = indices.data(), .indexCount = 6U,
+                .vertexFormat = RenderVertexFormat::P3N3UV2, .sections = sections.data(), .sectionCount = 2U,
+                .bounds = { .radius = 1.0F } }));
+            Require(resourceMap.ResolveMesh(meshAssetId).IsValid(), "The parallel scan test could not register its mesh");
+        }
+        // Materials 2000 and 2001 resolve and 2002 blends; 2003 reads a texture that has no binding; 2004 has none.
+        RenderMaterialDesc plain{};
+        RenderMaterialDesc blending{};
+        blending.alphaMode = RenderMaterialAlphaMode::Blend;
+        RenderMaterialDesc textured{};
+        textured.occlusionTextureAssetId = 909U;
+        resourceMap.BindMaterial(2000U, registry.RegisterMaterial(plain));
+        resourceMap.BindMaterial(2001U, registry.RegisterMaterial(plain));
+        resourceMap.BindMaterial(2002U, registry.RegisterMaterial(blending));
+        resourceMap.BindMaterial(2003U, registry.RegisterMaterial(textured));
+
+        // Each batch has one mesh and one material; the one with the unbound mesh and the ones with the unbound material
+        // or the missing texture are among the batches the workers scan.
+        RenderScene scene;
+        constexpr std::size_t kObjects = 8192U;
+        for (std::size_t index = 0U; index < kObjects; ++index) {
+            const std::size_t block = index / 1024U;
+            const std::uint64_t meshAssetId = block == 5U ? 1002U : 1000U + index % 2U;
+            const std::uint64_t materialAssetId = block == 3U ? 2004U : (block == 6U ? 2003U : 2000U + (index / 2U) % 3U);
+            MeshRenderProxyDesc proxy{
+                .entityId = index + 1U,
+                .meshAssetId = meshAssetId,
+                .materialAssetId = materialAssetId,
+                .model = TranslationMatrix(static_cast<float>(index % 100U) - 50.0F,
+                    static_cast<float>((index / 100U) % 100U) - 50.0F, 100.0F + static_cast<float>(index % 21U)),
+            };
+            if (index % 17U == 0U) {
+                // The second section of these objects is drawn with a material of its own, so a batch has several.
+                proxy.materialSlotAssetIds[1] = 2000U + index % 3U;
+                proxy.materialSlotOverrideCount = 2U;
+            }
+            static_cast<void>(scene.UpsertMesh(proxy));
+        }
+        const std::vector<SceneMeshBatch> batches = SceneMeshBatchBuilder::Build(scene.DrawGroups());
+        auto camera = PerspectiveCamera();
+        SceneDepthPolicy::MakePerspective(camera.projection.data(), 90.0F, 1.0F, 0.1F, 1000.0F, SceneDepthPolicy::HomogeneousDepth());
+        kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 8U } };
+        pool.Start(kb::ecs::WorkerPoolConfig{ .workerCount = 8U });
+        for (const MeshPassType pass : { MeshPassType::BaseOpaque, MeshPassType::BaseTransparent, MeshPassType::ShadowDepth }) {
+            const auto makeDesc = [&](kb::ecs::WorkerPool* workerPool, SceneRenderDiagnostics* diagnostics) {
+                return MeshPipelineBuildDesc{
+                    .pass = pass,
+                    .meshBatches = &batches,
+                    .resources = &registry,
+                    .resourceMap = &resourceMap,
+                    .camera = &camera,
+                    .diagnostics = diagnostics,
+                    .workerPool = workerPool,
+                };
+            };
+            RequireParallelBuildMatchesSerial(pool, makeDesc, true,
+                "Workers reported missing resources differently from the calling thread");
+            const MeshPipelineBuildResult reference = MeshPipelineProcessor::Build(makeDesc(nullptr, nullptr));
+            Require(reference.stats.missingMeshBindingCount != 0U && reference.stats.missingMaterialBindingCount != 0U &&
+                    reference.stats.missingTextureBindingCount != 0U,
+                "The parallel scan test scene does not miss the resources it means to");
+        }
+        // Passes built together report what is missing as they would one by one, each in its own diagnostics.
+        const std::array<MeshPassType, 3> passKinds{ MeshPassType::BaseOpaque, MeshPassType::BaseTransparent, MeshPassType::ShadowDepth };
+        RequireTogetherBuildMatchesSerial(pool, [&](std::size_t index, kb::ecs::WorkerPool* workerPool, SceneRenderDiagnostics* diagnostics) {
+            return MeshPipelineBuildDesc{
+                .pass = passKinds[index],
+                .meshBatches = &batches,
+                .resources = &registry,
+                .resourceMap = &resourceMap,
+                .camera = &camera,
+                .diagnostics = diagnostics,
+                .workerPool = workerPool,
+            };
+        }, passKinds.size(), "Passes built together reported missing resources differently from the same passes built one by one");
+    }
+    renderer.Shutdown();
+}
+
+// Median microseconds of one BaseOpaque build of the batches. The calling thread is busy for `pause` before every build,
+// as in a frame with other work between its passes: with none, builds follow each other and the workers stay awake;
+// with some, the workers are asleep and have to be woken.
+double MedianBuildMicroseconds(const std::vector<SceneMeshBatch>& batches, const RenderMeshResource& mesh,
+    const SceneRenderCamera& camera, kb::ecs::WorkerPool* workerPool, std::chrono::milliseconds pause, int runs,
+    std::size_t visibleCount) {
+    const RenderMaterialResource material{};
+    MeshPipelineBuildResult result;
+    std::vector<double> samples;
+    for (int run = -20; run < runs; ++run) {
+        for (const auto until = std::chrono::steady_clock::now() + pause; std::chrono::steady_clock::now() < until;) {
+        }
+        const auto begin = std::chrono::steady_clock::now();
+        MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
+            .pass = MeshPassType::BaseOpaque,
+            .meshBatches = &batches,
+            .resolvedMeshResource = &mesh,
+            .resolvedMaterialResource = &material,
+            .camera = &camera,
+            .resourceValidation = MeshPipelineResourceValidation::Skip,
+            .workerPool = workerPool,
+        }, result);
+        const auto end = std::chrono::steady_clock::now();
+        if (run >= 0) samples.push_back(std::chrono::duration<double, std::micro>(end - begin).count());
+    }
+    Require(result.stats.visibleMeshCount == visibleCount, "The scale benchmark scene is not fully visible");
+    std::ranges::sort(samples);
+    return samples[samples.size() / 2U];
+}
+
+// The cameras of the directional shadow cascades of a frame: each reaches farther than the one before.
+std::vector<SceneRenderCamera> ShadowCascadeCameras(std::initializer_list<float> reaches = { 30.0F, 45.0F, 70.0F, 110.0F }) {
+    std::vector<SceneRenderCamera> cameras;
+    for (const float reach : reaches) {
+        SceneRenderCamera camera{};
+        camera.view = IdentityMatrix();
+        SceneDepthPolicy::MakeOrthographic(camera.projection.data(), reach * 2.0F, 1.0F, 0.1F, 1000.0F, SceneDepthPolicy::HomogeneousDepth());
+        cameras.push_back(camera);
+    }
+    return cameras;
+}
+
+// The cameras of the six faces of each of four point lights placed inside the benchmark scene.
+std::vector<SceneRenderCamera> ShadowPointFaceCameras() {
+    struct Face { bx::Vec3 axis; bx::Vec3 up; };
+    const std::array<Face, 6> faces{ {
+        { { 1.0F, 0.0F, 0.0F }, { 0.0F, 1.0F, 0.0F } }, { { -1.0F, 0.0F, 0.0F }, { 0.0F, 1.0F, 0.0F } },
+        { { 0.0F, 1.0F, 0.0F }, { 0.0F, 0.0F, -1.0F } }, { { 0.0F, -1.0F, 0.0F }, { 0.0F, 0.0F, 1.0F } },
+        { { 0.0F, 0.0F, 1.0F }, { 0.0F, 1.0F, 0.0F } }, { { 0.0F, 0.0F, -1.0F }, { 0.0F, 1.0F, 0.0F } } } };
+    std::vector<SceneRenderCamera> cameras;
+    for (const bx::Vec3 eye : { bx::Vec3{ -25.0F, -25.0F, 110.0F }, bx::Vec3{ 25.0F, -25.0F, 110.0F },
+             bx::Vec3{ -25.0F, 25.0F, 110.0F }, bx::Vec3{ 25.0F, 25.0F, 110.0F } }) {
+        for (const Face& face : faces) {
+            SceneRenderCamera camera{};
+            bx::mtxLookAt(camera.view.data(), eye, bx::add(eye, face.axis), face.up);
+            SceneDepthPolicy::MakePerspective(camera.projection.data(), 90.0F, 1.0F, 0.1F, 80.0F, SceneDepthPolicy::HomogeneousDepth());
+            cameras.push_back(camera);
+        }
+    }
+    return cameras;
+}
+
+// The counters of a submitted pass that do not depend on how its instances are grouped into draw commands, which a
+// renderer that keeps the commands of the batches of a still camera does differently from one that merges the batches.
+[[nodiscard]] std::array<std::uint32_t, 12> PassCounters(const SceneRenderSubmitStats& stats) noexcept {
+    return { stats.visibleMeshCount, stats.culledInstanceCount, stats.droppedInstanceCount, stats.lodSelectionCount,
+        stats.submittedMeshCount, stats.missingMeshBindingCount, stats.missingMeshResourceCount, stats.missingMaterialBindingCount,
+        stats.missingMaterialResourceCount, stats.shadowCasterCount, stats.submittedShadowCasterCount,
+        stats.missingTextureBindingCount };
+}
+
+// A scene renderer that prepares the shadow passes of a frame submits them with the counters and diagnostics of one that
+// builds each pass when it submits it, over scenes that miss resources, and builds ahead only what it was asked to.
+void RunSceneRendererPreparedShadowPassesMatchOneByOneTest() {
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "The prepared shadow pass test could not initialize bgfx");
+    {
+        kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 8U } };
+        pool.Start(kb::ecs::WorkerPoolConfig{ .workerCount = 8U });
+        // Two scene renderers of the same content: the first builds every pass when it submits it, the second prepares.
+        std::array<SceneRenderer, 2> renderers;
+        const std::array<RenderStaticMeshVertexP3N3UV2, 3> vertices{ {
+            { .x = 0.0F, .y = 0.0F, .z = 0.0F }, { .x = 1.0F, .y = 0.0F, .z = 0.0F }, { .x = 0.0F, .y = 1.0F, .z = 0.0F } } };
+        const std::array<std::uint16_t, 3> indices{ 0U, 1U, 2U };
+        for (SceneRenderer& sceneRenderer : renderers) {
+            Require(sceneRenderer.Initialize(), "The prepared shadow pass test could not initialize a scene renderer");
+            sceneRenderer.SetWorkerPool(&pool);
+            // Meshes 1000 and 1001 resolve, 1002 has no binding; materials 2000 to 2002 resolve, 2003 has none.
+            for (std::uint64_t meshAssetId = 1000U; meshAssetId <= 1001U; ++meshAssetId) {
+                sceneRenderer.ResourceMap().BindMesh(meshAssetId, sceneRenderer.Resources().RegisterMesh(RenderMeshDesc{
+                    .vertexData = vertices.data(), .vertexCount = 3U, .indices = indices.data(), .indexCount = 3U,
+                    .vertexFormat = RenderVertexFormat::P3N3UV2, .bounds = { .radius = 1.0F } }));
+            }
+            for (std::uint64_t materialAssetId = 2000U; materialAssetId <= 2002U; ++materialAssetId) {
+                sceneRenderer.ResourceMap().BindMaterial(materialAssetId, sceneRenderer.Resources().RegisterMaterial(RenderMaterialDesc{}));
+            }
+        }
+        RenderScene scene;
+        constexpr std::size_t kObjects = 6144U;
+        for (std::size_t index = 0U; index < kObjects; ++index) {
+            const std::size_t block = index / 1024U;
+            static_cast<void>(scene.UpsertMesh(MeshRenderProxyDesc{
+                .entityId = index + 1U,
+                .meshAssetId = block == 4U ? 1002U : 1000U + index % 2U,
+                .materialAssetId = block == 2U ? 2003U : 2000U + (index / 2U) % 3U,
+                .model = TranslationMatrix(static_cast<float>(index % 100U) - 50.0F,
+                    static_cast<float>((index / 100U) % 100U) - 50.0F, 100.0F + static_cast<float>(index % 21U)),
+            }));
+        }
+        // Every cascade sees every object, so a renderer that builds them one by one finds the draw commands of the first
+        // in the cache it fills for the others.
+        const std::vector<SceneRenderCamera> cameras = ShadowCascadeCameras({ 60.0F, 70.0F, 80.0F, 90.0F });
+        std::vector<const SceneRenderCamera*> pointers;
+        for (const SceneRenderCamera& camera : cameras) pointers.push_back(&camera);
+        SceneRenderLightingConfig lighting{};
+        lighting.shadowsEnabled = true;
+        for (int round = 0; round < 3; ++round) {
+            // The third round prepares a single pass, which is built as usual when it is submitted.
+            const std::span<const SceneRenderCamera* const> prepared = round == 2 ? std::span{ pointers }.first(1U) : std::span{ pointers };
+            renderers[1].PrepareMeshPasses(MeshPassType::ShadowDepth, scene, prepared);
+            for (std::size_t index = 0U; index < cameras.size(); ++index) {
+                const bgfx::ViewId view = static_cast<bgfx::ViewId>(index);
+                renderers[0].SubmitMeshPass(view, MeshPassType::ShadowDepth, scene, 64U, 64U, &cameras[index], {}, lighting);
+                renderers[1].SubmitMeshPass(view, MeshPassType::ShadowDepth, scene, 64U, 64U, &cameras[index], {}, lighting);
+                const SceneRenderSubmitStats& expected = renderers[0].LastSubmitStats();
+                const SceneRenderSubmitStats& actual = renderers[1].LastSubmitStats();
+                Require(PassCounters(expected) == PassCounters(actual) &&
+                        SameDiagnostics(renderers[0].LastDiagnostics(), renderers[1].LastDiagnostics()),
+                    "A prepared shadow pass was submitted differently from one built when it was submitted");
+                Require(expected.visibleMeshCount != 0U && expected.missingMeshBindingCount != 0U &&
+                        expected.missingMaterialBindingCount != 0U && !renderers[0].LastDiagnostics().events.empty(),
+                    "The prepared shadow pass test scene does not miss the resources it means to");
+                // A pass built ahead starts with a draw command cache of its own; the passes built one by one share one.
+                if (round == 0 && index != 0U) {
+                    Require(actual.meshDrawCommandCacheBuildCount != 0U && expected.meshDrawCommandCacheBuildCount == 0U,
+                        "The renderer did not build the prepared shadow passes ahead");
+                }
+            }
+            for (SceneRenderer& sceneRenderer : renderers) sceneRenderer.TickFrame();
+            bgfx::frame();
+        }
+    }
+    renderer.Shutdown();
+}
+
+// How the shadow passes of a frame are built: one after the other, as the shadow stage submits them, or all at once.
+enum class ShadowBuildMode { OneByOne, Together };
+
+// Median microseconds the calling thread spends building the shadow passes of one frame. The calling thread is busy for
+// `pause` before every pass built on its own, or once before all passes built together, as it is while it submits the
+// pass before.
+double MedianShadowStageMicroseconds(const std::vector<SceneMeshBatch>& batches, const RenderMeshResource& mesh,
+    std::span<const SceneRenderCamera> cameras, kb::ecs::WorkerPool* workerPool, ShadowBuildMode mode,
+    std::chrono::microseconds pause, int runs, std::size_t& admittedCount) {
+    const RenderMaterialResource material{};
+    std::vector<MeshPipelineBuildResult> results(mode == ShadowBuildMode::Together ? cameras.size() : 1U);
+    const auto describe = [&](const SceneRenderCamera& camera) {
+        return MeshPipelineBuildDesc{
+            .pass = MeshPassType::ShadowDepth,
+            .meshBatches = &batches,
+            .resolvedMeshResource = &mesh,
+            .resolvedMaterialResource = &material,
+            .camera = &camera,
+            .resourceValidation = MeshPipelineResourceValidation::Skip,
+            .workerPool = workerPool,
+        };
+    };
+    const auto busyWait = [](std::chrono::microseconds duration) {
+        for (const auto until = std::chrono::steady_clock::now() + duration; std::chrono::steady_clock::now() < until;) {
+        }
+    };
+    std::vector<double> samples;
+    for (int run = -10; run < runs; ++run) {
+        double microseconds = 0.0;
+        admittedCount = 0U;
+        if (mode == ShadowBuildMode::Together) {
+            std::vector<MeshPipelinePassBuild> passes;
+            for (std::size_t index = 0U; index < cameras.size(); ++index) {
+                passes.push_back(MeshPipelinePassBuild{ .desc = describe(cameras[index]), .result = &results[index] });
+            }
+            busyWait(pause);
+            const auto begin = std::chrono::steady_clock::now();
+            MeshPipelineProcessor::BuildPassesInto(passes);
+            microseconds = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - begin).count();
+            for (const MeshPipelineBuildResult& result : results) admittedCount += result.stats.visibleMeshCount;
+        } else {
+            for (const SceneRenderCamera& camera : cameras) {
+                busyWait(pause);
+                const auto begin = std::chrono::steady_clock::now();
+                MeshPipelineProcessor::BuildInto(describe(camera), results.front());
+                microseconds += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - begin).count();
+                admittedCount += results.front().stats.visibleMeshCount;
+            }
+        }
+        if (run >= 0) samples.push_back(microseconds);
+    }
+    std::ranges::sort(samples);
+    return samples[samples.size() / 2U];
+}
+
 } // namespace
+
+// Prints the median time of one BaseOpaque pass build over scenes of 1 000 to 50 000 mesh objects, built on the calling
+// thread and with workers, each with the workers awake and asleep. No window and no GPU are involved.
+void RunMeshPipelineBuildScaleBenchmark() {
+    auto camera = PerspectiveCamera();
+    SceneDepthPolicy::MakePerspective(camera.projection.data(), 90.0F, 1.0F, 0.1F, 1000.0F, SceneDepthPolicy::HomogeneousDepth());
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{} };
+    pool.Start(kb::ecs::WorkerPoolConfig{});
+
+    std::fprintf(stderr, "mesh_pipeline_scale median microseconds of one pass build, %zu workers\n", pool.WorkerCount());
+    std::fprintf(stderr, "mesh_pipeline_scale levels_of_detail pairs objects batches serial serial_paused parallel parallel_paused\n");
+    struct Shape { bool levelsOfDetail; std::size_t pairs; };
+    for (const Shape shape : { Shape{ true, 16U }, Shape{ false, 16U }, Shape{ true, 1U } }) {
+        const RenderMeshResource mesh = BenchmarkMesh(shape.levelsOfDetail);
+        for (const std::size_t objectCount : { std::size_t{ 1000U }, std::size_t{ 2000U }, std::size_t{ 4000U }, std::size_t{ 10000U }, std::size_t{ 50000U } }) {
+            RenderScene scene;
+            FillBenchmarkScene(scene, objectCount, shape.pairs);
+            const std::vector<SceneMeshBatch> batches = SceneMeshBatchBuilder::Build(scene.DrawGroups());
+            // Every object is drawn once per section of its level.
+            const std::size_t visibleCount = objectCount * (shape.levelsOfDetail ? 2U : 1U);
+            const auto measure = [&](kb::ecs::WorkerPool* workerPool, std::chrono::milliseconds pause, int runs) {
+                return MedianBuildMicroseconds(batches, mesh, camera, workerPool, pause, runs, visibleCount);
+            };
+            const double serial = measure(nullptr, std::chrono::milliseconds{ 0 }, 200);
+            const double serialPaused = measure(nullptr, std::chrono::milliseconds{ 1 }, 100);
+            const double parallel = measure(&pool, std::chrono::milliseconds{ 0 }, 200);
+            const double parallelPaused = measure(&pool, std::chrono::milliseconds{ 1 }, 100);
+            std::fprintf(stderr, "mesh_pipeline_scale %d %zu %zu %zu %.1f %.1f %.1f %.1f\n", shape.levelsOfDetail ? 1 : 0, shape.pairs,
+                objectCount, batches.size(), serial, serialPaused, parallel, parallelPaused);
+        }
+    }
+}
+
+// Prints the median time of the shadow passes of one frame (four directional cascades, or four point lights of six faces)
+// over scenes of 1 000 to 50 000 shadow casters, built one after the other and together, on the calling thread and with
+// workers, each with the calling thread busy before the passes and without. No window and no GPU are involved.
+void RunMeshPipelineShadowBuildScaleBenchmark() {
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{} };
+    pool.Start(kb::ecs::WorkerPoolConfig{});
+    const std::vector<SceneRenderCamera> cascades = ShadowCascadeCameras();
+    const std::vector<SceneRenderCamera> pointFaces = ShadowPointFaceCameras();
+
+    std::fprintf(stderr, "shadow_scale median microseconds of the shadow passes of one frame, %zu workers\n", pool.WorkerCount());
+    std::fprintf(stderr, "shadow_scale stage levels_of_detail objects passes admitted serial serial_busy one_by_one one_by_one_busy together together_busy\n");
+    const std::chrono::microseconds busy{ 300 };
+    const std::chrono::microseconds none{ 0 };
+    for (const bool levelsOfDetail : { false, true }) {
+        const RenderMeshResource mesh = BenchmarkMesh(levelsOfDetail);
+        for (const std::size_t objectCount : { std::size_t{ 1000U }, std::size_t{ 10000U }, std::size_t{ 50000U } }) {
+            const int runs = static_cast<int>(std::clamp<std::size_t>(500000U / objectCount, 6U, 100U));
+            RenderScene scene;
+            FillBenchmarkScene(scene, objectCount, 16U);
+            const std::vector<SceneMeshBatch> batches = SceneMeshBatchBuilder::Build(scene.DrawGroups());
+            struct Stage { const char* name; std::span<const SceneRenderCamera> cameras; };
+            for (const Stage stage : { Stage{ "cascades", cascades }, Stage{ "points", pointFaces } }) {
+                std::size_t admitted = 0U;
+                const auto measure = [&](kb::ecs::WorkerPool* workerPool, ShadowBuildMode mode, std::chrono::microseconds pause) {
+                    return MedianShadowStageMicroseconds(batches, mesh, stage.cameras, workerPool, mode, pause, runs, admitted);
+                };
+                const double serial = measure(nullptr, ShadowBuildMode::OneByOne, none);
+                const double serialBusy = measure(nullptr, ShadowBuildMode::OneByOne, busy);
+                const double oneByOne = measure(&pool, ShadowBuildMode::OneByOne, none);
+                const double oneByOneBusy = measure(&pool, ShadowBuildMode::OneByOne, busy);
+                const double together = measure(&pool, ShadowBuildMode::Together, none);
+                const double togetherBusy = measure(&pool, ShadowBuildMode::Together, busy);
+                std::fprintf(stderr, "shadow_scale %s %d %zu %zu %zu %.1f %.1f %.1f %.1f %.1f %.1f\n", stage.name, levelsOfDetail ? 1 : 0,
+                    objectCount, stage.cameras.size(), admitted, serial, serialBusy, oneByOne, oneByOneBusy, together, togetherBusy);
+            }
+        }
+    }
+}
 
 void RunMeshPipelineTests() {
     {
@@ -2418,6 +3069,10 @@ void RunMeshPipelineTests() {
     RunGpuDrivenParityValidatorReportsCullingLodAndMeshletMismatchesTest();
     RunGpuDrivenParityValidatorReportsMissingRecordsAndDropBudgetTest();
     RunRenderScenePropagatesMeshPassFlagsTest();
+    RunMeshPipelineParallelScanMatchesSerialTest();
+    RunMeshPipelineBuildsPassesTogetherMatchesSerialTest();
+    RunSceneRendererPreparedShadowPassesMatchOneByOneTest();
+    RunMeshPipelineParallelScanReportsMissingResourcesInOrderTest();
 }
 
 } // namespace kb::render::tests

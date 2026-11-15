@@ -14,8 +14,10 @@
 #include <fstream>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <system_error>
+#include <unordered_map>
 #include <unordered_set>
 
 #if defined(_WIN32)
@@ -28,6 +30,7 @@
 #include <windows.h>
 #else
 #include <fcntl.h>
+#include <signal.h>
 #include <spawn.h>
 #include <sys/file.h>
 #include <sys/wait.h>
@@ -141,10 +144,23 @@ void AddArtifactDiagnostic(
     return names;
 }
 
+// A compiler binary (the compiler and its runtime) is tens of megabytes: reading and hashing it for every
+// cook of every pass dominated a cook that hit its cache. Its identity is its content hash, which the
+// process remembers per file size and write time and re-checks by the same two values.
+struct CompilerBinaryIdentity {
+    std::filesystem::path path;
+    std::uintmax_t size = 0U;
+    std::filesystem::file_time_type writeTime{};
+    std::uint64_t contentHash = 0U;
+};
+
 struct ResolvedShaderDependency {
     std::filesystem::path path;
     std::string name;
     std::string content;
+    // Set for a compiler binary: `content` stays empty and the identity stands in for it.
+    bool compilerBinary = false;
+    CompilerBinaryIdentity binary;
 };
 
 [[nodiscard]] std::optional<std::filesystem::path> ResolveShaderInclude(
@@ -259,13 +275,66 @@ struct ResolvedShaderDependency {
     return true;
 }
 
+[[nodiscard]] bool IdentifyCompilerBinary(const std::filesystem::path& path, CompilerBinaryIdentity& identity) {
+    const std::filesystem::path openPath = kb::platform::ExtendedLengthPath(path);
+    std::error_code error;
+    const std::uintmax_t size = std::filesystem::file_size(openPath, error);
+    if (error) return false;
+    const std::filesystem::file_time_type writeTime = std::filesystem::last_write_time(openPath, error);
+    if (error) return false;
+
+    static std::mutex memoMutex;
+    static std::unordered_map<std::string, CompilerBinaryIdentity> memo;
+    const std::string key = path.generic_string();
+    {
+        const std::lock_guard<std::mutex> lock{ memoMutex };
+        const auto found = memo.find(key);
+        if (found != memo.end() && found->second.size == size && found->second.writeTime == writeTime) {
+            identity = found->second;
+            return true;
+        }
+    }
+
+    std::ifstream input{ openPath, std::ios::binary };
+    if (!input) return false;
+    // The same value as hashing the whole file as one string: the size, then every byte.
+    std::uint64_t hash = 1469598103934665603ULL;
+    HashU64(hash, static_cast<std::uint64_t>(size));
+    std::array<char, 64U * 1024U> buffer{};
+    std::uintmax_t counted = 0U;
+    while (input) {
+        input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        const std::streamsize read = input.gcount();
+        if (read <= 0) break;
+        for (std::streamsize index = 0; index < read; ++index) {
+            HashByte(hash, static_cast<std::uint8_t>(static_cast<unsigned char>(buffer[static_cast<std::size_t>(index)])));
+        }
+        counted += static_cast<std::uintmax_t>(read);
+    }
+    if (input.bad() || counted != size) return false;
+    identity = CompilerBinaryIdentity{ .path = path, .size = size, .writeTime = writeTime, .contentHash = hash };
+    const std::lock_guard<std::mutex> lock{ memoMutex };
+    memo[key] = identity;
+    return true;
+}
+
+[[nodiscard]] bool CompilerBinaryUnchanged(const CompilerBinaryIdentity& identity) {
+    const std::filesystem::path openPath = kb::platform::ExtendedLengthPath(identity.path);
+    std::error_code error;
+    return std::filesystem::file_size(openPath, error) == identity.size && !error &&
+        std::filesystem::last_write_time(openPath, error) == identity.writeTime && !error;
+}
+
 [[nodiscard]] bool ShaderCompilerInputsUnchanged(
     std::span<const ResolvedShaderDependency> dependencies,
-    const std::filesystem::path& shadercPath,
-    std::string_view shadercBytes) {
+    const CompilerBinaryIdentity& shaderc) {
+    if (!CompilerBinaryUnchanged(shaderc)) return false;
     std::string current;
-    if (!ReadTextFileStrict(shadercPath, current) || current != shadercBytes) return false;
     for (const ResolvedShaderDependency& dependency : dependencies) {
+        if (dependency.compilerBinary) {
+            if (!CompilerBinaryUnchanged(dependency.binary)) return false;
+            continue;
+        }
         if (!ReadTextFileStrict(dependency.path, current) || current != dependency.content) {
             return false;
         }
@@ -388,6 +457,76 @@ private:
 #endif
 };
 
+// Records that a cache entry is being used now, so the cache can tell recent entries from forgotten ones.
+// The lock file is the one file every cook of an entry opens, hit or miss, which makes it the stamp.
+void StampShaderCacheEntryUsed(const std::filesystem::path& lockPath) {
+    std::error_code error;
+    std::filesystem::last_write_time(lockPath, std::filesystem::file_time_type::clock::now(), error);
+}
+
+// The graph node whose code a shader compiler message is about. The compiler numbers the lines of the code
+// it was given after preprocessing, which no longer matches the wrapper, but it repeats the offending line
+// in its message (">>> <line>: <text>"). The generated graph code carries a marker line before the code of
+// each node, so the node is the one whose code holds that text. 0 when the message repeats no line, or the
+// text is not in a node's code, or it is in the code of more than one node.
+[[nodiscard]] std::uint32_t NodeOfCompilerMessage(std::string_view source, std::string_view log) {
+    const auto trimmed = [](std::string_view text) {
+        const std::size_t first = text.find_first_not_of(" \t\r");
+        if (first == std::string_view::npos) {
+            return std::string_view{};
+        }
+        return text.substr(first, text.find_last_not_of(" \t\r") - first + 1U);
+    };
+    const auto forEachLine = [](std::string_view text, const auto& visit) {
+        for (std::size_t begin = 0U; begin < text.size();) {
+            const std::size_t end = std::min(text.find('\n', begin), text.size());
+            if (visit(text.substr(begin, end - begin))) {
+                return;
+            }
+            begin = end + 1U;
+        }
+    };
+
+    std::string_view wanted;
+    forEachLine(log, [&](std::string_view line) {
+        if (!line.starts_with(">>> ") || line.find(':') == std::string_view::npos) {
+            return false;
+        }
+        const std::string_view text = trimmed(line.substr(line.find(':') + 1U));
+        if (text.empty() || text == "^") {
+            return false;
+        }
+        wanted = text;
+        return true;
+    });
+    if (wanted.empty()) {
+        return 0U;
+    }
+
+    std::uint32_t node = 0U;
+    std::uint32_t found = 0U;
+    bool seen = false;
+    bool ambiguous = false;
+    forEachLine(source, [&](std::string_view line) {
+        const std::string_view text = trimmed(line);
+        if (text.starts_with("// ") && text.substr(3U).starts_with(kRenderMaterialGraphNodeMarker)) {
+            node = 0U;
+            for (const char ch : text.substr(3U + kRenderMaterialGraphNodeMarker.size())) {
+                if (ch < '0' || ch > '9') {
+                    break;
+                }
+                node = node * 10U + static_cast<std::uint32_t>(ch - '0');
+            }
+        } else if (text == wanted) {
+            ambiguous = ambiguous || (seen && node != found);
+            found = seen ? found : node;
+            seen = true;
+        }
+        return false;
+    });
+    return seen && !ambiguous ? found : 0U;
+}
+
 [[nodiscard]] bool RelativePathWithin(
     const std::filesystem::path& child,
     const std::filesystem::path& parent,
@@ -440,7 +579,7 @@ private:
     for (const ResolvedShaderDependency& dependency : dependencies) {
         for (std::size_t index = 0U; index < canonicalIncludeDirs.size(); ++index) {
             std::filesystem::path relative;
-            if (RelativePathWithin(dependency.path, canonicalIncludeDirs[index], relative) &&
+            if (!dependency.compilerBinary && RelativePathWithin(dependency.path, canonicalIncludeDirs[index], relative) &&
                 !WriteCapturedShaderInput(
                     std::filesystem::path{ includeDirs[index] } / relative,
                     dependency.content)) {
@@ -560,10 +699,13 @@ private:
 }
 #endif
 
+// Runs the compiler to its end and returns its exit code; with `terminate` it ends the process as soon as the
+// flag reads true.
 [[nodiscard]] int RunShaderCompilerHidden(
     const std::filesystem::path& executable,
     const std::vector<std::string>& arguments,
-    const std::filesystem::path& diagnosticPath) {
+    const std::filesystem::path& diagnosticPath,
+    const std::atomic<bool>* terminate = nullptr) {
 #if defined(_WIN32)
     const std::wstring executableWide = executable.wstring();
     if (executableWide.empty()) {
@@ -603,25 +745,48 @@ private:
         FILE_ATTRIBUTE_NORMAL,
         nullptr);
 
-    STARTUPINFOW startup{};
-    startup.cb = sizeof(startup);
-    startup.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
-    startup.wShowWindow = SW_HIDE;
-    startup.hStdInput = nullInput == INVALID_HANDLE_VALUE ? nullptr : nullInput;
-    startup.hStdOutput = diagnostic;
-    startup.hStdError = diagnostic;
+    // Only the two handles the compiler is given may be inherited. Compiles of several passes start at
+    // the same time, and a file another thread has open at that moment (a cache entry it is about to
+    // rename into place) would otherwise stay open in this child and make that rename fail.
+    std::array<HANDLE, 2U> inheritedHandles{};
+    DWORD inheritedHandleCount = 0U;
+    if (nullInput != INVALID_HANDLE_VALUE) {
+        inheritedHandles[inheritedHandleCount++] = nullInput;
+    }
+    inheritedHandles[inheritedHandleCount++] = diagnostic;
+    SIZE_T attributeBytes = 0U;
+    InitializeProcThreadAttributeList(nullptr, 1U, 0U, &attributeBytes);
+    std::vector<std::uint8_t> attributeStorage(attributeBytes);
+    auto* attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attributeStorage.data());
+    const bool attributesReady = !attributeStorage.empty() &&
+        InitializeProcThreadAttributeList(attributes, 1U, 0U, &attributeBytes) != FALSE;
+    const bool handleListReady = attributesReady &&
+        UpdateProcThreadAttribute(attributes, 0U, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inheritedHandles.data(),
+            inheritedHandleCount * sizeof(HANDLE), nullptr, nullptr) != FALSE;
+
+    STARTUPINFOEXW startup{};
+    startup.StartupInfo.cb = sizeof(startup);
+    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+    startup.StartupInfo.wShowWindow = SW_HIDE;
+    startup.StartupInfo.hStdInput = nullInput == INVALID_HANDLE_VALUE ? nullptr : nullInput;
+    startup.StartupInfo.hStdOutput = diagnostic;
+    startup.StartupInfo.hStdError = diagnostic;
+    startup.lpAttributeList = attributes;
     PROCESS_INFORMATION process{};
-    const BOOL created = CreateProcessW(
+    const BOOL created = !handleListReady ? FALSE : CreateProcessW(
         executableWide.c_str(),
         commandLine.data(),
         nullptr,
         nullptr,
         TRUE,
-        CREATE_NO_WINDOW,
+        CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT,
         nullptr,
         nullptr,
-        &startup,
+        &startup.StartupInfo,
         &process);
+    if (attributesReady) {
+        DeleteProcThreadAttributeList(attributes);
+    }
     CloseHandle(diagnostic);
     if (nullInput != INVALID_HANDLE_VALUE) {
         CloseHandle(nullInput);
@@ -630,7 +795,18 @@ private:
         return -1;
     }
 
-    WaitForSingleObject(process.hProcess, INFINITE);
+    if (terminate == nullptr) {
+        WaitForSingleObject(process.hProcess, INFINITE);
+    } else {
+        constexpr DWORD kTerminateCheckMs = 20U;
+        while (WaitForSingleObject(process.hProcess, kTerminateCheckMs) == WAIT_TIMEOUT) {
+            if (terminate->load(std::memory_order_acquire)) {
+                static_cast<void>(TerminateProcess(process.hProcess, static_cast<UINT>(-1)));
+                WaitForSingleObject(process.hProcess, INFINITE);
+                break;
+            }
+        }
+    }
     DWORD exitCode = static_cast<DWORD>(-1);
     static_cast<void>(GetExitCodeProcess(process.hProcess, &exitCode));
     CloseHandle(process.hThread);
@@ -641,6 +817,7 @@ private:
     static_cast<void>(executable);
     static_cast<void>(arguments);
     static_cast<void>(diagnosticPath);
+    static_cast<void>(terminate);
     return -1;
 #else
     posix_spawn_file_actions_t actions{};
@@ -676,10 +853,27 @@ private:
         return -1;
     }
     int status = 0;
-    if (waitpid(process, &status, 0) < 0 || !WIFEXITED(status)) {
-        return -1;
+    if (terminate == nullptr) {
+        if (waitpid(process, &status, 0) < 0 || !WIFEXITED(status)) {
+            return -1;
+        }
+        return WEXITSTATUS(status);
     }
-    return WEXITSTATUS(status);
+    while (true) {
+        const pid_t finished = waitpid(process, &status, WNOHANG);
+        if (finished < 0) {
+            return -1;
+        }
+        if (finished == process) {
+            return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+        }
+        if (terminate->load(std::memory_order_acquire)) {
+            static_cast<void>(kill(process, SIGKILL));
+            static_cast<void>(waitpid(process, &status, 0));
+            return -1;
+        }
+        usleep(20000);
+    }
 #endif
 }
 
@@ -712,7 +906,7 @@ void AddArtifactDiagnostic(
     });
 }
 
-// Unreal's Pixel Depth Offset: the depth the pass writes moves away from the viewer by
+// Pixel Depth Offset: the depth the pass writes moves away from the viewer by
 // surface.pixelDepthOffset metres (never toward it) - along the view ray of a perspective view, along
 // the view axis of an orthographic one (a directional light's shadow cascade). The shadow pass pushes
 // the caster by the same amount, so the pushed surface the lighting reconstructs does not shadow
@@ -737,7 +931,7 @@ void AppendMaterialGraphPixelDepthOffset(std::string& wrapper) {
     wrapper += "    gl_FragDepth = kbPdoDepth;\n";
 }
 
-// Unreal's Refraction (Index of Refraction mode) on a Translucent surface: the opaque scene behind it
+// Refraction (Index of Refraction mode) on a Translucent surface: the opaque scene behind it
 // is read from the scene-color snapshot at an offset along the view-space normal, scaled by (IOR - 1)
 // and the projection, toward the middle of a convex surface when IOR > 1 like a lens; the lit surface
 // then covers it by its opacity. The fragment writes alpha 1, so the alpha blend keeps its colour.
@@ -765,7 +959,7 @@ void AppendMaterialGraphRefraction(std::string& wrapper, const std::string& norm
     wrapper += "    gl_FragColor = vec4(mix(kbBehind, " + litColor + ", clamp(surface.alpha, 0.0, 1.0)), 1.0);\n";
 }
 
-// Unreal's Thin Translucent: the scene behind passes coloured by Transmittance Color where the
+// Thin Translucent: the scene behind passes coloured by Transmittance Color where the
 // surface does not cover it, the diffuse light is scaled by the opacity and the specular reflection
 // stays whole, as on clear glass. The specular is the lighting of the same surface with no albedo.
 // The fragment writes alpha 1 over the scene copy, so the alpha blend keeps its colour.
@@ -779,7 +973,7 @@ void AppendMaterialGraphThinTranslucent(std::string& wrapper, const RenderMateri
     wrapper += "    gl_FragColor = vec4(kbBehind * surface.transmittanceColor * (1.0 - kbThinCoverage) + kbThinDiffuse * kbThinCoverage + kbThinSpecular + surface.emissive, 1.0);\n";
 }
 
-// Unreal's Single Layer Water: the scene behind is dimmed by the water between the surface and it,
+// Single Layer Water: the scene behind is dimmed by the water between the surface and it,
 // exp(-(absorption + scattering) * thickness) times Color Scale Behind Water; the water scatters the
 // sky and the sun (Henyey-Greenstein phase of Phase G) in proportion scattering / extinction; the
 // surface reflects on top. Thickness comes from the opaque scene depth behind, along the view ray.
@@ -796,7 +990,7 @@ void AppendMaterialGraphSingleLayerWater(std::string& wrapper, const RenderMater
     wrapper += "    vec4 kbWaterBehindView = mul(u_invProj, vec4(0.0, 0.0, kbWaterDeviceDepth, 1.0));\n";
     wrapper += "    vec4 kbWaterSurfaceView = mul(u_view, vec4(v_worldPos, 1.0));\n";
     if (shader.reflection.hasRefraction) {
-        // Like Unreal: a refracted sample that lands on something in front of the water falls back to
+        // A refracted sample that lands on something in front of the water falls back to
         // the scene straight behind.
         wrapper += "    if ((kbWaterBehindView.z / kbWaterBehindView.w) / kbWaterSurfaceView.z < 1.0) {\n";
         wrapper += "        kbBehindUv = ctx.screenPosition;\n";
@@ -831,7 +1025,7 @@ std::string_view GraphShadingModelColorField(const RenderMaterialGraphShaderSour
     return shader.reflection.shadingModel == RenderMaterialShadingModel::Cloth ? "surface.fuzzColor" : "surface.subsurfaceColor";
 }
 
-// The shading basis of a pixel, like Unreal's: the interpolated vertex normal renormalized per pixel. World
+// The shading basis of a pixel: the interpolated vertex normal renormalized per pixel. World
 // Position Offset and Displacement move the geometry but keep the vertex normals (a material that bends the
 // surface supplies its own normal); a normal rebuilt from screen derivatives of the position would be the flat
 // normal of each triangle and facet every curved surface.
@@ -1089,7 +1283,7 @@ namespace {
     return MaterialGraphUsesExtraUvs(shader) || MaterialGraphIsDecal(shader) ? ", v_uv23, v_uv45, v_uv67" : "";
 }
 
-// Unreal's Deferred Decal: the opaque surface under this pixel (the scene depth) in the space of the decal's
+// Deferred Decal: the opaque surface under this pixel (the scene depth) in the space of the decal's
 // box (v_uv23/45/67 hold the rows of its inverse transform). Only what lies inside the unit box is decorated;
 // the decal projects along the box's Y axis, its X and Z span the texture.
 void AppendMaterialGraphDecalProjection(std::string& wrapper) {
@@ -1178,7 +1372,7 @@ void AppendMaterialGraphFragmentContext(std::string& wrapper, bool shadowPass, b
         shader.reflection.blendMode == RenderMaterialGraphBlendMode::Masked;
 }
 
-// Unreal's velocity pass with the material's own shaders: the surface the base pass kept - clipped by a
+// Velocity pass with the material's own shaders: the surface the base pass kept - clipped by a
 // Masked material, at the depth its Pixel Depth Offset wrote - writes the motion between the positions its
 // vertex shader produces for this frame and for the previous one (BuildGraphVertexWrapperSource).
 std::string BuildGraphMotionVectorFragmentWrapperSource(const RenderMaterialGraphShaderSource& shader) {
@@ -1258,9 +1452,9 @@ bool RenderMaterialGraphRequiresGeneratedVertexShader(const RenderMaterialGraphR
 
 namespace {
 
-// Unreal's post-process material: the graph evaluated for every pixel of the view with Scene Color / Scene Depth
+// Post-process material: the graph evaluated for every pixel of the view with Scene Color / Scene Depth
 // reading the chain's input (s_kbSceneColor at stage 4, s_kbSceneDepth at 5); its Emissive Color replaces the
-// colour. Unreal's User Interface material: the graph evaluated over a widget's rectangle (Texture Coordinate
+// colour. User Interface material: the graph evaluated over a widget's rectangle (Texture Coordinate
 // spans it); its Final Color (Emissive) and Opacity, times the widget's colour, are blended over the UI.
 std::string BuildGraphScreenFragmentWrapperSource(const RenderMaterialGraphShaderSource& shader, bool userInterface) {
     std::string wrapper;
@@ -1428,12 +1622,12 @@ std::string BuildGraphFragmentWrapperSource(
             wrapper += "    gl_FragData[2] = vec4(clamp(surface.metallic, 0.0, 1.0), clamp(surface.roughness, 0.04, 1.0), clamp(surface.occlusion, 0.0, 1.0), KbEncodeGBufferShadingModel(" + std::to_string(shadingModelId) + ".0));\n";
             wrapper += "    gl_FragData[3] = vec4(surface.emissive, clamp(surface.specular, 0.0, 1.0));\n";
             if (!compactGBufferPass && shader.reflection.writesShadingModelColor && shader.reflection.shadingModel == RenderMaterialShadingModel::Eye) {
-                // Unreal's Eye: the iris (octahedral world normal, mask, distance) in the fifth target.
+                // Eye: the iris (octahedral world normal, mask, distance) in the fifth target.
                 wrapper += "    vec3 kbIrisNormal = normalize(basisTangent * surface.irisNormal.x + basisBitangent * surface.irisNormal.y + basisNormal * surface.irisNormal.z);\n";
                 wrapper += "    if (u_materialFlags.z > 0.5 && !gl_FrontFacing) kbIrisNormal = -kbIrisNormal;\n";
                 wrapper += "    gl_FragData[4] = vec4(KbOctEncode(kbIrisNormal) * 0.5 + 0.5, clamp(surface.irisMask, 0.0, 1.0), clamp(surface.irisDistance, 0.0, 1.0));\n";
             } else if (!compactGBufferPass && shader.reflection.writesShadingModelColor) {
-                // Unreal's custom data: the model colour (alpha 1 = given) in the fifth target, which the
+                // Custom data: the model colour (alpha 1 = given) in the fifth target, which the
                 // G-buffer carries in frames that draw such a material.
                 wrapper += "    gl_FragData[4] = vec4(clamp(" + std::string{ GraphShadingModelColorField(shader) } +
                     ", vec3_splat(0.0), vec3_splat(1.0)), 1.0);\n";
@@ -1466,7 +1660,7 @@ std::string BuildGraphFragmentWrapperSource(
             wrapper += "    float specular = clamp(surface.specular, 0.0, 1.0);\n";
             const auto shadingModelId = static_cast<std::uint32_t>(GBufferShadingModelId(shader.reflection.shadingModel));
             if (shader.reflection.shadingModel == RenderMaterialShadingModel::Eye) {
-                // Unreal's Eye in the forward pass: the iris normal in world space, as the G-buffer stores it.
+                // Eye in the forward pass: the iris normal in world space, as the G-buffer stores it.
                 wrapper += "    vec3 kbIrisNormal = normalize(basisTangent * surface.irisNormal.x + basisBitangent * surface.irisNormal.y + basisNormal * surface.irisNormal.z);\n";
                 wrapper += "    if (u_materialFlags.z > 0.5 && !gl_FrontFacing) kbIrisNormal = -kbIrisNormal;\n";
                 wrapper += "    vec3 lighting = KbEvaluateForwardLightingFull(worldNormal, v_worldPos, surface.baseColor.rgb, metallic, roughness, specular, occlusion, " +
@@ -1577,7 +1771,7 @@ std::string BuildGraphVertexWrapperSource(const RenderMaterialGraphShaderSource&
     // MAT-67/#54: the instanced mesh vertex shader with graph vertex-domain outputs applied before
     // projection/rasterization. WPO and displacement move real geometry; CustomizedUV0 rewrites the
     // interpolated UV that fragment TextureSample nodes read. Mirrors vs_mesh_instanced.sc.
-    // The motion vector pass evaluates the graph twice, like Unreal's velocity pass runs the material's
+    // The motion vector pass evaluates the graph twice, as the velocity pass runs the material's
     // vertex factory with the previous frame's parameters: at this frame's material time with the current
     // model, and at the previous frame's time with the previous model (motion_vectors.sh).
     const bool motionVectors = pass == kRenderMaterialGraphMotionVectorsPass;
@@ -1790,14 +1984,13 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
     if (shadercCanonicalError) {
         shadercPath = std::filesystem::path{ request.shadercPath }.lexically_normal();
     }
-    std::string shadercBytes;
-    if (!ReadTextFileStrict(shadercPath, shadercBytes)) {
+    CompilerBinaryIdentity shadercIdentity;
+    if (!IdentifyCompilerBinary(shadercPath, shadercIdentity)) {
         AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
             "Material graph shader compiler identity could not be read: " + shadercPath.generic_string() + ".");
         return result;
     }
-    std::uint64_t shadercHash = 1469598103934665603ULL;
-    HashString64(shadercHash, shadercBytes);
+    const std::uint64_t shadercHash = shadercIdentity.contentHash;
     HashString64(dependencyHash, shadercPath.generic_string());
     HashU64(dependencyHash, shadercHash);
     artifact.dependencies.push_back(RenderMaterialGraphArtifactDependency{
@@ -1814,8 +2007,8 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
         std::error_code canonicalError;
         const std::filesystem::path canonicalRuntime =
             std::filesystem::weakly_canonical(runtimeCandidate, canonicalError);
-        std::string runtimeBytes;
-        if (canonicalError || !ReadTextFileStrict(canonicalRuntime, runtimeBytes)) {
+        CompilerBinaryIdentity runtimeIdentity;
+        if (canonicalError || !IdentifyCompilerBinary(canonicalRuntime, runtimeIdentity)) {
             AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
                 "Material graph shader compiler runtime identity could not be read: " +
                     runtimeCandidate.generic_string() + ".");
@@ -1824,14 +2017,19 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
         dependencies.push_back(ResolvedShaderDependency{
             .path = canonicalRuntime,
             .name = "shaderc-runtime:" + canonicalRuntime.filename().generic_string(),
-            .content = std::move(runtimeBytes),
+            .compilerBinary = true,
+            .binary = std::move(runtimeIdentity),
         });
     }
 
     HashU64(dependencyHash, dependencies.size());
     for (const ResolvedShaderDependency& dependency : dependencies) {
         std::uint64_t contentHash = 1469598103934665603ULL;
-        HashString64(contentHash, dependency.content);
+        if (dependency.compilerBinary) {
+            contentHash = dependency.binary.contentHash;
+        } else {
+            HashString64(contentHash, dependency.content);
+        }
         HashString64(dependencyHash, dependency.name);
         HashString64(dependencyHash, dependency.path.generic_string());
         HashU64(dependencyHash, contentHash);
@@ -1926,9 +2124,10 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
             continue;
         }
 
+        StampShaderCacheEntryUsed(binaryPath.string() + ".lock");
         ShaderCacheFileIdentity cachedIdentity{};
         if (ShaderCacheEntryIsValid(binaryPath, markerPath, cookKey, &cachedIdentity) &&
-            ShaderCompilerInputsUnchanged(dependencies, shadercPath, shadercBytes)) {
+            ShaderCompilerInputsUnchanged(dependencies, shadercIdentity)) {
             artifact.binaries.push_back(RenderMaterialGraphShaderBinary{
                 .backend = backend,
                 .binaryPath = kb::platform::PortablePath(binaryPath).generic_string(),
@@ -1985,7 +2184,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
             arguments.emplace_back("--debug");
         }
 
-        const int exitCode = RunShaderCompilerHidden(shadercPath, arguments, errorPath);
+        const int exitCode = RunShaderCompilerHidden(shadercPath, arguments, errorPath, request.terminate);
 
         const bool produced = IsNonEmptyRegularFile(stagingBinary);
         if (exitCode != 0 || !produced) {
@@ -2001,11 +2200,12 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
                 "' (pass '" + request.pass + "'): " + log,
                 request.pass,
                 std::string{ RenderMaterialGraphShaderBackendName(backend) });
+            result.diagnostics.back().nodeId = NodeOfCompilerMessage(artifact.wrapperSource, log);
             continue;
         }
         std::filesystem::remove(errorPath, error);
         error.clear();
-        if (!ShaderCompilerInputsUnchanged(dependencies, shadercPath, shadercBytes)) {
+        if (!ShaderCompilerInputsUnchanged(dependencies, shadercIdentity)) {
             std::filesystem::remove(stagingBinary, error);
             AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
                 "Material graph shader compiler inputs changed while cooking; no cache artifact was published.",
@@ -2097,7 +2297,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
             ShaderCacheFileIdentity cachedVsIdentity{};
             if (ShaderCacheEntryIsValid(
                     vsBinaryPath, vsMarkerPath, vsCookKey, &cachedVsIdentity) &&
-                ShaderCompilerInputsUnchanged(dependencies, shadercPath, shadercBytes)) {
+                ShaderCompilerInputsUnchanged(dependencies, shadercIdentity)) {
                 artifact.vertexBinaries.push_back(RenderMaterialGraphShaderBinary{
                     .backend = backend,
                     .binaryPath = kb::platform::PortablePath(vsBinaryPath).generic_string(),
@@ -2154,7 +2354,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
                 arguments.emplace_back("--debug");
             }
 
-            const int exitCode = RunShaderCompilerHidden(shadercPath, arguments, vsErrorPath);
+            const int exitCode = RunShaderCompilerHidden(shadercPath, arguments, vsErrorPath, request.terminate);
 
             const bool produced = IsNonEmptyRegularFile(stagingVsBinary);
             if (exitCode != 0 || !produced) {
@@ -2174,7 +2374,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
             }
             std::filesystem::remove(vsErrorPath, error);
             error.clear();
-            if (!ShaderCompilerInputsUnchanged(dependencies, shadercPath, shadercBytes)) {
+            if (!ShaderCompilerInputsUnchanged(dependencies, shadercIdentity)) {
                 std::filesystem::remove(stagingVsBinary, error);
                 AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
                     "Material graph vertex shader compiler inputs changed while cooking; no cache artifact was published.",
@@ -2248,6 +2448,96 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
     }
 
     result.artifact = std::move(artifact);
+    return result;
+}
+
+RenderMaterialGraphShaderCachePruneResult PruneRenderMaterialGraphShaderCache(
+    std::string_view cacheRoot,
+    const RenderMaterialGraphShaderCachePolicy& policy) {
+    RenderMaterialGraphShaderCachePruneResult result{};
+    if (cacheRoot.empty() || policy.maxBytes == 0U) {
+        return result;
+    }
+    // One prune at a time in a process: a request that arrives while another runs has nothing to add.
+    static std::mutex pruneMutex;
+    const std::unique_lock<std::mutex> pruneLock{ pruneMutex, std::try_to_lock };
+    if (!pruneLock.owns_lock()) {
+        return result;
+    }
+
+    struct GraphFolder {
+        std::filesystem::path path;
+        std::uint64_t bytes = 0U;
+        std::filesystem::file_time_type lastUsed{};
+    };
+    const auto measure = [](GraphFolder& folder) {
+        folder.bytes = 0U;
+        folder.lastUsed = std::filesystem::file_time_type::min();
+        std::error_code error;
+        for (std::filesystem::recursive_directory_iterator it{ folder.path, error }, end; it != end && !error; it.increment(error)) {
+            std::error_code entryError;
+            if (!it->is_regular_file(entryError) || entryError) {
+                continue;
+            }
+            folder.bytes += it->file_size(entryError);
+            const std::filesystem::file_time_type written = it->last_write_time(entryError);
+            if (!entryError) {
+                folder.lastUsed = std::max(folder.lastUsed, written);
+            }
+        }
+    };
+
+    // <cacheRoot>/<platform>/graph_<hash>: the only folders this removes.
+    std::vector<GraphFolder> graphs;
+    std::uint64_t total = 0U;
+    std::error_code error;
+    const std::filesystem::path root = kb::platform::ExtendedLengthPath(std::string{ cacheRoot });
+    for (std::filesystem::directory_iterator platformIt{ root, error }, end; platformIt != end && !error; platformIt.increment(error)) {
+        std::error_code platformError;
+        if (!platformIt->is_directory(platformError) || platformError) {
+            continue;
+        }
+        for (std::filesystem::directory_iterator graphIt{ platformIt->path(), platformError }; graphIt != end && !platformError; graphIt.increment(platformError)) {
+            std::error_code graphError;
+            if (!graphIt->is_directory(graphError) || graphError || graphIt->path().filename().string().rfind("graph_", 0U) != 0U) {
+                continue;
+            }
+            GraphFolder folder{ .path = graphIt->path() };
+            measure(folder);
+            total += folder.bytes;
+            graphs.push_back(std::move(folder));
+        }
+    }
+
+    const std::uint64_t target = policy.targetBytes != 0U && policy.targetBytes < policy.maxBytes ? policy.targetBytes : policy.maxBytes;
+    if (total > policy.maxBytes) {
+        std::ranges::sort(graphs, [](const GraphFolder& lhs, const GraphFolder& rhs) { return lhs.lastUsed < rhs.lastUsed; });
+        const std::filesystem::file_time_type now = std::filesystem::file_time_type::clock::now();
+        for (GraphFolder& folder : graphs) {
+            if (total <= target) {
+                break;
+            }
+            if (folder.lastUsed != std::filesystem::file_time_type::min() && now - folder.lastUsed < policy.inUseWindow) {
+                // Sorted by last use: everything after this graph is in use as well.
+                ++result.keptGraphs;
+                continue;
+            }
+            std::error_code removeError;
+            std::filesystem::remove_all(folder.path, removeError);
+            const std::uint64_t before = folder.bytes;
+            if (std::filesystem::exists(folder.path, removeError) && !removeError) {
+                // A file a cook still holds open stays; count what really went.
+                measure(folder);
+                ++result.keptGraphs;
+            } else {
+                folder.bytes = 0U;
+                ++result.removedGraphs;
+            }
+            total -= before - folder.bytes;
+            result.removedBytes += before - folder.bytes;
+        }
+    }
+    result.remainingBytes = total;
     return result;
 }
 

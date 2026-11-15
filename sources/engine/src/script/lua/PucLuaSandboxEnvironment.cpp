@@ -1,10 +1,9 @@
+#include "script/lua/LuaVm.hpp"
 #include "script/lua/PucLuaSandboxEnvironment.hpp"
 
-extern "C" {
-#include <lauxlib.h>
-#include <lua.h>
-#include <lualib.h>
-}
+#if !defined(KB_SCRIPT_VM_LUAJIT)
+#include "script/lua/PucLuaBitLibrary.hpp"
+#endif
 
 namespace kb::script {
 namespace {
@@ -28,6 +27,8 @@ void CopyGlobalValueToEnvironment(lua_State* state, int environmentIndex, const 
     lua_setfield(state, environmentIndex, name);
 }
 
+// What a script can use: the language of the two VMs they share (Lua 5.1 with the `bit` library and `unpack`), and what
+// only the Lua 5.4 build has on top of it (rawlen, utf8), which a script that must run on every platform does not use.
 void Populate(lua_State* state, int environmentIndex) {
     static constexpr const char* kAllowedGlobals[] = {
         "assert",
@@ -39,18 +40,22 @@ void Populate(lua_State* state, int environmentIndex) {
         "print",
         "rawequal",
         "rawget",
-        "rawlen",
         "rawset",
         "select",
         "tonumber",
         "tostring",
         "type",
+        "unpack",
         "xpcall",
         "coroutine",
         "table",
         "string",
         "math",
+        "bit",
+#if !defined(KB_SCRIPT_VM_LUAJIT)
+        "rawlen",
         "utf8",
+#endif
     };
     for (const char* name : kAllowedGlobals) {
         CopyGlobalValueToEnvironment(state, environmentIndex, name);
@@ -59,23 +64,47 @@ void Populate(lua_State* state, int environmentIndex) {
     lua_setfield(state, environmentIndex, "_G");
 }
 
+void RemoveGlobal(lua_State* state, const char* name) {
+    lua_pushnil(state);
+    lua_setglobal(state, name);
+}
+
 } // namespace
+
+#if defined(KB_SCRIPT_VM_LUAJIT)
+
+// The libraries a script may use are opened once in the state and copied into each script's own table. Nothing that loads
+// code, reaches the host or changes another script's environment is left in the base library. The jit library is opened
+// for the runtime, not for scripts: opening it sets the compiler up (its optimisations and the CPU features it uses);
+// without it LuaJIT compiles, but without optimising. Its global is removed again, and the ffi library is never opened here.
+void PucLuaSandboxEnvironment::OpenSafeLibraries(lua_State* state) {
+    static constexpr luaL_Reg kLibraries[] = {
+        { "", luaopen_base },
+        { LUA_TABLIBNAME, luaopen_table },
+        { LUA_STRLIBNAME, luaopen_string },
+        { LUA_BITLIBNAME, luaopen_bit },
+        { LUA_MATHLIBNAME, luaopen_math },
+        { LUA_JITLIBNAME, luaopen_jit },
+        { nullptr, nullptr },
+    };
+    for (const luaL_Reg* library = kLibraries; library->func != nullptr; ++library) {
+        lua_pushcfunction(state, library->func);
+        lua_pushstring(state, library->name);
+        lua_call(state, 1, 0);
+    }
+    for (const char* name : { "dofile", "loadfile", "load", "loadstring", "getfenv", "setfenv", "collectgarbage", "newproxy", "gcinfo", LUA_JITLIBNAME }) {
+        RemoveGlobal(state, name);
+    }
+}
+
+#else
 
 void PucLuaSandboxEnvironment::OpenSafeLibraries(lua_State* state) {
     luaL_requiref(state, "_G", luaopen_base, 1);
     lua_pop(state, 1);
-    lua_pushnil(state);
-    lua_setglobal(state, "dofile");
-    lua_pushnil(state);
-    lua_setglobal(state, "loadfile");
-    lua_pushnil(state);
-    lua_setglobal(state, "load");
-    lua_pushnil(state);
-    lua_setglobal(state, "collectgarbage");
-    lua_pushnil(state);
-    lua_setglobal(state, "require");
-    lua_pushnil(state);
-    lua_setglobal(state, "package");
+    for (const char* name : { "dofile", "loadfile", "load", "collectgarbage", "require", "package" }) {
+        RemoveGlobal(state, name);
+    }
     luaL_requiref(state, "coroutine", luaopen_coroutine, 1);
     lua_pop(state, 1);
     luaL_requiref(state, "table", luaopen_table, 1);
@@ -86,7 +115,16 @@ void PucLuaSandboxEnvironment::OpenSafeLibraries(lua_State* state) {
     lua_pop(state, 1);
     luaL_requiref(state, "utf8", luaopen_utf8, 1);
     lua_pop(state, 1);
+    // The two names the other VM has: the bit library, and `unpack` (Lua 5.4 moved it into the table library).
+    luaL_requiref(state, "bit", &PucLuaBitLibrary::Open, 1);
+    lua_pop(state, 1);
+    lua_getglobal(state, "table");
+    lua_getfield(state, -1, "unpack");
+    lua_setglobal(state, "unpack");
+    lua_pop(state, 1);
 }
+
+#endif
 
 void PucLuaSandboxEnvironment::Create(lua_State* state) {
     lua_newtable(state);

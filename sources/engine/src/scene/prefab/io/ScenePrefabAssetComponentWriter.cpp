@@ -57,6 +57,7 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "meshRenderer.lodBias=" << components.meshRenderer->lodBias << '\n';
         output << "meshRenderer.lodEnabled=" << (components.meshRenderer->lodEnabled ? 1 : 0) << '\n';
         output << "meshRenderer.mobility=" << static_cast<int>(components.meshRenderer->mobility) << '\n';
+        output << "meshRenderer.affectsNavigation=" << (components.meshRenderer->affectsNavigation ? 1 : 0) << '\n';
     }
 
     output << "light=" << (components.light.has_value() ? 1 : 0) << '\n';
@@ -118,6 +119,7 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "collider.restitution=" << components.collider->restitution << '\n';
         output << "collider.layer=" << components.collider->layer << '\n';
         output << "collider.meshAssetId=" << components.collider->meshAssetId << '\n';
+        output << "collider.affectsNavigation=" << (components.collider->affectsNavigation ? 1 : 0) << '\n';
     }
 
     output << "characterController=" << (components.characterController.has_value() ? 1 : 0) << '\n';
@@ -146,6 +148,22 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "joint.spring.spring=" << components.joint->spring.spring << '\n';
         output << "joint.spring.damper=" << components.joint->spring.damper << '\n';
         output << "joint.breakForce=" << components.joint->breakForce << '\n';
+        // Only the kinds that read the freedom settings store them, so a joint of an older kind is saved as before.
+        if (JointUsesFreedom(components.joint->type)) {
+            const JointFreedom& freedom = components.joint->freedom;
+            WriteVec3(output, "joint.freedom.secondaryAxis", freedom.secondaryAxis);
+            output << "joint.freedom.swing1Limit=" << freedom.swing1Limit << '\n';
+            output << "joint.freedom.swing2Limit=" << freedom.swing2Limit << '\n';
+            for (std::size_t index = 0; index < freedom.axes.size(); ++index) {
+                const JointAxis& axis = freedom.axes[index];
+                const std::string prefix = "joint.freedom.axis" + std::to_string(index);
+                output << prefix << ".mode=" << static_cast<int>(axis.mode) << '\n';
+                output << prefix << ".minLimit=" << axis.minLimit << '\n';
+                output << prefix << ".maxLimit=" << axis.maxLimit << '\n';
+                output << prefix << ".motor.targetVelocity=" << axis.motor.targetVelocity << '\n';
+                output << prefix << ".motor.force=" << axis.motor.force << '\n';
+            }
+        }
     }
 
     output << "tags=" << (components.tags.has_value() ? 1 : 0) << '\n';

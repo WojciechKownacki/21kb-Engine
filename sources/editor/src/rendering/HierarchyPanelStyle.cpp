@@ -18,7 +18,7 @@ COLORREF HierarchyPanelStyle::PanelBackground() noexcept {
 }
 
 COLORREF HierarchyPanelStyle::HeaderBackground() noexcept {
-    return Color(kTheme.strip);
+    return Color(kTheme.panel);
 }
 
 COLORREF HierarchyPanelStyle::HeaderBorder() noexcept {
@@ -42,7 +42,7 @@ COLORREF HierarchyPanelStyle::SearchPlaceholderText() noexcept {
 }
 
 COLORREF HierarchyPanelStyle::RowSelected() noexcept {
-    return Color(kTheme.tabActive);
+    return Color(kTheme.accent);
 }
 
 COLORREF HierarchyPanelStyle::RowHover() noexcept {
@@ -54,7 +54,7 @@ COLORREF HierarchyPanelStyle::RowText() noexcept {
 }
 
 COLORREF HierarchyPanelStyle::RowTextSelected() noexcept {
-    return Color(kTheme.textPrimary);
+    return RGB(255, 255, 255);
 }
 
 COLORREF HierarchyPanelStyle::RowTextHidden() noexcept {

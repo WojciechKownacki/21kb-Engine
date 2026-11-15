@@ -56,7 +56,7 @@ scenario-local aliases.
 | `map2d_dock` | Map `entity`. Creates a hidden native host, docks the production map canvas at a known size, then verifies hiding it with its panel. |
 | `assert_map2d_camera` | Map `entity`; optional `orientation`: `flat` or `wall`. Verifies a primary orthographic map camera and its direction. |
 | `assert_map2d_collision` | Map `entity`, expected `boxes` count. Checks the generated solid colliders, including shared-map updates and Undo/Redo. |
-| `select_project_settings_category` | `category`: `inputs`, `graphics`, or `physics`; selects the visible Project Settings page before a panel capture |
+| `select_project_settings_category` | `category`: `inputs`, `graphics`, `physics`, `display`, `audio`, `scenes`, or `tags`; selects the visible Project Settings page before a panel capture |
 | `set_joint_connection` | `entity` (a Joint owner) and `connected_entity`; assigns the Joint's referenced entity and marks it modified for scene persistence |
 | `assert_joint_connection` | `entity` and `connected_entity`; verifies the Joint still targets that entity, including after scene reload |
 | `set_visibility_mode` | `entity`, authoring `mode`: `inherit`, `visible`, or `hidden`; uses the production Inspector command and its undo stack |
@@ -102,8 +102,8 @@ scenario-local aliases.
 | `assert_user_storage` | Verifies sandboxed atomic read/write/delete/list, quota enforcement and asynchronous write without arbitrary filesystem paths. |
 | `assert_user_storage_failures` | Verifies sandbox-escape and quota rejection, preservation after a staged atomic-write failure, and unavailable platform capabilities. |
 | `assert_platform_locale` | Verifies the game-facing locale, bounded UTC offset and overflow-safe local-time conversion without system-clock access. |
-| `assert_runtime_settings` | Verifies transactional audio, video and input settings with device-capability validation and revert semantics. |
 | `assert_optional_platform_adapter` | Verifies achievements, cloud save, DLC and user services remain capability-gated and unavailable services fail closed. |
+| `assert_docking_interactions` | none; drives the dock workspace of a hidden editor window with pointer and key messages: tab click, reorder, tear-off into a floating window, grouping by a tab strip, ungrouping at a panel edge, Escape, double-click maximize, the tab menu, middle-click close, the floating close button, the Layout menu panel rows, Settings in its own window, a crowded tab strip and a splitter. Writes `dock-*.bmp` captures of each stage. |
 | `discover_assets` | none |
 | `unload_asset` | asset alias or virtual path; force-loads then unloads the live `AssetManager` entry so a running system must reacquire it |
 | `import_asset` | `source` project-relative path, `destination` virtual folder; optional `skeletal`, `import_textures`, `import_materials`, and `combine_meshes` booleans |
@@ -206,8 +206,14 @@ scenario-local aliases.
 | `capture_screenshot_matrix` | `panel`, `checkpoint`; captures `material_editor`, `skeletal_mesh_editor`, `animation_clip_editor`, or `animator_editor` through production docked and floating renderers. Every invocation writes six checked BMPs: 1920x1080, 1366x768, and a 1280x720 logical client at 150% DPI (a 1920x1080 bitmap), each in both layouts. |
 | `verify_viewport_host_lifecycle` | none; renders the real native viewport child plus, when an Animator Controller asset is open, the Animator Editor preview surface (the shared host-surface mechanism keyed by `panel.id` used by all three animation editors). Verifies over every host surface registered for the window that minimize, application deactivation, DPI transition, resize/move, and removing the panel leave no viewport overlay visible over its host, and that an owned overlay popup (scene viewport toolbar dropdown) shown through the production paint path is hidden by the `WM_ACTIVATEAPP` deactivation path and restored by the repaint after reactivation. |
 | `capture_runtime` | `checkpoint`; optional `require_non_uniform`; requires Play Mode and writes a PNG from the production GPU readback path |
-| `assert_capture_color` | `checkpoint`, `color` `[r, g, b]`; optional `tolerance` per channel (default 16) and `min_pixels` (default 100); verifies that expected artwork is actually visible |
+| `assert_capture_color` | `checkpoint`, `color` `[r, g, b]`; optional `tolerance` per channel (default 16), `min_pixels` (default 100) and `max_pixels`; verifies that expected artwork is actually visible |
+| `assert_capture_size` | `checkpoint`, `width`, `height`; the capture PNG has exactly this size |
 | `capture_scene_viewport` | `checkpoint`; renders the Scene panel's viewport with its own camera and present settings (editor overlays included) on the GPU and reads it back to a PNG |
+| `set_play_target` | `target` (`game_view` or `scene_view`); where Play runs the game, kept in the editor settings |
+| `set_game_view_resolution` | `resolution` (`FreeAspect`, `Project`, `Landscape16x9`, `Portrait9x16`, `PhoneLandscape`, `Tablet4x3`, `Tablet16x10`); the Game View's resolution, kept in the editor settings |
+| `capture_game_view` | `checkpoint`; optional `area_width`/`area_height` (the picture's area below the bar, at most 640 x 360); renders the Game View's picture while Play runs, with the game camera at the chosen resolution and no editor overlay, and reads it back to a PNG of the render size |
+| `assert_game_view_layout` | `area_width`, `area_height`; optional `render_width`, `render_height`, `left`, `top`, `right`, `bottom` (the picture inside the area) and `scale` (the text beside the resolution, such as `0.56x`); checks the letterboxed picture the Game View shows in an area |
+| `assert_game_view_settings` | optional `area_width`/`area_height`; checks the settings the Game View hands the renderer: game camera, no editor overlay of any kind, its own viewport session, the project's render scale |
 | `assert_capture_color_difference` | `with`, `without` capture checkpoints, `color` `[r, g, b]` (0..255); optional `tolerance` per channel (default 48) and `min_pixels` (default 100); counts pixels that differ and show the color in `with` |
 | `assert_capture_difference` | `before`, `after` capture checkpoints; requires equal dimensions and at least 100 changed pixels |
 | `set_animator_debug_target` | `target`: `preview` or a live entity alias using the open Animator Controller |

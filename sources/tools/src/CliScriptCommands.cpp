@@ -77,8 +77,16 @@ namespace {
     const kb::script::NativeScriptBuildResult built = kb::script::NativeScriptBuildPipeline::Build(
         kb::script::ScriptProjectFiles::BuildOf(*descriptor, metadata.physicalPath, projectRoot));
     if (!built.Succeeded()) {
-        return built.errors.empty() ? "the build command failed with exit code " + std::to_string(built.exitCode)
-                                    : built.errors.front();
+        if (built.errors.empty()) {
+            return "the build command failed with exit code " + std::to_string(built.exitCode);
+        }
+        // What failed, then the compiler's own error lines (file and line), so a caller that reads only
+        // this message (JSON, MCP) gets them too.
+        std::string problem = built.errors.front();
+        for (std::size_t index = 1U; index < built.errors.size(); ++index) {
+            problem += "\n  " + built.errors[index];
+        }
+        return problem;
     }
     std::error_code error;
     if (!module.empty() && !std::filesystem::is_regular_file(module, error)) {

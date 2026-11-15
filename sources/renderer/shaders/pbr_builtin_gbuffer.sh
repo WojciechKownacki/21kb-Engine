@@ -16,7 +16,9 @@ void main()
 {
     vec2 materialUv = v_texcoord0 * u_materialUvTransform.xy + u_materialUvTransform.zw;
     vec4 albedo = texture2D(s_albedo, materialUv) * v_color0;
-    if (u_materialFlags.x > 0.5 && u_materialFlags.x < 1.5 && albedo.a < u_materialParams.w) {
+    // One per-fragment compare: some ES drivers skip a discard whose test is nested in uniform-only branches.
+    float alphaCutoff = u_materialFlags.x > 0.5 && u_materialFlags.x < 1.5 ? u_materialParams.w : 0.0;
+    if (albedo.a < alphaCutoff) {
         discard;
     }
 
@@ -57,6 +59,15 @@ void main()
         custom0 = layers.z;
     }
 #endif
+    if (u_materialFlags.w > 0.5) {
+        // Baked lighting (the emissive texture as diffuse irradiance, in the second UV set when w > 1.5) replaces
+        // the dynamic lighting, as in the forward pass: the lit colour goes to the surface target.
+        emissive = albedo.rgb * texture2D(s_emissive, u_materialFlags.w > 1.5 ? v_shadowFlags.zw : materialUv).rgb;
+        albedo.rgb = vec3_splat(0.0);
+        model = KB_GBUFFER_SHADING_MODEL_BAKED_LIGHTING;
+        custom0 = 0.0;
+        custom1 = 0.0;
+    }
     gl_FragData[0] = vec4(albedo.rgb, custom0);
     gl_FragData[1] = vec4(normal * 0.5 + 0.5, KbEncodeGBufferCustomData1(custom1));
     gl_FragData[2] = vec4(metallic, roughness, occlusion, KbEncodeGBufferShadingModel(model));

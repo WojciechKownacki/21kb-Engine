@@ -248,6 +248,7 @@ void DestroyRemovedObjects(Scene& scene, std::span<const SceneObject> oldObjects
                 .motor = prefabJoint->motor,
                 .spring = prefabJoint->spring,
                 .breakForce = prefabJoint->breakForce,
+                .freedom = prefabJoint->freedom,
             });
         }
 

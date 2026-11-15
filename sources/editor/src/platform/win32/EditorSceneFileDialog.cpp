@@ -31,7 +31,7 @@ constexpr wchar_t kSceneDefaultExtension[] = L"21kbscene";
     });
 }
 
-// "Level.v2" becomes "Level.v2.21kbscene" (like Unity's "Level.v2.unity"): the typed name is kept,
+// "Level.v2" becomes "Level.v2.21kbscene": the typed name is kept,
 // so it never turns into an other file the user did not name.
 [[nodiscard]] std::filesystem::path WithSceneExtension(std::filesystem::path path) {
     if (path.extension() != ".21kbscene") {

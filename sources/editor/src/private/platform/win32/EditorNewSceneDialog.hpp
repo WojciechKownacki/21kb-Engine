@@ -31,7 +31,7 @@ struct EditorNewSceneDialogDescriptor {
     std::function<std::string(const std::string& name, const std::string& folder)> validate;
 };
 
-// File > New Scene, like Unity's New Scene window: a template card (Basic or Empty), the name and
+// File > New Scene: a template card (Basic or Empty), the name and
 // folder of the new scene, "Set as startup scene", a named error under the fields, Cancel / Create.
 // nullopt = cancelled.
 class EditorNewSceneDialog final {

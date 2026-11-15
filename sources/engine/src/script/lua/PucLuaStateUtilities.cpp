@@ -1,18 +1,17 @@
+#include "script/lua/LuaVm.hpp"
 #include "script/lua/PucLuaStateUtilities.hpp"
 #include "script/lua/PucLuaMemoryArena.hpp"
 #include "script/lua/PucLuaRuntimeApi.hpp"
 
-extern "C" {
-#include <lauxlib.h>
-}
-
 #include <cstdlib>
+#include <string_view>
 
 namespace kb::script {
 
 void* PucLuaMemoryBudget::Allocate(void* userData, void* block, std::size_t oldSize, std::size_t newSize) noexcept {
     auto& budget = *static_cast<PucLuaMemoryBudget*>(userData);
     static_cast<void>(oldSize); // The arena owns logical sizes and retained capacities.
+    if (block == nullptr && newSize != 0U) ++budget.allocationCount;
     try {
         if (!budget.arena) budget.arena = std::make_shared<PucLuaMemoryArena>();
         void* resized = budget.arena->Resize(block, newSize, budget.limitBytes,
@@ -73,8 +72,26 @@ std::string PucLuaErrorReporter::ErrorWithTracebackFromTop(lua_State* state) {
     if (message == nullptr) {
         message = "lua error";
     }
-    luaL_traceback(state, state, message, 1);
-    return ErrorFromTop(state);
+    // Level 0: the failed entry is still on the coroutine's stack, no message handler sits above it.
+    luaL_traceback(state, state, message, 0);
+    std::string text = ErrorFromTop(state);
+#if defined(KB_SCRIPT_VM_LUAJIT)
+    // Once an error has unwound the thread LuaJIT no longer knows the line of the innermost frame ("script.lua: in function
+    // <script.lua:2>"); the message ("script.lua:3: attempt to ...") names it, and the frame gets it from there.
+    const std::string_view reported{ message };
+    for (std::size_t colon = reported.find(':'); colon != std::string_view::npos; colon = reported.find(':', colon + 1U)) {
+        std::size_t digitsEnd = colon + 1U;
+        while (digitsEnd < reported.size() && reported[digitsEnd] >= '0' && reported[digitsEnd] <= '9') ++digitsEnd;
+        if (digitsEnd == colon + 1U || reported.substr(digitsEnd, 2U) != ": ") continue;
+        const std::string chunk{ reported.substr(0U, colon) };
+        const std::size_t frame = text.find("\n\t" + chunk + ": in ");
+        if (frame != std::string::npos) {
+            text.replace(frame + 2U + chunk.size(), 1U, std::string{ reported.substr(colon, digitsEnd - colon) } + ":");
+        }
+        break;
+    }
+#endif
+    return text;
 }
 
 std::string PucLuaErrorReporter::ChunkFromDebug(lua_Debug& debug) {

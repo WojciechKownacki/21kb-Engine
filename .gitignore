@@ -101,3 +101,8 @@ AGENTS.md
 # Keep vendored dependencies complete even if they contain files that look like
 # build artifacts for this repository.
 !/third_party/**
+
+# Generated test output and per-project shader caches
+/fog_profile_tests/
+/material_matrix_tests/
+samples/*/.cache/

@@ -12,7 +12,7 @@ namespace kb::scene {
 
 inline constexpr const char* kAnimationClipAssetExtension = ".kbanim";
 inline constexpr const char* kAnimationClipAssetType = "AnimationClip";
-inline constexpr std::uint32_t kAnimationClipAssetSchemaVersion = 2U;
+inline constexpr std::uint32_t kAnimationClipAssetSchemaVersion = 3U;
 inline constexpr const char* kAnimatorControllerAssetExtension = ".kbanimcontroller";
 inline constexpr const char* kAnimatorControllerAssetType = "AnimatorController";
 inline constexpr std::uint32_t kAnimatorControllerAssetSchemaVersion = 4U;

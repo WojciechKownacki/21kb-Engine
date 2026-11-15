@@ -19,6 +19,7 @@
 #include "engine/script/ScriptMeshRendererApi.hpp"
 #include "engine/script/ScriptParticleSystemApi.hpp"
 #include "engine/script/ScriptPostProcessApi.hpp"
+#include "engine/script/ScriptMicrophoneApi.hpp"
 #include "engine/script/ScriptNavigationApi.hpp"
 #include "engine/script/ScriptMap2DApi.hpp"
 #include "engine/script/ScriptModsApi.hpp"
@@ -332,6 +333,12 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .name = "Net",
             .ownerRuntime = "kb::network::INetworkScriptRuntime",
             .Register = &kb::script::ScriptNetApi::Register,
+        },
+        // Microphone.*: input devices, capture start and stop, the recent level, and recordings as audio clips.
+        LibraryModuleDesc{
+            .name = "Microphone",
+            .ownerRuntime = "kb::audio::AudioCapture",
+            .Register = &kb::script::ScriptMicrophoneApi::Register,
         },
         // Mods.*: the mods the running game has loaded and the entry scene each names.
         LibraryModuleDesc{

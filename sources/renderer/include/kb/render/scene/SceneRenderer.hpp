@@ -21,6 +21,10 @@ namespace kb::scene {
 class Scene;
 }
 
+namespace kb::ecs {
+class WorkerPool;
+}
+
 namespace kb::render {
 
 class SceneMeshSubmitter;
@@ -28,8 +32,8 @@ class SceneMeshCoverageProbe;
 class ParticleGpuRenderer;
 class RenderScene;
 
-// The post-process chain targets the scene's Post Process materials draw through (Unreal's post-process blendables,
-// before the tonemap): one view per material, ping-ponging between the two colour targets.
+// The post-process chain targets the scene's Post Process materials draw through,
+// before the tonemap: one view per material, ping-ponging between the two colour targets.
 struct ScenePostProcessMaterialChainDesc {
     std::array<std::uint16_t, 4U> views{};
     std::array<bgfx::FrameBufferHandle, 2U> frameBuffers{ { BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE } };
@@ -74,6 +78,17 @@ public:
         std::span<const std::uint64_t> selectedEntityIds = {},
         const SceneGpuDrivenFeatureSupport* gpuDrivenSupportOverride = nullptr,
         bool terrainLayersOnly = false) const;
+    // Builds the commands of `pass` for each of `cameras` together on the workers (SetWorkerPool), ahead of the
+    // SubmitMeshPass calls that follow with those cameras and the same scene, budget and GPU-driven support: each takes
+    // the commands built for its camera instead of building them after the pass before it. Passes that cannot be built
+    // ahead (fewer than two cameras, mesh particles) are built by their SubmitMeshPass as usual.
+    void PrepareMeshPasses(
+        MeshPassType pass,
+        const RenderScene& renderScene,
+        std::span<const SceneRenderCamera* const> cameras,
+        SceneRenderDrawBudget drawBudget = {},
+        const SceneGpuDrivenFeatureSupport* gpuDrivenSupportOverride = nullptr,
+        bool terrainLayersOnly = false) const;
     // Draws the Post Process materials of `renderScene` (Mesh Renderers whose material is of that domain, in entity
     // order, at most one per view) over `chain.input`; returns the texture holding the result.
     [[nodiscard]] bgfx::TextureHandle SubmitPostProcessMaterials(const RenderScene& renderScene, const ScenePostProcessMaterialChainDesc& chain) const;
@@ -92,6 +107,8 @@ public:
     // MAT-72: advance per-frame material time (seconds accumulate, frame index increments) and
     // expose it as the u_time vec4 (time, deltaTime, frameIndex, 0) bound during mesh submit.
     void AdvanceFrameTime(float deltaSeconds) noexcept;
+    // Starts the time and the frame count the shaders read from zero again.
+    void RestartFrameTime() noexcept;
     [[nodiscard]] std::array<float, 4> FrameTimeConstants() const noexcept;
     // MAT-30: graph DynamicParameter node source, bound as u_dynamicParameter for graph shaders.
     void SetDynamicParameter(std::array<float, 4> parameter) noexcept;
@@ -112,6 +129,9 @@ public:
         std::uint64_t frame, std::uint64_t completedFrame) noexcept;
     [[nodiscard]] RenderSkinningPaletteAllocator& SkinningPalettes() noexcept;
     [[nodiscard]] bool IsInitialized() const noexcept;
+    // The workers that scan the mesh passes of large scenes; null scans them on the submitting thread. Set after
+    // Initialize; the pool must outlive the submissions that use it.
+    void SetWorkerPool(kb::ecs::WorkerPool* workerPool) noexcept;
     void SetMeshCoverageEnabled(bool enabled) noexcept;
     void BeginMeshCoverageFrame(std::uint64_t frame);
     void EndMeshCoverageFrame();

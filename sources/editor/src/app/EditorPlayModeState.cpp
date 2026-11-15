@@ -31,6 +31,7 @@ void EditorPlayModeState::Stop() noexcept {
         return;
     }
     mode_ = EditorPlayMode::Stopped;
+    gameHasInput_ = false;
     ++generation_;
 }
 
@@ -44,6 +45,14 @@ void EditorPlayModeState::Pause() noexcept {
 
 void EditorPlayModeState::Resume() noexcept {
     Play();
+}
+
+bool EditorPlayModeState::GameHasInput() const noexcept {
+    return gameHasInput_;
+}
+
+void EditorPlayModeState::SetGameHasInput(bool hasInput) noexcept {
+    gameHasInput_ = hasInput && mode_ != EditorPlayMode::Stopped;
 }
 
 } // namespace kb::editor

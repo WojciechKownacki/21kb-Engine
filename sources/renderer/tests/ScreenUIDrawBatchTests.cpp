@@ -32,6 +32,7 @@
 #include <cstdio>
 #include <thread>
 #include <chrono>
+#include <string_view>
 
 #if defined(_WIN32)
 #include <Windows.h>
@@ -411,7 +412,7 @@ void FontPreparationShapesBidirectionalClustersAndKeepsSharedAtlasCoordinates() 
         const auto repeated = fonts.Prepare(1U, assets, resources, frame);
         Require(repeated.runs.size() == 1U, "Repeated shaping lost its text run");
         const auto warmCache = fonts.TextCacheStats();
-        Require(warmCache.hits > coldCache.hits && warmCache.misses == coldCache.misses,
+        Require(warmCache.misses == coldCache.misses,
                 "Unchanged text must reuse shaped runs without invoking the shaper again");
         for (std::size_t i = 0; i < first.glyphs.size(); ++i) {
             const auto& before = first.glyphs[i];
@@ -913,7 +914,215 @@ void RichTextParserTablesAreOptInAndAtomic() {
 
 } // namespace
 
+// Boxes of one colour that do not touch each other share a batch even with another colour between them; a box that
+// overlaps what was drawn in between stays behind it.
+void BatchesOfOneStateJoinOnlyAcrossClearGround() {
+    const auto box = [](std::uint64_t entity, kb::math::Rect rect, float red, float blue) {
+        auto element = Element(entity, rect);
+        element.border = kb::scene::UIBorder{.backgroundColor = {red, 0.0F, blue, 1.0F}};
+        return element;
+    };
+    ScreenUIDrawBatchBuilder builder;
+    {
+        kb::scene::SceneUIFrame frame{.viewportSize = {640.0F, 360.0F}};
+        frame.elements = {box(10U, {0.0F, 0.0F, 100.0F, 100.0F}, 1.0F, 0.0F), box(11U, {200.0F, 0.0F, 100.0F, 100.0F}, 0.0F, 1.0F),
+                          box(12U, {400.0F, 0.0F, 100.0F, 100.0F}, 1.0F, 0.0F)};
+        const ScreenUIDrawList& draw = builder.Build(frame, {}, {});
+        Require(draw.batches.size() == 2U, "Boxes of one state apart from each other must share a batch");
+        Require(draw.batches[0].style.fillColor[0] == 1.0F && draw.batches[0].indexCount == 12U &&
+                    draw.batches[1].style.fillColor[2] == 1.0F && draw.batches[1].indexCount == 6U,
+                "The joined batch must hold both boxes and the other colour must keep its place after it");
+        Require(draw.batches[0].firstIndex == 0U && draw.batches[1].firstIndex == 12U,
+                "Batches must own consecutive index ranges once their indices are gathered");
+        // The indices of the first batch name the vertices of the first and the third box.
+        std::array<float, 2U> lefts{};
+        for (std::size_t slot = 0U; slot < 2U; ++slot) lefts[slot] = draw.vertices[draw.indices[slot * 6U]].x;
+        Require(lefts[0] == 0.0F && lefts[1] == 400.0F, "The joined batch must draw the boxes in their original order");
+        Require(draw.indices.size() == 18U, "Gathering indices must not lose or repeat any");
+    }
+    {
+        kb::scene::SceneUIFrame frame{.viewportSize = {640.0F, 360.0F}};
+        frame.elements = {box(20U, {0.0F, 0.0F, 100.0F, 100.0F}, 1.0F, 0.0F), box(21U, {50.0F, 50.0F, 100.0F, 100.0F}, 0.0F, 1.0F),
+                          box(22U, {60.0F, 60.0F, 30.0F, 30.0F}, 1.0F, 0.0F)};
+        const ScreenUIDrawList& draw = builder.Build(frame, {}, {});
+        Require(draw.batches.size() == 3U && draw.batches[2].style.fillColor[0] == 1.0F,
+                "A box over another colour must stay in front of it instead of joining the batch behind");
+    }
+}
+
+// A label that was not touched keeps its run from the frame before, wherever the frame's order took it; a label that
+// was moved, restyled or re-worded is laid out again, and an atlas that grew under a kept run refreshes its coordinates.
+void UnchangedLabelsKeepTheirRunsAcrossFrames() {
+    bgfx::Init init;
+    init.type = bgfx::RendererType::Noop;
+    init.swapChain.width = 640U;
+    init.swapChain.height = 360U;
+    Require(bgfx::init(init), "Run reuse test could not initialize the headless renderer");
+    {
+        auto font = std::make_shared<kb::assets::ImportedAsset>();
+        font->category = kb::assets::AssetImportCategory::Font;
+        font->sourceExtension = ".ttf";
+        const auto path = std::filesystem::path{KB_RENDERER_TEST_SOURCE_ROOT} /
+            "sources/editor/content/EditorShell/Fonts/DejaVuSans.ttf";
+        std::ifstream stream(path, std::ios::binary | std::ios::ate);
+        Require(stream.good() && stream.tellg() > 0, "Run reuse font fixture is unavailable");
+        font->payload.resize(static_cast<std::size_t>(stream.tellg()));
+        stream.seekg(0);
+        stream.read(reinterpret_cast<char*>(font->payload.data()), static_cast<std::streamsize>(font->payload.size()));
+        Require(stream.good(), "Run reuse font fixture could not be read");
+        font->sourceSize = font->payload.size();
+        kb::assets::AssetManager assets;
+        Require(assets.RegisterLoader(std::make_unique<kb::assets::ImportedAssetLoader>()), "Font loader registration failed");
+        Require(assets.RegisterAsset({.id = kb::assets::AssetId{7U}, .type = "ImportedAsset", .name = "Run reuse font",
+                                      .virtualPath = "/Text/Font.kbasset", .runtimeLoadable = true}) &&
+                assets.PublishRuntimeAsset(kb::assets::AssetId{7U}, font), "Font fixture publication failed");
+        RenderResourceRegistry resources;
+        ScreenUIFontAtlasCache fonts;
+        const auto label = [](std::uint64_t entity, float x, std::string_view content) {
+            auto element = Element(entity, {x, 10.0F, 200.0F, 30.0F});
+            element.text = kb::scene::UIText{.fontAssetId = 7U, .fontSize = 20.0F};
+            Require(kb::scene::SetUITextContent(*element.text, content), "Run reuse label content failed");
+            return element;
+        };
+        kb::scene::SceneUIFrame frame{.viewportSize = {640.0F, 360.0F}};
+        frame.elements = {label(70U, 10.0F, "Alpha"), label(71U, 10.0F, "Beta"), label(72U, 10.0F, "Gamma")};
+        const std::vector<ScreenUITextRun> first = [&] {
+            const auto prepared = fonts.Prepare(1U, assets, resources, frame);
+            Require(prepared.failureReason == nullptr && prepared.runs.size() == 3U, "Run reuse labels failed preparation");
+            return std::vector<ScreenUITextRun>(prepared.runs.begin(), prepared.runs.end());
+        }();
+        const auto cold = fonts.TextCacheStats();
+        const auto same = fonts.Prepare(1U, assets, resources, frame);
+        const auto warm = fonts.TextCacheStats();
+        Require(same.runs.size() == 3U && warm.misses == cold.misses && warm.hits == cold.hits,
+                "Unchanged labels must not reach the shaper at all");
+        for (std::size_t run = 0U; run < 3U; ++run) {
+            Require(same.runs[run].entity == first[run].entity && same.runs[run].glyphs.size() == first[run].glyphs.size(),
+                    "Kept runs must stay in the order of their elements");
+            for (std::size_t glyph = 0U; glyph < first[run].glyphs.size(); ++glyph) {
+                Require(same.runs[run].glyphs[glyph].left == first[run].glyphs[glyph].left &&
+                            same.runs[run].glyphs[glyph].u0 == first[run].glyphs[glyph].u0,
+                        "Kept runs must keep their geometry");
+            }
+        }
+        // A label that dropped out of the frame leaves the others where they were.
+        frame.elements = {label(70U, 10.0F, "Alpha"), label(72U, 10.0F, "Gamma")};
+        const auto skipped = fonts.Prepare(1U, assets, resources, frame);
+        Require(skipped.runs.size() == 2U && skipped.runs[1].entity == 72U &&
+                    skipped.runs[1].glyphs.size() == first[2].glyphs.size() && fonts.TextCacheStats().misses == cold.misses,
+                "A label after a skipped one must still find its kept run");
+        // Moving, re-wording and restyling each produce a run that matches the new element.
+        frame.elements = {label(70U, 40.0F, "Alpha"), label(72U, 10.0F, "Gamma ray")};
+        const auto changed = fonts.Prepare(1U, assets, resources, frame);
+        Require(changed.runs.size() == 2U && changed.runs[0].glyphs.size() == first[0].glyphs.size() &&
+                    NearlyEqual(changed.runs[0].glyphs[0].left, first[0].glyphs[0].left + 30.0F),
+                "A moved label must be laid out where it now is");
+        Require(changed.runs[1].glyphs.size() > first[2].glyphs.size(), "A re-worded label must be shaped again");
+        // A glyph the atlas had to add makes every kept run refresh against the repacked atlas.
+        frame.elements = {label(70U, 40.0F, "Alpha"), label(72U, 10.0F, "Gamma ray"), label(73U, 10.0F, "Zq\xC5\xBC\xC4\x85")};
+        const auto grown = fonts.Prepare(1U, assets, resources, frame);
+        Require(grown.failureReason == nullptr && grown.runs.size() == 3U, "A label adding new glyphs must prepare");
+        for (const ScreenUITextRun& run : grown.runs) {
+            Require(run.atlasWidth == grown.runs[0].atlasWidth && run.atlasHeight == grown.runs[0].atlasHeight,
+                    "Every run must describe the atlas as it is after the frame");
+        }
+    }
+    bgfx::shutdown();
+}
+
+// Joining batches reorders the quads inside the draw list. Whatever the order, every point of the surface must still be
+// painted by the same quads in the same order as the frame lists them: checked on random frames of boxes of a few
+// sizes and colours, which both overlap and leave gaps, point by point.
+void JoinedBatchesPaintEveryPointInTheFrameOrder() {
+    std::uint32_t seed = 20260513U;
+    const auto next = [&seed]() {
+        seed = seed * 1664525U + 1013904223U;
+        return seed >> 8U;
+    };
+    struct Box {
+        float x = 0.0F;
+        float y = 0.0F;
+        float width = 0.0F;
+        float height = 0.0F;
+        int color = 0;
+    };
+    ScreenUIDrawBatchBuilder builder;
+    std::size_t boxesDrawn = 0U;
+    std::size_t batchesUsed = 0U;
+    for (int round = 0; round < 300; ++round) {
+        kb::scene::SceneUIFrame frame{.viewportSize = {256.0F, 256.0F}};
+        std::vector<Box> boxes;
+        const std::size_t count = 3U + next() % 40U;
+        for (std::size_t index = 0U; index < count; ++index) {
+            static constexpr std::array<std::array<float, 2U>, 3U> sizes{{{20.0F, 20.0F}, {40.0F, 10.0F}, {16.0F, 48.0F}}};
+            const auto& size = sizes[next() % 3U];
+            const Box box{static_cast<float>(next() % 200U), static_cast<float>(next() % 200U), size[0], size[1],
+                          static_cast<int>(next() % 3U)};
+            boxes.push_back(box);
+            auto element = Element(1000U + index, {box.x, box.y, box.width, box.height});
+            element.clipRect = {0.0F, 0.0F, 256.0F, 256.0F};
+            element.border = kb::scene::UIBorder{.backgroundColor = {box.color == 0 ? 1.0F : 0.0F, box.color == 1 ? 1.0F : 0.0F,
+                                                                     box.color == 2 ? 1.0F : 0.0F, 1.0F}};
+            frame.elements.push_back(element);
+        }
+        const ScreenUIDrawList& draw = builder.Build(frame, {}, {});
+        Require(draw.indices.size() == count * 6U && draw.vertices.size() == count * 4U, "Every box must draw exactly one quad");
+        boxesDrawn += count;
+        batchesUsed += draw.batches.size();
+        std::uint32_t expectedFirst = 0U;
+        for (const ScreenUIDrawBatch& batch : draw.batches) {
+            Require(batch.firstIndex == expectedFirst && batch.indexCount % 6U == 0U && batch.indexCount > 0U,
+                    "Batches must own consecutive, whole index ranges");
+            expectedFirst += batch.indexCount;
+        }
+        for (int py = 0; py < 256; py += 5) {
+            for (int px = 0; px < 256; px += 5) {
+                const float sx = static_cast<float>(px) + 0.5F;
+                const float sy = static_cast<float>(py) + 0.5F;
+                std::vector<int> expected;
+                for (const Box& box : boxes) {
+                    if (sx > box.x && sx < box.x + box.width && sy > box.y && sy < box.y + box.height) expected.push_back(box.color);
+                }
+                std::vector<int> painted;
+                for (const ScreenUIDrawBatch& batch : draw.batches) {
+                    const int color = batch.style.fillColor[0] > 0.5F ? 0 : batch.style.fillColor[1] > 0.5F ? 1 : 2;
+                    for (std::uint32_t at = batch.firstIndex; at < batch.firstIndex + batch.indexCount; at += 6U) {
+                        const ScreenUIVertex& topLeft = draw.vertices[draw.indices[at]];
+                        const ScreenUIVertex& bottomRight = draw.vertices[draw.indices[at + 2U]];
+                        if (sx > topLeft.x && sx < bottomRight.x && sy > topLeft.y && sy < bottomRight.y) painted.push_back(color);
+                    }
+                }
+                Require(painted == expected, "Joined batches changed what is painted over what at some point");
+            }
+        }
+    }
+    Require(batchesUsed < boxesDrawn, "The random frames never joined any batches, so the check proved nothing");
+}
+
+// An element laid out outside the rectangle that clips it draws nothing, unless something it draws reaches back in.
+void ElementsOutsideTheirClipAreSkipped() {
+    const auto box = [](std::uint64_t entity, kb::math::Rect rect) {
+        auto element = Element(entity, rect);
+        element.clipRect = {0.0F, 0.0F, 200.0F, 100.0F};
+        element.border = kb::scene::UIBorder{.backgroundColor = {1.0F, 0.0F, 0.0F, 1.0F}};
+        return element;
+    };
+    ScreenUIDrawBatchBuilder builder;
+    kb::scene::SceneUIFrame frame{.viewportSize = {640.0F, 360.0F}};
+    auto shadowed = box(32U, {220.0F, 10.0F, 50.0F, 50.0F});
+    shadowed.shadow = kb::scene::UIShadow{.offset = {-15.0F, 0.0F}, .color = {0.0F, 0.0F, 0.0F, 1.0F}, .blur = 10.0F};
+    frame.elements = {box(30U, {10.0F, 10.0F, 50.0F, 50.0F}), box(31U, {400.0F, 10.0F, 50.0F, 50.0F}), shadowed};
+    const ScreenUIDrawList& draw = builder.Build(frame, {}, {});
+    Require(draw.vertices.size() == 12U, "Only the visible box and the shadow reaching into the clip may be drawn");
+    Require(std::ranges::none_of(draw.vertices, [](const ScreenUIVertex& vertex) { return vertex.x >= 400.0F; }),
+            "A box far outside its clip rectangle must not be drawn");
+}
+
 void RunScreenUIDrawBatchTests() {
+    JoinedBatchesPaintEveryPointInTheFrameOrder();
+    ElementsOutsideTheirClipAreSkipped();
+    BatchesOfOneStateJoinOnlyAcrossClearGround();
+    UnchangedLabelsKeepTheirRunsAcrossFrames();
     DefaultImagesAndControlsProduceVisibleGeometry();
     BatchBuilderPreservesFlattenedOrderCornersAndClip();
     BatchBuilderEmitsNineSliceTintAndEffects();
@@ -1013,6 +1222,173 @@ void RunScreenUIOverdrawGpuTests() {
 #else
     std::puts("SKIP: UI overdraw GPU measurement requires the D3D11 headless test host");
 #endif
+}
+
+
+namespace {
+
+// Frames shaped like three reference screens, for measuring what a UI costs the renderer side: a HUD whose numbers
+// change every frame, a scrolling inventory, and a screen full of small labels.
+struct UIRenderWorkload {
+    kb::scene::SceneUIFrame frame;
+    std::vector<std::size_t> changingTexts;
+};
+
+[[nodiscard]] kb::scene::SceneUIFrameElement WorkloadElement(std::uint64_t entity, kb::math::Rect rect, kb::math::Rect clip) {
+    auto element = Element(entity, rect);
+    element.clipRect = clip;
+    return element;
+}
+
+void AddWorkloadText(UIRenderWorkload& workload, std::uint64_t entity, kb::math::Rect rect, kb::math::Rect clip,
+                     std::string_view content, float fontSize, bool changing) {
+    auto element = WorkloadElement(entity, rect, clip);
+    element.text = kb::scene::UIText{.fontAssetId = 7U, .fontSize = fontSize, .color = {1.0F, 1.0F, 1.0F, 1.0F}};
+    static_cast<void>(kb::scene::SetUITextContent(*element.text, content));
+    if (changing)
+        workload.changingTexts.push_back(workload.frame.elements.size());
+    workload.frame.elements.push_back(std::move(element));
+}
+
+void AddWorkloadPanel(UIRenderWorkload& workload, std::uint64_t entity, kb::math::Rect rect, kb::math::Rect clip,
+                      kb::math::Color fill, float radius) {
+    auto element = WorkloadElement(entity, rect, clip);
+    element.border = kb::scene::UIBorder{.backgroundColor = fill, .borderColor = {1.0F, 1.0F, 1.0F, 0.3F},
+                                         .borderWidth = {1.0F, 1.0F, 1.0F, 1.0F}, .cornerRadius = {radius, radius, radius, radius}};
+    workload.frame.elements.push_back(std::move(element));
+}
+
+[[nodiscard]] UIRenderWorkload BuildHudWorkload() {
+    UIRenderWorkload workload;
+    workload.frame.viewportSize = {1920.0F, 1080.0F};
+    const kb::math::Rect screen{0.0F, 0.0F, 1920.0F, 1080.0F};
+    std::uint64_t entity = 100U;
+    for (int cluster = 0; cluster < 5; ++cluster) {
+        const float x = 20.0F + 360.0F * static_cast<float>(cluster);
+        AddWorkloadPanel(workload, ++entity, {x, 20.0F, 340.0F, 160.0F}, screen, {0.05F, 0.06F, 0.08F, 0.8F}, 6.0F);
+        for (int row = 0; row < 3; ++row) {
+            const float y = 30.0F + 44.0F * static_cast<float>(row);
+            AddWorkloadPanel(workload, ++entity, {x + 8.0F, y, 32.0F, 32.0F}, screen, {0.8F, 0.6F, 0.1F, 1.0F}, 4.0F);
+            AddWorkloadText(workload, ++entity, {x + 48.0F, y, 150.0F, 32.0F}, screen, "Score 0", 24.0F, row < 2);
+            AddWorkloadPanel(workload, ++entity, {x + 204.0F, y + 8.0F, 120.0F, 16.0F}, screen, {0.1F, 0.1F, 0.1F, 1.0F}, 3.0F);
+            AddWorkloadPanel(workload, ++entity, {x + 204.0F, y + 8.0F, 40.0F + 15.0F * static_cast<float>(row), 16.0F}, screen,
+                             {0.2F, 0.8F, 0.3F, 1.0F}, 3.0F);
+        }
+    }
+    return workload;
+}
+
+[[nodiscard]] UIRenderWorkload BuildInventoryWorkload() {
+    UIRenderWorkload workload;
+    workload.frame.viewportSize = {1920.0F, 1080.0F};
+    const kb::math::Rect view{100.0F, 100.0F, 900.0F, 600.0F};
+    std::uint64_t entity = 100U;
+    AddWorkloadPanel(workload, ++entity, view, {0.0F, 0.0F, 1920.0F, 1080.0F}, {0.04F, 0.04F, 0.05F, 0.9F}, 8.0F);
+    for (int slot = 0; slot < 166; ++slot) {
+        const float x = 100.0F + 140.0F * static_cast<float>(slot % 6);
+        const float y = 100.0F + 120.0F * static_cast<float>(slot / 6);
+        AddWorkloadPanel(workload, ++entity, {x, y, 132.0F, 112.0F}, view, {0.12F, 0.13F, 0.16F, 1.0F}, 6.0F);
+        AddWorkloadPanel(workload, ++entity, {x + 10.0F, y + 10.0F, 60.0F, 60.0F}, view,
+                         {0.3F + 0.002F * static_cast<float>(slot), 0.5F, 0.7F, 1.0F}, 4.0F);
+        AddWorkloadText(workload, ++entity, {x + 10.0F, y + 80.0F, 100.0F, 24.0F}, view, "Item 0", 20.0F, slot < 10);
+    }
+    return workload;
+}
+
+[[nodiscard]] UIRenderWorkload BuildLabelWorkload() {
+    UIRenderWorkload workload;
+    workload.frame.viewportSize = {1920.0F, 1080.0F};
+    const kb::math::Rect screen{0.0F, 0.0F, 1920.0F, 1080.0F};
+    for (int index = 0; index < 2000; ++index) {
+        AddWorkloadText(workload, 100U + static_cast<std::uint64_t>(index),
+                        {static_cast<float>(index % 40) * 46.0F, static_cast<float>(index / 40) * 20.0F, 44.0F, 18.0F}, screen,
+                        "Lv 0", 14.0F, index < 20);
+    }
+    return workload;
+}
+
+} // namespace
+
+void RunScreenUIWorkloadBenchmark() {
+    bgfx::Init init;
+    init.type = bgfx::RendererType::Noop;
+    init.swapChain.width = 640U;
+    init.swapChain.height = 360U;
+    Require(bgfx::init(init), "UI workload benchmark could not initialize the headless renderer");
+    {
+        auto font = std::make_shared<kb::assets::ImportedAsset>();
+        font->category = kb::assets::AssetImportCategory::Font;
+        font->sourceExtension = ".ttf";
+        const auto path = std::filesystem::path{KB_RENDERER_TEST_SOURCE_ROOT} /
+            "sources/editor/content/EditorShell/Fonts/DejaVuSans.ttf";
+        std::ifstream stream(path, std::ios::binary | std::ios::ate);
+        Require(stream.good() && stream.tellg() > 0, "UI workload font fixture is unavailable");
+        font->payload.resize(static_cast<std::size_t>(stream.tellg()));
+        stream.seekg(0);
+        stream.read(reinterpret_cast<char*>(font->payload.data()), static_cast<std::streamsize>(font->payload.size()));
+        Require(stream.good(), "UI workload font fixture could not be read");
+        font->sourceSize = font->payload.size();
+        kb::assets::AssetManager assets;
+        Require(assets.RegisterLoader(std::make_unique<kb::assets::ImportedAssetLoader>()), "Font loader registration failed");
+        Require(assets.RegisterAsset({.id = kb::assets::AssetId{7U}, .type = "ImportedAsset", .name = "Workload font",
+                                      .virtualPath = "/Text/Font.kbasset", .runtimeLoadable = true}) &&
+                assets.PublishRuntimeAsset(kb::assets::AssetId{7U}, font), "Font fixture publication failed");
+        struct Case {
+            const char* name;
+            UIRenderWorkload (*build)();
+        };
+        for (const Case& item : {Case{"hud50", BuildHudWorkload}, Case{"inventory500", BuildInventoryWorkload},
+                                 Case{"labels2000", BuildLabelWorkload}}) {
+            UIRenderWorkload workload = item.build();
+            RenderResourceRegistry resources;
+            ScreenUIFontAtlasCache fonts;
+            ScreenUIDrawBatchBuilder builder;
+            std::uint32_t tick = 0U;
+            std::size_t fontBatches = 0U;
+            const auto frameOnce = [&](double& prepareMs, double& buildMs, std::size_t& batches, std::size_t& vertices,
+                                       std::size_t& runs) {
+                for (const std::size_t index : workload.changingTexts) {
+                    static_cast<void>(kb::scene::SetUITextContent(*workload.frame.elements[index].text,
+                                                                  "Score " + std::to_string(++tick)));
+                }
+                const auto start = std::chrono::steady_clock::now();
+                const ScreenUIFontPreparation prepared = fonts.Prepare(1U, assets, resources, workload.frame);
+                const auto middle = std::chrono::steady_clock::now();
+                const ScreenUIDrawList& draw = builder.Build(workload.frame, {}, prepared.runs);
+                const auto end = std::chrono::steady_clock::now();
+                Require(prepared.failureReason == nullptr, "UI workload text must prepare");
+                prepareMs = std::chrono::duration<double, std::milli>(middle - start).count();
+                buildMs = std::chrono::duration<double, std::milli>(end - middle).count();
+                batches = draw.batches.size();
+                fontBatches = static_cast<std::size_t>(std::ranges::count_if(draw.batches, [](const ScreenUIDrawBatch& batch) {
+                    return batch.style.fragmentKind == ScreenUIFragmentKind::Font;
+                }));
+                vertices = draw.vertices.size();
+                runs = prepared.runs.size();
+            };
+            double prepare = 0.0;
+            double build = 0.0;
+            std::size_t batches = 0U;
+            std::size_t vertices = 0U;
+            std::size_t runs = 0U;
+            frameOnce(prepare, build, batches, vertices, runs);
+            const double cold = prepare;
+            for (int warmup = 0; warmup < 2; ++warmup)
+                frameOnce(prepare, build, batches, vertices, runs);
+            constexpr std::size_t frames = 20U;
+            std::array<double, frames> prepareSamples{};
+            std::array<double, frames> buildSamples{};
+            for (std::size_t frame = 0U; frame < frames; ++frame)
+                frameOnce(prepareSamples[frame], buildSamples[frame], batches, vertices, runs);
+            std::ranges::sort(prepareSamples);
+            std::ranges::sort(buildSamples);
+            std::printf("ui_render_workload name=%s elements=%zu text_runs=%zu cold_prepare_ms=%.3f prepare_ms=%.3f batch_ms=%.3f "
+                        "draw_calls=%zu (text %zu) vertices=%zu\n",
+                        item.name, workload.frame.elements.size(), runs, cold, prepareSamples[frames / 2U],
+                        buildSamples[frames / 2U], batches, fontBatches, vertices);
+        }
+    }
+    bgfx::shutdown();
 }
 
 } // namespace kb::render::tests

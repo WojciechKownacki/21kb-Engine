@@ -19,7 +19,7 @@ namespace kb::editor {
 // Everything in the Profiler panel that answers a click.
 enum class ProfilerPanelAction : std::uint8_t {
     Tab, Record, Pause, Clear, FirstFrame, PreviousFrame, NextFrame, Live, Snapshot, WhatToShow,
-    AreasAll, AreasNone, CountersAll, CountersNone, Area, LeftCounter,
+    AreasAll, AreasNone, CountersAll, CountersNone, Area,
     PickFrame,
     CounterPanel, CounterScene, CounterBudget, CounterAlarm,
     Severity, Category, ShowIgnored, Finding, ShowInMeasurements, IgnoreFinding,
@@ -39,13 +39,13 @@ struct ProfilerPanelButton {
     bool enabled = true;
 };
 
-enum class ProfilerChartKind : std::uint8_t { Frame, Cpu, Gpu, Memory, Drawing };
-
-struct ProfilerChartRow {
-    ProfilerChartKind kind = ProfilerChartKind::Frame;
-    RECT row{};
-    RECT label{};
-    RECT plot{};
+// A row of the budget table: a counter that speaks for an area. The first row of an area carries
+// the switch that turns its measuring on and off.
+struct ProfilerBudgetRow {
+    kb::core::ProfilerArea area = kb::core::ProfilerArea::Cpu;
+    kb::core::ProfilerBuiltIn counter = kb::core::ProfilerBuiltIn::FrameTime;
+    bool startsArea = false;
+    RECT bounds{};
 };
 
 // Where everything is, for a panel of a given size and a given choice of areas. Painting and
@@ -53,21 +53,30 @@ struct ProfilerChartRow {
 struct ProfilerPanelGeometry {
     RECT content{};
     RECT tabs{}, toolbar{}, status{};
+    // The overview under the toolbar: the verdict in plain words and the big numbers. One line
+    // high when the panel is short, empty when there is no room for it at all.
+    RECT health{};
+    bool healthCompact = false;
     RECT left{}, center{}, right{};
-    // The left pane of the first two tabs: the areas, then the counters.
-    RECT areasHeader{}, areasList{}, countersHeader{}, countersList{};
-    // Measurements.
-    RECT ruler{}, hierarchyTabs{}, hierarchyHeader{}, hierarchyRows{};
-    std::vector<ProfilerChartRow> charts;
+    // The left pane of Counters: the areas to measure, and a word on what switching one on does.
+    RECT areasHeader{}, areasList{}, areasHint{};
+    // Measurements: the frames as bars, the budget table, and the regions of the shown frame.
+    // The strip and the hierarchy are empty in a panel too low for them.
+    RECT frameStrip{}, framePlot{}, budgetHeader{};
+    std::vector<ProfilerBudgetRow> budgetRows;
+    RECT hierarchyTabs{}, hierarchyHeader{}, hierarchyRows{};
     // Counters and Diagnosis share a summary strip, a column header and a list of rows.
     RECT summary{}, tableHeader{}, tableRows{};
 
     static constexpr int kRowHeight = 22;
     static constexpr int kCounterRowHeight = 24;
-    static constexpr int kFindingHeight = 48;
-    static constexpr int kLeftWidth = 250;
+    // A headline and two lines of what it means.
+    static constexpr int kFindingHeight = 58;
+    static constexpr int kLeftWidth = 220;
+    static constexpr int kHealthHeight = 60;
+    static constexpr int kHealthCompactHeight = 30;
     static constexpr int kRightWidth = 272;
-    static constexpr int kLabelWidth = 190;
+    static constexpr int kBudgetRowHeight = 28;
 };
 
 [[nodiscard]] ProfilerPanelGeometry ResolveProfilerPanelGeometry(const RECT& content, const ProfilerPanelState& state, const ProfilerSelection& selection);
@@ -82,6 +91,15 @@ struct ProfilerCounterColumns {
     int check = 0, name = 0, now = 0, average = 0, minimum = 0, maximum = 0, p95 = 0, budget = 0, alarm = 0, spark = 0, scene = 0, end = 0;
 };
 [[nodiscard]] ProfilerCounterColumns ResolveProfilerCounterColumns(const RECT& rows);
+
+// The x positions of the columns of the budget table: the name, the last frames as a line, the
+// reading now and on average, how much of the budget it takes, and the switch of the area.
+struct ProfilerBudgetColumns {
+    int name = 0, spark = 0, now = 0, average = 0, budget = 0, toggle = 0, end = 0;
+};
+[[nodiscard]] ProfilerBudgetColumns ResolveProfilerBudgetColumns(const RECT& row);
+// Where the switch of a row of the budget table is.
+[[nodiscard]] RECT ProfilerBudgetSwitchRect(const RECT& row);
 
 // The counters of a table or list, in registry order, with the group each starts.
 struct ProfilerCounterRow {

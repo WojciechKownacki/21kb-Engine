@@ -74,6 +74,8 @@ public:
     // Per-frame script diagnostics (compile/behaviour errors) captured while the
     // installed scene system ran, drained (and cleared) for the host to surface.
     [[nodiscard]] std::vector<std::string> DrainSceneSystemDiagnostics();
+    // The same for what only deserves a warning (the script runs): each is reported once.
+    [[nodiscard]] std::vector<std::string> DrainSceneSystemWarnings();
     // Read-only frame telemetry from the scheduler-owned scene system. The
     // pointers remain valid until the next scene-system phase runs or the
     // scene system is destroyed.

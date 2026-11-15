@@ -4,6 +4,7 @@
 #include "engine/scene/SceneSurfaceGeometry.hpp"
 #include "engine/scene/VectorShape2DAsset.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/SceneAnimatorPoseRate.hpp"
 #include "engine/scene/SceneAnimators.hpp"
 #include "engine/core/ReadSnapshotQueue.hpp"
 #include "engine/scene/AnimationAssets.hpp"
@@ -56,6 +57,8 @@
 #include "scene/transform/SceneTransformTopologyCache.hpp"
 
 #include <array>
+#include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <limits>
@@ -185,6 +188,10 @@ struct AnimatorInstanceSkeleton {
     std::array<std::vector<float>, 2U> stateMorphScratch;
     std::vector<float> motionMorphScratch;
     std::array<std::vector<std::uint8_t>, 2U> stateMorphTouched;
+    // The last evaluated pose the shown one moves toward while the character is posed less often than every
+    // frame (AnimatorPoseRatePolicy); sized on first use.
+    PoseSoa interpolationTarget;
+    std::vector<float> interpolationTargetMorphWeights;
     std::uint32_t currentPose = 0U;
     std::uint64_t evaluationCount = 0U;
     std::uint64_t hierarchySolveCount = 0U;
@@ -197,6 +204,7 @@ struct AnimatorInstanceSkeleton {
 struct SkeletonBindingRuntimePose {
     SceneEntity entity{};
     std::uint64_t runtimeBindingGeneration = 0U;
+    std::uint64_t syncSerial = 0U;
     AnimatorInstanceSkeleton skeleton;
 };
 
@@ -225,6 +233,12 @@ struct AnimatorInstance {
     float lastAppliedComponentPoseUpdateRateHz = 0.0F;
     double poseUpdateAccumulatorSeconds = 0.0;
     bool hasEvaluatedPose = false;
+    // View-driven pose rate (AnimatorPoseRatePolicy): ticks since the last evaluation, and, while skipped
+    // ticks show a pose moving toward the last evaluated one, the interval it was evaluated for.
+    std::uint32_t poseTicksSinceEvaluation = 0U;
+    std::uint32_t poseInterpolationInterval = 0U;
+    // The SyncComponents pass that last found this record's Animator enabled; older ones are dropped.
+    std::uint64_t syncSerial = 0U;
     // The entity's enabled, valid MotionSkeletonRule as read for this update, applied to the skeletal pose
     // after the controller's rig constraints, and the update's delta for its Spring kind.
     std::optional<MotionSkeletonRuleComponent> motionSkeletonRule;
@@ -338,6 +352,8 @@ public:
     // Single source of truth for authorable/runtime tag definitions. Entity
     // TagsComponent instances only reference values from this list.
     std::vector<std::string> tagDefinitions{ "Player", "Enemy", "Monster", "AI", "NPC", "Collision" };
+    // The project's own tags, set by the host: every definition list the scene takes keeps them.
+    std::vector<std::string> projectTagDefinitions;
     ScenePrefabRegistry prefabs;
     ScenePrefabInstanceRegistry prefabInstances;
     ScenePrefabInstantiationStats lastPrefabInstantiationStats;
@@ -359,7 +375,21 @@ public:
     GameplayRuntimeState gameplay;
     std::vector<AnimationEventRecord> pendingAnimationEvents;
     std::unique_ptr<kb::ecs::WorkerPool> animatorWorkerPool;
-    std::vector<AnimatorRuntimeRecord*> animatorParallelPoseScratch;
+    // A pose due this tick: the record and, for root-motion clips, the bone whose motion the pose must leave out.
+    // A pose job evaluates the pose, or (a skipped tick of a character whose shown pose moves toward the last
+    // evaluated one) only moves the shown pose toward it. `alpha` is the share of the way the shown pose
+    // covers this tick; an evaluation with alpha > 0 keeps its pose as that target (alpha 1 shows it as is).
+    enum class AnimatorPoseJobKind : std::uint8_t { Evaluate, Interpolate };
+    struct AnimatorPoseJob {
+        AnimatorRuntimeRecord* record = nullptr;
+        std::optional<std::uint32_t> rootMotionBone;
+        AnimatorPoseJobKind kind = AnimatorPoseJobKind::Evaluate;
+        float alpha = 0.0F;
+    };
+    std::vector<AnimatorPoseJob> animatorParallelPoseScratch;
+    AnimatorPoseRatePolicy animatorPoseRatePolicy;
+    std::uint64_t animatorPoseTick = 0U;
+    std::uint64_t animatorSyncSerial = 0U;
     std::size_t lastAnimatorParallelEvaluationCount = 0U;
     std::size_t lastAnimatorParallelWorkerCount = 1U;
     std::size_t lastAnimatorUpdateRateSkippedPoseCount = 0U;
@@ -440,6 +470,11 @@ public:
     std::uint64_t runtimeSnapshotRevision = 0U;
     kb::core::ReadSnapshotPublisher<SceneRuntimeReadSnapshot> runtimeSnapshots;
     std::uint64_t animatorDebugSnapshotRevision = 0U;
+    // Ticks left in which the debug snapshot is kept current. A reader (DebugSnapshot,
+    // WaitForDebugSnapshot) renews it; nobody reading for that long stops the per-tick snapshot work.
+    mutable std::atomic<std::uint32_t> animatorDebugSnapshotDemandTicks{ 0U };
+    std::uint64_t animatorDebugSnapshotUpdateSerial = 0U;
+    std::uint64_t animatorDebugSnapshotBuiltSerial = 0U;
     kb::core::ReadSnapshotPublisher<AnimatorDebugSnapshot> animatorDebugSnapshots;
     std::unordered_map<std::uint64_t, kb::assets::AssetCompatibilityReport> animatorCompatibilityReports;
     std::uint64_t animatorCompatibilityRegistryGeneration = 0U;
@@ -610,6 +645,7 @@ public:
     std::vector<LoadedSceneRecord> loadedScenes;
     std::uint64_t nextLoadedSceneId = 1U;
     std::uint64_t activeLoadedSceneId = 0U;
+    std::function<void(float)> loadProgressObserver;
     // LIB-073: scene lifecycle notifications (SceneLoading/SceneLoaded/
     // SceneActivated/SceneUnloading/SceneUnloaded) queued by
     // SceneLoadedContentService — an "unambiguous command deferred to a
@@ -708,6 +744,16 @@ public:
     // The update bits are cleared by the first writer after an Update (a transform pass or the next Update), so the
     // rows a pass composes before Update count for that Update.
     bool transformUpdatesResetPending = true;
+    // SceneTransformWorkerWrites: what each worker range leaves to the serial step after the join.
+    struct TransformWorkerRange {
+        std::vector<std::size_t> archetypes;
+        std::vector<SceneEntity> deferred;
+        std::size_t identityAffine = 0U;
+        // Keeps the fields that neighbouring ranges write on different cache lines.
+        std::array<std::byte, 64> separation{};
+    };
+    std::vector<TransformWorkerRange> transformWorkerRanges;
+    bool transformWorkerWritesOpen = false;
     // ParallelForEachRoot: its chunk records, kept while the storage structure and the extra components are unchanged.
     std::vector<kb::ecs::MutableQueryTableDispatchRecord> transformPassRecords;
     std::array<kb::ecs::ComponentId, 5U> transformPassRecordIds{};
@@ -766,6 +812,8 @@ public:
     mutable ecs_query_t* physicsBodyIterationQuery = nullptr;
     std::uint64_t nextHierarchyOrder = 1;
     kb::audio::IAudioPlaybackBackend* audioPlaybackBackend = nullptr;
+    // Host-set master gain, kept here so a backend registered later starts at it.
+    float audioMasterVolume = 1.0F;
 #if !defined(NDEBUG)
     const std::thread::id audioPlaybackOwnerThread = std::this_thread::get_id();
 #endif
@@ -796,6 +844,8 @@ public:
     // (a spatial, per-camera/per-volume post-process system is explicitly out of scope for
     // this ticket - see ScenePostProcessAccess.hpp's own doc comment).
     std::uint64_t postProcessProfileAssetId = 0U;
+    // SceneLightProbeAccess: the baked probe grid asset (0 = none).
+    std::uint64_t lightProbeGridAssetId = 0U;
     // LIB-147: scene-global active AudioMixer asset id (0 = none) + active snapshot NAME
     // (empty = authored bus volumes) - the ONLY mixer selection a scene carries, mirroring
     // postProcessProfileAssetId's exact scene-global-toggle shape. Content resolution and
@@ -861,6 +911,8 @@ public:
     // constructed (layer 0 = "Default", every pair interacts) matches every
     // pre-LIB-129 scene exactly.
     PhysicsLayersAsset physicsLayers;
+    // PhysicsBackend::SetGravity: kept here so a backend that registers later starts with it.
+    Vec3 physicsGravity{ 0.0F, -9.81F, 0.0F };
     // LIB-132: off by default, and never touched by kb_standalone_player's own code path
     // (only the editor's Scene Viewport ever calls PhysicsDebugDraw::SetEnabled/CollectLines)
     // - see PhysicsDebugDraw.hpp's own doc comment for the full "zero release-path impact"
@@ -884,6 +936,8 @@ public:
     kb::math::DVec3 particleSimulationOrigin{};
     mutable std::vector<kb::particles::ParticleRuntimeState> particleRuntimeStateScratch;
     SceneUIFrame uiFrame;
+    // Element storage left over from the frame before, lent to the next build so a steady frame allocates nothing.
+    std::vector<SceneUIFrameElement> uiSpareElements;
     std::vector<SceneUIEvent> uiEvents;
     SceneEntity uiHovered{};
     SceneEntity uiPressed{};

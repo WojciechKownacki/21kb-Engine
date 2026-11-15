@@ -25,6 +25,7 @@
 #include "scene/transform/SceneTransformPrecision.hpp"
 #include "scene/transform/SceneTransformResiduals.hpp"
 #include "navigation/NavMeshCrowd.hpp"
+#include "navigation/NavMeshHorde.hpp"
 #include "navigation/NavMeshRuntime.hpp"
 
 #include <algorithm>
@@ -108,15 +109,14 @@ struct AgentState {
 }
 
 void WriteAgentTransform(Scene& scene, SceneState& state, const AgentState& agent, const kb::math::DVec3& origin) {
-    TransformComponent* transform = scene.Transforms().TryGet(agent.entity);
-    if (transform == nullptr) return;
-    TransformComponent updated = *transform;
+    const SceneTransformWrite write = scene.Transforms().BeginWrite(agent.entity);
+    if (write.row == nullptr) return;
     // The agent's world position, in double precision.
     kb::math::DVec3 local = origin + agent.position;
     Quat localRotation = agent.rotation;
     const SceneEntity parent = scene.Hierarchy().Parent(agent.entity);
     if (parent.IsValid()) {
-        if (const TransformComponent* parentTransform = scene.Transforms().TryGet(parent); parentTransform != nullptr) {
+        if (const TransformComponent* parentTransform = std::as_const(scene).Transforms().TryGet(parent); parentTransform != nullptr) {
             const Quat inverse = kb::math::Inverse(parentTransform->worldRotation);
             const Vec3 scale = parentTransform->worldScale;
             const kb::math::DVec3 parentWorld = scene.Transforms().WorldTranslation(parent, *parentTransform);
@@ -136,9 +136,9 @@ void WriteAgentTransform(Scene& scene, SceneState& state, const AgentState& agen
         }
     }
     Vec3 residual{};
-    SplitTranslation(local, updated.localPosition, residual);
-    updated.localRotation = localRotation;
-    scene.Transforms().Set(agent.entity, updated);
+    SplitTranslation(local, write.row->localPosition, residual);
+    write.row->localRotation = localRotation;
+    scene.Transforms().EndWrite(write);
     SceneTransformPrecision::StoreLocalResidual(state, agent.entity, residual);
 }
 
@@ -241,22 +241,44 @@ void StepPolygonNavigation(Scene& scene, SceneState& state, std::span<const std:
     SynchronizeOverlays(scene, state);
     if (!navigation.crowd) navigation.crowd = std::make_shared<nav::NavMeshCrowd>();
 
-    std::vector<AgentState> agents;
-    std::vector<nav::NavMeshCrowdAgentInput> inputs;
-    agents.reserve(authored.size());
-    inputs.reserve(authored.size());
-    for (const auto& [entity, agent] : authored) {
-        const TransformComponent* transform = scene.Transforms().TryGet(entity);
-        if (transform == nullptr) continue;
-        const Vec3 position = kb::math::RelativeTo(scene.Transforms().WorldTranslation(entity, *transform), navigation.origin);
-        agents.push_back(AgentState{
-            .entity = entity,
-            .agent = agent,
-            .position = position,
-            .rotation = transform->worldRotation,
-            .character = scene.Components().CharacterControllers().Has(entity),
+    // Reading the agents' transforms only reads the scene, so large crowds read them on the crowd's
+    // workers; agents without a transform are dropped afterwards, keeping the id order.
+    std::vector<AgentState> agents(authored.size());
+    std::vector<std::uint8_t> placed(authored.size(), 0U);
+    const SceneState& readState = state;
+    const auto readAgents = [&](std::size_t begin, std::size_t end) {
+        for (std::size_t index = begin; index < end; ++index) {
+            const auto& [entity, agent] = authored[index];
+            const TransformComponent* transform = readState.componentStorage.Transforms().TryGet(entity);
+            if (transform == nullptr) continue;
+            agents[index] = AgentState{
+                .entity = entity,
+                .agent = agent,
+                .position = kb::math::RelativeTo(SceneTransformPrecision::WorldTranslation(readState, entity, *transform), navigation.origin),
+                .rotation = transform->worldRotation,
+                .character = readState.componentStorage.CharacterControllers().Has(entity),
+            };
+            placed[index] = 1U;
+        }
+    };
+    constexpr std::size_t kAgentsPerRead = 1024U;
+    kb::ecs::WorkerPool* readers = authored.size() > std::max(kAgentsPerRead, nav::kMinAgentsOnWorkers)
+        ? navigation.crowd->Workers(navigation.crowdSettings.workerThreads) : nullptr;
+    if (readers != nullptr) {
+        readers->ParallelForChunks(authored.size(), kAgentsPerRead, [&](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
+            readAgents(chunk.begin, chunk.begin + chunk.count);
         });
-        inputs.push_back(nav::NavMeshCrowdAgentInput{ .id = entity.Id(), .agent = agent, .position = position });
+    } else {
+        readAgents(0U, authored.size());
+    }
+    std::size_t kept = 0U;
+    for (std::size_t index = 0U; index < agents.size(); ++index) {
+        if (placed[index] != 0U) agents[kept++] = agents[index];
+    }
+    agents.resize(kept);
+    std::vector<nav::NavMeshCrowdAgentInput> inputs(agents.size());
+    for (std::size_t index = 0U; index < agents.size(); ++index) {
+        inputs[index] = nav::NavMeshCrowdAgentInput{ .id = agents[index].entity.Id(), .agent = agents[index].agent, .position = agents[index].position };
     }
     // Obstacles that neither carve nor repaint an area are circles the crowd steers around.
     std::vector<nav::NavMeshCrowdObstacle> circles;
@@ -269,13 +291,47 @@ void StepPolygonNavigation(Scene& scene, SceneState& state, std::span<const std:
         circles.push_back(nav::NavMeshCrowdObstacle{ .id = obstacle.id, .center = obstacle.center, .radius = radius, .height = height });
     }
     const std::vector<Vec3> focuses = CrowdFocuses(scene, state);
-    std::vector<nav::NavMeshCrowdAgentOutput> outputs;
+    // Horde agents step apart from the crowd, over shared navigation fields.
+    std::vector<nav::NavMeshCrowdAgentInput> hordeInputs;
+    std::vector<std::size_t> crowdIndices;
+    std::vector<std::size_t> hordeIndices;
+    if (std::ranges::any_of(inputs, [](const nav::NavMeshCrowdAgentInput& input) { return input.agent.horde; })) {
+        std::vector<nav::NavMeshCrowdAgentInput> crowdInputs;
+        for (std::size_t index = 0U; index < inputs.size(); ++index) {
+            (inputs[index].agent.horde ? hordeIndices : crowdIndices).push_back(index);
+            (inputs[index].agent.horde ? hordeInputs : crowdInputs).push_back(inputs[index]);
+        }
+        inputs = std::move(crowdInputs);
+        if (!navigation.horde) navigation.horde = std::make_shared<nav::NavMeshHorde>();
+    } else if (navigation.horde) {
+        navigation.horde->Clear();
+    }
+    std::vector<nav::NavMeshCrowdAgentOutput> crowdOutputs;
+    std::vector<nav::NavMeshCrowdAgentOutput> hordeOutputs;
+    // What pushes horde agents apart besides each other: the crowd's agents and the obstacles agents steer around.
+    std::vector<nav::NavMeshBody> hordeBodies;
+    std::vector<nav::NavMeshCrowdAgentOutput> outputs(agents.size());
     std::vector<bool> restoredPositions(agents.size(), false);
     for (std::uint32_t step = 0U; step < steps; ++step) {
-        navigation.crowd->Step(runtime, inputs, circles, focuses, navigation.crowdSettings, deltaSeconds, outputs);
+        navigation.crowd->Step(runtime, inputs, circles, focuses, navigation.crowdSettings, deltaSeconds, crowdOutputs);
+        if (!hordeInputs.empty()) {
+            hordeBodies.clear();
+            for (const nav::NavMeshCrowdAgentInput& input : inputs) {
+                if (input.agent.enabled) hordeBodies.push_back(nav::NavMeshBody{ .position = input.position, .radius = input.agent.radius });
+            }
+            for (const nav::NavMeshCrowdObstacle& circle : circles) hordeBodies.push_back(nav::NavMeshBody{ .position = circle.center, .radius = circle.radius });
+            navigation.horde->Step(runtime, hordeInputs, hordeBodies, focuses, navigation.crowdSettings, deltaSeconds,
+                navigation.crowd->Workers(navigation.crowdSettings.workerThreads), hordeOutputs);
+        }
         for (std::size_t index = 0U; index < inputs.size(); ++index) {
-            inputs[index].position = outputs[index].position;
-            restoredPositions[index] = restoredPositions[index] || outputs[index].restorePosition;
+            const std::size_t agent = hordeInputs.empty() ? index : crowdIndices[index];
+            inputs[index].position = crowdOutputs[index].position;
+            outputs[agent] = crowdOutputs[index];
+            restoredPositions[agent] = restoredPositions[agent] || crowdOutputs[index].restorePosition;
+        }
+        for (std::size_t index = 0U; index < hordeInputs.size(); ++index) {
+            hordeInputs[index].position = hordeOutputs[index].position;
+            outputs[hordeIndices[index]] = hordeOutputs[index];
         }
     }
     const float elapsed = deltaSeconds * static_cast<float>(steps);
@@ -371,6 +427,7 @@ void StepSceneNavigation(Scene& scene, float deltaSeconds, std::uint32_t steps) 
     }
     // Without polygon meshes agents stay where they are.
     if (navigation.crowd) navigation.crowd->Clear();
+    if (navigation.horde) navigation.horde->Clear();
     for (const auto& [entity, agent] : authored) {
         if (NavAgent* component = state.componentStorage.Navigation().TryGetNavAgent(entity); component != nullptr) {
             component->velocity = Vec3{};
@@ -389,6 +446,7 @@ void NavigationSceneSystem::OnUpdate(SceneSystemContext& context) {
         navigation.stepAccumulator = 0.0F;
         if (SceneEntityCounter::CountWithComponent(state.world, state.components.NavAgentComponentId()) == 0U) {
             if (navigation.crowd) navigation.crowd->Clear();
+            if (navigation.horde) navigation.horde->Clear();
         }
         return;
     }
@@ -587,11 +645,69 @@ float SceneNavigation::AreaCost(NavAreaId area) const noexcept {
     return navigation.polygons ? navigation.polygons->AreaCost(area) : 1.0F;
 }
 
+void SceneNavigation::SetAreaDefinitions(std::span<const NavAreaDefinition> areas) {
+    SceneNavigationState& navigation = SceneAccess::State(scene_).navigation;
+    navigation.areaDefinitions.assign(areas.begin(), areas.begin() + static_cast<std::ptrdiff_t>(std::min<std::size_t>(areas.size(), kNavAreaCount)));
+    nav::NavMeshRuntime& polygons = Polygons(navigation);
+    NavAreaMask blocked = 0U;
+    for (std::uint32_t area = 0U; area < kNavAreaCount; ++area) {
+        const float cost = area < navigation.areaDefinitions.size() ? navigation.areaDefinitions[area].cost : 1.0F;
+        if (cost == 0.0F) blocked |= NavAreaBit(static_cast<NavAreaId>(area));
+        polygons.SetAreaCost(static_cast<NavAreaId>(area), cost == 0.0F ? 1.0F : cost);
+    }
+    polygons.SetBlockedAreas(blocked);
+}
+
+const std::vector<NavAreaDefinition>& SceneNavigation::AreaDefinitions() const noexcept {
+    return SceneAccess::State(scene_).navigation.areaDefinitions;
+}
+
+std::optional<NavAreaId> SceneNavigation::FindArea(std::string_view name) const noexcept {
+    return FindNavArea(SceneAccess::State(scene_).navigation.areaDefinitions, name);
+}
+
+std::vector<NavAreaDefinition> DefaultNavAreaDefinitions() {
+    return {
+        NavAreaDefinition{ .name = "Walkable", .colour = 0x8CFF00U, .cost = 1.0F },
+        NavAreaDefinition{ .name = "Road", .colour = 0xB0B0B0U, .cost = 1.0F },
+        NavAreaDefinition{ .name = "Grass", .colour = 0x2E9E3EU, .cost = 2.0F },
+        NavAreaDefinition{ .name = "Water", .colour = 0x2F80EDU, .cost = 10.0F },
+        NavAreaDefinition{ .name = "Not walkable", .colour = 0xE03C31U, .cost = 0.0F },
+    };
+}
+
+std::optional<NavAreaId> FindNavArea(std::span<const NavAreaDefinition> areas, std::string_view name) noexcept {
+    const auto lower = [](char value) { return value >= 'A' && value <= 'Z' ? static_cast<char>(value - 'A' + 'a') : value; };
+    for (std::size_t area = 0U; area < areas.size() && area < kNavAreaCount; ++area) {
+        const std::string& candidate = areas[area].name;
+        if (!candidate.empty() && candidate.size() == name.size() &&
+            std::equal(candidate.begin(), candidate.end(), name.begin(), [&](char a, char b) { return lower(a) == lower(b); })) {
+            return static_cast<NavAreaId>(area);
+        }
+    }
+    return std::nullopt;
+}
+
+bool AreNavAreaDefinitionsValid(std::span<const NavAreaDefinition> areas) noexcept {
+    if (areas.size() > kNavAreaCount) return false;
+    for (std::size_t area = 0U; area < areas.size(); ++area) {
+        const NavAreaDefinition& definition = areas[area];
+        if (definition.name.empty() || definition.colour > 0xFFFFFFU || !std::isfinite(definition.cost) || definition.cost < 0.0F ||
+            FindNavArea(areas.first(area), definition.name).has_value()) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void SceneNavigation::ConfigureCrowd(const NavigationCrowdSettings& settings) {
-    if (!std::isfinite(settings.nearDistance) || settings.nearDistance < 0.0F || settings.farPathOptimizationInterval == 0U ||
+    if (!std::isfinite(settings.nearDistance) || settings.nearDistance < 0.0F || !std::isfinite(settings.midDistance) ||
+        settings.midDistance < 0.0F || settings.farPathOptimizationInterval == 0U ||
         settings.maxPathRequestsPerStep == 0U || !std::isfinite(settings.neighbourRangeRadii) || settings.neighbourRangeRadii <= 0.0F ||
-        !std::isfinite(settings.separationWeight) || settings.separationWeight < 0.0F) {
-        throw std::invalid_argument("Crowd settings need a non-negative near distance, a positive optimisation interval, request budget and range");
+        !std::isfinite(settings.separationWeight) || settings.separationWeight < 0.0F || settings.hordeFieldNodesPerStep == 0U ||
+        settings.hordeFieldCacheSize == 0U || !std::isfinite(settings.hordeSeparationDistance) || settings.hordeSeparationDistance <= 0.0F) {
+        throw std::invalid_argument("Crowd settings need non-negative near and mid distances, a positive optimisation interval, request budget and range, "
+                                    "and a positive horde field budget, cache size and separation distance");
     }
     SceneAccess::State(scene_).navigation.crowdSettings = settings;
 }
@@ -602,7 +718,9 @@ NavigationCrowdSettings SceneNavigation::CrowdSettings() const noexcept {
 
 NavigationCrowdStats SceneNavigation::CrowdStats() const noexcept {
     const SceneNavigationState& navigation = SceneAccess::State(scene_).navigation;
-    return navigation.crowd ? navigation.crowd->Stats() : NavigationCrowdStats{};
+    NavigationCrowdStats stats = navigation.crowd ? navigation.crowd->Stats() : NavigationCrowdStats{};
+    if (navigation.horde) navigation.horde->AddStats(stats);
+    return stats;
 }
 
 void SceneNavigation::SetCrowdFocuses(std::vector<kb::math::DVec3> focuses) {
@@ -613,7 +731,7 @@ void SceneNavigation::SetCrowdFocuses(std::vector<kb::math::DVec3> focuses) {
 
 bool SceneNavigation::AgentOnLink(SceneEntity agent) const noexcept {
     const SceneNavigationState& navigation = SceneAccess::State(scene_).navigation;
-    return navigation.crowd && navigation.crowd->OnLink(agent.Id());
+    return (navigation.crowd && navigation.crowd->OnLink(agent.Id())) || (navigation.horde && navigation.horde->OnLink(agent.Id()));
 }
 
 } // namespace kb::scene

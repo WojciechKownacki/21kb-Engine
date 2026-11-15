@@ -35,6 +35,7 @@ RenderMaterialResource RenderMaterialResourceBuilder::Build(const RenderMaterial
     resource.translucencyBlend = desc.translucencyBlend;
     resource.doubleSided = desc.doubleSided;
     resource.bakedLightmap = desc.bakedLightmap;
+    resource.bakedLightmapUv1 = desc.bakedLightmapUv1;
     resource.writesDepth = desc.writesDepth;
     resource.pointSampling = desc.pointSampling;
     resource.albedoTextureAssetId = desc.albedoTextureAssetId;

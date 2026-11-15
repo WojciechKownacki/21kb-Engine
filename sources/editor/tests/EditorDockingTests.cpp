@@ -16,9 +16,11 @@
 #include "scene/SkeletalMeshEditorDocumentState.hpp"
 #include "scene/SkeletonEditorDocumentState.hpp"
 #include "scene/AnimationClipTimelineState.hpp"
+#include "curves/CurveEditorInteraction.hpp"
 #include "scene/AnimationClipEditorDocumentState.hpp"
 #include "scene/AnimatorEditorGraphDocumentState.hpp"
 #include "scene/EditorAutosaveState.hpp"
+#include "docking/DockGeometry.hpp"
 #include "docking/DockLeafLayoutBuilder.hpp"
 #include "docking/DockLayoutBuildSettings.hpp"
 #include "docking/EditorWorkspaceArrangement.hpp"
@@ -448,7 +450,7 @@ void RunWorldMenuTest() {
     // The pointer handler acts on World rows by index; the labels must stay in that order.
     using kb::editor::EditorMenuCommand;
     using kb::editor::EditorToolbarLayout;
-    kb::editor::tests::Require(EditorToolbarLayout::FixedRowCount(EditorMenuCommand::World) == 11,
+    kb::editor::tests::Require(EditorToolbarLayout::FixedRowCount(EditorMenuCommand::World) == 13,
         "The World menu lists its region, build, selection and navigation commands");
     kb::editor::tests::Require(EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 0) == "Load Cells Near Camera" &&
             EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 3) == "Build World and HLODs" &&
@@ -456,7 +458,9 @@ void RunWorldMenuTest() {
             EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 6) == "Add Data Layer..." &&
             EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 8) == "Toggle Selection Always Loaded" &&
             EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 9) == "Bake Navigation Mesh" &&
-            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 10) == "Show or Hide Navigation Mesh",
+            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 10) == "Show or Hide Navigation Mesh" &&
+            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 11) == "Turn Automatic Navigation Update On or Off" &&
+            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 12) == "Build Lighting",
         "World menu rows must match the rows the pointer handler executes");
     kb::editor::tests::Require(EditorToolbarLayout::FixedRowCount(EditorMenuCommand::Help) == 4 &&
             EditorToolbarLayout::DropdownLabel(EditorMenuCommand::Help, 3) == "About",
@@ -997,6 +1001,68 @@ void RunLayoutMenuModelTest() {
         "a row outside the menu should resolve to nothing");
 }
 
+void RunLayoutMenuPanelRowsTest() {
+    kb::editor::EditorLayoutMenuModel model;
+    model.Rebuild({ "Lighting" }, {}, {
+        { .kind = kb::editor::DockPanelKind::Hierarchy, .title = "Hierarchy", .open = true },
+        { .kind = kb::editor::DockPanelKind::Console, .title = "Console", .open = false },
+    });
+    const std::vector<kb::editor::EditorLayoutMenuRow>& rows = model.Rows();
+    kb::editor::tests::Require(rows.size() == 7U,
+        "the Layout menu should list the layouts, the two commands, a caption and one row for each everyday panel");
+    kb::editor::tests::Require(
+        rows[4].action == kb::editor::EditorLayoutMenuAction::TogglePanel && !rows[4].enabled,
+        "the panels should sit under a caption that cannot be chosen");
+    kb::editor::tests::Require(
+        rows[5].label == "Hierarchy" && rows[5].panelKind == kb::editor::DockPanelKind::Hierarchy && rows[5].active && rows[5].enabled &&
+            rows[6].panelKind == kb::editor::DockPanelKind::Console && !rows[6].active,
+        "an open panel should be marked in the menu and a closed one left unmarked");
+    kb::editor::tests::Require(kb::editor::EditorLayoutMenuModel::MaximumRows <= kb::editor::EditorMenuRects::MaximumRows,
+        "the menu geometry should have a row for everything the Layout menu can list");
+}
+
+void RunCrowdedTabStripTest() {
+    using kb::editor::DockGeometry;
+    kb::editor::tests::Require(DockGeometry::TabWidths(600, 3, 0, 92, 156) == std::vector<int>({ 156, 156, 156 }),
+        "tabs with room to spare should take their full width");
+    kb::editor::tests::Require(DockGeometry::TabWidths(300, 3, 1, 92, 156) == std::vector<int>({ 100, 100, 100 }),
+        "tabs should share a strip that still fits their minimum");
+    const std::vector<int> crowded = DockGeometry::TabWidths(280, 5, 4, 92, 156);
+    int total = 0;
+    for (const int width : crowded) total += width;
+    kb::editor::tests::Require(crowded.size() == 5U && total <= 280 && crowded[4] == 92 && crowded[0] == 47,
+        "a crowded strip should keep the active tab's title and fit every other tab beside it");
+    const std::vector<int> packed = DockGeometry::TabWidths(120, 6, 0, 92, 156);
+    total = 0;
+    for (const int width : packed) total += width;
+    kb::editor::tests::Require(total <= 120 && packed[0] >= packed[1] && packed[1] >= 1,
+        "a strip narrower than its compact tabs should still keep every tab inside it");
+    kb::editor::tests::Require(DockGeometry::TabWidths(280, 0, -1, 92, 156).empty(), "an empty group has no tabs");
+
+    kb::editor::EditorDockModel model;
+    const kb::editor::DockPanel& inspector = *RequirePanel(model, 4U);
+    for (const kb::editor::DockPanelKind kind : { kb::editor::DockPanelKind::ProjectSettings, kb::editor::DockPanelKind::Plugins, kb::editor::DockPanelKind::EditorSettings }) {
+        kb::editor::tests::Require(model.Commands().ActivatePanelKind(kind, kb::editor::DockArea::Right), "a side panel should open beside the Inspector");
+    }
+    const std::uint32_t leaf = model.Queries().LeafOfPanel(inspector.id);
+    kb::editor::tests::Require(leaf != 0U && model.Queries().PanelsSharingLeaf(inspector.id).size() == 5U,
+        "the Inspector's group should hold the panels opened beside it");
+    const kb::editor::DockLayout layout = model.Queries().BuildLayout(1280, 760, 48, 24, 28, 92, 156, 3);
+    for (const kb::editor::DockPanelLayout& panel : layout.panels) {
+        if (panel.leafId != leaf) continue;
+        kb::editor::tests::Require(panel.tab.width > 0 && panel.tab.x + panel.tab.width <= panel.tabStrip.x + panel.tabStrip.width,
+            "every tab of a crowded group should stay inside its strip");
+        kb::editor::tests::Require(!panel.active || panel.tab.width == 92, "the active tab of a crowded group should keep its minimum width");
+    }
+    kb::editor::tests::Require(model.Commands().ToggleMaximizedLeaf(leaf) && model.Queries().MaximizedLeafId() == leaf,
+        "the maximized group should be reported by the model");
+    kb::editor::tests::Require(model.Commands().RestoreMaximizedLeaf() && model.Queries().MaximizedLeafId() == 0U,
+        "restoring should leave no group maximized");
+    kb::editor::tests::Require(model.Queries().LeafOfPanel(RequirePanel(model, 8U)->id) == 0U &&
+            model.Queries().PanelsSharingLeaf(RequirePanel(model, 8U)->id).empty(),
+        "a closed panel belongs to no group");
+}
+
 void RunParticleEditorWorkspaceAndSessionPersistenceTest() {
     kb::editor::EditorDockModel model;
     const kb::editor::DockPanel* panel = RequirePanel(model, 14U);
@@ -1280,7 +1346,7 @@ void RunAnimationClipTimelineStateTest() {
         { .boneId = 10U, .keyframes = {{ .timeSeconds = 1.0F }} },
     };
     clip.morphTracks = {{ .morphTarget = "Smile", .keyframes = {{ .timeSeconds = 0.25F }} }};
-    clip.curves = {{ .name = "FootPlant", .keyframes = {{ .timeSeconds = 1.25F }} }};
+    clip.curves = {{ .name = "FootPlant", .keyframes = {{ .time = 1.25F }} }};
     clip.events = {{ .timeSeconds = 1.75F, .id = 4U }, { .timeSeconds = 0.75F, .id = 2U }};
     clip.rootMotionMode = kb::scene::AnimationRootMotionMode::ExtractFromBone;
     clip.rootMotionBoneId = 20U;
@@ -1334,6 +1400,87 @@ void RunAnimationClipEditorDocumentStateTest() {
         "Animation Clip document should undo grouped edits and reject invalid event times");
     kb::editor::tests::Require(document.MarkSaved() && !document.Dirty() && !document.CanUndo() && !document.CanRedo(),
         "Animation Clip document save should establish a clean history baseline");
+}
+
+void RunCurveEditorStateTest() {
+    using kb::math::CurveTangentMode;
+    kb::scene::AnimationClip clip{};
+    clip.durationSeconds = 1.0F;
+    clip.curves = {{ .name = "Weight", .keyframes = {{ .time = 0.0F, .value = 0.0F }, { .time = 1.0F, .value = 1.0F }} }};
+    kb::editor::AnimationClipEditorDocumentState document;
+    document.Open(kb::assets::AssetId{ 7U }, clip);
+    kb::editor::CurveEditorState state;
+    kb::editor::CurveEditorInteraction input;
+    state.SetTimeLimits(0.0F, 1.0F);
+    state.SetViewport({ 0.0F, 0.0F, 400.0F, 200.0F });
+    state.SetCurve(kb::math::Curve{ document.WorkingCopy()->curves[0].keyframes });
+    // The host side of an edit: one undo group per gesture, the view's keys stored on every change.
+    const auto apply = [&](const kb::editor::CurveEditorResult& result) {
+        if (result.editBegin) document.BeginGroup();
+        bool stored = !result.edited || document.SetCurveKeyframes("Weight", state.Curve().keyframes);
+        if (result.editEnd) document.EndGroup();
+        return stored;
+    };
+    const auto keys = [&]() -> const std::vector<kb::math::CurveKeyframe>& { return document.WorkingCopy()->curves[0].keyframes; };
+
+    // Double-click adds a smooth key on the curve.
+    const kb::editor::CurveEditorResult added = input.DoubleClick(state, state.XAt(0.5F), 0.0F);
+    kb::editor::tests::Require(added.editBegin && added.edited && added.editEnd && apply(added) && keys().size() == 3U &&
+            state.Selected() == std::optional<std::size_t>{ 1U } && keys()[1].tangentMode == CurveTangentMode::Auto &&
+            std::fabs(keys()[1].value - 0.5F) < 1.0e-5F,
+        "Curve view should add an Auto key on the curve and store it");
+
+    // Dragging with Shift keeps the axis the pointer moved along most; the whole drag is one undo step.
+    const float keyX = state.XAt(keys()[1].time);
+    const float keyY = state.YAt(keys()[1].value);
+    kb::editor::tests::Require(input.PointerDown(state, keyX, keyY, false, false).redraw && input.Dragging(), "Curve view should start dragging a key");
+    const kb::editor::CurveEditorResult firstMove = input.PointerMove(state, keyX + 40.0F, keyY + 10.0F, true);
+    const kb::editor::CurveEditorResult secondMove = input.PointerMove(state, keyX + 80.0F, keyY + 15.0F, true);
+    const kb::editor::CurveEditorResult released = input.PointerUp();
+    kb::editor::tests::Require(firstMove.editBegin && firstMove.edited && apply(firstMove) && !secondMove.editBegin && secondMove.edited &&
+            apply(secondMove) && released.editEnd && !released.edited && apply(released) && !input.Dragging(),
+        "Curve view drag should open one edit, store every move and close it on release");
+    kb::editor::tests::Require(keys()[1].time > 0.5F && std::fabs(keys()[1].value - 0.5F) < 1.0e-5F,
+        "Shift should constrain a mostly horizontal key drag to the time axis");
+
+    // Undo restores the key before the drag, redo brings the drag back.
+    kb::editor::tests::Require(document.Undo() && std::fabs(keys()[1].time - 0.5F) < 1.0e-5F, "Undo should restore the key before the drag");
+    state.SetCurve(kb::math::Curve{ keys() });
+    kb::editor::tests::Require(state.Curve().keyframes[1].time == keys()[1].time && state.Selected() == std::optional<std::size_t>{ 1U },
+        "The view should follow the document after undo and keep its selection");
+    kb::editor::tests::Require(document.Redo() && keys()[1].time > 0.5F, "Redo should restore the dragged key");
+    state.SetCurve(kb::math::Curve{ keys() });
+
+    // Tangent mode from the context menu, then a tangent handle drag makes the key Free.
+    const kb::editor::CurveEditorResult flat = kb::editor::CurveEditorInteraction::SetTangentMode(state, CurveTangentMode::Flat);
+    kb::editor::tests::Require(flat.edited && apply(flat) && keys()[1].tangentMode == CurveTangentMode::Flat &&
+            keys()[1].inTangent == 0.0F && keys()[1].outTangent == 0.0F,
+        "Curve view should change the selected key's tangent mode");
+    const auto handle = state.HandlePosition(1U, true);
+    kb::editor::tests::Require(state.HitTest(handle.first, handle.second).handle == kb::editor::CurveEditorHandle::OutTangent,
+        "Curve view should hit the selected key's tangent handle");
+    static_cast<void>(input.PointerDown(state, handle.first, handle.second, false, false));
+    const kb::editor::CurveEditorResult tangent = input.PointerMove(state, handle.first, handle.second - 20.0F, false);
+    kb::editor::tests::Require(tangent.edited && apply(tangent) && apply(input.PointerUp()) &&
+            keys()[1].tangentMode == CurveTangentMode::Free && keys()[1].outTangent > 0.0F && keys()[1].inTangent == keys()[1].outTangent,
+        "Dragging a tangent handle should make the key Free with aligned tangents");
+
+    // Delete removes the selected key; undo brings it back.
+    const kb::editor::CurveEditorResult removed = kb::editor::CurveEditorInteraction::Key(state, kb::editor::CurveEditorKey::Delete);
+    kb::editor::tests::Require(removed.edited && apply(removed) && keys().size() == 2U && !state.Selected().has_value(),
+        "Delete should remove the selected key");
+    kb::editor::tests::Require(document.Undo() && keys().size() == 3U && keys()[1].tangentMode == CurveTangentMode::Free,
+        "Undo should restore a deleted key with its tangents");
+
+    // View: frame all, zoom and pan never edit the curve.
+    kb::editor::tests::Require(!kb::editor::CurveEditorInteraction::Key(state, kb::editor::CurveEditorKey::FrameAll).edited &&
+            kb::editor::CurveEditorInteraction::Wheel(state, 200.0F, 100.0F, 120, false).redraw &&
+            kb::editor::CurveEditorInteraction::Wheel(state, 200.0F, 100.0F, 120, true).redraw,
+        "Frame all and wheel zoom should change only the view");
+    input.MiddleDown(10.0F, 10.0F);
+    kb::editor::tests::Require(input.MiddleMove(state, 30.0F, 10.0F).redraw && !input.MiddleMove(state, 30.0F, 10.0F).edited,
+        "Middle drag should pan the view");
+    input.MiddleUp();
 }
 
 void RunAutosaveStateTest() {
@@ -1479,6 +1626,8 @@ void RunEditorDockingTests() {
     RunSavedLayoutLibraryTest();
     RunFloatingPanelContentMatchesDockedTest();
     RunLayoutMenuModelTest();
+    RunLayoutMenuPanelRowsTest();
+    RunCrowdedTabStripTest();
     RunAnimatorEditorDefaultLayoutTest();
     RunAnimatorEditorGraphDocumentStateTest();
     RunSkeletalMeshEditorDefaultLayoutTest();
@@ -1488,6 +1637,7 @@ void RunEditorDockingTests() {
     RunSkeletonEditorDocumentStateTest();
     RunAnimationClipTimelineStateTest();
     RunAnimationClipEditorDocumentStateTest();
+    RunCurveEditorStateTest();
     RunAutosaveStateTest();
     RunSharedEditorRowComponentLayoutTest();
     RunTabClickIsDockInteractionTest();

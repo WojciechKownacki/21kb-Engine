@@ -55,15 +55,20 @@ void RendererRelativeOverlays::Apply(RenderSceneSubmitDesc& desc, const kb::math
     lightWireframes_.assign(desc.editorLightWireframes.begin(), desc.editorLightWireframes.end());
     for (EditorLightWireframeDesc& light : lightWireframes_) light.position = RendererRenderOrigin::Relative(light.position, from, origin);
     desc.editorLightWireframes = lightWireframes_;
-    particleIcons_.assign(desc.editorParticleIcons.begin(), desc.editorParticleIcons.end());
-    for (EditorParticleIconDesc& icon : particleIcons_) icon.position = RendererRenderOrigin::Relative(icon.position, from, origin);
-    desc.editorParticleIcons = particleIcons_;
+    sceneIcons_.assign(desc.editorSceneIcons.begin(), desc.editorSceneIcons.end());
+    for (EditorSceneIconDesc& icon : sceneIcons_) icon.position = RendererRenderOrigin::Relative(icon.position, from, origin);
+    desc.editorSceneIcons = sceneIcons_;
     physicsDebugLines_.assign(desc.physicsDebugLines.begin(), desc.physicsDebugLines.end());
     for (PhysicsDebugLine& line : physicsDebugLines_) {
         line.from = RendererRenderOrigin::Relative(line.from, from, origin);
         line.to = RendererRenderOrigin::Relative(line.to, from, origin);
     }
     desc.physicsDebugLines = physicsDebugLines_;
+    debugFillTriangles_.assign(desc.debugFillTriangles.begin(), desc.debugFillTriangles.end());
+    for (DebugFillTriangle& triangle : debugFillTriangles_) {
+        for (std::array<float, 3>& corner : triangle.corners) corner = RendererRenderOrigin::Relative(corner, from, origin);
+    }
+    desc.debugFillTriangles = debugFillTriangles_;
 }
 
 } // namespace kb::render

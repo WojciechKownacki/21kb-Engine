@@ -35,6 +35,8 @@ struct InspectorUIPropertyRow {
     bool onClick = false;
     // Rare settings, listed after the others under a collapsed "Advanced" row.
     bool advanced = false;
+    // Written after the number.
+    std::string_view unit;
 };
 
 class InspectorUIComponentModel final {
@@ -52,6 +54,9 @@ public:
     // Selectable settings most widgets never touch (raycast, navigation, event name and target, ...): they follow
     // the others under an "Advanced" row.
     [[nodiscard]] static bool IsAdvancedProperty(kb::scene::UIComponentType component, std::string_view name) noexcept;
+    // The catalog name of the property a row of Properties() stands for ("onClick" for the Selectable's first row);
+    // empty past the end.
+    [[nodiscard]] static std::string_view PropertyNameAt(kb::scene::UIComponentType component, int index);
     [[nodiscard]] static std::string_view DisplayName(kb::scene::UIComponentType component);
     [[nodiscard]] static std::string_view PresetDisplayName(kb::scene::UIComponentPreset preset);
     [[nodiscard]] static InspectorSectionId Section(kb::scene::UIComponentType component) noexcept;

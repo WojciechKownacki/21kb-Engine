@@ -9,6 +9,7 @@
 #include "engine/script/ScriptExecutionBudget.hpp"
 #include "engine/script/ScriptValue.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -24,6 +25,7 @@ struct lua_State;
 
 namespace kb::script {
 
+class PucLuaRunaway;
 struct PucLuaMemoryBudget;
 struct PucLuaStateLifetime;
 
@@ -87,6 +89,13 @@ struct PucLuaExposedVariableInstance {
     bool overridden = false;
 };
 
+// What the collector's end-of-frame steps have cost so far (PucLuaScriptRuntime::StepGarbageCollector).
+struct PucLuaCollectionStats {
+    std::uint64_t steps = 0U;
+    std::uint64_t totalMicroseconds = 0U;
+    std::uint64_t longestStepMicroseconds = 0U;
+};
+
 class PucLuaScriptRuntime final : public ILuaScriptRuntime, public ILuaScriptAssetStore, public kb::core::IRuntimeStateProvider {
 public:
     PucLuaScriptRuntime();
@@ -135,12 +144,14 @@ public:
     void SetExecutionBudgetSettings(ScriptExecutionBudgetSettings settings) noexcept;
     void BeginExecutionBudget() noexcept;
     void EndExecutionBudget() noexcept;
-    [[nodiscard]] bool ConsumeLuaInstructions(std::size_t count) noexcept;
     [[nodiscard]] kb::core::BudgetExceededPolicy ExecutionBudgetPolicy() const noexcept;
     [[nodiscard]] bool IsExecutionBudgetEnabled() const noexcept;
     [[nodiscard]] bool HasActiveExecutionBudget() const noexcept;
     // Bytes the Lua state currently holds, counted by its bounded allocator.
     [[nodiscard]] std::size_t LuaMemoryUsedBytes() const noexcept;
+    // Blocks the Lua state has asked its allocator for since it was created; two readings bracket the allocations
+    // a stretch of script work made.
+    [[nodiscard]] std::uint64_t LuaAllocationCount() const noexcept;
     // Allocator block capacities/headers and checkpoint image storage, not process RSS.
     [[nodiscard]] std::size_t LuaMemoryOwnedBytes() const noexcept;
     [[nodiscard]] const PucLuaDebugSettings& DebugSettings() const noexcept;
@@ -163,6 +174,9 @@ public:
     // Line hook side: whether `thread` may yield from the hook to stay suspended at a pause; true marks it as
     // suspending. False while a Destroyed entry runs, which is never invoked again to resume.
     [[nodiscard]] bool BeginDebugSuspend(lua_State* thread) noexcept;
+    // LuaJIT runs the hook again for the line a thread was suspended at when it is resumed; true once for that first event,
+    // which is not a new line to stop at.
+    [[nodiscard]] bool ConsumeResumedLine(lua_State* thread, int line) noexcept;
     void RecordDebugPause(PucLuaDebugPauseSnapshot snapshot);
     [[nodiscard]] std::optional<PucLuaDebugPauseReason> ConsumeRequestedDebugPause() noexcept;
     [[nodiscard]] bool NeedsDebugLineHook() const noexcept;
@@ -175,6 +189,38 @@ public:
         kb::scene::SceneEntity entity,
         kb::assets::AssetId assetId,
         EventSubscriptionHandle handle);
+
+    // True unless the script of `behaviour` is loaded and defines nothing called `name`; also true while any entry is
+    // suspended in a coroutine, which must be resumed whatever the script defines now.
+    [[nodiscard]] bool HasEntry(
+        const kb::scene::BehaviourComponent& behaviour,
+        std::string_view name) override;
+
+    // An event delivered to many behaviours reaches each of them as the same Lua table: it is built for the first
+    // receiver and handed to the others, so a broadcast costs one table, not one per receiver. A handler that changes
+    // the table changes it for the receivers after it.
+    void BeginEventBroadcast(const ScriptEvent& event) override;
+    void EndEventBroadcast() noexcept override;
+
+    // The call a phase loop makes for an object: it keeps what the call needs (the script, the object's self table)
+    // so a frame does not look them up for every object. It stays valid until PhaseCallRevision moves.
+    [[nodiscard]] bool ResolvePhaseCall(
+        kb::scene::SceneEntity entity,
+        const kb::scene::BehaviourComponent& behaviour,
+        ScriptLifecycleEvent event,
+        ScriptPhaseCall& call) override;
+    // The same for the handlers of a broadcast: the name of the handler is the incoming event's.
+    [[nodiscard]] bool ResolveEventCall(
+        kb::scene::SceneEntity entity,
+        const kb::scene::BehaviourComponent& behaviour,
+        ScriptPhaseCall& call) override;
+    [[nodiscard]] std::uint64_t PhaseCallRevision() const noexcept override;
+
+    // Runs the collector for at most ScriptExecutionBudgetSettings::luaCollectionMicrosecondsPerFrame (the first
+    // call also switches the state to generational mode, where a step is one collection of the objects created since
+    // the last one - the per-frame garbage of scripts). The scene system host calls it once at the end of a frame.
+    void StepGarbageCollector() noexcept;
+    [[nodiscard]] PucLuaCollectionStats CollectionStats() const noexcept;
 
     [[nodiscard]] ScriptBackendExecutionResult ExecuteLifecycle(
         const kb::scene::BehaviourComponent& behaviour,
@@ -201,13 +247,36 @@ private:
         ScriptExecutionContext& context,
         const ScriptEvent* event);
     [[nodiscard]] int FindScriptEnvironment(kb::assets::AssetId assetId) const noexcept;
+    // Idle coroutine threads are kept in a table in the Lua registry (so a state checkpoint restores them with the
+    // rest of the heap): an entry that returns hands its thread back instead of leaving it to the collector, and the
+    // next entry starts on it. AcquireThread leaves the thread on the state's stack.
+    [[nodiscard]] lua_State* AcquireThread();
+    void ReleaseThread(lua_State* thread, int threadIndex) noexcept;
 
     struct ScriptRecord {
         int environmentRef = -2;
         std::string chunkName;
         std::uint64_t contentHash = 0U;
         std::uint64_t generation = 0U;
+        // The function set the environment has the execution API attached for (see PucLuaRuntimeApi::AttachExecutionApi).
+        // The stamp of a context without a function registry is 0, so a new script starts below every stamp.
+        long long attachedStamp = -1;
     };
+    // The record of an asset; the last one asked for is remembered, because the objects of one script are called one
+    // after another. Null when the asset has no script.
+    [[nodiscard]] ScriptRecord* FindScriptRecord(std::uint64_t assetId) noexcept;
+    ScriptRecord* cachedScript_ = nullptr;
+    std::uint64_t cachedScriptAsset_ = 0U;
+
+    // The event of each broadcast in progress and the registry reference of its table, once it was built.
+    struct EventBroadcast {
+        const ScriptEvent* event = nullptr;
+        int tableReference = -2;
+        // The event's name as an interned string anchored in the registry (LuaJIT: the receivers find their handler without
+        // hashing the name again); zero when there is none.
+        int nameReference = 0;
+    };
+    std::vector<EventBroadcast> eventBroadcasts_;
 
     struct ModuleRecord {
         std::string source;
@@ -257,6 +326,74 @@ private:
         int depth = 0;
     };
 
+    // What the calls of one object share, kept across frames: the script record, the registry reference of its self table
+    // and whether it has exposed variables to bring in line. Refreshed when callSiteRevision_ moved.
+    struct CallSite;
+    // What a phase loop is handed for one phase of one object: the site and the name of the entry it runs.
+    struct PhaseTarget {
+        CallSite* site = nullptr;
+        const char* name = nullptr;
+        int nameReference = 0;
+    };
+    struct CallSite {
+        PucLuaScriptRuntime* runtime = nullptr;
+        InstanceKey key{};
+        ScriptRecord* script = nullptr;
+        int selfReference = -2;
+        std::uint64_t revision = 0U;
+        bool plain = false;
+        // The function set the script environment has to be attached for. Once the function registry is locked it cannot
+        // change, and the value is kept until the site is refreshed.
+        long long apiStamp = 0;
+        bool apiStampFinal = false;
+        std::array<PhaseTarget, static_cast<std::size_t>(ScriptLifecycleEvent::Destroyed) + 1U> phases{};
+    };
+    [[nodiscard]] CallSite& SiteFor(const InstanceKey& key);
+    void RefreshSite(CallSite& site);
+    // Runs one entry of an object on the kept coroutine when nothing special applies (no suspended entries, no
+    // debugger, an object with a self table and no exposed variables). False when the general path has to run it.
+    [[nodiscard]] bool TryLeanExecute(
+        CallSite& site,
+        const char* functionName,
+        int nameReference,
+        const ScriptEvent* event,
+        ScriptExecutionContext& context,
+        std::vector<ScriptDiagnostic>& diagnostics,
+        bool& executed);
+    void FinishLeanResume(
+        CallSite& site,
+        lua_State* thread,
+        int status,
+        const char* functionName,
+        ScriptExecutionContext& context,
+        std::vector<ScriptDiagnostic>& diagnostics,
+        bool& executed);
+    // Pushes the event table of a handler on `target`: the shared one while a broadcast is in progress.
+    void PushEventValue(lua_State* target, const ScriptEvent& event);
+    // The registry reference of an interned entry name (zero: none is kept). A lifecycle name is kept for the life of the
+    // state; an event name only while its broadcast is in progress.
+    [[nodiscard]] int PhaseNameReference(ScriptLifecycleEvent event);
+    [[nodiscard]] int EventNameReference(const ScriptEvent& event);
+    std::array<int, static_cast<std::size_t>(ScriptLifecycleEvent::Destroyed) + 1U> phaseNameReferences_{};
+    [[nodiscard]] static bool InvokePhase(
+        void* target,
+        const kb::scene::BehaviourComponent& behaviour,
+        ScriptExecutionContext& context,
+        std::vector<ScriptDiagnostic>& diagnostics);
+    [[nodiscard]] static bool InvokeEventHandler(
+        void* target,
+        const kb::scene::BehaviourComponent& behaviour,
+        ScriptExecutionContext& context,
+        std::vector<ScriptDiagnostic>& diagnostics);
+    [[nodiscard]] static bool InvokeEntry(
+        CallSite& site,
+        const char* name,
+        int nameReference,
+        const ScriptEvent* event,
+        const kb::scene::BehaviourComponent& behaviour,
+        ScriptExecutionContext& context,
+        std::vector<ScriptDiagnostic>& diagnostics);
+
     void ReleaseDebugPause(DebugStepMode mode) noexcept;
     void ClearCoroutines(const InstanceKey& instanceKey) noexcept;
     void ClearCoroutinesForAsset(kb::assets::AssetId assetId) noexcept;
@@ -269,10 +406,22 @@ private:
     std::unique_ptr<PucLuaMemoryBudget> memoryBudget_;
     std::shared_ptr<PucLuaStateLifetime> stateLifetime_;
     lua_State* state_ = nullptr;
+    // Ends an entry that has run past the execution budget (see PucLuaRunaway.hpp).
+    std::unique_ptr<PucLuaRunaway> runaway_;
     std::unordered_map<std::uint64_t, ScriptRecord> scripts_;
     std::unordered_map<std::string, ModuleRecord> modules_;
     std::unordered_map<std::uint64_t, std::vector<ExposedVariableRecord>> exposedVariables_;
-    std::unordered_map<InstanceKey, std::vector<PucLuaExposedVariableInstance>, InstanceKeyHasher> instanceVariables_;
+    // The exposed variables of one behaviour instance, and the definitions revision they were last synchronized
+    // with: an instance is brought in line with its asset's definitions when they change, not on every call.
+    struct InstanceVariableSet {
+        std::vector<PucLuaExposedVariableInstance> values;
+        std::uint64_t syncedRevision = 0U;
+    };
+    std::unordered_map<InstanceKey, InstanceVariableSet, InstanceKeyHasher> instanceVariables_;
+    std::uint64_t exposedRevision_ = 1U;
+    std::unordered_map<InstanceKey, CallSite, InstanceKeyHasher> callSites_;
+    // Moves when a script record or an exposed-variable definition changes, or the sites are dropped.
+    std::uint64_t callSiteRevision_ = 1U;
     // LIB-097: registry references own Lua generator threads. Each thread is
     // scoped to one behaviour instance and entry function, so yielding Tick
     // never suspends another entity or lifecycle callback.
@@ -289,10 +438,13 @@ private:
     lua_State* debugSuspendThread_ = nullptr;
     int debugSuspendDepth_ = 0;
     bool debugSuspendAllowed_ = false;
+    // The thread last released from a pause and the line it paused at, until its first line event after the release.
+    lua_State* debugResumedThread_ = nullptr;
+    int debugResumedLine_ = 0;
     ScriptExecutionBudgetSettings executionBudgetSettings_;
-    std::size_t remainingLuaInstructions_ = 0U;
     bool executionBudgetActive_ = false;
     std::uint64_t generation_ = 1U;
+    PucLuaCollectionStats collectionStats_;
 };
 
 } // namespace kb::script

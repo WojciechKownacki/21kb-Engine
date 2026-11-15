@@ -177,8 +177,8 @@ namespace {
     return key == "chest" ? std::string{ "spine" } : key;
 }
 
-// Spine and neck links are numbered differently by every tool (Mixamo Spine, Spine1 against
-// Unreal spine_01, spine_02): their numbers mean nothing across rigs, only their order does.
+// Spine and neck links are numbered differently by every tool (Spine, Spine1 against
+// spine_01, spine_02): their numbers mean nothing across rigs, only their order does.
 [[nodiscard]] bool OrderedChain(std::string_view key) noexcept { return key == "spine" || key == "neck"; }
 
 } // namespace

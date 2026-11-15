@@ -84,6 +84,9 @@ public:
     [[nodiscard]] static EditorDialogListRowLayout ResolveListRow(
         const EditorDialogListRowDescriptor& descriptor) noexcept;
 
+    // Rounds a window hung from a button: every corner but the top one under the button,
+    // on the right for a window lined up with the right edge of its button.
+    static void ApplyDropdownShape(HWND window, bool squareTopRight = false) noexcept;
     static void PaintSurface(HDC dc, const RECT& bounds, const EditorTheme& theme);
     static void PaintTitleBar(HDC dc, const EditorTheme& theme, const EditorDialogHeaderDescriptor& descriptor);
     static void PaintHeader(HDC dc, const EditorTheme& theme, const EditorDialogHeaderDescriptor& descriptor);

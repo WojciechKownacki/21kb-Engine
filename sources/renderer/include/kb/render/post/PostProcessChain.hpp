@@ -20,7 +20,7 @@ enum class PostProcessPassKind : std::uint8_t {
     Tonemap,
     Bloom,
     SelectionOutline,
-    // FXAA: filters the display image after the tonemap (Unreal's order).
+    // FXAA: filters the display image after the tonemap.
     Fxaa,
 };
 

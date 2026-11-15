@@ -58,19 +58,19 @@ if (!kb::scene::SceneVideoPlayers::Play(scene, imageEntity,
         "/Game/Video/Clip.21kb", true, error)) { /* report error */ }
 auto state = kb::scene::SceneVideoPlayers::Read(scene, imageEntity);
 ```
-The owner requires UIRawImage. Windows Media Foundation decodes the imported payload,
-including from a mounted package. PCM uses the normal mixer/voice; its cursor is the
-video clock. Decoded RGB32 frames update one GPU texture per active image. Pause,
+The owner requires UIRawImage. Windows Media Foundation (Windows) or the NDK media
+codecs (Android) decode the imported payload, including from a mounted package.
+PCM uses the normal mixer/voice; its cursor is the video clock. Decoded RGB32 frames update one GPU texture per active image. Pause,
 resume, seek and loop use the same voice, and Stop restores the previous raw image.
 Seek operates on a live voice; call Play again after natural end. The rendered-frame
 audio clock classifies natural EOF even when a UI frame misses the final voice cursor.
 Lua: `UIVideo.Play(entity,asset,loop)`, `Info(entity)`, `Pause`, `Resume`,
 `Seek(entity,seconds)`, `Stop`. Info exposes audio/video timestamps and frame revision.
 
-Limits: Windows host codecs, unrotated SDR, audio track required, 60 seconds,
+Limits: Windows and Android host codecs, unrotated SDR, audio track required, 60 seconds,
 64 MiB source, 1920x1080, four simultaneous players, 64 decode frames per update.
 Unsupported hosts/codecs, missing Media Feature Pack and changing formats report errors.
 Author source assets and binding scripts; transient decoder/speech state is not a
-runtime checkpoint format. Windows playback does not qualify other platform decoders.
+runtime checkpoint format. Windows playback does not qualify the Android decoder.
 )guide";
 }

@@ -9,6 +9,7 @@
 #include "engine/input/InputValue.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -40,6 +41,22 @@ struct InputActionEvent {
     InputValue value{};
 };
 
+// An action name whose hash is worked out once, for queries made every frame: keep one (a static or a member of the
+// script) and pass it instead of the text.
+class InputActionName {
+public:
+    explicit InputActionName(std::string_view name)
+        : name_(name), hash_(std::hash<std::string_view>{}(name)) {}
+
+    [[nodiscard]] std::string_view View() const noexcept { return name_; }
+    [[nodiscard]] std::size_t Hash() const noexcept { return hash_; }
+    [[nodiscard]] friend bool operator==(const std::string& lhs, const InputActionName& rhs) noexcept { return std::string_view{ lhs } == rhs.name_; }
+
+private:
+    std::string name_;
+    std::size_t hash_ = 0U;
+};
+
 // The runtime input subsystem. Platform code fills MutableDeviceState() each frame;
 // the polling system calls Evaluate(dt); scripts query action states by name.
 //
@@ -48,6 +65,14 @@ struct InputActionEvent {
 // events every frame.
 class InputSubsystem {
 public:
+    // Action names are looked up by view or by InputActionName, without a string made for every query.
+    struct ActionNameHash {
+        using is_transparent = void;
+        [[nodiscard]] std::size_t operator()(std::string_view name) const noexcept { return std::hash<std::string_view>{}(name); }
+        [[nodiscard]] std::size_t operator()(const InputActionName& name) const noexcept { return name.Hash(); }
+    };
+    using ActionStateMap = std::unordered_map<std::string, InputActionState, ActionNameHash, std::equal_to<>>;
+
     using ActionResolver = InputMappingContextStack::ActionResolver;
     using ContextResolver = InputMappingContextStack::ContextResolver;
 
@@ -100,6 +125,7 @@ public:
 
     // --- Queries ---
     [[nodiscard]] bool IsActionPressed(std::string_view action) const;
+    [[nodiscard]] bool IsActionPressed(const InputActionName& action) const;
     [[nodiscard]] InputValue GetActionValue(std::string_view action) const;
     [[nodiscard]] bool WasActionStarted(std::string_view action) const;
     [[nodiscard]] bool WasActionTriggered(std::string_view action) const;
@@ -111,10 +137,11 @@ public:
     }
 
     // Evaluated values for diagnostics, including axes below their trigger threshold.
-    [[nodiscard]] const std::unordered_map<std::string, InputActionState>& ActionStates() const noexcept { return actionStates_; }
+    [[nodiscard]] const ActionStateMap& ActionStates() const noexcept { return actionStates_; }
 
 private:
     [[nodiscard]] const InputActionState* FindState(std::string_view action) const;
+    [[nodiscard]] const InputActionState* FindState(const InputActionName& action) const;
 
     InputDeviceState deviceState_;
     InputDeviceState gameplayDevice_;
@@ -123,7 +150,7 @@ private:
     bool gameplayInputBlocked_ = false;
     bool gameplayInputFiltered_ = false;
     InputMappingContextStack stack_;
-    std::unordered_map<std::string, InputActionState> actionStates_;
+    ActionStateMap actionStates_;
     std::unordered_map<std::string, TriggerState> previousCombined_;
     std::vector<InputActionEvent> frameEvents_;
 };

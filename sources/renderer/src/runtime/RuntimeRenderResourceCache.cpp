@@ -3,6 +3,7 @@
 #include "kb/render/runtime/RuntimeRenderAssetDiscovery.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "runtime/RuntimeMaterialResourceEnsurer.hpp"
 #include "runtime/RuntimeMeshResourceEnsurer.hpp"
 #include "runtime/RuntimeRenderResourceLifecycle.hpp"
@@ -33,11 +34,19 @@ void RuntimeRenderResourceCache::EnsureSceneResources(const RuntimeRenderResourc
     const auto started = traceEnabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     context.assetDiscovery.Ensure(context.scene, context.currentFrame);
     const auto discoveryFinished = traceEnabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-    EnsureMeshResources(context);
+    RuntimeResourceCreationBudget creation = loading_.asynchronous
+        ? RuntimeResourceCreationBudget{ loading_ }
+        : RuntimeResourceCreationBudget{};
+    if (creation.Asynchronous()) {
+        // Reads that finished since the last submit become loaded assets here, on the render thread.
+        context.scene.Assets().Manager().PumpAsyncLoads();
+    }
+    EnsureMeshResources(context, creation);
     const auto meshesFinished = traceEnabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     EnsureMaterialResources(context);
     const auto materialsFinished = traceEnabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-    EnsureTextureResources(context);
+    EnsureTextureResources(context, creation);
+    sceneProgress_[context.scene.Id()] = creation.Progress();
     if (traceEnabled) {
         const auto finished = std::chrono::steady_clock::now();
         const auto elapsedMs = [](auto begin, auto end) {
@@ -63,16 +72,32 @@ void RuntimeRenderResourceCache::EnsureSceneResources(const RuntimeRenderResourc
     }
 }
 
-void RuntimeRenderResourceCache::EnsureMeshResources(const RuntimeRenderResourceEnsureContext& context) {
-    RuntimeMeshResourceEnsurer::Ensure(context, meshes_, embeddedMaterials_, streamer_);
+void RuntimeRenderResourceCache::EnsureMeshResources(
+    const RuntimeRenderResourceEnsureContext& context, RuntimeResourceCreationBudget& creation) {
+    RuntimeMeshResourceEnsurer::Ensure(context, meshes_, embeddedMaterials_, streamer_, creation);
 }
 
 void RuntimeRenderResourceCache::EnsureMaterialResources(const RuntimeRenderResourceEnsureContext& context) {
     RuntimeMaterialResourceEnsurer::Ensure(context, materials_, embeddedMaterials_);
 }
 
-void RuntimeRenderResourceCache::EnsureTextureResources(const RuntimeRenderResourceEnsureContext& context) {
-    RuntimeTextureResourceEnsurer::Ensure(context, materials_, embeddedMaterials_, textures_, streamer_);
+void RuntimeRenderResourceCache::EnsureTextureResources(
+    const RuntimeRenderResourceEnsureContext& context, RuntimeResourceCreationBudget& creation) {
+    RuntimeTextureResourceEnsurer::Ensure(context, materials_, embeddedMaterials_, textures_, streamer_, creation);
+}
+
+RuntimeSceneLoadProgress RuntimeRenderResourceCache::SceneLoadProgress(std::uint64_t sceneId) const noexcept {
+    const auto found = sceneProgress_.find(sceneId);
+    return found == sceneProgress_.end() ? RuntimeSceneLoadProgress{} : found->second;
+}
+
+std::uint32_t RuntimeRenderResourceCache::WaitingResourceCount() const noexcept {
+    std::uint32_t waiting = 0U;
+    for (const auto& [sceneId, progress] : sceneProgress_) {
+        static_cast<void>(sceneId);
+        waiting += progress.waiting;
+    }
+    return waiting;
 }
 
 void RuntimeRenderResourceCache::UpdateStreaming(const RuntimeContentStreamingFrame& frame, SceneRenderer& sceneRenderer) {
@@ -80,11 +105,13 @@ void RuntimeRenderResourceCache::UpdateStreaming(const RuntimeContentStreamingFr
 }
 
 void RuntimeRenderResourceCache::ReleaseScene(kb::scene::Scene& scene, SceneRenderer* sceneRenderer) noexcept {
+    sceneProgress_.erase(scene.Id());
     streamer_.ReleaseScene(scene.Id());
     RuntimeRenderResourceLifecycle::ReleaseScene(scene, sceneRenderer, meshes_, materials_, embeddedMaterials_, textures_);
 }
 
 void RuntimeRenderResourceCache::DestroyAll(SceneRenderer* sceneRenderer) noexcept {
+    sceneProgress_.clear();
     streamer_.ReleaseAll();
     RuntimeRenderResourceLifecycle::DestroyAll(sceneRenderer, meshes_, materials_, embeddedMaterials_, textures_);
 }

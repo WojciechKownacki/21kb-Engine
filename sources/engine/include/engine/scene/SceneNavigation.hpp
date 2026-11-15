@@ -25,24 +25,36 @@ class Scene;
 // How the crowd (DetourCrowd) moving agents over polygon navigation meshes spends its time. Agents
 // closer than `nearDistance` to a level-of-detail focus (SetCrowdFocuses, else every enabled Stream
 // Focus; without any focus every agent is near) avoid neighbours and walls by sampling velocities,
-// keep apart from neighbours and shorten their paths every step; the others only follow their path
-// corridors and shorten them every `farPathOptimizationInterval` steps.
+// keep apart from neighbours and shorten their paths every step; agents within `midDistance` keep
+// apart from neighbours and shorten their paths every step but do not sample velocities; the others
+// only follow their path corridors and shorten them every `farPathOptimizationInterval` steps. An
+// agent moves to a farther level only 10% beyond its edge, so agents on an edge do not flicker.
 struct NavigationCrowdSettings {
     float nearDistance = 60.0F;
+    float midDistance = 120.0F;
     std::uint32_t farPathOptimizationInterval = 4U;
-    // Destinations handed to the crowd per step; agents waiting for theirs stand still and report a
-    // Pending path.
+    // Destinations handed to the crowd per step, nearer levels of detail first, then the longest
+    // waiting; agents waiting for theirs stand still and report a Pending path.
     std::uint32_t maxPathRequestsPerStep = 64U;
     // Neighbours (at most 6) and walls an agent reacts to lie within this many of its radii.
     float neighbourRangeRadii = 12.0F;
     float separationWeight = 2.0F;
     bool avoidance = true;
+    // Threads the per-agent work of a step runs on: 0 uses the engine's default worker count, 1 the
+    // calling thread. The result is the same for every count.
+    std::uint32_t workerThreads = 0U;
+    // Horde agents (NavAgent::horde): polygons the shared navigation fields grow by per step, all
+    // fields together; fields kept for reuse; the gap beyond touching at which they push apart.
+    std::uint32_t hordeFieldNodesPerStep = 4096U;
+    std::uint32_t hordeFieldCacheSize = 128U;
+    float hordeSeparationDistance = 0.3F;
 };
 
 struct NavigationCrowdStats {
     // Agents walking the polygon meshes, split by level of detail.
     std::size_t agents = 0U;
     std::size_t nearAgents = 0U;
+    std::size_t midAgents = 0U;
     std::size_t farAgents = 0U;
     // Destinations handed to the crowd in the last step, and agents whose path is not planned yet.
     std::size_t pathRequests = 0U;
@@ -50,8 +62,29 @@ struct NavigationCrowdStats {
     std::size_t onLinks = 0U;
     // Candidate velocities the crowd sampled to avoid collisions.
     std::size_t velocitySamples = 0U;
-    // Wall time of the last navigation step.
+    // Wall time of the last navigation step, and of its stages: handing agents to the crowd and
+    // reading them back, then the crowd's paths (validity, requests, queue), walls and neighbours,
+    // corners and links, steering, velocity sampling, and moving.
     double milliseconds = 0.0;
+    double syncMilliseconds = 0.0;
+    double pathMilliseconds = 0.0;
+    double neighbourMilliseconds = 0.0;
+    double cornerMilliseconds = 0.0;
+    double steeringMilliseconds = 0.0;
+    double avoidanceMilliseconds = 0.0;
+    double moveMilliseconds = 0.0;
+    // Horde agents: how many, how many were updated this step (far ones less often), asleep where
+    // they stopped, waiting for their field to reach them and crossing links; the fields kept and
+    // the polygons they grew by this step; the wall time of the horde step and of its fields.
+    std::size_t hordeAgents = 0U;
+    std::size_t hordeUpdated = 0U;
+    std::size_t hordeAsleep = 0U;
+    std::size_t hordeWaiting = 0U;
+    std::size_t hordeOnLinks = 0U;
+    std::size_t hordeFields = 0U;
+    std::size_t hordeFieldNodes = 0U;
+    double hordeMilliseconds = 0.0;
+    double hordeFieldMilliseconds = 0.0;
 };
 
 struct NavQueryOptions {
@@ -137,6 +170,11 @@ public:
     // not finite and positive.
     void SetAreaCost(NavAreaId area, float cost) noexcept;
     [[nodiscard]] float AreaCost(NavAreaId area) const noexcept;
+    // The project's named areas: sets every area's cost from the list (an area it leaves out costs 1)
+    // and blocks the areas whose cost is 0. FindArea resolves a name against the list.
+    void SetAreaDefinitions(std::span<const NavAreaDefinition> areas);
+    [[nodiscard]] const std::vector<NavAreaDefinition>& AreaDefinitions() const noexcept;
+    [[nodiscard]] std::optional<NavAreaId> FindArea(std::string_view name) const noexcept;
 
     void ConfigureCrowd(const NavigationCrowdSettings& settings);
     [[nodiscard]] NavigationCrowdSettings CrowdSettings() const noexcept;

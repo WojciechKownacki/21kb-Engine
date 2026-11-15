@@ -24,8 +24,13 @@ void SceneEntityDestructionService::DestroyEntity(Scene& scene, SceneEntity enti
         return;
     }
 
-    SceneHistoryService::NoteSubtreeDestroying(scene, entity);
     SceneState& state = SceneAccess::State(scene);
+    if (state.world.IterationActive()) {
+        // Removing rows under a running query is refused by the world, so the destroy waits for the end of the update.
+        SceneEntityService::QueueDeferredDestroy(scene, entity);
+        return;
+    }
+    SceneHistoryService::NoteSubtreeDestroying(scene, entity);
     const SceneEntity root = entity;
     for (;;) {
         const SceneObject object = SceneAccess::MakeObject(scene, entity);
@@ -52,6 +57,7 @@ void SceneEntityDestructionService::DestroyEntity(Scene& scene, SceneEntity enti
             state.persistentEntities.erase(entity.Id());
             state.behaviourVariableOverrides.erase(entity.Id());
             state.prefabInstances.ForgetDestroyedObject(entity);
+            state.componentStorage.Behaviours().NoteEntityDestroyed(entity);
             const auto beforeRemoval = state.world.NativeStorage().RemovalVersion();
             state.world.DestroyEntity(entity);
             state.transformTopology.LeafRemovalHandled(beforeRemoval, state.world.NativeStorage().RemovalVersion());

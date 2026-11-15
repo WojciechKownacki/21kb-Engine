@@ -163,6 +163,18 @@ ScriptFunctionCallResult SetAreaCost(const ScriptFunctionCallContext& context, s
     return ScriptFunctionCallResult{ .executed = true, .outputs = { Out("applied", ScriptValue{ applied }) }, .errors = {} };
 }
 
+ScriptFunctionCallResult FindArea(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) return Error("navigation api requires an active scene");
+    const ScriptValue* name = FindArg(arguments, "name");
+    const std::optional<kb::scene::NavAreaId> area = name != nullptr && name->Type() == ScriptValueType::String
+        ? kb::scene::SceneNavigation{ *context.scene }.FindArea(name->AsString()) : std::nullopt;
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { Out("found", ScriptValue{ area.has_value() }), Out("area", ScriptValue{ area.has_value() ? static_cast<int>(*area) : -1 }) },
+        .errors = {},
+    };
+}
+
 [[nodiscard]] std::vector<ScriptFunctionPin> PointPins(std::string_view prefix) {
     return {
         ScriptFunctionPin{ std::string{ prefix } + "X", ScriptValueType::Float, true },
@@ -216,6 +228,8 @@ bool ScriptNavigationApi::Register(ScriptRuntimeHost& host) {
     ok = RegisterFn(host, "Navigation.SetAreaCost",
         { ScriptFunctionPin{ "area", ScriptValueType::Int, true }, ScriptFunctionPin{ "cost", ScriptValueType::Float, true } }, { boolOut("applied") },
         &SetAreaCost) && ok;
+    ok = RegisterFn(host, "Navigation.FindArea", { ScriptFunctionPin{ "name", ScriptValueType::String, true } },
+        { boolOut("found"), ScriptFunctionPin{ "area", ScriptValueType::Int, true } }, &FindArea) && ok;
     return ok;
 }
 

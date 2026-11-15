@@ -8,6 +8,7 @@
 #include "kb/render/scene/MeshPipeline.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "kb/render/scene/LocalReflectionUniforms.hpp"
+#include "kb/render/scene/SceneLightProbeTexture.hpp"
 #include "scene/lighting/SceneLightingPacker.hpp"
 
 #include <bgfx/bgfx.h>
@@ -21,7 +22,7 @@
 
 namespace kb::render {
 
-// What the motion vector pass draws with besides the meshes (Unreal's velocity pass).
+// What the motion vector pass draws with besides the meshes.
 struct SceneMotionVectorFrame {
     // The jitter-free view-projections of the previous frame and of this one; the pass rasterizes with this
     // frame's jittered view (the prepass depth) and writes motion between these.
@@ -59,7 +60,7 @@ struct SceneMeshPassBindDesc {
     std::array<float, 4> renderOriginOffset{};
 };
 
-// One post-process material over the view (Unreal's post-process blendable, before the tonemap): its PostProcess
+// One post-process material over the view (before the tonemap): its PostProcess
 // program reads `input` as Scene Color and `depth` as Scene Depth. With `uiVertices` it is a User Interface material
 // drawing those screen UI triangles with its UserInterface program, alpha blended.
 struct SceneMeshScreenMaterialDesc {
@@ -105,6 +106,8 @@ struct SceneMeshPassProgramResolution {
     SceneRenderMaterialProgramStatus status = SceneRenderMaterialProgramStatus::None;
     bool graphProgram = false;
     bool fellBackToBuiltin = false;
+    // The built-in forward program that reads the shadow maps through comparison samplers (KB_SHADOW_COMPARE).
+    bool shadowCompare = false;
 };
 
 class SceneMeshPassResources {
@@ -120,9 +123,11 @@ public:
     [[nodiscard]] SceneLightGridResources& LightGrid() const noexcept { return lightGrid_; }
 
     void SetGraphShaderCacheRoot(std::string root) { graphShaderCacheRoot_ = std::move(root); }
+    // `shadowCompare` asks for the forward program that reads the shadow maps through comparison samplers; the
+    // resolution says whether it got it (the program is optional, and a material graph brings its own).
     [[nodiscard]] SceneMeshPassProgramResolution ResolveMeshPassProgram(
         const RenderMaterialResource* material, MeshPassType pass,
-        bool skinned = false) const noexcept;
+        bool skinned = false, bool shadowCompare = false) const noexcept;
     [[nodiscard]] SceneMeshPassProgramResolution LastProgramResolution() const noexcept { return lastProgramResolution_; }
     void ResetProgramBindStats() const noexcept;
     [[nodiscard]] SceneMeshProgramBindStats ProgramBindStats() const noexcept { return programBindStats_; }
@@ -199,6 +204,8 @@ private:
     bgfx::UniformHandle terrainLayerWeightSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle terrainLayerParamsUniform_ = BGFX_INVALID_HANDLE;
     mutable std::array<bool, 2> layeredGbufferUnavailable_{};
+    // The comparison forward program (rigid, skinned) failed to load: the stored-depth program lights instead.
+    mutable std::array<bool, 2> shadowCompareUnavailable_{};
     bgfx::UniformHandle clearcoatSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle clearcoatRoughnessSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle materialLayersUniform_ = BGFX_INVALID_HANDLE;
@@ -232,6 +239,8 @@ private:
     // The sky light's prefiltered cube (sky_reflection.sh) of the forward lighting.
     bgfx::UniformHandle skyReflectionSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle skyReflectionParamsUniform_ = BGFX_INVALID_HANDLE;
+    // The baked light probe grid (light_probes.sh) of the forward lighting.
+    LightProbeUniforms lightProbes_{};
     bgfx::UniformHandle shadowViewProjUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle shadowParamsUniform_ = BGFX_INVALID_HANDLE;
     ShadowCascadeUniforms shadowCascades_{};

@@ -28,6 +28,7 @@ add_library(kb_engine STATIC
     include/engine/audio/AudioMixerAssetIO.hpp
     include/engine/audio/AudioMixerAssetLoader.hpp
     include/engine/audio/AudioPlayback.hpp
+    include/engine/audio/AudioCapture.hpp
     include/engine/audio/AudioDiagnostics.hpp
     include/engine/audio/AudioMetering.hpp
     include/engine/audio/AudioMixerPreview.hpp
@@ -92,7 +93,6 @@ add_library(kb_engine STATIC
     include/engine/platform/PlatformServices.hpp
     include/engine/platform/UserStorage.hpp
     include/engine/platform/CrashReportConsent.hpp
-    include/engine/platform/SettingsTransaction.hpp
     include/engine/platform/PlatformAdapters.hpp
     include/engine/platform/PlatformLocale.hpp
     include/engine/security/Crypto.hpp
@@ -214,6 +214,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneAudioListenerComponents.hpp
     include/engine/scene/SceneAudioSourceComponents.hpp
     include/engine/scene/SceneAnimatorComponents.hpp
+    include/engine/scene/SceneAnimatorPoseRate.hpp
     include/engine/scene/SceneSkeletonBindingComponents.hpp
     include/engine/scene/SceneSocketAttachmentComponents.hpp
     include/engine/scene/SceneCombatantComponents.hpp
@@ -252,6 +253,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneLightComponents.hpp
     include/engine/scene/SceneLightingAccess.hpp
     include/engine/scene/ScenePostProcessAccess.hpp
+    include/engine/scene/SceneLightProbeAccess.hpp
     include/engine/scene/SceneDocument.hpp
     include/engine/scene/SceneDocumentService.hpp
     include/engine/scene/SceneCharacterControllerComponents.hpp
@@ -465,6 +467,8 @@ add_library(kb_engine STATIC
     include/engine/scene/VisibilityComponent.hpp
     include/engine/render/StaticLightmapBaker.hpp
     src/render/StaticLightmapBaker.cpp
+    include/engine/render/LightProbeGridAssetLoader.hpp
+    src/render/LightProbeGridAssetLoader.cpp
     include/engine/scene/PhysicsAssembly.hpp
     include/engine/math/Polygon2D.hpp
     include/engine/audio/SpatialAudioPlayback.hpp
@@ -527,8 +531,10 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptTimelineApi.hpp
     include/engine/script/ScriptPostProcessApi.hpp
     include/engine/script/ScriptNavigationApi.hpp
+    include/engine/script/ScriptMicrophoneApi.hpp
     include/engine/script/ScriptPhysicsApi.hpp
     include/engine/script/ScriptRendererApi.hpp
+    include/engine/script/ScriptLanguageSubset.hpp
     include/engine/script/ScriptLifecycle.hpp
     include/engine/script/UISceneValidation.hpp
     include/engine/script/ScriptModule.hpp
@@ -642,6 +648,7 @@ add_library(kb_engine STATIC
     src/audio/AudioMixerAssetLoader.cpp
     src/audio/AudioPlayback.cpp
     src/audio/AudioMetering.cpp
+    src/audio/AudioCapture.cpp
     src/audio/AudioMixerPreview.cpp
     src/assets/AssetId.cpp
     src/assets/BuiltInShapes.cpp
@@ -950,6 +957,7 @@ add_library(kb_engine STATIC
     src/script/ScriptUIMediaApi.cpp
     src/scene/SceneUIMedia.cpp
     src/scene/SceneVideoPlayers.cpp
+    src/scene/VideoMediaConversion.cpp
     src/scene/SceneUI.cpp
     src/scene/ui/SceneUIDependencies.cpp
     src/scene/ui/SceneUIHierarchyPresets.cpp
@@ -1048,6 +1056,7 @@ add_library(kb_engine STATIC
         src/scene/components/SceneLensEchoStorage.cpp
       src/scene/SceneContentInstanceService.cpp
     src/navigation/NavMeshCrowd.cpp
+    src/navigation/NavMeshHorde.cpp
     src/navigation/NavGeometryCollector.cpp
     src/navigation/NavMeshAsset.cpp
     src/navigation/NavMeshBuilder.cpp
@@ -1340,6 +1349,7 @@ add_library(kb_engine STATIC
     src/script/ScriptTimelineApi.cpp
     src/script/ScriptPostProcessApi.cpp
     src/script/ScriptNavigationApi.cpp
+    src/script/ScriptMicrophoneApi.cpp
     src/script/ScriptMap2DApi.cpp
     src/script/ScriptPhysics2DApi.cpp
     src/script/ScriptNetApi.cpp
@@ -1348,6 +1358,7 @@ add_library(kb_engine STATIC
     src/script/ScriptPhysicsAssemblyApi.cpp
     src/script/ScriptMap2DGeometryApi.cpp
     src/script/ScriptRendererApi.cpp
+    src/script/ScriptLanguageSubset.cpp
     src/script/ScriptLifecycle.cpp
     src/script/UISceneValidation.cpp
     src/script/ScriptModule.cpp
@@ -1398,7 +1409,10 @@ add_library(kb_engine STATIC
     src/private/script/lua/api/PucLuaSelfApi.hpp
     src/private/script/lua/api/PucLuaSharedApi.hpp
     src/private/script/lua/api/PucLuaTaskApi.hpp
+    src/private/script/lua/LuaVm.hpp
     src/private/script/lua/PucLuaDebugHook.hpp
+    src/private/script/lua/PucLuaHotApi.hpp
+    src/private/script/lua/PucLuaRunaway.hpp
     src/private/script/lua/PucLuaRuntimeApi.hpp
     src/private/script/lua/PucLuaSandboxEnvironment.hpp
     src/private/script/lua/PucLuaStateUtilities.hpp
@@ -1470,6 +1484,7 @@ add_library(kb_engine STATIC
       src/private/scene/SceneContentInstanceService.hpp
       src/private/scene/systems/ContentInstanceSceneSystem.hpp
     src/private/navigation/NavMeshCrowd.hpp
+    src/private/navigation/NavMeshHorde.hpp
     src/private/navigation/NavMeshRuntime.hpp
     src/private/world/WorldAssetLoaders.hpp
     src/private/world/WorldObjectSplit.hpp
@@ -1879,7 +1894,7 @@ set_source_files_properties(src/scene/CsgAsset.cpp PROPERTIES
 target_link_libraries(kb_engine
     PRIVATE
         flecs::flecs_static
-        kb_lua
+        $<LINK_ONLY:kb_script_vm>
         kb_monocypher
         kb_recast
         kb_ufbx
@@ -1889,6 +1904,12 @@ target_link_libraries(kb_engine
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(kb_engine PRIVATE rt)
+endif()
+
+if(ANDROID)
+    # UI video decodes through the NDK media extractor and codec.
+    target_sources(kb_engine PRIVATE src/scene/AndroidVideoSource.cpp)
+    target_link_libraries(kb_engine PRIVATE mediandk)
 endif()
 
 if(KB_ENGINE_ENABLE_NATIVE_AVX2)
@@ -1906,6 +1927,54 @@ set_source_files_properties(src/ecs/HierarchyDepthGuard.cpp PROPERTIES
     COMPILE_DEFINITIONS "KB_ECS_HIERARCHY_DEPTH_LIMIT=${KB_ECS_HIERARCHY_DEPTH_LIMIT}"
 )
 kb_apply_quality_gates(kb_engine)
+
+# The script VM (KB_SCRIPT_VM, root CMakeLists.txt). Only the sources that use the Lua API (script/lua/LuaVm.hpp maps the
+# calls that differ between the VMs) see its headers and its definition, so no other source of the engine depends on which
+# VM is built. Some sources exist for one VM only: the execution budget (PucLuaRunaway), the fast engine calls of LuaJIT and
+# the bit library Lua 5.4 lacks.
+if(kb_script_vm STREQUAL "LuaJIT")
+    target_sources(kb_engine PRIVATE
+        src/script/lua/vm/PucLuaHotApi.cpp
+        src/script/lua/vm/PucLuaRunawayWatchdog.cpp
+        src/private/script/lua/PucLuaWatchdogCore.hpp
+    )
+else()
+    target_sources(kb_engine PRIVATE
+        src/script/lua/vm/PucLuaBitLibrary.cpp
+        src/script/lua/vm/PucLuaRunawayInterpreter.cpp
+        src/private/script/lua/PucLuaBitLibrary.hpp
+    )
+endif()
+if(KB_SCRIPT_VM_BUILD_TARGET)
+    # The script VM's headers (luajit.h) are made by its build.
+    add_dependencies(kb_engine ${KB_SCRIPT_VM_BUILD_TARGET})
+endif()
+set(kb_engine_lua_sources
+    src/script/PucLuaRuntimeState.cpp
+    src/script/PucLuaScriptRuntime.cpp
+    src/script/lua/PucLuaDebugHook.cpp
+    src/script/lua/PucLuaMemoryArena.cpp
+    src/script/lua/PucLuaRuntimeApi.cpp
+    src/script/lua/PucLuaSafeCall.cpp
+    src/script/lua/PucLuaSandboxEnvironment.cpp
+    src/script/lua/PucLuaStateUtilities.cpp
+    src/script/lua/PucLuaValueBridge.cpp
+    src/script/lua/api/PucLuaEventApi.cpp
+    src/script/lua/api/PucLuaEventsApi.cpp
+    src/script/lua/api/PucLuaFunctionApi.cpp
+    src/script/lua/api/PucLuaModuleApi.cpp
+    src/script/lua/api/PucLuaSelfApi.cpp
+    src/script/lua/api/PucLuaSharedApi.cpp
+    src/script/lua/api/PucLuaTaskApi.cpp
+    src/script/lua/vm/PucLuaBitLibrary.cpp
+    src/script/lua/vm/PucLuaHotApi.cpp
+    src/script/lua/vm/PucLuaRunawayInterpreter.cpp
+    src/script/lua/vm/PucLuaRunawayWatchdog.cpp
+)
+set_source_files_properties(${kb_engine_lua_sources} PROPERTIES INCLUDE_DIRECTORIES "${KB_SCRIPT_VM_INCLUDE_DIR}")
+if(kb_script_vm STREQUAL "LuaJIT")
+    set_source_files_properties(${kb_engine_lua_sources} PROPERTIES COMPILE_DEFINITIONS KB_SCRIPT_VM_LUAJIT=1)
+endif()
 
 if(MSVC)
     # Under AddressSanitizer this test translation unit exceeds the default object-file section limit.
@@ -2158,6 +2227,7 @@ if(BUILD_TESTING)
         tests/ProjectSceneTests.cpp
         tests/PhysicsSceneSystemTests.cpp
         tests/AudioSceneSystemTests.cpp
+        tests/AudioCaptureTests.cpp
         tests/AnimationRuntimeTests.cpp
         tests/SkeletonAssetTests.cpp
         tests/SkeletalMeshAssetTests.cpp
@@ -2169,6 +2239,7 @@ if(BUILD_TESTING)
         tests/SceneBehaviourVariableTests.cpp
         tests/SceneHierarchyTests.cpp
         tests/SceneUITests.cpp
+        tests/VideoMediaConversionTests.cpp
         tests/UITextLineBreakingTests.cpp
         tests/UIThemeTests.cpp
         tests/CrashReportConsentTests.cpp
@@ -2188,6 +2259,7 @@ if(BUILD_TESTING)
         tests/SceneSystemTests.cpp
         tests/SceneSystemTransformSyncTests.cpp
         tests/ScriptApiCatalogTests.cpp
+        tests/ScriptDispatchBenchmark.cpp
         tests/ScriptRuntimeTests.cpp
         tests/SystemLifecycleTests.cpp
         tests/TestSuites.hpp
@@ -2198,6 +2270,7 @@ if(BUILD_TESTING)
         tests/EngineModuleTests.cpp
         tests/EngineLibraryTests.cpp
         tests/EngineMathTests.cpp
+        tests/StaticLightmapBakerTests.cpp
         tests/SecurityTests.cpp
     )
 
@@ -2209,6 +2282,10 @@ if(BUILD_TESTING)
             flecs::flecs_static
     )
     target_include_directories(kb_engine_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/private)
+    target_sources(kb_engine_tests PRIVATE tests/ScriptVmTests.cpp)
+    if(kb_script_vm STREQUAL "LuaJIT")
+        set_source_files_properties(tests/ScriptRuntimeTests.cpp tests/ScriptVmTests.cpp PROPERTIES COMPILE_DEFINITIONS KB_SCRIPT_VM_LUAJIT=1)
+    endif()
 
     add_dependencies(kb_engine_tests kb_native_script_test_plugin)
     target_compile_definitions(kb_engine_tests
@@ -2218,9 +2295,17 @@ if(BUILD_TESTING)
 
     add_test(NAME kb_engine_module_abi_current COMMAND $<TARGET_FILE:kb_engine_tests> engine-module)
     set_tests_properties(kb_engine_module_abi_current PROPERTIES TIMEOUT 60 LABELS "engine;module;abi")
+    add_test(NAME kb_engine_lightmap_bake COMMAND $<TARGET_FILE:kb_engine_tests> lightmap-bake)
+    set_tests_properties(kb_engine_lightmap_bake PROPERTIES TIMEOUT 120 LABELS "engine;lightmap;bake")
     add_test(NAME kb_engine_input_sensors COMMAND $<TARGET_FILE:kb_engine_tests> input)
     set_tests_properties(kb_engine_input_sensors PROPERTIES TIMEOUT 60 LABELS "engine;input")
     add_test(NAME kb_engine_scene_ui COMMAND $<TARGET_FILE:kb_engine_tests> scene-ui)
+    add_test(NAME kb_engine_script_dispatch COMMAND $<TARGET_FILE:kb_engine_tests> script-dispatch)
+    set_tests_properties(kb_engine_script_dispatch PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300 LABELS "engine;script")
+    add_test(NAME kb_engine_script_vm COMMAND $<TARGET_FILE:kb_engine_tests> script-vm)
+    set_tests_properties(kb_engine_script_vm PROPERTIES TIMEOUT 120 LABELS "engine;script;vm")
+    add_test(NAME kb_engine_video_conversion COMMAND $<TARGET_FILE:kb_engine_tests> video-conversion)
+    set_tests_properties(kb_engine_video_conversion PROPERTIES TIMEOUT 60 LABELS "engine;video")
     if(WIN32)
         add_executable(kb_win32_clipboard_tests tests/Win32ClipboardTests.cpp)
         target_link_libraries(kb_win32_clipboard_tests PRIVATE kb_engine)
@@ -2246,7 +2331,7 @@ if(BUILD_TESTING)
 
     # Machine-independent performance gates: each compares two measurements taken in the same run. They
     # run alone, as other tests competing for the CPU in between would skew one measurement and not the other.
-    foreach(kb_perf_suite physics-step-spikes scene-transform-bench agents-frame)
+    foreach(kb_perf_suite physics-step-spikes scene-transform-bench agents-frame script-dispatch-bench)
         add_test(NAME kb_engine_${kb_perf_suite} COMMAND $<TARGET_FILE:kb_engine_tests> ${kb_perf_suite})
         set_tests_properties(kb_engine_${kb_perf_suite} PROPERTIES
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
@@ -2257,7 +2342,7 @@ if(BUILD_TESTING)
     endforeach()
     # The step-spike gate lengthens its frames while other load slows the physics step down.
     set_tests_properties(kb_engine_physics-step-spikes PROPERTIES TIMEOUT 600)
-    # The crowd budget is absolute (1000 agents within 8 ms per navigation step in an optimised
+    # The crowd budget is absolute (1000 agents within 8 ms, 10 000 within 24 ms per navigation step in an optimised
     # build), with headroom for a slower machine; it also requires level of detail to pay off.
     add_test(NAME kb_engine_navigation-crowd-bench COMMAND $<TARGET_FILE:kb_engine_tests> navigation-crowd-bench)
     set_tests_properties(kb_engine_navigation-crowd-bench PROPERTIES
@@ -2265,6 +2350,15 @@ if(BUILD_TESTING)
         LABELS "performance"
         RUN_SERIAL TRUE
         TIMEOUT 300
+    )
+    # Horde agents sharing navigation fields: 10 000 after one target within 3 ms, after 100 targets
+    # within 6 ms, 50 000 within 30 ms (median step, optimised build); prints the crowd for comparison.
+    add_test(NAME kb_engine_navigation-horde-bench COMMAND $<TARGET_FILE:kb_engine_tests> navigation-horde-bench)
+    set_tests_properties(kb_engine_navigation-horde-bench PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        LABELS "performance"
+        RUN_SERIAL TRUE
+        TIMEOUT 1500
     )
 
     kb_apply_quality_gates(kb_engine_tests)

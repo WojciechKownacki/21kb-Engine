@@ -9,18 +9,18 @@
     240
   ],
   "images": {
-    "d3d11-frame-60.png": "13c9ad5b5718f7757ed0c92d6503c8817e0bb87feee24fba5d4c54e80b30694c",
-    "d3d11-frame-120.png": "a04ace5fcaef5eb490606b10e41270f2d464249aa9ac2f08783509441d83f178",
-    "d3d11-frame-240.png": "3d6e387a91375b3364819629cafdae71af52c022d288f77f1ae417b6cd8a78ca",
-    "d3d12-frame-60.png": "43246271fc749f4738de9c4c2063c6a5498cd06ccd3b2929bd3a875bbd669089",
-    "d3d12-frame-120.png": "ae32b8ba9959e310f1c85d441291efa45978dc9d1c3ff1de370f9b4db75c20c7",
-    "d3d12-frame-240.png": "7759b3de158385cdb582ed8bbce5ebf410b13ae19983d3536df27693c15b8408",
-    "vulkan-frame-60.png": "62da76d5c0acfba264de6684d83edeb89d86a582777169de51dc5c79b4e36391",
-    "vulkan-frame-120.png": "34f445c397940944a997825d66a4458a1385013c3c5f9abfc4d2110803d48370",
-    "vulkan-frame-240.png": "28dff7e588caf1551f702faf4f56d1fe85c78086f9bd725d74fef6f47a9ee4d1",
-    "opengl-frame-60.png": "1869ba8a27f065411c9dfae6d4d664433c4bea184e819ce58662cbe8f9775211",
-    "opengl-frame-120.png": "82a9bc45555de86764ab01d43b7e9e74dcbe7de5a149a01fb09156a13a099bf3",
-    "opengl-frame-240.png": "bf89bc9ff5e0ed724197145a471c529d5a14cea4807871f72e7c454118faba4c"
+    "d3d11-frame-60.png": "6ec23770cdf5934c0bddd10cf3e021da642af4ba99a961d0a83bb5a8271aa3af",
+    "d3d11-frame-120.png": "d3d8eebcf673473c358674f82cc3ff987acae859668cb658cc353258b9c56c2c",
+    "d3d11-frame-240.png": "de55247582f2f054a89b821ba78e1414bd4a3d949ef1301d86d07ec4f2b06093",
+    "d3d12-frame-60.png": "3fde0142f69a2488acb876435c0487af63461456efcffb1fadd4dceedf0eda41",
+    "d3d12-frame-120.png": "d2fe62ee217db2e8ea46e99045ccc133d696b1ececd3a36788d31af5936ade7c",
+    "d3d12-frame-240.png": "fe4bca1a96802c9d46be37c5fbfa281cb46fd30accd4a011510a19616fd4e009",
+    "vulkan-frame-60.png": "7e7a9e9786fa01f757bb9905fa04ce6802a41eb6c5f60df5f9ea294fd7b95151",
+    "vulkan-frame-120.png": "4d59bed8541fbcc185fa905b89f49611c30f373a13572e5f48032ee8b1ccf895",
+    "vulkan-frame-240.png": "9f5934fc5985a41f488e5bf72c472342136eef4ca0a24ad64eaac647123a21b3",
+    "opengl-frame-60.png": "c8e2b0925c2732462e0ea87438b93511e41e83039704888dc82f6b2337423cc7",
+    "opengl-frame-120.png": "690ad0620ee9dfe5eadc3202da449a977475a05fb41d60e8e679c5411c8da28f",
+    "opengl-frame-240.png": "965ac1017a98cd1fe63a37b1497673a56e2449b84b75dd33566099b81f543b06"
   },
   "tolerances": {
     "d3d11": {

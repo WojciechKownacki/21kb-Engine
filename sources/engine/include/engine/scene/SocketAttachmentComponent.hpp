@@ -14,7 +14,7 @@ inline constexpr std::size_t kMaxSocketAttachmentNameBytes = 128U;
 // Holds this entity at a socket - or, with no socket of that name, at a bone - of the character
 // it hangs under: a sword in a hand, a quiver on a back, a helmet on a head. The character is the
 // nearest ancestor with an animated skeleton, so attaching is parenting the object to the character
-// and naming the socket, as Unreal's AttachToComponent with a socket name. The offset is applied in
+// and naming the socket. The offset is applied in
 // the socket's space. Every frame after animation the socket sets the object's position and
 // rotation; its scale stays its own Transform's, so a sword is sized as any other object.
 struct SocketAttachmentOffset {

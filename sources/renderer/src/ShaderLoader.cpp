@@ -6,6 +6,7 @@
 #include <bgfx/bgfx.h>
 #include <bx/string.h>
 
+#include <atomic>
 #include <fstream>
 #include <memory>
 #include <mutex>
@@ -20,6 +21,7 @@ namespace kb::render {
 namespace {
 
 std::mutex gProviderMutex;
+std::atomic<ShaderLoader::LoadObserver> gLoadObserver{ nullptr };
 std::shared_ptr<const ShaderBinaryProvider> gProvider;
 
 [[nodiscard]] std::shared_ptr<const ShaderBinaryProvider> ActiveProvider() noexcept {
@@ -96,11 +98,18 @@ void ShaderLoader::ClearBinaryProvider(const std::shared_ptr<const ShaderBinaryP
     }
 }
 
+void ShaderLoader::SetLoadObserver(LoadObserver observer) noexcept {
+    gLoadObserver.store(observer, std::memory_order_release);
+}
+
 bool ShaderLoader::HasBinaryProvider() noexcept {
     return ActiveProvider() != nullptr;
 }
 
 bgfx::ShaderHandle ShaderLoader::Load(const char* name) {
+    if (const LoadObserver observer = gLoadObserver.load(std::memory_order_acquire); observer != nullptr) {
+        observer(name);
+    }
     // No profile directory means we ship no binaries for the renderer that came
     // up. Fail here rather than search some other backend's directory: bgfx's
     // .bin header has no backend identifier, so a mismatched blob is a hard

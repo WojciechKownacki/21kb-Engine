@@ -17,13 +17,17 @@
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneComponentVisitors.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/SceneUIComponents.hpp"
 #include "engine/scene/SceneVisibilityResolution.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
+#include "engine/ui/layout/UIRectTransform.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "kb/render/overlay/EditorCameraWireframe.hpp"
+#include "kb/render/scene/SceneLightingQuality.hpp"
 #include "scene/EditorSceneSelectionPivot.hpp"
 #include "TerrainAnalysis.hpp"
 #include "scene/EditorTerrainService.hpp"
@@ -43,7 +47,6 @@ namespace {
 constexpr float kGizmoTargetPixels = 90.0F;
 constexpr float kGizmoAxisLength = 1.16F;
 constexpr float kMinGizmoDepth = 0.25F;
-constexpr float kCameraWireframeWorldDepth = 10.0F;
 
 struct SceneViewportRenderProfileDesc {
     kb::render::SceneRenderMeshPassMode meshPassMode = kb::render::SceneRenderMeshPassMode::OpaqueOnly;
@@ -201,23 +204,13 @@ struct SceneViewportRenderProfileDesc {
     return RenderProfileDesc(EditorViewportRenderProfile::Interactive);
 }
 
-[[nodiscard]] kb::render::SceneRenderLightingPath RenderLightingPath(kb::project::ProjectSceneLightingPath path) noexcept {
-    switch (path) {
-    case kb::project::ProjectSceneLightingPath::Deferred:
-        return kb::render::SceneRenderLightingPath::Deferred;
-    case kb::project::ProjectSceneLightingPath::ForwardPlus:
-        return kb::render::SceneRenderLightingPath::ClusteredForwardPlus;
-    case kb::project::ProjectSceneLightingPath::Forward:
-    default:
-        return kb::render::SceneRenderLightingPath::Forward;
-    }
-}
-
 [[nodiscard]] kb::render::SceneRenderLightingConfig BuildViewportLightingConfig(
     const SceneViewportRenderProfileDesc& renderProfile,
-    kb::project::ProjectSceneLightingPath projectLightingPath) noexcept {
+    const kb::project::ProjectSettings& project) noexcept {
     kb::render::SceneRenderLightingConfig lighting{};
-    lighting.lightingPath = RenderLightingPath(projectLightingPath);
+    lighting.lightingPath = kb::render::ProjectLightingPath(project.lightingPath, false);
+    // The shadow and GI quality the project pins, as the game applies it (the editor is a desktop device).
+    kb::render::ApplyProjectLightingQuality(lighting, project.shadowQuality, project.giQuality, false);
     if (lighting.lightingPath == kb::render::SceneRenderLightingPath::ClusteredForwardPlus) {
         lighting.maxForwardLights = kb::render::kMaxSceneForwardPlusLights;
     }
@@ -341,17 +334,6 @@ struct LightWireframeBasis {
     return transform.worldDirty ? transform.localRotation : transform.worldRotation;
 }
 
-[[nodiscard]] float CameraWireframeDisplayFarClip(
-    const kb::scene::CameraComponent& camera) noexcept {
-    const float nearClip = std::max(0.0001F, camera.nearClip);
-    const float authoredFarClip =
-        std::max(nearClip + 0.0001F, camera.farClip);
-    const float minimumVisibleDepth = nearClip + 0.001F;
-    return std::min(
-        authoredFarClip,
-        std::max(minimumVisibleDepth, kCameraWireframeWorldDepth));
-}
-
 [[nodiscard]] std::vector<kb::render::EditorCameraWireframeDesc> BuildCameraWireframes(
     const EditorSceneContext& sceneContext,
     const kb::math::DVec3& origin) {
@@ -367,8 +349,7 @@ struct LightWireframeBasis {
     sceneContext.Scene().Components().Visitors().ForEachCamera(
         [](kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::CameraComponent& camera, void* opaque) {
             auto& context = *static_cast<Context*>(opaque);
-            if (!IsSelectedEntity(*context.sceneContext, entity) ||
-                !context.sceneContext->Scene().Components().Visibility().Get(entity).visible) {
+            if (!context.sceneContext->Scene().Components().Visibility().Get(entity).visible) {
                 return;
             }
 
@@ -389,11 +370,12 @@ struct LightWireframeBasis {
                 // Keep the authoring frustum closed without changing
                 // Camera.farClip. A fixed world-space depth makes the gizmo
                 // naturally shrink/grow as Scene View moves away/towards it.
-                .displayFarClip = CameraWireframeDisplayFarClip(camera),
+                .displayFarClip = kb::render::EditorCameraWireframeDisplayFarClip(camera.nearClip, camera.farClip),
                 // CameraComponent does not own the editor fly-camera viewport.
                 // Keep its authoring wireframe square instead of inheriting the
                 // unrelated Scene View panel aspect ratio.
                 .aspect = 1.0F,
+                .selected = IsSelectedEntity(*context.sceneContext, entity),
             });
         },
         &context);
@@ -449,7 +431,37 @@ struct LightWireframeBasis {
     return context.wireframes;
 }
 
-[[nodiscard]] std::vector<kb::render::EditorParticleIconDesc> BuildParticleIcons(
+// An entity that draws its own geometry, or lays out UI, is its own Scene View marker.
+[[nodiscard]] bool DrawsOwnSceneViewMarker(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+    const auto components = scene.Components();
+    return components.MeshRenderers().Has(entity) || components.Lights().Has(entity) ||
+        components.Sprites2D().Has(entity) || components.TilemapRenderers().Has(entity) ||
+        components.FacingPanels().Has(entity) || components.GeometrySwarms().Has(entity) ||
+        components.DeformedGeometries().Has(entity) ||
+        components.UI().Has<kb::scene::UIRectTransform>(entity);
+}
+
+[[nodiscard]] std::optional<kb::render::EditorSceneIconKind> SceneIconKindOf(
+    const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+    const auto components = scene.Components();
+    if (components.ParticleEffects().Has(entity)) {
+        return kb::render::EditorSceneIconKind::ParticleEffect;
+    }
+    if (components.Cameras().Has(entity)) {
+        return kb::render::EditorSceneIconKind::Camera;
+    }
+    if (components.AudioSources().Has(entity)) {
+        return kb::render::EditorSceneIconKind::AudioSource;
+    }
+    if (DrawsOwnSceneViewMarker(scene, entity)) {
+        return std::nullopt;
+    }
+    return scene.Prefabs().RootInstance(entity).IsValid()
+        ? kb::render::EditorSceneIconKind::Prefab
+        : kb::render::EditorSceneIconKind::Entity;
+}
+
+[[nodiscard]] std::vector<kb::render::EditorSceneIconDesc> BuildSceneIcons(
     const EditorSceneContext& sceneContext,
     const EditorViewportCameraState& viewportCamera,
     const EditorViewportCameraAxes& viewportAxes,
@@ -459,7 +471,7 @@ struct LightWireframeBasis {
         const EditorViewportCameraState* viewportCamera = nullptr;
         const EditorViewportCameraAxes* viewportAxes = nullptr;
         std::uint32_t renderHeight = 0U;
-        std::vector<kb::render::EditorParticleIconDesc> icons;
+        std::vector<kb::render::EditorSceneIconDesc> icons;
     } context{
         .sceneContext = &sceneContext,
         .viewportCamera = &viewportCamera,
@@ -467,20 +479,22 @@ struct LightWireframeBasis {
         .renderHeight = renderHeight,
     };
 
-    sceneContext.Scene().Components().ParticleEffects().ForEach(
+    sceneContext.Scene().Transforms().ForEach(
         [](kb::scene::SceneEntity entity,
-           const kb::scene::ParticleEffectComponent&,
+           const kb::scene::TransformComponent& transform,
            void* opaque) {
             auto& context = *static_cast<Context*>(opaque);
-            if (!kb::scene::ResolveVisibility(
+            const std::optional<kb::render::EditorSceneIconKind> kind =
+                SceneIconKindOf(context.sceneContext->Scene(), entity);
+            if (!kind.has_value() ||
+                !kb::scene::ResolveVisibility(
                     context.sceneContext->Scene(), entity).visible) {
                 return;
             }
-            const kb::scene::TransformComponent& transform =
-                context.sceneContext->Scene().Transforms().Get(entity);
             const kb::scene::Vec3 position = ResolveViewportPosition(
                 context.sceneContext->Scene(), entity, transform, context.viewportCamera->ViewportOrigin());
-            context.icons.push_back(kb::render::EditorParticleIconDesc{
+            context.icons.push_back(kb::render::EditorSceneIconDesc{
+                .kind = *kind,
                 .position = ToArray(position),
                 .iconRight = ToArray(context.viewportAxes->right),
                 .iconUp = ToArray(context.viewportAxes->up),
@@ -660,29 +674,55 @@ void AppendWorldPartitionGrid(
     }
 }
 
-// Outlines the polygons of the baked navigation mesh, relative to the viewport origin.
+[[nodiscard]] std::array<float, 3U> RelativeToOrigin(const std::array<float, 3U>& point, const kb::math::DVec3& origin) noexcept {
+    return std::array<float, 3U>{
+        static_cast<float>(static_cast<double>(point[0]) - origin.x),
+        static_cast<float>(static_cast<double>(point[1]) - origin.y),
+        static_cast<float>(static_cast<double>(point[2]) - origin.z),
+    };
+}
+
+// The boxes of the Navigation Bounds, then the edges and tile bounds of the baked navigation mesh,
+// relative to the viewport origin; scene geometry in front hides them like the filled walkable area.
 void AppendNavigationMesh(
     const EditorSceneContext& sceneContext,
     const kb::math::DVec3& origin,
     std::vector<kb::render::PhysicsDebugLine>& lines) {
+    for (const EditorNavBoundsLine& line : EditorNavigation::BoundsLines(sceneContext.Scene(), origin)) {
+        lines.push_back(kb::render::PhysicsDebugLine{
+            .from = { line.from.x, line.from.y, line.from.z },
+            .to = { line.to.x, line.to.y, line.to.z },
+            .color = EditorNavigation::BoundsColor,
+            .alpha = 1.0F,
+            .depthTested = true,
+        });
+    }
     if (!sceneContext.Navigation().Visible()) {
         return;
     }
-    const auto relative = [&origin](const std::array<float, 3U>& point) {
-        return std::array<float, 3U>{
-            static_cast<float>(static_cast<double>(point[0]) - origin.x),
-            static_cast<float>(static_cast<double>(point[1]) - origin.y),
-            static_cast<float>(static_cast<double>(point[2]) - origin.z),
-        };
-    };
-    for (const EditorWorldGridLine& line : sceneContext.Navigation().Lines()) {
+    for (const kb::render::PhysicsDebugLine& line : sceneContext.Navigation().Lines()) {
         lines.push_back(kb::render::PhysicsDebugLine{
-            .from = relative(line.from),
-            .to = relative(line.to),
+            .from = RelativeToOrigin(line.from, origin),
+            .to = RelativeToOrigin(line.to, origin),
             .color = line.color,
-            .alpha = 0.9F,
+            .alpha = line.alpha,
+            .depthTested = true,
         });
     }
+}
+
+// The filled walkable polygons of the baked navigation mesh, relative to the viewport origin.
+[[nodiscard]] std::vector<kb::render::DebugFillTriangle> BuildDebugFillTriangles(const EditorSceneContext& sceneContext, const kb::math::DVec3& origin) {
+    std::vector<kb::render::DebugFillTriangle> triangles;
+    if (!sceneContext.Navigation().Visible()) {
+        return triangles;
+    }
+    triangles.reserve(sceneContext.Navigation().Fills().size());
+    for (const kb::render::DebugFillTriangle& fill : sceneContext.Navigation().Fills()) {
+        kb::render::DebugFillTriangle& triangle = triangles.emplace_back(fill);
+        for (std::array<float, 3U>& corner : triangle.corners) corner = RelativeToOrigin(corner, origin);
+    }
+    return triangles;
 }
 
 [[nodiscard]] std::vector<kb::render::PhysicsDebugLine> BuildPhysicsDebugLines(const EditorSceneContext& sceneContext, const kb::math::DVec3& origin) {
@@ -780,8 +820,8 @@ void AppendNavigationMesh(
         renderProfile.autoExposureEnabled && continuousRuntimeFrames;
     postProcessSettings.outputTransform.autoExposure.temporalAdaptationEnabled =
         renderProfile.autoExposureEnabled && continuousRuntimeFrames;
-    // The scene's post-process profile shows in the edit-mode viewport too, as Unity's Scene view
-    // shows the global Volume. Edit mode renders on events, so its temporal parts follow the rule
+    // The scene's post-process profile shows in the edit-mode viewport too.
+    // Edit mode renders on events, so its temporal parts follow the rule
     // above: temporal anti-aliasing becomes FXAA, and auto exposure meters the scene's light each
     // frame (no GPU readback that lags a frame behind, no adaptation over time).
     if (!continuousRuntimeFrames) {
@@ -789,6 +829,7 @@ void AppendNavigationMesh(
             sceneProfile->fxaaEnabled = sceneProfile->fxaaEnabled || sceneProfile->temporalAntiAliasingEnabled;
             sceneProfile->temporalAntiAliasingEnabled = false;
             sceneProfile->temporalJitterEnabled = false;
+            sceneProfile->motionBlurEnabled = false;
             sceneProfile->outputTransform.autoExposure.temporalAdaptationEnabled = false;
             if (sceneProfile->autoExposureMetering == kb::render::ScenePostProcessSettings::AutoExposureMeteringMode::HdrColor) {
                 sceneProfile->autoExposureMetering = kb::render::ScenePostProcessSettings::AutoExposureMeteringMode::SceneLighting;
@@ -796,7 +837,7 @@ void AppendNavigationMesh(
             postProcessSettings = *sceneProfile;
         }
     }
-    kb::render::SceneRenderLightingConfig lightingConfig = BuildViewportLightingConfig(renderProfile, sceneContext.ProjectConfiguration().lightingPath);
+    kb::render::SceneRenderLightingConfig lightingConfig = BuildViewportLightingConfig(renderProfile, sceneContext.ProjectConfiguration());
     // SceneGBuffer has no MSAA-attachment support, so a multisampled Deferred G-buffer isn't an
     // option today; falling back to Forward is the only way to honor the MSAA request. This is a
     // real cost (per-sample forward shading instead of a single per-pixel deferred resolve), not a
@@ -865,6 +906,8 @@ void AppendNavigationMesh(
     return EditorSceneBgfxViewport::PresentSettings{
         .renderWidth = renderWidth,
         .renderHeight = renderHeight,
+        // Play renders at the project's render scale; edit mode stays at full resolution.
+        .renderScale = continuousRuntimeFrames ? sceneContext.ProjectConfiguration().display.renderScale : 1.0F,
         .fitMode = viewportState.FitMode(),
         .safeArea = profile.safeArea,
         .cameraOverride = presentPrimarySceneCamera
@@ -907,8 +950,9 @@ void AppendNavigationMesh(
         .editorGizmo = editorOverlaysEnabled && !twoD ? gizmo : kb::render::RenderSceneSubmitDesc::EditorGizmoDesc{},
         .editorCameraWireframes = editorOverlaysEnabled ? BuildCameraWireframes(sceneContext, viewportCamera.ViewportOrigin()) : std::vector<kb::render::EditorCameraWireframeDesc>{},
         .editorLightWireframes = editorOverlaysEnabled ? BuildLightWireframes(sceneContext, viewportCamera, axes, renderHeight) : std::vector<kb::render::EditorLightWireframeDesc>{},
-        .editorParticleIcons = editorOverlaysEnabled ? BuildParticleIcons(sceneContext, viewportCamera, axes, renderHeight) : std::vector<kb::render::EditorParticleIconDesc>{},
+        .editorSceneIcons = editorOverlaysEnabled ? BuildSceneIcons(sceneContext, viewportCamera, axes, renderHeight) : std::vector<kb::render::EditorSceneIconDesc>{},
         .physicsDebugLines = editorOverlaysEnabled ? BuildPhysicsDebugLines(sceneContext, viewportCamera.ViewportOrigin()) : std::vector<kb::render::PhysicsDebugLine>{},
+        .debugFillTriangles = editorOverlaysEnabled ? BuildDebugFillTriangles(sceneContext, viewportCamera.ViewportOrigin()) : std::vector<kb::render::DebugFillTriangle>{},
         // Outline and handles belong exactly where the UI itself is shown, never on their own.
         .editorUIOverlays = editorOverlaysEnabled && screenUIVisible ? EditorUIRectInteraction::Overlays(sceneContext, static_cast<float>(renderWidth), static_cast<float>(renderHeight), twoD ? viewportState.UIZoom() : 1.0F) : std::vector<kb::scene::SceneUIFrameElement>{},
         .editorUIScale = twoD ? viewportState.UIZoom() : 1.0F,
@@ -945,6 +989,14 @@ EditorSceneBgfxViewport::PresentSettings ScenePanelContentRenderer::BuildSetting
     const auto& state = sceneContext.ViewportPreview(panel.id);
     return BuildViewportPresentSettings(sceneContext, panel.id, panel.kind, state, renderBackendSettings,
         SceneViewportToolbarRenderer::Resolve(content,state,sceneContext), content);
+}
+
+EditorSceneBgfxViewport::PresentSettings ScenePanelContentRenderer::BuildGameSettings(
+    const RECT& content, const RECT& renderArea, const DockPanel& panel, const EditorViewportPreviewState& picture,
+    const EditorSceneContext& sceneContext, const EditorRenderBackendSettings& renderBackendSettings) {
+    SceneViewportToolbarRects sceneRects{};
+    sceneRects.renderArea = renderArea;
+    return BuildViewportPresentSettings(sceneContext, panel.id, panel.kind, picture, renderBackendSettings, sceneRects, content);
 }
 
 void ScenePanelContentRenderer::PresentViewport(

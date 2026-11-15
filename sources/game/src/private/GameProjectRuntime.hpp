@@ -45,10 +45,19 @@ struct GameProjectRuntime {
     std::string physicsLayersAsset;
     std::string inputMappingContext;
     bool inputEnabled = true;
-    kb::project::ProjectSceneLightingPath lightingPath = kb::project::ProjectSceneLightingPath::Deferred;
+    kb::project::ProjectSceneLightingPath lightingPath = kb::project::ProjectSceneLightingPath::Auto;
     // The shadow and global illumination quality the project pins for this device class (Auto keeps the engine's).
     kb::project::ProjectQualityLevel shadowQuality = kb::project::ProjectQualityLevel::Auto;
     kb::project::ProjectQualityLevel giQuality = kb::project::ProjectQualityLevel::Auto;
+    // How the window opens and the frames are paced (read by the Windows player), and the fixed step, gravity and
+    // time scale the scene starts with (applied by LoadGameProjectScene).
+    kb::project::ProjectDisplaySettings display;
+    kb::project::ProjectSimulationSettings simulation;
+    // The master gain and the tag list of the project (applied by LoadGameProjectScene).
+    float masterVolume = 1.0F;
+    std::vector<std::string> tags;
+    std::vector<kb::scene::NavAreaDefinition> navigationAreas;
+    kb::scene::NavigationCrowdSettings navigationCrowd;
     std::vector<std::string> requiredModules;
     std::shared_ptr<kb::assets::bake::RuntimeAssetPack> assetPack;
 
@@ -181,5 +190,13 @@ void ReportRuntimePackageRefusal(
     std::filesystem::path& loadedScenePath,
     std::size_t& discoveredAssets,
     std::ostream& err);
+
+// One line stating the project settings in effect once the scene is loaded: the window and frame cap
+// the host was given, and the fixed step, time scale, gravity, master volume and tag count read back
+// from the scene.
+void DescribeAppliedProjectSettings(
+    const GameProjectRuntime& runtime,
+    kb::scene::Scene& scene,
+    std::ostream& out);
 
 } // namespace kb::game

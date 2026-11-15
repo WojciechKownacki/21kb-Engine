@@ -127,7 +127,7 @@ namespace {
         MaterialAlphaModeValue(material == nullptr ? RenderMaterialAlphaMode::Opaque : material->alphaMode),
         std::clamp(material == nullptr ? 1.0F : material->occlusionStrength, 0.0F, 1.0F),
         material != nullptr && material->doubleSided ? 1.0F : 0.0F,
-        material != nullptr && material->bakedLightmap ? 1.0F : 0.0F,
+        material != nullptr && material->bakedLightmap ? (material->bakedLightmapUv1 ? 2.0F : 1.0F) : 0.0F,
     };
 }
 

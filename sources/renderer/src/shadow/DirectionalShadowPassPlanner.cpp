@@ -64,6 +64,12 @@ void SnapShadowViewToTexel(
     view[13] = std::round(view[13] / texelWorldSize) * texelWorldSize;
 }
 
+// The step the depth window of the cascades snaps outward by: a power of two near a 32nd of the window, so casters
+// coming and going near its ends, or a camera moving along the light, do not change the cascades' matrices.
+[[nodiscard]] float DepthWindowStep(float depthSpan) noexcept {
+    return std::exp2(std::ceil(std::log2(std::max(depthSpan / 32.0F, 0.25F))));
+}
+
 void SetShadowViewOrigin(std::array<float, 16>& view, const bx::Vec3& origin) noexcept {
     view[12] = -(view[0] * origin.x + view[4] * origin.y + view[8] * origin.z);
     view[13] = -(view[1] * origin.x + view[5] * origin.y + view[9] * origin.z);
@@ -212,8 +218,18 @@ DirectionalShadowSetup DirectionalShadowPassPlanner::Build(
     if (focusCamera && casterBounds.focusedCasterCount == 0U) {
         return setup;
     }
-    const float minimumDepth = focusCamera ? casterBounds.focusedDepthMinimum : -radius;
-    const float maximumDepth = focusCamera ? casterBounds.focusedDepthMaximum : radius;
+    // The depth window of the cascades, from the light's eye along it. Around the camera it is placed by absolute
+    // depth along the light on the grid of DepthWindowStep.
+    float minimumDepth = focusCamera ? casterBounds.focusedDepthMinimum : -radius;
+    float depthSpan = (focusCamera ? casterBounds.focusedDepthMaximum : radius) - minimumDepth;
+    float windowStart = 0.0F;
+    if (focusCamera) {
+        const float focusDepth = basis.zx * focus[0] + basis.zy * focus[1] + basis.zz * focus[2];
+        const float step = DepthWindowStep(depthSpan);
+        windowStart = std::floor((focusDepth + minimumDepth) / step) * step;
+        depthSpan = std::ceil((focusDepth + casterBounds.focusedDepthMaximum) / step) * step - windowStart;
+        minimumDepth = windowStart - focusDepth;
+    }
     const bx::Vec3 eye{
         focus[0] + basis.zx * (minimumDepth - 1.0F),
         focus[1] + basis.zy * (minimumDepth - 1.0F),
@@ -244,18 +260,22 @@ DirectionalShadowSetup DirectionalShadowPassPlanner::Build(
         if (lightingConfig.stableShadowCascades) {
             SnapShadowViewToTexel(camera.view, orthoHeight, tileSize);
         }
+        if (focusCamera) {
+            camera.view[14] = 1.0F - windowStart;
+        }
         camera.cullingMask = cameraCullingMask;
         SceneDepthPolicy::MakeOrthographic(
-            camera.projection.data(), orthoHeight, 1.0F, 0.1F, maximumDepth - minimumDepth + 2.0F, homogeneousDepth);
+            camera.projection.data(), orthoHeight, 1.0F, 0.1F, depthSpan + 2.0F, homogeneousDepth);
         const std::array<float, 16> lightViewProjection =
             MultiplyColumnMajor(textureMatrix, MultiplyColumnMajor(camera.projection, camera.view));
         std::ranges::copy(lightViewProjection, setup.binding.cascadeViewProjection.begin() + cascade * 16U);
         const float tileScale = cascadeCount > 1U ? 0.5F : 1.0F;
+        setup.cascadeHalfExtent[cascade] = cascadeRadius;
         setup.binding.cascadeAtlas[cascade * 4U + 0U] = static_cast<float>(cascade & 1U) * 0.5F;
         setup.binding.cascadeAtlas[cascade * 4U + 1U] = static_cast<float>(cascade >> 1U) * 0.5F;
         setup.binding.cascadeAtlas[cascade * 4U + 2U] = tileScale;
         // Penumbra in atlas uv per unit of shadow depth (the depth spans the projection's far - near).
-        const float depthRange = maximumDepth - minimumDepth + 2.0F - 0.1F;
+        const float depthRange = depthSpan + 2.0F - 0.1F;
         // Bias and normal offset in texels of this cascade: the same on screen for every cascade and map size.
         const float texelWorld = orthoHeight / static_cast<float>(std::max(tileSize, 1U));
         setup.binding.cascadeBias[cascade * 4U + 0U] = depthRange > 0.0F ? biasTexels * texelWorld / depthRange : 0.0F;
@@ -273,6 +293,7 @@ DirectionalShadowSetup DirectionalShadowPassPlanner::Build(
         setup.atlasSize == 0U ? 0.0F : 1.0F / static_cast<float>(setup.atlasSize),
         filterMode,
     };
+    setup.cacheable = casterBounds.displacedCasterCount == 0U;
     setup.valid = true;
     return setup;
 }

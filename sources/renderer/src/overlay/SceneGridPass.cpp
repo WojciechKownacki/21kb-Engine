@@ -391,6 +391,9 @@ bool SceneGridPass::Submit(const SceneGridPassDesc& desc) const {
     }
 
     ConfigureOverlayView(desc, frameBuffer);
+    if (!desc.drawGrid) {
+        return true;
+    }
     bgfx::TransientVertexBuffer vertices{};
     bgfx::allocTransientVertexBuffer(&vertices, vertexCount, fullscreenLayout_);
     std::memcpy(vertices.data, triangle.data(), sizeof(PosVertex) * triangle.size());

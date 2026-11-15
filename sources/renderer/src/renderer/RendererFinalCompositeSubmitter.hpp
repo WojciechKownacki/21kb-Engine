@@ -12,7 +12,7 @@ namespace kb::render {
 class RendererFinalCompositeSubmitter final {
 public:
     // The transform that shows the post-processed scene: the profile's exposure, tone curve and
-    // display encoding. Tonemapping off removes only the tone curve, as in Unity, Unreal and Godot.
+    // display encoding. Tonemapping off removes only the tone curve.
     [[nodiscard]] static SceneDisplayOutputTransform DisplayTransform(const PostProcessOutput& postProcessOutput) noexcept;
     // The profile's vignette as the composite applies it: 0 when off, else its intensity (0..1).
     [[nodiscard]] static float VignetteIntensity(const PostProcessOutput& postProcessOutput) noexcept;

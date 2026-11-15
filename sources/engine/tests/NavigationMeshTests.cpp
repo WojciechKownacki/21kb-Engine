@@ -7,11 +7,13 @@
 #include "engine/navigation/NavGeometryCollector.hpp"
 #include "engine/navigation/NavMeshAsset.hpp"
 #include "engine/navigation/NavMeshBuild.hpp"
+#include "engine/project/ProjectSettings.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/Navigation.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneDocument.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneNavigation.hpp"
@@ -29,14 +31,21 @@
 #include "engine/world/WorldDescriptor.hpp"
 #include "engine/world/WorldObjectFile.hpp"
 #include "engine/world/WorldPartitionRuntime.hpp"
+#include "scene/asset/io/SceneAssetBinaryIO.hpp"
+#include "scene/asset/io/SceneAssetComponentCodec.hpp"
+#include "scene/asset/io/components/SceneAssetPhysicsComponentCodec.hpp"
+#include "scene/asset/io/components/SceneAssetRenderComponentCodec.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -540,6 +549,11 @@ struct CrowdRun {
     std::vector<Vec3> positions;
     std::size_t arrived = 0U;
     double milliseconds = 0.0;
+    // The slowest measured step.
+    double worst = 0.0;
+    // Average stage times of the measured steps, and the stages of the slowest one.
+    scene::NavigationCrowdStats stages{};
+    scene::NavigationCrowdStats worstStages{};
 };
 
 [[nodiscard]] nav::NavMeshAsset CrowdArena(double half) {
@@ -557,10 +571,11 @@ struct CrowdRun {
 
 // `count` agents on a grid each walk to the mirrored point across the arena's centre.
 [[nodiscard]] CrowdRun RunCrowd(const std::shared_ptr<const nav::NavMeshAsset>& arena, double half, int count, int steps,
-    std::vector<DVec3> focuses = {}) {
+    std::vector<DVec3> focuses = {}, const scene::NavigationCrowdSettings& settings = {}) {
     scene::Scene scene;
     std::string error;
     Check(scene.Navigation().AddNavMesh(arena, &error) != 0U, "the crowd arena must load: " + error);
+    scene.Navigation().ConfigureCrowd(settings);
     if (!focuses.empty()) scene.Navigation().SetCrowdFocuses(std::move(focuses));
     const int side = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(count))));
     const double spacing = (half * 1.6) / side;
@@ -579,9 +594,26 @@ struct CrowdRun {
     CrowdRun run;
     for (int step = 0; step < steps; ++step) {
         static_cast<void>(scene.Runtime().Update(kFrame));
-        if (step >= steps / 2) run.milliseconds += scene.Navigation().CrowdStats().milliseconds;
+        if (step >= steps / 2) {
+            const scene::NavigationCrowdStats stats = scene.Navigation().CrowdStats();
+            run.milliseconds += stats.milliseconds;
+            if (stats.milliseconds > run.worst) run.worstStages = stats;
+            run.worst = std::max(run.worst, stats.milliseconds);
+            run.stages.syncMilliseconds += stats.syncMilliseconds;
+            run.stages.pathMilliseconds += stats.pathMilliseconds;
+            run.stages.neighbourMilliseconds += stats.neighbourMilliseconds;
+            run.stages.cornerMilliseconds += stats.cornerMilliseconds;
+            run.stages.steeringMilliseconds += stats.steeringMilliseconds;
+            run.stages.avoidanceMilliseconds += stats.avoidanceMilliseconds;
+            run.stages.moveMilliseconds += stats.moveMilliseconds;
+        }
     }
-    run.milliseconds /= static_cast<double>(steps - steps / 2);
+    const double measured = static_cast<double>(steps - steps / 2);
+    run.milliseconds /= measured;
+    for (double* stage : { &run.stages.syncMilliseconds, &run.stages.pathMilliseconds, &run.stages.neighbourMilliseconds, &run.stages.cornerMilliseconds,
+             &run.stages.steeringMilliseconds, &run.stages.avoidanceMilliseconds, &run.stages.moveMilliseconds }) {
+        *stage /= measured;
+    }
     for (const scene::SceneEntity agent : agents) {
         run.positions.push_back(Position(scene, agent));
         const scene::NavAgent& component = Agent(scene, agent);
@@ -594,11 +626,19 @@ void TestCrowdIsDeterministic() {
     constexpr double kHalf = 60.0;
     const auto arena = std::make_shared<const nav::NavMeshAsset>(CrowdArena(kHalf));
     constexpr int kAgents = 1200;
-    const CrowdRun first = RunCrowd(arena, kHalf, kAgents, 300);
-    const CrowdRun second = RunCrowd(arena, kHalf, kAgents, 300);
+    // Near, mid and far agents around one focus, stepped on one, two and eight threads.
+    const std::vector<DVec3> focuses{ DVec3{ -30.0, 0.0, -30.0 } };
+    const auto run = [&](std::uint32_t threads) {
+        return RunCrowd(arena, kHalf, kAgents, 300, focuses,
+            scene::NavigationCrowdSettings{ .nearDistance = 30.0F, .midDistance = 60.0F, .workerThreads = threads });
+    };
+    const CrowdRun first = run(1U);
     Check(first.positions.size() == static_cast<std::size_t>(kAgents), "every crowd agent is reported");
-    Check(std::memcmp(first.positions.data(), second.positions.data(), first.positions.size() * sizeof(Vec3)) == 0,
-        "a crowd of 1200 agents replays to the same positions");
+    for (const std::uint32_t threads : { 1U, 2U, 8U }) {
+        const CrowdRun again = run(threads);
+        Check(std::memcmp(first.positions.data(), again.positions.data(), first.positions.size() * sizeof(Vec3)) == 0,
+            "a crowd of 1200 agents replays to the same positions on " + std::to_string(threads) + " threads");
+    }
     // Every agent started 0.8 m or more from the centre line and has had five seconds to walk toward it.
     std::size_t moved = 0U;
     const int side = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(kAgents))));
@@ -623,7 +663,7 @@ struct LevelOfDetailRun {
 [[nodiscard]] LevelOfDetailRun RunLevelOfDetail(const std::shared_ptr<const nav::NavMeshAsset>& arena, std::vector<DVec3> focuses) {
     scene::Scene scene;
     static_cast<void>(scene.Navigation().AddNavMesh(arena));
-    scene.Navigation().ConfigureCrowd(scene::NavigationCrowdSettings{ .nearDistance = 20.0F, .farPathOptimizationInterval = 4U });
+    scene.Navigation().ConfigureCrowd(scene::NavigationCrowdSettings{ .nearDistance = 20.0F, .midDistance = 20.0F, .farPathOptimizationInterval = 4U });
     scene.Navigation().SetCrowdFocuses(std::move(focuses));
     const scene::SceneEntity near = AddAgent(scene, DVec3{ -40.0, 0.0, -42.0 }, Vec3{ -40.0F, 0.0F, -20.0F });
     const scene::SceneEntity far = AddAgent(scene, DVec3{ 40.0, 0.0, 38.0 }, Vec3{ 40.0F, 0.0F, 20.0F });
@@ -656,6 +696,331 @@ void TestCrowdLevelOfDetail() {
         "a far agent with nothing to avoid covers the same ground as a near one");
 }
 
+// An agent walking away from the focus turns mid and then far a tenth beyond each edge, and near
+// again as soon as it walks back inside the near distance.
+void TestCrowdLevelOfDetailTransitions() {
+    scene::Scene scene;
+    static_cast<void>(AddMesh(scene, BakeNodes({ Slab(-5.0, 45.0, -3.0, 3.0, 0.0) })));
+    scene.Navigation().ConfigureCrowd(scene::NavigationCrowdSettings{ .nearDistance = 10.0F, .midDistance = 20.0F });
+    scene.Navigation().SetCrowdFocuses({ DVec3{} });
+    const scene::SceneEntity agent = AddAgent(scene, DVec3{}, Vec3{ 40.0F, 0.0F, 0.0F });
+    float firstMid = -1.0F;
+    float firstFar = -1.0F;
+    bool ordered = true;
+    for (int frame = 0; frame < 900 && firstFar < 0.0F; ++frame) {
+        const float before = Position(scene, agent).x;
+        static_cast<void>(scene.Runtime().Update(kFrame));
+        const scene::NavigationCrowdStats stats = scene.Navigation().CrowdStats();
+        if (stats.midAgents == 1U && firstMid < 0.0F) firstMid = before;
+        if (stats.farAgents == 1U && firstFar < 0.0F) firstFar = before;
+        ordered = ordered && (firstMid >= 0.0F || stats.nearAgents == 1U) && (firstFar >= 0.0F || stats.farAgents == 0U);
+    }
+    Check(ordered, "an agent walking away is near, then mid, then far");
+    Check(firstMid > 11.0F && firstMid < 11.2F, "an agent turns mid a tenth beyond the near distance: " + std::to_string(firstMid));
+    Check(firstFar > 22.0F && firstFar < 22.2F, "an agent turns far a tenth beyond the mid distance: " + std::to_string(firstFar));
+    scene::NavAgent back = Agent(scene, agent);
+    back.destination = Vec3{};
+    scene.Components().NavAgents().Set(agent, back);
+    float firstNear = -1.0F;
+    for (int frame = 0; frame < 900 && firstNear < 0.0F; ++frame) {
+        const float before = Position(scene, agent).x;
+        static_cast<void>(scene.Runtime().Update(kFrame));
+        if (scene.Navigation().CrowdStats().nearAgents == 1U) firstNear = before;
+    }
+    Check(firstNear <= 10.0F && firstNear > 9.8F, "an agent walking back is near at the near distance: " + std::to_string(firstNear));
+}
+
+// With a budget of three destinations per step, the agents near the focus are planned first even
+// though the far ones were created first, and every agent is planned in the end.
+void TestCrowdPathBudgetPriority() {
+    scene::Scene scene;
+    static_cast<void>(AddMesh(scene, BakeNodes({ Slab(-30.0, 30.0, -5.0, 5.0, 0.0) })));
+    scene.Navigation().ConfigureCrowd(scene::NavigationCrowdSettings{ .nearDistance = 10.0F, .midDistance = 10.0F, .maxPathRequestsPerStep = 3U });
+    scene.Navigation().SetCrowdFocuses({ DVec3{ 20.0, 0.0, 0.0 } });
+    std::vector<scene::SceneEntity> far;
+    std::vector<scene::SceneEntity> near;
+    for (int index = 0; index < 6; ++index) {
+        const float x = -25.0F + 1.5F * static_cast<float>(index);
+        far.push_back(AddAgent(scene, DVec3{ x, 0.0, -2.0 }, Vec3{ x, 0.0F, 2.0F }));
+    }
+    for (int index = 0; index < 6; ++index) {
+        const float x = 16.0F + 1.5F * static_cast<float>(index);
+        near.push_back(AddAgent(scene, DVec3{ x, 0.0, -2.0 }, Vec3{ x, 0.0F, 2.0F }));
+    }
+    const auto planned = [&](const std::vector<scene::SceneEntity>& group) {
+        return static_cast<std::size_t>(std::ranges::count_if(group, [&](scene::SceneEntity entity) {
+            return Agent(scene, entity).pathStatus != scene::NavPathStatus::Pending;
+        }));
+    };
+    std::string history;
+    bool withinBudget = true;
+    for (int frame = 0; frame < 4; ++frame) {
+        static_cast<void>(scene.Runtime().Update(kFrame));
+        withinBudget = withinBudget && scene.Navigation().CrowdStats().pathRequests <= 3U;
+        history += std::to_string(planned(near)) + "/" + std::to_string(planned(far)) + " ";
+    }
+    Check(withinBudget, "no step hands the crowd more destinations than its budget");
+    Check(history == "3/0 6/0 6/3 6/6 ", "near agents are planned first, then the far ones: " + history);
+}
+
+// A level on two storeys: ground [-half, half]^2; a deck 3 m up over x in [half/3, half]; stairs up
+// to the deck in the far corner (z near -0.8 half); a 3 m wide bridge at deck height reaching back
+// over the ground along z in [10, 13]; and a ladder link from the ground up onto the bridge's end.
+struct HordeLevel {
+    std::shared_ptr<const nav::NavMeshAsset> asset;
+    double half = 0.0;
+    double deckX = 0.0;
+    Vec3 ladderStart{};
+    Vec3 ladderEnd{};
+};
+
+[[nodiscard]] HordeLevel MakeHordeLevel(double half) {
+    HordeLevel level;
+    level.half = half;
+    level.deckX = half / 3.0;
+    std::vector<scene::ScenePrefabNodeDesc> nodes{ Slab(-half, half, -half, half, 0.0), Slab(level.deckX, half, -half, half, 3.0) };
+    const double stairsZ = -half * 0.8;
+    for (int step = 0; step < 12; ++step) {
+        const double top = 0.25 * (step + 1);
+        nodes.push_back(Slab(level.deckX - 6.0 + 0.5 * step, level.deckX - 5.5 + 0.5 * step, stairsZ - 4.0, stairsZ + 4.0, top, top));
+    }
+    nodes.push_back(Slab(-half + 2.0, level.deckX, 10.0, 13.0, 3.0));
+    nav::NavMeshBuildSettings settings = Settings();
+    settings.cellSize = 0.3F;
+    settings.tileCells = 96U;
+    level.asset = std::make_shared<const nav::NavMeshAsset>(BakeNodes(nodes, settings));
+    level.ladderStart = Vec3{ static_cast<float>(-half + 4.0), 0.0F, 15.5F };
+    level.ladderEnd = Vec3{ static_cast<float>(-half + 4.0), 3.0F, 12.0F };
+    return level;
+}
+
+struct HordeRun {
+    std::vector<Vec3> positions;
+    std::vector<double> steps;
+    double crowdMilliseconds = 0.0;
+    // Horde agents waiting for guidance over the steps after the first half second, up to half way.
+    std::size_t laterWaiting = 0U;
+    bool crossedLink = false;
+    std::size_t maxFields = 0U;
+    std::size_t maxWaiting = 0U;
+    std::size_t updated = 0U;
+    // Field growth time of the slowest step.
+    double slowestFieldMilliseconds = 0.0;
+    [[nodiscard]] double Percentile(double fraction) const {
+        std::vector<double> sorted = steps;
+        std::ranges::sort(sorted);
+        return sorted.empty() ? 0.0 : sorted[std::min(sorted.size() - 1U, static_cast<std::size_t>(fraction * static_cast<double>(sorted.size())))];
+    }
+    [[nodiscard]] double Average() const {
+        double sum = 0.0;
+        for (const double step : steps) sum += step;
+        return steps.empty() ? 0.0 : sum / static_cast<double>(steps.size());
+    }
+};
+
+// `count` agents on the ground chase `targets` targets circling on the deck and on the ground
+// (agent i chases target i % targets), as a horde or as individual crowd agents. Measures the
+// navigation step of the second half of `steps`.
+[[nodiscard]] HordeRun RunHorde(const HordeLevel& level, int count, int targets, int steps, bool horde, std::uint32_t threads = 0U,
+    std::optional<Vec3> fixedGoal = std::nullopt, double targetSpin = 0.25, int crowdAgents = 0, std::uint32_t fieldBudget = 4096U) {
+    const bool moving = !fixedGoal.has_value();
+    scene::Scene scene;
+    std::string error;
+    Check(scene.Navigation().AddNavMesh(level.asset, &error) != 0U, "the horde level must load: " + error);
+    scene.Navigation().ConfigureCrowd(scene::NavigationCrowdSettings{ .workerThreads = threads, .hordeFieldNodesPerStep = fieldBudget });
+    static_cast<void>(AddLink(scene, level.ladderStart, scene::NavLink{
+        .start = {}, .end = level.ladderEnd - level.ladderStart, .radius = 0.6F, .kind = scene::NavLinkKind::Walk, .bidirectional = true }));
+    const double half = level.half;
+    const auto target = [&](int index, int step) {
+        if (fixedGoal) return *fixedGoal;
+        // Even targets circle on the deck, odd ones on the ground; 8 m circles at 2 m/s.
+        const double angle = (moving ? step * kFrame * targetSpin : 0.0) + index * 0.7;
+        const bool deck = index % 2 == 0;
+        const double spanZ = half * 1.4;
+        const double cz = -half * 0.7 + spanZ * ((index * 0.618) - std::floor(index * 0.618));
+        const double cx = deck ? (level.deckX + half) * 0.5 : -half * 0.5;
+        return Vec3{ static_cast<float>(cx + 8.0 * std::cos(angle)), deck ? 3.0F : 0.0F, static_cast<float>(cz + 8.0 * std::sin(angle)) };
+    };
+    const int side = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(count))));
+    const double minX = -half * 0.95;
+    const double spanX = (level.deckX - 8.0) - minX;
+    const double spanZ = half * 1.9;
+    std::vector<scene::SceneEntity> agents;
+    std::vector<scene::SceneEntity> crowd;
+    agents.reserve(static_cast<std::size_t>(count));
+    for (int index = 0; index < count; ++index) {
+        const double x = minX + spanX * (index % side + 0.5) / side;
+        const double z = -half * 0.95 + spanZ * (index / side + 0.5) / side;
+        const scene::SceneObject object = scene.Entities().CreateObject(scene::SceneObjectDesc{ .name = "Horde" });
+        scene.Transforms().SetLocalTranslation(object.Entity(), DVec3{ x, 0.0, z });
+        scene.Components().NavAgents().Set(object.Entity(), scene::NavAgent{
+            .radius = 0.4F, .maxSpeed = 3.5F, .acceleration = 10.0F, .stoppingDistance = 1.0F, .destination = target(index % targets, 0), .horde = horde });
+        agents.push_back(object.Entity());
+    }
+    // Individual crowd agents among them, after the same targets.
+    for (int index = 0; index < crowdAgents; ++index) {
+        const double x = minX + spanX * ((index * 37) % 101 + 0.5) / 101.0;
+        const double z = -half * 0.95 + spanZ * ((index * 53) % 103 + 0.5) / 103.0;
+        const scene::SceneObject object = scene.Entities().CreateObject(scene::SceneObjectDesc{ .name = "Crowd" });
+        scene.Transforms().SetLocalTranslation(object.Entity(), DVec3{ x, 0.0, z });
+        scene.Components().NavAgents().Set(object.Entity(), scene::NavAgent{
+            .radius = 0.4F, .maxSpeed = 3.5F, .acceleration = 10.0F, .stoppingDistance = 1.0F, .destination = target(index % targets, 0) });
+        crowd.push_back(object.Entity());
+    }
+    scene.Runtime().SynchronizeTransforms();
+    HordeRun run;
+    double slowest = 0.0;
+    std::vector<Vec3> goals(static_cast<std::size_t>(targets));
+    for (int step = 0; step < steps; ++step) {
+        if (moving) {
+            for (int index = 0; index < targets; ++index) goals[static_cast<std::size_t>(index)] = target(index, step);
+            for (int index = 0; index < count; ++index) {
+                scene.Components().NavAgents().TryGet(agents[static_cast<std::size_t>(index)])->destination = goals[static_cast<std::size_t>(index % targets)];
+            }
+            for (int index = 0; index < crowdAgents; ++index) {
+                scene.Components().NavAgents().TryGet(crowd[static_cast<std::size_t>(index)])->destination = goals[static_cast<std::size_t>(index % targets)];
+            }
+        }
+        static_cast<void>(scene.Runtime().Update(kFrame));
+        const scene::NavigationCrowdStats stats = scene.Navigation().CrowdStats();
+        if (step >= steps / 2) run.crowdMilliseconds += stats.milliseconds;
+        if (step >= 30 && step < steps / 2) run.laterWaiting += stats.hordeWaiting;
+        run.crossedLink = run.crossedLink || (horde ? stats.hordeOnLinks : stats.onLinks) > 0U;
+        run.maxFields = std::max(run.maxFields, stats.hordeFields);
+        if (step >= steps / 2) {
+            const double milliseconds = horde ? stats.hordeMilliseconds : stats.milliseconds;
+            if (run.steps.empty() || milliseconds > slowest) {
+                slowest = milliseconds;
+                run.slowestFieldMilliseconds = stats.hordeFieldMilliseconds;
+            }
+            run.steps.push_back(milliseconds);
+            run.maxWaiting = std::max(run.maxWaiting, stats.hordeWaiting);
+            run.updated += stats.hordeUpdated;
+        }
+    }
+    for (const scene::SceneEntity agent : agents) run.positions.push_back(Position(scene, agent));
+    return run;
+}
+
+// Horde agents on the ground reach a target on the deck over the stairs, the bridge and the
+// ladder link, sharing one field; agents under the bridge are not pushed by those on it.
+void TestHordeCrossesLevels() {
+    const HordeLevel level = MakeHordeLevel(30.0);
+    const Vec3 goal{ static_cast<float>(level.deckX + 4.0), 3.0F, 11.5F };
+    const HordeRun run = RunHorde(level, 300, 1, 60 * 40, true, 0U, goal);
+    std::size_t arrived = 0U;
+    for (const Vec3 position : run.positions) {
+        arrived += position.y > 2.5F && Horizontal(position, goal) < 12.0F ? 1U : 0U;
+    }
+    Check(arrived >= 270U, "a horde climbs onto the deck and gathers at its target: " + std::to_string(arrived) + " of 300");
+    Check(run.maxFields <= 24U, "one target gives a few shared fields, not one per agent: " + std::to_string(run.maxFields));
+    Check(run.crossedLink, "horde agents take the ladder link when it is the short way");
+}
+
+// The horde replays to the same positions on one, two and eight threads, with moving targets.
+void TestHordeIsDeterministic() {
+    const HordeLevel level = MakeHordeLevel(30.0);
+    const HordeRun first = RunHorde(level, 1500, 4, 400, true, 1U);
+    for (const std::uint32_t threads : { 2U, 8U }) {
+        const HordeRun again = RunHorde(level, 1500, 4, 400, true, threads);
+        Check(std::memcmp(first.positions.data(), again.positions.data(), first.positions.size() * sizeof(Vec3)) == 0,
+            "a horde of 1500 agents replays to the same positions on " + std::to_string(threads) + " threads");
+    }
+}
+
+// A target moving within its polygon reuses its field; one moving into other polygons builds new
+// fields while the agents keep following the old one, so none stands waiting.
+void TestHordeFieldFollowsItsTarget() {
+    scene::Scene scene;
+    static_cast<void>(AddMesh(scene, BakeNodes({ Slab(-20.0, 20.0, -20.0, 20.0, 0.0), BoxNode(DVec3{ 0.0, 1.0, 0.0 }, Vec3{ 2.0F, 2.0F, 12.0F }) })));
+    std::vector<scene::SceneEntity> agents;
+    for (int index = 0; index < 50; ++index) {
+        agents.push_back(AddAgent(scene, DVec3{ -15.0 + (index % 10) * 1.2, 0.0, -6.0 + (index / 10) * 1.2 }, Vec3{ 12.0F, 0.0F, 0.0F }));
+        scene.Components().NavAgents().TryGet(agents.back())->horde = true;
+    }
+    for (int frame = 0; frame < 30; ++frame) static_cast<void>(scene.Runtime().Update(kFrame));
+    const std::size_t fields = scene.Navigation().CrowdStats().hordeFields;
+    Check(fields <= 12U && scene.Navigation().CrowdStats().hordeWaiting == 0U,
+        "50 agents with one destination share a few fields and all follow them: " + std::to_string(fields));
+    for (const scene::SceneEntity agent : agents) scene.Components().NavAgents().TryGet(agent)->destination = Vec3{ 12.05F, 0.0F, 0.02F };
+    static_cast<void>(scene.Runtime().Update(kFrame));
+    Check(scene.Navigation().CrowdStats().hordeFields == fields, "a destination moved within its polygon keeps its field");
+    std::size_t waiting = 0U;
+    std::size_t waitedSteps = 0U;
+    for (int frame = 0; frame < 900; ++frame) {
+        const Vec3 destination{ 12.0F, 0.0F, -15.0F + 0.03F * static_cast<float>(frame) };
+        for (const scene::SceneEntity agent : agents) scene.Components().NavAgents().TryGet(agent)->destination = destination;
+        static_cast<void>(scene.Runtime().Update(kFrame));
+        waiting = std::max(waiting, scene.Navigation().CrowdStats().hordeWaiting);
+        waitedSteps += scene.Navigation().CrowdStats().hordeWaiting;
+    }
+    // Agents keep to the old fields while new ones grow; only one that has just stepped into a tile whose field is
+    // not there yet stands for a step.
+    Check(waiting <= 4U && waitedSteps <= 90U, "agents follow the old field while the new one grows: at most " + std::to_string(waiting) +
+        " waited at once, " + std::to_string(waitedSteps) + " agent steps in all");
+    std::size_t near = 0U;
+    for (const scene::SceneEntity agent : agents) near += Horizontal(Position(scene, agent), { 12.0F, 0.0F, 11.97F }) < 6.0F ? 1U : 0U;
+    Check(near >= 45U, "the horde goes around the wall and keeps up with its moving target: " + std::to_string(near) + " of 50");
+}
+
+// Far from their target and with a tiny field budget, horde agents still set off along the route over the
+// tiles instead of waiting for a field that would take long to reach them.
+void TestHordeFarAgentsFollowTheRoute() {
+    scene::Scene scene;
+    static_cast<void>(AddMesh(scene, BakeNodes({ Slab(-150.0, 150.0, -40.0, 40.0, 0.0) })));
+    scene.Navigation().ConfigureCrowd(scene::NavigationCrowdSettings{ .hordeFieldNodesPerStep = 48U });
+    std::vector<scene::SceneEntity> agents;
+    std::vector<float> startX;
+    for (int index = 0; index < 120; ++index) {
+        const double x = -140.0 + (index % 12) * 2.5;
+        agents.push_back(AddAgent(scene, DVec3{ x, 0.0, -14.0 + (index / 12) * 2.5 }, Vec3{ 120.0F, 0.0F, 0.0F }));
+        startX.push_back(static_cast<float>(x));
+        scene.Components().NavAgents().TryGet(agents.back())->horde = true;
+    }
+    std::size_t waitingLater = 0U;
+    for (int frame = 0; frame < 150; ++frame) {
+        static_cast<void>(scene.Runtime().Update(kFrame));
+        if (frame >= 30) waitingLater = std::max(waitingLater, scene.Navigation().CrowdStats().hordeWaiting);
+    }
+    Check(waitingLater == 0U, "far horde agents are guided along the route within half a second: " + std::to_string(waitingLater) + " waited");
+    std::size_t advanced = 0U;
+    float total = 0.0F;
+    for (std::size_t index = 0U; index < agents.size(); ++index) {
+        const float travelled = Position(scene, agents[index]).x - startX[index];
+        advanced += travelled > 2.0F ? 1U : 0U;
+        total += travelled;
+    }
+    Check(advanced >= 110U && total / 120.0F >= 4.0F, "far horde agents walk toward their target: " + std::to_string(advanced) + " of 120, average " +
+        std::to_string(total / 120.0F) + " m");
+}
+
+// A horde keeps its distance from a crowd agent and from an obstacle it steers around, like from each other.
+void TestHordeKeepsOffOtherBodies() {
+    scene::Scene scene;
+    static_cast<void>(AddMesh(scene, BakeNodes({ Slab(-30.0, 30.0, -30.0, 30.0, 0.0) })));
+    const scene::SceneEntity guard = AddAgent(scene, DVec3{ 10.0, 0.0, 0.0 }, Vec3{ 10.0F, 0.0F, 0.0F });
+    static_cast<void>(AddObstacle(scene, { 10.0F, 0.0F, 12.0F }, scene::NavObstacle{
+        .shape = scene::NavObstacleShape::Cylinder, .radius = 1.0F, .height = 2.0F, .carve = false }));
+    std::vector<scene::SceneEntity> toGuard;
+    std::vector<scene::SceneEntity> pastObstacle;
+    for (int index = 0; index < 4; ++index) {
+        toGuard.push_back(AddAgent(scene, DVec3{ -10.0 + index * 1.0, 0.0, -6.0 }, Vec3{ 10.0F, 0.0F, 0.0F }));
+        scene.Components().NavAgents().TryGet(toGuard.back())->horde = true;
+        // These walk straight at the obstacle's centre on their way to a point behind it.
+        pastObstacle.push_back(AddAgent(scene, DVec3{ 10.0 + (index - 1.5) * 0.15, 0.0, 2.0 + index * 1.0 }, Vec3{ 10.0F, 0.0F, 24.0F }));
+        scene.Components().NavAgents().TryGet(pastObstacle.back())->horde = true;
+    }
+    float closestToObstacle = 1.0e9F;
+    for (int frame = 0; frame < 60 * 20; ++frame) {
+        static_cast<void>(scene.Runtime().Update(kFrame));
+        for (const scene::SceneEntity agent : pastObstacle) closestToObstacle = std::min(closestToObstacle, Horizontal(Position(scene, agent), { 10.0F, 0.0F, 12.0F }));
+    }
+    float closestToGuard = 1.0e9F;
+    for (const scene::SceneEntity agent : toGuard) closestToGuard = std::min(closestToGuard, Horizontal(Position(scene, agent), Position(scene, guard)));
+    Check(closestToGuard >= 0.6F, "horde agents keep apart from a crowd agent: " + std::to_string(closestToGuard) + " m");
+    Check(closestToObstacle >= 0.8F, "horde agents steer around a non-carving obstacle: " + std::to_string(closestToObstacle) + " m");
+}
+
 void TestNavComponentsPersist() {
     const std::filesystem::path root = FreshDirectory("persist");
     {
@@ -665,6 +1030,7 @@ void TestNavComponentsPersist() {
             .bidirectional = false, .enabled = true }));
         const scene::SceneEntity agent = AddAgent(scene, DVec3{ 2.0, 0.0, 1.0 }, Vec3{ 5.0F, 0.0F, -3.0F }, 0.6F, 4.5F);
         scene.Components().NavAgents().TryGet(agent)->areaMask = scene::kAllNavAreas & ~scene::NavAreaBit(5U);
+        scene.Components().NavAgents().TryGet(agent)->horde = true;
         static_cast<void>(AddObstacle(scene, { -2.0F, 0.0F, 4.0F }, scene::NavObstacle{
             .shape = scene::NavObstacleShape::Cylinder, .radius = 1.25F, .height = 3.0F, .area = 6U, .carve = false }));
         Check(scene::SceneDocumentService::Save(scene, root / "Navigation.21kbscene", "Navigation"), "a scene with navigation components saves");
@@ -690,11 +1056,374 @@ void TestNavComponentsPersist() {
         links[0].kind == scene::NavLinkKind::Ladder && links[0].area == 7U && !links[0].bidirectional,
         "a link keeps every field through a save and a load");
     Check(found.agents.size() == 1U && found.agents[0].radius == 0.6F && found.agents[0].maxSpeed == 4.5F && found.agents[0].destination.z == -3.0F &&
-        found.agents[0].areaMask == (scene::kAllNavAreas & ~scene::NavAreaBit(5U)), "an agent keeps its fields through a save and a load");
+        found.agents[0].areaMask == (scene::kAllNavAreas & ~scene::NavAreaBit(5U)) && found.agents[0].horde,
+        "an agent keeps its fields through a save and a load");
     Check(found.obstacles.size() == 1U && found.obstacles[0].shape == scene::NavObstacleShape::Cylinder && found.obstacles[0].radius == 1.25F &&
         found.obstacles[0].height == 3.0F && found.obstacles[0].area == 6U && !found.obstacles[0].carve,
         "an obstacle keeps its fields through a save and a load");
     std::filesystem::remove_all(root);
+}
+
+// A Navigation Bounds node: a box `size` wide around `position`.
+[[nodiscard]] scene::ScenePrefabNodeDesc BoundsNode(DVec3 position, Vec3 size, scene::NavBounds bounds = {}) {
+    scene::ScenePrefabNodeDesc node;
+    node.name = "Navigation Bounds";
+    node.SetLocalTranslation(position);
+    bounds.size = size;
+    node.components.navBounds = bounds;
+    return node;
+}
+
+[[nodiscard]] double WalkableArea(const nav::NavMeshAsset& asset) {
+    if (asset.tiles.empty()) return 0.0;
+    scene::Scene scene;
+    static_cast<void>(AddMesh(scene, asset));
+    return scene.Navigation().NavMeshWalkableArea();
+}
+
+[[nodiscard]] nav::NavMeshAsset BakeWithBounds(const std::vector<scene::ScenePrefabNodeDesc>& nodes) {
+    nav::NavGeometry geometry;
+    nav::NavGeometryCollectStats stats;
+    nav::CollectNavGeometry(nodes, Settings(), nullptr, geometry, stats);
+    return BakeGeometry(geometry, Settings());
+}
+
+void TestBoundsLimitTheBake() {
+    const scene::ScenePrefabNodeDesc floor = Slab(-20.0, 20.0, -20.0, 20.0, 0.0);
+    const double whole = WalkableArea(BakeWithBounds({ floor }));
+    Check(whole > 38.0 * 38.0, "without Navigation Bounds the whole floor is baked: " + std::to_string(whole));
+
+    const nav::NavMeshAsset boxed = BakeWithBounds({ floor, BoundsNode(DVec3{ 2.0, 0.0, 3.0 }, Vec3{ 10.0F, 4.0F, 10.0F }) });
+    const double inside = WalkableArea(boxed);
+    Check(inside > 90.0 && inside <= 101.0, "one Navigation Bounds keeps the floor inside its 10 x 10 m box only: " + std::to_string(inside));
+    scene::Scene single;
+    static_cast<void>(AddMesh(single, boxed));
+    const std::optional<DVec3> centre = single.Navigation().NearestPoint(DVec3{ 2.0, 0.5, 3.0 });
+    Check(centre.has_value() && std::fabs(centre->x - 2.0) < 0.01, "the box's centre is walkable");
+    const std::optional<DVec3> outside = single.Navigation().NearestPoint(DVec3{ -12.0, 0.0, -12.0 });
+    Check(!outside.has_value() || outside->x > -3.2, "floor outside the box is not baked");
+    Check(boxed.tiles.size() < BakeWithBounds({ floor }).tiles.size(), "tiles no Navigation Bounds touches are not baked");
+
+    const double both = WalkableArea(BakeWithBounds({ floor, BoundsNode(DVec3{ -12.0, 0.0, 0.0 }, Vec3{ 8.0F, 4.0F, 8.0F }),
+        BoundsNode(DVec3{ 12.0, 0.0, 0.0 }, Vec3{ 8.0F, 4.0F, 8.0F }) }));
+    Check(both > 2.0 * 56.0 && both <= 2.0 * 65.0, "two Navigation Bounds bake the union of their boxes: " + std::to_string(both));
+
+    const double above = WalkableArea(BakeWithBounds({ floor, BoundsNode(DVec3{ 0.0, 10.0, 0.0 }, Vec3{ 10.0F, 4.0F, 10.0F }) }));
+    Check(above == 0.0, "a box above the floor bakes nothing: " + std::to_string(above));
+}
+
+void TestBoundsBakeSettings() {
+    scene::NavBounds bounds{};
+    const nav::NavMeshBuildSettings defaults = nav::NavBoundsBuildSettings(bounds);
+    Check(defaults.profiles.size() == 1U && defaults.profiles[0] == nav::NavAgentProfile{} && defaults.cellSize == nav::NavMeshBuildSettings{}.cellSize &&
+        defaults.tileCells == nav::NavMeshBuildSettings{}.tileCells, "a default Navigation Bounds bakes with the default settings");
+    Check(scene::NavAgent{}.radius == nav::NavAgentProfile{}.radius, "a default agent is as wide as the default baked profile");
+    bounds.agentRadius = 1.0F;
+    bounds.agentHeight = 1.2F;
+    bounds.maxStepHeight = 0.3F;
+    bounds.maxSlopeDegrees = 30.0F;
+    bounds.cellSize = 0.2F;
+    bounds.tileSize = 9.6F;
+    const nav::NavMeshBuildSettings own = nav::NavBoundsBuildSettings(bounds);
+    Check(own.profiles[0].radius == 1.0F && own.profiles[0].height == 1.2F && own.profiles[0].maxClimb == 0.3F &&
+        own.profiles[0].maxSlopeDegrees == 30.0F && own.cellSize == 0.2F && own.tileCells == 48U, "a Navigation Bounds' settings become the bake's");
+
+    // A wider agent keeps further from the walls, so less of the floor is walkable.
+    const std::filesystem::path root = FreshDirectory("bounds");
+    const auto bake = [&root](std::vector<scene::NavBounds> boxes) {
+        scene::Scene scene;
+        static_cast<void>(AddCollider(scene, DVec3{ 0.0, -0.25, 0.0 }, Vec3{ 20.0F, 0.5F, 20.0F }));
+        for (const scene::NavBounds& box : boxes) {
+            const scene::SceneObject holder = scene.Entities().CreateObject(scene::SceneObjectDesc{ .name = "Navigation Bounds" });
+            scene.Components().NavBounds().Set(holder.Entity(), box);
+        }
+        Check(scene::SceneDocumentService::Save(scene, root / "Bounds.21kbscene", "Bounds"), "a scene with Navigation Bounds saves");
+        return nav::BakeSceneNavMesh(root / "Bounds.21kbscene", Settings(), nullptr);
+    };
+    scene::NavBounds narrow{ .size = { 40.0F, 10.0F, 40.0F } };
+    scene::NavBounds wide = narrow;
+    wide.agentRadius = 1.2F;
+    const nav::NavSceneBakeResult narrowBake = bake({ narrow });
+    const nav::NavSceneBakeResult wideBake = bake({ wide });
+    Check(narrowBake.succeeded && wideBake.succeeded, "scenes with Navigation Bounds bake: " + narrowBake.error + wideBake.error);
+    Check(narrowBake.asset.settings == nav::NavBoundsBuildSettings(narrow) && wideBake.asset.settings.profiles[0].radius == 1.2F,
+        "a scene with Navigation Bounds bakes with their settings, not the ones passed in");
+    const double narrowArea = WalkableArea(narrowBake.asset);
+    const double wideArea = WalkableArea(wideBake.asset);
+    Check(wideArea < narrowArea - 20.0, "a bigger agent radius leaves a smaller walkable area: " + std::to_string(wideArea) + " vs " + std::to_string(narrowArea));
+    const nav::NavSceneBakeResult mixed = bake({ narrow, wide });
+    Check(!mixed.succeeded && mixed.error.find("different bake settings") != std::string::npos,
+        "Navigation Bounds that disagree on the settings are refused: " + mixed.error);
+    std::filesystem::remove_all(root);
+}
+
+void TestBoundsPersist() {
+    const std::filesystem::path root = FreshDirectory("bounds_persist");
+    const scene::NavBounds saved{ .center = { 1.0F, 2.0F, 3.0F }, .size = { 4.0F, 5.0F, 6.0F }, .agentRadius = 0.7F, .agentHeight = 1.6F,
+        .maxStepHeight = 0.35F, .maxSlopeDegrees = 38.0F, .cellSize = 0.3F, .tileSize = 12.0F };
+    {
+        scene::Scene scene;
+        const scene::SceneObject holder = scene.Entities().CreateObject(scene::SceneObjectDesc{ .name = "Navigation Bounds" });
+        scene.Components().NavBounds().Set(holder.Entity(), saved);
+        Check(scene::SceneDocumentService::Save(scene, root / "Bounds.21kbscene", "Bounds"), "a scene with Navigation Bounds saves");
+    }
+    scene::Scene loaded;
+    Check(scene::SceneDocumentService::LoadFileIntoScene(loaded, root / "Bounds.21kbscene"), "a scene with Navigation Bounds loads");
+    struct Found {
+        scene::Scene* scene = nullptr;
+        std::vector<scene::NavBounds> bounds;
+    } found{ .scene = &loaded, .bounds = {} };
+    loaded.Transforms().ForEach([](scene::SceneEntity entity, const scene::TransformComponent&, void* context) {
+        auto* search = static_cast<Found*>(context);
+        if (const scene::NavBounds* bounds = search->scene->Components().NavBounds().TryGet(entity); bounds != nullptr) search->bounds.push_back(*bounds);
+    }, &found);
+    Check(found.bounds.size() == 1U && std::memcmp(&found.bounds[0], &saved, sizeof(saved)) == 0, "a Navigation Bounds keeps every field through a save and a load");
+    std::filesystem::remove_all(root);
+
+    // Files from before Navigation Bounds still read; a Navigation Bounds in a file that claims to be older is refused.
+    scene::ScenePrefabNodeComponents plain;
+    plain.navLink = scene::NavLink{};
+    std::vector<std::uint8_t> plainBytes;
+    scene::SceneAssetComponentCodec::Write(plainBytes, plain);
+    scene::SceneAssetBinaryIO::ByteReader plainReader{ plainBytes };
+    scene::ScenePrefabNodeComponents plainRead;
+    Check(scene::SceneAssetComponentCodec::Read(plainReader, scene::SceneDocument::NavBoundsFileVersion - 1U, plainRead) && plainRead.navLink.has_value() &&
+        !plainRead.navBounds.has_value(), "components written without Navigation Bounds read as an older file");
+    scene::ScenePrefabNodeComponents withBounds;
+    withBounds.navBounds = saved;
+    std::vector<std::uint8_t> boundsBytes;
+    scene::SceneAssetComponentCodec::Write(boundsBytes, withBounds);
+    scene::SceneAssetBinaryIO::ByteReader oldReader{ boundsBytes };
+    scene::ScenePrefabNodeComponents oldRead;
+    Check(!scene::SceneAssetComponentCodec::Read(oldReader, scene::SceneDocument::NavBoundsFileVersion - 1U, oldRead),
+        "a file older than Navigation Bounds cannot hold one");
+}
+
+[[nodiscard]] nav::NavGeometry CollectNodes(const std::vector<scene::ScenePrefabNodeDesc>& nodes) {
+    nav::NavGeometry geometry;
+    nav::NavGeometryCollectStats stats;
+    nav::CollectNavGeometry(nodes, Settings(), nullptr, geometry, stats);
+    return geometry;
+}
+
+// Moves `nodes` from one geometry to the next: only the changed tiles are rebuilt, and they give the full bake.
+void CheckEditRebuildsItsTiles(const std::vector<scene::ScenePrefabNodeDesc>& before, const std::vector<scene::ScenePrefabNodeDesc>& after,
+    const std::string& edit, bool fewerThanAll = true) {
+    const nav::NavGeometry oldGeometry = CollectNodes(before);
+    const nav::NavGeometry newGeometry = CollectNodes(after);
+    const nav::NavMeshBakeResult baked = nav::NavMeshBuilder::Bake(Settings(), oldGeometry);
+    const nav::NavMeshBakeResult full = nav::NavMeshBuilder::Bake(Settings(), newGeometry);
+    const std::optional<std::vector<nav::NavTileCoord>> changed = nav::ChangedNavTiles(Settings(), oldGeometry, newGeometry);
+    Check(baked.succeeded && full.succeeded && changed.has_value() && !changed->empty(), edit + ": the edit names the tiles it changes");
+    Check(!fewerThanAll || changed->size() < full.tiles.size(), edit + ": " + std::to_string(changed->size()) + " of " + std::to_string(full.tiles.size()) +
+        " tiles are rebuilt, not all of them");
+    const nav::NavMeshBakeResult rebuilt = nav::NavMeshBuilder::RebuildTiles(Settings(), newGeometry, baked.tiles, *changed);
+    Check(rebuilt.succeeded && rebuilt.tiles == full.tiles, edit + ": rebuilding the changed tiles gives the full bake of the edited scene");
+    Check(baked.tiles != full.tiles, edit + ": the edit changes the navigation mesh");
+}
+
+void TestEditsRebuildOnlyTheirTiles() {
+    const scene::ScenePrefabNodeDesc floor = Slab(-40.0, 40.0, -40.0, 40.0, 0.0);
+    const scene::ScenePrefabNodeDesc pillar = BoxNode(DVec3{ 5.0, 1.0, 5.0 }, Vec3{ 2.0F, 2.0F, 2.0F });
+    const scene::ScenePrefabNodeDesc moved = BoxNode(DVec3{ -20.0, 1.0, -20.0 }, Vec3{ 2.0F, 2.0F, 2.0F });
+    const nav::NavGeometry still = CollectNodes({ floor, pillar });
+    const std::optional<std::vector<nav::NavTileCoord>> none = nav::ChangedNavTiles(Settings(), still, CollectNodes({ floor, pillar }));
+    Check(none.has_value() && none->empty(), "geometry that did not change rebuilds no tile");
+    CheckEditRebuildsItsTiles({ floor, pillar }, { floor, moved }, "a moved pillar");
+    CheckEditRebuildsItsTiles({ floor, pillar }, { floor }, "a removed pillar");
+    CheckEditRebuildsItsTiles({ floor }, { floor, pillar }, "an added pillar");
+    const scene::ScenePrefabNodeDesc bounds = BoundsNode(DVec3{ 0.0, 0.0, 0.0 }, Vec3{ 30.0F, 4.0F, 30.0F });
+    const scene::ScenePrefabNodeDesc grown = BoundsNode(DVec3{ 10.0, 0.0, 0.0 }, Vec3{ 30.0F, 4.0F, 30.0F });
+    // A box moving across the floor changes every tile it covered or covers now, but not the other box's.
+    const scene::ScenePrefabNodeDesc far = BoundsNode(DVec3{ -30.0, 0.0, -30.0 }, Vec3{ 10.0F, 4.0F, 10.0F });
+    CheckEditRebuildsItsTiles({ floor, pillar, bounds, far }, { floor, pillar, grown, far }, "a moved Navigation Bounds", false);
+    Check(!nav::ChangedNavTiles(Settings(), CollectNodes({ floor }), CollectNodes({ floor, bounds })).has_value(),
+        "the first Navigation Bounds changes every tile, so the whole scene is baked again");
+}
+
+void TestBackgroundBakeMatchesTheSynchronousOne() {
+    const std::filesystem::path root = FreshDirectory("background");
+    scene::Scene source;
+    static_cast<void>(AddCollider(source, DVec3{ 0.0, -0.25, 0.0 }, Vec3{ 60.0F, 0.5F, 60.0F }));
+    static_cast<void>(AddCollider(source, DVec3{ 3.0, 1.0, -2.0 }, Vec3{ 2.0F, 2.0F, 2.0F }));
+    const std::filesystem::path path = root / "Background.21kbscene";
+    Check(scene::SceneDocumentService::Save(source, path, "Background"), "the scene saves");
+    const nav::NavSceneBakeResult synchronous = nav::BakeSceneNavMesh(path, Settings(), nullptr);
+    Check(synchronous.succeeded && !synchronous.asset.tiles.empty(), "the saved scene bakes: " + synchronous.error);
+    // The editor collects the open scene on its thread and bakes it on a worker.
+    const scene::SceneDocument captured = scene::SceneDocumentService::Capture(source, "Background");
+    const nav::NavScenePreparation prepared = nav::PrepareSceneNavBake(captured.worldPrefab.Nodes(), Settings(), nullptr);
+    Check(prepared.succeeded, "the open scene's geometry is collected: " + prepared.error);
+    nav::NavBakeProgress progress;
+    std::thread worker;
+    nav::NavSceneBakeResult background;
+    worker = std::thread([&prepared, &progress, &background]() { background = nav::BakePreparedSceneNavMesh(prepared, &progress); });
+    worker.join();
+    Check(background.succeeded && background.asset.settings == synchronous.asset.settings && background.asset.tiles == synchronous.asset.tiles,
+        "a bake on a worker gives the same navigation mesh as the synchronous bake of the saved scene");
+    Check(progress.total.load() > 0U && progress.built.load() == progress.total.load(), "the bake reports every tile it built");
+    std::filesystem::remove_all(root);
+}
+
+void TestDebugGeometry() {
+    const nav::NavMeshAsset floor = BakeNodes({ Slab(-10.0, 10.0, -10.0, 10.0, 0.0) });
+    const auto shared = std::make_shared<const nav::NavMeshAsset>(floor);
+    const nav::NavMeshDebugGeometry drawn = nav::NavMeshAssetDebugGeometry(shared, 0U);
+    const std::vector<DVec3> triangles = nav::NavMeshAssetTriangles(shared, 0U);
+    Check(drawn.triangles == triangles && drawn.triangleAreas.size() * 3U == triangles.size(), "the debug view fills the same triangles the mesh has");
+    Check(std::ranges::all_of(drawn.triangleAreas, [](std::uint8_t area) { return area == scene::kDefaultNavArea; }), "an unpainted floor is all ground");
+    Check(drawn.tiles.size() == floor.tiles.size(), "every tile's bounds are drawn");
+    std::size_t boundary = 0U;
+    for (const nav::NavMeshDebugGeometry::Edge& edge : drawn.edges) {
+        if (edge.boundary) ++boundary;
+    }
+    Check(boundary >= 4U && drawn.edges.size() < triangles.size(), "polygon edges are drawn without the diagonals inside polygons: " +
+        std::to_string(drawn.edges.size()) + " edges for " + std::to_string(triangles.size() / 3U) + " triangles");
+    for (const nav::NavMeshDebugGeometry::Edge& edge : drawn.edges) {
+        if (!edge.boundary) continue;
+        const bool onRim = std::fabs(std::fabs(edge.from.x) - 9.6) < 0.3 || std::fabs(std::fabs(edge.from.z) - 9.6) < 0.3;
+        Check(onRim, "an outer edge lies on the rim of the walkable floor");
+    }
+}
+
+void TestObjectsThatDoNotAffectNavigation() {
+    const scene::ScenePrefabNodeDesc floor = Slab(-40.0, 40.0, -40.0, 40.0, 0.0);
+    const scene::ScenePrefabNodeDesc pillar = BoxNode(DVec3{ 5.0, 1.0, 5.0 }, Vec3{ 2.0F, 2.0F, 2.0F });
+    scene::ScenePrefabNodeDesc ignored = pillar;
+    ignored.components.collider->affectsNavigation = false;
+    const nav::NavMeshBakeResult bare = nav::NavMeshBuilder::Bake(Settings(), CollectNodes({ floor }));
+    const nav::NavMeshBakeResult withIgnored = nav::NavMeshBuilder::Bake(Settings(), CollectNodes({ floor, ignored }));
+    const nav::NavMeshBakeResult withPillar = nav::NavMeshBuilder::Bake(Settings(), CollectNodes({ floor, pillar }));
+    Check(bare.succeeded && withIgnored.succeeded && withPillar.succeeded && withIgnored.tiles == bare.tiles && withPillar.tiles != bare.tiles,
+        "a collider that does not affect navigation adds nothing to the bake");
+    // Switching the flag is an edit like any other: only the pillar's tiles are rebuilt, to the full bake.
+    CheckEditRebuildsItsTiles({ floor, pillar }, { floor, ignored }, "a pillar that stops affecting navigation");
+    CheckEditRebuildsItsTiles({ floor, ignored }, { floor, pillar }, "a pillar that starts affecting navigation");
+
+    // A mesh renderer is left out before its mesh is even looked for.
+    scene::ScenePrefabNodeDesc mesh;
+    mesh.name = "Mesh";
+    mesh.components.meshRenderer = scene::MeshRendererComponent{ .meshAssetId = 7U };
+    nav::NavGeometry geometry;
+    nav::NavGeometryCollectStats stats;
+    nav::CollectNavGeometry(std::vector<scene::ScenePrefabNodeDesc>{ mesh }, Settings(), nullptr, geometry, stats);
+    Check(stats.unresolved == 1U, "a mesh that affects navigation is looked for");
+    mesh.components.meshRenderer->affectsNavigation = false;
+    nav::NavGeometryCollectStats skipped;
+    nav::CollectNavGeometry(std::vector<scene::ScenePrefabNodeDesc>{ mesh }, Settings(), nullptr, geometry, skipped);
+    Check(skipped.unresolved == 0U && skipped.meshes == 0U, "a mesh that does not affect navigation is not collected");
+
+    // The flag survives a save and a load; files from before it load with it on.
+    const std::filesystem::path root = FreshDirectory("affects_navigation");
+    {
+        scene::Scene saved;
+        const scene::SceneObject holder = saved.Entities().CreateObject(scene::SceneObjectDesc{ .name = "Grass" });
+        saved.Components().Colliders().Set(holder.Entity(), scene::ColliderComponent{ .affectsNavigation = false });
+        saved.Components().MeshRenderers().Set(holder.Entity(), scene::MeshRendererComponent{ .affectsNavigation = false });
+        Check(scene::SceneDocumentService::Save(saved, root / "Grass.21kbscene", "Grass"), "a scene with objects that do not affect navigation saves");
+    }
+    scene::Scene loaded;
+    Check(scene::SceneDocumentService::LoadFileIntoScene(loaded, root / "Grass.21kbscene"), "that scene loads");
+    struct Found {
+        scene::Scene* scene = nullptr;
+        int off = 0;
+    } found{ .scene = &loaded };
+    loaded.Transforms().ForEach([](scene::SceneEntity entity, const scene::TransformComponent&, void* context) {
+        auto* search = static_cast<Found*>(context);
+        const scene::ColliderComponent* collider = search->scene->Components().Colliders().TryGet(entity);
+        const scene::MeshRendererComponent* renderer = search->scene->Components().MeshRenderers().TryGet(entity);
+        search->off += (collider != nullptr && !collider->affectsNavigation ? 1 : 0) + (renderer != nullptr && !renderer->affectsNavigation ? 1 : 0);
+    }, &found);
+    Check(found.off == 2, "the collider and the mesh renderer keep affecting navigation off through a save and a load");
+    std::filesystem::remove_all(root);
+    std::vector<std::uint8_t> colliderBytes;
+    scene::SceneAssetPhysicsComponentCodec::WriteCollider(colliderBytes, scene::ColliderComponent{ .affectsNavigation = false });
+    colliderBytes.pop_back();
+    scene::SceneAssetBinaryIO::ByteReader colliderReader{ colliderBytes };
+    scene::ColliderComponent oldCollider;
+    Check(scene::SceneAssetPhysicsComponentCodec::ReadCollider(colliderReader, scene::SceneDocument::AffectsNavigationFileVersion - 1U, oldCollider) &&
+        oldCollider.affectsNavigation, "a collider from an older file affects navigation");
+    std::vector<std::uint8_t> rendererBytes;
+    scene::SceneAssetRenderComponentCodec::WriteMeshRenderer(rendererBytes, scene::MeshRendererComponent{ .affectsNavigation = false });
+    rendererBytes.pop_back();
+    scene::SceneAssetBinaryIO::ByteReader rendererReader{ rendererBytes };
+    scene::MeshRendererComponent oldRenderer;
+    Check(scene::SceneAssetRenderComponentCodec::ReadMeshRenderer(rendererReader, scene::SceneDocument::AffectsNavigationFileVersion - 1U, oldRenderer) &&
+        oldRenderer.affectsNavigation, "a mesh renderer from an older file affects navigation");
+
+    // Scripts read and write the flag like any other field.
+    scene::Scene scripted;
+    const scene::SceneObject object = scripted.Entities().CreateObject(scene::SceneObjectDesc{ .name = "Scripted" });
+    scripted.Components().Colliders().Set(object.Entity(), scene::ColliderComponent{});
+    const auto set = kb::script::ScriptSceneComponentApi::SetProperty(scripted, object.Entity(), "Collider", "affectsNavigation", kb::script::ScriptValue{ false });
+    Check(set.succeeded && !scripted.Components().Colliders().TryGet(object.Entity())->affectsNavigation, "a script turns a collider's affects navigation off");
+}
+
+void TestNamedAreas() {
+    const std::vector<scene::NavAreaDefinition> defaults = scene::DefaultNavAreaDefinitions();
+    Check(defaults.size() == 5U && defaults[0].name == "Walkable" && defaults[4].name == "Not walkable" && defaults[4].cost == 0.0F &&
+        scene::AreNavAreaDefinitionsValid(defaults), "the default areas are Walkable, Road, Grass, Water and Not walkable");
+    Check(scene::FindNavArea(defaults, "water") == std::optional<scene::NavAreaId>{ 3U } && !scene::FindNavArea(defaults, "Lava").has_value(),
+        "an area name resolves to its id, whatever its letter case");
+    std::vector<scene::NavAreaDefinition> repeated = defaults;
+    repeated.push_back(scene::NavAreaDefinition{ .name = "ROAD" });
+    Check(!scene::AreNavAreaDefinitionsValid(repeated), "two areas cannot share a name");
+
+    // The list round-trips through the project's settings file; a file without it keeps the defaults.
+    const std::filesystem::path root = FreshDirectory("named_areas");
+    kb::project::ProjectSettings settings;
+    Check(settings.navigationAreas == defaults, "a new project starts with the default areas");
+    settings.navigationAreas = { scene::NavAreaDefinition{ .name = "Floor", .colour = 0x123456U, .cost = 1.0F },
+        scene::NavAreaDefinition{ .name = "Mud", .colour = 0xABCDEFU, .cost = 4.5F }, scene::NavAreaDefinition{ .name = "Pit", .colour = 0U, .cost = 0.0F } };
+    settings.navigationNearDistance = 25.0F;
+    settings.navigationMidDistance = 70.0F;
+    settings.navigationFarPathInterval = 8U;
+    std::string error;
+    Check(kb::project::ProjectSettingsStore::Save(root / "ProjectSettings.ini", settings, error), "project settings save: " + error);
+    const kb::project::ProjectSettingsLoadResult reloaded = kb::project::ProjectSettingsStore::Load(root / "ProjectSettings.ini");
+    Check(reloaded.Succeeded() && reloaded.settings.navigationAreas == settings.navigationAreas, "named areas keep their names, colours and costs");
+    const scene::NavigationCrowdSettings crowd = reloaded.settings.NavigationCrowd();
+    Check(crowd.nearDistance == 25.0F && crowd.midDistance == 70.0F && crowd.farPathOptimizationInterval == 8U,
+        "the crowd's level of detail round-trips through the project's settings");
+    const kb::project::ProjectSettingsLoadResult missing = kb::project::ProjectSettingsStore::Load(root / "Missing.ini");
+    Check(missing.settings.navigationAreas == defaults, "settings without areas use the default areas");
+    Check(missing.settings.NavigationCrowd().nearDistance == scene::NavigationCrowdSettings{}.nearDistance &&
+            missing.settings.NavigationCrowd().midDistance == scene::NavigationCrowdSettings{}.midDistance,
+        "settings without a crowd level of detail use the engine's defaults");
+    std::filesystem::remove_all(root);
+
+    // A scene takes the project's costs: a strip of Not walkable is never entered, one of Water is walked around.
+    scene::Scene scene;
+    static_cast<void>(AddMesh(scene, BakeNodes({ Slab(-10.0, 10.0, -10.0, 10.0, 0.0) })));
+    const scene::SceneEntity strip = AddObstacle(scene, { 0.0F, 0.0F, -2.0F },
+        scene::NavObstacle{ .shape = scene::NavObstacleShape::Box, .size = { 2.0F, 2.0F, 16.0F }, .area = 3U, .carve = false });
+    const Vec3 from{ -8.0F, 0.0F, 0.0F };
+    const Vec3 to{ 8.0F, 0.0F, 0.0F };
+    Check(std::fabs(Path(scene, from, to).length - 16.0F) < 0.05F, "without the project's areas every area costs 1");
+    scene.Navigation().SetAreaDefinitions(defaults);
+    Check(scene.Navigation().FindArea("Water") == std::optional<scene::NavAreaId>{ 3U } && scene.Navigation().AreaCost(3U) == 10.0F,
+        "the scene knows the project's areas and their costs");
+    const scene::NavPathResult aroundWater = Path(scene, from, to);
+    Check(aroundWater.status == scene::NavPathStatus::Complete && aroundWater.length > 20.0F, "a costly area is walked around");
+    scene.Components().NavObstacles().TryGet(strip)->area = 2U;
+    scene.Components().NavObstacles().TryGet(strip)->size.z = 30.0F;
+    scene.Components().NavObstacles().MarkModified(strip);
+    static_cast<void>(scene.Runtime().Update(kFrame));
+    Check(Path(scene, from, to).status == scene::NavPathStatus::Complete, "a cheap area across the whole floor is crossed");
+    scene.Components().NavObstacles().TryGet(strip)->area = 4U;
+    scene.Components().NavObstacles().MarkModified(strip);
+    static_cast<void>(scene.Runtime().Update(kFrame));
+    Check(Path(scene, from, to).status != scene::NavPathStatus::Complete, "a Not walkable area across the whole floor cannot be crossed");
+
+    // Scripts name areas instead of numbering them.
+    kb::script::ScriptRuntimeHost host{ scene };
+    const kb::script::ScriptFunctionCallContext call{ .scene = &scene };
+    const kb::script::ScriptFunctionCallResult found = host.Functions().Call("Navigation.FindArea",
+        std::vector<kb::script::ScriptFunctionArgument>{ { .name = "name", .value = kb::script::ScriptValue{ std::string{ "grass" } } } }, call);
+    Check(found.Succeeded() && found.Output("found")->AsBool() && found.Output("area")->AsInt() == 2, "Navigation.FindArea resolves an area's name");
+    const kb::script::ScriptFunctionCallResult unknown = host.Functions().Call("Navigation.FindArea",
+        std::vector<kb::script::ScriptFunctionArgument>{ { .name = "name", .value = kb::script::ScriptValue{ std::string{ "Lava" } } } }, call);
+    Check(unknown.Succeeded() && !unknown.Output("found")->AsBool() && unknown.Output("area")->AsInt() == -1, "an unknown area name finds nothing");
 }
 
 void TestNavigationScriptApi() {
@@ -994,7 +1723,22 @@ void RunNavigationMeshTests() {
     TestFarFromTheWorldOrigin();
     TestCrowdIsDeterministic();
     TestCrowdLevelOfDetail();
+    TestCrowdLevelOfDetailTransitions();
+    TestCrowdPathBudgetPriority();
+    TestHordeCrossesLevels();
+    TestHordeIsDeterministic();
+    TestHordeFieldFollowsItsTarget();
+    TestHordeFarAgentsFollowTheRoute();
+    TestHordeKeepsOffOtherBodies();
     TestNavComponentsPersist();
+    TestBoundsLimitTheBake();
+    TestBoundsBakeSettings();
+    TestBoundsPersist();
+    TestEditsRebuildOnlyTheirTiles();
+    TestBackgroundBakeMatchesTheSynchronousOne();
+    TestDebugGeometry();
+    TestObjectsThatDoNotAffectNavigation();
+    TestNamedAreas();
     TestNavigationScriptApi();
     TestPlacedNavigationMesh();
     TestTilesStreamWithCells();
@@ -1030,8 +1774,8 @@ void RunNavigationCrowdBenchmark() {
     static_cast<void>(CrowdArena(kHalf));
     const double bakeMilliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - bakeStart).count();
     const CrowdRun thousand = RunCrowd(arena, kHalf, 1000, 240);
-    // The two 5000-agent runs alternate and their medians are compared: one run of each swings
-    // by more than the level of detail saves.
+    // The two 5000-agent runs alternate and their fastest runs are compared: a run on workers that
+    // other load preempts swings by more than the level of detail saves.
     std::vector<double> fullRuns;
     std::vector<double> lodRuns;
     for (int round = 0; round < 3; ++round) {
@@ -1040,14 +1784,250 @@ void RunNavigationCrowdBenchmark() {
     }
     std::ranges::sort(fullRuns);
     std::ranges::sort(lodRuns);
-    const CrowdRun fiveThousand{ .milliseconds = fullRuns[1] };
-    const CrowdRun fiveThousandLod{ .milliseconds = lodRuns[1] };
+    const CrowdRun fiveThousand{ .milliseconds = fullRuns[0] };
+    const CrowdRun fiveThousandLod{ .milliseconds = lodRuns[0] };
     std::cout << "navigation: bake of a 200 x 200 m arena with 25 pillars " << bakeMilliseconds << " ms ("
               << arena->tiles.size() << " tiles)\n";
     std::cout << "navigation: crowd step, 1000 agents " << thousand.milliseconds << " ms, 5000 agents " << fiveThousand.milliseconds
               << " ms, 5000 agents with level of detail around one focus " << fiveThousandLod.milliseconds << " ms\n";
     Check(thousand.milliseconds < 8.0 * kSanitizerTimeScale, "1000 crowd agents must step within 8 ms: " + std::to_string(thousand.milliseconds));
+
+    const CrowdRun tenThousand = RunCrowd(arena, kHalf, 10000, 240);
+    const CrowdRun tenThousandOneThread = RunCrowd(arena, kHalf, 10000, 240, {}, scene::NavigationCrowdSettings{ .workerThreads = 1U });
+    // 600 measured steps: the slowest one shows the spikes a frame would see.
+    const CrowdRun twentyThousand = RunCrowd(arena, kHalf, 20000, 1200);
+    std::cout << "navigation: crowd step, 10000 agents " << tenThousand.milliseconds << " ms (slowest " << tenThousand.worst
+              << " ms; one thread " << tenThousandOneThread.milliseconds << " ms), 20000 agents " << twentyThousand.milliseconds
+              << " ms (slowest " << twentyThousand.worst << " ms over 600 steps)\n";
+    const CrowdRun fiveThousandStages = RunCrowd(arena, kHalf, 5000, 240);
+    const CrowdRun fiveThousandLodStages = RunCrowd(arena, kHalf, 5000, 240, { DVec3{ -50.0, 0.0, -50.0 } });
+    for (const auto& [label, stages] : { std::pair{ "1000 agents", thousand.stages }, std::pair{ "5000 agents", fiveThousandStages.stages }, std::pair{ "5000 agents with level of detail", fiveThousandLodStages.stages },
+             std::pair{ "10000 agents", tenThousand.stages }, std::pair{ "10000 agents on one thread", tenThousandOneThread.stages },
+             std::pair{ "the slowest of 20000 agents", twentyThousand.worstStages } }) {
+        std::cout << "navigation: stages of a step, " << label << ": sync " << stages.syncMilliseconds << " ms, paths " << stages.pathMilliseconds
+                  << " ms, neighbours " << stages.neighbourMilliseconds << " ms, corners " << stages.cornerMilliseconds << " ms, steering "
+                  << stages.steeringMilliseconds << " ms, avoidance " << stages.avoidanceMilliseconds << " ms, move " << stages.moveMilliseconds << " ms\n";
+    }
+
+    // Path queries across the arena (around the pillars) and over a few metres, the first in a fresh scene and repeated.
+    const auto pathMilliseconds = [&](DVec3 from, DVec3 to, int repeats, std::string_view label) {
+        scene::Scene paths;
+        static_cast<void>(paths.Navigation().AddNavMesh(arena));
+        const auto cold = std::chrono::steady_clock::now();
+        Check(paths.Navigation().FindPath(from, to).status == scene::NavPathStatus::Complete, "a benchmark path must be complete");
+        const double first = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - cold).count();
+        const auto warm = std::chrono::steady_clock::now();
+        for (int repeat = 0; repeat < repeats; ++repeat) static_cast<void>(paths.Navigation().FindPath(from, to));
+        const double each = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - warm).count() / repeats;
+        std::cout << "navigation: FindPath " << label << ", first " << first << " ms, then " << each << " ms each\n";
+    };
+    pathMilliseconds(DVec3{ -90.0, 0.0, -90.0 }, DVec3{ 90.0, 0.0, 90.0 }, 200, "across 250 m");
+    pathMilliseconds(DVec3{ -5.0, 0.0, -5.0 }, DVec3{ 5.0, 0.0, 5.0 }, 2000, "over 14 m");
     Check(fiveThousandLod.milliseconds < fiveThousand.milliseconds, "level of detail must make a large crowd cheaper");
+    Check(tenThousand.milliseconds < 24.0 * kSanitizerTimeScale, "10000 crowd agents must step within 24 ms: " + std::to_string(tenThousand.milliseconds));
+}
+
+// Horde cost: 10 000 and 50 000 agents chasing 1, 10 and 100 moving targets on the two-storey level
+// (stairs, bridge, ladder link) over 2000 steps, and individual crowd agents in the same scenario.
+void RunNavigationHordeBenchmark() {
+    const HordeLevel level = MakeHordeLevel(120.0);
+    const auto report = [](std::string_view label, const HordeRun& run) {
+        std::cout << "navigation: " << label << ": average " << run.Average() << " ms, p50 " << run.Percentile(0.5) << " ms, p95 "
+                  << run.Percentile(0.95) << " ms, p99 " << run.Percentile(0.99) << " ms, max " << run.Percentile(1.0) << " ms, fields "
+                  << run.maxFields << ", most waiting " << run.maxWaiting << ", fields in the slowest step " << run.slowestFieldMilliseconds << " ms\n";
+    };
+    double tenThousandOne = 0.0;
+    double tenThousandHundred = 0.0;
+    double fiftyThousandHundred = 0.0;
+    for (const int count : { 10000, 50000 }) {
+        for (const int targets : { 1, 10, 100 }) {
+            const HordeRun run = RunHorde(level, count, targets, 2000, true);
+            report("horde step, " + std::to_string(count) + " agents, " + std::to_string(targets) + " moving targets", run);
+            if (count == 10000 && targets == 1) tenThousandOne = run.Percentile(0.5);
+            if (count == 10000 && targets == 100) tenThousandHundred = run.Percentile(0.5);
+            if (count == 50000 && targets == 100) fiftyThousandHundred = run.Percentile(0.5);
+        }
+    }
+    const HordeRun oneThread = RunHorde(level, 10000, 1, 600, true, 1U);
+    report("horde step, 10000 agents, 1 moving target, one thread", oneThread);
+    for (const int targets : { 1, 100 }) {
+        const HordeRun run = RunHorde(level, 10000, targets, 2000, false);
+        report("crowd step, 10000 individual agents, " + std::to_string(targets) + " moving targets", run);
+    }
+    // Targets that cross polygons and tiles every step (about 13 m per second per step), 10 and 100 of them.
+    for (const int targets : { 10, 100 }) {
+        const HordeRun run = RunHorde(level, 10000, targets, 1000, true, 0U, std::nullopt, 25.0);
+        report("horde step, 10000 agents, " + std::to_string(targets) + " targets crossing polygons every step", run);
+    }
+    // A mixed scene: a horde and individual crowd agents after the same targets.
+    {
+        const HordeRun run = RunHorde(level, 10000, 10, 1000, true, 0U, std::nullopt, 0.25, 500);
+        report("horde step, 10000 horde agents among 500 crowd agents", run);
+        std::cout << "navigation: crowd step of those 500 agents, average " << run.crowdMilliseconds / static_cast<double>(run.steps.size()) << " ms\n";
+    }
+    // A 2 km map with agents spread over it: far agents follow the route, none waits for a field.
+    {
+        const HordeLevel huge = MakeHordeLevel(1000.0);
+        const HordeRun run = RunHorde(huge, 10000, 10, 600, true, 0U, std::nullopt, 0.25, 0, 4096U);
+        report("horde step, 10000 agents spread over a 2 km map, 10 moving targets", run);
+        // Agent steps spent waiting for guidance after the first half second, of 10000 agents over 270 steps: a few edge crossings at most.
+        Check(run.laterWaiting < 2700U, "horde agents on a 2 km map do not wait for fields after the first half second: " + std::to_string(run.laterWaiting) + " agent steps");
+        Check(run.Percentile(0.5) < 6.0 * kSanitizerTimeScale, "10000 horde agents on a 2 km map must step within 6 ms: " + std::to_string(run.Percentile(0.5)));
+    }
+    Check(tenThousandOne < 3.0 * kSanitizerTimeScale, "10000 horde agents after one target must step within 3 ms: " + std::to_string(tenThousandOne));
+    Check(tenThousandHundred < 6.0 * kSanitizerTimeScale, "10000 horde agents after 100 targets must step within 6 ms: " + std::to_string(tenThousandHundred));
+    Check(fiftyThousandHundred < 30.0 * kSanitizerTimeScale, "50000 horde agents must step within 30 ms: " + std::to_string(fiftyThousandHundred));
+}
+
+// ---- navigation comparison scenarios -------------------------------------------------------------------------------
+
+namespace {
+
+[[nodiscard]] std::string CompareEnvText(const char* name, const char* fallback) {
+#ifdef _WIN32
+    char* value = nullptr;
+    std::size_t length = 0U;
+    static_cast<void>(_dupenv_s(&value, &length, name));
+    std::string text = value != nullptr ? std::string{ value } : std::string{};
+    std::free(value);
+    return text.empty() ? std::string{ fallback } : text;
+#else
+    const char* value = std::getenv(name);
+    return value != nullptr && *value != '\0' ? std::string{ value } : std::string{ fallback };
+#endif
+}
+
+// A 256 m x 256 m ground with a 7 x 7 grid of 8 m x 8 m x 3 m boxes (centres 32 m apart).
+constexpr double kCompareHalf = 128.0;
+constexpr double kCompareBoxHalf = 4.0;
+constexpr int kCompareBoxGrid = 7;
+constexpr double kCompareBoxBase = -96.0;
+constexpr double kCompareBoxStep = 32.0;
+
+[[nodiscard]] bool InsideCompareBox(double x, double z, double margin) {
+    for (int i = 0; i < kCompareBoxGrid; ++i) {
+        for (int j = 0; j < kCompareBoxGrid; ++j) {
+            if (std::abs(x - (kCompareBoxBase + kCompareBoxStep * i)) < kCompareBoxHalf + margin &&
+                std::abs(z - (kCompareBoxBase + kCompareBoxStep * j)) < kCompareBoxHalf + margin) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] std::vector<scene::ScenePrefabNodeDesc> CompareLevelNodes() {
+    std::vector<scene::ScenePrefabNodeDesc> nodes{ Slab(-kCompareHalf, kCompareHalf, -kCompareHalf, kCompareHalf, 0.0) };
+    for (int i = 0; i < kCompareBoxGrid; ++i) {
+        for (int j = 0; j < kCompareBoxGrid; ++j) {
+            nodes.push_back(BoxNode(DVec3{ kCompareBoxBase + kCompareBoxStep * i, 1.5, kCompareBoxBase + kCompareBoxStep * j }, Vec3{ 8.0F, 3.0F, 8.0F }));
+        }
+    }
+    return nodes;
+}
+
+[[nodiscard]] nav::NavMeshBuildSettings CompareSettings() {
+    nav::NavMeshBuildSettings settings;
+    settings.cellSize = 0.25F;
+    settings.cellHeight = 0.25F;
+    settings.tileCells = 64U;
+    settings.profiles[0].radius = 0.5F;
+    settings.profiles[0].height = 2.0F;
+    settings.profiles[0].maxClimb = 0.25F;
+    settings.profiles[0].maxSlopeDegrees = 45.0F;
+    return settings;
+}
+
+} // namespace
+
+// One scenario of the navigation comparison, chosen by KB_BENCH_NAV_MODE: bake (time to bake the level), random or
+// chase (individual crowd agents with avoidance), horde-random or horde-chase (the same agents as a horde), with
+// KB_BENCH_COUNT agents, KB_BENCH_FRAMES measured frames after KB_BENCH_WARMUP. A frame is the whole scene update plus
+// the code that hands the agents their destinations.
+void RunNavigationCompareBenchmark() {
+    const std::string mode = CompareEnvText("KB_BENCH_NAV_MODE", "random");
+    const int count = std::atoi(CompareEnvText("KB_BENCH_COUNT", "1000").c_str());
+    const int frames = std::atoi(CompareEnvText("KB_BENCH_FRAMES", "600").c_str());
+    const int warmup = std::atoi(CompareEnvText("KB_BENCH_WARMUP", "60").c_str());
+    using Clock = std::chrono::steady_clock;
+    const auto since = [](Clock::time_point start) { return std::chrono::duration<double, std::milli>(Clock::now() - start).count(); };
+
+    const nav::NavMeshBuildSettings settings = CompareSettings();
+    const std::vector<scene::ScenePrefabNodeDesc> nodes = CompareLevelNodes();
+    nav::NavGeometry geometry;
+    nav::NavGeometryCollectStats collected;
+    nav::CollectNavGeometry(nodes, settings, nullptr, geometry, collected);
+    const Clock::time_point bakeStart = Clock::now();
+    const nav::NavMeshBakeResult baked = nav::NavMeshBuilder::Bake(settings, geometry, nullptr);
+    const double bakeMilliseconds = since(bakeStart);
+    Check(baked.succeeded, "the comparison level must bake: " + baked.error);
+    std::printf("BAKE backend=kb ms=%.2f tiles=%zu\n", bakeMilliseconds, baked.tiles.size());
+    if (mode == "bake") return;
+    auto asset = std::make_shared<nav::NavMeshAsset>();
+    asset->settings = settings;
+    asset->tiles = baked.tiles;
+
+    const bool horde = mode.starts_with("horde-");
+    const bool chase = mode.ends_with("chase");
+    scene::Scene world;
+    std::string error;
+    Check(world.Navigation().AddNavMesh(asset, &error) != 0U, "the comparison level must load: " + error);
+    world.Navigation().ConfigureCrowd(scene::NavigationCrowdSettings{ .workerThreads = static_cast<std::uint32_t>(std::atoi(CompareEnvText("KB_BENCH_THREADS", "0").c_str())) });
+    std::uint32_t seedState = 12345U;
+    const auto random = [&seedState]() {
+        seedState = seedState * 1664525U + 1013904223U;
+        return static_cast<double>(seedState) / 4294967296.0;
+    };
+    const int side = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(count) / 0.8)));
+    const double spacing = (2.0 * kCompareHalf - 8.0) / side;
+    std::vector<scene::SceneEntity> agents;
+    std::vector<Vec3> goals;
+    agents.reserve(static_cast<std::size_t>(count));
+    for (int k = 0; k < side * side && static_cast<int>(agents.size()) < count; ++k) {
+        const double x = -kCompareHalf + 4.0 + spacing * (k % side + 0.5);
+        const double z = -kCompareHalf + 4.0 + spacing * (k / side + 0.5);
+        if (InsideCompareBox(x, z, 1.5)) continue;
+        double goalX = 0.0;
+        double goalZ = 0.0;
+        do {
+            goalX = -kCompareHalf + 6.0 + (2.0 * kCompareHalf - 12.0) * random();
+            goalZ = -kCompareHalf + 6.0 + (2.0 * kCompareHalf - 12.0) * random();
+        } while (InsideCompareBox(goalX, goalZ, 1.5));
+        goals.push_back(Vec3{ static_cast<float>(goalX), 0.0F, static_cast<float>(goalZ) });
+        const scene::SceneObject object = world.Entities().CreateObject(scene::SceneObjectDesc{ .name = "Agent" });
+        world.Transforms().SetLocalTranslation(object.Entity(), DVec3{ x, 0.0, z });
+        world.Components().NavAgents().Set(object.Entity(), scene::NavAgent{ .radius = 0.4F, .maxSpeed = 3.5F, .acceleration = 10.0F,
+            .stoppingDistance = 1.0F, .destination = chase ? Vec3{ 16.0F, 0.0F, 16.0F } : goals.back(), .horde = horde });
+        agents.push_back(object.Entity());
+    }
+    Check(static_cast<int>(agents.size()) == count, "the comparison level must hold every agent");
+    world.Runtime().SynchronizeTransforms();
+
+    std::vector<double> times;
+    times.reserve(static_cast<std::size_t>(frames));
+    double stages[8] = {};
+    for (int step = 0; step < warmup + frames; ++step) {
+        const Clock::time_point start = Clock::now();
+        if (chase) {
+            const double angle = step * kFrame * 0.1;
+            const Vec3 target{ static_cast<float>(std::cos(angle) * 20.0 + 16.0), 0.0F, static_cast<float>(std::sin(angle) * 20.0 + 16.0) };
+            for (const scene::SceneEntity agent : agents) world.Components().NavAgents().TryGet(agent)->destination = target;
+        }
+        static_cast<void>(world.Runtime().Update(kFrame));
+        if (step >= warmup) {
+            times.push_back(since(start));
+            const scene::NavigationCrowdStats stats = world.Navigation().CrowdStats();
+            const double values[8] = { stats.milliseconds, stats.syncMilliseconds, stats.pathMilliseconds, stats.neighbourMilliseconds,
+                stats.cornerMilliseconds, stats.steeringMilliseconds, stats.avoidanceMilliseconds, stats.moveMilliseconds };
+            for (int index = 0; index < 8; ++index) stages[index] += values[index];
+        }
+    }
+    std::ranges::sort(times);
+    const auto at = [&](double q) { return times[std::min(times.size() - 1U, static_cast<std::size_t>(static_cast<double>(times.size()) * q))]; };
+    std::printf("RESULT backend=kb-nav scenario=%s count=%d frames=%d p50=%.4f p95=%.4f p99=%.4f max=%.4f\n",
+        mode.c_str(), count, frames, at(0.5), at(0.95), at(0.99), times.back());
+    std::printf("STAGES navigation=%.3f sync=%.3f path=%.3f neighbour=%.3f corner=%.3f steering=%.3f avoidance=%.3f move=%.3f (average ms)\n",
+        stages[0] / frames, stages[1] / frames, stages[2] / frames, stages[3] / frames, stages[4] / frames, stages[5] / frames, stages[6] / frames, stages[7] / frames);
 }
 
 } // namespace kb::tests

@@ -237,7 +237,7 @@ selection is driven entirely by the `RenderMaterial`'s own shader assignment —
 
 ### Stage 3.2 â€” deterministic fixed-step CPU kernel: `accepted`
 
-- `ParticleSceneSystem` participates in the engine-owned post-simulation fixed scheduler at exactly 1/60 seconds with the shared eight-step catch-up ceiling; no second accumulator exists.
+- `ParticleSceneSystem` participates in the engine-owned post-simulation fixed scheduler and advances particles in exact 1/60 second steps whatever fixed step the scene runs at: it accumulates the scene's step time and runs zero, one or several particle steps, bounded by the scene runtime's step limit.
 - The CPU backend compiles and generation-caches validated v2 assets into bounded runtime data, then simulates continuous and burst spawning, lifetime expiry, duration, looping, draining, and per-emitter authored prewarm through the same fixed-step kernel.
 - Per-instance state owns its time, emission remainders, burst cursors, random stream, and live-particle counts; particle storage remains bounded SoA with no heap allocation in a fixed step after warmup.
 - Explicit schema and runtime limits bound prewarm, continuous spawn rate, per-step spawn budget, per-emitter capacity, and the 262,144-particle scene capacity; telemetry reports admitted and rejected spawn demand.
@@ -282,8 +282,8 @@ selection is driven entirely by the `RenderMaterial`'s own shader assignment —
 
 ### Stage 4B — CPU-preview snapshot publication and tombstone: `accepted checkpoint`
 
-- The CPU preview backend captures previous positions, stable particle IDs, compiled output metadata, bounds, per-emitter ranges, and overflow telemetry into preallocated scratch, then publishes exactly one immutable snapshot after each fixed step.
-- Each publication is stamped with a monotonically increasing revision, the completed scene fixed-step index, and the current backend epoch. Typed snapshot backpressure remains observable while preview simulation continues and the last complete revision is retained.
+- The CPU preview backend captures previous positions, stable particle IDs, compiled output metadata, bounds, per-emitter ranges, and overflow telemetry into preallocated scratch, then publishes exactly one immutable snapshot after each particle step; its step index counts particle steps.
+- Each publication is stamped with a monotonically increasing revision, the completed particle step index (the scene fixed-step index at 60 Hz), and the current backend epoch. Typed snapshot backpressure remains observable while preview simulation continues and the last complete revision is retained.
 - Terminal snapshots use small engine-owned header slots, so teardown can publish a tombstone even when all four 16 MiB payload slots are retained. If terminal retention itself is exhausted, detach fails explicitly before backend ownership changes and can be retried after a reader releases a snapshot.
 - Focused tests prove two independent viewport reads see one immutable fixed-step revision, stable previous/current particle data and two-emitter ranges, payload and terminal backpressure, scene/provider lifetime, and allocation-free warm paths.
 

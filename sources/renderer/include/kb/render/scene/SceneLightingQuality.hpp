@@ -8,12 +8,27 @@
 
 namespace kb::render {
 
+// The lighting path a project's setting means on a phone or tablet (mobile) or on a computer: a named path as
+// the project wrote it, Auto as the device's own.
+[[nodiscard]] inline SceneRenderLightingPath ProjectLightingPath(project::ProjectSceneLightingPath path, bool mobile) noexcept {
+    switch (project::ResolveProjectSceneLightingPath(path, mobile)) {
+    case project::ProjectSceneLightingPath::Deferred:
+        return SceneRenderLightingPath::Deferred;
+    case project::ProjectSceneLightingPath::ForwardPlus:
+        return SceneRenderLightingPath::ClusteredForwardPlus;
+    case project::ProjectSceneLightingPath::Forward:
+    default:
+        return SceneRenderLightingPath::Forward;
+    }
+}
+
 // The shadow and global illumination detail a project pins for one device class. Auto leaves a computer's
 // lighting config as the engine and the scene chose it, and picks Medium on a phone or tablet, so a handheld
 // never starts at desktop detail. Every other level overwrites the settings that decide what shadows and
 // bounce light cost, from the cheapest (Low) to the most detailed (Ultra), with smaller maps, fewer cascades
 // and a coarser voxel grid on phones and tablets. A handheld also draws no cube shadows of point and area
-// lights (six passes each, and there is no one-pass cube shadow) and at most four lights' shadows.
+// lights (six passes each, and there is no one-pass cube shadow), at most four lights' shadows, a 16-bit sun shadow
+// map and the four-tap soft shadow filter, which ignores a light's source size (only the PCSS filter softens by it).
 inline void ApplyProjectLightingQuality(
     SceneRenderLightingConfig& config,
     project::ProjectQualityLevel shadows,
@@ -25,6 +40,7 @@ inline void ApplyProjectLightingQuality(
         if (globalIllumination == Level::Auto) globalIllumination = Level::Medium;
         config.pointShadowCubeEnabled = false;
         config.pointShadowMaxLights = std::min(config.pointShadowMaxLights, 4U);
+        config.compactShadows = true;
     }
     struct ShadowPreset {
         std::uint32_t mapSize;

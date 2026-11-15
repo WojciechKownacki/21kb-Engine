@@ -34,6 +34,7 @@ namespace {
         return Scale(16, dpi) + chipRows * Scale(24, dpi) + Scale(6, dpi);
     }
     case ParticleEditorPropertyWidget::Curve:
+        return Scale(140, dpi); // room for the editable curve view
     case ParticleEditorPropertyWidget::Gradient:
         return Scale(40, dpi);
     case ParticleEditorPropertyWidget::Color:

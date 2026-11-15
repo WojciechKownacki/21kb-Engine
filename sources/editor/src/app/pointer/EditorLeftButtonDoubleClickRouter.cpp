@@ -4,6 +4,8 @@
 #if defined(_WIN32)
 #include "app/EditorAssetBrowserPointerHandler.hpp"
 #include "app/EditorWindowInvalidator.hpp"
+#include "app/docking/EditorDockTabMenu.hpp"
+#include "windowing/FloatingWindowControlActions.hpp"
 #include "app/inspector/EditorInspectorPointerController.hpp"
 #include "docking/DockMainLayoutResolver.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -49,6 +51,11 @@ EditorLeftButtonDoubleClickRouter::EditorLeftButtonDoubleClickRouter(
     , metrics_(metrics) {}
 
 bool EditorLeftButtonDoubleClickRouter::Handle(HWND messageWindow, int x, int y) {
+    if (messageWindow != mainWindow_ &&
+        EditorDockTabMenu::PanelAt(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_) != 0U) {
+        // The title of a floating panel behaves as a window caption does.
+        return FloatingWindowControlActions{}.Execute(messageWindow, FloatingWindowControlKind::MaximizeRestore);
+    }
     if (messageWindow == mainWindow_) {
         const DockLayout layout = DockMainLayoutResolver::Resolve(mainWindow_, dockModel_, metrics_);
         if (const DockPanelLayout* tab = TabHit(layout, x, y); tab != nullptr) {

@@ -66,7 +66,7 @@ The standalone Win32MotionSensors provider supports explicit owner-thread pollin
 Other hosts currently report Unsupported; no mobile sensor provider is claimed.
 A headless replay or an unavailable Windows API/device does not qualify physical
 measurement. Physical acceleration and gyro reports require a real supported sensor.
-The larger raw snapshot requires native scripting SDK registration API version 6
+The larger raw snapshot requires native scripting SDK registration API version 7
 and C++ engine-module ABI 26; older binaries are rejected before entering engine code.
 The opaque C module SDK remains version 1.
 )guide";

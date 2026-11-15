@@ -1,4 +1,6 @@
 #include "app/console/EditorConsolePointerController.hpp"
+#include "app/EditorExternalCodeLauncher.hpp"
+#include "project/EditorProjectPaths.hpp"
 #include "localization/EditorLocalization.hpp"
 
 #if defined(_WIN32)
@@ -163,6 +165,10 @@ bool EditorConsolePointerController::HandleContextMenu(const RECT& content, int 
     }
     constexpr UINT_PTR kCopyLine = 1;
     constexpr UINT_PTR kSaveLog = 2;
+    constexpr UINT_PTR kOpenSource = 3;
+    if (EditorExternalCodeLauncher::HasBuildMessageLocation(selected->message)) {
+        AppendMenuW(menu, MF_STRING, kOpenSource, Utf8ToWide(std::string{ EditorText("console.openSource", "Open in Code Editor") }).c_str());
+    }
     AppendMenuW(menu, MF_STRING, kCopyLine, Utf8ToWide(std::string{ EditorText("console.copyLine", "Copy Line") }).c_str());
     AppendMenuW(menu, MF_STRING, kSaveLog, Utf8ToWide(std::string{ EditorText("console.saveLogToFile", "Save Log to File") }).c_str());
 
@@ -179,7 +185,22 @@ bool EditorConsolePointerController::HandleContextMenu(const RECT& content, int 
         static_cast<void>(SaveConsoleLogToFile(sceneContext_));
         return true;
     }
+    if (command == kOpenSource) {
+        OpenSelectedSource();
+        return true;
+    }
     return true;
+}
+
+void EditorConsolePointerController::OpenSelectedSource() {
+    const EditorConsoleEntry* selected = sceneContext_.Console().SelectedEntry();
+    if (selected == nullptr || !EditorExternalCodeLauncher::HasBuildMessageLocation(selected->message)) {
+        return;
+    }
+    std::string error;
+    if (!EditorExternalCodeLauncher::OpenBuildMessage(EditorProjectPaths::ProjectRoot(), selected->message, error)) {
+        sceneContext_.Console().Error("Scripts", error);
+    }
 }
 
 bool EditorConsolePointerController::HandlePointerDown(const RECT& content, int x, int y) {
@@ -251,6 +272,15 @@ bool EditorConsolePointerController::HandlePointerDown(const RECT& content, int 
         const std::uint64_t sequence = ConsoleEntryAt(hit.listRows, y, console);
         if (sequence != 0) {
             console.Select(sequence);
+            // A second click on the same row takes the user to the source line a compiler message names.
+            const ULONGLONG now = GetTickCount64();
+            if (sequence == lastClickedSequence_ && now - lastClickTick_ <= GetDoubleClickTime()) {
+                lastClickedSequence_ = 0;
+                OpenSelectedSource();
+            } else {
+                lastClickedSequence_ = sequence;
+                lastClickTick_ = now;
+            }
         } else {
             console.ClearSelection();
         }

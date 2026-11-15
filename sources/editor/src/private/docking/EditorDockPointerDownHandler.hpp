@@ -35,7 +35,7 @@ private:
 #if defined(_WIN32)
     [[nodiscard]] static bool IsMainWindow(HWND window, HWND mainWindow) noexcept;
     [[nodiscard]] static bool HandleMainWindowDown(HWND window, int x, int y, EditorDockModel& dockModel, const EditorMetrics& metrics, std::optional<DockPointerDrag>& drag);
-    static void HandleFloatingWindowDown(HWND window, int x, int y, EditorFloatingWindowManager& floatingWindows, const EditorMetrics& metrics, std::optional<DockPointerDrag>& drag);
+    [[nodiscard]] static bool HandleFloatingWindowDown(HWND window, int x, int y, EditorFloatingWindowManager& floatingWindows, const EditorMetrics& metrics, std::optional<DockPointerDrag>& drag);
 #endif
 };
 

@@ -16,8 +16,8 @@
 namespace kb::editor {
 namespace {
 
-// Unreal's Noise properties edited as numbers: Scale, Quality, Levels, Level Scale, Output Min, Output Max.
-// Quality and Levels are whole numbers in Unreal's ranges; the hint is owned by the renderer's Noise settings.
+// Noise properties edited as numbers: Scale, Quality, Levels, Level Scale, Output Min, Output Max.
+// Quality and Levels are whole numbers in the Noise ranges; the hint is owned by the renderer's Noise settings.
 struct NoiseNumericProperty {
     std::string_view stableId;
     float rangeMin = 0.0F;
@@ -1614,7 +1614,7 @@ std::vector<MaterialEditorGraphNodeProperty> MaterialEditorState::GraphNodePrope
         }
     }
     if (node->kind == kb::render::RenderMaterialGraphNodeKind::Noise) {
-        // Unreal's Noise details: Function, Turbulence, then the numeric settings.
+        // Noise details: Function, Turbulence, then the numeric settings.
         if (const kb::render::RenderMaterialGraphNoiseSettingsParseResult noise =
                 kb::render::ParseRenderMaterialGraphNoiseSettings(node->parameter.defaultValueHint);
             noise.settings.has_value()) {
@@ -1743,7 +1743,7 @@ std::vector<MaterialEditorGraphNodeProperty> MaterialEditorState::MaterialSettin
     properties.push_back(makeRow("material.shadingModel", EditorText("materialEditor.setting.shadingModel", "Shading Model"),
         workingCopy_->graph.shadingModel));
     properties.push_back(makeRow("material.blendMode", EditorText("materialEditor.setting.blendMode", "Blend Mode"), workingCopy_->graph.blendMode));
-    // Typed in (TextField): Unreal's Max World Position Offset Displacement.
+    // Typed in (TextField): Max World Position Offset Displacement.
     char margin[32];
     std::snprintf(margin, sizeof(margin), "%g", workingCopy_->graph.maxWorldPositionOffsetDisplacement);
     properties.push_back(MaterialEditorGraphNodeProperty{
@@ -2776,13 +2776,38 @@ void MaterialEditorState::ApplyCookResult(
     bool cookSucceeded,
     bool hasGpuProgram,
     bool hasLastGood,
-    bool fallbackApplied
+    bool fallbackApplied,
+    std::vector<std::uint32_t> diagnosticNodeIds,
+    const std::vector<kb::render::RenderMaterialGraphDiagnostic>& nodeDiagnostics
 ) {
     EnsureGraphDiagnostics();
     cookDiagnostics_.clear();
     cookDiagnostics_.reserve(diagnostics.size());
     for (std::string& diagnostic : diagnostics) {
         cookDiagnostics_.push_back("[cook] " + std::move(diagnostic));
+    }
+    diagnosticNodeIds.resize(cookDiagnostics_.size(), 0U);
+    cookDiagnosticLineNodeIds_ = std::move(diagnosticNodeIds);
+    // Mark the node a compile error belongs to, unless the validator already said the same thing there.
+    graphDiagnosticMarkers_.resize(graphDiagnosticMarkers_.size() - std::min(cookMarkerCount_, graphDiagnosticMarkers_.size()));
+    cookMarkerCount_ = 0U;
+    for (const kb::render::RenderMaterialGraphDiagnostic& diagnostic : nodeDiagnostics) {
+        const bool known = std::ranges::any_of(graphDiagnosticMarkers_, [&diagnostic](const MaterialEditorGraphDiagnosticMarker& marker) {
+            return marker.nodeId == diagnostic.nodeId && marker.message == diagnostic.message;
+        });
+        if (diagnostic.nodeId == 0U || known) {
+            continue;
+        }
+        graphDiagnosticMarkers_.push_back(MaterialEditorGraphDiagnosticMarker{
+            .nodeId = diagnostic.nodeId,
+            .linkId = diagnostic.linkId,
+            .pinId = diagnostic.pinId,
+            .pin = diagnostic.pin,
+            .severity = diagnostic.severity,
+            .kind = diagnostic.kind,
+            .message = diagnostic.message,
+        });
+        ++cookMarkerCount_;
     }
     cookCompleted_ = true;
     cookSucceeded_ = cookSucceeded;
@@ -4863,6 +4888,8 @@ void MaterialEditorState::RefreshGraphDiagnostics() {
 
 void MaterialEditorState::ResetCookDiagnostics() {
     cookDiagnostics_.clear();
+    cookDiagnosticLineNodeIds_.clear();
+    cookMarkerCount_ = 0U;
     cookCompleted_ = false;
     cookSucceeded_ = false;
     cookHasGpuProgram_ = false;
@@ -4899,10 +4926,12 @@ void MaterialEditorState::RebuildMergedDiagnostics() {
     append(compilerDiagnostics_);
     append(externalDiagnostics_);
     append(cookDiagnostics_);
-    // Keep the node-id list exactly parallel to diagnostics_: real ids for the graph/compiler lines,
-    // zero for the external/cook lines, which are not tied to a single node.
+    // Keep the node-id list exactly parallel to diagnostics_: real ids for the graph/compiler lines and for
+    // the cook lines that name a node, zero for the external lines, which are not tied to a single node.
     diagnosticNodeIds_.insert(diagnosticNodeIds_.end(), graphDiagnosticLineNodeIds_.begin(), graphDiagnosticLineNodeIds_.end());
     diagnosticNodeIds_.insert(diagnosticNodeIds_.end(), compilerDiagnosticLineNodeIds_.begin(), compilerDiagnosticLineNodeIds_.end());
+    diagnosticNodeIds_.resize(diagnostics_.size() - cookDiagnostics_.size(), 0U);
+    diagnosticNodeIds_.insert(diagnosticNodeIds_.end(), cookDiagnosticLineNodeIds_.begin(), cookDiagnosticLineNodeIds_.end());
     diagnosticNodeIds_.resize(diagnostics_.size(), 0U);
     diagnosticsHaveError_ = graphDiagnosticsHaveError_ || compilerDiagnosticsHaveError_ ||
         externalDiagnosticsHaveError_ || (!cookSucceeded_ && cookCompleted_);

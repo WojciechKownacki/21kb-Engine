@@ -40,7 +40,11 @@ public:
         std::uint32_t height,
         bool fullscreen,
         kb::input::Win32InputCollector& inputCollector,
-        bool visible = true);
+        bool visible = true,
+        // A fixed window has no sizing border and no maximize button; fullscreen ignores it.
+        bool resizable = true,
+        // The colour (0xRRGGBB) the window shows until the first frame is drawn into it.
+        std::uint32_t backgroundRgb = 0U);
 
     [[nodiscard]] std::uint32_t Width() const noexcept override;
     [[nodiscard]] std::uint32_t Height() const noexcept override;
@@ -62,6 +66,7 @@ private:
     static constexpr const wchar_t* kWindowClassName = L"21kbGameWindow";
 
     ATOM windowClass_ = 0U;
+    HBRUSH backgroundBrush_ = nullptr;
     HWND window_ = nullptr;
     kb::input::Win32InputCollector* inputCollector_ = nullptr;
     kb::input::Win32RawMouseRegistration rawMouse_;

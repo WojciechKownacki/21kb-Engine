@@ -1,0 +1,754 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    {
+      "op": "create_scene",
+      "name": "JointKinds",
+      "template": "Empty"
+    },
+    {
+      "op": "create_entity",
+      "id": "anchor",
+      "name": "anchor"
+    },
+    {
+      "op": "add_component",
+      "entity": "anchor",
+      "component": "Rigidbody"
+    },
+    {
+      "op": "add_component",
+      "entity": "anchor",
+      "component": "Collider"
+    },
+    {
+      "op": "set_property",
+      "entity": "anchor",
+      "component": "Rigidbody",
+      "property": "useGravity",
+      "value": false
+    },
+    {
+      "op": "set_property",
+      "entity": "anchor",
+      "component": "Transform",
+      "property": "localPosition.x",
+      "value": 0.0
+    },
+    {
+      "op": "set_property",
+      "entity": "anchor",
+      "component": "Transform",
+      "property": "localPosition.y",
+      "value": 20.0
+    },
+    {
+      "op": "create_entity",
+      "id": "slider",
+      "name": "slider"
+    },
+    {
+      "op": "add_component",
+      "entity": "slider",
+      "component": "Rigidbody"
+    },
+    {
+      "op": "add_component",
+      "entity": "slider",
+      "component": "Collider"
+    },
+    {
+      "op": "set_property",
+      "entity": "slider",
+      "component": "Rigidbody",
+      "property": "useGravity",
+      "value": false
+    },
+    {
+      "op": "set_property",
+      "entity": "slider",
+      "component": "Transform",
+      "property": "localPosition.x",
+      "value": 0.0
+    },
+    {
+      "op": "set_property",
+      "entity": "slider",
+      "component": "Transform",
+      "property": "localPosition.y",
+      "value": 10.0
+    },
+    {
+      "op": "add_component",
+      "entity": "slider",
+      "component": "Joint"
+    },
+    {
+      "op": "set_property",
+      "entity": "slider",
+      "component": "Joint",
+      "property": "type",
+      "value": 4
+    },
+    {
+      "op": "set_property",
+      "entity": "slider",
+      "component": "Joint",
+      "property": "connectedAnchor.x",
+      "value": 0.0
+    },
+    {
+      "op": "set_property",
+      "entity": "slider",
+      "component": "Joint",
+      "property": "connectedAnchor.y",
+      "value": 10.0
+    },
+    {
+      "op": "set_property",
+      "entity": "slider",
+      "component": "Joint",
+      "property": "axis.x",
+      "value": 1.0
+    },
+    {
+      "op": "set_property",
+      "entity": "slider",
+      "component": "Joint",
+      "property": "axis.y",
+      "value": 0.0
+    },
+    {
+      "op": "set_property",
+      "entity": "slider",
+      "component": "Joint",
+      "property": "enableLimit",
+      "value": true
+    },
+    {
+      "op": "set_property",
+      "entity": "slider",
+      "component": "Joint",
+      "property": "minLimit",
+      "value": -0.5
+    },
+    {
+      "op": "set_property",
+      "entity": "slider",
+      "component": "Joint",
+      "property": "maxLimit",
+      "value": 2.0
+    },
+    {
+      "op": "set_property",
+      "entity": "slider",
+      "component": "Joint",
+      "property": "motor.targetVelocity",
+      "value": 1.0
+    },
+    {
+      "op": "set_property",
+      "entity": "slider",
+      "component": "Joint",
+      "property": "motor.force",
+      "value": 50.0
+    },
+    {
+      "op": "set_property",
+      "entity": "slider",
+      "component": "Joint",
+      "property": "spring.spring",
+      "value": 200.0
+    },
+    {
+      "op": "set_property",
+      "entity": "slider",
+      "component": "Joint",
+      "property": "spring.damper",
+      "value": 5.0
+    },
+    {
+      "op": "set_property",
+      "entity": "slider",
+      "component": "Joint",
+      "property": "freedom.secondaryAxis.x",
+      "value": 0.0
+    },
+    {
+      "op": "set_property",
+      "entity": "slider",
+      "component": "Joint",
+      "property": "freedom.secondaryAxis.z",
+      "value": 1.0
+    },
+    {
+      "op": "set_property",
+      "entity": "slider",
+      "component": "Joint",
+      "property": "breakForce",
+      "value": 900.0
+    },
+    {
+      "op": "create_entity",
+      "id": "cone",
+      "name": "cone"
+    },
+    {
+      "op": "add_component",
+      "entity": "cone",
+      "component": "Rigidbody"
+    },
+    {
+      "op": "add_component",
+      "entity": "cone",
+      "component": "Collider"
+    },
+    {
+      "op": "set_property",
+      "entity": "cone",
+      "component": "Transform",
+      "property": "localPosition.x",
+      "value": 10.0
+    },
+    {
+      "op": "set_property",
+      "entity": "cone",
+      "component": "Transform",
+      "property": "localPosition.y",
+      "value": 9.0
+    },
+    {
+      "op": "add_component",
+      "entity": "cone",
+      "component": "Joint"
+    },
+    {
+      "op": "set_property",
+      "entity": "cone",
+      "component": "Joint",
+      "property": "type",
+      "value": 5
+    },
+    {
+      "op": "set_property",
+      "entity": "cone",
+      "component": "Joint",
+      "property": "anchor.y",
+      "value": 1.0
+    },
+    {
+      "op": "set_property",
+      "entity": "cone",
+      "component": "Joint",
+      "property": "connectedAnchor.x",
+      "value": 10.0
+    },
+    {
+      "op": "set_property",
+      "entity": "cone",
+      "component": "Joint",
+      "property": "connectedAnchor.y",
+      "value": 10.0
+    },
+    {
+      "op": "set_property",
+      "entity": "cone",
+      "component": "Joint",
+      "property": "axis.y",
+      "value": -1.0
+    },
+    {
+      "op": "set_property",
+      "entity": "cone",
+      "component": "Joint",
+      "property": "enableLimit",
+      "value": true
+    },
+    {
+      "op": "set_property",
+      "entity": "cone",
+      "component": "Joint",
+      "property": "minLimit",
+      "value": -15.0
+    },
+    {
+      "op": "set_property",
+      "entity": "cone",
+      "component": "Joint",
+      "property": "maxLimit",
+      "value": 25.0
+    },
+    {
+      "op": "set_property",
+      "entity": "cone",
+      "component": "Joint",
+      "property": "freedom.swing1Limit",
+      "value": 30.0
+    },
+    {
+      "op": "set_property",
+      "entity": "cone",
+      "component": "Joint",
+      "property": "freedom.swing2Limit",
+      "value": 40.0
+    },
+    {
+      "op": "create_entity",
+      "id": "sixdof",
+      "name": "sixdof"
+    },
+    {
+      "op": "add_component",
+      "entity": "sixdof",
+      "component": "Rigidbody"
+    },
+    {
+      "op": "add_component",
+      "entity": "sixdof",
+      "component": "Collider"
+    },
+    {
+      "op": "set_property",
+      "entity": "sixdof",
+      "component": "Rigidbody",
+      "property": "useGravity",
+      "value": false
+    },
+    {
+      "op": "set_property",
+      "entity": "sixdof",
+      "component": "Transform",
+      "property": "localPosition.x",
+      "value": 20.0
+    },
+    {
+      "op": "set_property",
+      "entity": "sixdof",
+      "component": "Transform",
+      "property": "localPosition.y",
+      "value": 10.0
+    },
+    {
+      "op": "add_component",
+      "entity": "sixdof",
+      "component": "Joint"
+    },
+    {
+      "op": "set_property",
+      "entity": "sixdof",
+      "component": "Joint",
+      "property": "type",
+      "value": 6
+    },
+    {
+      "op": "set_property",
+      "entity": "sixdof",
+      "component": "Joint",
+      "property": "connectedAnchor.x",
+      "value": 20.0
+    },
+    {
+      "op": "set_property",
+      "entity": "sixdof",
+      "component": "Joint",
+      "property": "connectedAnchor.y",
+      "value": 10.0
+    },
+    {
+      "op": "set_property",
+      "entity": "sixdof",
+      "component": "Joint",
+      "property": "freedom.linearX.mode",
+      "value": 2
+    },
+    {
+      "op": "set_property",
+      "entity": "sixdof",
+      "component": "Joint",
+      "property": "freedom.linearX.motor.targetVelocity",
+      "value": 0.5
+    },
+    {
+      "op": "set_property",
+      "entity": "sixdof",
+      "component": "Joint",
+      "property": "freedom.linearX.motor.force",
+      "value": 30.0
+    },
+    {
+      "op": "set_property",
+      "entity": "sixdof",
+      "component": "Joint",
+      "property": "freedom.linearY.mode",
+      "value": 1
+    },
+    {
+      "op": "set_property",
+      "entity": "sixdof",
+      "component": "Joint",
+      "property": "freedom.linearY.minLimit",
+      "value": -1.0
+    },
+    {
+      "op": "set_property",
+      "entity": "sixdof",
+      "component": "Joint",
+      "property": "freedom.linearY.maxLimit",
+      "value": 1.0
+    },
+    {
+      "op": "set_property",
+      "entity": "sixdof",
+      "component": "Joint",
+      "property": "freedom.angularZ.mode",
+      "value": 1
+    },
+    {
+      "op": "set_property",
+      "entity": "sixdof",
+      "component": "Joint",
+      "property": "freedom.angularZ.minLimit",
+      "value": -20.0
+    },
+    {
+      "op": "set_property",
+      "entity": "sixdof",
+      "component": "Joint",
+      "property": "freedom.angularZ.maxLimit",
+      "value": 20.0
+    },
+    {
+      "op": "set_property",
+      "entity": "sixdof",
+      "component": "Joint",
+      "property": "freedom.angularZ.motor.force",
+      "value": 5.0
+    },
+    {
+      "op": "set_property",
+      "entity": "sixdof",
+      "component": "Joint",
+      "property": "spring.spring",
+      "value": 100.0
+    },
+    {
+      "op": "create_entity",
+      "id": "rope",
+      "name": "rope"
+    },
+    {
+      "op": "add_component",
+      "entity": "rope",
+      "component": "Rigidbody"
+    },
+    {
+      "op": "add_component",
+      "entity": "rope",
+      "component": "Collider"
+    },
+    {
+      "op": "set_property",
+      "entity": "rope",
+      "component": "Transform",
+      "property": "localPosition.x",
+      "value": 0.0
+    },
+    {
+      "op": "set_property",
+      "entity": "rope",
+      "component": "Transform",
+      "property": "localPosition.y",
+      "value": 18.0
+    },
+    {
+      "op": "add_component",
+      "entity": "rope",
+      "component": "Joint"
+    },
+    {
+      "op": "set_property",
+      "entity": "rope",
+      "component": "Joint",
+      "property": "type",
+      "value": 7
+    },
+    {
+      "op": "set_property",
+      "entity": "rope",
+      "component": "Joint",
+      "property": "minLimit",
+      "value": 0.0
+    },
+    {
+      "op": "set_property",
+      "entity": "rope",
+      "component": "Joint",
+      "property": "maxLimit",
+      "value": 3.0
+    },
+    {
+      "op": "set_property",
+      "entity": "rope",
+      "component": "Joint",
+      "property": "spring.spring",
+      "value": 50.0
+    },
+    {
+      "op": "set_property",
+      "entity": "rope",
+      "component": "Joint",
+      "property": "spring.damper",
+      "value": 2.0
+    },
+    {
+      "op": "set_joint_connection",
+      "entity": "rope",
+      "connected_entity": "anchor"
+    },
+    {
+      "op": "save_scene",
+      "path": "Assets/Scenes/JointKinds.21kbscene"
+    },
+    {
+      "op": "reload_scene"
+    },
+    {
+      "op": "assert_backend",
+      "backend": "physics",
+      "available": true
+    },
+    {
+      "op": "assert_joint_connection",
+      "entity": "rope",
+      "connected_entity": "anchor"
+    },
+    {
+      "op": "assert_property",
+      "entity": "slider",
+      "component": "Joint",
+      "property": "type",
+      "value": 4
+    },
+    {
+      "op": "assert_property",
+      "entity": "slider",
+      "component": "Joint",
+      "property": "enableLimit",
+      "value": true
+    },
+    {
+      "op": "assert_property",
+      "entity": "slider",
+      "component": "Joint",
+      "property": "minLimit",
+      "value": -0.5
+    },
+    {
+      "op": "assert_property",
+      "entity": "slider",
+      "component": "Joint",
+      "property": "maxLimit",
+      "value": 2.0
+    },
+    {
+      "op": "assert_property",
+      "entity": "slider",
+      "component": "Joint",
+      "property": "motor.force",
+      "value": 50.0
+    },
+    {
+      "op": "assert_property",
+      "entity": "slider",
+      "component": "Joint",
+      "property": "spring.spring",
+      "value": 200.0
+    },
+    {
+      "op": "assert_property",
+      "entity": "slider",
+      "component": "Joint",
+      "property": "freedom.secondaryAxis.z",
+      "value": 1.0
+    },
+    {
+      "op": "assert_property",
+      "entity": "cone",
+      "component": "Joint",
+      "property": "type",
+      "value": 5
+    },
+    {
+      "op": "assert_property",
+      "entity": "cone",
+      "component": "Joint",
+      "property": "freedom.swing1Limit",
+      "value": 30.0
+    },
+    {
+      "op": "assert_property",
+      "entity": "cone",
+      "component": "Joint",
+      "property": "freedom.swing2Limit",
+      "value": 40.0
+    },
+    {
+      "op": "assert_property",
+      "entity": "cone",
+      "component": "Joint",
+      "property": "minLimit",
+      "value": -15.0
+    },
+    {
+      "op": "assert_property",
+      "entity": "sixdof",
+      "component": "Joint",
+      "property": "type",
+      "value": 6
+    },
+    {
+      "op": "assert_property",
+      "entity": "sixdof",
+      "component": "Joint",
+      "property": "freedom.linearX.mode",
+      "value": 2
+    },
+    {
+      "op": "assert_property",
+      "entity": "sixdof",
+      "component": "Joint",
+      "property": "freedom.linearX.motor.force",
+      "value": 30.0
+    },
+    {
+      "op": "assert_property",
+      "entity": "sixdof",
+      "component": "Joint",
+      "property": "freedom.linearY.mode",
+      "value": 1
+    },
+    {
+      "op": "assert_property",
+      "entity": "sixdof",
+      "component": "Joint",
+      "property": "freedom.linearY.maxLimit",
+      "value": 1.0
+    },
+    {
+      "op": "assert_property",
+      "entity": "sixdof",
+      "component": "Joint",
+      "property": "freedom.angularZ.mode",
+      "value": 1
+    },
+    {
+      "op": "assert_property",
+      "entity": "sixdof",
+      "component": "Joint",
+      "property": "freedom.angularZ.minLimit",
+      "value": -20.0
+    },
+    {
+      "op": "assert_property",
+      "entity": "sixdof",
+      "component": "Joint",
+      "property": "freedom.angularZ.motor.force",
+      "value": 5.0
+    },
+    {
+      "op": "assert_property",
+      "entity": "sixdof",
+      "component": "Joint",
+      "property": "freedom.angularX.mode",
+      "value": 0
+    },
+    {
+      "op": "assert_property",
+      "entity": "rope",
+      "component": "Joint",
+      "property": "type",
+      "value": 7
+    },
+    {
+      "op": "assert_property",
+      "entity": "rope",
+      "component": "Joint",
+      "property": "maxLimit",
+      "value": 3.0
+    },
+    {
+      "op": "assert_property",
+      "entity": "rope",
+      "component": "Joint",
+      "property": "spring.damper",
+      "value": 2.0
+    },
+    {
+      "op": "select_entity",
+      "entity": "slider"
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "joint-slider",
+      "height": 1500
+    },
+    {
+      "op": "select_entity",
+      "entity": "cone"
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "joint-cone",
+      "height": 1500
+    },
+    {
+      "op": "select_entity",
+      "entity": "sixdof"
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "joint-sixdof",
+      "height": 1500
+    },
+    {
+      "op": "select_entity",
+      "entity": "rope"
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "joint-rope",
+      "height": 1500
+    },
+    {
+      "op": "set_physics_debug_draw",
+      "enabled": true
+    },
+    {
+      "op": "play"
+    },
+    {
+      "op": "step",
+      "frames": 120,
+      "dt": 0.016666667
+    },
+    {
+      "op": "assert_backend",
+      "backend": "physics",
+      "available": true
+    },
+    {
+      "op": "assert_property",
+      "entity": "slider",
+      "component": "Joint",
+      "property": "type",
+      "value": 4
+    },
+    {
+      "op": "stop"
+    }
+  ]
+}

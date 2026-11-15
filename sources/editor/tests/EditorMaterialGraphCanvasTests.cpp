@@ -423,6 +423,44 @@ void RunEditorMaterialGraphPinPresentationMatchesSchemaTest() {
     }
 }
 
+void RunEditorMaterialGraphPinPresentationIsBuiltOncePerNodeTypeTest() {
+    // Drawing asks for the pins of every visible node on every frame: the list of a node type is built once
+    // and handed out again, the very same one.
+    for (const kb::render::RenderMaterialGraphNodeKind kind : kb::render::AllRenderMaterialGraphNodeKinds()) {
+        Require(&EditorMaterialGraphPinPresentationCatalog::InputPins(kind) == &EditorMaterialGraphPinPresentationCatalog::InputPins(kind) &&
+                &EditorMaterialGraphPinPresentationCatalog::OutputPins(kind) == &EditorMaterialGraphPinPresentationCatalog::OutputPins(kind),
+            "The pins of a node type must be built once, not on every frame.");
+    }
+    kb::render::RenderMaterialGraphNode multiply{ .id = 8U, .kind = kb::render::RenderMaterialGraphNodeKind::Multiply };
+    Require(&EditorMaterialGraphPinPresentationCatalog::InputPins(multiply) ==
+                &EditorMaterialGraphPinPresentationCatalog::InputPins(kb::render::RenderMaterialGraphNodeKind::Multiply),
+        "A node whose pins are those of its type must share the type's list.");
+
+    // A node with pins of its own keeps its list while they stay the same and gets a new one when they change.
+    kb::render::RenderMaterialGraphNode custom{ .id = 7U, .kind = kb::render::RenderMaterialGraphNodeKind::CustomCode };
+    custom.customCode.inputs = {
+        kb::render::RenderMaterialGraphCustomPin{ .name = "Base", .type = kb::render::RenderMaterialGraphPinType::Color },
+        kb::render::RenderMaterialGraphCustomPin{ .name = "Amount", .type = kb::render::RenderMaterialGraphPinType::Float } };
+    custom.customCode.outputs = {
+        kb::render::RenderMaterialGraphCustomPin{ .name = "Mask", .type = kb::render::RenderMaterialGraphPinType::Float } };
+    const std::vector<EditorMaterialGraphPinPresentation>& inputs = EditorMaterialGraphPinPresentationCatalog::InputPins(custom);
+    Require(inputs.size() == 2U && inputs[0].name == "Base" && inputs[1].name == "Amount",
+        "A custom code node must present the inputs it lists.");
+    const std::vector<EditorMaterialGraphPinPresentation>& outputs = EditorMaterialGraphPinPresentationCatalog::OutputPins(custom);
+    Require(outputs.size() == 2U && outputs[0].name == "value" && outputs[1].name == "Mask",
+        "A custom code node must present its value output and the outputs it lists.");
+    Require(&EditorMaterialGraphPinPresentationCatalog::InputPins(custom) == &inputs &&
+            &EditorMaterialGraphPinPresentationCatalog::OutputPins(custom) == &outputs,
+        "The pins of a node must not be built again while they are unchanged.");
+    custom.customCode.inputs.push_back(
+        kb::render::RenderMaterialGraphCustomPin{ .name = "Tint", .type = kb::render::RenderMaterialGraphPinType::Color });
+    const std::vector<EditorMaterialGraphPinPresentation>& grown = EditorMaterialGraphPinPresentationCatalog::InputPins(custom);
+    Require(grown.size() == 3U && grown[2].name == "Tint", "A pin added to a custom code node must show at once.");
+    custom.customCode.inputs.front().name = "Color";
+    Require(EditorMaterialGraphPinPresentationCatalog::InputPins(custom).front().name == "Color",
+        "A renamed pin of a custom code node must show at once.");
+}
+
 void RunMaterialGraphCanvasAdapterBuildsDocumentLinksTest() {
     kb::render::RenderMaterialGraphDocument document = kb::render::MakeDefaultRenderMaterialGraphDocument();
     Require(!document.nodes.empty(), "Default material graph should contain an output node.");
@@ -463,6 +501,7 @@ void RunEditorMaterialGraphCanvasTests() {
     RunMaterialGraphCanvasZoomScalesNodeGeometryProportionallyTest();
     RunMaterialGraphCanvasAdapterCoversAllNodeKindsTest();
     RunEditorMaterialGraphPinPresentationMatchesSchemaTest();
+    RunEditorMaterialGraphPinPresentationIsBuiltOncePerNodeTypeTest();
     RunMaterialGraphCanvasAdapterBuildsDocumentLinksTest();
     std::cout << "EditorMaterialGraphCanvasTests passed\n" << std::flush;
 }

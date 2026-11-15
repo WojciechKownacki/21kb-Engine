@@ -422,6 +422,13 @@ struct SyncContext {
         ? handle : RenderSkinningPaletteHandle{};
 }
 
+// A pose that did not move this frame reports the same matrices as its previous pose (the animator holds it
+// instead of copying it): its previous palette is the current one, uploaded once.
+[[nodiscard]] bool SameSkinMatrices(
+    std::span<const kb::math::Mat4> current, std::span<const kb::math::Mat4> previous) noexcept {
+    return current.data() == previous.data() && current.size() == previous.size();
+}
+
 [[nodiscard]] std::uint64_t MorphResourceId(kb::scene::SceneEntity entity) noexcept {
     return 0xD000000000000000ULL | (entity.Id() & 0x0FFFFFFFFFFFFFFFULL);
 }
@@ -588,21 +595,27 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
             }
             currentSkinningPalette = UploadSkinningPalette(
                 sync->skinningPaletteAllocator, sync->skinningMatrixScratch, *sync->skinningPoseScratch);
-            const bool previousPaletteResolved = kb::scene::BuildSkeletalMeshSkinningPalette(
-                *asset, pose->boneIds, pose->previousSkinMatrices,
-                *sync->skinningBoneScratch, *sync->skinningPoseScratch);
-            previousSkinningPalette = previousPaletteResolved
-                ? UploadSkinningPalette(sync->skinningPaletteAllocator, sync->skinningMatrixScratch, *sync->skinningPoseScratch)
-                : RenderSkinningPaletteHandle{};
+            if (SameSkinMatrices(pose->currentSkinMatrices, pose->previousSkinMatrices)) {
+                previousSkinningPalette = currentSkinningPalette;
+            } else {
+                const bool previousPaletteResolved = kb::scene::BuildSkeletalMeshSkinningPalette(
+                    *asset, pose->boneIds, pose->previousSkinMatrices,
+                    *sync->skinningBoneScratch, *sync->skinningPoseScratch);
+                previousSkinningPalette = previousPaletteResolved
+                    ? UploadSkinningPalette(sync->skinningPaletteAllocator, sync->skinningMatrixScratch, *sync->skinningPoseScratch)
+                    : RenderSkinningPaletteHandle{};
+            }
             if (!currentSkinningPalette.IsValid() || !previousSkinningPalette.IsValid()) visible = false;
         }
     } else if (skeleton.has_value()) {
         currentSkinningPalette = UploadSkinningPalette(
             sync->skinningPaletteAllocator, sync->skinningMatrixScratch,
             skeleton->currentSkinMatrices);
-        previousSkinningPalette = UploadSkinningPalette(
-            sync->skinningPaletteAllocator, sync->skinningMatrixScratch,
-            skeleton->previousSkinMatrices);
+        previousSkinningPalette = SameSkinMatrices(skeleton->currentSkinMatrices, skeleton->previousSkinMatrices)
+            ? currentSkinningPalette
+            : UploadSkinningPalette(
+                sync->skinningPaletteAllocator, sync->skinningMatrixScratch,
+                skeleton->previousSkinMatrices);
     }
     static_cast<void>(sync->renderScene->UpsertMesh(MeshRenderProxyDesc{
         .entityId = entity.Id(),

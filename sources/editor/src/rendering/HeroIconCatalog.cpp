@@ -132,6 +132,18 @@ HeroIconGlyph HeroIconCatalog::Glyph(HeroIconKind icon) noexcept {
         return HeroIconAssets::Flag();
     case HeroIconKind::Monitor:
         return HeroIconAssets::Monitor();
+    case HeroIconKind::Clock:
+        return HeroIconAssets::Clock();
+    case HeroIconKind::Trash:
+        return HeroIconAssets::Trash();
+    case HeroIconKind::Pencil:
+        return HeroIconAssets::Pencil();
+    case HeroIconKind::ExternalLink:
+        return HeroIconAssets::ExternalLink();
+    case HeroIconKind::GitHub:
+        return HeroIconAssets::GitHub();
+    case HeroIconKind::GitBranch:
+        return HeroIconAssets::GitBranch();
     default:
         return {};
     }

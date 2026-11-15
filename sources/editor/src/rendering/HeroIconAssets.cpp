@@ -160,6 +160,40 @@ static constexpr std::array<HeroIconPath, 2> kRedo{
     HeroIconPath{ "M15 14L20 9L15 4", false },
     HeroIconPath{ "M20 9H9.5A5.5 5.5 0 0 0 9.5 20H13", false },
 };
+// Lucide "clock" (ISC).
+static constexpr std::array<HeroIconPath, 2> kClock{
+    HeroIconPath{ "M22 12A10 10 0 1 1 2 12A10 10 0 1 1 22 12Z", false },
+    HeroIconPath{ "M12 6V12L16 14", false },
+};
+// Lucide "trash" (ISC).
+static constexpr std::array<HeroIconPath, 3> kTrash{
+    HeroIconPath{ "M3 6H21", false },
+    HeroIconPath{ "M19 6V20A2 2 0 0 1 17 22H7A2 2 0 0 1 5 20V6", false },
+    HeroIconPath{ "M8 6V4A2 2 0 0 1 10 2H14A2 2 0 0 1 16 4V6", false },
+};
+// Lucide "pencil" (ISC).
+static constexpr std::array<HeroIconPath, 2> kPencil{
+    HeroIconPath{ "M12 20H21", false },
+    HeroIconPath{ "M16.5 3.5A2.12 2.12 0 0 1 19.5 6.5L7 19L3 20L4 16Z", false },
+};
+// Lucide "external-link" (ISC).
+static constexpr std::array<HeroIconPath, 3> kExternalLink{
+    HeroIconPath{ "M18 13V19A2 2 0 0 1 16 21H5A2 2 0 0 1 3 19V8A2 2 0 0 1 5 6H11", false },
+    HeroIconPath{ "M15 3H21V9", false },
+    HeroIconPath{ "M10 14L21 3", false },
+};
+// Lucide "github" (ISC).
+static constexpr std::array<HeroIconPath, 2> kGitHub{
+    HeroIconPath{ "M15 22V18A4.8 4.8 0 0 0 14 14.5C17 14.5 20 12.5 20 9C20.08 7.75 19.73 6.52 19 5.5C19.28 4.35 19.28 3.15 19 2C19 2 18 2 16 3.5C13.36 3 10.64 3 8 3.5C6 2 5 2 5 2C4.7 3.15 4.7 4.35 5 5.5A5.403 5.403 0 0 0 4 9C4 12.5 7 14.5 10 14.5C9.61 14.99 9.32 15.55 9.15 16.15C8.98 16.75 8.93 17.38 9 18V22", false },
+    HeroIconPath{ "M9 18C4.49 20 4 16 2 16", false },
+};
+// Lucide "git-branch" (ISC).
+static constexpr std::array<HeroIconPath, 4> kGitBranch{
+    HeroIconPath{ "M6 3V15", false },
+    HeroIconPath{ "M21 6A3 3 0 1 1 15 6A3 3 0 1 1 21 6Z", false },
+    HeroIconPath{ "M9 18A3 3 0 1 1 3 18A3 3 0 1 1 9 18Z", false },
+    HeroIconPath{ "M18 9A9 9 0 0 1 9 18", false },
+};
 // Lucide "copy" (ISC).
 static constexpr std::array<HeroIconPath, 2> kDuplicate{
     HeroIconPath{ "M10 8H20A2 2 0 0 1 22 10V20A2 2 0 0 1 20 22H10A2 2 0 0 1 8 20V10A2 2 0 0 1 10 8Z", false },
@@ -591,6 +625,30 @@ HeroIconGlyph HeroIconAssets::Info() noexcept {
 
 HeroIconGlyph HeroIconAssets::Flag() noexcept {
     return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kFlag }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::Clock() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kClock }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::Trash() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kTrash }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::Pencil() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kPencil }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::ExternalLink() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kExternalLink }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::GitHub() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kGitHub }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::GitBranch() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kGitBranch }, .strokeWidth = 2.0F };
 }
 
 HeroIconGlyph HeroIconAssets::Monitor() noexcept {

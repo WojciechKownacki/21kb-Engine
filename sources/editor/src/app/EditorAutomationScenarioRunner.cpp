@@ -7,7 +7,10 @@
 #include "inspection/ui/InspectorUIThemeModel.hpp"
 #include "inspection/ui/InspectorUIComponentModel.hpp"
 #include "rendering/AnimatorEditorPanelRenderer.hpp"
+#include "rendering/GamePanelContentRenderer.hpp"
+#include "scene/EditorGameView.hpp"
 #include "app/EditorAutomationScenarioRunner.hpp"
+#include "app/EditorStartupSplashChecks.hpp"
 #include "scene/GameplayGraphEditorState.hpp"
 #include "rendering/GameplayGraphEditorPanel.hpp"
 #include "rendering/BuildGamePanelModel.hpp"
@@ -32,6 +35,9 @@
 #include "assets/EditorAssetBrowserHitTester.hpp"
 #include "assets/EditorAssetBrowserHitPayloadResolver.hpp"
 #include "rendering/EditorSettingsPanelRenderer.hpp"
+#include "rendering/ProjectSettingsPanelRenderer.hpp"
+#include "rendering/ProjectSettingsPanelLayout.hpp"
+#include "app/project_settings/EditorProjectSettingsPointerController.hpp"
 #include "engine/scene/SceneLocalization.hpp"
 #include "docking/EditorDockModel.hpp"
 #include "docking/EditorWorkspaceArrangement.hpp"
@@ -91,7 +97,6 @@
 #include "engine/network/NetworkSession.hpp"
 #include "engine/platform/PlatformServices.hpp"
 #include "engine/platform/PlatformAdapters.hpp"
-#include "engine/platform/SettingsTransaction.hpp"
 #include "engine/particles/ParticlePlayback.hpp"
 #include "engine/project/ProjectDescriptorWriter.hpp"
 #include "engine/scene/RegionPortalComponent.hpp"
@@ -1154,7 +1159,118 @@ ReadScriptValue(
     std::string error;
     EditorSceneContext& context = state.context;
     if (operation == "navmesh_bake") {
-        return StepOutcome{ context.BakeNavigation(), std::to_string(context.Navigation().TriangleCount()) + " triangle(s) shown" };
+        // The bake runs on a worker; the scenario waits for it like the editor's frame loop collects it.
+        const bool baked = context.BakeNavigation() && context.WaitForNavigationBake();
+        return StepOutcome{ baked, std::to_string(context.Navigation().TriangleCount()) + " triangle(s) shown" };
+    }
+    if (operation == "navigation_inspector_click") {
+        // A click on a navigation row of the Inspector of an object, through the panel's own hit test: the Affects
+        // Navigation switch of its Mesh Renderer or Collider, or the area row of its Nav Obstacle or Nav Agent and,
+        // with an index, the area of the opened list; "expect" is the obstacle's area or the agent's area mask after it.
+        const auto alias = StringMember(step, "entity", error);
+        const auto row = StringMember(step, "row", error);
+        if (!alias || !row) return StepOutcome{ false, error };
+        context.SelectEntity(ResolveEntity(state, *alias));
+        const int index = static_cast<int>(NumberMember(step, "index", error, false).value_or(-1.0));
+        if (*row == "mesh_affects_navigation") {
+            return StepOutcome{ state.automation.InspectorClickRow(InspectorPropertyId::MeshRendererAffectsNavigation, -1, InspectorHitKind::BoolField,
+                InspectorSectionId::MeshRenderer), *row };
+        }
+        if (*row == "collider_affects_navigation") {
+            return StepOutcome{ state.automation.InspectorClickRow(InspectorPropertyId::ColliderField, 14, InspectorHitKind::BoolField,
+                InspectorSectionId::Collider), *row };
+        }
+        const bool obstacle = *row == "obstacle_area";
+        if (!obstacle && *row != "agent_areas") return StepOutcome{ false, "unknown navigation inspector row" };
+        const InspectorSectionId section = obstacle ? InspectorSectionId::NavObstacle : InspectorSectionId::NavAgent;
+        if (!context.Inspector().IsMenuOpen(InspectorMenuKind::NavAreas, section) &&
+            !state.automation.InspectorClickRow(obstacle ? InspectorPropertyId::NavObstacleArea : InspectorPropertyId::NavAgentAreaMask, -1,
+                InspectorHitKind::Row, section)) {
+            return StepOutcome{ false, "the area row is not visible" };
+        }
+        if (index < 0) return StepOutcome{ context.Inspector().IsMenuOpen(InspectorMenuKind::NavAreas, section), *row + " opened" };
+        if (!state.automation.InspectorClickRow(obstacle ? InspectorPropertyId::NavObstacleAreaItem : InspectorPropertyId::NavAgentAreaMaskItem,
+                index, InspectorHitKind::Row, section)) {
+            return StepOutcome{ false, "area " + std::to_string(index) + " is not in the open list" };
+        }
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        const kb::scene::NavObstacle* navObstacle = context.Scene().Components().NavObstacles().TryGet(entity);
+        const kb::scene::NavAgent* navAgent = context.Scene().Components().NavAgents().TryGet(entity);
+        const std::uint32_t value = obstacle ? (navObstacle != nullptr ? navObstacle->area : 0U) : (navAgent != nullptr ? navAgent->areaMask : 0U);
+        const auto expect = NumberMember(step, "expect", error, false);
+        return StepOutcome{ !expect.has_value() || value == static_cast<std::uint32_t>(*expect), *row + " = " + std::to_string(value) };
+    }
+    if (operation == "navigation_settings_click") {
+        // A click on the Navigation page of the project settings, found through the page's own hit test, and the text
+        // typed into the cell it opens (applied as a click elsewhere applies it).
+        const auto target = StringMember(step, "target", error);
+        if (!target) return StepOutcome{ false, error };
+        const int index = static_cast<int>(NumberMember(step, "index", error, false).value_or(-1.0));
+        const std::optional<std::string> text = StringMember(step, "text", error, false);
+        static_cast<void>(context.ProjectSettings().SelectCategory(static_cast<int>(ProjectSettingsCategory::Navigation)));
+        constexpr RECT kContent{ 0, 0, 1280, 800 };
+        const ProjectSettingsPanelLayoutRects rects = ProjectSettingsPanelLayout::Resolve(kContent);
+        const ProjectSettingsHitKind kind = *target == "colour" ? ProjectSettingsHitKind::NavAreaColour
+            : *target == "name" ? ProjectSettingsHitKind::NavAreaName : *target == "cost" ? ProjectSettingsHitKind::NavAreaCost
+            : *target == "remove" ? ProjectSettingsHitKind::NavAreaRemove : *target == "new" ? ProjectSettingsHitKind::NavAreaNameField
+            : ProjectSettingsHitKind::None;
+        if (kind == ProjectSettingsHitKind::None) return StepOutcome{ false, "unknown navigation settings target" };
+        const RECT area = kind == ProjectSettingsHitKind::NavAreaNameField ? rects.tagNameField : ProjectSettingsPanelLayout::SceneRow(rects, std::max(index, 0));
+        const int y = static_cast<int>((area.top + area.bottom) / 2);
+        std::optional<int> x;
+        for (int probe = static_cast<int>(area.left); probe < static_cast<int>(area.right) && !x.has_value(); probe += 2) {
+            const ProjectSettingsPanelRenderer::Hit hit = ProjectSettingsPanelRenderer::HitTest(kContent, context, probe, y);
+            if (hit.kind == kind && (kind == ProjectSettingsHitKind::NavAreaNameField || hit.index == index)) x = probe;
+        }
+        if (!x.has_value()) return StepOutcome{ false, "the page shows no " + *target + " cell there" };
+        EditorProjectSettingsPointerController controller{ context };
+        static_cast<void>(controller.HandlePointerDown(kContent, *x, y));
+        if (text.has_value()) {
+            if (!context.ProjectSettings().IsNumberEditing()) return StepOutcome{ false, "the cell takes no text" };
+            context.ProjectSettings().NumberEdit().Clear();
+            for (const char character : *text) context.ProjectSettings().NumberEdit().AppendAscii(static_cast<wchar_t>(character));
+            static_cast<void>(EditorProjectSettingsPointerController::CommitNumberEdit(context));
+        }
+        return StepOutcome{ true, *target };
+    }
+    if (operation == "assert_navigation_area") {
+        // An area of the project's list: its name, colour and cost, the cost the open scene uses, and, with
+        // "overlay", that every filled polygon of the shown navigation mesh (all of that area) has the area's colour.
+        const auto index = NumberMember(step, "index", error);
+        if (!index) return StepOutcome{ false, error };
+        const auto area = static_cast<std::size_t>(*index);
+        const std::vector<kb::scene::NavAreaDefinition>& areas = context.ProjectConfiguration().navigationAreas;
+        if (const auto count = NumberMember(step, "count", error, false); count.has_value() && areas.size() != static_cast<std::size_t>(*count)) {
+            return StepOutcome{ false, std::to_string(areas.size()) + " area(s)" };
+        }
+        if (area >= areas.size()) return StepOutcome{ false, "no area " + std::to_string(area) };
+        const kb::scene::NavAreaDefinition& definition = areas[area];
+        std::string describe = definition.name + " #" + std::to_string(definition.colour) + " cost " + std::to_string(definition.cost);
+        bool ok = true;
+        if (const auto name = StringMember(step, "name", error, false); name.has_value()) ok = ok && definition.name == *name;
+        if (const auto colour = NumberMember(step, "colour", error, false); colour.has_value()) ok = ok && definition.colour == static_cast<std::uint32_t>(*colour);
+        if (const auto cost = NumberMember(step, "cost", error, false); cost.has_value()) {
+            ok = ok && definition.cost == static_cast<float>(*cost) &&
+                (*cost == 0.0 || context.Scene().Navigation().AreaCost(static_cast<kb::scene::NavAreaId>(area)) == static_cast<float>(*cost));
+        }
+        if (BoolMember(step, "overlay", error, false).value_or(false)) {
+            const std::array<float, 3U> expected = EditorNavigation::AreaColor(areas, static_cast<std::uint8_t>(area));
+            const std::vector<kb::render::DebugFillTriangle>& fills = context.Navigation().Fills();
+            ok = ok && !fills.empty() && std::ranges::all_of(fills, [&](const kb::render::DebugFillTriangle& fill) { return fill.color == expected; });
+            describe += ", " + std::to_string(fills.size()) + " filled triangle(s)";
+        }
+        return StepOutcome{ ok, describe };
+    }
+    if (operation == "navmesh_wait_update") {
+        // The frame loop pumps the automatic update of the changed tiles; the scenario pumps until one is applied.
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 20 };
+        bool applied = false;
+        while (!applied && std::chrono::steady_clock::now() < deadline) {
+            applied = context.PumpNavigationBake();
+            if (!applied) std::this_thread::sleep_for(std::chrono::milliseconds{ 20 });
+        }
+        return StepOutcome{ applied, applied ? std::to_string(context.Navigation().TriangleCount()) + " triangle(s) shown after the update"
+                                             : std::string{ "no automatic navigation update was applied" } };
     }
     if (operation == "navmesh_set_visible") {
         const auto visible = BoolMember(step, "visible", error);
@@ -1494,6 +1610,27 @@ ReadScriptValue(
         if (hit.IsValid()) EditorSceneViewportSelectionController::ApplyClick(state.context, hit.entity, EditorSceneViewportSelectionMode::Replace);
         const bool matched = state.context.SelectedEntity() == ResolveEntity(state, *alias);
         return {matched, matched ? "ray selects the rendered owner" : "ray selected a different object"};
+    }
+    if (*operation == "assert_viewport_click") {
+        // Frames the Scene View of a real editor window on a sphere looking along +Z, clicks it with mouse button
+        // messages where a world point lands on screen (moved by offset_x pixels), and checks what is selected;
+        // without "entity" the click must clear the selection.
+        const auto focusRadius = NumberMember(step, "focus_radius", error);
+        const auto x = NumberMember(step, "x", error);
+        const auto y = NumberMember(step, "y", error);
+        const auto z = NumberMember(step, "z", error);
+        if (!focusRadius || !x || !y || !z) return {false, error};
+        const auto offsetX = NumberMember(step, "offset_x", error, false);
+        const auto alias = StringMember(step, "entity", error, false);
+        if (!state.automation.ClickSceneView(static_cast<float>(*x), static_cast<float>(*y), static_cast<float>(*z),
+                static_cast<float>(offsetX.value_or(0.0)), static_cast<float>(*focusRadius))) {
+            return {false, state.automation.LastCheckDetail()};
+        }
+        const kb::scene::SceneEntity expected = alias ? ResolveEntity(state, *alias) : kb::scene::SceneEntity{};
+        const bool matched = alias ? state.context.SelectedEntity() == expected : state.context.SelectedHierarchyEntities().empty();
+        const kb::scene::SceneEntity selected = state.context.SelectedEntity();
+        return {matched, state.automation.LastCheckDetail() + (matched ? ": selects what is drawn under it" : ": selected entity " +
+            (selected.IsValid() ? std::string{state.context.Scene().Entities().Name(selected)} : std::string{"none"}))};
     }
     if (*operation == "assert_sprite_visibility") {
         const auto alias = StringMember(step, "entity", error);
@@ -2195,38 +2332,6 @@ ReadScriptValue(
                               : "platform locale contract rejected" };
     }
 
-    if (*operation == "assert_runtime_settings") {
-        kb::platform::SettingsTransaction settings{
-            kb::platform::RuntimeSettings{} };
-        settings.Pending().vibration = true;
-        const bool rejectedVibration = !settings.Apply({});
-        settings.Revert();
-        settings.Pending().masterVolume = 0.5F;
-        settings.Pending().videoWidth = 1920U;
-        settings.Pending().videoHeight = 1080U;
-        settings.Pending().fullscreen = true;
-        settings.Pending().mouseSensitivity = 2.0F;
-        const bool applied = settings.Apply(
-            { .flags = static_cast<std::uint32_t>(
-                kb::platform::PlatformCapability::Vibration) },
-            { .maximumVideoWidth = 1920U, .maximumVideoHeight = 1080U,
-                .fullscreen = true });
-        settings.Pending().videoWidth = 2560U;
-        const bool rejectedVideo = !settings.Apply(
-            {}, { .maximumVideoWidth = 1920U, .maximumVideoHeight = 1080U });
-        settings.Revert();
-        settings.Pending().mouseSensitivity = 0.0F;
-        const bool rejectedInput = !settings.Apply({});
-        settings.Revert();
-        const bool valid = rejectedVibration && applied && rejectedVideo &&
-            rejectedInput && settings.Current().masterVolume == 0.5F &&
-            settings.Current().videoWidth == 1920U &&
-            settings.Current().fullscreen &&
-            settings.Pending().mouseSensitivity == 2.0F;
-        return { valid, valid ? "audio, video and input settings transaction"
-                              : "runtime settings contract rejected" };
-    }
-
     if (*operation == "assert_optional_platform_adapter") {
         class Adapter final : public kb::platform::IPlatformAdapter {
         public:
@@ -2412,6 +2517,16 @@ ReadScriptValue(
             index = 1;
         } else if (*category == "physics") {
             index = 2;
+        } else if (*category == "display") {
+            index = static_cast<int>(ProjectSettingsCategory::Display);
+        } else if (*category == "audio") {
+            index = static_cast<int>(ProjectSettingsCategory::Audio);
+        } else if (*category == "scenes") {
+            index = static_cast<int>(ProjectSettingsCategory::Scenes);
+        } else if (*category == "tags") {
+            index = static_cast<int>(ProjectSettingsCategory::Tags);
+        } else if (*category == "navigation") {
+            index = static_cast<int>(ProjectSettingsCategory::Navigation);
         } else {
             return { false, "unknown project settings category" };
         }
@@ -2994,6 +3109,24 @@ ReadScriptValue(
         if (*operation == "prefab_revert") return {state.context.RevertPrefabInstance(entity), *alias};
         return {state.context.Scene().Prefabs().SourcePrefab(entity).IsValid(), *alias};
     }
+    // A script field of the Inspector (Lua `@expose`, C++ `expose =`): set it as the Inspector does, or check what it reads.
+    if (*operation == "set_script_field" || *operation == "assert_script_field") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto name = StringMember(step, "name", error);
+        const auto number = NumberMember(step, "value", error);
+        if (!alias || !name || !number) return {false, error};
+        const auto entity = ResolveEntity(state, *alias);
+        if (!state.context.Scene().Entities().IsAlive(entity)) return {false, "entity alias is not alive"};
+        if (*operation == "set_script_field") {
+            return {state.context.SetEntityScriptVariable(entity, *name, kb::script::ScriptValue{static_cast<float>(*number)}), *name};
+        }
+        for (const auto& field : state.context.EntityScriptExposedVariables(entity)) {
+            if (field.name == *name) {
+                return {std::abs(field.value.AsFloat() - static_cast<float>(*number)) < 1.0e-4F, *name};
+            }
+        }
+        return {false, "script field is not declared by the entity's script"};
+    }
     if (*operation == "bind_entity") {
         const auto alias = StringMember(step, "id", error);
         const auto name = StringMember(step, "name", error);
@@ -3228,8 +3361,12 @@ ReadScriptValue(
             state.context.SelectEntity(entity);
             const auto section = *component == "World2DMap" ? InspectorSectionId::World2DMap :
                 *component == "AudioSource" ? InspectorSectionId::AudioSource : InspectorSectionId::MeshRenderer;
-            const bool clicked = state.automation.InspectorClickRow(InspectorPropertyId::ComponentRemove, -1,
-                InspectorHitKind::ComponentMenuButton, section);
+            // The Mesh Renderer's and the Audio Source's header buttons open a component menu, whose Remove entry removes it.
+            const bool clicked = section != InspectorSectionId::World2DMap
+                ? state.automation.InspectorClickRow(InspectorPropertyId::ComponentMenu, -1, InspectorHitKind::ComponentMenuButton, section) &&
+                    state.automation.InspectorClickRow(InspectorPropertyId::ComponentMenuItem, static_cast<int>(InspectorComponentMenuItem::Remove),
+                        InspectorHitKind::Row, section)
+                : state.automation.InspectorClickRow(InspectorPropertyId::ComponentRemove, -1, InspectorHitKind::ComponentMenuButton, section);
             return { clicked && !HasAuthoredComponent(state.context.Scene(), entity, *component), *component };
         }
         if (*component == "SkeletonBinding") {
@@ -4988,6 +5125,136 @@ ReadScriptValue(
         return {passed, passed ? "double-click resolved selected IDE, CMake workspace and source; launch intercepted" : "incorrect code editor launch request"};
     }
 
+    if (*operation == "open_console_source") {
+        // A compiler message of the Console opens its file at its line in the chosen code editor.
+        const auto message = StringMember(step, "message", error);
+        const auto editor = StringMember(step, "editor", error);
+        const auto expected = StringMember(step, "expect", error);
+        if (!message || !editor || !expected) return {false, error};
+        const auto installation = StringMember(step, "visual_studio_installation", error, false);
+        if (!error.empty()) return {false, error};
+        std::array<wchar_t, 32768> previousInstallation{};
+        const DWORD priorSize = GetEnvironmentVariableW(L"VSINSTALLDIR", previousInstallation.data(),
+            static_cast<DWORD>(previousInstallation.size()));
+        struct RestoreInstallation {
+            std::wstring previous;
+            bool restore;
+            ~RestoreInstallation() { if (restore) SetEnvironmentVariableW(L"VSINSTALLDIR", previous.empty() ? nullptr : previous.c_str()); }
+        } restoreInstallation{std::wstring{previousInstallation.data()}, installation.has_value()};
+        if (priorSize >= previousInstallation.size() || (installation &&
+            !SetEnvironmentVariableW(L"VSINSTALLDIR", std::filesystem::path{*installation}.c_str())))
+            return {false, "Visual Studio discovery fixture could not be installed"};
+        const auto root = EditorProjectPaths::ProjectRoot();
+        if (!EditorExternalCodeLauncher::SetPreference(root, *editor, error)) return {false, error};
+        if (!EditorExternalCodeLauncher::HasBuildMessageLocation(*message)) return {false, "the message names no source line"};
+        static thread_local std::wstring launchedCommand;
+        launchedCommand.clear();
+        const auto previous = EditorExternalCodeLauncher::ExchangeProcessLauncher(
+            [](const auto&, const auto& command, const auto&, std::string&) { launchedCommand = command; return true; });
+        struct RestoreLauncher {
+            EditorExternalCodeLauncher::ProcessLauncher previous;
+            ~RestoreLauncher() { EditorExternalCodeLauncher::ExchangeProcessLauncher(previous); }
+        } restore{previous};
+        const bool opened = EditorExternalCodeLauncher::OpenBuildMessage(root, *message, error);
+        const bool passed = opened && launchedCommand.find(std::filesystem::path{*expected}.wstring()) != std::wstring::npos;
+        return {passed, passed ? "the compiler message opened its source line; launch intercepted" : "incorrect source line launch request: " + error};
+    }
+
+    if (*operation == "replace_in_file") {
+        // Saves a change to a text file of the project, as the user does in a code editor.
+        const auto pathText = StringMember(step, "path", error);
+        const auto from = StringMember(step, "replace_from", error);
+        const auto to = StringMember(step, "replace_to", error);
+        if (!pathText || !from || !to) return {false, error};
+        const std::filesystem::path file = EditorProjectPaths::ProjectRoot() / *pathText;
+        std::string text;
+        {
+            std::ifstream input(file, std::ios::binary);
+            text.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+        }
+        const std::size_t at = text.find(*from);
+        if (at == std::string::npos) return {false, "the text to replace is not in the file"};
+        text.replace(at, from->size(), *to);
+        std::ofstream output(file, std::ios::binary | std::ios::trunc);
+        output << text;
+        return {static_cast<bool>(output), "file text replaced"};
+    }
+
+    if (*operation == "assert_position_z_at_least") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto minimum = NumberMember(step, "value", error);
+        if (!alias || !minimum) return {false, error};
+        const auto entity = ResolveEntity(state, *alias);
+        if (!state.context.Scene().Entities().IsAlive(entity)) return {false, "entity alias is not alive"};
+        const float z = state.context.Scene().Transforms().Get(entity).localPosition.z;
+        return {z >= static_cast<float>(*minimum), "localPosition.z is " + std::to_string(z)};
+    }
+
+    if (*operation == "native_reload_in_play") {
+        // A C++ script saved while the game plays: it is built in the background, the running module stays in use until
+        // the new one is ready, and the script's object keeps its members through the reload.
+        const auto alias = StringMember(step, "entity", error);
+        const auto sourceText = StringMember(step, "source", error);
+        const auto from = StringMember(step, "replace_from", error);
+        const auto to = StringMember(step, "replace_to", error);
+        const auto gain = NumberMember(step, "gain", error);
+        if (!alias || !sourceText || !from || !to || !gain) return {false, error};
+        const auto entity = ResolveEntity(state, *alias);
+        if (!state.context.HasPlayModeSceneSession() || !state.context.Scene().Entities().IsAlive(entity)) {
+            return {false, "Play is not running or the entity is gone"};
+        }
+        const auto height = [&state, entity] { return state.context.Scene().Transforms().Get(entity).localPosition.z; };
+        const float before = height();
+        const std::filesystem::path source = EditorProjectPaths::ProjectRoot() / *sourceText;
+        std::string text;
+        {
+            std::ifstream input(source, std::ios::binary);
+            text.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+        }
+        const std::size_t at = text.find(*from);
+        if (at == std::string::npos) return {false, "the text to replace is not in the script source"};
+        text.replace(at, from->size(), *to);
+        {
+            std::ofstream output(source, std::ios::binary | std::ios::trunc);
+            output << text;
+        }
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 180 };
+        bool sawBuild = false;
+        float after = before;
+        while (std::chrono::steady_clock::now() < deadline && after < before + static_cast<float>(*gain)) {
+            if (!state.context.TickPlayModeSceneSession(1.0F / 60.0F)) return {false, "Play ended during the reload"};
+            sawBuild = sawBuild || !state.context.ScriptBuildsInProgress().empty();
+            after = height();
+            std::this_thread::sleep_for(std::chrono::milliseconds{ 10 });
+        }
+        const bool passed = sawBuild && after >= before + static_cast<float>(*gain);
+        return {passed, passed ? "the script was rebuilt in the background and its object kept its members through the reload"
+                              : "the reload did not happen or the members were lost: before=" + std::to_string(before) + " after=" + std::to_string(after) +
+                                  (sawBuild ? "" : " (no background build was seen)")};
+    }
+
+    if (*operation == "build_scripts_in_edit_mode") {
+        // The editor builds the scene's C++ scripts in the background while nothing plays; wait for that build to end.
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 240 };
+        bool sawBuild = false;
+        bool building = false;
+        while (std::chrono::steady_clock::now() < deadline) {
+            state.context.TickEditModeScripts();
+            building = !state.context.ScriptBuildsInProgress().empty();
+            sawBuild = sawBuild || building;
+            if (sawBuild && !building) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds{ 20 });
+        }
+        // The pass that takes a finished build and loads its module follows the end of the build process.
+        const auto settled = std::chrono::steady_clock::now() + std::chrono::milliseconds{ 800 };
+        while (std::chrono::steady_clock::now() < settled) {
+            state.context.TickEditModeScripts();
+            std::this_thread::sleep_for(std::chrono::milliseconds{ 20 });
+        }
+        const bool passed = sawBuild && !building && state.context.ScriptBuildsInProgress().empty();
+        return {passed, passed ? "the C++ scripts were built in the background in edit mode" : "no background build ran or it did not end"};
+    }
+
     if (*operation == "open_asset") {
         const auto asset = StringMember(step, "asset", error);
         if (!asset) return { false, error };
@@ -5813,6 +6080,11 @@ ReadScriptValue(
         return {state.automation.VerifyWorkspaceControls(), "real toolbar, keyboard, display and DPI routing"};
     }
 
+    if (*operation == "assert_docking_interactions") {
+        const bool succeeded = state.automation.VerifyDockingInteractions();
+        return {succeeded, state.automation.LastCheckDetail()};
+    }
+
     if (*operation == "assert_workspace_layout_persistence") {
         const auto workspace = state.automation.VerifyWorkspaceLayoutPersistence();
         return {
@@ -6114,6 +6386,12 @@ ReadScriptValue(
             static_cast<int>(*x), static_cast<int>(*y)), "audio mixer panel pointer"};
     }
 
+    if (*operation == "check_startup_splash") {
+        // The startup screen painted at 0 %, about 50 % and 100 % and checked at two DPI and in every language.
+        const auto result = EditorStartupSplashChecks::Run(state.automation);
+        return { result.first, result.second };
+    }
+
     if (*operation == "capture") {
         const auto panel = StringMember(step, "panel", error);
         const auto checkpoint =
@@ -6339,6 +6617,92 @@ ReadScriptValue(
         return { state.automation.CaptureSceneViewport(*checkpoint), "scene:" + *checkpoint };
     }
 
+    if (*operation == "set_play_target") {
+        // Where Play runs the game, kept in the editor settings like the options under the arrow beside Play.
+        const auto target = StringMember(step, "target", error);
+        if (!target) return { false, error };
+        EditorConfiguration configuration = state.context.EditorConfig();
+        if (*target == "game_view") configuration.play.target = EditorPlayTarget::GameView;
+        else if (*target == "scene_view") configuration.play.target = EditorPlayTarget::SceneView;
+        else return { false, "target must be game_view or scene_view" };
+        return { state.context.SaveEditorConfig(std::move(configuration)), "play target " + *target };
+    }
+
+    if (*operation == "set_game_view_resolution") {
+        const auto name = StringMember(step, "resolution", error);
+        if (!name) return { false, error };
+        const std::optional<EditorGameViewResolution> resolution = EditorGameView::FromName(*name);
+        if (!resolution.has_value()) return { false, "unknown Game View resolution " + *name };
+        EditorConfiguration configuration = state.context.EditorConfig();
+        configuration.play.gameViewResolution = *resolution;
+        return { state.context.SaveEditorConfig(std::move(configuration)), "game view resolution " + *name };
+    }
+
+    if (*operation == "capture_game_view") {
+        // The Game View's picture while the game runs, read back at its render resolution.
+        const auto checkpoint = StringMember(step, "checkpoint", error);
+        if (!checkpoint) return { false, error };
+        const double areaWidth = NumberMember(step, "area_width", error, false).value_or(640.0);
+        const double areaHeight = NumberMember(step, "area_height", error, false).value_or(360.0);
+        if (!error.empty()) return { false, error };
+        return { state.automation.CaptureGameView(*checkpoint, static_cast<int>(areaWidth), static_cast<int>(areaHeight)),
+            "game view:" + *checkpoint };
+    }
+
+    if (*operation == "assert_game_view_settings") {
+        const double areaWidth = NumberMember(step, "area_width", error, false).value_or(640.0);
+        const double areaHeight = NumberMember(step, "area_height", error, false).value_or(360.0);
+        if (!error.empty()) return { false, error };
+        const auto result = state.automation.VerifyGameViewSettings(static_cast<int>(areaWidth), static_cast<int>(areaHeight));
+        return { result.first, result.second };
+    }
+
+    if (*operation == "assert_game_view_layout") {
+        // The picture the Game View shows in an area below its bar: the size it renders at, where it sits
+        // (relative to the area) and the scale the bar reads. Every expectation given must hold.
+        const double areaWidth = NumberMember(step, "area_width", error).value_or(0.0);
+        const double areaHeight = NumberMember(step, "area_height", error).value_or(0.0);
+        if (!error.empty() || areaWidth < 1.0 || areaHeight < 1.0) return { false, error.empty() ? "the area must not be empty" : error };
+        const RECT content{ 0, -GamePanelContentRenderer::ToolbarHeight, static_cast<LONG>(areaWidth), static_cast<LONG>(areaHeight) };
+        const GameViewRects rects = GamePanelContentRenderer::Resolve(content, false);
+        const GameViewPicture picture = GamePanelContentRenderer::ResolvePicture(rects.renderArea, state.context);
+        const std::string scale = EditorGameView::FormatScale(
+            static_cast<std::uint32_t>(picture.destination.right - picture.destination.left), picture.renderWidth);
+        std::ostringstream report;
+        report << "render " << picture.renderWidth << "x" << picture.renderHeight << ", picture (" << picture.destination.left << ","
+               << picture.destination.top << ")-(" << picture.destination.right << "," << picture.destination.bottom << "), scale " << scale;
+        bool ok = true;
+        const auto check = [&](const char* key, double actual) {
+            if (const auto expected = NumberMember(step, key, error, false); expected.has_value() && std::abs(*expected - actual) > 1.0) {
+                report << "; " << key << " expected " << *expected;
+                ok = false;
+            }
+        };
+        check("render_width", picture.renderWidth);
+        check("render_height", picture.renderHeight);
+        check("left", picture.destination.left);
+        check("top", picture.destination.top);
+        check("right", picture.destination.right);
+        check("bottom", picture.destination.bottom);
+        if (const auto expectedScale = StringMember(step, "scale", error, false); expectedScale.has_value() && *expectedScale != scale) {
+            report << "; scale expected " << *expectedScale;
+            ok = false;
+        }
+        return { ok && error.empty(), error.empty() ? report.str() : error };
+    }
+
+    if (*operation == "assert_capture_size") {
+        const auto checkpoint = StringMember(step, "checkpoint", error);
+        const auto width = UInt32Member(step, "width", error);
+        const auto height = UInt32Member(step, "height", error);
+        if (!checkpoint || !width || !height) return { false, error };
+        HeroIconGdiplusRuntime::EnsureStarted();
+        Gdiplus::Bitmap captured((state.automation.ArtifactRoot() / "screenshots" / (*checkpoint + ".png")).wstring().c_str());
+        if (captured.GetLastStatus() != Gdiplus::Ok) return { false, "capture is not readable" };
+        return { captured.GetWidth() == *width && captured.GetHeight() == *height,
+            "capture is " + std::to_string(captured.GetWidth()) + "x" + std::to_string(captured.GetHeight()) };
+    }
+
     if (*operation == "assert_capture_color_difference") {
         // Pixels that differ between two captures and show `color` in `with`: what drawing one
         // thing (such as the cell grid) added to an otherwise identical frame.
@@ -6346,6 +6710,8 @@ ReadScriptValue(
         const auto without = StringMember(step, "without", error);
         const JsonValue* color = Member(step, "color", JsonValue::Kind::Array, error);
         const std::uint32_t minimum = UInt32Member(step, "min_pixels", error, false).value_or(100U);
+        // At most this many: drawing that something in front must hide.
+        const std::optional<std::uint32_t> maximum = UInt32Member(step, "max_pixels", error, false);
         const double tolerance = NumberMember(step, "tolerance", error, false).value_or(48.0);
         if (!with || !without || color == nullptr || color->Size() != 3U || !error.empty()) {
             return { false, error.empty() ? "color must be [r, g, b] in 0..255" : error };
@@ -6376,14 +6742,16 @@ ReadScriptValue(
                 }
             }
         }
-        return { matching >= minimum, "changed pixels: " + std::to_string(changed) + ", in the color: " + std::to_string(matching) +
-            " (minimum " + std::to_string(minimum) + ")" };
+        return { matching >= minimum && (!maximum.has_value() || matching <= *maximum),
+            "changed pixels: " + std::to_string(changed) + ", in the color: " + std::to_string(matching) + " (minimum " + std::to_string(minimum) +
+            (maximum.has_value() ? ", maximum " + std::to_string(*maximum) : std::string{}) + ")" };
     }
 
     if (*operation == "assert_capture_color") {
         const auto checkpoint = StringMember(step, "checkpoint", error);
         const auto* color = Member(step, "color", JsonValue::Kind::Array, error);
         const auto minimum = UInt32Member(step, "min_pixels", error, false).value_or(100U);
+        const auto maximum = UInt32Member(step, "max_pixels", error, false);
         const auto tolerance = NumberMember(step, "tolerance", error, false).value_or(16.0);
         if (!checkpoint || !color || color->Size() != 3U || !error.empty()) return {false, "color must be [r, g, b]"};
         HeroIconGdiplusRuntime::EnsureStarted();
@@ -6397,7 +6765,9 @@ ReadScriptValue(
                 std::fabs(pixel.GetG() - color->At(1)->AsNumber()) <= tolerance &&
                 std::fabs(pixel.GetB() - color->At(2)->AsNumber()) <= tolerance) ++matching;
         }
-        return {matching >= minimum, "matching pixels: " + std::to_string(matching) + " (minimum " + std::to_string(minimum) + ")"};
+        return {matching >= minimum && (!maximum.has_value() || matching <= *maximum),
+            "matching pixels: " + std::to_string(matching) + " (minimum " + std::to_string(minimum) +
+            (maximum.has_value() ? ", maximum " + std::to_string(*maximum) : std::string{}) + ")"};
     }
 
     if (*operation == "capture_runtime") {

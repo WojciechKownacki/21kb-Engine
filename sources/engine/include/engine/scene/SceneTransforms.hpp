@@ -87,6 +87,49 @@ struct TransformPassStats {
     std::size_t ranges = 0U;
 };
 
+inline constexpr std::uint8_t kTransformAxisX = 1U;
+inline constexpr std::uint8_t kTransformAxisY = 2U;
+inline constexpr std::uint8_t kTransformAxisZ = 4U;
+inline constexpr std::uint8_t kTransformAxesXYZ = kTransformAxisX | kTransformAxisY | kTransformAxisZ;
+
+// One in-place write of an entity's transform, from SceneTransforms::BeginWrite to EndWrite.
+struct SceneTransformWrite {
+    SceneEntity entity{};
+    // The live row; null when the entity has no stored transform.
+    TransformComponent* row = nullptr;
+    std::uint64_t structure = 0U;
+    // How the row is published, decided when it was opened (it holds while the structure does not change).
+    bool composes = false;
+    bool mirrored = false;
+};
+
+// In-place transform writes from the scene's worker threads, for code that changes only the rows of its own entities
+// (each entity by one thread, at most once). Made on the application's thread with the number of worker ranges; if
+// Enabled() is false (an undo recording is open, something observes transforms, or another one is open) write on the
+// calling thread with BeginWrite instead. A worker range opens an entity's row with Open, changes its local fields and
+// calls Publish: a row without parent or children gets its world transform there, as Set would compose it, and
+// anything else is left to Finish, which the application's thread calls after the workers joined (and the
+// destructor calls if it did not).
+class SceneTransformWorkerWrites {
+public:
+    SceneTransformWorkerWrites(Scene& scene, std::size_t rangeCount);
+    ~SceneTransformWorkerWrites();
+    SceneTransformWorkerWrites(const SceneTransformWorkerWrites&) = delete;
+    SceneTransformWorkerWrites& operator=(const SceneTransformWorkerWrites&) = delete;
+
+    [[nodiscard]] bool Enabled() const noexcept { return enabled_; }
+    [[nodiscard]] TransformComponent* Open(std::size_t range, SceneEntity entity) noexcept;
+    void Publish(std::size_t range, SceneEntity entity, TransformComponent& row) noexcept;
+    void Finish();
+
+private:
+    Scene& scene_;
+    bool enabled_ = false;
+    bool trackPrefab_ = false;
+    // More than one range: the update bits are shared between threads.
+    bool shared_ = false;
+};
+
 class SceneTransformQueries {
 public:
     explicit SceneTransformQueries(const Scene& scene) noexcept;
@@ -126,6 +169,17 @@ public:
     // Batch write: transforms[i] goes to entities[i] (same length required, std::invalid_argument otherwise).
     // Cheaper per entity than a loop of Set; dead entities are skipped.
     void SetMany(std::span<const SceneEntity> entities, std::span<const TransformComponent> transforms);
+    // A write without copying the row: BeginWrite hands out the live row, the caller changes its local fields, and
+    // EndWrite publishes it with the result of Set (the world transform of a row without parent or children, the
+    // dirty flags, the hierarchy and prefab bookkeeping). If entities were made or destroyed in between, EndWrite
+    // finds the row again and skips a destroyed entity. Nothing else may write the row in between.
+    [[nodiscard]] SceneTransformWrite BeginWrite(SceneEntity entity) noexcept;
+    void EndWrite(const SceneTransformWrite& write);
+    // Sets the local position of a live entity (only the axes in `axes`, a mix of kTransformAxisX/Y/Z; the others keep their
+    // value) with one lookup of its row, publishing it as EndWrite does. The one entry the script functions and the Lua
+    // bindings write positions through. An entity without a stored transform gets one with the default rotation and scale.
+    // False when the entity is not alive.
+    bool SetLocalPosition(SceneEntity entity, const Vec3& position, std::uint8_t axes);
     void MarkModified(SceneEntity entity) noexcept;
     // Bulk dirty signal: marks many transforms modified in one batched pass.
     void MarkModified(std::span<const SceneEntity> entities) noexcept;

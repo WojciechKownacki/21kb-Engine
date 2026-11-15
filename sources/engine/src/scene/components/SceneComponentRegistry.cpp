@@ -88,6 +88,7 @@ void RegisterPhysicsReflection(kb::ecs::World& world) {
             KB_ECS_FIELD(ColliderComponent, restitution, kb::ecs::ComponentFieldType::Float32),
             KB_ECS_FIELD(ColliderComponent, layer, kb::ecs::ComponentFieldType::UInt32),
             KB_ECS_FIELD(ColliderComponent, meshAssetId, kb::ecs::ComponentFieldType::Bytes),
+            KB_ECS_FIELD(ColliderComponent, affectsNavigation, kb::ecs::ComponentFieldType::Bool),
         }));
 }
 
@@ -728,7 +729,8 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , deformedGeometryComponentId_(RegisterSceneComponent<DrawD3DeformedGeometryComponent>(world, DrawD3DeformedGeometryComponent::StableId))
     , navAgentComponentId_(RegisterSceneComponent<NavAgent>(world, "kb.scene.NavAgent"))
     , navObstacleComponentId_(RegisterSceneComponent<NavObstacle>(world, "kb.scene.NavObstacle"))
-    , navLinkComponentId_(RegisterSceneComponent<NavLink>(world, "kb.scene.NavLink")) {
+    , navLinkComponentId_(RegisterSceneComponent<NavLink>(world, "kb.scene.NavLink"))
+    , navBoundsComponentId_(RegisterSceneComponent<NavBounds>(world, "kb.scene.NavBounds")) {
     // Keep runtime diagnostic type metadata in the host, which outlives provider DLLs.
     static_cast<void>(world.RegisterComponent<AIBrainDecisionSnapshot>(
         "AIBrainDecisionSnapshot", { .storageClass = kb::ecs::ComponentStorageClass::SparsePayload }));
@@ -859,5 +861,6 @@ std::uint64_t SceneComponentRegistry::DeformedGeometryComponentId() const noexce
 std::uint64_t SceneComponentRegistry::NavAgentComponentId() const noexcept { return navAgentComponentId_; }
 std::uint64_t SceneComponentRegistry::NavObstacleComponentId() const noexcept { return navObstacleComponentId_; }
 std::uint64_t SceneComponentRegistry::NavLinkComponentId() const noexcept { return navLinkComponentId_; }
+std::uint64_t SceneComponentRegistry::NavBoundsComponentId() const noexcept { return navBoundsComponentId_; }
 
 } // namespace kb::scene

@@ -124,6 +124,7 @@ public:
     [[nodiscard]] static std::array<std::string, 3U> ExecutionRows(const ParticleEmitterInspectorView& view);
     [[nodiscard]] static std::string FormatColor(const kb::math::Color& color);
     [[nodiscard]] static std::string FormatGradient(const kb::math::Gradient& gradient);
+    [[nodiscard]] static std::string FormatCurve(const kb::math::Curve& curve);
     [[nodiscard]] static bool ParseColor(std::string_view text, kb::math::Color& value) noexcept;
     [[nodiscard]] static bool ParseVec3(std::string_view text, kb::math::Vec3& value) noexcept;
     [[nodiscard]] static bool ParseCurve(std::string_view text, kb::math::Curve& value);

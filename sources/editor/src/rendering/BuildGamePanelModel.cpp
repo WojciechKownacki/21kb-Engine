@@ -374,7 +374,15 @@ bool BuildGamePanelModel::ApplyText(BuildGameField field, std::string_view value
             return false;
         }
         project.executableName = text; return true;
-    case BuildGameField::StartupMap: project.defaultMap = text; return true;
+    case BuildGameField::StartupMap: {
+        // The startup scene leads the packaged scenes, as when the Scenes page chooses it, so it is not listed
+        // twice. An empty entry is left for Validate to report.
+        if (text.empty()) { project.defaultMap = text; return true; }
+        std::vector<std::string> scenes{ text };
+        scenes.insert(scenes.end(), project.additionalScenes.begin(), project.additionalScenes.end());
+        kb::project::SetProjectBuildScenes(project, std::move(scenes));
+        return true;
+    }
     case BuildGameField::AndroidApplicationId:
         if (!ValidAndroidApplicationId(text)) { error = "Android application id must be a lowercase dotted identifier."; return false; }
         project.androidApplicationId = text; return true;

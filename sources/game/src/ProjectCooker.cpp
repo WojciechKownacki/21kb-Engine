@@ -1665,10 +1665,19 @@ struct LinkedNativeModule {
         return true;
     };
 
-    if (!addRoot("default map", settings.defaultMap, true, "Scene") ||
-        (settings.inputEnabled &&
+    if (!addRoot("default map", settings.defaultMap, true, "Scene")) {
+        return false;
+    }
+    // The scenes the project lists besides the startup scene are packaged as well.
+    for (const std::string& scene : settings.additionalScenes) {
+        if (!addRoot("scene in build", scene, true, "Scene")) {
+            return false;
+        }
+    }
+    if ((settings.inputEnabled &&
             !addRoot("input mapping context", settings.inputMappingContext, false, "InputMappingContext")) ||
-        !addRoot("physics layers asset", settings.physicsLayersAsset, false, "PhysicsLayers")) {
+        !addRoot("physics layers asset", settings.physicsLayersAsset, false, "PhysicsLayers") ||
+        !addRoot("launch screen image", settings.display.splash.image, false, "")) {
         return false;
     }
 
@@ -2369,7 +2378,7 @@ void PruneFixedShaderCache(const std::filesystem::path& cacheParent, std::string
             // Keep the browser lighting functions intact until the driver compiles
             // them; flattening this program can crash downstream HLSL compilers.
             const std::string optimization = backend == asset_bake::ShaderBakeBackend::Essl &&
-                std::string_view{ shader.name } == "fs_deferred_lighting.sc" ? "0" : "3";
+                std::string_view{ shader.name }.starts_with("fs_deferred_lighting") ? "0" : "3";
             const std::filesystem::path binaryPath = profileRoot / (std::string{ shader.name } + ".bin");
             planned.jobs.push_back(jobs.size());
             jobs.push_back(FixedShaderJob{

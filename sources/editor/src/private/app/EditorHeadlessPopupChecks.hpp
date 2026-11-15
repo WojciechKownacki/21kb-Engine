@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <string>
 
 namespace kb::editor {
@@ -27,6 +28,11 @@ public:
         EditorSceneContext& sceneContext, EditorSceneBgfxViewport& viewport);
     [[nodiscard]] static EditorHeadlessPopupCheckResult VerifyWorkspaceControls(
         EditorSceneContext& sceneContext, EditorSceneBgfxViewport& viewport);
+    // Drives the dock workspace with pointer and key messages: tab click, reorder, tear-off,
+    // grouping and ungrouping, Escape, maximize, the tab menu, closing, the Layout menu's panel
+    // rows and a crowded strip. Writes what the window painted along the way into `screenshots`.
+    [[nodiscard]] static EditorHeadlessPopupCheckResult VerifyDockingInteractions(
+        EditorSceneContext& sceneContext, EditorSceneBgfxViewport& viewport, const std::filesystem::path& screenshots);
     // Opens toolbar menus with clicks on the menu bar and checks that each dropdown
     // is a popup above the window and its scene viewport, paints every row, and
     // hands a click on a row to the toolbar's own menu handling.
@@ -37,6 +43,12 @@ public:
     // and to the browser popup, and checks that the search filters the components.
     [[nodiscard]] static EditorHeadlessPopupCheckResult VerifyAddComponentSearchInput(
         EditorSceneContext& sceneContext, EditorSceneBgfxViewport& viewport);
+    // Frames the Scene View of a real editor window on a sphere of focusRadius at the scene origin, looking
+    // along +Z, and clicks it the way the mouse does - a move, then the button down and up - where the world
+    // point (x, y, z) lands on screen, moved by offsetX pixels. The selection is left as the click made it.
+    [[nodiscard]] static EditorHeadlessPopupCheckResult ClickSceneView(
+        EditorSceneContext& sceneContext, EditorSceneBgfxViewport& viewport,
+        float x, float y, float z, float offsetX, float focusRadius);
 #endif
 };
 

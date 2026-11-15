@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/scene/SceneAnimatorPoseRate.hpp"
 #include "engine/scene/SceneAnimators.hpp"
 #include "engine/scene/SocketAttachmentComponent.hpp"
 
@@ -63,6 +64,8 @@ public:
     // Joins the in-flight asynchronous debug snapshot build (a no-op when
     // none is running) and rethrows any failure the worker recorded.
     static void WaitForDebugSnapshot(Scene& scene);
+    static void SetPoseRatePolicy(Scene& scene, const AnimatorPoseRatePolicy& policy);
+    [[nodiscard]] static AnimatorPoseRatePolicy PoseRatePolicy(const Scene& scene) noexcept;
     static void SyncComponents(Scene& scene);
     [[nodiscard]] static std::vector<std::string> SocketNames(const Scene& scene, SceneEntity entity);
     [[nodiscard]] static SocketAttachmentStatus SocketAttachment(const Scene& scene, SceneEntity attachedEntity);

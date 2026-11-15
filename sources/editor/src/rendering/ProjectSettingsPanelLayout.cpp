@@ -4,6 +4,7 @@
 #include "rendering/GdiDrawing.hpp"
 
 #include <algorithm>
+#include <array>
 
 namespace kb::editor {
 namespace {
@@ -33,6 +34,19 @@ constexpr int kAaButtonWidth = 64;
 constexpr int kQualityLabelWidth = 232;
 constexpr int kQualityButtonWidth = 72;
 constexpr int kQualityButtonGap = 6;
+constexpr int kButtonGap = 6;
+constexpr int kModeButtonWidth = 110;
+constexpr int kSizeButtonWidth = 88;
+constexpr int kRateButtonWidth = 56;
+constexpr int kNumberCellWidth = 64;
+constexpr int kSceneAddButtonWidth = 180;
+constexpr int kTagNameFieldWidth = 240;
+constexpr int kSceneUpButtonWidth = 100;
+constexpr int kSceneRemoveButtonWidth = 110;
+constexpr int kSceneRowPitch = kRowHeight + 4;
+constexpr int kStepperButtonWidth = 32;
+constexpr int kStepperValueWidth = 84;
+constexpr int kGravityPresetButtonWidth = 110;
 
 [[nodiscard]] int RowTopAfter(const RECT& row) noexcept {
     return row.bottom + kDescriptionHeight + kRowGap;
@@ -83,7 +97,8 @@ ProjectSettingsPanelLayoutRects ProjectSettingsPanelLayout::Resolve(const RECT& 
 
     const int lightingPathRowTop = RowTopAfter(rects.backendLabel);
     rects.lightingPathLabel = RECT{ left, lightingPathRowTop, left + kLabelWidth, lightingPathRowTop + kRowHeight };
-    rects.lightingPathForwardButton = RECT{ left + kLabelWidth, lightingPathRowTop + 3, left + kLabelWidth + kBackendButtonWidth, lightingPathRowTop + kRowHeight - 3 };
+    rects.lightingPathAutoButton = RECT{ left + kLabelWidth, lightingPathRowTop + 3, left + kLabelWidth + kBackendButtonWidth, lightingPathRowTop + kRowHeight - 3 };
+    rects.lightingPathForwardButton = RECT{ rects.lightingPathAutoButton.right + 6, lightingPathRowTop + 3, rects.lightingPathAutoButton.right + 6 + kBackendButtonWidth, lightingPathRowTop + kRowHeight - 3 };
     rects.lightingPathForwardPlusButton = RECT{ rects.lightingPathForwardButton.right + 6, lightingPathRowTop + 3, rects.lightingPathForwardButton.right + 6 + kBackendButtonWidth, lightingPathRowTop + kRowHeight - 3 };
     rects.lightingPathDeferredButton = RECT{ rects.lightingPathForwardPlusButton.right + 6, lightingPathRowTop + 3, rects.lightingPathForwardPlusButton.right + 6 + kBackendButtonWidth, lightingPathRowTop + kRowHeight - 3 };
 
@@ -133,6 +148,76 @@ ProjectSettingsPanelLayoutRects ProjectSettingsPanelLayout::Resolve(const RECT& 
             rects.qualityButton[row][level] = RECT{ buttonLeft, rowTop + 3, buttonLeft + buttonWidth, rowTop + kRowHeight - 3 };
         }
     }
+
+    // Pages made of rows: the n-th row under the section header.
+    const auto rowTopAt = [&](int row) noexcept {
+        return sectionTop + kSectionHeaderHeight + kRowGap + row * (kRowHeight + kDescriptionHeight + kRowGap);
+    };
+    // A run of equally wide buttons that starts where a row's label ends.
+    const auto buttonRow = [&](RECT* buttons, int count, int rowTop, int buttonWidth) noexcept {
+        int buttonLeft = left + kLabelWidth;
+        for (int index = 0; index < count; ++index) {
+            buttons[index] = RECT{ buttonLeft, rowTop + 3, buttonLeft + buttonWidth, rowTop + kRowHeight - 3 };
+            buttonLeft += buttonWidth + kButtonGap;
+        }
+    };
+    for (int row = 0; row < 12; ++row) {
+        rects.displayLabel[row] = RECT{ left, rowTopAt(row), left + kLabelWidth, rowTopAt(row) + kRowHeight };
+    }
+    buttonRow(rects.windowModeButton, 2, rowTopAt(0), kModeButtonWidth);
+    buttonRow(rects.androidGraphicsApiButton, 3, rowTopAt(6), kModeButtonWidth);
+    buttonRow(rects.splashScaleButton, 3, rowTopAt(7), kModeButtonWidth);
+    buttonRow(rects.splashColorButton, 6, rowTopAt(8), kRateButtonWidth);
+    buttonRow(rects.splashMinimumButton, 5, rowTopAt(9), kRateButtonWidth);
+    rects.splashProgressCheckbox = CheckboxForRow(left, rowTopAt(10));
+    rects.splashImageField = RECT{ left + kLabelWidth, rowTopAt(11), right, rowTopAt(11) + kRowHeight };
+    buttonRow(rects.windowSizeButton, 4, rowTopAt(1), kSizeButtonWidth);
+    rects.resizableCheckbox = CheckboxForRow(left, rowTopAt(2));
+    rects.vsyncCheckbox = CheckboxForRow(left, rowTopAt(3));
+    // The Off button holds a word that is long in some languages; the rates are numbers.
+    buttonRow(rects.frameRateButton, 1, rowTopAt(4), kSizeButtonWidth + 8);
+    for (int index = 1; index < 5; ++index) {
+        const int buttonLeft = rects.frameRateButton[index - 1].right + kButtonGap;
+        rects.frameRateButton[index] = RECT{ buttonLeft, rowTopAt(4) + 3, buttonLeft + kRateButtonWidth, rowTopAt(4) + kRowHeight - 3 };
+    }
+    const auto numberCell = [&](const RECT& previous, int rowTop) noexcept {
+        const int cellLeft = previous.right + 2 * kButtonGap;
+        return RECT{ cellLeft, rowTop + 3, cellLeft + kNumberCellWidth, rowTop + kRowHeight - 3 };
+    };
+    rects.windowWidthValue = numberCell(rects.windowSizeButton[3], rowTopAt(1));
+    rects.windowHeightValue = RECT{ rects.windowWidthValue.right + kButtonGap, rects.windowWidthValue.top,
+        rects.windowWidthValue.right + kButtonGap + kNumberCellWidth, rects.windowWidthValue.bottom };
+    rects.frameRateValue = numberCell(rects.frameRateButton[4], rowTopAt(4));
+    rects.renderScaleValue = RECT{ left + kLabelWidth, rowTopAt(5) + 3, left + kLabelWidth + kNumberCellWidth, rowTopAt(5) + kRowHeight - 3 };
+
+    // Scenes page: the explanation, the add button, then the list down to the bottom of the pane.
+    rects.scenesIntro = RECT{ left, rects.sectionHeader.bottom + kRowGap, right, rects.sectionHeader.bottom + kRowGap + kDescriptionHeight };
+    rects.sceneAddButton = RECT{ left, rects.scenesIntro.bottom + kRowGap, left + kSceneAddButtonWidth,
+        rects.scenesIntro.bottom + kRowGap + kOptionHeight };
+    rects.sceneList = RECT{ left, rects.sceneAddButton.bottom + kRowGap * 2, right, std::max(static_cast<int>(rects.sceneAddButton.bottom), static_cast<int>(content.bottom) - kPadding) };
+
+    // Tags page: where the Scenes page has its add button, the cell for a new name and the button that adds it.
+    rects.tagNameField = RECT{ left, rects.scenesIntro.bottom + kRowGap, left + kTagNameFieldWidth,
+        rects.scenesIntro.bottom + kRowGap + kOptionHeight };
+    rects.tagAddButton = RECT{ rects.tagNameField.right + kButtonGap, rects.tagNameField.top,
+        rects.tagNameField.right + kButtonGap + kSceneAddButtonWidth, rects.tagNameField.bottom };
+
+    // Physics page rows 1..4 are the steppers, 5 the gravity presets, 6 the time scale; the Audio page's master
+    // volume is the sixth stepper, in the first row.
+    constexpr std::array<int, 6> kStepperRows{ 1, 2, 3, 4, 6, 0 };
+    for (int stepper = 0; stepper < 6; ++stepper) {
+        const int rowTop = rowTopAt(kStepperRows[static_cast<std::size_t>(stepper)]);
+        rects.stepperLabel[stepper] = RECT{ left, rowTop, left + kLabelWidth, rowTop + kRowHeight };
+        buttonRow(rects.stepperButton[stepper], 1, rowTop, kStepperButtonWidth);
+        const RECT& minus = rects.stepperButton[stepper][0];
+        rects.stepperValue[stepper] = RECT{ minus.right + kButtonGap, minus.top, minus.right + kButtonGap + kStepperValueWidth, minus.bottom };
+        rects.stepperButton[stepper][1] = RECT{ rects.stepperValue[stepper].right + kButtonGap, minus.top,
+            rects.stepperValue[stepper].right + kButtonGap + kStepperButtonWidth, minus.bottom };
+    }
+    rects.gravityPresetLabel = RECT{ left, rowTopAt(5), left + kLabelWidth, rowTopAt(5) + kRowHeight };
+    buttonRow(rects.gravityPresetButton, 3, rowTopAt(5), kGravityPresetButtonWidth);
+    rects.microphoneLabel = RECT{ left, rowTopAt(1), left + kLabelWidth, rowTopAt(1) + kRowHeight };
+    rects.microphoneCheckbox = CheckboxForRow(left, rowTopAt(1));
     return rects;
 }
 
@@ -153,6 +238,10 @@ RECT ProjectSettingsPanelLayout::DescriptionRect(const ProjectSettingsPanelLayou
 
 RECT ProjectSettingsPanelLayout::MappingFieldBox(const ProjectSettingsPanelLayoutRects& rects) noexcept {
     return GdiDrawing::Inset(rects.mappingField, 4);
+}
+
+RECT ProjectSettingsPanelLayout::SplashImageFieldBox(const ProjectSettingsPanelLayoutRects& rects) noexcept {
+    return GdiDrawing::Inset(rects.splashImageField, 4);
 }
 
 RECT ProjectSettingsPanelLayout::OptionRow(const RECT& fieldBox, int index) noexcept {
@@ -180,10 +269,12 @@ RECT ProjectSettingsPanelLayout::BackendOptionButton(const ProjectSettingsPanelL
 RECT ProjectSettingsPanelLayout::LightingPathOptionButton(const ProjectSettingsPanelLayoutRects& rects, int index) noexcept {
     switch (index) {
     case 0:
-        return rects.lightingPathForwardButton;
+        return rects.lightingPathAutoButton;
     case 1:
-        return rects.lightingPathForwardPlusButton;
+        return rects.lightingPathForwardButton;
     case 2:
+        return rects.lightingPathForwardPlusButton;
+    case 3:
         return rects.lightingPathDeferredButton;
     default:
         return {};
@@ -244,6 +335,38 @@ RECT ProjectSettingsPanelLayout::QualityOptionButton(const ProjectSettingsPanelL
         return {};
     }
     return rects.qualityButton[row][level];
+}
+
+int ProjectSettingsPanelLayout::SceneRowCapacity(const ProjectSettingsPanelLayoutRects& rects) noexcept {
+    return std::max(0, static_cast<int>(rects.sceneList.bottom - rects.sceneList.top + 4) / kSceneRowPitch);
+}
+
+RECT ProjectSettingsPanelLayout::SceneRow(const ProjectSettingsPanelLayoutRects& rects, int visibleRow) noexcept {
+    const int top = rects.sceneList.top + visibleRow * kSceneRowPitch;
+    return RECT{ rects.sceneList.left, top, rects.sceneList.right, top + kRowHeight };
+}
+
+RECT ProjectSettingsPanelLayout::SceneRowLabel(const ProjectSettingsPanelLayoutRects& rects, int visibleRow) noexcept {
+    RECT row = SceneRow(rects, visibleRow);
+    row.right = SceneMoveUpButton(rects, visibleRow).left - kButtonGap;
+    return row;
+}
+
+RECT ProjectSettingsPanelLayout::SceneMoveUpButton(const ProjectSettingsPanelLayoutRects& rects, int visibleRow) noexcept {
+    const RECT row = SceneRow(rects, visibleRow);
+    const int right = row.right - kSceneRemoveButtonWidth - kButtonGap;
+    return RECT{ right - kSceneUpButtonWidth, row.top + 3, right, row.bottom - 3 };
+}
+
+RECT ProjectSettingsPanelLayout::SceneRemoveButton(const ProjectSettingsPanelLayoutRects& rects, int visibleRow) noexcept {
+    const RECT row = SceneRow(rects, visibleRow);
+    return RECT{ row.right - kSceneRemoveButtonWidth, row.top + 3, row.right, row.bottom - 3 };
+}
+
+RECT ProjectSettingsPanelLayout::TagRowLabel(const ProjectSettingsPanelLayoutRects& rects, int visibleRow) noexcept {
+    RECT row = SceneRow(rects, visibleRow);
+    row.right = SceneRemoveButton(rects, visibleRow).left - kButtonGap;
+    return row;
 }
 
 RECT ProjectSettingsPanelLayout::MsaaOptionButton(const ProjectSettingsPanelLayoutRects& rects, int index) noexcept {

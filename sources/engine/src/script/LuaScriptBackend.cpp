@@ -27,6 +27,44 @@ void LuaScriptBackend::ApplyExposedVariableOverrides(
     }
 }
 
+bool LuaScriptBackend::HasEntry(const kb::scene::BehaviourComponent& behaviour, std::string_view name) {
+    return runtime_.HasEntry(behaviour, name);
+}
+
+ScriptPhaseCall LuaScriptBackend::ResolvePhaseCall(
+    kb::scene::SceneEntity entity,
+    const kb::scene::BehaviourComponent& behaviour,
+    ScriptLifecycleEvent event) {
+    ScriptPhaseCall call;
+    if (runtime_.ResolvePhaseCall(entity, behaviour, event, call)) {
+        return call;
+    }
+    return IScriptBackend::ResolvePhaseCall(entity, behaviour, event);
+}
+
+ScriptPhaseCall LuaScriptBackend::ResolveEventCall(
+    kb::scene::SceneEntity entity,
+    const kb::scene::BehaviourComponent& behaviour,
+    std::string_view name) {
+    ScriptPhaseCall call;
+    if (runtime_.ResolveEventCall(entity, behaviour, call)) {
+        return call;
+    }
+    return IScriptBackend::ResolveEventCall(entity, behaviour, name);
+}
+
+std::uint64_t LuaScriptBackend::PhaseCallRevision() const noexcept {
+    return runtime_.PhaseCallRevision();
+}
+
+void LuaScriptBackend::BeginEventBroadcast(const ScriptEvent& event) {
+    runtime_.BeginEventBroadcast(event);
+}
+
+void LuaScriptBackend::EndEventBroadcast() noexcept {
+    runtime_.EndEventBroadcast();
+}
+
 void LuaScriptBackend::ResetAssetForHotReload(kb::assets::AssetId assetId, ScriptEventBus& events) noexcept {
     runtime_.ResetAssetForHotReload(assetId, events);
 }

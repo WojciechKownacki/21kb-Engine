@@ -1,5 +1,6 @@
 #include "settings/EditorConfigurationStore.hpp"
 
+#include "scene/EditorGameView.hpp"
 #include "settings/EditorPanelSessionText.hpp"
 
 #include "engine/config/IniDocument.hpp"
@@ -16,6 +17,7 @@ namespace {
 constexpr std::string_view kSaving = "Editor.Saving";
 constexpr std::string_view kPanels = "Editor.Panels";
 constexpr std::string_view kLayout = "Editor.Layout";
+constexpr std::string_view kPlay = "Editor.Play";
 
 } // namespace
 
@@ -63,6 +65,13 @@ EditorConfigurationLoadResult EditorConfigurationStore::Load(
         }
         result.configuration.panels.push_back(std::move(session));
     }
+    result.configuration.play.target = static_cast<EditorPlayTarget>(std::clamp<std::int64_t>(
+        document.GetInt(kPlay, "Target").value_or(static_cast<std::int64_t>(defaults.play.target)), 0, static_cast<std::int64_t>(EditorPlayTarget::GameView)));
+    if (const std::optional<std::string_view> resolution = document.GetString(kPlay, "GameViewResolution")) {
+        result.configuration.play.gameViewResolution =
+            EditorGameView::FromName(*resolution).value_or(defaults.play.gameViewResolution);
+    }
+    result.configuration.play.startPaused = document.GetBool(kPlay, "StartPaused").value_or(false);
     if (const std::optional<std::string_view> layout = document.GetString(kLayout, "Tree")) {
         result.configuration.layout = std::string{*layout};
     }
@@ -95,6 +104,9 @@ bool EditorConfigurationStore::Save(
     document.SetInt(kSaving, "AutosaveIntervalMinutes",
         static_cast<std::int64_t>(std::clamp<std::uint32_t>(configuration.saving.autosaveIntervalMinutes, 1U, 120U)));
     configuration.profiler.Write(document);
+    document.SetInt(kPlay, "Target", static_cast<std::int64_t>(configuration.play.target));
+    document.SetString(kPlay, "GameViewResolution", std::string{ EditorGameView::Name(configuration.play.gameViewResolution) });
+    document.SetBool(kPlay, "StartPaused", configuration.play.startPaused);
     for (const EditorPanelSession& session : configuration.panels) {
         if (session.panelId == 0U) {
             continue;

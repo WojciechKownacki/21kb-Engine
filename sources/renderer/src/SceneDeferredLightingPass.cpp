@@ -11,6 +11,7 @@
 #include "renderer/SceneClearColor.hpp"
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <sstream>
@@ -43,6 +44,9 @@ struct PosTexVertex {
         0.0F, 0.0F, 0.0F, 1.0F,
     };
 }
+
+std::atomic<std::uint64_t> litStageDraws{ 0U };
+std::atomic<std::uint64_t> litStageBindings{ 0U };
 
 [[nodiscard]] std::uint16_t ClampToViewExtent(std::uint32_t value) noexcept {
     return static_cast<std::uint16_t>(value > UINT16_MAX ? UINT16_MAX : value);
@@ -107,6 +111,7 @@ bool SceneDeferredLightingPass::Initialize() {
     WriteRendererDebugLog("deferred_lighting", "Initialize begin");
     if (!lightGrid_.Initialize()) return false;
     program_ = ShaderLoader::LoadProgram("vs_present.sc", "fs_deferred_lighting.sc");
+    compareProgram_ = ShaderLoader::LoadProgram("vs_present.sc", "fs_deferred_lighting_cmp.sc");
     static_cast<void>(debugNormalPresentPass_.Initialize());
     albedoSampler_ = bgfx::createUniform("s_gbufferAlbedo", bgfx::UniformType::Sampler);
     normalSampler_ = bgfx::createUniform("s_gbufferNormal", bgfx::UniformType::Sampler);
@@ -132,6 +137,8 @@ bool SceneDeferredLightingPass::Initialize() {
     shadowCascades_.Create();
     pointShadows_.Create();
     giUniforms_.Create();
+    // All 16 sampler stages are taken: the probe texture is read through the sampler of the reflections' lit colour.
+    lightProbes_.Create("s_ssrLit");
     fogParamsUniform_ = bgfx::createUniform("u_fogParams", bgfx::UniformType::Vec4);
     fogColorUniform_ = bgfx::createUniform("u_fogColor", bgfx::UniformType::Vec4);
     fogVolumetricUniform_ = bgfx::createUniform("u_fogVolumetric", bgfx::UniformType::Vec4);
@@ -227,6 +234,7 @@ void SceneDeferredLightingPass::Shutdown() noexcept {
     shadowCascades_.Destroy();
     pointShadows_.Destroy();
     giUniforms_.Destroy();
+    lightProbes_.Destroy();
     for (bgfx::UniformHandle* handle : { &fogParamsUniform_, &fogColorUniform_, &fogVolumetricUniform_, &fogSkyUniform_ }) {
         if (bgfx::isValid(*handle)) bgfx::destroy(*handle);
         *handle = BGFX_INVALID_HANDLE;
@@ -314,6 +322,10 @@ void SceneDeferredLightingPass::Shutdown() noexcept {
     if (bgfx::isValid(albedoSampler_)) {
         bgfx::destroy(albedoSampler_);
         albedoSampler_ = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(compareProgram_)) {
+        bgfx::destroy(compareProgram_);
+        compareProgram_ = BGFX_INVALID_HANDLE;
     }
     if (bgfx::isValid(program_)) {
         bgfx::destroy(program_);
@@ -474,8 +486,11 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
     if (desc.shadowMap != nullptr) {
         SceneLightingPacker::AssignPointShadowSlots(lighting, desc.shadowMap->point);
     }
+    // The program that reads the maps through comparison samplers, when the frame allows it and it shipped.
+    const bool shadowCompare = desc.shadowMap != nullptr && desc.shadowMap->compareSampling && bgfx::isValid(compareProgram_);
     pointShadows_.Set(desc.shadowMap != nullptr ? &desc.shadowMap->point : nullptr, lighting.pointShadowSlot,
-        fallbackShadowTexture_);
+        shadowCompare && shadowValid ? desc.shadowMap->depthTexture : fallbackShadowTexture_, PointShadowUniforms::kSamplerStage, shadowCompare,
+        desc.shadowMap == nullptr || desc.shadowMap->wideKernel);
     {
         std::ostringstream message;
         message << "bind-gbuffer viewId=" << desc.viewId
@@ -499,7 +514,12 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
     bgfx::setTexture(2U, materialSampler_, desc.gbuffer->MaterialTexture());
     bgfx::setTexture(3U, surfaceSampler_, desc.gbuffer->SurfaceTexture());
     bgfx::setTexture(4U, depthSampler_, desc.gbuffer->DepthTexture());
-    bgfx::setTexture(5U, shadowMapSampler_, shadowValid ? desc.shadowMap->depthTexture : fallbackShadowTexture_);
+    if (shadowCompare) {
+        // The comparison sampler needs a depth texture even when only the local lights have shadows.
+        bgfx::setTexture(5U, shadowMapSampler_, shadowValid ? desc.shadowMap->depthTexture : desc.shadowMap->point.depthTexture, kShadowCompareSamplerFlags);
+    } else {
+        bgfx::setTexture(5U, shadowMapSampler_, shadowValid ? desc.shadowMap->depthTexture : fallbackShadowTexture_);
+    }
     bgfx::setTexture(6U, backdropEnvironmentSampler_, environmentBackdrop ? desc.worldBackdropEnvironment : fallbackBackdropEnvironmentTexture_);
     // The custom data, or (none this frame) the albedo target, never read then.
     const bool customData = bgfx::isValid(desc.customData);
@@ -510,7 +530,12 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
         bgfx::isValid(lighting.skyReflection) ? lighting.skyReflection : fallbackSkyReflection_);
     // Adds the bounce light the resolve pass accumulated up to the previous frame; without one
     // (first frame, resize) the shader skips it rather than reading an undefined texture.
-    giUniforms_.Set(desc.gi, desc.lightingConfig, viewProjection, fallbackShadowTexture_);
+    const bool reflectionsBound = giUniforms_.Set(desc.gi, desc.lightingConfig, viewProjection, fallbackShadowTexture_);
+    // A frame with the baked grid has no screen-space reflections (UsesBakedLightProbes), so the grid takes their stage.
+    const bool probesBound = lightProbes_.Set(lighting.lightProbes, lighting.lightProbeGrid, lighting.lightProbeSize,
+        SceneGiUniforms::kLitStage, BGFX_INVALID_HANDLE);
+    litStageDraws.fetch_add(1U, std::memory_order_relaxed);
+    litStageBindings.fetch_add((reflectionsBound ? 1U : 0U) + (probesBound ? 1U : 0U), std::memory_order_relaxed);
     {
         const SceneRenderLightingConfig& config = desc.lightingConfig;
         // Volumetric fog is marched over the first 100 m.
@@ -530,7 +555,7 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
         BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_ALWAYS;
     bgfx::setState(resolveState);
     bgfx::setVertexBuffer(0, &vertices);
-    bgfx::submit(desc.viewId, program_);
+    bgfx::submit(desc.viewId, shadowCompare ? compareProgram_ : program_);
 
     stats += lightingStats;
     ++stats.submittedDrawCallCount;
@@ -556,11 +581,15 @@ bool SceneDeferredLightingPass::IsInitialized() const noexcept {
         bgfx::isValid(inverseViewProjectionUniform_) && bgfx::isValid(depthParamsUniform_) &&
         bgfx::isValid(backdropSunUniform_) && bgfx::isValid(backdropSunColorUniform_) &&
         bgfx::isValid(shadowMapSampler_) && bgfx::isValid(shadowViewProjUniform_) && bgfx::isValid(shadowParamsUniform_) && shadowCascades_.IsValid() && pointShadows_.IsValid() &&
-        giUniforms_.IsValid() &&
+        giUniforms_.IsValid() && lightProbes_.IsValid() &&
         bgfx::isValid(backdropHorizonUniform_) && bgfx::isValid(backdropZenithUniform_) && bgfx::isValid(backdropParamsUniform_) &&
         bgfx::isValid(backdropEnvironmentSampler_) && bgfx::isValid(fallbackShadowTexture_) &&
         bgfx::isValid(fallbackBackdropEnvironmentTexture_) && bgfx::isValid(skyReflectionSampler_) &&
         bgfx::isValid(skyReflectionParamsUniform_) && bgfx::isValid(fallbackSkyReflection_) && localReflections_.IsInitialized();
+}
+
+SceneDeferredLightingPass::SharedStageBindings SceneDeferredLightingPass::LitStageBindings() noexcept {
+    return { litStageDraws.load(std::memory_order_relaxed), litStageBindings.load(std::memory_order_relaxed) };
 }
 
 } // namespace kb::render

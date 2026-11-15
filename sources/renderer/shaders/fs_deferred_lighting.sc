@@ -14,7 +14,11 @@ SAMPLER2D(s_gbufferNormal, 1);
 SAMPLER2D(s_gbufferMaterial, 2);
 SAMPLER2D(s_gbufferSurface, 3);
 SAMPLER2D(s_gbufferDepth, 4);
+#if defined(KB_SHADOW_COMPARE)
+SAMPLER2DSHADOW(s_deferredShadowMap, 5);
+#else
 SAMPLER2D(s_deferredShadowMap, 5);
+#endif
 SAMPLER2D(s_deferredBackdropEnvironment, 6);
 SAMPLERCUBE(s_skyReflection, 12);
 // The G-buffer custom data (Subsurface Color / Fuzz Color, alpha 1 where given); read only when
@@ -41,6 +45,9 @@ uniform vec4 u_deferredShadowParams;
 
 #include "ssgi.sh"
 #include "ssr.sh"
+// No sampler stage is left: the baked light probes use the stage of the reflections' lit colour (s_ssrLit).
+#define KB_LIGHT_PROBES_DEFERRED 1
+#include "light_probes.sh"
 
 vec3 FresnelSchlick(float cosTheta, vec3 f0)
 {
@@ -99,7 +106,7 @@ vec3 EvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic,
     float nDotV = max(dot(normal, viewDir), 0.0);
     vec3 f0 = mix(vec3_splat(0.08 * specular), albedo, metallic);
     vec3 fresnel = FresnelSchlickRoughness(nDotV, f0, roughness);
-    vec3 diffuseEnv = EnvironmentColor(normal) * albedo * (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * occlusion * u_deferredEnvironmentParams.y;
+    vec3 diffuseEnv = KbDiffuseAmbient(worldPos, normal, EnvironmentColor(normal)) * albedo * (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * occlusion * u_deferredEnvironmentParams.y;
     vec3 reflectionDir = reflect(-viewDir, normal);
     float specularEnergy = mix(1.0, 0.18, roughness * roughness);
     vec3 specularEnv = KbLocalReflection(worldPos,reflectionDir,roughness,KbSkyReflection(reflectionDir, roughness, EnvironmentColor(reflectionDir))) * fresnel * specularEnergy * u_deferredEnvironmentParams.z;
@@ -219,7 +226,7 @@ vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos
     float geometry = GeometrySchlickGgx(nDotV, roughness) * GeometrySchlickGgx(nDotL, roughness);
     vec3 specularTerm = nDotL > 0.0 ? (distribution * geometry * fresnel) / max(4.0 * nDotV * nDotL, 0.0001) : vec3_splat(0.0);
     vec3 diffuse = (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * albedo * (0.31830989 * DiffuseBurley(nDotV, nDotL, lDotH, roughness));
-    // Light intensity follows the Unity convention: a light of intensity 1 shining straight onto a
+    // Light intensity is normalized: a light of intensity 1 shining straight onto a
     // surface returns its albedo, so the physical BRDF above is taken times pi.
     vec3 radiance = colorIntensity.rgb * (colorIntensity.a * attenuation * 3.14159265);
     if (KbIsShadingModel(shadingModel, KB_GBUFFER_SHADING_MODEL_LAYERED_PBR)) {
@@ -232,10 +239,14 @@ vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos
 
 float SampleShadowVisibility(vec3 shadowCoord, float penumbraScale)
 {
+#if defined(KB_SHADOW_COMPARE)
+    float compared = KbCompareShadow(s_deferredShadowMap, shadowCoord, max(u_deferredShadowParams.z, 0.000001), u_deferredShadowParams.w, u_shadowCascadeInfo.w);
+    return mix(1.0, 1.0 - u_deferredShadowParams.y, compared);
+#else
     float biasedDepth = shadowCoord.z;
     float texelSize = max(u_deferredShadowParams.z, 0.000001);
     float selectedShadow = 0.0;
-    if (penumbraScale > 0.0 && u_deferredShadowParams.w >= 2.0) {
+    if (penumbraScale > 0.0 && u_deferredShadowParams.w >= 2.5) {
         // Soft shadows from the light's source angle (PCSS): the mean depth of
         // the occluders around the point sets the penumbra the filter covers.
         float turn = 6.2831853 * fract(52.9829189 * fract(dot(shadowCoord.xy, vec2(4211.0, 2203.0))));
@@ -259,16 +270,19 @@ float SampleShadowVisibility(vec3 shadowCoord, float penumbraScale)
         }
         selectedShadow = occluders > 0.0 ? softShadow / 12.0 : 0.0;
     } else {
-        float hardShadow = biasedDepth < texture2DLod(s_deferredShadowMap, shadowCoord.xy, 0.0).x ? 1.0 : 0.0;
-        float shadowSamples = 0.0;
-        for (int y = -1; y <= 1; ++y) {
-            for (int x = -1; x <= 1; ++x) {
-                shadowSamples += biasedDepth < texture2DLod(s_deferredShadowMap, shadowCoord.xy + vec2(float(x), float(y)) * texelSize, 0.0).x ? 1.0 : 0.0;
+        selectedShadow = biasedDepth < texture2DLod(s_deferredShadowMap, shadowCoord.xy, 0.0).x ? 1.0 : 0.0;
+        if (u_deferredShadowParams.w >= 2.0) {
+            float shadowSamples = 0.0;
+            for (int y = -1; y <= 1; ++y) {
+                for (int x = -1; x <= 1; ++x) {
+                    shadowSamples += biasedDepth < texture2DLod(s_deferredShadowMap, shadowCoord.xy + vec2(float(x), float(y)) * texelSize, 0.0).x ? 1.0 : 0.0;
+                }
             }
+            selectedShadow = shadowSamples * 0.11111111;
         }
-        selectedShadow = u_deferredShadowParams.w < 2.0 ? hardShadow : shadowSamples * 0.11111111;
     }
     return mix(1.0, 1.0 - u_deferredShadowParams.y, selectedShadow);
+#endif
 }
 
 // Exponential height fog and volumetric fog. u_fogParams: density at the base height,
@@ -413,6 +427,9 @@ vec3 ShadeSurface(vec2 uv, vec2 pixel, vec4 albedo, vec4 encodedNormal, float de
 
     fogged = true;
     worldPos = ReconstructWorldPosition(uv, depth);
+    if (abs(shadingModel - KB_GBUFFER_SHADING_MODEL_BAKED_LIGHTING) < 0.5) {
+        return surface.rgb;
+    }
     vec3 viewDir = normalize(u_deferredCameraPosition.xyz - worldPos);
 
     float shadowVisible = 1.0;

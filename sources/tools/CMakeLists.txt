@@ -5,6 +5,7 @@ add_library(kb_cli_core STATIC
     src/CliSkeletonCommands.cpp
     src/CliAbilityCommands.cpp
     src/CliApiCommands.cpp
+    src/CliCodeCommands.cpp
     src/CliLuaDebugCommand.cpp
     src/CliAudioCommands.cpp
     src/CliBatchCommand.cpp
@@ -51,7 +52,8 @@ target_sources(kb_cli_core PRIVATE
     ../editor/src/docking/DockLayoutSerializer.cpp
     ../editor/src/docking/DockNodeFactory.cpp
     ../editor/src/docking/DockGeometry.cpp
-    ../editor/src/localization/EditorLocalization.cpp)
+    ../editor/src/localization/EditorLocalization.cpp
+    ../editor/src/scene/EditorGameView.cpp)
 
 # world build resolves meshes for HLOD proxies with the same loaders kb_cooker uses.
 # Materials (.kbmat) are renderer assets: material-new/set/show and MeshRenderer material=.
@@ -208,6 +210,8 @@ if(BUILD_TESTING)
 
     add_test(NAME kb_cli_tests COMMAND $<TARGET_FILE:kb_cli_tests>)
     set_tests_properties(kb_cli_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS tools)
+    add_test(NAME kb_cli_project_templates COMMAND $<TARGET_FILE:kb_cli_tests> project-templates)
+    set_tests_properties(kb_cli_project_templates PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS tools TIMEOUT 300)
     if(KB_BUILD_RENDERER)
         find_program(KB_BLENDER_EXECUTABLE NAMES blender)
         find_package(Python3 3.10 COMPONENTS Interpreter QUIET)
@@ -275,7 +279,7 @@ if(BUILD_TESTING)
             "-DPARTICLES_PLUGIN=$<TARGET_FILE:kb_21kb_particle_plugin>"
             "-DAI_PLUGIN=$<TARGET_FILE:kb_ai_plugin>"
             "-DWORLD2D_PLUGIN=$<TARGET_FILE:kb_world2d_plugin>"
-            "-Dlua_LIBRARY=$<TARGET_FILE:kb_lua>"
+            "-Dlua_LIBRARY=$<TARGET_FILE:${KB_SCRIPT_VM_LIBRARY}>"
             "-Dufbx_LIBRARY=$<TARGET_FILE:kb_ufbx>"
             "-Dmonocypher_LIBRARY=$<TARGET_FILE:kb_monocypher>"
             "-Dzstd_LIBRARY=$<TARGET_FILE:kb_zstd>"

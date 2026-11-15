@@ -97,6 +97,8 @@ public:
     // effect is incrementing/decrementing an atomic counter for the
     // guard's lifetime.
     [[nodiscard]] StructuralChangeValidator::Guard EnterIteration() const noexcept;
+    // True while a query or an EnterIteration guard is walking the world, when structural changes must be deferred.
+    [[nodiscard]] bool IterationActive() const noexcept;
     void ValidateStructuralChangeAllowed(std::string_view operation) const;
     void ReleaseUnusedQueryPlans();
     // Whether an in-place value write to an existing native component must also be published to the backend

@@ -63,7 +63,138 @@ void BuildVisibilityBlockerInputs(const RenderScene& scene, std::vector<SceneRen
     });
 }
 
+// What the commands of a pass depend on besides the pass, the state the submitter keeps and the lights.
+[[nodiscard]] SceneMeshCommandReuseKey CommandKey(
+    const RenderScene& renderScene,
+    const RenderResourceRegistry& resources,
+    const SceneRenderResourceMap& resourceMap,
+    std::uint64_t detailSwitchHistoryRevision,
+    std::optional<SceneRenderCamera> camera,
+    SceneRenderDrawBudget drawBudget,
+    SceneGpuDrivenFeatureSupport gpuDrivenSupport,
+    bool terrainLayersOnly) {
+    return SceneMeshCommandReuseKey{
+        .sceneRevision = renderScene.MeshContentRevision(),
+        .resourceRevision = resources.Revision(),
+        .bindingRevision = resourceMap.Revision(),
+        .detailSwitchHistoryRevision = detailSwitchHistoryRevision,
+        .resources = &resources, .bindings = &resourceMap,
+        .camera = std::move(camera),
+        .budget = drawBudget, .gpuSupport = gpuDrivenSupport, .terrainLayersOnly = terrainLayersOnly,
+    };
+}
+
+// Fully GPU-culled static batches retain camera-independent candidate lists.
+// LOD, fading, masks, portals and bounded CPU admission keep their CPU contract.
+[[nodiscard]] bool CommandsIgnoreCamera(
+    bool reuseAllowed,
+    MeshPassType pass,
+    const SceneGpuDrivenFeatureSupport& gpuDrivenSupport,
+    SceneRenderDrawBudget drawBudget,
+    std::span<const SceneMeshBatch> batches,
+    const RenderResourceRegistry& resources,
+    const SceneRenderResourceMap& resourceMap) {
+    return reuseAllowed && gpuDrivenSupport.computeCullingSupported &&
+        gpuDrivenSupport.indirectDrawSupported && gpuDrivenSupport.runtimeGpuDispatchSupported &&
+        drawBudget.maxDrawCommands == 0U && drawBudget.maxVisibleInstances == 0U &&
+        (pass == MeshPassType::BaseOpaque || pass == MeshPassType::GBuffer ||
+         pass == MeshPassType::Depth || pass == MeshPassType::ShadowDepth) &&
+        std::all_of(batches.begin(), batches.end(), [&](const SceneMeshBatch& batch) {
+            const auto* mesh = resources.FindMesh(resourceMap.ResolveMesh(batch.meshAssetId));
+            return mesh != nullptr && (mesh->gpuCullingEnabled || mesh->indirectDrawsEnabled) &&
+                mesh->lods.size() <= 1U && std::all_of(batch.instances.begin(), batch.instances.end(),
+                    [](const SceneRenderMeshInstance& i) { return !i.detailSwitchEnabled; });
+        });
+}
+
 } // namespace
+
+SceneGpuDrivenFeatureSupport SceneMeshSubmitter::EffectiveGpuSupport(SceneGpuDrivenFeatureSupport support) const noexcept {
+    support.computeCullingSupported = support.computeCullingSupported && gpuDrivenCullingPass_.IsInitialized();
+    support.indirectDrawSupported = support.indirectDrawSupported && gpuDrivenCullingPass_.IsInitialized();
+    support.meshletSubmitSupported = support.meshletSubmitSupported && gpuDrivenCullingPass_.IsInitialized();
+    return support;
+}
+
+void SceneMeshSubmitter::BindDetailSwitchScene(const RenderScene& renderScene) const noexcept {
+    if (detailSwitchScene_ != &renderScene) {
+        pipelineScratch_.detailSwitchLevels.clear();
+        pipelineScratch_.detailSwitchPreviousLevels.clear();
+        ++pipelineScratch_.detailSwitchHistoryRevision;
+        detailSwitchScene_ = &renderScene;
+    }
+}
+
+SceneMeshSubmitter::PrebuiltPass* SceneMeshSubmitter::FindPrebuiltPass(
+    const RenderScene& renderScene, MeshPassType pass, const SceneMeshCommandReuseKey& key) const noexcept {
+    for (PrebuiltPass& prebuilt : prebuiltPasses_) {
+        if (prebuilt.ready && prebuilt.pass == pass && prebuilt.scene == &renderScene && prebuilt.key == key) {
+            return &prebuilt;
+        }
+    }
+    return nullptr;
+}
+
+void SceneMeshSubmitter::PrebuildPasses(
+    const RenderScene& renderScene,
+    const RenderResourceRegistry& resources,
+    const SceneRenderResourceMap& resourceMap,
+    MeshPassType pass,
+    std::span<const SceneRenderCamera* const> cameras,
+    SceneRenderDrawBudget drawBudget,
+    SceneGpuDrivenFeatureSupport gpuDrivenSupport,
+    bool terrainLayersOnly) const {
+    for (PrebuiltPass& prebuilt : prebuiltPasses_) prebuilt.ready = false;
+    const auto& particleSnapshot = renderScene.ParticleRenderSnapshot();
+    if (!IsInitialized() || cameras.size() < 2U || (particleSnapshot != nullptr && !particleSnapshot->Emitters().empty())) {
+        return;
+    }
+    gpuDrivenSupport = EffectiveGpuSupport(gpuDrivenSupport);
+    BindDetailSwitchScene(renderScene);
+    std::vector<SceneRenderVisibilityBlocker> visibilityBlockers;
+    BuildVisibilityBlockerInputs(renderScene, visibilityBlockers);
+    SceneMeshBatchBuilder::BuildInto(renderScene.DrawGroups(), meshBatchSubmissionScratch_);
+    // Whatever the camera, such a pass holds the same commands, which Submit builds once and reuses for the cameras.
+    const bool reuseAllowed = pass != MeshPassType::BaseTransparent && renderScene.VisibilityBlockerProxyCount() == 0U &&
+        renderScene.PortalVisibility() == nullptr;
+    if (CommandsIgnoreCamera(reuseAllowed, pass, gpuDrivenSupport, drawBudget, meshBatchSubmissionScratch_, resources, resourceMap)) {
+        return;
+    }
+    while (prebuiltPasses_.size() < cameras.size()) prebuiltPasses_.emplace_back();
+    std::vector<MeshPipelinePassBuild> builds;
+    builds.reserve(cameras.size());
+    for (std::size_t index = 0U; index < cameras.size(); ++index) {
+        PrebuiltPass& prebuilt = prebuiltPasses_[index];
+        prebuilt.scene = &renderScene;
+        prebuilt.pass = pass;
+        prebuilt.key = CommandKey(renderScene, resources, resourceMap, pipelineScratch_.detailSwitchHistoryRevision,
+            SceneMeshCullingCamera(cameras[index]), drawBudget, gpuDrivenSupport, terrainLayersOnly);
+        prebuilt.diagnostics.Clear();
+        // A pass that does not move the history reads the levels the passes before it left.
+        prebuilt.result.detailSwitchPreviousLevels = pipelineScratch_.detailSwitchPreviousLevels;
+        builds.push_back(MeshPipelinePassBuild{
+            .desc = MeshPipelineBuildDesc{
+                .pass = pass,
+                .meshBatches = &meshBatchSubmissionScratch_,
+                .resources = &resources,
+                .resourceMap = &resourceMap,
+                .camera = cameras[index],
+                .visibilityBlockers = visibilityBlockers,
+                .portalVisibility = renderScene.PortalVisibility(),
+                .diagnostics = &prebuilt.diagnostics,
+                .maxDrawCommands = drawBudget.maxDrawCommands,
+                .maxVisibleInstances = drawBudget.maxVisibleInstances,
+                .maxDroppedInstances = drawBudget.maxDroppedInstances,
+                .gpuDrivenSupport = gpuDrivenSupport,
+                .terrainLayersOnly = terrainLayersOnly,
+                .workerPool = workerPool_,
+            },
+            .result = &prebuilt.result,
+        });
+        prebuilt.ready = true;
+    }
+    MeshPipelineProcessor::BuildPassesInto(builds);
+}
 
 bool SceneMeshSubmitter::Initialize() {
     if (IsInitialized()) {
@@ -197,9 +328,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         return stats;
     }
 
-    gpuDrivenSupport.computeCullingSupported = gpuDrivenSupport.computeCullingSupported && gpuDrivenCullingPass_.IsInitialized();
-    gpuDrivenSupport.indirectDrawSupported = gpuDrivenSupport.indirectDrawSupported && gpuDrivenCullingPass_.IsInitialized();
-    gpuDrivenSupport.meshletSubmitSupported = gpuDrivenSupport.meshletSubmitSupported && gpuDrivenCullingPass_.IsInitialized();
+    gpuDrivenSupport = EffectiveGpuSupport(gpuDrivenSupport);
     auto& passCommands = passCommandScratch_.at(static_cast<std::size_t>(pass));
     pipelineScratch_.commands.swap(passCommands);
     struct RestorePassCommands {
@@ -226,14 +355,19 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         });
     }
     SceneRenderSubmitStats lightingStats{};
-    PackedSceneLighting lighting = SceneLightingPacker::Build(renderScene, lightingStats, lightingConfig, camera);
+    // A depth-only pass (shadow maps, the depth pre-pass) reads no light: picking and packing them would be wasted work.
+    const bool readsLights = pass != MeshPassType::ShadowDepth && pass != MeshPassType::Depth;
+    PackedSceneLighting lighting;
+    if (readsLights) {
+        lighting = SceneLightingPacker::Build(renderScene, lightingStats, lightingConfig, camera);
+    }
     if ((pass == MeshPassType::BaseOpaque || pass == MeshPassType::BaseTransparent) &&
         lightingConfig.lightingPath != SceneRenderLightingPath::Forward &&
         lightingConfig.maxForwardLights != 0U && lightingStats.skippedForwardLightCount != 0U) {
         lighting.lightGrid = passResources_.LightGrid().Prepare(renderScene, lightingConfig,
             camera != nullptr ? camera->cullingMask : 0xFFFFFFFFU, lighting.primaryLightId, lightingStats, diagnostics);
     }
-    if (shadowMap != nullptr) {
+    if (readsLights && shadowMap != nullptr) {
         SceneLightingPacker::AssignPointShadowSlots(lighting, shadowMap->point);
     }
     const std::array<float, 4> cameraPosition = SceneLightingPacker::CameraPosition(camera);
@@ -245,73 +379,63 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
     const std::array<float, 4> renderOriginOffset{ static_cast<float>(std::fmod(renderOrigin.x, kMaterialWorldPeriodMeters)),
         static_cast<float>(std::fmod(renderOrigin.y, kMaterialWorldPeriodMeters)),
         static_cast<float>(std::fmod(renderOrigin.z, kMaterialWorldPeriodMeters)), 0.0F };
-    if (detailSwitchScene_ != &renderScene) {
-        pipelineScratch_.detailSwitchLevels.clear();
-        pipelineScratch_.detailSwitchPreviousLevels.clear();
-        ++pipelineScratch_.detailSwitchHistoryRevision;
-        detailSwitchScene_ = &renderScene;
-    }
+    BindDetailSwitchScene(renderScene);
     auto& reuse = passCommandReuse_.at(static_cast<std::size_t>(pass));
     auto& batchReuse = passBatchCommandReuse_.at(static_cast<std::size_t>(pass));
     const bool reuseAllowed = pass != MeshPassType::BaseTransparent && selectedEntityIds.empty() &&
         renderScene.VisibilityBlockerProxyCount() == 0U && renderScene.PortalVisibility() == nullptr &&
         (particleSnapshot == nullptr || particleSnapshot->Emitters().empty());
-    // Fully GPU-culled static batches retain camera-independent candidate lists.
-    // LOD, fading, masks, portals and bounded CPU admission keep their CPU contract.
-    const bool cameraIndependent = reuseAllowed && gpuDrivenSupport.computeCullingSupported &&
-        gpuDrivenSupport.indirectDrawSupported && gpuDrivenSupport.runtimeGpuDispatchSupported &&
-        drawBudget.maxDrawCommands == 0U && drawBudget.maxVisibleInstances == 0U &&
-        (pass == MeshPassType::BaseOpaque || pass == MeshPassType::GBuffer ||
-         pass == MeshPassType::Depth || pass == MeshPassType::ShadowDepth) &&
-        std::all_of(meshBatchSubmissionScratch_.begin(), meshBatchSubmissionScratch_.end(), [&](const SceneMeshBatch& batch) {
-            const auto* mesh = resources.FindMesh(resourceMap.ResolveMesh(batch.meshAssetId));
-            return mesh != nullptr && (mesh->gpuCullingEnabled || mesh->indirectDrawsEnabled) &&
-                mesh->lods.size() <= 1U && std::all_of(batch.instances.begin(), batch.instances.end(),
-                    [](const SceneRenderMeshInstance& i) { return !i.detailSwitchEnabled; });
-        });
+    const bool cameraIndependent = CommandsIgnoreCamera(
+        reuseAllowed, pass, gpuDrivenSupport, drawBudget, meshBatchSubmissionScratch_, resources, resourceMap);
     auto reuseCamera = SceneMeshCullingCamera(camera);
     if (cameraIndependent && reuseCamera) {
         const auto mask = reuseCamera->cullingMask;
         reuseCamera = SceneRenderCamera{};
         reuseCamera->cullingMask = mask;
     }
-    const SceneMeshCommandReuseKey reuseKey{
-        .sceneRevision = renderScene.MeshContentRevision(),
-        .resourceRevision = resources.Revision(),
-        .bindingRevision = resourceMap.Revision(),
-        .detailSwitchHistoryRevision = pipelineScratch_.detailSwitchHistoryRevision,
-        .resources = &resources, .bindings = &resourceMap,
-        .camera = reuseCamera,
-        .budget = drawBudget, .gpuSupport = gpuDrivenSupport, .terrainLayersOnly = terrainLayersOnly,
-    };
+    const SceneMeshCommandReuseKey reuseKey = CommandKey(renderScene, resources, resourceMap,
+        pipelineScratch_.detailSwitchHistoryRevision, reuseCamera, drawBudget, gpuDrivenSupport, terrainLayersOnly);
     const auto diagnosticCount = diagnostics == nullptr ? 0U : diagnostics->events.size();
     if (reuseAllowed && reuse.Matches(reuseKey)) {
         pipelineScratch_.stats = reuse.Stats();
     } else {
         reuse.Reset();
-        const bool retainBatches = reuseAllowed && batchReuse.HasStableCamera(reuseKey);
+        PrebuiltPass* const prebuilt = FindPrebuiltPass(renderScene, pass, CommandKey(renderScene, resources, resourceMap,
+            pipelineScratch_.detailSwitchHistoryRevision, SceneMeshCullingCamera(camera), drawBudget, gpuDrivenSupport, terrainLayersOnly));
+        const bool retainBatches = prebuilt == nullptr && reuseAllowed && batchReuse.HasStableCamera(reuseKey);
         if (reuseAllowed) {
             batchReuse.Prepare(reuseKey);
             if (!retainBatches) batchReuse.DiscardContent();
         } else batchReuse.Reset();
-        MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
-        .pass = pass,
-        .meshBatches = &meshBatchSubmissionScratch_,
-        .resources = &resources,
-        .resourceMap = &resourceMap,
-        .camera = camera,
-        .visibilityBlockers = visibilityBlockers,
-        .portalVisibility = renderScene.PortalVisibility(),
-        .diagnostics = diagnostics,
-        .maxDrawCommands = drawBudget.maxDrawCommands,
-        .maxVisibleInstances = drawBudget.maxVisibleInstances,
-        .maxDroppedInstances = drawBudget.maxDroppedInstances,
-        .selectedEntityIds = selectedEntityIds,
-        .gpuDrivenSupport = gpuDrivenSupport,
-        .terrainLayersOnly = terrainLayersOnly,
-        .batchCommandCache = retainBatches ? &batchReuse : nullptr,
-        .motionFrame = motionVectors != nullptr ? motionVectors->motionFrame : 0U,
-        }, pipelineScratch_);
+        if (prebuilt != nullptr) {
+            // The commands were built together with those of the other passes of the kind; take them as built here.
+            prebuilt->ready = false;
+            pipelineScratch_.commands.swap(prebuilt->result.commands);
+            pipelineScratch_.stats = prebuilt->result.stats;
+            if (diagnostics != nullptr) {
+                diagnostics->events.insert(diagnostics->events.end(), prebuilt->diagnostics.events.begin(), prebuilt->diagnostics.events.end());
+            }
+        } else {
+            MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
+                .pass = pass,
+                .meshBatches = &meshBatchSubmissionScratch_,
+                .resources = &resources,
+                .resourceMap = &resourceMap,
+                .camera = camera,
+                .visibilityBlockers = visibilityBlockers,
+                .portalVisibility = renderScene.PortalVisibility(),
+                .diagnostics = diagnostics,
+                .maxDrawCommands = drawBudget.maxDrawCommands,
+                .maxVisibleInstances = drawBudget.maxVisibleInstances,
+                .maxDroppedInstances = drawBudget.maxDroppedInstances,
+                .selectedEntityIds = selectedEntityIds,
+                .gpuDrivenSupport = gpuDrivenSupport,
+                .terrainLayersOnly = terrainLayersOnly,
+                .batchCommandCache = retainBatches ? &batchReuse : nullptr,
+                .motionFrame = motionVectors != nullptr ? motionVectors->motionFrame : 0U,
+                .workerPool = workerPool_,
+            }, pipelineScratch_);
+        }
         if (reuseAllowed && (diagnostics == nullptr || diagnosticCount == diagnostics->events.size())) {
             auto committedKey = reuseKey;
             committedKey.detailSwitchHistoryRevision = pipelineScratch_.detailSwitchHistoryRevision;

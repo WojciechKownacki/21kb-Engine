@@ -93,6 +93,37 @@ class ScreenUIFontAtlasCache {
         std::uint8_t distanceField = 0;
     };
 
+    // What decides how a label is laid out, apart from its colour and the atlas packing. A label whose snapshot is
+    // unchanged since the last frame gets its run back without being shaped again.
+    struct RunInputs {
+        std::string content;
+        std::string variations;
+        std::string language;
+        float x = 0.0F;
+        float y = 0.0F;
+        float width = 0.0F;
+        float height = 0.0F;
+        float canvasScale = 0.0F;
+        float fontSize = 0.0F;
+        float lineSpacing = 0.0F;
+        float characterSpacing = 0.0F;
+        float outline = 0.0F;
+        float shadow = 0.0F;
+        std::uint64_t fontAssetId = 0U;
+        std::uint64_t fallbackFontAssetId = 0U;
+        std::uint32_t maxLines = 0U;
+        std::uint8_t horizontalAlignment = 0U;
+        std::uint8_t verticalAlignment = 0U;
+        std::uint8_t wrapMode = 0U;
+        std::uint8_t overflow = 0U;
+        std::uint8_t renderMode = 0U;
+        bool richText = false;
+        bool inputField = false;
+        bool distanceFieldAvailable = false;
+
+        [[nodiscard]] bool operator==(const RunInputs&) const noexcept = default;
+    };
+
     struct FontEntry {
         struct ShapingEntry {
             std::vector<std::uint32_t> text;
@@ -149,8 +180,23 @@ class ScreenUIFontAtlasCache {
     [[nodiscard]] static bool Fits(const kb::scene::SceneUIFrameElement& element, const FontEntry& entry, const FontEntry* fallback,
                                    const ScreenUITextMarkup& markup, float factor);
 
+    // A scene's runs from its last Prepare, with the inputs each was made from and the atlas epoch it was last
+    // refreshed at. `consumed` marks the ones the current Prepare already took back.
+    struct RetainedRuns {
+        std::vector<ScreenUITextRun> runs;
+        std::vector<RunInputs> inputs;
+        std::vector<std::uint64_t> epochs;
+        std::vector<std::uint8_t> consumed;
+    };
+
     std::unordered_map<FontKey, FontEntry, FontKeyHash> fonts_;
     std::vector<ScreenUITextRun> textRuns_;
+    std::vector<RunInputs> textInputs_;
+    std::vector<std::uint64_t> textEpochs_;
+    std::unordered_map<std::uint64_t, RetainedRuns> retained_;
+    RunInputs probeInputs_;
+    // Counts every repacking of any atlas, so a run that was refreshed at the current count is known to be current.
+    std::uint64_t atlasEpoch_ = 1U;
     std::uint64_t prepareFrame_ = 0U;
 };
 

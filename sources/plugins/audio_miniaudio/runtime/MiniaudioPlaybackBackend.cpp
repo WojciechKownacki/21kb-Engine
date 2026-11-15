@@ -112,6 +112,7 @@ void MiniaudioPlaybackBackend::OnUpdate(kb::scene::SceneSystemContext& context) 
 
 void MiniaudioPlaybackBackend::Shutdown() noexcept {
     AssertOwnerThread();
+    capture_.Stop();
     sourceRegistry_.StopAll();
     voicePool_.StopAll();
     busRegistry_.StopAll();
@@ -245,6 +246,16 @@ bool MiniaudioPlaybackBackend::SetPlatformSuspended(kb::scene::Scene& scene, boo
     return engine_.SetPlatformSuspended(suspended);
 }
 
+bool MiniaudioPlaybackBackend::SetMasterVolume(kb::scene::Scene& scene, float volume) noexcept {
+    AssertOwnerThread();
+    static_cast<void>(scene);
+    if (!kb::audio::IsAudioMasterVolumeValid(volume)) {
+        return false;
+    }
+    engine_.SetMasterVolume(volume);
+    return true;
+}
+
 kb::audio::AudioDeviceStatus MiniaudioPlaybackBackend::ReinitializeInternal(kb::scene::Scene& scene, bool forceNoDevice) noexcept {
     static_cast<void>(scene);
     const bool suspended = engine_.IsPlatformSuspended();
@@ -358,7 +369,41 @@ kb::audio::AudioMeterReport MiniaudioPlaybackBackend::MeterReport(kb::scene::Sce
     return report;
 }
 
+std::vector<kb::audio::AudioCaptureDeviceInfo> MiniaudioPlaybackBackend::CaptureDevices(kb::scene::Scene&) {
+    AssertOwnerThread();
+    return capture_.Devices();
+}
+
+kb::audio::AudioCaptureStatus MiniaudioPlaybackBackend::StartCapture(kb::scene::Scene&, const kb::audio::AudioCaptureDesc& desc) {
+    AssertOwnerThread();
+    return capture_.Start(desc);
+}
+
+void MiniaudioPlaybackBackend::StopCapture(kb::scene::Scene&) noexcept {
+    AssertOwnerThread();
+    capture_.Stop();
+}
+
+bool MiniaudioPlaybackBackend::IsCapturing(kb::scene::Scene&) noexcept {
+    AssertOwnerThread();
+    return capture_.IsCapturing();
+}
+
+std::size_t MiniaudioPlaybackBackend::ReadCaptured(kb::scene::Scene&, std::span<float> out) noexcept {
+    AssertOwnerThread();
+    return capture_.ReadRecent(out);
+}
+
 #if defined(KB_AUDIO_MINIAUDIO_TESTING)
+void MiniaudioPlaybackBackend::UseCaptureContextForTesting(ma_context* context) noexcept {
+    AssertOwnerThread();
+    capture_.UseContext(context);
+}
+
+std::uint64_t MiniaudioPlaybackBackend::CapturedFramesForTesting() const noexcept {
+    return capture_.CapturedFrames();
+}
+
 kb::audio::AudioDeviceStatus MiniaudioPlaybackBackend::ReinitializeForTesting(kb::scene::Scene& scene, bool forceNoDevice) noexcept {
     AssertOwnerThread();
     return ReinitializeInternal(scene, forceNoDevice);

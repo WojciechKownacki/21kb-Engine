@@ -22,6 +22,7 @@
 #include "engine/library/EngineLibraryTaskFactories.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/particles/ParticlePlayback.hpp"
+#include "engine/project/ProjectSettings.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
@@ -78,6 +79,8 @@
 #include "engine/script/LuaScriptBackend.hpp"
 #include "engine/script/NativeScriptBuildPipeline.hpp"
 #include "engine/script/NativeScriptBackend.hpp"
+#include "engine/script/NativeScriptFields.hpp"
+#include "engine/script/ScriptAssetLoader.hpp"
 #include "engine/script/NativeScriptPlugin.hpp"
 #include "engine/script/NativeScriptPluginManager.hpp"
 #include "engine/script/PucLuaScriptRuntime.hpp"
@@ -124,6 +127,16 @@
 #endif
 #include <windows.h>
 #include <psapi.h>
+#endif
+
+// A loop a budget of 100 units stops on either script VM: Lua 5.4 counts the passes of a loop, LuaJIT ends a call that has
+// used that many units of processor time, so it needs a loop that runs for milliseconds.
+#if defined(KB_SCRIPT_VM_LUAJIT)
+#define KB_TEST_LONG_LOOP "100000000"
+#define KB_TEST_HEAVY_LOOP "1000000000"
+#else
+#define KB_TEST_LONG_LOOP "10000"
+#define KB_TEST_HEAVY_LOOP "10000000"
 #endif
 
 namespace {
@@ -183,7 +196,12 @@ public:
     [[nodiscard]] bool AddVoiceMarker(kb::scene::Scene&, std::uint64_t voiceId, std::string_view marker, float, kb::scene::SceneEntity) override {
         return IsLive(voiceId) && !marker.empty();
     }
+    [[nodiscard]] bool SetMasterVolume(kb::scene::Scene&, float volume) noexcept override {
+        masterVolume = volume;
+        return true;
+    }
 
+    float masterVolume = -1.0F;
     std::vector<kb::audio::AudioPlayDesc> played;
     std::uint64_t nextVoiceId = 1U;
     int stopAllCount = 0;
@@ -725,6 +743,55 @@ void RunNativeScriptPluginManagerDispatchTest() {
 #endif
 }
 
+// A script class from a real library: its object survives a reload of the library (the old library's code
+// saves and destroys it before it is unmapped), and goes with the library when that is unloaded.
+void RunNativeScriptPluginObjectReloadTest() {
+    ResetTestRoot();
+    const std::filesystem::path pluginPath = KB_NATIVE_SCRIPT_TEST_PLUGIN_PATH;
+    kb::tests::Require(std::filesystem::is_regular_file(pluginPath), "Native script test plugin DLL is missing");
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Native Plugin Object" });
+    constexpr kb::assets::AssetId kObjectAsset{ 1007U };
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kObjectAsset.value, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+    kb::script::ScriptRuntime runtime;
+    auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+    kb::script::NativeScriptBackend* native = nativeBackend.get();
+    kb::script::NativeScriptPluginManager plugins{ *native };
+    const kb::script::NativeScriptPluginLoadDesc desc{ .key = "object-plugin", .modulePath = pluginPath,
+        .entryPoint = "kb_register_native_object_script", .shadowCopy = true, .shadowCopyDirectory = TestRoot() / "NativePluginShadow" };
+    const kb::script::NativeScriptPluginLoadResult loaded = plugins.LoadOrReload(desc);
+    kb::tests::Require(loaded.Succeeded() && loaded.registeredSymbols.size() == 2U && loaded.registeredSymbols[0] == "tests.NativePluginObject",
+        "A script class from a library must register by its symbol");
+    kb::tests::Require(loaded.unsavedStateSymbols.size() == 1U && loaded.unsavedStateSymbols[0] == "tests.NativePluginForgetful",
+        "Only the class with members and no Serialize must be named as losing its state in a rebuilt library");
+    kb::tests::Require(native->BindAssetSymbol(kObjectAsset, "tests.NativePluginObject") &&
+            runtime.RegisterBackend(std::move(nativeBackend)), "The script class asset symbol binding failed");
+    for (int tick = 1; tick <= 3; ++tick) {
+        kb::tests::Require(runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F).Succeeded(), "A script class Tick failed");
+    }
+    kb::tests::Require(runtime.SharedState().Get("nativeObject.Ticks")->AsInt() == 3 && native->InstanceCount("tests.NativePluginObject") == 1U,
+        "The object of a script class must keep its members between calls");
+    std::filesystem::path previousPath = loaded.loadedPath;
+    double reloadMilliseconds = 0.0;
+    for (int reload = 1; reload <= 5; ++reload) {
+        const auto reloadStart = std::chrono::steady_clock::now();
+        const kb::script::NativeScriptPluginLoadResult replacement = plugins.LoadOrReload(desc);
+        reloadMilliseconds += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - reloadStart).count();
+        kb::tests::Require(replacement.Succeeded() && replacement.loadedPath != previousPath, "Reloading a script class library must load a distinct copy");
+#if defined(_WIN32)
+        kb::tests::Require(GetModuleHandleW(previousPath.c_str()) == nullptr, "The old library must be unmapped after its objects were destroyed");
+#endif
+        previousPath = replacement.loadedPath;
+        kb::tests::Require(runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F).Succeeded() &&
+                runtime.SharedState().Get("nativeObject.Ticks")->AsInt() == 3 + reload,
+            "The object made by the new library must continue with the saved members");
+    }
+    std::printf("native_object_reload average_ms=%.2f\n", reloadMilliseconds / 5.0);
+    plugins.Unload("object-plugin");
+    kb::tests::Require(native->InstanceCount("tests.NativePluginObject") == 0U, "The objects of an unloaded library must be destroyed with it");
+}
+
 void RunNativeScriptBuildPipelineTest() {
     ResetTestRoot();
     const std::filesystem::path projectRoot = TestRoot() / "NativeBuildProject";
@@ -775,6 +842,28 @@ void RunNativeScriptBuildPipelineTest() {
         .workingDirectory = projectRoot,
     });
     kb::tests::Require(!emptyCommand.Succeeded(), "Native script build pipeline accepted an empty build command");
+
+    // A compiler that fails: its error line, with file and line, reaches the caller (an editor has no
+    // console to read it from); a warning is counted but not listed as an error.
+#if defined(_WIN32)
+    const std::string failingCompile = "echo C:/proj/Probe.cpp(12): error C2065: 'x': undeclared identifier"
+        " & echo C:/proj/Probe.cpp(30): warning C4100: unused & exit /b 2";
+    const std::string errorLocation = "C:/proj/Probe.cpp(12): error C2065: 'x': undeclared identifier";
+#else
+    const std::string failingCompile = "echo 'Probe.cpp:12:5: error: use of undeclared identifier x'; echo 'Probe.cpp:30:1: warning: unused'; exit 2";
+    const std::string errorLocation = "Probe.cpp:12:5: error: use of undeclared identifier x";
+#endif
+    const kb::script::NativeScriptBuildResult failedCompile = kb::script::NativeScriptBuildPipeline::Build(kb::script::NativeScriptBuildDesc{
+        .enabled = true,
+        .command = failingCompile,
+        .workingDirectory = projectRoot,
+    });
+    kb::tests::Require(!failedCompile.Succeeded() && failedCompile.exitCode == 2 && failedCompile.errors.size() == 2U,
+        "A failing compile did not report its exit code and its error line");
+    kb::tests::Require(failedCompile.errors.front().find("exit code 2 (1 error, 1 warning)") != std::string::npos,
+        "A failing compile did not summarize its errors and warnings");
+    kb::tests::Require(failedCompile.errors.back() == errorLocation,
+        "A failing compile did not hand over the compiler's error line with its file and line");
 }
 
 void RunScriptRuntimeExecutionOrderTest() {
@@ -1058,7 +1147,7 @@ void RunPucLuaExecutionBudgetPolicyTest() {
     const char* source = R"(
 function Tick(self, dt)
     local total = 0
-    for index = 1, 10000 do
+    for index = 1, )" KB_TEST_LONG_LOOP R"( do
         total = total + index
     end
     SetShared("lua.executionBudget.finished", total)
@@ -1159,6 +1248,12 @@ void RunPucLuaHostileScriptsTest() {
     constexpr kb::assets::AssetId kCoroutine{ 3606U };
     constexpr kb::assets::AssetId kCaught{ 3607U };
     constexpr kb::assets::AssetId kImported{ 3610U };
+    // Every way a script can go round without the allowance noticing: a conditional jump back, goto, a generic for, and
+    // a call that never returns to its caller.
+    constexpr kb::assets::AssetId kRepeat{ 3613U };
+    constexpr kb::assets::AssetId kGoto{ 3614U };
+    constexpr kb::assets::AssetId kGenericFor{ 3615U };
+    constexpr kb::assets::AssetId kTailCall{ 3616U };
     kb::tests::Require(host.luaRuntime.RegisterModule("BudgetLoop", "while true do end", "BudgetLoop.lua").succeeded,
         "The lazy module budget fixture must register");
     kb::tests::Require(host.luaRuntime.LoadScript(kProbe, R"(
@@ -1197,20 +1292,27 @@ function Tick(self, dt)
     SetShared("healthy.ticks", (GetShared("healthy.ticks") or 0) + 1)
 end
 )", "Healthy.lua").succeeded, "The healthy script did not load");
+    kb::tests::Require(host.luaRuntime.LoadScript(kRepeat, "function Tick(self, dt) local n = 0 repeat n = n + 1 until n < 0 end", "RepeatForever.lua").succeeded &&
+            host.luaRuntime.LoadScript(kGoto, "function Tick(self, dt) ::again:: goto again end", "GotoForever.lua").succeeded &&
+            host.luaRuntime.LoadScript(kGenericFor, "function Tick(self, dt) for _ in function() return true end do end end", "ForInForever.lua").succeeded &&
+            host.luaRuntime.LoadScript(kTailCall, "local function spin() return spin() end function Tick(self, dt) spin() end", "TailCallForever.lua").succeeded,
+        "The other endless script shapes did not load");
     host.Attach(kProbe);
     host.Attach(kForever);
     host.Attach(kCoroutine);
     host.Attach(kCaught);
     host.Attach(kImported);
     host.Attach(kHealthy);
+    for (const kb::assets::AssetId asset : { kRepeat, kGoto, kGenericFor, kTailCall }) host.Attach(asset);
     for (int tick = 0; tick < 3; ++tick) {
         const kb::script::ScriptRuntimeExecutionResult result = host.Tick();
         std::vector<std::uint64_t> failed;
         for (const auto& diagnostic : result.diagnostics)
             if (diagnostic.message.find("execution budget exceeded") != std::string::npos) failed.push_back(diagnostic.assetId.value);
         std::ranges::sort(failed);
-        kb::tests::Require(!result.Succeeded() && failed == std::vector<std::uint64_t>{kForever.value, kCoroutine.value, kCaught.value, kImported.value},
-            "Direct, coroutine, protected and imported loops must fail with budget diagnostics on every tick");
+        kb::tests::Require(!result.Succeeded() && failed == std::vector<std::uint64_t>{kForever.value, kCoroutine.value, kCaught.value, kImported.value,
+                kRepeat.value, kGoto.value, kGenericFor.value, kTailCall.value},
+            "Direct, coroutine, protected, imported, repeat, goto, generic for and tail call loops must fail with budget diagnostics on every tick");
     }
     kb::tests::Require(host.Shared("healthy.ticks") == 3, "A script that loops forever must not stop the other scripts");
     for (const char* name : { "sandbox.require", "sandbox.package", "sandbox.load", "sandbox.dofile", "sandbox.loadfile", "sandbox.os",
@@ -1222,7 +1324,7 @@ end
     kb::tests::Require(!atLoad.succeeded && atLoad.error.find("execution budget exceeded") != std::string::npos,
         "An endless loop in the code at the top of a script must fail the load with the budget diagnostic");
     const kb::script::PucLuaLoadResult nested = host.luaRuntime.LoadScript(kb::assets::AssetId{ 3605U },
-        "local n = 0 for i = 1, 10000000 do n = n + i end", "LoadHeavy.lua");
+        "local n = 0 for i = 1, " KB_TEST_HEAVY_LOOP " do n = n + i end", "LoadHeavy.lua");
     kb::tests::Require(!nested.succeeded, "Top-level work beyond the instruction budget must fail the load");
     const auto caughtAtLoad = host.luaRuntime.LoadScript(kb::assets::AssetId{3608U},
         "while true do pcall(function() while true do end end) end", "CaughtLoadForever.lua");
@@ -1439,7 +1541,7 @@ end
     constexpr kb::assets::AssetId kDefaultHuge{ 3213U };
     constexpr kb::assets::AssetId kLooping{ 3214U };
     kb::tests::Require(defaultRuntime.LoadScript(kDefaultHuge, "function Tick(self, dt) local text = string.rep('x', 512 * 1024 * 1024) end\n", "LuaMemoryDefault.lua").succeeded &&
-            defaultRuntime.LoadScript(kLooping, "function Tick(self, dt) local total = 0 for index = 1, 10000 do total = total + index end end\n", "LuaMemoryLoop.lua").succeeded,
+            defaultRuntime.LoadScript(kLooping, "function Tick(self, dt) local total = 0 for index = 1, " KB_TEST_LONG_LOOP " do total = total + index end end\n", "LuaMemoryLoop.lua").succeeded,
         "Lua default memory limit scripts did not load");
     kb::scene::Scene defaultScene;
     for (const kb::assets::AssetId asset : { kDefaultHuge, kLooping }) {
@@ -1681,7 +1783,9 @@ end
     kb::tests::Require(luaRuntime.IsDebugPaused() && shared("lua.pause.ticker") == 3 && shared("lua.pause.done") == 0,
         "Lua paused script ran on, or the other scripts stopped, while the debugger held the pause");
     kb::script::PucLuaDebugPauseSnapshot inspected = luaRuntime.InspectDebugPause();
-    kb::tests::Require(inspected.valid && inspected.callStack.size() == 1U && inspected.callStack.front().line == 6, "Lua paused script call stack is not inspectable");
+    std::string stackInfo = std::to_string(inspected.callStack.size()) + " frames:";
+    for (const auto& frame : inspected.callStack) stackInfo += " [" + frame.name + " " + frame.chunkName + ":" + std::to_string(frame.line) + "]";
+    kb::tests::Require(inspected.valid && inspected.callStack.size() == 1U && inspected.callStack.front().line == 6, ("Lua paused script call stack is not inspectable: " + stackInfo).c_str());
     const kb::script::PucLuaDebugVariableSnapshot* delta = FindDebugLocal(inspected.callStack.front(), "dt");
     kb::tests::Require(delta != nullptr && delta->type == kb::script::ScriptValueType::Float && delta->value.starts_with("0.25"),
         "Lua paused script locals are not inspectable");
@@ -1692,9 +1796,9 @@ end
         !command("unknown").Find("succeeded")->AsBool(), "Debug protocol did not expose stack/locals or reject invalid commands");
     const auto protocolEvaluation = session.Execute(R"({"schema":"21kb.lua-debug/v1","command":"evaluate","expression":"dt * 4"})");
     kb::tests::Require(protocolEvaluation.Find("succeeded")->AsBool() &&
-        protocolEvaluation.Find("result")->Find("value")->AsString().starts_with("1."), "Debug protocol evaluation failed");
+        protocolEvaluation.Find("result")->Find("value")->AsString().starts_with("1"), "Debug protocol evaluation failed");
     const auto evaluated = luaRuntime.EvaluateDebugExpression("dt * 4");
-    kb::tests::Require(evaluated.succeeded && evaluated.value.value.starts_with("1."), "Debugger could not evaluate paused scalar locals");
+    kb::tests::Require(evaluated.succeeded && evaluated.value.value.starts_with("1"), "Debugger could not evaluate paused scalar locals");
     const auto wideInteger = luaRuntime.EvaluateDebugExpression("4294967296");
     kb::tests::Require(wideInteger.succeeded && wideInteger.value.value == "4294967296", "Debugger truncated a Lua integer");
     kb::tests::Require(!luaRuntime.EvaluateDebugExpression("dt +").succeeded &&
@@ -1713,7 +1817,13 @@ end
     const kb::script::PucLuaDebugVariableSnapshot* a = inspected.callStack.empty() ? nullptr : FindDebugLocal(inspected.callStack.front(), "a");
     kb::tests::Require(luaRuntime.IsDebugPaused() && luaRuntime.LastDebugPause().reason == kb::script::PucLuaDebugPauseReason::Step &&
             luaRuntime.LastDebugPause().line == 7 && a != nullptr && a->value == "1" && a->type == kb::script::ScriptValueType::Int,
-        "Lua step over did not stop on the next line with the updated locals");
+        ("Lua step over did not stop on the next line with the updated locals: paused=" + std::to_string(luaRuntime.IsDebugPaused()) + " reason=" +
+            std::to_string(static_cast<int>(luaRuntime.LastDebugPause().reason)) + " line=" + std::to_string(luaRuntime.LastDebugPause().line) +
+            " a=" + (a != nullptr ? a->value + "/" + std::to_string(static_cast<int>(a->type)) : std::string{ "none" })).c_str());
+
+    // The local the line just before the pause declared is part of the innermost frame.
+    const auto declaredJustBefore = luaRuntime.EvaluateDebugExpression("a + 2");
+    kb::tests::Require(declaredJustBefore.succeeded && declaredJustBefore.value.value == "3", "Debugger could not evaluate the local the previous line declared");
 
     kb::tests::Require(command("step_into").Find("succeeded")->AsBool(), "Debug protocol step_into failed");
     tick("Lua step into raised an error");
@@ -1721,7 +1831,9 @@ end
     const kb::script::PucLuaDebugVariableSnapshot* v = inspected.callStack.empty() ? nullptr : FindDebugLocal(inspected.callStack.front(), "v");
     kb::tests::Require(luaRuntime.IsDebugPaused() && luaRuntime.LastDebugPause().line == 2 && inspected.callStack.size() == 2U &&
             inspected.callStack[1].line == 7 && v != nullptr && v->value == "1",
-        "Lua step into did not stop inside the called function");
+        ("Lua step into did not stop inside the called function: paused=" + std::to_string(luaRuntime.IsDebugPaused()) + " line=" + std::to_string(luaRuntime.LastDebugPause().line) +
+            " frames=" + std::to_string(inspected.callStack.size()) + " v=" + (v != nullptr ? v->value : std::string{ "none" }) +
+            (inspected.callStack.size() > 1U ? " caller line=" + std::to_string(inspected.callStack[1].line) : std::string{})).c_str());
 
     kb::tests::Require(command("step_out").Find("succeeded")->AsBool(), "Debug protocol step_out failed");
     tick("Lua step out raised an error");
@@ -1809,6 +1921,308 @@ end
             luaRuntime.LastDebugPause().line == 10 && destroyedHit.has_value() && destroyedHit->AsInt() == 1,
         "Lua breakpoint in a Destroyed entry suspended a behaviour that is never resumed");
 }
+
+// A C++ script's `expose =` lines are fields the Inspector edits and the script reads: the default of the
+// declaration until a value is set on the object, then that value.
+void RunNativeExposedFieldsTest() {
+    ResetTestRoot();
+
+    const std::filesystem::path projectRoot = TestRoot() / "NativeFieldsProject";
+    WriteTextFile(projectRoot / "Assets" / "Logic" / "Fields.native",
+        "name = Fields\nsymbol = tests.Fields\nexpose = speed Float = 2.5\nexpose = label String = Runner\nexpose = lives Int\n");
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot), "Native fields project mount failed");
+    kb::tests::Require(scene.Assets().Discover() == 1U, "Native fields asset discovery failed");
+    const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/Fields.native");
+    kb::tests::Require(metadata != nullptr, "Native fields descriptor was not discovered");
+    const kb::assets::AssetHandle<kb::script::NativeBehaviourDescriptor> descriptor =
+        scene.Assets().Manager().Load<kb::script::NativeBehaviourDescriptor>(metadata->id);
+    kb::tests::Require(descriptor.IsLoaded() && descriptor->exposedVariables.size() == 3U &&
+            descriptor->exposedVariableDefaults.size() == 3U &&
+            descriptor->exposedVariables[0].name == "speed" && descriptor->exposedVariables[0].type == kb::script::ScriptValueType::Float &&
+            kb::tests::NearlyEqual(descriptor->exposedVariableDefaults[0].AsFloat(), 2.5F) &&
+            descriptor->exposedVariables[1].type == kb::script::ScriptValueType::String &&
+            descriptor->exposedVariableDefaults[1].AsString() == "Runner" &&
+            descriptor->exposedVariables[2].name == "lives" && descriptor->exposedVariableDefaults[2].AsInt(-1) == 0,
+        "The expose lines of a native descriptor were not read as fields with their defaults");
+
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Native Fields" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = metadata->id.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+    std::vector<kb::script::ScriptEvent> emitted;
+    kb::script::ScriptExecutionContext context{ scene, object.Entity(), metadata->id, kb::scene::BehaviourBackend::Native,
+        kb::script::ScriptLifecycleEvent::Tick, 0.0F, &emitted };
+    const std::optional<kb::script::ScriptValue> declared = kb::script::NativeField(context, "speed");
+    kb::tests::Require(declared.has_value() && kb::tests::NearlyEqual(declared->AsFloat(), 2.5F),
+        "A native field without a value on the object must read its declared default");
+    scene.Entities().SetBehaviourVariableOverride(object.Entity(), "speed", kb::script::ScriptValue{ 9.0F });
+    const std::optional<kb::script::ScriptValue> overridden = kb::script::NativeField(context, "speed");
+    kb::tests::Require(overridden.has_value() && kb::tests::NearlyEqual(overridden->AsFloat(), 9.0F),
+        "A native field set on the object must read that value, not the default");
+    kb::tests::Require(!kb::script::NativeField(context, "missing").has_value(), "An undeclared native field must read as absent");
+
+    const std::string invalid = "symbol = tests.Broken\nexpose = speed Nope = 1\n";
+    kb::script::NativeBehaviourDescriptorAssetLoader loader;
+    const kb::assets::AssetLoadResult refused = loader.Load(kb::assets::AssetLoadRequest{
+        .metadata = *metadata,
+        .resolvedPath = metadata->physicalPath,
+        .sourceBytes = std::span<const std::uint8_t>{ reinterpret_cast<const std::uint8_t*>(invalid.data()), invalid.size() },
+    });
+    kb::tests::Require(!refused.Succeeded() && refused.error.find("expose") != std::string::npos,
+        "A native descriptor with an expose line of an unknown type must be refused with a message naming expose");
+}
+
+// A C++ script that does not compile: the Console gets what failed and then each compiler error line with
+// its file and line, one row each, and asking again does not build again.
+void RunNativeBuildFailureDiagnosticsTest() {
+    ResetTestRoot();
+
+    const std::filesystem::path projectRoot = TestRoot() / "NativeBuildFailureProject";
+#if defined(_WIN32)
+    const std::string command = "echo Broken.cpp(7): error C2065: 'x': undeclared identifier & exit /b 2";
+    const std::string expectedLine = "Broken.cpp(7): error C2065: 'x': undeclared identifier";
+#else
+    const std::string command = "echo 'Broken.cpp:7:3: error: use of undeclared identifier x'; exit 2";
+    const std::string expectedLine = "Broken.cpp:7:3: error: use of undeclared identifier x";
+#endif
+    WriteTextFile(projectRoot / "Assets" / "Logic" / "Broken.native",
+        "name = Broken\nsymbol = tests.Broken\nbuild = " + command + "\nbuild_working_directory = .\n");
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot), "Native build failure project mount failed");
+    kb::tests::Require(scene.Assets().Discover() == 1U, "Native build failure asset discovery failed");
+    const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/Broken.native");
+    kb::tests::Require(metadata != nullptr, "Native build failure descriptor was not discovered");
+
+    kb::script::PucLuaScriptRuntime luaRuntime;
+    kb::visual::VisualGraphRuntimeRegistry visualArtifacts;
+    kb::script::ScriptRuntimeAssetPreparer preparer{ scene.Assets().Manager(), luaRuntime, visualArtifacts };
+    const kb::script::ScriptRuntimeAssetPrepareResult first = preparer.PrepareAsset(metadata->id);
+    kb::tests::Require(!first.Succeeded() && first.diagnostics.size() == 2U,
+        "A failing native build must give the summary and the compiler's error line");
+    kb::tests::Require(first.diagnostics[0].message.find("exit code 2 (1 error)") != std::string::npos &&
+            first.diagnostics[0].message.find("Fix:") != std::string::npos,
+        "The first row of a failing native build must say what failed and what to do");
+    kb::tests::Require(first.diagnostics[1].message == expectedLine,
+        "The second row of a failing native build must be the compiler's line with its file and line");
+    const kb::script::ScriptRuntimeAssetPrepareResult again = preparer.PrepareAsset(metadata->id);
+    kb::tests::Require(again.diagnostics.size() == 2U && again.diagnostics[1].message == expectedLine,
+        "A native build that failed must report the same rows again while its sources are unchanged");
+}
+
+// A script class that keeps data in members but has no Serialize is named in a warning when its library is loaded
+// (the script still runs); a class that lists its members is not.
+void RunNativeUnsavedStateWarningTest() {
+    ResetTestRoot();
+    const std::filesystem::path pluginPath = KB_NATIVE_SCRIPT_TEST_PLUGIN_PATH;
+    const std::filesystem::path projectRoot = TestRoot() / "NativeUnsavedStateProject";
+    const std::string module = "module = " + pluginPath.generic_string() + "\nentry = kb_register_native_object_script\n";
+    WriteTextFile(projectRoot / "Assets" / "Logic" / "Forgetful.native", "name = Forgetful\nsymbol = tests.NativePluginForgetful\n" + module);
+    WriteTextFile(projectRoot / "Assets" / "Logic" / "Kept.native", "name = Kept\nsymbol = tests.NativePluginObject\n" + module);
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot) && scene.Assets().Discover() == 2U, "Unsaved state project mount or discovery failed");
+    const kb::assets::AssetMetadata* forgetful = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/Forgetful.native");
+    const kb::assets::AssetMetadata* kept = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/Kept.native");
+    kb::tests::Require(forgetful != nullptr && kept != nullptr, "Unsaved state descriptors were not discovered");
+
+    kb::script::PucLuaScriptRuntime luaRuntime;
+    kb::visual::VisualGraphRuntimeRegistry visualArtifacts;
+    kb::script::ScriptRuntimeAssetPreparer preparer{ scene.Assets().Manager(), luaRuntime, visualArtifacts };
+    kb::script::NativeScriptBackend backend;
+    kb::script::NativeScriptPluginManager plugins{ backend };
+    preparer.SetNativeBackend(backend);
+    preparer.SetNativePluginManager(plugins);
+    preparer.SetNativeSettings(kb::script::ScriptRuntimeNativePrepareSettings{
+        .shadowCopyDirectory = TestRoot() / "NativeUnsavedStateShadow", .buildPlugins = false, .loadPlugins = true });
+    const kb::script::ScriptRuntimeAssetPrepareResult first = preparer.PrepareAsset(forgetful->id);
+    kb::tests::Require(first.Succeeded() && first.warnings.size() == 1U && first.warnings[0].assetId == forgetful->id &&
+            first.warnings[0].message.find("Serialize") != std::string::npos,
+        "A script class with members and no Serialize must give one warning that names Serialize");
+    kb::tests::Require(preparer.PrepareAsset(forgetful->id).warnings.empty(), "The warning must not repeat while the script is unchanged");
+    const kb::script::ScriptRuntimeAssetPrepareResult listed = preparer.PrepareAsset(kept->id);
+    kb::tests::Require(listed.Succeeded() && listed.warnings.empty(), "A script class that lists its members in Serialize must not be warned about");
+}
+
+// A C++ script is built on its own thread and process while the caller goes on: progress while it runs, a cancel
+// that stops it, and the finished build taken by the next pass.
+void RunNativeBackgroundBuildTest() {
+    ResetTestRoot();
+    const std::filesystem::path projectRoot = TestRoot() / "NativeBackgroundProject";
+    std::error_code error;
+    std::filesystem::create_directories(projectRoot, error);
+    kb::tests::Require(!error, "Native background build project directory could not be created");
+
+    // A build that runs: output seen while it runs, then stopped, and the whole process tree with it.
+    const auto started = std::chrono::steady_clock::now();
+    kb::script::NativeScriptBuildJob running{ kb::script::NativeScriptBuildDesc{
+        .enabled = true, .command = "cmake -E echo compiling && cmake -E sleep 30", .workingDirectory = projectRoot } };
+    kb::script::NativeScriptBuildProgress progress;
+    for (int attempt = 0; attempt < 200 && progress.outputLines == 0U; ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{ 50 });
+        progress = running.Progress();
+    }
+    kb::tests::Require(!progress.finished && progress.outputLines >= 1U && progress.lastLine == "compiling",
+        "A running native build must report its output while it runs");
+    running.Cancel();
+    const kb::script::NativeScriptBuildResult cancelled = running.Wait();
+    kb::tests::Require(cancelled.cancelled && !cancelled.Succeeded() && cancelled.errors.empty() && running.Finished(),
+        "A cancelled native build must end as cancelled, without compiler errors");
+    kb::tests::Require(std::chrono::steady_clock::now() - started < std::chrono::seconds{ 20 },
+        "Cancelling a native build must not wait for the build to end");
+
+    // The working directory belongs to the build, not to the process: this thread's directory is unchanged.
+    const std::filesystem::path before = std::filesystem::current_path();
+    kb::script::NativeScriptBuildJob inFolder{ kb::script::NativeScriptBuildDesc{
+        .enabled = true, .command = "cmake -E touch here.marker", .workingDirectory = projectRoot } };
+    kb::tests::Require(inFolder.Wait().Succeeded() && std::filesystem::is_regular_file(projectRoot / "here.marker") &&
+            std::filesystem::current_path() == before,
+        "A native build must run in its own folder without changing the process's folder");
+
+    // Through the preparer: the first pass starts the build and returns, a later pass takes the result.
+    const std::filesystem::path marker = projectRoot / "built.marker";
+    WriteTextFile(projectRoot / "Assets" / "Logic" / "Slow.native",
+        "name = Slow\nsymbol = tests.Slow\nbuild = cmake -E sleep 1 && cmake -E touch \"" + marker.generic_string() +
+        "\"\nbuild_working_directory = .\n");
+    WriteTextFile(projectRoot / "Assets" / "Logic" / "Short.native",
+        "name = Short\nsymbol = tests.Short\nbuild = cmake -E sleep 1 && cmake -E touch \"" + (projectRoot / "short.marker").generic_string() +
+        "\"\nbuild_working_directory = .\n");
+    WriteTextFile(projectRoot / "Assets" / "Logic" / "Forever.native",
+        "name = Forever\nsymbol = tests.Forever\nbuild = cmake -E sleep 60\nbuild_working_directory = .\n");
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot), "Native background project mount failed");
+    kb::tests::Require(scene.Assets().Discover() == 3U, "Native background asset discovery failed");
+    const kb::assets::AssetMetadata* slow = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/Slow.native");
+    const kb::assets::AssetMetadata* forever = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/Forever.native");
+    kb::tests::Require(slow != nullptr && forever != nullptr, "Native background descriptors were not discovered");
+
+    kb::script::PucLuaScriptRuntime luaRuntime;
+    kb::visual::VisualGraphRuntimeRegistry visualArtifacts;
+    kb::script::ScriptRuntimeAssetPreparer preparer{ scene.Assets().Manager(), luaRuntime, visualArtifacts };
+    preparer.SetNativeBuildMode(true, true);
+    const auto begin = std::chrono::steady_clock::now();
+    const kb::script::ScriptRuntimeAssetPrepareResult first = preparer.PrepareAsset(slow->id);
+    const auto startCall = std::chrono::steady_clock::now() - begin;
+    kb::tests::Require(first.Succeeded() && first.buildingAssets == 1U && first.preparedAssets == 0U &&
+            startCall < std::chrono::milliseconds{ 900 } && !std::filesystem::exists(marker),
+        "A native build in the background must return at once and report that it is building");
+    std::printf("native_background_build start_call_ms=%.2f\n", std::chrono::duration<double, std::milli>(startCall).count());
+    kb::tests::Require(preparer.NativeBuildsInProgress().size() == 1U && preparer.NativeBuildsInProgress().front().name == "Slow",
+        "A running native build must be listed with its name");
+    const kb::script::ScriptRuntimeAssetPrepareResult duringBuild = preparer.PrepareAsset(slow->id);
+    kb::tests::Require(duringBuild.Succeeded() && duringBuild.buildingAssets == 1U, "A pass during the build must not start another or fail");
+    kb::script::ScriptRuntimeAssetPrepareResult finished;
+    for (int attempt = 0; attempt < 400 && finished.preparedAssets == 0U && finished.Succeeded(); ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{ 50 });
+        finished = preparer.PrepareAsset(slow->id);
+    }
+    kb::tests::Require(finished.Succeeded() && finished.preparedAssets == 1U && std::filesystem::is_regular_file(marker) &&
+            preparer.NativeBuildsInProgress().empty(),
+        "A finished native build must be taken by the next pass");
+
+    // A build that never ends can be stopped.
+    const kb::script::ScriptRuntimeAssetPrepareResult foreverStarted = preparer.PrepareAsset(forever->id);
+    kb::tests::Require(foreverStarted.buildingAssets == 1U && preparer.NativeBuildsInProgress().size() == 1U,
+        "The second native script must build in the background too");
+    kb::tests::Require(preparer.CancelNativeBuild(forever->id) && preparer.NativeBuildsInProgress().empty(),
+        "Cancelling a native build in the background must stop it");
+    const kb::script::ScriptRuntimeAssetPrepareResult afterCancel = preparer.PrepareAsset(forever->id);
+    kb::tests::Require(!afterCancel.Succeeded() && afterCancel.buildingAssets == 0U && preparer.NativeBuildsInProgress().empty() &&
+            afterCancel.diagnostics.front().message.find("cancelled") != std::string::npos,
+        "A cancelled native build must be reported once and not started again until its sources change");
+
+    // FinishNativeBuilds waits for what runs (Play starts) and applies it.
+    const kb::assets::AssetMetadata* shortBuild = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/Short.native");
+    kb::tests::Require(shortBuild != nullptr, "The short native descriptor was not discovered");
+    const std::filesystem::path shortMarker = projectRoot / "short.marker";
+    kb::tests::Require(preparer.PrepareAsset(shortBuild->id).buildingAssets == 1U, "The short native script must start building");
+    const kb::script::ScriptRuntimeAssetPrepareResult waited = preparer.FinishNativeBuilds();
+    kb::tests::Require(waited.Succeeded() && waited.preparedAssets == 1U && std::filesystem::is_regular_file(shortMarker) &&
+            preparer.NativeBuildsInProgress().empty(),
+        "Waiting for the native builds must end with them built and applied");
+}
+
+// A compiler message names where the problem is; the Console opens that line in the code editor.
+void RunNativeBuildMessageLocationTest() {
+    const auto parsed = [](std::string_view message) { return kb::script::ParseBuildMessageLocation(message); };
+    auto location = parsed("C:\\proj\\Source\\Probe.cpp(12): error C2065: 'x': undeclared identifier");
+    kb::tests::Require(location.has_value() && location->path == "C:\\proj\\Source\\Probe.cpp" && location->line == 12 && location->column == 0,
+        "A Visual C++ message must give its file and line");
+    location = parsed("C:\\proj\\Probe.cpp(30,7): warning C4100: unused");
+    kb::tests::Require(location.has_value() && location->line == 30 && location->column == 7, "A Visual C++ message must give its column");
+    location = parsed("/home/dev/proj/Probe.cpp:12:5: error: use of undeclared identifier");
+    kb::tests::Require(location.has_value() && location->path == "/home/dev/proj/Probe.cpp" && location->line == 12 && location->column == 5,
+        "A Clang or GCC message must give its file, line and column");
+    location = parsed("Probe.cpp:9: error: expected ';'");
+    kb::tests::Require(location.has_value() && location->path == "Probe.cpp" && location->line == 9 && location->column == 0,
+        "A message with a line and no column must give its line");
+    location = parsed("C:/proj/Probe.cpp:41:3: error: no member named y");
+    kb::tests::Require(location.has_value() && location->path == "C:/proj/Probe.cpp" && location->line == 41,
+        "A drive letter's colon must not be taken for the line separator");
+    location = parsed("NativeProbe: C:\\proj\\Probe.cpp(12): error C2065: 'x'");
+    kb::tests::Require(location.has_value() && location->path == "C:\\proj\\Probe.cpp" && location->line == 12,
+        "The name a Console row puts in front must not become part of the path");
+    kb::tests::Require(!parsed("native script build command failed with exit code 2 (1 error)").has_value() &&
+            !parsed("LINK : fatal error LNK1104: cannot open file").has_value() && !parsed("").has_value(),
+        "A message without a source line must not give one");
+}
+
+// What the Inspector shows with a C++ script's field: unit, range and hover help from the expose line.
+void RunNativeFieldMetadataTest() {
+    ResetTestRoot();
+    const std::filesystem::path projectRoot = TestRoot() / "NativeFieldMetadataProject";
+    WriteTextFile(projectRoot / "Assets" / "Logic" / "Meta.native",
+        "name = Meta\nsymbol = tests.Meta\n"
+        "expose = speed Float = 3 unit=m/s min=0 max=20 tip=\"Metres per second, 0 to 20\"\n"
+        "expose = lives Int = 3 min=1\n"
+        "expose = label String = Runner\n");
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot), "Native field metadata project mount failed");
+    kb::tests::Require(scene.Assets().Discover() == 1U, "Native field metadata asset discovery failed");
+    const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/Meta.native");
+    kb::tests::Require(metadata != nullptr, "Native field metadata descriptor was not discovered");
+    const auto descriptor = scene.Assets().Manager().Load<kb::script::NativeBehaviourDescriptor>(metadata->id);
+    kb::tests::Require(descriptor.IsLoaded() && descriptor->exposedVariables.size() == 3U &&
+            descriptor->exposedVariableMetadata.size() == 3U, "The expose options were not read with their fields");
+    const kb::script::NativeFieldMetadata& speed = descriptor->exposedVariableMetadata[0];
+    kb::tests::Require(speed.unit == "m/s" && speed.tooltip == "Metres per second, 0 to 20" && speed.hasMinimum && speed.hasMaximum &&
+            speed.minimum == 0.0 && speed.maximum == 20.0 && kb::tests::NearlyEqual(descriptor->exposedVariableDefaults[0].AsFloat(), 3.0F),
+        "A field's unit, tip and range must be read next to its default");
+    const kb::script::NativeFieldMetadata& lives = descriptor->exposedVariableMetadata[1];
+    kb::tests::Require(lives.hasMinimum && !lives.hasMaximum && lives.minimum == 1.0 && lives.unit.empty() &&
+            descriptor->exposedVariableDefaults[1].AsInt() == 3, "A field with only a minimum must have only a minimum");
+    const kb::script::NativeFieldMetadata& label = descriptor->exposedVariableMetadata[2];
+    kb::tests::Require(label.unit.empty() && label.tooltip.empty() && !label.hasMinimum && !label.hasMaximum, "A field without options has no metadata");
+
+    kb::script::NativeBehaviourDescriptorAssetLoader loader;
+    for (const char* invalid : { "symbol = a\nexpose = speed Float = 3 unit=m/s min=high\n", "symbol = a\nexpose = speed Float = 3 min=5 max=1\n",
+             "symbol = a\nexpose = speed Float = 3 colour=red\n", "symbol = a\nexpose = speed Float = 3 tip=\"open\n" }) {
+        const std::string text = invalid;
+        const kb::assets::AssetLoadResult refused = loader.Load(kb::assets::AssetLoadRequest{
+            .metadata = *metadata,
+            .resolvedPath = metadata->physicalPath,
+            .sourceBytes = std::span<const std::uint8_t>{ reinterpret_cast<const std::uint8_t*>(text.data()), text.size() },
+        });
+        kb::tests::Require(!refused.Succeeded() && refused.error.find("expose option") != std::string::npos,
+            "An expose line with a wrong option must be refused with a message naming the option");
+    }
+}
+
+#if defined(_WIN32)
+// vcvars64.bat looks for vswhere on PATH: a build finds it where Visual Studio installs it.
+void RunNativeBuildFindsVswhereTest() {
+    wchar_t programFiles[MAX_PATH]{};
+    const DWORD length = GetEnvironmentVariableW(L"ProgramFiles(x86)", programFiles, MAX_PATH);
+    if (length == 0 || length >= MAX_PATH ||
+        !std::filesystem::is_regular_file(std::filesystem::path{ programFiles } / L"Microsoft Visual Studio" / L"Installer" / L"vswhere.exe")) {
+        return;
+    }
+    const kb::script::NativeScriptBuildResult found = kb::script::NativeScriptBuildPipeline::Build(kb::script::NativeScriptBuildDesc{
+        .enabled = true, .command = "where vswhere.exe >nul 2>nul", .workingDirectory = {} });
+    kb::tests::Require(found.Succeeded(), "A native build must find vswhere in Visual Studio's installer folder");
+}
+#endif
 
 void RunLuaExposedVariablesRuntimeTest() {
     ResetTestRoot();
@@ -4440,6 +4854,38 @@ private:
     bool queued_ = false;
 };
 
+// The runtime that plays the scene hands the unsaved-state warning to the host's owner, once, with the script's path.
+void RunScriptHostWarnsAboutUnsavedStateTest() {
+    ResetTestRoot();
+    const std::filesystem::path pluginPath = KB_NATIVE_SCRIPT_TEST_PLUGIN_PATH;
+    const std::filesystem::path projectRoot = TestRoot() / "HostUnsavedStateProject";
+    WriteTextFile(projectRoot / "Assets" / "Logic" / "Forgetful.native",
+        "name = Forgetful\nsymbol = tests.NativePluginForgetful\nmodule = " + pluginPath.generic_string() +
+        "\nentry = kb_register_native_object_script\n");
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot) && scene.Assets().Discover() == 1U, "Host unsaved state project mount or discovery failed");
+    const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/Forgetful.native");
+    kb::tests::Require(metadata != nullptr, "Host unsaved state descriptor was not discovered");
+    const std::optional<kb::scene::BehaviourComponent> behaviour = kb::script::ScriptBehaviourAsset::CreateComponent(*metadata);
+    kb::tests::Require(behaviour.has_value(), "Host unsaved state behaviour could not be created");
+    scene.Components().Behaviours().Set(scene.Entities().CreateEntity(), *behaviour);
+    kb::script::ScriptRuntimeHostOptions options;
+    options.installSceneSystem = true;
+    options.nativePrepareSettings.shadowCopyDirectory = TestRoot() / "HostUnsavedStateShadow";
+    options.nativePrepareSettings.buildPlugins = false;
+    kb::script::ScriptRuntimeHost host{ scene, options };
+    std::vector<std::string> warnings;
+    for (int frame = 0; frame < 3; ++frame) {
+        static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+        for (std::string& warning : host.DrainSceneSystemWarnings()) {
+            warnings.push_back(std::move(warning));
+        }
+    }
+    kb::tests::Require(warnings.size() == 1U && warnings[0].find("/Game/Logic/Forgetful.native") != std::string::npos &&
+            warnings[0].find("Serialize") != std::string::npos && host.DrainSceneSystemDiagnostics().empty(),
+        "The host must give one warning that names the script and Serialize, and no error, for a class that keeps nothing across a rebuild");
+}
+
 // A shipped game host isolates a faulty script: the failing behaviour instance
 // is disabled after its first error while every other behaviour keeps ticking.
 // Without the option (the editor) the failing behaviour stays enabled.
@@ -5541,6 +5987,25 @@ end
         "Audio.OcclusionEnabled must report the configured state");
 }
 
+// The master gain belongs to the scene: set before a backend exists it reaches the backend when that registers, set
+// after it reaches it at once, and a value outside 0..1 changes nothing.
+void RunAudioMasterVolumeFacadeTest() {
+    kb::scene::Scene scene;
+    kb::tests::Require(kb::audio::AudioPlayback::MasterVolume(scene) == 1.0F, "A scene must start at full master volume");
+    kb::tests::Require(kb::audio::AudioPlayback::SetMasterVolume(scene, 0.5F) && kb::audio::AudioPlayback::MasterVolume(scene) == 0.5F,
+        "The master volume was not kept without a backend");
+    ProbeAudioPlaybackBackend backend;
+    kb::audio::AudioPlayback::RegisterBackend(scene, backend);
+    kb::tests::Require(backend.masterVolume == 0.5F, "A backend registered later did not start at the scene's master volume");
+    kb::tests::Require(kb::audio::AudioPlayback::SetMasterVolume(scene, 0.25F) && backend.masterVolume == 0.25F,
+        "The master volume did not reach the registered backend");
+    kb::tests::Require(!kb::audio::AudioPlayback::SetMasterVolume(scene, 1.5F) && !kb::audio::AudioPlayback::SetMasterVolume(scene, -0.1F) &&
+            !kb::audio::AudioPlayback::SetMasterVolume(scene, std::numeric_limits<float>::quiet_NaN()) &&
+            kb::audio::AudioPlayback::MasterVolume(scene) == 0.25F && backend.masterVolume == 0.25F,
+        "A master volume outside 0..1 changed the gain");
+    kb::audio::AudioPlayback::UnregisterBackend(scene, backend);
+}
+
 // LIB-148: per-voice playback control - the AudioPlayback facade contract without a
 // backend (everything honestly false), the full per-voice flow through a fake backend
 // (no plugin required), registration of all ten functions on Native+VisualGraph, and
@@ -5637,6 +6102,7 @@ void RunScriptAudioVoiceControlApiTest() {
             lastMarkerTarget = target;
             return true;
         }
+        [[nodiscard]] bool SetMasterVolume(kb::scene::Scene&, float) noexcept override { return true; }
         std::string lastMarker;
         float lastMarkerSeconds = -1.0F;
         kb::scene::SceneEntity lastMarkerTarget{};
@@ -7278,7 +7744,7 @@ void RunScriptPhysicsCastOverlapClosestPointApiTest() {
     kb::tests::Require(overlapSphere.Output("overlapping")->AsBool() && overlapSphere.Output("entity")->AsUInt64() == object.Entity().Id(),
         "Physics.OverlapSphere with a matching layerMask must overlap the known entity");
     kb::tests::Require(overlapSphere.Output("count")->AsInt() == 2,
-        "Physics.OverlapSphere must count every overlapping collider (Unity returns them all)");
+        "Physics.OverlapSphere must count every overlapping collider");
     std::vector<kb::script::ScriptFunctionArgument> secondOverlapArgs = matchedOverlapSphereArgs;
     secondOverlapArgs.push_back(kb::script::ScriptFunctionArgument{ .name = "skip", .value = kb::script::ScriptValue{ 1 } });
     kb::tests::Require(host.Functions().Call("Physics.OverlapSphere", secondOverlapArgs, context).Output("entity")->AsUInt64() == secondOverlap.Id(),
@@ -9004,6 +9470,38 @@ void RunWorldSetPropertyPhysicsComponentsTest() {
     kb::tests::Require(capsuleRadiusResult.Succeeded() && capsuleRadiusResult.Output("set")->AsBool(), "World.SetPropertyFloat must report set=true for CharacterController.radius");
     kb::tests::Require(kb::tests::NearlyEqual(scene.Components().CharacterControllers().TryGet(bodyObject.Entity())->radius, 0.35F),
         "World.SetPropertyFloat must actually change CharacterController.radius on the live component");
+
+    // The slider, cone, six-degrees-of-freedom and rope settings are script properties like the rest of the joint.
+    const auto setJointProperty = [&](const char* function, const char* property, kb::script::ScriptValue value) {
+        const std::vector<kb::script::ScriptFunctionArgument> jointArgs{
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ jointObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+            kb::script::ScriptFunctionArgument{ .name = "component", .value = kb::script::ScriptValue{ std::string{ "Joint" } } },
+            kb::script::ScriptFunctionArgument{ .name = "property", .value = kb::script::ScriptValue{ std::string{ property } } },
+            kb::script::ScriptFunctionArgument{ .name = "value", .value = std::move(value) },
+        };
+        const kb::script::ScriptFunctionCallResult result = host.Functions().Call(function, jointArgs, context);
+        return result.Succeeded() && result.Output("set")->AsBool();
+    };
+    kb::tests::Require(setJointProperty("World.SetPropertyInt", "type", kb::script::ScriptValue{ static_cast<int>(kb::scene::JointType::SixDof) }),
+        "World.SetPropertyInt must accept the SixDof joint type");
+    kb::tests::Require(!setJointProperty("World.SetPropertyInt", "type", kb::script::ScriptValue{ static_cast<int>(kb::scene::JointType::Rope) + 1 }),
+        "World.SetPropertyInt must refuse a joint type past the last kind");
+    kb::tests::Require(setJointProperty("World.SetPropertyInt", "freedom.angularY.mode", kb::script::ScriptValue{ static_cast<int>(kb::scene::JointAxisMode::Limited) }) &&
+            setJointProperty("World.SetPropertyFloat", "freedom.angularY.maxLimit", kb::script::ScriptValue{ 35.0F }) &&
+            setJointProperty("World.SetPropertyFloat", "freedom.linearX.motor.force", kb::script::ScriptValue{ 80.0F }) &&
+            setJointProperty("World.SetPropertyFloat", "freedom.swing1Limit", kb::script::ScriptValue{ 20.0F }) &&
+            setJointProperty("World.SetPropertyFloat", "freedom.secondaryAxis.z", kb::script::ScriptValue{ 1.0F }),
+        "World.SetProperty must set the joint freedom properties");
+    kb::tests::Require(!setJointProperty("World.SetPropertyInt", "freedom.angularY.mode", kb::script::ScriptValue{ 3 }),
+        "World.SetPropertyInt must refuse an axis mode past Free");
+    {
+        const kb::scene::JointComponent* joint = scene.Components().Joints().TryGet(jointObject.Entity());
+        kb::tests::Require(joint != nullptr && joint->type == kb::scene::JointType::SixDof &&
+                joint->freedom.axes[4].mode == kb::scene::JointAxisMode::Limited && kb::tests::NearlyEqual(joint->freedom.axes[4].maxLimit, 35.0F) &&
+                kb::tests::NearlyEqual(joint->freedom.axes[0].motor.force, 80.0F) && kb::tests::NearlyEqual(joint->freedom.swing1Limit, 20.0F) &&
+                kb::tests::NearlyEqual(joint->freedom.secondaryAxis.z, 1.0F),
+            "The joint freedom script properties must change the live component");
+    }
 
     // LIB-082: Joint.connectedEntity is deliberately NOT reachable through
     // the generic property mechanism (ScriptSceneComponentApi's FieldBinding
@@ -12752,6 +13250,34 @@ void RunScriptRuntimeHostFrameSettingsTest() {
     kb::tests::Require(fixedDeltas.size() == 1U && kb::tests::NearlyEqual(fixedDeltas[0], 0.1F), "Script runtime host did not pass custom fixed step to scene system");
 }
 
+// The script system keeps a fixed step the scene already carries (the project's) whatever the order of setup, and
+// gives a scene nobody configured its own default step and step limit.
+void RunScriptRuntimeKeepsConfiguredSceneFixedStepTest() {
+    kb::scene::Scene configured;
+    kb::project::ProjectSimulationSettings simulation;
+    simulation.fixedStepHz = 120U;
+    configured.Runtime().ApplyProjectSimulation(simulation);
+    kb::script::ScriptRuntimeHost configuredHost{ configured };
+    kb::tests::Require(configuredHost.Succeeded() && configuredHost.InstallSceneSystem(), "Fixed step configured-scene script host install failed");
+    kb::tests::Require(kb::tests::NearlyEqual(configured.Runtime().FixedStepSettings().fixedDeltaSeconds, 1.0F / 120.0F) &&
+            kb::tests::NearlyEqual(configured.Runtime().ScriptFixedDeltaSeconds(), 1.0F / 120.0F),
+        "The script scene system replaced the fixed step the scene already had with its own default");
+
+    kb::scene::Scene limited;
+    limited.Runtime().SetFixedStepSettings({ .maxFixedStepsPerFrame = 16U });
+    kb::script::ScriptRuntimeHost limitedHost{ limited };
+    kb::tests::Require(limitedHost.Succeeded() && limitedHost.InstallSceneSystem(), "Step limit configured-scene script host install failed");
+    kb::tests::Require(limited.Runtime().FixedStepSettings().maxFixedStepsPerFrame == 16U,
+        "The script scene system replaced the step limit the scene already had with its own default");
+
+    kb::scene::Scene plain;
+    kb::script::ScriptRuntimeHost plainHost{ plain };
+    kb::tests::Require(plainHost.Succeeded() && plainHost.InstallSceneSystem(), "Fixed step plain-scene script host install failed");
+    kb::tests::Require(kb::tests::NearlyEqual(plain.Runtime().FixedStepSettings().fixedDeltaSeconds, 1.0F / 60.0F) &&
+            plain.Runtime().FixedStepSettings().maxFixedStepsPerFrame == 64U,
+        "The script scene system changed the fixed step of a scene nobody configured");
+}
+
 void RunScriptSceneComponentApiTest() {
     kb::scene::Scene scene;
     const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Script Api Object" });
@@ -12990,6 +13516,7 @@ void AttachAllUIComponents(kb::scene::Scene& scene, kb::scene::SceneEntity entit
     components.dropdown->optionCount = static_cast<std::uint32_t>(kb::scene::UIDropdown::MaxOptions);
     components.progressBar.emplace();
     components.widgetSwitcher.emplace();
+    components.accessibility.emplace();
     kb::scene::ApplySceneUIComponents(scene.Components().UI(), entity, components);
 }
 
@@ -13322,6 +13849,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     scene.Components().NavAgents().Set(object.Entity(), kb::scene::NavAgent{});
     scene.Components().NavObstacles().Set(object.Entity(), kb::scene::NavObstacle{});
     scene.Components().NavLinks().Set(object.Entity(), kb::scene::NavLink{});
+    scene.Components().NavBounds().Set(object.Entity(), kb::scene::NavBounds{});
     scene.Components().Animators().Set(object.Entity(), kb::scene::Animator{});
     static_cast<void>(scene.Components().DeformedGeometries().Set(object.Entity(), kb::scene::DrawD3DeformedGeometryComponent{ .skeletalMeshAssetId = 5U }));
     static_cast<void>(scene.Components().SocketAttachments().Set(object.Entity(), kb::scene::MakeSocketAttachment("hand_r")));
@@ -13416,7 +13944,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
                 } else if (componentName == "Detail Switch" && property.name == "demoteCoverage") {
                     validValue = kb::script::ScriptValue{ 0.4F };
                 } else if (componentName == "WorldBackdrop" && property.name == "sunSize") {
-                    validValue = kb::script::ScriptValue{ 0.5F }; // Unity's Sun Size range is 0..1
+                    validValue = kb::script::ScriptValue{ 0.5F }; // the Sun Size range is 0..1
                 } else {
                     validValue = kb::script::ScriptValue{ 2.5F };
                 }
@@ -13494,7 +14022,8 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     // NavLink adds eleven fields.
     // WorldBackdrop grew eleven procedural sky fields.
     // Animator (5), DeformedGeometry (8), SocketAttachment (9), Combatant (26) and AIBrain (37) fields: 681 -> 766.
-    kb::tests::Require(fieldsChecked == 838U, "Script component API generated accessor coverage test did not exercise the expected total field count (838, including text rendering, themes, audio fields and the compatibility alias)");
+    // NavBounds adds twelve fields.
+    kb::tests::Require(fieldsChecked == 907U, "Script component API generated accessor coverage test did not exercise the expected total field count (907, including text rendering, themes, audio fields and the compatibility alias)");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -13535,6 +14064,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     scene.Components().NavAgents().Set(object.Entity(), kb::scene::NavAgent{});
     scene.Components().NavObstacles().Set(object.Entity(), kb::scene::NavObstacle{});
     scene.Components().NavLinks().Set(object.Entity(), kb::scene::NavLink{});
+    scene.Components().NavBounds().Set(object.Entity(), kb::scene::NavBounds{});
     scene.Components().Animators().Set(object.Entity(), kb::scene::Animator{});
     static_cast<void>(scene.Components().DeformedGeometries().Set(object.Entity(), kb::scene::DrawD3DeformedGeometryComponent{ .skeletalMeshAssetId = 5U }));
     static_cast<void>(scene.Components().SocketAttachments().Set(object.Entity(), kb::scene::MakeSocketAttachment("hand_r")));
@@ -13591,7 +14121,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    kb::tests::Require(propertiesChecked == 838U, "LIB-082 raw-pointer audit did not exercise the expected total field count (838, including text rendering, themes, audio fields and the compatibility alias)");
+    kb::tests::Require(propertiesChecked == 907U, "LIB-082 raw-pointer audit did not exercise the expected total field count (907, including text rendering, themes, audio fields and the compatibility alias)");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {
@@ -17531,7 +18061,17 @@ void RunScriptRuntimeTests() {
     RunScriptTouchApiTest();
     RunNativeScriptRuntimeDispatchTest();
     RunNativeScriptPluginManagerDispatchTest();
+    RunNativeScriptPluginObjectReloadTest();
     RunNativeScriptBuildPipelineTest();
+    RunNativeExposedFieldsTest();
+    RunNativeBuildFailureDiagnosticsTest();
+    RunNativeUnsavedStateWarningTest();
+    RunNativeBackgroundBuildTest();
+    RunNativeBuildMessageLocationTest();
+    RunNativeFieldMetadataTest();
+#if defined(_WIN32)
+    RunNativeBuildFindsVswhereTest();
+#endif
     RunScriptRuntimeExecutionOrderTest();
     RunLuaScriptRuntimeDispatchTest();
     RunPucLuaScriptRuntimeDispatchTest();
@@ -17577,6 +18117,7 @@ void RunScriptRuntimeTests() {
     RunScriptParticleSystemApiTest();
     RunParticleEventPostFixedDispatchTest();
     RunScriptHostDisablesFailingBehaviourTest();
+    RunScriptHostWarnsAboutUnsavedStateTest();
     RunScriptMaterialInstanceApiTest();
     RunSceneMaterialInstancesParameterOverridesTest();
     RunScriptMaterialInstanceParameterApiTest();
@@ -17584,6 +18125,7 @@ void RunScriptRuntimeTests() {
     RunScriptPostProcessApiTest();
     RunAudioMixerAssetIOAndAccessTest();
     RunScriptAudioMixerApiTest();
+    RunAudioMasterVolumeFacadeTest();
     RunScriptAudioVoiceControlApiTest();
     RunAudioAssetUnloadAndSceneChangeLifecycleTest();
     RunScriptInputHapticsApiTest();
@@ -17682,6 +18224,7 @@ void RunScriptRuntimeTests() {
     RunScriptRuntimeHostSceneSystemTest();
     RunScriptRuntimeHostNativeDescriptorBindingTest();
     RunScriptRuntimeHostFrameSettingsTest();
+    RunScriptRuntimeKeepsConfiguredSceneFixedStepTest();
     RunScriptSceneComponentApiTest();
     RunScriptAudioComponentPropertiesTest();
     RunScriptUIApiTest();

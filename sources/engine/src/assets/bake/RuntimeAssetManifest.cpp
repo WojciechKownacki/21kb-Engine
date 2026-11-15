@@ -3,10 +3,12 @@
 
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/bake/AssetPack.hpp"
+#include "engine/scene/SceneTagCatalog.hpp"
 #include "project/ProjectDescriptorFormat.hpp"
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <filesystem>
 #include <limits>
 #include <new>
@@ -21,9 +23,29 @@ namespace {
 constexpr std::array<std::uint8_t, 8U> kMagic{ '2', '1', 'K', 'B', 'R', 'M', 'F', 0U };
 constexpr std::array<std::uint8_t, 8U> kSourceMagic{ '2', '1', 'K', 'B', 'S', 'R', 'C', 0U };
 // The word after the version: once reserved and zero, now flags. Bit 0 marks a partial manifest;
-// bit 1 says the tombstone lists follow the auxiliary files.
+// bit 1 says the tombstone lists follow the auxiliary files; bit 2 says the display and simulation
+// settings follow the physics layers asset (settings that are all defaults leave them out); bit 3 says the
+// master volume follows them and bit 4 that the project's tag list does (each left out while it is the default);
+// bit 5 says the display render scale follows the tags (left out at 1); bit 6 says the project records from the
+// microphone and carries no data (left out while it is off); bit 7 says the Android graphics API follows the
+// render scale as one byte (left out while it is Auto); bit 8 says the launch screen settings follow (left out while
+// they are all defaults); bit 9 says the navigation areas follow the launch screen (left out while they are the
+// default areas); bit 10 says the crowd level-of-detail distances and far path interval follow them (left out while
+// they are the defaults).
 constexpr std::uint32_t kPartialManifestFlag = 1U;
 constexpr std::uint32_t kTombstonesManifestFlag = 2U;
+constexpr std::uint32_t kRuntimeSettingsManifestFlag = 4U;
+constexpr std::uint32_t kMasterVolumeManifestFlag = 8U;
+constexpr std::uint32_t kTagsManifestFlag = 16U;
+constexpr std::uint32_t kRenderScaleManifestFlag = 32U;
+constexpr std::uint32_t kMicrophoneManifestFlag = 64U;
+constexpr std::uint32_t kAndroidGraphicsApiManifestFlag = 128U;
+constexpr std::uint32_t kSplashManifestFlag = 256U;
+constexpr std::uint32_t kNavigationAreasManifestFlag = 512U;
+constexpr std::uint32_t kNavigationCrowdManifestFlag = 1024U;
+constexpr std::uint32_t kSettingsManifestFlags = kRuntimeSettingsManifestFlag | kMasterVolumeManifestFlag | kTagsManifestFlag |
+    kRenderScaleManifestFlag | kMicrophoneManifestFlag | kAndroidGraphicsApiManifestFlag | kSplashManifestFlag |
+    kNavigationAreasManifestFlag | kNavigationCrowdManifestFlag;
 constexpr std::uint64_t kMaxManifestBytes = 64ULL * 1024ULL * 1024ULL;
 constexpr std::uint32_t kMaxDescriptorTargetPlatforms =
     kb::project::ProjectDescriptorFormat::MaxTargetPlatformCount;
@@ -51,6 +73,10 @@ void PutUInt64(std::vector<std::uint8_t>& bytes, std::uint64_t value) {
     for (std::uint32_t shift = 0U; shift < 64U; shift += 8U) {
         bytes.push_back(static_cast<std::uint8_t>((value >> shift) & 0xFFU));
     }
+}
+
+void PutFloat(std::vector<std::uint8_t>& bytes, float value) {
+    PutUInt32(bytes, std::bit_cast<std::uint32_t>(value));
 }
 
 void PutString(std::vector<std::uint8_t>& bytes, std::string_view value) {
@@ -90,6 +116,15 @@ public:
         for (std::uint32_t shift = 0U; shift < 64U; shift += 8U) {
             value |= static_cast<std::uint64_t>(bytes_[cursor_++]) << shift;
         }
+        return true;
+    }
+
+    [[nodiscard]] bool ReadFloat(float& value) noexcept {
+        std::uint32_t bits = 0U;
+        if (!ReadUInt32(bits)) {
+            return false;
+        }
+        value = std::bit_cast<float>(bits);
         return true;
     }
 
@@ -198,7 +233,7 @@ private:
 }
 
 [[nodiscard]] bool IsValidSettings(const kb::project::ProjectSettings& settings) noexcept {
-    const std::array<std::string_view, 7U> shortStrings{
+    const std::array<std::string_view, 8U> shortStrings{
         settings.name,
         settings.gameName,
         settings.category,
@@ -206,6 +241,7 @@ private:
         settings.lastOpenMap,
         settings.inputMappingContext,
         settings.physicsLayersAsset,
+        settings.display.splash.image,
     };
     if (std::ranges::any_of(shortStrings, [](std::string_view value) {
             return value.size() > kMaxPathBytes || !IsCleanText(value);
@@ -215,10 +251,53 @@ private:
     const auto validQuality = [](kb::project::ProjectQualityLevel level) noexcept {
         return static_cast<std::uint8_t>(level) < kb::project::kProjectQualityLevelCount;
     };
+    const auto within = [](auto value, auto minimum, auto maximum) noexcept {
+        return value >= minimum && value <= maximum;
+    };
+    const kb::project::ProjectDisplaySettings& display = settings.display;
+    const kb::project::ProjectSimulationSettings& simulation = settings.simulation;
     return static_cast<std::uint32_t>(settings.lightingPath) <=
-            static_cast<std::uint32_t>(kb::project::ProjectSceneLightingPath::ForwardPlus) &&
+            static_cast<std::uint32_t>(kb::project::ProjectSceneLightingPath::Auto) &&
         validQuality(settings.shadowQuality) && validQuality(settings.shadowQualityMobile) &&
-        validQuality(settings.giQuality) && validQuality(settings.giQualityMobile);
+        validQuality(settings.giQuality) && validQuality(settings.giQualityMobile) &&
+        within(display.windowWidth, kb::project::kProjectWindowExtentMin, kb::project::kProjectWindowExtentMax) &&
+        within(display.windowHeight, kb::project::kProjectWindowExtentMin, kb::project::kProjectWindowExtentMax) &&
+        display.windowMode <= kb::project::ProjectWindowMode::BorderlessFullscreen &&
+        display.frameRateCap <= kb::project::kProjectFrameRateCapMax &&
+        within(display.renderScale, kb::project::kProjectRenderScaleMin, kb::project::kProjectRenderScaleMax) &&
+        static_cast<std::uint8_t>(display.androidGraphicsApi) < kb::project::kProjectAndroidGraphicsApiCount &&
+        static_cast<std::uint8_t>(display.splash.scale) < kb::project::kProjectSplashScaleCount &&
+        display.splash.minimumDisplayMilliseconds <= kb::project::kProjectSplashMinimumMillisecondsMax &&
+        std::ranges::all_of(display.splash.backgroundColor, [&within](float channel) { return within(channel, 0.0F, 1.0F); }) &&
+        within(simulation.fixedStepHz, kb::project::kProjectFixedStepHzMin, kb::project::kProjectFixedStepHzMax) &&
+        within(simulation.gravity[0], -kb::project::kProjectGravityLimit, kb::project::kProjectGravityLimit) &&
+        within(simulation.gravity[1], -kb::project::kProjectGravityLimit, kb::project::kProjectGravityLimit) &&
+        within(simulation.gravity[2], -kb::project::kProjectGravityLimit, kb::project::kProjectGravityLimit) &&
+        within(simulation.timeScale, 0.0F, kb::project::kProjectTimeScaleMax) &&
+        within(settings.masterVolume, 0.0F, 1.0F) && settings.tags.size() <= kb::project::kProjectTagsMax &&
+        std::ranges::all_of(settings.tags, [](const std::string& tag) {
+            return !tag.empty() && kb::scene::SceneTagCatalog::CanonicalName(tag) == tag;
+        }) && kb::scene::AreNavAreaDefinitionsValid(settings.navigationAreas) &&
+        within(settings.navigationNearDistance, 0.0F, kb::project::kProjectNavigationDistanceMax) &&
+        within(settings.navigationMidDistance, 0.0F, kb::project::kProjectNavigationDistanceMax) &&
+        within(settings.navigationFarPathInterval, 1U, kb::project::kProjectNavigationFarPathIntervalMax);
+}
+
+// The manifest flags of the settings that differ from their defaults and so have to be written.
+[[nodiscard]] std::uint32_t SettingsFlags(const kb::project::ProjectSettings& settings) noexcept {
+    const kb::project::ProjectSettings defaults;
+    return ((settings.display != defaults.display || settings.simulation != defaults.simulation) ? kRuntimeSettingsManifestFlag : 0U) |
+        (settings.masterVolume != defaults.masterVolume ? kMasterVolumeManifestFlag : 0U) |
+        (!settings.tags.empty() ? kTagsManifestFlag : 0U) |
+        (settings.display.renderScale != defaults.display.renderScale ? kRenderScaleManifestFlag : 0U) |
+        (settings.microphone != defaults.microphone ? kMicrophoneManifestFlag : 0U) |
+        (settings.display.androidGraphicsApi != defaults.display.androidGraphicsApi ? kAndroidGraphicsApiManifestFlag : 0U) |
+        (settings.display.splash != defaults.display.splash ? kSplashManifestFlag : 0U) |
+        (settings.navigationAreas != defaults.navigationAreas ? kNavigationAreasManifestFlag : 0U) |
+        (settings.navigationNearDistance != defaults.navigationNearDistance || settings.navigationMidDistance != defaults.navigationMidDistance ||
+                settings.navigationFarPathInterval != defaults.navigationFarPathInterval
+            ? kNavigationCrowdManifestFlag
+            : 0U);
 }
 
 [[nodiscard]] bool ArtifactLess(
@@ -422,7 +501,7 @@ void EncodeDescriptor(std::vector<std::uint8_t>& bytes, const kb::project::Proje
     return RuntimeAssetManifestStatus::Success;
 }
 
-void EncodeSettings(std::vector<std::uint8_t>& bytes, const kb::project::ProjectSettings& settings) {
+void EncodeSettings(std::vector<std::uint8_t>& bytes, const kb::project::ProjectSettings& settings, std::uint32_t flags) {
     PutString(bytes, settings.name);
     PutString(bytes, settings.gameName);
     PutString(bytes, settings.category);
@@ -437,9 +516,124 @@ void EncodeSettings(std::vector<std::uint8_t>& bytes, const kb::project::Project
     PutUInt8(bytes, settings.inputEnabled ? 1U : 0U);
     PutString(bytes, settings.inputMappingContext);
     PutString(bytes, settings.physicsLayersAsset);
+    if ((flags & kRuntimeSettingsManifestFlag) != 0U) {
+        PutUInt32(bytes, settings.display.windowWidth);
+        PutUInt32(bytes, settings.display.windowHeight);
+        PutUInt8(bytes, static_cast<std::uint8_t>(settings.display.windowMode));
+        PutUInt8(bytes, settings.display.resizable ? 1U : 0U);
+        PutUInt8(bytes, settings.display.vsync ? 1U : 0U);
+        PutUInt32(bytes, settings.display.frameRateCap);
+        PutUInt32(bytes, settings.simulation.fixedStepHz);
+        for (const float axis : settings.simulation.gravity) {
+            PutFloat(bytes, axis);
+        }
+        PutFloat(bytes, settings.simulation.timeScale);
+    }
+    if ((flags & kMasterVolumeManifestFlag) != 0U) {
+        PutFloat(bytes, settings.masterVolume);
+    }
+    if ((flags & kTagsManifestFlag) != 0U) {
+        PutUInt32(bytes, static_cast<std::uint32_t>(settings.tags.size()));
+        for (const std::string& tag : settings.tags) {
+            PutString(bytes, tag);
+        }
+    }
+    if ((flags & kRenderScaleManifestFlag) != 0U) {
+        PutFloat(bytes, settings.display.renderScale);
+    }
+    if ((flags & kAndroidGraphicsApiManifestFlag) != 0U) {
+        PutUInt8(bytes, static_cast<std::uint8_t>(settings.display.androidGraphicsApi));
+    }
+    if ((flags & kSplashManifestFlag) != 0U) {
+        const kb::project::ProjectSplashSettings& splash = settings.display.splash;
+        PutString(bytes, splash.image);
+        for (const float channel : splash.backgroundColor) {
+            PutFloat(bytes, channel);
+        }
+        PutUInt8(bytes, static_cast<std::uint8_t>(splash.scale));
+        PutUInt32(bytes, splash.minimumDisplayMilliseconds);
+        PutUInt8(bytes, splash.showProgress ? 1U : 0U);
+    }
+    if ((flags & kNavigationAreasManifestFlag) != 0U) {
+        PutUInt32(bytes, static_cast<std::uint32_t>(settings.navigationAreas.size()));
+        for (const kb::scene::NavAreaDefinition& area : settings.navigationAreas) {
+            PutString(bytes, area.name);
+            PutUInt32(bytes, area.colour);
+            PutFloat(bytes, area.cost);
+        }
+    }
+    if ((flags & kNavigationCrowdManifestFlag) != 0U) {
+        PutFloat(bytes, settings.navigationNearDistance);
+        PutFloat(bytes, settings.navigationMidDistance);
+        PutUInt32(bytes, settings.navigationFarPathInterval);
+    }
 }
 
-[[nodiscard]] bool DecodeSettings(Reader& reader, kb::project::ProjectSettings& settings) {
+[[nodiscard]] bool DecodeRuntimeSettings(Reader& reader, kb::project::ProjectSettings& settings) {
+    kb::project::ProjectDisplaySettings& display = settings.display;
+    kb::project::ProjectSimulationSettings& simulation = settings.simulation;
+    std::uint8_t windowMode = 0U;
+    std::uint8_t resizable = 0U;
+    std::uint8_t vsync = 0U;
+    if (!reader.ReadUInt32(display.windowWidth) || !reader.ReadUInt32(display.windowHeight) ||
+        !reader.ReadUInt8(windowMode) || !reader.ReadUInt8(resizable) || !reader.ReadUInt8(vsync) ||
+        !reader.ReadUInt32(display.frameRateCap) || !reader.ReadUInt32(simulation.fixedStepHz) ||
+        !reader.ReadFloat(simulation.gravity[0]) || !reader.ReadFloat(simulation.gravity[1]) ||
+        !reader.ReadFloat(simulation.gravity[2]) || !reader.ReadFloat(simulation.timeScale) ||
+        windowMode > static_cast<std::uint8_t>(kb::project::ProjectWindowMode::BorderlessFullscreen) ||
+        resizable > 1U || vsync > 1U) {
+        return false;
+    }
+    display.windowMode = static_cast<kb::project::ProjectWindowMode>(windowMode);
+    display.resizable = resizable != 0U;
+    display.vsync = vsync != 0U;
+    return true;
+}
+
+[[nodiscard]] bool DecodeAndroidGraphicsApi(Reader& reader, kb::project::ProjectDisplaySettings& display) {
+    std::uint8_t api = 0U;
+    if (!reader.ReadUInt8(api) || api >= kb::project::kProjectAndroidGraphicsApiCount) {
+        return false;
+    }
+    display.androidGraphicsApi = static_cast<kb::project::ProjectAndroidGraphicsApi>(api);
+    return true;
+}
+
+[[nodiscard]] bool DecodeSplash(Reader& reader, kb::project::ProjectSplashSettings& splash) {
+    std::uint8_t scale = 0U;
+    std::uint8_t showProgress = 0U;
+    if (!reader.ReadString(splash.image, kMaxPathBytes) || !reader.ReadFloat(splash.backgroundColor[0]) ||
+        !reader.ReadFloat(splash.backgroundColor[1]) || !reader.ReadFloat(splash.backgroundColor[2]) ||
+        !reader.ReadUInt8(scale) || scale >= kb::project::kProjectSplashScaleCount ||
+        !reader.ReadUInt32(splash.minimumDisplayMilliseconds) || !reader.ReadUInt8(showProgress) || showProgress > 1U) {
+        return false;
+    }
+    splash.scale = static_cast<kb::project::ProjectSplashScale>(scale);
+    splash.showProgress = showProgress != 0U;
+    return true;
+}
+
+[[nodiscard]] bool DecodeTags(Reader& reader, std::vector<std::string>& tags) {
+    std::uint32_t count = 0U;
+    if (!reader.ReadUInt32(count) || count > kb::project::kProjectTagsMax) {
+        return false;
+    }
+    tags.resize(count);
+    return std::ranges::all_of(tags, [&reader](std::string& tag) { return reader.ReadString(tag, kMaxShortStringBytes); });
+}
+
+[[nodiscard]] bool DecodeNavigationAreas(Reader& reader, std::vector<kb::scene::NavAreaDefinition>& areas) {
+    std::uint32_t count = 0U;
+    if (!reader.ReadUInt32(count) || count > kb::scene::kNavAreaCount) {
+        return false;
+    }
+    areas.resize(count);
+    return std::ranges::all_of(areas, [&reader](kb::scene::NavAreaDefinition& area) {
+        return reader.ReadString(area.name, kMaxShortStringBytes) && reader.ReadUInt32(area.colour) && reader.ReadFloat(area.cost);
+    }) && kb::scene::AreNavAreaDefinitionsValid(areas);
+}
+
+[[nodiscard]] bool DecodeSettings(Reader& reader, kb::project::ProjectSettings& settings, std::uint32_t flags) {
     std::uint32_t lightingPath = 0U;
     std::array<std::uint8_t, 4U> quality{};
     std::uint8_t inputEnabled = 0U;
@@ -463,7 +657,17 @@ void EncodeSettings(std::vector<std::uint8_t>& bytes, const kb::project::Project
     settings.giQuality = static_cast<kb::project::ProjectQualityLevel>(quality[2]);
     settings.giQualityMobile = static_cast<kb::project::ProjectQualityLevel>(quality[3]);
     settings.inputEnabled = inputEnabled != 0U;
-    return true;
+    return ((flags & kRuntimeSettingsManifestFlag) == 0U || DecodeRuntimeSettings(reader, settings)) &&
+        ((flags & kMasterVolumeManifestFlag) == 0U || reader.ReadFloat(settings.masterVolume)) &&
+        ((flags & kTagsManifestFlag) == 0U || DecodeTags(reader, settings.tags)) &&
+        ((flags & kRenderScaleManifestFlag) == 0U || reader.ReadFloat(settings.display.renderScale)) &&
+        ((flags & kMicrophoneManifestFlag) == 0U || (settings.microphone = true)) &&
+        ((flags & kAndroidGraphicsApiManifestFlag) == 0U || DecodeAndroidGraphicsApi(reader, settings.display)) &&
+        ((flags & kSplashManifestFlag) == 0U || DecodeSplash(reader, settings.display.splash)) &&
+        ((flags & kNavigationAreasManifestFlag) == 0U || DecodeNavigationAreas(reader, settings.navigationAreas)) &&
+        ((flags & kNavigationCrowdManifestFlag) == 0U ||
+            (reader.ReadFloat(settings.navigationNearDistance) && reader.ReadFloat(settings.navigationMidDistance) &&
+                reader.ReadUInt32(settings.navigationFarPathInterval)));
 }
 
 } // namespace
@@ -496,11 +700,12 @@ RuntimeAssetManifestStatus EncodeRuntimeAssetManifest(
     PutUInt32(bytes, kRuntimeAssetManifestVersion);
     // Flags. Zero for a complete manifest, which keeps its bytes what they always were.
     const bool tombstones = !canonical.removedAssets.empty() || !canonical.removedAuxiliaryFiles.empty();
-    PutUInt32(bytes, (canonical.partial ? kPartialManifestFlag : 0U) | (tombstones ? kTombstonesManifestFlag : 0U));
+    const std::uint32_t settingsFlags = SettingsFlags(canonical.settings);
+    PutUInt32(bytes, (canonical.partial ? kPartialManifestFlag : 0U) | (tombstones ? kTombstonesManifestFlag : 0U) | settingsFlags);
     PutString(bytes, canonical.targetProfileId);
     PutUInt64(bytes, canonical.targetProfileHash);
     EncodeDescriptor(bytes, canonical.descriptor);
-    EncodeSettings(bytes, canonical.settings);
+    EncodeSettings(bytes, canonical.settings, settingsFlags);
     PutUInt32(bytes, static_cast<std::uint32_t>(canonical.assets.size()));
     for (const RuntimeAssetManifestEntry& asset : canonical.assets) {
         PutUInt64(bytes, asset.id.value);
@@ -571,7 +776,7 @@ RuntimeAssetManifestStatus DecodeRuntimeAssetManifest(
     if (version != kRuntimeAssetManifestVersion) {
         return RuntimeAssetManifestStatus::UnsupportedVersion;
     }
-    if (!reader.ReadUInt32(reserved) || (reserved & ~(kPartialManifestFlag | kTombstonesManifestFlag)) != 0U ||
+    if (!reader.ReadUInt32(reserved) || (reserved & ~(kPartialManifestFlag | kTombstonesManifestFlag | kSettingsManifestFlags)) != 0U ||
         !reader.ReadString(manifest.targetProfileId, kMaxShortStringBytes) ||
         !reader.ReadUInt64(manifest.targetProfileHash)) {
         return RuntimeAssetManifestStatus::Malformed;
@@ -581,7 +786,7 @@ RuntimeAssetManifestStatus DecodeRuntimeAssetManifest(
     if (descriptorStatus != RuntimeAssetManifestStatus::Success) {
         return descriptorStatus;
     }
-    if (!DecodeSettings(reader, manifest.settings)) {
+    if (!DecodeSettings(reader, manifest.settings, reserved & kSettingsManifestFlags)) {
         return RuntimeAssetManifestStatus::Malformed;
     }
 

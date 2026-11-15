@@ -11,6 +11,7 @@ std::string DefaultDockWorkspace::PanelTitle(DockPanelKind kind) {
     switch (kind) {
     case DockPanelKind::Hierarchy: return std::string{ EditorText("panel.hierarchy", "Hierarchy") };
     case DockPanelKind::Scene: return std::string{ EditorText("panel.scene", "Scene View") };
+    case DockPanelKind::Game: return std::string{ EditorText("panel.game", "Game View") };
     case DockPanelKind::Inspector: return std::string{ EditorText("panel.inspector", "Inspector") };
     case DockPanelKind::Assets: return std::string{ EditorText("panel.assets", "Project Files") };
     case DockPanelKind::Console: return std::string{ EditorText("panel.console", "Console") };
@@ -40,6 +41,8 @@ std::string DefaultDockWorkspace::PanelTitle(DockPanelKind kind) {
 // Each panel starts with its own title; Editor Settings gives them the new one when the language changes.
 std::vector<DockPanel> DefaultDockWorkspace::CreatePanels() const {
     return {
+        // Closed until Play opens it, then docked as a tab beside the Scene View.
+        DockPanel{ .id = 25, .kind = DockPanelKind::Game, .title = PanelTitle(DockPanelKind::Game), .area = DockArea::Center, .visible = false, .detachable = false, .floatingRect = DockRect{ 128, 128, 720, 520 } },
         DockPanel{ .id = 24, .kind = DockPanelKind::StaticMeshEditor, .title = PanelTitle(DockPanelKind::StaticMeshEditor), .area = DockArea::Center, .visible = false, .floatingRect = DockRect{ 160, 152, 860, 620 } },
         DockPanel{ .id = 22, .kind = DockPanelKind::GameplayGraphEditor, .title = PanelTitle(DockPanelKind::GameplayGraphEditor), .area = DockArea::Center, .visible = false, .floatingRect = DockRect{ 152, 144, 1180, 760 } },
         DockPanel{ .id = 21, .kind = DockPanelKind::BlendSpace2DEditor, .title = PanelTitle(DockPanelKind::BlendSpace2DEditor), .area = DockArea::Center, .visible = false, .floatingRect = DockRect{ 152, 144, 1100, 720 } },
@@ -51,7 +54,7 @@ std::vector<DockPanel> DefaultDockWorkspace::CreatePanels() const {
         DockPanel{ .id = 2, .kind = DockPanelKind::Scene, .title = PanelTitle(DockPanelKind::Scene), .area = DockArea::Center, .floatingRect = DockRect{ 128, 128, 720, 520 } },
         DockPanel{ .id = 4, .kind = DockPanelKind::Inspector, .title = PanelTitle(DockPanelKind::Inspector), .area = DockArea::Right, .floatingRect = DockRect{ 112, 112, 380, 560 } },
         DockPanel{ .id = 5, .kind = DockPanelKind::Assets, .title = PanelTitle(DockPanelKind::Assets), .area = DockArea::Bottom, .floatingRect = DockRect{ 128, 128, 620, 360 } },
-        DockPanel{ .id = 23, .kind = DockPanelKind::Agent, .title = PanelTitle(DockPanelKind::Agent), .area = DockArea::Bottom, .floatingRect = DockRect{ 160, 160, 720, 420 } },
+        DockPanel{ .id = 23, .kind = DockPanelKind::Agent, .title = PanelTitle(DockPanelKind::Agent), .area = DockArea::Right, .floatingRect = DockRect{ 160, 160, 720, 420 } },
         DockPanel{ .id = 6, .kind = DockPanelKind::Console, .title = PanelTitle(DockPanelKind::Console), .area = DockArea::Bottom, .floatingRect = DockRect{ 144, 144, 680, 340 } },
         DockPanel{ .id = 7, .kind = DockPanelKind::ProjectSettings, .title = PanelTitle(DockPanelKind::ProjectSettings), .area = DockArea::Right, .visible = false, .floatingRect = DockRect{ 160, 120, 420, 520 } },
         DockPanel{ .id = 8, .kind = DockPanelKind::ScriptEditor, .title = PanelTitle(DockPanelKind::ScriptEditor), .area = DockArea::Center, .visible = false, .floatingRect = DockRect{ 180, 140, 760, 560 } },
@@ -71,9 +74,9 @@ std::unique_ptr<DockNode> DefaultDockWorkspace::CreateRoot(std::uint32_t& nextNo
     // Only the everyday panels start open. The specialist editors, settings, plugins and Build Game stay closed
     // and dock into their area (center / right) when something opens them: a double click on an asset, or a menu row.
     auto center = DockNodeFactory::MakeLeaf(Next(nextNodeId), { 2 });
-    auto right = DockNodeFactory::MakeLeaf(Next(nextNodeId), { 4 });
-    auto bottom = DockNodeFactory::MakeLeaf(Next(nextNodeId), { 5, 6, 23 });
-    // The Inspector runs the full height on the right, as in Unity and Unreal, so a long component
+    auto right = DockNodeFactory::MakeLeaf(Next(nextNodeId), { 4, 23 });
+    auto bottom = DockNodeFactory::MakeLeaf(Next(nextNodeId), { 5, 6 });
+    // The Inspector runs the full height on the right, so a long component
     // list is not cut by the Project Files strip; that strip sits under the Hierarchy and the scene.
     auto top = DockNodeFactory::MakeSplit(Next(nextNodeId), DockSplitAxis::Horizontal, 0.23F, std::move(left), std::move(center));
     auto main = DockNodeFactory::MakeSplit(Next(nextNodeId), DockSplitAxis::Vertical, 0.69F, std::move(top), std::move(bottom));

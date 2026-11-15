@@ -26,6 +26,12 @@ public:
     [[nodiscard]] DockHit HitTest(const DockLayout& layout, int x, int y) const;
     [[nodiscard]] std::optional<DockDropPreview> ResolveDropPreview(const DockLayout& layout, int x, int y) const;
     [[nodiscard]] std::uint32_t PanelCountInLeaf(std::uint32_t leafId) const noexcept;
+    // The tab group a docked panel sits in: its leaf (0 when floating or closed) and the
+    // panels of that leaf in tab order.
+    [[nodiscard]] std::uint32_t LeafOfPanel(std::uint32_t panelId) const noexcept;
+    [[nodiscard]] std::vector<std::uint32_t> PanelsSharingLeaf(std::uint32_t panelId) const;
+    // The leaf currently filling the workspace, 0 when none is maximized.
+    [[nodiscard]] std::uint32_t MaximizedLeafId() const noexcept;
 
 private:
     const DockPanelCollection& panels_;

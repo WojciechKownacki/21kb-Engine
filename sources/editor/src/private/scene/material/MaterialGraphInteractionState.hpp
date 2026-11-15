@@ -89,6 +89,8 @@ struct MaterialGraphViewportState final {
     int canvasLeft = 0;
     int canvasTop = 0;
     bool focused = false;
+    // A material opened for the first time is framed once its canvas has been laid out.
+    bool frameAllPending = false;
     int panStartX = 0;
     int panStartY = 0;
     int panStartOffsetX = 0;

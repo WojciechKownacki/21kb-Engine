@@ -10,6 +10,24 @@ namespace kb::script {
 struct PucLuaMemoryBlock;
 class PucLuaMemoryArena;
 
+// The raw memory under every Lua state's allocator (the arena and the debugger's expression state), with the contract of a
+// Lua allocator: null block allocates, zero size frees, otherwise resizes. LuaJIT keeps the address of every object it
+// collects in 47 bits. Where malloc hands out such addresses (Windows, Linux, older Android) it is used, the fastest
+// choice; where it tags the pointers it returns (the top byte is set, as on newer Android) a LuaJIT build takes its
+// memory from LuaJIT's own allocator, reached through a state that is never run. Lua 5.4 always uses malloc.
+class PucLuaRawHeap final {
+public:
+    explicit PucLuaRawHeap(bool alwaysUseVmAllocator = false) noexcept; // true: LuaJIT builds use its allocator on every platform (tests)
+    ~PucLuaRawHeap();
+    PucLuaRawHeap(const PucLuaRawHeap&) = delete;
+    PucLuaRawHeap& operator=(const PucLuaRawHeap&) = delete;
+    [[nodiscard]] void* Resize(void* block, std::size_t oldSize, std::size_t newSize) noexcept;
+private:
+    [[maybe_unused]] void* host_ = nullptr; // Lua 5.4 needs no host state
+    void* (*allocate_)(void*, void*, std::size_t, std::size_t) = nullptr;
+    void* allocatorData_ = nullptr;
+};
+
 class PucLuaHeapImage final {
 public:
     PucLuaHeapImage() = default;
@@ -49,6 +67,7 @@ private:
     friend class PucLuaHeapImage;
     void Release(PucLuaMemoryBlock* block) noexcept;
     void Free(PucLuaMemoryBlock* block) noexcept;
+    PucLuaRawHeap heap_; // outlives the blocks: the destructor frees them first
     PucLuaMemoryBlock* blocks_ = nullptr;
     std::size_t liveBytes_ = 0U;
     std::size_t residentBytes_ = 0U;

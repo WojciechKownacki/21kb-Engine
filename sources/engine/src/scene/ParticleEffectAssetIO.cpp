@@ -5,6 +5,7 @@
 #include "scene/asset/io/SceneAssetBinaryIO.hpp"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <fstream>
@@ -245,6 +246,19 @@ template <typename Enum> [[nodiscard]] std::string_view EnumText(Enum value) noe
     return false;
 }
 
+constexpr std::array<std::string_view, 6> kTangentModeNames{"Easing", "Auto", "Flat", "Linear", "Constant", "Free"};
+
+[[nodiscard]] bool ParseTangentMode(std::string_view text, kb::math::CurveTangentMode& output) noexcept {
+    text = Trim(text);
+    for (std::size_t value = 0U; value < kTangentModeNames.size(); ++value) {
+        if (kTangentModeNames[value] == text) {
+            output = static_cast<kb::math::CurveTangentMode>(value);
+            return true;
+        }
+    }
+    return false;
+}
+
 class Reader {
   public:
     Reader(Records records, ParticleEffectLoadResult& result, std::uint32_t headerLine)
@@ -409,6 +423,12 @@ void ReadCurve(Reader& reader, const std::string& base, kb::math::Curve& curve) 
         reader.Required(path + ".value", curve.keyframes[index].value, ParseFloat);
         reader.Required(path + ".easing", curve.keyframes[index].easing, ParseEasing,
                         ParticleEffectDiagnosticCode::InvalidEnum);
+        // Tangent data is optional; keys without it keep their easing.
+        if (reader.Optional(path + ".tangentMode", curve.keyframes[index].tangentMode, ParseTangentMode,
+                            ParticleEffectDiagnosticCode::InvalidEnum)) {
+            reader.Required(path + ".inTangent", curve.keyframes[index].inTangent, ParseFloat);
+            reader.Required(path + ".outTangent", curve.keyframes[index].outTangent, ParseFloat);
+        }
     }
 }
 
@@ -1060,6 +1080,11 @@ void WriteCurve(std::string& out, const std::string& base, const kb::math::Curve
         Line(out, p + ".time", Float(curve.keyframes[i].time));
         Line(out, p + ".value", Float(curve.keyframes[i].value));
         Line(out, p + ".easing", kb::math::ToString(curve.keyframes[i].easing));
+        if (curve.keyframes[i].tangentMode != kb::math::CurveTangentMode::Easing) {
+            Line(out, p + ".tangentMode", std::string{kTangentModeNames[static_cast<std::size_t>(curve.keyframes[i].tangentMode)]});
+            Line(out, p + ".inTangent", Float(curve.keyframes[i].inTangent));
+            Line(out, p + ".outTangent", Float(curve.keyframes[i].outTangent));
+        }
     }
 }
 void WriteGradient(std::string& out, const std::string& base, const kb::math::Gradient& gradient) {

@@ -112,7 +112,7 @@ def main():
         return [[tuple(data[offset+(abs(height)-1-y if height>0 else y)*stride+x*(bits//8)+c] for c in (2,1,0)) for x in range(width)] for y in range(abs(height))]
     before,after=[bmp(root/('Editor/EditorExtension/automation/screenshots/'+name+'.bmp')) for name in ('before','after')]
     changed=sum(max(abs(a-b) for a,b in zip(before[y][x],after[y][x]))>8 for y in range(48,124) for x in range(16,800))
-    button=sum(min(after[y][x])>90 and max(after[y][x])-min(after[y][x])<5 for y in range(140,168) for x in range(20,250))
+    panel=after[150][600];button=sum(max(abs(a-b) for a,b in zip(after[y][x],panel))>24 for y in range(140,168) for x in range(20,250))
     assert changed>100 and button>1000,('module panel did not paint/update',changed,button)
     sys.path.insert(0,str(args.engine_root.resolve()/'scripts'))
     from png_readback import read_png

@@ -68,6 +68,12 @@ enum class HeroIconKind : std::uint8_t {
     Info,
     Flag,
     Monitor,
+    Clock,
+    Trash,
+    Pencil,
+    ExternalLink,
+    GitHub,
+    GitBranch,
 
     // Sentinel for anything sized by the catalogue. Adding a kind above this line must
     // never require a second edit somewhere else to keep a cache in range.

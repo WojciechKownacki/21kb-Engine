@@ -49,7 +49,7 @@ struct UIImage {
     bool fillClockwise = true;
     // A press only lands where the image is at least this opaque; 0 makes the whole rectangle clickable.
     float alphaHitThreshold = 0.0F;
-    // Unreal's UI material: a material of the User Interface domain draws the image's rectangle (its Texture
+    // UI material: a material of the User Interface domain draws the image's rectangle (its Texture
     // Coordinate spans it) instead of the image, tinted by `color`.
     std::uint64_t materialAssetId = 0U;
 };

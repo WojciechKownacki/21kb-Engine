@@ -1,10 +1,14 @@
 #include "engine/project/ProjectSettings.hpp"
 
 #include "engine/config/IniDocument.hpp"
+#include "engine/scene/SceneTagCatalog.hpp"
 
 #include <algorithm>
+#include <array>
+#include <string>
 #include <string_view>
 #include <system_error>
+#include <vector>
 
 namespace kb::project {
 namespace {
@@ -13,15 +17,22 @@ constexpr std::string_view kIdentity = "Project.Identity";
 constexpr std::string_view kProduct = "Project.Product";
 constexpr std::string_view kAndroid = "Project.Android";
 constexpr std::string_view kMaps = "Project.Maps";
+constexpr std::string_view kBuildScenes = "Project.BuildScenes";
 constexpr std::string_view kRendering = "Project.Rendering";
+constexpr std::string_view kDisplay = "Project.Display";
 constexpr std::string_view kInput = "Project.Input";
 constexpr std::string_view kPhysics = "Project.Physics";
+constexpr std::string_view kTime = "Project.Time";
+constexpr std::string_view kAudio = "Project.Audio";
+constexpr std::string_view kTags = "Project.Tags";
+constexpr std::string_view kNavigation = "Project.Navigation";
 constexpr std::string_view kCrashReports = "Project.CrashReports";
 
 [[nodiscard]] std::string_view LightingPathName(ProjectSceneLightingPath path) noexcept {
     switch (path) {
     case ProjectSceneLightingPath::Deferred: return "Deferred";
     case ProjectSceneLightingPath::ForwardPlus: return "ForwardPlus";
+    case ProjectSceneLightingPath::Auto: return "Auto";
     case ProjectSceneLightingPath::Forward:
     default: return "Forward";
     }
@@ -31,12 +42,87 @@ constexpr std::string_view kCrashReports = "Project.CrashReports";
     if (name == "Forward") return ProjectSceneLightingPath::Forward;
     if (name == "Deferred") return ProjectSceneLightingPath::Deferred;
     if (name == "ForwardPlus") return ProjectSceneLightingPath::ForwardPlus;
+    if (name == "Auto") return ProjectSceneLightingPath::Auto;
     return fallback;
+}
+
+[[nodiscard]] std::string_view WindowModeName(ProjectWindowMode mode) noexcept {
+    return mode == ProjectWindowMode::BorderlessFullscreen ? "BorderlessFullscreen" : "Windowed";
+}
+
+[[nodiscard]] ProjectWindowMode ParseWindowMode(std::string_view name, ProjectWindowMode fallback) noexcept {
+    if (name == "Windowed") return ProjectWindowMode::Windowed;
+    if (name == "BorderlessFullscreen") return ProjectWindowMode::BorderlessFullscreen;
+    return fallback;
+}
+
+[[nodiscard]] std::string_view AndroidGraphicsApiName(ProjectAndroidGraphicsApi api) noexcept {
+    switch (api) {
+    case ProjectAndroidGraphicsApi::Vulkan: return "Vulkan";
+    case ProjectAndroidGraphicsApi::OpenGLES: return "OpenGLES";
+    case ProjectAndroidGraphicsApi::Auto:
+    default: return "Auto";
+    }
+}
+
+[[nodiscard]] ProjectAndroidGraphicsApi ParseAndroidGraphicsApi(std::string_view name, ProjectAndroidGraphicsApi fallback) noexcept {
+    if (name == "Auto") return ProjectAndroidGraphicsApi::Auto;
+    if (name == "Vulkan") return ProjectAndroidGraphicsApi::Vulkan;
+    if (name == "OpenGLES") return ProjectAndroidGraphicsApi::OpenGLES;
+    return fallback;
+}
+
+[[nodiscard]] std::string_view SplashScaleName(ProjectSplashScale scale) noexcept {
+    switch (scale) {
+    case ProjectSplashScale::Fill: return "Fill";
+    case ProjectSplashScale::Center: return "Center";
+    case ProjectSplashScale::Fit:
+    default: return "Fit";
+    }
+}
+
+[[nodiscard]] ProjectSplashScale ParseSplashScale(std::string_view name, ProjectSplashScale fallback) noexcept {
+    if (name == "Fit") return ProjectSplashScale::Fit;
+    if (name == "Fill") return ProjectSplashScale::Fill;
+    if (name == "Center") return ProjectSplashScale::Center;
+    return fallback;
+}
+
+// An integer setting kept inside its bounds; a missing or unreadable key keeps the default.
+[[nodiscard]] std::uint32_t ReadBounded(
+    const config::IniDocument& document, std::string_view section, std::string_view key,
+    std::uint32_t fallback, std::uint32_t minimum, std::uint32_t maximum) {
+    const std::optional<std::int64_t> value = document.GetInt(section, key);
+    return value.has_value()
+        ? static_cast<std::uint32_t>(std::clamp<std::int64_t>(*value, minimum, maximum)) : fallback;
+}
+
+[[nodiscard]] float ReadBoundedFloat(
+    const config::IniDocument& document, std::string_view section, std::string_view key,
+    float fallback, float minimum, float maximum) {
+    return std::clamp(document.GetFloat(section, key).value_or(fallback), minimum, maximum);
 }
 
 [[nodiscard]] std::string ReadString(const config::IniDocument& document, std::string_view section, std::string_view key, std::string fallback) {
     const std::optional<std::string_view> value = document.GetString(section, key);
     return value.has_value() ? std::string{*value} : std::move(fallback);
+}
+
+// A scene path added to a list unless it is empty or already there.
+void AppendScene(std::vector<std::string>& scenes, const std::string& scene) {
+    if (!scene.empty() && std::ranges::find(scenes, scene) == scenes.end()) {
+        scenes.push_back(scene);
+    }
+}
+
+// The tag a name stands for in the project's list, empty when it cannot be listed: not a valid tag name, a built-in
+// tag, or one the list holds already.
+[[nodiscard]] std::string ListableTag(const std::vector<std::string>& tags, std::string_view name) {
+    std::string tag = kb::scene::SceneTagCatalog::CanonicalName(name);
+    if (kb::scene::SceneTagCatalog::IsBuiltIn(tag) || std::ranges::find(tags, tag) != tags.end()) {
+        return {};
+    }
+    return tag;
 }
 
 } // namespace
@@ -64,6 +150,41 @@ std::optional<ProjectQualityLevel> ParseProjectQualityLevel(std::string_view nam
     if (same("high")) return ProjectQualityLevel::High;
     if (same("ultra")) return ProjectQualityLevel::Ultra;
     return std::nullopt;
+}
+
+std::vector<std::string> ProjectBuildScenes(const ProjectSettings& settings) {
+    std::vector<std::string> scenes;
+    AppendScene(scenes, settings.defaultMap);
+    for (const std::string& scene : settings.additionalScenes) {
+        AppendScene(scenes, scene);
+    }
+    return scenes;
+}
+
+void SetProjectBuildScenes(ProjectSettings& settings, std::vector<std::string> scenes) {
+    std::vector<std::string> unique;
+    for (const std::string& scene : scenes) {
+        AppendScene(unique, scene);
+    }
+    if (unique.empty()) {
+        return;
+    }
+    settings.defaultMap = unique.front();
+    settings.additionalScenes.assign(unique.begin() + 1, unique.end());
+}
+
+bool AddProjectTag(ProjectSettings& settings, std::string_view name) {
+    std::string tag = ListableTag(settings.tags, name);
+    if (tag.empty() || settings.tags.size() >= kProjectTagsMax) {
+        return false;
+    }
+    settings.tags.push_back(std::move(tag));
+    return true;
+}
+
+bool RemoveProjectTag(ProjectSettings& settings, std::string_view name) {
+    const std::string tag = kb::scene::SceneTagCatalog::CanonicalName(name);
+    return std::erase(settings.tags, tag) != 0U;
 }
 
 std::filesystem::path ProjectSettingsStore::FilePath(const std::filesystem::path& projectRoot) {
@@ -127,6 +248,15 @@ ProjectSettingsLoadResult ProjectSettingsStore::Load(const std::filesystem::path
     result.settings.androidLabel = ReadString(document, kAndroid, "Label", defaults.androidLabel);
     result.settings.defaultMap = ReadString(document, kMaps, "DefaultMap", defaults.defaultMap);
     result.settings.lastOpenMap = ReadString(document, kMaps, "LastOpenMap", defaults.lastOpenMap);
+    const std::int64_t additionalCount = std::clamp<std::int64_t>(
+        document.GetInt(kBuildScenes, "Count").value_or(0), 0, static_cast<std::int64_t>(kProjectAdditionalScenesMax));
+    for (std::int64_t index = 0; index < additionalCount; ++index) {
+        if (const auto scene = document.GetString(kBuildScenes, "Scene" + std::to_string(index)); scene.has_value()) {
+            AppendScene(result.settings.additionalScenes, std::string{ *scene });
+        }
+    }
+    // The startup scene leads the list; a scene named there as well is not packaged twice.
+    std::erase(result.settings.additionalScenes, result.settings.defaultMap);
     result.settings.lightingPath = ParseLightingPath(
         ReadString(document, kRendering, "LightingPath", std::string{LightingPathName(defaults.lightingPath)}),
         defaults.lightingPath);
@@ -138,9 +268,80 @@ ProjectSettingsLoadResult ProjectSettingsStore::Load(const std::filesystem::path
     result.settings.shadowQualityMobile = readQuality("ShadowQualityMobile", defaults.shadowQualityMobile);
     result.settings.giQuality = readQuality("GiQuality", defaults.giQuality);
     result.settings.giQualityMobile = readQuality("GiQualityMobile", defaults.giQualityMobile);
+    ProjectDisplaySettings& display = result.settings.display;
+    display.windowWidth = ReadBounded(document, kDisplay, "WindowWidth", defaults.display.windowWidth,
+        kProjectWindowExtentMin, kProjectWindowExtentMax);
+    display.windowHeight = ReadBounded(document, kDisplay, "WindowHeight", defaults.display.windowHeight,
+        kProjectWindowExtentMin, kProjectWindowExtentMax);
+    display.windowMode = ParseWindowMode(
+        ReadString(document, kDisplay, "WindowMode", std::string{WindowModeName(defaults.display.windowMode)}),
+        defaults.display.windowMode);
+    display.resizable = document.GetBool(kDisplay, "Resizable").value_or(defaults.display.resizable);
+    display.vsync = document.GetBool(kDisplay, "VSync").value_or(defaults.display.vsync);
+    display.frameRateCap = ReadBounded(document, kDisplay, "FrameRateCap", defaults.display.frameRateCap,
+        0U, kProjectFrameRateCapMax);
+    display.renderScale = ReadBoundedFloat(document, kDisplay, "RenderScale", defaults.display.renderScale,
+        kProjectRenderScaleMin, kProjectRenderScaleMax);
+    display.androidGraphicsApi = ParseAndroidGraphicsApi(
+        ReadString(document, kDisplay, "AndroidGraphicsApi", std::string{AndroidGraphicsApiName(defaults.display.androidGraphicsApi)}),
+        defaults.display.androidGraphicsApi);
+    ProjectSplashSettings& splash = display.splash;
+    splash.image = ReadString(document, kDisplay, "SplashImage", defaults.display.splash.image);
+    constexpr std::array<std::string_view, 3U> splashColorKeys{ "SplashBackgroundRed", "SplashBackgroundGreen", "SplashBackgroundBlue" };
+    for (std::size_t channel = 0U; channel < splashColorKeys.size(); ++channel) {
+        splash.backgroundColor[channel] = ReadBoundedFloat(document, kDisplay, splashColorKeys[channel],
+            defaults.display.splash.backgroundColor[channel], 0.0F, 1.0F);
+    }
+    splash.scale = ParseSplashScale(
+        ReadString(document, kDisplay, "SplashScale", std::string{SplashScaleName(defaults.display.splash.scale)}),
+        defaults.display.splash.scale);
+    splash.minimumDisplayMilliseconds = ReadBounded(document, kDisplay, "SplashMinimumMilliseconds",
+        defaults.display.splash.minimumDisplayMilliseconds, 0U, kProjectSplashMinimumMillisecondsMax);
+    splash.showProgress = document.GetBool(kDisplay, "SplashProgress").value_or(defaults.display.splash.showProgress);
+    result.settings.masterVolume = ReadBoundedFloat(document, kAudio, "MasterVolume", defaults.masterVolume, 0.0F, 1.0F);
+    result.settings.microphone = document.GetBool(kAudio, "Microphone").value_or(defaults.microphone);
+    const std::int64_t tagCount = std::clamp<std::int64_t>(
+        document.GetInt(kTags, "Count").value_or(0), 0, static_cast<std::int64_t>(kProjectTagsMax));
+    for (std::int64_t index = 0; index < tagCount; ++index) {
+        if (const auto tag = document.GetString(kTags, "Tag" + std::to_string(index)); tag.has_value()) {
+            static_cast<void>(AddProjectTag(result.settings, *tag));
+        }
+    }
     result.settings.inputEnabled = document.GetBool(kInput, "Enabled").value_or(defaults.inputEnabled);
     result.settings.inputMappingContext = ReadString(document, kInput, "MappingContext", defaults.inputMappingContext);
     result.settings.physicsLayersAsset = ReadString(document, kPhysics, "LayersAsset", defaults.physicsLayersAsset);
+    ProjectSimulationSettings& simulation = result.settings.simulation;
+    simulation.fixedStepHz = ReadBounded(document, kPhysics, "FixedStepHz", defaults.simulation.fixedStepHz,
+        kProjectFixedStepHzMin, kProjectFixedStepHzMax);
+    constexpr std::array<std::string_view, 3U> gravityKeys{ "GravityX", "GravityY", "GravityZ" };
+    for (std::size_t axis = 0U; axis < gravityKeys.size(); ++axis) {
+        simulation.gravity[axis] = ReadBoundedFloat(document, kPhysics, gravityKeys[axis],
+            defaults.simulation.gravity[axis], -kProjectGravityLimit, kProjectGravityLimit);
+    }
+    simulation.timeScale = ReadBoundedFloat(document, kTime, "TimeScale", defaults.simulation.timeScale,
+        0.0F, kProjectTimeScaleMax);
+    // The areas as a count and a name, colour and cost per area; a file without them keeps the default areas
+    // and a list that is not valid is ignored.
+    if (const std::optional<std::int64_t> areaCount = document.GetInt(kNavigation, "AreaCount");
+        areaCount.has_value() && *areaCount >= 0 && *areaCount <= static_cast<std::int64_t>(kb::scene::kNavAreaCount)) {
+        std::vector<kb::scene::NavAreaDefinition> areas(static_cast<std::size_t>(*areaCount));
+        for (std::size_t index = 0U; index < areas.size(); ++index) {
+            const std::string prefix = "Area" + std::to_string(index);
+            areas[index].name = ReadString(document, kNavigation, prefix + "Name", "");
+            areas[index].colour = static_cast<std::uint32_t>(std::clamp<std::int64_t>(
+                document.GetInt(kNavigation, prefix + "Colour").value_or(-1), -1, 0xFFFFFF + 1));
+            areas[index].cost = document.GetFloat(kNavigation, prefix + "Cost").value_or(-1.0F);
+        }
+        if (kb::scene::AreNavAreaDefinitionsValid(areas)) {
+            result.settings.navigationAreas = std::move(areas);
+        }
+    }
+    result.settings.navigationNearDistance = ReadBoundedFloat(document, kNavigation, "CrowdNearDistance", defaults.navigationNearDistance,
+        0.0F, kProjectNavigationDistanceMax);
+    result.settings.navigationMidDistance = ReadBoundedFloat(document, kNavigation, "CrowdMidDistance", defaults.navigationMidDistance,
+        0.0F, kProjectNavigationDistanceMax);
+    result.settings.navigationFarPathInterval = ReadBounded(document, kNavigation, "CrowdFarPathInterval", defaults.navigationFarPathInterval,
+        1U, kProjectNavigationFarPathIntervalMax);
     result.settings.crashReportUploadUrl = ReadString(document, kCrashReports, "UploadUrl", defaults.crashReportUploadUrl);
     return result;
 }
@@ -176,14 +377,76 @@ bool ProjectSettingsStore::Save(
     document.SetString(kAndroid, "Label", settings.androidLabel);
     document.SetString(kMaps, "DefaultMap", settings.defaultMap);
     document.SetString(kMaps, "LastOpenMap", settings.lastOpenMap);
+    // The additional scenes as a count and one key each; keys a shorter list leaves behind are removed.
+    const std::size_t additionalCount = std::min(settings.additionalScenes.size(), kProjectAdditionalScenesMax);
+    if (additionalCount == 0U) {
+        document.Remove(kBuildScenes, "Count");
+    } else {
+        document.SetInt(kBuildScenes, "Count", static_cast<std::int64_t>(additionalCount));
+    }
+    for (std::size_t index = 0U; index < additionalCount; ++index) {
+        document.SetString(kBuildScenes, "Scene" + std::to_string(index), settings.additionalScenes[index]);
+    }
+    for (std::size_t index = additionalCount; document.Remove(kBuildScenes, "Scene" + std::to_string(index)); ++index) {
+    }
     document.SetString(kRendering, "LightingPath", std::string{LightingPathName(settings.lightingPath)});
     document.SetString(kRendering, "ShadowQuality", std::string{ProjectQualityLevelName(settings.shadowQuality)});
     document.SetString(kRendering, "ShadowQualityMobile", std::string{ProjectQualityLevelName(settings.shadowQualityMobile)});
     document.SetString(kRendering, "GiQuality", std::string{ProjectQualityLevelName(settings.giQuality)});
     document.SetString(kRendering, "GiQualityMobile", std::string{ProjectQualityLevelName(settings.giQualityMobile)});
+    document.SetInt(kDisplay, "WindowWidth", settings.display.windowWidth);
+    document.SetInt(kDisplay, "WindowHeight", settings.display.windowHeight);
+    document.SetString(kDisplay, "WindowMode", std::string{WindowModeName(settings.display.windowMode)});
+    document.SetBool(kDisplay, "Resizable", settings.display.resizable);
+    document.SetBool(kDisplay, "VSync", settings.display.vsync);
+    document.SetInt(kDisplay, "FrameRateCap", settings.display.frameRateCap);
+    document.SetFloat(kDisplay, "RenderScale", settings.display.renderScale);
+    document.SetString(kDisplay, "AndroidGraphicsApi", std::string{AndroidGraphicsApiName(settings.display.androidGraphicsApi)});
+    document.SetString(kDisplay, "SplashImage", settings.display.splash.image);
+    constexpr std::array<std::string_view, 3U> splashColorKeys{ "SplashBackgroundRed", "SplashBackgroundGreen", "SplashBackgroundBlue" };
+    for (std::size_t channel = 0U; channel < splashColorKeys.size(); ++channel) {
+        document.SetFloat(kDisplay, splashColorKeys[channel], settings.display.splash.backgroundColor[channel]);
+    }
+    document.SetString(kDisplay, "SplashScale", std::string{SplashScaleName(settings.display.splash.scale)});
+    document.SetInt(kDisplay, "SplashMinimumMilliseconds", settings.display.splash.minimumDisplayMilliseconds);
+    document.SetBool(kDisplay, "SplashProgress", settings.display.splash.showProgress);
+    document.SetFloat(kAudio, "MasterVolume", settings.masterVolume);
+    document.SetBool(kAudio, "Microphone", settings.microphone);
+    // The tags as a count and one key each; keys a shorter list leaves behind are removed.
+    const std::size_t tagCount = std::min(settings.tags.size(), kProjectTagsMax);
+    if (tagCount == 0U) {
+        document.Remove(kTags, "Count");
+    } else {
+        document.SetInt(kTags, "Count", static_cast<std::int64_t>(tagCount));
+    }
+    for (std::size_t index = 0U; index < tagCount; ++index) {
+        document.SetString(kTags, "Tag" + std::to_string(index), settings.tags[index]);
+    }
+    for (std::size_t index = tagCount; document.Remove(kTags, "Tag" + std::to_string(index)); ++index) {
+    }
+    const std::size_t areaCount = std::min<std::size_t>(settings.navigationAreas.size(), kb::scene::kNavAreaCount);
+    document.SetInt(kNavigation, "AreaCount", static_cast<std::int64_t>(areaCount));
+    for (std::size_t index = 0U; index < areaCount; ++index) {
+        const std::string prefix = "Area" + std::to_string(index);
+        document.SetString(kNavigation, prefix + "Name", settings.navigationAreas[index].name);
+        document.SetInt(kNavigation, prefix + "Colour", static_cast<std::int64_t>(settings.navigationAreas[index].colour));
+        document.SetFloat(kNavigation, prefix + "Cost", settings.navigationAreas[index].cost);
+    }
+    for (std::size_t index = areaCount; document.Remove(kNavigation, "Area" + std::to_string(index) + "Name"); ++index) {
+        static_cast<void>(document.Remove(kNavigation, "Area" + std::to_string(index) + "Colour"));
+        static_cast<void>(document.Remove(kNavigation, "Area" + std::to_string(index) + "Cost"));
+    }
+    document.SetFloat(kNavigation, "CrowdNearDistance", settings.navigationNearDistance);
+    document.SetFloat(kNavigation, "CrowdMidDistance", settings.navigationMidDistance);
+    document.SetInt(kNavigation, "CrowdFarPathInterval", settings.navigationFarPathInterval);
     document.SetBool(kInput, "Enabled", settings.inputEnabled);
     document.SetString(kInput, "MappingContext", settings.inputMappingContext);
     document.SetString(kPhysics, "LayersAsset", settings.physicsLayersAsset);
+    document.SetInt(kPhysics, "FixedStepHz", settings.simulation.fixedStepHz);
+    document.SetFloat(kPhysics, "GravityX", settings.simulation.gravity[0]);
+    document.SetFloat(kPhysics, "GravityY", settings.simulation.gravity[1]);
+    document.SetFloat(kPhysics, "GravityZ", settings.simulation.gravity[2]);
+    document.SetFloat(kTime, "TimeScale", settings.simulation.timeScale);
     document.SetString(kCrashReports, "UploadUrl", settings.crashReportUploadUrl);
     return document.Save(path, error);
 }

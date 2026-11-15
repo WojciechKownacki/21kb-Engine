@@ -13,6 +13,7 @@
 #include "engine/library/EngineLibraryCommandBatch.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
+#include "engine/project/ProjectSettings.hpp"
 #include "engine/scene/CharacterControllerComponent.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/JointComponent.hpp"
@@ -377,7 +378,7 @@ void RunPhysicsSceneSystemFallingBodyTest() {
             "PhysicsBackend::AddImpulse must reject live non-Dynamic bodies rather than report Jolt's no-op as applied");
         kb::tests::Require(!kb::scene::PhysicsBackend::SetVelocity(scene, unsupported, kb::scene::Vec3{ 1.0F, 0.0F, 0.0F }),
             "PhysicsBackend::SetVelocity must reject a body whose velocity is not a Dynamic simulation result");
-        // A Kinematic body reports the velocity MoveKinematic gives it (Unity's MovePosition).
+        // A Kinematic body reports the velocity MoveKinematic gives it.
         kb::tests::Require(kb::scene::PhysicsBackend::GetVelocity(scene, unsupported).found == (unsupported == kinematic.Entity()),
             "PhysicsBackend::GetVelocity must report found=false for a Static body and the velocity of a Kinematic one");
         kb::tests::Require(!kb::scene::PhysicsBackend::SetAngularVelocity(scene, unsupported, kb::scene::Vec3{ 0.0F, 1.0F, 0.0F }),
@@ -440,7 +441,7 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     });
     scene.Components().Rigidbodies().Set(beforeFirstSync.Entity(), kb::scene::RigidbodyComponent{});
     scene.Components().Colliders().Set(beforeFirstSync.Entity(), kb::scene::ColliderComponent{});
-    // Force and impulse wait for the body (Unity's Start runs before the first physics step);
+    // Force and impulse wait for the body;
     // every other control still needs the live body.
     kb::tests::Require(kb::scene::PhysicsBackend::AddForce(scene, beforeFirstSync.Entity(), kb::scene::Vec3{ 1.0F, 0.0F, 0.0F }) &&
             kb::scene::PhysicsBackend::AddImpulse(scene, beforeFirstSync.Entity(), kb::scene::Vec3{ 1.0F, 0.0F, 0.0F }),
@@ -2170,7 +2171,7 @@ void RunPhysicsPersistentSleeperTransitionTest() {
     std::filesystem::remove(path, error);
 }
 
-// Unity-like contact semantics: no hidden damping, and a pair that falls asleep while
+// Contact semantics: no hidden damping, and a pair that falls asleep while
 // touching stays in contact (no Exit) until a body wakes up and really leaves.
 void RunPhysicsSleepingContactAndDampingTest() {
     if (std::filesystem::path{KB_PHYSICS_JOLT_PLUGIN_PATH}.empty()) {
@@ -2237,7 +2238,7 @@ void RunPhysicsSleepingContactAndDampingTest() {
     run(30);
     kb::tests::Require(count(events, inside.Entity(), kb::scene::PhysicsContactPhase::Exit) == 1, "A woken occupant leaving the trigger must Exit once");
 
-    // Unity CharacterController: walks through a trigger (OnTrigger* on both sides), then
+    // Character controller: walks through a trigger (OnTrigger* on both sides), then
     // stops at a wall (OnControllerColliderHit each step, velocity reads the real motion).
     const auto walker = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{.name = "Walker", .transform = kb::scene::TransformComponent{.localPosition = {60.0F, 1.0F, 20.0F}}});
     scene.Components().CharacterControllers().Set(walker.Entity(), kb::scene::CharacterControllerComponent{.useGravity = false});
@@ -2266,10 +2267,10 @@ void RunPhysicsSleepingContactAndDampingTest() {
     kb::tests::Require(dampedSpeed < 2.0F, "Linear damping 1 must slow the body down");
 }
 
-// Physics comparison scene (Unity/UE defaults): a push queued before the body exists, no hidden
+// Physics comparison scene (default physics values): a push queued before the body exists, no hidden
 // speed cap, a 1 cm sphere resting on the floor, materials combined by average, hinge limits in
-// Unity's direction and a character keeping its horizontal speed up a slope.
-void RunPhysicsUnityDefaultsTest() {
+// the expected direction and a character keeping its horizontal speed up a slope.
+void RunPhysicsDefaultValuesTest() {
     if (std::filesystem::path{KB_PHYSICS_JOLT_PLUGIN_PATH}.empty()) {
         return;
     }
@@ -2321,7 +2322,7 @@ void RunPhysicsUnityDefaultsTest() {
         if (step == 90) {
             // 60 steps at 3 m/s horizontally up 30 deg: 3 tan30 = 1.73 m (projected onto the slope: 1.5 m).
             kb::tests::Require(scene.Transforms().Get(climber).localPosition.y - climbStart > 1.62F,
-                "A character walking up a 30 deg slope must keep its horizontal speed as in Unity and UE");
+                "A character walking up a 30 deg slope must keep its horizontal speed");
         }
         static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
         if (step == 0) {
@@ -2339,12 +2340,12 @@ void RunPhysicsUnityDefaultsTest() {
         "Restitution 1 on a restitution 0 floor must combine by average (0.5), not max");
     const kb::scene::Vec3 swing = scene.Transforms().Get(pendulum).localPosition;
     kb::tests::Require(swing.y < 4.03F && swing.y > 3.97F,
-        "A hinge limited to 0..30 deg must let the body swing down to 30 deg as in Unity");
+        "A hinge limited to 0..30 deg must let the body swing down to 30 deg");
     static_cast<void>(floor);
 }
 
 // Torque, explosion, hinge motor, distance spring and joint breaking (physics comparison F07, F28, F30,
-// F34, F35): the values Unity and UE give.
+// F34, F35): the expected values.
 void RunPhysicsTorqueJointDriveTest() {
     if (std::filesystem::path{KB_PHYSICS_JOLT_PLUGIN_PATH}.empty()) {
         return;
@@ -2396,7 +2397,7 @@ void RunPhysicsTorqueJointDriveTest() {
         }
         if (step == 119) {
             kb::tests::Require(std::abs(kb::scene::PhysicsBackend::GetAngularVelocity(scene, motorized.Entity()).value.y - 1.5708F) < 0.02F,
-                "A hinge motor at 90 deg/s must turn the body at +1.57 rad/s about the axis, as Unity's");
+                "A hinge motor at 90 deg/s must turn the body at +1.57 rad/s about the axis.");
         }
     }
     kb::tests::Require(std::abs(kb::scene::PhysicsBackend::GetVelocity(scene, blasted.Entity()).value.z - 10.0F * (1.0F - 1.0F / 3.0F)) < 0.01F,
@@ -2407,6 +2408,184 @@ void RunPhysicsTorqueJointDriveTest() {
         "A joint loaded above its break force must break, lose its component and let the body fall");
     kb::tests::Require(scene.Components().Joints().TryGet(strong.Entity()) != nullptr && scene.Transforms().Get(strong).localPosition.y > 4.9F,
         "A joint below its break force must hold");
+}
+
+// Slider, cone, six-degrees-of-freedom and rope joints: the slider stays on its axis and inside its travel, its motor
+// reaches the target speed, the cone holds the swing angle, locked six-degrees-of-freedom axes stay locked and a rope
+// (alone or as a chain) never stretches past its length.
+void RunPhysicsExtendedJointsTest() {
+    if (std::filesystem::path{KB_PHYSICS_JOLT_PLUGIN_PATH}.empty()) {
+        return;
+    }
+    kb::project::ProjectDescriptor descriptor;
+    descriptor.disableEnginePluginsByDefault = true;
+    descriptor.plugins.push_back(kb::project::ProjectPluginReference{
+        .name = "Physics.Jolt",
+        .binaryPath = KB_PHYSICS_JOLT_PLUGIN_PATH,
+        .enabled = true,
+    });
+    kb::scene::Scene scene{std::move(descriptor)};
+    kb::scene::PhysicsBackend::SetStepPipelining(scene, false);
+    const auto makeBody = [&scene](const char* name, kb::scene::Vec3 position, kb::scene::RigidbodyComponent rigidbody) {
+        const auto object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{.name = name, .transform = kb::scene::TransformComponent{.localPosition = position}});
+        scene.Components().Rigidbodies().Set(object.Entity(), rigidbody);
+        scene.Components().Colliders().Set(object.Entity(), kb::scene::ColliderComponent{.shape = kb::scene::ColliderShape::Sphere, .radius = 0.3F});
+        return object;
+    };
+    const auto distance = [&scene](const kb::scene::SceneObject& object, kb::scene::Vec3 point) {
+        const kb::scene::Vec3 position = scene.Transforms().Get(object).localPosition;
+        const kb::scene::Vec3 offset{position.x - point.x, position.y - point.y, position.z - point.z};
+        return std::sqrt(offset.x * offset.x + offset.y * offset.y + offset.z * offset.z);
+    };
+    const kb::scene::RigidbodyComponent floating{.useGravity = false, .linearDamping = 0.0F, .angularDamping = 0.0F};
+    const kb::scene::RigidbodyComponent falling{.linearDamping = 0.0F, .angularDamping = 0.0F};
+    using kb::scene::JointAxisMode;
+    using kb::scene::JointComponent;
+    using kb::scene::JointType;
+    // The joint frame is the world frame: X along the axis, Y along the secondary axis.
+    const auto sixDof = [](kb::scene::Vec3 world) {
+        JointComponent joint{.type = JointType::SixDof, .connectedAnchor = world, .axis = {1.0F, 0.0F, 0.0F}};
+        joint.freedom.secondaryAxis = {0.0F, 1.0F, 0.0F};
+        return joint;
+    };
+
+    // Slider along X with travel [-0.5, 2] m: pushed along the axis and sideways at once.
+    const auto sliderUp = makeBody("SliderUp", {0.0F, 10.0F, 0.0F}, floating);
+    scene.Components().Joints().Set(sliderUp.Entity(), JointComponent{.type = JointType::Slider, .connectedAnchor = {0.0F, 10.0F, 0.0F},
+        .axis = {1.0F, 0.0F, 0.0F}, .minLimit = -0.5F, .maxLimit = 2.0F, .enableLimit = true});
+    const auto sliderDown = makeBody("SliderDown", {0.0F, 20.0F, 0.0F}, floating);
+    scene.Components().Joints().Set(sliderDown.Entity(), JointComponent{.type = JointType::Slider, .connectedAnchor = {0.0F, 20.0F, 0.0F},
+        .axis = {1.0F, 0.0F, 0.0F}, .minLimit = -0.5F, .maxLimit = 2.0F, .enableLimit = true});
+    const auto sliderMotor = makeBody("SliderMotor", {0.0F, 30.0F, 0.0F}, floating);
+    scene.Components().Joints().Set(sliderMotor.Entity(), JointComponent{.type = JointType::Slider, .connectedAnchor = {0.0F, 30.0F, 0.0F},
+        .axis = {1.0F, 0.0F, 0.0F}, .motor = {.targetVelocity = 2.0F, .force = 1000.0F}});
+
+    // Cone pendulums hanging 1 m below a pivot, started with a sideways push that would swing a free one far past 60 deg.
+    const kb::scene::Vec3 conePivot{30.0F, 10.0F, 0.0F};
+    const kb::scene::Vec3 freePivot{35.0F, 10.0F, 0.0F};
+    const auto coneLimited = makeBody("ConeLimited", {30.0F, 9.0F, 0.0F}, falling);
+    JointComponent cone{.type = JointType::Cone, .anchor = {0.0F, 1.0F, 0.0F}, .connectedAnchor = conePivot, .axis = {0.0F, -1.0F, 0.0F},
+        .freedom = {.swing1Limit = 30.0F, .swing2Limit = 30.0F}};
+    scene.Components().Joints().Set(coneLimited.Entity(), cone);
+    const auto coneFree = makeBody("ConeFree", {35.0F, 9.0F, 0.0F}, falling);
+    cone.connectedAnchor = freePivot;
+    cone.freedom.swing1Limit = 180.0F;
+    cone.freedom.swing2Limit = 180.0F;
+    scene.Components().Joints().Set(coneFree.Entity(), cone);
+
+    // Six degrees of freedom: only the listed axis is free, the rest locked.
+    const auto sixSlide = makeBody("SixSlide", {40.0F, 10.0F, 0.0F}, floating);
+    JointComponent six = sixDof({40.0F, 10.0F, 0.0F});
+    six.freedom.axes[0].mode = JointAxisMode::Free;
+    scene.Components().Joints().Set(sixSlide.Entity(), six);
+    const auto sixSpin = makeBody("SixSpin", {50.0F, 10.0F, 0.0F}, floating);
+    six = sixDof({50.0F, 10.0F, 0.0F});
+    six.freedom.axes[4].mode = JointAxisMode::Free;
+    scene.Components().Joints().Set(sixSpin.Entity(), six);
+    const auto sixLimited = makeBody("SixLimited", {60.0F, 10.0F, 0.0F}, floating);
+    six = sixDof({60.0F, 10.0F, 0.0F});
+    six.freedom.axes[0] = {.mode = JointAxisMode::Limited, .minLimit = -1.0F, .maxLimit = 1.0F};
+    scene.Components().Joints().Set(sixLimited.Entity(), six);
+    const auto sixDrive = makeBody("SixDrive", {70.0F, 10.0F, 0.0F}, floating);
+    six = sixDof({70.0F, 10.0F, 0.0F});
+    six.freedom.axes[0] = {.mode = JointAxisMode::Free, .motor = {.targetVelocity = 1.5F, .force = 1000.0F}};
+    scene.Components().Joints().Set(sixDrive.Entity(), six);
+
+    // A rope dropped from inside its length, and a chain of three.
+    const kb::scene::Vec3 ropeAnchor{80.0F, 10.0F, 0.0F};
+    const auto rope = makeBody("Rope", {80.0F, 9.5F, 0.0F}, falling);
+    scene.Components().Joints().Set(rope.Entity(), JointComponent{.type = JointType::Rope, .connectedAnchor = ropeAnchor, .minLimit = 0.0F, .maxLimit = 1.5F});
+    const kb::scene::Vec3 chainAnchor{90.0F, 10.0F, 0.0F};
+    const auto link1 = makeBody("Link1", {90.0F, 9.0F, 0.0F}, falling);
+    const auto link2 = makeBody("Link2", {90.0F, 8.0F, 0.0F}, falling);
+    const auto link3 = makeBody("Link3", {90.0F, 7.0F, 0.0F}, falling);
+    scene.Components().Joints().Set(link1.Entity(), JointComponent{.type = JointType::Rope, .connectedAnchor = chainAnchor, .maxLimit = 1.0F});
+    scene.Components().Joints().Set(link2.Entity(), JointComponent{.type = JointType::Rope, .connectedEntity = link1.Entity(), .maxLimit = 1.0F});
+    scene.Components().Joints().Set(link3.Entity(), JointComponent{.type = JointType::Rope, .connectedEntity = link2.Entity(), .maxLimit = 1.0F});
+
+    // Break force on a slider: the weight hangs on its sideways constraint.
+    const auto weakSlider = makeBody("WeakSlider", {100.0F, 10.0F, 0.0F}, {.mass = 10.0F});
+    scene.Components().Joints().Set(weakSlider.Entity(), JointComponent{.type = JointType::Slider, .connectedAnchor = {100.0F, 10.0F, 0.0F},
+        .axis = {1.0F, 0.0F, 0.0F}, .breakForce = 40.0F});
+    const auto strongSlider = makeBody("StrongSlider", {110.0F, 10.0F, 0.0F}, {.mass = 10.0F});
+    scene.Components().Joints().Set(strongSlider.Entity(), JointComponent{.type = JointType::Slider, .connectedAnchor = {110.0F, 10.0F, 0.0F},
+        .axis = {1.0F, 0.0F, 0.0F}, .breakForce = 5000.0F});
+
+    float limitedSwing = 0.0F;
+    float freeSwing = 0.0F;
+    const auto swingDegrees = [&distance, &scene](const kb::scene::SceneObject& object, kb::scene::Vec3 pivot) {
+        const kb::scene::Vec3 position = scene.Transforms().Get(object).localPosition;
+        const float length = std::max(distance(object, pivot), 0.0001F);
+        const float cosine = std::clamp(-(position.y - pivot.y) / length, -1.0F, 1.0F);
+        return std::acos(cosine) * 180.0F / 3.14159265F;
+    };
+    float ropeSlackDistance = 0.0F;
+    for (int step = 0; step < 300; ++step) {
+        if (step == 1) {
+            kb::tests::Require(kb::scene::PhysicsBackend::SetVelocity(scene, sliderUp.Entity(), {6.0F, 3.0F, 2.0F}) &&
+                kb::scene::PhysicsBackend::SetVelocity(scene, sliderDown.Entity(), {-6.0F, 3.0F, 2.0F}) &&
+                kb::scene::PhysicsBackend::SetVelocity(scene, coneLimited.Entity(), {6.0F, 0.0F, 0.0F}) &&
+                kb::scene::PhysicsBackend::SetVelocity(scene, coneFree.Entity(), {6.0F, 0.0F, 0.0F}) &&
+                kb::scene::PhysicsBackend::SetVelocity(scene, sixSlide.Entity(), {1.5F, 3.0F, 2.0F}) &&
+                kb::scene::PhysicsBackend::SetAngularVelocity(scene, sixSlide.Entity(), {1.0F, 2.0F, 3.0F}) &&
+                kb::scene::PhysicsBackend::SetVelocity(scene, sixSpin.Entity(), {1.0F, 1.0F, 1.0F}) &&
+                kb::scene::PhysicsBackend::SetAngularVelocity(scene, sixSpin.Entity(), {2.0F, 3.0F, 1.0F}) &&
+                kb::scene::PhysicsBackend::SetVelocity(scene, sixLimited.Entity(), {5.0F, 2.0F, 2.0F}),
+                "Joint test bodies must have live physics bodies after the first update");
+        }
+        static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+        if (step == 9) {
+            ropeSlackDistance = distance(rope, ropeAnchor);
+        }
+        limitedSwing = std::max(limitedSwing, swingDegrees(coneLimited, conePivot));
+        freeSwing = std::max(freeSwing, swingDegrees(coneFree, freePivot));
+        if (step == 89) {
+            const kb::scene::Vec3 motorVelocity = kb::scene::PhysicsBackend::GetVelocity(scene, sliderMotor.Entity()).value;
+            kb::tests::Require(std::abs(motorVelocity.x - 2.0F) < 0.05F && std::abs(motorVelocity.y) < 0.05F && std::abs(motorVelocity.z) < 0.05F,
+                "A slider motor at 2 m/s must move the body along the axis at 2 m/s and nowhere else");
+            const kb::scene::Vec3 driven = kb::scene::PhysicsBackend::GetVelocity(scene, sixDrive.Entity()).value;
+            kb::tests::Require(std::abs(driven.x - 1.5F) < 0.05F && std::abs(driven.y) < 0.05F && std::abs(driven.z) < 0.05F,
+                "A six-degrees-of-freedom linear drive of 1.5 m/s must move the body along its free axis at 1.5 m/s");
+        }
+    }
+
+    const kb::scene::Vec3 up = scene.Transforms().Get(sliderUp).localPosition;
+    const kb::scene::Vec3 down = scene.Transforms().Get(sliderDown).localPosition;
+    kb::tests::Require(up.x > 1.9F && up.x < 2.05F, "A slider must stop the body at the upper end of its travel");
+    kb::tests::Require(down.x < -0.45F && down.x > -0.6F, "A slider must stop the body at the lower end of its travel");
+    kb::tests::Require(std::abs(up.y - 10.0F) < 0.05F && std::abs(up.z) < 0.05F && std::abs(down.y - 20.0F) < 0.05F && std::abs(down.z) < 0.05F,
+        "A slider must keep the body on its axis however it is pushed");
+
+    kb::tests::Require(limitedSwing > 24.0F && limitedSwing < 34.0F, "A cone limited to 30 degrees must let the body swing out to the limit and no further");
+    kb::tests::Require(freeSwing > 60.0F, "A cone with a 180 degree swing limit must not hold the body back");
+
+    const kb::scene::Vec3 slid = scene.Transforms().Get(sixSlide).localPosition;
+    const kb::scene::Quat slidRotation = scene.Transforms().Get(sixSlide).localRotation;
+    kb::tests::Require(slid.x > 43.0F && std::abs(slid.y - 10.0F) < 0.02F && std::abs(slid.z) < 0.02F,
+        "A six-degrees-of-freedom joint must move freely along its free axis and keep the locked ones");
+    kb::tests::Require(std::abs(slidRotation.w) > 0.999F, "Locked rotation axes of a six-degrees-of-freedom joint must keep the body from turning");
+    const kb::scene::Vec3 spun = kb::scene::PhysicsBackend::GetAngularVelocity(scene, sixSpin.Entity()).value;
+    const kb::scene::Vec3 spinPosition = scene.Transforms().Get(sixSpin).localPosition;
+    kb::tests::Require(std::abs(spun.y - 3.0F) < 0.1F && std::abs(spun.x) < 0.02F && std::abs(spun.z) < 0.02F,
+        "A six-degrees-of-freedom joint with only Y rotation free must keep that spin and remove the others");
+    kb::tests::Require(std::abs(spinPosition.x - 50.0F) < 0.02F && std::abs(spinPosition.y - 10.0F) < 0.02F && std::abs(spinPosition.z) < 0.02F,
+        "Locked translation axes of a six-degrees-of-freedom joint must hold the body in place");
+    const kb::scene::Vec3 limitedPosition = scene.Transforms().Get(sixLimited).localPosition;
+    kb::tests::Require(limitedPosition.x > 60.9F && limitedPosition.x < 61.05F && std::abs(limitedPosition.y - 10.0F) < 0.02F,
+        "A limited six-degrees-of-freedom axis must stop the body at its limit");
+
+    kb::tests::Require(ropeSlackDistance > 0.55F && ropeSlackDistance < 1.5F, "A rope must stay slack while the body is inside its length");
+    const float ropeLength = distance(rope, ropeAnchor);
+    kb::tests::Require(ropeLength > 1.4F && ropeLength < 1.56F, "A rope must hold the body at its maximum length once taut");
+    kb::tests::Require(distance(link1, chainAnchor) < 1.06F && distance(link2, scene.Transforms().Get(link1).localPosition) < 1.06F &&
+            distance(link3, scene.Transforms().Get(link2).localPosition) < 1.06F,
+        "No link of a rope chain may stretch past its length");
+    kb::tests::Require(scene.Transforms().Get(link3).localPosition.y < 7.5F, "A rope chain must hang under gravity, not be held up by the first link");
+
+    kb::tests::Require(scene.Components().Joints().TryGet(weakSlider.Entity()) == nullptr && scene.Transforms().Get(weakSlider).localPosition.y < 5.0F,
+        "A slider loaded above its break force must break and let the body fall");
+    kb::tests::Require(scene.Components().Joints().TryGet(strongSlider.Entity()) != nullptr && scene.Transforms().Get(strongSlider).localPosition.y > 9.9F,
+        "A slider below its break force must hold");
 }
 
 void RunPhysicsIdenticalReplayTest() {
@@ -2612,6 +2791,28 @@ void RunPhysicsDebugDrawTest() {
     kb::tests::Require(jointLines.size() == 1U, "LIB-132 a JointComponent must produce exactly one debug line");
     kb::tests::Require(kb::tests::NearlyEqual(jointLines.front().to.x, 5.0F) && kb::tests::NearlyEqual(jointLines.front().to.y, 5.0F) && kb::tests::NearlyEqual(jointLines.front().to.z, 5.0F),
         "LIB-132 a world-jointed JointComponent's debug line must end at its real connectedAnchor world position");
+
+    // The slider, cone, six-degrees-of-freedom and rope kinds add their axis and the range they allow to the anchor line.
+    kb::scene::JointComponent kindGizmo{ .type = kb::scene::JointType::Slider, .connectedAnchor = kb::scene::Vec3{ 5.0F, 5.0F, 5.0F },
+        .axis = kb::scene::Vec3{ 1.0F, 0.0F, 0.0F }, .minLimit = -1.0F, .maxLimit = 2.0F, .enableLimit = true };
+    scene.Components().Joints().Set(sphereObject.Entity(), kindGizmo);
+    const std::vector<kb::scene::PhysicsDebugLineDesc> sliderLines = kb::scene::PhysicsDebugDraw::CollectLines(scene);
+    kb::tests::Require(sliderLines.size() == 3U && kb::tests::NearlyEqual(sliderLines.back().from.x, 4.0F) && kb::tests::NearlyEqual(sliderLines.back().to.x, 7.0F) &&
+            kb::tests::NearlyEqual(sliderLines.back().to.y, 5.0F),
+        "A slider must draw its anchor line, its axis and the travel from minLimit to maxLimit around the connected anchor");
+    kindGizmo.type = kb::scene::JointType::SixDof;
+    scene.Components().Joints().Set(sphereObject.Entity(), kindGizmo);
+    kb::tests::Require(kb::scene::PhysicsDebugDraw::CollectLines(scene).size() == 2U, "A six-degrees-of-freedom joint must draw its anchor line and its axis");
+    kindGizmo.type = kb::scene::JointType::Cone;
+    scene.Components().Joints().Set(sphereObject.Entity(), kindGizmo);
+    kb::tests::Require(kb::scene::PhysicsDebugDraw::CollectLines(scene).size() == 30U, "A cone must draw its anchor line, its axis and its swing ellipse with four spokes");
+    kindGizmo.type = kb::scene::JointType::Rope;
+    kindGizmo.maxLimit = 3.0F;
+    scene.Components().Joints().Set(sphereObject.Entity(), kindGizmo);
+    kb::tests::Require(kb::scene::PhysicsDebugDraw::CollectLines(scene).size() == 73U, "A rope must draw its anchor line and the sphere of its length around the connected anchor");
+    kindGizmo.type = kb::scene::JointType::Hinge;
+    scene.Components().Joints().Set(sphereObject.Entity(), kindGizmo);
+    kb::tests::Require(kb::scene::PhysicsDebugDraw::CollectLines(scene).size() == 1U, "A joint of an older kind must keep drawing its anchor line only");
     scene.Components().Joints().Remove(sphereObject.Entity());
     kb::tests::Require(kb::scene::PhysicsDebugDraw::CollectLines(scene).empty(), "LIB-132 removing every physics component must leave zero debug lines");
 
@@ -3495,7 +3696,58 @@ void RunTopDownPlayerPresetTest() {
     kb::tests::Require(rig->scene.Runtime().DrainSceneSystemErrors().empty(), "the top-down script runs without errors");
 }
 
+// The project's gravity reaches the live physics world, whether it is set before or after the first step, and the
+// fixed step and time scale reach the scene.
+void RunProjectSimulationSettingsTest() {
+    if (std::filesystem::path{KB_PHYSICS_JOLT_PLUGIN_PATH}.empty()) return;
+    const auto heightAfterHalfSecond = [](const kb::project::ProjectSimulationSettings& simulation) {
+        kb::project::ProjectDescriptor descriptor;
+        descriptor.disableEnginePluginsByDefault = true;
+        descriptor.plugins.push_back({.name = "Physics.Jolt", .binaryPath = KB_PHYSICS_JOLT_PLUGIN_PATH, .enabled = true});
+        kb::scene::Scene scene{std::move(descriptor)};
+        kb::scene::PhysicsBackend::SetStepPipelining(scene, false);
+        scene.Runtime().ApplyProjectSimulation(simulation);
+        kb::tests::Require(std::fabs(scene.Runtime().FixedStepSettings().fixedDeltaSeconds - 1.0F / static_cast<float>(simulation.fixedStepHz)) < 1e-7F &&
+                scene.Runtime().TimeScale() == simulation.timeScale,
+            "The project's fixed step and time scale must reach the scene runtime");
+        const auto body = scene.Entities().CreateObject({.name = "Faller", .transform = {.localPosition = {0.0F, 100.0F, 0.0F}}});
+        scene.Components().Rigidbodies().Set(body.Entity(), {.bodyType = kb::scene::RigidbodyBodyType::Dynamic});
+        scene.Components().Colliders().Set(body.Entity(), {.boxSize = {1, 1, 1}});
+        for (int frame = 0; frame < 30; ++frame) static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+        return scene.Transforms().Get(body).worldPosition.y;
+    };
+    const float earth = heightAfterHalfSecond({});
+    const float moon = heightAfterHalfSecond({ .fixedStepHz = 120U, .gravity = { 0.0F, -1.62F, 0.0F }, .timeScale = 0.5F });
+    const float weightless = heightAfterHalfSecond({ .gravity = { 0.0F, 0.0F, 0.0F } });
+    kb::tests::Require(earth < 99.0F && earth > 98.5F, "A scene with the default project gravity must fall at about 9.81 m/s squared");
+    kb::tests::Require(moon > earth + 0.5F && moon < 100.0F - 0.05F, "A lower project gravity must make a body fall more slowly");
+    kb::tests::Require(std::fabs(weightless - 100.0F) < 0.001F, "A project without gravity must leave a body where it is");
+}
+
+// A body asleep on the old gravity wakes when the gravity changes, and stays asleep when the gravity is set to what it already is.
+void RunGravityChangeWakesBodiesTest() {
+    if (std::filesystem::path{KB_PHYSICS_JOLT_PLUGIN_PATH}.empty()) return;
+    kb::project::ProjectDescriptor descriptor;
+    descriptor.disableEnginePluginsByDefault = true;
+    descriptor.plugins.push_back({.name = "Physics.Jolt", .binaryPath = KB_PHYSICS_JOLT_PLUGIN_PATH, .enabled = true});
+    kb::scene::Scene scene{std::move(descriptor)};
+    kb::scene::PhysicsBackend::SetStepPipelining(scene, false);
+    const auto floor = scene.Entities().CreateObject({.name = "Floor", .transform = {.localPosition = {0.0F, -0.5F, 0.0F}}});
+    scene.Components().Colliders().Set(floor.Entity(), {.boxSize = {20.0F, 1.0F, 20.0F}});
+    const auto box = scene.Entities().CreateObject({.name = "Resting box", .transform = {.localPosition = {0.0F, 0.5F, 0.0F}}});
+    scene.Components().Colliders().Set(box.Entity(), {});
+    scene.Components().Rigidbodies().Set(box.Entity(), {});
+    for (int frame = 0; frame < 120; ++frame) static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    kb::tests::Require(kb::scene::PhysicsBackend::IsSleeping(scene, box.Entity()), "A box resting on a floor must fall asleep");
+    static_cast<void>(kb::scene::PhysicsBackend::SetGravity(scene, kb::scene::PhysicsBackend::Gravity(scene)));
+    kb::tests::Require(kb::scene::PhysicsBackend::IsSleeping(scene, box.Entity()), "Setting the gravity it already has must leave a sleeping body asleep");
+    kb::tests::Require(kb::scene::PhysicsBackend::SetGravity(scene, {0.0F, 9.81F, 0.0F}), "The live physics world must take a new gravity");
+    kb::tests::Require(!kb::scene::PhysicsBackend::IsSleeping(scene, box.Entity()), "Changing the gravity must wake a sleeping body");
+}
+
 void RunPhysicsSceneSystemTests() {
+    RunProjectSimulationSettingsTest();
+    RunGravityChangeWakesBodiesTest();
     RunPhysicsMemoryMeasurementTest();
     RunPhysicsStackAndConnectedBodyRemovalTest();
     RunStaticColliderBatchInvalidationTest();
@@ -3511,8 +3763,9 @@ void RunPhysicsSceneSystemTests() {
     RunPhysicsSceneSystemFallingBodyTest();
     RunPhysicsPersistentSleeperTransitionTest();
     RunPhysicsSleepingContactAndDampingTest();
-    RunPhysicsUnityDefaultsTest();
+    RunPhysicsDefaultValuesTest();
     RunPhysicsTorqueJointDriveTest();
+    RunPhysicsExtendedJointsTest();
     RunPhysicsPipelinedStepEquivalenceTest();
 }
 

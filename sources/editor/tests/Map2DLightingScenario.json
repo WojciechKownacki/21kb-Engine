@@ -175,7 +175,7 @@
       "entity": "map",
       "checkpoint": "lit-map-blocking",
       "inputs": [
-        "occlusion 1",
+        "select 10 6 10 6", "occlusion 1",
         "key s ctrl"
       ]
     },
@@ -210,7 +210,7 @@
       "checkpoint": "top-down-lit-map",
       "inputs": [
         "view flat",
-        "occlusion 0",
+        "select 10 6 10 6", "occlusion 0",
         "key s ctrl"
       ]
     },
@@ -245,7 +245,7 @@
       "entity": "map",
       "checkpoint": "top-down-occlusion",
       "inputs": [
-        "occlusion 1",
+        "select 10 6 10 6", "occlusion 1",
         "key s ctrl"
       ]
     },

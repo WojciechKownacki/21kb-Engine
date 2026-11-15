@@ -20,6 +20,11 @@ public:
     [[nodiscard]] static EditorSceneBgfxViewport::PresentSettings BuildSettings(
         const RECT& content, const DockPanel& panel, const EditorSceneContext& sceneContext,
         const EditorRenderBackendSettings& renderBackendSettings);
+    // The Game View's picture: the same present settings with the picture's size, taken from `picture`, inside
+    // `renderArea`. The game camera is used while the game runs, so no editor overlay is drawn.
+    [[nodiscard]] static EditorSceneBgfxViewport::PresentSettings BuildGameSettings(
+        const RECT& content, const RECT& renderArea, const DockPanel& panel, const EditorViewportPreviewState& picture,
+        const EditorSceneContext& sceneContext, const EditorRenderBackendSettings& renderBackendSettings);
     static void PresentViewport(
         EditorSceneBgfxViewport& sceneViewport,
         HWND sceneViewportHost,

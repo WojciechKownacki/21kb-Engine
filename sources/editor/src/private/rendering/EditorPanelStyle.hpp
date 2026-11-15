@@ -42,16 +42,41 @@ constexpr int kDividerHeight = 1;
 constexpr int kCheckboxSize = 16;
 constexpr int kTextBaselineOffsetY = 1;
 
-// Where every Inspector row's label column ends: 45% of the row, the label/value split of Unity's
-// and Godot's inspectors, so long names ("Atmosphere Thickness", "Sun Size Convergence") fit at
-// the usual panel width instead of being cut.
+// The widest label the Inspector has drawn for the object it shows, in pixels. Rows note their label as they paint
+// (NoteInspectorLabelWidth), and the panel starts over when another object or language is shown.
+[[nodiscard]] inline int& InspectorWidestLabel() noexcept {
+    static int widest = 0;
+    return widest;
+}
+
+inline void NoteInspectorLabelWidth(int pixels) noexcept {
+    InspectorWidestLabel() = std::max(InspectorWidestLabel(), pixels);
+}
+
+inline void BeginInspectorLabelMeasure(unsigned long long subject, std::string_view language) {
+    static unsigned long long lastSubject = 0ULL;
+    static std::string lastLanguage;
+    if (subject != lastSubject || language != lastLanguage) {
+        lastSubject = subject;
+        lastLanguage = std::string{ language };
+        InspectorWidestLabel() = 0;
+    }
+}
+
+// Where every Inspector row's label column ends: where the widest label of the panel needs it to, with room for the
+// reset arrow, but never less than 36% or more than 55% of the row so that the values keep their share. Before any
+// label was measured it is 45% of the row.
 [[nodiscard]] inline int InspectorLabelColumnRight(RECT row) noexcept {
-    return row.left + (row.right - row.left) * 45 / 100;
+    const int width = static_cast<int>(row.right - row.left);
+    constexpr int kLabelTrailing = kRowPadX + 24;
+    const int wanted = InspectorWidestLabel() > 0 ? InspectorWidestLabel() + kLabelTrailing : width * 45 / 100;
+    return row.left + std::clamp(wanted, width * 36 / 100, width * 55 / 100);
 }
 constexpr int kSectionDividerInset = 8;
-constexpr float kSectionCornerRadius = 7.0F;
-constexpr float kSectionOutlineWidth = 1.5F;
-constexpr float kInputCornerRadius = 3.0F;
+constexpr float kSectionCornerRadius = 4.0F;
+constexpr float kSectionOutlineWidth = 1.0F;
+constexpr float kDockTabCornerRadius = 4.0F;
+constexpr float kInputCornerRadius = 4.0F;
 constexpr float kInputOutlineWidth = 1.0F;
 [[nodiscard]] inline COLORREF Color(EditorColor color) {
     return GdiDrawing::ToColorRef(color);
@@ -242,11 +267,34 @@ inline void DrawRoundedFrame(
     graphics.DrawPath(&pen, &path);
 }
 
-// `accent` paints a bar down the left edge. Focused fields use it so a field being typed
-// into is distinguishable at a glance from one the pointer merely rests on.
+// A focused field takes `accent` as its outline, so a field being typed into is
+// distinguishable at a glance from one the pointer merely rests on.
 inline void DrawInputFrame(HDC dc, const RECT& rect, COLORREF fill, COLORREF border,
                            COLORREF accent = CLR_INVALID, float accentWidth = 0.0F) {
-    DrawRoundedFrame(dc, rect, fill, border, kInputCornerRadius, kInputOutlineWidth, accent, accentWidth);
+    const COLORREF outline = accent != CLR_INVALID && accentWidth > 0.0F ? accent : border;
+    DrawRoundedFrame(dc, rect, fill, outline, kInputCornerRadius, kInputOutlineWidth);
+}
+
+// A dock tab: only its top corners are rounded, so the active tab runs into its panel.
+inline void FillDockTab(HDC dc, const RECT& rect, COLORREF fill, float radius) {
+    if (dc == nullptr || rect.right - rect.left <= 2 || rect.bottom - rect.top <= 2) {
+        return;
+    }
+    HeroIconGdiplusRuntime::EnsureStarted();
+    Gdiplus::Graphics graphics(dc);
+    ConfigureSectionGraphics(graphics);
+    Gdiplus::GraphicsPath path;
+    AddTopRoundedRectPath(
+        path,
+        Gdiplus::RectF{
+            static_cast<Gdiplus::REAL>(rect.left),
+            static_cast<Gdiplus::REAL>(rect.top),
+            static_cast<Gdiplus::REAL>(rect.right - rect.left),
+            static_cast<Gdiplus::REAL>(rect.bottom - rect.top),
+        },
+        radius);
+    Gdiplus::SolidBrush brush(GdiplusColor(fill));
+    graphics.FillPath(&brush, &path);
 }
 
 inline void DrawSectionButtonFrame(HDC dc, const RECT& rect, COLORREF fill, COLORREF border) {
@@ -254,7 +302,8 @@ inline void DrawSectionButtonFrame(HDC dc, const RECT& rect, COLORREF fill, COLO
 }
 
 inline void DrawSectionAccentFrame(HDC dc, const RECT& rect, COLORREF fill, COLORREF border, COLORREF accent) {
-    DrawRoundedFrame(dc, rect, fill, border, kSectionCornerRadius, kSectionOutlineWidth, accent, 3.5F);
+    static_cast<void>(border);
+    DrawRoundedFrame(dc, rect, fill, accent, kSectionCornerRadius, kSectionOutlineWidth);
 }
 
 inline void FillSectionHeaderBackground(HDC dc, const RECT& rect, COLORREF fill) {

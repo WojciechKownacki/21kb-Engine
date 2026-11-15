@@ -15,6 +15,10 @@ GameWindow::~GameWindow() {
         UnregisterClassW(kWindowClassName, GetModuleHandleW(nullptr));
         windowClass_ = 0U;
     }
+    if (backgroundBrush_ != nullptr) {
+        DeleteObject(backgroundBrush_);
+        backgroundBrush_ = nullptr;
+    }
 }
 
 bool GameWindow::Open(
@@ -23,7 +27,9 @@ bool GameWindow::Open(
     std::uint32_t height,
     bool fullscreen,
     kb::input::Win32InputCollector& inputCollector,
-    bool visible) {
+    bool visible,
+    bool resizable,
+    std::uint32_t backgroundRgb) {
     if (width == 0U || height == 0U) {
         return false;
     }
@@ -36,6 +42,8 @@ bool GameWindow::Open(
     windowClass.hInstance = GetModuleHandleW(nullptr);
     windowClass.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
     windowClass.lpszClassName = kWindowClassName;
+    backgroundBrush_ = CreateSolidBrush(RGB((backgroundRgb >> 16U) & 0xFFU, (backgroundRgb >> 8U) & 0xFFU, backgroundRgb & 0xFFU));
+    windowClass.hbrBackground = backgroundBrush_;
     windowClass_ = RegisterClassExW(&windowClass);
     if (windowClass_ == 0U) {
         return false;
@@ -47,7 +55,7 @@ bool GameWindow::Open(
         .right = static_cast<LONG>(width),
         .bottom = static_cast<LONG>(height),
     };
-    DWORD style = WS_OVERLAPPEDWINDOW;
+    DWORD style = resizable ? WS_OVERLAPPEDWINDOW : (WS_OVERLAPPEDWINDOW & ~(WS_THICKFRAME | WS_MAXIMIZEBOX));
     DWORD extendedStyle = visible ? 0U : WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
     int x = CW_USEDEFAULT;
     int y = CW_USEDEFAULT;

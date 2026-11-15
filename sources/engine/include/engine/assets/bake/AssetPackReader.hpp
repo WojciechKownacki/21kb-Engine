@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -150,6 +151,14 @@ public:
     [[nodiscard]] const AssetPackBlockEntry* FindBlock(
         const AssetPackArtifactEntry& artifact,
         std::string_view blockName) const noexcept;
+
+    // ReadBlock for a reader that several threads share: `fileLock` is held only while the stored bytes are read from
+    // the file handle. The seal check, decryption, decompression and digest check run after it is released, so
+    // concurrent loads from one pack decode at the same time instead of one behind the other.
+    [[nodiscard]] AssetPackReadStatus ReadBlock(const AssetPackArtifactEntry& artifact,
+                                                std::string_view blockName,
+                                                std::mutex& fileLock,
+                                                std::vector<std::uint8_t>& out);
 
     // Turns stored bytes of `block` that a caller read itself -- an asynchronous reader with its
     // own file handle -- into the payload: checks the seal digest, decrypts, decompresses and

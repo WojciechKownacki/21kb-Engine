@@ -143,6 +143,8 @@ public:
 
     void SetAreaCost(kb::scene::NavAreaId area, float cost) noexcept;
     [[nodiscard]] float AreaCost(kb::scene::NavAreaId area) const noexcept;
+    // Areas no query or agent enters, whatever its own area mask.
+    void SetBlockedAreas(kb::scene::NavAreaMask areas);
     void ConfigureFilter(NavAreaFilter& filter, kb::scene::NavAreaMask areas) const noexcept;
 
     // A crowd filters polygons by their 16 flag bits only, so every area mask its members use gets a
@@ -168,6 +170,8 @@ public:
         const NavAreaFilter& filter);
     // Triangles of every polygon of a profile, three corners each, in the mesh's space.
     [[nodiscard]] std::vector<kb::math::Vec3> DebugTriangles(std::uint32_t profile) const;
+    // Polygons, edges and tile bounds of a profile, moved by `offset` (the mesh's origin).
+    [[nodiscard]] NavMeshDebugGeometry DebugGeometry(std::uint32_t profile, const kb::math::DVec3& offset) const;
     // Summed horizontal area of the polygons of a profile.
     [[nodiscard]] double WalkableArea(std::uint32_t profile) const;
 
@@ -226,6 +230,7 @@ private:
     std::map<std::uint64_t, std::uint32_t> linkUserIds_;
     std::uint32_t nextLinkUserId_ = 1U;
     std::array<float, kb::scene::kNavAreaCount> costs_{};
+    kb::scene::NavAreaMask blocked_ = 0U;
     // Area mask per crowd filter slot; 0 marks a free slot.
     std::array<kb::scene::NavAreaMask, kCrowdFilterCount> filterMasks_{ kb::scene::kAllNavAreas };
     std::uint64_t nextGeneration_ = 1U;

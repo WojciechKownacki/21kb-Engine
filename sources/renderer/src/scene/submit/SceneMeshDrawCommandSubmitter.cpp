@@ -1,5 +1,6 @@
 #include "scene/submit/SceneMeshDrawCommandSubmitter.hpp"
 #include "scene/submit/SceneMeshCoverageProbe.hpp"
+#include "scene/pipeline/MeshPipelinePassPolicy.hpp"
 #include "kb/render/scene/SceneGpuDrivenCullingPass.hpp"
 
 #include "kb/render/scene/RenderInstanceBuffer.hpp"
@@ -120,7 +121,7 @@ enum class MotionPreviousModelUpload : std::uint8_t {
     Unavailable,
 };
 
-// Unreal's previous LocalToWorld per primitive: the previous models of a draw whose instances moved this frame,
+// Previous LocalToWorld per primitive: the previous models of a draw whose instances moved this frame,
 // one row per submitted instance in instance order (the vertex stage indexes them by gl_InstanceID).
 [[nodiscard]] MotionPreviousModelUpload UploadMotionPreviousModels(
     const SceneMotionVectorFrame& motion,
@@ -452,6 +453,10 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
         const std::uint64_t submittedTriangles = static_cast<std::uint64_t>(command.indexCount / 3U) * submittedInstances;
         desc.stats.submittedTriangleCount += submittedTriangles;
         if (desc.pass == MeshPassType::ShadowDepth) desc.stats.submittedShadowTriangleCount += submittedTriangles;
+        if (desc.pass == MeshPassType::BaseTransparent &&
+            MeshPipelinePassPolicy::SamplesSceneColor(command.materialResource, resolution.graphProgram)) {
+            ++desc.stats.sceneColorReadDrawCallCount;
+        }
         if (desc.pass == MeshPassType::GBuffer && command.materialResource != nullptr) {
             const bool compactGraph = resolution.graphProgram && resolution.key.pass == "GBufferCompact";
             if ((command.materialResource->graphProgram.writesShadingModelColor && resolution.graphProgram && !compactGraph) ||

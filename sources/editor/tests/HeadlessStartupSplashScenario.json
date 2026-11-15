@@ -1,0 +1,8 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    {
+      "op": "check_startup_splash"
+    }
+  ]
+}

@@ -34,6 +34,7 @@ void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeC
         ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint32_t>(components.meshRenderer->lodBias));
         ScenePrefabHashBuilder::Mix(hash, components.meshRenderer->lodEnabled ? 1U : 0U);
         ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint32_t>(components.meshRenderer->mobility));
+        if (!components.meshRenderer->affectsNavigation) ScenePrefabHashBuilder::Mix(hash, 0x4E415646U);
     }
 
     ScenePrefabHashBuilder::Mix(hash, components.light.has_value() ? 1U : 0U);
@@ -92,6 +93,7 @@ void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeC
         ScenePrefabHashBuilder::MixFloat(hash, components.collider->restitution);
         ScenePrefabHashBuilder::Mix(hash, components.collider->layer);
         if (components.collider->meshAssetId != 0) ScenePrefabHashBuilder::Mix(hash, components.collider->meshAssetId);
+        if (!components.collider->affectsNavigation) ScenePrefabHashBuilder::Mix(hash, 0x4E415646U);
     }
 
     ScenePrefabHashBuilder::Mix(hash, components.characterController.has_value() ? 1U : 0U);
@@ -120,6 +122,20 @@ void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeC
         ScenePrefabHashBuilder::MixFloat(hash, components.joint->spring.spring);
         ScenePrefabHashBuilder::MixFloat(hash, components.joint->spring.damper);
         ScenePrefabHashBuilder::MixFloat(hash, components.joint->breakForce);
+        // Only the kinds that read the freedom settings hash them, so a joint of an older kind keeps its hash.
+        if (JointUsesFreedom(components.joint->type)) {
+            const JointFreedom& freedom = components.joint->freedom;
+            ScenePrefabHashBuilder::MixVec3(hash, freedom.secondaryAxis);
+            ScenePrefabHashBuilder::MixFloat(hash, freedom.swing1Limit);
+            ScenePrefabHashBuilder::MixFloat(hash, freedom.swing2Limit);
+            for (const JointAxis& freedomAxis : freedom.axes) {
+                ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(freedomAxis.mode));
+                ScenePrefabHashBuilder::MixFloat(hash, freedomAxis.minLimit);
+                ScenePrefabHashBuilder::MixFloat(hash, freedomAxis.maxLimit);
+                ScenePrefabHashBuilder::MixFloat(hash, freedomAxis.motor.targetVelocity);
+                ScenePrefabHashBuilder::MixFloat(hash, freedomAxis.motor.force);
+            }
+        }
     }
 
     ScenePrefabHashBuilder::Mix(hash, components.regionPortal.has_value() ? 1U : 0U);

@@ -3,6 +3,8 @@
 #include "scene/EditorHierarchySearchState.hpp"
 
 #include <cstdint>
+#include <string>
+#include <utility>
 
 namespace kb::editor {
 
@@ -24,6 +26,26 @@ enum class ProjectSettingsTooltipKind : std::uint8_t {
     ShadowQualityMobile,
     GiQuality,
     GiQualityMobile,
+    WindowMode,
+    WindowSize,
+    Resizable,
+    VSync,
+    FrameRateLimit,
+    RenderScale,
+    AndroidGraphicsApi,
+    SplashImage,
+    SplashScale,
+    SplashBackground,
+    SplashMinimumTime,
+    SplashProgress,
+    FixedStep,
+    Gravity,
+    GravityPreset,
+    TimeScale,
+    MasterVolume,
+    Microphone,
+    Tags,
+    NavigationAreas,
 };
 
 // Transient UI state for the Project Settings panel: which category is selected
@@ -50,9 +72,67 @@ public:
         selectedCategory_ = category;
         mappingContextDropdownOpen_ = false; // Closing a stale dropdown on switch.
         physicsLayersDropdownOpen_ = false;
+        splashImageDropdownOpen_ = false;
+        EndNumberEdit();
+        firstVisibleScene_ = 0;
         hoveredOption_ = -1;
         tooltipKind_ = ProjectSettingsTooltipKind::None;
         return true;
+    }
+
+    // Typing into a setting's cell: which cell (a ProjectSettingsNumber, kTagNameEdit for the new tag's name,
+    // -1 for none) and the text typed so far. The text starts out selected, so the first key replaces the old value.
+    static constexpr int kTagNameEdit = 1000;
+    // The name of a new navigation area, and per area its cost and its new name (plus the area id).
+    static constexpr int kNavAreaNameEdit = 1001;
+    static constexpr int kNavAreaCostEdit = 2000;
+    static constexpr int kNavAreaRenameEdit = 3000;
+    static constexpr int kNavAreaEditRange = 64;
+    [[nodiscard]] bool IsNumberEditing() const noexcept {
+        return editedNumber_ >= 0;
+    }
+    [[nodiscard]] bool IsTagNameEditing() const noexcept {
+        return editedNumber_ == kTagNameEdit;
+    }
+    // Whether the cell being typed in takes any text (a name) rather than a number.
+    [[nodiscard]] bool IsTextEditing() const noexcept {
+        return IsTagNameEditing() || editedNumber_ == kNavAreaNameEdit ||
+            (editedNumber_ >= kNavAreaRenameEdit && editedNumber_ < kNavAreaRenameEdit + kNavAreaEditRange);
+    }
+    [[nodiscard]] int EditedNumber() const noexcept {
+        return editedNumber_;
+    }
+    [[nodiscard]] EditorHierarchySearchState& NumberEdit() noexcept {
+        return numberEdit_;
+    }
+    [[nodiscard]] const EditorHierarchySearchState& NumberEdit() const noexcept {
+        return numberEdit_;
+    }
+    void BeginNumberEdit(int number, std::string text) {
+        mappingContextDropdownOpen_ = false;
+        physicsLayersDropdownOpen_ = false;
+        splashImageDropdownOpen_ = false;
+        search_.Focus(false);
+        editedNumber_ = number;
+        numberEdit_.SetQuery(std::move(text));
+        numberEdit_.Focus(true);
+        numberEdit_.SelectAll();
+    }
+    void BeginTagNameEdit() {
+        BeginNumberEdit(kTagNameEdit, {});
+    }
+    void EndNumberEdit() noexcept {
+        editedNumber_ = -1;
+        numberEdit_.Clear();
+        numberEdit_.Focus(false);
+    }
+
+    // The list of the Scenes page, or of the Tags page, starts at this row.
+    [[nodiscard]] int FirstVisibleScene() const noexcept {
+        return firstVisibleScene_;
+    }
+    void SetFirstVisibleScene(int index) noexcept {
+        firstVisibleScene_ = index < 0 ? 0 : index;
     }
 
     [[nodiscard]] bool IsMappingContextDropdownOpen() const noexcept {
@@ -62,6 +142,7 @@ public:
     void ToggleMappingContextDropdown() noexcept {
         mappingContextDropdownOpen_ = !mappingContextDropdownOpen_;
         physicsLayersDropdownOpen_ = false;
+        splashImageDropdownOpen_ = false;
         hoveredOption_ = -1;
     }
 
@@ -72,14 +153,28 @@ public:
     void TogglePhysicsLayersDropdown() noexcept {
         physicsLayersDropdownOpen_ = !physicsLayersDropdownOpen_;
         mappingContextDropdownOpen_ = false;
+        splashImageDropdownOpen_ = false;
+        hoveredOption_ = -1;
+    }
+
+    // The list of the project's images for the launch screen on the Display page.
+    [[nodiscard]] bool IsSplashImageDropdownOpen() const noexcept {
+        return splashImageDropdownOpen_;
+    }
+
+    void ToggleSplashImageDropdown() noexcept {
+        splashImageDropdownOpen_ = !splashImageDropdownOpen_;
+        mappingContextDropdownOpen_ = false;
+        physicsLayersDropdownOpen_ = false;
         hoveredOption_ = -1;
     }
 
     // Returns true when a dropdown was actually open (so the caller can repaint).
     bool CloseDropdowns() noexcept {
-        const bool wasOpen = mappingContextDropdownOpen_ || physicsLayersDropdownOpen_;
+        const bool wasOpen = mappingContextDropdownOpen_ || physicsLayersDropdownOpen_ || splashImageDropdownOpen_;
         mappingContextDropdownOpen_ = false;
         physicsLayersDropdownOpen_ = false;
+        splashImageDropdownOpen_ = false;
         hoveredOption_ = -1;
         return wasOpen;
     }
@@ -126,9 +221,13 @@ public:
 
 private:
     EditorHierarchySearchState search_;
+    EditorHierarchySearchState numberEdit_;
+    int editedNumber_ = -1;
+    int firstVisibleScene_ = 0;
     int selectedCategory_ = 0;
     bool mappingContextDropdownOpen_ = false;
     bool physicsLayersDropdownOpen_ = false;
+    bool splashImageDropdownOpen_ = false;
     int hoveredOption_ = -1;
     ProjectSettingsTooltipKind tooltipKind_ = ProjectSettingsTooltipKind::None;
     int tooltipX_ = 0;

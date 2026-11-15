@@ -108,7 +108,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         for path, code, output in pool.map(run, sources):
             reported = [line for line in output.splitlines() if re.search(r": (warning|error): ", line)]
             # A finding inside a system or SDK header is not ours to fix; the gate holds first-party code.
-            findings = [line for line in reported if line.lower().startswith(str(ENGINE_ROOT).lower())]
+            # Nor is one inside a third-party header, unless it is an error that kept the source from being analysed.
+            findings = [
+                line for line in reported
+                if line.lower().startswith(str(ENGINE_ROOT).lower())
+                and ("[clang-diagnostic-error]" in line or not EXCLUDED.search(line.split(": ", 1)[0]))
+            ]
             if findings or (code != 0 and not reported):
                 failures += 1
                 print(f"--- {path}")

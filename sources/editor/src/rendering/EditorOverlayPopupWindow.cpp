@@ -30,9 +30,10 @@ namespace {
 
 } // namespace
 
-EditorOverlayPopupWindow::EditorOverlayPopupWindow(const wchar_t* className, Client& client) noexcept
+EditorOverlayPopupWindow::EditorOverlayPopupWindow(const wchar_t* className, Client& client, UINT classStyle) noexcept
     : className_(className)
-    , client_(&client) {}
+    , client_(&client)
+    , classStyle_(classStyle) {}
 
 EditorOverlayPopupWindow::~EditorOverlayPopupWindow() {
     if (window_ != nullptr && IsWindow(window_) != 0) {
@@ -56,7 +57,7 @@ bool EditorOverlayPopupWindow::Ensure(HWND owner) {
 
     WNDCLASSEXW windowClass{};
     windowClass.cbSize = sizeof(windowClass);
-    windowClass.style = CS_HREDRAW | CS_VREDRAW;
+    windowClass.style = CS_HREDRAW | CS_VREDRAW | classStyle_;
     windowClass.lpfnWndProc = &EditorOverlayPopupWindow::WindowProc;
     windowClass.hInstance = GetModuleHandleW(nullptr);
     windowClass.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));

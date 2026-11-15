@@ -30,8 +30,15 @@ private:
 
     void ReconcileComponents(kb::scene::Scene& scene);
     void CreateComponentInstance(kb::scene::Scene& scene, ComponentInstance& binding);
+    // Adds this scene step's duration to the time owed to the particle clock and returns how many whole
+    // particle steps (CpuParticleBackend::kStepSeconds) are due now.
+    [[nodiscard]] std::uint32_t TakeDueParticleSteps(kb::scene::SceneSystemContext& context);
 
     CpuParticleBackend backend_;
+    // Particles advance at their own fixed rate, so effects look the same under any scene fixed step.
+    double particleDebtSeconds_ = 0.0;
+    // Particle steps taken so far; the step index of the GPU time base and of the render snapshots.
+    std::uint64_t particleStepIndex_ = 0U;
     kb::ecs::Query<kb::scene::ParticleEffectComponent> componentQuery_;
     kb::ecs::UnsafeHotReadQuery<kb::scene::ParticleEffectComponent> componentHotQuery_;
     std::array<ComponentInstance, kb::scene::kParticleEffectMaxInstancesPerScene> componentInstances_{};

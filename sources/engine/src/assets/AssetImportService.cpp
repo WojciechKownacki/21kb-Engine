@@ -547,7 +547,7 @@ struct ImportedAssetHeader {
     }
 
     const std::uint16_t importOptions = AssetImportOptionFlags(options);
-    // Scale and rotation are model import settings, as in Unity's ModelImporter; other sources
+    // Scale and rotation are model import settings; other sources
     // carry none.
     const AssetMeshImportTransform transform = result.category == AssetImportCategory::Model
         ? options.mesh.transform : AssetMeshImportTransform{};

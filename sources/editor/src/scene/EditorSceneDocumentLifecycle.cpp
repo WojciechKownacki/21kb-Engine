@@ -3,6 +3,7 @@
 
 #include "app/EditorPlayModeSceneSession.hpp"
 #include "diagnostics/EditorLagTrace.hpp"
+#include "engine/assets/AssetFileName.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/modules/EngineModuleHost.hpp"
@@ -15,7 +16,9 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneInputActivation.hpp"
+#include "engine/scene/SceneLightProbeAccess.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 #include "engine/script/ScriptModule.hpp"
 #include "engine/world/WorldDescriptor.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
@@ -34,6 +37,7 @@
 #include "scene/EditorSceneDocumentAssetLoaders.hpp"
 #include "scene/EditorMap2DService.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <memory>
@@ -233,7 +237,7 @@ bool EditorSceneContext::BeginPlayModeSceneSession() {
         return false;
     }
     trace.Phase(phaseStarted, "transition=begin phase=pending-plugin-reload");
-    // Like Unity and Unreal, Play runs the scene as it is in the editor, saved or not: the snapshot below
+    // Play runs the scene as it is in the editor, saved or not: the snapshot below
     // brings the edited scene back afterwards, still unsaved when it was.
     playModeDocumentWasDirty_ = sceneDocumentDirty_;
     kb::audio::AudioPlayback::StopAll(*scene_);
@@ -244,6 +248,8 @@ bool EditorSceneContext::BeginPlayModeSceneSession() {
     if (!ActivateProjectPhysicsLayers(*scene_)) {
         return false;
     }
+    scene_->Runtime().ApplyProjectSimulation(projectConfig_.simulation);
+    static_cast<void>(kb::audio::AudioPlayback::SetMasterVolume(*scene_, projectConfig_.masterVolume));
     trace.Phase(phaseStarted, "transition=begin phase=physics-layers");
 
     phaseStarted = std::chrono::steady_clock::now();
@@ -272,6 +278,7 @@ bool EditorSceneContext::BeginPlayModeSceneSession() {
     ActivateProjectInput();
     trace.Phase(phaseStarted, "transition=begin phase=input-setup");
     phaseStarted = std::chrono::steady_clock::now();
+    ReleaseEditModeScripts();
     if (HasSceneBehaviours(*scene_)) {
         EnsureScriptRuntime();
     }
@@ -367,6 +374,7 @@ bool EditorSceneContext::ReloadSceneFromProject() {
         edited = kb::scene::SceneDocumentService::Capture(*scene_, SceneDocumentName(currentScenePath_));
     }
 
+    DropEditModeScripts();
     if (scriptModuleHost_ != nullptr) {
         scriptModuleHost_->DetachScene(*scene_);
         scriptModuleHost_->Unload();
@@ -387,6 +395,8 @@ bool EditorSceneContext::ReloadSceneFromProject() {
     if (!ActivateProjectPhysicsLayers(*nextScene)) {
         return false;
     }
+    nextScene->Runtime().ApplyProjectSimulation(projectConfig_.simulation);
+    ApplyProjectAudioAndTags(*nextScene);
 
     kb::scene::SceneDocumentLoadResult loaded;
     if (worldPartition_.IsOpen()) {
@@ -430,6 +440,7 @@ bool EditorSceneContext::ReloadSceneFromProject() {
     scene_ = documentScene_.get();
     AdvanceSceneDocumentGeneration();
     plugins_.ClearPendingReload();
+    AdoptSceneTagsIntoProject();
     SelectFirstSceneEntityOrClear();
     ResetSceneEditState();
     ClearSceneDocumentDirty();
@@ -502,6 +513,7 @@ bool EditorSceneContext::ReloadSceneAfterExternalChange() {
         commandStack_.RemapEntities(EditorCommandHistoryKey::Scene(), remap);
         if (!loaded || !resumed) return false;
         EditorSceneAudioSettingsService::PrepareDocument(*scene_);
+        AdoptSceneTagsIntoProject();
         before.Restore(*scene_, hierarchySelection_);
         ReleaseRenderedSceneResources();
         CompleteLoadedUIComponents();
@@ -597,6 +609,142 @@ bool EditorSceneContext::CreateScene(std::string_view folder, std::string_view n
     return true;
 }
 
+bool EditorSceneContext::RenameOpenScene(std::string_view name) {
+    if (RejectWhilePrefabEditing()) {
+        return false;
+    }
+    if (playModeSceneSession_.Active() || worldPartition_.IsOpen()) {
+        console_.Warning("Project", "Stop play mode and close the world before renaming a scene.");
+        return false;
+    }
+    if (std::string problem = kb::assets::AssetFileNameError(name); !problem.empty()) {
+        console_.Error("Project", "Scene could not be renamed: " + problem);
+        return false;
+    }
+    const std::string fileName = std::string{ name } + currentScenePath_.extension().string();
+    const std::filesystem::path target = currentScenePath_.parent_path() / kb::assets::Utf8Path(fileName);
+    std::error_code error;
+    if (std::filesystem::exists(target, error)) {
+        console_.Error("Project", "A scene named " + std::string{ name } + " already exists there. Choose another name.");
+        return false;
+    }
+    static_cast<void>(scene_->Assets().Discover());
+    kb::assets::AssetManager& assets = scene_->Assets().Manager();
+    const std::optional<std::filesystem::path> virtualPath = assets.Mounts().ToVirtual(currentScenePath_);
+    const kb::assets::AssetMetadata* metadata = virtualPath.has_value() ? assets.Registry().FindByPath(*virtualPath) : nullptr;
+    if (metadata == nullptr) {
+        console_.Error("Project", "Only a saved scene of this project can be renamed.");
+        return false;
+    }
+    const bool startup = std::filesystem::weakly_canonical(currentScenePath_, error) == std::filesystem::weakly_canonical(ResolveDefaultScenePath(), error);
+    if (!assets.RenameAsset(metadata->id, std::string{ name })) {
+        console_.Error("Project", "Scene could not be renamed: " + assets.LastError());
+        return false;
+    }
+    currentScenePath_ = target;
+    RememberLastOpenMap();
+    const std::string renamedVirtual = (virtualPath->parent_path() / kb::assets::Utf8Path(fileName)).generic_string();
+    const std::string previousVirtual = virtualPath->generic_string();
+    // The scenes listed for the package follow the file to its new name.
+    const auto listed = std::ranges::find(projectConfig_.additionalScenes, previousVirtual);
+    if (listed != projectConfig_.additionalScenes.end()) {
+        *listed = renamedVirtual;
+    }
+    if (startup) {
+        projectConfig_.defaultMap = renamedVirtual;
+    }
+    if (startup || listed != projectConfig_.additionalScenes.end()) {
+        static_cast<void>(SaveProjectConfiguration());
+    }
+    console_.Info("Project", "Scene renamed to " + fileName + ".");
+    return true;
+}
+
+bool EditorSceneContext::DuplicateOpenScene() {
+    if (RejectWhilePrefabEditing()) {
+        return false;
+    }
+    if (playModeSceneSession_.Active() || worldPartition_.IsOpen()) {
+        console_.Warning("Project", "Stop play mode and close the world before duplicating a scene.");
+        return false;
+    }
+    const std::filesystem::path folder = currentScenePath_.parent_path();
+    const std::u8string stem = currentScenePath_.stem().u8string();
+    const std::string base = std::string{ reinterpret_cast<const char*>(stem.data()), stem.size() } + " Copy";
+    std::filesystem::path copy = folder / kb::assets::Utf8Path(base + ".21kbscene");
+    std::error_code error;
+    for (int number = 2; std::filesystem::exists(copy, error); ++number) {
+        copy = folder / kb::assets::Utf8Path(base + " " + std::to_string(number) + ".21kbscene");
+    }
+    if (!kb::scene::SceneDocumentService::Save(*scene_, copy, SceneDocumentName(copy))) {
+        console_.Error("Project", "The scene copy could not be written: " + copy.generic_string());
+        return false;
+    }
+    static_cast<void>(scene_->Assets().Discover());
+    console_.Info("Project", "Scene copied to " + copy.generic_string());
+    return true;
+}
+
+bool EditorSceneContext::DeleteOpenScene() {
+    if (RejectWhilePrefabEditing()) {
+        return false;
+    }
+    if (playModeSceneSession_.Active() || worldPartition_.IsOpen()) {
+        console_.Warning("Project", "Stop play mode and close the world before deleting a scene.");
+        return false;
+    }
+    static_cast<void>(scene_->Assets().Discover());
+    kb::assets::AssetManager& assets = scene_->Assets().Manager();
+    std::error_code error;
+    const std::filesystem::path doomed = std::filesystem::weakly_canonical(currentScenePath_, error);
+    const std::optional<std::filesystem::path> doomedVirtual = assets.Mounts().ToVirtual(currentScenePath_);
+    const kb::assets::AssetMetadata* metadata = doomedVirtual.has_value() ? assets.Registry().FindByPath(*doomedVirtual) : nullptr;
+    if (metadata == nullptr) {
+        console_.Error("Project", "Only a saved scene of this project can be deleted.");
+        return false;
+    }
+    const kb::assets::AssetId id = metadata->id;
+    const std::filesystem::path startupScene = std::filesystem::weakly_canonical(ResolveDefaultScenePath(), error);
+
+    // The startup scene when that is another one, or else the first other scene.
+    std::string nextVirtual;
+    std::filesystem::path nextPath;
+    for (const std::string& candidate : ProjectScenePaths()) {
+        const std::optional<std::filesystem::path> resolved = assets.Mounts().Resolve(std::filesystem::path{ candidate });
+        if (!resolved.has_value()) {
+            continue;
+        }
+        const std::filesystem::path canonical = std::filesystem::weakly_canonical(*resolved, error);
+        if (canonical == doomed || !std::filesystem::is_regular_file(canonical, error)) {
+            continue;
+        }
+        if (nextPath.empty() || canonical == startupScene) {
+            nextVirtual = candidate;
+            nextPath = *resolved;
+        }
+    }
+    if (nextPath.empty()) {
+        console_.Warning("Project", "This is the project's only scene, so it stays. Create another one first.");
+        return false;
+    }
+    const bool startup = doomed == startupScene;
+    if (!OpenScene(nextPath, EditorDirtySceneResolution::Discard)) {
+        return false;
+    }
+    // A deleted scene leaves the package list too.
+    const std::string doomedVirtualPath = doomedVirtual->generic_string();
+    const std::size_t listedBefore = projectConfig_.additionalScenes.size();
+    std::erase(projectConfig_.additionalScenes, doomedVirtualPath);
+    if (startup) {
+        projectConfig_.defaultMap = nextVirtual;
+        std::erase(projectConfig_.additionalScenes, nextVirtual);
+    }
+    if (startup || projectConfig_.additionalScenes.size() != listedBefore) {
+        static_cast<void>(SaveProjectConfiguration());
+    }
+    return DeleteAssetBrowserItem(id);
+}
+
 // The scene document's name: the file's name in UTF-8 (any letters), "Main" for a path without one.
 std::string EditorSceneContext::SceneDocumentName(const std::filesystem::path& scenePath) {
     const std::u8string stem = scenePath.stem().u8string();
@@ -647,7 +795,9 @@ bool EditorSceneContext::OpenScene(const std::filesystem::path& path, EditorDirt
     ReleaseRenderedSceneResources();
 
     currentScenePath_ = scenePath;
+    kb::scene::SceneLightProbeAccess::AssignBakedGrid(*scene_, scenePath.stem().generic_string());
     RememberLastOpenMap();
+    AdoptSceneTagsIntoProject();
     AdvanceSceneDocumentGeneration();
     SelectFirstSceneEntityOrClear();
     ResetSceneEditState();
@@ -702,6 +852,7 @@ bool EditorSceneContext::OpenPrefabEditMode(const std::filesystem::path& prefabP
     std::swap(commandStack_, documentCommands_);
     prefabEdit_ = std::move(edit);
     prefabEditPath_ = prefabPath;
+    DropEditModeScripts();
     scene_ = &prefabEdit_.EditScene();
     ResetSceneEditState();
     InvalidateHierarchyRows();
@@ -740,6 +891,7 @@ bool EditorSceneContext::ClosePrefabEditMode() {
     }
     ReleaseRenderedSceneResources();
     ResetSceneEditState();
+    DropEditModeScripts();
     scene_ = documentScene_.get();
     prefabEdit_ = {};
     prefabEditPath_.clear();

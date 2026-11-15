@@ -78,6 +78,7 @@ struct ScenePrefabOptionalComponentExpectation {
         { registry.NavAgentComponentId(), components.navAgent.has_value() },
         { registry.NavObstacleComponentId(), components.navObstacle.has_value() },
         { registry.NavLinkComponentId(), components.navLink.has_value() },
+        { registry.NavBoundsComponentId(), components.navBounds.has_value() },
     });
 }
 

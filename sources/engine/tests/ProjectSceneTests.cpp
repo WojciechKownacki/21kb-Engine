@@ -51,6 +51,7 @@
 #include "scene/asset/io/SceneAssetBinaryIO.hpp"
 #include "scene/asset/io/components/SceneAssetAudioComponentCodec.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <filesystem>
@@ -125,6 +126,42 @@ void RunSingleRootNonAdditiveSceneOwnershipTest() {
     kb::tests::Require(target.LoadedContent().Unload(id) && target.Entities().Count() == 1U &&
             target.Entities().IsAlive(persistent),
         "Single-root non-additive unload removed persistent content or leaked a child");
+    std::filesystem::remove(path);
+}
+
+// A load that replaces the scene reports its progress to the scene's observer: from 0 as it starts, through the
+// stage in between, to 1 -- also when it fails. An additive load, which streams content in beside the scene, reports nothing.
+void RunSceneLoadProgressObserverTest() {
+    using namespace kb::scene;
+    Scene source;
+    static_cast<void>(source.Entities().CreateObject(SceneObjectDesc{ .name = "Progress root" }));
+    const std::filesystem::path path = std::filesystem::temp_directory_path() / "21kb_load_progress_test.21kbscene";
+    kb::tests::Require(SceneDocumentService::Save(SceneDocumentService::Capture(source, "Progress world"), path),
+        "Load progress fixture could not be saved");
+
+    Scene target;
+    std::vector<float> reported;
+    target.LoadedContent().SetLoadProgressObserver([&reported](float fraction) { reported.push_back(fraction); });
+    kb::tests::Require(target.LoadedContent().Load(path, false) != 0U,
+        "Load progress fixture could not be loaded");
+    kb::tests::Require(reported.size() == 3U && reported.front() == 0.0F && reported.back() == 1.0F &&
+            reported[1] > 0.0F && reported[1] < 1.0F,
+        "A replacing load must report its start, a stage in between and its end");
+    reported.clear();
+    kb::tests::Require(target.LoadedContent().Load(std::filesystem::temp_directory_path() / "21kb_load_progress_missing.21kbscene", false) == 0U &&
+            reported.size() == 2U && reported.front() == 0.0F && reported.back() == 1.0F,
+        "A replacing load that fails must still report its end so a loading screen goes away");
+    reported.clear();
+    kb::tests::Require(target.LoadedContent().Load(path, true) != 0U && reported.empty(),
+        "An additive load must not report progress");
+    target.LoadedContent().ReportLoadProgress(7.0F);
+    target.LoadedContent().ReportLoadProgress(-1.0F);
+    kb::tests::Require(reported.size() == 2U && reported[0] == 1.0F && reported[1] == 0.0F,
+        "A reported fraction must be kept within 0 and 1");
+    target.LoadedContent().SetLoadProgressObserver({});
+    reported.clear();
+    kb::tests::Require(target.LoadedContent().Load(path, false) != 0U && reported.empty(),
+        "A scene with no observer must load without reporting");
     std::filesystem::remove(path);
 }
 
@@ -488,6 +525,266 @@ void RunProjectQualitySettingsTest() {
     Require(fallback.shadowQuality == kb::project::ProjectQualityLevel::Auto && fallback.giQuality == kb::project::ProjectQualityLevel::Low,
         "a misspelled level must fall back to Auto and leave the others alone");
     CleanTempRoot();
+}
+
+// The lighting path a project asks for: a project that never chose one leaves it to the platform (Auto), every
+// path round-trips through the settings file, and Auto becomes Deferred on a computer and Forward on a handheld
+// while a named path is used as written on both.
+void RunProjectLightingPathTest() {
+    using Path = kb::project::ProjectSceneLightingPath;
+    CleanTempRoot();
+    const std::filesystem::path file = kb::project::ProjectSettingsStore::FilePath(TempRoot());
+    Require(kb::project::ProjectSettings{}.lightingPath == Path::Auto, "a new project must leave the lighting path to the platform");
+    for (const Path path : { Path::Auto, Path::Forward, Path::Deferred, Path::ForwardPlus }) {
+        kb::project::ProjectSettings chosen;
+        chosen.lightingPath = path;
+        std::string error;
+        Require(kb::project::ProjectSettingsStore::Save(file, chosen, error), "the lighting path could not be saved");
+        const kb::project::ProjectSettingsLoadResult loaded = kb::project::ProjectSettingsStore::Load(file);
+        Require(loaded.Succeeded() && loaded.settings.lightingPath == path, "the settings file did not keep the lighting path");
+    }
+    {
+        std::ofstream output{ file, std::ios::binary | std::ios::trunc };
+        output << "[Project.Rendering]\nLightingPath=Sideways\n";
+    }
+    Require(kb::project::ProjectSettingsStore::Load(file).settings.lightingPath == Path::Auto,
+        "a misspelled lighting path must fall back to the default");
+    Require(kb::project::ResolveProjectSceneLightingPath(Path::Auto, false) == Path::Deferred,
+        "Auto must be Deferred on a computer");
+    Require(kb::project::ResolveProjectSceneLightingPath(Path::Auto, true) == Path::Forward,
+        "Auto must be Forward on a phone or tablet");
+    for (const Path path : { Path::Forward, Path::Deferred, Path::ForwardPlus }) {
+        Require(kb::project::ResolveProjectSceneLightingPath(path, false) == path &&
+                kb::project::ResolveProjectSceneLightingPath(path, true) == path,
+            "a named lighting path must be used as written");
+    }
+    CleanTempRoot();
+}
+
+// The window, frame pacing, fixed step, gravity and time scale of a project: a settings file written before
+// they existed reads as the behaviour the game always had, the values round-trip, and a value outside its
+// bounds is brought back inside them.
+void RunProjectDisplayAndSimulationSettingsTest() {
+    CleanTempRoot();
+    const std::filesystem::path file = kb::project::ProjectSettingsStore::FilePath(TempRoot());
+    const kb::project::ProjectSettings defaults;
+    Require(defaults.display.windowWidth == 1280U && defaults.display.windowHeight == 720U &&
+            defaults.display.windowMode == kb::project::ProjectWindowMode::Windowed && defaults.display.resizable &&
+            defaults.display.vsync && defaults.display.frameRateCap == 0U && defaults.display.renderScale == 1.0F &&
+            defaults.display.androidGraphicsApi == kb::project::ProjectAndroidGraphicsApi::Auto &&
+            defaults.simulation.fixedStepHz == 60U && defaults.simulation.gravity[0] == 0.0F &&
+            defaults.simulation.gravity[1] == -9.81F && defaults.simulation.gravity[2] == 0.0F &&
+            defaults.simulation.timeScale == 1.0F,
+        "the defaults of the display and simulation settings must be what the game did before they were settings");
+
+    {
+        std::ofstream output{ file, std::ios::binary | std::ios::trunc };
+        output << "[Project.Identity]\nName=Older\n[Project.Rendering]\nShadowQuality=High\n";
+    }
+    const kb::project::ProjectSettingsLoadResult older = kb::project::ProjectSettingsStore::Load(file);
+    Require(older.Succeeded() && older.settings.display == defaults.display && older.settings.simulation == defaults.simulation,
+        "a settings file without the new keys must read as the defaults");
+
+    kb::project::ProjectSettings chosen = older.settings;
+    chosen.display = { .windowWidth = 1920U, .windowHeight = 1080U, .windowMode = kb::project::ProjectWindowMode::BorderlessFullscreen,
+        .resizable = false, .vsync = false, .frameRateCap = 144U, .renderScale = 0.75F,
+        .androidGraphicsApi = kb::project::ProjectAndroidGraphicsApi::OpenGLES };
+    chosen.simulation = { .fixedStepHz = 120U, .gravity = { 0.5F, -1.62F, 3.0F }, .timeScale = 0.25F };
+    std::string error;
+    Require(kb::project::ProjectSettingsStore::Save(file, chosen, error), "the display and simulation settings could not be saved");
+    const kb::project::ProjectSettingsLoadResult reloaded = kb::project::ProjectSettingsStore::Load(file);
+    Require(reloaded.Succeeded() && reloaded.settings == chosen,
+        "the settings file did not keep the display and simulation settings");
+    for (const kb::project::ProjectAndroidGraphicsApi api :
+            { kb::project::ProjectAndroidGraphicsApi::Vulkan, kb::project::ProjectAndroidGraphicsApi::Auto }) {
+        chosen.display.androidGraphicsApi = api;
+        Require(kb::project::ProjectSettingsStore::Save(file, chosen, error) &&
+                kb::project::ProjectSettingsStore::Load(file).settings.display.androidGraphicsApi == api,
+            "the settings file did not keep the Android graphics API");
+    }
+
+    {
+        std::ofstream output{ file, std::ios::binary | std::ios::trunc };
+        output << "[Project.Display]\nAndroidGraphicsApi=Metal\nWindowWidth=10\nWindowHeight=99999\nWindowMode=Sideways\nFrameRateCap=5000\nRenderScale=0.1\n"
+                  "[Project.Physics]\nFixedStepHz=1\nGravityX=oops\nGravityY=-2000\n[Project.Time]\nTimeScale=-3\n";
+    }
+    const kb::project::ProjectSettings clamped = kb::project::ProjectSettingsStore::Load(file).settings;
+    Require(clamped.display.windowWidth == kb::project::kProjectWindowExtentMin &&
+            clamped.display.windowHeight == kb::project::kProjectWindowExtentMax &&
+            clamped.display.windowMode == kb::project::ProjectWindowMode::Windowed &&
+            clamped.display.frameRateCap == kb::project::kProjectFrameRateCapMax &&
+            clamped.display.renderScale == kb::project::kProjectRenderScaleMin &&
+            clamped.display.androidGraphicsApi == kb::project::ProjectAndroidGraphicsApi::Auto &&
+            clamped.simulation.fixedStepHz == kb::project::kProjectFixedStepHzMin &&
+            clamped.simulation.gravity[0] == 0.0F && clamped.simulation.gravity[1] == -kb::project::kProjectGravityLimit &&
+            clamped.simulation.timeScale == 0.0F,
+        "a value outside its bounds must be brought back inside them and an unreadable one left at its default");
+
+    // The launch screen: shown by default with the engine's mark on a dark background and no minimum time; every
+    // choice round-trips, and a value outside its bounds is brought back inside them.
+    Require(defaults.display.splash.image.empty() && defaults.display.splash.scale == kb::project::ProjectSplashScale::Fit &&
+            defaults.display.splash.minimumDisplayMilliseconds == 0U && defaults.display.splash.showProgress,
+        "the launch screen must default to the engine mark, fitted, with no minimum time and a progress bar");
+    kb::project::ProjectSettings splashChosen = defaults;
+    splashChosen.display.splash = { .image = "/Game/Branding/Logo.png", .backgroundColor = { 0.25F, 0.5F, 0.75F },
+        .scale = kb::project::ProjectSplashScale::Fill, .minimumDisplayMilliseconds = 1500U, .showProgress = false };
+    Require(kb::project::ProjectSettingsStore::Save(file, splashChosen, error) &&
+            kb::project::ProjectSettingsStore::Load(file).settings == splashChosen,
+        "the settings file did not keep the launch screen");
+    splashChosen.display.splash.scale = kb::project::ProjectSplashScale::Center;
+    Require(kb::project::ProjectSettingsStore::Save(file, splashChosen, error) &&
+            kb::project::ProjectSettingsStore::Load(file).settings.display.splash.scale == kb::project::ProjectSplashScale::Center,
+        "the settings file did not keep the centered launch screen scale");
+    {
+        std::ofstream output{ file, std::ios::binary | std::ios::trunc };
+        output << "[Project.Display]\nSplashScale=Stretched\nSplashMinimumMilliseconds=99999999\nSplashBackgroundRed=7\n"
+                  "SplashBackgroundGreen=-1\nSplashProgress=false\n";
+    }
+    const kb::project::ProjectSplashSettings splashClamped = kb::project::ProjectSettingsStore::Load(file).settings.display.splash;
+    Require(splashClamped.scale == kb::project::ProjectSplashScale::Fit &&
+            splashClamped.minimumDisplayMilliseconds == kb::project::kProjectSplashMinimumMillisecondsMax &&
+            splashClamped.backgroundColor[0] == 1.0F && splashClamped.backgroundColor[1] == 0.0F &&
+            splashClamped.backgroundColor[2] == defaults.display.splash.backgroundColor[2] && !splashClamped.showProgress,
+        "a launch screen value outside its bounds must be brought back inside them and an unknown scale left at its default");
+    CleanTempRoot();
+}
+
+// The scenes a package holds: a settings file without the list keeps packaging the startup scene alone, the
+// list round-trips in order behind the startup scene, a scene named twice counts once, and a shorter list
+// leaves no stale entries in the file.
+void RunProjectBuildScenesTest() {
+    CleanTempRoot();
+    const std::filesystem::path file = kb::project::ProjectSettingsStore::FilePath(TempRoot());
+    std::error_code directoryError;
+    std::filesystem::create_directories(file.parent_path(), directoryError);
+    {
+        std::ofstream output{ file, std::ios::binary | std::ios::trunc };
+        output << "[Project.Maps]\nDefaultMap=/Game/Scenes/Start.21kbscene\n";
+    }
+    const kb::project::ProjectSettings older = kb::project::ProjectSettingsStore::Load(file).settings;
+    Require(older.additionalScenes.empty() &&
+            kb::project::ProjectBuildScenes(older) == std::vector<std::string>{ "/Game/Scenes/Start.21kbscene" },
+        "a settings file without a scene list must package the startup scene alone");
+
+    kb::project::ProjectSettings chosen = older;
+    kb::project::SetProjectBuildScenes(chosen, { "/Game/Scenes/Hub.21kbscene", "/Game/Scenes/Start.21kbscene", "", "/Game/Scenes/Hub.21kbscene", "/Game/Scenes/End.21kbscene" });
+    Require(chosen.defaultMap == "/Game/Scenes/Hub.21kbscene" &&
+            chosen.additionalScenes == std::vector<std::string>{ "/Game/Scenes/Start.21kbscene", "/Game/Scenes/End.21kbscene" },
+        "the first scene of the list must become the startup scene, with empty and repeated entries dropped");
+    kb::project::ProjectSettings untouched = chosen;
+    kb::project::SetProjectBuildScenes(untouched, {});
+    Require(untouched == chosen, "an empty scene list must leave the settings as they are");
+
+    std::string error;
+    Require(kb::project::ProjectSettingsStore::Save(file, chosen, error), "the scene list could not be saved");
+    const kb::project::ProjectSettingsLoadResult reloaded = kb::project::ProjectSettingsStore::Load(file);
+    Require(reloaded.Succeeded() && reloaded.settings == chosen &&
+            kb::project::ProjectBuildScenes(reloaded.settings) == std::vector<std::string>{
+                "/Game/Scenes/Hub.21kbscene", "/Game/Scenes/Start.21kbscene", "/Game/Scenes/End.21kbscene" },
+        "the settings file did not keep the scene list in order");
+
+    kb::project::SetProjectBuildScenes(chosen, { "/Game/Scenes/Hub.21kbscene" });
+    Require(kb::project::ProjectSettingsStore::Save(file, chosen, error), "the shorter scene list could not be saved");
+    const kb::project::ProjectSettings shorter = kb::project::ProjectSettingsStore::Load(file).settings;
+    Require(shorter.additionalScenes.empty() && shorter.defaultMap == "/Game/Scenes/Hub.21kbscene", "a shorter scene list left stale entries in the file");
+
+    {
+        // A file that lists the startup scene among the others does not package it twice.
+        std::ofstream output{ file, std::ios::binary | std::ios::trunc };
+        output << "[Project.Maps]\nDefaultMap=/Game/A.21kbscene\n[Project.BuildScenes]\nCount=3\nScene0=/Game/A.21kbscene\nScene1=/Game/B.21kbscene\nScene2=/Game/B.21kbscene\n";
+    }
+    Require(kb::project::ProjectSettingsStore::Load(file).settings.additionalScenes == std::vector<std::string>{ "/Game/B.21kbscene" },
+        "the startup scene and a repeated scene must not be listed twice");
+    CleanTempRoot();
+}
+
+// The master volume and the tag list: a settings file without them reads as full volume and no tags, both
+// round-trip, an out-of-range volume is brought back inside, and a tag that cannot be listed (invalid, built in,
+// repeated) never enters the list, from the file or from the helpers.
+void RunProjectAudioAndTagSettingsTest() {
+    CleanTempRoot();
+    const std::filesystem::path file = kb::project::ProjectSettingsStore::FilePath(TempRoot());
+    std::error_code directoryError;
+    std::filesystem::create_directories(file.parent_path(), directoryError);
+    const kb::project::ProjectSettings defaults;
+    Require(defaults.masterVolume == 1.0F && defaults.tags.empty(), "a project must start at full volume with no tags of its own");
+    {
+        std::ofstream output{ file, std::ios::binary | std::ios::trunc };
+        output << "[Project.Identity]\nName=Older\n";
+    }
+    const kb::project::ProjectSettings older = kb::project::ProjectSettingsStore::Load(file).settings;
+    Require(older.masterVolume == 1.0F && older.tags.empty(), "a settings file without audio or tags must read as the defaults");
+    Require(!defaults.microphone && !older.microphone, "a project must not record from the microphone unless it says so");
+
+    kb::project::ProjectSettings chosen = older;
+    chosen.masterVolume = 0.35F;
+    chosen.microphone = true;
+    Require(kb::project::AddProjectTag(chosen, "  Boss ") && kb::project::AddProjectTag(chosen, "Loot Chest") &&
+            !kb::project::AddProjectTag(chosen, "Boss") && !kb::project::AddProjectTag(chosen, "Player") &&
+            !kb::project::AddProjectTag(chosen, "") && !kb::project::AddProjectTag(chosen, "a,b") &&
+            chosen.tags == std::vector<std::string>{ "Boss", "Loot Chest" },
+        "the tag list must take valid new names in order and refuse the rest");
+    std::string error;
+    Require(kb::project::ProjectSettingsStore::Save(file, chosen, error), "the audio and tag settings could not be saved");
+    const kb::project::ProjectSettingsLoadResult reloaded = kb::project::ProjectSettingsStore::Load(file);
+    Require(reloaded.Succeeded() && reloaded.settings == chosen && reloaded.settings.microphone,
+        "the settings file did not keep the master volume, the microphone and the tags");
+    chosen.microphone = false;
+    Require(kb::project::ProjectSettingsStore::Save(file, chosen, error) && !kb::project::ProjectSettingsStore::Load(file).settings.microphone,
+        "the settings file did not take the microphone back out");
+    chosen.microphone = true;
+
+    Require(kb::project::RemoveProjectTag(chosen, "Boss") && !kb::project::RemoveProjectTag(chosen, "Boss") &&
+            chosen.tags == std::vector<std::string>{ "Loot Chest" },
+        "removing a tag must take it out of the list once");
+    Require(kb::project::ProjectSettingsStore::Save(file, chosen, error), "the shorter tag list could not be saved");
+    const kb::project::ProjectSettings shorter = kb::project::ProjectSettingsStore::Load(file).settings;
+    Require(shorter.tags == chosen.tags && shorter.masterVolume == 0.35F, "a shorter tag list left stale entries in the file");
+
+    {
+        std::ofstream output{ file, std::ios::binary | std::ios::trunc };
+        output << "[Project.Audio]\nMasterVolume=7\n[Project.Tags]\nCount=5\nTag0=Boss\nTag1=Boss\nTag2=Enemy\nTag3=x;y\nTag4=Trap\n";
+    }
+    const kb::project::ProjectSettings clamped = kb::project::ProjectSettingsStore::Load(file).settings;
+    Require(clamped.masterVolume == 1.0F && clamped.tags == std::vector<std::string>{ "Boss", "Trap" },
+        "an out-of-range volume must be brought back inside and unlistable tags dropped");
+    CleanTempRoot();
+}
+
+// Every scene of a project starts from the project's tags: the catalogue holds the built-in tags, then the
+// project's, then what only the scene defines - whether the project list is set before a scene loads or after - and
+// a scene file's own definitions stay honoured.
+void RunProjectTagsReachSceneCatalogTest() {
+    kb::scene::Scene scene;
+    const std::vector<std::string> project{ "Boss", "Trap" };
+    Require(scene.Tags().SetProjectDefinitions(project) && scene.Tags().ProjectDefinitions().size() == 2U,
+        "the project's tags could not be set on a scene");
+    const std::vector<std::string> expected{ "Player", "Enemy", "Monster", "AI", "NPC", "Collision", "Boss", "Trap" };
+    Require(std::ranges::equal(scene.Tags().Names(), expected), "a scene must define the built-in tags and then the project's");
+
+    kb::scene::SceneDocument document;
+    document.guid = "scene:older";
+    document.name = "Older";
+    document.tagDefinitions = { "Player", "Enemy", "Monster", "AI", "NPC", "Collision", "Trap", "OnlyHere" };
+    Require(kb::scene::SceneDocumentService::LoadIntoScene(scene, document), "a scene with its own tags did not load");
+    const std::vector<std::string> merged{ "Player", "Enemy", "Monster", "AI", "NPC", "Collision", "Boss", "Trap", "OnlyHere" };
+    Require(std::ranges::equal(scene.Tags().Names(), merged),
+        "loading a scene must keep the project's tags and honour a tag only the scene file defines");
+
+    // Set after the scene holds a tag of its own: the project's tags move ahead of it.
+    kb::scene::Scene late;
+    Require(late.Tags().Define("OnlyHere") && late.Tags().SetProjectDefinitions(project) &&
+            std::ranges::equal(late.Tags().Names(), merged),
+        "the project's tags must come before a tag only the scene has");
+    const std::vector<std::string> invalid{ "Fine", "a;b" };
+    Require(!late.Tags().SetProjectDefinitions(invalid) && late.Tags().ProjectDefinitions().size() == 2U,
+        "a list with an invalid tag must change nothing");
+
+    // A scene-only definition goes when no object carries it and stays while one does.
+    const kb::scene::SceneObject carrier = late.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Carrier" });
+    Require(late.Tags().SetAssigned(carrier.Entity(), "Kept", true) && late.Tags().UndefineUnused() == 1U &&
+            late.Tags().Contains("Kept") && !late.Tags().Contains("OnlyHere") && late.Tags().Contains("Boss"),
+        "only the unused tags that the scene alone defines must be dropped");
 }
 
 // A project directory deep enough to leave no room for the files that go inside it is refused at
@@ -1666,7 +1963,7 @@ void RunSceneFromNewerEngineIsExplainedTest() {
 }
 
 // v44: the scene's post-process profile is saved with the scene, reloaded into the runtime scene the
-// renderer reads, and captured back, as a Unity global Volume or a Godot WorldEnvironment is.
+// renderer reads, and captured back.
 void RunScenePostProcessProfileDocumentTest() {
     CleanTempRoot();
     const std::filesystem::path sceneFile = TempRoot() / "PostProcessProfile.21kbscene";
@@ -1894,6 +2191,7 @@ void RunLargeNonAdditiveSceneTransitionBenchmark() {
 void RunProjectSceneTests() {
     RunSceneAssetIntegrityBlockReadTest();
     RunSingleRootNonAdditiveSceneOwnershipTest();
+    RunSceneLoadProgressObserverTest();
     RunMultiRootSceneUnloadOwnershipTest();
     RunLargeNonAdditiveSceneRootOwnershipTest();
     RunIniDocumentRoundTripTest();
@@ -1902,6 +2200,11 @@ void RunProjectSceneTests() {
     RunProjectFromNewerEngineIsExplainedTest();
     RunLegacyProjectDescriptorCarriesItsSettingsTest();
     RunProjectQualitySettingsTest();
+    RunProjectLightingPathTest();
+    RunProjectDisplayAndSimulationSettingsTest();
+    RunProjectBuildScenesTest();
+    RunProjectAudioAndTagSettingsTest();
+    RunProjectTagsReachSceneCatalogTest();
     RunProjectDescriptorRejectsChecksumMismatchTest();
     RunSceneAssetUsersTest();
     RunProjectPathBudgetTest();

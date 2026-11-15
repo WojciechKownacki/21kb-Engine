@@ -57,6 +57,8 @@ add_library(kb_audio_miniaudio_plugin ${KB_AUDIO_MINIAUDIO_PLUGIN_LIBRARY_TYPE}
     assets/MiniaudioClipResolver.hpp
     playback/MiniaudioVoicePool.hpp
     playback/MiniaudioVoicePool.cpp
+    runtime/MiniaudioCapture.hpp
+    runtime/MiniaudioCapture.cpp
     runtime/MiniaudioEngine.hpp
     runtime/MiniaudioEngine.cpp
     runtime/MiniaudioMeterNode.hpp
@@ -146,6 +148,7 @@ if(BUILD_TESTING)
         assets/ResolvedAudioClip.hpp
         assets/MiniaudioClipResolver.cpp
         playback/MiniaudioVoicePool.cpp
+        runtime/MiniaudioCapture.cpp
         runtime/MiniaudioEngine.cpp
         runtime/MiniaudioMeterNode.cpp
         runtime/MiniaudioPlaybackBackend.cpp
@@ -197,6 +200,8 @@ if(BUILD_TESTING)
     add_test(NAME kb_audio_runtime_tests COMMAND $<TARGET_FILE:kb_audio_runtime_tests>)
     add_test(NAME kb_audio_mixer_workload COMMAND $<TARGET_FILE:kb_audio_runtime_tests> mixer-dsp-workload)
     add_test(NAME kb_audio_mixer_meters COMMAND $<TARGET_FILE:kb_audio_runtime_tests> mixer-meters)
+    add_test(NAME kb_audio_capture COMMAND $<TARGET_FILE:kb_audio_runtime_tests> capture)
+    set_tests_properties(kb_audio_capture PROPERTIES LABELS "audio" TIMEOUT 60)
     set_tests_properties(kb_audio_mixer_meters PROPERTIES LABELS "audio" TIMEOUT 20)
     set_tests_properties(kb_audio_mixer_workload PROPERTIES LABELS "audio;performance" TIMEOUT 20)
     set_tests_properties(kb_audio_runtime_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})

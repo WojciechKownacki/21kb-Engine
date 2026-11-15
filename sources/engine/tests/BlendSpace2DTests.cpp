@@ -116,7 +116,7 @@ void GridCases() {
 
 void InvalidCases() {
     std::string error;
-    for (const BlendSpace2DAsset asset : {BlendSpace2DAsset{{{0,0,"A"},{0,0,"B"}}},
+    for (const BlendSpace2DAsset& asset : {BlendSpace2DAsset{{{0,0,"A"},{0,0,"B"}}},
         BlendSpace2DAsset{{{0,0,""}}}, BlendSpace2DAsset{{{std::numeric_limits<float>::infinity(),0,"A"}}},
         BlendSpace2DAsset{{{0,std::numeric_limits<float>::quiet_NaN(),"A"}}}})
         Require(!BlendSpace2DPlan::Build(asset,error) && !error.empty(), "Invalid blend space was accepted");

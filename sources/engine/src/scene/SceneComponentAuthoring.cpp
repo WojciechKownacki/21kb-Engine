@@ -142,6 +142,7 @@ const std::array kEntries{
     Entry{ { "NavAgent", "Nav Agent", {} }, KB_COMPONENT(NavAgents, navAgent, NavAgent{}) },
     Entry{ { "NavObstacle", "Nav Obstacle", {} }, KB_COMPONENT(NavObstacles, navObstacle, NavObstacle{}) },
     Entry{ { "NavLink", "Nav Link", {} }, KB_COMPONENT(NavLinks, navLink, NavLink{}) },
+    Entry{ { "NavBounds", "Navigation Bounds", {} }, KB_COMPONENT(NavBounds, navBounds, NavBounds{}) },
 };
 
 #undef KB_COMPONENT

@@ -216,6 +216,107 @@ end
     focus = {key: [detail(name, box) for name in ('nearFocus', 'farFocus')] for key, box in [('near', near), ('far', far)]}
     assert focus['near'][0] > focus['near'][1] * 1.5 and focus['far'][1] > focus['far'][0] * 1.5, focus
     (root / 'observations.json').write_text(json.dumps(dict(probes=observations, focus=focus), indent=2), encoding='utf-8')
+    # Scene-wide bake: a static floor (a cube: no usable lightmap UV, so one is generated), a static lamp
+    # and a movable wall that only bounces light.
+    entity('WideFloor', 'Cube', '0,-3.5,3', '14,1,14')
+    component('WideFloor', 'MeshRenderer', 'mobility=1')
+    entity('WideLamp', 'Point Light', '3,1,3')
+    component('WideLamp', 'Light', 'mobility=1', 'intensity=10', 'range=15')
+    entity('BounceWall', 'Cube', '5,0,3', '0.3,8,8')
+    wide_texture = project / 'Assets/Baked/Main/WideFloor.tga'
+    wide = cli('scene-bake-lighting', '--project', project, '--resolution', '64', '--bounces', '1')
+    assert re.search(r'baked 1 receivers \((\d+) texels, 1 generated', wide) and wide_texture.is_file(), wide
+    assert 'bakedLightmapUv1 true' in (project / 'Assets/Baked/Main/WideFloor.kbmat').read_text()
+    first_wide = wide_texture.read_bytes()
+    # The same run bakes a light probe grid over the static geometry beside the lightmaps.
+    probe_file = project / 'Assets/Baked/Main/LightProbes.kblp'
+    def probe_grid():
+        data = probe_file.read_bytes()
+        magic, version, _ox, _oy, _oz, spacing, nx, ny, nz = struct.unpack('<4sI4f3I', data[:36])
+        assert magic == b'KBLP' and version == 1 and len(data) == 36 + nx * ny * nz * 108, (magic, version, len(data))
+        return spacing, nx * ny * nz
+    spacing, count = probe_grid()
+    assert spacing == 2.0 and count > 1 and f'{count} light probes' in wide, (spacing, count, wide)
+    first_probes = probe_file.read_bytes()
+    cli('scene-bake-lighting', '--project', project, '--resolution', '64', '--bounces', '1', '--probe-spacing', '0')
+    assert not probe_file.exists(), 'A bake without probes must not leave an old grid'
+    assert wide_texture.read_bytes() == first_wide
+    cli('scene-bake-lighting', '--project', project, '--resolution', '64', '--bounces', '1', '--probe-spacing', '0.5', '--max-probes', '40')
+    capped_spacing, capped = probe_grid()
+    assert capped <= 40 and capped_spacing > 0.5, (capped_spacing, capped)
+    cli('scene-bake-lighting', '--project', project, '--probe-spacing', '-1', expected=1)
+    # Baking again overwrites the previous bake; the generated UV copy is rebuilt from the source mesh.
+    assert ', 1 generated' in cli('scene-bake-lighting', '--project', project, '--resolution', '64', '--bounces', '1')
+    assert wide_texture.read_bytes() == first_wide, 'A repeated bake must reproduce the same lightmap'
+    assert probe_file.read_bytes() == first_probes, 'A repeated bake must reproduce the same probe grid'
+    # A static spot light is baked: it changes the lightmap and is counted, and removing it restores the bake.
+    entity('WideSpot', 'Spot Light', '-4,-2,-3')
+    component('WideSpot', 'Light', 'mobility=1', 'intensity=20', 'range=20')
+    spot = cli('scene-bake-lighting', '--project', project, '--resolution', '64', '--bounces', '1')
+    assert 'with 2 static lights' in spot and 'skipped' not in spot, spot
+    assert wide_texture.read_bytes() != first_wide, 'A static spot light must change the lightmap'
+    cli('entity', 'remove', '--project', project, '--name', 'WideSpot')
+    cli('scene-bake-lighting', '--project', project, '--resolution', '64', '--bounces', '1')
+    assert wide_texture.read_bytes() == first_wide
+    # A plain colour material made by `entity add --color` (default graph) is a valid receiver of both bakes.
+    cli('entity', 'add', '--project', project, '--name', 'ColorBoard', '--create', 'Quad', '--position', '-5,-2.9,-4', '--color', '#3366FF')
+    assert 'baked' in cli('scene-lightmap', '--project', project, '--entity', 'ColorBoard', '--out', '/Game/Lighting/ColorBoard.tga', '--resolution', '32')
+    cli('entity', 'remove', '--project', project, '--name', 'ColorBoard')
+    cli('entity', 'add', '--project', project, '--name', 'ColorPillar', '--create', 'Cube', '--position', '-5,-2.5,-4', '--scale', '0.5,1,0.5',
+        '--color', '#3366FF')
+    component('ColorPillar', 'MeshRenderer', 'mobility=1')
+    colored = cli('scene-bake-lighting', '--project', project, '--resolution', '64', '--bounces', '1')
+    assert 'baked 2 receivers' in colored and (project / 'Assets/Baked/Main/ColorPillar.tga').is_file(), colored
+    cli('entity', 'remove', '--project', project, '--name', 'ColorPillar')
+    cli('scene-bake-lighting', '--project', project, '--resolution', '64', '--bounces', '1')
+    assert wide_texture.read_bytes() == first_wide
+    # A re-bake starts from the original mesh: replacing the source model in place changes the lightmap.
+    def plate(path, half):
+        # The two triangles share UV space, so the plate has no usable lightmap UV and gets a generated one.
+        positions = [-half, 0, -half, half, 0, -half, half, 0, half, -half, 0, half]
+        floats = positions + [0, 1, 0] * 4 + [0, 0, 1, 0, 0, 1, 1, 1]
+        binary = struct.pack('<%df6H' % len(floats), *floats, 0, 2, 1, 0, 3, 2)
+        document = dict(asset=dict(version='2.0'), buffers=[dict(byteLength=len(binary))], scene=0, scenes=[dict(nodes=[0])], nodes=[dict(mesh=0)],
+            bufferViews=[dict(buffer=0, byteOffset=0, byteLength=48), dict(buffer=0, byteOffset=48, byteLength=48), dict(buffer=0, byteOffset=96, byteLength=32), dict(buffer=0, byteOffset=128, byteLength=12)],
+            accessors=[dict(bufferView=0, componentType=5126, count=4, type='VEC3', min=[-half, 0, -half], max=[half, 0, half]),
+                       dict(bufferView=1, componentType=5126, count=4, type='VEC3'), dict(bufferView=2, componentType=5126, count=4, type='VEC2'),
+                       dict(bufferView=3, componentType=5123, count=6, type='SCALAR')],
+            meshes=[dict(primitives=[dict(attributes=dict(POSITION=0, NORMAL=1, TEXCOORD_0=2), indices=3)])])
+        text = json.dumps(document).encode()
+        text += b' ' * (-len(text) % 4)
+        binary += b'\0' * (-len(binary) % 4)
+        path.write_bytes(struct.pack('<III', 0x46546C67, 2, 28 + len(text) + len(binary)) + struct.pack('<II', len(text), 0x4E4F534A) + text +
+            struct.pack('<II', len(binary), 0x004E4942) + binary)
+    plate(root / 'Plate.glb', 0.6)
+    cli('import', '--project', project, '--destination', '/Game/Models', root / 'Plate.glb')
+    entity('ReplacePlate', position='-4.5,-2.5,6')
+    component('ReplacePlate', 'MeshRenderer', action='add')
+    component('ReplacePlate', 'MeshRenderer', 'mesh=/Game/Models/Plate.21kb', 'mobility=1')
+    plate_texture = project / 'Assets/Baked/Main/ReplacePlate.tga'
+    cli('scene-bake-lighting', '--project', project, '--resolution', '64', '--bounces', '1')
+    small_plate = plate_texture.read_bytes()
+    plate(root / 'Plate.glb', 2.4)
+    cli('import', '--project', project, '--reimport', '/Game/Models/Plate.21kb', root / 'Plate.glb')
+    assert ', 2 generated' in cli('scene-bake-lighting', '--project', project, '--resolution', '64', '--bounces', '1')
+    assert plate_texture.read_bytes() != small_plate, 'A re-bake must use the replaced source mesh'
+    cli('entity', 'remove', '--project', project, '--name', 'ReplacePlate')
+    cli('scene-bake-lighting', '--project', project, '--resolution', '64', '--bounces', '1')
+    assert wide_texture.read_bytes() == first_wide
+    cli('scene-bake-lighting', '--project', project, '--resolution', '64', '--bounces', '0')
+    assert wide_texture.read_bytes() != first_wide, 'The bounce must change the lightmap'
+    cli('scene-bake-lighting', '--project', project, '--resolution', '64', '--bounces', '1')
+    assert wide_texture.read_bytes() == first_wide
+    cli('scene-bake-lighting', '--project', project, '--bounces', '5', expected=1)
+    # Probes light the default path; the same bake without its grid leaves the movable wall on the flat ambient.
+    def probe_frame(target, name):
+        run(args.player, '--project=' + str(target), '--headless', '--frames=120', '--uncapped', '--width=640', '--height=360',
+            '--profile-fixed-step', '--profile-file=' + str(root / f'{name}.csv'),
+            '--screenshot-frame=120', '--screenshot-file=' + str(root / f'{name}.png'))
+    cli('scene-bake-lighting', '--project', project, '--resolution', '64', '--bounces', '1', '--probe-spacing', '0')
+    probe_frame(next(project.glob('*.21kbproject')), 'unprobed')
+    cli('scene-bake-lighting', '--project', project, '--resolution', '64', '--bounces', '1')
+    assert wide_texture.read_bytes() == first_wide and probe_file.read_bytes() == first_probes
+    probe_frame(next(project.glob('*.21kbproject')), 'probedSource')
     run(args.player, '--project=' + str(next(project.glob('*.21kbproject'))), '--headless', '--frames=120', '--uncapped',
         '--width=640', '--height=360', '--profile-fixed-step', '--profile-file=' + str(root / 'source.csv'), '--screenshot-frame=120', '--screenshot-file=' + str(root / 'source.png'))
     package = root / 'Package'
@@ -237,8 +338,28 @@ end
     # than demanding lossless identity from an explicitly lossy texture codec.
     average = sum(abs(a-b) for row1,row2 in zip(source,cooked) for p,q in zip(row1,row2) for a,b in zip(p[:3],q[:3])) / (640*360*3)
     assert average < 2, average
+
+    def brightness(image, cx, cy):
+        return sum(sum(image[y][x][:3]) for y in range(cy - 2, cy + 3) for x in range(cx - 2, cx + 3)) / 75
+    # The packaged scene-wide bake lights the floor near the lamp and leaves its far corner dark.
+    lit, dark = brightness(cooked, 420, 313), brightness(cooked, 110, 330)
+    assert lit > dark + 40 and abs(lit - brightness(source, 420, 313)) < 12, (lit, dark)
+
+    # The packaged frame keeps the probe grid's light on the movable wall: where the grid changes the source
+    # frame, the packaged frame differs from the frame without the grid far more than from its own source,
+    # which only texture compression and shader cooking change.
+    probe_frame(package / 'Game.kbpack', 'probedPackage')
+    probed, unprobed, probed_source = read_png(root / 'probedPackage.png'), read_png(root / 'unprobed.png'), read_png(root / 'probedSource.png')
+    lit_by_probes = [(y, x) for y, (row1, row2) in enumerate(zip(unprobed, probed_source)) for x, (p, q) in enumerate(zip(row1, row2))
+        if sum(abs(a - b) for a, b in zip(p[:3], q[:3])) > 12]
+    assert len(lit_by_probes) > 1500, len(lit_by_probes)
+    def difference_sum(a, b):
+        return sum(abs(c - d) for y, x in lit_by_probes for c, d in zip(a[y][x][:3], b[y][x][:3]))
+    probe_difference, cook_difference = difference_sum(unprobed, probed), difference_sum(probed_source, probed)
+    assert probe_difference > 2 * cook_difference, (probe_difference, cook_difference)
     (root / 'result.json').write_text(json.dumps(dict(result='PASS', probes=observations, focus=focus,
-        bakedTexels=int(match[1]), occludedSamples=int(match[2]), sourceUnavailable=True, cookedMeanError=average), indent=2), encoding='utf-8')
+        bakedTexels=int(match[1]), occludedSamples=int(match[2]), sourceUnavailable=True, cookedMeanError=average,
+        probeDifference=probe_difference, cookDifference=cook_difference, probePixels=len(lit_by_probes)), indent=2), encoding='utf-8')
     print(root)
 
 

@@ -8,8 +8,11 @@
 #include <cstdint>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace kb::editor {
 
@@ -100,13 +103,15 @@ enum class InspectorSectionId : std::uint8_t {
     SocketAttachment,
     Combatant,
     AIBrain,
-    // A post-process profile asset (.kbppfx): one section per effect, as Unity's Volume overrides.
+    // A post-process profile asset (.kbppfx): one section per effect.
     PostProcessTonemap,
     PostProcessExposure,
     PostProcessBloom,
     PostProcessAntiAliasing,
     PostProcessVignette,
     PostProcessAmbientOcclusion,
+    PostProcessScreenSpaceReflections,
+    PostProcessMotionBlur,
     PostProcessGlobalIllumination,
     PostProcessFog,
     // The scene's post-process profile, shown on the scene's environment (World Backdrop) object.
@@ -123,8 +128,33 @@ enum class InspectorSectionId : std::uint8_t {
     TilemapRenderer,
     TilemapCollider,
     UITheme,
+    NavBounds,
 
 };
+
+// The list that opens under a section: the component menu behind the header button, or the Joint's presets.
+enum class InspectorMenuKind : std::uint8_t {
+    None,
+    Component,
+    JointPresets,
+    LightPresets,
+    // The project's navigation areas under a Nav Obstacle's area or a Nav Agent's walkable areas.
+    NavAreas,
+};
+
+// The entries of those lists. A Transform cannot be removed or copied; its entries put one part back.
+enum class InspectorComponentMenuItem : std::uint8_t { Reset, Remove, Copy, Paste, ResetPosition, ResetRotation, ResetScale };
+
+// The entries of a section's component menu in the order they are shown: a hit on one carries its position as the index.
+[[nodiscard]] inline std::span<const InspectorComponentMenuItem> InspectorComponentMenuItems(InspectorSectionId section) noexcept {
+    using Item = InspectorComponentMenuItem;
+    static constexpr std::array<Item, 4> kComponent{ Item::Reset, Item::Remove, Item::Copy, Item::Paste };
+    static constexpr std::array<Item, 3> kTransform{ Item::ResetPosition, Item::ResetRotation, Item::ResetScale };
+    if (section == InspectorSectionId::Transform) {
+        return kTransform;
+    }
+    return kComponent;
+}
 
 enum class InspectorHitKind : std::uint8_t {
     None,
@@ -142,6 +172,7 @@ enum class InspectorHitKind : std::uint8_t {
     ScrollbarThumb,
     ValueTypeOption,
     TagOption,
+    ResetField, // the marker beside a value that differs from its default
 };
 
 // Animated disclosure groups are shared Inspector UI state. Add a value here
@@ -157,6 +188,9 @@ enum class InspectorDisclosureId : std::uint8_t {
     LightAdvanced,
     RigidbodyAdvanced,
     ColliderAdvanced,
+    JointAdvanced,
+    AudioSourceAdvanced,
+    GenericAdvanced,
     Count,
 };
 
@@ -166,6 +200,9 @@ enum class InspectorPropertyId : std::uint16_t {
     LightAdvanced,
     RigidbodyAdvanced,
     ColliderAdvanced,
+    JointAdvanced,
+    AudioSourceAdvanced,
+    GenericAdvanced,
     EntityName,
     EntityVisible,
     EntityVisibilityMode,
@@ -237,6 +274,7 @@ enum class InspectorPropertyId : std::uint16_t {
     MeshRendererLodBias,
     MeshRendererLodEnabled,
     MeshRendererMobility,
+    MeshRendererAffectsNavigation,
     MeshRendererMaterialSlot0,
     MeshRendererMaterialSlot1,
     MeshRendererMaterialSlot2,
@@ -306,6 +344,8 @@ enum class InspectorPropertyId : std::uint16_t {
     // One row per exposed ("@expose") script variable; the specific variable is
     // identified by the Hit's/edit's row index (like InputMapping entries).
     ScriptVariable,
+    // The row of a C++ script that is being built in the background; a click stops the build.
+    ScriptBuildCancel,
     // One row per physics-component field, keyed by row index (the "one id +
     // index" model as ScriptVariable). One id per component so an in-flight float
     // edit is unambiguous even when an entity carries several physics components.
@@ -357,6 +397,8 @@ enum class InspectorPropertyId : std::uint16_t {
     NavAgentDestinationY,
     NavAgentDestinationZ,
     NavAgentEnabled,
+    NavAgentHorde,
+    NavAgentAreaMaskItem,
     NavObstacleShape,
     NavObstacleCenterX,
     NavObstacleCenterY,
@@ -369,6 +411,7 @@ enum class InspectorPropertyId : std::uint16_t {
     NavObstacleArea,
     NavObstacleCarve,
     NavObstacleEnabled,
+    NavObstacleAreaItem,
     TagsText,
     TagsRemove,
     RegionShapeKind,
@@ -500,6 +543,12 @@ enum class InspectorPropertyId : std::uint16_t {
     HistoryRibbonReceivesShadow,
     HistoryRibbonEnabled,
     ComponentRemove,
+    ComponentMenu,     // the header button of a component that offers Reset / Remove / Copy / Paste
+    ComponentMenuItem, // one entry of that menu; the hit's index says which
+    JointPreset,       // the Joint's Preset row
+    JointPresetItem,   // one entry of its list; the hit's index is the JointPreset
+    LightPreset,       // the Light's Preset row
+    LightPresetItem,   // one entry of its list; the hit's index is the LightPreset
     AddComponentButton,
     AddComponentSearch,
     AddComponentOption,
@@ -657,6 +706,16 @@ enum class InspectorPropertyId : std::uint16_t {
     UIThemeField,
 };
 
+// One Inspector field: the section it sits in, its property id and, for rows that share a property id (physics
+// fields), the row index.
+struct InspectorFieldKey {
+    InspectorSectionId section = InspectorSectionId::None;
+    InspectorPropertyId property = InspectorPropertyId::None;
+    int index = -1;
+
+    [[nodiscard]] friend bool operator==(const InspectorFieldKey&, const InspectorFieldKey&) noexcept = default;
+};
+
 struct InspectorDynamicRowIdentity {
     std::uint64_t ownerAssetId = 0U;
     std::uint64_t ownerDocumentGeneration = 0U;
@@ -715,9 +774,20 @@ struct InspectorPanelState {
     void EndAddComponentScrollbarDrag() noexcept;
     [[nodiscard]] bool IsAddComponentScrollbarDragging() const noexcept { return addComponentScrollDragging_; }
     [[nodiscard]] int AddComponentScrollbarGrabOffset() const noexcept { return addComponentScrollGrab_; }
+    // The list open under one section: the component menu (Reset, Remove, Copy, Paste) behind its header button or
+    // the Joint's presets. One list is open at a time; toggling the open one closes it.
     [[nodiscard]] bool IsComponentMenuOpen(InspectorSectionId section) const noexcept;
+    [[nodiscard]] bool IsMenuOpen(InspectorMenuKind kind, InspectorSectionId section) const noexcept;
+    void ToggleMenu(InspectorMenuKind kind, InspectorSectionId section) noexcept;
     void ToggleComponentMenu(InspectorSectionId section) noexcept;
     void CloseComponentMenus() noexcept;
+
+    // The fields of the shown component that differ from their defaults, refreshed on every paint, so the rows can
+    // carry the reset marker and a click on it can be told from a click on the label.
+    void SetChangedFields(std::vector<InspectorFieldKey> fields) noexcept { changedFields_ = std::move(fields); }
+    [[nodiscard]] bool IsFieldChanged(InspectorSectionId section, InspectorPropertyId property, int index = -1) const noexcept;
+    [[nodiscard]] InspectorHitKind HoveredKind() const noexcept { return hoveredKind_; }
+    [[nodiscard]] InspectorSectionId HoveredSection() const noexcept { return hoveredSection_; }
     // `index` disambiguates rows that share one property id (physics fields,
     // script variables). Pass -1 for singular rows. IsHovered/HoveredIndex report
     // it so only the row actually under the cursor highlights.
@@ -853,7 +923,9 @@ private:
     bool addComponentSlideForward_ = true;
     bool addComponentScrollDragging_ = false;
     int addComponentScrollGrab_ = 0;
-    bool scriptComponentMenuOpen_ = false;
+    InspectorMenuKind menuKind_ = InspectorMenuKind::None;
+    InspectorSectionId menuSection_ = InspectorSectionId::None;
+    std::vector<InspectorFieldKey> changedFields_;
     InspectorHitKind hoveredKind_ = InspectorHitKind::None;
     InspectorSectionId hoveredSection_ = InspectorSectionId::None;
     InspectorPropertyId hoveredProperty_ = InspectorPropertyId::None;

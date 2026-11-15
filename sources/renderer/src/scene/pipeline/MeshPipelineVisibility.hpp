@@ -42,7 +42,7 @@ public:
         const RenderBoundsSphere& bounds,
         std::span<const SceneRenderVisibilityBlocker> blockers) noexcept;
     [[nodiscard]] static std::uint16_t DepthBucket(float depth) noexcept;
-    // Unreal's Max World Position Offset Displacement: the world units a graph material may move its
+    // Max World Position Offset Displacement: the world units a graph material may move its
     // vertices, which every culling path adds to the bounds of the objects drawn with it.
     [[nodiscard]] static float MaterialBoundsMargin(const RenderMaterialResource* material) noexcept;
     [[nodiscard]] static float MaterialBoundsMargin(

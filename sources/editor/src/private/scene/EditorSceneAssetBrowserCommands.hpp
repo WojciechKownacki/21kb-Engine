@@ -15,7 +15,7 @@ class Scene;
 namespace kb::editor {
 
 // The scene open in the editor and the project's startup scene (physical paths). Project Files does
-// not delete, rename or move either, nor a folder holding one - like Unreal refuses the open level.
+// not delete, rename or move either, nor a folder holding one, so the open level is protected.
 struct EditorProtectedScenes {
     std::filesystem::path openScene;
     std::filesystem::path startupScene;

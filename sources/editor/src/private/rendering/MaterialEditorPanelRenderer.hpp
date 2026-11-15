@@ -606,7 +606,7 @@ inline bool MaterialEditorPanelIsTexturePreviewNode(kb::render::RenderMaterialGr
 
 inline SIZE MaterialEditorPanelGraphNodeSize(const kb::render::RenderMaterialGraphNode& node) {
     SIZE size = MaterialEditorPanelGraphNodeSize(node.kind);
-    // The node grows with its pin rows (Unreal): the canvas that places and hit-tests the pins owns the rule.
+    // The node grows with its pin rows: the canvas that places and hit-tests the pins owns the rule.
     size.cy = std::max(size.cy, static_cast<LONG>(std::lround(MaterialGraphCanvasPinRowsHeight(BuildMaterialGraphCanvasNode(node)))));
     return size;
 }
@@ -1514,7 +1514,7 @@ inline POINT MaterialEditorPanelInputPinPoint(const RECT& node, kb::render::Rend
             std::clamp(y, bodyTop + MaterialEditorPanelScaled(6, scale), static_cast<int>(node.bottom) - MaterialEditorPanelScaled(6, scale)),
         };
     }
-    const int count = static_cast<int>(std::max<std::size_t>(1U, MaterialEditorPanelInputPins(kind).size()));
+    const int count = static_cast<int>(std::max<std::size_t>(1U, EditorMaterialGraphPinPresentationCatalog::InputPins(kind).size()));
     const int bodyTop = node.top + headerHeight;
     const int bodyHeight = std::max(1, MaterialEditorPanelRectHeight(node) - headerHeight);
     const int rowHeight = std::min(
@@ -1610,7 +1610,7 @@ inline POINT MaterialEditorPanelOutputPinPoint(
     const int headerHeight = MaterialEditorPanelScaled(MaterialEditorPanelMetrics::GraphNodeHeaderHeight, scale);
     const int bodyTop = node.top + headerHeight;
     const int bodyHeight = std::max(1, MaterialEditorPanelRectHeight(node) - headerHeight);
-    const std::size_t inputCount = MaterialEditorPanelHitTestInputPins(graphNode).size();
+    const std::size_t inputCount = EditorMaterialGraphPinPresentationCatalog::InputPins(graphNode).size();
     const std::size_t outputCount = std::max<std::size_t>(1U, count);
     const int rowCount = static_cast<int>(std::max(inputCount, outputCount));
     const int rowHeight = std::min(
@@ -3615,7 +3615,7 @@ inline bool MaterialEditorGraphMenuCommandCreatesCanvasObject(MaterialEditorGrap
         haystack += " pixel position viewport pixel screen pixel absolute coordinate coordinates fragcoord";
     }
     if (command == MaterialEditorGraphMenuCommand::CreateNoise) {
-        // Unreal's Noise functions, so typing Voronoi or Simplex finds the node that has them.
+        // Noise functions, so typing Voronoi or Simplex finds the node that has them.
         haystack += " simplex gradient perlin value voronoi cellular worley turbulence fractal levels octaves";
     }
     if (command == MaterialEditorGraphMenuCommand::CreateWorldAlignedTexture) {

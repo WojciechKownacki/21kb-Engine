@@ -267,6 +267,10 @@ bool ScenePrefabAppliedPropertyBuilder::Build(Scene& scene, std::uint32_t nodeIn
             property.value = ToString(meshRenderer->lodEnabled);
             return true;
         }
+        if (propertyPath == "meshRenderer.affectsNavigation") {
+            property.value = ToString(meshRenderer->affectsNavigation);
+            return true;
+        }
         if (propertyPath == "meshRenderer.mobility") {
             property.value = std::to_string(static_cast<int>(meshRenderer->mobility));
             return true;

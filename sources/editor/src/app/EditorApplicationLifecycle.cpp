@@ -3,6 +3,8 @@
 
 #if defined(_WIN32)
 #include "app/EditorApplicationWindowProc.hpp"
+#include "app/EditorProjectCommands.hpp"
+#include "app/EditorStartupProgress.hpp"
 #include "app/EditorWorkspaceSession.hpp"
 #include "docking/EditorFloatingWindowSync.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -104,11 +106,14 @@ bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
     {
         std::string error;
         const std::string language = EditorLocalization::PreferredLanguage();
-        if (!EditorLocalization::SetLanguage(language, EditorLocalization::DefaultCatalogFolder(), error)) {
+        // The startup screen loaded it already; a failed load is tried again here and reported.
+        if (EditorLocalization::Current() != language &&
+            !EditorLocalization::SetLanguage(language, EditorLocalization::DefaultCatalogFolder(), error)) {
             state.sceneContext.Console().Warning("Editor", error + " The editor stays in English.");
         }
     }
 
+    EditorStartupProgress::Begin(EditorStartupStage::Interface);
     if (!state.windowClasses.Register(state.instance, &EditorApplicationWindowProc::Handle)) {
         return false;
     }
@@ -146,6 +151,12 @@ bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
     state.floatingWindows.Lifecycle().Configure(state.instance, state.window, state.metrics);
     state.dockController.Configure(state.window, state.dockModel, state.floatingWindows, state.metrics);
     EditorWorkspaceSession::Restore(state.dockModel, state.sceneContext);
+    // The Agent lives beside the Inspector; a layout saved with it in the bottom drawer gives way.
+    for (const DockPanel& panel : state.dockModel.Queries().Panels()) {
+        if (panel.kind == DockPanelKind::Agent && panel.area == DockArea::Bottom) {
+            static_cast<void>(state.dockModel.Commands().ClosePanel(panel.id));
+        }
+    }
     state.extensions=std::make_unique<EditorExtensionHost>(state.sceneContext,state.dockModel);
     std::string extensionError;
     if(!state.extensions->LoadProject(extensionError)) state.sceneContext.Console().Error("Extension",extensionError);
@@ -155,9 +166,18 @@ bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
     // now, and creating a window a panel already has is a no-op.
     EditorFloatingWindowSync::Reconcile(state.dockModel, state.floatingWindows);
 
+    // The renderer starts, and loads its shaders, before the window is shown rather than at its first frame.
+    EditorStartupProgress::Begin(EditorStartupStage::Renderer);
+    state.sceneViewport.PrepareRenderer();
+
+    // The window was created before the message router existed; ask for its frame again
+    // now, so the top bar's row replaces the title row Windows would keep.
+    SetWindowPos(state.window, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
     ShowWindow(state.window, SW_SHOWMAXIMIZED);
     UpdateWindow(state.window);
+    EditorStartupProgress::Finish();
 
+    EditorProjectCommands::RememberCurrentProject();
     state.running = true;
     return true;
 }
@@ -184,6 +204,7 @@ void EditorApplicationLifecycle::Shutdown(EditorApplicationState& state) {
     state.windowClasses.Unregister();
     state.instance = nullptr;
     state.running = false;
+    EditorProjectCommands::LaunchPendingSwitch();
 }
 
 } // namespace kb::editor

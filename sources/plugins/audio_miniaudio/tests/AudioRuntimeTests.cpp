@@ -5,6 +5,7 @@
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/RuntimeAssetManifest.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
+#include "engine/audio/AudioCapture.hpp"
 #include "engine/audio/AudioClipAsset.hpp"
 #include "engine/audio/AudioClipFormats.hpp"
 #include "engine/audio/AudioMixerAsset.hpp"
@@ -1359,6 +1360,73 @@ void RunSnapshotTransitionPcmTest() {
     measure("captured-mix-excludes-override", 0.5 * 0.3125 * 0.25);
     Require(!Access::AdvanceSnapshotTransition(scene, 0.5F), "Overridden retarget completed too soon");
     measure("captured-mix-half", 0.625 * 0.65625 * 0.25);
+}
+
+// The master gain scales the output above the buses and a snapshot, leaves snapshots working, survives a device
+// restart and refuses a value outside 0..1.
+void RunMasterVolumePcmTest() {
+    const auto tonePath = TestRoot() / "MasterTone.wav";
+    WriteToneWav(tonePath);
+    kb::scene::Scene scene;
+    Require(scene.Assets().MountProject(TestRoot() / "MasterPcmProject"), "Master PCM project did not mount");
+    const std::array files{tonePath};
+    const auto imported = kb::assets::AssetImportService::ImportFiles(scene.Assets().Manager(), files, "/Game/Audio");
+    Require(imported.Succeeded() && imported.items.size() == 1U, "Master PCM tone did not import");
+    kb::audio::AudioMixerAsset mixer;
+    mixer.buses = {{.name = "Output", .volume = 0.5F}};
+    mixer.snapshots = {{.name = "Quiet", .busVolumes = {{.bus = "Output", .volume = 0.25F}}}};
+    const auto mixerPath = TestRoot() / "MasterMixer.kbmixer";
+    constexpr kb::assets::AssetId mixerId{9601U};
+    Require(kb::audio::AudioMixerAssetIO::Save(mixerPath, mixer), "Master PCM mixer did not save");
+    Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+        .id = mixerId, .type = kb::audio::kAudioMixerAssetType, .name = "MasterMixer",
+        .virtualPath = "/Game/Audio/MasterMixer.kbmixer", .physicalPath = mixerPath, .contentHash = 1U,
+    }), "Master PCM mixer did not register");
+    kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, mixerId.value);
+    kb::audio_miniaudio::MiniaudioPlaybackBackend backend;
+    Require(backend.ReinitializeForTesting(scene, true) == kb::audio::AudioDeviceStatus::NoPlaybackDevice,
+        "Master PCM backend must use its actual offline engine");
+    kb::audio::AudioPlayDesc desc{.clipAssetId = imported.items.front().id.value, .volume = 0.25F, .loop = true, .spatial = false};
+    desc.outputBus = "Output";
+    const auto play = [&] {
+        const auto result = backend.PlayOneShotForTesting(scene, desc);
+        Require(result.Succeeded() && backend.IsVoicePlaying(scene, result.voiceId), "Master PCM voice did not start");
+        return result.voiceId;
+    };
+    const auto measure = [&](std::string_view phase, double gain) {
+        const double expected = (3276.0 / 32768.0) * gain * 2.0 / 3.141592653589793;
+        std::size_t good = 0U;
+        double mean = 0.0;
+        for (std::size_t attempt = 0U; attempt < 8U && good < 4U; ++attempt) {
+            const auto block = backend.PumpFramesForTesting(2048U);
+            Require(block.frames == 2048U && std::isfinite(block.energy), "Master PCM block is incomplete or non-finite");
+            mean = block.energy / (2.0 * static_cast<double>(block.frames));
+            const bool matches = expected == 0.0 ? mean < 0.000001 : std::abs(mean / expected - 1.0) < 0.02;
+            good = matches ? good + 1U : 0U;
+        }
+        std::cout << "Master PCM " << phase << " gain=" << gain << " mean=" << mean << " expected=" << expected << " blocks=" << good << '\n';
+        Require(good == 4U, std::string{phase} + " did not produce the expected PCM");
+    };
+    play();
+    measure("full", 0.25 * 0.5);
+    Require(backend.SetMasterVolume(scene, 0.5F), "The backend refused a valid master volume");
+    measure("half", 0.5 * 0.25 * 0.5);
+    // The snapshot still drives the bus, under the master gain; a silent trigger makes the backend sync its buses.
+    Require(kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(scene, "Quiet"), "Master PCM snapshot did not select");
+    auto silent = desc;
+    silent.volume = 0.0F;
+    const auto trigger = backend.PlayOneShotForTesting(scene, silent);
+    Require(trigger.Succeeded() && backend.StopVoice(scene, trigger.voiceId), "Master PCM snapshot trigger failed");
+    measure("snapshot", 0.5 * 0.25 * 0.25);
+    Require(!backend.SetMasterVolume(scene, 1.5F) && !backend.SetMasterVolume(scene, -0.5F), "The backend accepted a master volume outside 0..1");
+    measure("refused-value", 0.5 * 0.25 * 0.25);
+    Require(backend.ReinitializeForTesting(scene, true) == kb::audio::AudioDeviceStatus::NoPlaybackDevice,
+        "Master PCM backend did not restart");
+    play();
+    measure("after-restart", 0.5 * 0.25 * 0.25);
+    Require(backend.SetMasterVolume(scene, 0.0F), "The backend refused a muted master volume");
+    measure("muted", 0.0);
+    backend.Shutdown();
 }
 
 void RunVorbisTransportTest() {
@@ -3564,6 +3632,75 @@ void RunClipResolverValidationTest(const std::filesystem::path& clipPath, Resolv
 
 } // namespace
 
+// Microphone capture on the null device: no real input is opened. The null device delivers silence in real
+// time, which proves the device, the ring and the clip path; a tone clip proves the recorded clip plays.
+void RunMicrophoneCaptureTest() {
+    struct Context {
+        ma_context native{}; bool ready = false;
+        ~Context() { if (ready) ma_context_uninit(&native); }
+    } context;
+    const ma_backend nullBackend = ma_backend_null;
+    context.ready = ma_context_init(&nullBackend, 1U, nullptr, &context.native) == MA_SUCCESS;
+    Require(context.ready, "Native null audio device context did not initialize");
+
+    kb::scene::Scene scene;
+    kb::audio_miniaudio::MiniaudioPlaybackBackend backend;
+    Require(backend.ReinitializeForTesting(scene, true) == kb::audio::AudioDeviceStatus::NoPlaybackDevice,
+        "Capture test backend did not initialize offline");
+    backend.UseCaptureContextForTesting(&context.native);
+    kb::audio::AudioPlayback::RegisterBackend(scene, backend);
+
+    const std::vector<kb::audio::AudioCaptureDeviceInfo> devices = kb::audio::AudioCapture::Devices(scene);
+    Require(!devices.empty() && std::ranges::any_of(devices, [](const auto& device) { return device.isDefault; }),
+        "The null backend did not list a default capture device");
+    Require(kb::audio::AudioCapture::Start(scene, { .deviceName = "No such capture device" }) == kb::audio::AudioCaptureStatus::DeviceNotFound,
+        "A capture device that does not exist was accepted");
+    Require(!kb::audio::AudioCapture::IsCapturing(scene), "A refused capture start left the device running");
+
+    Require(kb::audio::AudioCapture::Start(scene, { .deviceName = devices.front().name }) == kb::audio::AudioCaptureStatus::Success
+            && kb::audio::AudioCapture::IsCapturing(scene),
+        "The null capture device did not start by name");
+    Require(kb::audio::AudioCapture::Start(scene) == kb::audio::AudioCaptureStatus::AlreadyCapturing,
+        "A second capture start was accepted");
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (backend.CapturedFramesForTesting() < kb::audio::kAudioCaptureSampleRate / 5U && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    Require(backend.CapturedFramesForTesting() >= kb::audio::kAudioCaptureSampleRate / 5U,
+        "The null capture device delivered no frames at the capture rate");
+    const kb::audio::AudioCaptureLevel level = kb::audio::AudioCapture::Level(scene);
+    Require(level.rms == 0.0F && level.peak == 0.0F, "The null capture device is silent, so its level must be zero");
+
+    const kb::audio::AudioCaptureClip recorded = kb::audio::AudioCapture::RecordToClip(scene, 0.1F);
+    Require(recorded.Succeeded() && recorded.frames == kb::audio::kAudioCaptureSampleRate / 10U
+            && recorded.sampleRate == kb::audio::kAudioCaptureSampleRate,
+        "A recording of a tenth of a second has the wrong length or rate");
+    Require(kb::audio::AudioCapture::PublishClip(scene, recorded) != 0U, "A recorded clip could not be published");
+
+    kb::audio::AudioCapture::Stop(scene);
+    Require(!kb::audio::AudioCapture::IsCapturing(scene) && kb::audio::AudioCapture::RecordToClip(scene, 0.05F).Succeeded(),
+        "A stopped capture lost what it had captured");
+    kb::audio::AudioCapture::Stop(scene);
+
+    // A tone recorded into a clip plays through the ordinary playback path.
+    std::vector<float> tone(kb::audio::kAudioCaptureSampleRate / 4U);
+    for (std::size_t index = 0U; index < tone.size(); ++index) {
+        tone[index] = 0.5F * std::sin(6.2831853F * 440.0F * static_cast<float>(index) / static_cast<float>(kb::audio::kAudioCaptureSampleRate));
+    }
+    const kb::audio::AudioCaptureClip toneClip{ .status = kb::audio::AudioCaptureStatus::Success,
+        .clip = kb::audio::MakeAudioClipFromPcm(tone, kb::audio::kAudioCaptureSampleRate), .frames = tone.size() };
+    const std::uint64_t clipId = kb::audio::AudioCapture::PublishClip(scene, toneClip);
+    Require(clipId != 0U, "A tone clip could not be published");
+    const kb::audio::AudioPlayResult voice = backend.PlayOneShotForTesting(scene, kb::audio::AudioPlayDesc{
+        .clipAssetId = clipId, .volume = 1.0F, .spatial = false });
+    Require(voice.Succeeded(), "A recorded clip did not start through the playback backend");
+    const auto pumped = backend.PumpFramesForTesting(2048U);
+    Require(pumped.frames > 0U && pumped.energy > 1.0, "A recorded tone clip played as silence");
+
+    kb::audio::AudioPlayback::UnregisterBackend(scene, backend);
+    backend.Shutdown();
+}
+
 int RunTests(int argc, char** argv) {
     std::error_code error;
     std::filesystem::remove_all(TestRoot(), error);
@@ -3601,6 +3738,9 @@ int RunTests(int argc, char** argv) {
     if (filter.empty() || filter == "bus-topology") {
         RunBusTopologyPcmTest();
     }
+    if (filter.empty() || filter == "master-volume") {
+        RunMasterVolumePcmTest();
+    }
     if (filter.empty() || filter == "snapshot-transition") {
         RunSnapshotTransitionPcmTest();
     }
@@ -3614,6 +3754,9 @@ int RunTests(int argc, char** argv) {
         RunSoundStateTest(clipPath);
         RunSpatialDistanceAttenuationOutputTest();
         RunSpatialPanningOutputTest();
+    }
+    if (filter.empty() || filter == "capture") {
+        RunMicrophoneCaptureTest();
     }
     if (filter.empty() || filter == "voice" || filter == "resolver") {
         RunVoiceStateTest(clipPath);

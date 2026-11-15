@@ -11,6 +11,8 @@
 #include "engine/scene/SceneTransforms.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <stdexcept>
 
 namespace kb::particle_plugin {
@@ -87,14 +89,22 @@ void ParticleSceneSystem::OnCreate(kb::scene::SceneSystemContext& context) {
     }
     const auto existingSnapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(context.GetScene());
     backend_.renderSnapshotRevision_ = existingSnapshot ? existingSnapshot->Revision() : 0U;
+    // The particle clock starts at the scene's fixed time so far and never behind the last snapshot.
+    kb::scene::Scene& scene = context.GetScene();
+    const double elapsedSteps = static_cast<double>(scene.Runtime().FixedStepIndex()) *
+        static_cast<double>(scene.Runtime().FixedStepSettings().fixedDeltaSeconds) /
+        static_cast<double>(CpuParticleBackend::kStepSeconds);
+    particleStepIndex_ = std::max(static_cast<std::uint64_t>(std::llround(elapsedSteps)),
+        existingSnapshot ? existingSnapshot->FixedStepIndex() : std::uint64_t{0U});
+    particleDebtSeconds_ = 0.0;
 }
 
 void ParticleSceneSystem::OnDestroy(kb::scene::SceneSystemContext& context) {
     if (!registered_) return;
     const auto latestSnapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(context.GetScene());
     const std::uint64_t terminalFixedStepIndex = latestSnapshot
-        ? std::max(context.GetScene().Runtime().FixedStepIndex(), latestSnapshot->FixedStepIndex())
-        : context.GetScene().Runtime().FixedStepIndex();
+        ? std::max(particleStepIndex_, latestSnapshot->FixedStepIndex())
+        : particleStepIndex_;
     const kb::particles::ParticleRenderSnapshotResult terminal = backend_.PublishRenderTombstone(
         context.GetScene(), terminalFixedStepIndex);
     if (!terminal.Succeeded()) ThrowTerminalSnapshotFailure(terminal.status);
@@ -114,18 +124,45 @@ void ParticleSceneSystem::OnDestroy(kb::scene::SceneSystemContext& context) {
     registered_ = false;
 }
 
+std::uint32_t ParticleSceneSystem::TakeDueParticleSteps(kb::scene::SceneSystemContext& context) {
+    const float sceneStepSeconds = context.DeltaSeconds();
+    if (!std::isfinite(sceneStepSeconds) || sceneStepSeconds <= 0.0F) {
+        throw std::logic_error("particle scene system received an invalid fixed step");
+    }
+    const kb::scene::SceneRuntimeFixedStepSettings fixed = context.GetScene().Runtime().FixedStepSettings();
+    // The scene runtime's step limit bounds the catch-up too: a long step never becomes an unbounded burst.
+    const std::size_t maxSteps = fixed.maxFixedStepsPerFrame > 0U
+        ? fixed.maxFixedStepsPerFrame : kb::scene::kSceneRuntimeDefaultMaxFixedStepsPerFrame;
+    constexpr double kStepSeconds = CpuParticleBackend::kStepSeconds;
+    // Float rounding of the scene's step must not push a due particle step one scene step later.
+    constexpr double kSlackSeconds = 1.0e-8;
+    particleDebtSeconds_ += static_cast<double>(sceneStepSeconds);
+    std::uint32_t steps = 0U;
+    while (particleDebtSeconds_ + kSlackSeconds >= kStepSeconds && steps < maxSteps) {
+        particleDebtSeconds_ -= kStepSeconds;
+        ++steps;
+    }
+    if (steps == maxSteps) particleDebtSeconds_ = std::min(particleDebtSeconds_, kStepSeconds);
+    return steps;
+}
+
 void ParticleSceneSystem::OnFixedUpdate(kb::scene::SceneSystemContext& context) {
+    const std::uint32_t dueSteps = TakeDueParticleSteps(context);
+    if (dueSteps == 0U) return;
     // Owner transforms below are taken relative to the origin the backend simulates around this step.
     backend_.FollowSimulationOrigin(kb::particles::ParticlePlayback::SimulationOrigin(context.GetScene()));
     backend_.CapturePreviousParticlePositions();
     backend_.ProcessOwnerLifecycle(context.GetScene());
     ReconcileComponents(context.GetScene());
-    const kb::particles::ParticleRuntimeResult result = backend_.Step(context.GetScene(), context.DeltaSeconds());
-    if (!result.Succeeded()) {
-        throw std::logic_error("particle CPU backend rejected the authoritative fixed step");
+    for (std::uint32_t step = 0U; step < dueSteps; ++step) {
+        if (step != 0U) backend_.CapturePreviousParticlePositions();
+        const kb::particles::ParticleRuntimeResult result = backend_.Step(
+            context.GetScene(), CpuParticleBackend::kStepSeconds, ++particleStepIndex_);
+        if (!result.Succeeded()) {
+            throw std::logic_error("particle CPU backend rejected the authoritative fixed step");
+        }
+        static_cast<void>(backend_.PublishRenderSnapshot(context.GetScene(), particleStepIndex_));
     }
-    static_cast<void>(backend_.PublishRenderSnapshot(
-        context.GetScene(), context.GetScene().Runtime().FixedStepIndex() + 1U));
     std::size_t index = 0U;
     while (index < componentInstanceCount_) {
         const ComponentInstance& binding = componentInstances_[index];

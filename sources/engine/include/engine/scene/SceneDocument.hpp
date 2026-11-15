@@ -53,9 +53,9 @@ struct SceneDocument {
     //      and load unchanged.
     // v43: WorldBackdropComponent persists the procedural sky settings (sun disc and size,
     //      convergence, atmosphere thickness, sky tint, ground colour, exposure); older files load
-    //      Unity's Skybox/Procedural defaults.
+    //      with the defaults of the procedural sky.
     // v44: the scene's post-process profile (tonemapping, exposure, bloom, anti-aliasing) persists
-    //      with the scene, as a Unity global Volume or a Godot WorldEnvironment does; older files
+    //      with the scene; older files
     //      load with no profile (renderer defaults).
     // v49: SocketAttachment holds an object at a socket or bone of the character above it.
     //      Combatant persists health, mana, resistances, team, senses and ability slots.
@@ -65,6 +65,8 @@ struct SceneDocument {
     // v61: a Mesh Renderer persists its LOD bias, LOD switch and mobility; a Light persists its shadow bias,
     //      normal bias, filter, quality and (directional) cascade count and distribution. Older files load
     //      the defaults.
+    // v64: a Mesh Renderer and a Collider persist whether they affect navigation; older files load with it on.
+    // v65: a NavAgent persists whether it moves with the horde; older files load with it off.
     static constexpr std::uint32_t TilemapFileVersion = 50U;
     static constexpr std::uint32_t OneWayColliderFileVersion = 51U;
     static constexpr std::uint32_t ModalCanvasFileVersion = 52U;
@@ -79,7 +81,11 @@ struct SceneDocument {
     static constexpr std::uint32_t UIThemeBindingFileVersion = 59U;
     static constexpr std::uint32_t BehaviourVariableOverridesFileVersion = 60U;
     static constexpr std::uint32_t MeshLodAndShadowQualityFileVersion = 61U;
-    static constexpr std::uint32_t CurrentFileVersion = 61U;
+    static constexpr std::uint32_t JointFreedomFileVersion = 62U;
+    static constexpr std::uint32_t NavBoundsFileVersion = 63U;
+    static constexpr std::uint32_t AffectsNavigationFileVersion = 64U;
+    static constexpr std::uint32_t NavAgentHordeFileVersion = 65U;
+    static constexpr std::uint32_t CurrentFileVersion = 65U;
     static constexpr std::uint32_t SocketAttachmentFileVersion = 49U;
     static constexpr std::uint32_t CombatantFileVersion = 49U;
     static constexpr std::uint32_t AIBrainFileVersion = 49U;

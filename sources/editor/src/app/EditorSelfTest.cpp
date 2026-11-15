@@ -25,6 +25,8 @@
 #include "assets/EditorAssetBrowserState.hpp"
 #include "project/EditorProjectBootstrap.hpp"
 #include "project/EditorProjectPaths.hpp"
+#include "engine/audio/AudioPlayback.hpp"
+#include "engine/scene/SceneTagCatalog.hpp"
 #include "rendering/PluginsPanelRenderer.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/InspectorPanelSectionRows.hpp"
@@ -32,6 +34,7 @@
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/HeroIconGdiplusRuntime.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
+#include "inspection/InspectorFieldGuide.hpp"
 #include "inspection/InspectorPanelInteraction.hpp"
 #include "inspection/InspectorPhysicsModel.hpp"
 #include "rendering/ProjectSettingsPanelLayout.hpp"
@@ -221,6 +224,7 @@ struct ProjectSettingsClickPoints {
     POINT optionRow1{}; // First named option inside the open dropdown.
     POINT checkbox{};   // Enabled checkbox.
     POINT vulkanBackend{};
+    POINT autoLightingPath{};
     POINT forwardPlusLightingPath{};
     POINT deferredLightingPath{};
     POINT postProcessToggle{};
@@ -242,6 +246,7 @@ struct ProjectSettingsClickPoints {
         .optionRow1 = Center(ProjectSettingsPanelLayout::OptionRow(fieldBox, 1)),
         .checkbox = Center(rects.enabledCheckbox),
         .vulkanBackend = Center(rects.backendVulkanButton),
+        .autoLightingPath = Center(rects.lightingPathAutoButton),
         .forwardPlusLightingPath = Center(rects.lightingPathForwardPlusButton),
         .deferredLightingPath = Center(rects.lightingPathDeferredButton),
         .postProcessToggle = Center(rects.postProcessCheckbox),
@@ -355,6 +360,16 @@ void RunProjectSettingsSuite(Report& report) {
                 stored.settings.lightingPath == kb::project::ProjectSceneLightingPath::Deferred,
             "Deferred lighting path persisted to the settings file");
     }
+    report.Check(HitKindAt(context, click.autoLightingPath) == ProjectSettingsHitKind::LightingPathOption, "Auto lighting path point hit-tests as LightingPathOption");
+    report.Check(controller.HandlePointerDown(kContent, click.autoLightingPath.x, click.autoLightingPath.y), "Clicking Auto lighting path is handled");
+    report.Check(context.ProjectConfiguration().lightingPath == kb::project::ProjectSceneLightingPath::Auto, "Project lighting path changed to Auto");
+    {
+        const auto stored = kb::project::ProjectSettingsStore::Load(
+            kb::project::ProjectSettingsStore::FilePath(context.ProjectFile().parent_path()));
+        report.Check(stored.Succeeded() && stored.found &&
+                stored.settings.lightingPath == kb::project::ProjectSceneLightingPath::Auto,
+            "Auto lighting path persisted to the settings file");
+    }
 
     // Lighting category: shadow and global illumination quality, desktop and mobile, one level button each.
     const ProjectSettingsPanelLayoutRects lightingRects = ProjectSettingsPanelLayout::Resolve(kContent);
@@ -384,6 +399,300 @@ void RunProjectSettingsSuite(Report& report) {
     const ProjectSettingsPanelRenderer::Hit labelHit = ProjectSettingsPanelRenderer::TooltipHitTest(kContent, context, shadowsLabel.x, shadowsLabel.y);
     report.Check(labelHit.kind == ProjectSettingsHitKind::QualityOption && labelHit.index / 5 == 2,
         "A quality row label hit-tests for its tooltip");
+
+    // Display category: window mode, size, the two switches and the frame rate limit.
+    const auto stored = [&context] {
+        return kb::project::ProjectSettingsStore::Load(kb::project::ProjectSettingsStore::FilePath(context.ProjectFile().parent_path()));
+    };
+    const POINT displayCategory = Center(ProjectSettingsPanelLayout::CategoryRow(
+        lightingRects.sidebar, static_cast<int>(ProjectSettingsCategory::Display)));
+    report.Check(controller.HandlePointerDown(kContent, displayCategory.x, displayCategory.y), "Clicking the Display category is handled");
+    report.Check(context.ProjectSettings().SelectedCategory() == static_cast<int>(ProjectSettingsCategory::Display), "Display category active after click");
+    const POINT borderless = Center(lightingRects.windowModeButton[1]);
+    const POINT size1080 = Center(lightingRects.windowSizeButton[2]);
+    const POINT vsyncSwitch = Center(lightingRects.vsyncCheckbox);
+    const POINT resizableLabel = Center(lightingRects.displayLabel[2]);
+    const POINT frameCap60 = Center(lightingRects.frameRateButton[2]);
+    const POINT androidVulkan = Center(lightingRects.androidGraphicsApiButton[1]);
+    report.Check(HitKindAt(context, borderless) == ProjectSettingsHitKind::WindowModeOption &&
+            HitKindAt(context, size1080) == ProjectSettingsHitKind::WindowSizeOption &&
+            HitKindAt(context, vsyncSwitch) == ProjectSettingsHitKind::DisplayToggle &&
+            HitKindAt(context, resizableLabel) == ProjectSettingsHitKind::DisplayToggle &&
+            HitKindAt(context, frameCap60) == ProjectSettingsHitKind::FrameRateOption &&
+            HitKindAt(context, androidVulkan) == ProjectSettingsHitKind::AndroidGraphicsApiOption,
+        "The Display controls hit-test as their own kinds");
+    for (const POINT point : { borderless, size1080, vsyncSwitch, resizableLabel, frameCap60, androidVulkan }) {
+        report.Check(controller.HandlePointerDown(kContent, point.x, point.y), "Clicking a Display control is handled");
+    }
+    const kb::project::ProjectDisplaySettings& display = context.ProjectConfiguration().display;
+    report.Check(display.windowMode == kb::project::ProjectWindowMode::BorderlessFullscreen && display.windowWidth == 1920U &&
+            display.windowHeight == 1080U && !display.vsync && !display.resizable && display.frameRateCap == 60U &&
+            display.androidGraphicsApi == kb::project::ProjectAndroidGraphicsApi::Vulkan,
+        "The Display buttons change the project's display settings");
+    report.Check(stored().Succeeded() && stored().settings.display == display, "Display settings persisted to the settings file");
+    const POINT displayLabel = Center(lightingRects.displayLabel[4]);
+    const ProjectSettingsPanelRenderer::Hit displayLabelHit = ProjectSettingsPanelRenderer::TooltipHitTest(kContent, context, displayLabel.x, displayLabel.y);
+    report.Check(displayLabelHit.kind == ProjectSettingsHitKind::FrameRateOption && displayLabelHit.index == -1,
+        "A Display row label hit-tests for its tooltip");
+    const POINT splashLabel = Center(lightingRects.displayLabel[8]);
+    report.Check(ProjectSettingsPanelRenderer::TooltipHitTest(kContent, context, splashLabel.x, splashLabel.y).kind ==
+            ProjectSettingsHitKind::SplashColorOption,
+        "A launch screen row label hit-tests for its tooltip");
+    // The launch screen image: its selector opens the list of the project's images, whose first row is none.
+    const RECT splashImageBox = ProjectSettingsPanelLayout::SplashImageFieldBox(lightingRects);
+    const POINT splashImage = Center(splashImageBox);
+    report.Check(HitKindAt(context, splashImage) == ProjectSettingsHitKind::SplashImageField &&
+            controller.HandlePointerDown(kContent, splashImage.x, splashImage.y) &&
+            context.ProjectSettings().IsSplashImageDropdownOpen(),
+        "The launch screen image selector opens its list");
+    const POINT noImage = Center(ProjectSettingsPanelLayout::OptionRow(splashImageBox, 0));
+    report.Check(HitKindAt(context, noImage) == ProjectSettingsHitKind::SplashImageOption &&
+            controller.HandlePointerDown(kContent, noImage.x, noImage.y) &&
+            !context.ProjectSettings().IsSplashImageDropdownOpen() && context.ProjectConfiguration().display.splash.image.empty(),
+        "Choosing no launch screen image keeps the engine's mark");
+
+    // Physics category: fixed step, gravity and time scale are steppers; the gravity presets set the whole vector.
+    const POINT physicsCategory = Center(ProjectSettingsPanelLayout::CategoryRow(
+        lightingRects.sidebar, static_cast<int>(ProjectSettingsCategory::Physics)));
+    report.Check(controller.HandlePointerDown(kContent, physicsCategory.x, physicsCategory.y), "Clicking the Physics category is handled");
+    const POINT fixedStepPlus = Center(lightingRects.stepperButton[0][1]);
+    const POINT gravityYPlus = Center(lightingRects.stepperButton[2][1]);
+    const POINT timeScaleMinus = Center(lightingRects.stepperButton[4][0]);
+    report.Check(HitKindAt(context, fixedStepPlus) == ProjectSettingsHitKind::SimulationStepper &&
+            HitKindAt(context, Center(lightingRects.gravityPresetButton[1])) == ProjectSettingsHitKind::GravityPresetOption,
+        "The Physics steppers and presets hit-test as their own kinds");
+    for (const POINT point : { fixedStepPlus, gravityYPlus, timeScaleMinus }) {
+        report.Check(controller.HandlePointerDown(kContent, point.x, point.y), "Clicking a Physics stepper is handled");
+    }
+    const kb::project::ProjectSimulationSettings& simulation = context.ProjectConfiguration().simulation;
+    report.Check(simulation.fixedStepHz == 70U && simulation.gravity[0] == 0.0F && simulation.gravity[1] == -9.31F &&
+            simulation.gravity[2] == 0.0F && simulation.timeScale == 0.75F,
+        "The steppers change only the value they belong to");
+    report.Check(stored().Succeeded() && stored().settings.simulation == simulation, "Simulation settings persisted to the settings file");
+    report.Check(std::fabs(context.Scene().Runtime().FixedStepSettings().fixedDeltaSeconds - 1.0F / 70.0F) < 1e-7F &&
+            context.Scene().Runtime().TimeScale() == 0.75F && kb::scene::PhysicsBackend::Gravity(context.Scene()).y == -9.31F,
+        "The open scene takes the simulation settings at once");
+    const POINT moonPreset = Center(lightingRects.gravityPresetButton[1]);
+    report.Check(controller.HandlePointerDown(kContent, moonPreset.x, moonPreset.y), "Clicking a gravity preset is handled");
+    report.Check(simulation.gravity == std::array<float, 3U>{ 0.0F, -1.62F, 0.0F } && simulation.fixedStepHz == 70U,
+        "A gravity preset sets the whole vector and nothing else");
+    const POINT gravityLabel = Center(lightingRects.stepperLabel[2]);
+    const ProjectSettingsPanelRenderer::Hit gravityLabelHit = ProjectSettingsPanelRenderer::TooltipHitTest(kContent, context, gravityLabel.x, gravityLabel.y);
+    report.Check(gravityLabelHit.kind == ProjectSettingsHitKind::SimulationStepper && gravityLabelHit.index / 2 == 2,
+        "A stepper label hit-tests for its tooltip");
+
+    // Typing a number into a value cell: a click starts it with the old value selected, Enter applies what was typed
+    // (clamped to the bounds), Esc and text that is not a number change nothing, and a click elsewhere applies it.
+    EditorProjectSettingsState& settingsState = context.ProjectSettings();
+    const auto typeNumber = [&](const POINT cell, const std::string_view text) {
+        const bool started = controller.HandlePointerDown(kContent, cell.x, cell.y) && settingsState.IsNumberEditing();
+        for (const char character : text) {
+            settingsState.NumberEdit().AppendAscii(static_cast<wchar_t>(character));
+        }
+        return started;
+    };
+    const POINT gravityYCell = Center(lightingRects.stepperValue[2]);
+    report.Check(HitKindAt(context, gravityYCell) == ProjectSettingsHitKind::NumberField,
+        "A value cell hit-tests as a number field");
+    report.Check(controller.HandlePointerDown(kContent, gravityYCell.x, gravityYCell.y) && settingsState.IsNumberEditing() &&
+            settingsState.EditedNumber() == static_cast<int>(ProjectSettingsNumber::GravityY) && settingsState.NumberEdit().Query() == "-1.62",
+        "Clicking a value cell starts typing with the current value");
+    settingsState.EndNumberEdit();
+    report.Check(typeNumber(gravityYCell, "-3.5") && EditorProjectSettingsPointerController::CommitNumberEdit(context) &&
+            !settingsState.IsNumberEditing() && simulation.gravity == std::array<float, 3U>{ 0.0F, -3.5F, 0.0F } && simulation.fixedStepHz == 70U,
+        "Typing a number and pressing Enter sets that value and nothing else");
+    report.Check(stored().Succeeded() && stored().settings.simulation == simulation &&
+            kb::scene::PhysicsBackend::Gravity(context.Scene()).y == -3.5F,
+        "A typed simulation value is persisted and applied to the open scene");
+    const POINT fixedStepCell = Center(lightingRects.stepperValue[0]);
+    const POINT timeScaleCell = Center(lightingRects.stepperValue[4]);
+    report.Check(typeNumber(fixedStepCell, "9999") && EditorProjectSettingsPointerController::CommitNumberEdit(context) &&
+            simulation.fixedStepHz == kb::project::kProjectFixedStepHzMax,
+        "A typed value above the bound is clamped to it");
+    report.Check(typeNumber(timeScaleCell, "-5") && EditorProjectSettingsPointerController::CommitNumberEdit(context) && simulation.timeScale == 0.0F,
+        "A typed value below the bound is clamped to it");
+    report.Check(typeNumber(timeScaleCell, "1,5") && EditorProjectSettingsPointerController::CommitNumberEdit(context) && simulation.timeScale == 1.5F,
+        "A decimal comma is read as a decimal point");
+    report.Check(typeNumber(timeScaleCell, "-") && EditorProjectSettingsPointerController::CommitNumberEdit(context) && simulation.timeScale == 1.5F,
+        "Text that is not a number changes nothing");
+    report.Check(typeNumber(fixedStepCell, "30") && (settingsState.EndNumberEdit(), true) && !settingsState.IsNumberEditing() &&
+            simulation.fixedStepHz == kb::project::kProjectFixedStepHzMax,
+        "Cancelling a typed number changes nothing");
+    const POINT outsideCell = Center(lightingRects.header);
+    report.Check(typeNumber(timeScaleCell, "2") && controller.HandlePointerDown(kContent, outsideCell.x, outsideCell.y) &&
+            !settingsState.IsNumberEditing() && simulation.timeScale == 2.0F,
+        "A click outside the cell applies the typed number");
+
+    // The Display page: the window size and the frame rate limit take typed numbers too.
+    report.Check(controller.HandlePointerDown(kContent, displayCategory.x, displayCategory.y), "Clicking the Display category again is handled");
+    report.Check(typeNumber(Center(lightingRects.windowWidthValue), "1000") && EditorProjectSettingsPointerController::CommitNumberEdit(context) &&
+            typeNumber(Center(lightingRects.windowHeightValue), "50") && EditorProjectSettingsPointerController::CommitNumberEdit(context) &&
+            typeNumber(Center(lightingRects.frameRateValue), "240") && EditorProjectSettingsPointerController::CommitNumberEdit(context) &&
+            display.windowWidth == 1000U && display.windowHeight == kb::project::kProjectWindowExtentMin && display.frameRateCap == 240U &&
+            !display.vsync && !display.resizable,
+        "Typed window size and frame rate limit are applied, clamped, and leave the other display settings alone");
+    report.Check(stored().Succeeded() && stored().settings.display == display, "Typed display values persisted to the settings file");
+
+    // The Scenes page: the build list, startup scene first, with a move up and a remove button per scene.
+    const POINT scenesCategory = Center(ProjectSettingsPanelLayout::CategoryRow(
+        lightingRects.sidebar, static_cast<int>(ProjectSettingsCategory::Scenes)));
+    report.Check(controller.HandlePointerDown(kContent, scenesCategory.x, scenesCategory.y) &&
+            context.ProjectSettings().SelectedCategory() == static_cast<int>(ProjectSettingsCategory::Scenes),
+        "Clicking the Scenes category selects it");
+    const kb::project::ProjectSettings& project = context.ProjectConfiguration();
+    const std::string startup = project.defaultMap;
+    const std::string second = "/Game/Scenes/Second.21kbscene";
+    const std::string third = "/Game/Scenes/Third.21kbscene";
+    report.Check(HitKindAt(context, Center(lightingRects.sceneAddButton)) == ProjectSettingsHitKind::BuildSceneAdd,
+        "The Add scene button hit-tests as its own kind");
+    report.Check(context.SetProjectBuildScenes({ startup, second, third }) && project.defaultMap == startup &&
+            project.additionalScenes == std::vector<std::string>{ second, third } && stored().settings.additionalScenes == project.additionalScenes,
+        "A scene list keeps the startup scene first and is persisted");
+    report.Check(HitKindAt(context, Center(ProjectSettingsPanelLayout::SceneMoveUpButton(lightingRects, 0))) != ProjectSettingsHitKind::BuildSceneMoveUp,
+        "The first scene has nothing above it to move past");
+    const POINT thirdUp = Center(ProjectSettingsPanelLayout::SceneMoveUpButton(lightingRects, 2));
+    report.Check(HitKindAt(context, thirdUp) == ProjectSettingsHitKind::BuildSceneMoveUp && controller.HandlePointerDown(kContent, thirdUp.x, thirdUp.y) &&
+            project.additionalScenes == std::vector<std::string>{ third, second },
+        "Move up swaps a scene with the one above it");
+    const POINT thirdUpAgain = Center(ProjectSettingsPanelLayout::SceneMoveUpButton(lightingRects, 1));
+    report.Check(controller.HandlePointerDown(kContent, thirdUpAgain.x, thirdUpAgain.y) && project.defaultMap == third &&
+            project.additionalScenes == std::vector<std::string>{ startup, second } && stored().settings.defaultMap == third,
+        "Moving a scene to the top makes it the startup scene");
+    const POINT removeFirst = Center(ProjectSettingsPanelLayout::SceneRemoveButton(lightingRects, 0));
+    report.Check(HitKindAt(context, removeFirst) == ProjectSettingsHitKind::BuildSceneRemove && controller.HandlePointerDown(kContent, removeFirst.x, removeFirst.y) &&
+            project.defaultMap == startup && project.additionalScenes == std::vector<std::string>{ second },
+        "Removing the startup scene promotes the next one");
+    const POINT removeSecond = Center(ProjectSettingsPanelLayout::SceneRemoveButton(lightingRects, 1));
+    report.Check(controller.HandlePointerDown(kContent, removeSecond.x, removeSecond.y) && project.additionalScenes.empty() &&
+            HitKindAt(context, removeFirst) != ProjectSettingsHitKind::BuildSceneRemove,
+        "The last scene of the list cannot be removed");
+
+    // The Audio page: the master volume is a stepper and takes a typed number; the open scene takes it at once.
+    const POINT audioCategory = Center(ProjectSettingsPanelLayout::CategoryRow(
+        lightingRects.sidebar, static_cast<int>(ProjectSettingsCategory::Audio)));
+    report.Check(controller.HandlePointerDown(kContent, audioCategory.x, audioCategory.y) &&
+            context.ProjectSettings().SelectedCategory() == static_cast<int>(ProjectSettingsCategory::Audio) && project.masterVolume == 1.0F,
+        "Clicking the Audio category selects it, and a project starts at full volume");
+    const POINT volumeMinus = Center(lightingRects.stepperButton[5][0]);
+    const POINT volumePlus = Center(lightingRects.stepperButton[5][1]);
+    const POINT volumeCell = Center(lightingRects.stepperValue[5]);
+    report.Check(HitKindAt(context, volumeMinus) == ProjectSettingsHitKind::MasterVolumeStepper &&
+            HitKindAt(context, volumePlus) == ProjectSettingsHitKind::MasterVolumeStepper &&
+            HitKindAt(context, volumeCell) == ProjectSettingsHitKind::NumberField,
+        "The master volume controls hit-test as their own kinds");
+    report.Check(controller.HandlePointerDown(kContent, volumeMinus.x, volumeMinus.y) && project.masterVolume == 0.9F &&
+            stored().Succeeded() && stored().settings.masterVolume == 0.9F && kb::audio::AudioPlayback::MasterVolume(context.Scene()) == 0.9F,
+        "The minus button lowers the master volume, persists it and gives it to the open scene");
+    report.Check(typeNumber(volumeCell, "0,35") && EditorProjectSettingsPointerController::CommitNumberEdit(context) &&
+            project.masterVolume == 0.35F && stored().settings.masterVolume == 0.35F &&
+            kb::audio::AudioPlayback::MasterVolume(context.Scene()) == 0.35F,
+        "A typed master volume is applied, persisted and given to the open scene");
+    report.Check(typeNumber(volumeCell, "7") && EditorProjectSettingsPointerController::CommitNumberEdit(context) && project.masterVolume == 1.0F,
+        "A typed master volume above 1 is clamped to full volume");
+    report.Check(controller.HandlePointerDown(kContent, volumePlus.x, volumePlus.y) && project.masterVolume == 1.0F,
+        "The plus button stops at full volume");
+
+    // The Tags page: a typed name is added to the project's list, the remove button takes a tag out, and the open
+    // scene follows both.
+    const POINT tagsCategory = Center(ProjectSettingsPanelLayout::CategoryRow(
+        lightingRects.sidebar, static_cast<int>(ProjectSettingsCategory::Tags)));
+    report.Check(controller.HandlePointerDown(kContent, tagsCategory.x, tagsCategory.y) &&
+            context.ProjectSettings().SelectedCategory() == static_cast<int>(ProjectSettingsCategory::Tags) && project.tags.empty(),
+        "Clicking the Tags category selects it, and a project starts with no tags of its own");
+    const POINT tagNameField = Center(lightingRects.tagNameField);
+    const POINT tagAddButton = Center(lightingRects.tagAddButton);
+    report.Check(HitKindAt(context, tagNameField) == ProjectSettingsHitKind::TagNameField &&
+            HitKindAt(context, tagAddButton) == ProjectSettingsHitKind::TagAdd,
+        "The tag name cell and the Add tag button hit-test as their own kinds");
+    const auto typeTag = [&](const std::string_view text) {
+        const bool started = controller.HandlePointerDown(kContent, tagNameField.x, tagNameField.y) && settingsState.IsTagNameEditing();
+        for (const char character : text) {
+            settingsState.NumberEdit().AppendAscii(static_cast<wchar_t>(character));
+        }
+        return started;
+    };
+    const kb::scene::SceneEntity tagged = context.Scene().Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "TaggedForPage" });
+    report.Check(typeTag("Boss") && EditorProjectSettingsPointerController::CommitNumberEdit(context) && !settingsState.IsNumberEditing() &&
+            project.tags == std::vector<std::string>{ "Boss" } && stored().settings.tags == project.tags && context.Scene().Tags().Contains("Boss"),
+        "A typed tag name is added to the project's list, persisted, and defined in the open scene");
+    report.Check(typeTag("Trap") && controller.HandlePointerDown(kContent, tagAddButton.x, tagAddButton.y) &&
+            project.tags == std::vector<std::string>{ "Boss", "Trap" } && settingsState.IsTagNameEditing(),
+        "The Add tag button adds the typed name and readies the cell for the next one");
+    settingsState.EndNumberEdit();
+    report.Check(typeTag("Boss") && EditorProjectSettingsPointerController::CommitNumberEdit(context) &&
+            typeTag("Player") && EditorProjectSettingsPointerController::CommitNumberEdit(context) &&
+            typeTag("a,b") && EditorProjectSettingsPointerController::CommitNumberEdit(context) &&
+            typeTag("") && EditorProjectSettingsPointerController::CommitNumberEdit(context) &&
+            project.tags == std::vector<std::string>{ "Boss", "Trap" },
+        "A tag that is listed, built in, invalid or empty is not added");
+    report.Check(typeTag("Cancelled") && (settingsState.EndNumberEdit(), true) && project.tags.size() == 2U,
+        "Cancelling a typed tag name adds nothing");
+    // Removing a tag follows the scene's own Undefine: it is cleared from the objects that carry it.
+    report.Check(context.SetEntityTagSelected(tagged, "Trap", true) && context.Scene().Tags().IsAssigned(tagged, "Trap"),
+        "A tag of the project can be assigned to an object");
+    const POINT removeTrap = Center(ProjectSettingsPanelLayout::SceneRemoveButton(lightingRects, 1));
+    report.Check(HitKindAt(context, removeTrap) == ProjectSettingsHitKind::TagRemove && controller.HandlePointerDown(kContent, removeTrap.x, removeTrap.y) &&
+            project.tags == std::vector<std::string>{ "Boss" } && stored().settings.tags == project.tags &&
+            !context.Scene().Tags().Contains("Trap") && !context.Scene().Tags().IsAssigned(tagged, "Trap") && context.Scene().Tags().Contains("Boss"),
+        "Removing a tag takes it out of the project's list and clears it from the open scene's objects");
+    // A tag made through the Inspector's Add Tag joins the project's list too, and deleting one there leaves it.
+    report.Check(context.SetEntityTagSelected(tagged, "Chest", true) && project.tags == std::vector<std::string>{ "Boss", "Chest" } &&
+            stored().settings.tags == project.tags,
+        "A tag made while tagging an object is added to the project's list");
+    report.Check(context.DeleteSceneTag("Chest") && project.tags == std::vector<std::string>{ "Boss" } && !context.Scene().Tags().Contains("Chest"),
+        "Deleting a tag in the Inspector takes it out of the project's list");
+    // A tag only a scene file defines is added to the list when the editor opens that scene, as long as an object
+    // of the scene carries it; one nothing carries, such as a tag the project dropped since, stays out.
+    report.Check(context.Scene().Tags().SetAssigned(tagged, "OnlyInScene", true) && context.Scene().Tags().Define("StaleInScene") &&
+            std::ranges::find(project.tags, std::string{ "OnlyInScene" }) == project.tags.end(),
+        "A tag defined in the scene alone is not in the project's list yet");
+    const std::filesystem::path tagScenePath = EditorProjectPaths::AssetsRoot() / "Scenes" / "TagPage.21kbscene";
+    report.Check(context.SaveCurrentSceneAs(tagScenePath) && context.OpenScene(tagScenePath, EditorDirtySceneResolution::Discard) &&
+            project.tags == std::vector<std::string>{ "Boss", "OnlyInScene" } && stored().settings.tags == project.tags &&
+            context.Scene().Tags().Contains("OnlyInScene") && !context.Scene().Tags().Contains("StaleInScene"),
+        "Opening a scene adds the tags its objects carry to the project's list and drops the unused ones");
+    const std::vector<std::string> names{ context.Scene().Tags().Names().begin(), context.Scene().Tags().Names().end() };
+    report.Check(names.size() >= 8U && names[6] == "Boss" && names[7] == "OnlyInScene",
+        "A scene defines the built-in tags, then the project's");
+
+    // A scene renamed or deleted in Project Files follows into the package list.
+    const std::filesystem::path scenesFolder = EditorProjectPaths::AssetsRoot() / "Scenes";
+    report.Check(context.SaveCurrentSceneAs(scenesFolder / "ListedA.21kbscene") && context.SaveCurrentSceneAs(scenesFolder / "ListedB.21kbscene") &&
+            context.OpenScene(tagScenePath, EditorDirtySceneResolution::Discard),
+        "Two more scenes are made for the package list");
+    static_cast<void>(context.Scene().Assets().Discover());
+    const std::string listedA = "/Game/Scenes/ListedA.21kbscene";
+    const std::string listedB = "/Game/Scenes/ListedB.21kbscene";
+    const std::string renamed = "/Game/Scenes/ListedRenamed.21kbscene";
+    report.Check(context.SetProjectBuildScenes({ project.defaultMap, listedA, listedB }) &&
+            project.additionalScenes == std::vector<std::string>{ listedA, listedB },
+        "Two scenes are listed for the package");
+    const kb::assets::AssetMetadata* assetA = context.Scene().Assets().Manager().Registry().FindByPath(listedA);
+    report.Check(assetA != nullptr && context.BeginAssetRename(assetA->id) &&
+            (context.AssetBrowser().SetTextEditValue("ListedRenamed"), true) && context.CommitAssetTextEdit() &&
+            project.additionalScenes == std::vector<std::string>{ renamed, listedB } && stored().settings.additionalScenes == project.additionalScenes,
+        "Renaming a listed scene in Project Files renames its entry in the package list");
+    const kb::assets::AssetMetadata* assetB = context.Scene().Assets().Manager().Registry().FindByPath(listedB);
+    report.Check(assetB != nullptr && context.DeleteAssetBrowserItem(assetB->id) &&
+            project.additionalScenes == std::vector<std::string>{ renamed } && stored().settings.additionalScenes == project.additionalScenes,
+        "Deleting a listed scene in Project Files takes it out of the package list");
+    // The scenes of a folder renamed or moved in Project Files follow into the package list.
+    std::error_code folderError;
+    std::filesystem::create_directories(EditorProjectPaths::AssetsRoot() / "Levels", folderError);
+    report.Check(context.SaveCurrentSceneAs(EditorProjectPaths::AssetsRoot() / "Levels" / "LevelA.21kbscene") &&
+            context.OpenScene(tagScenePath, EditorDirtySceneResolution::Discard),
+        "A scene is made in a folder of its own");
+    static_cast<void>(context.Scene().Assets().Discover());
+    report.Check(context.SetProjectBuildScenes({ project.defaultMap, renamed, "/Game/Levels/LevelA.21kbscene" }) &&
+            context.BeginAssetFolderRename("/Game/Levels") && (context.AssetBrowser().SetTextEditValue("Stages"), true) &&
+            context.CommitAssetTextEdit() &&
+            project.additionalScenes == std::vector<std::string>{ renamed, "/Game/Stages/LevelA.21kbscene" } &&
+            stored().settings.additionalScenes == project.additionalScenes,
+        "Renaming a folder in Project Files renames the package list's entries for its scenes");
+    report.Check(context.MoveAssetFolderToFolder("/Game/Stages", "/Game/Scenes") &&
+            project.additionalScenes == std::vector<std::string>{ renamed, "/Game/Scenes/Stages/LevelA.21kbscene" } &&
+            stored().settings.additionalScenes == project.additionalScenes,
+        "Moving a folder in Project Files moves the package list's entries for its scenes");
 }
 
 void RunProjectPhysicsLayersRuntimeSuite(Report& report) {
@@ -1034,6 +1343,10 @@ void RunInspectorComponentAffordancesSuite(Report& report) {
             context.ScriptEditor().AssetId() != controllerId,
         "Animator Controller is never routed to the Script Editor when its runtime data is unavailable");
     const kb::assets::AssetId timelineId{ 0xA111U };
+    const std::filesystem::path timelinePath = ArtifactPath("SelfTest.kbtimeline");
+    kb::scene::TimelineAsset timeline;
+    timeline.bindings = { { "Target", "." } };
+    report.Check(kb::scene::TimelineAssetIO::Save(timelinePath, timeline), "Create Timeline fixture for the editor asset surface");
     report.Check(context.Scene().Assets().Manager().RegisterAsset(
                      kb::assets::AssetMetadata{
                          .id = timelineId,
@@ -1041,13 +1354,14 @@ void RunInspectorComponentAffordancesSuite(Report& report) {
                          .name = "SelfTestTimeline",
                          .virtualPath =
                              "/Game/Cinematics/SelfTest.kbtimeline",
+                         .physicalPath = timelinePath,
                          .runtimeLoadable = true,
                      }),
         "Register Timeline for the editor asset surface");
     report.Check(context.OpenAnimationAsset(timelineId) &&
-            context.ScriptEditor().IsOpen() &&
-            context.ScriptEditor().AssetId() == timelineId,
-        "Timeline opens in the editor's writable typed-asset surface");
+            context.TimelineEditorDocument().AssetId() == timelineId &&
+            context.ScriptEditor().AssetId() != timelineId,
+        "Timeline opens in the Timeline editor document, not the Script Editor");
     report.Check(context.SetAnimatorControllerAsset(actor, controllerId), "Assign Animator Controller through Inspector asset path");
     report.Check(context.SetAnimatorControllerAsset(actor, {}), "Clear Animator Controller through asset picker path");
     const kb::scene::Animator* clearedAnimator = context.Scene().Components().Animators().TryGet(actor);
@@ -2710,7 +3024,8 @@ void RunMaterialGraphTextureNodeSuite(Report& report) {
 
 void RunMaterialGraphDenseNodeLayoutSuite(Report& report) {
     auto nodeRectFor = [](kb::render::RenderMaterialGraphNodeKind kind) {
-        const SIZE size = MaterialEditorPanelGraphNodeSize(kind);
+        // A node grows with its pin rows, so its rect comes from a node of that kind, not from the kind's minimum size.
+        const SIZE size = MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNode{ .id = 1U, .kind = kind });
         return RECT{ 40, 40, 40 + size.cx, 40 + size.cy };
     };
     auto nodeRectForNode = [](const kb::render::RenderMaterialGraphNode& node) {
@@ -2750,11 +3065,11 @@ void RunMaterialGraphDenseNodeLayoutSuite(Report& report) {
         "CollectionParameter output pins keep readable spacing");
     checkInputSpacing(
         kb::render::RenderMaterialGraphNodeKind::MaterialOutput,
-        14U,
+        kb::render::RenderMaterialGraphNodeInputPinNames(kb::render::RenderMaterialGraphNodeKind::MaterialOutput).size(),
         "MaterialOutput input pins keep readable spacing");
     checkInputSpacing(
         kb::render::RenderMaterialGraphNodeKind::SetMaterialAttributes,
-        11U,
+        kb::render::RenderMaterialGraphNodeInputPinNames(kb::render::RenderMaterialGraphNodeKind::SetMaterialAttributes).size(),
         "SetMaterialAttributes input pins keep readable spacing");
 
     bool allCatalogInputsSpaced = true;
@@ -4238,7 +4553,7 @@ void RunMaterialSettingsInspectorSuite(Report& report) {
 
     // With nothing selected, the Inspector shows the three material settings.
     const std::vector<MaterialEditorGraphNodeProperty> settings = context.MaterialEditor().MaterialSettingsProperties();
-    report.Check(settings.size() == 3U, "Finding 25: three material settings are exposed");
+    report.Check(settings.size() == 4U, "Finding 25: three enum settings and the displacement margin are exposed");
     const auto findSetting = [&settings](std::string_view stableId) -> const MaterialEditorGraphNodeProperty* {
         for (const MaterialEditorGraphNodeProperty& row : settings) {
             if (row.stableId == stableId) {
@@ -4265,13 +4580,17 @@ void RunMaterialSettingsInspectorSuite(Report& report) {
     };
     // Options are derived from the renderer's production predicates, so non-production values are never
     // offered and the editor cannot author a material the compiler would reject.
-    report.Check(hasOption(*domainRow, "surface") && domainRow->options.size() == 1U,
-        "Finding 25: only the production domain (surface) is offered");
+    report.Check(hasOption(*domainRow, "surface") && hasOption(*domainRow, "postProcess") &&
+            hasOption(*domainRow, "deferredDecal") && hasOption(*domainRow, "userInterface") &&
+            !hasOption(*domainRow, "lightFunction") && !hasOption(*domainRow, "volume") && domainRow->options.size() == 4U,
+        "Finding 25: only the production domains are offered");
     report.Check(hasOption(*shadingRow, "unlit") && hasOption(*shadingRow, "defaultLit") &&
             hasOption(*shadingRow, "subsurface") && hasOption(*shadingRow, "clearCoat"),
         "Finding 25: production shading models are offered");
-    report.Check(!hasOption(*shadingRow, "cloth") && !hasOption(*shadingRow, "hair") && !hasOption(*shadingRow, "eye"),
-        "Finding 25: non-production shading models are NOT offered");
+    report.Check(hasOption(*shadingRow, "cloth") && hasOption(*shadingRow, "hair") && hasOption(*shadingRow, "eye") &&
+            hasOption(*shadingRow, "singleLayerWater") && hasOption(*shadingRow, "thinTranslucent") &&
+            shadingRow->options.size() == 9U,
+        "Finding 25: the later production shading models are offered and no other");
     report.Check(blendRow->options.size() == 7U && hasOption(*blendRow, "opaque") && hasOption(*blendRow, "alphaHoldout"),
         "Finding 25: all seven blend modes are offered");
     report.Check(shadingRow->value.text == "Default Lit",
@@ -4287,8 +4606,8 @@ void RunMaterialSettingsInspectorSuite(Report& report) {
     // A no-op and a non-production value are both declined and change nothing.
     report.Check(!context.SetMaterialGraphSetting(id, "material.shadingModel", "unlit"),
         "Finding 25: setting the same value again is a declined no-op");
-    report.Check(!context.SetMaterialGraphSetting(id, "material.shadingModel", "cloth") &&
-            context.MaterialEditor().WorkingCopy()->graph.shadingModel == "unlit",
+    report.Check(!context.SetMaterialGraphSetting(id, "material.domain", "volume") &&
+            context.MaterialEditor().WorkingCopy()->graph.materialDomain == "surface",
         "Finding 25: a non-production value is refused and leaves the document untouched");
     report.Check(!context.SetMaterialGraphSetting(id, "material.bogus", "whatever"),
         "Finding 25: an unknown setting id is refused");
@@ -4313,7 +4632,7 @@ void RunMaterialSettingsInspectorSuite(Report& report) {
     // the Material section; selecting a node replaces them with that node's properties.
     const MaterialEditorPanelDetailsRows unselectedRows =
         MaterialEditorPanelRenderer::DetailsRowsForDocument(context, *context.MaterialEditor().WorkingCopy(), false);
-    report.Check(unselectedRows.nodePropertiesAreMaterialSettings && unselectedRows.nodePropertyRows.size() == 3U,
+    report.Check(unselectedRows.nodePropertiesAreMaterialSettings && unselectedRows.nodePropertyRows.size() == 4U,
         "Finding 25: the panel shows the material settings when nothing is selected");
     // The developer-only diagnostic dumps (Material Diff, Debug Channels) are off by default so the panel
     // reads like an Inspector rather than a debug log; they return only under KB_MATERIAL_EDITOR_DEBUG_DETAILS.
@@ -5357,18 +5676,25 @@ void RunMaterialEditorGlobalSaveSuite(Report& report) {
 }
 
 void RunInspectorBasicAdvancedSuite(Report& report) {
+    // A joint shows only the rows its kind uses, so the Joint cases name the kind that has the row under test.
     struct Case { const char* component; InspectorDisclosureId disclosure; InspectorPropertyId toggle;
-        InspectorPropertyId field; int index; const char* value; };
+        InspectorPropertyId field; int index; const char* value; kb::scene::JointType joint = kb::scene::JointType::Fixed; };
+    constexpr int kJointMotorForceRow = 14;
     const std::array cases{
         Case{"Camera", InspectorDisclosureId::CameraAdvanced, InspectorPropertyId::CameraAdvanced, InspectorPropertyId::CameraFarClip, -1, "500"},
         Case{"Light", InspectorDisclosureId::LightAdvanced, InspectorPropertyId::LightAdvanced, InspectorPropertyId::LightShadowStrength, -1, "0.75"},
         Case{"Rigidbody", InspectorDisclosureId::RigidbodyAdvanced, InspectorPropertyId::RigidbodyAdvanced, InspectorPropertyId::RigidbodyField, 12, "0.25"},
-        Case{"Collider", InspectorDisclosureId::ColliderAdvanced, InspectorPropertyId::ColliderAdvanced, InspectorPropertyId::ColliderField, 10, "0.25"}};
+        Case{"Collider", InspectorDisclosureId::ColliderAdvanced, InspectorPropertyId::ColliderAdvanced, InspectorPropertyId::ColliderField, 10, "0.25"},
+        Case{"Joint", InspectorDisclosureId::JointAdvanced, InspectorPropertyId::JointAdvanced, InspectorPropertyId::JointField, kJointMotorForceRow, "75", kb::scene::JointType::Hinge},
+        Case{"Joint", InspectorDisclosureId::JointAdvanced, InspectorPropertyId::JointAdvanced, InspectorPropertyId::JointField, InspectorPhysicsModel::JointFirstAxisRow + 1, "-0.5", kb::scene::JointType::SixDof}};
     for (const auto& test : cases) {
         EditorSceneContext context;
         const auto actor = context.CreateHierarchyObject();
         context.SelectEntity(actor);
         report.Check(context.AddComponentToEntity(actor, test.component), "Add component with usable defaults");
+        if (test.disclosure == InspectorDisclosureId::JointAdvanced) {
+            context.Scene().Components().Joints().TryGet(actor)->type = test.joint;
+        }
         EditorHeadlessAutomation automation{context, ArtifactPath(test.component)};
         auto find = [&]() {
             static_cast<void>(context.Inspector().SetScrollOffset(0, 0));
@@ -5403,11 +5729,163 @@ void RunInspectorBasicAdvancedSuite(Report& report) {
         if (test.disclosure == InspectorDisclosureId::LightAdvanced) changed = context.Scene().Components().Lights().TryGet(actor)->shadowStrength == 0.75F;
         if (test.disclosure == InspectorDisclosureId::RigidbodyAdvanced) changed = context.Scene().Components().Rigidbodies().TryGet(actor)->linearDamping == 0.25F;
         if (test.disclosure == InspectorDisclosureId::ColliderAdvanced) changed = context.Scene().Components().Colliders().TryGet(actor)->friction == 0.25F;
+        if (test.disclosure == InspectorDisclosureId::JointAdvanced) {
+            const kb::scene::JointComponent& joint = *context.Scene().Components().Joints().TryGet(actor);
+            changed = test.index == kJointMotorForceRow ? joint.motor.force == 75.0F : joint.freedom.axes[0].minLimit == -0.5F;
+        }
         report.Check(changed, "Advanced edit changes the intended runtime property");
         report.Check(automation.CaptureInspector("advanced"), "Capture expanded Inspector controls");
         report.Check(automation.InspectorClickRow(test.toggle, -1, InspectorHitKind::Row), "Close Advanced through live pointer handling");
         report.Check(find().kind == InspectorHitKind::None && InspectorPanelRenderer::ContentHeight(kContent, context) == basicHeight,
             "Collapsing restores basic geometry and hides advanced hit regions");
+    }
+}
+
+// The reset arrow, the component menu and the Joint's presets through live pointer handling: the rows they
+// add must be where painting and hit testing agree they are, and each click must change the scene and undo.
+void RunInspectorResetMenuPresetSuite(Report& report) {
+    EditorSceneContext context;
+    const auto actor = context.CreateHierarchyObject();
+    context.SelectEntity(actor);
+    report.Check(context.AddComponentToEntity(actor, "Rigidbody") && context.AddComponentToEntity(actor, "Joint"),
+        "Add the components under test");
+    EditorHeadlessAutomation automation{context, ArtifactPath("reset-menu-preset")};
+    // Looked up each time: an undo restores the scene's stores.
+    const auto body = [&]() -> kb::scene::RigidbodyComponent& { return *context.Scene().Components().Rigidbodies().TryGet(actor); };
+    const auto joint = [&]() -> kb::scene::JointComponent& { return *context.Scene().Components().Joints().TryGet(actor); };
+
+    const auto find = [&](auto&& accept) {
+        static_cast<void>(context.Inspector().SetScrollOffset(0, 0));
+        const RECT panel = WholeInspector(context);
+        for (int y = panel.top; y < panel.bottom; y += 2) {
+            for (int x = panel.left; x < panel.right; x += 4) {
+                const auto hit = InspectorPanelRenderer::HitTest(panel, context, x, y);
+                if (accept(hit)) return hit;
+            }
+        }
+        return InspectorPanelRenderer::Hit{};
+    };
+    const auto press = [&](const InspectorPanelRenderer::Hit& hit) {
+        const POINT point = Center(hit.rect);
+        const bool handled = InspectorPanelInteraction::HandlePointerDown(context, hit, point.x, point.y);
+        static_cast<void>(InspectorPanelInteraction::HandlePointerUp(context));
+        return handled;
+    };
+    const auto menuItem = [&](InspectorSectionId section, int item) {
+        return find([&](const InspectorPanelRenderer::Hit& hit) {
+            return hit.kind == InspectorHitKind::Row && hit.section == section && hit.property == InspectorPropertyId::ComponentMenuItem && hit.index == item;
+        });
+    };
+    const auto menuButton = [&](InspectorSectionId section) {
+        return find([&](const InspectorPanelRenderer::Hit& hit) {
+            return hit.kind == InspectorHitKind::ComponentMenuButton && hit.section == section && hit.property == InspectorPropertyId::ComponentMenu;
+        });
+    };
+
+    // Reset arrow: marked after a paint, absent while the value is the default, and one press puts the value back.
+    report.Check(find([](const InspectorPanelRenderer::Hit& hit) { return hit.kind == InspectorHitKind::ResetField; }).kind == InspectorHitKind::None,
+        "No value is changed, so no reset arrow can be pressed");
+    body().mass = 5.0F;
+    report.Check(automation.CaptureInspector("changed"), "Paint the Inspector with a changed value");
+    const InspectorPanelRenderer::Hit arrow = find([](const InspectorPanelRenderer::Hit& hit) {
+        return hit.kind == InspectorHitKind::ResetField && hit.section == InspectorSectionId::Rigidbody && hit.index == 1;
+    });
+    report.Check(arrow.kind == InspectorHitKind::ResetField, "The changed mass offers its reset arrow");
+    report.Check(press(arrow) && body().mass == 1.0F, "Pressing the reset arrow puts the mass back");
+    report.Check(context.UndoSceneCommand() && body().mass == 5.0F, "The reset is one undoable step");
+
+    // Hovering a label shows its help, and hovering the arrow says what it does.
+    const InspectorPanelRenderer::Hit massLabel = find([](const InspectorPanelRenderer::Hit& hit) {
+        return hit.kind == InspectorHitKind::Row && hit.section == InspectorSectionId::Rigidbody &&
+            hit.property == InspectorPropertyId::RigidbodyField && hit.index == 1;
+    });
+    report.Check(massLabel.kind == InspectorHitKind::Row &&
+            !InspectorFieldGuide::Tooltip(massLabel.section, massLabel.property, massLabel.index).empty(),
+        "The mass label can be hovered and has a help text");
+    static_cast<void>(InspectorPanelInteraction::UpdateHover(context, massLabel));
+    report.Check(automation.CaptureInspector("tooltip-label"), "Paint the help of a hovered label");
+    static_cast<void>(InspectorPanelInteraction::UpdateHover(context, arrow));
+    report.Check(automation.CaptureInspector("tooltip-reset-arrow"), "Paint the help of the hovered reset arrow");
+    static_cast<void>(InspectorPanelInteraction::UpdateHover(context, {}));
+
+    // Component menu: Reset, Copy, Paste and Remove.
+    const InspectorPanelRenderer::Hit button = menuButton(InspectorSectionId::Rigidbody);
+    report.Check(button.kind == InspectorHitKind::ComponentMenuButton && press(button) && context.Inspector().IsComponentMenuOpen(InspectorSectionId::Rigidbody),
+        "The header button opens the component menu");
+    const InspectorPanelRenderer::Hit reset = menuItem(InspectorSectionId::Rigidbody, 0);
+    report.Check(reset.kind == InspectorHitKind::Row && press(reset) && body().mass == 1.0F && !context.Inspector().IsComponentMenuOpen(InspectorSectionId::Rigidbody),
+        "Reset puts every value of the component back and closes the menu");
+    body().mass = 9.0F;
+    report.Check(press(menuButton(InspectorSectionId::Rigidbody)) && press(menuItem(InspectorSectionId::Rigidbody, 2)) && body().mass == 9.0F,
+        "Copy changes nothing in the scene");
+    body().mass = 2.0F;
+    report.Check(press(menuButton(InspectorSectionId::Rigidbody)) && press(menuItem(InspectorSectionId::Rigidbody, 3)) && body().mass == 9.0F,
+        "Paste brings the copied settings back");
+
+    // Preset: one press opens the list, one press on a preset sets the kind and the limits.
+    const InspectorPanelRenderer::Hit quick = find([](const InspectorPanelRenderer::Hit& hit) {
+        return hit.kind == InspectorHitKind::Row && hit.section == InspectorSectionId::Joint && hit.property == InspectorPropertyId::JointPreset;
+    });
+    report.Check(quick.kind == InspectorHitKind::Row && press(quick) && context.Inspector().IsMenuOpen(InspectorMenuKind::JointPresets, InspectorSectionId::Joint),
+        "The Preset row opens the list of presets");
+    const InspectorPanelRenderer::Hit sliding = find([](const InspectorPanelRenderer::Hit& hit) {
+        return hit.kind == InspectorHitKind::Row && hit.section == InspectorSectionId::Joint && hit.property == InspectorPropertyId::JointPresetItem && hit.index == 1;
+    });
+    report.Check(sliding.kind == InspectorHitKind::Row && press(sliding) && joint().type == kb::scene::JointType::Slider && joint().enableLimit &&
+            joint().maxLimit == 1.5F && !context.Inspector().IsMenuOpen(InspectorMenuKind::JointPresets, InspectorSectionId::Joint),
+        "Sliding door sets a slider with its limits and closes the list");
+    report.Check(context.UndoSceneCommand() && joint().type == kb::scene::JointType::Fixed && !joint().enableLimit, "A preset is one undoable step");
+    report.Check(automation.CaptureInspector("joint-after-undo"), "Paint the Inspector after the undo");
+
+    report.Check(press(menuButton(InspectorSectionId::Rigidbody)) && press(menuItem(InspectorSectionId::Rigidbody, 1)) &&
+            !context.Scene().Components().Rigidbodies().Has(actor),
+        "Remove Component in the menu removes the component");
+}
+
+// Painting, hit testing and the scroll height walk the same sections by three separate routines. With every kind of
+// component on one object, and with each Advanced foldout and each list open, the button under the last section
+// must stay reachable: a routine that disagrees about one section loses everything below it.
+void RunInspectorSectionStackSuite(Report& report) {
+    EditorSceneContext context;
+    const auto actor = context.CreateMenuObject("Cube");
+    context.SelectEntity(actor);
+    report.Check(context.AddComponentToEntity(actor, "Rigidbody") && context.AddComponentToEntity(actor, "Joint") &&
+            context.AddComponentToEntity(actor, "Camera") && context.AddComponentToEntity(actor, "Light"),
+        "Add one of each component to the cube");
+    context.Scene().Components().Joints().TryGet(actor)->type = kb::scene::JointType::Hinge;
+
+    const auto addButtonReachable = [&]() {
+        const int maxScroll = InspectorPanelRenderer::MaxScrollOffset(kContent, context);
+        static_cast<void>(context.Inspector().SetScrollOffset(maxScroll, maxScroll));
+        for (int y = kContent.top; y < kContent.bottom; y += 3) {
+            const auto hit = InspectorPanelRenderer::HitTest(kContent, context, (kContent.left + kContent.right) / 2, y);
+            if (hit.property == InspectorPropertyId::AddComponentButton) return true;
+        }
+        return false;
+    };
+    report.Check(addButtonReachable(), "The Add Component button is reachable with every section closed to its basics");
+
+    const InspectorDisclosureId foldouts[] = { InspectorDisclosureId::MeshRendererAdvanced, InspectorDisclosureId::RigidbodyAdvanced,
+        InspectorDisclosureId::ColliderAdvanced, InspectorDisclosureId::JointAdvanced, InspectorDisclosureId::CameraAdvanced,
+        InspectorDisclosureId::LightAdvanced };
+    for (const InspectorDisclosureId foldout : foldouts) {
+        context.Inspector().ToggleDisclosure(foldout);
+        static_cast<void>(context.Inspector().TickDisclosures(1.0F));
+        report.Check(addButtonReachable(), "The Add Component button is reachable with one more Advanced foldout open");
+    }
+    const InspectorSectionId sections[] = { InspectorSectionId::MeshRenderer, InspectorSectionId::Rigidbody, InspectorSectionId::Collider,
+        InspectorSectionId::Joint, InspectorSectionId::Camera, InspectorSectionId::Light };
+    for (const InspectorSectionId section : sections) {
+        context.Inspector().ToggleComponentMenu(section);
+        report.Check(addButtonReachable(), "The Add Component button is reachable with a component menu open");
+        context.Inspector().CloseComponentMenus();
+    }
+    context.Inspector().ToggleMenu(InspectorMenuKind::JointPresets, InspectorSectionId::Joint);
+    report.Check(addButtonReachable(), "The Add Component button is reachable with the Joint's presets open");
+    context.Inspector().CloseComponentMenus();
+    for (const InspectorSectionId section : sections) {
+        context.Inspector().ToggleCollapsed(section);
+        report.Check(addButtonReachable(), "The Add Component button is reachable with a section collapsed");
     }
 }
 
@@ -5638,7 +6116,11 @@ void RunPrefabPlacementSuite(Report& report) {
     const std::filesystem::path linkedPath = EditorProjectPaths::PrefabsRoot() / "LinkedCrate.kbprefab";
     const kb::assets::AssetMetadata* linkedAsset = context.Scene().Assets().Manager().Registry().FindByPath("/Game/Prefabs/LinkedCrate.kbprefab");
     report.Check(linkedAsset != nullptr && !context.DeleteAssetBrowserItem(linkedAsset->id) && std::filesystem::exists(linkedPath), "Deleting a prefab asset with scene instances is blocked");
-    report.Check(linkedAsset != nullptr && !context.MoveAssetToFolder(linkedAsset->id, "/Game") && std::filesystem::exists(linkedPath), "Moving a prefab asset with scene instances is blocked");
+    const kb::assets::AssetId linkedAssetId = linkedAsset != nullptr ? linkedAsset->id : kb::assets::AssetId{};
+    report.Check(linkedAssetId.IsValid() && context.MoveAssetToFolder(linkedAssetId, "/Game") && !std::filesystem::exists(linkedPath), "Moving a prefab asset with scene instances moves the file");
+    const kb::assets::AssetMetadata* movedLinkedAsset = context.Scene().Assets().Manager().Registry().FindByPath("/Game/LinkedCrate.kbprefab");
+    report.Check(movedLinkedAsset != nullptr, "A moved prefab asset is found at its new path");
+    report.Check(linkedCrate(findNamed("LinkedCrate")), "Scene instances of a moved prefab asset stay linked");
     const kb::scene::SceneEntity unused = context.CreateHierarchyObject();
     context.Scene().Entities().SetName(unused, "UnusedPrefabSource");
     report.Check(context.CreatePrefabAsset(unused, EditorProjectPaths::PrefabsRoot() / "UnusedPrefab.kbprefab"), "Create prefab asset to delete");
@@ -6786,6 +7268,8 @@ int EditorSelfTest::Run(
     RunSuiteInScratch(report, "inspector_material_preview_surface", &RunInspectorMaterialPreviewSurfaceSuite);
     RunSuiteInScratch(report, "inspector_material_drop_target", &RunInspectorMaterialDropTargetSuite);
     RunSuiteInScratch(report, "inspector_basic_advanced", &RunInspectorBasicAdvancedSuite);
+    RunSuiteInScratch(report, "inspector_reset_menu_preset", &RunInspectorResetMenuPresetSuite);
+    RunSuiteInScratch(report, "inspector_section_stack", &RunInspectorSectionStackSuite);
     RunSuiteInScratch(report, "inspector_light_component", &RunInspectorLightComponentSuite);
     RunSuiteInScratch(report, "prefab_placement", &RunPrefabPlacementSuite);
     RunSuiteInScratch(report, "prefab_inspector", &RunPrefabInspectorSuite);

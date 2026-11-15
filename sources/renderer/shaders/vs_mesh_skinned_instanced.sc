@@ -6,7 +6,7 @@ $output v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowPos, v_shadowFlags,
 #include "model_normal.sh"
 
 uniform mat4 u_shadowViewProj;
-SAMPLER2D(s_skinningPalette, 14);
+SAMPLER2D(s_skinningPalette, 15);
 // x = first palette matrix, y = reciprocal palette texture height.
 uniform vec4 u_skinningPaletteInfo;
 

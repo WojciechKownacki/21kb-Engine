@@ -379,7 +379,7 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
         if (!outputPin && pin == "value") return RenderMaterialGraphPinType::Float4;
         return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::Noise:
-        // Unreal's Noise: a float3 Position and a scalar Filter Width; the scalar result is broadcast to
+        // Noise: a float3 Position and a scalar Filter Width; the scalar result is broadcast to
         // float4 so saved graphs keep feeding colour pins.
         if (!outputPin && pin == "value") return RenderMaterialGraphPinType::Float3;
         if (!outputPin && pin == "filterWidth") return RenderMaterialGraphPinType::Float;

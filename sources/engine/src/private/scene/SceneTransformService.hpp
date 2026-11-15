@@ -25,6 +25,9 @@ public:
     // Writes one transform per entity (the two spans must be the same length) with the scene state and the
     // prefab-tracking decision resolved once for the whole batch. Dead entities are skipped.
     static void SetMany(Scene& scene, std::span<const SceneEntity> entities, std::span<const TransformComponent> transforms);
+    [[nodiscard]] static SceneTransformWrite BeginWrite(Scene& scene, SceneEntity entity) noexcept;
+    static void EndWrite(Scene& scene, const SceneTransformWrite& write);
+    static bool SetLocalPosition(Scene& scene, SceneEntity entity, const Vec3& position, std::uint8_t axes);
     static void MarkModified(Scene& scene, SceneEntity entity) noexcept;
     // Bulk transform dirty signal. Fetches scene state once and resolves the
     // prefab-tracking decision once for the whole batch, so a scene with no

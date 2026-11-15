@@ -98,7 +98,7 @@ void RunProjectBootstrapCreatesDescriptorAndRuntimeFoldersTest() {
     kb::editor::tests::Require(BinaryPathFor(loaded.descriptor, "Physics.Jolt") == kb::editor::EditorPluginCatalog::PersistentBinaryPath("Physics.Jolt"), "Persisted physics plugin path should stay config-agnostic");
     kb::editor::tests::Require(BinaryPathFor(loaded.descriptor, "Audio.Miniaudio") == kb::editor::EditorPluginCatalog::PersistentBinaryPath("Audio.Miniaudio"), "Persisted audio plugin path should stay config-agnostic");
     kb::editor::tests::Require(BinaryPathFor(loaded.descriptor, "Rendering.BasicLighting") == kb::editor::EditorPluginCatalog::PersistentBinaryPath("Rendering.BasicLighting"), "Persisted lighting plugin path should stay config-agnostic");
-    kb::editor::tests::Require(created.settings.lightingPath == kb::project::ProjectSceneLightingPath::Deferred, "Created editor project should default to Deferred lighting path");
+    kb::editor::tests::Require(created.settings.lightingPath == kb::project::ProjectSceneLightingPath::Auto, "Created editor project should default to the Auto lighting path");
     kb::editor::tests::Require(loaded.descriptor.fileVersion == kb::project::ProjectDescriptor::CurrentFileVersion,
         "Created editor project descriptor should be written at the current file version");
 
@@ -108,7 +108,8 @@ void RunProjectBootstrapCreatesDescriptorAndRuntimeFoldersTest() {
     kb::editor::tests::Require(std::filesystem::is_regular_file(settingsFile), "Editor project settings file was not created");
     for (const kb::project::ProjectSceneLightingPath path : {
              kb::project::ProjectSceneLightingPath::ForwardPlus,
-             kb::project::ProjectSceneLightingPath::Deferred }) {
+             kb::project::ProjectSceneLightingPath::Deferred,
+             kb::project::ProjectSceneLightingPath::Auto }) {
         kb::project::ProjectSettings settings = created.settings;
         settings.lightingPath = path;
         std::string settingsError;

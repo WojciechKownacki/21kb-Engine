@@ -89,6 +89,10 @@ inline constexpr std::size_t kMaxAudioVoiceMarkerNameBytes = 255U;
     return std::isfinite(pitch) && pitch >= 0.01F;
 }
 
+[[nodiscard]] inline bool IsAudioMasterVolumeValid(float volume) noexcept {
+    return std::isfinite(volume) && volume >= 0.0F && volume <= 1.0F;
+}
+
 [[nodiscard]] inline bool IsAudioVoiceMarkerNameValid(std::string_view marker) noexcept {
     if (marker.empty() || marker.size() > kMaxAudioVoiceMarkerNameBytes) {
         return false;
@@ -209,6 +213,9 @@ public:
     // Suspend the output device without discarding voices, cursors or user pause state.
     // Platforms combine their activity and audio-focus policy before calling this.
     [[nodiscard]] virtual bool SetPlatformSuspended(kb::scene::Scene&, bool) noexcept { return false; }
+    // The master gain, 0..1: it scales the whole output after every bus, snapshot and override, and it
+    // survives the backend restarting its device. False when the backend cannot apply it.
+    [[nodiscard]] virtual bool SetMasterVolume(kb::scene::Scene& scene, float volume) noexcept = 0;
 };
 
 // LIB-152: one fired voice marker awaiting script dispatch. `target` is the entity whose
@@ -243,6 +250,10 @@ public:
     [[nodiscard]] static AudioDeviceStatus DeviceStatus(kb::scene::Scene& scene) noexcept;
     [[nodiscard]] static AudioDeviceStatus Reinitialize(kb::scene::Scene& scene) noexcept;
     [[nodiscard]] static bool SetPlatformSuspended(kb::scene::Scene& scene, bool suspended) noexcept;
+    // The scene's master gain (1 by default). The scene keeps it, so a backend registered later - or after a
+    // plugin reload - starts at it. False, and unchanged, for a value outside 0..1.
+    [[nodiscard]] static bool SetMasterVolume(kb::scene::Scene& scene, float volume) noexcept;
+    [[nodiscard]] static float MasterVolume(kb::scene::Scene& scene) noexcept;
     [[nodiscard]] static bool ConfigureOffline(kb::scene::Scene& scene) noexcept;
     [[nodiscard]] static AudioOfflinePcm RenderOffline(kb::scene::Scene& scene, std::uint32_t frames);
     [[nodiscard]] static AudioDspRuntimeReport DspReport(kb::scene::Scene& scene);

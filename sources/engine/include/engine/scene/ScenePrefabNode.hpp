@@ -80,6 +80,7 @@ struct ScenePrefabJointComponent {
     JointMotor motor{};
     JointSpring spring{};
     float breakForce = 0.0F;
+    JointFreedom freedom{};
 };
 
 struct ScenePrefabRegionPortalComponent {
@@ -159,6 +160,7 @@ struct ScenePrefabNodeComponents {
     std::optional<NavAgent> navAgent;
     std::optional<NavObstacle> navObstacle;
     std::optional<NavLink> navLink;
+    std::optional<NavBounds> navBounds;
 };
 
 struct ScenePrefabNodeDesc {

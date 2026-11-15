@@ -35,6 +35,10 @@ public:
 
 private:
     void ShowAgentMenu(HWND owner, const RECT& anchor);
+    void ShowModeMenu(HWND owner, const RECT& anchor);
+    void AttachFile(HWND owner);
+    void ShowConversations(HWND owner, const RECT& anchor);
+    void SearchConversations(HWND owner, const RECT& anchor);
     // The model (`models`) or reasoning level picker.
     void ShowChoiceMenu(HWND owner, const RECT& anchor, bool models);
 

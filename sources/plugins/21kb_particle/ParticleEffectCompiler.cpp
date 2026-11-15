@@ -243,7 +243,7 @@ ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleE
         destination.burstCount = static_cast<std::uint8_t>(source.spawn.bursts.size());
         for (std::size_t index = 0U; index < source.spawn.rateOverTime.keyframes.size(); ++index) {
             const auto& key = source.spawn.rateOverTime.keyframes[index];
-            destination.rateKeys[index] = {.time = key.time, .value = key.value, .easing = key.easing};
+            destination.rateKeys[index] = key;
         }
         std::copy(source.spawn.bursts.begin(), source.spawn.bursts.end(), destination.bursts.begin());
         destination.moduleCount = static_cast<std::uint8_t>(source.modules.size());
@@ -288,8 +288,7 @@ ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleE
                 const kb::math::Curve& curve = std::get<kb::scene::ParticleSizeOverLifeModule>(sourceModule.payload).curve;
                 destination.sizeOverLife.keyCount = static_cast<std::uint8_t>(curve.keyframes.size());
                 for (std::size_t index = 0U; index < curve.keyframes.size(); ++index)
-                    destination.sizeOverLife.keys[index] = {.time = curve.keyframes[index].time,
-                        .value = curve.keyframes[index].value, .easing = curve.keyframes[index].easing};
+                    destination.sizeOverLife.keys[index] = curve.keyframes[index];
                 sizeOverLifeEnabled = true;
                 break;
             }
@@ -298,8 +297,7 @@ ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleE
                 const kb::math::Curve& curve = std::get<kb::scene::ParticleAlphaOverLifeModule>(sourceModule.payload).curve;
                 destination.alphaOverLife.keyCount = static_cast<std::uint8_t>(curve.keyframes.size());
                 for (std::size_t index = 0U; index < curve.keyframes.size(); ++index)
-                    destination.alphaOverLife.keys[index] = {.time = curve.keyframes[index].time,
-                        .value = curve.keyframes[index].value, .easing = curve.keyframes[index].easing};
+                    destination.alphaOverLife.keys[index] = curve.keyframes[index];
                 break;
             }
             case kb::scene::ParticleModuleType::CollisionPlane: {
@@ -349,8 +347,12 @@ ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleE
             destination.sizeOverLife.keys[0] = {.time = 0.0F, .value = source.spawn.startSize,
                                                 .easing = kb::math::Easing::Linear};
         } else {
-            for (std::uint8_t index = 0U; index < destination.sizeOverLife.keyCount; ++index)
-                destination.sizeOverLife.keys[index].value *= source.spawn.startSize;
+            for (std::uint8_t index = 0U; index < destination.sizeOverLife.keyCount; ++index) {
+                auto& key = destination.sizeOverLife.keys[index];
+                key.value *= source.spawn.startSize;
+                key.inTangent *= source.spawn.startSize;
+                key.outTangent *= source.spawn.startSize;
+            }
         }
     }
     compiled.eventBindingCount = static_cast<std::uint8_t>(asset.eventBindings.size());

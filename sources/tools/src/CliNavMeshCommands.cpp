@@ -147,7 +147,7 @@ namespace {
         io.err << "error: " << error << '\n';
         return 1;
     }
-    io.out << "baked " << baked.stats.tiles << " tiles (" << baked.stats.layers << " layers) for " << settings.profiles.size()
+    io.out << "baked " << baked.stats.tiles << " tiles (" << baked.stats.layers << " layers) for " << baked.asset.settings.profiles.size()
            << " agent profile(s) from " << baked.geometry.meshes << " meshes and " << baked.geometry.colliders << " colliders ("
            << baked.stats.sourceTriangles << " triangles) in " << static_cast<long long>(baked.stats.milliseconds) << " ms into "
            << out.generic_string() << '\n';

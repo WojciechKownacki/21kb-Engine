@@ -62,6 +62,8 @@ public:
 
     [[nodiscard]] static bool HasBehaviour(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const BehaviourComponent* TryGetBehaviour(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const std::uint64_t* BehaviourRevisionCounter(const Scene& scene) noexcept;
+    [[nodiscard]] static std::uint64_t BehaviourChangeStamp(const Scene& scene) noexcept;
 
     [[nodiscard]] static bool HasCamera(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const CameraComponent* TryGetCamera(const Scene& scene, SceneEntity entity) noexcept;
@@ -169,6 +171,8 @@ public:
     [[nodiscard]] static const NavObstacle* TryGetNavObstacle(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool HasNavLink(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const NavLink* TryGetNavLink(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasNavBounds(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const NavBounds* TryGetNavBounds(const Scene& scene, SceneEntity entity) noexcept;
 };
 
 } // namespace kb::scene

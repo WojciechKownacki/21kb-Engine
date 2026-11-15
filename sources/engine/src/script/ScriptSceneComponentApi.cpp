@@ -299,10 +299,48 @@ struct ComponentAccess {
             KB_ASSERT_NOT_POINTER(static_cast<const Component*>(component)->field); \
             return ScriptValue{ static_cast<int>(static_cast<const Component*>(component)->field) }; }, \
         [](void* component, const ScriptValue& value) noexcept -> bool { \
-            if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() > static_cast<int>(kb::scene::JointType::Point)) { return false; } \
+            if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() > static_cast<int>(kb::scene::JointType::Rope)) { return false; } \
             static_cast<Component*>(component)->field = static_cast<kb::scene::JointType>(value.AsInt()); \
             return true; \
         } }
+
+// Joint freedom settings: a float or enum at an explicit path of the joint, addressed by its dotted script name.
+#define KB_JOINT_FLOAT_AT(name, path) \
+    FieldBinding{ name, \
+        [](const void* component) noexcept -> ScriptValue { \
+            return ScriptValue{ static_cast<const kb::scene::JointComponent*>(component)->path }; }, \
+        [](void* component, const ScriptValue& value) noexcept -> bool { \
+            if (value.Type() == ScriptValueType::Float) { static_cast<kb::scene::JointComponent*>(component)->path = value.AsFloat(); return true; } \
+            if (value.Type() == ScriptValueType::Int) { static_cast<kb::scene::JointComponent*>(component)->path = static_cast<float>(value.AsInt()); return true; } \
+            return false; \
+        } }
+
+#define KB_JOINT_AXIS_MODE_AT(name, path) \
+    FieldBinding{ name, \
+        [](const void* component) noexcept -> ScriptValue { \
+            return ScriptValue{ static_cast<int>(static_cast<const kb::scene::JointComponent*>(component)->path) }; }, \
+        [](void* component, const ScriptValue& value) noexcept -> bool { \
+            if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() > static_cast<int>(kb::scene::JointAxisMode::Free)) { return false; } \
+            static_cast<kb::scene::JointComponent*>(component)->path = static_cast<kb::scene::JointAxisMode>(value.AsInt()); \
+            return true; \
+        } }
+
+// One entry per axis of JointFreedom::axes: its script label and index.
+#define KB_JOINT_AXES(X) X("linearX", 0) X("linearY", 1) X("linearZ", 2) X("angularX", 3) X("angularY", 4) X("angularZ", 5)
+
+#define KB_JOINT_AXIS_FIELDS(label, index) \
+    KB_JOINT_AXIS_MODE_AT("freedom." label ".mode", freedom.axes[index].mode), \
+    KB_JOINT_FLOAT_AT("freedom." label ".minLimit", freedom.axes[index].minLimit), \
+    KB_JOINT_FLOAT_AT("freedom." label ".maxLimit", freedom.axes[index].maxLimit), \
+    KB_JOINT_FLOAT_AT("freedom." label ".motor.targetVelocity", freedom.axes[index].motor.targetVelocity), \
+    KB_JOINT_FLOAT_AT("freedom." label ".motor.force", freedom.axes[index].motor.force),
+
+#define KB_JOINT_AXIS_DESCS(label, index) \
+    ScriptSceneComponentPropertyDesc{ "freedom." label ".mode", ScriptValueType::Int, true, kJointAxisModeNames }, \
+    ScriptSceneComponentPropertyDesc{ "freedom." label ".minLimit", ScriptValueType::Float }, \
+    ScriptSceneComponentPropertyDesc{ "freedom." label ".maxLimit", ScriptValueType::Float }, \
+    ScriptSceneComponentPropertyDesc{ "freedom." label ".motor.targetVelocity", ScriptValueType::Float }, \
+    ScriptSceneComponentPropertyDesc{ "freedom." label ".motor.force", ScriptValueType::Float },
 
 #define KB_NAV_LINK_KIND(Component, field) \
     FieldBinding{ #field, \
@@ -328,7 +366,7 @@ struct ComponentAccess {
 
 // clang-format on
 
-constexpr std::array<std::string_view, 48> kComponentNames{
+constexpr std::array<std::string_view, 49> kComponentNames{
     "AudioSource",
     "AudioListener",
     "Transform",
@@ -345,6 +383,7 @@ constexpr std::array<std::string_view, 48> kComponentNames{
     "NavAgent",
     "NavObstacle",
     "NavLink",
+    "NavBounds",
     "Tags",
     "RegionShape",
     "GuideCurve",
@@ -381,7 +420,8 @@ constexpr std::array<std::string_view, 48> kComponentNames{
 
 // Value names of Int enum properties, in value order (tools accept them in place of numbers).
 constexpr std::array<std::string_view, 3> kRigidbodyBodyTypeNames{ "Static", "Dynamic", "Kinematic" };
-constexpr std::array<std::string_view, 4> kJointTypeNames{ "Fixed", "Hinge", "Distance", "Point" };
+constexpr std::array<std::string_view, 8> kJointTypeNames{ "Fixed", "Hinge", "Distance", "Point", "Slider", "Cone", "SixDof", "Rope" };
+constexpr std::array<std::string_view, 3> kJointAxisModeNames{ "Locked", "Limited", "Free" };
 constexpr std::array<std::string_view, 2> kCameraProjectionNames{ "Perspective", "Orthographic" };
 constexpr std::array<std::string_view, 5> kRegionShapeKindNames{ "Circle2D", "Rectangle2D", "Sphere", "Box", "Capsule" };
 constexpr std::array<std::string_view, 5> kContentInstanceKindNames{ "Prefab", "Subscene", "WorldFragment", "PartitionedWorld", "NavigationMesh" };
@@ -746,7 +786,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 26> kLightPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "shadowCascadeDistribution", ScriptValueType::Float },
 };
 
-constexpr std::array<ScriptSceneComponentPropertyDesc, 7> kMeshRendererPropertyDescs{
+constexpr std::array<ScriptSceneComponentPropertyDesc, 8> kMeshRendererPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "materialSlotOverrideCount", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "castsShadow", ScriptValueType::Bool },
     ScriptSceneComponentPropertyDesc{ "receivesShadow", ScriptValueType::Bool },
@@ -754,6 +794,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 7> kMeshRendererPropertyD
     ScriptSceneComponentPropertyDesc{ "lodBias", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "lodEnabled", ScriptValueType::Bool },
     ScriptSceneComponentPropertyDesc{ "mobility", ScriptValueType::Int, true, kMeshMobilityNames },
+    ScriptSceneComponentPropertyDesc{ "affectsNavigation", ScriptValueType::Bool },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 3> kBehaviourPropertyDescs{
@@ -779,7 +820,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 14> kRigidbodyPropertyDes
     ScriptSceneComponentPropertyDesc{ "angularDamping", ScriptValueType::Float },
 };
 
-constexpr std::array<ScriptSceneComponentPropertyDesc, 14> kColliderPropertyDescs{
+constexpr std::array<ScriptSceneComponentPropertyDesc, 15> kColliderPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "shape", ScriptValueType::Int, true, kColliderShapeNames },
     ScriptSceneComponentPropertyDesc{ "meshAssetId", ScriptValueType::Hash },
     ScriptSceneComponentPropertyDesc{ "center.x", ScriptValueType::Float },
@@ -794,6 +835,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 14> kColliderPropertyDesc
     ScriptSceneComponentPropertyDesc{ "friction", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "restitution", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "layer", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "affectsNavigation", ScriptValueType::Bool },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 9> kCharacterControllerPropertyDescs{
@@ -818,7 +860,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 9> kCharacterControllerPr
 // JointComponent>/TryGet<JointComponent> (the whole struct, field access is
 // plain C++, not this string-keyed mechanism) - see
 // RunEntityHandlePhysicsComponentAccessTest.
-constexpr std::array<ScriptSceneComponentPropertyDesc, 18> kJointPropertyDescs{
+constexpr std::array<ScriptSceneComponentPropertyDesc, 53> kJointPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "type", ScriptValueType::Int, true, kJointTypeNames },
     ScriptSceneComponentPropertyDesc{ "anchor.x", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "anchor.y", ScriptValueType::Float },
@@ -837,6 +879,12 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 18> kJointPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "spring.spring", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "spring.damper", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "breakForce", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "freedom.secondaryAxis.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "freedom.secondaryAxis.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "freedom.secondaryAxis.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "freedom.swing1Limit", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "freedom.swing2Limit", ScriptValueType::Float },
+    KB_JOINT_AXES(KB_JOINT_AXIS_DESCS)
 };
 
 // controllerAssetId: kb_cli takes `controller=/Game/...kbanimcontroller`.
@@ -946,7 +994,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 9> kSocketAttachmentPrope
     ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
 };
 
-constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kNavAgentPropertyDescs{
+constexpr std::array<ScriptSceneComponentPropertyDesc, 12> kNavAgentPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "radius", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "height", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "maxSpeed", ScriptValueType::Float },
@@ -958,6 +1006,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kNavAgentPropertyDesc
     ScriptSceneComponentPropertyDesc{ "destination.y", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "destination.z", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "horde", ScriptValueType::Bool },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 9> kNavObstaclePropertyDescs{
@@ -984,6 +1033,21 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kNavLinkPropertyDescs
     ScriptSceneComponentPropertyDesc{ "area", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "bidirectional", ScriptValueType::Bool },
     ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 12> kNavBoundsPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "size.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "size.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "size.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "center.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "center.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "center.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "agentRadius", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "agentHeight", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "maxStepHeight", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "maxSlopeDegrees", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "cellSize", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "tileSize", ScriptValueType::Float },
 };
 
 constexpr std::array<FieldBinding, 13> kTransformFields{
@@ -1140,11 +1204,20 @@ constexpr std::array<FieldBinding, 26> kLightFields{
     KB_FLOAT(kb::scene::LightComponent, shadowNormalBias),
     KB_SCENE_ENUM(kb::scene::LightComponent, shadowFilter, kb::scene::LightShadowFilter, kb::scene::LightShadowFilter::Pcss),
     KB_SCENE_ENUM(kb::scene::LightComponent, shadowQuality, kb::scene::LightShadowQuality, kb::scene::LightShadowQuality::Ultra),
-    KB_UINT32(kb::scene::LightComponent, shadowCascadeCount),
+    FieldBinding{ "shadowCascadeCount",
+        [](const void* component) noexcept -> ScriptValue {
+            return ScriptValue{ static_cast<const kb::scene::LightComponent*>(component)->shadowCascadeCount };
+        },
+        [](void* component, const ScriptValue& value) noexcept -> bool {
+            if (value.Type() != ScriptValueType::UInt32 && (value.Type() != ScriptValueType::Int || value.AsInt() < 0)) return false;
+            static_cast<kb::scene::LightComponent*>(component)->shadowCascadeCount =
+                value.Type() == ScriptValueType::UInt32 ? value.AsUInt32() : static_cast<std::uint32_t>(value.AsInt());
+            return true;
+        } },
     KB_FLOAT(kb::scene::LightComponent, shadowCascadeDistribution),
 };
 
-constexpr std::array<FieldBinding, 7> kMeshRendererFields{
+constexpr std::array<FieldBinding, 8> kMeshRendererFields{
     KB_UINT32(kb::scene::MeshRendererComponent, materialSlotOverrideCount),
     KB_BOOL(kb::scene::MeshRendererComponent, castsShadow),
     KB_BOOL(kb::scene::MeshRendererComponent, receivesShadow),
@@ -1152,6 +1225,7 @@ constexpr std::array<FieldBinding, 7> kMeshRendererFields{
     KB_INT(kb::scene::MeshRendererComponent, lodBias),
     KB_BOOL(kb::scene::MeshRendererComponent, lodEnabled),
     KB_SCENE_ENUM(kb::scene::MeshRendererComponent, mobility, kb::scene::MeshMobility, kb::scene::MeshMobility::Static),
+    KB_BOOL(kb::scene::MeshRendererComponent, affectsNavigation),
 };
 
 constexpr std::array<FieldBinding, 3> kBehaviourFields{
@@ -1177,7 +1251,7 @@ constexpr std::array<FieldBinding, 14> kRigidbodyFields{
     KB_FLOAT(kb::scene::RigidbodyComponent, angularDamping),
 };
 
-constexpr std::array<FieldBinding, 14> kColliderFields{
+constexpr std::array<FieldBinding, 15> kColliderFields{
     KB_COLLIDER_SHAPE(kb::scene::ColliderComponent, shape),
     FieldBinding{"meshAssetId",
         [](const void* c) noexcept -> ScriptValue { return ScriptValue{static_cast<const kb::scene::ColliderComponent*>(c)->meshAssetId, ScriptValueType::Hash}; },
@@ -1198,6 +1272,7 @@ constexpr std::array<FieldBinding, 14> kColliderFields{
     KB_FLOAT(kb::scene::ColliderComponent, friction),
     KB_FLOAT(kb::scene::ColliderComponent, restitution),
     KB_UINT32(kb::scene::ColliderComponent, layer),
+    KB_BOOL(kb::scene::ColliderComponent, affectsNavigation),
 };
 
 constexpr std::array<FieldBinding, 9> kCharacterControllerFields{
@@ -1212,7 +1287,7 @@ constexpr std::array<FieldBinding, 9> kCharacterControllerFields{
     KB_BOOL(kb::scene::CharacterControllerComponent, useGravity),
 };
 
-constexpr std::array<FieldBinding, 18> kJointFields{
+constexpr std::array<FieldBinding, 53> kJointFields{
     KB_JOINT_TYPE(kb::scene::JointComponent, type),
     KB_NESTED_FLOAT(kb::scene::JointComponent, anchor, x),
     KB_NESTED_FLOAT(kb::scene::JointComponent, anchor, y),
@@ -1231,6 +1306,12 @@ constexpr std::array<FieldBinding, 18> kJointFields{
     KB_NESTED_FLOAT(kb::scene::JointComponent, spring, spring),
     KB_NESTED_FLOAT(kb::scene::JointComponent, spring, damper),
     KB_FLOAT(kb::scene::JointComponent, breakForce),
+    KB_NESTED_FLOAT(kb::scene::JointComponent, freedom.secondaryAxis, x),
+    KB_NESTED_FLOAT(kb::scene::JointComponent, freedom.secondaryAxis, y),
+    KB_NESTED_FLOAT(kb::scene::JointComponent, freedom.secondaryAxis, z),
+    KB_NESTED_FLOAT(kb::scene::JointComponent, freedom, swing1Limit),
+    KB_NESTED_FLOAT(kb::scene::JointComponent, freedom, swing2Limit),
+    KB_JOINT_AXES(KB_JOINT_AXIS_FIELDS)
 };
 
 [[nodiscard]] bool FiniteNonNegative(const ScriptValue& value, float& out) noexcept {
@@ -1462,7 +1543,7 @@ constexpr std::array<FieldBinding, 9> kSocketAttachmentFields{
     KB_BOOL(kb::scene::SocketAttachmentComponent, enabled),
 };
 
-constexpr std::array<FieldBinding, 11> kNavAgentFields{
+constexpr std::array<FieldBinding, 12> kNavAgentFields{
     KB_FLOAT(kb::scene::NavAgent, radius),
     KB_FLOAT(kb::scene::NavAgent, height),
     KB_FLOAT(kb::scene::NavAgent, maxSpeed),
@@ -1474,6 +1555,7 @@ constexpr std::array<FieldBinding, 11> kNavAgentFields{
     KB_NESTED_FLOAT(kb::scene::NavAgent, destination, y),
     KB_NESTED_FLOAT(kb::scene::NavAgent, destination, z),
     KB_BOOL(kb::scene::NavAgent, enabled),
+    KB_BOOL(kb::scene::NavAgent, horde),
 };
 
 constexpr std::array<FieldBinding, 9> kNavObstacleFields{
@@ -1500,6 +1582,21 @@ constexpr std::array<FieldBinding, 11> kNavLinkFields{
     KB_NAV_AREA(kb::scene::NavLink, area),
     KB_BOOL(kb::scene::NavLink, bidirectional),
     KB_BOOL(kb::scene::NavLink, enabled),
+};
+
+constexpr std::array<FieldBinding, 12> kNavBoundsFields{
+    KB_NESTED_FLOAT(kb::scene::NavBounds, size, x),
+    KB_NESTED_FLOAT(kb::scene::NavBounds, size, y),
+    KB_NESTED_FLOAT(kb::scene::NavBounds, size, z),
+    KB_NESTED_FLOAT(kb::scene::NavBounds, center, x),
+    KB_NESTED_FLOAT(kb::scene::NavBounds, center, y),
+    KB_NESTED_FLOAT(kb::scene::NavBounds, center, z),
+    KB_FLOAT(kb::scene::NavBounds, agentRadius),
+    KB_FLOAT(kb::scene::NavBounds, agentHeight),
+    KB_FLOAT(kb::scene::NavBounds, maxStepHeight),
+    KB_FLOAT(kb::scene::NavBounds, maxSlopeDegrees),
+    KB_FLOAT(kb::scene::NavBounds, cellSize),
+    KB_FLOAT(kb::scene::NavBounds, tileSize),
 };
 
 constexpr std::array<FieldBinding, 1> kTagsFields{
@@ -1862,6 +1959,11 @@ constexpr std::array<FieldBinding, 7> kLensEchoFields{
 #undef KB_RIGIDBODY_BODY_TYPE
 #undef KB_COLLIDER_SHAPE
 #undef KB_JOINT_TYPE
+#undef KB_JOINT_FLOAT_AT
+#undef KB_JOINT_AXIS_MODE_AT
+#undef KB_JOINT_AXES
+#undef KB_JOINT_AXIS_FIELDS
+#undef KB_JOINT_AXIS_DESCS
 #undef KB_ASSERT_NOT_POINTER
 
 [[nodiscard]] const FieldBinding* FindField(std::span<const FieldBinding> fields, std::string_view name) noexcept {
@@ -1929,6 +2031,7 @@ void MarkCombatantModified(kb::scene::Scene& scene, kb::scene::SceneEntity entit
 void MarkAIBrainModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().AIBrains().MarkModified(entity); }
 void MarkNavObstacleModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().NavObstacles().MarkModified(entity); }
 void MarkNavLinkModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().NavLinks().MarkModified(entity); }
+void MarkNavBoundsModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().NavBounds().MarkModified(entity); }
 void MarkTagsModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().Tags().MarkModified(entity); }
 void MarkRegionShapeModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().RegionShapes().MarkModified(entity); }
 void MarkGuideCurveModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().GuideCurves().MarkModified(entity); }
@@ -2042,6 +2145,10 @@ void MarkLensEchoModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity
     if (componentName == "NavLink") {
         kb::scene::NavLink* component = scene.Components().NavLinks().TryGet(entity);
         return ComponentAccess{ component, component, kNavLinkFields, &MarkNavLinkModified };
+    }
+    if (componentName == "NavBounds") {
+        kb::scene::NavBounds* component = scene.Components().NavBounds().TryGet(entity);
+        return ComponentAccess{ component, component, kNavBoundsFields, &MarkNavBoundsModified };
     }
     if (componentName == "Tags") {
         kb::scene::TagsComponent* component = scene.Components().Tags().TryGet(entity);
@@ -2239,6 +2346,7 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
     if (componentName == "AIBrain") return kAIBrainPropertyDescs;
     if (componentName == "NavObstacle") return kNavObstaclePropertyDescs;
     if (componentName == "NavLink") return kNavLinkPropertyDescs;
+    if (componentName == "NavBounds") return kNavBoundsPropertyDescs;
     if (componentName == "Tags") return kTagsPropertyDescs;
     return {};
 }

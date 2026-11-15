@@ -32,10 +32,14 @@ public:
     [[nodiscard]] std::optional<std::string_view> GetString(std::string_view section, std::string_view key) const;
     [[nodiscard]] std::optional<std::int64_t> GetInt(std::string_view section, std::string_view key) const;
     [[nodiscard]] std::optional<bool> GetBool(std::string_view section, std::string_view key) const;
+    // A finite number; nullopt for a missing key or text that is not wholly a number.
+    [[nodiscard]] std::optional<float> GetFloat(std::string_view section, std::string_view key) const;
 
     void SetString(std::string_view section, std::string_view key, std::string value);
     void SetInt(std::string_view section, std::string_view key, std::int64_t value);
     void SetBool(std::string_view section, std::string_view key, bool value);
+    // Written in the shortest form that reads back as the same float.
+    void SetFloat(std::string_view section, std::string_view key, float value);
     // Removes one key, and the section with it when that key was its last.
     bool Remove(std::string_view section, std::string_view key);
 

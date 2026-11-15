@@ -94,6 +94,7 @@ void AppendSeparator(HMENU menu) {
     if (item.id == "Particle System") return EditorText("hierarchy.create.particleSystem", "Particle System");
     if (item.id == "Audio Source") return EditorText("hierarchy.create.audioSource", "Audio Source");
     if (item.id == "Audio Listener") return EditorText("hierarchy.create.audioListener", "Audio Listener");
+    if (item.id == "Navigation Bounds") return EditorText("hierarchy.create.navigationBounds", "Navigation Bounds");
     return item.label;
 }
 

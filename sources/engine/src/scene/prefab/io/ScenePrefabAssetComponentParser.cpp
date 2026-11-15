@@ -120,7 +120,8 @@ template <typename T>
         || !ParseOptionalField(fields, "collider.friction", collider.friction)
         || !ParseOptionalField(fields, "collider.restitution", collider.restitution)
         || !ParseOptionalField(fields, "collider.layer", collider.layer)
-        || !ParseOptionalField(fields, "collider.meshAssetId", collider.meshAssetId)) {
+        || !ParseOptionalField(fields, "collider.meshAssetId", collider.meshAssetId)
+        || !ParseOptionalBool(fields, "collider.affectsNavigation", collider.affectsNavigation)) {
         return false;
     }
 
@@ -508,7 +509,7 @@ template <typename T>
     ScenePrefabJointComponent joint;
     if (!ParseField(fields, "joint.type", type)
         || type < static_cast<int>(JointType::Fixed)
-        || type > static_cast<int>(JointType::Point)
+        || type > static_cast<int>(JointType::Rope)
         || !ParseField(fields, "joint.connectedNodeStableId", joint.connectedNodeStableId)
         || !ScenePrefabAssetFieldParser::ParseVec3(fields, "joint.anchor", joint.anchor)
         || !ScenePrefabAssetFieldParser::ParseVec3(fields, "joint.connectedAnchor", joint.connectedAnchor)
@@ -526,6 +527,30 @@ template <typename T>
             || !ParseField(fields, "joint.spring.damper", joint.spring.damper)
             || !ParseField(fields, "joint.breakForce", joint.breakForce))) {
         return false;
+    }
+    // Absent in prefabs written before the slider, cone, six-degrees-of-freedom and rope kinds, and for kinds that do not use it.
+    if (fields.contains("joint.freedom.swing1Limit")) {
+        JointFreedom& freedom = joint.freedom;
+        if (!ScenePrefabAssetFieldParser::ParseVec3(fields, "joint.freedom.secondaryAxis", freedom.secondaryAxis)
+            || !ParseField(fields, "joint.freedom.swing1Limit", freedom.swing1Limit)
+            || !ParseField(fields, "joint.freedom.swing2Limit", freedom.swing2Limit)) {
+            return false;
+        }
+        for (std::size_t index = 0; index < freedom.axes.size(); ++index) {
+            JointAxis& axis = freedom.axes[index];
+            const std::string prefix = "joint.freedom.axis" + std::to_string(index);
+            int mode = 0;
+            if (!ParseField(fields, prefix + ".mode", mode)
+                || mode < static_cast<int>(JointAxisMode::Locked)
+                || mode > static_cast<int>(JointAxisMode::Free)
+                || !ParseField(fields, prefix + ".minLimit", axis.minLimit)
+                || !ParseField(fields, prefix + ".maxLimit", axis.maxLimit)
+                || !ParseField(fields, prefix + ".motor.targetVelocity", axis.motor.targetVelocity)
+                || !ParseField(fields, prefix + ".motor.force", axis.motor.force)) {
+                return false;
+            }
+            axis.mode = static_cast<JointAxisMode>(mode);
+        }
     }
 
     joint.type = static_cast<JointType>(type);

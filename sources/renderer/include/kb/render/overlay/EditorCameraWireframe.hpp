@@ -26,6 +26,7 @@ struct EditorCameraWireframeDesc {
     // A non-positive value requests the full authored frustum.
     float displayFarClip = 0.0F;
     float aspect = 1.0F;
+    bool selected = false;
 };
 
 struct EditorCameraWireframeLine {
@@ -35,6 +36,10 @@ struct EditorCameraWireframeLine {
 };
 
 inline constexpr std::size_t kEditorCameraWireframeLineCount = 12U;
+
+// The bounded depth the Scene View draws a camera's frustum to: a fixed world depth, never past
+// the authored far clip, never before the near clip.
+[[nodiscard]] float EditorCameraWireframeDisplayFarClip(float nearClip, float farClip) noexcept;
 
 // Produces four near-plane edges, four far-plane edges, and four connectors.
 // Scene View navigation must never add or remove edges from this geometry.

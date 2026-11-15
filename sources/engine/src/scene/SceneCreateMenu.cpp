@@ -26,7 +26,7 @@ namespace {
 constexpr std::string_view k3DObject = "3D Object";
 constexpr std::string_view kLight = "Light";
 
-constexpr std::array<SceneCreateItem, 24> kItems{ {
+constexpr std::array<SceneCreateItem, 25> kItems{ {
     { "Empty", "Create Empty", "Entity", {}, "Ctrl+Shift+N" },
     { "Map Top Down", "Map - Top Down", "Map", "2D Object", {} },
     { "Map Platformer", "Map - Platformer", "Map", "2D Object", {} },
@@ -51,6 +51,7 @@ constexpr std::array<SceneCreateItem, 24> kItems{ {
     { "Particle System", "Particle System", "Particle System", "Effects", {} },
     { "Audio Source", "Audio Source", "Audio Source", "Audio", {} },
     { "Audio Listener", "Audio Listener", "Audio Listener", "Audio", {} },
+    { "Navigation Bounds", "Navigation Bounds", "Navigation Bounds", {}, {} },
 } };
 
 [[nodiscard]] std::optional<LightKind> LightKindOf(std::string_view id) noexcept {
@@ -72,11 +73,12 @@ constexpr std::array<SceneCreateItem, 24> kItems{ {
     if (id == "Particle System") return { "Particle Effect" };
     if (id == "Audio Source") return { "AudioSource" };
     if (id == "Audio Listener") return { "AudioListener" };
+    if (id == "Navigation Bounds") return { "NavBounds" };
     return {};
 }
 
-// The collider Unity gives its primitive of the same shape: a capsule for the cylinder, and a
-// thin box where Unity uses a mesh collider (plane, quad). The cone has no primitive collider.
+// The collider a built-in primitive gets for its shape: a capsule for the cylinder, and a
+// thin box instead of a mesh collider (plane, quad). The cone has no primitive collider.
 [[nodiscard]] std::optional<ColliderComponent> PrimitiveCollider(kb::assets::BuiltInShape shape) noexcept {
     ColliderComponent collider{};
     switch (shape) {
@@ -144,7 +146,7 @@ SceneCreateResult SceneCreateMenu::Create(Scene& scene, std::string_view id, std
     desc.name = std::move(name);
     const std::optional<LightKind> lightKind = LightKindOf(item->id);
     if (lightKind == LightKind::Directional) {
-        // Unity's new Directional Light: the sun from above, at an angle.
+        // The new Directional Light: the sun from above, at an angle.
         desc.transform.localRotation = kb::math::FromEulerDegrees(kb::math::Vec3{ 50.0F, -30.0F, 0.0F });
     }
     const SceneEntity entity = scene.Entities().CreateEntity(std::move(desc));

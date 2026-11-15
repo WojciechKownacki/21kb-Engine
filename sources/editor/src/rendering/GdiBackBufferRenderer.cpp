@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace kb::editor {
@@ -92,8 +93,9 @@ private:
     int height_ = 0;
 };
 
+// A window paints on the thread that created it, so each thread owns the buffers of its windows.
 [[nodiscard]] RetainedBackBuffer& BackBufferFor(HWND window) {
-    static std::vector<std::unique_ptr<RetainedBackBuffer>> buffers;
+    thread_local std::vector<std::unique_ptr<RetainedBackBuffer>> buffers;
     std::erase_if(buffers, [](const std::unique_ptr<RetainedBackBuffer>& buffer) {
         return buffer == nullptr || buffer->Window() == nullptr || IsWindow(buffer->Window()) == 0;
     });
@@ -108,15 +110,33 @@ private:
     return *buffers.back();
 }
 
+// The window being printed on this thread and the device context it prints into.
+thread_local HWND printWindow = nullptr;
+thread_local HDC printTarget = nullptr;
+
 } // namespace
+
+GdiBackBufferRenderer::PrintScope::PrintScope(HWND window, HDC target) noexcept {
+    printWindow = window;
+    printTarget = target;
+}
+
+GdiBackBufferRenderer::PrintScope::~PrintScope() {
+    printWindow = nullptr;
+    printTarget = nullptr;
+}
 
 void GdiBackBufferRenderer::Paint(HWND window, GdiBackBufferPaintFn paint, void* context) {
     if (paint == nullptr) {
         return;
     }
 
-    ScopedPaint paintScope(window);
-    HDC targetDc = paintScope.Dc();
+    const bool printing = printTarget != nullptr && printWindow == window;
+    std::optional<ScopedPaint> paintScope;
+    if (!printing) {
+        paintScope.emplace(window);
+    }
+    HDC targetDc = printing ? printTarget : paintScope->Dc();
     if (targetDc == nullptr) {
         return;
     }
@@ -129,7 +149,7 @@ void GdiBackBufferRenderer::Paint(HWND window, GdiBackBufferPaintFn paint, void*
         return;
     }
 
-    const RECT paintRect = paintScope.PaintRect();
+    const RECT paintRect = printing ? client : paintScope->PaintRect();
     const int paintWidth = paintRect.right - paintRect.left;
     const int paintHeight = paintRect.bottom - paintRect.top;
     if (paintWidth <= 0 || paintHeight <= 0) {

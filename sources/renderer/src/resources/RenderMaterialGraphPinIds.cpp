@@ -40,24 +40,24 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (!outputPin && pin == "customizedUv0") return PinId(nodeKind, direction, 19U);
         if (!outputPin && pin == "displacement") return PinId(nodeKind, direction, 20U);
         if (!outputPin && pin == "tangentOutput") return PinId(nodeKind, direction, 23U);
-        // Unreal CustomData0/1 of the Clear Coat shading model.
+        // CustomData0/1 of the Clear Coat shading model.
         if (!outputPin && pin == "clearCoat") return PinId(nodeKind, direction, 24U);
         if (!outputPin && pin == "clearCoatRoughness") return PinId(nodeKind, direction, 25U);
-        // Unreal's Pixel Depth Offset.
+        // Pixel Depth Offset.
         if (!outputPin && pin == "pixelDepthOffset") return PinId(nodeKind, direction, 26U);
-        // Unreal's Refraction (index of refraction of a translucent surface).
+        // Refraction (index of refraction of a translucent surface).
         if (!outputPin && pin == "refraction") return PinId(nodeKind, direction, 27U);
-        // Unreal's Thin Translucent Material Output: the colour the surface passes.
+        // Thin Translucent Material Output: the colour the surface passes.
         if (!outputPin && pin == "transmittanceColor") return PinId(nodeKind, direction, 28U);
-        // Unreal's Single Layer Water Material Output.
+        // Single Layer Water Material Output.
         if (!outputPin && pin == "waterScattering") return PinId(nodeKind, direction, 29U);
         if (!outputPin && pin == "waterAbsorption") return PinId(nodeKind, direction, 30U);
         if (!outputPin && pin == "waterPhaseG") return PinId(nodeKind, direction, 31U);
         if (!outputPin && pin == "waterColorScaleBehind") return PinId(nodeKind, direction, 32U);
-        // Unreal's Subsurface Color (Subsurface) and Fuzz Color (Cloth).
+        // Subsurface Color (Subsurface) and Fuzz Color (Cloth).
         if (!outputPin && pin == "subsurfaceColor") return PinId(nodeKind, direction, 33U);
         if (!outputPin && pin == "fuzzColor") return PinId(nodeKind, direction, 34U);
-        // Unreal's Eye: Iris Mask, Iris Distance, Iris Normal.
+        // Eye: Iris Mask, Iris Distance, Iris Normal.
         if (!outputPin && pin == "irisMask") return PinId(nodeKind, direction, 35U);
         if (!outputPin && pin == "irisDistance") return PinId(nodeKind, direction, 36U);
         if (!outputPin && pin == "irisNormal") return PinId(nodeKind, direction, 37U);

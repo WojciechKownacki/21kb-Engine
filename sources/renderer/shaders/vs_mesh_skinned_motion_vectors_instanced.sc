@@ -6,8 +6,8 @@ $output v_currentClip, v_previousClip
 #include "skinning.sh"
 
 SAMPLER2D(s_motionPreviousModels, 13);
-SAMPLER2D(s_skinningPalette, 14);
-SAMPLER2D(s_previousSkinningPalette, 15);
+SAMPLER2D(s_skinningPalette, 15);
+SAMPLER2D(s_previousSkinningPalette, 14);
 uniform vec4 u_skinningPaletteInfo;
 uniform vec4 u_previousSkinningPaletteInfo;
 

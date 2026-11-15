@@ -2,6 +2,7 @@
 
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetRegistry.hpp"
+#include "engine/render/StaticLightmapBaker.hpp"
 #include "engine/scene/SceneAssetMeta.hpp"
 #include "engine/scene/SceneDocument.hpp"
 #include "scene/asset/SceneComponentAssetReferences.hpp"
@@ -90,6 +91,7 @@ void ValidateUIReference(
 
 [[nodiscard]] SceneDependencyResolution ResolveSceneDependencies(
     const SceneAssetMeta& meta,
+    const std::filesystem::path& sceneVirtualPath,
     const kb::assets::AssetRegistry& registry,
     ScenePrefabGuidAssetIndex& guidIndex) {
     SceneDependencyResolution result;
@@ -119,6 +121,12 @@ void ValidateUIReference(
         if (!claim->IsContested()) {
             AppendUnique(result.dependencies, claim->assetId);
         }
+    }
+    // The lighting bake's probe grid sits at a place derived from the scene's name, not in the scene file.
+    if (const kb::assets::AssetMetadata* grid = registry.FindByPath(std::filesystem::path{
+            kb::render::LightProbeGridVirtualPath(sceneVirtualPath.stem().generic_string()) });
+        grid != nullptr && grid->type == kb::render::kLightProbeGridAssetType) {
+        AppendUnique(result.dependencies, grid->id);
     }
     return result;
 }
@@ -186,7 +194,7 @@ std::vector<kb::assets::AssetId> SceneAssetLoader::DiscoverDependencies(
         return {};
     }
 
-    return ResolveSceneDependencies(meta.meta, registry, nestedPrefabGuidIndex_).dependencies;
+    return ResolveSceneDependencies(meta.meta, metadata.virtualPath, registry, nestedPrefabGuidIndex_).dependencies;
 }
 
 std::optional<std::string> SceneAssetLoader::ValidateDependencies(
@@ -212,7 +220,7 @@ std::optional<std::string> SceneAssetLoader::ValidateDependencies(
     // whichever thread asked for the scene, while the cached one belongs to the
     // discovery thread. It is only built when the scene actually nests a prefab.
     ScenePrefabGuidAssetIndex guidIndex;
-    SceneDependencyResolution current = ResolveSceneDependencies(meta.meta, registry, guidIndex);
+    SceneDependencyResolution current = ResolveSceneDependencies(meta.meta, metadata.virtualPath, registry, guidIndex);
     if (current.diagnostic.has_value()) {
         return current.diagnostic;
     }

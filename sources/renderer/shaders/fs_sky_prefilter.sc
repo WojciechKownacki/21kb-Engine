@@ -1,6 +1,6 @@
 $input v_texcoord0
 
-// GGX prefilter of the captured sky for one roughness (Karis, "Real Shading in Unreal Engine 4"),
+// GGX prefilter of the captured sky for one roughness (Karis, SIGGRAPH 2013 physically based shading course),
 // sampling the captured cube's mips by each sample's solid angle so few samples do not alias.
 
 #include <bgfx_shader.sh>

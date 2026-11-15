@@ -1,5 +1,5 @@
 #include "kb/render/scene/SceneRenderer.hpp"
-#include "scene/SceneIblConfigResolver.hpp"
+#include "renderer/RendererSceneLightingConfigResolver.hpp"
 #include "scene/submit/SceneMeshCoverageProbe.hpp"
 
 #include "engine/particles/ParticlePlayback.hpp"
@@ -30,63 +30,6 @@ namespace {
     };
 }
 
-[[nodiscard]] SceneRenderLightingConfig ResolveLightingConfig(SceneRenderLightingConfig requested, SceneRenderLightingConfig fallback) noexcept {
-    constexpr SceneRenderLightingConfig defaultConfig{};
-    return SceneRenderLightingConfig{
-        .maxForwardLights = requested.maxForwardLights != defaultConfig.maxForwardLights ? requested.maxForwardLights : fallback.maxForwardLights,
-        .lightingPath = requested.lightingPath != defaultConfig.lightingPath ? requested.lightingPath : fallback.lightingPath,
-        .clusterDimensions = requested.clusterDimensions != defaultConfig.clusterDimensions ? requested.clusterDimensions : fallback.clusterDimensions,
-        .ambientColor = requested.ambientColor != defaultConfig.ambientColor ? requested.ambientColor : fallback.ambientColor,
-        .ambientIntensity = requested.ambientIntensity != defaultConfig.ambientIntensity ? requested.ambientIntensity : fallback.ambientIntensity,
-        .environmentMode = requested.environmentMode != defaultConfig.environmentMode ? requested.environmentMode : fallback.environmentMode,
-        .environmentZenithColor = requested.environmentZenithColor != defaultConfig.environmentZenithColor ? requested.environmentZenithColor : fallback.environmentZenithColor,
-        .environmentGroundColor = requested.environmentGroundColor != defaultConfig.environmentGroundColor ? requested.environmentGroundColor : fallback.environmentGroundColor,
-        .environmentDiffuseIntensity = requested.environmentDiffuseIntensity != defaultConfig.environmentDiffuseIntensity ? requested.environmentDiffuseIntensity : fallback.environmentDiffuseIntensity,
-        .environmentSpecularIntensity = requested.environmentSpecularIntensity != defaultConfig.environmentSpecularIntensity ? requested.environmentSpecularIntensity : fallback.environmentSpecularIntensity,
-        .editorPreviewKeyLightEnabled = requested.editorPreviewKeyLightEnabled != defaultConfig.editorPreviewKeyLightEnabled ? requested.editorPreviewKeyLightEnabled : fallback.editorPreviewKeyLightEnabled,
-        .editorPreviewKeyLightDirection = requested.editorPreviewKeyLightDirection != defaultConfig.editorPreviewKeyLightDirection ? requested.editorPreviewKeyLightDirection : fallback.editorPreviewKeyLightDirection,
-        .editorPreviewKeyLightColor = requested.editorPreviewKeyLightColor != defaultConfig.editorPreviewKeyLightColor ? requested.editorPreviewKeyLightColor : fallback.editorPreviewKeyLightColor,
-        .editorPreviewKeyLightIntensity = requested.editorPreviewKeyLightIntensity != defaultConfig.editorPreviewKeyLightIntensity ? requested.editorPreviewKeyLightIntensity : fallback.editorPreviewKeyLightIntensity,
-        .ibl = ResolveSceneIblConfig(requested.ibl, fallback.ibl),
-        .globalIllumination = requested.globalIllumination != defaultConfig.globalIllumination ? requested.globalIllumination : fallback.globalIllumination,
-        .giIntensity = requested.giIntensity != defaultConfig.giIntensity ? requested.giIntensity : fallback.giIntensity,
-        .giRange = requested.giRange != defaultConfig.giRange ? requested.giRange : fallback.giRange,
-        .giHistoryWeight = requested.giHistoryWeight != defaultConfig.giHistoryWeight ? requested.giHistoryWeight : fallback.giHistoryWeight,
-        .giVoxelSize = requested.giVoxelSize != defaultConfig.giVoxelSize ? requested.giVoxelSize : fallback.giVoxelSize,
-        .ambientOcclusionEnabled = requested.ambientOcclusionEnabled != defaultConfig.ambientOcclusionEnabled ? requested.ambientOcclusionEnabled : fallback.ambientOcclusionEnabled,
-        .aoIntensity = requested.aoIntensity != defaultConfig.aoIntensity ? requested.aoIntensity : fallback.aoIntensity,
-        .aoRadius = requested.aoRadius != defaultConfig.aoRadius ? requested.aoRadius : fallback.aoRadius,
-        .screenSpaceReflectionsEnabled = requested.screenSpaceReflectionsEnabled != defaultConfig.screenSpaceReflectionsEnabled ? requested.screenSpaceReflectionsEnabled : fallback.screenSpaceReflectionsEnabled,
-        .ssrIntensity = requested.ssrIntensity != defaultConfig.ssrIntensity ? requested.ssrIntensity : fallback.ssrIntensity,
-        .ssrMaxDistance = requested.ssrMaxDistance != defaultConfig.ssrMaxDistance ? requested.ssrMaxDistance : fallback.ssrMaxDistance,
-        .shadowMapSize = requested.shadowMapSize != defaultConfig.shadowMapSize ? requested.shadowMapSize : fallback.shadowMapSize,
-        .shadowCascadeCount = requested.shadowCascadeCount != defaultConfig.shadowCascadeCount ? requested.shadowCascadeCount : fallback.shadowCascadeCount,
-        .shadowAtlasSize = requested.shadowAtlasSize != defaultConfig.shadowAtlasSize ? requested.shadowAtlasSize : fallback.shadowAtlasSize,
-        .shadowDistance = requested.shadowDistance != defaultConfig.shadowDistance ? requested.shadowDistance : fallback.shadowDistance,
-        .shadowDepthBias = requested.shadowDepthBias != defaultConfig.shadowDepthBias ? requested.shadowDepthBias : fallback.shadowDepthBias,
-        .shadowNormalBias = requested.shadowNormalBias != defaultConfig.shadowNormalBias ? requested.shadowNormalBias : fallback.shadowNormalBias,
-        .shadowStrength = requested.shadowStrength != defaultConfig.shadowStrength ? requested.shadowStrength : fallback.shadowStrength,
-        .shadowFilter = requested.shadowFilter != defaultConfig.shadowFilter ? requested.shadowFilter : fallback.shadowFilter,
-        .pointShadowMaxLights = requested.pointShadowMaxLights != defaultConfig.pointShadowMaxLights ? requested.pointShadowMaxLights : fallback.pointShadowMaxLights,
-        .pointShadowCubeEnabled = requested.pointShadowCubeEnabled != defaultConfig.pointShadowCubeEnabled ? requested.pointShadowCubeEnabled : fallback.pointShadowCubeEnabled,
-        .shadowCascadeBlend = requested.shadowCascadeBlend != defaultConfig.shadowCascadeBlend ? requested.shadowCascadeBlend : fallback.shadowCascadeBlend,
-        .shadowsEnabled = requested.shadowsEnabled != defaultConfig.shadowsEnabled ? requested.shadowsEnabled : fallback.shadowsEnabled,
-        .stableShadowCascades = requested.stableShadowCascades != defaultConfig.stableShadowCascades ? requested.stableShadowCascades : fallback.stableShadowCascades,
-        .perLightShadowCaching = requested.perLightShadowCaching != defaultConfig.perLightShadowCaching ? requested.perLightShadowCaching : fallback.perLightShadowCaching,
-        .contactShadowsEnabled = requested.contactShadowsEnabled != defaultConfig.contactShadowsEnabled ? requested.contactShadowsEnabled : fallback.contactShadowsEnabled,
-        .volumetricLightingEnabled = requested.volumetricLightingEnabled != defaultConfig.volumetricLightingEnabled ? requested.volumetricLightingEnabled : fallback.volumetricLightingEnabled,
-        .fogProfile = requested.fogProfile != defaultConfig.fogProfile ? requested.fogProfile : fallback.fogProfile,
-        .fogEnabled = requested.fogEnabled != defaultConfig.fogEnabled ? requested.fogEnabled : fallback.fogEnabled,
-        .fogDensity = requested.fogDensity != defaultConfig.fogDensity ? requested.fogDensity : fallback.fogDensity,
-        .fogHeightFalloff = requested.fogHeightFalloff != defaultConfig.fogHeightFalloff ? requested.fogHeightFalloff : fallback.fogHeightFalloff,
-        .fogBaseHeight = requested.fogBaseHeight != defaultConfig.fogBaseHeight ? requested.fogBaseHeight : fallback.fogBaseHeight,
-        .fogColor = requested.fogColor != defaultConfig.fogColor ? requested.fogColor : fallback.fogColor,
-        .volumetricFogEnabled = requested.volumetricFogEnabled != defaultConfig.volumetricFogEnabled ? requested.volumetricFogEnabled : fallback.volumetricFogEnabled,
-        .fogAnisotropy = requested.fogAnisotropy != defaultConfig.fogAnisotropy ? requested.fogAnisotropy : fallback.fogAnisotropy,
-        .debugView = requested.debugView != defaultConfig.debugView ? requested.debugView : fallback.debugView,
-    };
-}
-
 [[nodiscard]] const char* MeshPassName(MeshPassType pass) noexcept {
     switch (pass) {
     case MeshPassType::Depth:
@@ -114,6 +57,10 @@ namespace {
 } // namespace
 
 SceneRenderer::SceneRenderer() = default;
+
+void SceneRenderer::SetWorkerPool(kb::ecs::WorkerPool* workerPool) noexcept {
+    if (meshSubmitter_ != nullptr) meshSubmitter_->SetWorkerPool(workerPool);
+}
 
 void SceneRenderer::SetMeshCoverageEnabled(bool enabled) noexcept {
     if (meshCoverage_) meshCoverage_->SetEnabled(enabled);
@@ -224,6 +171,21 @@ void SceneRenderer::Submit(bgfx::ViewId viewId, const RenderScene& renderScene, 
     SubmitMeshPass(viewId, MeshPassType::BaseOpaque, renderScene, viewportWidth, viewportHeight, cameraOverride, drawBudget, lightingConfig);
 }
 
+void SceneRenderer::PrepareMeshPasses(
+    MeshPassType pass,
+    const RenderScene& renderScene,
+    std::span<const SceneRenderCamera* const> cameras,
+    SceneRenderDrawBudget drawBudget,
+    const SceneGpuDrivenFeatureSupport* gpuDrivenSupportOverride,
+    bool terrainLayersOnly) const {
+    if (!initialized_ || meshSubmitter_ == nullptr) {
+        return;
+    }
+    meshSubmitter_->PrebuildPasses(renderScene, resources_, resourceMap_, pass, cameras,
+        ResolveDrawBudget(drawBudget, defaultDrawBudget_),
+        gpuDrivenSupportOverride == nullptr ? gpuDrivenRuntimeSupport_ : *gpuDrivenSupportOverride, terrainLayersOnly);
+}
+
 void SceneRenderer::SubmitMeshPass(
     bgfx::ViewId viewId,
     MeshPassType pass,
@@ -241,7 +203,7 @@ void SceneRenderer::SubmitMeshPass(
     lastSubmitStats_ = SceneRenderSubmitStats{};
     lastDiagnostics_.Clear();
     const SceneRenderDrawBudget effectiveDrawBudget = ResolveDrawBudget(drawBudget, defaultDrawBudget_);
-    const SceneRenderLightingConfig effectiveLightingConfig = ResolveLightingConfig(lightingConfig, defaultLightingConfig_);
+    const SceneRenderLightingConfig effectiveLightingConfig = RendererSceneLightingConfigResolver::Resolve(lightingConfig, defaultLightingConfig_);
     const std::optional<SceneRenderCamera> primaryCamera = cameraOverride == nullptr ? renderScene.BuildPrimaryCamera(viewportWidth, viewportHeight) : std::optional<SceneRenderCamera>{};
     const SceneRenderCamera* camera = cameraOverride != nullptr ? cameraOverride : (primaryCamera.has_value() ? &(*primaryCamera) : nullptr);
     {
@@ -502,6 +464,12 @@ void SceneRenderer::AdvanceFrameTime(float deltaSeconds) noexcept {
     frameDeltaSeconds_ = deltaSeconds;
     frameTimeSeconds_ += deltaSeconds;
     ++frameTimeIndex_;
+}
+
+void SceneRenderer::RestartFrameTime() noexcept {
+    frameTimeSeconds_ = 0.0F;
+    frameTimeIndex_ = 0U;
+    previousFrameTime_ = FrameTimeConstants();
 }
 
 std::array<float, 4> SceneRenderer::FrameTimeConstants() const noexcept {

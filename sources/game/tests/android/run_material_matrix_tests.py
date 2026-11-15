@@ -17,6 +17,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "scripts"))
 from png_readback import read_png
+from device_screen import capture as capture_screen, default_display
 
 
 def main():
@@ -92,9 +93,7 @@ def main():
             raise RuntimeError("Android reported a material or rendering failure after startup")
         if compact and "material capability fallback:" not in logs:
             raise RuntimeError("Android did not diagnose its four-target material reduction")
-        picture = args.output / "android.png"
-        picture.write_bytes(adb("exec-out", "screencap", "-p", binary=True))
-        pixels = read_png(picture)
+        pixels = capture_screen(adb, args.output / "android.png", default_display(adb))
         if len(pixels) != height or len(pixels[0]) != width:
             raise RuntimeError("Screenshot extent differs from the actual render surface; no implicit resize is allowed")
         native = args.output / "native.png"

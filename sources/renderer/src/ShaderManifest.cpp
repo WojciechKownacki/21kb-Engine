@@ -57,6 +57,12 @@ constexpr auto kRequiredShaders = std::to_array<ShaderManifestEntry>({
     ShaderManifestEntry{.name = "fs_leui_rect.sc", .stage = ShaderStage::Fragment, .required = false},
     ShaderManifestEntry{.name = "fs_lit.sc", .stage = ShaderStage::Fragment, .required = false},
     ShaderManifestEntry{.name = "fs_deferred_lighting.sc", .stage = ShaderStage::Fragment},
+    // Optional: the same lighting shaders reading the shadow maps through comparison samplers (hardware filtering),
+    // used by frames without PCSS; without them the stored-depth shaders light every frame.
+    ShaderManifestEntry{.name = "fs_deferred_lighting_cmp.sc", .stage = ShaderStage::Fragment, .required = false},
+    ShaderManifestEntry{.name = "fs_mesh_instanced_cmp.sc", .stage = ShaderStage::Fragment, .required = false},
+    // The world backdrop of the forward path.
+    ShaderManifestEntry{.name = "fs_sky_backdrop.sc", .stage = ShaderStage::Fragment},
     // Optional: without it (no Metal variant is generated on Windows hosts) screen-space GI stays off.
     ShaderManifestEntry{.name = "fs_ssgi_resolve.sc", .stage = ShaderStage::Fragment, .required = false},
     // Optional likewise: without them (no Metal variant is generated on Windows hosts) reflections keep
@@ -80,6 +86,9 @@ constexpr auto kRequiredShaders = std::to_array<ShaderManifestEntry>({
     ShaderManifestEntry{.name = "fs_particle_instanced.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_particle_strip.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_present_tex.sc", .stage = ShaderStage::Fragment},
+    // Optional: without it (no Metal variant is generated on Windows hosts) a reduced render scale is
+    // upscaled by the plain present's bilinear read.
+    ShaderManifestEntry{.name = "fs_present_upscale.sc", .stage = ShaderStage::Fragment, .required = false},
     ShaderManifestEntry{.name = "fs_screen_ui.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_screen_ui_sdf.sc", .stage = ShaderStage::Fragment, .required = false},
     ShaderManifestEntry{.name = "vs_editor_gizmo.sc", .stage = ShaderStage::Vertex,
@@ -102,6 +111,7 @@ constexpr auto kRequiredShaders = std::to_array<ShaderManifestEntry>({
     ShaderManifestEntry{.name = "vs_mesh_skinned_instanced.sc", .stage = ShaderStage::Vertex},
     ShaderManifestEntry{.name = "vs_mesh_skinned_motion_vectors_instanced.sc", .stage = ShaderStage::Vertex},
     ShaderManifestEntry{.name = "vs_present.sc", .stage = ShaderStage::Vertex},
+    ShaderManifestEntry{.name = "vs_sky_backdrop.sc", .stage = ShaderStage::Vertex},
     ShaderManifestEntry{.name = "vs_particle_decal.sc", .stage = ShaderStage::Vertex},
     ShaderManifestEntry{.name = "vs_particle_instanced.sc", .stage = ShaderStage::Vertex},
     ShaderManifestEntry{.name = "vs_particle_strip.sc", .stage = ShaderStage::Vertex},
@@ -118,6 +128,7 @@ constexpr auto kRequiredPrograms = std::to_array<ShaderProgramManifestEntry>({
     ShaderProgramManifestEntry{.name = "scene_mesh_selection", .vertexShader = "vs_mesh_instanced.sc", .fragmentShader = "fs_mesh_selection_instanced.sc"},
     ShaderProgramManifestEntry{.name = "deferred_lighting", .vertexShader = "vs_present.sc", .fragmentShader = "fs_deferred_lighting.sc"},
     ShaderProgramManifestEntry{.name = "fullscreen_present", .vertexShader = "vs_present.sc", .fragmentShader = "fs_present_tex.sc"},
+    ShaderProgramManifestEntry{.name = "fullscreen_present_upscale", .vertexShader = "vs_present.sc", .fragmentShader = "fs_present_upscale.sc", .required = false},
     ShaderProgramManifestEntry{.name = "screen_ui", .vertexShader = "vs_screen_ui.sc", .fragmentShader = "fs_screen_ui.sc"},
     ShaderProgramManifestEntry{.name = "particle_instanced", .vertexShader = "vs_particle_instanced.sc", .fragmentShader = "fs_particle_instanced.sc"},
     ShaderProgramManifestEntry{.name = "particle_strip", .vertexShader = "vs_particle_strip.sc", .fragmentShader = "fs_particle_strip.sc"},

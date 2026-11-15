@@ -1,5 +1,6 @@
 #include "engine/script/ScriptValue.hpp"
 
+#include <cmath>
 #include <charconv>
 #include <cerrno>
 #include <cstdlib>
@@ -67,19 +68,29 @@ bool ScriptValue::AsBool(bool fallback) const noexcept {
     return value == nullptr ? fallback : *value;
 }
 
+// A script's numbers are all doubles on LuaJIT, so the same number reaches the engine as an Int on one VM and as a Float
+// on the other (2 and 2.0); the readers of dynamic values take either for a whole number or a fraction.
 int ScriptValue::AsInt(int fallback) const noexcept {
-    const auto* value = std::get_if<int>(&value_);
-    return value == nullptr ? fallback : *value;
+    if (const auto* value = std::get_if<int>(&value_)) return *value;
+    if (const auto* value = std::get_if<float>(&value_)) {
+        return *value == std::floor(*value) && std::fabs(*value) < 2147483648.0F ? static_cast<int>(*value) : fallback;
+    }
+    if (const auto* value = std::get_if<double>(&value_)) {
+        return *value == std::floor(*value) && std::fabs(*value) < 2147483648.0 ? static_cast<int>(*value) : fallback;
+    }
+    return fallback;
 }
 
 float ScriptValue::AsFloat(float fallback) const noexcept {
-    const auto* value = std::get_if<float>(&value_);
-    return value == nullptr ? fallback : *value;
+    if (const auto* value = std::get_if<float>(&value_)) return *value;
+    if (const auto* value = std::get_if<int>(&value_)) return static_cast<float>(*value);
+    return fallback;
 }
 
 double ScriptValue::AsDouble(double fallback) const noexcept {
-    const auto* value = std::get_if<double>(&value_);
-    return value == nullptr ? fallback : *value;
+    if (const auto* value = std::get_if<double>(&value_)) return *value;
+    if (const auto* value = std::get_if<int>(&value_)) return static_cast<double>(*value);
+    return fallback;
 }
 
 std::int64_t ScriptValue::AsInt64(std::int64_t fallback) const noexcept {

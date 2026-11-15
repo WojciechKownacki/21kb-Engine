@@ -4,6 +4,8 @@
 #include "app/EditorCrashBreadcrumbs.hpp"
 #include "app/EditorAutomationScenarioRunner.hpp"
 #include "app/EditorSelfTest.hpp"
+#include "localization/EditorLocalization.hpp"
+#include "platform/win32/EditorSplashWindow.hpp"
 #include "project/EditorProjectPaths.hpp"
 #include "scene/EditorSceneContext.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
@@ -78,8 +80,25 @@ void ConfigureProjectFromArguments(int argc, char** argv) {
 
 int RunEditor() {
     kb::editor::EditorCrashBreadcrumbs::Write("app", "RunEditor begin");
+#if defined(_WIN32)
+    // The startup screen says its stages in the editor's language, so the language is loaded before the
+    // screen opens; its catalogue is the editor's own and does not wait for the project. A catalogue that
+    // cannot be read is reported when the editor window starts.
+    {
+        std::string languageError;
+        static_cast<void>(kb::editor::EditorLocalization::SetLanguage(
+            kb::editor::EditorLocalization::PreferredLanguage(), kb::editor::EditorLocalization::DefaultCatalogFolder(), languageError));
+    }
+    // The startup screen is up before the first load starts and closes when the main window is shown,
+    // or - since a failed start reports its error on its own - before that error is.
+    kb::editor::EditorSplashWindow splash;
+#endif
     kb::editor::EditorApplication app;
-    if (!app.Initialize()) {
+    const bool initialized = app.Initialize();
+#if defined(_WIN32)
+    splash.Close();
+#endif
+    if (!initialized) {
         kb::editor::EditorCrashBreadcrumbs::Write("app", "EditorApplication Initialize failed");
         return 1;
     }

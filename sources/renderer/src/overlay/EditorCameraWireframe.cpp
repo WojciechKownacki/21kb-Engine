@@ -40,7 +40,15 @@ using CameraPlaneCorners = std::array<std::array<float, 3>, 4U>;
     }};
 }
 
+constexpr float kDisplayWorldDepth = 10.0F;
+
 } // namespace
+
+float EditorCameraWireframeDisplayFarClip(float nearClip, float farClip) noexcept {
+    const float clampedNear = std::max(0.0001F, nearClip);
+    const float authoredFarClip = std::max(clampedNear + 0.0001F, farClip);
+    return std::min(authoredFarClip, std::max(clampedNear + 0.001F, kDisplayWorldDepth));
+}
 
 std::array<EditorCameraWireframeLine, kEditorCameraWireframeLineCount>
 BuildEditorCameraWireframeLines(

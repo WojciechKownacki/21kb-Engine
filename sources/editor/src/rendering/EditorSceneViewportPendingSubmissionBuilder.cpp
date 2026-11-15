@@ -36,7 +36,9 @@ bool EditorSceneBgfxViewport::PendingSubmissionBuilder::Build(
         (!present.settings.postProcessEnabled && present.settings.lightingConfig.lightingPath != render::SceneRenderLightingPath::Deferred)
             ? present.settings.msaaSamples
             : 0U;
-    if (!EnsureSessionTargets(session, present.renderWidth, present.renderHeight, present.settings.postProcessEnabled, sceneMsaaSamples)) {
+    const render::RenderExtent sceneExtent = render::Renderer::ScaledRenderExtent(
+        render::RenderExtent{present.renderWidth, present.renderHeight}, present.settings.renderScale);
+    if (!EnsureSessionTargets(session, sceneExtent.width, sceneExtent.height, present.settings.postProcessEnabled, sceneMsaaSamples)) {
         return false;
     }
 
@@ -77,7 +79,8 @@ render::RenderSceneSubmitDesc EditorSceneBgfxViewport::PendingSubmissionBuilder:
     const HostSurface& surface,
     const ViewportSession& session,
     bool clearTarget) {
-    const render::RenderExtent renderExtent{present.renderWidth, present.renderHeight};
+    const render::RenderExtent fullExtent{present.renderWidth, present.renderHeight};
+    const render::RenderExtent renderExtent = render::Renderer::ScaledRenderExtent(fullExtent, present.settings.renderScale);
     const render::RenderExtent surfaceExtent{RectWidth(surface.rect), RectHeight(surface.rect)};
     const SceneViewportSceneSyncDecision sync = SceneViewportSceneSyncPolicy::Resolve(
         session.submittedSceneRevision,
@@ -117,6 +120,7 @@ render::RenderSceneSubmitDesc EditorSceneBgfxViewport::PendingSubmissionBuilder:
             .enabled = present.settings.presentToHost,
             .clearTarget = clearTarget,
         },
+        .upscaledExtent = renderExtent == fullExtent ? render::RenderExtent{} : fullExtent,
         .cameraOverride = present.settings.cameraOverride,
         .cameraOverrideEye = present.settings.cameraOverrideEye,
         .overlayOrigin = present.settings.overlayOrigin,
@@ -128,8 +132,9 @@ render::RenderSceneSubmitDesc EditorSceneBgfxViewport::PendingSubmissionBuilder:
         .dirtySceneEntityIds = dirtySceneEntityIds,
         .editorCameraWireframes = std::span<const render::EditorCameraWireframeDesc>{present.settings.editorCameraWireframes.data(), present.settings.editorCameraWireframes.size()},
         .editorLightWireframes = std::span<const render::EditorLightWireframeDesc>{present.settings.editorLightWireframes.data(), present.settings.editorLightWireframes.size()},
-        .editorParticleIcons = std::span<const render::EditorParticleIconDesc>{present.settings.editorParticleIcons.data(), present.settings.editorParticleIcons.size()},
+        .editorSceneIcons = std::span<const render::EditorSceneIconDesc>{present.settings.editorSceneIcons.data(), present.settings.editorSceneIcons.size()},
         .physicsDebugLines = std::span<const render::PhysicsDebugLine>{present.settings.physicsDebugLines.data(), present.settings.physicsDebugLines.size()},
+        .debugFillTriangles = std::span<const render::DebugFillTriangle>{present.settings.debugFillTriangles.data(), present.settings.debugFillTriangles.size()},
         .editorUIOverlays = present.settings.editorUIOverlays,
         .editorUIScale = present.settings.editorUIScale,
         .editorUIOffset = present.settings.editorUIOffset,

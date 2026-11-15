@@ -89,7 +89,7 @@ state machines, scripts and game builds.
     <td width="58%"><img src="docs/readme/script.png" alt="Lua gameplay script in the built in script editor"></td>
     <td width="42%">
 
-**One API, three front ends.** Native C++, sandboxed Lua 5.4 and Visual Graph all call
+**One API, three front ends.** Native C++, sandboxed Lua (LuaJIT, or Lua 5.4 where machine code cannot be generated) and Visual Graph all call
 the same engine library, so a feature exists everywhere or nowhere.
 
 **Safe by construction.** Lua runs without `io`, `os` or `debug`, under an execution

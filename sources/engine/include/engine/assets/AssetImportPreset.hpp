@@ -16,8 +16,8 @@ namespace kb::assets {
 inline constexpr const char* kAssetImportPresetExtension = ".kbimportpreset";
 inline constexpr const char* kAssetImportPresetAssetType = "ImportPreset";
 
-// A reusable set of import options, as Unreal's Interchange pipeline asset or a Unity Preset of
-// a ModelImporter: the import dialog and kb_cli import --preset start from it. Its payload IS
+// A reusable set of import options:
+// the import dialog and kb_cli import --preset start from it. Its payload IS
 // AssetImportOptions (no second schema to keep in sync). A flat `key value` text file: unknown
 // keys are ignored (a newer editor's preset still loads), a missing key keeps the default, and
 // a value a key does not take refuses the whole file.

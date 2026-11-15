@@ -1,6 +1,7 @@
 #include "app/EditorPlayModeSceneSession.hpp"
 
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAnimatorPoseRate.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 
@@ -26,6 +27,9 @@ bool EditorPlayModeSceneSession::Begin(kb::scene::Scene& scene, std::string scen
     history_ = scene.History().Suspend();
     owner_ = &scene;
     restoredEntities_.clear();
+    // The Scene view and the Game view are both rendered while playing and the last one decides what the renderer
+    // reports as seen: characters would animate in steps in the view that did not submit last.
+    kb::scene::SceneAnimatorPoseRate::SetPolicy(scene, kb::scene::AnimatorPoseRatePolicy{ .enabled = false });
     scene.Runtime().SetPlaying(true);
     return true;
 }
@@ -37,6 +41,7 @@ bool EditorPlayModeSceneSession::Restore(kb::scene::Scene& scene) {
     if (owner_ != &scene) return false;
 
     scene.Runtime().SetPlaying(false);
+    kb::scene::SceneAnimatorPoseRate::SetPolicy(scene, kb::scene::AnimatorPoseRatePolicy{});
     const bool restored = kb::scene::SceneDocumentService::LoadIntoScene(scene, *snapshot_);
     // Runtime mode is session state, not document state. Keep it stopped even if
     // loading fails or a future document version starts carrying runtime fields.

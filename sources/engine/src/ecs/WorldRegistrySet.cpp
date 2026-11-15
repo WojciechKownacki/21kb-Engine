@@ -67,7 +67,8 @@ const WorldEntityCatalog& WorldRegistrySet::Entities() const noexcept {
 }
 
 bool WorldRegistrySet::HasComponentObserver(ComponentId componentId) const noexcept {
-    return componentObservers_.find(componentId) != componentObservers_.end();
+    // Value writes ask this for every write; most worlds have no observer at all, which needs no lookup.
+    return !componentObservers_.empty() && componentObservers_.find(componentId) != componentObservers_.end();
 }
 
 void WorldRegistrySet::RetainComponentObserver(ComponentId componentId) {

@@ -13,6 +13,7 @@
 #include "engine/ecs/World.hpp"
 #include "engine/ecs/WorldTelemetryExport.hpp"
 #include "engine/audio/AudioPlayback.hpp"
+#include "engine/scene/SceneTagCatalog.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/particles/ParticlePlayback.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -600,6 +601,9 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         ? projectSettings.settings.inputEnabled : loadedProject.legacySettings.inputEnabled;
     const std::string inputMappingContext = projectSettings.found && projectSettings.Succeeded()
         ? projectSettings.settings.inputMappingContext : loadedProject.legacySettings.inputMappingContext;
+    // An older project keeps no simulation settings in its descriptor, so it runs with the defaults.
+    const kb::project::ProjectSimulationSettings simulation = projectSettings.found && projectSettings.Succeeded()
+        ? projectSettings.settings.simulation : kb::project::ProjectSimulationSettings{};
     kb::ecs::WorldConfig worldConfig;
     worldConfig.chunkSizeProfile = kb::ecs::ChunkSizeProfile::Chunk64KB;
     worldConfig.workerThreadLimit = workerLimit;
@@ -633,6 +637,11 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         io.err << "error: project physics layers could not be loaded and applied: "
                << physicsLayersAsset << '\n';
         return 1;
+    }
+    // The master gain and project tags the game applies before any scene is loaded.
+    if (projectSettings.found && projectSettings.Succeeded()) {
+        static_cast<void>(kb::audio::AudioPlayback::SetMasterVolume(scene, projectSettings.settings.masterVolume));
+        static_cast<void>(scene.Tags().SetProjectDefinitions(projectSettings.settings.tags));
     }
 
     // Resolve and load the scene file exactly the way scene-list does: virtual
@@ -721,6 +730,7 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         }
     }
 
+    scene.Runtime().ApplyProjectSimulation(simulation);
     kb::script::ScriptRuntimeHost host{ scene };
     RegisterStdoutLog(host, io.out);
     if (!host.Succeeded()) {

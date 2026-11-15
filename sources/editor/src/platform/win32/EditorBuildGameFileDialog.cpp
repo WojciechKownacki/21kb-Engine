@@ -3,13 +3,16 @@
 #if defined(_WIN32)
 #include "localization/EditorLocalization.hpp"
 #include "platform/win32/EditorFileDialogFilter.hpp"
+#include "platform/win32/EditorModalMessageLoop.hpp"
 #include "rendering/script_editor/ScriptEditorTextEncoding.hpp"
 
 #include <CommDlg.h>
 #include <ShlObj.h>
 
 #include <array>
+#include <atomic>
 #include <string>
+#include <thread>
 
 namespace kb::editor {
 namespace {
@@ -36,15 +39,16 @@ namespace {
 
 } // namespace
 
-std::optional<std::filesystem::path> EditorBuildGameFileDialog::SelectFolder(
-    HWND owner, const std::filesystem::path& initialDirectory, std::string_view title) {
+namespace {
+
+[[nodiscard]] std::optional<std::filesystem::path> ShowFolderDialog(
+    HWND owner, const std::filesystem::path& initialDirectory, const std::wstring& titleText) {
     IFileDialog* dialog = nullptr;
     if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
             IID_PPV_ARGS(&dialog))) || dialog == nullptr) return std::nullopt;
     DWORD options = 0U;
     static_cast<void>(dialog->GetOptions(&options));
     static_cast<void>(dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST));
-    const std::wstring titleText = ScriptEditorTextEncoding::Widen(title);
     static_cast<void>(dialog->SetTitle(titleText.c_str()));
     IShellItem* initial = nullptr;
     if (!initialDirectory.empty() && SUCCEEDED(SHCreateItemFromParsingName(initialDirectory.c_str(), nullptr,
@@ -69,6 +73,30 @@ std::optional<std::filesystem::path> EditorBuildGameFileDialog::SelectFolder(
     std::filesystem::path selectedPath{ path };
     CoTaskMemFree(path);
     return selectedPath;
+}
+
+} // namespace
+
+std::optional<std::filesystem::path> EditorBuildGameFileDialog::SelectFolder(
+    HWND owner, const std::filesystem::path& initialDirectory, std::string_view title) {
+    // The shell's dialog needs a single-threaded apartment and the audio backend leaves the UI thread
+    // in a multithreaded one, where Show never returns. It gets a thread of its own, and this one
+    // keeps pumping so the owner the dialog is attached to stays alive.
+    const std::wstring titleText = ScriptEditorTextEncoding::Widen(title);
+    std::optional<std::filesystem::path> selected;
+    std::atomic<bool> finished{ false };
+    std::thread worker([&]() {
+        const HRESULT apartment = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+        selected = ShowFolderDialog(owner, initialDirectory, titleText);
+        if (SUCCEEDED(apartment)) {
+            CoUninitialize();
+        }
+        finished.store(true);
+        PostMessageW(owner, WM_NULL, 0U, 0);
+    });
+    static_cast<void>(RunEditorModalMessageLoop(owner, false, [&finished]() noexcept { return finished.load(); }));
+    worker.join();
+    return selected;
 }
 
 std::optional<std::filesystem::path> EditorBuildGameFileDialog::SelectPng(HWND owner) {

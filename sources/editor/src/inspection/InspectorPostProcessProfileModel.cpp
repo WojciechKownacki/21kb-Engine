@@ -13,18 +13,20 @@ namespace {
 using Kind = InspectorPostProcessProfileRowKind;
 constexpr std::string_view kAntiAliasingField = "antiAliasing";
 
-constexpr std::array<InspectorPostProcessProfileSection, 8> kSections{ {
+constexpr std::array<InspectorPostProcessProfileSection, 10> kSections{ {
     { InspectorSectionId::PostProcessTonemap },
     { InspectorSectionId::PostProcessExposure },
     { InspectorSectionId::PostProcessBloom },
     { InspectorSectionId::PostProcessAntiAliasing },
     { InspectorSectionId::PostProcessVignette },
     { InspectorSectionId::PostProcessAmbientOcclusion },
+    { InspectorSectionId::PostProcessScreenSpaceReflections },
+    { InspectorSectionId::PostProcessMotionBlur },
     { InspectorSectionId::PostProcessGlobalIllumination },
     { InspectorSectionId::PostProcessFog },
 } };
 
-constexpr std::array<InspectorPostProcessProfileRow, 32> kRows{ {
+constexpr std::array<InspectorPostProcessProfileRow, 38> kRows{ {
     { InspectorSectionId::PostProcessTonemap, Kind::Bool, "tonemapEnabled" },
     { InspectorSectionId::PostProcessTonemap, Kind::Choice, "outputTransform.tonemap" },
     { InspectorSectionId::PostProcessExposure, Kind::Number, "outputTransform.exposureStops" },
@@ -57,6 +59,12 @@ constexpr std::array<InspectorPostProcessProfileRow, 32> kRows{ {
     { InspectorSectionId::PostProcessFog, Kind::Bool, "volumetricFogEnabled" },
     { InspectorSectionId::PostProcessFog, Kind::Number, "fogAnisotropy" },
     { InspectorSectionId::PostProcessFog, Kind::Choice, "fogProfile" },
+    { InspectorSectionId::PostProcessScreenSpaceReflections, Kind::Bool, "screenSpaceReflectionsEnabled" },
+    { InspectorSectionId::PostProcessScreenSpaceReflections, Kind::Number, "screenSpaceReflectionsIntensity" },
+    { InspectorSectionId::PostProcessScreenSpaceReflections, Kind::Number, "screenSpaceReflectionsMaxDistance" },
+    { InspectorSectionId::PostProcessMotionBlur, Kind::Bool, "motionBlurEnabled" },
+    { InspectorSectionId::PostProcessMotionBlur, Kind::Number, "motionBlurIntensity" },
+    { InspectorSectionId::PostProcessMotionBlur, Kind::Number, "motionBlurSamples" },
 } };
 
 // Every choice row's values, in the order a click steps through them: the file's value name and
@@ -212,6 +220,8 @@ std::string_view InspectorPostProcessProfileModel::SectionTitle(InspectorSection
     case InspectorSectionId::PostProcessAntiAliasing: return EditorText("inspector.postProcess.antiAliasing", "Anti-aliasing");
     case InspectorSectionId::PostProcessVignette: return EditorText("inspector.postProcess.vignette", "Vignette");
     case InspectorSectionId::PostProcessAmbientOcclusion: return EditorText("inspector.postProcess.ambientOcclusion", "Ambient Occlusion");
+    case InspectorSectionId::PostProcessScreenSpaceReflections: return EditorText("inspector.postProcess.screenSpaceReflections", "Screen Space Reflections");
+    case InspectorSectionId::PostProcessMotionBlur: return EditorText("inspector.postProcess.motionBlur", "Motion Blur");
     case InspectorSectionId::PostProcessGlobalIllumination: return EditorText("inspector.postProcess.globalIllumination", "Global Illumination");
     case InspectorSectionId::PostProcessFog: return EditorText("inspector.postProcess.fog", "Fog");
     default: return {};
@@ -252,6 +262,12 @@ std::string_view InspectorPostProcessProfileModel::RowLabel(int row) {
     case 29: return EditorText("inspector.postProcess.volumetricFog", "Volumetric Fog");
     case 30: return EditorText("inspector.postProcess.fogAnisotropy", "Volumetric Fog Anisotropy");
     case 31: return EditorText("inspector.postProcess.fogProfile", "Fog Profile");
+    case 32: return EditorText("inspector.postProcess.screenSpaceReflectionsEnabled", "Screen Space Reflections");
+    case 33: return EditorText("inspector.postProcess.screenSpaceReflectionsIntensity", "Intensity");
+    case 34: return EditorText("inspector.postProcess.screenSpaceReflectionsMaxDistance", "Max Distance (m)");
+    case 35: return EditorText("inspector.postProcess.motionBlurEnabled", "Motion Blur");
+    case 36: return EditorText("inspector.postProcess.motionBlurIntensity", "Shutter");
+    case 37: return EditorText("inspector.postProcess.motionBlurSamples", "Samples");
     default: return {};
     }
 }

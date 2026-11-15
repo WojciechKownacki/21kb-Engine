@@ -42,11 +42,11 @@ constexpr int kMenuHeading = 26;
 constexpr int kMenuModelRow = 32;
 constexpr int kMenuPill = 28;
 
-const Gdiplus::Color kFill{ 244, 21, 23, 27 };
-const Gdiplus::Color kText{ 255, 230, 232, 235 };
-const Gdiplus::Color kDim{ 255, 146, 152, 162 };
-const Gdiplus::Color kFaint{ 255, 98, 104, 114 };
-const Gdiplus::Color kAccent{ 255, 98, 186, 218 };
+const Gdiplus::Color kFill{ 244, 28, 28, 28 };
+const Gdiplus::Color kText{ 255, 226, 226, 226 };
+const Gdiplus::Color kDim{ 255, 168, 168, 168 };
+const Gdiplus::Color kFaint{ 255, 128, 128, 128 };
+const Gdiplus::Color kAccent{ 255, 0, 112, 224 };
 const Gdiplus::Color kAmber{ 255, 226, 170, 64 };
 const Gdiplus::Color kDanger{ 255, 236, 116, 116 };
 

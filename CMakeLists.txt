@@ -14,6 +14,12 @@ set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS deployment ta
 
 project(Engine21kb LANGUAGES C CXX)
 
+# Outside a developer command prompt every configure check fails to link and the
+# wrong answers stay in the cache, which later breaks third-party builds.
+if(MSVC AND CMAKE_GENERATOR MATCHES "Ninja|Makefiles" AND "$ENV{LIB}" STREQUAL "")
+    message(FATAL_ERROR "The MSVC environment is not set (LIB is empty). Configure from a developer command prompt or through scripts/build_with_lock.py.")
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -108,6 +114,11 @@ if(ANDROID AND KB_BUILD_ANDROID_HOST AND
 endif()
 if(ANDROID AND KB_BUILD_ANDROID_HOST AND NOT ANDROID_ABI STREQUAL "arm64-v8a")
     message(FATAL_ERROR "The packaged Android game host requires ANDROID_ABI=arm64-v8a")
+endif()
+if(ANDROID AND KB_BUILD_ANDROID_HOST)
+    # The package ships this library: its assertion messages and debug information must not name the
+    # folders of the machine that built it.
+    add_compile_options(-ffile-prefix-map=${CMAKE_SOURCE_DIR}=.)
 endif()
 if(EMSCRIPTEN AND NOT KB_WEB_RENDERER MATCHES "^(WEBGL|WEBGPU)$")
     message(FATAL_ERROR "KB_WEB_RENDERER must be WEBGL or WEBGPU")
@@ -422,12 +433,49 @@ if(NOT WIN32)
 endif()
 kb_apply_fuzz_instrumentation(kb_ufbx)
 
+# The script VM. Scripts run on LuaJIT where the platform allows the program to generate machine code (Windows, Linux and
+# Android) and on Lua 5.4 where it does not (iOS, the web, consoles). The VM is chosen here, once: there is no runtime
+# switch, and the engine's script sources are written for both (script/lua/LuaVm.hpp maps the few calls that differ).
+# KB_SCRIPT_VM overrides the platform default, for example to build the Lua 5.4 VM on Windows to test the language subset
+# both VMs share.
+set(KB_SCRIPT_VM "" CACHE STRING "Script VM: LuaJIT or Lua54 (empty: LuaJIT on Windows with MSVC, Linux and Android, Lua54 elsewhere)")
+set_property(CACHE KB_SCRIPT_VM PROPERTY STRINGS "" LuaJIT Lua54)
+if(KB_SCRIPT_VM STREQUAL "")
+    if((WIN32 AND MSVC) OR ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        set(kb_script_vm LuaJIT)
+    else()
+        set(kb_script_vm Lua54)
+    endif()
+elseif(KB_SCRIPT_VM MATCHES "^(LuaJIT|Lua54)$")
+    set(kb_script_vm ${KB_SCRIPT_VM})
+else()
+    message(FATAL_ERROR "KB_SCRIPT_VM must be LuaJIT or Lua54, not '${KB_SCRIPT_VM}'")
+endif()
+message(STATUS "Script VM: ${kb_script_vm}")
+
+FetchContent_Declare(
+    kb_luajit
+    URL https://github.com/LuaJIT/LuaJIT/archive/63c8f1a9b479ba5518cf6a170ff7729178bc3cfd.tar.gz
+    URL_HASH SHA256=8cad76f444b76001b7123dc626c5d0bfc24f1f790333737443345f7e6b41bb5f
+    SOURCE_SUBDIR kb_luajit_has_no_cmake_entry
+)
+if(kb_script_vm STREQUAL "Lua54")
 FetchContent_Declare(
     kb_lua
     URL https://www.lua.org/ftp/lua-5.4.8.tar.gz
     URL_HASH SHA256=4f18ddae154e793e46eeab727c59ef1c0c0c2b744e7b94219710d76f530629ae
+    PATCH_COMMAND ${CMAKE_COMMAND} -DLUA_SOURCE_DIR=<SOURCE_DIR>/src -P ${CMAKE_CURRENT_SOURCE_DIR}/CMake/PatchLuaRunaway.cmake
 )
 FetchContent_MakeAvailable(kb_lua)
+# A tree fetched before the patch step existed (or by a CMake that keeps populated content) is patched here; the script
+# changes nothing in a tree that already has the patch.
+execute_process(
+    COMMAND ${CMAKE_COMMAND} -DLUA_SOURCE_DIR=${kb_lua_SOURCE_DIR}/src -P ${CMAKE_CURRENT_SOURCE_DIR}/CMake/PatchLuaRunaway.cmake
+    RESULT_VARIABLE _kb_lua_patch_result
+)
+if(NOT _kb_lua_patch_result EQUAL 0)
+    message(FATAL_ERROR "The Lua runaway patch could not be applied to ${kb_lua_SOURCE_DIR}")
+endif()
 if(NOT TARGET kb_lua)
     add_library(kb_lua STATIC
         ${kb_lua_SOURCE_DIR}/src/lapi.c
@@ -469,6 +517,94 @@ if(NOT TARGET kb_lua)
     elseif(UNIX)
         target_compile_definitions(kb_lua PRIVATE LUA_USE_POSIX)
     endif()
+endif()
+
+    add_library(kb_script_vm INTERFACE)
+    target_link_libraries(kb_script_vm INTERFACE kb_lua)
+    set(KB_SCRIPT_VM_LIBRARY kb_lua)
+    set(KB_SCRIPT_VM_INCLUDE_DIR ${kb_lua_SOURCE_DIR}/src)
+else()
+    # LuaJIT (MIT), built from the pinned archive into a static library with LUAJIT_ENABLE_CHECKHOOK: compiled code checks
+    # for an interrupting hook in its loops, which the execution budget of the runtime relies on (PucLuaRunaway).
+    FetchContent_MakeAvailable(kb_luajit)
+    set(kb_luajit_gen_dir ${CMAKE_BINARY_DIR}/kb_luajit_gen)
+    file(MAKE_DIRECTORY ${kb_luajit_gen_dir})
+    if(MSVC)
+        # The Windows build uses src/msvcbuild.bat in the active MSVC environment. The script ships with LF line endings,
+        # which the Windows command interpreter mishandles.
+        file(READ ${kb_luajit_SOURCE_DIR}/src/msvcbuild.bat kb_luajit_script)
+        if(NOT kb_luajit_script MATCHES "\r\n")
+            string(REPLACE "\n" "\r\n" kb_luajit_script "${kb_luajit_script}")
+            file(WRITE ${kb_luajit_SOURCE_DIR}/src/msvcbuild.bat "${kb_luajit_script}")
+        endif()
+        file(TO_NATIVE_PATH ${kb_luajit_SOURCE_DIR}/src kb_luajit_src_native)
+        set(kb_luajit_library ${kb_luajit_gen_dir}/luajit.lib)
+        file(TO_NATIVE_PATH ${kb_luajit_library} kb_luajit_library_native)
+        file(CONFIGURE OUTPUT ${kb_luajit_gen_dir}/build_luajit.bat @ONLY NEWLINE_STYLE WIN32 CONTENT
+            "@echo off
+set NoDefaultCurrentDirectoryInExePath=
+set CL=/MD /DLUAJIT_ENABLE_CHECKHOOK
+cd /d \"@kb_luajit_src_native@\"
+call msvcbuild.bat static
+if errorlevel 1 exit /b 1
+copy /y lua51.lib \"@kb_luajit_library_native@\" >nul
+")
+        add_custom_command(
+            OUTPUT ${kb_luajit_library}
+            COMMAND cmd /c ${kb_luajit_gen_dir}/build_luajit.bat
+            DEPENDS ${kb_luajit_gen_dir}/build_luajit.bat
+            WORKING_DIRECTORY ${kb_luajit_SOURCE_DIR}/src
+            COMMENT "Building LuaJIT with msvcbuild.bat"
+            VERBATIM)
+        add_custom_target(kb_luajit_build DEPENDS ${kb_luajit_library})
+        set(KB_SCRIPT_VM_BUILD_TARGET kb_luajit_build)
+        add_library(kb_luajit STATIC IMPORTED GLOBAL)
+        set_target_properties(kb_luajit PROPERTIES IMPORTED_LOCATION ${kb_luajit_library})
+        add_dependencies(kb_luajit kb_luajit_build)
+        target_include_directories(kb_luajit SYSTEM INTERFACE ${kb_luajit_SOURCE_DIR}/src)
+    else()
+        # Android and Linux: LuaJIT's own host tools generate the VM (assembler for the target) and the headers, then the
+        # toolchain of this build compiles the library like any other target, so it gets the flags of the platform
+        # (CMake/GenerateLuaJitVm.cmake does what LuaJIT's Makefile does for a cross build).
+        enable_language(ASM)
+        set(kb_luajit_target_flags "${CMAKE_C_FLAGS}")
+        if(CMAKE_C_COMPILER_TARGET)
+            string(APPEND kb_luajit_target_flags " --target=${CMAKE_C_COMPILER_TARGET}")
+        endif()
+        if(CMAKE_SYSROOT)
+            string(APPEND kb_luajit_target_flags " --sysroot=${CMAKE_SYSROOT}")
+        endif()
+        set(kb_luajit_generated
+            ${kb_luajit_gen_dir}/lj_vm.S ${kb_luajit_gen_dir}/lj_bcdef.h ${kb_luajit_gen_dir}/lj_ffdef.h
+            ${kb_luajit_gen_dir}/lj_libdef.h ${kb_luajit_gen_dir}/lj_recdef.h ${kb_luajit_gen_dir}/lj_folddef.h ${kb_luajit_gen_dir}/luajit.h)
+        add_custom_command(
+            OUTPUT ${kb_luajit_generated}
+            COMMAND ${CMAKE_COMMAND} -DLJ_SRC=${kb_luajit_SOURCE_DIR}/src -DLJ_GEN=${kb_luajit_gen_dir}
+                -DLJ_TARGET_CC=${CMAKE_C_COMPILER} "-DLJ_TARGET_FLAGS=${kb_luajit_target_flags}" -DLJ_TARGET_OS=Linux
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/CMake/GenerateLuaJitVm.cmake
+            DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/CMake/GenerateLuaJitVm.cmake
+            COMMENT "Generating the LuaJIT VM"
+            VERBATIM)
+        file(GLOB kb_luajit_sources CONFIGURE_DEPENDS ${kb_luajit_SOURCE_DIR}/src/lj_*.c ${kb_luajit_SOURCE_DIR}/src/lib_*.c)
+        add_custom_target(kb_luajit_generate DEPENDS ${kb_luajit_generated})
+        set(KB_SCRIPT_VM_BUILD_TARGET kb_luajit_generate)
+        add_library(kb_luajit STATIC ${kb_luajit_sources} ${kb_luajit_gen_dir}/lj_vm.S)
+        add_dependencies(kb_luajit kb_luajit_generate)
+        set_source_files_properties(${kb_luajit_gen_dir}/lj_vm.S PROPERTIES GENERATED TRUE)
+        set_target_properties(kb_luajit PROPERTIES OUTPUT_NAME kb_lua POSITION_INDEPENDENT_CODE ON)
+        target_include_directories(kb_luajit PRIVATE ${kb_luajit_gen_dir})
+        target_include_directories(kb_luajit SYSTEM PUBLIC ${kb_luajit_SOURCE_DIR}/src ${kb_luajit_gen_dir})
+        target_compile_definitions(kb_luajit PRIVATE LUAJIT_ENABLE_CHECKHOOK _FILE_OFFSET_BITS=64 _LARGEFILE_SOURCE)
+        target_compile_options(kb_luajit PRIVATE -U_FORTIFY_SOURCE -fno-stack-protector -w)
+        if(NOT ANDROID)
+            target_link_libraries(kb_luajit PUBLIC m ${CMAKE_DL_LIBS})
+        endif()
+    endif()
+    add_library(kb_script_vm INTERFACE)
+    target_link_libraries(kb_script_vm INTERFACE kb_luajit)
+    set(KB_SCRIPT_VM_LIBRARY kb_luajit)
+    # luajit.h is generated by the LuaJIT build, into its source folder (Windows) or the generated folder (the others).
+    set(KB_SCRIPT_VM_INCLUDE_DIR ${kb_luajit_SOURCE_DIR}/src ${kb_luajit_gen_dir})
 endif()
 
 # Every cryptographic primitive the engine uses (Ed25519, SHA-512, HMAC-SHA512,
@@ -565,6 +701,79 @@ if(NOT TARGET kb_recast)
     string(REPLACE "${_kb_crowd_reset}"
         "// Engine patch: cancel link animation before the slot can be reused.\n\t\tm_agentAnims[idx].active = false;\n\t\tm_agents[idx].active = false;"
         _kb_crowd_source "${_kb_crowd_source}")
+    # The crowd update runs its per-member passes on the engine's workers: the generated copy ends
+    # with the engine's path validity check and update (sources/engine/src/navigation/
+    # DetourCrowdUpdate.inl) in place of the upstream ones, the last two functions of the file, and
+    # its header gains the worker hooks and per-pass timings.
+    set(_kb_crowd_update "void dtCrowd::checkPathValidity(dtCrowdAgent** agents, const int nagents, const float dt)\n{")
+    set(_kb_crowd_purge "void dtCrowd::purge()\n{\n")
+    string(FIND "${_kb_crowd_source}" "${_kb_crowd_update}" _kb_crowd_update_offset)
+    string(FIND "${_kb_crowd_source}" "${_kb_crowd_purge}" _kb_crowd_purge_offset)
+    file(READ "${kb_recast_SOURCE_DIR}/DetourCrowd/Include/DetourCrowd.h" _kb_crowd_header)
+    set(_kb_crowd_class "class dtCrowd\n{\n")
+    set(_kb_crowd_private "\tvoid purge();\n")
+    set(_kb_crowd_public "\tvoid update(const float dt, dtCrowdAgentDebugInfo* debug);\n")
+    string(FIND "${_kb_crowd_header}" "${_kb_crowd_class}" _kb_crowd_class_offset)
+    string(FIND "${_kb_crowd_header}" "${_kb_crowd_private}" _kb_crowd_private_offset)
+    string(FIND "${_kb_crowd_header}" "${_kb_crowd_public}" _kb_crowd_public_offset)
+    if(_kb_crowd_update_offset EQUAL -1 OR _kb_crowd_purge_offset EQUAL -1 OR _kb_crowd_class_offset EQUAL -1 OR
+            _kb_crowd_private_offset EQUAL -1 OR _kb_crowd_public_offset EQUAL -1)
+        message(FATAL_ERROR "The pinned crowd source no longer matches the parallel update patch")
+    endif()
+    string(SUBSTRING "${_kb_crowd_source}" 0 ${_kb_crowd_update_offset} _kb_crowd_source)
+    string(REPLACE "${_kb_crowd_purge}" "${_kb_crowd_purge}\treleaseWorkers();\n" _kb_crowd_source "${_kb_crowd_source}")
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/sources/engine/src/navigation/DetourCrowdUpdate.inl" _kb_crowd_update_source)
+    string(APPEND _kb_crowd_source "${_kb_crowd_update_source}")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/sources/engine/src/navigation/DetourCrowdUpdate.inl")
+    string(REPLACE "${_kb_crowd_class}" [=[
+// Engine patch: the per-member passes of dtCrowd::update run through a parallel-for. It calls
+// `range(pass, begin, end, worker)` over [0, count) in pieces, each on one worker in [0, workers).
+typedef void (*dtCrowdPassRange)(void* pass, int begin, int end, int worker);
+typedef void (*dtCrowdParallelFor)(void* user, int count, dtCrowdPassRange range, void* pass);
+
+// Engine patch: the stages of dtCrowd::update timed by getPassMilliseconds.
+enum dtCrowdPass
+{
+	DT_CROWD_PASS_PATHS,
+	DT_CROWD_PASS_NEIGHBOURS,
+	DT_CROWD_PASS_CORNERS,
+	DT_CROWD_PASS_STEERING,
+	DT_CROWD_PASS_AVOIDANCE,
+	DT_CROWD_PASS_MOVE,
+	DT_CROWD_PASS_COUNT
+};
+
+class dtCrowd
+{
+]=] _kb_crowd_header "${_kb_crowd_header}")
+    string(REPLACE "${_kb_crowd_private}" [=[
+	void purge();
+
+	// Engine patch: the parallel-for and each worker's query objects.
+	dtCrowdParallelFor m_parallelFor = 0;
+	void* m_parallelUser = 0;
+	int m_workerCount = 0;
+	dtNavMeshQuery** m_workerQueries = 0;
+	dtObstacleAvoidanceQuery** m_workerAvoidance = 0;
+	int* m_workerSamples = 0;
+	float m_passMilliseconds[DT_CROWD_PASS_COUNT] = {};
+	void releaseWorkers();
+	template <typename Pass> void runPass(const int count, Pass& pass);
+]=] _kb_crowd_header "${_kb_crowd_header}")
+    string(REPLACE "${_kb_crowd_public}" [=[
+	void update(const float dt, dtCrowdAgentDebugInfo* debug);
+
+	/// Engine patch: runs the per-member passes of update() through @p run on @p workers workers,
+	/// each with its own query objects; a null @p run or no workers runs them on the calling thread.
+	/// Call after init(), which drops the workers. Returns false when they cannot be allocated.
+	bool setParallelFor(dtCrowdParallelFor run, void* user, const int workers);
+
+	/// Engine patch: wall time of each stage of the last update(), indexed by dtCrowdPass.
+	const float* getPassMilliseconds() const { return m_passMilliseconds; }
+]=] _kb_crowd_header "${_kb_crowd_header}")
+    file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/navigation/DetourCrowd.h"
+        CONTENT "${_kb_crowd_header}" @ONLY)
     file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/navigation/DetourCrowd.cpp"
         CONTENT "${_kb_crowd_source}" @ONLY)
     add_library(kb_recast STATIC
@@ -597,6 +806,7 @@ if(NOT TARGET kb_recast)
     target_include_directories(kb_recast PUBLIC
         ${kb_recast_SOURCE_DIR}/Recast/Include
         ${kb_recast_SOURCE_DIR}/Detour/Include
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/navigation
         ${kb_recast_SOURCE_DIR}/DetourCrowd/Include
         ${kb_recast_SOURCE_DIR}/DetourTileCache/Include
     )
@@ -734,13 +944,24 @@ endif()
 # symbol store outside the shipped folder. /DEBUG turns off the Release reference
 # and folding optimisations, so they are named again.
 if(MSVC)
+    # The shipped images must not name the machine that built them: the linker records the full path of the PDB,
+    # and __FILE__ in the assertion messages of third-party code (and of the renderer, which compiles bgfx's
+    # inline readers) expands to the full source path.
+    file(TO_NATIVE_PATH "${CMAKE_SOURCE_DIR}" _kb_native_source_root)
+    foreach(_kb_trimmed_target IN ITEMS flecs_static bx bimg bimg_decode bgfx kb_renderer)
+        if(TARGET ${_kb_trimmed_target})
+            target_compile_options(${_kb_trimmed_target} PRIVATE "/d1trimfile:${_kb_native_source_root}")
+        endif()
+    endforeach()
     foreach(_kb_shipped_target IN ITEMS
             kb_game kb_physics_jolt_plugin kb_audio_miniaudio_plugin kb_basic_lighting_plugin
             kb_21kb_particle_plugin kb_ai_plugin kb_world2d_plugin kb_crash_reporting_test_helper)
         if(TARGET ${_kb_shipped_target})
             get_target_property(_kb_shipped_type ${_kb_shipped_target} TYPE)
             if(_kb_shipped_type MATCHES "^(EXECUTABLE|SHARED_LIBRARY|MODULE_LIBRARY)$")
+                target_compile_options(${_kb_shipped_target} PRIVATE "/d1trimfile:${_kb_native_source_root}")
                 target_link_options(${_kb_shipped_target} PRIVATE
+                    "/PDBALTPATH:$<TARGET_PDB_FILE_NAME:${_kb_shipped_target}>"
                     "$<$<CONFIG:Release>:/DEBUG:FULL;/OPT:REF;/OPT:ICF>")
             endif()
         endif()

@@ -2,6 +2,8 @@
 
 #include "kb/editor/docking/DockTypes.hpp"
 
+#include <vector>
+
 namespace kb::editor {
 
 class DockGeometry {
@@ -18,6 +20,10 @@ public:
     // sitting in a margin its docked twin does not have.
     [[nodiscard]] static DockRect PanelTabStrip(const DockRect& frame, int tabStripHeight);
     [[nodiscard]] static DockRect PanelContent(const DockRect& frame, int tabStripHeight);
+    // The widths of a strip's tabs, in order. Tabs keep their comfortable minimum while the
+    // strip has room for it. A strip too narrow for that lets the active tab keep its title and
+    // shares the rest evenly, so no tab ends up past the strip's edge where it could not be reached.
+    [[nodiscard]] static std::vector<int> TabWidths(int stripWidth, int tabCount, int activeIndex, int tabMinWidth, int tabMaxWidth);
 };
 
 } // namespace kb::editor

@@ -1,11 +1,14 @@
 #pragma once
 
 #include "engine/math/DVec3.hpp"
+#include "engine/scene/Navigation.hpp"
 
 #include <array>
+#include <atomic>
 #include <compare>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -23,10 +26,10 @@ struct NavAgentProfile {
     static constexpr std::size_t MaxNameBytes = 64U;
 
     std::string name = "Humanoid";
-    float radius = 0.4F;
-    float height = 1.8F;
-    float maxClimb = 0.4F;
-    float maxSlopeDegrees = 45.0F;
+    float radius = kb::scene::kDefaultNavAgentRadius;
+    float height = kb::scene::kDefaultNavAgentHeight;
+    float maxClimb = kb::scene::kDefaultNavAgentMaxStepHeight;
+    float maxSlopeDegrees = kb::scene::kDefaultNavAgentMaxSlopeDegrees;
 
     friend bool operator==(const NavAgentProfile&, const NavAgentProfile&) = default;
 };
@@ -41,7 +44,7 @@ struct NavMeshBuildSettings {
 
     std::vector<NavAgentProfile> profiles{ NavAgentProfile{} };
     // Horizontal and vertical size of the voxels geometry is rasterised into, in metres.
-    float cellSize = 0.25F;
+    float cellSize = kb::scene::kDefaultNavCellSize;
     float cellHeight = 0.2F;
     // Side of a tile in voxels. A layer holds at most 255 walkable regions, so very cluttered
     // ground wants smaller tiles.
@@ -84,6 +87,12 @@ struct NavGeometryChunk {
     std::vector<std::uint32_t> indices;
 };
 
+// A world-space box the bake is limited to.
+struct NavBakeBox {
+    kb::math::DVec3 min{};
+    kb::math::DVec3 max{};
+};
+
 class NavGeometry {
 public:
     // Adds a chunk; indices outside the vertex list and non-finite vertices are dropped with
@@ -92,9 +101,14 @@ public:
     [[nodiscard]] std::span<const NavGeometryChunk> Chunks() const noexcept { return chunks_; }
     [[nodiscard]] std::size_t TriangleCount() const noexcept;
     [[nodiscard]] bool Empty() const noexcept { return chunks_.empty(); }
+    // Without bake boxes every tile the geometry touches is baked; with them only tiles touching a
+    // box are, and only the walkable ground inside the union of the boxes is kept.
+    void AddBakeBox(const NavBakeBox& box);
+    [[nodiscard]] std::span<const NavBakeBox> BakeBoxes() const noexcept { return bakeBoxes_; }
 
 private:
     std::vector<NavGeometryChunk> chunks_;
+    std::vector<NavBakeBox> bakeBoxes_;
 };
 
 // One walkable layer of a tile: a height grid with an area and neighbour connections per column,
@@ -144,6 +158,20 @@ struct NavMeshBakeResult {
     std::string error;
 };
 
+// How far a running bake has got: tile builds finished out of those it has to do. Another thread may
+// read it while the bake runs.
+struct NavBakeProgress {
+    std::atomic<std::size_t> total{ 0U };
+    std::atomic<std::size_t> built{ 0U };
+};
+
+// The tiles whose bake can differ between two geometries baked with the same settings: those (with
+// the border their agents need) touched by a chunk or a bake box only one of the geometries holds.
+// Empty when nothing changed; nullopt when everything may have, because one of them has bake boxes
+// and the other has none.
+[[nodiscard]] std::optional<std::vector<NavTileCoord>> ChangedNavTiles(const NavMeshBuildSettings& settings,
+    const NavGeometry& before, const NavGeometry& after);
+
 class NavMeshBuilder {
 public:
     NavMeshBuilder() = delete;
@@ -158,7 +186,13 @@ public:
     // bake. The tiles are the same bytes whatever the number of workers.
     // Workers of a pool started for a bake: one per core, at most 8 (each holds a tile's voxels).
     [[nodiscard]] static std::size_t DefaultBakeWorkerCount() noexcept;
-    [[nodiscard]] static NavMeshBakeResult Bake(const NavMeshBuildSettings& settings, const NavGeometry& geometry, kb::ecs::WorkerPool* workers = nullptr);
+    [[nodiscard]] static NavMeshBakeResult Bake(const NavMeshBuildSettings& settings, const NavGeometry& geometry, kb::ecs::WorkerPool* workers = nullptr,
+        NavBakeProgress* progress = nullptr);
+    // `tiles` (a bake's result) with the tiles at `coords` of every profile built again from the geometry, on
+    // the workers the way Bake builds them: rebuilding the tiles ChangedNavTiles names gives what a full
+    // Bake of the new geometry gives.
+    [[nodiscard]] static NavMeshBakeResult RebuildTiles(const NavMeshBuildSettings& settings, const NavGeometry& geometry,
+        std::vector<NavTile> tiles, std::span<const NavTileCoord> coords, kb::ecs::WorkerPool* workers = nullptr, NavBakeProgress* progress = nullptr);
 };
 
 } // namespace kb::navigation

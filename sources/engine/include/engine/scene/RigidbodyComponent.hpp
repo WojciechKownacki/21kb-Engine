@@ -26,7 +26,7 @@ struct RigidbodyComponent {
     // default - since LinearCast costs real extra CPU and most bodies never move fast enough
     // relative to their own/nearby colliders' thickness to need it.
     bool useContinuousCollision = false;
-    // Velocity damping per second, Unity's Rigidbody defaults (linear 0, angular 0.05).
+    // Velocity damping per second (defaults: linear 0, angular 0.05).
     float linearDamping = 0.0F;
     float angularDamping = 0.05F;
 };

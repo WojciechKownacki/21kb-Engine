@@ -1,15 +1,38 @@
 #include "assets/AssetFileSystem.hpp"
 
 #include <array>
+#include <chrono>
 #include <fstream>
+#include <mutex>
 #include <string>
 #include <system_error>
+#include <unordered_map>
 
 namespace kb::assets {
 namespace {
 
 constexpr std::uint64_t FnvOffset = 14695981039346656037ULL;
 constexpr std::uint64_t FnvPrime = 1099511628211ULL;
+
+// What HashFileUnlessUnchanged remembers of a file, keyed by its path.
+struct HashedFile {
+    std::uintmax_t size = 0U;
+    std::filesystem::file_time_type written{};
+    std::uint64_t hash = 0U;
+};
+
+constexpr std::chrono::seconds kSettledAfter{ 2 };
+constexpr std::size_t kMaxRememberedFiles = 1U << 20U;
+
+std::mutex& HashedFilesMutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+std::unordered_map<std::filesystem::path::string_type, HashedFile>& HashedFiles() {
+    static std::unordered_map<std::filesystem::path::string_type, HashedFile> files;
+    return files;
+}
 
 } // namespace
 
@@ -116,6 +139,40 @@ std::uint64_t AssetFileSystem::HashFile(const std::filesystem::path& path) noexc
         return 0;
     }
     return hash == 0 ? FnvPrime : hash;
+}
+
+std::uint64_t AssetFileSystem::HashFileUnlessUnchanged(const std::filesystem::path& path) noexcept {
+    try {
+        std::error_code error;
+        const std::uintmax_t size = std::filesystem::file_size(path, error);
+        if (error) {
+            return HashFile(path);
+        }
+        const std::filesystem::file_time_type written = std::filesystem::last_write_time(path, error);
+        if (error) {
+            return HashFile(path);
+        }
+        {
+            std::scoped_lock lock{ HashedFilesMutex() };
+            const auto found = HashedFiles().find(path.native());
+            if (found != HashedFiles().end() && found->second.size == size && found->second.written == written) {
+                return found->second.hash;
+            }
+        }
+        // The stamp was read before the content, so a write that lands in between leaves a stamp that no longer
+        // matches the file and the next call reads it again.
+        const std::uint64_t hash = HashFile(path);
+        if (hash != 0U && std::filesystem::file_time_type::clock::now() - written > kSettledAfter) {
+            std::scoped_lock lock{ HashedFilesMutex() };
+            if (HashedFiles().size() >= kMaxRememberedFiles) {
+                HashedFiles().clear();
+            }
+            HashedFiles()[path.native()] = HashedFile{ .size = size, .written = written, .hash = hash };
+        }
+        return hash;
+    } catch (...) {
+        return HashFile(path);
+    }
 }
 
 } // namespace kb::assets

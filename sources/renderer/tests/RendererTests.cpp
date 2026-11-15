@@ -72,6 +72,7 @@ void RunRendererRuntimeSubmitTests();
 void RunRendererStreamingLifetimeTests();
 void RunRendererGiResolveTests();
 void RunRendererSkyReflectionTests();
+void RunRendererLightProbeTests();
 void RunRendererCommandReuseTests();
 void RunRendererTransparentGpuReadbackTests();
 void RunRendererDefaultSubmissionResultTest();
@@ -102,6 +103,8 @@ void RunRendererParticleVolumetricSnapshotSubmitTest();
 void RunRendererDetachedViewportFinalCompositePixelsTest();
 void RunRendererCapabilityReportTests();
 void RunMeshPipelineTests();
+void RunMeshPipelineBuildScaleBenchmark();
+void RunMeshPipelineShadowBuildScaleBenchmark();
 void RunSceneDisplayCompositeTests();
 void RunSceneExposureMeterTests();
 void RunExposureReadbackResetTest();
@@ -117,6 +120,7 @@ void RunTextureBakeTests();
 void RunRuntimeContentStreamingTests();
 void RunPackagedWebGpuTextureFallbackTestOnly();
 void RunScreenUIDrawBatchTests();
+void RunScreenUIWorkloadBenchmark();
 void RunLargeWorldRenderTests();
 }
 
@@ -244,6 +248,10 @@ int main(int argc, char** argv) {
         kb::render::tests::RunScreenUIDrawBatchTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{ argv[1] } == "screen-ui-workloads") {
+        kb::render::tests::RunScreenUIWorkloadBenchmark();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{ argv[1] } == "screen-ui-overdraw") {
         kb::render::tests::RunScreenUIOverdrawGpuTests();
         return EXIT_SUCCESS;
@@ -282,6 +290,14 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "mesh-pipeline") {
         kb::render::tests::RunMeshPipelineTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "mesh-pipeline-scale") {
+        kb::render::tests::RunMeshPipelineBuildScaleBenchmark();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "mesh-pipeline-shadow-scale") {
+        kb::render::tests::RunMeshPipelineShadowBuildScaleBenchmark();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "transparent-gpu-readback") {
@@ -334,6 +350,10 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "sky-reflection") {
         kb::render::tests::RunRendererSkyReflectionTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "light-probes") {
+        kb::render::tests::RunRendererLightProbeTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "particle-state-rejection") {

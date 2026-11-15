@@ -416,8 +416,8 @@ int RunSceneAttachCommand(const ArgumentList& arguments, CommandIo io) {
 }
 
 #if KB_CLI_RENDERER
-// The scene's image settings: the post-process profile the renderer applies to it (as a Unity
-// global Volume's profile or a Godot WorldEnvironment's Environment), or none for the defaults.
+// The scene's image settings: the post-process profile the renderer applies to it,
+// or none for the defaults.
 int RunScenePostProcessCommand(const ArgumentList& arguments, CommandIo io) {
     const std::optional<std::string> project = arguments.Option("--project");
     const std::optional<std::string> profile = arguments.Option("--profile");
@@ -511,6 +511,12 @@ int RunSceneNewCommand(const ArgumentList& arguments, CommandIo io) {
         projectRoot, arguments.Option("--folder").value_or("Assets/Scenes"), *name);
     if (!target.error.empty()) {
         io.err << "error: " << target.error << '\n';
+        return 1;
+    }
+    // A character template names a script and input assets of the project; they are written when missing.
+    if (std::string files = kb::scene::SceneTemplates::WriteProjectFiles(projectRoot, *sceneTemplate, loaded.descriptor);
+        !files.empty()) {
+        io.err << "error: " << files << '\n';
         return 1;
     }
     if (std::string created = kb::scene::SceneTemplates::WriteSceneFile(target.file, *sceneTemplate, loaded.descriptor);

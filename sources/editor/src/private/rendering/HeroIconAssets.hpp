@@ -71,6 +71,12 @@ public:
     [[nodiscard]] static HeroIconGlyph Info() noexcept;
     [[nodiscard]] static HeroIconGlyph Flag() noexcept;
     [[nodiscard]] static HeroIconGlyph Monitor() noexcept;
+    [[nodiscard]] static HeroIconGlyph Clock() noexcept;
+    [[nodiscard]] static HeroIconGlyph Trash() noexcept;
+    [[nodiscard]] static HeroIconGlyph Pencil() noexcept;
+    [[nodiscard]] static HeroIconGlyph ExternalLink() noexcept;
+    [[nodiscard]] static HeroIconGlyph GitHub() noexcept;
+    [[nodiscard]] static HeroIconGlyph GitBranch() noexcept;
 };
 
 } // namespace kb::editor

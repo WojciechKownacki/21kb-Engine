@@ -58,6 +58,28 @@ public:
 // three world positions per triangle (debug drawing, inspection).
 [[nodiscard]] std::vector<kb::math::DVec3> NavMeshAssetTriangles(std::shared_ptr<const NavMeshAsset> asset, std::uint32_t profile);
 
+// What a debug view draws of one agent profile, in world space: the polygons as triangles with the
+// navigation area of each, every polygon edge (not the diagonals inside a polygon) with the edges
+// no polygon continues past marked, and the bounds of every tile.
+struct NavMeshDebugGeometry {
+    struct Edge {
+        kb::math::DVec3 from{};
+        kb::math::DVec3 to{};
+        bool boundary = false;
+    };
+    struct Box {
+        kb::math::DVec3 min{};
+        kb::math::DVec3 max{};
+    };
+    // Three corners per triangle; triangleAreas holds the navigation area id of each.
+    std::vector<kb::math::DVec3> triangles;
+    std::vector<std::uint8_t> triangleAreas;
+    std::vector<Edge> edges;
+    std::vector<Box> tiles;
+};
+
+[[nodiscard]] NavMeshDebugGeometry NavMeshAssetDebugGeometry(std::shared_ptr<const NavMeshAsset> asset, std::uint32_t profile);
+
 class NavMeshAssetLoader final : public kb::assets::IAssetLoader {
 public:
     [[nodiscard]] std::string_view Type() const noexcept override;

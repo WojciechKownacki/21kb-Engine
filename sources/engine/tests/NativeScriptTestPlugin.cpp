@@ -38,3 +38,39 @@ KB_NATIVE_SCRIPT_PLUGIN_EXPORT bool kb_register_native_scripts_partial_failure(k
     static_cast<void>(api->registerLifecycle(api->user, "tests.NativePluginPartialFailure", kb::script::ScriptLifecycleEvent::Tick, &OnTick));
     return false;
 }
+
+namespace {
+
+// A script class with state: its object is made by this library, carried over a reload through Serialize, and
+// destroyed by this library's code before the library is unmapped.
+class StatefulObject {
+public:
+    void Tick(kb::script::ScriptExecutionContext* context) {
+        ++ticks_;
+        static_cast<void>(context->SetSharedValue("nativeObject.Ticks", kb::script::ScriptValue{ ticks_ }));
+    }
+
+    void Serialize(kb::script::NativeScriptArchive& archive) {
+        archive.Field("ticks", ticks_);
+    }
+
+private:
+    int ticks_ = 0;
+};
+
+// Members but no Serialize: the load result says so, the editor tells the author.
+class ForgetfulObject {
+public:
+    void Tick(kb::script::ScriptExecutionContext*) { ++ticks_; }
+
+private:
+    int ticks_ = 0;
+};
+
+} // namespace
+
+KB_NATIVE_SCRIPT_PLUGIN_EXPORT bool kb_register_native_object_script(kb::script::NativeScriptPluginApi* api) {
+    return api != nullptr && api->version == kb::script::kNativeScriptPluginApiVersion &&
+        kb::script::RegisterNativeScript<StatefulObject>(api, "tests.NativePluginObject") &&
+        kb::script::RegisterNativeScript<ForgetfulObject>(api, "tests.NativePluginForgetful");
+}

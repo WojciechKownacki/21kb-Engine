@@ -1,6 +1,7 @@
 #include "agent/EditorAgentPanelState.hpp"
 
 #include "engine/core/JsonValue.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -189,6 +190,12 @@ void EditorAgentPanelState::RefreshAgents() {
 
 void EditorAgentPanelState::Prepare() {
     if (!prepared_) {
+        // The first tab was made before the editor's language was chosen.
+        for (const std::unique_ptr<EditorAgentConversation>& conversation : conversations_) {
+            if (conversation->entries.empty()) {
+                conversation->title = std::string{ EditorText("agent.newConversation", "New conversation") };
+            }
+        }
         RefreshAgents();
     }
 }
@@ -282,7 +289,7 @@ void EditorAgentPanelState::FinishAccountCheck() {
 
 void EditorAgentPanelState::NewConversation() {
     auto conversation = std::make_unique<EditorAgentConversation>();
-    conversation->title = "New conversation";
+    conversation->title = std::string{ EditorText("agent.newConversation", "New conversation") };
     conversations_.push_back(std::move(conversation));
     active_ = ConversationCount() - 1;
 }
@@ -397,6 +404,12 @@ bool EditorAgentPanelState::Send(const EditorAgentWorkspace& workspace) {
         file << document.Dump();
     }
 
+    // The agent reads the limit with every request, so a mode holds for agents that have no switch for it.
+    const std::string wire = (mode_ == EditorAgentMode::Plan
+        ? std::string{ "Plan only. Do not change any file, scene or asset, and do not run anything that changes the project. Reply with the steps you would take.\n\n" }
+        : mode_ == EditorAgentMode::Ask
+            ? std::string{ "Answer only. Do not change any file, scene or asset, and do not run anything that changes the project.\n\n" }
+            : std::string{}) + request;
     bool promptInArguments = false;
     const auto substitute = [&](const std::string& word) {
         std::string text = Replace(word, "{project}", workspace.project.generic_string());
@@ -405,17 +418,18 @@ bool EditorAgentPanelState::Send(const EditorAgentWorkspace& workspace) {
         text = Replace(text, "{session}", conversation.session);
         text = Replace(text, "{model}", model_);
         text = Replace(text, "{effort}", effort_);
+        text = Replace(text, "{permissionMode}", mode_ == EditorAgentMode::Agent ? "acceptEdits" : "plan");
         if (text.find("{prompt}") != std::string::npos) {
             promptInArguments = true;
-            text = Replace(text, "{prompt}", request);
+            text = Replace(text, "{prompt}", wire);
         }
         return Widen(text);
     };
     // An agent that stays running gets the next request on its input, as long as it runs with the
     // same agent, model and reasoning level; otherwise it starts again and resumes the session.
     const bool persistent = !agent->requestTemplate.empty() && !promptInArguments;
-    const std::string runKey = agent->Label() + "|" + model_ + "|" + effort_;
-    const std::string message = persistent ? Replace(agent->requestTemplate, "{request}", JsonValue::MakeString(request).Dump()) : std::string{};
+    const std::string runKey = agent->Label() + "|" + model_ + "|" + effort_ + "|" + std::to_string(static_cast<int>(mode_));
+    const std::string message = persistent ? Replace(agent->requestTemplate, "{request}", JsonValue::MakeString(wire).Dump()) : std::string{};
     if (persistent && conversation.run != nullptr && conversation.run->Alive() && conversation.runKey == runKey) {
         if (conversation.entries.empty()) {
             conversation.title = TitleFrom(request);
@@ -488,7 +502,7 @@ bool EditorAgentPanelState::Send(const EditorAgentWorkspace& workspace) {
     conversation.run = std::make_unique<EditorAgentProcess>();
     std::string error;
     if (!conversation.run->Start(agent->executable, arguments, workspace.project, environment,
-            persistent ? message : promptInArguments ? std::string{} : request, error, persistent)) {
+            persistent ? message : promptInArguments ? std::string{} : wire, error, persistent)) {
         Add(EditorAgentEntryKind::Error, agent->Label() + ": " + error + ".");
         return false;
     }

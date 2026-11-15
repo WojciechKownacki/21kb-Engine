@@ -7,6 +7,7 @@
 #include "engine/script/PucLuaScriptRuntime.hpp"
 #include "engine/script/ScriptAsset.hpp"
 #include "engine/script/ScriptBehaviourAsset.hpp"
+#include "engine/script/ScriptLanguageSubset.hpp"
 #include "engine/visual/VisualGraphCompileCoordinator.hpp"
 
 #include <algorithm>
@@ -28,11 +29,13 @@ struct ScenePrepareContext {
     ScriptRuntimeAssetPreparer* preparer = nullptr;
     ScriptRuntimeAssetPrepareResult* result = nullptr;
     std::unordered_set<std::uint64_t> visitedAssetIds;
+    bool nativeOnly = false;
 };
 
 void MergePrepareResult(ScriptRuntimeAssetPrepareResult& target, ScriptRuntimeAssetPrepareResult source) {
     target.visitedAssets += source.visitedAssets;
     target.preparedAssets += source.preparedAssets;
+    target.buildingAssets += source.buildingAssets;
     target.reloadedAssets.reserve(target.reloadedAssets.size() + source.reloadedAssets.size());
     for (kb::assets::AssetId assetId : source.reloadedAssets) {
         target.reloadedAssets.push_back(assetId);
@@ -41,11 +44,14 @@ void MergePrepareResult(ScriptRuntimeAssetPrepareResult& target, ScriptRuntimeAs
     for (ScriptRuntimeAssetPrepareDiagnostic& diagnostic : source.diagnostics) {
         target.diagnostics.push_back(std::move(diagnostic));
     }
+    for (ScriptRuntimeAssetPrepareDiagnostic& warning : source.warnings) {
+        target.warnings.push_back(std::move(warning));
+    }
 }
 
 void PrepareBehaviourVisitor(kb::scene::SceneEntity, const kb::scene::BehaviourComponent& behaviour, void* rawContext) {
     auto& context = *static_cast<ScenePrepareContext*>(rawContext);
-    if (!behaviour.enabled) {
+    if (!behaviour.enabled || (context.nativeOnly && behaviour.backend != kb::scene::BehaviourBackend::Native)) {
         return;
     }
     const kb::assets::AssetId assetId{ behaviour.behaviourAssetId };
@@ -194,6 +200,56 @@ void ScriptRuntimeAssetPreparer::InvalidateNativeSourceObservations() noexcept {
     failedNativeAssetBuilds_.clear();
 }
 
+void ScriptRuntimeAssetPreparer::SetNativeBuildMode(bool inBackground, bool firstBuildInBackground) noexcept {
+    nativeSettings_.buildInBackground = inBackground;
+    nativeSettings_.backgroundFirstBuild = firstBuildInBackground;
+}
+
+std::vector<ScriptRuntimeNativeBuildStatus> ScriptRuntimeAssetPreparer::NativeBuildsInProgress() const {
+    std::vector<ScriptRuntimeNativeBuildStatus> builds;
+    for (const auto& [id, record] : nativeBuildJobs_) {
+        NativeScriptBuildProgress progress = record.job->Progress();
+        if (!progress.finished) {
+            builds.push_back(ScriptRuntimeNativeBuildStatus{ .assetId = kb::assets::AssetId{ id }, .name = record.name, .progress = std::move(progress) });
+        }
+    }
+    std::ranges::sort(builds, [](const auto& lhs, const auto& rhs) { return lhs.assetId.value < rhs.assetId.value; });
+    return builds;
+}
+
+bool ScriptRuntimeAssetPreparer::CancelNativeBuild(kb::assets::AssetId assetId) {
+    const auto record = nativeBuildJobs_.find(assetId.value);
+    if (record == nativeBuildJobs_.end() || record->second.job->Finished()) {
+        return false;
+    }
+    // A build the user stopped is not started again by the next pass; it waits for the next change.
+    failedNativeAssetBuilds_[assetId.value] = { record->second.signature,
+        "native script build was cancelled; change the script or press Play to build it again" };
+    record->second.job->Cancel();
+    nativeBuildJobs_.erase(record);
+    return true;
+}
+
+ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::FinishNativeBuilds() {
+    ScriptRuntimeAssetPrepareResult result{};
+    std::vector<std::uint64_t> ids;
+    ids.reserve(nativeBuildJobs_.size());
+    for (const auto& [id, record] : nativeBuildJobs_) {
+        ids.push_back(id);
+    }
+    std::ranges::sort(ids);
+    for (const std::uint64_t id : ids) {
+        const auto record = nativeBuildJobs_.find(id);
+        if (record != nativeBuildJobs_.end()) {
+            static_cast<void>(record->second.job->Wait());
+        }
+        // The pass that finds the finished build takes its result and loads the module.
+        nativeSourceObservations_.erase(id);
+        MergePrepareResult(result, PrepareAsset(kb::assets::AssetId{ id }));
+    }
+    return result;
+}
+
 ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareAsset(kb::assets::AssetId assetId) {
     ScriptRuntimeAssetPrepareResult result{};
     ++result.visitedAssets;
@@ -246,6 +302,17 @@ ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareSceneBehaviou
     return result;
 }
 
+ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareNativeSceneBehaviours(kb::scene::Scene& scene) {
+    ScriptRuntimeAssetPrepareResult result{};
+    ScenePrepareContext context{
+        .preparer = this,
+        .result = &result,
+        .nativeOnly = true,
+    };
+    scene.Components().Behaviours().ForEach(&PrepareBehaviourVisitor, &context);
+    return result;
+}
+
 ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareLuaAsset(const kb::assets::AssetMetadata& metadata) {
     ScriptRuntimeAssetPrepareResult result{};
     ++result.visitedAssets;
@@ -275,8 +342,19 @@ ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareLuaAsset(cons
     const LuaScriptLoadResult loaded = dynamic_cast<PucLuaScriptRuntime*>(&luaScripts_) == nullptr
         ? luaScripts_.LoadScript(metadata.id, asset->source, chunkName)
         : runtime->LoadScript(metadata.id, asset->source, chunkName, metadata.contentHash);
+    // What only one of the two script VMs has: on the other one it is a syntax or a runtime error, or means something else.
+    const auto warnAboutSubset = [&] {
+        for (const ScriptSubsetFinding& finding : FindOutOfSubsetConstructs(asset->source)) {
+            result.warnings.push_back(ScriptRuntimeAssetPrepareDiagnostic{
+                .assetId = metadata.id,
+                .backend = kb::scene::BehaviourBackend::Lua,
+                .message = "line " + std::to_string(finding.line) + ": " + finding.message,
+            });
+        }
+    };
     if (!loaded.succeeded) {
         AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Lua, loaded.error.empty() ? "Lua script could not be prepared" : loaded.error);
+        warnAboutSubset();
         return result;
     }
 
@@ -286,6 +364,7 @@ ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareLuaAsset(cons
         runtime->SetScriptExposedVariables(metadata.id, asset->exposedVariables, asset->exposedVariableDefaults, asset->exposedVariableHasDefault);
     }
 
+    warnAboutSubset();
     result.reloadedAssets.push_back(metadata.id);
     ++result.preparedAssets;
     return result;
@@ -381,6 +460,22 @@ ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareLuaImportsRec
 ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareNativeBehaviourAsset(const kb::assets::AssetMetadata& metadata) {
     ScriptRuntimeAssetPrepareResult result{};
     ++result.visitedAssets;
+    // A failed build is kept as one text: what failed, then the compiler's lines (file and line) one per
+    // row, so the user reads each of them in the Console and not one wall of text.
+    const auto addBuildFailure = [&result, &metadata](const std::string& message) {
+        const std::size_t summaryEnd = message.find('\n');
+        AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native, message.substr(0U, summaryEnd));
+        for (std::size_t begin = summaryEnd; begin != std::string::npos;) {
+            ++begin;
+            const std::size_t end = message.find('\n', begin);
+            result.diagnostics.push_back(ScriptRuntimeAssetPrepareDiagnostic{
+                .assetId = metadata.id,
+                .backend = kb::scene::BehaviourBackend::Native,
+                .message = message.substr(begin, end == std::string::npos ? std::string::npos : end - begin),
+            });
+            begin = end;
+        }
+    };
     const auto now = std::chrono::steady_clock::now();
     const auto observation = nativeSourceObservations_.find(metadata.id.value);
     if (observation != nativeSourceObservations_.end() && observation->second.descriptorHash == metadata.contentHash &&
@@ -392,7 +487,14 @@ ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareNativeBehavio
         }
         const auto failed = failedNativeAssetBuilds_.find(metadata.id.value);
         if (failed != failedNativeAssetBuilds_.end() && failed->second.first == observation->second.signature) {
-            AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native, failed->second.second);
+            addBuildFailure(failed->second.second);
+            return result;
+        }
+        // The build of exactly these sources is still running: nothing to look at before it ends.
+        const auto building = nativeBuildJobs_.find(metadata.id.value);
+        if (building != nativeBuildJobs_.end() && building->second.signature == observation->second.signature &&
+            !building->second.job->Finished()) {
+            ++result.buildingAssets;
             return result;
         }
     }
@@ -443,7 +545,7 @@ ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareNativeBehavio
     }
     const auto failedBuild = failedNativeAssetBuilds_.find(metadata.id.value);
     if (failedBuild != failedNativeAssetBuilds_.end() && failedBuild->second.first == signature) {
-        AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native, failedBuild->second.second);
+        addBuildFailure(failedBuild->second.second);
         return result;
     }
     if (nativeSettings_.buildPlugins && descriptor->build.enabled) {
@@ -451,11 +553,44 @@ ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareNativeBehavio
         if (!build.workingDirectory.empty() && build.workingDirectory.is_relative()) {
             build.workingDirectory = (metadata.physicalPath.parent_path() / build.workingDirectory).lexically_normal();
         }
-        NativeScriptBuildResult built = NativeScriptBuildPipeline::Build(build);
+        NativeScriptBuildResult built;
+        auto running = nativeBuildJobs_.find(metadata.id.value);
+        if (running != nativeBuildJobs_.end() && running->second.signature != signature) {
+            // The sources changed again: the build of the older ones is of no use any more.
+            nativeBuildJobs_.erase(running);
+            running = nativeBuildJobs_.end();
+        }
+        const bool background = nativeSettings_.buildInBackground &&
+            (nativeSettings_.backgroundFirstBuild || preparedNativeAssetHashes_.contains(metadata.id.value));
+        if (running != nativeBuildJobs_.end()) {
+            if (!running->second.job->Finished()) {
+                ++result.buildingAssets;
+                return result;
+            }
+            built = running->second.job->Wait();
+            nativeBuildJobs_.erase(running);
+        } else if (background) {
+            nativeBuildJobs_[metadata.id.value] = NativeBuildRecord{
+                .signature = signature,
+                .name = metadata.name.empty() ? metadata.virtualPath.filename().string() : metadata.name,
+                .job = std::make_shared<NativeScriptBuildJob>(std::move(build)),
+            };
+            ++result.buildingAssets;
+            return result;
+        } else {
+            built = NativeScriptBuildPipeline::Build(build);
+        }
+        if (built.cancelled) {
+            return result;
+        }
         if (!built.Succeeded()) {
-            const std::string message = built.errors.empty() ? "native script plugin build failed" : built.errors.front();
+            // The first entry says what failed; the others are the compiler's lines with file and line.
+            std::string message = built.errors.empty() ? "native script plugin build failed" : built.errors.front();
+            for (std::size_t index = 1U; index < built.errors.size(); ++index) {
+                message += '\n' + built.errors[index];
+            }
             failedNativeAssetBuilds_[metadata.id.value] = { signature, message };
-            AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native, message);
+            addBuildFailure(message);
             return result;
         }
     }
@@ -500,6 +635,16 @@ ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareNativeBehavio
             const std::string message = loaded.errors.empty() ? "native script plugin could not be loaded" : loaded.errors.front();
             AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native, message);
             return result;
+        }
+        if (std::ranges::find(loaded.unsavedStateSymbols, descriptor->symbol) == loaded.unsavedStateSymbols.end()) {
+            unsavedStateWarned_.erase(metadata.id.value);
+        } else if (unsavedStateWarned_.insert(metadata.id.value).second) {
+            result.warnings.push_back(ScriptRuntimeAssetPrepareDiagnostic{
+                .assetId = metadata.id,
+                .backend = kb::scene::BehaviourBackend::Native,
+                .message = "this script keeps data in member variables but has no Serialize function, so they start over each "
+                           "time the script is rebuilt while the game runs. List the ones to keep in Serialize.",
+            });
         }
     }
     if (nativeBackend_ != nullptr && !nativeBackend_->BindAssetSymbol(metadata.id, descriptor->symbol)) {

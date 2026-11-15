@@ -33,6 +33,8 @@
 #include "platform/win32/EditorParticleEffectAssetPickerDialog.hpp"
 #include "profiler/ProfilerOverlayLayout.hpp"
 #include "rendering/DockWorkspaceRenderer.hpp"
+#include "app/EditorStartupProgress.hpp"
+#include "rendering/EditorSplashPainter.hpp"
 #include "rendering/ProfilerSelectionOverlayWindow.hpp"
 #include "rendering/FloatingWindowBackBufferPainter.hpp"
 #include "rendering/HeroIconGdiplusRuntime.hpp"
@@ -49,6 +51,7 @@
 #include "app/scene_viewport/EditorUIRectInteraction.hpp"
 #include "app/scene_viewport/EditorSceneViewportToolbarPointerController.hpp"
 #include "app/panels/EditorPanelPointerHitContext.hpp"
+#include "rendering/GamePanelContentRenderer.hpp"
 #include "rendering/ScenePanelContentRenderer.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 #include "rendering/FloatingEditorWindowRenderer.hpp"
@@ -360,6 +363,7 @@ FindInspectorHit(
     std::string_view panel) noexcept {
     if (panel == "hierarchy") return DockPanelKind::Hierarchy;
     if (panel == "scene") return DockPanelKind::Scene;
+    if (panel == "game") return DockPanelKind::Game;
     if (panel == "inspector") return DockPanelKind::Inspector;
     if (panel == "assets") return DockPanelKind::Assets;
     if (panel == "console") return DockPanelKind::Console;
@@ -733,6 +737,21 @@ struct EditorHeadlessAutomation::Impl {
         return std::string_view{ viewport.ActiveBackendLabel() } != "Not initialized";
     }
 
+    // The Game View's own present settings (GamePanelContentRenderer::BuildSettings) for a render area of
+    // areaWidth x areaHeight, the way RenderSceneViewport does it for the Scene panel.
+    [[nodiscard]] bool RenderGameView(EditorSceneContext& context, std::uint64_t viewportKey, int areaWidth, int areaHeight) {
+        if (window == nullptr || !GamePanelContentRenderer::ShowsGame(context)) return false;
+        const DockPanel panel{ .id = static_cast<std::uint32_t>(viewportKey), .kind = DockPanelKind::Game };
+        const RECT content{ 0, -GamePanelContentRenderer::ToolbarHeight, areaWidth, areaHeight };
+        auto settings = GamePanelContentRenderer::BuildSettings(content, panel, context, backendSettings);
+        settings.presentToHost = false;
+        viewport.SetGraphShaderCacheRoot(context.GraphShaderCacheRoot());
+        viewport.BeginPaintLayout(window);
+        viewport.Present(window, RECT{ 0, 0, areaWidth, areaHeight }, context.Scene(), settings);
+        viewport.EndPaintLayout();
+        return std::string_view{viewport.ActiveBackendLabel()} != "Not initialized";
+    }
+
     // Renders the scene viewport and, when an Animator Controller asset is
     // open, the Animator Editor preview in a single paint. The preview mirrors
     // AnimatorEditorPanelRenderer: animation editor previews share the
@@ -772,6 +791,7 @@ struct EditorHeadlessAutomation::Impl {
             EditorSceneBgfxViewport::PresentSettings previewSettings{};
             previewSettings.viewportKey = animatorPreviewKey;
             previewSettings.editorSceneOverlaysEnabled = true;
+            context.WaitForAnimatorEditorDebugSnapshot();
             const auto debugSnapshot = context.AnimatorEditorDebugSnapshot();
             const auto* debugInstance = debugSnapshot ? debugSnapshot->Find(context.AnimatorEditorResolvedDebugTarget()) : nullptr;
             if (debugInstance) previewSettings.physicsDebugLines = AnimatorEditorPanelRenderer::TargetMarkers(*debugInstance);
@@ -1677,7 +1697,8 @@ bool EditorHeadlessAutomation::VerifySceneCreationMenu() {
             item->id == "Camera" ? has("Camera") :
             item->id == "Particle System" ? has("Particle Effect") :
             item->id == "Audio Source" ? has("AudioSource") :
-            item->id == "Audio Listener" ? has("AudioListener") : true;
+            item->id == "Audio Listener" ? has("AudioListener") :
+            item->id == "Navigation Bounds" ? has("NavBounds") : true;
         if (!components) return fail(id + ": components missing");
         if (shape && context_.Scene().Components().MeshRenderers().TryGet(entity)->meshAssetId !=
                 kb::assets::BuiltInShapeId(kb::assets::FindBuiltInShape(item->id)->shape).value)
@@ -2219,6 +2240,9 @@ bool EditorHeadlessAutomation::VerifyUIClickHandler() {
     if (!FindInspectorHit(context_, section, InspectorPropertyId::UISelectableAdvanced, -1, InspectorHitKind::Row, &disclosure))
         return fail("advanced-row-not-found");
     if (!CaptureInspectorBottom("ui-selectable-advanced-collapsed")) return false;
+    // The capture scrolled to the bottom, which moves the row: find it again where it is now.
+    if (!FindInspectorHit(context_, section, InspectorPropertyId::UISelectableAdvanced, -1, InspectorHitKind::Row, &disclosure))
+        return fail("advanced-row-not-found-after-capture");
     if (!EditorInspectorPointerController{context_}.HandlePointerDown(kInspectorContent, disclosure.x, disclosure.y, impl_->viewport) ||
         !context_.Inspector().IsDisclosureExpanded(InspectorDisclosureId::UISelectableAdvanced))
         return fail("advanced-row-did-not-open");
@@ -2258,6 +2282,7 @@ bool EditorHeadlessAutomation::VerifyInspectorShadowRows() {
     const auto cube = context_.CreateMenuObject("Cube");
     if (!cube.IsValid()) return fail("cube-not-created");
     context_.SelectEntity(cube);
+    if (!click(InspectorSectionId::MeshRenderer, P::MeshRendererAdvanced, InspectorHitKind::Row)) return fail("mesh-advanced-row-not-found");
     for (const P property : { P::MeshRendererLodEnabled, P::MeshRendererLodBias, P::MeshRendererMobility })
         if (!FindInspectorHit(context_, InspectorSectionId::MeshRenderer, property))
             return fail("mesh-row-not-found-" + std::to_string(static_cast<int>(property)));
@@ -2753,9 +2778,15 @@ bool EditorHeadlessAutomation::StepRuntime(
             bgfx::setDebug(BGFX_DEBUG_TEXT | BGFX_DEBUG_PROFILER);
             viewProfiler.enabled = true;
         }
-        if (requireShadows && impl_->viewport.LastSceneSubmitStats().submittedShadowDrawCallCount == 0U) {
+        // A shadow kept from an earlier frame draws nothing in this one: the light still counts as casting it.
+        if (const auto shadowStats = impl_->viewport.LastSceneSubmitStats();
+            requireShadows && shadowStats.submittedShadowDrawCallCount == 0U && shadowStats.selectedShadowLightCount == 0U) {
             Trace("step_runtime", false, "required-shadow-draws-missing");
             return false;
+        } else if (requireShadows && frame + 1U == frames) {
+            Trace("step_runtime_shadows", true, std::format("lights={} dropped={} casters={} submitted={} draws={}",
+                shadowStats.selectedShadowLightCount, shadowStats.droppedShadowLightCount, shadowStats.shadowCasterCount,
+                shadowStats.submittedShadowCasterCount, shadowStats.submittedShadowDrawCallCount));
         }
         if (profile) {
             const auto end = std::chrono::steady_clock::now();
@@ -3906,6 +3937,51 @@ bool EditorHeadlessAutomation::CaptureSceneViewport(std::string_view checkpoint)
     });
 }
 
+namespace {
+// The Game View's viewport session; the Scene View's is 1 and other panels have their own.
+constexpr std::uint64_t kGameViewKey = 25U;
+}
+
+bool EditorHeadlessAutomation::CaptureGameView(std::string_view checkpoint, int areaWidth, int areaHeight) {
+    if (areaWidth < 16 || areaWidth > 640 || areaHeight < 16 || areaHeight > 360) {
+        Trace("capture_game_view", false, "area-outside-the-headless-host");
+        return false;
+    }
+    // An empty scene shows only the camera's background, so a uniform picture is the expected one.
+    return CaptureScene("capture_game_view", checkpoint, [this, areaWidth, areaHeight] {
+        return impl_->RenderGameView(context_, kGameViewKey, areaWidth, areaHeight);
+    }, false);
+}
+
+std::pair<bool, std::string> EditorHeadlessAutomation::VerifyGameViewSettings(int areaWidth, int areaHeight) {
+    if (!GamePanelContentRenderer::ShowsGame(context_)) {
+        return { false, "the game is not running with a primary camera" };
+    }
+    const DockPanel panel{ .id = static_cast<std::uint32_t>(kGameViewKey), .kind = DockPanelKind::Game };
+    const RECT content{ 0, -GamePanelContentRenderer::ToolbarHeight, areaWidth, areaHeight };
+    const auto settings = GamePanelContentRenderer::BuildSettings(content, panel, context_, impl_->backendSettings);
+    std::string failures;
+    const auto expect = [&failures](bool condition, std::string_view what) {
+        if (!condition) failures += std::string{ what } + "; ";
+    };
+    expect(settings.cameraOverride.has_value(), "the game camera is not used");
+    expect(!settings.editorSceneOverlaysEnabled, "editor overlays are on");
+    expect(!settings.editorGizmo.visible, "a gizmo is drawn");
+    expect(!settings.editorGrid.visible, "the grid is drawn");
+    expect(settings.editorCameraWireframes.empty() && settings.editorLightWireframes.empty() && settings.editorSceneIcons.empty(),
+        "camera or light markers are drawn");
+    expect(settings.physicsDebugLines.empty(), "debug lines are drawn");
+    expect(settings.editorUIOverlays.empty() && !settings.editorSelectionBox.visible, "UI handles or a selection box are drawn");
+    expect(settings.selectedEntityIds.empty() && !settings.selectionMaskEnabled && !settings.selectionOutlineEnabled, "a selection is shown");
+    expect(settings.screenUIEnabled, "the game's UI is not drawn");
+    expect(!settings.drawSafeArea, "a safe area is drawn");
+    expect(settings.viewportKey == panel.id, "the viewport session is not the Game View's own");
+    expect(settings.renderScale == context_.ProjectConfiguration().display.renderScale, "the project's render scale is not applied");
+    return { failures.empty(),
+        failures.empty() ? "game camera, no editor overlay, render " + std::to_string(settings.renderWidth) + "x" +
+            std::to_string(settings.renderHeight) + " at scale " + std::to_string(settings.renderScale) : failures };
+}
+
 kb::render::SceneRenderSubmitStats EditorHeadlessAutomation::SceneSubmitStats() const {
     return impl_->viewport.LastSceneSubmitStats();
 }
@@ -3918,6 +3994,16 @@ bool EditorHeadlessAutomation::CaptureProfilerWindow(std::string_view checkpoint
         window.PaintInto(memory, RECT{ 0, 0, width, height }, MakeEditorDarkTheme(), context_);
     });
     Trace("capture_profiler_window", saved, path.filename().string());
+    return saved;
+}
+
+bool EditorHeadlessAutomation::CaptureStartupSplash(std::string_view checkpoint, int dpi, const EditorStartupSnapshot& snapshot) {
+    const EditorSplashLayout layout = EditorSplashPainter::Layout(dpi);
+    const std::filesystem::path path = artifactRoot_ / "screenshots" / (SafeCheckpoint(checkpoint) + ".bmp");
+    // The layout is already in pixels at `dpi`, so the bitmap is made at 96 and the painter is not scaled.
+    const bool saved = CaptureBitmap(path, ScreenshotDimensions{ layout.client.right, layout.client.bottom, 96 },
+        [&](HDC memory) { EditorSplashPainter::Paint(memory, layout, MakeEditorDarkTheme(), snapshot); });
+    Trace("capture_startup_splash", saved, path.filename().string());
     return saved;
 }
 
@@ -4049,7 +4135,7 @@ std::optional<kb::render::ScenePostProcessSettings> EditorHeadlessAutomation::Sc
 }
 
 bool EditorHeadlessAutomation::CaptureScene(
-    std::string_view operation, std::string_view checkpoint, const std::function<bool()>& render) {
+    std::string_view operation, std::string_view checkpoint, const std::function<bool()>& render, bool requireNonUniform) {
 
     const std::filesystem::path output =
         artifactRoot_ / "screenshots" /
@@ -4091,7 +4177,7 @@ bool EditorHeadlessAutomation::CaptureScene(
             kb::scene::SceneRenderFeedback::ScreenCaptureStatus(
                 context_.Scene(), capture);
         if (status == kb::scene::SceneScreenCaptureStatus::Completed) {
-            const bool valid = ValidateCapturedImage(output, true);
+            const bool valid = ValidateCapturedImage(output, requireNonUniform);
             Trace(
                 operation, valid,
                 output.filename().string());
@@ -4652,6 +4738,21 @@ bool EditorHeadlessAutomation::VerifyDebuggerInteraction() {
 bool EditorHeadlessAutomation::VerifyWorkspaceControls() {
     const auto result = EditorHeadlessPopupChecks::VerifyWorkspaceControls(context_, impl_->viewport);
     Trace("verify_workspace_controls", result.succeeded, result.detail);
+    return result.succeeded;
+}
+
+bool EditorHeadlessAutomation::VerifyDockingInteractions() {
+    const auto result = EditorHeadlessPopupChecks::VerifyDockingInteractions(
+        context_, impl_->viewport, artifactRoot_ / "screenshots");
+    Trace("verify_docking_interactions", result.succeeded, result.detail);
+    lastCheckDetail_ = result.detail;
+    return result.succeeded;
+}
+
+bool EditorHeadlessAutomation::ClickSceneView(float x, float y, float z, float offsetX, float focusRadius) {
+    const auto result = EditorHeadlessPopupChecks::ClickSceneView(context_, impl_->viewport, x, y, z, offsetX, focusRadius);
+    Trace("click_scene_view", result.succeeded, result.detail);
+    lastCheckDetail_ = result.detail;
     return result.succeeded;
 }
 

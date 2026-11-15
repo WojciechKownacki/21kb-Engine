@@ -5,6 +5,7 @@
 #include "engine/script/ScriptRuntime.hpp"
 #include "engine/script/ScriptRuntimeAssetPreparer.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -78,6 +79,9 @@ private:
         kb::scene::BehaviourComponent behaviour{};
         bool active = false;
         bool created = false;
+        // The synchronization pass that last found the behaviour in the scene; a record an older pass left
+        // behind belongs to a behaviour that is gone.
+        std::uint64_t seenEpoch = 0U;
     };
 
     void BeginFrame(kb::scene::Scene& scene, float deltaSeconds);
@@ -87,6 +91,7 @@ private:
     void PrepareScene(kb::scene::Scene& scene);
     void RestartReloadedBehaviours(kb::scene::Scene& scene);
     void ExecuteTrackedBehaviourPhase(kb::scene::Scene& scene, ScriptLifecycleEvent event, float deltaSeconds);
+    void RebuildPhaseOrder();
     // LIB-073: drains kb::scene::SceneLoadedContent's pending
     // SceneLoading/SceneLoaded/SceneActivated/SceneUnloading/SceneUnloaded
     // notifications and turns each into a real ScriptEvent broadcast via
@@ -153,7 +158,6 @@ private:
         const kb::scene::BehaviourComponent& behaviour,
         ScriptLifecycleEvent event,
         float deltaSeconds);
-    [[nodiscard]] std::vector<BehaviourLifecycleRecord> CollectBehaviourRecords(kb::scene::Scene& scene) const;
     [[nodiscard]] static BehaviourLifecycleKey MakeKey(kb::scene::SceneEntity entity, const kb::scene::BehaviourComponent& behaviour) noexcept;
 
     std::vector<kb::scene::PendingCollisionEvent> collisionEventScratch_;
@@ -167,6 +171,57 @@ private:
     ScriptRuntimeAssetPrepareResult lastPrepareResult_;
     std::vector<ScriptUIDispatch> uiDispatches_;
     std::unordered_map<BehaviourLifecycleKey, BehaviourLifecycleRecord, BehaviourLifecycleKeyHasher> lifecycleRecords_;
+    // The records the per-frame phases visit (created and active), in the guaranteed execution order. Built when a
+    // synchronization or a restart changes the records, not for every phase of every frame; the pointers refer to
+    // lifecycleRecords_ elements, so whoever replaces or erases records marks the order dirty.
+    std::vector<BehaviourLifecycleRecord*> phaseOrder_;
+    bool phaseOrderDirty_ = true;
+    // The scripts the ordered behaviours run, once each, and for every ordered behaviour the index of its script.
+    struct PhaseScript {
+        std::uint64_t assetId = 0U;
+        kb::scene::BehaviourBackend backend = kb::scene::BehaviourBackend::Native;
+    };
+    std::vector<PhaseScript> phaseScripts_;
+    std::vector<std::uint32_t> phaseOrderScripts_;
+    // Moves with every rebuild of the order; a dispatch list built from an older one is built again.
+    std::uint64_t phaseOrderVersion_ = 1U;
+
+    // One behaviour of a dispatch list with the call its backend resolved for the phase.
+    struct PhaseEntry {
+        kb::scene::SceneEntity entity{};
+        kb::scene::BehaviourComponent behaviour{};
+        ScriptPhaseCall call{};
+    };
+    // What one per-frame phase runs: the behaviours that have something to run in it, in execution order. Built again
+    // only when the order changed, a script gained or lost its entry, or a backend reports that its calls changed -
+    // never by looking at every behaviour of the scene.
+    struct PhaseList {
+        std::vector<PhaseEntry> entries;
+        std::vector<std::uint8_t> answers;
+        std::array<std::uint64_t, 3> callRevisions{};
+        std::uint64_t orderVersion = 0U;
+    };
+    [[nodiscard]] bool PreparePhaseList(ScriptLifecycleEvent event, PhaseList& list);
+    std::array<PhaseList, static_cast<std::size_t>(ScriptLifecycleEvent::Destroyed) + 1U> phaseLists_;
+    std::vector<std::uint8_t> phaseAnswerScratch_;
+    // Events the behaviours of a phase emitted, delivered after each call; kept to reuse its storage.
+    std::vector<ScriptEvent> phaseEmittedEvents_;
+    // Runs entries [begin, end) of a phase, all of them calls that may run on any thread, on the scene's workers (on this
+    // thread when the run is too short to pay for the hand-over); false when the scene cannot take writes from workers
+    // now, and the phase loop calls them one by one.
+    [[nodiscard]] bool RunOnWorkers(kb::scene::Scene& scene, ScriptLifecycleEvent event, float deltaSeconds, const std::vector<PhaseEntry>& entries, std::size_t begin, std::size_t end);
+    // What each worker range of RunOnWorkers leaves to the calling thread, delivered in range order after the join.
+    struct WorkerRangeOutput {
+        std::vector<ScriptEvent> events;
+        std::vector<ScriptDiagnostic> diagnostics;
+        std::size_t executed = 0U;
+    };
+    std::vector<WorkerRangeOutput> workerOutputs_;
+    // The scene's behaviour change stamp the lifecycle records were last brought in line with. While it still holds, no
+    // behaviour appeared, went or changed, and the synchronization has nothing to look at.
+    std::uint64_t syncStamp_ = 0U;
+    bool syncStampValid_ = false;
+    std::uint64_t syncEpoch_ = 0U;
 };
 
 } // namespace kb::script

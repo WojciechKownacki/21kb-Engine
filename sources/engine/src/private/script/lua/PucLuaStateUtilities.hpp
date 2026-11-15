@@ -1,8 +1,6 @@
 #pragma once
 
-extern "C" {
-#include <lua.h>
-}
+#include "script/lua/LuaVm.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -14,10 +12,37 @@ namespace kb::script {
 
 class PucLuaMemoryArena;
 class ScriptExecutionContext;
+// The object a `self` table belongs to: the entity and the script asset it runs.
+struct PucLuaSelfKey {
+    std::uint64_t entityId = 0U;
+    std::uint64_t assetId = 0U;
+
+    [[nodiscard]] bool operator==(const PucLuaSelfKey& other) const noexcept = default;
+};
+
+struct PucLuaSelfKeyHasher {
+    [[nodiscard]] std::size_t operator()(PucLuaSelfKey key) const noexcept {
+        std::uint64_t hash = key.entityId;
+        hash ^= key.assetId + 0x9e3779b97f4a7c15ULL + (hash << 6U) + (hash >> 2U);
+        return static_cast<std::size_t>(hash);
+    }
+};
+
 struct PucLuaStateLifetime {
     lua_State* state = nullptr;
     ScriptExecutionContext* activeContext = nullptr;
     std::unordered_map<int, const void*> eventReferenceOwners;
+    // Registry references to the `self` table of each object, kept for the life of the object.
+    std::unordered_map<PucLuaSelfKey, int, PucLuaSelfKeyHasher> selfReferences;
+    // The coroutine thread entries run on: one is kept anchored in the registry and handed to the next entry when
+    // the last one finished, so a call does not go through the table of idle threads.
+    lua_State* spareThread = nullptr;
+    int spareThreadReference = -2; // LUA_NOREF
+    bool spareThreadBusy = false;
+    // LuaJIT: the scalar locals of the innermost frame of the entry a debugger pause suspended, copied into a table when the
+    // hook paused it (the thread reports the position of the instruction before the pause, which hides the local the
+    // previous statement declared). LUA_NOREF when there is none.
+    int pausedFrameLocals = -2;
 };
 
 class PucLuaExecutionContextScope final {
@@ -35,8 +60,10 @@ private:
 // refusal surfaces as a catchable LUA_ERRMEM. Host-side stack set-up between
 // protected calls is never refused: Lua turns an allocation failure outside a
 // protected call into a panic that ends the process.
-struct PucLuaMemoryBudget final {
+struct PucLuaMemoryBudget final : PucLuaOwnerSlot {
     std::size_t usedBytes = 0U;
+    // Blocks the state asked its allocator for since it was created.
+    std::uint64_t allocationCount = 0U;
     std::size_t limitBytes = 0U;
     std::uint32_t protectedDepth = 0U;
     bool limitReached = false;

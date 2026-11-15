@@ -19,6 +19,18 @@ void SceneTransforms::SetMany(std::span<const SceneEntity> entities, std::span<c
     SceneTransformService::SetMany(scene_, entities, transforms);
 }
 
+SceneTransformWrite SceneTransforms::BeginWrite(SceneEntity entity) noexcept {
+    return SceneTransformService::BeginWrite(scene_, entity);
+}
+
+void SceneTransforms::EndWrite(const SceneTransformWrite& write) {
+    SceneTransformService::EndWrite(scene_, write);
+}
+
+bool SceneTransforms::SetLocalPosition(SceneEntity entity, const Vec3& position, std::uint8_t axes) {
+    return SceneTransformService::SetLocalPosition(scene_, entity, position, axes);
+}
+
 void SceneTransforms::MarkModified(SceneEntity entity) noexcept {
     SceneTransformService::MarkModified(scene_, entity);
 }

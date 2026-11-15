@@ -76,7 +76,7 @@ std::vector<UIClickChoice> InspectorUIClickHandler::Choices(const kb::scene::Sce
 std::string InspectorUIClickHandler::Describe(const kb::scene::Scene& scene, kb::scene::SceneEntity widget) {
     const auto* selectable = scene.Components().UI().TryGet<kb::scene::UISelectable>(widget);
     const std::string_view event = selectable != nullptr ? kb::scene::UIEventName(*selectable) : std::string_view{};
-    if (event.empty()) return std::string{ EditorText("inspector.onClick.none", "(none)") };
+    if (selectable == nullptr || event.empty()) return std::string{ EditorText("inspector.onClick.none", "(none)") };
     const kb::scene::SceneEntity target = selectable->eventTarget != 0U ? kb::scene::SceneEntity{ selectable->eventTarget } : widget;
     if (!scene.Entities().IsAlive(target))
         return std::string{ event } + " " + std::string{ EditorText("inspector.onClick.targetMissing", "(target missing)") };

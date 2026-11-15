@@ -3,7 +3,7 @@
 
 #include "screen_uv.sh"
 
-// The motion vector pass (Unreal's velocity pass), shared by the builtin and the material graph programs.
+// The motion vector pass, shared by the builtin and the material graph programs.
 // A mesh rasterizes with this frame's jittered u_viewProj - exactly as the depth prepass drew it - and
 // writes the jitter-free screen motion between its previous and current positions.
 
@@ -40,7 +40,7 @@ mat4 KbMotionPreviousModel(sampler2D rows, float instance, vec4 c0, vec4 c1, vec
 #endif // BGFX_SHADER_TYPE_VERTEX
 
 #if BGFX_SHADER_TYPE_FRAGMENT
-// The visibility test of the pass: Unreal renders velocity with a near-or-equal depth test against the
+// The visibility test of the pass: a near-or-equal depth test against the
 // prepass depth. Reversed Z stores nearer surfaces as larger depths, so a fragment is the visible surface
 // when its depth is not smaller than the stored one; an occluded surface behind it is rejected at any
 // distance. `fragmentDepth` is the depth the prepass wrote for this fragment (gl_FragCoord.z, or the pixel

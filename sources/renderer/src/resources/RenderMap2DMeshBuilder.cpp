@@ -113,7 +113,9 @@ void EmitSection(
             bounds.Add(corner.x, corner.y, corner.z);
             meshBounds.Add(corner.x, corner.y, corner.z);
         }
-        mesh.indices32.insert(mesh.indices32.end(), { base, base + 1U, base + 2U, base, base + 2U, base + 3U });
+        // Clockwise seen from the side the normal points to, like every other mesh: a face wound the
+        // other way counts as a back face, and a two-sided material lights it with the normal turned away.
+        mesh.indices32.insert(mesh.indices32.end(), { base, base + 2U, base + 1U, base, base + 3U, base + 2U });
     }
     mesh.sections.push_back(RenderMeshSectionDesc{
         .indexStart = firstIndex,

@@ -1,8 +1,10 @@
 #include "engine/config/IniDocument.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <charconv>
+#include <cmath>
 #include <fstream>
 #include <locale>
 #include <sstream>
@@ -211,6 +213,20 @@ std::optional<bool> IniDocument::GetBool(std::string_view section, std::string_v
     return std::nullopt;
 }
 
+std::optional<float> IniDocument::GetFloat(std::string_view section, std::string_view key) const {
+    const std::optional<std::string_view> text = GetString(section, key);
+    if (!text.has_value() || text->empty()) {
+        return std::nullopt;
+    }
+    float value = 0.0F;
+    const char* end = text->data() + text->size();
+    const std::from_chars_result parsed = std::from_chars(text->data(), end, value);
+    if (parsed.ec != std::errc{} || parsed.ptr != end || !std::isfinite(value)) {
+        return std::nullopt;
+    }
+    return value;
+}
+
 void IniDocument::SetString(std::string_view section, std::string_view key, std::string value) {
     sections_[std::string{section}][std::string{key}] = std::move(value);
 }
@@ -221,6 +237,12 @@ void IniDocument::SetInt(std::string_view section, std::string_view key, std::in
 
 void IniDocument::SetBool(std::string_view section, std::string_view key, bool value) {
     SetString(section, key, value ? "1" : "0");
+}
+
+void IniDocument::SetFloat(std::string_view section, std::string_view key, float value) {
+    std::array<char, 32U> buffer{};
+    const std::to_chars_result written = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
+    SetString(section, key, written.ec == std::errc{} ? std::string{buffer.data(), written.ptr} : std::string{"0"});
 }
 
 bool IniDocument::Remove(std::string_view section, std::string_view key) {

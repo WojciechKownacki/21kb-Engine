@@ -57,6 +57,49 @@ public:
         static_cast<void>(value);
     }
 
+    // See IScriptBackend::HasEntry. Default yes so lightweight test runtimes need not implement it.
+    [[nodiscard]] virtual bool HasEntry(
+        const kb::scene::BehaviourComponent& behaviour,
+        std::string_view name) {
+        static_cast<void>(behaviour);
+        static_cast<void>(name);
+        return true;
+    }
+
+    // See IScriptBackend::ResolvePhaseCall: false when the runtime has no resolved call of its own, and the backend then
+    // runs the phase through ExecuteLifecycle.
+    [[nodiscard]] virtual bool ResolvePhaseCall(
+        kb::scene::SceneEntity entity,
+        const kb::scene::BehaviourComponent& behaviour,
+        ScriptLifecycleEvent event,
+        ScriptPhaseCall& call) {
+        static_cast<void>(entity);
+        static_cast<void>(behaviour);
+        static_cast<void>(event);
+        static_cast<void>(call);
+        return false;
+    }
+    // See IScriptBackend::ResolveEventCall: false when the runtime has no resolved call of its own, and the backend then
+    // runs the handler through ExecuteEvent.
+    [[nodiscard]] virtual bool ResolveEventCall(
+        kb::scene::SceneEntity entity,
+        const kb::scene::BehaviourComponent& behaviour,
+        ScriptPhaseCall& call) {
+        static_cast<void>(entity);
+        static_cast<void>(behaviour);
+        static_cast<void>(call);
+        return false;
+    }
+    [[nodiscard]] virtual std::uint64_t PhaseCallRevision() const noexcept {
+        return 0U;
+    }
+
+    // See IScriptBackend::BeginEventBroadcast. Defaults do nothing.
+    virtual void BeginEventBroadcast(const ScriptEvent& event) {
+        static_cast<void>(event);
+    }
+    virtual void EndEventBroadcast() noexcept {}
+
     // Lua implementations with retained event callbacks release every
     // callback owned by this asset before the scene system performs its
     // explicit hot-reload restart. Default no-op keeps lightweight test
@@ -80,6 +123,18 @@ public:
         kb::scene::SceneEntity entity,
         const kb::scene::BehaviourComponent& behaviour,
         std::span<const kb::scene::BehaviourVariableOverride> overrides) override;
+    [[nodiscard]] bool HasEntry(const kb::scene::BehaviourComponent& behaviour, std::string_view name) override;
+    void BeginEventBroadcast(const ScriptEvent& event) override;
+    void EndEventBroadcast() noexcept override;
+    [[nodiscard]] ScriptPhaseCall ResolvePhaseCall(
+        kb::scene::SceneEntity entity,
+        const kb::scene::BehaviourComponent& behaviour,
+        ScriptLifecycleEvent event) override;
+    [[nodiscard]] ScriptPhaseCall ResolveEventCall(
+        kb::scene::SceneEntity entity,
+        const kb::scene::BehaviourComponent& behaviour,
+        std::string_view name) override;
+    [[nodiscard]] std::uint64_t PhaseCallRevision() const noexcept override;
     void ResetAssetForHotReload(kb::assets::AssetId assetId, ScriptEventBus& events) noexcept override;
 
 private:

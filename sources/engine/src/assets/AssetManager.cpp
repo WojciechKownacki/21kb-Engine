@@ -24,7 +24,9 @@
 
 namespace kb::assets {
 
-AssetManager::AssetManager() = default;
+// A manager loads as many assets at once as the shared service keeps load workers for jobs; the loaders that
+// cannot run side by side still take turns behind the loader mutex. SetAsyncLoadConcurrency overrides it.
+AssetManager::AssetManager() : asyncConcurrency_{ streaming::BackgroundLoadService::SharedOptions().jobWorkers } {}
 
 AssetManager::~AssetManager() {
     StopAsyncLoads();
@@ -347,7 +349,7 @@ std::size_t AssetManager::DiscoverMountedAssets() {
     }
     asyncLoads_.clear();
     const std::size_t count = AssetDiscoveryService::DiscoverMountedAssets(mounts_, registry_, loaders_, cache_);
-    // The engine's basic shapes exist in every loose project, like Unreal's /Engine content:
+    // The engine's basic shapes exist in every loose project:
     // /Engine is never a mounted root, so discovery above never removes them.
     for (const BuiltInShapeDesc& shape : BuiltInShapes()) {
         if (registry_.Find(BuiltInShapeId(shape.shape)) == nullptr) {

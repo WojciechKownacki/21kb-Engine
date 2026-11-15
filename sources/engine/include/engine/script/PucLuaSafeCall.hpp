@@ -1,5 +1,8 @@
 #pragma once
 
+#include <exception>
+#include <utility>
+
 struct lua_State;
 
 namespace kb::script {
@@ -31,6 +34,10 @@ using PucLuaRawFunction = int (*)(lua_State*);
 // bridging C++ exceptions across a longjmp-based C API.
 [[nodiscard]] int PucLuaSafeInvoke(lua_State* state, PucLuaRawFunction function);
 
+// Turns a caught exception into the Lua error. It takes over the exception and releases it before lua_error (a
+// longjmp) runs, so the exception object is not leaked; only the failing path calls it.
+[[nodiscard]] int PucLuaSafeRaise(lua_State* state, std::exception_ptr&& failure);
+
 // Compile-time form for registration call sites that already know their
 // function pointer at compile time (the common case:
 // lua_pushcclosure(state, &PucLuaSafeCall<&LuaSomething>, upvalueCount)) —
@@ -38,9 +45,17 @@ using PucLuaRawFunction = int (*)(lua_State*);
 // so Function's own lua_upvalueindex(N) reads are unaffected (Lua's
 // "currently running closure" is still this trampoline's own frame, with
 // exactly the upvalues the call site pushed).
+// The guarded call is made here, in the trampoline, so Function is a direct call (a hot binding is inlined into
+// it) and the happy path costs no second call through a function pointer.
 template <PucLuaRawFunction Function>
 int PucLuaSafeCall(lua_State* state) {
-    return PucLuaSafeInvoke(state, Function);
+    std::exception_ptr failure;
+    try {
+        return Function(state);
+    } catch (...) {
+        failure = std::current_exception();
+    }
+    return PucLuaSafeRaise(state, std::move(failure));
 }
 
 } // namespace kb::script

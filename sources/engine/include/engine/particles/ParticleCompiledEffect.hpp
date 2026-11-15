@@ -17,11 +17,8 @@ enum class ParticleCompilePlatform : std::uint8_t {
     WindowsVulkan,
 };
 
-struct ParticleCompiledCurveKey {
-    float time = 0.0F;
-    float value = 0.0F;
-    kb::math::Easing easing = kb::math::Easing::Linear;
-};
+// Compiled curves keep the authored keyframes and evaluate through kb::math::Evaluate.
+using ParticleCompiledCurveKey = kb::math::CurveKeyframe;
 
 struct ParticleCompiledCurve {
     std::uint8_t keyCount = 0U;

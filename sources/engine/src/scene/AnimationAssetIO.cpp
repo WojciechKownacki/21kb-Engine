@@ -247,12 +247,13 @@ bool ValidateClip(AnimationClip& clip, std::string* error = nullptr) {
         if (track.name.empty() || !curves.insert(track.name).second || track.keyframes.empty()) return false;
         float previous = -1.0F;
         for (const AnimationCurveKeyframe& key : track.keyframes) {
-            if (!std::isfinite(key.timeSeconds) || !std::isfinite(key.value) ||
-                key.timeSeconds < 0.0F || key.timeSeconds > clip.durationSeconds ||
-                key.timeSeconds < previous) {
+            if (!std::isfinite(key.time) || !std::isfinite(key.value) ||
+                !std::isfinite(key.inTangent) || !std::isfinite(key.outTangent) ||
+                key.time < 0.0F || key.time > clip.durationSeconds ||
+                key.time < previous) {
                 return false;
             }
-            previous = key.timeSeconds;
+            previous = key.time;
         }
     }
     const bool validRootMotion = clip.rootMotionMode == AnimationRootMotionMode::None
@@ -551,10 +552,19 @@ std::optional<AnimationClip> AnimationAssetIO::LoadClip(
         } else if (command == "curveKey") {
             std::size_t trackIndex = 0U;
             AnimationCurveKeyframe key{};
-            if (!(input >> trackIndex >> key.timeSeconds >> key.value) ||
-                trackIndex >= clip.curves.size() || !EndOfRecord(input)) {
+            if (!(input >> trackIndex >> key.time >> key.value) || trackIndex >= clip.curves.size()) {
                 return std::nullopt;
             }
+            // Schema 3 may append a tangent mode and both tangents; keys without them stay linear.
+            if (schemaVersion >= 3U && !EndOfRecord(input)) {
+                std::uint32_t mode = 0U;
+                if (!(input >> mode >> key.inTangent >> key.outTangent) ||
+                    mode > static_cast<std::uint32_t>(kb::math::CurveTangentMode::Free)) {
+                    return std::nullopt;
+                }
+                key.tangentMode = static_cast<kb::math::CurveTangentMode>(mode);
+            }
+            if (!EndOfRecord(input)) return std::nullopt;
             clip.curves[trackIndex].keyframes.push_back(key);
         } else if (command == "rootMotion") {
             std::string mode;
@@ -868,7 +878,11 @@ bool AnimationAssetIO::SaveClip(const std::filesystem::path& path, const Animati
             const auto& curve = clip.curves[index];
             output << "curve " << std::quoted(curve.name) << '\n';
             for (const auto& key : curve.keyframes) {
-                output << "curveKey " << index << ' ' << key.timeSeconds << ' ' << key.value << '\n';
+                output << "curveKey " << index << ' ' << key.time << ' ' << key.value;
+                if (key.tangentMode != kb::math::CurveTangentMode::Easing) {
+                    output << ' ' << static_cast<std::uint32_t>(key.tangentMode) << ' ' << key.inTangent << ' ' << key.outTangent;
+                }
+                output << '\n';
             }
         }
         output << "rootMotion "

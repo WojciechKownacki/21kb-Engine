@@ -9,7 +9,7 @@
 
 namespace kb::render {
 
-// Unreal's SkyLight with real-time capture: the world backdrop rendered into a cube map and
+// Sky light with real-time capture: the world backdrop rendered into a cube map and
 // prefiltered with GGX for every roughness, so metals and clear coats reflect the sky the camera
 // sees. The work is spread over frames - the capture, then one roughness level per frame - into a
 // back cube that replaces the shown one once it is complete.

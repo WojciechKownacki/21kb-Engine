@@ -89,7 +89,7 @@ private:
 void CollectEntities(const kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::vector<kb::scene::SceneEntity>& out);
 // Every entity of the scene, parents before children.
 [[nodiscard]] std::vector<kb::scene::SceneEntity> AllEntities(const kb::scene::Scene& scene);
-// "Parent/Child/Name", like Unity's Transform.Find path.
+// "Parent/Child/Name".
 [[nodiscard]] std::string EntityPath(const kb::scene::Scene& scene, kb::scene::SceneEntity entity);
 // The entities `name` addresses, in hierarchy order: by name, or by path ("Parent/Name").
 [[nodiscard]] std::vector<kb::scene::SceneEntity> MatchEntities(const kb::scene::Scene& scene, std::string_view name);

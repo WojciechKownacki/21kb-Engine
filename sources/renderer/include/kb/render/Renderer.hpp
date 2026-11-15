@@ -11,7 +11,9 @@
 #include "kb/render/frame/EditorRenderPassSubmitter.hpp"
 #include "kb/render/gi/SceneGiHistory.hpp"
 #include "kb/render/gi/SceneGiResolvePass.hpp"
+#include "kb/render/scene/SceneSkyBackdropPass.hpp"
 #include "kb/render/scene/SceneSkyReflection.hpp"
+#include "kb/render/scene/SceneLightProbeTexture.hpp"
 #include "kb/render/gi/SceneGiVoxelGrid.hpp"
 #include "kb/render/frame/FinalCompositePass.hpp"
 #include "kb/render/frame/RenderFramePipeline.hpp"
@@ -187,6 +189,10 @@ public:
     // The caller preserves pre-update changes and reconciles topology separately
     // from this runtime tick's transform/proxy updates.
     [[nodiscard]] bool SubmitRuntimeScene(const kb::scene::Scene& scene, const RuntimeSceneSynchronization& synchronization);
+    // Submits `scene` like SubmitRuntimeScene and, in the same frame, draws `prewarmed` into the runtime scene targets
+    // without showing it (no post-process or composite to the screen). Every program, pipeline state and GPU resource
+    // the draws of `prewarmed` need is created then, so its first visible frame does not stall creating them.
+    [[nodiscard]] bool SubmitRuntimeSceneWithPrewarm(const kb::scene::Scene& scene, const kb::scene::Scene& prewarmed);
     [[nodiscard]] bool SubmitScene(const kb::scene::Scene& scene, const RenderSceneSubmitDesc& desc);
     struct SceneFrameSubmission {
         const kb::scene::Scene* scene = nullptr;
@@ -242,6 +248,12 @@ public:
     // Streaming of the finer mip levels and levels of detail of packaged textures and meshes:
     // the GPU memory budget, I/O and per-frame upload limits, and what it is doing.
     void ConfigureContentStreaming(const RuntimeContentStreamingSettings& settings);
+    // How the first use of a packaged mesh or texture reaches the GPU (RuntimeResourceLoadingSettings).
+    void ConfigureRuntimeResourceLoading(const RuntimeResourceLoadingSettings& settings) noexcept;
+    // The meshes and textures `scene` referenced in its last submit, and how many have their GPU resource; and the
+    // number still waiting over the last submit of every scene.
+    [[nodiscard]] RuntimeSceneLoadProgress RuntimeSceneResourceProgress(const kb::scene::Scene& scene) const noexcept;
+    [[nodiscard]] std::uint32_t RuntimeResourcesWaiting() const noexcept;
     [[nodiscard]] RuntimeContentStreamingStats ContentStreamingStats() const;
     void ReserveRuntimeSceneResources(const RuntimeSceneResourceReserveDesc& desc);
     void SetDefaultSceneDrawBudget(SceneRenderDrawBudget drawBudget) noexcept;
@@ -253,16 +265,25 @@ public:
     [[nodiscard]] RenderEffectHost& RenderEffects();
     [[nodiscard]] bool GpuDrivenRuntimeDispatchEnabled() const noexcept;
     void SetGraphShaderCacheRoot(std::string root);
-    // Cook graph materials on demand into the graph shader cache (an unpackaged project run, as
-    // Unreal compiles a missing material shader); std::nullopt draws only already cooked binaries.
+    // Cook graph materials on demand into the graph shader cache (an unpackaged project run).
+    // std::nullopt draws only already cooked binaries.
     void SetGraphShaderCookToolchain(std::optional<RenderMaterialGraphShaderToolchain> toolchain);
     [[nodiscard]] const std::string& GraphShaderCacheRoot() const noexcept;
     [[nodiscard]] bool SetShaderBinaryProvider(
         std::shared_ptr<const ShaderBinaryProvider> provider) noexcept;
     // MAT-72: seconds advanced per completed frame; drives material u_time (Time/animation nodes).
     void SetFrameDeltaSeconds(float seconds) noexcept;
+    // Starts the time and the frame count the shaders read from zero: a host calls it when its scene begins, so what
+    // the scene shows does not depend on how many frames (a loading screen, say) were drawn before it.
+    void RestartFrameTime() noexcept;
     [[nodiscard]] float FrameDeltaSeconds() const noexcept;
     void SetDefaultPostProcessSettings(ScenePostProcessSettings settings) noexcept;
+    // Fraction (0.5..1) of the backbuffer the runtime scene renders at before it is upscaled; 1 keeps
+    // the full-resolution path with no upscale pass.
+    void SetRenderScale(float scale) noexcept;
+    [[nodiscard]] float RenderScale() const noexcept;
+    // `extent` scaled by `scale` (clamped to 0.5..1), each side at least one pixel.
+    [[nodiscard]] static RenderExtent ScaledRenderExtent(RenderExtent extent, float scale) noexcept;
     [[nodiscard]] ScenePostProcessSettings DefaultPostProcessSettings() const noexcept;
     [[nodiscard]] bool ConfigurePostProcessChain(const PostProcessChainDesc& desc);
     [[nodiscard]] bool AddPostProcessPass(PostProcessPass pass);
@@ -291,6 +312,9 @@ public:
     [[nodiscard]] const RenderOriginPolicy& CurrentRenderOriginPolicy() const noexcept;
 
 private:
+    // The submit of a runtime scene to the screen through the default scene and post-process targets; nothing when
+    // no frame is active or the targets cannot be made.
+    [[nodiscard]] std::optional<RenderSceneSubmitDesc> RuntimeSceneSubmitDesc(const RuntimeSceneSynchronization& synchronization);
     // Moves the scene's render origin to the viewing camera when it went too far, re-expresses the submit's
     // world-space camera and overlays in render space, then submits.
     [[nodiscard]] bool SubmitSceneToViewport(const kb::scene::Scene& scene, const RenderSceneSubmitDesc& desc, const RenderViewportPlan& viewportPlan);
@@ -309,6 +333,9 @@ private:
         std::uint64_t sceneId = 0;
         std::uint64_t cameraEntityId = 0;
         std::uint64_t historyFrame = 0;
+        // Frames drawn since the history last started: the place in the jitter pattern, so a view shows the same
+        // sequence whatever number of frames the renderer drew before it began.
+        std::uint64_t jitterSequence = 0;
         bool cameraOverride = false;
         bool orthographic = false;
         bool taaEnabled = false;
@@ -331,8 +358,11 @@ private:
     std::unique_ptr<FinalCompositePass> finalCompositePass_;
     std::unique_ptr<SceneDeferredLightingPass> deferredLightingPass_;
     SceneGiResolvePass giResolvePass_;
-    // Unreal's SkyLight: the backdrop captured and prefiltered for the reflections of the lighting.
+    // Sky light: the backdrop captured and prefiltered for the reflections of the lighting.
     SceneSkyReflection skyReflection_;
+    // The backdrop of the forward path, drawn after its opaque geometry.
+    SceneSkyBackdropPass skyBackdropPass_;
+    SceneLightProbeTexture lightProbes_;
     SceneGiVoxelGrid giVoxelGrid_;
     SceneRenderTarget defaultSceneTarget_;
     // G-buffer commands are consumed asynchronously by bgfx. Reusing one allocation for
@@ -385,6 +415,7 @@ private:
     SceneRenderDrawBudget defaultSceneDrawBudget_{};
     SceneRenderLightingConfig defaultSceneLightingConfig_{};
     ScenePostProcessSettings defaultPostProcessSettings_{};
+    float renderScale_ = 1.0F;
     std::optional<SceneRenderLightingPath> lastRuntimeMaterialLightingPath_;
     std::optional<SceneRenderDebugView> lastRuntimeMaterialDebugView_;
     std::optional<RenderMaterialGraphQualityLevel> lastRuntimeMaterialQualityLevel_;

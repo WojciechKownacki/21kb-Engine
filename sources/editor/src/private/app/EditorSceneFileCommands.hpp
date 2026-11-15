@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app/EditorShellInteractionState.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #if defined(_WIN32)
@@ -7,6 +8,9 @@
 #define NOMINMAX
 #include <Windows.h>
 #endif
+
+#include <filesystem>
+#include <vector>
 
 namespace kb::editor {
 
@@ -22,6 +26,14 @@ public:
     [[nodiscard]] static bool NewScene(HWND owner, EditorSceneContext& sceneContext);
     [[nodiscard]] static bool OpenScene(HWND owner, EditorSceneContext& sceneContext);
     [[nodiscard]] static bool SaveSceneAs(HWND owner, EditorSceneContext& sceneContext);
+    // The Scene menu: the project's scenes, whether the open one can be duplicated, renamed or
+    // deleted (a saved scene outside play mode and prefab editing), and those commands.
+    [[nodiscard]] static std::vector<EditorPathMenuRow> SceneMenuRows(const EditorSceneContext& sceneContext);
+    [[nodiscard]] static bool CanChangeOpenSceneFile(const EditorSceneContext& sceneContext);
+    [[nodiscard]] static bool OpenSceneFile(HWND owner, EditorSceneContext& sceneContext, const std::filesystem::path& path);
+    [[nodiscard]] static bool DuplicateScene(EditorSceneContext& sceneContext);
+    [[nodiscard]] static bool RenameScene(HWND owner, EditorSceneContext& sceneContext);
+    [[nodiscard]] static bool DeleteScene(HWND owner, EditorSceneContext& sceneContext);
     // Ctrl+N, Ctrl+O and Ctrl+Shift+S; false for any other key, which is left to the next handler.
     [[nodiscard]] static bool HandleShortcut(HWND owner, EditorSceneContext& sceneContext, WPARAM key, bool& changed);
 };

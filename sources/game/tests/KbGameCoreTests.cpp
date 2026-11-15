@@ -6,6 +6,7 @@
 // input activation and the mapping context left every test in the repository
 // green. These run the bootstrap directly, on projects that have those things.
 
+#include "AndroidGraphicsApi.hpp"
 #include "GameProjectRuntime.hpp"
 #include "PackagedRuntimeModuleContract.hpp"
 #include "ProjectCooker.hpp"
@@ -27,12 +28,16 @@
 #include "engine/input/InputAssetIO.hpp"
 #include "engine/input/InputMappingContextAsset.hpp"
 #include "engine/input/InputSubsystem.hpp"
+#include "engine/audio/AudioPlayback.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/project/ProjectSettings.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/PhysicsBackend.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
+#include "engine/scene/SceneTagCatalog.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneObject.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
@@ -73,6 +78,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <thread>
 #include <cmath>
@@ -82,6 +88,7 @@
 #include <fstream>
 #include <iterator>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -137,6 +144,94 @@ void WriteTextFile(const std::filesystem::path& path, const std::string& text) {
 // -------------------------------------------------------------------------
 // The time step the loop hands the scene runtime.
 // -------------------------------------------------------------------------
+
+// -------------------------------------------------------------------------
+// The renderer an Android package starts with.
+// -------------------------------------------------------------------------
+
+void RunAndroidGraphicsApiTests() {
+    using Api = kb::project::ProjectAndroidGraphicsApi;
+    constexpr std::int32_t vulkan = static_cast<std::int32_t>(bgfx::RendererType::Vulkan);
+    constexpr std::int32_t gles = static_cast<std::int32_t>(bgfx::RendererType::OpenGLES);
+    const std::array<bgfx::RendererType::Enum, 2U> both{ bgfx::RendererType::Vulkan, bgfx::RendererType::OpenGLES };
+    const std::array<bgfx::RendererType::Enum, 1U> glesOnly{ bgfx::RendererType::OpenGLES };
+    const std::array<bgfx::RendererType::Enum, 1U> vulkanOnly{ bgfx::RendererType::Vulkan };
+    const std::array<bgfx::RendererType::Enum, 1U> neitherOffered{ bgfx::RendererType::Noop };
+    const auto resolve = [](Api api, const auto& supported) {
+        return kb::game::ResolveAndroidRenderers(api, supported.data(), static_cast<std::uint8_t>(supported.size()));
+    };
+
+    // Auto leaves the choice to the renderer, whatever the build offers.
+    for (const auto& candidates : { resolve(Api::Auto, both), resolve(Api::Auto, glesOnly), resolve(Api::Auto, vulkanOnly) }) {
+        Require(candidates.count == 1U && candidates.types[0] == -1, "Auto must leave the choice of the renderer to the renderer");
+    }
+    // A named API comes first and the other one is the way out when the device cannot start it.
+    const kb::game::AndroidRendererCandidates forcedGles = resolve(Api::OpenGLES, both);
+    Require(forcedGles.count == 2U && forcedGles.types[0] == gles && forcedGles.types[1] == vulkan,
+        "OpenGL ES must be tried first and Vulkan after it");
+    const kb::game::AndroidRendererCandidates forcedVulkan = resolve(Api::Vulkan, both);
+    Require(forcedVulkan.count == 2U && forcedVulkan.types[0] == vulkan && forcedVulkan.types[1] == gles,
+        "Vulkan must be tried first and OpenGL ES after it");
+    // An API the build does not offer is left out, so the other one starts.
+    const kb::game::AndroidRendererCandidates missingVulkan = resolve(Api::Vulkan, glesOnly);
+    Require(missingVulkan.count == 1U && missingVulkan.types[0] == gles,
+        "A build without Vulkan must start OpenGL ES for a Vulkan project");
+    const kb::game::AndroidRendererCandidates missingGles = resolve(Api::OpenGLES, vulkanOnly);
+    Require(missingGles.count == 1U && missingGles.types[0] == vulkan,
+        "A build without OpenGL ES must start Vulkan for an OpenGL ES project");
+    // A build that offers neither leaves the choice to the renderer, which then reports why it cannot start.
+    const kb::game::AndroidRendererCandidates neither = resolve(Api::Vulkan, neitherOffered);
+    Require(neither.count == 1U && neither.types[0] == -1, "A build with neither API must leave the choice to the renderer");
+
+    // The list of unreliable Vulkan devices: a device built from the values of a rule matches that rule, moves an
+    // Auto project to OpenGL ES and changes nothing else.
+    for (std::size_t index = 0U; index < kb::game::kAndroidVulkanUnreliableDevices.size(); ++index) {
+        const kb::game::AndroidVulkanUnreliableRule& rule = kb::game::kAndroidVulkanUnreliableDevices[index];
+        const kb::game::AndroidVulkanDevice device{ true, rule.vendorId, rule.deviceIdValue, rule.maxDriverVersion,
+            rule.maxAndroidApiLevel == 0U ? 33U : rule.maxAndroidApiLevel };
+        const auto resolveFor = [&](Api api, const auto& supported) {
+            return kb::game::ResolveAndroidRenderers(api, supported.data(), static_cast<std::uint8_t>(supported.size()), device);
+        };
+        Require(kb::game::FindAndroidVulkanUnreliableRule(device) == static_cast<int>(index),
+            "A device with the values of a rule must match that rule");
+        const kb::game::AndroidRendererCandidates listed = resolveFor(Api::Auto, both);
+        Require(listed.count == 1U && listed.types[0] == gles && listed.unreliableRule == static_cast<int>(index),
+            "Auto must start OpenGL ES on a listed Vulkan device");
+        const kb::game::AndroidRendererCandidates keptVulkan = resolveFor(Api::Vulkan, both);
+        Require(keptVulkan.count == 2U && keptVulkan.types[0] == vulkan && keptVulkan.unreliableRule == -1,
+            "A project that names Vulkan must keep Vulkan on a listed device");
+        const kb::game::AndroidRendererCandidates noGles = resolveFor(Api::Auto, vulkanOnly);
+        Require(noGles.count == 1U && noGles.types[0] == -1 && noGles.unreliableRule == -1,
+            "A build without OpenGL ES must leave Auto to the renderer on a listed device");
+        const kb::game::AndroidRendererCandidates noVulkan = resolveFor(Api::Auto, glesOnly);
+        Require(noVulkan.count == 1U && noVulkan.types[0] == -1 && noVulkan.unreliableRule == -1,
+            "A build without Vulkan must leave Auto to the renderer on a listed device");
+
+        kb::game::AndroidVulkanDevice newerDriver = device;
+        newerDriver.driverVersion = rule.maxDriverVersion + 1U;
+        Require(kb::game::FindAndroidVulkanUnreliableRule(newerDriver) == -1, "A driver newer than the ceiling must not match");
+        kb::game::AndroidVulkanDevice olderDriver = device;
+        olderDriver.driverVersion = 0U;
+        Require(kb::game::FindAndroidVulkanUnreliableRule(olderDriver) == static_cast<int>(index),
+            "A driver older than the ceiling must match");
+        if (rule.maxAndroidApiLevel != 0U) {
+            kb::game::AndroidVulkanDevice newerRelease = device;
+            newerRelease.androidApiLevel = rule.maxAndroidApiLevel + 1U;
+            Require(kb::game::FindAndroidVulkanUnreliableRule(newerRelease) == -1,
+                "An Android release newer than the ceiling must not match");
+        }
+        kb::game::AndroidVulkanDevice otherVendor = device;
+        otherVendor.vendorId = rule.vendorId ^ 1U;
+        Require(kb::game::FindAndroidVulkanUnreliableRule(otherVendor) == -1, "Another vendor must not match");
+        kb::game::AndroidVulkanDevice otherDevice = device;
+        otherDevice.deviceId = rule.deviceIdValue ^ (rule.deviceIdMask & ~(rule.deviceIdMask - 1U));
+        Require(kb::game::FindAndroidVulkanUnreliableRule(otherDevice) == -1, "Another device id must not match");
+        kb::game::AndroidVulkanDevice unknown = device;
+        unknown.known = false;
+        Require(kb::game::FindAndroidVulkanUnreliableRule(unknown) == -1, "A device the loader did not report must not match");
+    }
+    Require(resolve(Api::Auto, both).unreliableRule == -1, "Without a probed device Auto must not consult the list");
+}
 
 void RunRuntimeDeltaTests() {
     const Clock::time_point base = Clock::now();
@@ -537,6 +632,64 @@ private:
 // ordinary path at MAX_PATH. The publication lock is a raw CreateFileW, so a deep output turned
 // into "already being cooked" - a message that sends the reader looking for another cook that was
 // never running.
+// A package holds the startup scene and the scenes the project lists besides it, and no other scene that
+// nothing references; a listed scene that is not a scene of the project fails the cook by name.
+void RunBuildSceneListCookTest() {
+    namespace bake = kb::assets::bake;
+    const Fixture fixture = BuildFixture(TestRoot() / "build_scene_list", "Project");
+    {
+        kb::scene::Scene authored;
+        Require(authored.Assets().MountProject(fixture.root), "Build scene list fixture could not be mounted");
+        static_cast<void>(authored.Assets().Discover());
+        static_cast<void>(authored.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Hub_0" }));
+        Require(kb::scene::SceneDocumentService::Save(authored, fixture.root / "Assets" / "Scenes" / "Hub.21kbscene", "Hub"),
+            "Build scene list hub scene could not be saved");
+        static_cast<void>(authored.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Extra_0" }));
+        Require(kb::scene::SceneDocumentService::Save(authored, fixture.root / "Assets" / "Scenes" / "Extra.21kbscene", "Extra"),
+            "Build scene list extra scene could not be saved");
+    }
+    kb::project::ProjectSettings settings;
+    settings.defaultMap = fixture.sceneVirtualPath;
+    settings.physicsLayersAsset.clear();
+    settings.inputEnabled = false;
+    const auto cook = [&](const kb::project::ProjectSettings& chosen, const std::string& name) {
+        WriteSettings(fixture.root, chosen);
+        std::ostringstream diagnostics;
+        auto result = kb::game::CookProject(
+            kb::game::ProjectCookRequest{ .projectPath = fixture.root, .targetProfileId = "Windows.x64",
+                .outputPackPath = fixture.root / (name + ".kbpack") }, diagnostics);
+        return result;
+    };
+    const auto packaged = [&](const std::string& name) {
+        auto pack = std::make_unique<bake::RuntimeAssetPack>();
+        Require(pack->Mount(fixture.root / (name + ".kbpack"), bake::WindowsX64BakeTargetProfile()) == bake::RuntimeAssetPackStatus::Success,
+            "A build scene list pack did not mount");
+        return pack;
+    };
+
+    // A project without a list packages the startup scene alone.
+    Require(cook(settings, "alone").succeeded, "The startup scene alone did not cook");
+    {
+        const auto pack = packaged("alone");
+        Require(pack->FindAsset("/Game/Scenes/Main.21kbscene") != nullptr && pack->FindAsset("/Game/Scenes/Hub.21kbscene") == nullptr &&
+                pack->FindAsset("/Game/Scenes/Extra.21kbscene") == nullptr,
+            "A project without a scene list packaged more than its startup scene");
+    }
+    // A listed scene is packaged with it; a scene that is not listed is not.
+    settings.additionalScenes = { "/Game/Scenes/Hub.21kbscene" };
+    Require(cook(settings, "listed").succeeded, "The listed scenes did not cook");
+    {
+        const auto pack = packaged("listed");
+        Require(pack->FindAsset("/Game/Scenes/Main.21kbscene") != nullptr && pack->FindAsset("/Game/Scenes/Hub.21kbscene") != nullptr &&
+                pack->FindAsset("/Game/Scenes/Extra.21kbscene") == nullptr,
+            "A package must hold exactly the startup scene and the listed scenes");
+    }
+    settings.additionalScenes = { "/Game/Scenes/Missing.21kbscene" };
+    const kb::game::ProjectCookResult missing = cook(settings, "missing");
+    Require(!missing.succeeded && Mentions(missing.error, "scene in build") && Mentions(missing.error, "Missing.21kbscene"),
+        "A listed scene that does not exist must fail the cook and be named");
+}
+
 void RunDeepOutputPathCookTest() {
     const Fixture fixture = BuildFixture(TestRoot() / "deep_output_cook", "Project");
     kb::project::ProjectSettings settings;
@@ -1342,6 +1495,12 @@ void RunWindowsRuntimeModulePackagingTests() {
     settings.defaultMap = fixture.sceneVirtualPath;
     settings.physicsLayersAsset.clear();
     settings.inputEnabled = false;
+    settings.display.windowWidth = 1920U;
+    settings.display.windowHeight = 1080U;
+    settings.display.frameRateCap = 75U;
+    settings.simulation.fixedStepHz = 90U;
+    settings.masterVolume = 0.6F;
+    settings.tags = { "Boss", "Trap" };
     WriteSettings(fixture.root, settings);
     std::error_code copyError;
     std::filesystem::create_directories(fixture.root / "Binaries", copyError);
@@ -1416,6 +1575,10 @@ void RunWindowsRuntimeModulePackagingTests() {
     Require(kb::game::ReadMountedGameProjectRuntime(
                 pack, sealedRoot, "", runtime, runtimeError),
         "Mounted Windows runtime did not accept its sealed module DLLs");
+    Require(runtime.display == settings.display && runtime.simulation == settings.simulation,
+        "A packaged game must read the display and simulation settings from its cooked manifest");
+    Require(runtime.masterVolume == 0.6F && runtime.tags == settings.tags,
+        "A packaged game must read the master volume and the tag list from its cooked manifest");
     Require(
         std::filesystem::path{ runtime.descriptor.plugins[0].binaryPath } ==
             std::filesystem::weakly_canonical(stagedModules / "Binaries" / "custom.dll") &&
@@ -2371,6 +2534,11 @@ void RunSettingsTests() {
     settings.physicsLayersAsset = "/Game/Config/Layers.21kbphysicslayers";
     settings.inputMappingContext = "/Game/Input/Context.21kbinput";
     settings.inputEnabled = false;
+    settings.display = { .windowWidth = 1600U, .windowHeight = 900U, .windowMode = kb::project::ProjectWindowMode::BorderlessFullscreen,
+        .resizable = false, .vsync = false, .frameRateCap = 60U };
+    settings.simulation = { .fixedStepHz = 120U, .gravity = { 0.0F, -3.7F, 0.0F }, .timeScale = 0.5F };
+    settings.masterVolume = 0.25F;
+    settings.tags = { "Boss" };
     WriteSettings(fixture.root, settings);
 
     std::ostringstream err;
@@ -2389,6 +2557,21 @@ void RunSettingsTests() {
         runtime.inputMappingContext == "/Game/Input/Context.21kbinput",
         "The input mapping context must reach the runtime");
     Require(!runtime.inputEnabled, "An input-disabled project must reach the runtime disabled");
+    Require(
+        runtime.display == settings.display && runtime.simulation == settings.simulation,
+        "The display and simulation settings must reach the runtime");
+    Require(runtime.masterVolume == 0.25F && runtime.tags == settings.tags,
+        "The master volume and the project's tags must reach the runtime");
+    {
+        // Loading the project's scene applies the simulation settings to it.
+        kb::scene::Scene configured;
+        configured.Runtime().ApplyProjectSimulation(runtime.simulation);
+        const kb::scene::SceneRuntimeFixedStepSettings fixedStep = configured.Runtime().FixedStepSettings();
+        const kb::scene::Vec3 gravity = kb::scene::PhysicsBackend::Gravity(configured);
+        Require(
+            fixedStep.fixedDeltaSeconds == 1.0F / 120.0F && configured.Runtime().TimeScale() == 0.5F && gravity.y == -3.7F,
+            "The project's fixed step, time scale and gravity must be applied to the scene");
+    }
     Require(
         runtime.projectRoot == std::filesystem::absolute(fixture.root).lexically_normal(),
         "The project root is the directory holding the descriptor");
@@ -2551,6 +2734,22 @@ void RunSceneLoadTests() {
     }
 
     {
+        // The project's master volume and tags are the scene's once it is loaded.
+        kb::scene::Scene scene;
+        kb::game::GameProjectRuntime runtime = RuntimeFor(fixture);
+        runtime.masterVolume = 0.3F;
+        runtime.tags = { "Boss" };
+        std::ostringstream err;
+        std::filesystem::path loaded;
+        std::size_t discovered = 0U;
+        Require(kb::game::LoadGameProjectScene(runtime, scene, loaded, discovered, err),
+            "A project with a master volume and tags must load");
+        Require(kb::audio::AudioPlayback::MasterVolume(scene) == 0.3F && scene.Tags().Contains("Boss") &&
+                scene.Tags().ProjectDefinitions().size() == 1U,
+            "Loading the project's scene must apply its master volume and tag list");
+    }
+
+    {
         // A reference that is not a virtual path is resolved under the project.
         kb::scene::Scene scene;
         kb::game::GameProjectRuntime runtime = RuntimeFor(fixture);
@@ -2682,9 +2881,201 @@ void RunSceneLoadTests() {
     }
 }
 
+// -------------------------------------------------------------------------
+// A pack a packaging run produced, held against the project it was made from.
+// -------------------------------------------------------------------------
+
+// True for content that names a place on the machine that built the package: one of the given roots (in
+// lower case; paths compare without regard to case) or, in text, a drive-letter path. Binary content, such as
+// a shader, is held to the roots only: a drive letter and a colon can occur there by chance.
+[[nodiscard]] bool NamesHostPath(std::string_view text, const std::vector<std::string>& hostRoots) {
+    std::string lowered{ text };
+    std::ranges::transform(lowered, lowered.begin(), [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
+    for (const std::string& root : hostRoots) {
+        if (!root.empty() && lowered.find(root) != std::string::npos) {
+            return true;
+        }
+    }
+    if (text.find('\0') != std::string_view::npos) {
+        return false;
+    }
+    for (std::size_t index = 0U; index + 2U < text.size(); ++index) {
+        const bool separator = text[index + 2U] == '\\' || text[index + 2U] == '/';
+        const bool boundary = index == 0U || std::isalnum(static_cast<unsigned char>(text[index - 1U])) == 0;
+        if (std::isalpha(static_cast<unsigned char>(text[index])) != 0 && text[index + 1U] == ':' && separator && boundary) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void RunPackageContractCheck(
+    std::string_view profileId,
+    const std::filesystem::path& packPath,
+    const std::filesystem::path& projectRoot,
+    const std::vector<std::string>& hostRoots) {
+    namespace bake = kb::assets::bake;
+
+    bake::BakeTargetProfile profile{};
+    Require(bake::TryFindBakeTargetProfile(profileId, profile), "The package contract names an unknown target profile");
+    bake::RuntimeAssetPack pack;
+    Require(pack.Mount(packPath, profile) == bake::RuntimeAssetPackStatus::Success, "The package does not mount for its target");
+    const bake::RuntimeAssetManifest& manifest = pack.Manifest();
+
+    // Every setting the project holds is in the manifest, and the project holds non-default ones.
+    const kb::project::ProjectSettingsLoadResult loaded =
+        kb::project::ProjectSettingsStore::Load(kb::project::ProjectSettingsStore::FilePath(projectRoot));
+    Require(loaded.found && loaded.Succeeded(), "The project's settings file could not be read");
+    const kb::project::ProjectSettings& expected = loaded.settings;
+    const kb::project::ProjectSettings defaults;
+    Require(expected.display != defaults.display && expected.simulation != defaults.simulation &&
+            expected.masterVolume != defaults.masterVolume && !expected.tags.empty() && !expected.additionalScenes.empty(),
+        "The package contract project has to carry non-default settings");
+    Require(manifest.settings.display == expected.display, "The manifest does not carry the project's display settings");
+    Require(manifest.settings.simulation == expected.simulation, "The manifest does not carry the project's fixed step, gravity and time scale");
+    Require(manifest.settings.masterVolume == expected.masterVolume, "The manifest does not carry the project's master volume");
+    Require(manifest.settings.microphone == expected.microphone && expected.microphone, "The manifest does not carry the project's microphone setting");
+    Require(manifest.settings.tags == expected.tags, "The manifest does not carry the project's tags");
+    Require(manifest.settings.defaultMap == expected.defaultMap && manifest.settings.gameName == expected.gameName,
+        "The manifest does not carry the project's startup scene and game name");
+
+    // The package holds the scenes of the build list and no other, and the default mixer.
+    std::vector<std::string> scenes;
+    for (const bake::RuntimeAssetManifestEntry& asset : manifest.assets) {
+        if (asset.type == "Scene") {
+            scenes.push_back(asset.virtualPath);
+        }
+    }
+    std::vector<std::string> buildScenes = kb::project::ProjectBuildScenes(expected);
+    std::ranges::sort(scenes);
+    std::ranges::sort(buildScenes);
+    Require(scenes == buildScenes && scenes.size() >= 2U, "The package does not hold exactly the scenes of the build list");
+    Require(pack.FindAsset("/Game/Audio/DefaultMixer.kbmixer") != nullptr, "The package does not hold the project's default audio mixer");
+
+    // Textures are cooked to the target's families, shaders to its backends, and no source image or model ships.
+    std::set<std::string> families;
+    std::set<std::string> backends;
+    std::size_t textures = 0U;
+    const auto allowedFamily = [&profile](std::string_view name) {
+        for (std::uint32_t index = 0U; index < bake::kTextureCompressionFamilyCount; ++index) {
+            const auto family = static_cast<bake::TextureCompressionFamily>(index);
+            if (bake::HasTextureCompressionFamily(profile.textureCompressions, family) &&
+                bake::TextureCompressionFamilyName(family) == name) {
+                return true;
+            }
+        }
+        return false;
+    };
+    constexpr std::array<std::string_view, 10U> kSourceExtensions{
+        ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".dds", ".hdr", ".fbx", ".gltf", ".glb" };
+    for (const bake::RuntimeAssetManifestEntry& asset : manifest.assets) {
+        bool baked = false;
+        for (const bake::RuntimeArtifactReference& artifact : asset.artifacts) {
+            if (artifact.encoding == bake::RuntimeArtifactEncoding::BakedTexture) {
+                baked = true;
+                ++textures;
+                families.insert(artifact.qualifier);
+                Require(allowedFamily(artifact.qualifier), "The package holds a texture in a family its target does not use");
+            } else if (artifact.encoding == bake::RuntimeArtifactEncoding::BakedMesh) {
+                baked = true;
+            } else if (artifact.encoding == bake::RuntimeArtifactEncoding::MaterialShader) {
+                const std::string_view qualifier = artifact.qualifier;
+                std::size_t begin = 0U;
+                for (int field = 0; field < 3; ++field) {
+                    begin = qualifier.find(':', begin) + 1U;
+                }
+                backends.insert(std::string{ qualifier.substr(begin, qualifier.find(':', begin) - begin) });
+            }
+        }
+        const bool sourceFormat = std::ranges::find(kSourceExtensions, asset.sourceExtension) != kSourceExtensions.end();
+        Require(!sourceFormat || baked, "The package ships a source image or model that was not cooked");
+    }
+    Require(textures != 0U, "The package holds no cooked texture");
+    // The launch screen image is named by the settings alone, so only the cook's own roots keep it: it must be there, cooked.
+    const std::string& splashImage = manifest.settings.display.splash.image;
+    if (!splashImage.empty()) {
+        const auto splash = std::ranges::find(manifest.assets, splashImage, &bake::RuntimeAssetManifestEntry::virtualPath);
+        Require(splash != manifest.assets.end() &&
+                std::ranges::any_of(splash->artifacts, [](const bake::RuntimeArtifactReference& artifact) {
+                    return artifact.encoding == bake::RuntimeArtifactEncoding::BakedTexture;
+                }),
+            "The package does not hold the launch screen image as a cooked texture");
+    }
+    // The engine's own shaders are auxiliary files: /Engine/Shaders/<platform>/<backend>/<name>.bin.
+    constexpr std::string_view kShaderRoot = "/Engine/Shaders/";
+    for (const bake::RuntimeAuxiliaryFileEntry& file : manifest.auxiliaryFiles) {
+        if (!std::string_view{ file.virtualPath }.starts_with(kShaderRoot)) {
+            continue;
+        }
+        const std::string_view rest = std::string_view{ file.virtualPath }.substr(kShaderRoot.size());
+        const std::size_t platformEnd = rest.find('/');
+        const std::size_t backendEnd = rest.find('/', platformEnd + 1U);
+        Require(platformEnd != std::string_view::npos && backendEnd != std::string_view::npos &&
+                rest.substr(0U, platformEnd) == bake::ShaderBakePlatformName(profile.shaderPlatform),
+            "The package holds a shader of another platform than its target");
+        backends.insert(std::string{ rest.substr(platformEnd + 1U, backendEnd - platformEnd - 1U) });
+    }
+    for (std::uint32_t index = 0U; index < bake::kShaderBakeBackendCount; ++index) {
+        const auto backend = static_cast<bake::ShaderBakeBackend>(index);
+        const bool listed = backends.contains(std::string{ bake::ShaderBakeBackendName(backend) });
+        Require(listed == bake::HasShaderBakeBackend(profile.shaderBackends, backend),
+            "The package's shader backends are not exactly the target's");
+    }
+
+    // Nothing the manifest says, and no file the package carries as text, names the build machine.
+    std::vector<std::string> strings{ manifest.targetProfileId, manifest.settings.name, manifest.settings.gameName,
+        manifest.settings.category, manifest.settings.description, manifest.settings.defaultMap, manifest.settings.lastOpenMap,
+        manifest.settings.inputMappingContext, manifest.settings.physicsLayersAsset, manifest.descriptor.contentRoot };
+    for (const bake::RuntimeAssetManifestEntry& asset : manifest.assets) {
+        strings.insert(strings.end(), { asset.type, asset.name, asset.virtualPath, asset.sourceExtension });
+    }
+    for (const kb::project::ProjectPluginReference& plugin : manifest.descriptor.plugins) {
+        strings.insert(strings.end(), { plugin.name, plugin.binaryPath });
+    }
+    for (const bake::RuntimeAssetManifestEntry& asset : manifest.assets) {
+        for (const bake::RuntimeArtifactReference& artifact : asset.artifacts) {
+            std::vector<std::uint8_t> bytes;
+            if (artifact.encoding == bake::RuntimeArtifactEncoding::SourceBytes &&
+                pack.ReadSourceFile(artifact.digest, bytes) == bake::RuntimeAssetPackStatus::Success) {
+                strings.emplace_back(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+            }
+        }
+    }
+    for (const bake::RuntimeAuxiliaryFileEntry& file : manifest.auxiliaryFiles) {
+        std::vector<std::uint8_t> bytes;
+        strings.push_back(file.virtualPath);
+        if (pack.ReadAuxiliaryFile(file.virtualPath, bytes) == bake::RuntimeAssetPackStatus::Success) {
+            strings.emplace_back(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+        }
+    }
+    for (const std::string& text : strings) {
+        if (NamesHostPath(text, hostRoots)) {
+            std::fprintf(stderr, "in: %.160s\n", text.c_str());
+            Require(false, "The package names a path of the machine that built it");
+        }
+    }
+
+    std::string familyList;
+    for (const std::string& family : families) {
+        familyList += (familyList.empty() ? "" : ",") + family;
+    }
+    std::string backendList;
+    for (const std::string& backend : backends) {
+        backendList += (backendList.empty() ? "" : ",") + backend;
+    }
+    std::printf("package-contract ok: profile=%s scenes=%zu textures=%zu families=%s shader-backends=%s\n",
+        std::string{ profileId }.c_str(), scenes.size(), textures, familyList.c_str(), backendList.c_str());
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
+    // --package-contract <target profile> <Game.kbpack> <project directory> [<host path>...]
+    if (argc >= 5 && std::string_view{ argv[1] } == "--package-contract") {
+        RunPackageContractCheck(argv[2], argv[3], argv[4], std::vector<std::string>(argv + 5, argv + argc));
+        return EXIT_SUCCESS;
+    }
+
     std::error_code error;
     std::filesystem::create_directories(TestRoot(), error);
     Require(!error, "kb_game_core test root could not be prepared");
@@ -2728,9 +3119,11 @@ int main(int argc, char** argv) {
     Require(argc == 1, "kb_game_core tests received an unsupported argument");
 
     RunRuntimeDeltaTests();
+    RunAndroidGraphicsApiTests();
     RunPackagedRuntimeModuleContractTests();
     RunCookOutputLockTest();
     RunTextureReuseCookTests();
+    RunBuildSceneListCookTest();
     RunDeepOutputPathCookTest();
     RunWindowsRuntimeModulePackagingTests();
     RunNativeBehaviourPackagingTests();

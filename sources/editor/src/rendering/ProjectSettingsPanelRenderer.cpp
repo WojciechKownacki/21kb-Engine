@@ -9,17 +9,21 @@
 #include "rendering/EditorSettingsPanelRenderer.hpp"
 #include "rendering/PluginsPanelRenderer.hpp"
 #include "rendering/ProjectSettingsPanelLayout.hpp"
+#include "rendering/gdi/CutTextAudit.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
 #include "platform/win32/Utf8Gdi.hpp"
 
 #include <array>
 #include <cctype>
+#include <cmath>
+#include <cstdio>
 #include <filesystem>
 #include <algorithm>
 #include <optional>
 #include <string_view>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace kb::editor {
@@ -53,6 +57,16 @@ constexpr int kTooltipPaddingY = 10;
         return EditorText("projectSettings.category.physics", "Physics");
     case ProjectSettingsCategory::Lighting:
         return EditorText("projectSettings.category.lighting", "Lighting");
+    case ProjectSettingsCategory::Display:
+        return EditorText("projectSettings.category.display", "Display");
+    case ProjectSettingsCategory::Audio:
+        return EditorText("projectSettings.category.audio", "Audio");
+    case ProjectSettingsCategory::Scenes:
+        return EditorText("projectSettings.category.scenes", "Scenes");
+    case ProjectSettingsCategory::Tags:
+        return EditorText("projectSettings.category.tags", "Tags");
+    case ProjectSettingsCategory::Navigation:
+        return EditorText("projectSettings.category.navigation", "Navigation");
     case ProjectSettingsCategory::EditorGeneral:
         return EditorText("projectSettings.category.editorGeneral", "General");
     case ProjectSettingsCategory::EditorSaving:
@@ -106,7 +120,10 @@ void DrawCategorySidebar(HDC dc, const ProjectSettingsPanelLayoutRects& rects, c
         HeroIconKind::MagnifyingGlass, Color(theme.textDisabled), 1);
     const RECT searchText{ rects.searchField.left + 26, rects.searchField.top, rects.searchField.right - 6, rects.searchField.bottom };
     if (query.empty() && !search.IsFocused()) {
-        DrawText(dc, searchText, EditorText("settings.searchPlaceholder", "Search settings"), Color(theme.textDisabled), 12);
+        // The hint is longer in some languages than the field is wide: it gets the largest size it fits at.
+        const std::string_view hint = EditorText("settings.searchPlaceholder", "Search settings");
+        DrawText(dc, searchText, hint, Color(theme.textDisabled),
+            EditorDialogStyle::FittingSize(dc, hint, static_cast<int>(searchText.right - searchText.left), 12));
     } else {
         const std::string shown = std::string{ query } + (search.IsFocused() ? "|" : "");
         DrawText(dc, searchText, shown.c_str(), Color(theme.textPrimary), 12);
@@ -126,11 +143,10 @@ void DrawCategorySidebar(HDC dc, const ProjectSettingsPanelLayoutRects& rects, c
         const RECT row = ProjectSettingsPanelLayout::CategoryRow(rects.sidebar, index);
         const bool selected = index == selectedCategory;
         if (selected) {
-            GdiDrawing::FillRectColor(dc, row, Blend(Color(theme.panel), Color(theme.accent), 18));
-            GdiDrawing::FillRectColor(dc, RECT{ row.left, row.top, row.left + 3, row.bottom }, RGB(86, 172, 205));
+            GdiDrawing::FillRectColor(dc, row, Color(theme.accent));
         }
         DrawText(dc, RECT{ row.left + 12, row.top, row.right - 8, row.bottom }, CategoryLabel(index),
-            Color(selected ? theme.textPrimary : theme.textDisabled), 12, selected ? FW_SEMIBOLD : FW_NORMAL);
+            selected ? RGB(255, 255, 255) : Color(theme.textSecondary), 12, selected ? FW_SEMIBOLD : FW_NORMAL);
     }
 }
 
@@ -216,6 +232,55 @@ struct TooltipContent {
     }
 }
 
+[[nodiscard]] std::string_view SettingLabel(ProjectSettingsTooltipKind kind) {
+    switch (kind) {
+    case ProjectSettingsTooltipKind::WindowMode:
+        return EditorText("projectSettings.windowMode", "Window Mode");
+    case ProjectSettingsTooltipKind::WindowSize:
+        return EditorText("projectSettings.windowSize", "Window Size");
+    case ProjectSettingsTooltipKind::Resizable:
+        return EditorText("projectSettings.resizable", "Resizable");
+    case ProjectSettingsTooltipKind::VSync:
+        return "VSync";
+    case ProjectSettingsTooltipKind::FrameRateLimit:
+        return EditorText("projectSettings.frameRateLimit", "Frame Rate Limit");
+    case ProjectSettingsTooltipKind::RenderScale:
+        return EditorText("projectSettings.renderScale", "Render Scale");
+    case ProjectSettingsTooltipKind::AndroidGraphicsApi:
+        return EditorText("projectSettings.androidGraphicsApi", "Android Graphics API");
+    case ProjectSettingsTooltipKind::SplashImage:
+        return EditorText("projectSettings.splashImage", "Launch Screen Image");
+    case ProjectSettingsTooltipKind::SplashScale:
+        return EditorText("projectSettings.splashScale", "Launch Screen Scale");
+    case ProjectSettingsTooltipKind::SplashBackground:
+        return EditorText("projectSettings.splashBackground", "Launch Screen Background");
+    case ProjectSettingsTooltipKind::SplashMinimumTime:
+        return EditorText("projectSettings.splashMinimumTime", "Launch Screen Minimum Time (ms)");
+    case ProjectSettingsTooltipKind::SplashProgress:
+        return EditorText("projectSettings.splashProgress", "Launch Screen Progress Bar");
+    case ProjectSettingsTooltipKind::FixedStep:
+        return EditorText("projectSettings.fixedStep", "Fixed Step (Hz)");
+    case ProjectSettingsTooltipKind::Gravity:
+        return EditorText("projectSettings.gravity", "Gravity");
+    case ProjectSettingsTooltipKind::GravityPreset:
+        return EditorText("projectSettings.gravityPreset", "Gravity Preset");
+    case ProjectSettingsTooltipKind::TimeScale:
+        return EditorText("projectSettings.timeScale", "Time Scale");
+    case ProjectSettingsTooltipKind::MasterVolume:
+        return EditorText("projectSettings.masterVolume", "Master Volume");
+    case ProjectSettingsTooltipKind::Microphone:
+        return EditorText("projectSettings.microphone", "Microphone");
+    case ProjectSettingsTooltipKind::Tags:
+        return EditorText("projectSettings.category.tags", "Tags");
+    case ProjectSettingsTooltipKind::NavigationAreas:
+        return EditorText("projectSettings.navigationAreas", "Navigation Areas");
+    default:
+        return {};
+    }
+}
+
+[[nodiscard]] std::string_view DescriptionFor(ProjectSettingsTooltipKind kind);
+
 [[nodiscard]] TooltipContent TooltipForKind(ProjectSettingsTooltipKind kind) {
     switch (kind) {
     case ProjectSettingsTooltipKind::MappingContext:
@@ -246,7 +311,8 @@ struct TooltipContent {
         return TooltipContent{
             EditorText("projectSettings.lightingPath", "Lighting Path"),
             EditorText("projectSettings.lightingPathTooltip",
-            "Chooses Forward or Deferred scene lighting for opaque geometry. Transparent objects still render in the forward transparent pass."),
+            "Chooses Forward or Deferred scene lighting for opaque geometry. Transparent objects still render in the forward transparent pass. "
+            "Auto uses Deferred on computers and Forward on phones and tablets."),
         };
     case ProjectSettingsTooltipKind::PostProcess:
         return TooltipContent{
@@ -316,6 +382,28 @@ struct TooltipContent {
             EditorText("projectSettings.giQualityMobileTooltip",
             "Phones and tablets use a coarser grid than computers; Medium is the usual choice."),
         };
+    case ProjectSettingsTooltipKind::WindowMode:
+    case ProjectSettingsTooltipKind::WindowSize:
+    case ProjectSettingsTooltipKind::Resizable:
+    case ProjectSettingsTooltipKind::VSync:
+    case ProjectSettingsTooltipKind::FrameRateLimit:
+    case ProjectSettingsTooltipKind::RenderScale:
+    case ProjectSettingsTooltipKind::AndroidGraphicsApi:
+    case ProjectSettingsTooltipKind::SplashImage:
+    case ProjectSettingsTooltipKind::SplashScale:
+    case ProjectSettingsTooltipKind::SplashBackground:
+    case ProjectSettingsTooltipKind::SplashMinimumTime:
+    case ProjectSettingsTooltipKind::SplashProgress:
+    case ProjectSettingsTooltipKind::FixedStep:
+    case ProjectSettingsTooltipKind::Gravity:
+    case ProjectSettingsTooltipKind::GravityPreset:
+    case ProjectSettingsTooltipKind::TimeScale:
+    case ProjectSettingsTooltipKind::MasterVolume:
+    case ProjectSettingsTooltipKind::Microphone:
+    case ProjectSettingsTooltipKind::Tags:
+    case ProjectSettingsTooltipKind::NavigationAreas:
+        // These settings say all there is to say in their one-line description.
+        return TooltipContent{ SettingLabel(kind), DescriptionFor(kind) };
     case ProjectSettingsTooltipKind::None:
     default:
         return {};
@@ -357,6 +445,46 @@ struct TooltipContent {
         return EditorText("projectSettings.giQualityDescription", "Detail of indirect light on computers.");
     case ProjectSettingsTooltipKind::GiQualityMobile:
         return EditorText("projectSettings.giQualityMobileDescription", "Detail of indirect light on phones and tablets.");
+    case ProjectSettingsTooltipKind::WindowMode:
+        return EditorText("projectSettings.windowModeDescription", "How the game window opens: in a window or borderless fullscreen.");
+    case ProjectSettingsTooltipKind::WindowSize:
+        return EditorText("projectSettings.windowSizeDescription", "Size of the game window when it opens windowed.");
+    case ProjectSettingsTooltipKind::Resizable:
+        return EditorText("projectSettings.resizableDescription", "Lets the player resize the game window.");
+    case ProjectSettingsTooltipKind::VSync:
+        return EditorText("projectSettings.vsyncDescription", "Waits for the display refresh, which avoids tearing.");
+    case ProjectSettingsTooltipKind::FrameRateLimit:
+        return EditorText("projectSettings.frameRateLimitDescription", "Most frames per second the game draws; Off leaves it to VSync.");
+    case ProjectSettingsTooltipKind::RenderScale:
+        return EditorText("projectSettings.renderScaleDescription", "Share of the screen resolution the 3D scene renders at (0.5 to 1); the interface stays sharp.");
+    case ProjectSettingsTooltipKind::AndroidGraphicsApi:
+        return EditorText("projectSettings.androidGraphicsApiDescription", "Graphics API of the Android package. Auto uses Vulkan where available; if the device cannot start the chosen API, the other one runs.");
+    case ProjectSettingsTooltipKind::SplashImage:
+        return EditorText("projectSettings.splashImageDescription", "Picture the game shows while a scene loads; none shows the engine's mark.");
+    case ProjectSettingsTooltipKind::SplashScale:
+        return EditorText("projectSettings.splashScaleDescription", "How the picture fits the screen: whole, filling it, or at its own size.");
+    case ProjectSettingsTooltipKind::SplashBackground:
+        return EditorText("projectSettings.splashBackgroundDescription", "Colour around the picture, also on Android before the engine starts.");
+    case ProjectSettingsTooltipKind::SplashMinimumTime:
+        return EditorText("projectSettings.splashMinimumTimeDescription", "Shortest time the launch screen stays up, even when the scene loads faster.");
+    case ProjectSettingsTooltipKind::SplashProgress:
+        return EditorText("projectSettings.splashProgressDescription", "Shows a bar under the picture that follows the load.");
+    case ProjectSettingsTooltipKind::FixedStep:
+        return EditorText("projectSettings.fixedStepDescription", "Physics steps per second.");
+    case ProjectSettingsTooltipKind::Gravity:
+        return EditorText("projectSettings.gravityDescription", "Gravity of the scene in metres per second squared.");
+    case ProjectSettingsTooltipKind::TimeScale:
+        return EditorText("projectSettings.timeScaleDescription", "Speed of game time when a scene starts; 1 is normal.");
+    case ProjectSettingsTooltipKind::MasterVolume:
+        return EditorText("projectSettings.masterVolumeDescription", "Loudness of the whole game; 1 is full volume.");
+    case ProjectSettingsTooltipKind::Microphone:
+        return EditorText("projectSettings.microphoneDescription", "Lets the game record from the microphone; an Android package then asks for the record-audio permission.");
+    case ProjectSettingsTooltipKind::Tags:
+        return EditorText("projectSettings.tagsDescription", "Tags for objects, shared by every scene, besides the built-in ones.");
+    case ProjectSettingsTooltipKind::NavigationAreas:
+        return EditorText("projectSettings.navigationAreasDescription",
+            "Kinds of ground characters walk on. A higher cost makes paths avoid an area; a cost of 0 makes it not walkable.");
+    case ProjectSettingsTooltipKind::GravityPreset:
     case ProjectSettingsTooltipKind::None:
     default:
         return {};
@@ -394,9 +522,21 @@ struct SearchableSetting {
         return fromKinds({ Kind::RenderBackend, Kind::LightingPath, Kind::PostProcess, Kind::AntiAliasing, Kind::MsaaSamples,
             Kind::Bloom, Kind::Shadows, Kind::SelectionOutline, Kind::GpuDriven });
     case ProjectSettingsCategory::Physics:
-        return fromKinds({ Kind::PhysicsLayers });
+        return fromKinds({ Kind::PhysicsLayers, Kind::FixedStep, Kind::Gravity, Kind::GravityPreset, Kind::TimeScale });
     case ProjectSettingsCategory::Lighting:
         return fromKinds({ Kind::ShadowQuality, Kind::ShadowQualityMobile, Kind::GiQuality, Kind::GiQualityMobile });
+    case ProjectSettingsCategory::Display:
+        return fromKinds({ Kind::WindowMode, Kind::WindowSize, Kind::Resizable, Kind::VSync, Kind::FrameRateLimit, Kind::RenderScale, Kind::AndroidGraphicsApi,
+            Kind::SplashScale, Kind::SplashBackground, Kind::SplashMinimumTime, Kind::SplashProgress, Kind::SplashImage });
+    case ProjectSettingsCategory::Audio:
+        return fromKinds({ Kind::MasterVolume, Kind::Microphone });
+    case ProjectSettingsCategory::Tags:
+        return fromKinds({ Kind::Tags });
+    case ProjectSettingsCategory::Navigation:
+        return fromKinds({ Kind::NavigationAreas });
+    case ProjectSettingsCategory::Scenes:
+        return { { EditorText("projectSettings.scenesInBuild", "Scenes in Build"),
+            EditorText("projectSettings.scenesInBuildDescription", "Scenes in the game package, in order. The first one starts the game.") } };
     case ProjectSettingsCategory::EditorGeneral:
         return { { EditorText("editorSettings.language", "Language"),
             EditorText("settings.languageDescription", "Language of the editor's menus and panels.") } };
@@ -412,6 +552,78 @@ struct SearchableSetting {
     }
 }
 
+// How many rows the list of the open page has: the scenes of the build on the Scenes page, the tags on the Tags page,
+// the areas on the Navigation page.
+[[nodiscard]] int ListedRowCount(const EditorSceneContext& sceneContext) {
+    switch (static_cast<ProjectSettingsCategory>(sceneContext.ProjectSettings().SelectedCategory())) {
+    case ProjectSettingsCategory::Tags: return static_cast<int>(sceneContext.ProjectConfiguration().tags.size());
+    case ProjectSettingsCategory::Navigation: return static_cast<int>(sceneContext.ProjectConfiguration().navigationAreas.size());
+    default: return static_cast<int>(kb::project::ProjectBuildScenes(sceneContext.ProjectConfiguration()).size());
+    }
+}
+
+// The Navigation page keeps the bottom of its pane for the crowd's level of detail: a section header, a line of
+// description and one row per number; the list of areas fills the rest.
+constexpr int kNavCrowdRowPitch = 30;
+constexpr int kNavCrowdBlockHeight = 24 + 22 + 3 * kNavCrowdRowPitch;
+constexpr std::array<ProjectSettingsNumber, 3U> kNavCrowdNumbers{ ProjectSettingsNumber::NavNearDistance, ProjectSettingsNumber::NavMidDistance,
+    ProjectSettingsNumber::NavFarPathInterval };
+
+[[nodiscard]] ProjectSettingsPanelLayoutRects ListRects(const EditorSceneContext& sceneContext, ProjectSettingsPanelLayoutRects rects) noexcept {
+    if (static_cast<ProjectSettingsCategory>(sceneContext.ProjectSettings().SelectedCategory()) == ProjectSettingsCategory::Navigation) {
+        rects.sceneList.bottom = std::max(rects.sceneList.top, rects.sceneList.bottom - kNavCrowdBlockHeight);
+    }
+    return rects;
+}
+
+[[nodiscard]] RECT NavCrowdHeader(const ProjectSettingsPanelLayoutRects& listRects) noexcept {
+    return RECT{ listRects.sceneList.left, listRects.sceneList.bottom + 4, listRects.sceneList.right, listRects.sceneList.bottom + 24 };
+}
+
+[[nodiscard]] RECT NavCrowdLabel(const ProjectSettingsPanelLayoutRects& listRects, int row) noexcept {
+    const LONG top = NavCrowdHeader(listRects).bottom + 22 + row * kNavCrowdRowPitch;
+    return RECT{ listRects.sceneList.left + 8, top, listRects.sceneList.right - 130, top + 24 };
+}
+
+[[nodiscard]] RECT NavCrowdValue(const ProjectSettingsPanelLayoutRects& listRects, int row) noexcept {
+    const RECT label = NavCrowdLabel(listRects, row);
+    return RECT{ listRects.sceneList.right - 120, label.top, listRects.sceneList.right, label.bottom };
+}
+
+// The cells of a row of the Navigation page: the colour swatch, the name and the cost, before the remove button.
+[[nodiscard]] RECT NavAreaSwatch(const ProjectSettingsPanelLayoutRects& rects, int visibleRow) noexcept {
+    const RECT row = ProjectSettingsPanelLayout::SceneRow(rects, visibleRow);
+    return RECT{ row.left + 8, row.top + 5, row.left + 32, row.bottom - 5 };
+}
+
+[[nodiscard]] RECT NavAreaCostCell(const ProjectSettingsPanelLayoutRects& rects, int visibleRow) noexcept {
+    constexpr int kCostWidth = 90;
+    const RECT remove = ProjectSettingsPanelLayout::SceneRemoveButton(rects, visibleRow);
+    return RECT{ remove.left - 8 - kCostWidth, remove.top, remove.left - 8, remove.bottom };
+}
+
+[[nodiscard]] RECT NavAreaNameCell(const ProjectSettingsPanelLayoutRects& rects, int visibleRow) noexcept {
+    const RECT row = ProjectSettingsPanelLayout::SceneRow(rects, visibleRow);
+    return RECT{ NavAreaSwatch(rects, visibleRow).right + 8, row.top + 3, NavAreaCostCell(rects, visibleRow).left - 8, row.bottom - 3 };
+}
+
+// The description under a setting: one line at the normal size. Some languages need much more room than English, so
+// a longer one first shrinks to the largest size it fits at, and when even the smallest size does not fit it runs
+// over two lines - the row pitch leaves the second line the gap under the row, no more.
+void DrawSettingDescription(HDC dc, RECT rect, std::string_view text, COLORREF color) {
+    constexpr int normalSize = 11;
+    constexpr int smallestSize = 10;
+    constexpr int twoLineHeight = 28;
+    const int room = static_cast<int>(rect.right - rect.left);
+    const int size = EditorDialogStyle::FittingSize(dc, text, room, normalSize, FW_NORMAL, smallestSize);
+    if (EditorDialogStyle::TextWidth(dc, text, size, FW_NORMAL) <= room) {
+        DrawText(dc, rect, text, color, size);
+        return;
+    }
+    rect.bottom = rect.top + twoLineHeight;
+    DrawTooltipText(dc, rect, text, color, smallestSize);
+}
+
 // A setting's label with its description under it. While searching, a setting that does not
 // match is dimmed, so the matching ones stand out on the page.
 void DrawSetting(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const RECT& label, std::string_view text,
@@ -420,10 +632,19 @@ void DrawSetting(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const REC
     const bool matches = query.empty() || ContainsIgnoringCase(text, query) || ContainsIgnoringCase(description, query) ||
         ContainsIgnoringCase(TooltipForKind(kind).title, query);
     const bool active = enabled && matches;
-    DrawText(dc, RECT{ label.left, label.top, label.right - 8, label.bottom }, text,
-        Color(active ? (query.empty() ? theme.textSecondary : theme.textPrimary) : theme.textDisabled), 12,
-        !query.empty() && matches ? FW_SEMIBOLD : FW_NORMAL);
-    DrawText(dc, ProjectSettingsPanelLayout::DescriptionRect(rects, label), description, Color(theme.textDisabled), 11);
+    // The label is longer in some languages than its column is wide: it gets the largest size it fits at, and when
+    // even the smallest size does not fit it runs over two lines, which the height of the row has room for.
+    const RECT room{ label.left, label.top, label.right - 8, label.bottom };
+    const int weight = !query.empty() && matches ? FW_SEMIBOLD : FW_NORMAL;
+    const COLORREF labelColor = Color(active ? (query.empty() ? theme.textSecondary : theme.textPrimary) : theme.textDisabled);
+    const int labelWidth = static_cast<int>(room.right - room.left);
+    const int labelSize = EditorDialogStyle::FittingSize(dc, text, labelWidth, 12, weight);
+    if (EditorDialogStyle::TextWidth(dc, text, labelSize, weight) <= labelWidth) {
+        DrawText(dc, room, text, labelColor, labelSize, weight);
+    } else {
+        DrawTooltipText(dc, RECT{ room.left, room.top + 2, room.right, room.bottom - 2 }, text, labelColor, labelSize, weight);
+    }
+    DrawSettingDescription(dc, ProjectSettingsPanelLayout::DescriptionRect(rects, label), description, Color(theme.textDisabled));
 }
 
 void DrawTooltip(HDC dc, const RECT& content, const EditorTheme& theme, const EditorProjectSettingsState& state) {
@@ -505,6 +726,7 @@ void DrawGraphicsPage(
 
     DrawSetting(dc, rects, rects.lightingPathLabel, EditorText("projectSettings.lightingPath", "Lighting Path"), Kind::LightingPath, theme, query);
     const kb::project::ProjectSceneLightingPath lightingPath = sceneContext.ProjectConfiguration().lightingPath;
+    DrawOptionButton(dc, rects.lightingPathAutoButton, theme, EditorText("projectSettings.lightingAuto", "Auto"), lightingPath == kb::project::ProjectSceneLightingPath::Auto);
     DrawOptionButton(dc, rects.lightingPathForwardButton, theme, EditorText("projectSettings.lightingForward", "Forward"), lightingPath == kb::project::ProjectSceneLightingPath::Forward);
     DrawOptionButton(dc, rects.lightingPathForwardPlusButton, theme, EditorText("projectSettings.lightingForwardPlus", "Forward+"), lightingPath == kb::project::ProjectSceneLightingPath::ForwardPlus);
     DrawOptionButton(dc, rects.lightingPathDeferredButton, theme, EditorText("projectSettings.lightingDeferred", "Deferred"), lightingPath == kb::project::ProjectSceneLightingPath::Deferred);
@@ -553,6 +775,257 @@ void DrawLightingPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, cons
     }
 }
 
+// A setting's value in its cell: the number, or - while it is being typed - the text so far with a caret.
+void DrawNumberCell(HDC dc, const RECT& cell, const EditorTheme& theme, const EditorSceneContext& sceneContext, ProjectSettingsNumber number) {
+    const EditorProjectSettingsState& state = sceneContext.ProjectSettings();
+    const bool editing = state.EditedNumber() == static_cast<int>(number);
+    const std::string text = editing ? std::string{ state.NumberEdit().Query() } + "|"
+                                     : ProjectSettingsPanelRenderer::NumberText(sceneContext.ProjectConfiguration(), number);
+    GdiDrawing::DrawSharpFrame(dc, cell, Color(theme.chrome), Color(editing ? theme.accent : theme.borderPanel));
+    DrawText(dc, GdiDrawing::Inset(cell, 2), text, Color(theme.textPrimary), 12, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+
+// A value between a minus and a plus button.
+void DrawStepper(HDC dc, const RECT& minus, const RECT& value, const RECT& plus, const EditorTheme& theme,
+    const EditorSceneContext& sceneContext, ProjectSettingsNumber number) {
+    DrawOptionButton(dc, minus, theme, "-", false);
+    DrawOptionButton(dc, plus, theme, "+", false);
+    DrawNumberCell(dc, value, theme, sceneContext, number);
+}
+
+void DrawDisplayPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
+    using Kind = ProjectSettingsTooltipKind;
+    const kb::project::ProjectDisplaySettings& display = sceneContext.ProjectConfiguration().display;
+    const std::string_view query = sceneContext.ProjectSettings().Search().Query();
+
+    GdiDrawing::FillRectColor(dc, rects.sectionHeader, Color(theme.strip));
+    DrawText(dc, RECT{ rects.sectionHeader.left + 8, rects.sectionHeader.top, rects.sectionHeader.right - 8, rects.sectionHeader.bottom }, EditorText("projectSettings.displaySection", "DISPLAY"), Color(theme.textSecondary), 11, FW_SEMIBOLD);
+
+    DrawSetting(dc, rects, rects.displayLabel[0], SettingLabel(Kind::WindowMode), Kind::WindowMode, theme, query);
+    DrawOptionButton(dc, rects.windowModeButton[0], theme, EditorText("projectSettings.windowModeWindowed", "Windowed"), display.windowMode == kb::project::ProjectWindowMode::Windowed);
+    DrawOptionButton(dc, rects.windowModeButton[1], theme, EditorText("projectSettings.windowModeBorderless", "Borderless"), display.windowMode == kb::project::ProjectWindowMode::BorderlessFullscreen);
+
+    DrawSetting(dc, rects, rects.displayLabel[1], SettingLabel(Kind::WindowSize), Kind::WindowSize, theme, query);
+    for (std::size_t index = 0U; index < kProjectSettingsWindowSizes.size(); ++index) {
+        const ProjectSettingsWindowSize& size = kProjectSettingsWindowSizes[index];
+        const std::string text = std::to_string(size.width) + "x" + std::to_string(size.height);
+        DrawOptionButton(dc, rects.windowSizeButton[index], theme, text, display.windowWidth == size.width && display.windowHeight == size.height);
+    }
+    DrawNumberCell(dc, rects.windowWidthValue, theme, sceneContext, ProjectSettingsNumber::WindowWidth);
+    DrawNumberCell(dc, rects.windowHeightValue, theme, sceneContext, ProjectSettingsNumber::WindowHeight);
+
+    DrawSetting(dc, rects, rects.displayLabel[2], SettingLabel(Kind::Resizable), Kind::Resizable, theme, query);
+    DrawCheckbox(dc, rects.resizableCheckbox, theme, display.resizable);
+    DrawSetting(dc, rects, rects.displayLabel[3], SettingLabel(Kind::VSync), Kind::VSync, theme, query);
+    DrawCheckbox(dc, rects.vsyncCheckbox, theme, display.vsync);
+
+    DrawSetting(dc, rects, rects.displayLabel[4], SettingLabel(Kind::FrameRateLimit), Kind::FrameRateLimit, theme, query);
+    for (std::size_t index = 0U; index < kProjectSettingsFrameRates.size(); ++index) {
+        const std::uint32_t rate = kProjectSettingsFrameRates[index];
+        const std::string text = rate == 0U ? std::string{ EditorText("projectSettings.msaaOff", "Off") } : std::to_string(rate);
+        DrawOptionButton(dc, rects.frameRateButton[index], theme, text, display.frameRateCap == rate);
+    }
+    DrawNumberCell(dc, rects.frameRateValue, theme, sceneContext, ProjectSettingsNumber::FrameRateCap);
+
+    DrawSetting(dc, rects, rects.displayLabel[5], SettingLabel(Kind::RenderScale), Kind::RenderScale, theme, query);
+    DrawNumberCell(dc, rects.renderScaleValue, theme, sceneContext, ProjectSettingsNumber::RenderScale);
+
+    DrawSetting(dc, rects, rects.displayLabel[6], SettingLabel(Kind::AndroidGraphicsApi), Kind::AndroidGraphicsApi, theme, query);
+    DrawOptionButton(dc, rects.androidGraphicsApiButton[0], theme, EditorText("projectSettings.backendAuto", "Auto"), display.androidGraphicsApi == kb::project::ProjectAndroidGraphicsApi::Auto);
+    DrawOptionButton(dc, rects.androidGraphicsApiButton[1], theme, "Vulkan", display.androidGraphicsApi == kb::project::ProjectAndroidGraphicsApi::Vulkan);
+    DrawOptionButton(dc, rects.androidGraphicsApiButton[2], theme, "OpenGL ES", display.androidGraphicsApi == kb::project::ProjectAndroidGraphicsApi::OpenGLES);
+
+    // The launch screen a shipped game shows while its scene loads.
+    const kb::project::ProjectSplashSettings& splash = display.splash;
+    DrawSetting(dc, rects, rects.displayLabel[7], SettingLabel(Kind::SplashScale), Kind::SplashScale, theme, query);
+    DrawOptionButton(dc, rects.splashScaleButton[0], theme, EditorText("projectSettings.splashScaleFit", "Fit"), splash.scale == kb::project::ProjectSplashScale::Fit);
+    DrawOptionButton(dc, rects.splashScaleButton[1], theme, EditorText("projectSettings.splashScaleFill", "Fill"), splash.scale == kb::project::ProjectSplashScale::Fill);
+    DrawOptionButton(dc, rects.splashScaleButton[2], theme, EditorText("projectSettings.splashScaleCenter", "Center"), splash.scale == kb::project::ProjectSplashScale::Center);
+    DrawSetting(dc, rects, rects.displayLabel[8], SettingLabel(Kind::SplashBackground), Kind::SplashBackground, theme, query);
+    for (std::size_t index = 0U; index < kProjectSettingsSplashColors.size(); ++index) {
+        const std::array<float, 3U>& color = kProjectSettingsSplashColors[index];
+        const COLORREF fill = RGB(std::lround(color[0] * 255.0F), std::lround(color[1] * 255.0F), std::lround(color[2] * 255.0F));
+        GdiDrawing::DrawSharpFrame(dc, rects.splashColorButton[index], fill,
+            Color(splash.backgroundColor == color ? theme.accent : theme.borderPanel));
+    }
+    DrawSetting(dc, rects, rects.displayLabel[9], SettingLabel(Kind::SplashMinimumTime), Kind::SplashMinimumTime, theme, query);
+    for (std::size_t index = 0U; index < kProjectSettingsSplashMinimumTimes.size(); ++index) {
+        const std::uint32_t milliseconds = kProjectSettingsSplashMinimumTimes[index];
+        DrawOptionButton(dc, rects.splashMinimumButton[index], theme, std::to_string(milliseconds), splash.minimumDisplayMilliseconds == milliseconds);
+    }
+    DrawSetting(dc, rects, rects.displayLabel[10], SettingLabel(Kind::SplashProgress), Kind::SplashProgress, theme, query);
+    DrawCheckbox(dc, rects.splashProgressCheckbox, theme, splash.showProgress);
+    // The image row last, so that its open list covers what is under it.
+    DrawSetting(dc, rects, rects.displayLabel[11], SettingLabel(Kind::SplashImage), Kind::SplashImage, theme, query);
+    const RECT imageBox = ProjectSettingsPanelLayout::SplashImageFieldBox(rects);
+    const bool imageListOpen = sceneContext.ProjectSettings().IsSplashImageDropdownOpen();
+    DrawSelectorBox(dc, imageBox, theme, MappingContextDisplayName(splash.image), splash.image.empty(), imageListOpen);
+    if (imageListOpen) {
+        DrawDropdownList(dc, imageBox, theme, sceneContext.ProjectSplashImageOptions(), splash.image, sceneContext.ProjectSettings().HoveredOption());
+    }
+}
+
+void DrawAudioPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
+    const std::string_view query = sceneContext.ProjectSettings().Search().Query();
+    GdiDrawing::FillRectColor(dc, rects.sectionHeader, Color(theme.strip));
+    DrawText(dc, RECT{ rects.sectionHeader.left + 8, rects.sectionHeader.top, rects.sectionHeader.right - 8, rects.sectionHeader.bottom },
+        EditorText("projectSettings.audioSection", "AUDIO"), Color(theme.textSecondary), 11, FW_SEMIBOLD);
+    DrawSetting(dc, rects, rects.stepperLabel[5], SettingLabel(ProjectSettingsTooltipKind::MasterVolume), ProjectSettingsTooltipKind::MasterVolume, theme, query);
+    DrawStepper(dc, rects.stepperButton[5][0], rects.stepperValue[5], rects.stepperButton[5][1], theme, sceneContext, ProjectSettingsNumber::MasterVolume);
+    DrawSetting(dc, rects, rects.microphoneLabel, SettingLabel(ProjectSettingsTooltipKind::Microphone), ProjectSettingsTooltipKind::Microphone, theme, query);
+    DrawCheckbox(dc, rects.microphoneCheckbox, theme, sceneContext.ProjectConfiguration().microphone);
+}
+
+// The cell that takes the name of a new tag: a hint while it is empty, the text so far with a caret while it is typed.
+void DrawTagNameCell(HDC dc, const RECT& cell, const EditorTheme& theme, const EditorProjectSettingsState& state) {
+    const bool editing = state.IsTagNameEditing();
+    GdiDrawing::DrawSharpFrame(dc, cell, Color(theme.chrome), Color(editing ? theme.accent : theme.borderPanel));
+    const RECT text{ cell.left + 8, cell.top, cell.right - 8, cell.bottom };
+    if (editing) {
+        const CutTextDataScope data;
+        DrawText(dc, text, std::string{ state.NumberEdit().Query() } + "|", Color(theme.textPrimary), 12);
+        return;
+    }
+    const std::string_view hint = EditorText("projectSettings.tagNameHint", "New tag name");
+    DrawText(dc, text, hint, Color(theme.textDisabled),
+        EditorDialogStyle::FittingSize(dc, hint, static_cast<int>(text.right - text.left), 12));
+}
+
+// The tags the project defines: a cell and a button that add one, and per tag a remove button. The list scrolls with
+// the wheel when it is longer than the pane, like the Scenes page's.
+void DrawTagsPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
+    const std::vector<std::string>& tags = sceneContext.ProjectConfiguration().tags;
+    GdiDrawing::FillRectColor(dc, rects.sectionHeader, Color(theme.strip));
+    DrawText(dc, RECT{ rects.sectionHeader.left + 8, rects.sectionHeader.top, rects.sectionHeader.right - 8, rects.sectionHeader.bottom },
+        EditorText("projectSettings.tagsSection", "TAGS"), Color(theme.textSecondary), 11, FW_SEMIBOLD);
+    DrawText(dc, rects.scenesIntro, DescriptionFor(ProjectSettingsTooltipKind::Tags), Color(theme.textDisabled), 11);
+    DrawTagNameCell(dc, rects.tagNameField, theme, sceneContext.ProjectSettings());
+    DrawOptionButton(dc, rects.tagAddButton, theme, EditorText("projectSettings.tagAdd", "Add tag"), false);
+
+    const int capacity = ProjectSettingsPanelLayout::SceneRowCapacity(rects);
+    const int first = ProjectSettingsPanelRenderer::FirstVisibleScene(sceneContext, rects);
+    for (int visible = 0; visible < capacity && first + visible < static_cast<int>(tags.size()); ++visible) {
+        const RECT row = ProjectSettingsPanelLayout::SceneRow(rects, visible);
+        GdiDrawing::DrawSharpFrame(dc, row, Color(theme.chrome), Color(theme.borderPanel));
+        // The tag's name is the project's data, not interface text: a long one ends in an ellipsis.
+        const RECT label = ProjectSettingsPanelLayout::TagRowLabel(rects, visible);
+        {
+            const CutTextDataScope data;
+            DrawText(dc, RECT{ row.left + 10, label.top, label.right, label.bottom }, tags[static_cast<std::size_t>(first + visible)], Color(theme.textPrimary), 12);
+        }
+        DrawOptionButton(dc, ProjectSettingsPanelLayout::SceneRemoveButton(rects, visible), theme, EditorText("projectSettings.sceneRemove", "Remove"), false);
+    }
+}
+
+// The project's navigation areas, in id order: a cell and a button that add one, and per area its colour (a click picks
+// the next one), its name and its cost (both typed), and a remove button on the last area only, so the ids of the
+// others never change. The list scrolls with the wheel when it is longer than the pane.
+void DrawNavigationPage(HDC dc, const ProjectSettingsPanelLayoutRects& pageRects, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
+    const ProjectSettingsPanelLayoutRects rects = ListRects(sceneContext, pageRects);
+    const std::vector<kb::scene::NavAreaDefinition>& areas = sceneContext.ProjectConfiguration().navigationAreas;
+    const EditorProjectSettingsState& state = sceneContext.ProjectSettings();
+    GdiDrawing::FillRectColor(dc, rects.sectionHeader, Color(theme.strip));
+    DrawText(dc, RECT{ rects.sectionHeader.left + 8, rects.sectionHeader.top, rects.sectionHeader.right - 8, rects.sectionHeader.bottom },
+        EditorText("projectSettings.navigationAreasSection", "NAVIGATION AREAS"), Color(theme.textSecondary), 11, FW_SEMIBOLD);
+    DrawText(dc, rects.scenesIntro, DescriptionFor(ProjectSettingsTooltipKind::NavigationAreas), Color(theme.textDisabled), 11);
+    {
+        const bool editing = state.EditedNumber() == EditorProjectSettingsState::kNavAreaNameEdit;
+        const RECT cell = rects.tagNameField;
+        GdiDrawing::DrawSharpFrame(dc, cell, Color(theme.chrome), Color(editing ? theme.accent : theme.borderPanel));
+        const RECT text{ cell.left + 8, cell.top, cell.right - 8, cell.bottom };
+        if (editing) {
+            const CutTextDataScope data;
+            DrawText(dc, text, std::string{ state.NumberEdit().Query() } + "|", Color(theme.textPrimary), 12);
+        } else {
+            const std::string_view hint = EditorText("projectSettings.navAreaNameHint", "New area name");
+            DrawText(dc, text, hint, Color(theme.textDisabled), EditorDialogStyle::FittingSize(dc, hint, static_cast<int>(text.right - text.left), 12));
+        }
+    }
+    DrawOptionButton(dc, rects.tagAddButton, theme, EditorText("projectSettings.navAreaAdd", "Add area"), false,
+        areas.size() < kb::scene::kNavAreaCount);
+
+    const int capacity = ProjectSettingsPanelLayout::SceneRowCapacity(rects);
+    const int first = ProjectSettingsPanelRenderer::FirstVisibleScene(sceneContext, rects);
+    for (int visible = 0; visible < capacity && first + visible < static_cast<int>(areas.size()); ++visible) {
+        const int index = first + visible;
+        const kb::scene::NavAreaDefinition& area = areas[static_cast<std::size_t>(index)];
+        const RECT row = ProjectSettingsPanelLayout::SceneRow(rects, visible);
+        GdiDrawing::DrawSharpFrame(dc, row, Color(theme.chrome), Color(theme.borderPanel));
+        const RECT swatch = NavAreaSwatch(rects, visible);
+        GdiDrawing::DrawSharpFrame(dc, swatch, RGB((area.colour >> 16U) & 0xFFU, (area.colour >> 8U) & 0xFFU, area.colour & 0xFFU), Color(theme.borderPanel));
+        // The name and the cost are the project's data, not interface text; a cell being typed in shows the text so far.
+        const auto drawCell = [&](const RECT& cell, int edit, const std::string& value) {
+            const bool editing = state.EditedNumber() == edit;
+            GdiDrawing::DrawSharpFrame(dc, cell, Color(theme.chrome), Color(editing ? theme.accent : theme.chrome));
+            const CutTextDataScope data;
+            DrawText(dc, RECT{ cell.left + 6, cell.top, cell.right - 6, cell.bottom }, editing ? std::string{ state.NumberEdit().Query() } + "|" : value,
+                Color(theme.textPrimary), 12);
+        };
+        drawCell(NavAreaNameCell(rects, visible), EditorProjectSettingsState::kNavAreaRenameEdit + index, area.name);
+        drawCell(NavAreaCostCell(rects, visible), EditorProjectSettingsState::kNavAreaCostEdit + index, ProjectSettingsPanelRenderer::NavAreaCostText(area.cost));
+        DrawOptionButton(dc, ProjectSettingsPanelLayout::SceneRemoveButton(rects, visible), theme, EditorText("projectSettings.sceneRemove", "Remove"), false,
+            index + 1 == static_cast<int>(areas.size()) && areas.size() > 1U);
+    }
+
+    // The crowd's level of detail.
+    const RECT header = NavCrowdHeader(rects);
+    GdiDrawing::FillRectColor(dc, header, Color(theme.strip));
+    DrawText(dc, RECT{ header.left + 8, header.top, header.right - 8, header.bottom }, EditorText("projectSettings.crowdSection", "CROWD DETAIL"),
+        Color(theme.textSecondary), 11, FW_SEMIBOLD);
+    DrawText(dc, RECT{ header.left, header.bottom, header.right, header.bottom + 22 },
+        EditorText("projectSettings.crowdDescription", "Characters far from the camera move with less work, so more of them fit in a frame."),
+        Color(theme.textDisabled), 11);
+    const std::array<std::string_view, 3U> labels{ EditorText("projectSettings.crowdNearDistance", "Full avoidance up to (m)"),
+        EditorText("projectSettings.crowdMidDistance", "Keep apart up to (m)"),
+        EditorText("projectSettings.crowdFarPathInterval", "Farther away, update paths every (steps)") };
+    for (int row = 0; row < 3; ++row) {
+        DrawText(dc, NavCrowdLabel(rects, row), labels[static_cast<std::size_t>(row)], Color(theme.textPrimary), 12);
+        DrawNumberCell(dc, NavCrowdValue(rects, row), theme, sceneContext, kNavCrowdNumbers[static_cast<std::size_t>(row)]);
+    }
+}
+
+// The scenes a package holds, startup scene first: the list, a button that adds a scene, and per scene a move up
+// and a remove button. The list scrolls with the wheel when it is longer than the pane.
+void DrawScenesPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
+    const std::vector<std::string> scenes = kb::project::ProjectBuildScenes(sceneContext.ProjectConfiguration());
+    const std::vector<std::string> projectScenes = sceneContext.ProjectScenePaths();
+
+    GdiDrawing::FillRectColor(dc, rects.sectionHeader, Color(theme.strip));
+    DrawText(dc, RECT{ rects.sectionHeader.left + 8, rects.sectionHeader.top, rects.sectionHeader.right - 8, rects.sectionHeader.bottom },
+        EditorText("projectSettings.scenesSection", "SCENES IN BUILD"), Color(theme.textSecondary), 11, FW_SEMIBOLD);
+    DrawText(dc, rects.scenesIntro, EditorText("projectSettings.scenesInBuildDescription", "Scenes in the game package, in order. The first one starts the game."),
+        Color(theme.textDisabled), 11);
+    DrawOptionButton(dc, rects.sceneAddButton, theme, EditorText("projectSettings.sceneAdd", "Add scene"), false);
+
+    const int capacity = ProjectSettingsPanelLayout::SceneRowCapacity(rects);
+    const int first = ProjectSettingsPanelRenderer::FirstVisibleScene(sceneContext, rects);
+    for (int visible = 0; visible < capacity && first + visible < static_cast<int>(scenes.size()); ++visible) {
+        const int index = first + visible;
+        const std::string& scene = scenes[static_cast<std::size_t>(index)];
+        const RECT row = ProjectSettingsPanelLayout::SceneRow(rects, visible);
+        GdiDrawing::DrawSharpFrame(dc, row, Color(theme.chrome), Color(theme.borderPanel));
+        // The first scene starts the game; the others show their place in the list.
+        constexpr int kPlaceWidth = 96;
+        const RECT place{ row.left + 10, row.top, row.left + kPlaceWidth, row.bottom };
+        if (index == 0) {
+            const std::string_view startup = EditorText("projectSettings.sceneStartup", "Startup");
+            DrawText(dc, place, startup, Color(theme.accent), EditorDialogStyle::FittingSize(dc, startup, static_cast<int>(place.right - place.left), 12, FW_SEMIBOLD), FW_SEMIBOLD);
+        } else {
+            DrawText(dc, place, "#" + std::to_string(index + 1), Color(theme.textSecondary), 12);
+        }
+        // The scene's path is the project's data, not interface text: a long one ends in an ellipsis.
+        const bool present = std::ranges::find(projectScenes, scene) != projectScenes.end();
+        const RECT label = ProjectSettingsPanelLayout::SceneRowLabel(rects, visible);
+        {
+            const CutTextDataScope data;
+            DrawText(dc, RECT{ row.left + kPlaceWidth, label.top, label.right, label.bottom }, std::filesystem::path{ scene }.replace_extension().generic_string(),
+                Color(present ? theme.textPrimary : theme.textDisabled), 12);
+        }
+        DrawOptionButton(dc, ProjectSettingsPanelLayout::SceneMoveUpButton(rects, visible), theme, EditorText("projectSettings.sceneMoveUp", "Move up"), false, index > 0);
+        DrawOptionButton(dc, ProjectSettingsPanelLayout::SceneRemoveButton(rects, visible), theme, EditorText("projectSettings.sceneRemove", "Remove"), false, scenes.size() > 1U);
+    }
+}
+
 void DrawPhysicsPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
     const kb::project::ProjectSettings& settings = sceneContext.ProjectConfiguration();
     const bool dropdownOpen = sceneContext.ProjectSettings().IsPhysicsLayersDropdownOpen();
@@ -560,6 +1033,28 @@ void DrawPhysicsPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const
 
     GdiDrawing::FillRectColor(dc, rects.sectionHeader, Color(theme.strip));
     DrawText(dc, RECT{ rects.sectionHeader.left + 8, rects.sectionHeader.top, rects.sectionHeader.right - 8, rects.sectionHeader.bottom }, EditorText("projectSettings.physicsSection", "PHYSICS"), Color(theme.textSecondary), 11, FW_SEMIBOLD);
+
+    // The steppers, then the gravity presets, under the layers row so that its open list can cover them.
+    const kb::project::ProjectSimulationSettings& simulation = settings.simulation;
+    char value[32]{};
+    for (int stepper = 0; stepper < 5; ++stepper) {
+        using Kind = ProjectSettingsTooltipKind;
+        const Kind kind = stepper == 0 ? Kind::FixedStep : (stepper == 4 ? Kind::TimeScale : Kind::Gravity);
+        std::string label{ SettingLabel(kind) };
+        if (kind == Kind::Gravity) {
+            label += stepper == 1 ? " X" : (stepper == 2 ? " Y" : " Z");
+        }
+        DrawSetting(dc, rects, rects.stepperLabel[stepper], label, kind, theme, query);
+        DrawStepper(dc, rects.stepperButton[stepper][0], rects.stepperValue[stepper], rects.stepperButton[stepper][1], theme,
+            sceneContext, static_cast<ProjectSettingsNumber>(stepper));
+    }
+    DrawSetting(dc, rects, rects.gravityPresetLabel, SettingLabel(ProjectSettingsTooltipKind::GravityPreset), ProjectSettingsTooltipKind::GravityPreset, theme, query);
+    for (std::size_t preset = 0U; preset < kProjectSettingsGravityPresets.size(); ++preset) {
+        const std::array<float, 3U>& gravity = kProjectSettingsGravityPresets[preset];
+        std::snprintf(value, sizeof(value), "0, %g, 0", static_cast<double>(gravity[1]));
+        DrawOptionButton(dc, rects.gravityPresetButton[preset], theme, value, simulation.gravity == gravity);
+    }
+
     DrawSetting(dc, rects, rects.mappingLabel, EditorText("projectSettings.physicsLayers", "Collision Layers Asset"), ProjectSettingsTooltipKind::PhysicsLayers, theme, query);
     const RECT fieldBox = ProjectSettingsPanelLayout::MappingFieldBox(rects);
     DrawSelectorBox(dc, fieldBox, theme, MappingContextDisplayName(settings.physicsLayersAsset), settings.physicsLayersAsset.empty(), dropdownOpen);
@@ -583,7 +1078,6 @@ void ProjectSettingsPanelRenderer::Paint(
 
     // Title bar (full width).
     GdiDrawing::FillRectColor(dc, rects.header, Color(theme.strip));
-    GdiDrawing::FillRectColor(dc, RECT{ rects.header.left, rects.header.top, rects.header.left + 3, rects.header.bottom }, Color(theme.accent));
     GdiDrawing::FillRectColor(dc, RECT{ rects.header.left, rects.header.bottom - 1, rects.header.right, rects.header.bottom }, Color(theme.borderChrome));
     DrawText(dc, RECT{ rects.header.left + kPadding, rects.header.top, rects.header.right - kPadding, rects.header.bottom }, EditorText("panel.settings", "Settings"), Color(theme.textPrimary), 14, FW_SEMIBOLD);
 
@@ -601,6 +1095,21 @@ void ProjectSettingsPanelRenderer::Paint(
         break;
     case ProjectSettingsCategory::Lighting:
         DrawLightingPage(dc, rects, theme, sceneContext);
+        break;
+    case ProjectSettingsCategory::Display:
+        DrawDisplayPage(dc, rects, theme, sceneContext);
+        break;
+    case ProjectSettingsCategory::Audio:
+        DrawAudioPage(dc, rects, theme, sceneContext);
+        break;
+    case ProjectSettingsCategory::Scenes:
+        DrawScenesPage(dc, rects, theme, sceneContext);
+        break;
+    case ProjectSettingsCategory::Tags:
+        DrawTagsPage(dc, rects, theme, sceneContext);
+        break;
+    case ProjectSettingsCategory::Navigation:
+        DrawNavigationPage(dc, rects, theme, sceneContext);
         break;
     case ProjectSettingsCategory::EditorGeneral:
     case ProjectSettingsCategory::EditorSaving: {
@@ -646,7 +1155,7 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
                 return Hit{ .kind = ProjectSettingsHitKind::RenderBackendOption, .index = index, .rect = button };
             }
         }
-        for (int index = 0; index < 3; ++index) {
+        for (int index = 0; index < 4; ++index) {
             const RECT button = ProjectSettingsPanelLayout::LightingPathOptionButton(rects, index);
             if (PointInRect(button, x, y)) {
                 return Hit{ .kind = ProjectSettingsHitKind::LightingPathOption, .index = index, .rect = button };
@@ -686,6 +1195,165 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
         return Hit{};
     }
 
+    if (category == ProjectSettingsCategory::Display) {
+        const RECT imageBox = ProjectSettingsPanelLayout::SplashImageFieldBox(rects);
+        if (sceneContext.ProjectSettings().IsSplashImageDropdownOpen()) {
+            const std::vector<std::string> options = sceneContext.ProjectSplashImageOptions();
+            for (std::size_t index = 0; index < options.size(); ++index) {
+                const RECT row = ProjectSettingsPanelLayout::OptionRow(imageBox, static_cast<int>(index));
+                if (PointInRect(row, x, y)) {
+                    return Hit{ .kind = ProjectSettingsHitKind::SplashImageOption, .index = static_cast<int>(index), .rect = row };
+                }
+            }
+        }
+        if (PointInRect(imageBox, x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::SplashImageField, .index = -1, .rect = imageBox };
+        }
+        for (int index = 0; index < 2; ++index) {
+            if (PointInRect(rects.windowModeButton[index], x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::WindowModeOption, .index = index, .rect = rects.windowModeButton[index] };
+            }
+        }
+        for (int index = 0; index < 4; ++index) {
+            if (PointInRect(rects.windowSizeButton[index], x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::WindowSizeOption, .index = index, .rect = rects.windowSizeButton[index] };
+            }
+        }
+        for (int index = 0; index < 3; ++index) {
+            if (PointInRect(rects.androidGraphicsApiButton[index], x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::AndroidGraphicsApiOption, .index = index, .rect = rects.androidGraphicsApiButton[index] };
+            }
+        }
+        for (int index = 0; index < 5; ++index) {
+            if (PointInRect(rects.frameRateButton[index], x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::FrameRateOption, .index = index, .rect = rects.frameRateButton[index] };
+            }
+        }
+        for (int index = 0; index < 3; ++index) {
+            if (PointInRect(rects.splashScaleButton[index], x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::SplashScaleOption, .index = index, .rect = rects.splashScaleButton[index] };
+            }
+        }
+        for (int index = 0; index < 6; ++index) {
+            if (PointInRect(rects.splashColorButton[index], x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::SplashColorOption, .index = index, .rect = rects.splashColorButton[index] };
+            }
+        }
+        for (int index = 0; index < 5; ++index) {
+            if (PointInRect(rects.splashMinimumButton[index], x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::SplashMinimumOption, .index = index, .rect = rects.splashMinimumButton[index] };
+            }
+        }
+        if (PointInRect(rects.splashProgressCheckbox, x, y) || PointInRect(rects.displayLabel[10], x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::DisplayToggle, .index = 2, .rect = rects.splashProgressCheckbox };
+        }
+        const std::array<std::pair<const RECT*, ProjectSettingsNumber>, 4U> cells{ {
+            { &rects.windowWidthValue, ProjectSettingsNumber::WindowWidth },
+            { &rects.windowHeightValue, ProjectSettingsNumber::WindowHeight },
+            { &rects.frameRateValue, ProjectSettingsNumber::FrameRateCap },
+            { &rects.renderScaleValue, ProjectSettingsNumber::RenderScale } } };
+        for (const auto& [cell, number] : cells) {
+            if (PointInRect(*cell, x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::NumberField, .index = static_cast<int>(number), .rect = *cell };
+            }
+        }
+        const std::array<std::array<RECT, 2U>, 2U> toggles{ { { rects.resizableCheckbox, rects.displayLabel[2] }, { rects.vsyncCheckbox, rects.displayLabel[3] } } };
+        for (int index = 0; index < 2; ++index) {
+            const std::array<RECT, 2U>& toggle = toggles[static_cast<std::size_t>(index)];
+            if (PointInRect(toggle[0], x, y) || PointInRect(toggle[1], x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::DisplayToggle, .index = index, .rect = toggle[0] };
+            }
+        }
+        return Hit{};
+    }
+
+    if (category == ProjectSettingsCategory::Audio) {
+        for (int direction = 0; direction < 2; ++direction) {
+            if (PointInRect(rects.stepperButton[5][direction], x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::MasterVolumeStepper, .index = direction, .rect = rects.stepperButton[5][direction] };
+            }
+        }
+        if (PointInRect(rects.stepperValue[5], x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::NumberField, .index = static_cast<int>(ProjectSettingsNumber::MasterVolume), .rect = rects.stepperValue[5] };
+        }
+        if (PointInRect(rects.microphoneCheckbox, x, y) || PointInRect(rects.microphoneLabel, x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::MicrophoneToggle, .index = 0, .rect = rects.microphoneCheckbox };
+        }
+        return Hit{};
+    }
+
+    if (category == ProjectSettingsCategory::Navigation) {
+        const ProjectSettingsPanelLayoutRects listRects = ListRects(sceneContext, rects);
+        for (int row = 0; row < 3; ++row) {
+            const RECT value = NavCrowdValue(listRects, row);
+            if (PointInRect(value, x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::NumberField, .index = static_cast<int>(kNavCrowdNumbers[static_cast<std::size_t>(row)]), .rect = value };
+            }
+        }
+        if (PointInRect(rects.tagAddButton, x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::NavAreaAdd, .index = -1, .rect = rects.tagAddButton };
+        }
+        if (PointInRect(rects.tagNameField, x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::NavAreaNameField, .index = -1, .rect = rects.tagNameField };
+        }
+        const int count = ListedRowCount(sceneContext);
+        const int capacity = ProjectSettingsPanelLayout::SceneRowCapacity(listRects);
+        const int first = FirstVisibleScene(sceneContext, listRects);
+        for (int visible = 0; visible < capacity && first + visible < count; ++visible) {
+            const int index = first + visible;
+            const std::array<std::pair<ProjectSettingsHitKind, RECT>, 4U> cells{ {
+                { ProjectSettingsHitKind::NavAreaColour, NavAreaSwatch(listRects, visible) },
+                { ProjectSettingsHitKind::NavAreaName, NavAreaNameCell(listRects, visible) },
+                { ProjectSettingsHitKind::NavAreaCost, NavAreaCostCell(listRects, visible) },
+                { ProjectSettingsHitKind::NavAreaRemove, ProjectSettingsPanelLayout::SceneRemoveButton(listRects, visible) },
+            } };
+            for (const auto& [kind, cell] : cells) {
+                if (PointInRect(cell, x, y)) return Hit{ .kind = kind, .index = index, .rect = cell };
+            }
+        }
+        return Hit{};
+    }
+
+    if (category == ProjectSettingsCategory::Tags) {
+        if (PointInRect(rects.tagAddButton, x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::TagAdd, .index = -1, .rect = rects.tagAddButton };
+        }
+        if (PointInRect(rects.tagNameField, x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::TagNameField, .index = -1, .rect = rects.tagNameField };
+        }
+        const int count = ListedRowCount(sceneContext);
+        const int capacity = ProjectSettingsPanelLayout::SceneRowCapacity(rects);
+        const int first = FirstVisibleScene(sceneContext, rects);
+        for (int visible = 0; visible < capacity && first + visible < count; ++visible) {
+            const RECT remove = ProjectSettingsPanelLayout::SceneRemoveButton(rects, visible);
+            if (PointInRect(remove, x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::TagRemove, .index = first + visible, .rect = remove };
+            }
+        }
+        return Hit{};
+    }
+
+    if (category == ProjectSettingsCategory::Scenes) {
+        if (PointInRect(rects.sceneAddButton, x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::BuildSceneAdd, .index = -1, .rect = rects.sceneAddButton };
+        }
+        const std::size_t count = kb::project::ProjectBuildScenes(sceneContext.ProjectConfiguration()).size();
+        const int capacity = ProjectSettingsPanelLayout::SceneRowCapacity(rects);
+        const int first = FirstVisibleScene(sceneContext, rects);
+        for (int visible = 0; visible < capacity && first + visible < static_cast<int>(count); ++visible) {
+            const int index = first + visible;
+            const RECT up = ProjectSettingsPanelLayout::SceneMoveUpButton(rects, visible);
+            const RECT remove = ProjectSettingsPanelLayout::SceneRemoveButton(rects, visible);
+            if (index > 0 && PointInRect(up, x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::BuildSceneMoveUp, .index = index, .rect = up };
+            }
+            if (count > 1U && PointInRect(remove, x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::BuildSceneRemove, .index = index, .rect = remove };
+            }
+        }
+        return Hit{};
+    }
+
     if (category == ProjectSettingsCategory::Physics) {
         const RECT fieldBox = ProjectSettingsPanelLayout::MappingFieldBox(rects);
         if (sceneContext.ProjectSettings().IsPhysicsLayersDropdownOpen()) {
@@ -699,6 +1367,22 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
         }
         if (PointInRect(fieldBox, x, y)) {
             return Hit{ .kind = ProjectSettingsHitKind::PhysicsLayersField, .index = -1, .rect = fieldBox };
+        }
+        for (int stepper = 0; stepper < 5; ++stepper) {
+            for (int direction = 0; direction < 2; ++direction) {
+                const RECT& button = rects.stepperButton[stepper][direction];
+                if (PointInRect(button, x, y)) {
+                    return Hit{ .kind = ProjectSettingsHitKind::SimulationStepper, .index = stepper * 2 + direction, .rect = button };
+                }
+            }
+            if (PointInRect(rects.stepperValue[stepper], x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::NumberField, .index = stepper, .rect = rects.stepperValue[stepper] };
+            }
+        }
+        for (int index = 0; index < 3; ++index) {
+            if (PointInRect(rects.gravityPresetButton[index], x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::GravityPresetOption, .index = index, .rect = rects.gravityPresetButton[index] };
+            }
         }
         return Hit{};
     }
@@ -726,6 +1410,146 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
         return Hit{ .kind = ProjectSettingsHitKind::EnabledCheckbox, .index = -1, .rect = rects.enabledCheckbox };
     }
     return Hit{};
+}
+
+int ProjectSettingsPanelRenderer::FirstVisibleScene(const EditorSceneContext& sceneContext, const ProjectSettingsPanelLayoutRects& rects) {
+    const int count = ListedRowCount(sceneContext);
+    const int last = std::max(0, count - ProjectSettingsPanelLayout::SceneRowCapacity(ListRects(sceneContext, rects)));
+    return std::clamp(sceneContext.ProjectSettings().FirstVisibleScene(), 0, last);
+}
+
+std::string ProjectSettingsPanelRenderer::NavAreaCostText(float cost) {
+    char text[32]{};
+    std::snprintf(text, sizeof(text), "%g", static_cast<double>(cost));
+    return text;
+}
+
+int ProjectSettingsPanelRenderer::MaximumFirstVisibleScene(const RECT& content, const EditorSceneContext& sceneContext) {
+    const int count = ListedRowCount(sceneContext);
+    return std::max(0, count - ProjectSettingsPanelLayout::SceneRowCapacity(ListRects(sceneContext, ProjectSettingsPanelLayout::Resolve(content))));
+}
+
+ProjectSettingsNumberLimits ProjectSettingsPanelRenderer::NumberLimits(ProjectSettingsNumber number) noexcept {
+    switch (number) {
+    case ProjectSettingsNumber::FixedStep:
+        return { static_cast<double>(kb::project::kProjectFixedStepHzMin), static_cast<double>(kb::project::kProjectFixedStepHzMax), true };
+    case ProjectSettingsNumber::GravityX:
+    case ProjectSettingsNumber::GravityY:
+    case ProjectSettingsNumber::GravityZ:
+        return { -static_cast<double>(kb::project::kProjectGravityLimit), static_cast<double>(kb::project::kProjectGravityLimit), false };
+    case ProjectSettingsNumber::TimeScale:
+        return { 0.0, static_cast<double>(kb::project::kProjectTimeScaleMax), false };
+    case ProjectSettingsNumber::WindowWidth:
+    case ProjectSettingsNumber::WindowHeight:
+        return { static_cast<double>(kb::project::kProjectWindowExtentMin), static_cast<double>(kb::project::kProjectWindowExtentMax), true };
+    case ProjectSettingsNumber::MasterVolume:
+        return { 0.0, 1.0, false };
+    case ProjectSettingsNumber::RenderScale:
+        return { static_cast<double>(kb::project::kProjectRenderScaleMin), static_cast<double>(kb::project::kProjectRenderScaleMax), false };
+    case ProjectSettingsNumber::NavNearDistance:
+    case ProjectSettingsNumber::NavMidDistance:
+        return { 0.0, static_cast<double>(kb::project::kProjectNavigationDistanceMax), false };
+    case ProjectSettingsNumber::NavFarPathInterval:
+        return { 1.0, static_cast<double>(kb::project::kProjectNavigationFarPathIntervalMax), true };
+    case ProjectSettingsNumber::FrameRateCap:
+    case ProjectSettingsNumber::Count:
+    default:
+        return { 0.0, static_cast<double>(kb::project::kProjectFrameRateCapMax), true };
+    }
+}
+
+std::string ProjectSettingsPanelRenderer::NumberText(const kb::project::ProjectSettings& settings, ProjectSettingsNumber number) {
+    const kb::project::ProjectSimulationSettings& simulation = settings.simulation;
+    char text[32]{};
+    switch (number) {
+    case ProjectSettingsNumber::FixedStep:
+        std::snprintf(text, sizeof(text), "%u", simulation.fixedStepHz);
+        break;
+    case ProjectSettingsNumber::GravityX:
+    case ProjectSettingsNumber::GravityY:
+    case ProjectSettingsNumber::GravityZ:
+        std::snprintf(text, sizeof(text), "%g", static_cast<double>(simulation.gravity[static_cast<std::size_t>(number) - 1U]));
+        break;
+    case ProjectSettingsNumber::TimeScale:
+        std::snprintf(text, sizeof(text), "%g", static_cast<double>(simulation.timeScale));
+        break;
+    case ProjectSettingsNumber::WindowWidth:
+        std::snprintf(text, sizeof(text), "%u", settings.display.windowWidth);
+        break;
+    case ProjectSettingsNumber::WindowHeight:
+        std::snprintf(text, sizeof(text), "%u", settings.display.windowHeight);
+        break;
+    case ProjectSettingsNumber::FrameRateCap:
+        std::snprintf(text, sizeof(text), "%u", settings.display.frameRateCap);
+        break;
+    case ProjectSettingsNumber::MasterVolume:
+        std::snprintf(text, sizeof(text), "%g", static_cast<double>(settings.masterVolume));
+        break;
+    case ProjectSettingsNumber::RenderScale:
+        std::snprintf(text, sizeof(text), "%g", static_cast<double>(settings.display.renderScale));
+        break;
+    case ProjectSettingsNumber::NavNearDistance:
+        std::snprintf(text, sizeof(text), "%g", static_cast<double>(settings.navigationNearDistance));
+        break;
+    case ProjectSettingsNumber::NavMidDistance:
+        std::snprintf(text, sizeof(text), "%g", static_cast<double>(settings.navigationMidDistance));
+        break;
+    case ProjectSettingsNumber::NavFarPathInterval:
+        std::snprintf(text, sizeof(text), "%u", settings.navigationFarPathInterval);
+        break;
+    case ProjectSettingsNumber::Count:
+    default:
+        break;
+    }
+    return text;
+}
+
+kb::project::ProjectSettings ProjectSettingsPanelRenderer::WithNumber(
+    kb::project::ProjectSettings settings, ProjectSettingsNumber number, double value) {
+    const ProjectSettingsNumberLimits limits = NumberLimits(number);
+    value = std::clamp(limits.whole ? std::round(value) : value, limits.minimum, limits.maximum);
+    kb::project::ProjectSimulationSettings& simulation = settings.simulation;
+    switch (number) {
+    case ProjectSettingsNumber::FixedStep:
+        simulation.fixedStepHz = static_cast<std::uint32_t>(value);
+        break;
+    case ProjectSettingsNumber::GravityX:
+    case ProjectSettingsNumber::GravityY:
+    case ProjectSettingsNumber::GravityZ:
+        simulation.gravity[static_cast<std::size_t>(number) - 1U] = static_cast<float>(value);
+        break;
+    case ProjectSettingsNumber::TimeScale:
+        simulation.timeScale = static_cast<float>(value);
+        break;
+    case ProjectSettingsNumber::WindowWidth:
+        settings.display.windowWidth = static_cast<std::uint32_t>(value);
+        break;
+    case ProjectSettingsNumber::WindowHeight:
+        settings.display.windowHeight = static_cast<std::uint32_t>(value);
+        break;
+    case ProjectSettingsNumber::FrameRateCap:
+        settings.display.frameRateCap = static_cast<std::uint32_t>(value);
+        break;
+    case ProjectSettingsNumber::MasterVolume:
+        settings.masterVolume = static_cast<float>(value);
+        break;
+    case ProjectSettingsNumber::RenderScale:
+        settings.display.renderScale = static_cast<float>(value);
+        break;
+    case ProjectSettingsNumber::NavNearDistance:
+        settings.navigationNearDistance = static_cast<float>(value);
+        break;
+    case ProjectSettingsNumber::NavMidDistance:
+        settings.navigationMidDistance = static_cast<float>(value);
+        break;
+    case ProjectSettingsNumber::NavFarPathInterval:
+        settings.navigationFarPathInterval = static_cast<std::uint32_t>(value);
+        break;
+    case ProjectSettingsNumber::Count:
+    default:
+        break;
+    }
+    return settings;
 }
 
 std::optional<RECT> ProjectSettingsPanelRenderer::EmbeddedPage(const RECT& content, const EditorSceneContext& sceneContext) {
@@ -765,7 +1589,8 @@ std::optional<int> ProjectSettingsPanelRenderer::FirstMatchingCategory(std::stri
 
 ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::TooltipHitTest(const RECT& content, const EditorSceneContext& sceneContext, int x, int y) {
     const Hit direct = HitTest(content, sceneContext, x, y);
-    if (direct.kind != ProjectSettingsHitKind::None && direct.kind != ProjectSettingsHitKind::CategoryItem && direct.kind != ProjectSettingsHitKind::MappingContextOption && direct.kind != ProjectSettingsHitKind::PhysicsLayersOption) {
+    if (direct.kind != ProjectSettingsHitKind::None && direct.kind != ProjectSettingsHitKind::CategoryItem && direct.kind != ProjectSettingsHitKind::MappingContextOption && direct.kind != ProjectSettingsHitKind::PhysicsLayersOption &&
+        direct.kind != ProjectSettingsHitKind::SplashImageOption) {
         return direct;
     }
 
@@ -804,8 +1629,55 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::TooltipHitTest(c
         }
     }
 
-    if (category == ProjectSettingsCategory::Physics && (PointInRect(rects.mappingLabel, x, y) || PointInRect(rects.mappingField, x, y))) {
-        return Hit{ .kind = ProjectSettingsHitKind::PhysicsLayersField, .index = -1, .rect = rects.mappingField };
+    if (category == ProjectSettingsCategory::Display) {
+        constexpr std::array<ProjectSettingsHitKind, 5> kinds{ ProjectSettingsHitKind::WindowModeOption, ProjectSettingsHitKind::WindowSizeOption,
+            ProjectSettingsHitKind::DisplayToggle, ProjectSettingsHitKind::DisplayToggle, ProjectSettingsHitKind::FrameRateOption };
+        if (PointInRect(rects.displayLabel[5], x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::NumberField, .index = static_cast<int>(ProjectSettingsNumber::RenderScale), .rect = rects.renderScaleValue };
+        }
+        if (PointInRect(rects.displayLabel[6], x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::AndroidGraphicsApiOption, .index = -1, .rect = rects.displayLabel[6] };
+        }
+        constexpr std::array<ProjectSettingsHitKind, 3> splashKinds{ ProjectSettingsHitKind::SplashScaleOption,
+            ProjectSettingsHitKind::SplashColorOption, ProjectSettingsHitKind::SplashMinimumOption };
+        for (std::size_t row = 0U; row < splashKinds.size(); ++row) {
+            if (PointInRect(rects.displayLabel[7U + row], x, y)) {
+                return Hit{ .kind = splashKinds[row], .index = -1, .rect = rects.displayLabel[7U + row] };
+            }
+        }
+        if (PointInRect(rects.displayLabel[10], x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::DisplayToggle, .index = 2, .rect = rects.displayLabel[10] };
+        }
+        if (PointInRect(rects.displayLabel[11], x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::SplashImageField, .index = -1, .rect = rects.splashImageField };
+        }
+        for (int row = 0; row < 5; ++row) {
+            if (PointInRect(rects.displayLabel[row], x, y)) {
+                // A toggle says which one it is (0 Resizable, 1 VSync), as when it is clicked.
+                return Hit{ .kind = kinds[static_cast<std::size_t>(row)], .index = row >= 2 && row <= 3 ? row - 2 : -1, .rect = rects.displayLabel[row] };
+            }
+        }
+    }
+
+    if (category == ProjectSettingsCategory::Audio && PointInRect(rects.stepperLabel[5], x, y)) {
+        return Hit{ .kind = ProjectSettingsHitKind::MasterVolumeStepper, .index = -1, .rect = rects.stepperLabel[5] };
+    }
+    if (category == ProjectSettingsCategory::Audio && PointInRect(rects.microphoneLabel, x, y)) {
+        return Hit{ .kind = ProjectSettingsHitKind::MicrophoneToggle, .index = -1, .rect = rects.microphoneLabel };
+    }
+
+    if (category == ProjectSettingsCategory::Physics) {
+        if (PointInRect(rects.mappingLabel, x, y) || PointInRect(rects.mappingField, x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::PhysicsLayersField, .index = -1, .rect = rects.mappingField };
+        }
+        for (int stepper = 0; stepper < 5; ++stepper) {
+            if (PointInRect(rects.stepperLabel[stepper], x, y) || PointInRect(rects.stepperValue[stepper], x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::SimulationStepper, .index = stepper * 2, .rect = rects.stepperLabel[stepper] };
+            }
+        }
+        if (PointInRect(rects.gravityPresetLabel, x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::GravityPresetOption, .index = -1, .rect = rects.gravityPresetLabel };
+        }
     }
 
     return direct;

@@ -13,6 +13,8 @@ struct PhysicsDebugLine {
     std::array<float, 3> to{0.0F, 0.0F, 0.0F};
     std::array<float, 3> color{1.0F, 1.0F, 1.0F};
     float alpha = 1.0F;
+    // Hidden behind scene geometry (drawn with the scene depth, like the filled debug triangles) instead of on top.
+    bool depthTested = false;
 };
 
 } // namespace kb::render

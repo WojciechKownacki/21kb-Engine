@@ -54,6 +54,7 @@
 #include "scene/AnimationPreviewContext.hpp"
 #include "scene/AnimationClipTimelineState.hpp"
 #include "scene/AnimationClipEditorDocumentState.hpp"
+#include "curves/CurveEditorInteraction.hpp"
 #include "scene/TimelineEditorDocumentState.hpp"
 #include "engine/scene/BlendSpace2D.hpp"
 #include "scene/EditorTimelinePreviewSession.hpp"
@@ -92,6 +93,7 @@
 #include <string_view>
 #include <cstddef>
 #include <cstdint>
+#include <chrono>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -100,6 +102,7 @@
 #include <span>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -121,6 +124,8 @@ class EngineModuleHost;
 namespace kb::script {
 
 class ScriptModule;
+class ScriptRuntimeHost;
+struct ScriptRuntimeAssetPrepareResult;
 
 } // namespace kb::script
 
@@ -321,6 +326,21 @@ public:
     // installed scene system produced to the Console, so a behaviour that
     // silently fails to run during play surfaces a reason instead of nothing.
     void SurfaceScriptDiagnostics();
+    // A C++ script that is being built in the background, as the Inspector and the Console show it.
+    struct ScriptBuildStatus {
+        kb::assets::AssetId assetId{};
+        std::string name;
+        double elapsedSeconds = 0.0;
+        std::size_t outputLines = 0;
+        std::string lastLine;
+    };
+    [[nodiscard]] std::vector<ScriptBuildStatus> ScriptBuildsInProgress() const;
+    [[nodiscard]] std::optional<ScriptBuildStatus> EntityScriptBuild(kb::scene::SceneEntity entity) const;
+    // Stops the background build of the script on `entity`; its running module, if any, stays in use.
+    bool CancelEntityScriptBuild(kb::scene::SceneEntity entity);
+    // While nothing plays: builds the scene's C++ scripts in the background when their sources change and
+    // loads the result, so errors show in the Console as the file is saved and Play starts on a built module.
+    void TickEditModeScripts();
     static void ConfigureLuaDebugger(std::filesystem::path directory);
     [[nodiscard]] bool StartLuaDebugger(const std::filesystem::path& directory, std::string& error);
     void PollLuaDebugger();
@@ -348,6 +368,13 @@ public:
         bool setAsStartupScene, EditorDirtySceneResolution dirtyResolution);
     // Why `folder`/`name` cannot be a new scene of the project, or an empty string when it can.
     [[nodiscard]] std::string NewScenePathError(std::string_view folder, std::string_view name) const;
+    // The Scene menu's work on the open scene. Rename follows it in the project's startup setting
+    // and needs no save: unsaved work stays unsaved under the new name. Duplicate writes the scene
+    // as it stands now beside it and leaves it open. Delete first moves to another scene, which
+    // takes the startup role if the deleted one had it; the only scene of a project stays.
+    [[nodiscard]] bool RenameOpenScene(std::string_view name);
+    [[nodiscard]] bool DuplicateOpenScene();
+    [[nodiscard]] bool DeleteOpenScene();
     [[nodiscard]] bool OpenDefaultScene();
     [[nodiscard]] bool OpenScene(const std::filesystem::path& path, EditorDirtySceneResolution dirtyResolution = EditorDirtySceneResolution::Save);
     [[nodiscard]] bool SaveCurrentScene();
@@ -369,6 +396,18 @@ public:
     // with a Navigation Mesh ContentInstance; for a world, enables navigation in the world file
     // and builds the world, which bakes one navigation mesh per cell.
     [[nodiscard]] bool BakeNavigation();
+    // For a scene, BakeNavigation only starts the bake on a worker; these apply its result on this
+    // thread. Pump applies a finished bake, reports progress and starts the automatic update of the
+    // changed tiles once an edit has settled; it returns true when the shown mesh changed.
+    [[nodiscard]] bool PumpNavigationBake();
+    // Blocks until the running bake ends and applies it; false when it failed or none ran.
+    [[nodiscard]] bool WaitForNavigationBake();
+    [[nodiscard]] bool NavigationBakeInProgress() const noexcept;
+    // Whether static edits rebuild the tiles they touch by themselves (on by default).
+    [[nodiscard]] bool NavigationAutoUpdate() const noexcept;
+    void SetNavigationAutoUpdate(bool enabled);
+    // Bakes the open scene's static lights and bounces into lightmaps (the scene is saved first and again after).
+    [[nodiscard]] bool BuildLighting();
     [[nodiscard]] EditorNavigation& Navigation() noexcept;
     [[nodiscard]] const EditorNavigation& Navigation() const noexcept;
     // Shows or hides the outline of the baked navigation mesh in the scene view.
@@ -811,6 +850,18 @@ public:
     [[nodiscard]] bool SaveAnimationClipEditorAsset();
     [[nodiscard]] std::vector<kb::assets::AssetId> AnimationClipEditorCompatiblePreviewMeshes();
     [[nodiscard]] bool SetAnimationClipEditorPreviewMesh(kb::assets::AssetId meshId);
+    // Shared curve view: bound to the selected clip Curve track or a particle curve property.
+    [[nodiscard]] CurveEditorState& CurveEditor() noexcept { return curveEditor_; }
+    [[nodiscard]] const CurveEditorState& CurveEditor() const noexcept { return curveEditor_; }
+    [[nodiscard]] CurveEditorInteraction& CurveEditorInput() noexcept { return curveEditorInput_; }
+    [[nodiscard]] bool BindAnimationClipCurveEditor();
+    [[nodiscard]] bool BindParticleCurveEditor(std::size_t propertyIndex);
+    [[nodiscard]] std::optional<std::size_t> ParticleCurveEditorProperty() const noexcept;
+    [[nodiscard]] bool ApplyCurveEditorResult(const CurveEditorResult& result);
+    // What to draw: the bound view (window and selection kept) or a framed one, showing the document's keys.
+    [[nodiscard]] std::optional<CurveEditorState> AnimationClipCurveEditorView(const CurveEditorViewport& viewport) const;
+    [[nodiscard]] CurveEditorState ParticleCurveEditorView(
+        std::size_t propertyIndex, const kb::math::Curve& curve, const CurveEditorViewport& viewport) const;
     // Interactive opens are staged through AssetManager's worker so the Win32
     // double-click handler never parses a Skeletal Mesh on the message thread.
     // OpenSkeletalMeshEditorAsset intentionally remains synchronous for headless
@@ -1046,8 +1097,14 @@ public:
     [[nodiscard]] bool ScrollMaterialEditorDetails(int wheelDelta, int maxOffset) noexcept;
     // Select a node and centre the graph view on it. Used to jump to a diagnostic's offending node.
     [[nodiscard]] bool FocusMaterialGraphNode(std::uint32_t nodeId);
+    // Fits the selected nodes and comment in the canvas, or the whole graph when nothing is selected.
     [[nodiscard]] bool FrameSelectedMaterialGraphNodes();
     [[nodiscard]] bool FrameSelectedMaterialGraphNodes(int canvasWidth, int canvasHeight);
+    // Fits the whole graph in the canvas, whatever is selected.
+    [[nodiscard]] bool FrameAllMaterialGraphNodes(int canvasWidth, int canvasHeight);
+    // Frames a material that was just opened for the first time, now that its canvas size is known.
+    // True when the view changed.
+    [[nodiscard]] bool FrameNewlyOpenedMaterialGraph(int canvasWidth, int canvasHeight);
     [[nodiscard]] bool SelectMaterialGraphUpstream();
     [[nodiscard]] bool SelectMaterialGraphDownstream();
     [[nodiscard]] bool AlignSelectedMaterialGraphNodes(kb::assets::AssetId id, MaterialEditorGraphAlignMode mode);
@@ -1301,12 +1358,32 @@ public:
 
     [[nodiscard]] std::vector<std::string> ProjectInputMappingContextOptions() const;
     [[nodiscard]] std::vector<std::string> ProjectPhysicsLayersAssetOptions() const;
+    // The images the launch screen can show: none (the engine's mark) first, then the project's textures.
+    [[nodiscard]] std::vector<std::string> ProjectSplashImageOptions() const;
     [[nodiscard]] bool SetProjectInputMappingContext(std::string virtualPath);
     [[nodiscard]] bool ToggleProjectInputEnabled();
     [[nodiscard]] bool SetProjectSceneLightingPath(kb::project::ProjectSceneLightingPath path);
     // Pins the shadow (rows 0 and 1) or global illumination (rows 2 and 3) quality of computers (even rows)
     // or mobile devices (odd rows) in the project settings; true when the level changed and was saved.
     [[nodiscard]] bool SetProjectQualityLevel(int row, kb::project::ProjectQualityLevel level);
+    // The shipped game's window and frame pacing; true when the settings changed and were saved.
+    [[nodiscard]] bool SetProjectDisplay(const kb::project::ProjectDisplaySettings& display);
+    // The fixed step, gravity and time scale; true when they changed and were saved. The open scene takes them at once.
+    [[nodiscard]] bool SetProjectSimulation(const kb::project::ProjectSimulationSettings& simulation);
+    // The scenes the package holds, in order, the first being the startup scene; true when the list changed and was saved.
+    [[nodiscard]] bool SetProjectBuildScenes(std::vector<std::string> scenes);
+    // The master volume of the game, 0..1; true when it changed and was saved. The open scene takes it at once.
+    [[nodiscard]] bool SetProjectMasterVolume(float volume);
+    // Whether the game records from the microphone; true when it changed and was saved.
+    [[nodiscard]] bool SetProjectMicrophone(bool enabled);
+    // Replaces the project's navigation areas; false, and nothing changes, for a list that cannot be the project's.
+    // The open scene takes the new costs and the navigation overlay the new colours.
+    [[nodiscard]] bool SetProjectNavigationAreas(std::vector<kb::scene::NavAreaDefinition> areas);
+    // The crowd's level of detail: near and mid distances in metres, the far path interval in steps.
+    [[nodiscard]] bool SetProjectNavigationCrowd(float nearDistance, float midDistance, std::uint32_t farPathInterval);
+    // Adds a tag to the project's list, which every scene of the project starts from; true when it was new and
+    // valid. The open scene defines it at once. Removing one is DeleteSceneTag.
+    [[nodiscard]] bool AddProjectTag(std::string_view name);
     [[nodiscard]] bool SetProjectPhysicsLayersAsset(std::string virtualPath);
     bool CloseProjectSettingsDropdowns() noexcept;
     [[nodiscard]] bool IsProjectPluginEnabled(std::string_view pluginId) const noexcept;
@@ -1407,6 +1484,13 @@ public:
         kb::script::ScriptValueType type = kb::script::ScriptValueType::Void;
         kb::script::ScriptValue value;
         bool overridden = false;
+        // From the options of a C++ script's `expose =` line (unit=, min=, max=, tip=); empty for a Lua variable.
+        std::string unit;
+        std::string tooltip;
+        bool hasMinimum = false;
+        bool hasMaximum = false;
+        double minimum = 0.0;
+        double maximum = 0.0;
     };
     [[nodiscard]] std::vector<EntityScriptVariable> EntityScriptExposedVariables(kb::scene::SceneEntity entity) const;
     // How many rows the script section shows. The panel's height and its hit testing
@@ -1487,6 +1571,7 @@ public:
     [[nodiscard]] bool HasActiveTransformEdit() const noexcept;
 
 private:
+    [[nodiscard]] bool FrameMaterialGraph(int canvasWidth, int canvasHeight, bool wholeGraph);
     [[nodiscard]] bool CompleteUIComponentDependencies(kb::scene::SceneEntity entity);
     void CompleteLoadedUIComponents();
     // Marks a loaded scene that links its prefab instances by object name for saving, which records node ids.
@@ -1558,10 +1643,28 @@ private:
     void EnsureScriptRuntime();
     void SurfaceScriptLibraryStartupReport();
     void ResetScriptRuntimeStateForPlayMode();
+    // Play brings its own script runtime: the edit-mode one (with its modules) is finished and dropped first.
+    void ReleaseEditModeScripts();
+    // The edit-mode runtime holds the open scene: it goes before that scene is replaced.
+    void DropEditModeScripts();
+    void AnnounceNativeScriptBuilds(kb::script::ScriptRuntimeHost& host);
+    // A script warning reaches the Console once, however many runtimes (edit mode, Play) report it.
+    void WarnScriptOnce(std::string line);
     [[nodiscard]] bool SaveProjectDescriptor();
     // Switches a plugin that new projects have on by default on for this project too.
     [[nodiscard]] bool SwitchOnDefaultPlugin(std::string_view pluginId, std::string_view notice);
     [[nodiscard]] bool SaveProjectConfiguration();
+    // Gives a scene the project's master volume, tag list and navigation areas.
+    void ApplyProjectAudioAndTags(kb::scene::Scene& scene);
+    // Adds the tags the open scene defines and the project's list lacks to the list, so a tag an author made in
+    // an older scene is not lost; the list is saved when it grew.
+    void AdoptSceneTagsIntoProject();
+    // The scenes of the package list that exist as files, taken before an asset operation that may delete some.
+    [[nodiscard]] std::vector<std::string> ListedScenesOnDisk() const;
+    // Takes the scenes of `before` that are gone out of the package list.
+    void DropDeletedBuildScenes(const std::vector<std::string>& before);
+    // Renames the package list's entries for a scene, or every scene under a folder, that moved from `from` to `to`.
+    void RetargetBuildScenes(const std::filesystem::path& from, const std::filesystem::path& to);
     // Records the document the author has open, so reopening the project returns to it.
     void RememberLastOpenMap();
     // The editor's start when no saved scene can be opened: a new, unsaved Untitled scene from Basic.
@@ -1633,6 +1736,11 @@ private:
     kb::assets::AssetId animationClipEditorAssetId_{};
     AnimationClipTimelineState animationClipEditorTimeline_;
     AnimationClipEditorDocumentState animationClipEditorDocument_;
+    CurveEditorState curveEditor_;
+    CurveEditorInteraction curveEditorInput_;
+    std::string curveEditorClipCurve_;
+    std::optional<std::size_t> curveEditorParticleProperty_;
+    bool curveEditorCoalesce_ = false;
     TimelineEditorDocumentState timelineEditorDocument_;
     std::unique_ptr<BlendSpace2DEditorState> blendSpaceEditor_;
     std::unique_ptr<GameplayGraphEditorState> gameplayGraphEditor_;
@@ -1750,7 +1858,10 @@ private:
     EditorAutosaveState autosave_;
     EditorPlayModeSceneSession playModeSceneSession_;
     EditorWorldPartition worldPartition_;
+    // Writes and shows a finished navigation bake (and places a new scene mesh); false when it failed.
+    [[nodiscard]] bool ApplyNavigationBake(EditorNavigationBakeJob& job);
     EditorNavigation navigation_;
+    EditorNavigationUpdates navigationUpdates_;
     std::uint64_t playModeRenderTopologyVersion_ = 0U;
     std::size_t playModeRootCount_ = 0U;
     std::uint64_t playModeRootAppendEpoch_ = 0U;
@@ -1783,6 +1894,13 @@ private:
     // script Destroyed callbacks may log during scene shutdown.
     kb::script::ScriptModule* scriptModule_ = nullptr;
     std::unique_ptr<kb::modules::EngineModuleHost> scriptModuleHost_;
+    // The script runtime of edit mode: it only prepares (builds, loads) the scene's C++ scripts.
+    std::unique_ptr<kb::script::ScriptRuntimeHost> editScriptHost_;
+    const kb::scene::Scene* editScriptScene_ = nullptr;
+    std::chrono::steady_clock::time_point editScriptNextPoll_{};
+    std::unordered_map<std::uint64_t, std::string> announcedScriptBuilds_;
+    std::unordered_set<std::string> reportedEditScriptDiagnostics_;
+    std::unordered_set<std::string> reportedScriptWarnings_;
 };
 
 } // namespace kb::editor

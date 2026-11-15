@@ -239,6 +239,9 @@ bool ScenePrefabPropertyOverrideApplier::Apply(ScenePrefabNodeDesc& node, const 
     if (property.propertyPath == "meshRenderer.lodEnabled") {
         return ParseBool(property.value, Ensure(node.components.meshRenderer).lodEnabled);
     }
+    if (property.propertyPath == "meshRenderer.affectsNavigation") {
+        return ParseBool(property.value, Ensure(node.components.meshRenderer).affectsNavigation);
+    }
     if (property.propertyPath == "meshRenderer.mobility") {
         std::uint32_t mobility = 0U;
         if (!ParseNumber(property.value, mobility) || mobility > static_cast<std::uint32_t>(MeshMobility::Static)) {

@@ -21,9 +21,10 @@ namespace {
 
 constexpr std::string_view kProtocolVersion = "2024-11-05";
 constexpr std::string_view kServerVersion = "0.1.0";
+constexpr std::string_view kCodeActions[]{"map", "find", "show"};
 constexpr std::string_view kEntityActions[]{"add", "set", "remove", "rename", "attach", "detach", "show"};
 constexpr std::string_view kComponentActions[]{"add", "set", "remove"};
-constexpr std::string_view kSceneTemplates[]{"Basic", "Empty"};
+constexpr std::string_view kSceneTemplates[]{"Basic3D", "Basic2D", "FirstPerson", "ThirdPerson", "Empty", "Basic"};
 constexpr std::string_view kYesNo[]{"yes", "no"};
 constexpr std::string_view kScriptLanguages[]{"lua", "cpp"};
 constexpr std::string_view kBlendSpaceActions[]{"new", "show", "add", "set", "remove", "sample", "assign"};
@@ -136,6 +137,18 @@ thread_local bool tDiscovery = false;
         "characters-and-animation, combat-and-ai, maps-2d, verify. Without a topic, the list of guides.",
         {
             ToolProperty{ "topic", "string", "The guide's name, or 'index'.", false, "--topic" },
+        });
+    if (command.name == "code") return MakeToolDescriptor(command.mcpTool,
+        "Finds your way in the engine's own source without reading all of it: map lists folders with their size and purpose "
+        "(and the files of one folder), find names the files that deal with a topic and the line to start at, show prints where a "
+        "type or function is declared, its comment, its declaration, the files that use it and its tests.",
+        {
+            ToolProperty{ "action", "string", "map, find or show.", true, "", kCodeActions },
+            ToolProperty{ "path", "string", "Folder to map or to search in, for example sources/renderer.", false, "--path" },
+            ToolProperty{ "depth", "string", "How many folder levels map prints (1-8).", false, "--depth" },
+            ToolProperty{ "text", "string", "Words every found file must mention (find).", false, "--text" },
+            ToolProperty{ "symbol", "string", "Exact name of a type or function (show).", false, "--symbol" },
+            ToolProperty{ "limit", "string", "How many files find lists.", false, "--limit" },
         });
     if (command.name == "import") return MakeToolDescriptor(command.mcpTool,
         "Imports an external source asset into a project's runtime asset format and registers it.",
@@ -381,10 +394,10 @@ struct ToolCallOutcome {
     for (const auto& entry : CliCommandCatalog())
         if (entry.available && entry.mcpTool == toolName) { command = &entry; break; }
     if (command == nullptr) return {.isError = true, .text = "unknown tool: " + std::string{toolName}};
-    if (projectRoot.empty() && command->name != "api" && command->name != "schema" && command->name != "guide")
+    if (projectRoot.empty() && command->name != "api" && command->name != "schema" && command->name != "guide" && command->name != "code")
         return {.isError = true, .text = "this tool requires a bound project"};
     std::vector<std::string> words{std::string{command->name}};
-    if (!projectRoot.empty() && command->name != "guide") words.insert(words.end(), {"--project", projectRoot});
+    if (!projectRoot.empty() && command->name != "guide" && command->name != "code") words.insert(words.end(), {"--project", projectRoot});
     const auto descriptor = MakeCommandToolDescriptor(*command);
     const auto* properties = descriptor.Find("inputSchema")->Find("properties");
     for (std::size_t index = 0U; index < properties->Size(); ++index) {

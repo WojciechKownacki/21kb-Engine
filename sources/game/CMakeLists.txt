@@ -23,6 +23,8 @@ endif()
 
 add_library(kb_game_core STATIC
     src/GameProjectRuntime.cpp
+    src/LoadingScreen.cpp
+    src/private/LoadingScreen.hpp
     src/GameRuntimeDiagnostics.cpp
     src/private/GameRuntimeDiagnostics.hpp
     src/GameScriptLog.cpp
@@ -88,14 +90,19 @@ endif()
 # the modules to link, and each host compiles them with the engine headers and links them in.
 set(KB_PROJECT_NATIVE_MANIFEST "" CACHE FILEPATH "Cooked project C++ modules to link into the packaged host")
 function(kb_attach_project_native host)
-    if(NOT KB_PROJECT_NATIVE_MANIFEST)
+    # The environment names the manifest for builds whose configuration must not depend on it (Gradle).
+    set(manifest_path "${KB_PROJECT_NATIVE_MANIFEST}")
+    if(NOT manifest_path)
+        set(manifest_path "$ENV{KB_PROJECT_NATIVE_MANIFEST}")
+    endif()
+    if(NOT manifest_path)
         return()
     endif()
-    if(NOT EXISTS "${KB_PROJECT_NATIVE_MANIFEST}")
-        message(FATAL_ERROR "Project C++ manifest does not exist: ${KB_PROJECT_NATIVE_MANIFEST}")
+    if(NOT EXISTS "${manifest_path}")
+        message(FATAL_ERROR "Project C++ manifest does not exist: ${manifest_path}")
     endif()
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KB_PROJECT_NATIVE_MANIFEST}")
-    file(READ "${KB_PROJECT_NATIVE_MANIFEST}" manifest)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${manifest_path}")
+    file(READ "${manifest_path}" manifest)
     string(JSON count LENGTH "${manifest}" modules)
     if(count EQUAL 0)
         return()
@@ -464,22 +471,6 @@ if(BUILD_TESTING)
             set(_kb_particle_test_shaderc "$<TARGET_FILE:bgfx::shaderc>")
             add_dependencies(kb_game_tests bgfx::shaderc)
         endif()
-        add_test(NAME kb_game_particle_gpu_package COMMAND "${Python3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests/ParticlePackagedGpuTests.py"
-            "--cli" "$<TARGET_FILE:kb_cli>"
-            "--cooker" "$<TARGET_FILE:kb_cooker>"
-            "--player" "$<TARGET_FILE:kb_game>"
-            "--engine-root" "${CMAKE_SOURCE_DIR}"
-            "--test-root" "${CMAKE_BINARY_DIR}/particle_package_tests"
-            "--shaderc" "${_kb_particle_test_shaderc}"
-            "--plugin" "$<TARGET_FILE:kb_physics_jolt_plugin>"
-            "--plugin" "$<TARGET_FILE:kb_audio_miniaudio_plugin>"
-            "--plugin" "$<TARGET_FILE:kb_basic_lighting_plugin>"
-            "--plugin" "$<TARGET_FILE:kb_21kb_particle_plugin>"
-            "--plugin" "$<TARGET_FILE:kb_ai_plugin>"
-            "--plugin" "$<TARGET_FILE:kb_world2d_plugin>")
-        set_tests_properties(kb_game_particle_gpu_package PROPERTIES
-            LABELS "game;runtime;packaging;gpu" TIMEOUT 360)
         set(_kb_touch_test_runtime_args)
         if(TARGET kb_steam_audio)
             list(APPEND _kb_touch_test_runtime_args "--runtime-dll" "$<TARGET_FILE:kb_steam_audio>")
@@ -488,6 +479,23 @@ if(BUILD_TESTING)
             list(APPEND _kb_touch_test_runtime_args
                 "--runtime-dll" "${KB_MSVC_ASAN_DYNAMIC_RUNTIME}")
         endif()
+        add_test(NAME kb_game_particle_gpu_package COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/ParticlePackagedGpuTests.py"
+            "--cli" "$<TARGET_FILE:kb_cli>"
+            "--cooker" "$<TARGET_FILE:kb_cooker>"
+            "--player" "$<TARGET_FILE:kb_game>"
+            "--engine-root" "${CMAKE_SOURCE_DIR}"
+            "--test-root" "${CMAKE_BINARY_DIR}/particle_package_tests"
+            "--shaderc" "${_kb_particle_test_shaderc}"
+            ${_kb_touch_test_runtime_args}
+            "--plugin" "$<TARGET_FILE:kb_physics_jolt_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_audio_miniaudio_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_basic_lighting_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_21kb_particle_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_ai_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_world2d_plugin>")
+        set_tests_properties(kb_game_particle_gpu_package PROPERTIES
+            LABELS "game;runtime;packaging;gpu" TIMEOUT 360)
         add_test(NAME kb_game_touch_script_package COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/ScriptTouchPackagedTests.py"
             "--cli" "$<TARGET_FILE:kb_cli>"
@@ -737,5 +745,23 @@ if(BUILD_TESTING)
             "--plugin" "$<TARGET_FILE:kb_world2d_plugin>")
         set_tests_properties(kb_game_mods_package PROPERTIES
             LABELS "game;runtime;packaging;mods" TIMEOUT 600)
+        # A project from ProjectCreator, packaged by the Build Game script for Windows and for Android, and the
+        # package held to the project's settings. The APK test is skipped (exit code 77) when the Android
+        # toolchain is incomplete; it builds the native host with Gradle, so it takes long on a cold build.
+        add_dependencies(kb_game_tests kb_game_core_tests kb_runtime_asset_pack_validator)
+        function(kb_add_package_contract_test name mode timeout)
+            add_test(NAME ${name} COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/PackageContractTests.py" ${mode}
+                "--cli" "$<TARGET_FILE:kb_cli>"
+                "--checker" "$<TARGET_FILE:kb_game_core_tests>"
+                "--engine-root" "${CMAKE_SOURCE_DIR}"
+                "--build-root" "${CMAKE_BINARY_DIR}"
+                "--test-root" "${CMAKE_BINARY_DIR}/package_contract_tests")
+            set_tests_properties(${name} PROPERTIES
+                LABELS "game;runtime;packaging" TIMEOUT ${timeout} SKIP_RETURN_CODE 77 RUN_SERIAL TRUE)
+        endfunction()
+        kb_add_package_contract_test(kb_package_windows windows 900)
+        kb_add_package_contract_test(kb_package_android_cook android-cook 600)
+        kb_add_package_contract_test(kb_package_android_apk android-apk 7200)
     endif()
 endif()

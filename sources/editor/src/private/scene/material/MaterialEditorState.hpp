@@ -457,12 +457,16 @@ public:
 
     void SetDiagnostics(std::vector<std::string> diagnostics, bool hasError);
 
+    // `diagnosticNodeIds` runs parallel to `diagnostics` (0 = not about one node) and `nodeDiagnostics`
+    // are the lines that name a node, so a compile error is marked on the node that caused it.
     void ApplyCookResult(
         std::vector<std::string> diagnostics,
         bool cookSucceeded,
         bool hasGpuProgram,
         bool hasLastGood,
-        bool fallbackApplied);
+        bool fallbackApplied,
+        std::vector<std::uint32_t> diagnosticNodeIds = {},
+        const std::vector<kb::render::RenderMaterialGraphDiagnostic>& nodeDiagnostics = {});
 
     void ApplyCookMaterialStats(
         std::uint64_t sourceHash,
@@ -625,7 +629,7 @@ private:
     [[nodiscard]] static std::array<float, 2U> TextureCoordinateTiling(const kb::render::RenderMaterialGraphNode& node);
 
     [[nodiscard]] static std::string TextureCoordinateHint(float uTile, float vTile, std::string_view uvSetValue) {
-        // Unreal's Coordinate Index: UV0..UV7.
+        // Coordinate Index: UV0..UV7.
         const bool known = uvSetValue.size() == 1U && uvSetValue[0] >= '0' && uvSetValue[0] <= '7';
         return FloatText(uTile) + " " + FloatText(vTile) + " " + (known ? std::string{ uvSetValue } : std::string{ "0" });
     }
@@ -926,6 +930,9 @@ private:
     std::vector<std::uint32_t> compilerDiagnosticLineNodeIds_;
     std::vector<std::string> externalDiagnostics_;
     std::vector<std::string> cookDiagnostics_;
+    std::vector<std::uint32_t> cookDiagnosticLineNodeIds_;
+    // How many markers at the end of graphDiagnosticMarkers_ came from the cook (the rest from the validator).
+    std::size_t cookMarkerCount_ = 0U;
     std::vector<MaterialEditorGraphDiagnosticMarker> graphDiagnosticMarkers_;
     bool diagnosticsHaveError_ = false;
     bool graphDiagnosticsHaveError_ = false;

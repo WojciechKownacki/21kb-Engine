@@ -1,6 +1,6 @@
 #pragma once
 
-// Colours a person types or picks (hex codes, colour pickers) are sRGB, as in Unity and Unreal.
+// Colours a person types or picks (hex codes, colour pickers) are sRGB.
 // Material and light colours are stored and shaded in linear space. These are the only
 // conversions between the two (IEC 61966-2-1 transfer function).
 

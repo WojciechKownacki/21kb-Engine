@@ -28,11 +28,39 @@ kb_cli component set --project . --entity LocalReflection --type RegionShape --s
 ```
 
 Static diffuse lightmaps use a unique UV0 atlas. The CPU baker performs direct
-point/directional lighting and hard shadow rays, pads islands, and returns sRGB
-irradiance. No indirect bounce, HDR encoding, UV unwrapping or moving-object
-relighting is provided. C++: include `engine/render/StaticLightmapBaker.hpp`,
+point/spot/directional lighting and hard shadow rays, pads islands, and returns sRGB
+irradiance, with 0..4 diffuse bounces (`StaticLightmapSettings::bounces`, default 1)
+that use the base colour of receivers and shadow casters. HDR encoding is not provided.
+`BakeLightProbes` traces a regular grid of L2 spherical-harmonics probes through the same
+geometry (`ShL2`, `EvaluateShL2Irradiance`, `SampleLightProbeGrid`; a small binary form via
+`SerializeLightProbeGrid`). A probe stores only the light its rays pick up from the baked
+lightmaps, bounces included: the lights themselves still shine on moving objects in real time.
+C++: include `engine/render/StaticLightmapBaker.hpp`,
 fill world-space `LightmapTriangle` and `LightmapLight` spans, then call
 `BakeStaticLightmap`. Check `Succeeded()` before saving `rgba`.
+`GenerateLightmapUv` charts an unindexed triangle soup into a non-overlapping atlas.
+
+The whole scene bakes with one command, or Build Lighting in the World menu of the editor:
+
+```text
+kb_cli scene-bake-lighting --project . --scene /Game/Scenes/Main.21kbscene --resolution 128 --bounces 1 --probe-spacing 2 --max-probes 4096
+```
+
+Every Static mesh renderer is a receiver and every Static point/spot/directional light
+is used. Each receiver gets a texture and
+material under /Game/Baked/<scene>; a receiver whose second UV set is missing or
+overlaps gets a generated lightmap UV mesh beside them, and its renderer is switched
+to that mesh. Baking again replaces the previous result and starts from each receiver's
+original mesh (BakeSources.kbbake maps generated copies back to it), so edits of the
+source mesh are picked up. The materials set `bakedLightmapUv1`, so the second UV set
+is sampled. The same run writes LightProbes.kblp beside them: probes every
+`--probe-spacing` metres (default 2, 0 writes none) over the static geometry plus half a
+cell, coarsened to stay within `--max-probes`. A scene renders with the grid of its own
+name (SceneLightProbeAccess; the game and editor assign it when they open the scene, and
+the cooker packages it with the scene): surfaces without a lightmap take their diffuse
+ambient from the grid instead of the flat ambient, whether they are shaded forward,
+deferred or by a material graph. A frame with gathered GI (screen-space or voxel) or
+screen-space reflections ignores the grid.
 
 The scene command uses static RGB point/directional lights and mesh shadow
 casters, saves a TGA and material, then assigns it to the receiver:

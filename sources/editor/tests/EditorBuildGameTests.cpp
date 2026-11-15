@@ -202,6 +202,15 @@ void SchemaAndValidationTest() {
         "AAB selection unexpectedly changed another Android target");
     Require(kb::editor::BuildGamePanelModel::ApplyText(BuildGameField::AndroidFormat, "apk",
         AndroidEtc2Arm64, project, local, bundleError), "APK format could not be restored");
+    // Typing a startup map keeps it out of the additional scenes, as choosing it on the Scenes page does.
+    project.defaultMap = "/Game/Scenes/Main.21kbscene";
+    project.additionalScenes = { "/Game/Scenes/Second.21kbscene", "/Game/Scenes/Third.21kbscene" };
+    Require(kb::editor::BuildGamePanelModel::ApplyText(BuildGameField::StartupMap, "/Game/Scenes/Third.21kbscene",
+                WindowsX64, project, local, bundleError) &&
+            project.defaultMap == "/Game/Scenes/Third.21kbscene" &&
+            project.additionalScenes == std::vector<std::string>{ "/Game/Scenes/Second.21kbscene" },
+        "A typed startup map was left in the additional scenes");
+    project.additionalScenes.clear();
     Require(kb::editor::BuildGamePanelModel::Validate(WebGpuWasm32, project, local, false, false).canBuild,
         "Configured WebGPU BUILD should be enabled");
     Require(kb::editor::BuildGamePanelModel::Validate(LinuxX64, project, local, false, false).canBuild,

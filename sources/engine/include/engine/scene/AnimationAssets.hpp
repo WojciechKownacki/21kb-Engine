@@ -60,10 +60,8 @@ struct AnimationMorphTrack {
     std::vector<AnimationMorphKeyframe> keyframes;
 };
 
-struct AnimationCurveKeyframe {
-    float timeSeconds = 0.0F;
-    float value = 0.0F;
-};
+// Curve channels use the shared curve keyframe; time is in seconds.
+using AnimationCurveKeyframe = kb::math::CurveKeyframe;
 
 struct AnimationCurveTrack {
     std::string name;
@@ -145,7 +143,7 @@ struct AnimatorTransitionCondition {
 
 // A transition from this "state" leaves whichever state the layer is in (but never re-enters
 // its own target): hit reactions, death, a jump. Any-state transitions are checked before the
-// active state's own, as in Unity.
+// active state's own.
 inline constexpr std::string_view kAnimatorAnyState = "*";
 
 struct AnimatorControllerTransition {
@@ -247,8 +245,10 @@ enum class AnimatorRootMotionOwner : std::uint8_t {
 struct Animator {
     std::uint64_t controllerAssetId = 0U;
     float speed = 1.0F;
-    // Zero preserves per-frame pose evaluation. A positive value limits only
-    // visual pose sampling; playheads, transitions, events, and root motion
+    // Zero lets the animator system choose (AnimatorPoseRatePolicy): every
+    // frame unless the renderer's last frame shows the character small or not
+    // at all. A positive value fixes the rate. Either way only visual pose
+    // sampling is limited; playheads, transitions, events, and root motion
     // still advance on every runtime tick.
     float poseUpdateRateHz = 0.0F;
     bool enabled = true;

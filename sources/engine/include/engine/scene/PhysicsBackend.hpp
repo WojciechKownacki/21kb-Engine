@@ -108,7 +108,7 @@ public:
     // silent no-op as a successful command for either of those body types.
     virtual bool AddForce(SceneEntity entity, Vec3 force) noexcept = 0;
     virtual bool AddImpulse(SceneEntity entity, Vec3 impulse) noexcept = 0;
-    // Continuous world-space torque (Nm), as Unity's Rigidbody.AddTorque.
+    // Continuous world-space torque (Nm).
     virtual bool AddTorque(SceneEntity entity, Vec3 torque) noexcept = 0;
     virtual bool SetVelocity(SceneEntity entity, Vec3 velocity) noexcept = 0;
     [[nodiscard]] virtual PhysicsVectorResult GetVelocity(SceneEntity entity) const noexcept = 0;
@@ -207,6 +207,13 @@ public:
         return false;
     }
 
+    // The scene gravity in metres per second squared. Called when the backend is registered and whenever
+    // PhysicsBackend::SetGravity changes it. Default: not applied.
+    virtual bool SetGravity(Vec3 gravity) noexcept {
+        static_cast<void>(gravity);
+        return false;
+    }
+
     // LIB-131: a CharacterControllerComponent entity has no Rigidbody - the
     // real backend steps a separate, un-simulated-by-the-rest-of-physics
     // character object for it (JPH::CharacterVirtual, see
@@ -279,7 +286,7 @@ enum class PhysicsContactPhase : std::uint8_t {
     Enter,
     Stay,
     Exit,
-    // A character controller hit a solid collider while moving (Unity's OnControllerColliderHit);
+    // A character controller hit a solid collider while moving;
     // queued for the controller only.
     ControllerHit,
 };
@@ -321,7 +328,7 @@ public:
     static bool AddForce(Scene& scene, SceneEntity entity, Vec3 force) noexcept;
     static bool AddImpulse(Scene& scene, SceneEntity entity, Vec3 impulse) noexcept;
     static bool AddTorque(Scene& scene, SceneEntity entity, Vec3 torque) noexcept;
-    // Unity's AddExplosionForce: pushes the body away from `center` with `force` falling off
+    // Explosion force: pushes the body away from `center` with `force` falling off
     // linearly to zero at `radius` (measured to the body's position); a force, or an impulse
     // when `impulse` is set. A body outside the radius gets nothing.
     static bool AddExplosionForce(Scene& scene, SceneEntity entity, float force, Vec3 center, float radius, bool impulse) noexcept;
@@ -374,6 +381,11 @@ public:
     [[nodiscard]] static std::vector<PendingCollisionEvent> DrainPendingCollisionEvents(Scene& scene);
     // Recycles the caller's completed batch storage; queued events keep their order.
     static void DrainPendingCollisionEvents(Scene& scene, std::vector<PendingCollisionEvent>& output);
+
+    // Stores the scene gravity (default 0, -9.81, 0) and applies it to the registered backend, which also
+    // receives it when it registers later. The return value reflects only the backend applying it.
+    static bool SetGravity(Scene& scene, Vec3 gravity) noexcept;
+    [[nodiscard]] static Vec3 Gravity(Scene& scene) noexcept;
 
     // LIB-129: stores `layers` on the scene (so LayerBit below can resolve
     // names even without a backend) and applies it to the registered

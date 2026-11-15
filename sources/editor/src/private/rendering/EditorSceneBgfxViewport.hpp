@@ -44,6 +44,8 @@ public:
     struct PresentSettings {
         std::uint32_t renderWidth = 0;
         std::uint32_t renderHeight = 0;
+        // Fraction of renderWidth x renderHeight the 3D scene renders at before it is upscaled (Play view).
+        float renderScale = 1.0F;
         EditorViewportFitMode fitMode = EditorViewportFitMode::Fit;
         EditorViewportSafeArea safeArea{};
         std::optional<render::SceneRenderCamera> cameraOverride{};
@@ -61,8 +63,9 @@ public:
         render::RenderSceneSubmitDesc::EditorGizmoDesc editorGizmo{};
         std::vector<render::EditorCameraWireframeDesc> editorCameraWireframes;
         std::vector<render::EditorLightWireframeDesc> editorLightWireframes;
-        std::vector<render::EditorParticleIconDesc> editorParticleIcons;
+        std::vector<render::EditorSceneIconDesc> editorSceneIcons;
         std::vector<render::PhysicsDebugLine> physicsDebugLines;
+        std::vector<render::DebugFillTriangle> debugFillTriangles;
         std::vector<kb::scene::SceneUIFrameElement> editorUIOverlays;
         float editorUIScale = 1.0F;
         kb::math::Vec2 editorUIOffset{};
@@ -112,6 +115,9 @@ public:
     void SetGraphShaderCacheRoot(std::string root);
     [[nodiscard]] const char* ActiveBackendLabel() const noexcept;
     [[nodiscard]] bool RendererInitialized() const noexcept;
+    // Starts the renderer now instead of at the first frame, so its shaders are loaded before the
+    // editor window is shown; the loads are reported to EditorStartupProgress.
+    void PrepareRenderer();
     void RequestPresent() noexcept;
     [[nodiscard]] bool PresentRequested() const noexcept;
     void ClearPresentRequest() noexcept;

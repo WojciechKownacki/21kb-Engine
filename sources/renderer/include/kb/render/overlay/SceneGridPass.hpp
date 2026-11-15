@@ -22,6 +22,8 @@ struct SceneGridPassDesc {
     float minorSpacingMeters = 1.0F;
     std::uint32_t majorEvery = 10U;
     bool buildDepthFrameBuffer = false;
+    // False binds the depth-tested overlay view without drawing the grid (other depth-tested overlays still draw).
+    bool drawGrid = true;
     // The world position of the camera's space origin (RenderSceneSubmitDesc::EditorGridDesc::worldOffset).
     kb::math::DVec3 worldOffset{};
 

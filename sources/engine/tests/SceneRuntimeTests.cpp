@@ -13,6 +13,7 @@
 #include <string_view>
 
 namespace kb::tests {
+void RunScriptVmTests();
 void RunEcsHierarchyDepthTests();
 void RunSceneHierarchyDepthTests();
 void RunPrefabHierarchyDepthTests();
@@ -99,6 +100,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunSceneUITests();
     } else if (suite == "scene-ui-bench") {
         kb::tests::RunSceneUIBuildFrameBenchmark();
+    } else if (suite == "scene-ui-workloads") {
+        kb::tests::RunSceneUIWorkloadBenchmark();
     } else if (suite == "scene-ui-profile") {
         kb::tests::RunSceneUIBuildFrameProfile();
     } else if (suite == "scene-system") {
@@ -141,6 +144,14 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunLargeNonAdditiveSceneTransitionBenchmark();
     } else if (suite == "script") {
         kb::tests::RunScriptRuntimeTests();
+    } else if (suite == "script-dispatch") {
+        kb::tests::RunScriptDispatchTests();
+    } else if (suite == "script-dispatch-bench") {
+        kb::tests::RunScriptDispatchBenchmark();
+    } else if (suite == "script-frame-bench") {
+        kb::tests::RunScriptFrameBenchmark();
+    } else if (suite == "script-vm") {
+        kb::tests::RunScriptVmTests();
     } else if (suite == "script-collections") {
         kb::tests::RunScriptCollectionsTests();
     } else if (suite == "script-save") {
@@ -161,6 +172,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunEngineLibraryTests();
     } else if (suite == "engine-math") {
         kb::tests::RunEngineMathTests();
+    } else if (suite == "lightmap-bake") {
+        kb::tests::RunStaticLightmapBakerTests();
     } else if (suite == "animation-runtime") {
         kb::tests::RunAnimationRuntimeTests();
     } else if (suite == "skeleton-assets") {
@@ -176,6 +189,8 @@ bool RunSuite(std::string_view suite) {
     } else if (suite == "ui-text-layout") {
         kb::tests::RunUITextLineBreakingTests();
         kb::tests::RunUIThemeTests();
+    } else if (suite == "video-conversion") {
+        kb::tests::RunVideoMediaConversionTests();
     } else if (suite == "crash-consent") {
         kb::tests::RunCrashReportConsentTests();
     } else if (suite == "navigation-runtime") {
@@ -184,6 +199,10 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunNavigationMeshTests();
     } else if (suite == "navigation-crowd-bench") {
         kb::tests::RunNavigationCrowdBenchmark();
+    } else if (suite == "navigation-horde-bench") {
+        kb::tests::RunNavigationHordeBenchmark();
+    } else if (suite == "navigation-compare-bench") {
+        kb::tests::RunNavigationCompareBenchmark();
     } else if (suite == "portal-visibility") {
         kb::tests::RunPortalVisibilityTests();
     } else if (suite == "motion-skeleton-rule") {
@@ -217,16 +236,19 @@ void RunAllSuites() {
     kb::tests::RunSceneHierarchyTests();
     kb::tests::RunSceneUITests();
     kb::tests::RunUIThemeTests();
+    kb::tests::RunVideoMediaConversionTests();
     kb::tests::RunSceneSystemTests();
     kb::tests::RunScenePrefabTests();
     kb::tests::RunProjectSceneTests();
     kb::tests::RunScriptRuntimeTests();
+    kb::tests::RunScriptDispatchTests();
     kb::tests::RunScriptApiCatalogTests();
     kb::tests::RunVisualGraphTests();
     kb::tests::RunInputTests();
     kb::tests::RunEngineModuleTests();
     kb::tests::RunEngineLibraryTests();
     kb::tests::RunEngineMathTests();
+    kb::tests::RunStaticLightmapBakerTests();
     kb::tests::RunAnimationRuntimeTests();
     kb::tests::RunSkeletonAssetTests();
     kb::tests::RunSkeletalMeshAssetTests();

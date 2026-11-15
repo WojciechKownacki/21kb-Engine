@@ -47,7 +47,7 @@ public:
     [[nodiscard]] bgfx::TextureHandle MaterialTexture() const noexcept;
     [[nodiscard]] bgfx::TextureHandle SurfaceTexture() const noexcept;
     [[nodiscard]] bgfx::TextureHandle DepthTexture() const noexcept;
-    // Unreal's custom data (Subsurface Color / Fuzz Color): a fifth RGBA8 target and the
+    // Custom data (Subsurface Color / Fuzz Color): a fifth RGBA8 target and the
     // framebuffer that carries it, created with the first frame drawing a material that writes it
     // and used only by such frames. False when it cannot be created.
     [[nodiscard]] bool EnsureCustomData();

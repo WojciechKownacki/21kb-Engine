@@ -201,7 +201,10 @@ event 0.625 {10+i}
         poses.append(pose)
     sys.path.insert(0, str(args.engine_root.resolve() / 'scripts'))
     from png_readback import read_png
-    assert read_png(source_image) == read_png(captured_image), 'Cooked BlendSpace2D image differs from source'
+    from compare_images import compare
+    # Two runs on a GPU agree to the last bit only by luck; a cook that changed the content moves pixels by far more
+    # than the two levels allowed here.
+    assert compare(read_png(source_image), read_png(captured_image))['worst'] <= 2, 'Cooked BlendSpace2D image differs from source'
     space_file = unavailable / 'Assets/Motion.kbblend2d'
     original = space_file.read_bytes()
     space_file.write_text('kbblend2d 1\n', encoding='utf-8')

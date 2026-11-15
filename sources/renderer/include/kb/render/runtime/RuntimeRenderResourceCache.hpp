@@ -3,6 +3,7 @@
 #include "kb/render/runtime/RuntimeContentStreamer.hpp"
 #include "kb/render/runtime/RuntimeFrameResourceReferences.hpp"
 #include "kb/render/runtime/RuntimeRenderResourceCacheTypes.hpp"
+#include "kb/render/runtime/RuntimeResourceLoading.hpp"
 
 #include <cstdint>
 #include <span>
@@ -77,6 +78,15 @@ public:
 
     [[nodiscard]] RuntimeRenderResourceCacheStats Stats() const noexcept;
 
+    // How the first use of a packaged mesh or texture reaches the GPU; see RuntimeResourceLoadingSettings.
+    void ConfigureResourceLoading(const RuntimeResourceLoadingSettings& settings) noexcept {
+        loading_ = settings;
+    }
+    // The meshes and textures a scene referenced in its last submit, and how many of them have a GPU resource.
+    [[nodiscard]] RuntimeSceneLoadProgress SceneLoadProgress(std::uint64_t sceneId) const noexcept;
+    // Resources waiting to be read or created, summed over the last submit of every scene.
+    [[nodiscard]] std::uint32_t WaitingResourceCount() const noexcept;
+
     // Streams the finer levels of the packaged textures and meshes this cache created; see
     // RuntimeContentStreamer. Called once per submitted view, after EnsureSceneResources.
     void UpdateStreaming(const RuntimeContentStreamingFrame& frame, SceneRenderer& sceneRenderer);
@@ -93,10 +103,12 @@ private:
     RuntimeMaterialResourceMap embeddedMaterials_;
     RuntimeTextureResourceMap textures_;
     RuntimeContentStreamer streamer_;
+    RuntimeResourceLoadingSettings loading_{};
+    std::unordered_map<std::uint64_t, RuntimeSceneLoadProgress> sceneProgress_;
 
-    void EnsureMeshResources(const RuntimeRenderResourceEnsureContext& context);
+    void EnsureMeshResources(const RuntimeRenderResourceEnsureContext& context, RuntimeResourceCreationBudget& creation);
     void EnsureMaterialResources(const RuntimeRenderResourceEnsureContext& context);
-    void EnsureTextureResources(const RuntimeRenderResourceEnsureContext& context);
+    void EnsureTextureResources(const RuntimeRenderResourceEnsureContext& context, RuntimeResourceCreationBudget& creation);
 };
 
 } // namespace kb::render

@@ -2,7 +2,8 @@
 
 #include "kb/render/overlay/EditorCameraWireframe.hpp"
 #include "kb/render/overlay/EditorLightWireframe.hpp"
-#include "kb/render/overlay/EditorParticleIcon.hpp"
+#include "kb/render/overlay/EditorSceneIcon.hpp"
+#include "kb/render/overlay/DebugFillTriangle.hpp"
 #include "kb/render/overlay/PhysicsDebugLine.hpp"
 #include "kb/render/frame/RenderTargetDesc.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
@@ -29,11 +30,21 @@ struct SceneGizmoPassDesc {
     std::uint8_t mode = 0U;
     std::span<const EditorCameraWireframeDesc> cameraWireframes{};
     std::span<const EditorLightWireframeDesc> lightWireframes{};
-    std::span<const EditorParticleIconDesc> particleIcons{};
+    std::span<const EditorSceneIconDesc> sceneIcons{};
+    // Lines marked depthTested are left to SubmitDepthTested.
     std::span<const PhysicsDebugLine> physicsDebugLines{};
     bool visible = false;
 
     [[nodiscard]] bool IsValid() const noexcept;
+};
+
+// Debug surfaces and lines drawn into a view that already holds the scene colour and depth (the scene
+// overlay view), so scene geometry in front of them hides them.
+struct SceneDepthTestedDebugDesc {
+    bgfx::ViewId viewId = 0;
+    const SceneRenderCamera* camera = nullptr;
+    std::span<const PhysicsDebugLine> lines{};
+    std::span<const DebugFillTriangle> triangles{};
 };
 
 class SceneGizmoPass {
@@ -47,6 +58,8 @@ public:
     [[nodiscard]] bool Initialize();
     void Shutdown() noexcept;
     [[nodiscard]] bool Submit(const SceneGizmoPassDesc& desc) const;
+    // Draws the debug triangles and the depth-tested lines into the configured view; Submit skips both.
+    [[nodiscard]] bool SubmitDepthTested(const SceneDepthTestedDebugDesc& desc) const;
     [[nodiscard]] bool IsInitialized() const noexcept;
 
     struct GizmoVertex {

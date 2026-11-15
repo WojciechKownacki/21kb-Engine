@@ -14,7 +14,7 @@ namespace kb::scene {
 
 class Scene;
 
-// One object of the hierarchy Create menu, like Unity's GameObject menu. The editor's menu and
+// One object of the hierarchy Create menu. The editor's menu and
 // `kb_cli entity add --create` both create through SceneCreateMenu::Create, so an object made by
 // either is the same object.
 struct SceneCreateItem {
@@ -39,8 +39,8 @@ public:
     [[nodiscard]] static std::span<const SceneCreateItem> Items() noexcept;
     [[nodiscard]] static const SceneCreateItem* Find(std::string_view id) noexcept;
     // Creates the object at its parent's origin with the components and defaults of its kind.
-    // A built-in shape gets a fitted collider when the project has the Physics.Jolt plugin, as
-    // Unity's primitives come with one. Refuses, naming the plugin, when the object's own
+    // A built-in shape gets a fitted collider when the project has the Physics.Jolt plugin.
+    // Refuses, naming the plugin, when the object's own
     // component needs a plugin the project has disabled.
     [[nodiscard]] static SceneCreateResult Create(Scene& scene, std::string_view id, std::string name,
         const kb::project::ProjectDescriptor& project, SceneEntity parent = {});

@@ -23,7 +23,9 @@ namespace {
 } // namespace
 
 void PhysicsBackend::RegisterBackend(Scene& scene, IPhysicsBackend& backend) {
-    SceneAccess::State(scene).physicsBackend = &backend;
+    SceneState& state = SceneAccess::State(scene);
+    state.physicsBackend = &backend;
+    static_cast<void>(backend.SetGravity(state.physicsGravity));
 }
 
 void PhysicsBackend::UnregisterBackend(Scene& scene, IPhysicsBackend& backend) noexcept {
@@ -78,7 +80,7 @@ bool PhysicsBackend::AddExplosionForce(Scene& scene, SceneEntity entity, float f
     const double dz = position.z - center.z;
     const double distance = std::sqrt(dx * dx + dy * dy + dz * dz);
     const double scale = distance < radius ? force * (1.0 - distance / radius) : 0.0;
-    // A body exactly at the center is pushed up, as Unity does.
+    // A body exactly at the center is pushed up.
     const Vec3 push = distance > 1e-6
         ? Vec3{ static_cast<float>(dx / distance * scale), static_cast<float>(dy / distance * scale), static_cast<float>(dz / distance * scale) }
         : Vec3{ 0.0F, static_cast<float>(scale), 0.0F };
@@ -236,6 +238,16 @@ std::vector<PendingCollisionEvent> PhysicsBackend::DrainPendingCollisionEvents(S
 void PhysicsBackend::DrainPendingCollisionEvents(Scene& scene, std::vector<PendingCollisionEvent>& output) {
     output.clear();
     output.swap(SceneAccess::State(scene).pendingCollisionEvents);
+}
+
+bool PhysicsBackend::SetGravity(Scene& scene, Vec3 gravity) noexcept {
+    SceneAccess::State(scene).physicsGravity = gravity;
+    IPhysicsBackend* backend = FindBackend(scene);
+    return backend != nullptr && backend->SetGravity(gravity);
+}
+
+Vec3 PhysicsBackend::Gravity(Scene& scene) noexcept {
+    return SceneAccess::State(scene).physicsGravity;
 }
 
 bool PhysicsBackend::ConfigureLayers(Scene& scene, const PhysicsLayersAsset& layers) noexcept {

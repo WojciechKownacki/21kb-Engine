@@ -63,6 +63,8 @@ struct EditorApplicationState {
     std::uint64_t lastStatusConsoleEntrySequence = 0U;
     std::uint64_t lastStatusConsoleEntryCount = 0U;
     bool lastStatusRendererInitialized = false;
+    // The script builds the status bar last showed (how many, and the whole seconds of the longest).
+    std::uint64_t lastStatusBuildSignature = 0U;
     // Whether the window was last too short for the bottom drawer to stay open.
     bool compactWindow = false;
     // When the "Used by" column of Project Files last looked at the scene.

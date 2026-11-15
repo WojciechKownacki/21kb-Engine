@@ -49,7 +49,7 @@ void SetError(std::string* output, std::string value) {
         (static_cast<std::uint32_t>(bytes[offset + 2U]) << 16U) | (static_cast<std::uint32_t>(bytes[offset + 3U]) << 24U));
 }
 
-// Neighbour bits, Remere's TileAlignment order.
+// Neighbour bits, in border order.
 enum NeighbourBit : std::uint8_t {
     kNorthWest = 1U, kNorth = 2U, kNorthEast = 4U, kWest = 8U, kEast = 16U, kSouthWest = 32U, kSouth = 64U, kSouthEast = 128U,
 };

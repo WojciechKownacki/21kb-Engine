@@ -57,6 +57,7 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
             .motor = joint->motor,
             .spring = joint->spring,
             .breakForce = joint->breakForce,
+            .freedom = joint->freedom,
         };
     }
 
@@ -191,6 +192,9 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
     }
     if (const NavLink* navLink = sceneComponents.NavLinks().TryGet(entity)) {
         components.navLink = *navLink;
+    }
+    if (const NavBounds* navBounds = sceneComponents.NavBounds().TryGet(entity)) {
+        components.navBounds = *navBounds;
     }
 
     return components;

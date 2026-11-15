@@ -61,7 +61,7 @@ struct SkeletalMeshGltfCoordinateConversion {
         SkeletalMeshGltfAxis::X, SkeletalMeshGltfAxis::Y, SkeletalMeshGltfAxis::Z,
     };
     // glTF is right-handed (+Y up, front +Z); the engine is left-handed. Mirroring source X
-    // keeps the front at +Z - the conversion Unity and the static mesh importers apply.
+    // keeps the front at +Z - the conversion the static mesh importers apply too.
     std::array<float, 3U> engineAxisSigns{ -1.0F, 1.0F, 1.0F };
     float unitScale = 1.0F;
 };

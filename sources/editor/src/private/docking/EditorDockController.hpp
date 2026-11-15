@@ -4,6 +4,7 @@
 #include "docking/EditorFloatingWindowManager.hpp"
 #include "docking/DockPointerDrag.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
+#include "settings/EditorLayoutLibrary.hpp"
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -27,6 +28,8 @@ public:
     [[nodiscard]] bool HandlePointerMove(HWND window, int x, int y, bool leftButtonDown);
     [[nodiscard]] bool HandlePointerUp(HWND window);
     void CancelDrag() noexcept;
+    // Escape during a drag: the workspace goes back to how the drag found it. False when no drag was active.
+    [[nodiscard]] bool CancelDragAndRestore();
     void HandleCaptureChanged(HWND newCapture) noexcept;
     void UpdateHoverCursor(HWND window, int x, int y) const;
 #endif
@@ -43,6 +46,8 @@ private:
     const EditorMetrics* metrics_ = nullptr;
     std::optional<DockPointerDrag> drag_;
     std::optional<DockDropPreview> dropPreview_;
+    // The arrangement at the moment the pointer went down, for Escape.
+    std::optional<EditorLayoutPreset> dragOrigin_;
 #endif
 };
 

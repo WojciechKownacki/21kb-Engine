@@ -27,6 +27,8 @@ public:
 
     [[nodiscard]] bool IsInitialized() const noexcept;
     [[nodiscard]] bool IsPlaybackAvailable() const noexcept;
+    // The master gain; kept across Shutdown and Initialize, and applied to the engine's endpoint.
+    void SetMasterVolume(float volume) noexcept;
     [[nodiscard]] bool SetPlatformSuspended(bool suspended) noexcept;
     [[nodiscard]] bool IsPlatformSuspended() const noexcept { return platformSuspended_; }
     [[nodiscard]] kb::audio::AudioDeviceStatus Status() const noexcept;
@@ -52,6 +54,7 @@ private:
     std::atomic<std::uint64_t> deviceBlocks_{0U}, deviceFrames_{0U}, shortBlocks_{0U}, deadlineMisses_{0U}, worstCallbackNs_{0U};
     std::atomic<std::uint32_t> periodFrames_{0U};
     std::uint64_t generation_ = 0U;
+    float masterVolume_ = 1.0F;
     ma_engine engine_{};
     bool initialized_ = false;
     bool playbackAvailable_ = false;

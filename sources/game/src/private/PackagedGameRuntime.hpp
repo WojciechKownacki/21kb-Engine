@@ -1,6 +1,7 @@
 #pragma once
 
 #include "GameProjectRuntime.hpp"
+#include "LoadingScreen.hpp"
 #include "RuntimeSceneFrameSync.hpp"
 #include "kb/net/SceneClient.hpp"
 
@@ -71,6 +72,10 @@ private:
     bool reportedMaterialShadingFallback_ = false;
     bool reportedGraphProgramFallback_ = false;
     RuntimeSceneFrameSync renderSceneSync_;
+    // Shown from the first frame until the scene is ready, and again while a script changes scene. The renderer it
+    // draws with is the one the host last gave this runtime.
+    std::unique_ptr<LoadingScreen> loadingScreen_;
+    kb::render::Renderer* activeRenderer_ = nullptr;
 };
 
 } // namespace kb::game

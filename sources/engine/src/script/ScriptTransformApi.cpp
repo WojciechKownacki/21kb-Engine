@@ -172,41 +172,32 @@ struct LocalPose {
     };
 }
 
+[[nodiscard]] std::optional<float> OptionalFloatArg(std::span<const ScriptFunctionArgument> arguments, std::string_view name) noexcept {
+    const ScriptValue* value = FindArg(arguments, name);
+    return value == nullptr ? std::nullopt : std::optional<float>{ value->AsFloat() };
+}
+
 ScriptFunctionCallResult GetPosition(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
-    if (!Alive(context, entity)) {
+    float x = 0.0F;
+    float y = 0.0F;
+    float z = 0.0F;
+    if (context.scene == nullptr || !ScriptTransformApi::GetLocalPosition(*context.scene, entity, x, y, z)) {
         return PositionResult(false, {});
     }
-    const kb::scene::TransformComponent transform = context.scene->Transforms().Get(entity);
-    return PositionResult(true, transform.localPosition);
+    return PositionResult(true, kb::scene::Vec3{ x, y, z });
 }
 
 ScriptFunctionCallResult SetPosition(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
-    if (!Alive(context, entity)) {
-        return BoolResult("moved", false);
-    }
-    kb::scene::TransformComponent transform = context.scene->Transforms().Get(entity);
-    transform.localPosition = kb::scene::Vec3{
-        FloatArg(arguments, "x", transform.localPosition.x),
-        FloatArg(arguments, "y", transform.localPosition.y),
-        FloatArg(arguments, "z", transform.localPosition.z),
-    };
-    context.scene->Transforms().Set(entity, transform);
-    return BoolResult("moved", true);
+    return BoolResult("moved", context.scene != nullptr && ScriptTransformApi::SetLocalPosition(
+        *context.scene, entity, OptionalFloatArg(arguments, "x"), OptionalFloatArg(arguments, "y"), OptionalFloatArg(arguments, "z")));
 }
 
 ScriptFunctionCallResult Translate(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
-    if (!Alive(context, entity)) {
-        return BoolResult("moved", false);
-    }
-    kb::scene::TransformComponent transform = context.scene->Transforms().Get(entity);
-    transform.localPosition.x += FloatArg(arguments, "x");
-    transform.localPosition.y += FloatArg(arguments, "y");
-    transform.localPosition.z += FloatArg(arguments, "z");
-    context.scene->Transforms().Set(entity, transform);
-    return BoolResult("moved", true);
+    return BoolResult("moved", context.scene != nullptr && ScriptTransformApi::TranslateLocalPosition(
+        *context.scene, entity, FloatArg(arguments, "x"), FloatArg(arguments, "y"), FloatArg(arguments, "z")));
 }
 
 ScriptFunctionCallResult GetPrecisePosition(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
@@ -772,6 +763,63 @@ bool RegisterFunction(
 }
 
 } // namespace
+
+bool ScriptTransformApi::GetLocalPosition(kb::scene::Scene& scene, kb::scene::SceneEntity entity, float& x, float& y, float& z) {
+    if (!entity.IsValid()) {
+        return false;
+    }
+    const kb::scene::TransformComponent* transform = std::as_const(scene).Transforms().TryGet(entity);
+    if (transform == nullptr) {
+        // A live entity without a stored transform reads as the origin.
+        if (!scene.Entities().IsAlive(entity)) {
+            return false;
+        }
+        x = y = z = 0.0F;
+        return true;
+    }
+    x = transform->localPosition.x;
+    y = transform->localPosition.y;
+    z = transform->localPosition.z;
+    return true;
+}
+
+namespace {
+
+// Changes the local position of a live entity in place; one without a stored transform gets one with the default
+// rotation and scale.
+template <typename Change>
+bool WriteLocalPosition(kb::scene::Scene& scene, kb::scene::SceneEntity entity, Change&& change) {
+    if (!entity.IsValid()) {
+        return false;
+    }
+    const kb::scene::SceneTransformWrite write = scene.Transforms().BeginWrite(entity);
+    if (write.row != nullptr) {
+        write.row->localPosition = change(write.row->localPosition);
+        scene.Transforms().EndWrite(write);
+        return true;
+    }
+    if (!scene.Entities().IsAlive(entity)) {
+        return false;
+    }
+    kb::scene::TransformComponent transform{};
+    transform.localPosition = change(transform.localPosition);
+    scene.Transforms().Set(entity, transform);
+    return true;
+}
+
+} // namespace
+
+bool ScriptTransformApi::SetLocalPosition(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::optional<float> x, std::optional<float> y, std::optional<float> z) {
+    const std::uint8_t axes = static_cast<std::uint8_t>((x.has_value() ? kb::scene::kTransformAxisX : 0U) |
+        (y.has_value() ? kb::scene::kTransformAxisY : 0U) | (z.has_value() ? kb::scene::kTransformAxisZ : 0U));
+    return scene.Transforms().SetLocalPosition(entity, kb::scene::Vec3{ x.value_or(0.0F), y.value_or(0.0F), z.value_or(0.0F) }, axes);
+}
+
+bool ScriptTransformApi::TranslateLocalPosition(kb::scene::Scene& scene, kb::scene::SceneEntity entity, float x, float y, float z) {
+    return WriteLocalPosition(scene, entity, [x, y, z](const kb::scene::Vec3& position) {
+        return kb::scene::Vec3{ position.x + x, position.y + y, position.z + z };
+    });
+}
 
 bool ScriptTransformApi::Register(ScriptRuntimeHost& host) {
     bool ok = true;

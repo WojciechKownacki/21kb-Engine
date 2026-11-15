@@ -6,6 +6,7 @@ add_library(kb_renderer STATIC
     include/kb/render/RendererCapabilityReport.hpp
     include/kb/render/RenderSurface.hpp
     include/kb/render/bake/MeshBaker.hpp
+    include/kb/render/bake/SceneLightingBaker.hpp
     include/kb/render/world/NavMeshBakeTool.hpp
     include/kb/render/world/RenderNavGeometrySource.hpp
     include/kb/render/world/WorldBuildTool.hpp
@@ -42,7 +43,7 @@ add_library(kb_renderer STATIC
     include/kb/render/overlay/EditorCameraWireframe.hpp
     include/kb/render/overlay/SceneGizmoPass.hpp
     include/kb/render/overlay/EditorLightWireframe.hpp
-    include/kb/render/overlay/EditorParticleIcon.hpp
+    include/kb/render/overlay/EditorSceneIcon.hpp
     include/kb/render/overlay/PhysicsDebugLine.hpp
     include/kb/render/overlay/SceneGridPass.hpp
     include/kb/render/overlay/SelectionOutlineCompositePass.hpp
@@ -127,6 +128,7 @@ add_library(kb_renderer STATIC
     include/kb/render/ViewIdPolicy.hpp
     src/BgfxContext.cpp
     src/bake/MeshBaker.cpp
+    src/bake/SceneLightingBaker.cpp
     src/world/NavMeshBakeTool.cpp
     src/world/RenderNavGeometrySource.cpp
     src/world/WorldBuildTool.cpp
@@ -164,6 +166,8 @@ add_library(kb_renderer STATIC
     src/SceneDeferredLightingPass.cpp
     src/scene/SceneBackdropUniforms.cpp
     src/scene/SceneSkyReflection.cpp
+    src/scene/SceneSkyBackdropPass.cpp
+    src/scene/SceneLightProbeTexture.cpp
     src/SceneFramebuffer.cpp
     src/SceneGBuffer.cpp
     src/SceneRenderTarget.cpp
@@ -184,6 +188,7 @@ add_library(kb_renderer STATIC
     src/frame/RenderPassGraphValidator.hpp
     src/frame/RenderPassKind.cpp
     src/overlay/EditorCameraWireframe.cpp
+    src/overlay/EditorLightWireframe.cpp
     src/overlay/SceneGizmoPass.cpp
     src/overlay/SceneGridPass.cpp
     src/overlay/SelectionBoxOverlayPass.cpp
@@ -380,8 +385,8 @@ add_library(kb_renderer STATIC
     src/shadow/ShadowCasterBoundsCollector.cpp
     src/shadow/ShadowCasterBoundsCollector.hpp
     src/shadow/ShadowMapResource.cpp
-    src/shadow/PointShadowCasterChanges.cpp
-    src/shadow/PointShadowCasterChanges.hpp
+    src/shadow/ShadowCasterChanges.cpp
+    src/shadow/ShadowCasterChanges.hpp
     src/shadow/PointShadowPassPlanner.cpp
     src/gi/SceneGiHistory.cpp
     src/gi/SceneGiResolvePass.cpp
@@ -396,6 +401,7 @@ add_library(kb_renderer STATIC
     src/private/ui/ScreenUIRenderer.hpp
     src/private/ui/ScreenUIDrawData.hpp
     src/private/ui/ScreenUIDrawBatchBuilder.hpp
+    src/private/ui/ScreenUIElementCulling.hpp
     src/private/ui/ScreenUIFontPayloadValidator.hpp
     src/private/ui/ScreenUIFontDistanceField.hpp
     src/private/ui/ScreenUIFontAtlasCache.hpp
@@ -509,9 +515,12 @@ set(KB_RENDERER_SHADER_MANIFEST
     fs_leui_rect.sc
     fs_lit.sc
     fs_deferred_lighting.sc
+    fs_deferred_lighting_cmp.sc
+    fs_sky_backdrop.sc
     fs_mesh.sc
     fs_mesh_gbuffer_instanced.sc
     fs_mesh_instanced.sc
+    fs_mesh_instanced_cmp.sc
     fs_mesh_motion_vectors.sc
     fs_mesh_selection_instanced.sc
     fs_mesh_shadow_instanced.sc
@@ -542,6 +551,7 @@ set(KB_RENDERER_SHADER_MANIFEST
     vs_mesh_skinned_instanced.sc
     vs_mesh_skinned_motion_vectors_instanced.sc
     vs_present.sc
+    vs_sky_backdrop.sc
     vs_particle_decal.sc
     vs_particle_instanced.sc
     vs_particle_strip.sc
@@ -583,6 +593,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_mesh_shadow_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_mesh_shadow_skinned_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_present.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_sky_backdrop.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_particle_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_particle_strip.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_particle_decal.sc
@@ -630,10 +641,12 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_gbuffer_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_gbuffer_layered_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_instanced.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_instanced_cmp.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_motion_vectors.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_selection_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_shadow_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_present_tex.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_present_upscale.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_particle_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_particle_strip.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_particle_decal.sc
@@ -644,6 +657,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_motion_vectors.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_taa_resolve.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_ssgi_resolve.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_sky_backdrop.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_sky_capture.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_sky_prefilter.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_gizmo.sc
@@ -679,6 +693,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
         bgfx_compile_shaders(
             TYPE FRAGMENT
             SHADERS ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_deferred_lighting.sc
+                ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_deferred_lighting_cmp.sc
             VARYING_DEF ${KB_RENDERER_SHADER_VARYING_DEF}
             OUTPUT_DIR ${KB_RENDERER_GENERATED_SHADER_DIR}
             INCLUDE_DIRS ${KB_RENDERER_SHADER_INCLUDE_DIR} ${KB_RENDERER_BGFX_SHADER_INCLUDE_DIR}
@@ -728,16 +743,21 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             add_custom_command(OUTPUT "${_fog_shader_output}" APPEND
                 DEPENDS "${KB_RENDERER_SHADER_INCLUDE_DIR}/screen_uv.sh")
         endif()
-        if(_fog_shader_output MATCHES "/fs_(mesh_instanced|deferred_lighting)\\.sc\\.bin$")
+        if(_fog_shader_output MATCHES "/fs_present_(tex|upscale)\\.sc\\.bin$")
+            add_custom_command(OUTPUT "${_fog_shader_output}" APPEND
+                DEPENDS "${KB_RENDERER_SHADER_INCLUDE_DIR}/present_display.sh")
+        endif()
+        if(_fog_shader_output MATCHES "/fs_(mesh_instanced|deferred_lighting)(_cmp)?\\.sc\\.bin$")
             add_custom_command(OUTPUT "${_fog_shader_output}" APPEND
                 DEPENDS "${KB_RENDERER_SHADER_INCLUDE_DIR}/height_fog.sh"
-                    "${KB_RENDERER_SHADER_INCLUDE_DIR}/local_reflection.sh")
+                    "${KB_RENDERER_SHADER_INCLUDE_DIR}/local_reflection.sh"
+                    "${KB_RENDERER_SHADER_INCLUDE_DIR}/light_probes.sh")
         endif()
-        if(_fog_shader_output MATCHES "/fs_mesh_instanced\\.sc\\.bin$")
+        if(_fog_shader_output MATCHES "/fs_mesh_instanced(_cmp)?\\.sc\\.bin$")
             add_custom_command(OUTPUT "${_fog_shader_output}" APPEND
                 DEPENDS "${KB_RENDERER_SHADER_INCLUDE_DIR}/pbr_builtin_advanced.sh")
         endif()
-        if(_fog_shader_output MATCHES "/fs_(mesh_instanced|mesh_gbuffer_instanced|mesh_gbuffer_layered_instanced|deferred_lighting)\\.sc\\.bin$")
+        if(_fog_shader_output MATCHES "/fs_(mesh_instanced|mesh_gbuffer_instanced|mesh_gbuffer_layered_instanced|deferred_lighting)(_cmp)?\\.sc\\.bin$")
             add_custom_command(OUTPUT "${_fog_shader_output}" APPEND DEPENDS
                 "${KB_RENDERER_SHADER_INCLUDE_DIR}/gbuffer_contract.sh"
                 "${KB_RENDERER_SHADER_INCLUDE_DIR}/shading_models.sh"
@@ -746,13 +766,24 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
         endif()
     endforeach()
 
+    # The comparison-sampler programs are the lit shaders with a define: they follow them and the shadow lookups.
+    foreach(_compare_shader_output IN LISTS KB_RENDERER_GENERATED_FRAGMENT_SHADERS)
+        if(_compare_shader_output MATCHES "/(fs_mesh_instanced|fs_deferred_lighting)_cmp\\.sc\\.bin$")
+            string(REGEX REPLACE ".*/(fs_[a-z_]+)_cmp\\.sc\\.bin$" "\\1.sc" _compare_base_source "${_compare_shader_output}")
+            add_custom_command(OUTPUT "${_compare_shader_output}" APPEND DEPENDS
+                "${KB_RENDERER_SHADER_INCLUDE_DIR}/${_compare_base_source}"
+                "${KB_RENDERER_SHADER_INCLUDE_DIR}/shadow_cascades.sh"
+                "${KB_RENDERER_SHADER_INCLUDE_DIR}/point_shadow.sh")
+        endif()
+    endforeach()
+
     foreach(_position_shader_output IN LISTS KB_RENDERER_GENERATED_FRAGMENT_SHADERS KB_RENDERER_GENERATED_COMPUTE_SHADERS)
-        if(_position_shader_output MATCHES "/(fs_deferred_lighting|fs_ssgi_resolve|cs_particle_gpu_collide)\\.sc\\.bin$")
+        if(_position_shader_output MATCHES "/(fs_deferred_lighting(_cmp)?|fs_ssgi_resolve|cs_particle_gpu_collide)\\.sc\\.bin$")
             add_custom_command(OUTPUT "${_position_shader_output}" APPEND DEPENDS
                 "${KB_RENDERER_SHADER_INCLUDE_DIR}/gbuffer_position.sh"
                 "${KB_RENDERER_SHADER_INCLUDE_DIR}/screen_uv.sh")
         endif()
-        if(_position_shader_output MATCHES "/fs_(deferred_lighting|sky_capture)\\.sc\\.bin$")
+        if(_position_shader_output MATCHES "/fs_(deferred_lighting(_cmp)?|sky_capture)\\.sc\\.bin$")
             add_custom_command(OUTPUT "${_position_shader_output}" APPEND DEPENDS
                 "${KB_RENDERER_SHADER_INCLUDE_DIR}/sky_backdrop.sh")
         endif()
@@ -982,7 +1013,6 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
     set(KB_RENDER_EFFECT_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/include")
     add_subdirectory("${CMAKE_SOURCE_DIR}/samples/RenderEffectPlugin" "${CMAKE_CURRENT_BINARY_DIR}/external_render_effect")
     add_dependencies(kb_renderer_tests sample_render_effect)
-    file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/render_effect_plugin_path.txt" CONTENT "$<TARGET_FILE:sample_render_effect>")
 
     # The file-to-pixel particle test loads the real particle provider as a module.
     if(KB_BUILD_PROVIDER_MODULES_AS_DLL AND TARGET kb_21kb_particle_plugin)
@@ -1044,6 +1074,9 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         add_test(NAME kb_renderer_sky_reflection COMMAND $<TARGET_FILE:kb_renderer_tests> sky-reflection)
         set_tests_properties(kb_renderer_sky_reflection PROPERTIES
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;sky" TIMEOUT 180)
+        add_test(NAME kb_renderer_light_probes COMMAND $<TARGET_FILE:kb_renderer_tests> light-probes)
+        set_tests_properties(kb_renderer_light_probes PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu" TIMEOUT 180)
         # Screen-space ambient occlusion, reflections and bounce light, and the voxel grid built from mesh geometry.
         add_test(NAME kb_renderer_screen_space COMMAND $<TARGET_FILE:kb_renderer_tests> screen-space)
         add_test(NAME kb_renderer_graph_compact_gbuffer COMMAND $<TARGET_FILE:kb_renderer_tests> graph-compact-gbuffer)
@@ -1051,8 +1084,9 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;material" TIMEOUT 240)
         foreach(_fog_backend d3d11 d3d12 vulkan opengl)
             add_test(NAME kb_renderer_material_matrix_${_fog_backend} COMMAND $<TARGET_FILE:kb_renderer_tests> material-matrix --backend ${_fog_backend})
+            # The matrix fills the GPU for a minute; beside other GPU tests the driver can drop their device.
             set_tests_properties(kb_renderer_material_matrix_${_fog_backend} PROPERTIES
-                WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;material" TIMEOUT 240)
+                WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;material" TIMEOUT 240 RUN_SERIAL TRUE)
             add_test(NAME kb_renderer_fog_${_fog_backend} COMMAND $<TARGET_FILE:kb_renderer_tests> fog-profiles --backend ${_fog_backend})
             set_tests_properties(kb_renderer_fog_${_fog_backend} PROPERTIES
                 WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;fog" TIMEOUT 180)

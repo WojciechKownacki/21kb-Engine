@@ -324,7 +324,11 @@ int RunNewCommand(const ArgumentList& arguments, CommandIo io) {
     const std::string templateName = arguments.Option("--template").value_or("Basic");
     const std::optional<kb::scene::SceneTemplate> startupTemplate = kb::scene::SceneTemplates::Parse(templateName);
     if (!startupTemplate.has_value()) {
-        io.err << "error: unknown template '" << templateName << "'. Templates: Basic Empty\n";
+        io.err << "error: unknown template '" << templateName << "'. Templates:";
+        for (const kb::scene::SceneTemplateInfo& info : kb::scene::SceneTemplates::All()) {
+            io.err << ' ' << info.name;
+        }
+        io.err << '\n';
         return 1;
     }
     const std::filesystem::path parentDirectory{

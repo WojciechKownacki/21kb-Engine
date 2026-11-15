@@ -74,6 +74,10 @@ struct EditorPackageRequest {
     std::string androidApplicationId;
     std::uint32_t androidVersionCode = 1U;
     std::string androidLabel;
+    // The project records from the microphone: the Android package declares the record-audio permission.
+    bool androidMicrophone = false;
+    // The launch screen background as six hex digits (RRGGBB): the window shows it before the first engine frame.
+    std::string androidSplashBackground;
     std::filesystem::path androidKeystore;
     std::string androidKeyAlias;
     std::string androidFormat = "apk";

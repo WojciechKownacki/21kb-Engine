@@ -62,6 +62,14 @@ int main(int argumentCount, char** arguments) {
         kb::editor::tests::RunEditorViewportPreviewTests();
         return 0;
     }
+    if (argumentCount == 2 && std::string_view{ arguments[1] } == "material-cook") {
+        kb::editor::tests::RunEditorMaterialGraphCookServiceTests();
+        return 0;
+    }
+    if (argumentCount == 2 && std::string_view{ arguments[1] } == "game-view") {
+        kb::editor::tests::RunEditorGameViewTests();
+        return 0;
+    }
     kb::editor::tests::RunEditorTimelineTests();
     kb::editor::tests::RunEditorBlendSpace2DTests();
     kb::editor::tests::RunEditorStaticMeshTests();
@@ -74,6 +82,7 @@ int main(int argumentCount, char** arguments) {
     kb::editor::tests::RunEditorAudioMixerInspectorTests();
     kb::editor::tests::RunEditorSceneAudioInspectorTests();
     kb::editor::tests::RunEditorViewportPreviewTests();
+    kb::editor::tests::RunEditorGameViewTests();
     kb::editor::tests::RunEditorMaterialGraphCanvasTests();
     kb::editor::tests::RunEditorMaterialGraphCookServiceTests();
     kb::editor::tests::RunEditorDockingTests();
@@ -82,6 +91,7 @@ int main(int argumentCount, char** arguments) {
     kb::editor::tests::RunEditorProfilerTests();
     kb::editor::tests::RunEditorProfilerPanelTests();
     kb::editor::tests::RunEditorLocalizationTests();
+    kb::editor::tests::RunEditorStartupProgressTests();
     kb::editor::tests::RunEditorInspectorTests();
     kb::editor::tests::RunEditorMaterialAssetAuthoringTests();
     kb::editor::tests::RunScriptEditorTests();

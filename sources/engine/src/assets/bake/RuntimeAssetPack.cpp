@@ -570,8 +570,7 @@ AssetPackReadStatus RuntimeAssetPack::ReadArtifactBlock(
         return AssetPackReadStatus::ArtifactNotFound;
     }
     Container& container = containers_[owner->container];
-    std::scoped_lock lock{ *container.readMutex };
-    return container.reader->ReadBlock(*owner->artifact, blockName, out);
+    return container.reader->ReadBlock(*owner->artifact, blockName, *container.readMutex, out);
 }
 
 RuntimeAssetPackStatus RuntimeAssetPack::ReadSourceFile(
@@ -591,8 +590,7 @@ RuntimeAssetPackStatus RuntimeAssetPack::ReadSourceFile(
     std::vector<std::uint8_t> blob;
     {
         Container& container = containers_[owner->container];
-        std::scoped_lock lock{ *container.readMutex };
-        if (container.reader->ReadBlock(*owner->artifact, kBakedAssetPrimaryBlockName, blob) !=
+        if (container.reader->ReadBlock(*owner->artifact, kBakedAssetPrimaryBlockName, *container.readMutex, blob) !=
             AssetPackReadStatus::Success) {
             return RuntimeAssetPackStatus::SourceCorrupt;
         }
@@ -646,7 +644,8 @@ RuntimeAssetPackStatus RuntimeAssetPack::ReadPayload(
         return RuntimeAssetPackStatus::ReferenceMissing;
     }
 
-    std::scoped_lock lock{ *container.readMutex };
+    // The container's read lock is taken per block, around the file read only: the index below is immutable once
+    // mounted, and verification, decryption and decompression of a block run outside any lock.
     // The asset's artifacts lie in the pack that supplies its manifest entry; a later pack that
     // happens to hold the same digest holds the same bytes, but the owner is the one validated.
     const AssetPackReader& reader = *container.reader;
@@ -686,7 +685,7 @@ RuntimeAssetPackStatus RuntimeAssetPack::ReadPayload(
             payload.blocks.push_back(std::move(block));
             continue;
         }
-        if (container.reader->ReadBlock(*artifact, indexedBlock.name, block.bytes) !=
+        if (container.reader->ReadBlock(*artifact, indexedBlock.name, *container.readMutex, block.bytes) !=
             AssetPackReadStatus::Success) {
             return RuntimeAssetPackStatus::ArtifactCorrupt;
         }
@@ -861,8 +860,7 @@ AssetPackReadStatus RuntimeAssetPack::ReadContainerBlock(
     if (container >= containers_.size()) {
         return AssetPackReadStatus::ArtifactNotFound;
     }
-    std::scoped_lock lock{ *containers_[container].readMutex };
-    return containers_[container].reader->ReadBlock(artifact, blockName, out);
+    return containers_[container].reader->ReadBlock(artifact, blockName, *containers_[container].readMutex, out);
 }
 
 } // namespace kb::assets::bake
