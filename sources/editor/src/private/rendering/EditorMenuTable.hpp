@@ -53,6 +53,7 @@ enum class EditorMenuAction : std::uint8_t {
     Copy,
     Paste,
     Duplicate,
+    OpenCommandPalette,
     // Layout.
     ApplyDefaultLayout,
     ApplyLayout,
@@ -179,6 +180,11 @@ public:
     // commands. The rows a project supplies (layouts, scenes, platforms, recent projects) are the ones
     // `shell` holds; its strings must outlive the result.
     [[nodiscard]] static std::vector<EditorMenuRowView> AllRows(const EditorShellInteractionState& shell);
+    // Puts the rows of `rows` (an AllRows result) a user can run on their own into the palette's commands, each
+    // valued with its place in `rows`. Rows that only open another list, or the palette itself, are left out.
+    static void ListCommands(EditorCommandPaletteModel& palette, const std::vector<EditorMenuRowView>& rows);
+    // The row of `rows` a chosen palette command stands for; null when the menus changed since it was listed.
+    [[nodiscard]] static const EditorMenuRowView* CommandRow(const std::vector<EditorMenuRowView>& rows, const EditorCommandPaletteModel::Row& chosen) noexcept;
 };
 
 } // namespace kb::editor

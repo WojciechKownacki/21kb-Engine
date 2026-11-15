@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app/EditorPlayModeState.hpp"
+#include "app/EditorWindowMessageContext.hpp"
 #include "app/EditorShellInteractionState.hpp"
 #include "docking/EditorDockModel.hpp"
 #include "docking/EditorFloatingWindowManager.hpp"
@@ -54,6 +55,13 @@ public:
     // browser, a file operation) runs. Null puts the usual behaviour back.
     using MenuRowObserver = bool (*)(const EditorMenuRowView& row);
     static void SetMenuRowObserver(MenuRowObserver observer) noexcept;
+
+    // Reads what the menus list from the project (scenes, layouts, platforms, recent projects, play options),
+    // as opening each of them does, so that every row of every menu is current.
+    static void RefreshSuppliedMenus(EditorShellInteractionState& shellInteraction, const EditorSceneContext& sceneContext, const EditorDockModel& dockModel);
+    // Carries out a menu row the way a click on it does, observer included, for anything that lists the
+    // editor's commands outside a menu. A row that cannot be chosen now does nothing.
+    static void RunMenuRow(const EditorMenuRowView& row, EditorWindowMessageContext& context);
 #endif
 };
 

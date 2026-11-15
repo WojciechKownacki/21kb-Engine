@@ -2,6 +2,7 @@
 #include "localization/EditorLocalization.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorAssetBrowserDoubleClickHandler.hpp"
 #include "app/EditorAssetBrowserPointerHandler.hpp"
 #include "app/EditorWindowInvalidator.hpp"
 #include "app/docking/EditorDockTabMenu.hpp"
@@ -163,15 +164,7 @@ bool EditorLeftButtonDoubleClickRouter::Handle(HWND messageWindow, int x, int y)
     if (assetResult == EditorAssetBrowserDoubleClickResult::None) {
         return false;
     }
-    if (assetResult == EditorAssetBrowserDoubleClickResult::ScriptEditorOpened) {
-        static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::ScriptEditor, DockArea::Center));
-    }
-    if (assetResult == EditorAssetBrowserDoubleClickResult::MaterialEditorOpened) {
-        static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::MaterialEditor, DockArea::Center));
-    }
-    if (assetResult == EditorAssetBrowserDoubleClickResult::PrefabEditorOpened) {
-        static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::Scene, DockArea::Center));
-    }
+    EditorAssetBrowserDoubleClickHandler::ShowOpenedAsset(assetResult, dockModel_, sceneContext_);
 
     const std::optional<RECT> animatorEditorContent = EditorPanelContentResolver::Resolve(
         DockPanelKind::AnimatorEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
@@ -189,47 +182,6 @@ bool EditorLeftButtonDoubleClickRouter::Handle(HWND messageWindow, int x, int y)
                 return true;
             }
         }
-    }
-    if (assetResult == EditorAssetBrowserDoubleClickResult::SkeletalMeshEditorOpened) {
-        const kb::assets::AssetId selectedAsset = sceneContext_.RequestedSkeletalMeshEditorAssetId();
-        if (const kb::assets::AssetMetadata* metadata =
-                sceneContext_.Scene().Assets().Manager().Registry().Find(selectedAsset);
-            metadata != nullptr) {
-            const std::string filename = metadata->virtualPath.filename().string();
-            static_cast<void>(dockModel_.Commands().SetPanelTitle(
-                DockPanelKind::SkeletalMeshEditor,
-                filename.empty() ? metadata->name : filename));
-        }
-        static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::SkeletalMeshEditor, DockArea::Center));
-    }
-    if (assetResult == EditorAssetBrowserDoubleClickResult::AnimationClipEditorOpened) {
-        static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::AnimationClipEditor, DockArea::Center));
-    }
-    if (assetResult == EditorAssetBrowserDoubleClickResult::AnimatorEditorOpened) {
-        static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::AnimatorEditor, DockArea::Center));
-    }
-    if (assetResult == EditorAssetBrowserDoubleClickResult::TimelineEditorOpened) {
-        const auto id = sceneContext_.TimelineEditorDocument().AssetId();
-        if (const auto* metadata = sceneContext_.Scene().Assets().Manager().Registry().Find(id))
-            static_cast<void>(dockModel_.Commands().SetPanelTitle(DockPanelKind::TimelineEditor,metadata->virtualPath.filename().string()));
-        static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::TimelineEditor, DockArea::Center));
-    }
-    if (assetResult == EditorAssetBrowserDoubleClickResult::GameplayGraphEditorOpened) {
-        static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::GameplayGraphEditor,DockArea::Center));
-    }
-    if (assetResult == EditorAssetBrowserDoubleClickResult::BlendSpace2DEditorOpened) {
-        static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::BlendSpace2DEditor,DockArea::Center));
-    }
-    if (assetResult == EditorAssetBrowserDoubleClickResult::ParticleEditorOpened) {
-        if (const kb::assets::AssetMetadata* metadata =
-                sceneContext_.Scene().Assets().Manager().Registry().Find(sceneContext_.ParticleEditorAssetId());
-            metadata != nullptr) {
-            const std::string filename = metadata->virtualPath.filename().string();
-            static_cast<void>(dockModel_.Commands().SetPanelTitle(
-                DockPanelKind::ParticleEditor,
-                filename.empty() ? metadata->name : filename));
-        }
-        static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::ParticleEditor, DockArea::Center));
     }
     // A GPU viewport is a native child window, so repainting the GDI dock host does not retire the
     // surface belonging to the previously active tab. Without an explicit composition request the

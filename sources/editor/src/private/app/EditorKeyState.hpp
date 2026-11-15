@@ -18,7 +18,8 @@ public:
     EditorScriptedInputScope& operator=(const EditorScriptedInputScope&) = delete;
 };
 
-// A scoped modifier for messages sent by deterministic headless controls.
+// A scoped key held down for messages sent by deterministic headless controls; scopes nest, so a few keys can
+// be held at once.
 class EditorScriptedKeyScope final {
 public:
     explicit EditorScriptedKeyScope(int key) noexcept;
@@ -26,7 +27,7 @@ public:
     EditorScriptedKeyScope(const EditorScriptedKeyScope&) = delete;
     EditorScriptedKeyScope& operator=(const EditorScriptedKeyScope&) = delete;
 private:
-    int previous_;
+    int slot_ = -1;
 };
 
 } // namespace kb::editor

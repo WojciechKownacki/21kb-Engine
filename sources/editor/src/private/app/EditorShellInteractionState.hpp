@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app/EditorCommandPaletteModel.hpp"
 #include "app/EditorPlayPreferences.hpp"
 #include "settings/EditorLayoutMenuModel.hpp"
 
@@ -110,6 +111,10 @@ public:
     [[nodiscard]] EditorTransportCommand HoveredTransport() const noexcept;
     [[nodiscard]] EditorTransportCommand PressedTransport() const noexcept;
 
+    // The command palette and quick open: its text, names and chosen row while it is open.
+    [[nodiscard]] EditorCommandPaletteModel& CommandPalette() noexcept { return commandPalette_; }
+    [[nodiscard]] const EditorCommandPaletteModel& CommandPalette() const noexcept { return commandPalette_; }
+
 private:
     EditorTopBarItem hoveredTopBarItem_ = EditorTopBarItem::None;
     std::uint32_t hoveredTab_ = 0;
@@ -128,6 +133,7 @@ private:
     bool pressedSave_ = false;
     EditorTransportCommand hoveredTransport_ = EditorTransportCommand::None;
     EditorTransportCommand pressedTransport_ = EditorTransportCommand::None;
+    EditorCommandPaletteModel commandPalette_{};
 };
 
 } // namespace kb::editor

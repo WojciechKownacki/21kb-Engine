@@ -71,6 +71,60 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::Handle
     }
 }
 
+void EditorAssetBrowserDoubleClickHandler::ShowOpenedAsset(
+    EditorAssetBrowserDoubleClickResult result, EditorDockModel& dockModel, EditorSceneContext& sceneContext) {
+    const auto activate = [&](DockPanelKind kind) {
+        static_cast<void>(dockModel.Commands().ActivatePanelKind(kind, DockArea::Center));
+    };
+    // The editor's tab is titled with the file it holds.
+    const auto activateTitled = [&](DockPanelKind kind, kb::assets::AssetId id, bool filenameOnly) {
+        if (const kb::assets::AssetMetadata* metadata = sceneContext.Scene().Assets().Manager().Registry().Find(id); metadata != nullptr) {
+            const std::string filename = metadata->virtualPath.filename().string();
+            static_cast<void>(dockModel.Commands().SetPanelTitle(kind, filename.empty() && !filenameOnly ? metadata->name : filename));
+        }
+        activate(kind);
+    };
+    switch (result) {
+    case EditorAssetBrowserDoubleClickResult::ScriptEditorOpened:
+        activate(DockPanelKind::ScriptEditor);
+        break;
+    case EditorAssetBrowserDoubleClickResult::MaterialEditorOpened:
+        activate(DockPanelKind::MaterialEditor);
+        break;
+    case EditorAssetBrowserDoubleClickResult::PrefabEditorOpened:
+        activate(DockPanelKind::Scene);
+        break;
+    case EditorAssetBrowserDoubleClickResult::SkeletalMeshEditorOpened:
+        activateTitled(DockPanelKind::SkeletalMeshEditor, sceneContext.RequestedSkeletalMeshEditorAssetId(), false);
+        break;
+    case EditorAssetBrowserDoubleClickResult::AnimationClipEditorOpened:
+        activate(DockPanelKind::AnimationClipEditor);
+        break;
+    case EditorAssetBrowserDoubleClickResult::AnimatorEditorOpened:
+        activate(DockPanelKind::AnimatorEditor);
+        break;
+    case EditorAssetBrowserDoubleClickResult::TimelineEditorOpened:
+        activateTitled(DockPanelKind::TimelineEditor, sceneContext.TimelineEditorDocument().AssetId(), true);
+        break;
+    case EditorAssetBrowserDoubleClickResult::GameplayGraphEditorOpened:
+        activate(DockPanelKind::GameplayGraphEditor);
+        break;
+    case EditorAssetBrowserDoubleClickResult::BlendSpace2DEditorOpened:
+        activate(DockPanelKind::BlendSpace2DEditor);
+        break;
+    case EditorAssetBrowserDoubleClickResult::ParticleEditorOpened:
+        activateTitled(DockPanelKind::ParticleEditor, sceneContext.ParticleEditorAssetId(), false);
+        break;
+    case EditorAssetBrowserDoubleClickResult::None:
+    case EditorAssetBrowserDoubleClickResult::BrowserNavigation:
+    case EditorAssetBrowserDoubleClickResult::SceneOpened:
+    case EditorAssetBrowserDoubleClickResult::ExternalScriptOpened:
+    case EditorAssetBrowserDoubleClickResult::StaticMeshEditorOpened:
+    case EditorAssetBrowserDoubleClickResult::LocalizationPreviewChanged:
+        break;
+    }
+}
+
 bool EditorAssetBrowserDoubleClickHandler::PreviewLocalization(EditorSceneContext& context,
     kb::assets::AssetId catalogId, std::string_view language) {
     if (context.HasPlayModeSceneSession()) return false;

@@ -4,6 +4,7 @@
 #include "app/EditorKeyState.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorCommandPaletteController.hpp"
 #include "app/EditorCurveEditorPointerHandler.hpp"
 #include "app/EditorEditCommandInputHandler.hpp"
 #include "app/EditorSceneFileCommands.hpp"
@@ -619,6 +620,7 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
             // their editor host. Keeping their last frame avoids flashing the
             // Scene View gray while the editor is merely inactive. Owned
             // WS_POPUP overlays are different: hide them explicitly.
+            context_.shellInteraction.CommandPalette().Close();
             MainWindowBackBufferPainter::HideAllOverlays();
             FloatingWindowBackBufferPainter::HideAllOverlays();
             return 0;
@@ -689,6 +691,10 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         return 0;
     }
     case WM_KILLFOCUS:
+        // The palette goes away with the keyboard.
+        if (context_.shellInteraction.CommandPalette().IsOpen()) {
+            EditorCommandPaletteController::Close(context_);
+        }
         if (EditorProjectSettingsPointerController::CommitNumberEdit(context_.sceneContext)) {
             InvalidateRect(messageWindow, nullptr, FALSE);
         }
@@ -698,6 +704,12 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         }
         break;
     case WM_CHAR:
+        if (EditorCommandPaletteModel& palette = context_.shellInteraction.CommandPalette(); palette.IsOpen()) {
+            // The palette's box takes every character; the window repaints for the list to follow it.
+            static_cast<void>(HandleSearchFieldChar(palette.Field(), wparam, [&palette] { palette.TextChanged(); }));
+            InvalidateRect(context_.mainWindow, nullptr, FALSE);
+            return 0;
+        }
         if (EditorAgentPanelController{ context_.sceneContext }.HandleChar(wparam)) {
             InvalidateRect(messageWindow, nullptr, FALSE);
             if (messageWindow != context_.mainWindow) InvalidateRect(context_.mainWindow, nullptr, FALSE);
@@ -755,6 +767,13 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         }
         break;
     case WM_KEYDOWN:
+        if (EditorCommandPaletteController::HandleKeyDown(context_, wparam)) return 0;
+        if (EditorCommandPaletteModel& palette = context_.shellInteraction.CommandPalette(); palette.IsOpen()) {
+            // What is left is editing the box: the keys do not reach the editor behind it.
+            static_cast<void>(HandleSearchFieldKeyDown(palette.Field(), messageWindow, wparam, [&palette] { palette.TextChanged(); }));
+            InvalidateRect(context_.mainWindow, nullptr, FALSE);
+            return 0;
+        }
         if (EditorCurveEditorPointerHandler{ context_ }.HandleKey(messageWindow, wparam)) return 0;
         if (wparam == VK_ESCAPE && context_.dockController.CancelDragAndRestore()) {
             context_.sceneViewport.RequestPresent();
@@ -972,6 +991,9 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
     case WM_SETCURSOR:
         if (message == WM_NCHITTEST) {
             return EditorWindowHitTestHandler::Handle(messageWindow, lparam, context_.floatingWindows, context_.mainWindow, EditorMetrics{}.menuHeight);
+        }
+        if (message != WM_SETCURSOR && EditorCommandPaletteController::HandlePointer(context_, messageWindow, message, wparam, lparam)) {
+            return 0;
         }
         if (context_.sceneContext.Inspector().IsListeningForKey() &&
             (message == WM_LBUTTONDOWN || message == WM_RBUTTONDOWN || message == WM_MBUTTONDOWN)) {

@@ -4,6 +4,7 @@
 #include "app/EditorWindowResizeInteraction.hpp"
 #include "app/agent/EditorAgentBarOverlay.hpp"
 #include "rendering/DockDropPreviewOverlayWindow.hpp"
+#include "rendering/EditorCommandPaletteOverlayWindow.hpp"
 #include "rendering/DockTabTooltipOverlayWindow.hpp"
 #include "rendering/DockWorkspaceRenderer.hpp"
 #include "rendering/DockWorkspaceTabStripRenderer.hpp"
@@ -279,6 +280,11 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
     return overlay;
 }
 
+[[nodiscard]] EditorCommandPaletteOverlayWindow& MainCommandPaletteOverlay() {
+    static EditorCommandPaletteOverlayWindow overlay;
+    return overlay;
+}
+
 } // namespace
 
 void MainWindowBackBufferPainter::HideAllOverlays() noexcept {
@@ -291,6 +297,7 @@ void MainWindowBackBufferPainter::HideAllOverlays() noexcept {
     MainToolbarMenuOverlay().Hide();
     MainTabTooltipOverlay().Hide();
     MainAgentBarOverlay().Hide();
+    MainCommandPaletteOverlay().Hide();
 }
 
 void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, EditorSceneContext& sceneContext, const DockDropPreview* preview, const DockPointerDrag* dockDrag, const EditorPointerDragState& drag, const EditorRenderBackendSettings& renderBackendSettings, const EditorPlayModeState& playMode, const EditorShellInteractionState& shellInteraction, EditorSceneBgfxViewport& sceneViewport) {
@@ -383,6 +390,12 @@ void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dock
     }
     if (!tabTooltipShown) {
         MainTabTooltipOverlay().Hide();
+    }
+    // The command palette is the topmost popup.
+    if (shellInteraction.CommandPalette().IsOpen()) {
+        MainCommandPaletteOverlay().Show(window, theme, shellInteraction);
+    } else {
+        MainCommandPaletteOverlay().Hide();
     }
 }
 

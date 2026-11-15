@@ -4,6 +4,7 @@
 #include <array>
 #include <iterator>
 
+#include "app/EditorCommandPaletteController.hpp"
 #include "app/EditorEditCommandPolicy.hpp"
 #include "rendering/EditorMenuTable.hpp"
 #include "profiler/ProfilerPanel.hpp"
@@ -130,8 +131,8 @@ void RefreshLayoutMenu(
 }
 
 // What a menu lists from the project is read the moment it opens.
-void RefreshOpenMenu(EditorShellInteractionState& shellInteraction, const EditorSceneContext& sceneContext, const EditorDockModel& dockModel) {
-    switch (shellInteraction.OpenMenu()) {
+void RefreshMenu(EditorMenuCommand menu, EditorShellInteractionState& shellInteraction, const EditorSceneContext& sceneContext, const EditorDockModel& dockModel) {
+    switch (menu) {
     case EditorMenuCommand::Layout:
         RefreshLayoutMenu(shellInteraction, sceneContext, dockModel, false);
         break;
@@ -166,6 +167,10 @@ void RefreshOpenMenu(EditorShellInteractionState& shellInteraction, const Editor
     default:
         break;
     }
+}
+
+void RefreshOpenMenu(EditorShellInteractionState& shellInteraction, const EditorSceneContext& sceneContext, const EditorDockModel& dockModel) {
+    RefreshMenu(shellInteraction.OpenMenu(), shellInteraction, sceneContext, dockModel);
 }
 
 // Switching arrangements replaces the whole workspace, so the torn-off windows are
@@ -507,6 +512,9 @@ bool SavePlayPreference(EditorSceneContext& sceneContext, Change change) {
         return edit(EditorEditCommand::Paste);
     case EditorMenuAction::Duplicate:
         return edit(EditorEditCommand::Duplicate);
+    case EditorMenuAction::OpenCommandPalette:
+        EditorCommandPaletteController::Open(context.mainWindow, context.dockModel, sceneContext, context.shellInteraction);
+        return false;
 
     case EditorMenuAction::ApplyDefaultLayout:
         context.dockModel.Commands().ResetWorkspace();
@@ -638,6 +646,14 @@ bool SavePlayPreference(EditorSceneContext& sceneContext, Change change) {
     }
 }
 
+// What a chosen row does once the observer has had its say: its action, then a new frame for the scene view when
+// the action changed what it shows. A click and the command palette both end here.
+void PerformMenuRow(const EditorMenuRowView& row, bool observed, const MenuActionContext& context) {
+    if (!observed && ExecuteMenuAction(row, context)) {
+        context.sceneViewport.RequestPresent();
+    }
+}
+
 [[nodiscard]] bool HandleMenuLeftButtonDown(
     HWND mainWindow,
     int x,
@@ -730,9 +746,7 @@ bool SavePlayPreference(EditorSceneContext& sceneContext, Change change) {
             closeMenu();
         }
         const MenuActionContext context{ mainWindow, dockModel, floatingWindows, sceneContext, sceneViewport, renderBackendSettings, shellInteraction };
-        if (!observed && ExecuteMenuAction(row, context)) {
-            sceneViewport.RequestPresent();
-        }
+        PerformMenuRow(row, observed, context);
         if (row.closesFirst) {
             InvalidateRect(mainWindow, nullptr, FALSE);
             return true;
@@ -1015,6 +1029,26 @@ bool EditorWindowToolbarPointerHandler::HandleMouseMove(
 
 void EditorWindowToolbarPointerHandler::SetMenuRowObserver(MenuRowObserver observer) noexcept {
     g_menuRowObserver = observer;
+}
+
+void EditorWindowToolbarPointerHandler::RefreshSuppliedMenus(
+    EditorShellInteractionState& shellInteraction, const EditorSceneContext& sceneContext, const EditorDockModel& dockModel) {
+    for (const EditorMenuCommand menu : { EditorMenuCommand::Layout, EditorMenuCommand::Scene, EditorMenuCommand::RecentProjects,
+             EditorMenuCommand::PlayOptions, EditorMenuCommand::Publish }) {
+        RefreshMenu(menu, shellInteraction, sceneContext, dockModel);
+    }
+}
+
+void EditorWindowToolbarPointerHandler::RunMenuRow(const EditorMenuRowView& row, EditorWindowMessageContext& context) {
+    if (!row.enabled) {
+        return;
+    }
+    const bool observed = g_menuRowObserver != nullptr && g_menuRowObserver(row);
+    const MenuActionContext actionContext{
+        context.mainWindow, context.dockModel, context.floatingWindows, context.sceneContext,
+        context.sceneViewport, context.renderBackendSettings, context.shellInteraction };
+    PerformMenuRow(row, observed, actionContext);
+    InvalidateRect(context.mainWindow, nullptr, FALSE);
 }
 
 void EditorWindowToolbarPointerHandler::ClearHover(EditorShellInteractionState& shellInteraction) noexcept {

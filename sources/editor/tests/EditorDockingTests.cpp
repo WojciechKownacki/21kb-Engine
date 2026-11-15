@@ -1,6 +1,8 @@
 #include "EditorTestSupport.hpp"
 #include "EditorTestSuites.hpp"
 
+#include "app/EditorCommandPaletteModel.hpp"
+#include "app/EditorKeyState.hpp"
 #include "docking/EditorDockModel.hpp"
 #include "rendering/DockTabControlGeometry.hpp"
 #include "rendering/EditorMenuTable.hpp"
@@ -33,6 +35,7 @@
 #include "windowing/FloatingWindowControlLayout.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -505,14 +508,19 @@ void RunWorldMenuTest() {
 void RunEditAndOptionsMenuTest() {
     // No two Edit rows may share an icon, and Edit and Options rows are found by id.
     using kb::editor::EditorMenuCommand;
-    kb::editor::tests::Require(kb::editor::EditorMenuTable::FixedRowCount(EditorMenuCommand::Edit) == 6 &&
+    kb::editor::tests::Require(kb::editor::EditorMenuTable::FixedRowCount(EditorMenuCommand::Edit) == 7 &&
             MenuRowLabel(EditorMenuCommand::Edit, "edit.undo") == "Undo" &&
             MenuRowLabel(EditorMenuCommand::Edit, "edit.redo") == "Redo" &&
             MenuRowLabel(EditorMenuCommand::Edit, "edit.cut") == "Cut" &&
             MenuRowLabel(EditorMenuCommand::Edit, "edit.copy") == "Copy" &&
             MenuRowLabel(EditorMenuCommand::Edit, "edit.paste") == "Paste" &&
-            MenuRowLabel(EditorMenuCommand::Edit, "edit.duplicate") == "Duplicate",
+            MenuRowLabel(EditorMenuCommand::Edit, "edit.duplicate") == "Duplicate" &&
+            MenuRowLabel(EditorMenuCommand::Edit, "edit.commandPalette") == "Find Command or Asset...",
         "Edit menu rows carry the labels the menu shows");
+    const kb::editor::EditorMenuRowSpec* palette = FindMenuRow(EditorMenuCommand::Edit, "edit.commandPalette");
+    kb::editor::tests::Require(palette != nullptr && palette->shortcut == "Ctrl+Shift+P" &&
+            palette->action == kb::editor::EditorMenuAction::OpenCommandPalette && palette->closesFirst,
+        "Edit lists the command palette with its shortcut, and the menu goes away before it opens");
     const auto edit = kb::editor::EditorMenuTable::FixedRows(EditorMenuCommand::Edit);
     for (std::size_t first = 0; first < edit.size(); ++first) {
         for (std::size_t second = first + 1U; second < edit.size(); ++second) {
@@ -543,7 +551,7 @@ void RunMenuTableTest() {
     }
     std::sort(ids.begin(), ids.end());
     kb::editor::tests::Require(!ids.empty() && std::adjacent_find(ids.begin(), ids.end()) == ids.end(), "Every menu row id is unique");
-    kb::editor::tests::Require(all.size() == 5U + 6U + 3U + 7U + 13U + 4U + 7U + 1U + 6U + 5U + 1U, "AllRows lists the rows of every menu");
+    kb::editor::tests::Require(all.size() == 5U + 7U + 3U + 7U + 13U + 4U + 7U + 1U + 6U + 5U + 1U, "AllRows lists the rows of every menu");
 
     // Rules and captions of the menus whose rows a project supplies: three scenes, two platforms, two projects.
     kb::editor::tests::Require(!EditorMenuTable::StartsGroup(EditorMenuCommand::File, 1, 5) && EditorMenuTable::StartsGroup(EditorMenuCommand::File, 2, 5) &&
@@ -563,6 +571,207 @@ void RunMenuTableTest() {
     kb::editor::tests::Require(EditorMenuTable::StartsGroup(EditorMenuCommand::RecentProjects, 1, 3) &&
             !EditorMenuTable::StartsGroup(EditorMenuCommand::RecentProjects, 2, 3) && EditorMenuTable::FixedRowCount(EditorMenuCommand::Layout) == 0,
         "The recent list sets its projects apart from Back");
+}
+
+// The names the palette lists for a text, best first.
+std::vector<std::string> PaletteResults(kb::editor::EditorCommandPaletteModel& palette, std::string_view text) {
+    palette.Field().SetQuery(std::string{ text });
+    palette.TextChanged();
+    std::vector<std::string> labels;
+    for (std::size_t index = 0; index < palette.ResultCount(); ++index) {
+        labels.emplace_back(palette.ResultAt(index).label);
+    }
+    return labels;
+}
+
+// The letters of every word, in order, somewhere in the name: the rule a name has to meet to match.
+bool PaletteLettersInOrder(std::string_view text, std::string_view name) {
+    std::size_t at = 0;
+    for (const char letter : text) {
+        if (letter == ' ') {
+            continue;
+        }
+        const char wanted = letter >= 'A' && letter <= 'Z' ? static_cast<char>(letter + 32) : letter;
+        bool found = false;
+        for (; at < name.size() && !found; ++at) {
+            const char have = name[at] >= 'A' && name[at] <= 'Z' ? static_cast<char>(name[at] + 32) : name[at];
+            found = have == wanted;
+        }
+        if (!found) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void RunCommandPaletteMatchingTest() {
+    using kb::editor::EditorCommandPaletteModel;
+    EditorCommandPaletteModel palette;
+    for (const char* name : { "Open Scene...", "Save As...", "Save", "Scene Settings", "Close Scene", "Save All", "Show in Explorer", "Build Lighting" }) {
+        palette.AddCommand(name, "File", "", 0U);
+    }
+    palette.AddAsset("Main.21kbscene", "Scenes/Main.21kbscene", 7U);
+    palette.Open(">");
+    kb::editor::tests::Require(palette.CurrentMode() == EditorCommandPaletteModel::Mode::Commands && palette.ResultCount() == 8U &&
+            palette.ResultAt(0U).label == "Open Scene..." && palette.ResultAt(7U).label == "Build Lighting",
+        "A palette that opens with > lists every command, in the order they were added");
+
+    // Ranking: the whole name, then names that start with the word, then a word inside a name, then letters in order.
+    std::vector<std::string> found = PaletteResults(palette, ">save");
+    kb::editor::tests::Require(found.size() == 3U && found[0] == "Save" && found[1] == "Save All" && found[2] == "Save As...",
+        "An exact name ranks first, then names that start with the text, the shorter first");
+    kb::editor::tests::Require(PaletteResults(palette, ">SAVE") == found && PaletteResults(palette, ">  save  ") == found,
+        "Matching ignores case and extra spaces");
+    found = PaletteResults(palette, ">scene");
+    kb::editor::tests::Require(found.size() == 3U && found[0] == "Scene Settings" && found[1] == "Close Scene" && found[2] == "Open Scene...",
+        "A name that starts with the word ranks above one that holds it as a later word, the shorter first");
+    kb::editor::tests::Require(PaletteResults(palette, ">open scene") == std::vector<std::string>{ "Open Scene..." } &&
+            PaletteResults(palette, ">scene open") == std::vector<std::string>{ "Open Scene..." },
+        "Every word has to match, in any order");
+    kb::editor::tests::Require(PaletteResults(palette, ">sset") == std::vector<std::string>{ "Scene Settings" } &&
+            PaletteResults(palette, ">cs").size() == 2U,
+        "Letters in order match");
+    kb::editor::tests::Require(PaletteResults(palette, ">xyz").empty() && palette.Selected() < 0 && !palette.Chosen().has_value(),
+        "A text nothing matches lists nothing and chooses nothing");
+
+    // Without > the list is the assets, and nothing typed lists none.
+    kb::editor::tests::Require(PaletteResults(palette, "").empty() && palette.CurrentMode() == EditorCommandPaletteModel::Mode::Assets,
+        "An empty box lists no assets");
+    found = PaletteResults(palette, "main");
+    kb::editor::tests::Require(found == std::vector<std::string>{ "Main.21kbscene" } && palette.Chosen().has_value() && palette.Chosen()->value == 7U &&
+            palette.Chosen()->detail == "Scenes/Main.21kbscene",
+        "Without > the names are the project's assets, and the chosen row carries what was added with it");
+    kb::editor::tests::Require(PaletteResults(palette, "> save").size() == 3U && palette.CurrentMode() == EditorCommandPaletteModel::Mode::Commands,
+        "Typing > turns the list to commands again");
+
+    // Keyboard: the chosen row wraps around and the rows on screen follow it.
+    static_cast<void>(PaletteResults(palette, ">"));
+    palette.MoveSelection(-1, true);
+    kb::editor::tests::Require(palette.Selected() == 7 && palette.FirstVisible() == 0 && palette.VisibleCount() == 8, "Up from the first row chooses the last");
+    palette.MoveSelection(1, true);
+    kb::editor::tests::Require(palette.Selected() == 0, "Down from the last row chooses the first");
+    palette.Close();
+    kb::editor::tests::Require(!palette.IsOpen() && palette.EntryCount() == 0U && palette.ResultCount() == 0U, "Closing lets go of the names");
+}
+
+void RunCommandPaletteLargeListTest() {
+    using kb::editor::EditorCommandPaletteLayout;
+    using kb::editor::EditorCommandPaletteModel;
+    constexpr std::size_t kAssets = 100000;
+    constexpr std::array<const char*, 4> kKinds{ "Rock", "Tree", "Barrel", "Crate" };
+    std::vector<std::string> names;
+    names.reserve(kAssets);
+    EditorCommandPaletteModel palette;
+    for (std::size_t index = 0; index < kAssets; ++index) {
+        names.push_back(std::string{ kKinds[index % kKinds.size()] } + "_" + std::to_string(index));
+        palette.AddAsset(names.back(), "Props", index + 1U);
+    }
+    palette.Open("");
+    kb::editor::tests::Require(palette.EntryCount() == kAssets, "The palette holds every asset name");
+
+    // Typing narrows the list: each longer text looks only at what the shorter one matched.
+    std::size_t previousMatches = kAssets;
+    std::string typed;
+    for (const char letter : std::string{ "tree_77" }) {
+        typed.push_back(letter);
+        static_cast<void>(PaletteResults(palette, typed));
+        std::size_t expected = 0;
+        for (const std::string& name : names) {
+            expected += PaletteLettersInOrder(typed, name) ? 1U : 0U;
+        }
+        kb::editor::tests::Require(palette.MatchCount() == expected, "The names that match are exactly those holding the letters in order");
+        kb::editor::tests::Require(palette.Scanned() == (typed.size() == 1U ? kAssets : previousMatches), "A longer text looks only at the names the shorter one matched");
+        previousMatches = palette.MatchCount();
+        kb::editor::tests::Require(palette.ResultCount() == std::min<std::size_t>(expected, EditorCommandPaletteModel::kMaxResults),
+            "The list keeps at most the best hundred names");
+    }
+    kb::editor::tests::Require(palette.ResultAt(0U).label == "Tree_77", "The name that is the whole text comes first");
+    for (std::size_t index = 0; index < palette.ResultCount(); ++index) {
+        kb::editor::tests::Require(PaletteLettersInOrder(typed, palette.ResultAt(index).label), "Every name kept matches the text");
+    }
+
+    // The same text typed in one go gives the same list as the one narrowed key by key.
+    EditorCommandPaletteModel fresh;
+    for (std::size_t index = 0; index < kAssets; ++index) {
+        fresh.AddAsset(names[index], "Props", index + 1U);
+    }
+    fresh.Open("tree_77");
+    kb::editor::tests::Require(fresh.ResultCount() == palette.ResultCount() && fresh.MatchCount() == palette.MatchCount(), "Narrowing and filtering at once keep the same names");
+    for (std::size_t index = 0; index < fresh.ResultCount(); ++index) {
+        kb::editor::tests::Require(fresh.ResultAt(index).value == palette.ResultAt(index).value, "Narrowing and filtering at once rank the names the same");
+    }
+
+    // Every name matches "_" yet only a screenful of rows is laid out.
+    static_cast<void>(PaletteResults(palette, "_"));
+    kb::editor::tests::Require(palette.MatchCount() == kAssets && palette.ResultCount() == EditorCommandPaletteModel::kMaxResults,
+        "A text every name matches still keeps only the best hundred");
+    kb::editor::tests::Require(palette.VisibleCount() == EditorCommandPaletteLayout::kVisibleRows, "Only a screenful of the list is on screen");
+    const EditorCommandPaletteLayout layout = EditorCommandPaletteLayout::Resolve(1280, 760, palette.VisibleCount());
+    kb::editor::tests::Require(layout.rowCount == EditorCommandPaletteLayout::kVisibleRows && layout.RowAt(layout.rows[8].left + 2, layout.rows[8].top + 2) == 8 &&
+            layout.RowAt(layout.panel.left - 1, layout.rows[0].top) == -1,
+        "No more rows are laid out than fit on screen, however long the list");
+    kb::editor::tests::Require(layout.panel.left == 1280 - layout.panel.right && layout.panel.top >= 0 && layout.panel.bottom <= 760 &&
+            layout.rows[0].top >= layout.field.bottom && layout.hint.top >= layout.rows[8].bottom,
+        "The palette is centred in the window with its box over its rows");
+    for (int step = 0; step < 25; ++step) {
+        palette.MoveSelection(1, false);
+        kb::editor::tests::Require(palette.Selected() >= palette.FirstVisible() && palette.Selected() < palette.FirstVisible() + EditorCommandPaletteLayout::kVisibleRows,
+            "The rows on screen follow the chosen row");
+    }
+    kb::editor::tests::Require(palette.Selected() == 25 && palette.SelectVisible(0) && palette.Selected() == palette.FirstVisible(),
+        "A row on screen can be chosen by its place");
+}
+
+void RunCommandPaletteCommandsTest() {
+    using kb::editor::EditorCommandPaletteModel;
+    using kb::editor::EditorMenuAction;
+    using kb::editor::EditorMenuTable;
+    constexpr int kControl = 0x11;
+    constexpr int kShift = 0x10;
+    {
+        // Opening: Ctrl+Shift+P, and only that.
+        const kb::editor::EditorScriptedInputScope scripted;
+        kb::editor::tests::Require(!EditorCommandPaletteModel::IsOpenShortcut('P'), "P alone does not open the palette");
+        const kb::editor::EditorScriptedKeyScope control(kControl);
+        kb::editor::tests::Require(!EditorCommandPaletteModel::IsOpenShortcut('P'), "Ctrl+P does not open the palette");
+        const kb::editor::EditorScriptedKeyScope shift(kShift);
+        kb::editor::tests::Require(EditorCommandPaletteModel::IsOpenShortcut('P') && !EditorCommandPaletteModel::IsOpenShortcut('O'),
+            "Ctrl+Shift+P opens the palette");
+    }
+
+    kb::editor::EditorShellInteractionState shell;
+    kb::editor::EditorLayoutMenuModel layouts;
+    layouts.Rebuild({}, {});
+    shell.SetLayoutMenu(layouts);
+    const std::vector<kb::editor::EditorMenuRowView> rows = EditorMenuTable::AllRows(shell);
+    EditorCommandPaletteModel& palette = shell.CommandPalette();
+    EditorMenuTable::ListCommands(palette, rows);
+    palette.Open(">");
+    kb::editor::tests::Require(palette.EntryCount() > 0U && palette.EntryCount() < rows.size(),
+        "The palette lists the rows of the menu table that can be run, not the ones that open lists");
+
+    // Filtering: the command is found, a command that does not match is not.
+    kb::editor::tests::Require(PaletteResults(palette, ">find command").empty(), "The palette does not list the row that opens it");
+    const std::vector<std::string> found = PaletteResults(palette, ">undo");
+    kb::editor::tests::Require(!found.empty() && found[0] == "Undo" && std::find(found.begin(), found.end(), "Copy") == found.end(),
+        "Typing a command's name lists it and leaves the others out");
+
+    // Enter: the chosen command is the menu table's own row.
+    const std::optional<EditorCommandPaletteModel::Row> chosen = palette.Chosen();
+    kb::editor::tests::Require(chosen.has_value(), "A found command is chosen");
+    const kb::editor::EditorMenuRowView* row = EditorMenuTable::CommandRow(rows, *chosen);
+    kb::editor::tests::Require(row != nullptr && row->id == "edit.undo" && row->action == EditorMenuAction::Undo,
+        "Enter runs the row of the menu table the chosen command stands for");
+    kb::editor::tests::Require(palette.HandleKey(EditorCommandPaletteModel::Key::Enter) == EditorCommandPaletteModel::KeyResult::Choose &&
+            EditorMenuTable::CommandRow(rows, { .label = "Copy", .value = chosen->value }) == nullptr &&
+            EditorMenuTable::CommandRow(rows, { .label = "Undo", .value = rows.size() }) == nullptr,
+        "Enter chooses the row, and a command whose place in the menus changed is not run");
+
+    // Escape closes.
+    kb::editor::tests::Require(palette.HandleKey(EditorCommandPaletteModel::Key::Escape) == EditorCommandPaletteModel::KeyResult::Close,
+        "Escape asks for the palette to close");
+    palette.Close();
+    kb::editor::tests::Require(!palette.IsOpen() && !palette.Chosen().has_value(), "A closed palette chooses nothing");
 }
 
 void RunBuildGameMenuAndWorkspaceActivationTest() {
@@ -1711,6 +1920,9 @@ void RunEditorDockingTests() {
     RunWorldMenuTest();
     RunEditAndOptionsMenuTest();
     RunMenuTableTest();
+    RunCommandPaletteMatchingTest();
+    RunCommandPaletteLargeListTest();
+    RunCommandPaletteCommandsTest();
     RunSkeletalMeshEditorWorkspaceActivationTest();
     RunAnimationClipEditorWorkspaceActivationTest();
     RunAnimatorEditorWorkspaceActivationTest();

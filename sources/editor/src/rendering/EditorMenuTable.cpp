@@ -1,6 +1,7 @@
 #include "rendering/EditorMenuTable.hpp"
 
 #include "localization/EditorLocalization.hpp"
+#include "rendering/EditorToolbarLayout.hpp"
 
 #include <array>
 #include <utility>
@@ -26,6 +27,30 @@ using Icon = HeroIconKind;
     return { .enabled = shell.PlayMenuCanChange(), .checked = shell.PlayMenuPreferences().startPaused };
 }
 
+// Rows that only turn a menu into another list, or open the palette itself, are not commands to run.
+[[nodiscard]] bool ListedAsCommand(const EditorMenuRowView& row) noexcept {
+    return row.enabled && row.action != Action::None && row.action != Action::ShowRecentProjects && row.action != Action::ShowProjectMenu &&
+           row.action != Action::ShowDeleteLayoutList && row.action != Action::OpenCommandPalette;
+}
+
+// Where a row is found: the menu it belongs to, in the editor language.
+[[nodiscard]] std::string_view MenuName(EditorMenuCommand menu) {
+    switch (menu) {
+    case EditorMenuCommand::Project:
+        return EditorText("menu.heading.project", "Project");
+    case EditorMenuCommand::RecentProjects:
+        return EditorText("menu.project.recent", "Recent Projects");
+    case EditorMenuCommand::Scene:
+        return EditorText("palette.menu.scene", "Scene");
+    case EditorMenuCommand::PlayOptions:
+        return EditorText("palette.menu.play", "Play");
+    case EditorMenuCommand::Publish:
+        return EditorText("palette.menu.publish", "Publish");
+    default:
+        return EditorToolbarLayout::MenuLabel(menu);
+    }
+}
+
 constexpr std::array<EditorMenuRowSpec, 5> kFileRows{{
     { .id = "file.newScene", .label = EditorMenuText("menu.file.newScene", "New Scene..."),
       .detail = EditorMenuText("menu.detail.newScene", "An empty scene in the project"), .icon = Icon::Plus, .action = Action::NewScene },
@@ -43,7 +68,7 @@ constexpr std::array<EditorMenuRowSpec, 5> kFileRows{{
 
 // Only the shortcuts the editor actually binds (EditorEditCommandInputHandler); a row without one shows
 // nothing rather than a key that does not work.
-constexpr std::array<EditorMenuRowSpec, 6> kEditRows{{
+constexpr std::array<EditorMenuRowSpec, 7> kEditRows{{
     { .id = "edit.undo", .label = EditorMenuText("menu.edit.undo", "Undo"), .icon = Icon::Undo, .shortcut = "Ctrl+Z", .action = Action::Undo },
     { .id = "edit.redo", .label = EditorMenuText("menu.edit.redo", "Redo"), .icon = Icon::Redo, .shortcut = "Ctrl+Y", .action = Action::Redo },
     { .id = "edit.cut", .label = EditorMenuText("menu.edit.cut", "Cut"), .icon = Icon::Scissors, .shortcut = "Ctrl+X",
@@ -52,6 +77,9 @@ constexpr std::array<EditorMenuRowSpec, 6> kEditRows{{
     { .id = "edit.paste", .label = EditorMenuText("menu.edit.paste", "Paste"), .icon = Icon::ClipboardPaste, .shortcut = "Ctrl+V", .action = Action::Paste },
     { .id = "edit.duplicate", .label = EditorMenuText("menu.edit.duplicate", "Duplicate"), .icon = Icon::Duplicate, .shortcut = "Ctrl+D",
       .action = Action::Duplicate },
+    { .id = "edit.commandPalette", .label = EditorMenuText("menu.edit.commandPalette", "Find Command or Asset..."),
+      .detail = EditorMenuText("menu.detail.commandPalette", "Type a name to run a command or open an asset"), .icon = Icon::MagnifyingGlass,
+      .shortcut = "Ctrl+Shift+P", .action = Action::OpenCommandPalette, .startsGroup = true, .closesFirst = true },
 }};
 
 constexpr std::array<EditorMenuRowSpec, 7> kOptionsRows{{
@@ -481,6 +509,18 @@ std::vector<EditorMenuRowView> EditorMenuTable::AllRows(const EditorShellInterac
         }
     }
     return all;
+}
+
+void EditorMenuTable::ListCommands(EditorCommandPaletteModel& palette, const std::vector<EditorMenuRowView>& rows) {
+    for (std::size_t index = 0; index < rows.size(); ++index) {
+        if (ListedAsCommand(rows[index])) {
+            palette.AddCommand(rows[index].label, MenuName(rows[index].menu), rows[index].shortcut, index);
+        }
+    }
+}
+
+const EditorMenuRowView* EditorMenuTable::CommandRow(const std::vector<EditorMenuRowView>& rows, const EditorCommandPaletteModel::Row& chosen) noexcept {
+    return chosen.value < rows.size() && rows[static_cast<std::size_t>(chosen.value)].label == chosen.label ? &rows[static_cast<std::size_t>(chosen.value)] : nullptr;
 }
 
 } // namespace kb::editor

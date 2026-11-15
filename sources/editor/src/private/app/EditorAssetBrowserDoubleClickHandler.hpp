@@ -1,6 +1,7 @@
 #pragma once
 
 #include "assets/EditorAssetBrowserState.hpp"
+#include "docking/EditorDockModel.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 
@@ -56,6 +57,8 @@ public:
         const kb::assets::AssetMetadata& metadata,
         EditorSceneContext& sceneContext);
     [[nodiscard]] static EditorAssetBrowserDoubleClickResult HandleDoubleClick(HWND owner, const RECT& content, int x, int y, EditorSceneContext& sceneContext);
+    // Brings forward the editor an open asset needs, as a double-click does after the asset was opened.
+    static void ShowOpenedAsset(EditorAssetBrowserDoubleClickResult result, EditorDockModel& dockModel, EditorSceneContext& sceneContext);
 };
 
 #endif

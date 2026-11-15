@@ -90,6 +90,8 @@ add_executable(kb_editor WIN32
     src/app/EditorSceneFileCommands.cpp
     src/app/EditorSceneLifecycleGuard.cpp
     src/app/EditorShellInteractionState.cpp
+    src/app/EditorCommandPaletteModel.cpp
+    src/app/EditorCommandPaletteController.cpp
     src/app/EditorPointerDragInteraction.cpp
     src/app/EditorPointerDragSourceResolver.cpp
     src/app/EditorPointerDropHandler.cpp
@@ -386,6 +388,8 @@ add_executable(kb_editor WIN32
     src/private/app/EditorSelfTest.hpp
     src/private/app/EditorHeadlessAutomation.hpp
     src/private/app/EditorShellInteractionState.hpp
+    src/private/app/EditorCommandPaletteModel.hpp
+    src/private/app/EditorCommandPaletteController.hpp
     src/private/app/EditorPointerDragInteraction.hpp
     src/private/app/EditorPointerDragState.hpp
     src/private/app/EditorPointerDragSourceResolver.hpp
@@ -602,6 +606,7 @@ add_executable(kb_editor WIN32
     src/private/app/panels/EditorPanelCloser.hpp
     src/private/rendering/EditorToolbarMenuOverlayWindow.hpp
     src/private/rendering/DockTabTooltipOverlayWindow.hpp
+    src/private/rendering/EditorCommandPaletteOverlayWindow.hpp
     src/private/rendering/InspectorAddComponentOverlayWindow.hpp
     src/private/rendering/MaterialEditorPanelRenderer.hpp
     src/private/rendering/material_graph/EditorMaterialGraphPinPresentation.hpp
@@ -855,6 +860,7 @@ add_executable(kb_editor WIN32
     src/app/panels/EditorPanelCloser.cpp
     src/rendering/EditorToolbarMenuOverlayWindow.cpp
     src/rendering/DockTabTooltipOverlayWindow.cpp
+    src/rendering/EditorCommandPaletteOverlayWindow.cpp
     src/rendering/InspectorAddComponentOverlayWindow.cpp
     src/rendering/MaterialEditorPanelRenderer.cpp
     src/rendering/EditorMaterialThumbnailService.cpp
@@ -1633,10 +1639,12 @@ if(BUILD_TESTING)
         src/app/EditorPlayModeState.cpp
         src/app/EditorPlayModeSceneSession.cpp
         src/app/EditorShellInteractionState.cpp
+        src/app/EditorCommandPaletteModel.cpp
         src/project/EditorProjectBootstrap.cpp
         src/project/EditorProjectPaths.cpp
         src/rendering/EditorRenderBackendSettings.cpp
         src/rendering/EditorMenuTable.cpp
+        src/app/EditorKeyState.cpp
         src/rendering/EditorToolbarLayout.cpp
         src/rendering/scene_viewport_toolbar/SceneViewportToolbarLayout.cpp
         src/rendering/scene_viewport_toolbar/SceneViewportToolbarState.cpp
