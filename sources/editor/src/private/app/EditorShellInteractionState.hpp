@@ -103,7 +103,7 @@ public:
     [[nodiscard]] EditorMenuCommand OpenMenu() const noexcept;
     [[nodiscard]] std::optional<int> HoveredMenuRow() const noexcept;
     [[nodiscard]] const EditorLayoutMenuModel& LayoutMenu() const noexcept;
-    // How many rows the given menu shows. Every menu but Layout has a fixed four.
+    // How many rows the given menu shows: its fixed rows and those the project supplies.
     [[nodiscard]] int MenuRowCount(EditorMenuCommand menu) const noexcept;
     [[nodiscard]] bool HoveredSave() const noexcept;
     [[nodiscard]] bool PressedSave() const noexcept;

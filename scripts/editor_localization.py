@@ -1,4 +1,4 @@
-"""The editor's text in 33 languages: collects every EditorText / EditorLocalization / ParticleText
+"""The editor's text in 33 languages: collects every EditorText / EditorMenuText / EditorLocalization / ParticleText
 call of the editor sources and checks the catalogs in sources/editor/content/EditorShell/Localization.
 
   python scripts/editor_localization.py extract   writes source.kbloc (every key with its English text)
@@ -25,7 +25,7 @@ STRING = r'"((?:[^"\\]|\\.)*)"'
 # An argument may be several adjacent literals the compiler joins: "part one " "part two".
 LITERALS = r'((?:"(?:[^"\\]|\\.)*"\s*)+)'
 
-TEXT_CALL = re.compile(r'\b(?:EditorText|EditorLocalization::Text|EditorLocalization::Format|ParticleText|ParticleFormat)\s*\(\s*' + STRING +
+TEXT_CALL = re.compile(r'\b(?:EditorText|EditorLocalization::Text|EditorLocalization::Format|EditorMenuText|ParticleText|ParticleFormat)\s*\(\s*' + STRING +
                        r'\s*,\s*' + LITERALS, re.S)
 PLURAL_CALL = re.compile(r'\bEditorLocalization::Plural\s*\(\s*' + STRING + r'\s*,[^,]+,\s*' + LITERALS + r'\s*,\s*' +
                          LITERALS, re.S)

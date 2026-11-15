@@ -5,6 +5,7 @@
 #include <iterator>
 
 #include "app/EditorEditCommandPolicy.hpp"
+#include "rendering/EditorMenuTable.hpp"
 #include "profiler/ProfilerPanel.hpp"
 #include "app/EditorSceneFileCommands.hpp"
 #include "app/EditorProjectCommands.hpp"
@@ -362,6 +363,281 @@ void OpenSettingsPanel(
     sceneViewport.RequestPresent();
 }
 
+EditorWindowToolbarPointerHandler::MenuRowObserver g_menuRowObserver = nullptr;
+
+// Everything a menu row may act on.
+struct MenuActionContext {
+    HWND mainWindow;
+    EditorDockModel& dockModel;
+    EditorFloatingWindowManager& floatingWindows;
+    EditorSceneContext& sceneContext;
+    EditorSceneBgfxViewport& sceneViewport;
+    EditorRenderBackendSettings& renderBackendSettings;
+    EditorShellInteractionState& shellInteraction;
+};
+
+void OpenSettingsPage(const MenuActionContext& context, ProjectSettingsCategory category) {
+    static_cast<void>(context.sceneContext.ProjectSettings().SelectCategory(static_cast<int>(category)));
+    OpenSettingsPanel(context.mainWindow, context.dockModel, context.floatingWindows, context.sceneViewport);
+}
+
+// Project Settings opens on the page the window was left on, unless that is one of the editor's own.
+void OpenProjectSettingsPage(const MenuActionContext& context) {
+    if (context.sceneContext.ProjectSettings().SelectedCategory() >= static_cast<int>(ProjectSettingsCategory::EditorGeneral)) {
+        static_cast<void>(context.sceneContext.ProjectSettings().SelectCategory(static_cast<int>(ProjectSettingsCategory::Inputs)));
+    }
+    OpenSettingsPanel(context.mainWindow, context.dockModel, context.floatingWindows, context.sceneViewport);
+}
+
+void OpenHelpPage(const MenuActionContext& context, const wchar_t* page) {
+    const auto opened = reinterpret_cast<INT_PTR>(
+        ShellExecuteW(context.mainWindow, L"open", page, nullptr, nullptr, SW_SHOWNORMAL));
+    if (opened <= 32) {
+        context.sceneContext.Console().Error("Editor", "The help page could not be opened in the browser (error " +
+            std::to_string(static_cast<long long>(opened)) + ").");
+    }
+}
+
+// The Release Settings page, or the platform the user chose to build for: the panel shows the build's
+// progress, or what is still missing for it.
+void OpenPublish(const MenuActionContext& context, int platform) {
+    const auto& platforms = context.shellInteraction.PublishRows();
+    const bool known = platform >= 0 && static_cast<std::size_t>(platform) < platforms.size();
+    const bool ready = known && platforms[static_cast<std::size_t>(platform)].active;
+    if (known) {
+        static_cast<void>(context.sceneContext.SetBuildGameSelectedTarget(platform));
+    }
+    static_cast<void>(context.sceneContext.SetBuildGameSelectedProfile(1));
+    ActivatePanel(context.mainWindow, context.dockModel, context.sceneViewport, DockPanelKind::BuildGame, DockArea::Center);
+    if (!ready) {
+        return;
+    }
+    const std::optional<EditorDirtySceneResolution> resolution = EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(
+        context.mainWindow, context.sceneContext, EditorSceneTransition::BuildGame);
+    if (resolution.has_value() && context.sceneContext.StartBuildGamePackage(*resolution)) {
+        static_cast<void>(SetTimer(context.mainWindow, kEditorPackageStatusTimer, 100U, nullptr));
+    }
+}
+
+void TogglePanelRow(const MenuActionContext& context, const EditorMenuRowView& chosen) {
+    const auto kind = static_cast<DockPanelKind>(chosen.argument);
+    if (chosen.checked) {
+        for (const DockPanel& panel : context.dockModel.Queries().Panels()) {
+            if (panel.kind == kind) {
+                static_cast<void>(EditorPanelCloser::Close(context.mainWindow, panel.id, context.dockModel, context.floatingWindows, context.sceneContext));
+                break;
+            }
+        }
+        return;
+    }
+    for (const EverydayPanel& everyday : kEverydayPanels) {
+        if (everyday.kind == kind) {
+            ActivatePanel(context.mainWindow, context.dockModel, context.sceneViewport, everyday.kind, everyday.area);
+        }
+    }
+}
+
+template <typename Change>
+bool SavePlayPreference(EditorSceneContext& sceneContext, Change change) {
+    EditorConfiguration configuration = sceneContext.EditorConfig();
+    change(configuration.play);
+    static_cast<void>(sceneContext.SaveEditorConfig(std::move(configuration)));
+    return false;
+}
+
+// Carries out what a menu row stands for. True when the scene view has to be presented again.
+[[nodiscard]] bool ExecuteMenuAction(const EditorMenuRowView& chosen, const MenuActionContext& context) {
+    EditorSceneContext& sceneContext = context.sceneContext;
+    const HWND mainWindow = context.mainWindow;
+    const auto activate = [&](DockPanelKind kind, DockArea area) {
+        ActivatePanel(mainWindow, context.dockModel, context.sceneViewport, kind, area);
+        return false;
+    };
+    // Through the policy's pointer route: these rows used to call the context directly and so did not
+    // honour the graph-gesture guard. The text-edit guard deliberately does not apply to a click - the
+    // commands commit the pending edit themselves.
+    const auto edit = [&](EditorEditCommand command) {
+        return EditorEditCommandPolicy::ExecuteFromPointer(sceneContext, command);
+    };
+    switch (chosen.action) {
+    case EditorMenuAction::NewScene:
+        return EditorSceneFileCommands::NewScene(mainWindow, sceneContext);
+    case EditorMenuAction::OpenScene:
+        return EditorSceneFileCommands::OpenScene(mainWindow, sceneContext);
+    case EditorMenuAction::SaveScene:
+        // Same guard as Ctrl+S: a graph gesture owns the working copy until it ends, and saving
+        // through it would write a half-finished document and re-base the clean snapshot.
+        return edit(EditorEditCommand::Save);
+    case EditorMenuAction::SaveSceneAs:
+        return EditorSceneFileCommands::SaveSceneAs(mainWindow, sceneContext);
+    case EditorMenuAction::OpenBuildGame:
+        return activate(DockPanelKind::BuildGame, DockArea::Center);
+    case EditorMenuAction::OpenProject:
+        EditorProjectCommands::OpenProject(mainWindow, sceneContext);
+        return false;
+    case EditorMenuAction::NewProject:
+        EditorProjectCommands::NewProject(mainWindow, sceneContext);
+        return false;
+    case EditorMenuAction::SwitchProject:
+        if (chosen.path != nullptr) {
+            EditorProjectCommands::SwitchTo(mainWindow, sceneContext, *chosen.path);
+        }
+        return false;
+    case EditorMenuAction::ShowInExplorer:
+        EditorProjectCommands::ShowInExplorer(mainWindow, sceneContext);
+        return false;
+    case EditorMenuAction::OpenSceneFile:
+        return chosen.path != nullptr && EditorSceneFileCommands::OpenSceneFile(mainWindow, sceneContext, *chosen.path);
+    case EditorMenuAction::DuplicateScene:
+        return EditorSceneFileCommands::DuplicateScene(sceneContext);
+    case EditorMenuAction::RenameScene:
+        return EditorSceneFileCommands::RenameScene(mainWindow, sceneContext);
+    case EditorMenuAction::DeleteScene:
+        return EditorSceneFileCommands::DeleteScene(mainWindow, sceneContext);
+
+    case EditorMenuAction::Undo:
+        return edit(EditorEditCommand::Undo);
+    case EditorMenuAction::Redo:
+        return edit(EditorEditCommand::Redo);
+    case EditorMenuAction::Cut:
+        return edit(EditorEditCommand::Cut);
+    case EditorMenuAction::Copy:
+        return edit(EditorEditCommand::Copy);
+    case EditorMenuAction::Paste:
+        return edit(EditorEditCommand::Paste);
+    case EditorMenuAction::Duplicate:
+        return edit(EditorEditCommand::Duplicate);
+
+    case EditorMenuAction::ApplyDefaultLayout:
+        context.dockModel.Commands().ResetWorkspace();
+        AdoptWorkspace(context.dockModel, context.floatingWindows, sceneContext, {});
+        sceneContext.Console().Info("Layout", "Default layout applied.");
+        return true;
+    case EditorMenuAction::ApplyLayout:
+        ApplySavedLayout(context.dockModel, context.floatingWindows, sceneContext, std::string{ chosen.name });
+        return true;
+    case EditorMenuAction::SaveLayout:
+        SaveCurrentLayout(mainWindow, context.dockModel, sceneContext);
+        return true;
+    case EditorMenuAction::DeleteLayout:
+        DeleteSavedLayout(mainWindow, context.dockModel, sceneContext, std::string{ chosen.name });
+        return true;
+    case EditorMenuAction::TogglePanel:
+        TogglePanelRow(context, chosen);
+        return true;
+
+    case EditorMenuAction::CycleRenderBackend:
+        // Renderer: step to the next graphics backend. The viewport rebuilds on
+        // the settings generation, so the change lands on the next present.
+        context.renderBackendSettings.CycleBackend();
+        sceneContext.Console().Info("Renderer",
+            std::string{"Render backend: "} +
+                EditorRenderBackendLabel(context.renderBackendSettings.Backend()) +
+                ". Reopen the editor to apply.");
+        return true;
+    case EditorMenuAction::OpenProjectSettings:
+        OpenProjectSettingsPage(context);
+        return false;
+    case EditorMenuAction::OpenEditorSettings:
+        // Editor Settings and Plugins are pages of the one Settings window.
+        OpenSettingsPage(context, ProjectSettingsCategory::EditorGeneral);
+        return false;
+    case EditorMenuAction::OpenPlugins:
+        OpenSettingsPage(context, ProjectSettingsCategory::Plugins);
+        return false;
+    case EditorMenuAction::OpenProfiler:
+        return activate(DockPanelKind::Profiler, ProfilerPanel::kOpenArea);
+    case EditorMenuAction::OpenAudioMixer:
+        return activate(DockPanelKind::AudioMixer, DockArea::Center);
+    case EditorMenuAction::OpenAgent:
+        // The same as Ctrl+K: the Agent panel with its request box ready.
+        static_cast<void>(activate(DockPanelKind::Agent, DockArea::Right));
+        sceneContext.AgentPanel().Prepare();
+        sceneContext.AgentPanel().FocusInput(true);
+        return false;
+
+    case EditorMenuAction::LoadCellsNearCamera:
+        return sceneContext.LoadWorldCellsNearCamera();
+    case EditorMenuAction::LoadAllCells:
+        return sceneContext.LoadAllWorldCells();
+    case EditorMenuAction::UnloadAllCells:
+        return sceneContext.UnloadAllWorldCells();
+    case EditorMenuAction::BuildWorld:
+        return sceneContext.BuildOpenWorld();
+    case EditorMenuAction::ToggleCellGrid:
+        sceneContext.WorldPartition().SetGridVisible(!sceneContext.WorldPartition().GridVisible());
+        sceneContext.Console().Info("World", sceneContext.WorldPartition().GridVisible() ? "Cell grid shown." : "Cell grid hidden.");
+        return true;
+    case EditorMenuAction::ConvertSceneToWorld: {
+        const std::optional<EditorDirtySceneResolution> resolution =
+            EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(mainWindow, sceneContext, EditorSceneTransition::ConvertSceneToWorld);
+        return resolution.has_value() && sceneContext.ConvertCurrentSceneToWorld(128.0, *resolution);
+    }
+    case EditorMenuAction::AddDataLayer: {
+        const std::optional<std::string> name = EditorTextEntryDialog::Show(mainWindow, {
+            .title = std::string{ EditorText("world.addDataLayerTitle", "Add Data Layer") },
+            .label = std::string{ EditorText("world.dataLayerNameLabel", "Layer name") },
+            .value = {},
+            .hint = std::string{ EditorText("world.dataLayerNameHint", "Letters, digits, '_', '-' or '.'. New layers start active.") },
+            .acceptLabel = std::string{ EditorText("common.add", "Add") },
+        });
+        return name.has_value() && sceneContext.DeclareWorldDataLayer(*name);
+    }
+    case EditorMenuAction::CycleSelectionDataLayer:
+        return sceneContext.CycleSelectedObjectDataLayer();
+    case EditorMenuAction::ToggleSelectionAlwaysLoaded:
+        return sceneContext.ToggleSelectedObjectAlwaysLoaded();
+    case EditorMenuAction::BakeNavigation:
+        return sceneContext.BakeNavigation();
+    case EditorMenuAction::ToggleNavigationMesh:
+        sceneContext.SetNavigationMeshVisible(!sceneContext.Navigation().Visible());
+        sceneContext.Console().Info("Navigation", sceneContext.Navigation().Visible() ? "Navigation mesh shown." : "Navigation mesh hidden.");
+        return true;
+    case EditorMenuAction::ToggleNavigationAutoUpdate:
+        sceneContext.SetNavigationAutoUpdate(!sceneContext.NavigationAutoUpdate());
+        return false;
+    case EditorMenuAction::BuildLighting:
+        return sceneContext.BuildLighting();
+
+    // Help: the engine's online pages in the browser, and About.
+    case EditorMenuAction::OpenDocumentation:
+        OpenHelpPage(context, L"https://github.com/WojciechKownacki/21kb-Engine/tree/1.0/docs");
+        return false;
+    case EditorMenuAction::ReportIssue:
+        OpenHelpPage(context, L"https://github.com/WojciechKownacki/21kb-Engine/issues/new");
+        return false;
+    case EditorMenuAction::OpenReleaseNotes:
+        OpenHelpPage(context, L"https://github.com/WojciechKownacki/21kb-Engine/releases");
+        return false;
+    case EditorMenuAction::ShowAbout: {
+        const std::string about = EditorLocalization::Format("help.aboutText",
+            "21kb Engine editor\nBuilt {date}\n\nMIT License, Copyright (c) 2026 WojciechKownacki.\n{url}",
+            { { "date", __DATE__ }, { "url", "https://github.com/WojciechKownacki/21kb-Engine" } });
+        kb::editor::MessageBoxUtf8(mainWindow, about.c_str(),
+            std::string{ EditorText("help.aboutTitle", "About 21kb Engine") }.c_str(), MB_OK | MB_ICONINFORMATION);
+        return false;
+    }
+
+    case EditorMenuAction::SetPlayTarget:
+        return SavePlayPreference(sceneContext, [&](EditorPlayPreferences& play) { play.target = static_cast<EditorPlayTarget>(chosen.argument); });
+    case EditorMenuAction::ToggleStartPaused:
+        return SavePlayPreference(sceneContext, [](EditorPlayPreferences& play) { play.startPaused = !play.startPaused; });
+    case EditorMenuAction::PublishPlatform:
+        OpenPublish(context, chosen.argument);
+        return false;
+    case EditorMenuAction::OpenPublishSettings:
+        OpenPublish(context, -1);
+        return false;
+
+    case EditorMenuAction::None:
+    case EditorMenuAction::ShowRecentProjects:
+    case EditorMenuAction::ShowProjectMenu:
+    case EditorMenuAction::ShowDeleteLayoutList:
+    default:
+        return false;
+    }
+}
+
 [[nodiscard]] bool HandleMenuLeftButtonDown(
     HWND mainWindow,
     int x,
@@ -399,8 +675,15 @@ void OpenSettingsPanel(
         return false;
     }
 
-    if (const std::optional<int> row = EditorToolbarRenderer::HitTestMenuRow(menu, x, y); row.has_value()) {
+    if (const std::optional<int> hit = EditorToolbarRenderer::HitTestMenuRow(menu, x, y); hit.has_value()) {
         const EditorMenuCommand clickedMenu = shellInteraction.OpenMenu();
+        const std::vector<EditorMenuRowView> rows = EditorMenuTable::Rows(clickedMenu, shellInteraction);
+        const EditorMenuRowView* clicked = EditorMenuTable::RowAt(rows, *hit);
+        // A caption, or a row that cannot be chosen now, does not put the menu away.
+        if (clicked == nullptr || !clicked->enabled) {
+            return true;
+        }
+        const EditorMenuRowView row = *clicked;
         const auto closeMenu = [&]() {
             shellInteraction.CloseMenu();
             InvalidateMenuChange(mainWindow, layout, shellInteraction, clickedMenu, EditorMenuCommand::None);
@@ -415,181 +698,17 @@ void OpenSettingsPanel(
             InvalidateMainRect(mainWindow, rect);
             InvalidateRect(mainWindow, nullptr, FALSE);
         };
-        if (clickedMenu == EditorMenuCommand::PlayOptions) {
-            if (!shellInteraction.PlayMenuCanChange()) {
-                return true;
-            }
-            EditorConfiguration configuration = sceneContext.EditorConfig();
-            if (*row < static_cast<int>(kEditorPlayTargetMenuOrder.size())) {
-                configuration.play.target = kEditorPlayTargetMenuOrder[static_cast<std::size_t>(*row)];
-            } else {
-                configuration.play.startPaused = !configuration.play.startPaused;
-            }
-            closeMenu();
-            static_cast<void>(sceneContext.SaveEditorConfig(std::move(configuration)));
-            return true;
-        }
-        if (clickedMenu == EditorMenuCommand::Publish) {
-            const auto platforms = static_cast<int>(shellInteraction.PublishRows().size());
-            const bool ready = *row < platforms && shellInteraction.PublishRows()[static_cast<std::size_t>(*row)].active;
-            closeMenu();
-            if (*row < platforms) {
-                static_cast<void>(sceneContext.SetBuildGameSelectedTarget(*row));
-            }
-            static_cast<void>(sceneContext.SetBuildGameSelectedProfile(1));
-            // The panel shows the build's progress, or what is still missing for it.
-            ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::BuildGame, DockArea::Center);
-            if (ready) {
-                const std::optional<EditorDirtySceneResolution> resolution =
-                    EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(mainWindow, sceneContext, EditorSceneTransition::BuildGame);
-                if (resolution.has_value() && sceneContext.StartBuildGamePackage(*resolution)) {
-                    static_cast<void>(SetTimer(mainWindow, kEditorPackageStatusTimer, 100U, nullptr));
-                }
-            }
-            InvalidateRect(mainWindow, nullptr, FALSE);
-            return true;
-        }
-        if (clickedMenu == EditorMenuCommand::Project) {
-            if (*row == 2) {
+        const bool observed = g_menuRowObserver != nullptr && g_menuRowObserver(row);
+        if (!observed) {
+            // These rows turn the menu into another list instead of acting.
+            switch (row.action) {
+            case EditorMenuAction::ShowRecentProjects:
                 showMenu(EditorMenuCommand::RecentProjects);
                 return true;
-            }
-            closeMenu();
-            switch (*row) {
-            case 0:
-                EditorProjectCommands::OpenProject(mainWindow, sceneContext);
-                break;
-            case 1:
-                EditorProjectCommands::NewProject(mainWindow, sceneContext);
-                break;
-            case 3:
-                if (sceneContext.ProjectSettings().SelectedCategory() >= static_cast<int>(ProjectSettingsCategory::EditorGeneral)) {
-                    static_cast<void>(sceneContext.ProjectSettings().SelectCategory(static_cast<int>(ProjectSettingsCategory::Inputs)));
-                }
-                OpenSettingsPanel(mainWindow, dockModel, floatingWindows, sceneViewport);
-                break;
-            case 4:
-                static_cast<void>(sceneContext.ProjectSettings().SelectCategory(static_cast<int>(ProjectSettingsCategory::Plugins)));
-                OpenSettingsPanel(mainWindow, dockModel, floatingWindows, sceneViewport);
-                break;
-            case 5:
-                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::BuildGame, DockArea::Center);
-                break;
-            case 6:
-                EditorProjectCommands::ShowInExplorer(mainWindow, sceneContext);
-                break;
-            default:
-                break;
-            }
-            return true;
-        }
-        if (clickedMenu == EditorMenuCommand::RecentProjects) {
-            if (*row == 0) {
+            case EditorMenuAction::ShowProjectMenu:
                 showMenu(EditorMenuCommand::Project);
                 return true;
-            }
-            const auto index = static_cast<std::size_t>(*row - 1);
-            if (index >= shellInteraction.RecentProjectRows().size() || shellInteraction.RecentProjectRows()[index].path.empty()) {
-                return true;
-            }
-            const std::filesystem::path project = shellInteraction.RecentProjectRows()[index].path;
-            closeMenu();
-            EditorProjectCommands::SwitchTo(mainWindow, sceneContext, project);
-            return true;
-        }
-        if (clickedMenu == EditorMenuCommand::Scene) {
-            const auto scenes = static_cast<int>(shellInteraction.SceneMenuRows().size());
-            const int action = *row - scenes;
-            if (action >= 0 && !shellInteraction.SceneDocumentActionsEnabled() && (action == 2 || action == 3 || action == 5)) {
-                return true;
-            }
-            std::filesystem::path scene;
-            if (action < 0) {
-                scene = shellInteraction.SceneMenuRows()[static_cast<std::size_t>(*row)].path;
-            }
-            closeMenu();
-            bool changed = false;
-            switch (action) {
-            case 0:
-                changed = EditorSceneFileCommands::NewScene(mainWindow, sceneContext);
-                break;
-            case 1:
-                changed = EditorSceneFileCommands::OpenScene(mainWindow, sceneContext);
-                break;
-            case 2:
-                changed = EditorSceneFileCommands::DuplicateScene(sceneContext);
-                break;
-            case 3:
-                changed = EditorSceneFileCommands::RenameScene(mainWindow, sceneContext);
-                break;
-            case 4:
-                changed = EditorEditCommandPolicy::ExecuteFromPointer(sceneContext, EditorEditCommand::Save);
-                break;
-            case 5:
-                changed = EditorSceneFileCommands::DeleteScene(mainWindow, sceneContext);
-                break;
-            default:
-                changed = EditorSceneFileCommands::OpenSceneFile(mainWindow, sceneContext, scene);
-                break;
-            }
-            if (changed) {
-                sceneViewport.RequestPresent();
-            }
-            InvalidateRect(mainWindow, nullptr, FALSE);
-            return true;
-        }
-        if (shellInteraction.OpenMenu() == EditorMenuCommand::File) {
-            if (*row == 0) {
-                if (EditorSceneFileCommands::NewScene(mainWindow, sceneContext)) {
-                    sceneViewport.RequestPresent();
-                }
-            } else if (*row == 1) {
-                if (EditorSceneFileCommands::OpenScene(mainWindow, sceneContext)) {
-                    sceneViewport.RequestPresent();
-                }
-            } else if (*row == 2) {
-                // Same guard as Ctrl+S: a graph gesture owns the working copy until it ends, and saving
-                // through it would write a half-finished document and re-base the clean snapshot.
-                if (EditorEditCommandPolicy::ExecuteFromPointer(sceneContext, EditorEditCommand::Save)) {
-                    sceneViewport.RequestPresent();
-                }
-            } else if (*row == 3) {
-                if (EditorSceneFileCommands::SaveSceneAs(mainWindow, sceneContext)) {
-                    sceneViewport.RequestPresent();
-                }
-            } else if (*row == 4) {
-                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::BuildGame, DockArea::Center);
-            }
-        } else if (shellInteraction.OpenMenu() == EditorMenuCommand::Edit) {
-            // Through the policy's pointer route: these rows used to call the context directly and so did
-            // not honour the graph-gesture guard. The text-edit guard deliberately does not apply to a
-            // click - the commands commit the pending edit themselves.
-            constexpr std::array<EditorEditCommand, 6> kEditRows{ EditorEditCommand::Undo, EditorEditCommand::Redo,
-                EditorEditCommand::Cut, EditorEditCommand::Copy, EditorEditCommand::Paste, EditorEditCommand::Duplicate };
-            if (*row >= 0 && *row < static_cast<int>(kEditRows.size()) &&
-                EditorEditCommandPolicy::ExecuteFromPointer(sceneContext, kEditRows[static_cast<std::size_t>(*row)])) {
-                sceneViewport.RequestPresent();
-            }
-        } else if (shellInteraction.OpenMenu() == EditorMenuCommand::Layout) {
-            const EditorLayoutMenuRow* layoutRow = shellInteraction.LayoutMenu().Row(*row);
-            if (layoutRow == nullptr || !layoutRow->enabled) {
-                // The caption of the delete list: it says what the list is, and clicking
-                // it must not put the list away.
-                return true;
-            }
-            switch (layoutRow->action) {
-            case EditorLayoutMenuAction::Default:
-                dockModel.Commands().ResetWorkspace();
-                AdoptWorkspace(dockModel, floatingWindows, sceneContext, {});
-                sceneContext.Console().Info("Layout", "Default layout applied.");
-                break;
-            case EditorLayoutMenuAction::Apply:
-                ApplySavedLayout(dockModel, floatingWindows, sceneContext, layoutRow->layoutName);
-                break;
-            case EditorLayoutMenuAction::Save:
-                SaveCurrentLayout(mainWindow, dockModel, sceneContext);
-                break;
-            case EditorLayoutMenuAction::Delete: {
+            case EditorMenuAction::ShowDeleteLayoutList: {
                 // Second step of the same menu: which one goes.
                 const RECT before = MenuInvalidationRect(
                     layout, EditorMenuCommand::Layout,
@@ -603,143 +722,20 @@ void OpenSettingsPanel(
                 InvalidateMainRect(mainWindow, rect);
                 return true;
             }
-            case EditorLayoutMenuAction::Remove:
-                DeleteSavedLayout(mainWindow, dockModel, sceneContext, layoutRow->layoutName);
-                break;
-            case EditorLayoutMenuAction::TogglePanel:
-                if (layoutRow->active) {
-                    for (const DockPanel& panel : dockModel.Queries().Panels()) {
-                        if (panel.kind == layoutRow->panelKind) {
-                            static_cast<void>(EditorPanelCloser::Close(mainWindow, panel.id, dockModel, floatingWindows, sceneContext));
-                            break;
-                        }
-                    }
-                } else {
-                    for (const EverydayPanel& everyday : kEverydayPanels) {
-                        if (everyday.kind == layoutRow->panelKind) {
-                            ActivatePanel(mainWindow, dockModel, sceneViewport, everyday.kind, everyday.area);
-                        }
-                    }
-                }
-                break;
-            }
-            sceneViewport.RequestPresent();
-        } else if (shellInteraction.OpenMenu() == EditorMenuCommand::Options) {
-            if (*row == 0) {
-                // Renderer: step to the next graphics backend. The viewport rebuilds on
-                // the settings generation, so the change lands on the next present.
-                renderBackendSettings.CycleBackend();
-                sceneContext.Console().Info("Renderer",
-                    std::string{"Render backend: "} +
-                        EditorRenderBackendLabel(renderBackendSettings.Backend()) +
-                        ". Reopen the editor to apply.");
-                sceneViewport.RequestPresent();
-            } else if (*row == 1) {
-                if (sceneContext.ProjectSettings().SelectedCategory() >= static_cast<int>(ProjectSettingsCategory::EditorGeneral)) {
-                    static_cast<void>(sceneContext.ProjectSettings().SelectCategory(static_cast<int>(ProjectSettingsCategory::Inputs)));
-                }
-                OpenSettingsPanel(mainWindow, dockModel, floatingWindows, sceneViewport);
-            } else if (*row == 2) {
-                // Editor Settings and Plugins are pages of the one Settings window.
-                static_cast<void>(sceneContext.ProjectSettings().SelectCategory(static_cast<int>(ProjectSettingsCategory::EditorGeneral)));
-                OpenSettingsPanel(mainWindow, dockModel, floatingWindows, sceneViewport);
-            } else if (*row == 3) {
-                static_cast<void>(sceneContext.ProjectSettings().SelectCategory(static_cast<int>(ProjectSettingsCategory::Plugins)));
-                OpenSettingsPanel(mainWindow, dockModel, floatingWindows, sceneViewport);
-            } else if (*row == 4) {
-                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::Profiler, ProfilerPanel::kOpenArea);
-            } else if (*row == 5) {
-                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::AudioMixer, DockArea::Center);
-            } else if (*row == 6) {
-                // The same as Ctrl+K: the Agent panel with its request box ready.
-                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::Agent, DockArea::Right);
-                sceneContext.AgentPanel().Prepare();
-                sceneContext.AgentPanel().FocusInput(true);
-            }
-        } else if (shellInteraction.OpenMenu() == EditorMenuCommand::Help) {
-            // Help menu: the engine's online pages in the browser, and About.
-            constexpr const wchar_t* kHelpPages[] = {
-                L"https://github.com/WojciechKownacki/21kb-Engine/tree/1.0/docs",
-                L"https://github.com/WojciechKownacki/21kb-Engine/issues/new",
-                L"https://github.com/WojciechKownacki/21kb-Engine/releases",
-            };
-            if (*row >= 0 && *row < 3) {
-                const auto opened = reinterpret_cast<INT_PTR>(
-                    ShellExecuteW(mainWindow, L"open", kHelpPages[*row], nullptr, nullptr, SW_SHOWNORMAL));
-                if (opened <= 32) {
-                    sceneContext.Console().Error("Editor", "The help page could not be opened in the browser (error " +
-                        std::to_string(static_cast<long long>(opened)) + ").");
-                }
-            } else if (*row == 3) {
-                const std::string about = EditorLocalization::Format("help.aboutText",
-                    "21kb Engine editor\nBuilt {date}\n\nMIT License, Copyright (c) 2026 WojciechKownacki.\n{url}",
-                    { { "date", __DATE__ }, { "url", "https://github.com/WojciechKownacki/21kb-Engine" } });
-                kb::editor::MessageBoxUtf8(mainWindow, about.c_str(),
-                    std::string{ EditorText("help.aboutTitle", "About 21kb Engine") }.c_str(), MB_OK | MB_ICONINFORMATION);
-            }
-        } else if (shellInteraction.OpenMenu() == EditorMenuCommand::World) {
-            bool changed = false;
-            switch (*row) {
-            case 0:
-                changed = sceneContext.LoadWorldCellsNearCamera();
-                break;
-            case 1:
-                changed = sceneContext.LoadAllWorldCells();
-                break;
-            case 2:
-                changed = sceneContext.UnloadAllWorldCells();
-                break;
-            case 3:
-                changed = sceneContext.BuildOpenWorld();
-                break;
-            case 4:
-                sceneContext.WorldPartition().SetGridVisible(!sceneContext.WorldPartition().GridVisible());
-                sceneContext.Console().Info("World", sceneContext.WorldPartition().GridVisible() ? "Cell grid shown." : "Cell grid hidden.");
-                changed = true;
-                break;
-            case 5: {
-                const std::optional<EditorDirtySceneResolution> resolution =
-                    EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(mainWindow, sceneContext, EditorSceneTransition::ConvertSceneToWorld);
-                changed = resolution.has_value() && sceneContext.ConvertCurrentSceneToWorld(128.0, *resolution);
-                break;
-            }
-            case 6: {
-                const std::optional<std::string> name = EditorTextEntryDialog::Show(mainWindow, {
-                    .title = std::string{ EditorText("world.addDataLayerTitle", "Add Data Layer") },
-                    .label = std::string{ EditorText("world.dataLayerNameLabel", "Layer name") },
-                    .value = {},
-                    .hint = std::string{ EditorText("world.dataLayerNameHint", "Letters, digits, '_', '-' or '.'. New layers start active.") },
-                    .acceptLabel = std::string{ EditorText("common.add", "Add") },
-                });
-                changed = name.has_value() && sceneContext.DeclareWorldDataLayer(*name);
-                break;
-            }
-            case 7:
-                changed = sceneContext.CycleSelectedObjectDataLayer();
-                break;
-            case 8:
-                changed = sceneContext.ToggleSelectedObjectAlwaysLoaded();
-                break;
-            case 9:
-                changed = sceneContext.BakeNavigation();
-                break;
-            case 10:
-                sceneContext.SetNavigationMeshVisible(!sceneContext.Navigation().Visible());
-                sceneContext.Console().Info("Navigation", sceneContext.Navigation().Visible() ? "Navigation mesh shown." : "Navigation mesh hidden.");
-                changed = true;
-                break;
-            case 11:
-                sceneContext.SetNavigationAutoUpdate(!sceneContext.NavigationAutoUpdate());
-                break;
-            case 12:
-                changed = sceneContext.BuildLighting();
-                break;
             default:
                 break;
             }
-            if (changed) {
-                sceneViewport.RequestPresent();
-            }
+        }
+        if (row.closesFirst) {
+            closeMenu();
+        }
+        const MenuActionContext context{ mainWindow, dockModel, floatingWindows, sceneContext, sceneViewport, renderBackendSettings, shellInteraction };
+        if (!observed && ExecuteMenuAction(row, context)) {
+            sceneViewport.RequestPresent();
+        }
+        if (row.closesFirst) {
+            InvalidateRect(mainWindow, nullptr, FALSE);
+            return true;
         }
         const EditorMenuCommand oldMenu = shellInteraction.OpenMenu();
         shellInteraction.CloseMenu();
@@ -1015,6 +1011,10 @@ bool EditorWindowToolbarPointerHandler::HandleMouseMove(
         changed = true;
     }
     return changed;
+}
+
+void EditorWindowToolbarPointerHandler::SetMenuRowObserver(MenuRowObserver observer) noexcept {
+    g_menuRowObserver = observer;
 }
 
 void EditorWindowToolbarPointerHandler::ClearHover(EditorShellInteractionState& shellInteraction) noexcept {

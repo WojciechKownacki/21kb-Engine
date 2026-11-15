@@ -1,6 +1,6 @@
 #include "app/EditorShellInteractionState.hpp"
 
-#include "rendering/EditorToolbarLayout.hpp"
+#include "rendering/EditorMenuTable.hpp"
 
 #include <utility>
 
@@ -41,20 +41,19 @@ const EditorLayoutMenuModel& EditorShellInteractionState::LayoutMenu() const noe
 }
 
 int EditorShellInteractionState::MenuRowCount(EditorMenuCommand menu) const noexcept {
-    if (menu == EditorMenuCommand::Layout) {
+    const int fixed = EditorMenuTable::FixedRowCount(menu);
+    switch (menu) {
+    case EditorMenuCommand::Layout:
         return static_cast<int>(layoutMenu_.Rows().size());
+    case EditorMenuCommand::Scene:
+        return static_cast<int>(sceneMenuRows_.size()) + fixed;
+    case EditorMenuCommand::Publish:
+        return static_cast<int>(publishRows_.size()) + fixed;
+    case EditorMenuCommand::RecentProjects:
+        return static_cast<int>(recentProjectRows_.size()) + fixed;
+    default:
+        return fixed;
     }
-    if (menu == EditorMenuCommand::Scene) {
-        return static_cast<int>(sceneMenuRows_.size()) + EditorToolbarLayout::FixedRowCount(menu);
-    }
-    if (menu == EditorMenuCommand::Publish) {
-        return static_cast<int>(publishRows_.size()) + EditorToolbarLayout::FixedRowCount(menu);
-    }
-    if (menu == EditorMenuCommand::RecentProjects) {
-        // "Back" above the projects.
-        return static_cast<int>(recentProjectRows_.size()) + 1;
-    }
-    return EditorToolbarLayout::FixedRowCount(menu);
 }
 
 void EditorShellInteractionState::SetSceneMenu(std::vector<EditorPathMenuRow> scenes, bool documentActionsEnabled) {

@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "project/EditorProjectPaths.hpp"
+#include "rendering/EditorMenuTable.hpp"
 #include "rendering/EditorPanelStyle.hpp"
 #include "rendering/EditorSurfacePainter.hpp"
 #include "rendering/EditorToolbarLayout.hpp"
@@ -27,6 +28,7 @@
 #include <fstream>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace kb::editor {
 namespace {
@@ -195,27 +197,6 @@ void EditorToolbarRenderer::InvalidateRepositoryState() noexcept {
     g_nextBranchRead = 0;
 }
 
-namespace {
-
-[[nodiscard]] HeroIconKind LayoutRowIcon(const EditorLayoutMenuRow& row) noexcept {
-    if (row.active) {
-        return HeroIconKind::Check;
-    }
-    switch (row.action) {
-    case EditorLayoutMenuAction::Save:
-        return HeroIconKind::Plus;
-    case EditorLayoutMenuAction::Delete:
-    case EditorLayoutMenuAction::Remove:
-        return HeroIconKind::XMark;
-    case EditorLayoutMenuAction::Default:
-    case EditorLayoutMenuAction::Apply:
-    default:
-        return HeroIconKind::RectangleGroup;
-    }
-}
-
-} // namespace
-
 void EditorToolbarRenderer::PaintMenu(HDC dc, const RECT& rect, const EditorTheme& theme, const EditorShellInteractionState& interaction) const {
     const EditorMenuRects menu =
         ResolveMenu(rect, interaction.OpenMenu(), interaction.MenuRowCount(interaction.OpenMenu()));
@@ -244,76 +225,7 @@ void EditorToolbarRenderer::PaintMenu(HDC dc, const RECT& rect, const EditorThem
 
 namespace {
 
-struct DropdownRowView {
-    std::string_view label;
-    std::string_view detail;
-    std::string_view shortcut;
-    HeroIconKind icon = HeroIconKind::RectangleGroup;
-    bool enabled = true;
-    bool selected = false;
-    bool danger = false;
-    bool submenu = false;
-};
-
-[[nodiscard]] DropdownRowView ResolveDropdownRow(EditorMenuCommand openMenu, int row, const EditorShellInteractionState& interaction) {
-    if (openMenu == EditorMenuCommand::Layout) {
-        const EditorLayoutMenuRow* layoutRow = interaction.LayoutMenu().Row(row);
-        if (layoutRow == nullptr) {
-            return {};
-        }
-        return { .label = layoutRow->label, .icon = LayoutRowIcon(*layoutRow), .enabled = layoutRow->enabled };
-    }
-    if (openMenu == EditorMenuCommand::RecentProjects) {
-        if (row == 0) {
-            return { .label = EditorText("common.back", "Back"), .icon = HeroIconKind::ChevronLeft };
-        }
-        const auto& projects = interaction.RecentProjectRows();
-        const auto index = static_cast<std::size_t>(row - 1);
-        if (index >= projects.size()) {
-            return {};
-        }
-        return { .label = projects[index].label, .detail = projects[index].detail, .icon = HeroIconKind::Cube, .enabled = !projects[index].path.empty() };
-    }
-    int fixedRow = row;
-    if (openMenu == EditorMenuCommand::Publish) {
-        const auto& platforms = interaction.PublishRows();
-        if (static_cast<std::size_t>(row) < platforms.size()) {
-            const EditorPathMenuRow& platform = platforms[static_cast<std::size_t>(row)];
-            return { .label = platform.label, .detail = platform.detail, .icon = platform.active ? HeroIconKind::RocketLaunch : HeroIconKind::Warning };
-        }
-        fixedRow = row - static_cast<int>(platforms.size());
-    }
-    if (openMenu == EditorMenuCommand::Scene) {
-        const auto& scenes = interaction.SceneMenuRows();
-        if (static_cast<std::size_t>(row) < scenes.size()) {
-            return { .label = scenes[static_cast<std::size_t>(row)].label, .icon = HeroIconKind::Cube, .selected = scenes[static_cast<std::size_t>(row)].active };
-        }
-        fixedRow = row - static_cast<int>(scenes.size());
-    }
-    DropdownRowView view{
-        .label = EditorToolbarLayout::DropdownLabel(openMenu, fixedRow),
-        .detail = EditorToolbarLayout::DropdownDescription(openMenu, fixedRow),
-        .shortcut = EditorToolbarLayout::DropdownShortcut(openMenu, fixedRow),
-        .icon = EditorToolbarLayout::DropdownIcon(openMenu, fixedRow),
-    };
-    if (openMenu == EditorMenuCommand::PlayOptions) {
-        const EditorPlayPreferences& play = interaction.PlayMenuPreferences();
-        view.enabled = interaction.PlayMenuCanChange();
-        if (fixedRow < static_cast<int>(kEditorPlayTargetMenuOrder.size())) {
-            view.selected = play.target == kEditorPlayTargetMenuOrder[static_cast<std::size_t>(fixedRow)];
-        } else if (play.startPaused) {
-            view.icon = HeroIconKind::Check;
-        }
-    } else if (openMenu == EditorMenuCommand::Project) {
-        view.submenu = fixedRow == 2;
-    } else if (openMenu == EditorMenuCommand::Scene) {
-        view.enabled = interaction.SceneDocumentActionsEnabled() || fixedRow < 2 || fixedRow == 4;
-        view.danger = fixedRow == 5;
-    }
-    return view;
-}
-
-void PaintDropdownRow(HDC dc, const RECT& rect, const EditorTheme& theme, const DropdownRowView& row, bool hovered) {
+void PaintDropdownRow(HDC dc, const RECT& rect, const EditorTheme& theme, const EditorMenuRowView& row, bool hovered) {
     if (row.selected) {
         const COLORREF accent = ThemeColor(theme.accent);
         panel_style::DrawRoundedFrame(dc, rect, accent, accent, kDropdownRowRadius, 1.0F);
@@ -359,27 +271,29 @@ void PaintDropdownRow(HDC dc, const RECT& rect, const EditorTheme& theme, const 
 
 void EditorToolbarRenderer::PaintMenuDropdown(HDC dc, const EditorMenuRects& menu, const EditorTheme& theme, const EditorShellInteractionState& interaction) const {
     const EditorMenuCommand openMenu = interaction.OpenMenu();
-    if (EditorToolbarLayout::MenuIndex(openMenu) < 0) {
+    if (openMenu == EditorMenuCommand::None) {
         return;
     }
     GdiDrawing::FillRectColor(dc, menu.dropdown, ThemeColor(theme.header));
 
+    const std::vector<EditorMenuRowView> rows = EditorMenuTable::Rows(openMenu, interaction);
     const ScopedFont headingFont(12, FW_SEMIBOLD);
-    for (int row = 0; row < menu.dropdownRowCount; ++row) {
+    for (int row = 0; row < menu.dropdownRowCount && static_cast<std::size_t>(row) < rows.size(); ++row) {
         const RECT rowRect = menu.dropdownRows[static_cast<std::size_t>(row)];
+        const EditorMenuRowView& view = rows[static_cast<std::size_t>(row)];
         int above = static_cast<int>(rowRect.top);
-        if (EditorToolbarLayout::DropdownHasHeading(openMenu, row, menu.dropdownRowCount)) {
+        if (!view.heading.empty()) {
             above -= EditorToolbarLayout::DropdownHeadingHeight;
             const ScopedGdiObject selectedFont(dc, headingFont.handle);
             DrawStatusText(dc, RECT{ rowRect.left + kDropdownRowPadding, above + 8, rowRect.right - kDropdownRowPadding, static_cast<int>(rowRect.top) - 4 },
-                EditorToolbarLayout::DropdownHeading(openMenu, row, menu.dropdownRowCount), RGB(168, 168, 168), DT_LEFT);
+                view.heading, RGB(168, 168, 168), DT_LEFT);
         }
-        if (EditorToolbarLayout::DropdownStartsGroup(openMenu, row, menu.dropdownRowCount)) {
+        if (view.startsGroup) {
             const int ruleY = above - EditorToolbarLayout::DropdownSeparatorHeight / 2 - 1;
             GdiDrawing::FillRectColor(dc, RECT{ rowRect.left + 4, ruleY, rowRect.right - 4, ruleY + 1 }, ThemeColor(theme.toolbarButton));
         }
         const bool hovered = interaction.HoveredMenuRow().has_value() && *interaction.HoveredMenuRow() == row;
-        PaintDropdownRow(dc, rowRect, theme, ResolveDropdownRow(openMenu, row, interaction), hovered);
+        PaintDropdownRow(dc, rowRect, theme, view, hovered);
     }
 }
 

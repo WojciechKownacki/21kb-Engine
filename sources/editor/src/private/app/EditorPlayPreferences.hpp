@@ -25,14 +25,6 @@ enum class EditorGameViewResolution : std::uint8_t {
     Tablet16x10,
 };
 
-// The places in the order the arrow beside Play lists them; Start Paused follows.
-inline constexpr std::array<EditorPlayTarget, 4U> kEditorPlayTargetMenuOrder{
-    EditorPlayTarget::GameView,
-    EditorPlayTarget::SceneView,
-    EditorPlayTarget::SceneViewMaximized,
-    EditorPlayTarget::Standalone,
-};
-
 struct EditorPlayPreferences {
     EditorPlayTarget target = EditorPlayTarget::GameView;
     EditorGameViewResolution gameViewResolution = EditorGameViewResolution::FreeAspect;

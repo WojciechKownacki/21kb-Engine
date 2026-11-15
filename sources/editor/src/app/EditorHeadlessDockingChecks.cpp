@@ -2,11 +2,13 @@
 
 #if defined(_WIN32)
 #include "app/EditorKeyState.hpp"
+#include "app/EditorWindowToolbarPointerHandler.hpp"
 #include "app/EditorWindowUnderTest.hpp"
 #include "app/docking/EditorDockTabMenu.hpp"
 #include "rendering/DockTabControlGeometry.hpp"
 #include "rendering/DockTabTooltipOverlayWindow.hpp"
 #include "rendering/DockWorkspaceTabStripRenderer.hpp"
+#include "rendering/EditorMenuTable.hpp"
 #include "rendering/EditorToolbarLayout.hpp"
 #include "rendering/EditorToolbarRenderer.hpp"
 #include "rendering/GamePanelContentRenderer.hpp"
@@ -116,6 +118,35 @@ private:
         }
     }
     return order;
+}
+
+// Where the open menu lists the row with this id; -1 when it does not.
+[[nodiscard]] int MenuRowIndex(EditorMenuCommand menu, const EditorShellInteractionState& shell, std::string_view id) {
+    const std::vector<EditorMenuRowView> rows = EditorMenuTable::Rows(menu, shell);
+    for (std::size_t index = 0; index < rows.size(); ++index) {
+        if (rows[index].id == id) {
+            return static_cast<int>(index);
+        }
+    }
+    return -1;
+}
+
+struct ObservedMenuRow {
+    std::string id;
+    EditorMenuAction action = EditorMenuAction::None;
+};
+std::vector<ObservedMenuRow> g_observedMenuRows;
+
+[[nodiscard]] bool NavigatesMenu(EditorMenuAction action) noexcept {
+    return action == EditorMenuAction::ShowRecentProjects || action == EditorMenuAction::ShowProjectMenu ||
+           action == EditorMenuAction::ShowDeleteLayoutList;
+}
+
+// Records the row a click chose. A row that only turns the menu into another list runs, so the recent
+// projects and the delete list can be reached; every other row is taken in place of its action.
+[[nodiscard]] bool ObserveMenuRow(const EditorMenuRowView& row) {
+    g_observedMenuRows.push_back({ std::string{ row.id }, row.action });
+    return !NavigatesMenu(row.action);
 }
 
 } // namespace
@@ -391,7 +422,7 @@ EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::VerifyDockingInteracti
         // Default puts the workspace back on the arrangement a new project starts with.
         const EditorMenuRects rects = EditorToolbarRenderer::ResolveMenu(
             ToRect(editor.Layout().menu), EditorMenuCommand::Layout, editor.Shell().MenuRowCount(EditorMenuCommand::Layout));
-        editor.Click(main, Center(rects.dropdownRows[0]));
+        editor.Click(main, Center(rects.dropdownRows[static_cast<std::size_t>(std::max(0, MenuRowIndex(EditorMenuCommand::Layout, editor.Shell(), "layout.default")))]));
         expect(dock.Commands().SerializeWorkspace() == defaultTree, "Layout > Default restores the starting arrangement");
     }
 
@@ -484,30 +515,33 @@ EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::VerifyDockingInteracti
 
     // Edit > Cut, Copy and Paste act on the selected object, each from its own row, and each row has its own icon.
     {
-        constexpr std::array<HeroIconKind, 3> kIcons{ HeroIconKind::Scissors, HeroIconKind::ClipboardCopy, HeroIconKind::ClipboardPaste };
-        for (std::size_t index = 0; index < kIcons.size(); ++index) {
-            const HeroIconKind icon = EditorToolbarLayout::DropdownIcon(EditorMenuCommand::Edit, static_cast<int>(index) + 2);
-            expect(icon == kIcons[index] && !HeroIconCatalog::Glyph(icon).paths.empty(), "Cut, Copy and Paste rows have their own drawn icons");
+        constexpr std::array<std::pair<std::string_view, HeroIconKind>, 3> kIcons{{
+            { "edit.cut", HeroIconKind::Scissors }, { "edit.copy", HeroIconKind::ClipboardCopy }, { "edit.paste", HeroIconKind::ClipboardPaste } }};
+        for (const auto& [rowId, expectedIcon] : kIcons) {
+            const std::vector<EditorMenuRowView> rows = EditorMenuTable::Rows(EditorMenuCommand::Edit, editor.Shell());
+            const int at = MenuRowIndex(EditorMenuCommand::Edit, editor.Shell(), rowId);
+            const HeroIconKind icon = at >= 0 ? rows[static_cast<std::size_t>(at)].icon : HeroIconKind::RectangleGroup;
+            expect(icon == expectedIcon && !HeroIconCatalog::Glyph(icon).paths.empty(), "Cut, Copy and Paste rows have their own drawn icons");
         }
-        const auto clickEditRow = [&](int row) {
+        const auto clickEditRow = [&](std::string_view id) {
             const EditorMenuRects bar = EditorToolbarRenderer::ResolveMenu(ToRect(editor.Layout().menu), EditorMenuCommand::None, 0);
             editor.Click(main, Center(EditorToolbarLayout::MenuRectByCommand(bar, EditorMenuCommand::Edit)));
             const EditorMenuRects rects = EditorToolbarRenderer::ResolveMenu(
                 ToRect(editor.Layout().menu), EditorMenuCommand::Edit, editor.Shell().MenuRowCount(EditorMenuCommand::Edit));
             expect(editor.Shell().OpenMenu() == EditorMenuCommand::Edit, "the Edit menu opens");
-            editor.Click(main, Center(rects.dropdownRows[static_cast<std::size_t>(row)]));
+            editor.Click(main, Center(rects.dropdownRows[static_cast<std::size_t>(std::max(0, MenuRowIndex(EditorMenuCommand::Edit, editor.Shell(), id)))]));
             expect(editor.Shell().OpenMenu() == EditorMenuCommand::None, "an Edit row closes the menu");
         };
         const auto objects = [&] { return sceneContext.Scene().Entities().Count(); };
         sceneContext.SelectEntity(sceneContext.CreateHierarchyObject());
         const std::size_t before = objects();
-        clickEditRow(3);
+        clickEditRow("edit.copy");
         expect(objects() == before, "Edit > Copy leaves the object where it is");
-        clickEditRow(4);
+        clickEditRow("edit.paste");
         expect(objects() == before + 1U, "Edit > Paste adds the copied object");
-        clickEditRow(2);
+        clickEditRow("edit.cut");
         expect(objects() == before, "Edit > Cut removes the selected object");
-        clickEditRow(4);
+        clickEditRow("edit.paste");
         expect(objects() == before + 1U, "Edit > Paste adds the cut object back");
     }
 
@@ -517,7 +551,7 @@ EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::VerifyDockingInteracti
         editor.Click(main, Center(EditorToolbarLayout::MenuRectByCommand(bar, EditorMenuCommand::Options)));
         const EditorMenuRects rects = EditorToolbarRenderer::ResolveMenu(
             ToRect(editor.Layout().menu), EditorMenuCommand::Options, editor.Shell().MenuRowCount(EditorMenuCommand::Options));
-        editor.Click(main, Center(rects.dropdownRows[1]));
+        editor.Click(main, Center(rects.dropdownRows[static_cast<std::size_t>(std::max(0, MenuRowIndex(EditorMenuCommand::Options, editor.Shell(), "options.projectSettings")))]));
         const DockPanel* settings = PanelOfKind(dock, DockPanelKind::ProjectSettings);
         const HWND window = floatingWindow(DockPanelKind::ProjectSettings);
         if (expect(settings->visible && settings->area == DockArea::Floating && window != nullptr, "Settings opens in its own window")) {
@@ -537,22 +571,25 @@ EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::VerifyDockingInteracti
 
     // Editor Settings and Plugins are pages of the one Settings window; their Options rows open it on the right page.
     {
-        const auto clickOptionsRow = [&](int row) {
+        const auto clickOptionsRow = [&](std::string_view id) {
             const EditorMenuRects bar = EditorToolbarRenderer::ResolveMenu(ToRect(editor.Layout().menu), EditorMenuCommand::None, 0);
             editor.Click(main, Center(EditorToolbarLayout::MenuRectByCommand(bar, EditorMenuCommand::Options)));
             const EditorMenuRects rects = EditorToolbarRenderer::ResolveMenu(
                 ToRect(editor.Layout().menu), EditorMenuCommand::Options, editor.Shell().MenuRowCount(EditorMenuCommand::Options));
-            editor.Click(main, Center(rects.dropdownRows[static_cast<std::size_t>(row)]));
+            editor.Click(main, Center(rects.dropdownRows[static_cast<std::size_t>(std::max(0, MenuRowIndex(EditorMenuCommand::Options, editor.Shell(), id)))]));
         };
-        expect(EditorToolbarLayout::DropdownLabel(EditorMenuCommand::Options, 2) == "Editor Settings" &&
-                EditorToolbarLayout::DropdownLabel(EditorMenuCommand::Options, 3) == "Plugins",
+        const std::vector<EditorMenuRowView> optionRows = EditorMenuTable::Rows(EditorMenuCommand::Options, editor.Shell());
+        const int editorSettingsAt = MenuRowIndex(EditorMenuCommand::Options, editor.Shell(), "options.editorSettings");
+        const int pluginsAt = MenuRowIndex(EditorMenuCommand::Options, editor.Shell(), "options.plugins");
+        expect(editorSettingsAt >= 0 && pluginsAt >= 0 && optionRows[static_cast<std::size_t>(editorSettingsAt)].label == "Editor Settings" &&
+                optionRows[static_cast<std::size_t>(pluginsAt)].label == "Plugins",
             "Options lists Editor Settings and Plugins");
         const DockPanel* settings = PanelOfKind(dock, DockPanelKind::ProjectSettings);
-        clickOptionsRow(2);
+        clickOptionsRow("options.editorSettings");
         expect(settings->visible && floatingWindow(DockPanelKind::ProjectSettings) != nullptr &&
                 sceneContext.ProjectSettings().SelectedCategory() == static_cast<int>(ProjectSettingsCategory::EditorGeneral),
             "Options > Editor Settings opens the Settings window on the editor page");
-        clickOptionsRow(3);
+        clickOptionsRow("options.plugins");
         expect(settings->visible && floatingWindow(DockPanelKind::ProjectSettings) != nullptr &&
                 sceneContext.ProjectSettings().SelectedCategory() == static_cast<int>(ProjectSettingsCategory::Plugins),
             "Options > Plugins turns the open Settings window to the plugins page");
@@ -564,6 +601,70 @@ EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::VerifyDockingInteracti
             editor.Pump();
         }
         expect(!settings->visible && dock.Commands().SerializeWorkspace() == defaultTree, "Settings closes and leaves the docked arrangement alone");
+    }
+
+    // Every row of every menu is chosen by a click once, and each click reaches the row the table lists in that
+    // place: the id and the action come from the table, wherever the row sits. A row that cannot be chosen now
+    // does nothing and leaves its menu open.
+    {
+        const EditorMenuRects bar = EditorToolbarRenderer::ResolveMenu(ToRect(editor.Layout().menu), EditorMenuCommand::None, 0);
+        const auto openTitle = [&](EditorMenuCommand menu) {
+            editor.Shell().CloseMenu();
+            editor.Click(main, Center(EditorToolbarLayout::MenuRectByCommand(bar, menu)));
+        };
+        const auto clickRow = [&](EditorMenuCommand menu, int index) {
+            const EditorMenuRects rects = EditorToolbarRenderer::ResolveMenu(
+                ToRect(editor.Layout().menu), menu, editor.Shell().MenuRowCount(menu));
+            editor.Click(main, Center(rects.dropdownRows[static_cast<std::size_t>(index)]));
+        };
+        // The recent projects hang from the Project menu's own row.
+        const auto reach = [&](EditorMenuCommand menu) {
+            if (menu != EditorMenuCommand::RecentProjects) {
+                openTitle(menu);
+                return;
+            }
+            openTitle(EditorMenuCommand::Project);
+            clickRow(EditorMenuCommand::Project, std::max(0, MenuRowIndex(EditorMenuCommand::Project, editor.Shell(), "project.recent")));
+        };
+        struct Expected {
+            std::string id;
+            EditorMenuAction action = EditorMenuAction::None;
+            bool enabled = true;
+        };
+        EditorWindowToolbarPointerHandler::SetMenuRowObserver(&ObserveMenuRow);
+        std::size_t chosen = 0;
+        for (const EditorMenuCommand menu : { EditorMenuCommand::File, EditorMenuCommand::Edit, EditorMenuCommand::Layout,
+                 EditorMenuCommand::Options, EditorMenuCommand::World, EditorMenuCommand::Help, EditorMenuCommand::Project,
+                 EditorMenuCommand::RecentProjects, EditorMenuCommand::Scene, EditorMenuCommand::PlayOptions, EditorMenuCommand::Publish }) {
+            reach(menu);
+            if (!expect(editor.Shell().OpenMenu() == menu, "a menu opens for its rows to be chosen")) {
+                continue;
+            }
+            std::vector<Expected> rows;
+            for (const EditorMenuRowView& row : EditorMenuTable::Rows(menu, editor.Shell())) {
+                rows.push_back({ std::string{ row.id }, row.action, row.enabled });
+            }
+            for (std::size_t index = 0; index < rows.size(); ++index) {
+                if (index > 0U) {
+                    reach(menu);
+                }
+                g_observedMenuRows.clear();
+                clickRow(menu, static_cast<int>(index));
+                const Expected& row = rows[index];
+                const std::string name = "menu row " + row.id;
+                if (!row.enabled) {
+                    expect(g_observedMenuRows.empty() && editor.Shell().OpenMenu() == menu, name + " is left alone while it cannot be chosen");
+                    continue;
+                }
+                ++chosen;
+                expect(g_observedMenuRows.size() == 1U && g_observedMenuRows.front().id == row.id && g_observedMenuRows.front().action == row.action,
+                    name + " is chosen through the table");
+                expect((editor.Shell().OpenMenu() != EditorMenuCommand::None) == NavigatesMenu(row.action), name + " leaves the menu as its action says");
+            }
+        }
+        EditorWindowToolbarPointerHandler::SetMenuRowObserver(nullptr);
+        editor.Shell().CloseMenu();
+        expect(chosen >= 50U, "every menu's rows were chosen");
     }
 
     // Dragging the seam between two panels resizes both.

@@ -5,6 +5,7 @@
 #include "docking/EditorDockModel.hpp"
 #include "docking/EditorFloatingWindowManager.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
+#include "rendering/EditorMenuTable.hpp"
 #include "rendering/EditorRenderBackendSettings.hpp"
 #include "rendering/EditorSceneBgfxViewport.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -47,6 +48,12 @@ public:
         bool pointerDown = false);
 
     static void ClearHover(EditorShellInteractionState& shellInteraction) noexcept;
+
+    // Lets a check see which table row a click chose. The observer runs for every enabled row that is
+    // clicked; when it returns true it has taken the row's place, so nothing it would do (a dialog, a
+    // browser, a file operation) runs. Null puts the usual behaviour back.
+    using MenuRowObserver = bool (*)(const EditorMenuRowView& row);
+    static void SetMenuRowObserver(MenuRowObserver observer) noexcept;
 #endif
 };
 

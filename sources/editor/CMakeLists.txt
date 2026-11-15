@@ -545,6 +545,7 @@ add_executable(kb_editor WIN32
     src/private/rendering/EditorSurfacePainter.hpp
     src/private/rendering/EditorSceneBgfxViewport.hpp
     src/private/rendering/EditorTabIndicatorPainter.hpp
+    src/private/rendering/EditorMenuTable.hpp
     src/private/rendering/EditorToolbarLayout.hpp
     src/private/rendering/FloatingEditorWindowRenderer.hpp
     src/private/rendering/FloatingWindowBackBufferPainter.hpp
@@ -809,6 +810,7 @@ add_executable(kb_editor WIN32
     src/rendering/EditorSurfaceStyle.cpp
     src/rendering/EditorTexturePreviewService.cpp
     src/rendering/EditorTabIndicatorPainter.cpp
+    src/rendering/EditorMenuTable.cpp
     src/rendering/EditorToolbarLayout.cpp
     src/rendering/EditorToolbarRenderer.cpp
     src/rendering/EditorMeshPreviewRasterizer.cpp
@@ -1634,6 +1636,7 @@ if(BUILD_TESTING)
         src/project/EditorProjectBootstrap.cpp
         src/project/EditorProjectPaths.cpp
         src/rendering/EditorRenderBackendSettings.cpp
+        src/rendering/EditorMenuTable.cpp
         src/rendering/EditorToolbarLayout.cpp
         src/rendering/scene_viewport_toolbar/SceneViewportToolbarLayout.cpp
         src/rendering/scene_viewport_toolbar/SceneViewportToolbarState.cpp

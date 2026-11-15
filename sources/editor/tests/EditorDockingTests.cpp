@@ -3,6 +3,7 @@
 
 #include "docking/EditorDockModel.hpp"
 #include "rendering/DockTabControlGeometry.hpp"
+#include "rendering/EditorMenuTable.hpp"
 #include "rendering/EditorToolbarLayout.hpp"
 #include "console/EditorConsoleLayout.hpp"
 #include "rendering/SkeletalMeshEditorPanelLayout.hpp"
@@ -37,6 +38,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -446,24 +448,49 @@ void RunClosedMaterialEditorReopensInCenterDockTest() {
     kb::editor::tests::Require(scene != nullptr && reopened->leafId == scene->leafId, "Reopened Material Editor should return to the center workspace group");
 }
 
+// The row of a menu with the given stable id; null for an id the menu does not have.
+const kb::editor::EditorMenuRowSpec* FindMenuRow(kb::editor::EditorMenuCommand menu, std::string_view id) {
+    for (const kb::editor::EditorMenuRowSpec& row : kb::editor::EditorMenuTable::FixedRows(menu)) {
+        if (row.id == id) {
+            return &row;
+        }
+    }
+    return nullptr;
+}
+
+std::string_view MenuRowLabel(kb::editor::EditorMenuCommand menu, std::string_view id) {
+    const kb::editor::EditorMenuRowSpec* row = FindMenuRow(menu, id);
+    return row != nullptr ? row->label.Resolve() : std::string_view{};
+}
+
 void RunWorldMenuTest() {
-    // The pointer handler acts on World rows by index; the labels must stay in that order.
+    // A row is found by its id, so the labels and the actions they stand for are checked by id.
+    using kb::editor::EditorMenuAction;
     using kb::editor::EditorMenuCommand;
     using kb::editor::EditorToolbarLayout;
-    kb::editor::tests::Require(EditorToolbarLayout::FixedRowCount(EditorMenuCommand::World) == 13,
+    kb::editor::tests::Require(kb::editor::EditorMenuTable::FixedRowCount(EditorMenuCommand::World) == 13,
         "The World menu lists its region, build, selection and navigation commands");
-    kb::editor::tests::Require(EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 0) == "Load Cells Near Camera" &&
-            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 3) == "Build World and HLODs" &&
-            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 4) == "Show or Hide Cell Grid" &&
-            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 6) == "Add Data Layer..." &&
-            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 8) == "Toggle Selection Always Loaded" &&
-            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 9) == "Bake Navigation Mesh" &&
-            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 10) == "Show or Hide Navigation Mesh" &&
-            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 11) == "Turn Automatic Navigation Update On or Off" &&
-            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::World, 12) == "Build Lighting",
-        "World menu rows must match the rows the pointer handler executes");
-    kb::editor::tests::Require(EditorToolbarLayout::FixedRowCount(EditorMenuCommand::Help) == 4 &&
-            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::Help, 3) == "About",
+    const auto actionOf = [](std::string_view id) {
+        const kb::editor::EditorMenuRowSpec* row = FindMenuRow(EditorMenuCommand::World, id);
+        return row != nullptr ? row->action : EditorMenuAction::None;
+    };
+    kb::editor::tests::Require(MenuRowLabel(EditorMenuCommand::World, "world.loadCellsNearCamera") == "Load Cells Near Camera" &&
+            MenuRowLabel(EditorMenuCommand::World, "world.buildWorld") == "Build World and HLODs" &&
+            MenuRowLabel(EditorMenuCommand::World, "world.toggleCellGrid") == "Show or Hide Cell Grid" &&
+            MenuRowLabel(EditorMenuCommand::World, "world.addDataLayer") == "Add Data Layer..." &&
+            MenuRowLabel(EditorMenuCommand::World, "world.toggleSelectionAlwaysLoaded") == "Toggle Selection Always Loaded" &&
+            MenuRowLabel(EditorMenuCommand::World, "world.bakeNavigationMesh") == "Bake Navigation Mesh" &&
+            MenuRowLabel(EditorMenuCommand::World, "world.toggleNavigationMesh") == "Show or Hide Navigation Mesh" &&
+            MenuRowLabel(EditorMenuCommand::World, "world.toggleNavigationAutoUpdate") == "Turn Automatic Navigation Update On or Off" &&
+            MenuRowLabel(EditorMenuCommand::World, "world.buildLighting") == "Build Lighting",
+        "World menu rows carry the labels the menu shows");
+    kb::editor::tests::Require(actionOf("world.buildWorld") == EditorMenuAction::BuildWorld &&
+            actionOf("world.toggleCellGrid") == EditorMenuAction::ToggleCellGrid &&
+            actionOf("world.bakeNavigationMesh") == EditorMenuAction::BakeNavigation &&
+            actionOf("world.buildLighting") == EditorMenuAction::BuildLighting,
+        "World menu rows name the actions they run");
+    kb::editor::tests::Require(kb::editor::EditorMenuTable::FixedRowCount(EditorMenuCommand::Help) == 4 &&
+            MenuRowLabel(EditorMenuCommand::Help, "help.about") == "About",
         "Adding the World menu must not move the Help rows");
     const RECT bar{ 0, 0, 1200, 28 };
     const kb::editor::EditorMenuRects menus = EditorToolbarLayout::ResolveMenu(bar, EditorMenuCommand::World, 11);
@@ -476,39 +503,78 @@ void RunWorldMenuTest() {
 }
 
 void RunEditAndOptionsMenuTest() {
-    // The pointer handler acts on Edit and Options rows by index; the labels must stay in that order,
-    // and no two Edit rows may share an icon.
+    // No two Edit rows may share an icon, and Edit and Options rows are found by id.
     using kb::editor::EditorMenuCommand;
-    using kb::editor::EditorToolbarLayout;
-    kb::editor::tests::Require(EditorToolbarLayout::FixedRowCount(EditorMenuCommand::Edit) == 6 &&
-            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::Edit, 0) == "Undo" &&
-            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::Edit, 1) == "Redo" &&
-            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::Edit, 2) == "Cut" &&
-            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::Edit, 3) == "Copy" &&
-            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::Edit, 4) == "Paste" &&
-            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::Edit, 5) == "Duplicate",
-        "Edit menu rows must match the rows the pointer handler executes");
-    for (int first = 0; first < 6; ++first) {
-        for (int second = first + 1; second < 6; ++second) {
-            kb::editor::tests::Require(
-                EditorToolbarLayout::DropdownIcon(EditorMenuCommand::Edit, first) != EditorToolbarLayout::DropdownIcon(EditorMenuCommand::Edit, second),
-                "Every Edit row has an icon of its own");
+    kb::editor::tests::Require(kb::editor::EditorMenuTable::FixedRowCount(EditorMenuCommand::Edit) == 6 &&
+            MenuRowLabel(EditorMenuCommand::Edit, "edit.undo") == "Undo" &&
+            MenuRowLabel(EditorMenuCommand::Edit, "edit.redo") == "Redo" &&
+            MenuRowLabel(EditorMenuCommand::Edit, "edit.cut") == "Cut" &&
+            MenuRowLabel(EditorMenuCommand::Edit, "edit.copy") == "Copy" &&
+            MenuRowLabel(EditorMenuCommand::Edit, "edit.paste") == "Paste" &&
+            MenuRowLabel(EditorMenuCommand::Edit, "edit.duplicate") == "Duplicate",
+        "Edit menu rows carry the labels the menu shows");
+    const auto edit = kb::editor::EditorMenuTable::FixedRows(EditorMenuCommand::Edit);
+    for (std::size_t first = 0; first < edit.size(); ++first) {
+        for (std::size_t second = first + 1U; second < edit.size(); ++second) {
+            kb::editor::tests::Require(edit[first].icon != edit[second].icon, "Every Edit row has an icon of its own");
         }
     }
-    kb::editor::tests::Require(EditorToolbarLayout::DropdownLabel(EditorMenuCommand::Options, 2) == "Editor Settings" &&
-            EditorToolbarLayout::DropdownLabel(EditorMenuCommand::Options, 3) == "Plugins",
+    kb::editor::tests::Require(MenuRowLabel(EditorMenuCommand::Options, "options.editorSettings") == "Editor Settings" &&
+            MenuRowLabel(EditorMenuCommand::Options, "options.plugins") == "Plugins",
         "Options lists Editor Settings and Plugins, the rows that open those pages of the Settings window");
+}
+
+void RunMenuTableTest() {
+    // The table is what the menus paint and what a click runs: every row has an id of its own, a label and an
+    // action, and the rules and captions land where the menus have always put them.
+    using kb::editor::EditorMenuAction;
+    using kb::editor::EditorMenuCommand;
+    using kb::editor::EditorMenuTable;
+    kb::editor::EditorShellInteractionState shell;
+    kb::editor::EditorLayoutMenuModel layouts;
+    layouts.Rebuild({}, {});
+    shell.SetLayoutMenu(layouts);
+    const std::vector<kb::editor::EditorMenuRowView> all = EditorMenuTable::AllRows(shell);
+    std::vector<std::string> ids;
+    for (const kb::editor::EditorMenuRowView& row : all) {
+        kb::editor::tests::Require(!row.id.empty() && !row.label.empty() && row.action != EditorMenuAction::None,
+            "Every menu row has an id, a label and an action");
+        ids.emplace_back(row.id);
+    }
+    std::sort(ids.begin(), ids.end());
+    kb::editor::tests::Require(!ids.empty() && std::adjacent_find(ids.begin(), ids.end()) == ids.end(), "Every menu row id is unique");
+    kb::editor::tests::Require(all.size() == 5U + 6U + 3U + 7U + 13U + 4U + 7U + 1U + 6U + 5U + 1U, "AllRows lists the rows of every menu");
+
+    // Rules and captions of the menus whose rows a project supplies: three scenes, two platforms, two projects.
+    kb::editor::tests::Require(!EditorMenuTable::StartsGroup(EditorMenuCommand::File, 1, 5) && EditorMenuTable::StartsGroup(EditorMenuCommand::File, 2, 5) &&
+            EditorMenuTable::StartsGroup(EditorMenuCommand::File, 4, 5),
+        "File sets Save and Build Game apart");
+    kb::editor::tests::Require(EditorMenuTable::Heading(EditorMenuCommand::Scene, 0, 9) == "Scenes in the Project" &&
+            EditorMenuTable::Heading(EditorMenuCommand::Scene, 3, 9) == "Actions" && EditorMenuTable::Heading(EditorMenuCommand::Scene, 4, 9).empty() &&
+            EditorMenuTable::StartsGroup(EditorMenuCommand::Scene, 3, 9) && EditorMenuTable::StartsGroup(EditorMenuCommand::Scene, 8, 9) &&
+            !EditorMenuTable::StartsGroup(EditorMenuCommand::Scene, 5, 9),
+        "Scene puts a caption over its scenes and over its actions, and a rule before the actions and before Delete");
+    kb::editor::tests::Require(EditorMenuTable::Heading(EditorMenuCommand::Scene, 0, 6) == "Actions" && !EditorMenuTable::StartsGroup(EditorMenuCommand::Scene, 0, 6),
+        "Scene without scenes starts with its actions");
+    kb::editor::tests::Require(EditorMenuTable::Heading(EditorMenuCommand::Publish, 0, 3) == "Release Build For" &&
+            EditorMenuTable::Heading(EditorMenuCommand::Publish, 0, 1).empty() && EditorMenuTable::StartsGroup(EditorMenuCommand::Publish, 2, 3) &&
+            !EditorMenuTable::StartsGroup(EditorMenuCommand::Publish, 0, 1),
+        "Publish captions its platforms and sets Release Settings apart from them");
+    kb::editor::tests::Require(EditorMenuTable::StartsGroup(EditorMenuCommand::RecentProjects, 1, 3) &&
+            !EditorMenuTable::StartsGroup(EditorMenuCommand::RecentProjects, 2, 3) && EditorMenuTable::FixedRowCount(EditorMenuCommand::Layout) == 0,
+        "The recent list sets its projects apart from Back");
 }
 
 void RunBuildGameMenuAndWorkspaceActivationTest() {
     // The panel is only ever reached through File > Build Game, so the row has to be
     // there and has to be the one the handler acts on.
     kb::editor::tests::Require(
-        kb::editor::EditorToolbarLayout::FixedRowCount(kb::editor::EditorMenuCommand::File) == 5,
+        kb::editor::EditorMenuTable::FixedRowCount(kb::editor::EditorMenuCommand::File) == 5,
         "The File menu must list five rows once Build Game joins it");
+    const kb::editor::EditorMenuRowSpec* buildGame = FindMenuRow(kb::editor::EditorMenuCommand::File, "file.buildGame");
     kb::editor::tests::Require(
-        kb::editor::EditorToolbarLayout::DropdownLabel(kb::editor::EditorMenuCommand::File, 4) == "Build Game",
-        "File row 4 must be Build Game, which is the row the pointer handler opens the panel from");
+        buildGame != nullptr && buildGame->label.Resolve() == "Build Game" && buildGame->action == kb::editor::EditorMenuAction::OpenBuildGame,
+        "The File menu's Build Game row opens the panel");
 
     kb::editor::EditorDockModel model;
     const kb::editor::DockPanel* panel = RequirePanel(model, 16U);
@@ -1644,6 +1710,7 @@ void RunEditorDockingTests() {
     RunBuildGameMenuAndWorkspaceActivationTest();
     RunWorldMenuTest();
     RunEditAndOptionsMenuTest();
+    RunMenuTableTest();
     RunSkeletalMeshEditorWorkspaceActivationTest();
     RunAnimationClipEditorWorkspaceActivationTest();
     RunAnimatorEditorWorkspaceActivationTest();

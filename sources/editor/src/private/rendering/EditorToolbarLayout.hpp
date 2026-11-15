@@ -37,24 +37,9 @@ public:
     [[nodiscard]] static EditorTopBarItem HitTestTopBarItem(const EditorToolbarRects& rects, int x, int y) noexcept;
     // False over the bar's empty space, which drags the window.
     [[nodiscard]] static bool IsInteractive(const EditorMenuRects& menu, const EditorToolbarRects& toolbar, int x, int y) noexcept;
-    [[nodiscard]] static int MenuIndex(EditorMenuCommand menu) noexcept;
     [[nodiscard]] static RECT MenuRectByCommand(const EditorMenuRects& rects, EditorMenuCommand menu) noexcept;
-    // How many rows a menu whose contents the build fixes shows. Zero for Layout,
-    // whose rows are the layouts the project holds.
-    [[nodiscard]] static int FixedRowCount(EditorMenuCommand menu) noexcept;
-    // The menu's title and its rows in the editor language.
+    // The title of a menu in the editor language; the rows are in EditorMenuTable.
     [[nodiscard]] static std::string_view MenuLabel(EditorMenuCommand menu);
-    [[nodiscard]] static std::string_view DropdownLabel(EditorMenuCommand menu, int row);
-    // A fixed row's icon, its keyboard shortcut (empty when none is bound) and whether a
-    // divider sets it apart from the row above.
-    [[nodiscard]] static HeroIconKind DropdownIcon(EditorMenuCommand menu, int row) noexcept;
-    [[nodiscard]] static std::string_view DropdownShortcut(EditorMenuCommand menu, int row) noexcept;
-    // `row` counts every row of the menu here; `rowCount` is how many it shows now.
-    [[nodiscard]] static bool DropdownStartsGroup(EditorMenuCommand menu, int row, int rowCount) noexcept;
-    [[nodiscard]] static bool DropdownHasHeading(EditorMenuCommand menu, int row, int rowCount) noexcept;
-    [[nodiscard]] static std::string_view DropdownHeading(EditorMenuCommand menu, int row, int rowCount);
-    // The line under a fixed row's label; empty when the label says it all.
-    [[nodiscard]] static std::string_view DropdownDescription(EditorMenuCommand menu, int row);
 #endif
 };
 

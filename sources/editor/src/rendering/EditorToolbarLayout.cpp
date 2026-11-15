@@ -1,6 +1,7 @@
 #include "rendering/EditorToolbarLayout.hpp"
 
 #include "localization/EditorLocalization.hpp"
+#include "rendering/EditorMenuTable.hpp"
 #include "rendering/gdi/EditorFontCache.hpp"
 
 #if defined(_WIN32)
@@ -45,10 +46,6 @@ constexpr std::array<EditorMenuDescriptor, 6> kMenus{{
     { EditorMenuCommand::World, 44 },
     { EditorMenuCommand::Help, 44 },
 }};
-
-// How many of those rows each menu actually shows. Layout and the recent projects count
-// zero here, and Scene only its actions: the rest comes from the project, not the build.
-constexpr std::array<int, 11> kDropdownRowCounts{ 5, 6, 0, 7, 13, 4, 7, 6, 0, 5, 1 };
 
 // The Layout menu is the only one whose length the project decides, so the row
 // geometry has to have room for the longest one the menu model can produce.
@@ -103,10 +100,10 @@ constexpr int kDropdownShortcutGap = 24;
     }
     int width = kDropdownWidth;
     try {
-        for (int row = 0; row < EditorToolbarLayout::FixedRowCount(menu); ++row) {
-            const std::string_view shortcut = EditorToolbarLayout::DropdownShortcut(menu, row);
-            width = std::max(width, std::max(TextWidth(EditorToolbarLayout::DropdownLabel(menu, row), EditorToolbarLayout::MenuFontSize),
-                    TextWidth(EditorToolbarLayout::DropdownDescription(menu, row), EditorToolbarLayout::DropdownDetailFontSize)) +
+        for (const EditorMenuRowSpec& row : EditorMenuTable::FixedRows(menu)) {
+            const std::string_view shortcut = row.shortcut;
+            width = std::max(width, std::max(TextWidth(row.label.Resolve(), EditorToolbarLayout::MenuFontSize),
+                    TextWidth(row.detail.Resolve(), EditorToolbarLayout::DropdownDetailFontSize)) +
                 kDropdownTextAllowance +
                 (shortcut.empty() ? 0 : TextWidth(shortcut, EditorToolbarLayout::MenuFontSize) + kDropdownShortcutGap));
         }
@@ -195,10 +192,10 @@ EditorMenuRects EditorToolbarLayout::ResolveMenu(
         const int dropY = static_cast<int>(anchor.bottom);
         int rowTop = dropY + kDropdownInset;
         for (int i = 0; i < menu.dropdownRowCount; ++i) {
-            if (DropdownStartsGroup(openMenu, i, menu.dropdownRowCount)) {
+            if (EditorMenuTable::StartsGroup(openMenu, i, menu.dropdownRowCount)) {
                 rowTop += DropdownSeparatorHeight;
             }
-            if (DropdownHasHeading(openMenu, i, menu.dropdownRowCount)) {
+            if (!EditorMenuTable::Heading(openMenu, i, menu.dropdownRowCount).empty()) {
                 rowTop += DropdownHeadingHeight;
             }
             menu.dropdownRows[static_cast<std::size_t>(i)] = RECT{
@@ -383,36 +380,6 @@ bool EditorToolbarLayout::HitTestSave(const EditorToolbarRects& rects, int x, in
     return PointInRect(rects.saveButton, x, y);
 }
 
-int EditorToolbarLayout::MenuIndex(EditorMenuCommand menu) noexcept {
-    switch (menu) {
-    case EditorMenuCommand::File:
-        return 0;
-    case EditorMenuCommand::Edit:
-        return 1;
-    case EditorMenuCommand::Layout:
-        return 2;
-    case EditorMenuCommand::Options:
-        return 3;
-    case EditorMenuCommand::World:
-        return 4;
-    case EditorMenuCommand::Help:
-        return 5;
-    case EditorMenuCommand::Project:
-        return 6;
-    case EditorMenuCommand::Scene:
-        return 7;
-    case EditorMenuCommand::RecentProjects:
-        return 8;
-    case EditorMenuCommand::PlayOptions:
-        return 9;
-    case EditorMenuCommand::Publish:
-        return 10;
-    case EditorMenuCommand::None:
-    default:
-        return -1;
-    }
-}
-
 RECT EditorToolbarLayout::MenuRectByCommand(const EditorMenuRects& rects, EditorMenuCommand menu) noexcept {
     switch (menu) {
     case EditorMenuCommand::File:
@@ -442,11 +409,6 @@ RECT EditorToolbarLayout::MenuRectByCommand(const EditorMenuRects& rects, Editor
     }
 }
 
-int EditorToolbarLayout::FixedRowCount(EditorMenuCommand menu) noexcept {
-    const int index = MenuIndex(menu);
-    return index < 0 ? 0 : kDropdownRowCounts[static_cast<std::size_t>(index)];
-}
-
 std::string_view EditorToolbarLayout::MenuLabel(EditorMenuCommand menu) {
     switch (menu) {
     case EditorMenuCommand::File:
@@ -465,321 +427,6 @@ std::string_view EditorToolbarLayout::MenuLabel(EditorMenuCommand menu) {
     default:
         return {};
     }
-}
-
-// The Layout menu is missing here on purpose: its rows are the layouts a project
-// holds, so they are built when the menu opens rather than fixed by the build.
-std::string_view EditorToolbarLayout::DropdownLabel(EditorMenuCommand menu, int row) {
-    if (MenuIndex(menu) < 0 || row < 0 || row >= FixedRowCount(menu)) {
-        return {};
-    }
-    switch (menu) {
-    case EditorMenuCommand::File: {
-        const std::array<std::string_view, 5> rows{
-            EditorText("menu.file.newScene", "New Scene..."),
-            EditorText("menu.file.openScene", "Open Scene..."),
-            EditorText("common.save", "Save"),
-            EditorText("menu.file.saveAs", "Save As..."),
-            EditorText("menu.file.buildGame", "Build Game"),
-        };
-        return rows[static_cast<std::size_t>(row)];
-    }
-    case EditorMenuCommand::Edit: {
-        const std::array<std::string_view, 6> rows{
-            EditorText("menu.edit.undo", "Undo"),
-            EditorText("menu.edit.redo", "Redo"),
-            EditorText("menu.edit.cut", "Cut"),
-            EditorText("menu.edit.copy", "Copy"),
-            EditorText("menu.edit.paste", "Paste"),
-            EditorText("menu.edit.duplicate", "Duplicate"),
-        };
-        return rows[static_cast<std::size_t>(row)];
-    }
-    case EditorMenuCommand::Options: {
-        const std::array<std::string_view, 7> rows{
-            EditorText("menu.options.renderer", "Renderer"),
-            EditorText("menu.options.projectSettings", "Project Settings"),
-            EditorText("menu.options.editorSettings", "Editor Settings"),
-            EditorText("menu.edit.plugins", "Plugins"),
-            EditorText("panel.profiler", "Profiler"),
-            EditorText("inspector.audioMixer.subtitle", "Audio Mixer"),
-            EditorText("menu.options.agent", "AI Agent"),
-        };
-        return rows[static_cast<std::size_t>(row)];
-    }
-    case EditorMenuCommand::World: {
-        const std::array<std::string_view, 13> rows{
-            EditorText("menu.world.loadCellsNearCamera", "Load Cells Near Camera"),
-            EditorText("menu.world.loadAllCells", "Load All Cells"),
-            EditorText("menu.world.unloadAllCells", "Unload All Cells"),
-            EditorText("menu.world.buildWorldAndHlods", "Build World and HLODs"),
-            EditorText("menu.world.toggleCellGrid", "Show or Hide Cell Grid"),
-            EditorText("menu.world.convertSceneToWorld", "Convert Scene to World"),
-            EditorText("menu.world.addDataLayer", "Add Data Layer..."),
-            EditorText("menu.world.cycleSelectionDataLayer", "Cycle Selection Data Layer"),
-            EditorText("menu.world.toggleSelectionAlwaysLoaded", "Toggle Selection Always Loaded"),
-            EditorText("menu.world.bakeNavigationMesh", "Bake Navigation Mesh"),
-            EditorText("menu.world.toggleNavigationMesh", "Show or Hide Navigation Mesh"),
-            EditorText("menu.world.toggleNavigationAutoUpdate", "Turn Automatic Navigation Update On or Off"),
-            EditorText("menu.world.buildLighting", "Build Lighting"),
-        };
-        return rows[static_cast<std::size_t>(row)];
-    }
-    case EditorMenuCommand::Help: {
-        const std::array<std::string_view, 4> rows{
-            EditorText("menu.help.documentation", "Documentation"),
-            EditorText("menu.help.reportIssue", "Report Issue"),
-            EditorText("menu.help.releaseNotes", "Release Notes"),
-            EditorText("menu.help.about", "About"),
-        };
-        return rows[static_cast<std::size_t>(row)];
-    }
-    case EditorMenuCommand::Project: {
-        const std::array<std::string_view, 7> rows{
-            EditorText("menu.project.open", "Open Project..."),
-            EditorText("menu.project.new", "New Project..."),
-            EditorText("menu.project.recent", "Recent Projects"),
-            EditorText("menu.options.projectSettings", "Project Settings"),
-            EditorText("menu.edit.plugins", "Plugins"),
-            EditorText("menu.file.buildGame", "Build Game"),
-            EditorText("menu.project.showInExplorer", "Show in Explorer"),
-        };
-        return rows[static_cast<std::size_t>(row)];
-    }
-    case EditorMenuCommand::Scene: {
-        const std::array<std::string_view, 6> rows{
-            EditorText("menu.file.newScene", "New Scene..."),
-            EditorText("menu.file.openScene", "Open Scene..."),
-            EditorText("menu.scene.duplicate", "Duplicate Scene"),
-            EditorText("menu.scene.rename", "Rename..."),
-            EditorText("common.save", "Save"),
-            EditorText("menu.scene.delete", "Delete Scene"),
-        };
-        return rows[static_cast<std::size_t>(row)];
-    }
-    case EditorMenuCommand::PlayOptions: {
-        const std::array<std::string_view, 5> rows{
-            EditorText("menu.play.gameView", "In the Game View"),
-            EditorText("menu.play.sceneView", "In the Scene View"),
-            EditorText("menu.play.maximized", "Maximized Scene View"),
-            EditorText("menu.play.standalone", "In Its Own Window"),
-            EditorText("menu.play.startPaused", "Start Paused"),
-        };
-        return rows[static_cast<std::size_t>(row)];
-    }
-    case EditorMenuCommand::Publish:
-        return EditorText("menu.publish.settings", "Release Settings...");
-    case EditorMenuCommand::Layout:
-    case EditorMenuCommand::None:
-    default:
-        return {};
-    }
-}
-
-std::string_view EditorToolbarLayout::DropdownDescription(EditorMenuCommand menu, int row) {
-    if (MenuIndex(menu) < 0 || row < 0 || row >= FixedRowCount(menu)) {
-        return {};
-    }
-    const auto pick = [row](auto rows) { return rows[static_cast<std::size_t>(row)]; };
-    switch (menu) {
-    case EditorMenuCommand::File:
-        return pick(std::array<std::string_view, 5>{
-            EditorText("menu.detail.newScene", "An empty scene in the project"),
-            EditorText("menu.detail.openScene", "Choose one from disk"),
-            EditorText("menu.detail.save", "Saves the current scene"),
-            EditorText("menu.detail.saveAs", "Under a new name"),
-            EditorText("menu.detail.buildGame", "For the chosen platform"),
-        });
-    case EditorMenuCommand::Options:
-        return pick(std::array<std::string_view, 7>{
-            EditorText("menu.detail.renderer", "The next graphics backend"),
-            EditorText("menu.detail.projectSettings", "Inputs, graphics, physics"),
-            EditorText("menu.detail.editorSettings", "Language and how the editor works"),
-            EditorText("menu.detail.plugins", "Enabled modules"),
-            EditorText("menu.detail.profiler", "Frame timings"),
-            EditorText("menu.detail.audioMixer", "Buses and volumes"),
-            EditorText("menu.detail.agent", "Tell the agent what to do"),
-        });
-    case EditorMenuCommand::World:
-        return pick(std::array<std::string_view, 13>{
-            EditorText("menu.detail.loadNear", "Around the view"),
-            EditorText("menu.detail.loadAll", "The whole world into memory"),
-            EditorText("menu.detail.unloadAll", "Frees the memory"),
-            EditorText("menu.detail.buildWorld", "Streaming data and far objects"),
-            EditorText("menu.detail.cellGrid", "Cell boundaries in the view"),
-            EditorText("menu.detail.convertWorld", "Splits it into streamed cells"),
-            EditorText("menu.detail.addLayer", "A new group of objects"),
-            EditorText("menu.detail.cycleLayer", "The next layer for the selection"),
-            EditorText("menu.detail.alwaysLoaded", "Stays in memory with every cell"),
-            EditorText("menu.detail.bakeNavigation", "Where characters can walk"),
-            EditorText("menu.detail.showNavigation", "Walkable areas in the view"),
-            EditorText("menu.detail.navigationAutoUpdate", "Rebuilds the tiles an edit touches"),
-            EditorText("menu.detail.buildLighting", "Bakes lights and bounces into lightmaps"),
-        });
-    case EditorMenuCommand::Help:
-        return pick(std::array<std::string_view, 4>{
-            EditorText("menu.detail.documentation", "Opens in the browser"),
-            EditorText("menu.detail.reportIssue", "A new issue on GitHub"),
-            EditorText("menu.detail.releaseNotes", "What changed"),
-            EditorText("menu.detail.about", "Version and license"),
-        });
-    case EditorMenuCommand::Project:
-        return pick(std::array<std::string_view, 7>{
-            EditorText("menu.detail.openProject", "Another project from disk"),
-            EditorText("menu.detail.newProject", "A new folder with a first scene"),
-            EditorText("menu.detail.recentProjects", "Quick way back"),
-            EditorText("menu.detail.projectSettings", "Inputs, graphics, physics"),
-            EditorText("menu.detail.plugins", "Enabled modules"),
-            EditorText("menu.detail.buildGame", "For the chosen platform"),
-            EditorText("menu.detail.showInExplorer", "The project folder"),
-        });
-    case EditorMenuCommand::Scene:
-        return pick(std::array<std::string_view, 6>{
-            EditorText("menu.detail.newScene", "An empty scene in the project"),
-            EditorText("menu.detail.openScene", "Choose one from disk"),
-            EditorText("menu.detail.duplicateScene", "A copy beside this scene"),
-            EditorText("menu.detail.renameScene", "The scene file's name"),
-            EditorText("menu.detail.save", "Saves the current scene"),
-            EditorText("menu.detail.deleteScene", "Goes to the Recycle Bin"),
-        });
-    case EditorMenuCommand::PlayOptions:
-        return pick(std::array<std::string_view, 5>{
-            EditorText("menu.detail.playGameView", "What the player sees, at a resolution you choose"),
-            EditorText("menu.detail.playSceneView", "The open scene, inside the editor"),
-            EditorText("menu.detail.playMaximized", "Scene View fills the editor while playing"),
-            EditorText("menu.detail.playStandalone", "From the startup scene, like the finished game"),
-            EditorText("menu.detail.playStartPaused", "Waits on the first frame"),
-        });
-    case EditorMenuCommand::Publish:
-        return EditorText("menu.detail.publishSettings", "Version, signing and output folder");
-    default:
-        return {};
-    }
-}
-
-HeroIconKind EditorToolbarLayout::DropdownIcon(EditorMenuCommand menu, int row) noexcept {
-    if (MenuIndex(menu) < 0 || row < 0 || row >= FixedRowCount(menu)) {
-        return HeroIconKind::RectangleGroup;
-    }
-    const auto pick = [row](auto icons) noexcept { return icons[static_cast<std::size_t>(row)]; };
-    switch (menu) {
-    case EditorMenuCommand::File:
-        return pick(std::array{ HeroIconKind::Plus, HeroIconKind::Folder, HeroIconKind::Save,
-            HeroIconKind::DocumentText, HeroIconKind::RocketLaunch });
-    case EditorMenuCommand::Edit:
-        return pick(std::array{ HeroIconKind::Undo, HeroIconKind::Redo, HeroIconKind::Scissors,
-            HeroIconKind::ClipboardCopy, HeroIconKind::ClipboardPaste, HeroIconKind::Duplicate });
-    case EditorMenuCommand::Options:
-        return pick(std::array{ HeroIconKind::Monitor, HeroIconKind::AdjustmentsHorizontal,
-            HeroIconKind::WrenchScrewdriver, HeroIconKind::Plug, HeroIconKind::Activity, HeroIconKind::SpeakerWave, HeroIconKind::Bolt });
-    case EditorMenuCommand::World:
-        return pick(std::array{ HeroIconKind::Camera, HeroIconKind::Download, HeroIconKind::Upload,
-            HeroIconKind::WrenchScrewdriver, HeroIconKind::Grid, HeroIconKind::Map,
-            HeroIconKind::Plus, HeroIconKind::Layers, HeroIconKind::LockClosed,
-            HeroIconKind::Navigation, HeroIconKind::Eye, HeroIconKind::Clock, HeroIconKind::Bolt });
-    case EditorMenuCommand::Help:
-        return pick(std::array{ HeroIconKind::BookOpen, HeroIconKind::Flag, HeroIconKind::DocumentText, HeroIconKind::Info });
-    case EditorMenuCommand::Project:
-        return pick(std::array{ HeroIconKind::Folder, HeroIconKind::Plus, HeroIconKind::Clock,
-            HeroIconKind::AdjustmentsHorizontal, HeroIconKind::Plug, HeroIconKind::WrenchScrewdriver, HeroIconKind::ExternalLink });
-    case EditorMenuCommand::Scene:
-        return pick(std::array{ HeroIconKind::Plus, HeroIconKind::Folder, HeroIconKind::Duplicate,
-            HeroIconKind::Pencil, HeroIconKind::Save, HeroIconKind::Trash });
-    case EditorMenuCommand::PlayOptions:
-        return pick(std::array{ HeroIconKind::Play, HeroIconKind::Monitor, HeroIconKind::Scale, HeroIconKind::Gamepad2, HeroIconKind::Pause });
-    case EditorMenuCommand::Publish:
-        return HeroIconKind::AdjustmentsHorizontal;
-    case EditorMenuCommand::Layout:
-    case EditorMenuCommand::None:
-    default:
-        return HeroIconKind::RectangleGroup;
-    }
-}
-
-// Only the shortcuts the editor actually binds (EditorEditCommandInputHandler); a row
-// without one shows nothing rather than a key that does not work.
-std::string_view EditorToolbarLayout::DropdownShortcut(EditorMenuCommand menu, int row) noexcept {
-    if ((menu == EditorMenuCommand::File && row == 2) || (menu == EditorMenuCommand::Scene && row == 4)) {
-        return "Ctrl+S";
-    }
-    if (menu == EditorMenuCommand::Options && row == 6) {
-        return "Ctrl+K";
-    }
-    if (menu == EditorMenuCommand::Edit) {
-        constexpr std::array<std::string_view, 6> shortcuts{ "Ctrl+Z", "Ctrl+Y", "Ctrl+X", "Ctrl+C", "Ctrl+V", "Ctrl+D" };
-        if (row >= 0 && row < static_cast<int>(shortcuts.size())) {
-            return shortcuts[static_cast<std::size_t>(row)];
-        }
-    }
-    return {};
-}
-
-// The long fixed menus read in groups: File's scene rows apart from Build Game, the
-// project, editor and plugin settings apart from the tools, and World's streaming,
-// build, data layer and navigation commands.
-bool EditorToolbarLayout::DropdownStartsGroup(EditorMenuCommand menu, int row, int rowCount) noexcept {
-    if (row <= 0) {
-        return false;
-    }
-    const int scenes = rowCount - FixedRowCount(EditorMenuCommand::Scene);
-    switch (menu) {
-    case EditorMenuCommand::File:
-        return row == 2 || row == 4;
-    case EditorMenuCommand::Edit:
-        return row == 2;
-    case EditorMenuCommand::Options:
-        return row == 1 || row == 4 || row == 6;
-    case EditorMenuCommand::World:
-        return row == 3 || row == 6 || row == 9;
-    case EditorMenuCommand::Help:
-        return row == 3;
-    case EditorMenuCommand::Project:
-        return row == 3 || row == 5;
-    case EditorMenuCommand::Scene:
-        return row == scenes || row == scenes + 5;
-    case EditorMenuCommand::RecentProjects:
-        return row == 1;
-    case EditorMenuCommand::PlayOptions:
-        return row == 4;
-    case EditorMenuCommand::Publish:
-        return row == rowCount - 1;
-    default:
-        return false;
-    }
-}
-
-bool EditorToolbarLayout::DropdownHasHeading(EditorMenuCommand menu, int row, int rowCount) noexcept {
-    if (menu == EditorMenuCommand::Project) {
-        return row == 0 || row == 3;
-    }
-    if (menu == EditorMenuCommand::PlayOptions) {
-        return row == 0 || row == 4;
-    }
-    if (menu == EditorMenuCommand::Publish) {
-        return row == 0 && rowCount > 1;
-    }
-    if (menu == EditorMenuCommand::Scene) {
-        const int scenes = rowCount - FixedRowCount(menu);
-        return (row == 0 && scenes > 0) || row == scenes;
-    }
-    return false;
-}
-
-std::string_view EditorToolbarLayout::DropdownHeading(EditorMenuCommand menu, int row, int rowCount) {
-    if (!DropdownHasHeading(menu, row, rowCount)) {
-        return {};
-    }
-    if (menu == EditorMenuCommand::Project) {
-        return row == 0 ? EditorText("menu.heading.project", "Project") : EditorText("menu.heading.settings", "Settings");
-    }
-    if (menu == EditorMenuCommand::PlayOptions) {
-        return row == 0 ? EditorText("menu.heading.playWhere", "Run") : EditorText("menu.heading.options", "Options");
-    }
-    if (menu == EditorMenuCommand::Publish) {
-        return EditorText("menu.heading.publishPlatform", "Release Build For");
-    }
-    const int scenes = rowCount - FixedRowCount(menu);
-    return row == scenes ? EditorText("menu.heading.actions", "Actions") : EditorText("menu.heading.scenes", "Scenes in the Project");
 }
 
 } // namespace kb::editor
