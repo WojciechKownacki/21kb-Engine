@@ -155,6 +155,7 @@ void RunWorldConfigTest() {
     kb::tests::Require(benchmarkSettings.workerPool == &benchmarkPool, "ECS world did not attach the requested query worker pool");
     kb::tests::Require(benchmarkSettings.policy == kb::ecs::QueryExecutionPolicy::SIMDPreferred, "ECS world did not honor requested query policy");
     kb::tests::Require(benchmarkSettings.adaptiveGrain, "ECS world did not enable adaptive default query grain");
+    kb::tests::Require(benchmarkSettings.autoParallel, "ECS world did not enable the measured serial or pool choice by default");
 
     const kb::ecs::WorldConfig mobile4K = kb::ecs::WorldConfigPresets::Mobile4K();
     kb::tests::Require(mobile4K.chunkSizeProfile == kb::ecs::ChunkSizeProfile::Chunk4KB, "ECS Mobile4K config uses invalid storage chunk profile");
@@ -169,6 +170,7 @@ void RunWorldConfigTest() {
     kb::tests::Require(mobileSettings.workerCountOverride == 2, "ECS Mobile4K default query settings lost worker cap");
     kb::tests::Require(mobileSettings.policy == kb::ecs::QueryExecutionPolicy::ParallelRanges, "ECS Mobile4K default query settings lost policy override");
     kb::tests::Require(mobileSettings.adaptiveGrain, "ECS Mobile4K default query settings lost adaptive grain");
+    kb::tests::Require(mobileSettings.autoParallel, "ECS Mobile4K default query settings lost the measured serial or pool choice");
 
     const kb::ecs::WorldConfig mobile8K = kb::ecs::WorldConfigPresets::Mobile8K();
     kb::tests::Require(mobile8K.chunkSizeProfile == kb::ecs::ChunkSizeProfile::Chunk8KB, "ECS Mobile8K config uses invalid storage chunk profile");

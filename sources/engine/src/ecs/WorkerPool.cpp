@@ -10,6 +10,7 @@
 #include <exception>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -349,7 +350,9 @@ public:
         JoinWorkers();
 
         {
-            std::lock_guard lock{ mutex_ };
+            std::unique_lock lock{ mutex_ };
+            // The thread that dispatched work and runs a piece of it itself finishes that piece first.
+            batchFinished_.wait(lock, [this] { return !dispatcherRunning_; });
             if (batchActive_) {
                 const std::exception_ptr cancellation = firstJobException_ != nullptr
                     ? firstJobException_
@@ -382,6 +385,7 @@ public:
             remainingWork_ = 0;
             workMode_ = WorkMode::None;
             batchActive_ = false;
+            helperSlot_ = kNoSlot;
             activeCompletion_.reset();
             running_ = false;
             stopping_ = false;
@@ -406,15 +410,21 @@ public:
             if (!Running()) {
                 throw std::logic_error("ECS worker pool must be started before running jobs");
             }
-            RunJobsInline(jobs);
+            RunJobsInline(jobs, WorkerContext{ .workerIndex = 0, .workerCount = 1 });
             return;
         }
 
         const DispatchTimePoint dispatchStartedAt = BeginDispatchScheduleTiming();
+        DispatcherSlot dispatcher;
         {
             std::unique_lock lock{ mutex_ };
             if (!running_) {
                 throw std::logic_error("ECS worker pool must be started before running jobs");
+            }
+            if (const std::optional<WorkerContext> nested = RunningContextLocked()) {
+                lock.unlock();
+                RunJobsInline(jobs, *nested);
+                return;
             }
             WaitFinished(lock, [this] {
                 return !batchActive_;
@@ -428,28 +438,14 @@ public:
             activeWorkerLimit_ = config_.workerCount;
             workMode_ = WorkMode::Jobs;
             RecordDispatchLocked(workMode_, jobs.size(), activeWorkerLimit_);
+            dispatcher = ReserveDispatcherSlotLocked();
             batchActive_ = true;
         }
 
         NoteWorkPublished();
         batchAvailable_.notify_all();
         EndDispatchScheduleTiming(dispatchStartedAt);
-
-        std::unique_lock lock{ mutex_ };
-        WaitFinished(lock, [this] {
-            return !batchActive_;
-        });
-
-        if (firstJobException_ != nullptr) {
-            std::exception_ptr exception = firstJobException_;
-            firstJobException_ = nullptr;
-            std::rethrow_exception(exception);
-        }
-        if (cancelledRunException_ != nullptr) {
-            std::exception_ptr exception = cancelledRunException_;
-            cancelledRunException_ = nullptr;
-            std::rethrow_exception(exception);
-        }
+        AwaitDispatch(dispatcher);
     }
 
     void RunBatches(std::span<const WorkerPoolBatch> batches, WorkerPoolBatchCallback callback, void* context) {
@@ -464,15 +460,21 @@ public:
             if (!Running()) {
                 throw std::logic_error("ECS worker pool must be started before running batches");
             }
-            RunBatchesInline(batches, callback, context);
+            RunBatchesInline(batches, callback, context, WorkerContext{ .workerIndex = 0, .workerCount = 1 });
             return;
         }
 
         const DispatchTimePoint dispatchStartedAt = BeginDispatchScheduleTiming();
+        DispatcherSlot dispatcher;
         {
             std::unique_lock lock{ mutex_ };
             if (!running_) {
                 throw std::logic_error("ECS worker pool must be started before running batches");
+            }
+            if (const std::optional<WorkerContext> nested = RunningContextLocked()) {
+                lock.unlock();
+                RunBatchesInline(batches, callback, context, *nested);
+                return;
             }
             WaitFinished(lock, [this] {
                 return !batchActive_;
@@ -501,28 +503,14 @@ public:
             cancelledRunException_ = nullptr;
             workMode_ = useStaticStridedBatches ? WorkMode::BatchesStaticStrided : WorkMode::Batches;
             RecordDispatchLocked(workMode_, batches.size(), activeWorkerLimit_);
+            dispatcher = ReserveDispatcherSlotLocked();
             batchActive_ = true;
         }
 
         NoteWorkPublished();
         batchAvailable_.notify_all();
         EndDispatchScheduleTiming(dispatchStartedAt);
-
-        std::unique_lock lock{ mutex_ };
-        WaitFinished(lock, [this] {
-            return !batchActive_;
-        });
-
-        if (firstJobException_ != nullptr) {
-            std::exception_ptr exception = firstJobException_;
-            firstJobException_ = nullptr;
-            std::rethrow_exception(exception);
-        }
-        if (cancelledRunException_ != nullptr) {
-            std::exception_ptr exception = cancelledRunException_;
-            cancelledRunException_ = nullptr;
-            std::rethrow_exception(exception);
-        }
+        AwaitDispatch(dispatcher);
     }
 
     void ParallelForChunks(std::span<const WorkerPoolChunk> chunks, WorkerPoolChunkCallback callback, void* context) {
@@ -537,15 +525,21 @@ public:
             if (!Running()) {
                 throw std::logic_error("ECS worker pool must be started before running chunks");
             }
-            RunChunksInline(chunks, callback, context);
+            RunChunksInline(chunks, callback, context, WorkerContext{ .workerIndex = 0, .workerCount = 1 });
             return;
         }
 
         const DispatchTimePoint dispatchStartedAt = BeginDispatchScheduleTiming();
+        DispatcherSlot dispatcher;
         {
             std::unique_lock lock{ mutex_ };
             if (!running_) {
                 throw std::logic_error("ECS worker pool must be started before running chunks");
+            }
+            if (const std::optional<WorkerContext> nested = RunningContextLocked()) {
+                lock.unlock();
+                RunChunksInline(chunks, callback, context, *nested);
+                return;
             }
             WaitFinished(lock, [this] {
                 return !batchActive_;
@@ -574,28 +568,14 @@ public:
             cancelledRunException_ = nullptr;
             workMode_ = useStaticStridedChunks ? WorkMode::ChunksStaticStrided : WorkMode::Chunks;
             RecordDispatchLocked(workMode_, chunks.size(), activeWorkerLimit_);
+            dispatcher = ReserveDispatcherSlotLocked();
             batchActive_ = true;
         }
 
         NoteWorkPublished();
         batchAvailable_.notify_all();
         EndDispatchScheduleTiming(dispatchStartedAt);
-
-        std::unique_lock lock{ mutex_ };
-        WaitFinished(lock, [this] {
-            return !batchActive_;
-        });
-
-        if (firstJobException_ != nullptr) {
-            std::exception_ptr exception = firstJobException_;
-            firstJobException_ = nullptr;
-            std::rethrow_exception(exception);
-        }
-        if (cancelledRunException_ != nullptr) {
-            std::exception_ptr exception = cancelledRunException_;
-            cancelledRunException_ = nullptr;
-            std::rethrow_exception(exception);
-        }
+        AwaitDispatch(dispatcher);
     }
 
     [[nodiscard]] JobHandle Submit(std::vector<WorkerPoolJob> jobs) {
@@ -608,7 +588,7 @@ public:
             if (!Running()) {
                 throw std::logic_error("ECS worker pool must be started before submitting jobs");
             }
-            return SubmitJobsInline(jobs);
+            return SubmitJobsInline(jobs, WorkerContext{ .workerIndex = 0, .workerCount = 1 });
         }
 
         auto completion = std::make_shared<JobHandle::State>();
@@ -616,6 +596,10 @@ public:
             std::unique_lock lock{ mutex_ };
             if (!running_) {
                 throw std::logic_error("ECS worker pool must be started before submitting jobs");
+            }
+            if (const std::optional<WorkerContext> nested = RunningContextLocked()) {
+                lock.unlock();
+                return SubmitJobsInline(jobs, *nested);
             }
             WaitFinished(lock, [this] {
                 return !batchActive_;
@@ -652,7 +636,7 @@ public:
             if (!Running()) {
                 throw std::logic_error("ECS worker pool must be started before submitting batches");
             }
-            return SubmitBatchesInline(batches, callback, context);
+            return SubmitBatchesInline(batches, callback, context, WorkerContext{ .workerIndex = 0, .workerCount = 1 });
         }
 
         auto completion = std::make_shared<JobHandle::State>();
@@ -660,6 +644,10 @@ public:
             std::unique_lock lock{ mutex_ };
             if (!running_) {
                 throw std::logic_error("ECS worker pool must be started before submitting batches");
+            }
+            if (const std::optional<WorkerContext> nested = RunningContextLocked()) {
+                lock.unlock();
+                return SubmitBatchesInline(batches, callback, context, *nested);
             }
             WaitFinished(lock, [this] {
                 return !batchActive_;
@@ -710,7 +698,7 @@ public:
             if (!Running()) {
                 throw std::logic_error("ECS worker pool must be started before submitting chunks");
             }
-            return SubmitChunksInline(chunks, callback, context);
+            return SubmitChunksInline(chunks, callback, context, WorkerContext{ .workerIndex = 0, .workerCount = 1 });
         }
 
         auto completion = std::make_shared<JobHandle::State>();
@@ -718,6 +706,10 @@ public:
             std::unique_lock lock{ mutex_ };
             if (!running_) {
                 throw std::logic_error("ECS worker pool must be started before submitting chunks");
+            }
+            if (const std::optional<WorkerContext> nested = RunningContextLocked()) {
+                lock.unlock();
+                return SubmitChunksInline(chunks, callback, context, *nested);
             }
             WaitFinished(lock, [this] {
                 return !batchActive_;
@@ -758,10 +750,7 @@ public:
 
     [[nodiscard]] bool IsWorkerThread() const noexcept {
         std::lock_guard lock{mutex_};
-        const auto current = std::this_thread::get_id();
-        return std::any_of(workers_.begin(), workers_.end(), [current](const std::thread& worker) {
-            return worker.get_id() == current;
-        });
+        return RunningContextLocked().has_value();
     }
 
     [[nodiscard]] bool Running() const noexcept {
@@ -976,12 +965,8 @@ private:
         return true;
     }
 
-    static void RunJobsInline(std::span<const WorkerPoolJob> jobs) {
+    static void RunJobsInline(std::span<const WorkerPoolJob> jobs, WorkerContext context) {
         std::exception_ptr firstException;
-        const WorkerContext context{
-            .workerIndex = 0,
-            .workerCount = 1,
-        };
 
         for (const WorkerPoolJob& job : jobs) {
             try {
@@ -997,12 +982,8 @@ private:
         ThrowIfFailed(firstException);
     }
 
-    static void RunBatchesInline(std::span<const WorkerPoolBatch> batches, WorkerPoolBatchCallback callback, void* callbackContext) {
+    static void RunBatchesInline(std::span<const WorkerPoolBatch> batches, WorkerPoolBatchCallback callback, void* callbackContext, WorkerContext context) {
         std::exception_ptr firstException;
-        const WorkerContext context{
-            .workerIndex = 0,
-            .workerCount = 1,
-        };
 
         for (const WorkerPoolBatch& batch : batches) {
             try {
@@ -1018,12 +999,8 @@ private:
         ThrowIfFailed(firstException);
     }
 
-    static void RunChunksInline(std::span<const WorkerPoolChunk> chunks, WorkerPoolChunkCallback callback, void* callbackContext) {
+    static void RunChunksInline(std::span<const WorkerPoolChunk> chunks, WorkerPoolChunkCallback callback, void* callbackContext, WorkerContext context) {
         std::exception_ptr firstException;
-        const WorkerContext context{
-            .workerIndex = 0,
-            .workerCount = 1,
-        };
 
         for (const WorkerPoolChunk& chunk : chunks) {
             try {
@@ -1039,13 +1016,9 @@ private:
         ThrowIfFailed(firstException);
     }
 
-    static JobHandle SubmitJobsInline(std::span<const WorkerPoolJob> jobs) {
+    static JobHandle SubmitJobsInline(std::span<const WorkerPoolJob> jobs, WorkerContext context) {
         auto completion = std::make_shared<JobHandle::State>();
         std::exception_ptr firstException;
-        const WorkerContext context{
-            .workerIndex = 0,
-            .workerCount = 1,
-        };
 
         for (const WorkerPoolJob& job : jobs) {
             try {
@@ -1062,13 +1035,9 @@ private:
         return JobHandle{ std::move(completion) };
     }
 
-    static JobHandle SubmitBatchesInline(std::span<const WorkerPoolBatch> batches, WorkerPoolBatchCallback callback, void* callbackContext) {
+    static JobHandle SubmitBatchesInline(std::span<const WorkerPoolBatch> batches, WorkerPoolBatchCallback callback, void* callbackContext, WorkerContext context) {
         auto completion = std::make_shared<JobHandle::State>();
         std::exception_ptr firstException;
-        const WorkerContext context{
-            .workerIndex = 0,
-            .workerCount = 1,
-        };
 
         for (const WorkerPoolBatch& batch : batches) {
             try {
@@ -1085,13 +1054,9 @@ private:
         return JobHandle{ std::move(completion) };
     }
 
-    static JobHandle SubmitChunksInline(std::span<const WorkerPoolChunk> chunks, WorkerPoolChunkCallback callback, void* callbackContext) {
+    static JobHandle SubmitChunksInline(std::span<const WorkerPoolChunk> chunks, WorkerPoolChunkCallback callback, void* callbackContext, WorkerContext context) {
         auto completion = std::make_shared<JobHandle::State>();
         std::exception_ptr firstException;
-        const WorkerContext context{
-            .workerIndex = 0,
-            .workerCount = 1,
-        };
 
         for (const WorkerPoolChunk& chunk : chunks) {
             try {
@@ -1127,22 +1092,10 @@ private:
         }
 
         while (true) {
-            const WorkerPoolJob* job = nullptr;
-            WorkerPoolBatchCallback batchCallback = nullptr;
-            void* batchCallbackContext = nullptr;
-            WorkerPoolChunkCallback chunkCallback = nullptr;
-            void* chunkCallbackContext = nullptr;
-            const WorkerPoolBatch* staticBatches = nullptr;
-            std::size_t staticBatchCount = 0;
-            const WorkerPoolChunk* staticChunks = nullptr;
-            std::size_t staticChunkCount = 0;
-            WorkerPoolBatch batch;
-            WorkerPoolChunk chunk;
-            WorkMode mode = WorkMode::None;
-            std::size_t workerCount = config_.workerCount;
+            WorkItem item;
             {
                 std::unique_lock lock{ mutex_ };
-                if (!stopping_ && !HasPendingWorkLocked(workerIndex) && passesFollowClosely_.load(std::memory_order_relaxed)) {
+                if (!stopping_ && !HasPendingWorkForWorkerLocked(workerIndex) && passesFollowClosely_.load(std::memory_order_relaxed)) {
                     // Passes are coming one right after another: stay awake for the next one.
                     const std::uint64_t seen = workEpoch_.load(std::memory_order_acquire);
                     lock.unlock();
@@ -1150,95 +1103,187 @@ private:
                     lock.lock();
                 }
                 batchAvailable_.wait(lock, [this, workerIndex] {
-                    return stopping_ || HasPendingWorkLocked(workerIndex);
+                    return stopping_ || HasPendingWorkForWorkerLocked(workerIndex);
                 });
 
                 if (stopping_) {
                     return;
                 }
+                item = TakeWorkLocked(workerIndex);
+            }
+            RunWorkItem(item, workerIndex, false);
+        }
+    }
 
-                mode = workMode_;
-                workerCount = activeWorkerLimit_;
-                if (mode == WorkMode::Jobs) {
-                    job = &jobs_[nextJob_];
-                    ++nextJob_;
-                } else if (mode == WorkMode::Batches) {
-                    const std::size_t batchIndex = TakeBatchLocked(workerIndex);
-                    batch = batches_[batchIndex];
-                    batchCallback = batchCallback_;
-                    batchCallbackContext = batchCallbackContext_;
-                } else if (mode == WorkMode::BatchesStaticStrided) {
-                    staticBatches = batches_;
-                    staticBatchCount = batchCount_;
-                    batchCallback = batchCallback_;
-                    batchCallbackContext = batchCallbackContext_;
-                } else if (mode == WorkMode::Chunks) {
-                    const std::size_t chunkIndex = TakeBatchLocked(workerIndex);
-                    chunk = chunks_[chunkIndex];
-                    chunkCallback = chunkCallback_;
-                    chunkCallbackContext = chunkCallbackContext_;
-                } else if (mode == WorkMode::ChunksStaticStrided) {
-                    staticChunks = chunks_;
-                    staticChunkCount = chunkCount_;
-                    chunkCallback = chunkCallback_;
-                    chunkCallbackContext = chunkCallbackContext_;
+    // One piece of the active dispatch, copied out under the lock so that it runs without it.
+    struct WorkItem {
+        WorkMode mode = WorkMode::None;
+        const WorkerPoolJob* job = nullptr;
+        WorkerPoolBatchCallback batchCallback = nullptr;
+        void* batchCallbackContext = nullptr;
+        WorkerPoolChunkCallback chunkCallback = nullptr;
+        void* chunkCallbackContext = nullptr;
+        const WorkerPoolBatch* staticBatches = nullptr;
+        std::size_t staticBatchCount = 0;
+        const WorkerPoolChunk* staticChunks = nullptr;
+        std::size_t staticChunkCount = 0;
+        WorkerPoolBatch batch;
+        WorkerPoolChunk chunk;
+        std::size_t workerCount = 0;
+    };
+
+    [[nodiscard]] WorkItem TakeWorkLocked(std::size_t slot) {
+        WorkItem item;
+        item.mode = workMode_;
+        item.workerCount = activeWorkerLimit_;
+        if (item.mode == WorkMode::Jobs) {
+            item.job = &jobs_[nextJob_];
+            ++nextJob_;
+        } else if (item.mode == WorkMode::Batches) {
+            const std::size_t batchIndex = TakeBatchLocked(slot);
+            item.batch = batches_[batchIndex];
+            item.batchCallback = batchCallback_;
+            item.batchCallbackContext = batchCallbackContext_;
+        } else if (item.mode == WorkMode::BatchesStaticStrided) {
+            item.staticBatches = batches_;
+            item.staticBatchCount = batchCount_;
+            item.batchCallback = batchCallback_;
+            item.batchCallbackContext = batchCallbackContext_;
+        } else if (item.mode == WorkMode::Chunks) {
+            const std::size_t chunkIndex = TakeBatchLocked(slot);
+            item.chunk = chunks_[chunkIndex];
+            item.chunkCallback = chunkCallback_;
+            item.chunkCallbackContext = chunkCallbackContext_;
+        } else if (item.mode == WorkMode::ChunksStaticStrided) {
+            item.staticChunks = chunks_;
+            item.staticChunkCount = chunkCount_;
+            item.chunkCallback = chunkCallback_;
+            item.chunkCallbackContext = chunkCallbackContext_;
+        }
+        return item;
+    }
+
+    // Runs a piece as worker `slot` and accounts for it. `byDispatcher` is set when the thread that published the work
+    // runs the piece itself (see AwaitDispatch).
+    void RunWorkItem(const WorkItem& item, std::size_t slot, bool byDispatcher) {
+        const WorkerContext context{
+            .workerIndex = slot,
+            .workerCount = item.workerCount,
+        };
+
+        const DispatchTimePoint activeStartedAt = BeginWorkerActiveTiming();
+        try {
+            if (item.mode == WorkMode::Jobs) {
+                item.job->callback(context, item.job->context);
+            } else if (item.mode == WorkMode::Batches) {
+                item.batchCallback(context, item.batch, item.batchCallbackContext);
+            } else if (item.mode == WorkMode::BatchesStaticStrided) {
+                for (std::size_t batchIndex = FirstStaticWork(slot); batchIndex < item.staticBatchCount;
+                     batchIndex = NextStaticWork(batchIndex, item.workerCount)) {
+                    item.batchCallback(context, item.staticBatches[batchIndex], item.batchCallbackContext);
+                }
+            } else if (item.mode == WorkMode::Chunks) {
+                item.chunkCallback(context, item.chunk, item.chunkCallbackContext);
+            } else if (item.mode == WorkMode::ChunksStaticStrided) {
+                for (std::size_t chunkIndex = FirstStaticWork(slot); chunkIndex < item.staticChunkCount;
+                     chunkIndex = NextStaticWork(chunkIndex, item.workerCount)) {
+                    item.chunkCallback(context, item.staticChunks[chunkIndex], item.chunkCallbackContext);
                 }
             }
-
-            const WorkerContext context{
-                .workerIndex = workerIndex,
-                .workerCount = workerCount,
-            };
-
-            const DispatchTimePoint activeStartedAt = BeginWorkerActiveTiming();
-            try {
-                if (mode == WorkMode::Jobs) {
-                    job->callback(context, job->context);
-                } else if (mode == WorkMode::Batches) {
-                    batchCallback(context, batch, batchCallbackContext);
-                } else if (mode == WorkMode::BatchesStaticStrided) {
-                    for (std::size_t batchIndex = FirstStaticWork(workerIndex); batchIndex < staticBatchCount;
-                         batchIndex = NextStaticWork(batchIndex, workerCount)) {
-                        batchCallback(context, staticBatches[batchIndex], batchCallbackContext);
-                    }
-                } else if (mode == WorkMode::Chunks) {
-                    chunkCallback(context, chunk, chunkCallbackContext);
-                } else if (mode == WorkMode::ChunksStaticStrided) {
-                    for (std::size_t chunkIndex = FirstStaticWork(workerIndex); chunkIndex < staticChunkCount;
-                         chunkIndex = NextStaticWork(chunkIndex, workerCount)) {
-                        chunkCallback(context, staticChunks[chunkIndex], chunkCallbackContext);
-                    }
-                }
-            } catch (...) {
-                std::lock_guard lock{ mutex_ };
-                if (firstJobException_ == nullptr) {
-                    firstJobException_ = std::current_exception();
-                    if (mode != WorkMode::BatchesStaticStrided && mode != WorkMode::ChunksStaticStrided) {
-                        CancelPendingWorkLocked();
-                    }
-                }
-            }
-            const std::uint64_t activeNanoseconds = EndWorkerActiveTiming(activeStartedAt);
-
-            {
-                std::lock_guard lock{ mutex_ };
-                RecordWorkerActiveTimeLocked(activeNanoseconds);
-                if ((mode == WorkMode::BatchesStaticStrided || mode == WorkMode::ChunksStaticStrided) && workerIndex < staticStridedWorkerDone_.size()) {
-                    staticStridedWorkerDone_[workerIndex] = 1U;
-                }
-                --remainingWork_;
-                if (remainingWork_ == 0) {
-                    CompleteDispatchTelemetryLocked();
-                    CompleteActiveWorkLocked();
-                    ClearActiveWorkLocked();
-                    finishEpoch_.fetch_add(1U, std::memory_order_release);
-                    batchFinished_.notify_all();
-                } else if (HasAnyPendingWorkLocked()) {
-                    NoteWorkPublished();
-                    batchAvailable_.notify_one();
+        } catch (...) {
+            std::lock_guard lock{ mutex_ };
+            if (firstJobException_ == nullptr) {
+                firstJobException_ = std::current_exception();
+                if (item.mode != WorkMode::BatchesStaticStrided && item.mode != WorkMode::ChunksStaticStrided) {
+                    CancelPendingWorkLocked();
                 }
             }
         }
+        const std::uint64_t activeNanoseconds = EndWorkerActiveTiming(activeStartedAt);
+
+        std::lock_guard lock{ mutex_ };
+        RecordWorkerActiveTimeLocked(activeNanoseconds);
+        if ((item.mode == WorkMode::BatchesStaticStrided || item.mode == WorkMode::ChunksStaticStrided) && slot < staticStridedWorkerDone_.size()) {
+            staticStridedWorkerDone_[slot] = 1U;
+        }
+        --remainingWork_;
+        if (byDispatcher) {
+            dispatcherRunning_ = false;
+        }
+        if (remainingWork_ == 0) {
+            CompleteDispatchTelemetryLocked();
+            CompleteActiveWorkLocked();
+            ClearActiveWorkLocked();
+            finishEpoch_.fetch_add(1U, std::memory_order_release);
+            batchFinished_.notify_all();
+        } else if (HasAnyPendingWorkLocked()) {
+            NoteWorkPublished();
+            batchAvailable_.notify_one();
+        }
+        if (byDispatcher && stopping_) {
+            batchFinished_.notify_all();
+        }
+    }
+
+    // The slot the thread that published a synchronous dispatch works as while pieces of it are pending: the highest
+    // slot of the dispatch. Its worker stays out of that dispatch, so no two threads run as one worker.
+    struct DispatcherSlot {
+        std::uint64_t dispatchId = 0;
+        std::size_t slot = kNoSlot;
+    };
+
+    [[nodiscard]] DispatcherSlot ReserveDispatcherSlotLocked() noexcept {
+        helperSlot_ = activeWorkerLimit_ - 1U;
+        return DispatcherSlot{ .dispatchId = dispatchId_, .slot = helperSlot_ };
+    }
+
+    // The thread that published a dispatch takes the pending pieces of it as its slot until none is left, then waits
+    // for the workers to finish theirs.
+    void AwaitDispatch(DispatcherSlot dispatcher) {
+        std::unique_lock lock{ mutex_ };
+        while (dispatchId_ == dispatcher.dispatchId && batchActive_ && !stopping_ && HasPendingWorkLocked(dispatcher.slot)) {
+            const WorkItem item = TakeWorkLocked(dispatcher.slot);
+            dispatcherRunning_ = true;
+            dispatcherThread_ = std::this_thread::get_id();
+            dispatcherSlot_ = dispatcher.slot;
+            lock.unlock();
+            RunWorkItem(item, dispatcher.slot, true);
+            lock.lock();
+        }
+        WaitFinished(lock, [this] {
+            return !batchActive_;
+        });
+
+        if (firstJobException_ != nullptr) {
+            std::exception_ptr exception = firstJobException_;
+            firstJobException_ = nullptr;
+            std::rethrow_exception(exception);
+        }
+        if (cancelledRunException_ != nullptr) {
+            std::exception_ptr exception = cancelledRunException_;
+            cancelledRunException_ = nullptr;
+            std::rethrow_exception(exception);
+        }
+    }
+
+    // The worker context of the calling thread when it runs a piece of this pool's work, as one of its workers or as
+    // the thread that dispatched the work. Work handed to the pool from there runs in place, in that context: the pool
+    // is busy with the dispatch the piece belongs to.
+    [[nodiscard]] std::optional<WorkerContext> RunningContextLocked() const noexcept {
+        const std::thread::id current = std::this_thread::get_id();
+        if (dispatcherRunning_ && dispatcherThread_ == current) {
+            return WorkerContext{ .workerIndex = dispatcherSlot_, .workerCount = activeWorkerLimit_ };
+        }
+        for (std::size_t index = 0; index < workers_.size(); ++index) {
+            if (workers_[index].get_id() == current) {
+                return WorkerContext{ .workerIndex = index, .workerCount = activeWorkerLimit_ };
+            }
+        }
+        return std::nullopt;
+    }
+
+    [[nodiscard]] bool HasPendingWorkForWorkerLocked(std::size_t workerIndex) const {
+        return workerIndex != helperSlot_ && HasPendingWorkLocked(workerIndex);
     }
 
     [[nodiscard]] bool HasPendingWorkLocked(std::size_t workerIndex) const {
@@ -1414,6 +1459,8 @@ private:
         remainingWork_ = 0;
         workMode_ = WorkMode::None;
         batchActive_ = false;
+        helperSlot_ = kNoSlot;
+        ++dispatchId_;
         activeCompletion_.reset();
     }
 
@@ -1457,6 +1504,15 @@ private:
     }
 
     // Counted up with every wake of the two conditions below, so a waiter can watch for the next one without sleeping.
+    static constexpr std::size_t kNoSlot = std::numeric_limits<std::size_t>::max();
+    // dispatchId_ counts the dispatches that completed, so it names the active one. helperSlot_ is the slot the thread
+    // that published the active dispatch works as, and dispatcherRunning_ tells that this thread runs a piece of it
+    // (on dispatcherThread_, as dispatcherSlot_).
+    std::uint64_t dispatchId_ = 0;
+    std::size_t helperSlot_ = kNoSlot;
+    bool dispatcherRunning_ = false;
+    std::thread::id dispatcherThread_;
+    std::size_t dispatcherSlot_ = kNoSlot;
     std::atomic<std::uint64_t> workEpoch_{ 0U };
     std::atomic<std::uint64_t> finishEpoch_{ 0U };
     std::atomic<std::int64_t> lastPublishNanoseconds_{ 0 };

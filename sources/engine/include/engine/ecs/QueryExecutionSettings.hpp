@@ -111,6 +111,8 @@ struct QueryExecutionSettings {
     // With a worker pool and a parallel policy: each execution picks serial or pool dispatch from the wall times
     // measured for the same visitor, so a set too small or a kernel too cheap for the pool stays on the calling
     // thread and the choice follows the hardware. Replaces the size limits of adaptiveGrain for the policy.
+    // World::DefaultQueryExecutionSettings switches it on together with adaptiveGrain; a policy that is not parallel,
+    // a deterministic order or reduction, and a missing pool keep the query on the calling thread either way.
     bool autoParallel = false;
 };
 

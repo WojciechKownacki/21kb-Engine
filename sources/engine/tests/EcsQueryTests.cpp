@@ -639,6 +639,10 @@ void RunTypedEcsAdaptiveQueryGrainTest() {
     kb::ecs::QueryExecutionSettings adaptiveSettings =
         adaptiveWorld.DefaultQueryExecutionSettings(&adaptivePool, kb::ecs::QueryExecutionPolicy::ParallelRanges);
     adaptiveSettings.telemetryEnabled = true;
+    // World defaults choose between the calling thread and the pool by measured time, so their first runs are serial.
+    // The grain checked here is that of a pool dispatch, which this test asks for explicitly.
+    kb::tests::Require(adaptiveSettings.autoParallel, "Adaptive ECS world defaults did not enable the measured serial or pool choice");
+    adaptiveSettings.autoParallel = false;
     adaptiveQuery.ForEachBatch(
         adaptiveSettings,
         &CountMovingBatchesParallelFast,
@@ -2551,6 +2555,94 @@ void RunTypedEcsAutoParallelQueryTest() {
     kb::tests::Require(visited.load(std::memory_order_acquire) == 4U * kCount, "Read-only autoParallel runs did not visit every entity");
 }
 
+// World defaults carry the measured serial or pool choice. A policy that is not parallel, a deterministic order and a
+// missing pool must never reach the pool, whatever the size and cost of the loop, and results equal the serial ones.
+void RunTypedEcsDefaultAutoParallelQueryTest() {
+    constexpr int kRuns = 8;
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 3 } };
+
+    // Runs the costly kernel and returns how many of its batches ran on a pool worker.
+    const auto workerBatchesOf = [](kb::ecs::World& world, const kb::ecs::QueryExecutionSettings& settings) {
+        const auto query = world.CreateQuery<EcsPosition, EcsVelocity>();
+        std::atomic_size_t onWorkers{ 0U };
+        for (int run = 0; run < kRuns; ++run) {
+            query.ForEachMutableBatchKernel(settings, [&onWorkers](kb::ecs::MutableQueryBatch<EcsPosition, EcsVelocity>& batch) {
+                if (kb::ecs::CurrentQueryWorkerContext().active) onWorkers.fetch_add(1U, std::memory_order_acq_rel);
+                HeavyAutoParallelStep(batch);
+            });
+        }
+        return onWorkers.load(std::memory_order_acquire);
+    };
+    const auto positionsOf = [](kb::ecs::World& world) {
+        std::vector<float> values;
+        world.CreateQuery<EcsPosition>().ForEachBatchKernel([&values](const kb::ecs::QueryBatch<EcsPosition>& batch) {
+            for (std::size_t row = 0; row < batch.Count(); ++row) values.push_back(batch.Components<0>()[row].x);
+        });
+        return values;
+    };
+
+    {
+        const auto world = MakeAutoParallelWorld(40'000U);
+        kb::tests::Require(world->DefaultQueryExecutionSettings(&pool).autoParallel, "World defaults must carry the measured serial or pool choice");
+        kb::tests::Require(!world->DefaultQueryExecutionSettings().workerPool, "Default settings must not invent a pool");
+    }
+
+    // Policies and settings that keep the loop on the calling thread stay there with the choice switched on.
+    constexpr std::size_t kLarge = 40'000U;
+    for (const kb::ecs::QueryExecutionPolicy policy : { kb::ecs::QueryExecutionPolicy::SingleThread, kb::ecs::QueryExecutionPolicy::SingleThreadSIMD, kb::ecs::QueryExecutionPolicy::Deterministic }) {
+        const auto world = MakeAutoParallelWorld(kLarge);
+        kb::tests::Require(workerBatchesOf(*world, world->DefaultQueryExecutionSettings(&pool, policy)) == 0U, "A serial policy reached the pool under autoParallel");
+    }
+    {
+        const auto world = MakeAutoParallelWorld(kLarge);
+        kb::ecs::QueryExecutionSettings settings = world->DefaultQueryExecutionSettings(&pool);
+        settings.iterationOrder = kb::ecs::QueryIterationOrder::Deterministic;
+        kb::tests::Require(workerBatchesOf(*world, settings) == 0U, "A deterministic iteration order reached the pool under autoParallel");
+    }
+    {
+        const auto world = MakeAutoParallelWorld(kLarge);
+        kb::ecs::QueryExecutionSettings settings = world->DefaultQueryExecutionSettings(&pool);
+        settings.reductionMode = kb::ecs::QueryReductionMode::Deterministic;
+        kb::tests::Require(workerBatchesOf(*world, settings) == 0U, "A deterministic reduction reached the pool under autoParallel");
+    }
+    {
+        const auto world = MakeAutoParallelWorld(kLarge);
+        kb::tests::Require(workerBatchesOf(*world, world->DefaultQueryExecutionSettings(nullptr)) == 0U, "Default settings without a pool used a pool");
+    }
+
+    // Around the entity floor, with the empty set and one entity, the results equal the serial ones, and below the floor
+    // nothing reaches the pool.
+    const std::size_t kFloor = kb::ecs::QueryParallelismController::kMinEntities;
+    const auto makeWorld = [](std::size_t count) { return count == 0U ? std::make_unique<kb::ecs::World>() : MakeAutoParallelWorld(count); };
+    for (const std::size_t count : { std::size_t{ 0U }, std::size_t{ 1U }, kFloor - 1U, kFloor, kFloor + 1U }) {
+        const auto reference = makeWorld(count);
+        const auto automatic = makeWorld(count);
+        const std::size_t onWorkers = workerBatchesOf(*automatic, automatic->DefaultQueryExecutionSettings(&pool));
+        static_cast<void>(workerBatchesOf(*reference, kb::ecs::QueryExecutionSettings{}));
+        if (count < kFloor) kb::tests::Require(onWorkers == 0U, "A set below the entity floor reached the pool by default");
+        kb::tests::Require(positionsOf(*reference).size() == count && positionsOf(*reference) == positionsOf(*automatic), "Default settings changed the result around the entity floor");
+    }
+
+    // A pool of one worker and a pool that runs on the calling thread give the serial result too.
+    kb::ecs::WorkerPool singleWorker{ kb::ecs::WorkerPoolConfig{ .workerCount = 1 } };
+    kb::ecs::WorkerPool inlinePool{ kb::ecs::WorkerPoolConfig{ .workerCount = 2, .singleThreaded = true } };
+    for (kb::ecs::WorkerPool* candidate : { &singleWorker, &inlinePool }) {
+        const auto reference = MakeAutoParallelWorld(kLarge);
+        const auto automatic = MakeAutoParallelWorld(kLarge);
+        static_cast<void>(workerBatchesOf(*reference, kb::ecs::QueryExecutionSettings{}));
+        static_cast<void>(workerBatchesOf(*automatic, automatic->DefaultQueryExecutionSettings(candidate)));
+        kb::tests::Require(positionsOf(*reference) == positionsOf(*automatic), "Default settings on a small pool changed the result");
+    }
+
+    // A million entities: the pool is probed after the serial runs, and the result still equals the serial one.
+    constexpr std::size_t kHuge = 1'000'000U;
+    const auto reference = MakeAutoParallelWorld(kHuge);
+    const auto automatic = MakeAutoParallelWorld(kHuge);
+    static_cast<void>(workerBatchesOf(*reference, kb::ecs::QueryExecutionSettings{}));
+    kb::tests::Require(workerBatchesOf(*automatic, automatic->DefaultQueryExecutionSettings(&pool)) > 0U, "A costly loop over a million entities never probed the pool");
+    kb::tests::Require(positionsOf(*reference) == positionsOf(*automatic), "Default settings changed the result over a million entities");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -2558,6 +2650,7 @@ namespace kb::tests {
 void RunEcsQueryTests() {
     RunQueryParallelismControllerTest();
     RunTypedEcsAutoParallelQueryTest();
+    RunTypedEcsDefaultAutoParallelQueryTest();
     RunTypedEcsQueryRowBatchAdapterTest();
     RunTypedEcsQueryBatchTest();
     RunTypedEcsQueryBatchPointerContractTest();

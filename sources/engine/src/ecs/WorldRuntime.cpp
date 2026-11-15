@@ -61,6 +61,7 @@ QueryExecutionSettings World::DefaultQueryExecutionSettings(WorkerPool* workerPo
         .workerCountOverride = config_.workerThreadLimit,
         .workerPool = workerPool,
         .adaptiveGrain = config_.adaptiveQueryExecution,
+        .autoParallel = config_.adaptiveQueryExecution,
     };
 }
 

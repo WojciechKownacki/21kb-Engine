@@ -4,9 +4,15 @@
 #include "engine/ecs/JobGraph.hpp"
 #include "engine/ecs/WorkerPool.hpp"
 
+#include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <cstdlib>
+#include <iostream>
 #include <memory>
+#include <mutex>
+#include <span>
 #include <stdexcept>
 #include <thread>
 #include <type_traits>
@@ -1020,6 +1026,144 @@ void RunWorkerGraphNestedWorkerLimitTest() {
     static_cast<void>(pool.RunGraph(graph, std::span{&job, 1U}));
 }
 
+// A deadlock fails the run instead of hanging it.
+class DeadlockWatchdog {
+public:
+    explicit DeadlockWatchdog(const char* message)
+        : thread_([this, message] {
+              std::unique_lock lock{ mutex_ };
+              if (!changed_.wait_for(lock, std::chrono::seconds{ 30 }, [this] { return finished_; })) {
+                  std::cerr << message << '\n';
+                  std::_Exit(EXIT_FAILURE);
+              }
+          }) {}
+
+    ~DeadlockWatchdog() {
+        {
+            const std::lock_guard lock{ mutex_ };
+            finished_ = true;
+        }
+        changed_.notify_all();
+        thread_.join();
+    }
+
+    DeadlockWatchdog(const DeadlockWatchdog&) = delete;
+    DeadlockWatchdog& operator=(const DeadlockWatchdog&) = delete;
+
+private:
+    std::mutex mutex_;
+    std::condition_variable changed_;
+    bool finished_ = false;
+    std::thread thread_;
+};
+
+// The thread that dispatches work runs the pieces of it that are still pending, as the highest slot of the dispatch;
+// the worker of that slot stays out of the dispatch, so that no two threads run as one worker.
+void RunWorkerPoolDispatcherRunsPendingPiecesTest() {
+    const std::thread::id dispatcher = std::this_thread::get_id();
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 2 } };
+
+    // Pieces bound to slots: chunk i runs as slot i % 2, and the dispatching thread is slot 1.
+    std::vector<kb::ecs::WorkerPoolChunk> chunks;
+    for (std::size_t index = 0; index < 8; ++index) {
+        chunks.push_back(kb::ecs::WorkerPoolChunk{ .index = index, .begin = index, .count = 1, .preferredWorkerIndex = index });
+    }
+    std::atomic<std::size_t> onDispatcher = 0;
+    std::atomic<std::size_t> onWorker = 0;
+    pool.ParallelForChunks(chunks, [&](kb::ecs::WorkerContext context, const kb::ecs::WorkerPoolChunk& chunk) {
+        const bool onCaller = std::this_thread::get_id() == dispatcher;
+        kb::tests::Require(context.workerIndex == chunk.index % 2U && context.workerCount == 2U, "ECS worker pool changed the slot of a bound chunk");
+        kb::tests::Require(onCaller == (context.workerIndex == 1U), "ECS worker pool dispatching thread did not work as the highest slot");
+        (onCaller ? onDispatcher : onWorker).fetch_add(1U, std::memory_order_acq_rel);
+    });
+    kb::tests::Require(onDispatcher.load(std::memory_order_acquire) == 4U && onWorker.load(std::memory_order_acquire) == 4U,
+        "ECS worker pool dispatching thread did not run its share of the chunks");
+
+    // Jobs and unbound batches go to whichever slot is free; the slot still tells the thread.
+    std::atomic<std::size_t> jobs = 0;
+    const std::vector<kb::ecs::WorkerPoolJob> jobList(6, kb::ecs::WorkerPoolJob{ .callback = +[](kb::ecs::WorkerContext context, void* count) {
+        kb::tests::Require(context.workerIndex < context.workerCount, "ECS worker pool job ran outside its slots");
+        static_cast<std::atomic<std::size_t>*>(count)->fetch_add(1U, std::memory_order_acq_rel);
+    }, .context = &jobs });
+    pool.Run(jobList);
+    kb::tests::Require(jobs.load(std::memory_order_acquire) == 6U, "ECS worker pool lost a job to the dispatching thread");
+
+    std::vector<kb::ecs::WorkerPoolBatch> batches;
+    for (std::size_t index = 0; index < 16; ++index) {
+        batches.push_back(kb::ecs::WorkerPoolBatch{ .index = index, .begin = index, .count = 1, .preferredWorkerIndex = 0 });
+    }
+    std::atomic<std::size_t> visited = 0;
+    pool.RunBatches(batches, [&](kb::ecs::WorkerContext context, const kb::ecs::WorkerPoolBatch&) {
+        kb::tests::Require((std::this_thread::get_id() == dispatcher) == (context.workerIndex == 1U), "ECS worker pool batch ran as the wrong slot for its thread");
+        visited.fetch_add(1U, std::memory_order_acq_rel);
+    });
+    kb::tests::Require(visited.load(std::memory_order_acquire) == 16U, "ECS worker pool lost a batch to the dispatching thread");
+
+    // A piece that fails on the dispatching thread reaches its caller, and the pool stays usable.
+    bool propagated = false;
+    try {
+        pool.ParallelForChunks(chunks, [&](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk&) {
+            if (std::this_thread::get_id() == dispatcher) {
+                throw std::runtime_error("dispatching thread piece failed");
+            }
+        });
+    } catch (const std::runtime_error&) {
+        propagated = true;
+    }
+    kb::tests::Require(propagated, "ECS worker pool did not propagate a failure of the dispatching thread");
+    std::atomic<std::size_t> after = 0;
+    pool.ParallelForChunks(32, 1, [&](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) { after.fetch_add(chunk.count, std::memory_order_acq_rel); });
+    kb::tests::Require(after.load(std::memory_order_acquire) == 32U, "ECS worker pool stopped working after a failure of the dispatching thread");
+
+    // With one worker nothing is left for it: the dispatching thread runs every piece, as worker 0 of 1.
+    kb::ecs::WorkerPool single{ kb::ecs::WorkerPoolConfig{ .workerCount = 1 } };
+    std::atomic<std::size_t> rows = 0;
+    single.ParallelForChunks(64, 1, [&](kb::ecs::WorkerContext context, const kb::ecs::WorkerPoolChunk& chunk) {
+        kb::tests::Require(std::this_thread::get_id() == dispatcher && context.workerIndex == 0U && context.workerCount == 1U, "ECS single worker pool did not run on the dispatching thread");
+        rows.fetch_add(chunk.count, std::memory_order_acq_rel);
+    });
+    kb::tests::Require(rows.load(std::memory_order_acquire) == 64U, "ECS single worker pool lost rows");
+}
+
+// Work handed to a pool from inside its own pieces of work runs in place, as the worker that handed it over.
+void RunWorkerPoolNestedDispatchRunsInPlaceTest() {
+    const DeadlockWatchdog watchdog{ "ECS worker pool deadlocked on nested work" };
+    for (const std::size_t workers : { std::size_t{ 1 }, std::size_t{ 2 }, std::size_t{ 4 } }) {
+        kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = workers } };
+        std::vector<std::size_t> rows(8U * 8U, 0U);
+        std::atomic<std::size_t> nested = 0;
+
+        pool.ParallelForChunks(8, 1, [&](kb::ecs::WorkerContext outer, const kb::ecs::WorkerPoolChunk& chunk) {
+            const auto sameWorker = [&outer](kb::ecs::WorkerContext inner) {
+                kb::tests::Require(inner.workerIndex == outer.workerIndex && inner.workerCount == outer.workerCount, "ECS nested work did not run as the worker that handed it over");
+            };
+            pool.ParallelForChunks(8, 1, [&](kb::ecs::WorkerContext inner, const kb::ecs::WorkerPoolChunk& piece) {
+                sameWorker(inner);
+                rows[(chunk.begin * 8U) + piece.begin] = (chunk.begin * 8U) + piece.begin + 1U;
+                nested.fetch_add(1U, std::memory_order_acq_rel);
+            });
+            const std::array<kb::ecs::WorkerPoolBatch, 2> batches{ kb::ecs::WorkerPoolBatch{ .index = 0, .begin = 0, .count = 1 }, kb::ecs::WorkerPoolBatch{ .index = 1, .begin = 1, .count = 1 } };
+            pool.RunBatches(batches, [&](kb::ecs::WorkerContext inner, const kb::ecs::WorkerPoolBatch&) {
+                sameWorker(inner);
+                nested.fetch_add(1U, std::memory_order_acq_rel);
+            });
+            const kb::ecs::WorkerPoolJob job{ .callback = +[](kb::ecs::WorkerContext, void* count) {
+                static_cast<std::atomic<std::size_t>*>(count)->fetch_add(1U, std::memory_order_acq_rel);
+            }, .context = &nested };
+            pool.Run(std::span<const kb::ecs::WorkerPoolJob>{ &job, 1U });
+            const kb::ecs::JobHandle handle = pool.SubmitParallelForChunks(4, 1, +[](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk&, void* count) {
+                static_cast<std::atomic<std::size_t>*>(count)->fetch_add(1U, std::memory_order_acq_rel);
+            }, &nested);
+            kb::tests::Require(handle.IsReady(), "ECS nested asynchronous work was not complete on return");
+        });
+
+        kb::tests::Require(nested.load(std::memory_order_acquire) == 8U * (8U + 2U + 1U + 4U), "ECS nested work did not run every piece");
+        for (std::size_t index = 0; index < rows.size(); ++index) {
+            kb::tests::Require(rows[index] == index + 1U, "ECS nested chunks changed the order of their results");
+        }
+    }
+}
+
 #if defined(_WIN32) && defined(KB_ECS_GRAPH_MODULE_PATH)
 void RunWorkerGraphDynamicModuleTest() {
     HMODULE module = LoadLibraryA(KB_ECS_GRAPH_MODULE_PATH);
@@ -1086,6 +1230,8 @@ void RunEcsWorkerPoolTests() {
     RunWorkerPoolRejectsTelemetryReconfigureWhileRunningTest();
     RunWorkerPoolStopCancelsSubmittedHandleTest();
     RunWorkerPoolReusesBatchQueuesAcrossDispatchesTest();
+    RunWorkerPoolDispatcherRunsPendingPiecesTest();
+    RunWorkerPoolNestedDispatchRunsInPlaceTest();
 }
 
 } // namespace kb::tests

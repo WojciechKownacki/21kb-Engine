@@ -172,6 +172,10 @@ public:
 
     void Start(WorkerPoolConfig config);
     void Stop();
+    // The thread that calls Run, RunBatches or ParallelForChunks works as the highest worker slot of that dispatch while
+    // pieces of it are pending (the worker of that slot stays out of it), so callbacks run on that thread too, always
+    // with workerIndex < workerCount. Work handed to the pool from inside a callback (those three and the Submit calls)
+    // runs in place on that thread, as the same worker. Submitted work does not use the thread that waits for it.
     void Run(std::span<const WorkerPoolJob> jobs);
     // Dependency completion releases successors immediately. Synchronous nested
     // Run/RunBatches/ParallelForChunks share these workers and help while waiting.

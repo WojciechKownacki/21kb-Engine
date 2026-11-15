@@ -261,7 +261,6 @@ int main(int argc, char** argv) {
         if (autoParallel) {
             pool = std::make_unique<kb::ecs::WorkerPool>(kb::ecs::WorkerPoolConfig{});
             updateSettings = world.DefaultQueryExecutionSettings(pool.get());
-            updateSettings.autoParallel = true;
         }
         std::vector<double> frameSamples;
         frameSamples.reserve(measuredFrames);
