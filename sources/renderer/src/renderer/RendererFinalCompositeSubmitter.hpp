@@ -16,12 +16,17 @@ public:
     [[nodiscard]] static SceneDisplayOutputTransform DisplayTransform(const PostProcessOutput& postProcessOutput) noexcept;
     // The profile's vignette as the composite applies it: 0 when off, else its intensity (0..1).
     [[nodiscard]] static float VignetteIntensity(const PostProcessOutput& postProcessOutput) noexcept;
+    // The profile's chromatic aberration and film grain as the composite applies them: an effect that is off has
+    // intensity 0, an effect that is on its clamped settings. `frameIndex` makes the grain differ from frame to frame.
+    [[nodiscard]] static FullscreenTextureImageEffects ImageEffects(
+        const PostProcessOutput& postProcessOutput, std::uint64_t frameIndex) noexcept;
     [[nodiscard]] static bool Submit(
         const FinalCompositePass& finalCompositePass,
         const RenderViewportPlan& viewportPlan,
         const RenderSceneSubmitDesc& desc,
         const PostProcessOutput& postProcessOutput,
-        bgfx::TextureHandle scenePostProcessOutput);
+        bgfx::TextureHandle scenePostProcessOutput,
+        std::uint64_t frameIndex);
 };
 
 } // namespace kb::render

@@ -243,6 +243,33 @@ void VignetteFollowsTheProfile() {
     Require(RendererFinalCompositeSubmitter::VignetteIntensity(output) == 0.0F, "A disabled vignette must not darken");
 }
 
+// The composite applies chromatic aberration and film grain only when they are on, at their clamped settings.
+void ImageEffectsFollowTheProfile() {
+    PostProcessOutput output;
+    const FullscreenTextureImageEffects off = RendererFinalCompositeSubmitter::ImageEffects(output, 7U);
+    Require(off.chromaticAberrationIntensity == 0.0F && off.filmGrainIntensity == 0.0F && off.grainFrame == 0U,
+        "The default profile must not add chromatic aberration or film grain");
+    output.postProcessSettings.chromaticAberrationIntensity = 0.7F;
+    output.postProcessSettings.filmGrainIntensity = 0.6F;
+    output.postProcessSettings.filmGrainSize = 2.0F;
+    const FullscreenTextureImageEffects disabled = RendererFinalCompositeSubmitter::ImageEffects(output, 7U);
+    Require(disabled.chromaticAberrationIntensity == 0.0F && disabled.filmGrainIntensity == 0.0F,
+        "Disabled effects must stay off whatever their intensity");
+    output.postProcessSettings.chromaticAberrationEnabled = true;
+    output.postProcessSettings.filmGrainEnabled = true;
+    const FullscreenTextureImageEffects on = RendererFinalCompositeSubmitter::ImageEffects(output, 7U);
+    Require(NearlyEqual(on.chromaticAberrationIntensity, 0.7F) && NearlyEqual(on.filmGrainIntensity, 0.6F) &&
+            NearlyEqual(on.filmGrainSize, 2.0F) && on.grainFrame == 7U,
+        "Enabled effects lost their settings or the frame");
+    output.postProcessSettings.chromaticAberrationIntensity = 3.0F;
+    output.postProcessSettings.filmGrainIntensity = -1.0F;
+    output.postProcessSettings.filmGrainSize = 40.0F;
+    const FullscreenTextureImageEffects clamped = RendererFinalCompositeSubmitter::ImageEffects(output, 7U);
+    Require(NearlyEqual(clamped.chromaticAberrationIntensity, 1.0F) && clamped.filmGrainIntensity == 0.0F &&
+            NearlyEqual(clamped.filmGrainSize, ScenePostProcessSettings::kFilmGrainSizeMax),
+        "Chromatic aberration and film grain settings must clamp to their ranges");
+}
+
 } // namespace
 
 void RunSceneExposureMeterTests() {
@@ -257,6 +284,7 @@ void RunSceneExposureMeterTests() {
     SuddenBrightnessChangesConvergeWithoutOscillation();
     TonemapOffKeepsExposureAndDisplayEncoding();
     VignetteFollowsTheProfile();
+    ImageEffectsFollowTheProfile();
 }
 
 } // namespace kb::render::tests

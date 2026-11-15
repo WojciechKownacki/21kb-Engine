@@ -24,10 +24,10 @@ vec3 upscale_edge_aware(vec2 uv, out vec3 low, out vec3 high)
     vec2 uv10 = uv00 + vec2(texel.x, 0.0);
     vec2 uv01 = uv00 + vec2(0.0, texel.y);
     vec2 uv11 = uv00 + texel;
-    vec3 c00 = display_transform(texture2D(s_kbFullscreenColor, uv00).rgb, uv00);
-    vec3 c10 = display_transform(texture2D(s_kbFullscreenColor, uv10).rgb, uv10);
-    vec3 c01 = display_transform(texture2D(s_kbFullscreenColor, uv01).rgb, uv01);
-    vec3 c11 = display_transform(texture2D(s_kbFullscreenColor, uv11).rgb, uv11);
+    vec3 c00 = display_transform(scene_color(uv00), uv00);
+    vec3 c10 = display_transform(scene_color(uv10), uv10);
+    vec3 c01 = display_transform(scene_color(uv01), uv01);
+    vec3 c11 = display_transform(scene_color(uv11), uv11);
     vec4 weights = vec4((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
     vec4 lumas = vec4(upscale_luma(c00), upscale_luma(c10), upscale_luma(c01), upscale_luma(c11));
     float nearest = f.x < 0.5 ? (f.y < 0.5 ? lumas.x : lumas.z) : (f.y < 0.5 ? lumas.y : lumas.w);
@@ -52,6 +52,7 @@ void main()
         display_sample(v_texcoord0 + vec2(texel.x, 0.0)) + display_sample(v_texcoord0 - vec2(texel.x, 0.0)) +
         display_sample(v_texcoord0 + vec2(0.0, texel.y)) + display_sample(v_texcoord0 - vec2(0.0, texel.y)));
     display = clamp(display + u_displayAntiAliasing.w * (display - neighbours), low, high);
+    display = apply_film_grain(display, gl_FragCoord.xy);
     // Quantisation dither, as the plain present.
     float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
     display += vec3_splat((noise - 0.5) / 255.0);

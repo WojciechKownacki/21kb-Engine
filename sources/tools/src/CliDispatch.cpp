@@ -101,8 +101,9 @@ Commands:
                field as material-set names it; a Mesh Renderer takes the instance as
                its material: component set ... --set material=<path>.kbmatinst)
   post-process-new Create a post-process profile: the image settings (tonemapping,
-               exposure, bloom, anti-aliasing, vignette, ambient occlusion) a scene
-               can use. Existing files are never overwritten.
+               exposure, bloom, anti-aliasing, vignette, chromatic aberration, film
+               grain, ambient occlusion) a scene can use. Existing files are never
+               overwritten.
                  --project <dir> --name <Name> [--folder Assets/PostProcess]
                  [--set field=value ...]
   post-process-set Change values of a post-process profile.
@@ -110,7 +111,9 @@ Commands:
                (fields as the .kbppfx file names them, e.g. tonemapEnabled=0,
                outputTransform.tonemap=None, outputTransform.autoExposure.enabled=0,
                outputTransform.exposureStops=0, bloomEnabled=0, vignetteEnabled=1,
-               vignetteIntensity=0.3, ambientOcclusionEnabled=1,
+               vignetteIntensity=0.3, chromaticAberrationEnabled=1,
+               chromaticAberrationIntensity=0.2, filmGrainEnabled=1, filmGrainIntensity=0.3,
+               filmGrainSize=1, ambientOcclusionEnabled=1,
                ambientOcclusionIntensity=1, ambientOcclusionRadius=0.6,
                screenSpaceReflectionsEnabled=1, screenSpaceReflectionsIntensity=1,
                screenSpaceReflectionsMaxDistance=25, motionBlurEnabled=1,

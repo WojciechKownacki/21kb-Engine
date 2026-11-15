@@ -36,6 +36,17 @@ struct FullscreenTextureOutputTransform {
 
 [[nodiscard]] float ResolveFullscreenTextureExposureStops(const FullscreenTextureOutputTransform& transform) noexcept;
 
+// Image effects of the display composite. Intensity 0 turns an effect off: the composite then reads and
+// writes exactly what it did before the effect existed.
+struct FullscreenTextureImageEffects {
+    // Colour fringes toward the image edges, 0..1.
+    float chromaticAberrationIntensity = 0.0F;
+    // Film grain strength 0..1 and the width of a grain in pixels (>= 1); `grainFrame` varies it from frame to frame.
+    float filmGrainIntensity = 0.0F;
+    float filmGrainSize = 1.0F;
+    std::uint64_t grainFrame = 0U;
+};
+
 struct FullscreenTexturePassDesc {
     bgfx::ViewId viewId = 0;
     bgfx::TextureHandle sourceTexture = BGFX_INVALID_HANDLE;
@@ -57,6 +68,7 @@ struct FullscreenTexturePassDesc {
     bool upscale = false;
     // Display output has opaque alpha; ordinary texture copies preserve source alpha.
     bool forceOpaqueAlpha = false;
+    FullscreenTextureImageEffects imageEffects{};
 
     [[nodiscard]] bool IsValid() const noexcept;
 };
@@ -82,6 +94,7 @@ private:
     bgfx::UniformHandle tonemapParams_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle colorGradeParams_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle vignetteParams_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle imageEffectParams_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle displayAntiAliasing_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle neutralColorGradeLut_ = BGFX_INVALID_HANDLE;
 };

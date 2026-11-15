@@ -16,6 +16,8 @@ struct ScenePostProcessSettings {
     };
     static constexpr std::uint32_t kMotionBlurSamplesMin = 4U;
     static constexpr std::uint32_t kMotionBlurSamplesMax = 16U;
+    static constexpr float kFilmGrainSizeMin = 1.0F;
+    static constexpr float kFilmGrainSizeMax = 4.0F;
 
     bool bloomEnabled = true;
     float bloomStrength = 0.05F;
@@ -41,6 +43,15 @@ struct ScenePostProcessSettings {
     // Intensity 0..1: how dark the corners get.
     bool vignetteEnabled = false;
     float vignetteIntensity = 0.3F;
+    // Colour fringes toward the image edges (red and blue shifted apart, as a simple lens does), in the
+    // final composite. Intensity 0..1: how far the fringes spread. Off by default.
+    bool chromaticAberrationEnabled = false;
+    float chromaticAberrationIntensity = 0.2F;
+    // Film grain over the finished image, in the final composite after anti-aliasing; it changes every
+    // frame. Intensity 0..1: how strong the grain is, size (1..4) the width of a grain in pixels. Off by default.
+    bool filmGrainEnabled = false;
+    float filmGrainIntensity = 0.3F;
+    float filmGrainSize = 1.0F;
     // Screen-space ambient occlusion of the indirect light (the renderer's SSAO pass in the
     // screen-space resolve). Intensity scales the occlusion, radius (m) is the sampled hemisphere.
     // Off by default, as a scene without a profile renders today.

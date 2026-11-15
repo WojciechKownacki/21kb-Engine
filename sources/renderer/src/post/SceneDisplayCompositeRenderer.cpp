@@ -38,6 +38,7 @@ bool SceneDisplayCompositeRenderer::Submit(const SceneDisplayCompositeDesc& desc
         .sourceExtent = desc.hdrExtent,
         .upscale = desc.upscale,
         .forceOpaqueAlpha = true,
+        .imageEffects = desc.imageEffects,
     });
 }
 

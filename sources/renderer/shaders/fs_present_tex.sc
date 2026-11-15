@@ -7,10 +7,11 @@ $input v_texcoord0
 void main()
 {
     vec4 scene = texture2D(s_kbFullscreenColor, v_texcoord0);
-    vec3 display = display_transform(scene.rgb, v_texcoord0);
+    vec3 display = display_transform(chromatic_aberration(scene.rgb, v_texcoord0), v_texcoord0);
     if (u_displayAntiAliasing.x > 0.5) {
         display = fxaa_display(v_texcoord0, display);
     }
+    display = apply_film_grain(display, gl_FragCoord.xy);
     // Quantisation dither: half an 8-bit step of
     // interleaved gradient noise hides the banding of smooth light falloff.
     float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));

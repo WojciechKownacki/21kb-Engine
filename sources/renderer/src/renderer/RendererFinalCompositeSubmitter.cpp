@@ -22,12 +22,29 @@ float RendererFinalCompositeSubmitter::VignetteIntensity(const PostProcessOutput
     return settings.vignetteEnabled ? std::clamp(settings.vignetteIntensity, 0.0F, 1.0F) : 0.0F;
 }
 
+FullscreenTextureImageEffects RendererFinalCompositeSubmitter::ImageEffects(
+    const PostProcessOutput& postProcessOutput, std::uint64_t frameIndex) noexcept {
+    const ScenePostProcessSettings& settings = postProcessOutput.postProcessSettings;
+    FullscreenTextureImageEffects effects;
+    if (settings.chromaticAberrationEnabled) {
+        effects.chromaticAberrationIntensity = std::clamp(settings.chromaticAberrationIntensity, 0.0F, 1.0F);
+    }
+    if (settings.filmGrainEnabled) {
+        effects.filmGrainIntensity = std::clamp(settings.filmGrainIntensity, 0.0F, 1.0F);
+        effects.filmGrainSize = std::clamp(settings.filmGrainSize,
+            ScenePostProcessSettings::kFilmGrainSizeMin, ScenePostProcessSettings::kFilmGrainSizeMax);
+        effects.grainFrame = frameIndex;
+    }
+    return effects;
+}
+
 bool RendererFinalCompositeSubmitter::Submit(
     const FinalCompositePass& finalCompositePass,
     const RenderViewportPlan& viewportPlan,
     const RenderSceneSubmitDesc& desc,
     const PostProcessOutput& postProcessOutput,
-    bgfx::TextureHandle scenePostProcessOutput) {
+    bgfx::TextureHandle scenePostProcessOutput,
+    std::uint64_t frameIndex) {
     const SceneDisplayOutputTransform outputTransform = DisplayTransform(postProcessOutput);
 
     {
@@ -63,6 +80,7 @@ bool RendererFinalCompositeSubmitter::Submit(
         .antiAliasing = postProcessOutput.fxaaEnabled && !postProcessOutput.temporalAntiAliasingEnabled,
         .postProcessExtent = postProcessOutput.extent,
         .upscale = desc.upscaledExtent.IsValid(),
+        .imageEffects = ImageEffects(postProcessOutput, frameIndex),
     });
 }
 

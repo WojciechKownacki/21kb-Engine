@@ -1931,6 +1931,11 @@ void RunPostProcessProfileAssetSaveLoadRoundTripTest() {
     settings.outputTransform.autoExposure.darkAdaptationRate = 1.0F;
     settings.vignetteEnabled = true;
     settings.vignetteIntensity = 0.45F;
+    settings.chromaticAberrationEnabled = true;
+    settings.chromaticAberrationIntensity = 0.65F;
+    settings.filmGrainEnabled = true;
+    settings.filmGrainIntensity = 0.55F;
+    settings.filmGrainSize = 2.5F;
     settings.ambientOcclusionEnabled = true;
     settings.ambientOcclusionIntensity = 1.5F;
     settings.ambientOcclusionRadius = 0.9F;
@@ -1970,6 +1975,9 @@ void RunPostProcessProfileAssetSaveLoadRoundTripTest() {
         "PostProcess profile asset round trip lost outputTransform.autoExposure fields");
     Require(loaded->vignetteEnabled && NearlyEqual(loaded->vignetteIntensity, 0.45F),
         "PostProcess profile asset round trip lost the vignette");
+    Require(loaded->chromaticAberrationEnabled && NearlyEqual(loaded->chromaticAberrationIntensity, 0.65F) && loaded->filmGrainEnabled &&
+            NearlyEqual(loaded->filmGrainIntensity, 0.55F) && NearlyEqual(loaded->filmGrainSize, 2.5F),
+        "PostProcess profile asset round trip lost the chromatic aberration or the film grain");
     Require(loaded->ambientOcclusionEnabled && NearlyEqual(loaded->ambientOcclusionIntensity, 1.5F) &&
             NearlyEqual(loaded->ambientOcclusionRadius, 0.9F),
         "PostProcess profile asset round trip lost the ambient occlusion");
@@ -2033,6 +2041,9 @@ void RunPostProcessProfileAssetSaveLoadRoundTripTest() {
         "A profile without the reflection keys must keep reflections off at the lighting config's defaults");
     Require(!legacy->motionBlurEnabled && NearlyEqual(legacy->motionBlurIntensity, 0.5F) && legacy->motionBlurSamples == 8U,
         "A profile without the motion blur keys must keep motion blur off at its defaults");
+    Require(!legacy->chromaticAberrationEnabled && !legacy->filmGrainEnabled && NearlyEqual(legacy->chromaticAberrationIntensity, 0.2F) &&
+            NearlyEqual(legacy->filmGrainIntensity, 0.3F) && NearlyEqual(legacy->filmGrainSize, 1.0F),
+        "A profile without the chromatic aberration and film grain keys must keep both off at their defaults");
     ScenePostProcessSettings edited{};
     Require(PostProcessProfileAssetLoader::SetField(edited, "vignetteIntensity", "0.8") && NearlyEqual(edited.vignetteIntensity, 0.8F) &&
             PostProcessProfileAssetLoader::SetField(edited, "ambientOcclusionEnabled", "1") && edited.ambientOcclusionEnabled,
@@ -2066,12 +2077,28 @@ void RunPostProcessProfileAssetSaveLoadRoundTripTest() {
             !PostProcessProfileAssetLoader::SetField(edited, "motionBlurEnabled", "maybe") &&
             NearlyEqual(edited.motionBlurIntensity, 0.25F) && edited.motionBlurSamples == 4U,
         "SetField must refuse a shutter outside 0..1, samples outside 4..16 or fractional, and a non-boolean toggle");
+    Require(PostProcessProfileAssetLoader::SetField(edited, "chromaticAberrationEnabled", "1") && edited.chromaticAberrationEnabled &&
+            PostProcessProfileAssetLoader::SetField(edited, "chromaticAberrationIntensity", "0.4") &&
+            NearlyEqual(edited.chromaticAberrationIntensity, 0.4F) &&
+            PostProcessProfileAssetLoader::SetField(edited, "filmGrainEnabled", "1") && edited.filmGrainEnabled &&
+            PostProcessProfileAssetLoader::SetField(edited, "filmGrainIntensity", "0.7") && NearlyEqual(edited.filmGrainIntensity, 0.7F) &&
+            PostProcessProfileAssetLoader::SetField(edited, "filmGrainSize", "4") && NearlyEqual(edited.filmGrainSize, 4.0F),
+        "SetField must take the chromatic aberration and film grain fields");
+    Require(!PostProcessProfileAssetLoader::SetField(edited, "chromaticAberrationIntensity", "1.5") &&
+            !PostProcessProfileAssetLoader::SetField(edited, "filmGrainIntensity", "-0.1") &&
+            !PostProcessProfileAssetLoader::SetField(edited, "filmGrainSize", "0.5") &&
+            !PostProcessProfileAssetLoader::SetField(edited, "filmGrainSize", "4.5") &&
+            !PostProcessProfileAssetLoader::SetField(edited, "filmGrainEnabled", "maybe") &&
+            NearlyEqual(edited.chromaticAberrationIntensity, 0.4F) && NearlyEqual(edited.filmGrainIntensity, 0.7F) &&
+            NearlyEqual(edited.filmGrainSize, 4.0F),
+        "SetField must refuse an intensity outside 0..1, a grain size outside 1..4 and a non-boolean toggle");
     const std::vector<std::string> names = PostProcessProfileAssetLoader::FieldNames();
     Require(std::ranges::find(names, "vignetteEnabled") != names.end() && std::ranges::find(names, "ambientOcclusionRadius") != names.end() &&
             std::ranges::find(names, "screenSpaceReflectionsEnabled") != names.end() &&
             std::ranges::find(names, "screenSpaceReflectionsMaxDistance") != names.end() &&
-            std::ranges::find(names, "motionBlurEnabled") != names.end() && std::ranges::find(names, "motionBlurSamples") != names.end(),
-        "FieldNames must list the vignette, ambient occlusion, screen-space reflection and motion blur fields");
+            std::ranges::find(names, "motionBlurEnabled") != names.end() && std::ranges::find(names, "motionBlurSamples") != names.end() &&
+            std::ranges::find(names, "chromaticAberrationEnabled") != names.end() && std::ranges::find(names, "filmGrainSize") != names.end(),
+        "FieldNames must list the vignette, ambient occlusion, screen-space reflection, motion blur, chromatic aberration and film grain fields");
 
     const std::optional<ScenePostProcessSettings> missing = PostProcessProfileAssetLoader::LoadProfile(
         std::filesystem::temp_directory_path() / "21kb_post_process_profile_does_not_exist.kbppfx");
@@ -8615,6 +8642,143 @@ void RunRendererVignetteDarkensFinalCompositeCornersTest() {
     Require(corner * 10 < plainCorner * 8, "Vignette test: the vignette must darken the corners");
 }
 
+// Chromatic aberration parts the red and blue images at an edge away from the centre, film grain adds noise
+// that differs from frame to frame and grows with its size; with both off the composite writes the same pixels
+// whatever their intensities are.
+void RunRendererChromaticAberrationAndFilmGrainChangeFinalCompositeTest() {
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "Image effects test could not create a hidden native surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Image effects test renderer did not initialize");
+    constexpr std::uint32_t kSize = NativeTestSurface::kExtent;
+    constexpr std::uint32_t kBandWidth = 8U;
+    std::vector<std::uint8_t> bandPixels(static_cast<std::size_t>(kSize) * kSize * 4U, 0U);
+    for (std::uint32_t y = 0U; y < kSize; ++y) {
+        for (std::uint32_t x = 0U; x < kSize; ++x) {
+            const std::size_t offset = (static_cast<std::size_t>(y) * kSize + x) * 4U;
+            const std::uint8_t value = x < kBandWidth ? 255U : 0U;
+            bandPixels[offset] = value;
+            bandPixels[offset + 1U] = value;
+            bandPixels[offset + 2U] = value;
+            bandPixels[offset + 3U] = 255U;
+        }
+    }
+    constexpr std::uint64_t kClamp = BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
+    const bgfx::TextureHandle band = bgfx::createTexture2D(
+        static_cast<std::uint16_t>(kSize), static_cast<std::uint16_t>(kSize), false, 1, bgfx::TextureFormat::RGBA8, kClamp,
+        bgfx::copy(bandPixels.data(), static_cast<std::uint32_t>(bandPixels.size())));
+    const std::array<std::uint8_t, 4U> grey{ 128U, 128U, 128U, 255U };
+    const bgfx::TextureHandle flat = bgfx::createTexture2D(
+        1, 1, false, 1, bgfx::TextureFormat::RGBA8, kClamp, bgfx::copy(grey.data(), static_cast<std::uint32_t>(grey.size())));
+    FinalCompositePass composite;
+    Require(bgfx::isValid(band) && bgfx::isValid(flat) && composite.Initialize(), "Image effects test could not create its composite");
+    const auto render = [&](bgfx::TextureHandle source, const ScenePostProcessSettings& settings, std::uint64_t frame) {
+        FinalCompositeReadbackTarget target;
+        Require(target.Initialize(), "Image effects test could not allocate its target");
+        PostProcessOutput output;
+        output.postProcessSettings = settings;
+        output.tonemapEnabled = false;
+        const RenderFinalCompositeTargetBinding binding = target.Binding();
+        Require(composite.Submit(FinalCompositePassDesc{
+                    .viewId = 200U,
+                    .postProcessColor = source,
+                    .frameBuffer = binding.frameBuffer,
+                    .extent = binding.extent,
+                    .outputRect = binding.outputRect,
+                    .outputTransform = RendererFinalCompositeSubmitter::DisplayTransform(output),
+                    .clearTarget = true,
+                    .imageEffects = RendererFinalCompositeSubmitter::ImageEffects(output, frame),
+                }),
+            "Image effects test could not submit the composite");
+        bgfx::frame();
+        return target.ReadPixels();
+    };
+    const auto channel = [&](const std::vector<std::uint8_t>& pixels, std::uint32_t x, std::uint32_t y, std::size_t index) {
+        const std::size_t offset = (static_cast<std::size_t>(y) * kSize + x) * 4U + index;
+        Require(offset < pixels.size(), "Image effects test read outside the final composite");
+        return static_cast<int>(pixels[offset]);
+    };
+    // The largest difference between the first and the third channel (red and blue, or blue and red) of any pixel.
+    const auto largestColourSplit = [&](const std::vector<std::uint8_t>& pixels) {
+        int largest = 0;
+        for (std::uint32_t y = 0U; y < kSize; ++y) {
+            for (std::uint32_t x = 0U; x < kSize; ++x) {
+                largest = std::max(largest, std::abs(channel(pixels, x, y, 0U) - channel(pixels, x, y, 2U)));
+            }
+        }
+        return largest;
+    };
+    // The spread of the middle channel over the w by h pixels from the top left corner.
+    const auto spread = [&](const std::vector<std::uint8_t>& pixels, std::uint32_t w, std::uint32_t h) {
+        int lowest = 255;
+        int highest = 0;
+        for (std::uint32_t y = 0U; y < h; ++y) {
+            for (std::uint32_t x = 0U; x < w; ++x) {
+                lowest = std::min(lowest, channel(pixels, x, y, 1U));
+                highest = std::max(highest, channel(pixels, x, y, 1U));
+            }
+        }
+        return highest - lowest;
+    };
+    const auto differingPixels = [&](const std::vector<std::uint8_t>& lhs, const std::vector<std::uint8_t>& rhs) {
+        std::size_t count = 0U;
+        for (std::size_t offset = 0U; offset + 3U < lhs.size(); offset += 4U) {
+            count += (lhs[offset + 1U] != rhs[offset + 1U]) ? 1U : 0U;
+        }
+        return count;
+    };
+
+    const ScenePostProcessSettings off{};
+    ScenePostProcessSettings configuredButOff{};
+    configuredButOff.chromaticAberrationIntensity = 1.0F;
+    configuredButOff.filmGrainIntensity = 1.0F;
+    configuredButOff.filmGrainSize = 3.0F;
+    ScenePostProcessSettings fringes{};
+    fringes.chromaticAberrationEnabled = true;
+    fringes.chromaticAberrationIntensity = 1.0F;
+    ScenePostProcessSettings grain{};
+    grain.filmGrainEnabled = true;
+    grain.filmGrainIntensity = 1.0F;
+    ScenePostProcessSettings coarseGrain = grain;
+    coarseGrain.filmGrainSize = 4.0F;
+
+    const std::vector<std::uint8_t> plainBand = render(band, off, 5U);
+    const std::vector<std::uint8_t> plainFlat = render(flat, off, 5U);
+    const bool offIsIdentical = plainBand == render(band, configuredButOff, 5U) && plainFlat == render(flat, configuredButOff, 9U);
+    const std::vector<std::uint8_t> fringed = render(band, fringes, 5U);
+    const std::vector<std::uint8_t> grained = render(flat, grain, 5U);
+    const std::vector<std::uint8_t> grainedAgain = render(flat, grain, 5U);
+    const std::vector<std::uint8_t> grainedNextFrame = render(flat, grain, 6U);
+    const std::vector<std::uint8_t> coarse = render(flat, coarseGrain, 5U);
+    composite.Shutdown();
+    bgfx::destroy(flat);
+    bgfx::destroy(band);
+    renderer.Shutdown();
+
+    const int plainSplit = largestColourSplit(plainBand);
+    const int fringeSplit = largestColourSplit(fringed);
+    const int plainSpread = spread(plainFlat, kSize, kSize);
+    const int grainSpread = spread(grained, kSize, kSize);
+    const int fineBlock = spread(grained, 4U, 4U);
+    const int coarseBlock = spread(coarse, 4U, 4U);
+    const std::size_t changedByFrame = differingPixels(grained, grainedNextFrame);
+    std::fprintf(stderr, "image_effects_pixels plain_split=%d fringe_split=%d plain_spread=%d grain_spread=%d fine_block=%d coarse_block=%d frame_changed=%zu%c",
+        plainSplit, fringeSplit, plainSpread, grainSpread, fineBlock, coarseBlock, changedByFrame, 10);
+    Require(offIsIdentical, "Image effects test: a disabled effect must leave the composite pixels exactly as they are");
+    Require(plainSplit == 0, "Image effects test: a grey image must keep equal colour channels without chromatic aberration");
+    Require(fringeSplit > 40, "Image effects test: chromatic aberration must part the colour channels at an edge");
+    Require(channel(fringed, 40U, 32U, 0U) == channel(plainBand, 40U, 32U, 0U) && channel(fringed, 40U, 32U, 2U) == channel(plainBand, 40U, 32U, 2U),
+        "Image effects test: chromatic aberration must leave a flat area alone");
+    Require(plainSpread <= 2, "Image effects test: a flat image must stay flat without film grain");
+    Require(grainSpread >= 20, "Image effects test: film grain must add noise to a flat image");
+    Require(grained == grainedAgain, "Image effects test: film grain of one frame must be the same every time");
+    Require(changedByFrame > static_cast<std::size_t>(kSize) * kSize / 2U, "Image effects test: film grain must change from frame to frame");
+    Require(fineBlock >= 10 && coarseBlock <= 2, "Image effects test: a larger grain size must make coarser grain");
+}
+
 // A red wall that is outside the camera's view must tint the floor in view only when the bounce light is
 // traced through the world-space voxel grid: screen-space GI cannot see what is not on screen.
 void RunRendererRendersVoxelGiFromOffscreenObjectsTest() {
@@ -12357,6 +12521,7 @@ void RunRendererPostProcessProfileAuthoringTests() {
     RunRendererPostProcessProfileDrivesAmbientOcclusionTest();
     RunBloomOutputProfilePixelsTest();
     RunRendererVignetteDarkensFinalCompositeCornersTest();
+    RunRendererChromaticAberrationAndFilmGrainChangeFinalCompositeTest();
     RunRendererMotionBlurSmearsMovingObjectsTest();
     RunRendererRenderScaleUpscalesSceneTest();
 #endif

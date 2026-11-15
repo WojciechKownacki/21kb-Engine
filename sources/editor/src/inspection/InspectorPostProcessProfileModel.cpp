@@ -13,7 +13,7 @@ namespace {
 using Kind = InspectorPostProcessProfileRowKind;
 constexpr std::string_view kAntiAliasingField = "antiAliasing";
 
-constexpr std::array<InspectorPostProcessProfileSection, 10> kSections{ {
+constexpr std::array<InspectorPostProcessProfileSection, 12> kSections{ {
     { InspectorSectionId::PostProcessTonemap },
     { InspectorSectionId::PostProcessExposure },
     { InspectorSectionId::PostProcessBloom },
@@ -22,11 +22,13 @@ constexpr std::array<InspectorPostProcessProfileSection, 10> kSections{ {
     { InspectorSectionId::PostProcessAmbientOcclusion },
     { InspectorSectionId::PostProcessScreenSpaceReflections },
     { InspectorSectionId::PostProcessMotionBlur },
+    { InspectorSectionId::PostProcessChromaticAberration },
+    { InspectorSectionId::PostProcessFilmGrain },
     { InspectorSectionId::PostProcessGlobalIllumination },
     { InspectorSectionId::PostProcessFog },
 } };
 
-constexpr std::array<InspectorPostProcessProfileRow, 38> kRows{ {
+constexpr std::array<InspectorPostProcessProfileRow, 43> kRows{ {
     { InspectorSectionId::PostProcessTonemap, Kind::Bool, "tonemapEnabled" },
     { InspectorSectionId::PostProcessTonemap, Kind::Choice, "outputTransform.tonemap" },
     { InspectorSectionId::PostProcessExposure, Kind::Number, "outputTransform.exposureStops" },
@@ -65,6 +67,11 @@ constexpr std::array<InspectorPostProcessProfileRow, 38> kRows{ {
     { InspectorSectionId::PostProcessMotionBlur, Kind::Bool, "motionBlurEnabled" },
     { InspectorSectionId::PostProcessMotionBlur, Kind::Number, "motionBlurIntensity" },
     { InspectorSectionId::PostProcessMotionBlur, Kind::Number, "motionBlurSamples" },
+    { InspectorSectionId::PostProcessChromaticAberration, Kind::Bool, "chromaticAberrationEnabled" },
+    { InspectorSectionId::PostProcessChromaticAberration, Kind::Number, "chromaticAberrationIntensity" },
+    { InspectorSectionId::PostProcessFilmGrain, Kind::Bool, "filmGrainEnabled" },
+    { InspectorSectionId::PostProcessFilmGrain, Kind::Number, "filmGrainIntensity" },
+    { InspectorSectionId::PostProcessFilmGrain, Kind::Number, "filmGrainSize" },
 } };
 
 // Every choice row's values, in the order a click steps through them: the file's value name and
@@ -222,6 +229,8 @@ std::string_view InspectorPostProcessProfileModel::SectionTitle(InspectorSection
     case InspectorSectionId::PostProcessAmbientOcclusion: return EditorText("inspector.postProcess.ambientOcclusion", "Ambient Occlusion");
     case InspectorSectionId::PostProcessScreenSpaceReflections: return EditorText("inspector.postProcess.screenSpaceReflections", "Screen Space Reflections");
     case InspectorSectionId::PostProcessMotionBlur: return EditorText("inspector.postProcess.motionBlur", "Motion Blur");
+    case InspectorSectionId::PostProcessChromaticAberration: return EditorText("inspector.postProcess.chromaticAberration", "Chromatic Aberration");
+    case InspectorSectionId::PostProcessFilmGrain: return EditorText("inspector.postProcess.filmGrain", "Film Grain");
     case InspectorSectionId::PostProcessGlobalIllumination: return EditorText("inspector.postProcess.globalIllumination", "Global Illumination");
     case InspectorSectionId::PostProcessFog: return EditorText("inspector.postProcess.fog", "Fog");
     default: return {};
@@ -268,6 +277,11 @@ std::string_view InspectorPostProcessProfileModel::RowLabel(int row) {
     case 35: return EditorText("inspector.postProcess.motionBlurEnabled", "Motion Blur");
     case 36: return EditorText("inspector.postProcess.motionBlurIntensity", "Shutter");
     case 37: return EditorText("inspector.postProcess.motionBlurSamples", "Samples");
+    case 38: return EditorText("inspector.postProcess.chromaticAberrationEnabled", "Chromatic Aberration");
+    case 39: return EditorText("inspector.postProcess.chromaticAberrationIntensity", "Intensity");
+    case 40: return EditorText("inspector.postProcess.filmGrainEnabled", "Film Grain");
+    case 41: return EditorText("inspector.postProcess.filmGrainIntensity", "Intensity");
+    case 42: return EditorText("inspector.postProcess.filmGrainSize", "Grain Size (px)");
     default: return {};
     }
 }

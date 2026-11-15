@@ -27,6 +27,7 @@ struct SceneDisplayCompositeDesc {
     RenderExtent hdrExtent{};
     // hdrColor was rendered below the output resolution (FullscreenTexturePassDesc::upscale).
     bool upscale = false;
+    FullscreenTextureImageEffects imageEffects{};
 
     [[nodiscard]] bool IsValid() const noexcept;
 };

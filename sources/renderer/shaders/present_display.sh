@@ -8,6 +8,9 @@ SAMPLER3D(s_kbFullscreenColorGradeLut, 1);
 uniform vec4 u_tonemapParams;
 uniform vec4 u_colorGradeParams;
 uniform vec4 u_vignetteParams;
+// x: how far the red and blue images part toward the edges (0 = no chromatic aberration), y: film grain strength
+// (0 = no grain), z: width of a grain in pixels, w: the frame number the grain moves by.
+uniform vec4 u_imageEffectParams;
 // x: 1 runs FXAA on the display image (after tonemapping), yz: texel size of the source, w: sharpening
 // of the upscaling present.
 uniform vec4 u_displayAntiAliasing;
@@ -50,6 +53,46 @@ float vignette_factor(vec2 uv)
     return falloff * falloff;
 }
 
+// Chromatic aberration: the red and blue channels of `color`, the scene at `uv`, are read from either side of it
+// along the line from the image centre, so edges away from the centre grow colour fringes. The scene is read as
+// before when the effect is off.
+vec3 chromatic_aberration(vec3 color, vec2 uv)
+{
+    if (u_imageEffectParams.x > 0.0) {
+        vec2 shift = (uv - vec2_splat(0.5)) * u_imageEffectParams.x;
+        color.r = texture2D(s_kbFullscreenColor, uv + shift).r;
+        color.b = texture2D(s_kbFullscreenColor, uv - shift).b;
+    }
+    return color;
+}
+
+// The scene colour at `uv`, with chromatic aberration.
+vec3 scene_color(vec2 uv)
+{
+    return chromatic_aberration(texture2D(s_kbFullscreenColor, uv).rgb, uv);
+}
+
+// A value in 0..1 per grain cell: a hash of the cell, not a pattern.
+float film_grain_noise(vec2 cell)
+{
+    vec3 p3 = fract(vec3(cell.x, cell.y, cell.x) * 0.1031);
+    p3 += vec3_splat(dot(p3, p3.yzx + vec3_splat(33.33)));
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+// Film grain on the display image: one grain per `u_imageEffectParams.z` pixels, moved by the frame number so
+// every frame differs, strongest in the midtones and weaker in deep shadows and highlights.
+vec3 apply_film_grain(vec3 display, vec2 pixel)
+{
+    if (u_imageEffectParams.y > 0.0) {
+        vec2 cell = floor(pixel / u_imageEffectParams.z) + u_imageEffectParams.w * vec2(37.0, 17.0);
+        float luma = saturate(dot(display, vec3(0.299, 0.587, 0.114)));
+        float response = 0.25 + 3.0 * luma * (1.0 - luma);
+        display += vec3_splat((film_grain_noise(cell) * 2.0 - 1.0) * u_imageEffectParams.y * response);
+    }
+    return display;
+}
+
 // Display encoding. Gamma 2.2 (the default) is the sRGB transfer curve of the display;
 // a plain 1/2.2 power lifts the darks (#0A0C16 came out as #141418). Any other
 // gamma (1.0 for linear debug views) is a plain power.
@@ -86,18 +129,19 @@ vec3 display_sample(vec2 uv)
     vec2 uv10 = uv00 + vec2(texel.x, 0.0);
     vec2 uv01 = uv00 + vec2(0.0, texel.y);
     vec2 uv11 = uv00 + texel;
-    vec3 c00 = display_transform(texture2D(s_kbFullscreenColor, uv00).rgb, uv00);
-    vec3 c10 = display_transform(texture2D(s_kbFullscreenColor, uv10).rgb, uv10);
-    vec3 c01 = display_transform(texture2D(s_kbFullscreenColor, uv01).rgb, uv01);
-    vec3 c11 = display_transform(texture2D(s_kbFullscreenColor, uv11).rgb, uv11);
+    vec3 c00 = display_transform(scene_color(uv00), uv00);
+    vec3 c10 = display_transform(scene_color(uv10), uv10);
+    vec3 c01 = display_transform(scene_color(uv01), uv01);
+    vec3 c11 = display_transform(scene_color(uv11), uv11);
     return mix(mix(c00, c10, weight.x), mix(c01, c11, weight.x), weight.y);
 }
 
 // Perceptual luma of the display image at a source texel, for the FXAA edge search: the exposure, vignette,
-// tonemap and encoding of display_transform without the colour grade, from one texel fetch.
+// tonemap and encoding of display_transform without the colour grade, from one texel fetch (three with
+// chromatic aberration).
 float display_luma(vec2 uv)
 {
-    vec3 hdr = texture2D(s_kbFullscreenColor, uv).rgb * exp2(u_tonemapParams.x) * vignette_factor(uv);
+    vec3 hdr = scene_color(uv) * exp2(u_tonemapParams.x) * vignette_factor(uv);
     // Encoding the luma instead of each channel keeps it one power per texel.
     return encode_display(vec3_splat(dot(tonemap_display(hdr), vec3(0.299, 0.587, 0.114)))).x;
 }

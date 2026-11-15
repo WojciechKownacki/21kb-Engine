@@ -26,6 +26,8 @@ struct FinalCompositePassDesc {
     RenderExtent postProcessExtent{};
     // The scene was rendered at a reduced render scale and is upscaled to the output.
     bool upscale = false;
+    // The profile's chromatic aberration and film grain: all 0 = none.
+    FullscreenTextureImageEffects imageEffects{};
 
     [[nodiscard]] bool IsValid() const noexcept;
 };

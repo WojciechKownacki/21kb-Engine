@@ -159,6 +159,19 @@ enum class FieldResult { Applied, Invalid, Unknown };
     if (keyword == "outputTransform.autoExposure.darkAdaptationRate") return Applied(ParseNonNegativeFloat(Trim(rest), settings.outputTransform.autoExposure.darkAdaptationRate));
     if (keyword == "vignetteEnabled") return Applied(ParseBoolToken(rest, settings.vignetteEnabled));
     if (keyword == "vignetteIntensity") return Applied(ParseUnitFloat(Trim(rest), settings.vignetteIntensity));
+    if (keyword == "chromaticAberrationEnabled") return Applied(ParseBoolToken(rest, settings.chromaticAberrationEnabled));
+    if (keyword == "chromaticAberrationIntensity") return Applied(ParseUnitFloat(Trim(rest), settings.chromaticAberrationIntensity));
+    if (keyword == "filmGrainEnabled") return Applied(ParseBoolToken(rest, settings.filmGrainEnabled));
+    if (keyword == "filmGrainIntensity") return Applied(ParseUnitFloat(Trim(rest), settings.filmGrainIntensity));
+    if (keyword == "filmGrainSize") {
+        float value = 0.0F;
+        if (!ParseFiniteMaterialFloatToken(Trim(rest), value) || value < ScenePostProcessSettings::kFilmGrainSizeMin ||
+            value > ScenePostProcessSettings::kFilmGrainSizeMax) {
+            return FieldResult::Invalid;
+        }
+        settings.filmGrainSize = value;
+        return FieldResult::Applied;
+    }
     if (keyword == "ambientOcclusionEnabled") return Applied(ParseBoolToken(rest, settings.ambientOcclusionEnabled));
     if (keyword == "ambientOcclusionIntensity") return Applied(ParseNonNegativeFloat(Trim(rest), settings.ambientOcclusionIntensity));
     if (keyword == "ambientOcclusionRadius") return Applied(ParsePositiveFloat(Trim(rest), settings.ambientOcclusionRadius));
@@ -264,6 +277,11 @@ void WriteProfile(std::ostream& output, const ScenePostProcessSettings& settings
     output << "outputTransform.autoExposure.darkAdaptationRate " << settings.outputTransform.autoExposure.darkAdaptationRate << '\n';
     output << "vignetteEnabled " << (settings.vignetteEnabled ? 1 : 0) << '\n';
     output << "vignetteIntensity " << settings.vignetteIntensity << '\n';
+    output << "chromaticAberrationEnabled " << (settings.chromaticAberrationEnabled ? 1 : 0) << '\n';
+    output << "chromaticAberrationIntensity " << settings.chromaticAberrationIntensity << '\n';
+    output << "filmGrainEnabled " << (settings.filmGrainEnabled ? 1 : 0) << '\n';
+    output << "filmGrainIntensity " << settings.filmGrainIntensity << '\n';
+    output << "filmGrainSize " << settings.filmGrainSize << '\n';
     output << "ambientOcclusionEnabled " << (settings.ambientOcclusionEnabled ? 1 : 0) << '\n';
     output << "ambientOcclusionIntensity " << settings.ambientOcclusionIntensity << '\n';
     output << "ambientOcclusionRadius " << settings.ambientOcclusionRadius << '\n';

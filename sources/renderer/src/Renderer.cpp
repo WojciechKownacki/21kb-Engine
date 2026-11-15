@@ -2115,7 +2115,8 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
             lastAaPipelineTraceLines_.push_back(trace);
         }
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport final composite submit begin");
-        if (!RendererFinalCompositeSubmitter::Submit(*finalCompositePass_, viewportPlan, desc, postProcessOutput, scenePostProcessOutput)) {
+        if (!RendererFinalCompositeSubmitter::Submit(
+                *finalCompositePass_, viewportPlan, desc, postProcessOutput, scenePostProcessOutput, frameIndex)) {
             WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport final composite submit failed");
             return false;
         }
@@ -2531,6 +2532,10 @@ void Renderer::SetDefaultPostProcessSettings(ScenePostProcessSettings settings) 
     settings.outputTransform.autoExposure.brightAdaptationRate = std::max(settings.outputTransform.autoExposure.brightAdaptationRate, 0.0F);
     settings.outputTransform.autoExposure.darkAdaptationRate = std::max(settings.outputTransform.autoExposure.darkAdaptationRate, 0.0F);
     settings.vignetteIntensity = std::clamp(settings.vignetteIntensity, 0.0F, 1.0F);
+    settings.chromaticAberrationIntensity = std::clamp(settings.chromaticAberrationIntensity, 0.0F, 1.0F);
+    settings.filmGrainIntensity = std::clamp(settings.filmGrainIntensity, 0.0F, 1.0F);
+    settings.filmGrainSize = std::clamp(settings.filmGrainSize,
+        ScenePostProcessSettings::kFilmGrainSizeMin, ScenePostProcessSettings::kFilmGrainSizeMax);
     settings.ambientOcclusionIntensity = std::max(settings.ambientOcclusionIntensity, 0.0F);
     settings.ambientOcclusionRadius = std::max(settings.ambientOcclusionRadius, 0.01F);
     settings.screenSpaceReflectionsIntensity = std::clamp(settings.screenSpaceReflectionsIntensity, 0.0F, 1.0F);
