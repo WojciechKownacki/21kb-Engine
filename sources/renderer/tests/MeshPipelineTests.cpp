@@ -42,9 +42,13 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <span>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace kb::render::tests {
 namespace {
@@ -2858,6 +2862,288 @@ double MedianShadowStageMicroseconds(const std::vector<SceneMeshBatch>& batches,
     return samples[samples.size() / 2U];
 }
 
+// ---- Large scenes of shadow casters -----------------------------------------------------------------------------
+
+// The value of an environment variable, empty when it is not set.
+[[nodiscard]] std::string EnvironmentValue(const char* name) {
+#if defined(_WIN32)
+    char* value = nullptr;
+    std::size_t length = 0U;
+    static_cast<void>(_dupenv_s(&value, &length, name));
+    std::string result = value == nullptr ? std::string{} : std::string{ value };
+    std::free(value);
+    return result;
+#else
+    const char* value = std::getenv(name);
+    return value == nullptr ? std::string{} : std::string{ value };
+#endif
+}
+
+// The numbers of a comma separated list.
+[[nodiscard]] std::vector<std::size_t> ParseCountList(const std::string& text) {
+    std::vector<std::size_t> counts;
+    for (std::size_t begin = 0U; begin < text.size();) {
+        std::size_t end = text.find(',', begin);
+        if (end == std::string::npos) end = text.size();
+        if (end > begin) counts.push_back(static_cast<std::size_t>(std::stoull(text.substr(begin, end - begin))));
+        begin = end + 1U;
+    }
+    return counts;
+}
+
+// A unit cube: one section and the bounding sphere of the cube.
+RenderMeshResource CubeBenchmarkMesh() {
+    RenderMeshResource mesh{};
+    mesh.indexCount = 36U;
+    mesh.bounds = RenderBoundsSphere{ .center = { 0.0F, 0.0F, 0.0F }, .radius = 0.8660254F };
+    mesh.sections = { RenderMeshSection{ .indexStart = 0U, .indexCount = 36U, .bounds = mesh.bounds } };
+    return mesh;
+}
+
+// The box of 120 x 40 x 120 with its corner at (-60, 0, -60) that the large scenes fill with a regular grid of cubes: a grid
+// of 3n x n x 3n cells, the first n of which that hold an object being spread evenly over all of them. The objects are
+// numbered along the grid, or, shuffled, in an order that has no relation to where they are. A cube takes 0.4 of the
+// smallest side of its cell, and the objects use 16 pairs of mesh and material, as the other benchmarks do.
+void FillCasterGridScene(RenderScene& scene, std::size_t objectCount, bool shuffled) {
+    std::uint64_t perHeight = 1U;
+    while (9U * perHeight * perHeight * perHeight < objectCount) ++perHeight;
+    const std::uint64_t cellsX = 3U * perHeight;
+    const std::uint64_t cellsZ = 3U * perHeight;
+    const std::uint64_t cells = cellsX * perHeight * cellsZ;
+    const float stepX = 120.0F / static_cast<float>(cellsX);
+    const float stepY = 40.0F / static_cast<float>(perHeight);
+    const float stepZ = 120.0F / static_cast<float>(cellsZ);
+    const float scale = 0.4F * std::min({ stepX, stepY, stepZ });
+    for (std::size_t index = 0U; index < objectCount; ++index) {
+        std::uint64_t cell = static_cast<std::uint64_t>(index) * cells / objectCount;
+        if (shuffled) cell = cell * 2147483647ULL % cells;
+        const std::uint64_t cellX = cell % cellsX;
+        const std::uint64_t cellZ = (cell / cellsX) % cellsZ;
+        const std::uint64_t cellY = cell / (cellsX * cellsZ);
+        auto model = IdentityMatrix();
+        model[0] = scale;
+        model[5] = scale;
+        model[10] = scale;
+        model[12] = -60.0F + (static_cast<float>(cellX) + 0.5F) * stepX;
+        model[13] = (static_cast<float>(cellY) + 0.5F) * stepY;
+        model[14] = -60.0F + (static_cast<float>(cellZ) + 0.5F) * stepZ;
+        static_cast<void>(scene.UpsertMesh(MeshRenderProxyDesc{
+            .entityId = index + 1U,
+            .meshAssetId = 1000U + index % 16U,
+            .materialAssetId = 2000U + index % 16U,
+            .model = model,
+        }));
+    }
+}
+
+// The viewer of a frame of the large scenes: it looks at the middle of the box from outside and turns and slides a little
+// more every frame, so that no pass repeats the one before.
+struct CasterViewer {
+    bx::Vec3 position;
+    bx::Vec3 forward;
+    bx::Vec3 right;
+    bx::Vec3 up;
+};
+
+[[nodiscard]] bx::Vec3 TurnAboutUp(const bx::Vec3& vector, float angle) noexcept {
+    const float cosine = std::cos(angle);
+    const float sine = std::sin(angle);
+    return bx::Vec3{ vector.x * cosine + vector.z * sine, vector.y, -vector.x * sine + vector.z * cosine };
+}
+
+[[nodiscard]] CasterViewer CasterViewerAtFrame(int frame) noexcept {
+    const bx::Vec3 start{ 0.0F, 20.0F, 66.0F };
+    const bx::Vec3 forward = bx::normalize(bx::sub(bx::Vec3{ 0.0F, 14.0F, 0.0F }, start));
+    const bx::Vec3 back = bx::mul(forward, -1.0F);
+    const bx::Vec3 right = bx::normalize(bx::cross(bx::Vec3{ 0.0F, 1.0F, 0.0F }, back));
+    const bx::Vec3 up = bx::cross(back, right);
+    const float turn = 0.12F * std::sin(static_cast<float>(frame) * 0.35F);
+    return CasterViewer{
+        .position = bx::Vec3{ start.x + 0.5F * std::sin(static_cast<float>(frame) * 0.21F), start.y, start.z },
+        .forward = TurnAboutUp(forward, turn),
+        .right = TurnAboutUp(right, turn),
+        .up = TurnAboutUp(up, turn),
+    };
+}
+
+// The four cascades of a directional light that points along (0.35, -1, -0.25): the viewer's 70 degree frustum of aspect
+// 16:9 is cut at 0.5 and at 0.1, 0.2, 0.5 and 1 of the way from there to `reach` (150 unless set), and each part gets the
+// box that bounds it along the axes of the light, open towards the light. A box becomes an orthographic camera in the
+// middle of it, looking along the light.
+std::vector<SceneRenderCamera> CasterCascadeCameras(int frame, float reach) {
+    const CasterViewer viewer = CasterViewerAtFrame(frame);
+    const bx::Vec3 towardLight = bx::normalize(bx::Vec3{ -0.35F, 1.0F, 0.25F });
+    const bx::Vec3 axisX = bx::normalize(bx::cross(bx::Vec3{ 0.0F, 1.0F, 0.0F }, towardLight));
+    const bx::Vec3 axisY = bx::cross(towardLight, axisX);
+    const std::array<float, 5> distances{ 0.5F, 0.5F + 0.1F * (reach - 0.5F), 0.5F + 0.2F * (reach - 0.5F),
+        0.5F + 0.5F * (reach - 0.5F), reach };
+    const float halfTangent = std::tan(bx::toRad(70.0F) * 0.5F);
+    std::vector<SceneRenderCamera> cameras;
+    for (std::size_t cascade = 0U; cascade < 4U; ++cascade) {
+        std::array<float, 3> low{ 1.0e30F, 1.0e30F, 1.0e30F };
+        std::array<float, 3> high{ -1.0e30F, -1.0e30F, -1.0e30F };
+        for (const float distance : { distances[cascade], distances[cascade + 1U] }) {
+            const float halfHeight = distance * halfTangent;
+            const float halfWidth = halfHeight * (16.0F / 9.0F);
+            for (const float sideX : { -1.0F, 1.0F }) {
+                for (const float sideY : { -1.0F, 1.0F }) {
+                    const bx::Vec3 corner = bx::add(bx::add(bx::add(viewer.position, bx::mul(viewer.forward, distance)),
+                        bx::mul(viewer.right, sideX * halfWidth)), bx::mul(viewer.up, sideY * halfHeight));
+                    const std::array<float, 3> along{ bx::dot(corner, axisX), bx::dot(corner, axisY), bx::dot(corner, towardLight) };
+                    for (std::size_t axis = 0U; axis < 3U; ++axis) {
+                        low[axis] = std::min(low[axis], along[axis]);
+                        high[axis] = std::max(high[axis], along[axis]);
+                    }
+                }
+            }
+        }
+        const float eyeDepth = high[2] + 2000.0F;
+        const bx::Vec3 eye = bx::add(bx::add(bx::mul(axisX, 0.5F * (low[0] + high[0])), bx::mul(axisY, 0.5F * (low[1] + high[1]))),
+            bx::mul(towardLight, eyeDepth));
+        SceneRenderCamera camera{};
+        bx::mtxLookAt(camera.view.data(), eye, bx::sub(eye, towardLight), axisY);
+        const float halfExtentX = 0.5F * (high[0] - low[0]);
+        const float halfExtentY = 0.5F * (high[1] - low[1]);
+        SceneDepthPolicy::MakeOrthographic(camera.projection.data(), halfExtentY * 2.0F, halfExtentX / halfExtentY, 0.1F,
+            eyeDepth - low[2], SceneDepthPolicy::HomogeneousDepth());
+        cameras.push_back(camera);
+    }
+    return cameras;
+}
+
+// The six faces of each of four point lights of the given range, at (+-30, 20, +-30), each of which slides a little every frame.
+std::vector<SceneRenderCamera> CasterPointFaceCameras(int frame, float range) {
+    struct Face { bx::Vec3 axis; bx::Vec3 up; };
+    const std::array<Face, 6> faces{ {
+        { { 1.0F, 0.0F, 0.0F }, { 0.0F, 1.0F, 0.0F } }, { { -1.0F, 0.0F, 0.0F }, { 0.0F, 1.0F, 0.0F } },
+        { { 0.0F, 1.0F, 0.0F }, { 0.0F, 0.0F, -1.0F } }, { { 0.0F, -1.0F, 0.0F }, { 0.0F, 0.0F, 1.0F } },
+        { { 0.0F, 0.0F, 1.0F }, { 0.0F, 1.0F, 0.0F } }, { { 0.0F, 0.0F, -1.0F }, { 0.0F, 1.0F, 0.0F } } } };
+    const std::array<bx::Vec3, 4> lights{ bx::Vec3{ -30.0F, 20.0F, -30.0F }, bx::Vec3{ 30.0F, 20.0F, -30.0F },
+        bx::Vec3{ -30.0F, 20.0F, 30.0F }, bx::Vec3{ 30.0F, 20.0F, 30.0F } };
+    std::vector<SceneRenderCamera> cameras;
+    for (std::size_t light = 0U; light < lights.size(); ++light) {
+        const bx::Vec3 eye{ lights[light].x + 0.01F * std::sin(static_cast<float>(frame) * 0.5F + static_cast<float>(light)),
+            lights[light].y, lights[light].z };
+        for (const Face& face : faces) {
+            SceneRenderCamera camera{};
+            bx::mtxLookAt(camera.view.data(), eye, bx::add(eye, face.axis), face.up);
+            SceneDepthPolicy::MakePerspective(camera.projection.data(), 90.0F, 1.0F, 0.025F, range, SceneDepthPolicy::HomogeneousDepth());
+            cameras.push_back(camera);
+        }
+    }
+    return cameras;
+}
+
+// Microseconds the calling thread spends building the shadow passes of one frame, built together on the workers or one by
+// one on the calling thread. `results` keeps the commands of the passes from one frame to the next, as a renderer does.
+double ShadowFrameMicroseconds(const std::vector<SceneMeshBatch>& batches, const RenderMeshResource& mesh,
+    std::span<const SceneRenderCamera> cameras, kb::ecs::WorkerPool* workerPool, ShadowBuildMode mode,
+    std::vector<MeshPipelineBuildResult>& results, std::size_t& admittedCount) {
+    const RenderMaterialResource material{};
+    const auto describe = [&](const SceneRenderCamera& camera) {
+        return MeshPipelineBuildDesc{
+            .pass = MeshPassType::ShadowDepth,
+            .meshBatches = &batches,
+            .resolvedMeshResource = &mesh,
+            .resolvedMaterialResource = &material,
+            .camera = &camera,
+            .resourceValidation = MeshPipelineResourceValidation::Skip,
+            .workerPool = workerPool,
+        };
+    };
+    admittedCount = 0U;
+    if (mode == ShadowBuildMode::Together) {
+        std::vector<MeshPipelinePassBuild> passes;
+        for (std::size_t index = 0U; index < cameras.size(); ++index) {
+            passes.push_back(MeshPipelinePassBuild{ .desc = describe(cameras[index]), .result = &results[index] });
+        }
+        const auto begin = std::chrono::steady_clock::now();
+        MeshPipelineProcessor::BuildPassesInto(passes);
+        const double microseconds = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - begin).count();
+        for (const MeshPipelineBuildResult& result : results) admittedCount += result.stats.visibleMeshCount;
+        return microseconds;
+    }
+    double microseconds = 0.0;
+    for (const SceneRenderCamera& camera : cameras) {
+        const auto begin = std::chrono::steady_clock::now();
+        MeshPipelineProcessor::BuildInto(describe(camera), results.front());
+        microseconds += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - begin).count();
+        admittedCount += results.front().stats.visibleMeshCount;
+    }
+    return microseconds;
+}
+
+[[nodiscard]] double MedianOf(std::vector<double> samples) {
+    if (samples.empty()) return -1.0;
+    std::ranges::sort(samples);
+    return samples[samples.size() / 2U];
+}
+
+[[nodiscard]] double WorstOf(const std::vector<double>& samples) {
+    return samples.empty() ? -1.0 : *std::ranges::max_element(samples);
+}
+
+// Median and worst microseconds of the shadow passes of a frame, over scenes of the sizes in `sizeList` that are far
+// larger than the ones the benchmark otherwise builds. Every frame the camera and the lights move, so no pass repeats
+// the one before, and each size is a row of its own whose passes are built on the workers and, unless `KB_SHADOW_SCALE_MODES`
+// leaves it out, one after the other on the calling thread. `KB_SHADOW_SCALE_FRAMES` sets the frames measured (after three
+// that are not), `KB_SHADOW_SCALE_STAGES` is cascades, points or both, `KB_SHADOW_SCALE_ORDER` is raster or shuffle and
+// `KB_SHADOW_SCALE_POINT_RANGE` is the range of the point lights (25 unless set) and `KB_SHADOW_SCALE_CASCADE_REACH` is how
+// far the cascades reach (150 unless set).
+void RunShadowLargeSceneBenchmark(const std::string& sizeList) {
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{} };
+    pool.Start(kb::ecs::WorkerPoolConfig{});
+    const std::string frameText = EnvironmentValue("KB_SHADOW_SCALE_FRAMES");
+    const int frames = frameText.empty() ? 10 : std::max(1, std::atoi(frameText.c_str()));
+    constexpr int kWarmupFrames = 3;
+    const std::string stageText = EnvironmentValue("KB_SHADOW_SCALE_STAGES");
+    const bool withCascades = stageText.empty() || stageText == "both" || stageText == "cascades";
+    const bool withPoints = stageText.empty() || stageText == "both" || stageText == "points";
+    const std::string modeText = EnvironmentValue("KB_SHADOW_SCALE_MODES");
+    const bool withSerial = modeText.empty() || modeText.find("serial") != std::string::npos;
+    const bool shuffled = EnvironmentValue("KB_SHADOW_SCALE_ORDER") == "shuffle";
+    const std::string rangeText = EnvironmentValue("KB_SHADOW_SCALE_POINT_RANGE");
+    const float pointRange = rangeText.empty() ? 25.0F : std::max(0.1F, static_cast<float>(std::atof(rangeText.c_str())));
+    const std::string reachText = EnvironmentValue("KB_SHADOW_SCALE_CASCADE_REACH");
+    const float cascadeReach = reachText.empty() ? 150.0F : std::max(1.0F, static_cast<float>(std::atof(reachText.c_str())));
+    const RenderMeshResource mesh = CubeBenchmarkMesh();
+
+    std::fprintf(stderr, "shadow_scale_large microseconds of the shadow passes of one frame, %zu workers, %s order\n",
+        pool.WorkerCount(), shuffled ? "shuffled" : "grid");
+    std::fprintf(stderr, "shadow_scale_large stage objects passes admitted frames together_median together_worst serial_median serial_worst workers\n");
+    for (const std::size_t objectCount : ParseCountList(sizeList)) {
+        RenderScene scene;
+        FillCasterGridScene(scene, objectCount, shuffled);
+        const std::vector<SceneMeshBatch> batches = SceneMeshBatchBuilder::Build(scene.DrawGroups());
+        for (const bool cascades : { true, false }) {
+            if (cascades ? !withCascades : !withPoints) continue;
+            std::vector<MeshPipelineBuildResult> togetherResults(cascades ? 4U : 24U);
+            std::vector<MeshPipelineBuildResult> serialResults(1U);
+            std::vector<double> together;
+            std::vector<double> serial;
+            std::size_t passes = 0U;
+            std::size_t admitted = 0U;
+            for (int frame = -kWarmupFrames; frame < frames; ++frame) {
+                const std::vector<SceneRenderCamera> cameras = cascades ? CasterCascadeCameras(frame + kWarmupFrames, cascadeReach)
+                                                                        : CasterPointFaceCameras(frame + kWarmupFrames, pointRange);
+                passes = cameras.size();
+                std::size_t togetherAdmitted = 0U;
+                const double togetherTime = ShadowFrameMicroseconds(batches, mesh, cameras, &pool, ShadowBuildMode::Together, togetherResults, togetherAdmitted);
+                admitted = togetherAdmitted;
+                if (frame >= 0) together.push_back(togetherTime);
+                if (withSerial) {
+                    std::size_t serialAdmitted = 0U;
+                    const double serialTime = ShadowFrameMicroseconds(batches, mesh, cameras, nullptr, ShadowBuildMode::OneByOne, serialResults, serialAdmitted);
+                    Require(serialAdmitted == togetherAdmitted, "The shadow passes built on one thread admitted other instances than the ones built together");
+                    if (frame >= 0) serial.push_back(serialTime);
+                }
+            }
+            std::fprintf(stderr, "shadow_scale_large %s %zu %zu %zu %d %.1f %.1f %.1f %.1f %zu\n", cascades ? "cascades" : "points",
+                objectCount, passes, admitted, frames, MedianOf(together), WorstOf(together), MedianOf(serial), WorstOf(serial), pool.WorkerCount());
+        }
+    }
+}
+
 } // namespace
 
 // Prints the median time of one BaseOpaque pass build over scenes of 1 000 to 50 000 mesh objects, built on the calling
@@ -2895,7 +3181,13 @@ void RunMeshPipelineBuildScaleBenchmark() {
 // Prints the median time of the shadow passes of one frame (four directional cascades, or four point lights of six faces)
 // over scenes of 1 000 to 50 000 shadow casters, built one after the other and together, on the calling thread and with
 // workers, each with the calling thread busy before the passes and without. No window and no GPU are involved.
+// With KB_SHADOW_SCALE_SIZES set to a comma separated list of object counts it measures large scene sizes instead
+// (see RunShadowLargeSceneBenchmark), so the usual run stays as short as it was.
 void RunMeshPipelineShadowBuildScaleBenchmark() {
+    if (const std::string largeSizes = EnvironmentValue("KB_SHADOW_SCALE_SIZES"); !largeSizes.empty()) {
+        RunShadowLargeSceneBenchmark(largeSizes);
+        return;
+    }
     kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{} };
     pool.Start(kb::ecs::WorkerPoolConfig{});
     const std::vector<SceneRenderCamera> cascades = ShadowCascadeCameras();
