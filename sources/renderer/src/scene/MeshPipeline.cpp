@@ -79,7 +79,7 @@ void ExpandMeshletCommands(const MeshPipelineBuildDesc& desc, MeshPipelineBuildR
 [[nodiscard]] bool BeginPass(const MeshPipelineBuildDesc& desc, MeshPipelineBuildResult& result,
     SceneMeshBatchCommandCache* batchCache, std::span<const SceneMeshBatch>& meshBatches) {
     if (batchCache != nullptr) batchCache->BeginBuild(desc.pass, result);
-    else for (MeshDrawCommand& command : result.commands) command.instances.clear();
+    else for (MeshDrawCommand& command : result.commands) { command.instances.clear(); command.motion.clear(); }
     result.gpuDrivenInputRecords.clear();
     result.transparentInstanceScratch.clear();
     ClearKeepingNodes(result.commandLookupScratch, result.commandLookupNodes);

@@ -70,6 +70,8 @@
 #include <memory>
 #include <span>
 #include <system_error>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -2962,6 +2964,268 @@ void RunUpdateMeshTransformRefreshesInstanceInPlaceTest() {
     Require(renderScene.DrawGroups()[0].instances.size() == 1U, "Draw group rebuild kept removed instance");
 }
 
+[[nodiscard]] std::array<float, 16> ModelAtPosition(float x, float y, float z) {
+    return { 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, x, y, z, 1.0F };
+}
+
+// Every visible mesh proxy has exactly one instance in the draw groups, which carries what the proxy says, and the
+// visibility indexes of the groups follow the models of the instances.
+void RequireDrawGroupsMatchProxies(const RenderScene& scene, const char* message) {
+    std::unordered_map<std::uint64_t, const SceneRenderMeshInstance*> instances;
+    for (const SceneRenderDrawGroup& group : scene.DrawGroups()) {
+        if (group.partitionKind != 0U) {
+            continue; // generated instances (swarms, strokes) have no mesh proxy
+        }
+        const bool indexed = !group.visibility.Empty();
+        Require(!indexed || group.visibility.slots.size() == group.instances.size(), message);
+        for (std::size_t position = 0U; position < group.instances.size(); ++position) {
+            const SceneRenderMeshInstance& instance = group.instances[position];
+            Require(instances.emplace(instance.entityId, &instance).second, message);
+            if (!indexed) {
+                continue;
+            }
+            const SceneMeshVisibilityIndex::Entry& entry = group.visibility.entries[group.visibility.slots[position]];
+            Require(entry.instance == position &&
+                entry.origin == std::array<float, 3>{ instance.model[12], instance.model[13], instance.model[14] }, message);
+        }
+    }
+    std::size_t visible = 0U;
+    for (const auto& [entityId, proxy] : scene.MeshProxies()) {
+        const auto found = instances.find(entityId);
+        if (!proxy.desc.visible) {
+            Require(found == instances.end(), message);
+            continue;
+        }
+        ++visible;
+        Require(found != instances.end(), message);
+        const SceneRenderMeshInstance& instance = *found->second;
+        Require(instance.model == proxy.desc.model && instance.previousModel == proxy.previousModel &&
+            instance.previousModelFrame == proxy.previousModelFrame && instance.meshAssetId == proxy.desc.meshAssetId &&
+            instance.materialAssetId == proxy.desc.materialAssetId, message);
+    }
+    Require(visible == instances.size(), message);
+}
+
+// Moves of mesh proxies leave their draw group instances to the next PrepareDrawGroups. Over frames that move all, some
+// and none of the meshes, and add, remove, hide, show and change meshes between a move and the passes, the instances,
+// their motion history and their visibility indexes must be what the proxies say, with the draw groups prepared on the
+// calling thread and on workers, for scenes of no mesh, one, groups too small to be indexed, and enough moves for workers.
+void RunQueuedMeshMovesKeepDrawGroupsInStepTest() {
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{} };
+    if (!pool.Running()) {
+        pool.Start(kb::ecs::WorkerPoolConfig{});
+    }
+    for (const std::size_t count : { std::size_t{ 0U }, std::size_t{ 1U }, std::size_t{ 40U }, std::size_t{ 700U }, std::size_t{ 5200U } }) {
+        for (const bool pooled : { false, true }) {
+            RenderScene scene;
+            std::unordered_map<std::uint64_t, std::array<float, 16>> alive;
+            const auto describe = [](std::uint64_t id) {
+                return MeshRenderProxyDesc{ .entityId = id, .meshAssetId = 10U + id % 3U, .materialAssetId = 20U + id % 2U,
+                    .model = ModelAtPosition(static_cast<float>(id % 97U), static_cast<float>(id % 13U), static_cast<float>(id % 31U)) };
+            };
+            const auto add = [&](std::uint64_t id) {
+                static_cast<void>(scene.UpsertMesh(describe(id)));
+                alive[id] = describe(id).model;
+            };
+            for (std::uint64_t id = 1U; id <= count; ++id) {
+                add(id);
+            }
+            scene.BeginMotionFrame(1U);
+            scene.PrepareDrawGroups(pooled ? &pool : nullptr);
+            RequireDrawGroupsMatchProxies(scene, "Prepared draw groups differ from the mesh proxies");
+
+            std::vector<std::uint64_t> removed;
+            for (std::uint64_t frame = 2U; frame <= 9U; ++frame) {
+                scene.BeginMotionFrame(frame);
+                const std::unordered_map<std::uint64_t, std::array<float, 16>> start = alive;
+                const std::uint64_t revisionBefore = scene.MeshContentRevision();
+                Require(scene.MeshContentRevision() == revisionBefore, "The mesh content revision changed without a change");
+                std::unordered_map<std::uint64_t, std::uint64_t> revisions;
+                for (const SceneRenderDrawGroup& group : scene.DrawGroups()) {
+                    revisions.emplace(group.cacheId, group.contentRevision);
+                }
+                const std::uint64_t step = frame == 2U ? 1U : frame % 4U + 2U;
+                std::unordered_set<std::uint64_t> moved;
+                const auto move = [&](std::uint64_t id, float shift) {
+                    const auto found = alive.find(id);
+                    Require((found != alive.end()) == (scene.FindMeshByEntity(id) != nullptr), "The mesh lookup disagrees with the scene");
+                    if (found == alive.end()) {
+                        Require(!scene.UpdateMeshTransform(id, ModelAtPosition(0.0F, 0.0F, 0.0F)), "A missing mesh was moved");
+                        return;
+                    }
+                    found->second[12] += shift;
+                    found->second[13] -= 0.25F * shift;
+                    if ((id & 1U) == 0U) {
+                        Require(scene.UpdateMeshTransform(id, found->second), "A mesh did not move");
+                    } else {
+                        scene.UpdateMeshTransform(id, *scene.FindMeshByEntity(id), found->second);
+                    }
+                    moved.insert(id);
+                };
+                for (std::uint64_t id = 1U; id <= count + 20U; id += step) {
+                    move(id, static_cast<float>(frame));
+                }
+                // A second change in the same frame keeps the model the frame began with.
+                for (std::uint64_t id = 1U; id <= count; id += 3U * step) {
+                    move(id, 0.5F);
+                }
+                Require(moved.empty() || scene.MeshContentRevision() != revisionBefore, "Moves did not change the mesh content revision");
+                if (frame == 2U && count >= 40U) {
+                    // A copy of a scene whose moves are still queued builds its draw groups from its own proxies and moves on its own.
+                    RenderScene copy = scene;
+                    RequireDrawGroupsMatchProxies(copy, "A copy of a scene with queued moves differs from its proxies");
+                    for (std::uint64_t id = 1U; id <= count; id += 5U) {
+                        Require(copy.FindMeshByEntity(id) != nullptr && copy.FindMeshByEntity(id) != scene.FindMeshByEntity(id),
+                            "A copy of a scene did not find its own proxies");
+                    }
+                    Require(copy.UpdateMeshTransform(1U, ModelAtPosition(500.0F, 0.0F, 0.0F)), "A copy of a scene did not move a mesh");
+                    RequireDrawGroupsMatchProxies(copy, "A copy of a scene differs from its proxies after a move");
+                    Require(copy.FindMeshByEntity(1U)->desc.model != scene.FindMeshByEntity(1U)->desc.model,
+                        "A move in a copy of a scene moved the mesh of its source scene");
+                }
+                const bool structural = frame >= 3U;
+                // Between the moves and the passes: remove, hide, show, add, change, remove all but some, change the groups.
+                if (frame == 3U) {
+                    for (std::uint64_t id = 5U; id <= count; id += 11U) {
+                        Require(scene.RemoveMesh(id), "A mesh was not removed");
+                        alive.erase(id);
+                        removed.push_back(id);
+                    }
+                } else if (frame == 4U) {
+                    for (const std::uint64_t id : removed) {
+                        add(id);
+                        move(id, 1.0F);
+                    }
+                    for (std::uint64_t id = 7U; id <= count; id += 7U) {
+                        MeshRenderProxyDesc desc = scene.FindMeshByEntity(id)->desc;
+                        desc.visible = false;
+                        static_cast<void>(scene.UpsertMesh(desc));
+                    }
+                } else if (frame == 5U) {
+                    for (std::uint64_t id = 7U; id <= count; id += 7U) {
+                        MeshRenderProxyDesc desc = scene.FindMeshByEntity(id)->desc;
+                        desc.visible = true;
+                        static_cast<void>(scene.UpsertMesh(desc));
+                    }
+                } else if (frame == 6U) {
+                    for (std::uint64_t id = count + 1U; id <= count + 20U; ++id) {
+                        add(id);
+                        move(id, 2.0F);
+                    }
+                } else if (frame == 7U) {
+                    for (std::uint64_t id = 3U; id <= count; id += 17U) {
+                        MeshRenderProxyDesc desc = scene.FindMeshByEntity(id)->desc;
+                        desc.meshAssetId += 100U;
+                        static_cast<void>(scene.UpsertMesh(desc));
+                    }
+                } else if (frame == 8U) {
+                    std::vector<std::uint64_t> kept;
+                    for (std::uint64_t id = 1U; id <= count + 20U; ++id) {
+                        if (id % 13U != 9U) {
+                            kept.push_back(id);
+                        } else {
+                            alive.erase(id);
+                        }
+                    }
+                    static_cast<void>(scene.RemoveMeshesNotInSorted(kept));
+                } else if (frame == 9U) {
+                    static_cast<void>(scene.UpsertGeometrySwarm(GeometrySwarmRenderProxyDesc{
+                        .entityId = 900000U, .meshAssetId = 44U, .materialAssetId = 9U, .model = ModelAtPosition(0.0F, 0.0F, 0.0F),
+                        .instanceCount = 4U, .columns = 2U, .rows = 1U, .layers = 2U, .spacing = { 2.0F, 1.0F, 1.0F },
+                    }));
+                }
+                scene.PrepareDrawGroups(pooled ? &pool : nullptr);
+                RequireDrawGroupsMatchProxies(scene, "Prepared draw groups differ from the mesh proxies after moves");
+                for (const std::uint64_t id : moved) {
+                    const MeshRenderProxy* proxy = scene.FindMeshByEntity(id);
+                    if (proxy == nullptr || proxy->spawnMotionFrame == scene.MotionFrame()) {
+                        continue;
+                    }
+                    Require(proxy->previousModelFrame == scene.MotionFrame() && proxy->previousModel == start.at(id),
+                        "A moved mesh did not keep the model its frame began with");
+                }
+                if (!structural) {
+                    // Only the groups that hold a mesh that moved are new content.
+                    for (const SceneRenderDrawGroup& group : scene.DrawGroups()) {
+                        const auto before = revisions.find(group.cacheId);
+                        Require(before != revisions.end(), "A move changed the draw group set");
+                        const bool holdsMoved = std::ranges::any_of(group.instances, [&moved](const SceneRenderMeshInstance& instance) {
+                            return moved.contains(instance.entityId);
+                        });
+                        Require((group.contentRevision != before->second) == holdsMoved, "A draw group revision did not follow its moves");
+                    }
+                }
+            }
+        }
+    }
+    pool.Stop();
+}
+
+// A mesh proxy is found by the entity id with one load when the id is small and dense, and in the map otherwise; the
+// two must agree through insertion, removal, re-insertion, ids no table covers and a move of the scene.
+void RunMeshProxyLookupFindsEveryProxyTest() {
+    RenderScene scene;
+    std::vector<std::uint64_t> ids{ 0U, 1U };
+    for (std::uint64_t id = 2U; id <= 300U; ++id) ids.push_back(id);
+    // Far, sparse and extreme ids, among them one that a later, denser table comes to cover.
+    for (const std::uint64_t id : { std::uint64_t{ 3000U }, std::uint64_t{ 5000000U }, std::uint64_t{ 0x9e3779b97f4a7c15ULL }, UINT64_MAX }) ids.push_back(id);
+    const auto expectFound = [](const RenderScene& source, const std::vector<std::uint64_t>& present, const char* message) {
+        for (const std::uint64_t id : present) {
+            const MeshRenderProxy* found = source.FindMeshByEntity(id);
+            const auto inMap = source.MeshProxies().find(id);
+            Require(found != nullptr && inMap != source.MeshProxies().end() && found == &inMap->second &&
+                found->desc.entityId == id, message);
+        }
+    };
+    for (const std::uint64_t id : ids) {
+        static_cast<void>(scene.UpsertMesh(MeshRenderProxyDesc{ .entityId = id, .meshAssetId = 1U }));
+        Require(scene.FindMeshByEntity(id) != nullptr, "A mesh was not found as soon as it was added");
+    }
+    expectFound(scene, ids, "A present mesh was not found by its id");
+    for (const std::uint64_t id : { std::uint64_t{ 301U }, std::uint64_t{ 4096U }, std::uint64_t{ 999999999U }, UINT64_MAX - 1U }) {
+        Require(scene.FindMeshByEntity(id) == nullptr && !scene.UpdateMeshTransform(id, ModelAtPosition(1.0F, 0.0F, 0.0F)),
+            "A mesh that is not there was found");
+    }
+    // The ids that were sparse when added are now inside what a growing table covers.
+    for (std::uint64_t id = 301U; id <= 6000U; ++id) {
+        if (id == 3000U) {
+            continue;
+        }
+        static_cast<void>(scene.UpsertMesh(MeshRenderProxyDesc{ .entityId = id, .meshAssetId = 1U }));
+        ids.push_back(id);
+    }
+    expectFound(scene, ids, "A mesh was lost when the table grew");
+    // Removal leaves nothing behind, and a mesh added again under the same id is the new proxy.
+    std::vector<std::uint64_t> kept;
+    for (const std::uint64_t id : ids) {
+        if (id % 3U == 0U) {
+            Require(scene.RemoveMesh(id), "A mesh was not removed");
+            Require(scene.FindMeshByEntity(id) == nullptr, "A removed mesh was still found");
+        } else {
+            kept.push_back(id);
+        }
+    }
+    expectFound(scene, kept, "A mesh was lost when others were removed");
+    static_cast<void>(scene.UpsertMesh(MeshRenderProxyDesc{ .entityId = 3U, .meshAssetId = 2U }));
+    Require(scene.FindMeshByEntity(3U) != nullptr && scene.FindMeshByEntity(3U)->desc.meshAssetId == 2U, "A mesh added again was not found");
+    kept.push_back(3U);
+    std::vector<std::uint64_t> sorted = kept;
+    std::ranges::sort(sorted);
+    sorted.erase(std::unique(sorted.begin(), sorted.end()), sorted.end());
+    std::vector<std::uint64_t> survivors;
+    for (const std::uint64_t id : sorted) {
+        if (id % 2U == 1U) survivors.push_back(id);
+    }
+    Require(scene.RemoveMeshesNotInSorted(survivors) == sorted.size() - survivors.size(), "Meshes outside the sorted ids were not all removed");
+    expectFound(scene, survivors, "A mesh was lost when meshes outside a list were removed");
+    for (const std::uint64_t id : sorted) {
+        Require((scene.FindMeshByEntity(id) != nullptr) == (id % 2U == 1U), "A mesh outside the sorted ids was still found");
+    }
+    // A scene that moves keeps its proxies where they are.
+    RenderScene moved = std::move(scene);
+    expectFound(moved, survivors, "A mesh was lost when its scene was moved");
+}
+
 // Previous LocalToWorld per primitive, which the motion vector pass reads: a proxy records the model it
 // had when the motion frame began on its first transform change in that frame; a proxy that does not change in
 // a frame has no motion of its own, and a new proxy has none in its first frame.
@@ -4279,6 +4543,8 @@ void RunRenderSceneSyncTests() {
     RunSyncConsumesPrecomputedWorldTransformTest();
     RunSyncFallsBackToResolveForDirtyTransformTest();
     RunUpdateMeshTransformRefreshesInstanceInPlaceTest();
+    RunQueuedMeshMovesKeepDrawGroupsInStepTest();
+    RunMeshProxyLookupFindsEveryProxyTest();
     RunRenderSceneRecordsPreviousModelsPerMotionFrameTest();
     RunTilemapSortingSurvivesTransformPublicationTest();
     RunSyncMeshWorldAffinesPushesColumnarTransformTest();

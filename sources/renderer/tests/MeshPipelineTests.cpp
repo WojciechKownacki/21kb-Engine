@@ -143,7 +143,7 @@ void RunSceneMeshBatchCommandRetentionTest() {
             result.stats.culledInstanceCount == reference.stats.culledInstanceCount &&
             result.stats.droppedInstanceCount == reference.stats.droppedInstanceCount,
             "Batch retention changed culling or instance budgets");
-        std::unordered_map<std::uint64_t, const SceneRenderMeshInstance*> expected;
+        std::unordered_map<std::uint64_t, const SceneRenderCommandInstance*> expected;
         for (const auto& command : reference.commands) for (const auto& instance : command.instances) expected.emplace(instance.entityId, &instance);
         for (const auto& command : result.commands) {
             for (const auto& instance : command.instances) {
@@ -172,7 +172,7 @@ void RunSceneMeshBatchCommandRetentionTest() {
     };
     build();
     Require(result.commands.size() == 4U, "Native instance pages were not bounded");
-    std::unordered_map<std::uint64_t, std::pair<std::uint64_t, const SceneRenderMeshInstance*>> identities;
+    std::unordered_map<std::uint64_t, std::pair<std::uint64_t, const SceneRenderCommandInstance*>> identities;
     for (const auto& command : result.commands) identities.emplace(command.sourceBatchId, std::pair{command.instanceRevision, command.instances.data()});
     Require(scene.UpdateMeshTransform(2050U, TranslationMatrix(0.3F, 0.0F, 0.0F)), "Dynamic mesh did not update");
     build();
@@ -299,6 +299,73 @@ void RunMotionVectorPassDrawsOnlyMovingInstancesTest() {
     scene.BeginMotionFrame(2U);
     Require(drawn(MeshPassType::MotionVectors, scene.MotionFrame()) == std::vector<std::uint64_t>{4U},
         "A mesh that stopped moving must leave the motion pass");
+}
+
+// A draw command keeps a compact copy of each instance its pass admitted: what the instance buffers, the GPU cull and
+// the meshlet bounds read, and, in the commands of a motion pass only, the motion history. Over scenes of no mesh, one,
+// groups too small to be indexed and indexed ones, with moved meshes, those must be what the draw group instances say.
+void RunDrawCommandsCarryTheAdmittedInstancesTest() {
+    RenderMeshResource mesh{};
+    mesh.indexCount = 3U;
+    mesh.bounds = {.radius = 0.5F};
+    RenderMaterialResource material{};
+    const auto camera = PerspectiveCamera();
+    for (const std::uint64_t count : {std::uint64_t{0U}, std::uint64_t{1U}, std::uint64_t{70U}, std::uint64_t{2500U}}) {
+        RenderScene scene;
+        scene.BeginMotionFrame(1U);
+        for (std::uint64_t id = 1U; id <= count; ++id) {
+            static_cast<void>(scene.UpsertMesh(MeshRenderProxyDesc{.entityId = id, .meshAssetId = 7U + id % 2U, .materialAssetId = 3U,
+                .model = TranslationMatrix(static_cast<float>(id % 7U) - 3.0F, static_cast<float>(id % 5U) - 2.0F, 10.0F + static_cast<float>(id % 11U)),
+                .boundsOverride = id % 4U == 0U ? RenderBoundsSphere{.center = {0.25F, 0.0F, 0.0F}, .radius = 0.75F} : RenderBoundsSphere{},
+                .color = {0.1F * static_cast<float>(id % 10U), 0.5F, 0.25F, 1.0F}, .fadeAmount = 0.5F + 0.01F * static_cast<float>(id % 50U),
+                .customData0 = static_cast<float>(id), .receivesShadow = id % 5U != 0U}));
+        }
+        scene.BeginMotionFrame(2U);
+        static_cast<void>(scene.DrawGroups());
+        for (std::uint64_t id = 3U; id <= count; id += 3U) {
+            Require(scene.UpdateMeshTransform(id, TranslationMatrix(static_cast<float>(id % 7U) - 2.5F, 1.0F, 12.0F)), "A mesh did not move");
+        }
+        const std::vector<SceneRenderDrawGroup>& groups = scene.DrawGroups();
+        std::unordered_map<std::uint64_t, const SceneRenderMeshInstance*> sources;
+        for (const SceneRenderDrawGroup& group : groups) {
+            for (const SceneRenderMeshInstance& instance : group.instances) sources.emplace(instance.entityId, &instance);
+        }
+        for (const MeshPassType pass : {MeshPassType::BaseOpaque, MeshPassType::ShadowDepth, MeshPassType::MotionVectors}) {
+            const MeshPipelineBuildResult result = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{.pass = pass, .drawGroups = &groups,
+                .resolvedMeshResource = &mesh, .resolvedMaterialResource = &material, .camera = &camera,
+                .resourceValidation = MeshPipelineResourceValidation::Skip,
+                .motionFrame = pass == MeshPassType::MotionVectors ? scene.MotionFrame() : 0U});
+            std::size_t admitted = 0U;
+            for (const MeshDrawCommand& command : result.commands) {
+                Require(command.motion.empty() || command.motion.size() == command.instances.size(), "A command kept motion history for some of its instances");
+                Require((pass == MeshPassType::MotionVectors) == (command.motion.size() == command.instances.size() && !command.instances.empty()),
+                    "Only the commands of a motion pass keep motion history");
+                for (std::size_t index = 0U; index < command.instances.size(); ++index) {
+                    const SceneRenderCommandInstance& copy = command.instances[index];
+                    const auto found = sources.find(copy.entityId);
+                    Require(found != sources.end(), "A command holds an instance no draw group has");
+                    const SceneRenderMeshInstance& source = *found->second;
+                    Require(copy.model == source.model && copy.meshAssetId == source.meshAssetId && copy.materialAssetId == source.materialAssetId &&
+                        copy.color == source.color && copy.fadeAmount == source.fadeAmount && copy.customData0 == source.customData0 &&
+                        copy.receivesShadow == source.receivesShadow && copy.boundsOverride.center == source.boundsOverride.center &&
+                        copy.boundsOverride.radius == source.boundsOverride.radius, "A command instance differs from the instance it copies");
+                    Require(copy.worldBounds.IsValid(), "A command instance lost its world bounds");
+                    if (pass == MeshPassType::MotionVectors) {
+                        Require(SceneRenderPreviousModel(copy, command.motion[index], scene.MotionFrame()) == SceneRenderPreviousModel(source, scene.MotionFrame()),
+                            "A command of the motion pass lost the previous model of an instance");
+                        Require((copy.entityId % 3U == 0U) == (SceneRenderPreviousModel(copy, command.motion[index], scene.MotionFrame()) != copy.model),
+                            "The motion pass did not keep exactly the moved instances moving");
+                    }
+                    ++admitted;
+                }
+            }
+            if (pass == MeshPassType::MotionVectors) {
+                Require(admitted == count / 3U, "The motion pass did not admit exactly the moved meshes");
+            } else {
+                Require(admitted == count, "A pass did not admit every mesh in view");
+            }
+        }
+    }
 }
 
 void RunMeshPassTypeNamesResolveTest() {
@@ -1040,9 +1107,9 @@ void RunMeshPipelineSplitsSectionCommandsByMaterialSlotOverrideTest() {
     SceneRenderMeshInstance overridden{
         .entityId = 2U,
         .meshAssetId = 42U,
-        .materialSlotAssetIds = { 0U, 201U },
-        .materialSlotOverrideCount = 2U,
         .model = IdentityMatrix(),
+        .materialSlotOverrideCount = 2U,
+        .materialSlotAssetIds = { 0U, 201U },
     };
     const std::vector<SceneRenderDrawGroup> drawGroups{
         SceneRenderDrawGroup{
@@ -1102,7 +1169,7 @@ void RunMeshPipelineDrawBudgetDropsOverflowCommandsTest() {
             .meshAssetId = 42U,
             .instances = {
                 SceneRenderMeshInstance{ .entityId = 1U, .meshAssetId = 42U, .model = IdentityMatrix() },
-                SceneRenderMeshInstance{ .entityId = 2U, .meshAssetId = 42U, .materialSlotAssetIds = { 0U, 201U }, .materialSlotOverrideCount = 2U, .model = IdentityMatrix() },
+                SceneRenderMeshInstance{ .entityId = 2U, .meshAssetId = 42U, .model = IdentityMatrix(), .materialSlotOverrideCount = 2U, .materialSlotAssetIds = { 0U, 201U } },
             },
         },
     };
@@ -1829,13 +1896,13 @@ void RunMeshPipelineCoordinatesDetailSwitchGroupsWithHysteresisTest() {
             .instances = {
                 SceneRenderMeshInstance{
                     .entityId = 1U, .meshAssetId = 42U, .model = TranslationMatrix(0.0F, 0.0F, 0.1F),
-                    .detailSwitchGroupId = 7U, .detailSwitchMinimumLod = 0U, .detailSwitchMaximumLod = 1U,
-                    .detailSwitchPromoteCoverage = 0.20F, .detailSwitchDemoteCoverage = 0.15F, .detailSwitchEnabled = true,
+                    .detailSwitchEnabled = true, .detailSwitchGroupId = 7U, .detailSwitchMinimumLod = 0U, .detailSwitchMaximumLod = 1U,
+                    .detailSwitchPromoteCoverage = 0.20F, .detailSwitchDemoteCoverage = 0.15F,
                 },
                 SceneRenderMeshInstance{
                     .entityId = 2U, .meshAssetId = 42U, .model = TranslationMatrix(0.0F, 0.0F, 0.9F),
-                    .detailSwitchGroupId = 7U, .detailSwitchMinimumLod = 0U, .detailSwitchMaximumLod = 1U,
-                    .detailSwitchPromoteCoverage = 0.20F, .detailSwitchDemoteCoverage = 0.15F, .detailSwitchEnabled = true,
+                    .detailSwitchEnabled = true, .detailSwitchGroupId = 7U, .detailSwitchMinimumLod = 0U, .detailSwitchMaximumLod = 1U,
+                    .detailSwitchPromoteCoverage = 0.20F, .detailSwitchDemoteCoverage = 0.15F,
                 },
             },
         },
@@ -2375,8 +2442,8 @@ public:
             return false;
         }
         for (std::size_t instance = 0U; instance < x.instances.size(); ++instance) {
-            const SceneRenderMeshInstance& p = x.instances[instance];
-            const SceneRenderMeshInstance& q = y.instances[instance];
+            const SceneRenderCommandInstance& p = x.instances[instance];
+            const SceneRenderCommandInstance& q = y.instances[instance];
             if (p.entityId != q.entityId || p.meshAssetId != q.meshAssetId || p.materialAssetId != q.materialAssetId ||
                 p.model != q.model || !SameBounds(p.worldBounds, q.worldBounds) || p.depthBucket != q.depthBucket) {
                 return false;
@@ -3097,7 +3164,7 @@ void RunMeshPipelineVisibilityIndexMatchesScanTest() {
     const auto admits = [&](const std::vector<SceneRenderDrawGroup>& source) {
         const MeshPipelineBuildResult result = build(source, front, MeshPassType::Depth);
         return std::ranges::any_of(result.commands, [moved](const MeshDrawCommand& command) {
-            return std::ranges::any_of(command.instances, [moved](const SceneRenderMeshInstance& instance) { return instance.entityId == moved; });
+            return std::ranges::any_of(command.instances, [moved](const SceneRenderCommandInstance& instance) { return instance.entityId == moved; });
         });
     };
     Require(admits(unindexed) && !admits(tampered), "The visibility index did not rule out the instances it holds far away");
@@ -4165,6 +4232,7 @@ void RunMeshPipelineTests() {
     RunSceneMeshCommandReuseInvalidationTest();
     RunSceneMeshBatchCommandRetentionTest();
     RunMotionVectorPassDrawsOnlyMovingInstancesTest();
+    RunDrawCommandsCarryTheAdmittedInstancesTest();
     // Compare accelerated generated ranges with the original per-instance path.
     // Camera motion, shear, off-centre bounds, growth and mixed owners must not
     // alter accepted ids or pass counters.

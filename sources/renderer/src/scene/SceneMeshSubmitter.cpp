@@ -497,7 +497,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
                 .terrainLayersOnly = terrainLayersOnly,
             }, gpuMeshScratch_);
             for (const MeshDrawCommand& command : gpuMeshScratch_.commands) {
-                for (const SceneRenderMeshInstance& instance : command.instances) {
+                for (const SceneRenderCommandInstance& instance : command.instances) {
                     const std::size_t drawIndex = static_cast<std::size_t>(instance.entityId) - 1U;
                     if (drawIndex >= gpuMeshDraws.size()) continue;
                     MeshDrawCommand gpuCommand = command;

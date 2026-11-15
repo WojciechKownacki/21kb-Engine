@@ -20,8 +20,8 @@ public:
         return static_cast<std::uint16_t>(sizeof(RenderInstanceData));
     }
 
-    [[nodiscard]] static RenderInstanceData Pack(const SceneRenderMeshInstance& instance, const RenderMaterialResource* material = nullptr, bool encodeShadowReceiver = true) noexcept;
-    static void Copy(std::span<RenderInstanceData> destination, std::span<const SceneRenderMeshInstance> source, const RenderMaterialResource* material = nullptr, bool encodeShadowReceiver = true) noexcept;
+    [[nodiscard]] static RenderInstanceData Pack(const SceneRenderCommandInstance& instance, const RenderMaterialResource* material = nullptr, bool encodeShadowReceiver = true) noexcept;
+    static void Copy(std::span<RenderInstanceData> destination, std::span<const SceneRenderCommandInstance> source, const RenderMaterialResource* material = nullptr, bool encodeShadowReceiver = true) noexcept;
 };
 
 } // namespace kb::render

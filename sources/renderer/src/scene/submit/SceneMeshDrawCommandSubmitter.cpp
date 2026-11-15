@@ -30,7 +30,7 @@ void EmitGroupDiagnostics(
         static_cast<std::uint32_t>(command.instances.size()),
         firstInstance + instanceCount);
     for (std::uint32_t index = firstInstance; index < end; ++index) {
-        const SceneRenderMeshInstance& instance = command.instances[index];
+        const SceneRenderCommandInstance& instance = command.instances[index];
         diagnostics->events.push_back(SceneRenderDiagnosticEvent{
             .severity = severity,
             .kind = kind,
@@ -125,11 +125,17 @@ enum class MotionPreviousModelUpload : std::uint8_t {
 // one row per submitted instance in instance order (the vertex stage indexes them by gl_InstanceID).
 [[nodiscard]] MotionPreviousModelUpload UploadMotionPreviousModels(
     const SceneMotionVectorFrame& motion,
-    std::span<const SceneRenderMeshInstance> instances,
+    std::span<const SceneRenderCommandInstance> instances,
+    std::span<const SceneRenderCommandMotion> motions,
     RenderSkinningPaletteHandle& handle) {
-    const bool moved = std::ranges::any_of(instances, [&motion](const SceneRenderMeshInstance& instance) {
-        return SceneRenderPreviousModel(instance, motion.motionFrame) != instance.model;
-    });
+    // An instance the command holds no motion history of has not moved.
+    const auto previousModel = [&](std::size_t index) -> const std::array<float, 16>& {
+        return index < motions.size() ? SceneRenderPreviousModel(instances[index], motions[index], motion.motionFrame) : instances[index].model;
+    };
+    bool moved = false;
+    for (std::size_t index = 0U; index < instances.size() && !moved; ++index) {
+        moved = previousModel(index) != instances[index].model;
+    }
     if (!moved) {
         return MotionPreviousModelUpload::Unmoved;
     }
@@ -142,8 +148,8 @@ enum class MotionPreviousModelUpload : std::uint8_t {
     }
     std::vector<RenderSkinningMatrix> rows;
     rows.reserve(instances.size());
-    for (const SceneRenderMeshInstance& instance : instances) {
-        rows.push_back(SceneRenderPreviousModel(instance, motion.motionFrame));
+    for (std::size_t index = 0U; index < instances.size(); ++index) {
+        rows.push_back(previousModel(index));
     }
     return motion.previousModels->Upload(handle, rows)
         ? MotionPreviousModelUpload::Uploaded
@@ -293,7 +299,9 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
             const MotionPreviousModelUpload upload = desc.motionVectors == nullptr
                 ? MotionPreviousModelUpload::Unavailable
                 : UploadMotionPreviousModels(*desc.motionVectors,
-                    std::span<const SceneRenderMeshInstance>(command.instances.data(), submittedInstances), motionPreviousModels);
+                    std::span<const SceneRenderCommandInstance>(command.instances.data(), submittedInstances),
+                    std::span<const SceneRenderCommandMotion>(command.motion.data(), std::min<std::size_t>(command.motion.size(), submittedInstances)),
+                    motionPreviousModels);
             if (upload == MotionPreviousModelUpload::Unavailable) {
                 EmitMotionVectorDiagnostic(desc.diagnostics, SceneRenderDiagnosticKind::MotionVectorPreviousModelsUnavailable,
                     SceneRenderDiagnosticSeverity::Error, command, submittedInstances);
@@ -331,7 +339,7 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
             auto* instanceData = reinterpret_cast<RenderInstanceData*>(instanceBuffer.data);
             RenderInstanceBuffer::Copy(
                 std::span<RenderInstanceData>(instanceData, submittedInstances),
-                std::span<const SceneRenderMeshInstance>(command.instances.data(), submittedInstances),
+                std::span<const SceneRenderCommandInstance>(command.instances.data(), submittedInstances),
                 selectionPass ? nullptr : command.materialResource,
                 desc.pass != MeshPassType::ShadowDepth && !selectionPass);
             bgfx::setInstanceDataBuffer(&instanceBuffer, 0U, submittedInstances);

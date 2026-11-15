@@ -184,26 +184,17 @@ struct SceneRenderCamera {
     std::array<float, 3> clearColor{ 0.0F, 0.0F, 0.0F };
 };
 
+// What a draw group holds for each visible mesh proxy. What the copy into a draw command reads comes first, then what
+// the scan of a pass reads of each instance, then the motion history, and last what is rarely set.
 struct SceneRenderMeshInstance {
     std::uint64_t entityId = 0;
     std::uint64_t meshAssetId = 0;
     std::uint64_t materialAssetId = 0;
-    std::array<std::uint64_t, kMaxSceneMaterialSlotOverrides> materialSlotAssetIds{};
-    std::uint32_t materialSlotOverrideCount = 0;
     std::array<float, 16> model{};
     RenderBoundsSphere boundsOverride{};
     std::array<float, 4> color{ 0.76F, 0.80F, 0.86F, 1.0F };
     float fadeAmount = 1.0F;
     float customData0 = 0.0F;
-    RenderSkinningPaletteHandle currentSkinningPalette{};
-    RenderSkinningPaletteHandle previousSkinningPalette{};
-    // The model the instance had when the motion frame `previousModelFrame` began (RenderScene::MotionFrame).
-    // In any later motion frame the instance has not moved since, so its previous model is `model`
-    // (SceneRenderPreviousModel); 0 names no frame.
-    std::array<float, 16> previousModel{};
-    std::uint64_t previousModelFrame = 0U;
-    RenderBoundsSphere worldBounds{};
-    std::uint16_t depthBucket = 0;
     bool castsShadow = true;
     bool receivesShadow = true;
     bool shadowOnly = false;
@@ -211,22 +202,77 @@ struct SceneRenderMeshInstance {
     // camera's SceneRenderCamera::cullingMask. Bit 0 set by default, matching
     // MeshRendererComponent::layer's default ("Default" layer).
     std::uint32_t layer = 1U;
-    std::uint64_t detailSwitchGroupId = 0U;
-    std::uint32_t detailSwitchMinimumLod = 0U;
-    std::uint32_t detailSwitchMaximumLod = 255U;
-    float detailSwitchPromoteCoverage = 0.20F;
-    float detailSwitchDemoteCoverage = 0.15F;
     bool detailSwitchEnabled = false;
     std::int32_t lodBias = 0;
     bool lodEnabled = true;
     // The mesh never moves while the scene runs (MeshMobility::Static): it has no motion to draw.
     bool isStatic = false;
+    std::uint32_t materialSlotOverrideCount = 0;
+    RenderSkinningPaletteHandle currentSkinningPalette{};
+    RenderSkinningPaletteHandle previousSkinningPalette{};
+    // The model the instance had when the motion frame `previousModelFrame` began (RenderScene::MotionFrame).
+    // In any later motion frame the instance has not moved since, so its previous model is `model`
+    // (SceneRenderPreviousModel); 0 names no frame.
+    std::uint64_t previousModelFrame = 0U;
+    std::array<float, 16> previousModel{};
+    RenderBoundsSphere worldBounds{};
+    std::uint16_t depthBucket = 0;
+    std::uint64_t detailSwitchGroupId = 0U;
+    std::uint32_t detailSwitchMinimumLod = 0U;
+    std::uint32_t detailSwitchMaximumLod = 255U;
+    float detailSwitchPromoteCoverage = 0.20F;
+    float detailSwitchDemoteCoverage = 0.15F;
+    std::array<std::uint64_t, kMaxSceneMaterialSlotOverrides> materialSlotAssetIds{};
 };
+
+// What a draw command keeps of an instance its pass admitted: what the instance buffers, the GPU cull and the bounds
+// of a meshlet need. A command holds one of these per drawn instance, so it leaves out what only the scan of the pass
+// reads (flags, layer, level of detail, skinning palettes, material slots) and the motion history, which only a motion
+// pass keeps (SceneRenderCommandMotion).
+struct SceneRenderCommandInstance {
+    SceneRenderCommandInstance() = default;
+    SceneRenderCommandInstance(const SceneRenderMeshInstance& instance) noexcept
+        : entityId(instance.entityId), meshAssetId(instance.meshAssetId), materialAssetId(instance.materialAssetId),
+          model(instance.model), boundsOverride(instance.boundsOverride), color(instance.color),
+          fadeAmount(instance.fadeAmount), customData0(instance.customData0), worldBounds(instance.worldBounds),
+          depthBucket(instance.depthBucket), receivesShadow(instance.receivesShadow) {}
+    SceneRenderCommandInstance(const SceneRenderMeshInstance& instance, const RenderBoundsSphere& bounds, std::uint16_t bucket) noexcept
+        : entityId(instance.entityId), meshAssetId(instance.meshAssetId), materialAssetId(instance.materialAssetId),
+          model(instance.model), boundsOverride(instance.boundsOverride), color(instance.color),
+          fadeAmount(instance.fadeAmount), customData0(instance.customData0), worldBounds(bounds),
+          depthBucket(bucket), receivesShadow(instance.receivesShadow) {}
+
+    std::uint64_t entityId = 0;
+    std::uint64_t meshAssetId = 0;
+    std::uint64_t materialAssetId = 0;
+    std::array<float, 16> model{};
+    RenderBoundsSphere boundsOverride{};
+    std::array<float, 4> color{ 0.76F, 0.80F, 0.86F, 1.0F };
+    float fadeAmount = 1.0F;
+    float customData0 = 0.0F;
+    RenderBoundsSphere worldBounds{};
+    std::uint16_t depthBucket = 0;
+    bool receivesShadow = true;
+};
+
+// The motion history of an instance of a command (SceneRenderMeshInstance::previousModel): a command of a motion pass
+// holds one for each of its instances.
+struct SceneRenderCommandMotion {
+    std::uint64_t previousModelFrame = 0U;
+    std::array<float, 16> previousModel{};
+};
+
+// The model an instance of a command was drawn with in the previous motion frame, as seen from `motionFrame`.
+[[nodiscard]] inline const std::array<float, 16>& SceneRenderPreviousModel(
+    const SceneRenderCommandInstance& instance, const SceneRenderCommandMotion& motion, std::uint64_t motionFrame) noexcept {
+    return motion.previousModelFrame != 0U && motion.previousModelFrame == motionFrame ? motion.previousModel : instance.model;
+}
 
 // The model an instance was drawn with in the previous motion frame, as seen from `motionFrame`: what it
 // recorded when it moved in this frame, its current model otherwise.
+template <typename Instance>
 [[nodiscard]] inline const std::array<float, 16>& SceneRenderPreviousModel(
-    const SceneRenderMeshInstance& instance, std::uint64_t motionFrame) noexcept {
+    const Instance& instance, std::uint64_t motionFrame) noexcept {
     return instance.previousModelFrame != 0U && instance.previousModelFrame == motionFrame
         ? instance.previousModel
         : instance.model;
@@ -316,6 +362,8 @@ struct SceneRenderDrawGroup {
     std::uint64_t contentRevision = 0U;
     std::uint64_t partitionOwner = 0U;
     std::uint8_t partitionKind = 0U;
+    // Set when an instance of the group was moved in place; the next refresh gives the group a new content revision.
+    std::uint8_t instancesMoved = 0U;
 };
 
 struct SceneRenderLight {

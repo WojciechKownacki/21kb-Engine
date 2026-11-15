@@ -110,6 +110,7 @@ void ResetCommandKeepingInstanceStorage(MeshDrawCommand& command) noexcept {
     command.currentSkinningPalette = {};
     command.previousSkinningPalette = {};
     command.instances.clear();
+    command.motion.clear();
 }
 
 } // namespace
@@ -148,7 +149,7 @@ void MeshPipelineCommandBuilder::FinalizeCommands(MeshPipelineBuildResult& resul
         std::uint32_t previousSourceIndex = UINT32_MAX;
         for (const MeshPipelineTransparentInstanceRef& reference : result.transparentInstanceScratch) {
             const MeshDrawCommand& source = result.transparentSourceCommands[reference.commandIndex];
-            const SceneRenderMeshInstance& instance = source.instances[reference.instanceIndex];
+            const SceneRenderCommandInstance& instance = source.instances[reference.instanceIndex];
             const bool startsCommand = result.commands.empty() || previousSourceIndex != reference.commandIndex ||
                 result.commands.back().depthBucket != instance.depthBucket;
             if (startsCommand && maxDrawCommands != 0U && result.commands.size() >= maxDrawCommands) {

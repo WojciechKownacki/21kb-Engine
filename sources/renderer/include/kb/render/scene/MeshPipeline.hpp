@@ -64,7 +64,9 @@ struct MeshDrawCommand {
     std::uint64_t sortKey = 0;
     RenderSkinningPaletteHandle currentSkinningPalette{};
     RenderSkinningPaletteHandle previousSkinningPalette{};
-    std::vector<SceneRenderMeshInstance> instances;
+    std::vector<SceneRenderCommandInstance> instances;
+    // The motion history of each instance, kept by the commands of a motion pass only; empty for the others.
+    std::vector<SceneRenderCommandMotion> motion;
     // Instances produced on the GPU (a compute-written buffer in the mesh instance layout): drawn as they are,
     // `instances` then holds one placeholder that only identifies the source.
     bgfx::DynamicVertexBufferHandle gpuInstanceBuffer = BGFX_INVALID_HANDLE;

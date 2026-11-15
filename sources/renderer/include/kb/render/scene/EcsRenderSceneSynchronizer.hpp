@@ -175,7 +175,6 @@ private:
     mutable std::size_t meshPullMeshCount_ = 0U;
     // Rows written after the last transform sync, resolved on the calling thread after the workers.
     mutable std::vector<std::size_t> meshPullDirtyRows_;
-    mutable std::vector<std::uint32_t> meshPullChangedGroups_;
     mutable std::vector<RenderSkinningMatrix> skinningMatrixScratch_;
     mutable std::vector<kb::scene::SkeletonBoneId> skinningBoneScratch_;
     mutable std::vector<kb::math::Mat4> skinningPoseScratch_;

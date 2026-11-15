@@ -18,6 +18,7 @@
 #include <atomic>
 #include <bit>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <unordered_map>
@@ -414,13 +415,18 @@ private:
     }
 };
 
-// Fetches the memory of an instance that will be read soon: instances far apart are not read ahead of time.
-void PrefetchInstance(const SceneRenderMeshInstance& instance) noexcept {
+// Fetches the memory of an instance that will be read soon: instances far apart are not read ahead of time. The scan
+// of a pass reads the instance up to its motion history, the copy into a draw command what comes before its flags.
+void PrefetchInstance(const SceneRenderMeshInstance& instance, std::size_t size) noexcept {
     const char* bytes = reinterpret_cast<const char*>(&instance);
-    for (std::size_t offset = 0U; offset < sizeof(SceneRenderMeshInstance); offset += 64U) {
+    for (std::size_t offset = 0U; offset < size; offset += 64U) {
         kb::ecs::PrefetchQueryMemory(bytes + offset);
     }
+    kb::ecs::PrefetchQueryMemory(bytes + size - 1U);
 }
+constexpr std::size_t kScanReadSize = offsetof(SceneRenderMeshInstance, previousModelFrame);
+constexpr std::size_t kCopyReadSize = offsetof(SceneRenderMeshInstance, shadowOnly);
+constexpr std::size_t kMotionReadSize = offsetof(SceneRenderMeshInstance, worldBounds);
 
 // A pass makes use of the visibility index only where it admits instances by what the index counts and by the frustum:
 // a pass that admits them by entity, or by whether they moved, reads more of each.
@@ -634,7 +640,7 @@ void ScanSection(const MeshScanContext& context, MeshScanState& state, const Sce
         if (selection.bits != nullptr) {
             // The instances that are left may lie far apart: the next is fetched while this one is scanned.
             const std::size_t ahead = selection.After(instanceIndex, instanceCount);
-            if (ahead < instanceCount && ahead != instanceIndex + 1U) PrefetchInstance(batch.instances[ahead]);
+            if (ahead < instanceCount && ahead != instanceIndex + 1U) PrefetchInstance(batch.instances[ahead], kScanReadSize);
         }
         const SceneRenderMeshInstance& instance = batch.instances[instanceIndex];
         if (!MeshPipelinePassPolicy::CanEverContain(desc.pass, instance, desc.selectedEntityIds, context.cullingMask)) {
@@ -893,9 +899,10 @@ struct MeshCommandWriter {
             MeshPipelineGpuDrivenRecorder::Record(result, instance.entityId, admitted.worldBounds, drawCommandIndex, admitted.lodLevel, scope.meshletRange, false);
         }
         command.sortKey += admitted.depthBucket;
-        SceneRenderMeshInstance& accepted = command.instances.emplace_back(instance);
-        accepted.worldBounds = admitted.worldBounds;
-        accepted.depthBucket = admitted.depthBucket;
+        command.instances.emplace_back(instance, admitted.worldBounds, admitted.depthBucket);
+        if (desc.pass == MeshPassType::MotionVectors) {
+            command.motion.push_back(SceneRenderCommandMotion{ .previousModelFrame = instance.previousModelFrame, .previousModel = instance.previousModel });
+        }
         if (desc.pass == MeshPassType::BaseTransparent) {
             const float viewDepth = std::abs(admitted.viewDepth);
             result.transparentInstanceScratch.push_back(MeshPipelineTransparentInstanceRef{
@@ -1001,7 +1008,8 @@ void MergeChunk(const MeshScanContext& context, const MeshPipelineScanChunk& chu
         std::uint32_t drawCommandIndex = 0U;
         for (std::uint32_t index = 0U; index < run.instanceCount; ++index) {
             if (index + kMergePrefetchDistance < run.instanceCount) {
-                PrefetchInstance(batch.instances[chunk.instances[instanceCursor + kMergePrefetchDistance].instanceIndex]);
+                PrefetchInstance(batch.instances[chunk.instances[instanceCursor + kMergePrefetchDistance].instanceIndex],
+                    context.desc.pass == MeshPassType::MotionVectors ? kMotionReadSize : kCopyReadSize);
             }
             const MeshPipelineScanInstance& admitted = chunk.instances[instanceCursor++];
             const SceneRenderMeshInstance& instance = batch.instances[admitted.instanceIndex];

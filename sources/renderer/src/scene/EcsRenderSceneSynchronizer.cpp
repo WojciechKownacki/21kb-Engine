@@ -1438,15 +1438,11 @@ void EcsRenderSceneSynchronizer::PullComposedMeshTransforms(const kb::scene::Sce
     std::vector<std::size_t>& dirtyRows = meshPullDirtyRows_;
     std::atomic<std::uint64_t> inPlace{ 0U };
     std::atomic<std::uint64_t> fallback{ 0U };
-    std::mutex changedGroupsMutex;
-    std::vector<std::uint32_t>& changedGroups = meshPullChangedGroups_;
-    changedGroups.clear();
     const auto& rows = meshPullRows_;
     const bool floatTranslations = UsesFloatTranslations(scene, renderScene);
-    const_cast<kb::scene::Scene&>(scene).Runtime().ParallelFor(rows.size(), kMeshPullGrainSize, [&scene, floatTranslations, &renderScene, &rows, &inPlace, &fallback, &changedGroupsMutex, &changedGroups, &dirtyRowsMutex, &dirtyRows](std::size_t begin, std::size_t end) {
+    const_cast<kb::scene::Scene&>(scene).Runtime().ParallelFor(rows.size(), kMeshPullGrainSize, [&scene, floatTranslations, &renderScene, &rows, &inPlace, &fallback, &dirtyRowsMutex, &dirtyRows](std::size_t begin, std::size_t end) {
         std::uint64_t localInPlace = 0U;
         std::uint64_t localFallback = 0U;
-        std::uint32_t lastGroup = UINT32_MAX;
         for (std::size_t index = begin; index < end; ++index) {
             const auto [entity, transform, proxy] = rows[index];
             if (transform->worldDirty) {
@@ -1459,14 +1455,9 @@ void EcsRenderSceneSynchronizer::PullComposedMeshTransforms(const kb::scene::Sce
             const std::array<float, 16> model = floatTranslations
                 ? ModelFromWorldAffine3x4(kb::scene::BuildWorldAffine3x4(*transform))
                 : ModelFromWorldAffine3x4(kb::scene::BuildWorldAffine3x4(*transform, scene.Transforms().WorldTranslation(entity, *transform), renderScene.RenderOrigin()));
-            switch (renderScene.ApplyMeshTransform(entity.Id(), const_cast<MeshRenderProxy&>(*proxy), model, false)) {
+            switch (renderScene.ApplyMeshTransform(const_cast<MeshRenderProxy&>(*proxy), model, RenderScene::InstanceRefresh::Immediate)) {
             case RenderScene::TransformUpdateOutcome::InPlace:
                 ++localInPlace;
-                if (proxy->instanceGroupIndex != lastGroup) {
-                    lastGroup = proxy->instanceGroupIndex;
-                    const std::lock_guard lock{ changedGroupsMutex };
-                    changedGroups.push_back(lastGroup);
-                }
                 break;
             case RenderScene::TransformUpdateOutcome::Fallback:
                 ++localFallback;
@@ -1478,9 +1469,6 @@ void EcsRenderSceneSynchronizer::PullComposedMeshTransforms(const kb::scene::Sce
         inPlace.fetch_add(localInPlace, std::memory_order_relaxed);
         fallback.fetch_add(localFallback, std::memory_order_relaxed);
     });
-    std::ranges::sort(changedGroups);
-    changedGroups.erase(std::unique(changedGroups.begin(), changedGroups.end()), changedGroups.end());
-    for (const std::uint32_t group : changedGroups) renderScene.MarkDrawGroupContentChanged(group);
     const std::uint64_t fallbackCount = fallback.load(std::memory_order_relaxed);
     renderScene.InvalidateDrawGroupsIfFallback(fallbackCount > 0U ? RenderScene::TransformUpdateOutcome::Fallback : RenderScene::TransformUpdateOutcome::InPlace);
     renderScene.AddTransformUpdateCounts(inPlace.load(std::memory_order_relaxed), fallbackCount);

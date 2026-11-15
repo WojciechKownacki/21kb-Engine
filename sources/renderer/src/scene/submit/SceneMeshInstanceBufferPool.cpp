@@ -48,7 +48,7 @@ SceneMeshInstanceBufferPool::~SceneMeshInstanceBufferPool() {
 }
 
 bgfx::DynamicVertexBufferHandle SceneMeshInstanceBufferPool::Upload(
-    std::span<const SceneRenderMeshInstance> instances,
+    std::span<const SceneRenderCommandInstance> instances,
     const RenderMaterialResource* material,
     bool encodeShadowReceiver,
     std::uint64_t instanceRevision, SceneMeshInstanceBufferOwner owner) {

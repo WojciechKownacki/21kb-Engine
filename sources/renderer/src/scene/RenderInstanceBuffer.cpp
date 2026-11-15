@@ -20,7 +20,7 @@ namespace {
 
 } // namespace
 
-RenderInstanceData RenderInstanceBuffer::Pack(const SceneRenderMeshInstance& instance, const RenderMaterialResource* material, bool encodeShadowReceiver) noexcept {
+RenderInstanceData RenderInstanceBuffer::Pack(const SceneRenderCommandInstance& instance, const RenderMaterialResource* material, bool encodeShadowReceiver) noexcept {
     std::array<float, 4> color = instance.color;
     if (material != nullptr) {
         color[0] *= material->baseColor[0];
@@ -46,7 +46,7 @@ RenderInstanceData RenderInstanceBuffer::Pack(const SceneRenderMeshInstance& ins
     };
 }
 
-void RenderInstanceBuffer::Copy(std::span<RenderInstanceData> destination, std::span<const SceneRenderMeshInstance> source, const RenderMaterialResource* material, bool encodeShadowReceiver) noexcept {
+void RenderInstanceBuffer::Copy(std::span<RenderInstanceData> destination, std::span<const SceneRenderCommandInstance> source, const RenderMaterialResource* material, bool encodeShadowReceiver) noexcept {
     const std::size_t count = std::min(destination.size(), source.size());
     for (std::size_t index = 0; index < count; ++index) {
         destination[index] = Pack(source[index], material, encodeShadowReceiver);

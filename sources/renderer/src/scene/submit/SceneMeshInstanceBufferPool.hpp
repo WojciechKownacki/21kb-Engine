@@ -22,7 +22,7 @@ public:
     SceneMeshInstanceBufferPool& operator=(const SceneMeshInstanceBufferPool&) = delete;
 
     [[nodiscard]] bgfx::DynamicVertexBufferHandle Upload(
-        std::span<const SceneRenderMeshInstance> instances,
+        std::span<const SceneRenderCommandInstance> instances,
         const RenderMaterialResource* material,
         bool encodeShadowReceiver,
         std::uint64_t instanceRevision = 0U,

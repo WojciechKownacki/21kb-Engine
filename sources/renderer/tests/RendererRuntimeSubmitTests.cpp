@@ -4288,7 +4288,7 @@ void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest(bool testRetention = f
     }
 
     SceneMeshInstanceBufferPool pool;
-    std::array<SceneRenderMeshInstance, 2> instances{};
+    std::array<SceneRenderCommandInstance, 2> instances{};
     const auto buffer = pool.Upload(instances, nullptr, true, 91U);
     Require(bgfx::isValid(buffer) && pool.LastUploadBytes() != 0U, "Retained pool did not upload initial contents");
     pool.EndFrame();

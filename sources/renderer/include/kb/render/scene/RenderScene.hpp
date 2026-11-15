@@ -224,28 +224,45 @@ struct SpaceStrokeRenderProxyDesc {
     bool receivesShadow = true;
 };
 
+// Where a mesh proxy waits in the queue of moves of its scene (UINT32_MAX when it does not). The place belongs to
+// the proxy that holds it, so a copy of a proxy is in no queue.
+struct MeshMoveQueueSlot {
+    std::uint32_t index = UINT32_MAX;
+
+    MeshMoveQueueSlot() = default;
+    MeshMoveQueueSlot(const MeshMoveQueueSlot&) noexcept {}
+    MeshMoveQueueSlot& operator=(const MeshMoveQueueSlot&) noexcept {
+        index = UINT32_MAX;
+        return *this;
+    }
+};
+
 struct MeshRenderProxy {
     RenderProxyId id{};
-    MeshRenderProxyDesc desc{};
-    RenderProxyDirtyFlag dirty = RenderProxyDirtyFlag::None;
-    // Cached draw-group instance location, stamped with the draw-group build
-    // version so a transform-only update can refresh the instance in place with a
-    // single proxy lookup (no second entity->location map). A stale stamp falls
-    // back to a full rebuild.
-    mutable std::uint32_t instanceGroupIndex = 0;
-    mutable std::uint32_t instanceIndexInGroup = 0;
-    mutable std::uint64_t instanceLocationVersion = 0;
+    // The state a transform change touches is kept together, in front of the authored description: a move reads and
+    // writes these and the model, nothing else.
     // The entity's world transform version the transform pull last applied (EcsRenderSceneSynchronizer::PullTransforms).
     mutable std::uint64_t pulledWorldVersion = 0;
     // Renderer-derived motion history: the model at the start of the motion
     // frame `previousModelFrame`, recorded by the first transform change in that frame. `spawnMotionFrame` is
     // the frame the proxy was created in, which has no previous model.
-    std::array<float, 16> previousModel{};
     std::uint64_t previousModelFrame = 0U;
     std::uint64_t spawnMotionFrame = 0U;
     // The motion frame of the last change a shadow can show: the model, the mesh, its visibility, its shadow
     // flags, the material or the skin. A cached local shadow stays while no such change reaches its light.
     std::uint64_t shadowChangeFrame = 0U;
+    // Cached draw-group instance location, stamped with the draw-group build
+    // version so a transform-only update can refresh the instance in place with a
+    // single proxy lookup (no second entity->location map). A stale stamp falls
+    // back to a full rebuild.
+    mutable std::uint64_t instanceLocationVersion = 0;
+    mutable std::uint32_t instanceGroupIndex = 0;
+    mutable std::uint32_t instanceIndexInGroup = 0;
+    // Where the proxy waits in the queue of moves whose instance is refreshed before the passes.
+    mutable MeshMoveQueueSlot moveQueue;
+    RenderProxyDirtyFlag dirty = RenderProxyDirtyFlag::None;
+    std::array<float, 16> previousModel{};
+    MeshRenderProxyDesc desc{};
 };
 
 struct CameraRenderProxy {
@@ -340,7 +357,14 @@ public:
 
     void Reserve(const RenderSceneReserveDesc& desc);
     [[nodiscard]] RenderSceneStats Stats() const noexcept;
-    [[nodiscard]] std::uint64_t MeshContentRevision() const noexcept { return meshContentRevision_; }
+    // Moves only note that the content changed: the revision is made when it is read, so that a frame of moves takes one.
+    [[nodiscard]] std::uint64_t MeshContentRevision() const noexcept {
+        if (meshContentMoved_) {
+            meshContentMoved_ = false;
+            meshContentRevision_ = NextContentRevision();
+        }
+        return meshContentRevision_;
+    }
     // Changes when a mesh proxy is added or removed: a pointer to a proxy stays valid while it is unchanged.
     [[nodiscard]] std::uint64_t MeshSetVersion() const noexcept { return meshSetVersion_; }
     [[nodiscard]] std::uint64_t LightContentRevision() const noexcept { return lightContentRevision_; }
@@ -405,16 +429,19 @@ public:
 
 private:
     friend class EcsRenderSceneSynchronizer;
+    // How a transform change reaches the instance in its draw group: `Queued` leaves it to the next PrepareDrawGroups
+    // (which refreshes all queued instances together, on the workers when there are many), `Immediate` writes it now.
+    enum class InstanceRefresh : std::uint8_t {
+        Queued,
+        Immediate,
+    };
     // H6 - shared core for the single-entity and parallel batch paths. Updates
-    // the proxy's source-of-truth model and, when the cache is clean, the cached
+    // the proxy's source-of-truth model and, when the cache is clean, refreshes the cached
     // instance in place. Never invalidates or touches telemetry, so it is safe to
-    // call concurrently for distinct entity ids (each owns a distinct proxy and
+    // call concurrently for distinct entity ids with `Immediate` (each owns a distinct proxy and
     // instance slot). The caller applies invalidation/telemetry once per batch.
     [[nodiscard]] TransformUpdateOutcome ApplyMeshTransform(std::uint64_t entityId, const std::array<float, 16>& model);
-    // With markGroupChanged false the draw group's content revision is left to MarkDrawGroupContentChanged, so that
-    // workers refreshing instances of one group do not all write its revision.
-    [[nodiscard]] TransformUpdateOutcome ApplyMeshTransform(std::uint64_t entityId, MeshRenderProxy& proxy, const std::array<float, 16>& model, bool markGroupChanged = true);
-    void MarkDrawGroupContentChanged(std::uint32_t groupIndex) noexcept;
+    [[nodiscard]] TransformUpdateOutcome ApplyMeshTransform(MeshRenderProxy& proxy, const std::array<float, 16>& model, InstanceRefresh refresh);
     [[nodiscard]] bool ApplyGeometrySwarmTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept;
     [[nodiscard]] bool ApplySurfaceCastTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept;
     [[nodiscard]] bool ApplySpaceStrokeTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept;
@@ -423,6 +450,12 @@ private:
     void RecordPreviousModel(MeshRenderProxy& proxy, const std::array<float, 16>& model) const noexcept;
     void RecordPreviousSwarmModel(GeometrySwarmRenderProxy& proxy, const std::array<float, 16>& model) const noexcept;
     void AddTransformUpdateCounts(std::uint64_t inPlace, std::uint64_t fallback) noexcept;
+    // Copies the model and motion history of a proxy into its instance and marks the instance moved. False when the
+    // instance is not where the proxy says, which asks for the draw groups to be built again.
+    [[nodiscard]] bool RefreshMovedInstance(const MeshRenderProxy& proxy) const noexcept;
+    // Refreshes the instances of the queued moves, which a rebuild of the draw groups makes unnecessary.
+    void ApplyQueuedMoves(kb::ecs::WorkerPool* workers) const;
+    void ForgetQueuedMove(const MeshRenderProxy& proxy) noexcept;
 
 public:
     [[nodiscard]] bool RemoveMesh(std::uint64_t entityId) noexcept;
@@ -549,9 +582,38 @@ private:
     // InvalidateDrawGroups for a change of a non-mesh proxy, which also marks every cached local shadow stale.
     void InvalidateDrawGroupsOfNonMeshProxy() noexcept;
 
+    // Finds a mesh proxy by entity id with one load when the id lies in the table; every other id is found in the map.
+    // Entries point into the map, which keeps its nodes where they are, and are removed with the proxy. The table
+    // of a copy of a scene is empty: its proxies are found in its map.
+    class MeshProxyIndex {
+    public:
+        MeshProxyIndex() = default;
+        MeshProxyIndex(const MeshProxyIndex&) noexcept {}
+        MeshProxyIndex& operator=(const MeshProxyIndex&) noexcept {
+            slots_.clear();
+            return *this;
+        }
+        MeshProxyIndex(MeshProxyIndex&&) noexcept = default;
+        MeshProxyIndex& operator=(MeshProxyIndex&&) noexcept = default;
+
+        [[nodiscard]] const MeshRenderProxy* Find(std::uint64_t entityId) const noexcept {
+            return entityId < slots_.size() ? slots_[static_cast<std::size_t>(entityId)] : nullptr;
+        }
+        // `meshCount` is the number of proxies once this one is in: the table never grows beyond a multiple of it.
+        void Add(std::uint64_t entityId, MeshRenderProxy& proxy, std::size_t meshCount);
+        void Remove(std::uint64_t entityId) noexcept {
+            if (entityId < slots_.size()) slots_[static_cast<std::size_t>(entityId)] = nullptr;
+        }
+
+    private:
+        std::vector<MeshRenderProxy*> slots_;
+    };
+
     MeshProxyMap meshes_;
+    MeshProxyIndex meshById_;
     std::uint64_t instanceStamp_ = NextContentRevision();
-    std::uint64_t meshContentRevision_ = NextContentRevision();
+    mutable std::uint64_t meshContentRevision_ = NextContentRevision();
+    mutable bool meshContentMoved_ = false;
     std::uint64_t meshSetVersion_ = NextContentRevision();
     std::uint64_t lightContentRevision_ = NextContentRevision();
     mutable SortedMeshProxyIndex sortedMeshProxies_;
@@ -567,6 +629,24 @@ private:
     std::vector<SceneRenderReflectionProbe> localReflectionProbes_;
     std::shared_ptr<const kb::particles::ParticleRenderSnapshot> particleRenderSnapshot_;
     mutable std::vector<SceneRenderDrawGroup> drawGroups_;
+    // The proxies moved since the draw groups were last prepared, whose instances are refreshed by PrepareDrawGroups;
+    // a null entry names a proxy removed meanwhile. The entries point into the scene that made them, so a copy of a
+    // scene that had moves queued has none, and builds its draw groups again instead.
+    struct MoveQueue {
+        MoveQueue() = default;
+        MoveQueue(const MoveQueue& other) noexcept : copiedWithMoves(other.copiedWithMoves || !other.entries.empty()) {}
+        MoveQueue& operator=(const MoveQueue& other) noexcept {
+            entries.clear();
+            copiedWithMoves = other.copiedWithMoves || !other.entries.empty();
+            return *this;
+        }
+        MoveQueue(MoveQueue&&) noexcept = default;
+        MoveQueue& operator=(MoveQueue&&) noexcept = default;
+
+        std::vector<MeshRenderProxy*> entries;
+        bool copiedWithMoves = false;
+    };
+    mutable MoveQueue queuedMoves_;
     mutable std::unordered_map<DrawGroupKey, std::size_t, DrawGroupKeyHash> drawGroupLookupScratch_;
     std::uint64_t nextProxyId_ = 1U;
     mutable bool drawGroupsDirty_ = true;

@@ -5,6 +5,7 @@
 #include "scene/GeometrySwarmVisibilityClusters.hpp"
 #include "scene/SceneMeshVisibilityIndexBuilder.hpp"
 
+#include "engine/ecs/QueryPrefetch.hpp"
 #include "engine/ecs/WorkerPool.hpp"
 
 #include <algorithm>
@@ -20,6 +21,22 @@ namespace {
 // The indexes of the draw groups are made and refreshed on workers from this many groups, in chunks of this many.
 constexpr std::size_t kMinGroupsOnWorkers = 256U;
 constexpr std::size_t kGroupsPerChunk = 32U;
+
+// The instances of queued moves are refreshed on workers from this many moves, in chunks of this many.
+constexpr std::size_t kMinMovesOnWorkers = 4096U;
+constexpr std::size_t kMovesPerChunk = 1024U;
+
+// Fetches every cache line of the bytes at `first`.
+void PrefetchBytes(const void* first, std::size_t size, kb::ecs::QueryPrefetchAccess access = kb::ecs::QueryPrefetchAccess::Read) noexcept {
+    const char* bytes = static_cast<const char*>(first);
+    for (std::size_t offset = 0U; offset < size; offset += 64U) kb::ecs::PrefetchQueryMemory(bytes + offset, access);
+    kb::ecs::PrefetchQueryMemory(bytes + size - 1U, access);
+}
+
+// How many queued moves ahead the refresh fetches the proxy, the draw group and the instance of a move.
+constexpr std::size_t kProxyAhead = 16U;
+constexpr std::size_t kGroupAhead = 10U;
+constexpr std::size_t kInstanceAhead = 4U;
 
 [[nodiscard]] std::array<float, 16> GeometrySwarmModel(
     const GeometrySwarmRenderProxyDesc& swarm, std::uint32_t index) noexcept {
@@ -140,6 +157,15 @@ std::size_t RenderScene::DrawGroupKeyHash::operator()(DrawGroupKey key) const no
     return static_cast<std::size_t>(mixed ^ (key.owner * 0x85ebca77c2b2ae63ULL) ^ key.kind);
 }
 
+void RenderScene::MeshProxyIndex::Add(std::uint64_t entityId, MeshRenderProxy& proxy, std::size_t meshCount) {
+    if (entityId >= slots_.size()) {
+        const std::size_t limit = 4U * meshCount + 1024U;
+        if (entityId >= limit) return;
+        slots_.resize(std::min(limit, std::max(static_cast<std::size_t>(entityId) + 1U, slots_.size() * 2U)), nullptr);
+    }
+    slots_[static_cast<std::size_t>(entityId)] = &proxy;
+}
+
 void RenderScene::Reserve(const RenderSceneReserveDesc& desc) {
     if (desc.meshProxies > 0U) {
         meshes_.reserve(desc.meshProxies);
@@ -184,6 +210,13 @@ namespace {
     return desc.visible && desc.castsShadow;
 }
 
+// Whether two models differ as floats (-0 equals 0, NaN equals nothing), compared without stopping at the first element.
+[[nodiscard]] bool ModelsDiffer(const std::array<float, 16>& lhs, const std::array<float, 16>& rhs) noexcept {
+    bool differ = false;
+    for (std::size_t index = 0U; index < lhs.size(); ++index) differ |= lhs[index] != rhs[index];
+    return differ;
+}
+
 // Whether a change of a mesh proxy can alter the shadow it casts: where it is, what it draws, whether it casts.
 [[nodiscard]] bool ChangesMeshShadow(const MeshRenderProxyDesc& before, const MeshRenderProxyDesc& after) noexcept {
     if (!CastsMeshShadow(before) && !CastsMeshShadow(after)) return false;
@@ -203,6 +236,7 @@ RenderProxyId RenderScene::UpsertMesh(const MeshRenderProxyDesc& desc) {
     auto [it, inserted] = meshes_.try_emplace(desc.entityId);
     MeshRenderProxy& proxy = it->second;
     if (inserted) {
+        meshById_.Add(desc.entityId, proxy, meshes_.size());
         meshContentRevision_ = NextContentRevision();
         meshSetVersion_ = NextContentRevision();
         if (!sortedMeshProxies_.dirty) {
@@ -428,6 +462,8 @@ bool RenderScene::RemoveMesh(std::uint64_t entityId) noexcept {
     if (!RemoveMeshInstance(found->second)) InvalidateDrawGroups();
     else meshContentRevision_ = NextContentRevision();
     NoteNonMeshShadowCasterChange();
+    ForgetQueuedMove(found->second);
+    meshById_.Remove(entityId);
     meshes_.erase(found);
     meshSetVersion_ = NextContentRevision();
     sortedMeshProxies_.dirty = true;
@@ -445,6 +481,8 @@ bool RenderScene::RemoveLight(std::uint64_t entityId) noexcept {
 }
 
 bool RenderScene::UpdateVisibilityBlockerTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept {
+    // Most scenes have none of these proxies: the transform sync asks for every entity, and asking an empty map costs a hash.
+    if (visibilityBlockers_.empty()) return false;
     const auto found = visibilityBlockers_.find(entityId);
     if (found == visibilityBlockers_.end()) return false;
     if (found->second.desc.model != model) {
@@ -454,6 +492,7 @@ bool RenderScene::UpdateVisibilityBlockerTransform(std::uint64_t entityId, const
     return true;
 }
 bool RenderScene::ApplyGeometrySwarmTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept {
+    if (geometrySwarms_.empty()) return false;
     const auto found = geometrySwarms_.find(entityId);
     if (found == geometrySwarms_.end()) return false;
     GeometrySwarmRenderProxy& proxy = found->second;
@@ -471,6 +510,7 @@ bool RenderScene::UpdateGeometrySwarmTransform(std::uint64_t entityId, const std
     return true;
 }
 bool RenderScene::ApplySurfaceCastTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept {
+    if (surfaceCasts_.empty()) return false;
     const auto found = surfaceCasts_.find(entityId);
     if (found == surfaceCasts_.end()) return false;
     if (found->second.desc.model == model) return false;
@@ -479,6 +519,7 @@ bool RenderScene::ApplySurfaceCastTransform(std::uint64_t entityId, const std::a
     return true;
 }
 bool RenderScene::ApplySpaceStrokeTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept {
+    if (spaceStrokes_.empty()) return false;
     const auto found = spaceStrokes_.find(entityId);
     if (found == spaceStrokes_.end()) return false;
     SpaceStrokeRenderProxy& proxy = found->second;
@@ -505,6 +546,13 @@ bool RenderScene::RemoveSurfaceCast(std::uint64_t entityId) noexcept { const boo
 bool RenderScene::RemoveSpaceStroke(std::uint64_t entityId) noexcept { const bool removed = spaceStrokes_.erase(entityId) != 0U; if (removed) InvalidateDrawGroupsOfNonMeshProxy(); return removed; }
 
 const MeshRenderProxy* RenderScene::FindMeshByEntity(std::uint64_t entityId) const noexcept {
+    if (const MeshRenderProxy* proxy = meshById_.Find(entityId)) {
+        // What a lookup is for is usually to read or move the proxy: its lines are fetched together, not one after the other.
+        PrefetchBytes(proxy, offsetof(MeshRenderProxy, desc), kb::ecs::QueryPrefetchAccess::Write);
+        PrefetchBytes(&proxy->desc.model, sizeof(proxy->desc.model), kb::ecs::QueryPrefetchAccess::Write);
+        kb::ecs::PrefetchQueryMemory(&proxy->desc.visible);
+        return proxy;
+    }
     const auto it = meshes_.find(entityId);
     return it == meshes_.end() ? nullptr : &it->second;
 }
@@ -527,6 +575,8 @@ std::uint32_t RenderScene::RemoveMeshesNotInSorted(std::span<const std::uint64_t
             continue;
         }
         if (!RemoveMeshInstance(it->second)) InvalidateDrawGroups();
+        ForgetQueuedMove(it->second);
+        meshById_.Remove(it->first);
         it = meshes_.erase(it);
         meshSetVersion_ = NextContentRevision();
         ++removed;
@@ -770,6 +820,7 @@ const std::vector<SceneRenderDrawGroup>& RenderScene::DrawGroups() const {
 }
 
 void RenderScene::PrepareDrawGroups(kb::ecs::WorkerPool* workers) const {
+    ApplyQueuedMoves(workers);
     RebuildDrawGroupsIfNeeded(workers);
     RefreshVisibility(workers);
 }
@@ -995,6 +1046,7 @@ void RenderScene::RebuildDrawGroupsIfNeeded(kb::ecs::WorkerPool* workers) const 
     for (SceneRenderDrawGroup& group : drawGroups_) {
         group.instances.clear();
         group.visibilityClusters.clear();
+        group.instancesMoved = 0U;
     }
 
     drawGroupLookupScratch_.clear();
@@ -1115,6 +1167,10 @@ void RenderScene::RefreshVisibility(kb::ecs::WorkerPool* workers) const {
     const auto refresh = [this](std::size_t begin, std::size_t end) {
         for (std::size_t index = begin; index < end; ++index) {
             SceneRenderDrawGroup& group = drawGroups_[index];
+            if (group.instancesMoved != 0U) {
+                group.instancesMoved = 0U;
+                group.contentRevision = NextContentRevision();
+            }
             SceneMeshVisibilityIndexBuilder::Refresh(group.instances, group.visibility);
         }
     };
@@ -1139,11 +1195,11 @@ void RenderScene::ApplySurfaceCasts(SceneRenderMeshInstance& instance) const {
 }
 
 RenderScene::TransformUpdateOutcome RenderScene::ApplyMeshTransform(std::uint64_t entityId, const std::array<float, 16>& model) {
-    const auto proxyIt = meshes_.find(entityId);
-    if (proxyIt == meshes_.end()) {
+    const MeshRenderProxy* proxy = FindMeshByEntity(entityId);
+    if (proxy == nullptr) {
         return TransformUpdateOutcome::NotFound;
     }
-    return ApplyMeshTransform(entityId, proxyIt->second, model);
+    return ApplyMeshTransform(const_cast<MeshRenderProxy&>(*proxy), model, InstanceRefresh::Immediate);
 }
 
 void RenderScene::RecordPreviousModel(MeshRenderProxy& proxy, const std::array<float, 16>& model) const noexcept {
@@ -1164,48 +1220,115 @@ void RenderScene::RecordPreviousSwarmModel(GeometrySwarmRenderProxy& proxy, cons
     proxy.previousModelFrame = motionFrame_;
 }
 
-RenderScene::TransformUpdateOutcome RenderScene::ApplyMeshTransform(std::uint64_t entityId, MeshRenderProxy& proxy, const std::array<float, 16>& worldModel, bool markGroupChanged) {
+RenderScene::TransformUpdateOutcome RenderScene::ApplyMeshTransform(MeshRenderProxy& proxy, const std::array<float, 16>& worldModel, InstanceRefresh refresh) {
     auto model = worldModel;
     for (std::size_t component = 0; component < 3; ++component) {
         for (std::size_t axis = 0; axis < 3; ++axis) {
             model[12 + component] += worldModel[axis * 4 + component] * proxy.desc.localRenderOffset[axis];
         }
     }
-    if (proxy.desc.model != model) {
+    if (ModelsDiffer(proxy.desc.model, model)) {
         RecordPreviousModel(proxy, proxy.desc.model);
         if (CastsMeshShadow(proxy.desc)) proxy.shadowChangeFrame = motionFrame_;
     }
     proxy.desc.model = model; // source of truth, always current
-
-    // Fast path: clean cache + a location stamped by the current build. Single
-    // proxy lookup, instance refreshed in place. No invalidation, no telemetry.
-    if (!drawGroupsDirty_ && proxy.instanceLocationVersion == drawGroupBuildVersion_ &&
-        proxy.instanceGroupIndex < drawGroups_.size()) {
-        SceneRenderDrawGroup& group = drawGroups_[proxy.instanceGroupIndex];
-        if (proxy.instanceIndexInGroup < group.instances.size() &&
-            group.instances[proxy.instanceIndexInGroup].entityId == entityId) {
-            SceneRenderMeshInstance& instance = group.instances[proxy.instanceIndexInGroup];
-            instance.model = model;
-            instance.previousModel = proxy.previousModel;
-            instance.previousModelFrame = proxy.previousModelFrame;
-            SceneMeshVisibilityIndexBuilder::MarkMoved(group.visibility, proxy.instanceIndexInGroup);
-            std::atomic_ref<std::uint8_t> stale(visibilityStale_);
-            if (stale.load(std::memory_order_relaxed) == 0U) stale.store(1U, std::memory_order_relaxed);
-            // Parallel affine publication writes disjoint instances in the same page.
-            if (markGroupChanged) std::atomic_ref<std::uint64_t>(group.contentRevision).store(NextContentRevision(), std::memory_order_relaxed);
-            proxy.dirty |= RenderProxyDirtyFlag::Transform;
-            return TransformUpdateOutcome::InPlace;
-        }
-    }
-
     proxy.dirty |= RenderProxyDirtyFlag::Transform;
-    return TransformUpdateOutcome::Fallback;
+
+    // Fast path: clean cache + a location stamped by the current build. The proxy is all this reads: the instance is
+    // refreshed from it now, or, queued, by the next PrepareDrawGroups. No invalidation, no telemetry.
+    if (drawGroupsDirty_ || !proxy.desc.visible || proxy.instanceLocationVersion != drawGroupBuildVersion_ ||
+        proxy.instanceGroupIndex >= drawGroups_.size()) {
+        return TransformUpdateOutcome::Fallback;
+    }
+    if (refresh == InstanceRefresh::Immediate) {
+        return RefreshMovedInstance(proxy) ? TransformUpdateOutcome::InPlace : TransformUpdateOutcome::Fallback;
+    }
+    if (proxy.moveQueue.index == UINT32_MAX) {
+        proxy.moveQueue.index = static_cast<std::uint32_t>(queuedMoves_.entries.size());
+        queuedMoves_.entries.push_back(&proxy);
+    }
+    return TransformUpdateOutcome::InPlace;
 }
 
-void RenderScene::MarkDrawGroupContentChanged(std::uint32_t groupIndex) noexcept {
-    if (groupIndex < drawGroups_.size()) {
-        drawGroups_[groupIndex].contentRevision = NextContentRevision();
+bool RenderScene::RefreshMovedInstance(const MeshRenderProxy& proxy) const noexcept {
+    // A proxy that is not visible has no instance.
+    if (!proxy.desc.visible) return true;
+    if (proxy.instanceLocationVersion != drawGroupBuildVersion_ || proxy.instanceGroupIndex >= drawGroups_.size()) return false;
+    SceneRenderDrawGroup& group = drawGroups_[proxy.instanceGroupIndex];
+    const std::size_t position = proxy.instanceIndexInGroup;
+    if (position >= group.instances.size() || group.instances[position].entityId != proxy.desc.entityId) return false;
+    SceneRenderMeshInstance& instance = group.instances[position];
+    instance.model = proxy.desc.model;
+    instance.previousModel = proxy.previousModel;
+    instance.previousModelFrame = proxy.previousModelFrame;
+    SceneMeshVisibilityIndexBuilder::MarkMoved(group.visibility, static_cast<std::uint32_t>(position));
+    // Workers refresh disjoint instances of one group, and every instance that moves would write the flags: only the first does.
+    std::atomic_ref<std::uint8_t> groupMoved(group.instancesMoved);
+    if (groupMoved.load(std::memory_order_relaxed) == 0U) groupMoved.store(1U, std::memory_order_relaxed);
+    std::atomic_ref<std::uint8_t> stale(visibilityStale_);
+    if (stale.load(std::memory_order_relaxed) == 0U) stale.store(1U, std::memory_order_relaxed);
+    return true;
+}
+
+void RenderScene::ForgetQueuedMove(const MeshRenderProxy& proxy) noexcept {
+    if (proxy.moveQueue.index == UINT32_MAX) return;
+    queuedMoves_.entries[proxy.moveQueue.index] = nullptr;
+    proxy.moveQueue.index = UINT32_MAX;
+}
+
+void RenderScene::ApplyQueuedMoves(kb::ecs::WorkerPool* workers) const {
+    if (queuedMoves_.copiedWithMoves) {
+        queuedMoves_.copiedWithMoves = false;
+        drawGroupsDirty_ = true;
     }
+    std::vector<MeshRenderProxy*>& queue = queuedMoves_.entries;
+    if (queue.empty()) {
+        return;
+    }
+    // Draw groups that are built again take every proxy as it is; their old instances need nothing.
+    std::atomic<bool> misplaced{ drawGroupsDirty_ };
+    if (!drawGroupsDirty_) {
+        const auto refresh = [&](std::size_t begin, std::size_t end) {
+            bool failed = false;
+            for (std::size_t index = begin; index < end; ++index) {
+                // The proxy, then its draw group, then its instance are fetched while the moves before this one are refreshed.
+                if (index + kProxyAhead < end) {
+                    if (const MeshRenderProxy* ahead = queue[index + kProxyAhead]) {
+                        PrefetchBytes(ahead, offsetof(MeshRenderProxy, desc), kb::ecs::QueryPrefetchAccess::Write);
+                        PrefetchBytes(&ahead->desc.model, sizeof(ahead->desc.model));
+                    }
+                }
+                if (index + kGroupAhead < end) {
+                    if (const MeshRenderProxy* ahead = queue[index + kGroupAhead]; ahead != nullptr && ahead->instanceGroupIndex < drawGroups_.size()) {
+                        PrefetchBytes(&drawGroups_[ahead->instanceGroupIndex], 64U);
+                    }
+                }
+                if (index + kInstanceAhead < end) {
+                    if (const MeshRenderProxy* ahead = queue[index + kInstanceAhead]; ahead != nullptr && ahead->instanceGroupIndex < drawGroups_.size()) {
+                        const SceneRenderDrawGroup& group = drawGroups_[ahead->instanceGroupIndex];
+                        if (ahead->instanceIndexInGroup < group.instances.size()) {
+                            const SceneRenderMeshInstance& instance = group.instances[ahead->instanceIndexInGroup];
+                            PrefetchBytes(&instance, offsetof(SceneRenderMeshInstance, boundsOverride), kb::ecs::QueryPrefetchAccess::Write);
+                            PrefetchBytes(&instance.previousModelFrame, sizeof(instance.previousModelFrame) + sizeof(instance.previousModel), kb::ecs::QueryPrefetchAccess::Write);
+                        }
+                    }
+                }
+                if (const MeshRenderProxy* proxy = queue[index]; proxy != nullptr && !RefreshMovedInstance(*proxy)) failed = true;
+            }
+            if (failed) misplaced.store(true, std::memory_order_relaxed);
+        };
+        if (workers != nullptr && workers->Running() && queue.size() >= kMinMovesOnWorkers) {
+            workers->ParallelForChunks(queue.size(), kMovesPerChunk,
+                [&refresh](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) { refresh(chunk.begin, chunk.begin + chunk.count); });
+        } else {
+            refresh(0U, queue.size());
+        }
+    }
+    for (MeshRenderProxy* proxy : queue) {
+        if (proxy != nullptr) proxy->moveQueue.index = UINT32_MAX;
+    }
+    queue.clear();
+    drawGroupsDirty_ = misplaced.load(std::memory_order_relaxed);
 }
 
 void RenderScene::InvalidateDrawGroupsIfFallback(TransformUpdateOutcome outcome) noexcept {
@@ -1216,7 +1339,7 @@ void RenderScene::InvalidateDrawGroupsIfFallback(TransformUpdateOutcome outcome)
 
 void RenderScene::AddTransformUpdateCounts(std::uint64_t inPlace, std::uint64_t fallback) noexcept {
     if (inPlace != 0U || fallback != 0U) {
-        meshContentRevision_ = NextContentRevision();
+        meshContentMoved_ = true;
         if (!surfaceCasts_.empty()) drawGroupsDirty_ = true;
     }
     transformInPlaceUpdateCount_ += inPlace;
@@ -1224,22 +1347,22 @@ void RenderScene::AddTransformUpdateCounts(std::uint64_t inPlace, std::uint64_t 
 }
 
 bool RenderScene::UpdateMeshTransform(std::uint64_t entityId, const std::array<float, 16>& model) {
-    const auto proxyIt = meshes_.find(entityId);
-    if (proxyIt == meshes_.end()) {
+    const MeshRenderProxy* proxy = FindMeshByEntity(entityId);
+    if (proxy == nullptr) {
         return false;
     }
-    UpdateMeshTransform(entityId, proxyIt->second, model);
+    UpdateMeshTransform(entityId, *proxy, model);
     return true;
 }
 
-void RenderScene::UpdateMeshTransform(std::uint64_t entityId, const MeshRenderProxy& proxy, const std::array<float, 16>& model) {
+void RenderScene::UpdateMeshTransform(std::uint64_t, const MeshRenderProxy& proxy, const std::array<float, 16>& model) {
     // The proxy is one of meshes_, found through the const lookup.
-    const TransformUpdateOutcome outcome = ApplyMeshTransform(entityId, const_cast<MeshRenderProxy&>(proxy), model);
+    const TransformUpdateOutcome outcome = ApplyMeshTransform(const_cast<MeshRenderProxy&>(proxy), model, InstanceRefresh::Queued);
     switch (outcome) {
     case TransformUpdateOutcome::NotFound:
         return;
     case TransformUpdateOutcome::InPlace:
-        meshContentRevision_ = NextContentRevision();
+        meshContentMoved_ = true;
         if (!surfaceCasts_.empty()) drawGroupsDirty_ = true;
         ++transformInPlaceUpdateCount_;
         return;
