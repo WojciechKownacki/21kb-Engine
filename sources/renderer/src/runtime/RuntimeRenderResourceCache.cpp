@@ -45,8 +45,12 @@ void RuntimeRenderResourceCache::EnsureSceneResources(const RuntimeRenderResourc
     const auto meshesFinished = traceEnabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     EnsureMaterialResources(context);
     const auto materialsFinished = traceEnabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    const auto texturesStarted = std::chrono::steady_clock::now();
     EnsureTextureResources(context, creation);
-    sceneProgress_[context.scene.Id()] = creation.Progress();
+    RuntimeSceneLoadProgress progress = creation.Progress();
+    progress.textureMilliseconds =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - texturesStarted).count();
+    sceneProgress_[context.scene.Id()] = progress;
     if (traceEnabled) {
         const auto finished = std::chrono::steady_clock::now();
         const auto elapsedMs = [](auto begin, auto end) {

@@ -18,6 +18,7 @@
 #include <memory>
 #include <optional>
 #include <sstream>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -45,6 +46,8 @@ void RuntimeTextureResourceEnsurer::Ensure(
     RuntimeContentStreamer& streamer,
     RuntimeResourceCreationBudget& creation) {
     kb::assets::AssetManager& manager = context.scene.Assets().Manager();
+    // A texture several materials, or a material and another feature, refer to is brought to the GPU once per submit.
+    std::unordered_set<RuntimeTextureAssetKey, RuntimeTextureAssetKeyHash> ensured;
 
     auto ensureTexture = [&](
                              std::uint64_t textureAssetId,
@@ -63,6 +66,9 @@ void RuntimeTextureResourceEnsurer::Ensure(
         context.frameReferences.MarkTexture(runtimeKey);
         // Content streaming sizes a texture by the on-screen size of what its material is on.
         streamer.NoteTextureUse(runtimeKey, materialAssetId);
+        if (!ensured.insert(runtimeKey).second) {
+            return;
+        }
 
         const kb::assets::AssetId assetId{ textureAssetId };
         const kb::assets::AssetMetadata* metadata = manager.Registry().Find(assetId);
@@ -123,6 +129,7 @@ void RuntimeTextureResourceEnsurer::Ensure(
             if (prepared.IsLoaded() && !creation.MayCreate()) {
                 // Decoded; this submit has spent its time on other resources, so the GPU resource is made in the
                 // next one.
+                creation.NoteTextureLoadInFlight();
                 context.sceneRenderer.ResourceMap().UnbindTexture(textureAssetId, colorSpace);
                 creation.NoteWaiting();
                 return;
@@ -132,8 +139,16 @@ void RuntimeTextureResourceEnsurer::Ensure(
                 // The decoded bytes are needed only until the GPU has them; this function and, for a streamed
                 // texture, the streamer hold them, so the manager need not keep a second copy.
                 static_cast<void>(manager.Unload(assetId));
-            } else if (manager.AsyncLoadStatus(assetId) != kb::assets::AsyncAssetLoadStatus::Failed) {
-                static_cast<void>(manager.RequestLoadAsync(assetId));
+            } else if (const kb::assets::AsyncAssetLoadStatus status = manager.AsyncLoadStatus(assetId);
+                       status != kb::assets::AsyncAssetLoadStatus::Failed) {
+                // A load already running is left alone; a new one starts only while the submit has a place for it,
+                // so the first submit of a scene of thousands of textures does not queue them all.
+                if (status == kb::assets::AsyncAssetLoadStatus::Pending) {
+                    creation.NoteTextureLoadInFlight();
+                } else if (status == kb::assets::AsyncAssetLoadStatus::NotRequested && creation.MayStartTextureLoad()) {
+                    static_cast<void>(manager.RequestLoadAsync(assetId));
+                    creation.NoteTextureLoadInFlight();
+                }
                 context.sceneRenderer.ResourceMap().UnbindTexture(textureAssetId, colorSpace);
                 creation.NoteWaiting();
                 return;

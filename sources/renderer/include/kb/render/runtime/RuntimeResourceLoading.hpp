@@ -19,6 +19,11 @@ struct RuntimeResourceLoadingSettings {
     // driver uploads it and prepares its first draw in the frame that follows, so this keeps that frame short on
     // slower GPUs. 0 means no limit. Used when asynchronous.
     std::uint32_t maxCreationsPerFrame = 64U;
+    // Textures that may be read and decoded, or decoded and waiting for their GPU resource, at once. Starting a load
+    // costs the render thread a lookup and a queue entry and a decoded texture holds its bytes until the GPU has them,
+    // so this bounds both for a scene of thousands of textures; the rest wait for a place. 0 means no limit. Used when
+    // asynchronous.
+    std::uint32_t maxTextureLoadsInFlight = 128U;
 };
 
 // Where the meshes and textures a scene references stand after its last submit.
@@ -27,6 +32,8 @@ struct RuntimeSceneLoadProgress {
     std::uint32_t resolved = 0U;
     // Referenced resources still being read or decoded, or waiting for their turn in the frame's creation budget.
     std::uint32_t waiting = 0U;
+    // What the texture pass of the last submit cost the render thread.
+    double textureMilliseconds = 0.0;
 
     [[nodiscard]] constexpr bool Complete() const noexcept {
         return waiting == 0U;
@@ -47,6 +54,7 @@ public:
     explicit RuntimeResourceCreationBudget(const RuntimeResourceLoadingSettings& settings)
         : asynchronous_{ settings.asynchronous },
           maxCreations_{ settings.maxCreationsPerFrame },
+          maxLoadsInFlight_{ settings.maxTextureLoadsInFlight },
           deadline_{ std::chrono::steady_clock::now() +
               std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                   std::chrono::duration<double, std::milli>(settings.creationBudgetMilliseconds)) } {}
@@ -58,6 +66,14 @@ public:
     [[nodiscard]] bool MayCreate() const noexcept {
         return !asynchronous_ || created_ == 0U ||
             ((maxCreations_ == 0U || created_ < maxCreations_) && std::chrono::steady_clock::now() < deadline_);
+    }
+    // True while another texture load may be started in this submit.
+    [[nodiscard]] bool MayStartTextureLoad() const noexcept {
+        return !asynchronous_ || maxLoadsInFlight_ == 0U || loadsInFlight_ < maxLoadsInFlight_;
+    }
+    // A texture load that is running, finished and waiting for its GPU resource, or has just been started.
+    void NoteTextureLoadInFlight() noexcept {
+        ++loadsInFlight_;
     }
     void NoteCreated() noexcept {
         ++created_;
@@ -76,6 +92,8 @@ public:
 private:
     bool asynchronous_ = false;
     std::uint32_t maxCreations_ = 0U;
+    std::uint32_t maxLoadsInFlight_ = 0U;
+    std::uint32_t loadsInFlight_ = 0U;
     std::chrono::steady_clock::time_point deadline_{};
     std::uint32_t created_ = 0U;
     std::uint32_t resolved_ = 0U;

@@ -35,6 +35,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <iostream>
@@ -42,6 +43,7 @@
 #include <numbers>
 #include <span>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <thread>
 #include <vector>
@@ -1396,7 +1398,486 @@ void PackedSceneLoadBench(const std::filesystem::path& packPath, bool background
 }
 #endif
 
+// ---- Packaged textures ------------------------------------------------------------------------------
+// A compressed pack of a scene, a sphere, `count` distinct baked textures of mixed sizes and the materials that use
+// them (five texture slots each).
+struct TexturePack {
+    std::shared_ptr<asset_bake::RuntimeAssetPack> pack;
+    std::vector<kb::assets::AssetId> textures;
+    std::vector<kb::assets::AssetId> materials;
+    kb::assets::AssetId mesh{};
+};
+
+[[nodiscard]] std::uint16_t TextureEdgeOf(std::uint32_t index) noexcept {
+    const std::uint32_t pick = static_cast<std::uint32_t>((index * 2654435761U) >> 16U) % 100U;
+    return pick < 40U ? 32U : pick < 65U ? 64U : pick < 85U ? 128U : pick < 95U ? 256U : pick < 99U ? 512U : 1024U;
+}
+
+// A smooth image that differs from every other seed, so that no two textures bake to the same bytes.
+[[nodiscard]] std::vector<std::uint8_t> MakeSeededTga(std::uint16_t edge, std::uint32_t seed) {
+    std::vector<std::uint8_t> bytes(18U, 0U);
+    bytes[2] = 2U;
+    bytes[12] = static_cast<std::uint8_t>(edge & 0xFFU);
+    bytes[13] = static_cast<std::uint8_t>(edge >> 8U);
+    bytes[14] = bytes[12];
+    bytes[15] = bytes[13];
+    bytes[16] = 32U;
+    bytes[17] = 0x28U;
+    bytes.reserve(18U + static_cast<std::size_t>(edge) * edge * 4U);
+    for (std::uint32_t y = 0U; y < edge; ++y) {
+        for (std::uint32_t x = 0U; x < edge; ++x) {
+            const auto r = static_cast<std::uint8_t>((x * 255U) / (edge - 1U) + seed * 37U);
+            const auto g = static_cast<std::uint8_t>((y * 255U) / (edge - 1U) + seed * 91U);
+            const auto b = static_cast<std::uint8_t>((((x >> 3U) + (y >> 3U) + seed) & 1U) * 200U);
+            bytes.insert(bytes.end(), { b, g, r, 255U });
+        }
+    }
+    return bytes;
+}
+
+constexpr std::uint32_t kSlotsPerMaterial = 5U;
+
+[[nodiscard]] TexturePack BuildTexturePack(const std::filesystem::path& path, std::uint32_t count) {
+    const asset_bake::BakeTargetProfile profile = asset_bake::AndroidEtc2Arm64BakeTargetProfile();
+    asset_bake::AssetPackWriterOptions options{};
+    options.compression = asset_bake::AssetPackBlockCompression::Zstd;
+    asset_bake::AssetPackWriter writer{ path, profile, options };
+    const std::string scenePath = "/Game/Scenes/Main.21kbscene";
+    asset_bake::RuntimeAssetManifest manifest{
+        .targetProfileId = std::string{ profile.identifier },
+        .targetProfileHash = asset_bake::BakeTargetProfileFingerprint(profile),
+    };
+    manifest.descriptor.targetPlatforms = { "Windows" };
+    manifest.settings.name = "TextureLoading";
+    manifest.settings.defaultMap = scenePath;
+    TexturePack result{};
+    for (std::uint32_t index = 0U; index < count; ++index) {
+        const std::string texturePath = "/Game/Textures/T" + std::to_string(index) + ".tga";
+        const std::vector<std::uint8_t> source = MakeSeededTga(TextureEdgeOf(index), index);
+        asset_bake::RuntimeAssetManifestEntry texture{
+            .id = kb::assets::MakeAssetId(texturePath + ":RenderTexture"),
+            .type = "RenderTexture",
+            .name = "T" + std::to_string(index),
+            .virtualPath = texturePath,
+            .sourceExtension = ".tga",
+            .contentHash = asset_bake::HashBakeBytes(source),
+        };
+        for (std::uint32_t familyIndex = 0U; familyIndex < asset_bake::kTextureCompressionFamilyCount; ++familyIndex) {
+            const auto family = static_cast<asset_bake::TextureCompressionFamily>(familyIndex);
+            if (!asset_bake::HasTextureCompressionFamily(profile.textureCompressions, family)) {
+                continue;
+            }
+            const bake::TextureBakeOutput baked = bake::BakeTextureBytes(source,
+                bake::TextureBakeSettings{ RenderTextureAssetSemantic::BaseColor, RenderTextureAssetColorSpace::Srgb },
+                profile, family, writer);
+            Require(baked.status == bake::TextureBakeStatus::Success, "A loading texture variant did not bake");
+            texture.artifacts.push_back(asset_bake::RuntimeArtifactReference{
+                .digest = baked.key.Digest(),
+                .encoding = asset_bake::RuntimeArtifactEncoding::BakedTexture,
+                .qualifier = std::string{ asset_bake::TextureCompressionFamilyName(family) },
+            });
+        }
+        manifest.assets.push_back(std::move(texture));
+        result.textures.push_back(manifest.assets.back().id);
+    }
+    static constexpr std::array<std::string_view, kSlotsPerMaterial> slotKeys{ "albedoTextureAssetId", "normalTextureAssetId",
+        "metallicRoughnessTextureAssetId", "occlusionTextureAssetId", "emissiveTextureAssetId" };
+    for (std::uint32_t first = 0U; first < count; first += kSlotsPerMaterial) {
+        std::string text = "baseColor 1 1 1 1\nmetallicFactor 0.2\nroughnessFactor 0.55\nnormalScale 1.0\nalphaMode OPAQUE\n";
+        for (std::uint32_t slot = 0U; slot < kSlotsPerMaterial && first + slot < count; ++slot) {
+            text += std::string{ slotKeys[slot] } + " " + std::to_string(result.textures[first + slot].value) + "\n";
+        }
+        const std::vector<std::uint8_t> source(text.begin(), text.end());
+        std::vector<std::uint8_t> blob;
+        Require(asset_bake::EncodeRuntimeSourceBlob(source, blob), "A loading material source did not encode");
+        const std::string materialPath = "/Game/Materials/M" + std::to_string(first / kSlotsPerMaterial) + ".kbmat";
+        const asset_bake::AssetBakeKey key = SourceKey(profile, source, materialPath);
+        Require(writer.BeginAsset({ .key = key, .assetTypeId = std::string{ asset_bake::kSourceAssetTypeId } }) ==
+                    asset_bake::BakedAssetSinkStatus::Success &&
+                writer.WritePrimaryBlock(blob, profile.packageBlockAlignmentBytes) == asset_bake::BakedAssetSinkStatus::Success &&
+                writer.CommitAsset() == asset_bake::BakedAssetSinkStatus::Success,
+            "A loading material could not be stored");
+        manifest.assets.push_back(asset_bake::RuntimeAssetManifestEntry{
+            .id = kb::assets::MakeAssetId(materialPath + ":RenderMaterial"),
+            .type = "RenderMaterial",
+            .name = "M" + std::to_string(first / kSlotsPerMaterial),
+            .virtualPath = materialPath,
+            .sourceExtension = ".kbmat",
+            .contentHash = asset_bake::HashBakeBytes(source),
+            .artifacts = { asset_bake::RuntimeArtifactReference{
+                .digest = key.Digest(), .encoding = asset_bake::RuntimeArtifactEncoding::SourceBytes } },
+        });
+        result.materials.push_back(manifest.assets.back().id);
+    }
+    const bake::MeshBakeOutput bakedMesh = bake::BakeMesh(MakeSphere(24U, 16U), profile, writer);
+    Require(bakedMesh.status == bake::MeshBakeStatus::Success, "The loading sphere did not bake");
+    manifest.assets.push_back(asset_bake::RuntimeAssetManifestEntry{
+        .id = kb::assets::MakeAssetId("/Game/Meshes/Sphere.obj:RenderMesh"),
+        .type = "RenderMesh",
+        .name = "Sphere",
+        .virtualPath = "/Game/Meshes/Sphere.obj",
+        .sourceExtension = ".obj",
+        .contentHash = 0x5EF1U,
+        .artifacts = { asset_bake::RuntimeArtifactReference{
+            .digest = bakedMesh.key.Digest(), .encoding = asset_bake::RuntimeArtifactEncoding::BakedMesh } },
+    });
+    result.mesh = manifest.assets.back().id;
+    const std::array<std::uint8_t, 5U> sceneSource{ 's', 'c', 'e', 'n', 'e' };
+    std::vector<std::uint8_t> sceneBlob;
+    Require(asset_bake::EncodeRuntimeSourceBlob(sceneSource, sceneBlob), "The loading scene source did not encode");
+    const asset_bake::AssetBakeKey sceneKey = SourceKey(profile, sceneSource, scenePath);
+    Require(writer.BeginAsset({ .key = sceneKey, .assetTypeId = std::string{ asset_bake::kSourceAssetTypeId } }) ==
+                asset_bake::BakedAssetSinkStatus::Success &&
+            writer.WritePrimaryBlock(sceneBlob, profile.packageBlockAlignmentBytes) == asset_bake::BakedAssetSinkStatus::Success &&
+            writer.CommitAsset() == asset_bake::BakedAssetSinkStatus::Success,
+        "The loading scene could not be stored");
+    manifest.assets.push_back(asset_bake::RuntimeAssetManifestEntry{
+        .id = kb::assets::MakeAssetId(scenePath + ":Scene"),
+        .type = "Scene",
+        .name = "Main",
+        .virtualPath = scenePath,
+        .sourceExtension = ".21kbscene",
+        .contentHash = asset_bake::HashBakeBytes(sceneSource),
+        .artifacts = { asset_bake::RuntimeArtifactReference{
+            .digest = sceneKey.Digest(), .encoding = asset_bake::RuntimeArtifactEncoding::SourceBytes } },
+    });
+    std::vector<std::uint8_t> manifestBytes;
+    Require(asset_bake::EncodeRuntimeAssetManifest(manifest, manifestBytes) == asset_bake::RuntimeAssetManifestStatus::Success,
+        "The texture loading manifest did not encode");
+    asset_bake::AssetBakeKey manifestKey = SourceKey(profile, manifestBytes, "manifest");
+    manifestKey.bakerId = "RuntimeManifest";
+    Require(writer.BeginAsset({ .key = manifestKey, .assetTypeId = std::string{ asset_bake::kRuntimeManifestAssetTypeId } }) ==
+                asset_bake::BakedAssetSinkStatus::Success &&
+            writer.WritePrimaryBlock(manifestBytes, profile.packageBlockAlignmentBytes) ==
+                asset_bake::BakedAssetSinkStatus::Success &&
+            writer.CommitAsset() == asset_bake::BakedAssetSinkStatus::Success &&
+            writer.Finish() == asset_bake::BakedAssetSinkStatus::Success,
+        "The texture loading pack could not be published");
+    result.pack = std::make_shared<asset_bake::RuntimeAssetPack>();
+    Require(result.pack->Mount(path, profile) == asset_bake::RuntimeAssetPackStatus::Success, "The texture loading pack did not mount");
+    return result;
+}
+
+// What one pass over a scene of packaged textures did to the render thread.
+struct TextureLoadingRun {
+    std::uint32_t submits = 0U;
+    std::uint32_t textures = 0U;
+    std::uint32_t boundTextures = 0U;
+    std::uint32_t waitingAfterFirstSubmit = 0U;
+    std::uint32_t texturesLoadedAfterFirstSubmit = 0U;
+    bool progressNeverWentBack = true;
+    double firstSubmitMilliseconds = 0.0;
+    double slowestSubmitMilliseconds = 0.0;
+    double firstTextureMilliseconds = 0.0;
+    double slowestTextureMilliseconds = 0.0;
+    double totalTextureMilliseconds = 0.0;
+    double totalMilliseconds = 0.0;
+    // Width, height, mip count and format of every texture's GPU resource, in the order of the pack.
+    std::vector<std::array<std::uint32_t, 4U>> shapes;
+};
+
+// `stopAfterFirstSubmit` ends the run with the loads still in flight (a renderer shut down mid-load).
+[[nodiscard]] TextureLoadingRun RunSceneOfTextures(const TexturePack& fixture, const RuntimeResourceLoadingSettings& settings,
+    bool stopAfterFirstSubmit = false, std::uint32_t expectedBound = 0xFFFFFFFFU) {
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.MountRuntimePack(fixture.pack), "The texture loading pack did not mount in the scene");
+    for (std::size_t index = 0U; index < fixture.materials.size(); ++index) {
+        const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+            .name = "Surface " + std::to_string(index) });
+        scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+            .meshAssetId = fixture.mesh.value, .materialAssetId = fixture.materials[index].value });
+    }
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "The texture loading renderer did not initialize");
+    renderer.ConfigureRuntimeResourceLoading(settings);
+    const SceneRenderCamera camera = CameraAt(8.0F);
+    TextureLoadingRun run{};
+    run.textures = static_cast<std::uint32_t>(fixture.textures.size());
+    std::uint32_t previouslyResolved = 0U;
+    std::uint32_t settledSubmits = 0U;
+    const auto submitOnce = [&] {
+        Require(renderer.BeginFrame(), "The texture loading renderer did not begin a frame");
+        const RenderSceneSubmitDesc desc{
+            .target = RenderSceneTargetBinding{
+                .frameBuffer = BGFX_INVALID_HANDLE,
+                .colorTexture = BGFX_INVALID_HANDLE,
+                .viewport = RenderViewportDesc{ .id = RenderViewportId{ 1U }, .extent = RenderExtent{ 64U, 64U }, .viewportIndex = 0U },
+            },
+            .cameraOverride = camera,
+        };
+        Require(renderer.SubmitScene(scene, desc), "The texture loading scene did not submit");
+        renderer.EndFrame();
+    };
+    const Clock::time_point started = Clock::now();
+    const Clock::time_point deadline = started + std::chrono::seconds{ 180 };
+    for (;;) {
+        const Clock::time_point submitStarted = Clock::now();
+        submitOnce();
+        const double milliseconds = std::chrono::duration<double, std::milli>(Clock::now() - submitStarted).count();
+        ++run.submits;
+        const RuntimeSceneLoadProgress progress = renderer.RuntimeSceneResourceProgress(scene);
+        if (run.submits == 1U) {
+            run.firstSubmitMilliseconds = milliseconds;
+            run.firstTextureMilliseconds = progress.textureMilliseconds;
+            run.waitingAfterFirstSubmit = progress.waiting;
+            for (const kb::assets::AssetId id : fixture.textures) {
+                run.texturesLoadedAfterFirstSubmit += manager.IsLoaded(id) ? 1U : 0U;
+            }
+            if (stopAfterFirstSubmit) {
+                renderer.Shutdown();
+                return run;
+            }
+        }
+        run.slowestSubmitMilliseconds = std::max(run.slowestSubmitMilliseconds, milliseconds);
+        run.slowestTextureMilliseconds = std::max(run.slowestTextureMilliseconds, progress.textureMilliseconds);
+        run.totalTextureMilliseconds += progress.textureMilliseconds;
+        run.progressNeverWentBack = run.progressNeverWentBack && progress.resolved >= previouslyResolved;
+        previouslyResolved = progress.resolved;
+        const std::uint32_t bound = renderer.RuntimeResourceStats().cachedTextureCount;
+        // A texture the device cannot hold (or has no data) is retried but never bound: a scene that has stopped waiting
+        // and stopped gaining textures for a while is as loaded as it will get.
+        settledSubmits = progress.Complete() ? settledSubmits + 1U : 0U;
+        if (progress.Complete() && ((expectedBound == 0xFFFFFFFFU ? bound == run.textures : bound >= expectedBound) ||
+                                       settledSubmits >= 20U)) {
+            run.boundTextures = bound;
+            break;
+        }
+        Require(Clock::now() < deadline, "Packaged textures did not finish loading in time");
+        std::this_thread::sleep_for(std::chrono::milliseconds{ 1 });
+    }
+    run.totalMilliseconds = std::chrono::duration<double, std::milli>(Clock::now() - started).count();
+    for (int settle = 0; settle < 4; ++settle) {
+        submitOnce();
+    }
+    const SceneRenderResourceMap* map = renderer.SceneResourceMap();
+    const RenderResourceRegistry* resources = renderer.SceneResources();
+    for (std::size_t position = 0U; position < fixture.textures.size(); ++position) {
+        // The first slot of a material is sRGB, the rest are linear.
+        const RenderTextureColorSpace space = position % kSlotsPerMaterial == 0U || position % kSlotsPerMaterial == 4U
+            ? RenderTextureColorSpace::Srgb : RenderTextureColorSpace::Linear;
+        const RenderTextureResource* texture = map != nullptr && resources != nullptr
+            ? resources->FindTexture(map->ResolveTexture(fixture.textures[position].value, space)) : nullptr;
+        run.shapes.push_back(texture == nullptr ? std::array<std::uint32_t, 4U>{}
+            : std::array<std::uint32_t, 4U>{ texture->width, texture->height, texture->mipCount,
+                  static_cast<std::uint32_t>(texture->format) });
+    }
+    renderer.Shutdown();
+    return run;
+}
+
+[[nodiscard]] std::uint64_t HashTexture(const RenderTextureAssetData& texture) {
+    std::uint64_t hash = 1469598103934665603ULL;
+    const auto mix = [&hash](std::uint64_t value) { hash = (hash ^ value) * 1099511628211ULL; };
+    mix(texture.width);
+    mix(texture.height);
+    mix(texture.mipCount);
+    const std::vector<std::uint8_t>& bytes = texture.gpuBlocks.has_value() ? texture.gpuBlocks->blocks : texture.rgba8;
+    if (texture.gpuBlocks.has_value()) {
+        mix(static_cast<std::uint64_t>(texture.gpuBlocks->format));
+    }
+    for (const std::uint8_t byte : bytes) {
+        mix(byte);
+    }
+    return hash;
+}
+
+// Red when: with background loading on, a packaged texture is read or decoded inside the submit that first uses it; a
+// texture that finished in the background differs from the one a synchronous load returns (its bytes, or the GPU
+// resource made from them); a texture whose cooked data is missing keeps the scene waiting for good or is lost for the
+// ones around it; or a renderer shut down with loads in flight crashes or leaves the scene unusable for the next run.
+void PackagedTexturesLoadInTheBackground() {
+    const std::filesystem::path root = TestRoot();
+    std::error_code error;
+    std::filesystem::create_directories(root, error);
+    constexpr std::uint32_t kTextures = 40U;
+    const TexturePack fixture = BuildTexturePack(root / "Game.kbpack", kTextures);
+    const TextureLoadingRun synchronous = RunSceneOfTextures(fixture, RuntimeResourceLoadingSettings{});
+    Require(synchronous.submits == 1U && synchronous.waitingAfterFirstSubmit == 0U && synchronous.boundTextures == kTextures,
+        "A synchronous submit did not build every texture in one go");
+    const TextureLoadingRun background = RunSceneOfTextures(fixture,
+        RuntimeResourceLoadingSettings{ .asynchronous = true, .creationBudgetMilliseconds = 0.0 });
+    // The scene's one sphere is waiting too.
+    Require(background.texturesLoadedAfterFirstSubmit == 0U && background.waitingAfterFirstSubmit == kTextures + 1U,
+        ("The first submit loaded packaged textures on the render thread instead of leaving them to the workers: " +
+            std::to_string(background.texturesLoadedAfterFirstSubmit) + " loaded, " +
+            std::to_string(background.waitingAfterFirstSubmit) + " waiting of " + std::to_string(kTextures)).c_str());
+    Require(background.boundTextures == kTextures && background.progressNeverWentBack && background.submits > 2U,
+        "Packaged textures did not all arrive one budget at a time");
+    // The longer run has streamed finer levels in meanwhile, so each texture is at least as large as the one a single
+    // synchronous submit builds, in the same format.
+    for (std::size_t index = 0U; index < fixture.textures.size(); ++index) {
+        const auto& single = synchronous.shapes[index];
+        const auto& later = background.shapes[index];
+        Require(single[0] != 0U && later[0] >= single[0] && later[1] >= single[1] && later[2] >= single[2] && later[3] == single[3],
+            "A texture loaded in the background is smaller than the one a synchronous submit builds, or has another format");
+    }
+
+    // The bytes themselves: what a worker prepares is what a synchronous load returns.
+    {
+        kb::scene::Scene scene;
+        kb::assets::AssetManager& manager = scene.Assets().Manager();
+        HeadlessSurface surface;
+        DisplayConfig config{};
+        config.allowHeadlessNoop = true;
+        config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+        Renderer renderer;
+        Require(renderer.Initialize(surface, &config), "The texture hashing renderer did not initialize");
+        Require(manager.MountRuntimePack(fixture.pack) &&
+                (manager.HasLoaderForType("RenderTexture") ||
+                    manager.RegisterLoader(std::make_unique<RenderTextureAssetLoader>())),
+            "The texture hashing manager could not be set up");
+        std::vector<std::uint64_t> expected;
+        for (const kb::assets::AssetId id : fixture.textures) {
+            const kb::assets::AssetHandle<RenderTextureAssetData> loaded = manager.Load<RenderTextureAssetData>(id);
+            Require(loaded.IsLoaded(), "A packaged texture did not load synchronously");
+            expected.push_back(HashTexture(*loaded));
+            static_cast<void>(manager.Unload(id));
+        }
+        for (const kb::assets::AssetId id : fixture.textures) {
+            Require(manager.RequestLoadAsync(id), "A texture load request was refused");
+        }
+        const Clock::time_point deadline = Clock::now() + std::chrono::seconds{ 60 };
+        std::size_t ready = 0U;
+        while (ready < fixture.textures.size()) {
+            manager.PumpAsyncLoads();
+            ready = 0U;
+            for (const kb::assets::AssetId id : fixture.textures) {
+                Require(manager.AsyncLoadStatus(id) != kb::assets::AsyncAssetLoadStatus::Failed,
+                    "A texture failed to load in the background");
+                ready += manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Completed ? 1U : 0U;
+            }
+            Require(Clock::now() < deadline, "Background texture loads did not finish");
+            std::this_thread::sleep_for(std::chrono::milliseconds{ 1 });
+        }
+        for (std::size_t index = 0U; index < fixture.textures.size(); ++index) {
+            const kb::assets::AssetHandle<RenderTextureAssetData> loaded =
+                manager.AcquireLoaded<RenderTextureAssetData>(fixture.textures[index]);
+            Require(loaded.IsLoaded() && HashTexture(*loaded) == expected[index],
+                "A texture prepared by a worker differs from the synchronous load");
+        }
+        renderer.Shutdown();
+    }
+
+    // A renderer shut down while its loads are in flight, twice over, then a scene that loads normally.
+    for (int round = 0; round < 2; ++round) {
+        const TextureLoadingRun cut = RunSceneOfTextures(fixture, RuntimeResourceLoadingSettings{ .asynchronous = true }, true);
+        Require(cut.waitingAfterFirstSubmit == kTextures + 1U, "The cut-short run did not have loads in flight");
+    }
+    Require(RunSceneOfTextures(fixture, RuntimeResourceLoadingSettings{ .asynchronous = true }).boundTextures == kTextures,
+        "A scene did not load after another one was shut down mid-load");
+
+    // A pack that cannot be read any more (damaged or gone): every request ends in the error state instead of waiting.
+    {
+        kb::scene::Scene scene;
+        kb::assets::AssetManager& manager = scene.Assets().Manager();
+        HeadlessSurface surface;
+        DisplayConfig config{};
+        config.allowHeadlessNoop = true;
+        config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+        Renderer renderer;
+        Require(renderer.Initialize(surface, &config), "The damaged pack renderer did not initialize");
+        Require(manager.MountRuntimePack(fixture.pack) &&
+                (manager.HasLoaderForType("RenderTexture") ||
+                    manager.RegisterLoader(std::make_unique<RenderTextureAssetLoader>())),
+            "The damaged pack manager could not be set up");
+        std::filesystem::resize_file(root / "Game.kbpack", 0U, error);
+        Require(!error, "The texture pack could not be truncated for the damage test");
+        for (const kb::assets::AssetId id : fixture.textures) {
+            Require(manager.RequestLoadAsync(id), "A texture load request was refused");
+        }
+        const Clock::time_point deadline = Clock::now() + std::chrono::seconds{ 60 };
+        std::size_t failed = 0U;
+        while (failed < fixture.textures.size()) {
+            manager.PumpAsyncLoads();
+            failed = 0U;
+            for (const kb::assets::AssetId id : fixture.textures) {
+                Require(manager.AsyncLoadStatus(id) != kb::assets::AsyncAssetLoadStatus::Completed,
+                    "A texture of an unreadable pack finished loading");
+                failed += manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Failed ? 1U : 0U;
+            }
+            Require(Clock::now() < deadline, "A texture of an unreadable pack kept waiting instead of failing");
+            std::this_thread::sleep_for(std::chrono::milliseconds{ 1 });
+        }
+        renderer.Shutdown();
+    }
+    std::cout << "{\"case\":\"packaged-textures-background\",\"textures\":" << kTextures
+              << ",\"synchronousFirstSubmitMs\":" << synchronous.firstSubmitMilliseconds
+              << ",\"backgroundFirstSubmitMs\":" << background.firstSubmitMilliseconds
+              << ",\"backgroundSlowestTextureMs\":" << background.slowestTextureMilliseconds
+              << ",\"backgroundSubmits\":" << background.submits << "}\n";
+    std::filesystem::remove_all(root, error);
+}
+
+[[nodiscard]] std::string EnvironmentText(const char* name) {
+#if defined(_WIN32)
+    char* value = nullptr;
+    std::size_t size = 0U;
+    std::string text = _dupenv_s(&value, &size, name) == 0 && value != nullptr ? std::string{ value } : std::string{};
+    std::free(value);
+    return text;
+#else
+    const char* value = std::getenv(name);
+    return value != nullptr ? std::string{ value } : std::string{};
+#endif
+}
+
+// KB_TEXTURE_LOAD_BENCH=<count>[,<count>...]: how a scene of that many distinct packaged textures reaches the GPU, the
+// whole scene inside the first submit and in the background under the creation budget. One JSON line per run.
+// KB_TEXTURE_LOAD_BENCH_DIR names a folder that keeps the packs between runs; KB_TEXTURE_LOAD_BENCH_MODE is
+// "synchronous" or "background" to run one of the two.
+void PackagedTextureLoadBench(std::string_view counts, const std::filesystem::path& directory, std::string_view mode) {
+    std::error_code error;
+    std::filesystem::create_directories(directory, error);
+    std::size_t position = 0U;
+    while (position < counts.size()) {
+        std::size_t end = counts.find(',', position);
+        end = end == std::string_view::npos ? counts.size() : end;
+        const auto count = static_cast<std::uint32_t>(std::stoul(std::string{ counts.substr(position, end - position) }));
+        position = end + 1U;
+        const std::filesystem::path packPath = directory / ("Textures" + std::to_string(count) + ".kbpack");
+        TexturePack fixture{};
+        if (std::filesystem::exists(packPath)) {
+            fixture.pack = std::make_shared<asset_bake::RuntimeAssetPack>();
+            Require(fixture.pack->Mount(packPath, asset_bake::AndroidEtc2Arm64BakeTargetProfile()) ==
+                        asset_bake::RuntimeAssetPackStatus::Success,
+                "The cached texture bench pack did not mount");
+            for (const asset_bake::RuntimeAssetManifestEntry& entry : fixture.pack->Manifest().assets) {
+                if (entry.type == "RenderTexture") fixture.textures.push_back(entry.id);
+                else if (entry.type == "RenderMaterial") fixture.materials.push_back(entry.id);
+                else if (entry.type == "RenderMesh") fixture.mesh = entry.id;
+            }
+        } else {
+            fixture = BuildTexturePack(packPath, count);
+        }
+        for (const bool background : { false, true }) {
+            if (!mode.empty() && mode != (background ? "background" : "synchronous")) {
+                continue;
+            }
+            const TextureLoadingRun run = RunSceneOfTextures(fixture, RuntimeResourceLoadingSettings{ .asynchronous = background });
+            std::cout << "{\"case\":\"texture-load\",\"mode\":\"" << (background ? "background" : "synchronous")
+                      << "\",\"textures\":" << count << ",\"firstSubmitMs\":" << run.firstSubmitMilliseconds
+                      << ",\"firstTextureMs\":" << run.firstTextureMilliseconds
+                      << ",\"slowestSubmitMs\":" << run.slowestSubmitMilliseconds
+                      << ",\"slowestTextureMs\":" << run.slowestTextureMilliseconds
+                      << ",\"totalTextureMs\":" << run.totalTextureMilliseconds << ",\"submits\":" << run.submits
+                      << ",\"readyMs\":" << run.totalMilliseconds << ",\"bound\":" << run.boundTextures << "}\n";
+            std::cout.flush();
+        }
+    }
+}
+
 void RunRuntimeContentStreamingTests() {
+    if (const std::string counts = EnvironmentText("KB_TEXTURE_LOAD_BENCH"); !counts.empty()) {
+        const std::string directory = EnvironmentText("KB_TEXTURE_LOAD_BENCH_DIR");
+        PackagedTextureLoadBench(counts, directory.empty() ? TestRoot() : std::filesystem::path{ directory },
+            EnvironmentText("KB_TEXTURE_LOAD_BENCH_MODE"));
+        return;
+    }
 #if defined(_WIN32)
     char* benchPack = nullptr;
     std::size_t benchPackSize = 0U;
@@ -1413,6 +1894,7 @@ void RunRuntimeContentStreamingTests() {
     std::free(benchPack);
 #endif
     PackagedMeshesLoadInTheBackground();
+    PackagedTexturesLoadInTheBackground();
 #if defined(_WIN32)
     StreamingImagesSurviveZoomAndEviction();
 #endif
