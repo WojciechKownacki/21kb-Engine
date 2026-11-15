@@ -1,4 +1,5 @@
 #include "CliCommands.hpp"
+#include "engine/core/JsonValue.hpp"
 
 #include "engine/assets/AssetFileName.hpp"
 #include "engine/project/ProjectManager.hpp"
@@ -69,9 +70,19 @@ int RunLightingQualityCommand(const ArgumentList& arguments, CommandIo io) {
         io.err << "error: " << error << '\n';
         return 1;
     }
+    using kb::core::JsonValue;
+    JsonValue data = DataObject("21kb.cli.lighting-quality/v1");
+    auto rows = JsonValue::MakeArray();
     for (const QualityOption& option : kQualityOptions) {
         io.out << option.label << ": " << kb::project::ProjectQualityLevelName(settings.*option.member) << '\n';
+        auto row = JsonValue::MakeObject();
+        row.Set("option", JsonValue::MakeString(std::string{ option.flag }));
+        row.Set("label", JsonValue::MakeString(std::string{ option.label }));
+        row.Set("level", JsonValue::MakeString(std::string{ kb::project::ProjectQualityLevelName(settings.*option.member) }));
+        rows.Append(std::move(row));
     }
+    data.Set("settings", std::move(rows));
+    PublishData(io, std::move(data));
     return 0;
 }
 

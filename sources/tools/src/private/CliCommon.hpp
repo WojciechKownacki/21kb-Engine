@@ -21,12 +21,27 @@ namespace kb::scene {
 class Scene;
 }
 
+namespace kb::core {
+class JsonValue;
+}
+
 namespace kb::cli {
 
 struct CommandIo {
     std::ostream& out;
     std::ostream& err;
+    // Set by --json: the answer of a command that reports one as data (CliJsonOutput::Structured) goes here, as the
+    // same facts its text prints. Null otherwise, so a command builds it only when asked.
+    kb::core::JsonValue* data = nullptr;
+
+    [[nodiscard]] bool WantsData() const noexcept { return data != nullptr; }
 };
+
+// A data object that starts with its schema id ("21kb.cli.<command>/v1"); the command adds its fields and hands it
+// to PublishData.
+[[nodiscard]] kb::core::JsonValue DataObject(std::string_view schema);
+// Gives `data` to the result object of --json; does nothing without --json.
+void PublishData(CommandIo io, kb::core::JsonValue data);
 
 // Parses "--name value" options, "--name" boolean flags (from a caller-provided
 // flag list), and bare positionals from a command's argument tail.

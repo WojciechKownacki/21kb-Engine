@@ -472,6 +472,13 @@ The scene runner also returns `124` on timeout and `130` on cancellation.
 - `ok` is `exitCode == 0`, and `exitCode` is also the process exit code.
 - `output` is what the command printed on stdout; `errors` has one entry per line it wrote on
   stderr (without the `error: ` prefix). On success `errors` may still hold warnings.
+- A read command marked `structured` in the catalog adds a `data` object to this result: the
+  facts its text prints, as objects and arrays with stable field names, and a `schema` id such as
+  `21kb.cli.entity-show/v1`. `output` keeps the text, so nothing printed before is lost. The
+  structured read forms are `scene-list`, `entity show`, `schema`, `validate`, `skeleton show`,
+  `input-action list`, `layout list`, `navmesh info`, `physics-layers`, `lighting-quality`,
+  `material-show` and `material-instance-show`. The forms that change something report what they did in
+  `output` (the options-given forms of `physics-layers` and `lighting-quality` also return the resulting state as `data`).
 - A command that prints a JSON object of its own (`audio-mixer ... --json`, `run --report ...`,
   `api --print json`) keeps it unchanged and is not wrapped; its failures that print nothing
   on stdout still come as the object above.
@@ -493,7 +500,7 @@ CLI dispatch and MCP discovery use one command catalog. `kb_cli commands` return
 `21kb.cli-commands/v1`: one entry for every command the CLI dispatches, with its
 `purpose`, its `subcommands` (each with its own `options`), the `options` of the command itself
 (each with `name`, `type` of flag, number, path, string or enum, `required`, `default` and
-`choices`), what `--json` gives (`json`: `envelope`, `native`, `partial` or `protocol`), the
+`choices`), what `--json` gives (`json`: `envelope`, `native`, `partial`, `structured` or `protocol`), the
 global options and the exit codes. A null `mcpTool` means that operation is available only
 through the CLI, and `available` reflects the current build's capabilities.
 The entries are read from the usage text that `kb_cli help` prints, so a command is described

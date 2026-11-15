@@ -1,4 +1,6 @@
 #include "CliCommands.hpp"
+#include "engine/core/JsonValue.hpp"
+#include "CliProgram.hpp"
 
 #include "engine/assets/AssetFileName.hpp"
 #include "engine/project/ProjectManager.hpp"
@@ -20,7 +22,14 @@ int RunLayoutCommand(const ArgumentList& arguments, CommandIo io) {
     const auto root = file.parent_path();
     const auto action = arguments.Positionals().front();
     if (action == "list") {
-        for (const auto& name : kb::editor::EditorLayoutLibrary::List(root)) io.out << name << '\n';
+        kb::core::JsonValue data = DataObject("21kb.cli.layout-list/v1");
+        auto layouts = kb::core::JsonValue::MakeArray();
+        for (const auto& name : kb::editor::EditorLayoutLibrary::List(root)) {
+            io.out << name << '\n';
+            layouts.Append(kb::core::JsonValue::MakeString(ToValidUtf8(name)));
+        }
+        data.Set("layouts", std::move(layouts));
+        PublishData(io, std::move(data));
         return 0;
     }
     const auto settingsPath = kb::editor::EditorConfigurationStore::FilePath(root);

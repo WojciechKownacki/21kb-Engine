@@ -1,4 +1,5 @@
 #include "CliCommands.hpp"
+#include "engine/core/JsonValue.hpp"
 
 #include <cmath>
 #include <cstdlib>
@@ -636,10 +637,13 @@ void PrintInstance(
     const std::string& virtualPath,
     const std::string& parentPath,
     const kb::assets::AssetRegistry& registry,
-    CommandIo io) {
+    CommandIo io,
+    kb::core::JsonValue* data = nullptr) {
+    using kb::core::JsonValue;
     io.out << virtualPath << '\n' << "  Parent = " << parentPath << '\n';
     const kb::render::RenderMaterialAssetData effective = kb::render::BuildEffectiveRenderMaterialInstanceAsset(parent, instance);
     const std::vector<ExposedParameter> parameters = ExposedParameters(parent);
+    auto parameterRows = JsonValue::MakeArray();
     for (const ExposedParameter& parameter : parameters) {
         const auto value = std::ranges::find_if(effective.graphParameterValues, [&](const kb::render::RenderMaterialGraphParameterValue& candidate) {
             return candidate.stableId == parameter.stableId;
@@ -649,11 +653,25 @@ void PrintInstance(
         io.out << "  " << parameter.displayName << " = "
                << (value != effective.graphParameterValues.end() ? ParameterValueText(*value, registry) : std::string{ "(graph default)" })
                << (overridden ? " (override)" : "") << '\n';
+        if (data != nullptr) {
+            auto row = JsonValue::MakeObject();
+            row.Set("name", JsonValue::MakeString(parameter.displayName));
+            row.Set("value", JsonValue::MakeString(value != effective.graphParameterValues.end() ? ParameterValueText(*value, registry) : std::string{ "(graph default)" }));
+            row.Set("override", JsonValue::MakeBool(overridden));
+            parameterRows.Append(std::move(row));
+        }
+    }
+    if (data != nullptr) {
+        data->Set("instance", JsonValue::MakeString(virtualPath));
+        data->Set("parent", JsonValue::MakeString(parentPath));
+        data->Set("parameters", std::move(parameterRows));
+        data->Set("values", JsonValue::MakeNull());
     }
     // A graph material renders its graph; the built-in values are only what a material without
     // one shows.
     if (!kb::render::HasGraphAuthoringData(effective.graph)) {
         material::PrintBuiltinValues(effective.desc, &registry, io);
+        if (data != nullptr) data->Set("values", material::BuiltinValuesJson(effective.desc, &registry));
     }
 }
 
@@ -791,7 +809,9 @@ int InstanceEdit(const ArgumentList& arguments, CommandIo io, bool change) {
             return 1;
         }
     }
-    PrintInstance(*instance, *parent, located->virtualPath, parentPath, Registry(project), io);
+    kb::core::JsonValue data = DataObject("21kb.cli.material-instance-show/v1");
+    PrintInstance(*instance, *parent, located->virtualPath, parentPath, Registry(project), io, !change && io.WantsData() ? &data : nullptr);
+    if (!change) PublishData(io, std::move(data));
     return 0;
 }
 

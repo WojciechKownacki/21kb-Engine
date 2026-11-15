@@ -1,9 +1,11 @@
 #include "CliCommands.hpp"
+#include "CliProgram.hpp"
 
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/assets/AssetFileName.hpp"
 #include "engine/audio/AudioMixerAsset.hpp"
+#include "engine/core/JsonValue.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/project/ProjectSettings.hpp"
 #include "engine/scene/Scene.hpp"
@@ -165,13 +167,14 @@ namespace {
     return positions;
 }
 
-[[nodiscard]] std::string ComponentSummary(const kb::scene::ScenePrefabNodeDesc& node) {
+[[nodiscard]] std::string ComponentSummary(const kb::scene::ScenePrefabNodeDesc& node, kb::core::JsonValue* names = nullptr) {
     std::string summary;
-    const auto append = [&summary](std::string_view name) {
+    const auto append = [&summary, names](std::string_view name) {
         if (!summary.empty()) {
             summary += ", ";
         }
         summary += name;
+        if (names != nullptr) names->Append(kb::core::JsonValue::MakeString(std::string{ name }));
     };
     // The same component table the Inspector and `kb_cli component` use.
     for (const kb::scene::SceneComponentKind& kind : kb::scene::SceneComponentAuthoring::Kinds()) {
@@ -266,43 +269,73 @@ int RunSceneListCommand(const ArgumentList& arguments, CommandIo io) {
         return 1;
     }
 
+    using kb::core::JsonValue;
     io.out << "scene: " << loaded.document.name << " (" << loaded.document.worldPrefab.NodeCount() << " nodes)\n";
     const std::span<const kb::scene::ScenePrefabNodeDesc> nodes = loaded.document.worldPrefab.Nodes();
     const std::vector<kb::math::Vec3> world = NodeWorldPositions(nodes);
+    JsonValue data = DataObject("21kb.cli.scene-list/v1");
+    data.Set("scene", JsonValue::MakeString(ToValidUtf8(loaded.document.name)));
+    data.Set("nodeCount", JsonValue::MakeNumber(static_cast<double>(nodes.size())));
+    auto nodeRows = JsonValue::MakeArray();
     for (std::size_t index = 0U; index < nodes.size(); ++index) {
         const kb::scene::ScenePrefabNodeDesc& node = nodes[index];
+        auto row = JsonValue::MakeObject();
+        row.Set("index", JsonValue::MakeNumber(static_cast<double>(index)));
+        row.Set("name", JsonValue::MakeString(ToValidUtf8(node.name)));
         io.out << "  [" << index << "] " << node.name;
         if (node.parentNode != kb::scene::ScenePrefabNodeDesc::NoParent) {
             io.out << " (parent " << node.parentNode << ")";
         }
-        const std::string components = ComponentSummary(node);
+        row.Set("parent", node.parentNode != kb::scene::ScenePrefabNodeDesc::NoParent
+            ? JsonValue::MakeNumber(static_cast<double>(node.parentNode)) : JsonValue::MakeNull());
+        auto componentNames = JsonValue::MakeArray();
+        const std::string components = ComponentSummary(node, &componentNames);
+        row.Set("components", std::move(componentNames));
         if (!components.empty()) {
             io.out << " components: " << components;
         }
+        row.Set("behaviour", JsonValue::MakeNull());
         if (node.components.behaviour.has_value()) {
             const kb::scene::BehaviourComponent& behaviour = *node.components.behaviour;
             io.out << " behaviour: ";
             const kb::assets::AssetMetadata* metadata = mounted != nullptr
                 ? mounted->Assets().Manager().Registry().Find(kb::assets::AssetId{ behaviour.behaviourAssetId })
                 : nullptr;
-            if (metadata != nullptr) {
-                io.out << metadata->virtualPath.generic_string();
-            } else {
-                io.out << "0x" << kb::assets::ToString(kb::assets::AssetId{ behaviour.behaviourAssetId });
-            }
+            const std::string script = metadata != nullptr
+                ? metadata->virtualPath.generic_string()
+                : "0x" + kb::assets::ToString(kb::assets::AssetId{ behaviour.behaviourAssetId });
+            io.out << script;
             io.out << " (" << BackendName(behaviour.backend)
                    << ", " << TickGroupName(behaviour.tickGroup)
                    << ", order " << behaviour.executionOrder
                    << (behaviour.enabled ? "" : ", disabled")
                    << ")";
+            auto behaviourRow = JsonValue::MakeObject();
+            behaviourRow.Set("script", JsonValue::MakeString(ToValidUtf8(script)));
+            behaviourRow.Set("backend", JsonValue::MakeString(BackendName(behaviour.backend)));
+            behaviourRow.Set("tickGroup", JsonValue::MakeString(TickGroupName(behaviour.tickGroup)));
+            behaviourRow.Set("order", JsonValue::MakeNumber(behaviour.executionOrder));
+            behaviourRow.Set("enabled", JsonValue::MakeBool(behaviour.enabled));
+            auto variables = JsonValue::MakeObject();
             for (std::size_t variable = 0U; variable < node.components.behaviourVariableOverrides.size(); ++variable) {
                 const kb::scene::BehaviourVariableOverride& entry = node.components.behaviourVariableOverrides[variable];
                 io.out << (variable == 0U ? " variables: " : ", ") << entry.name << '=' << kb::script::FormatValueText(entry.value);
+                variables.Set(entry.name, JsonValue::MakeString(ToValidUtf8(kb::script::FormatValueText(entry.value))));
             }
+            behaviourRow.Set("variables", std::move(variables));
+            row.Set("behaviour", std::move(behaviourRow));
         }
         io.out << " @ " << FormatCliNumber(world[index].x) << ',' << FormatCliNumber(world[index].y) << ','
                << FormatCliNumber(world[index].z) << '\n';
+        auto position = JsonValue::MakeArray();
+        for (const float component : { world[index].x, world[index].y, world[index].z }) {
+            position.Append(JsonValue::MakeNumber(std::stod(FormatCliNumber(component))));
+        }
+        row.Set("position", std::move(position));
+        nodeRows.Append(std::move(row));
     }
+    data.Set("nodes", std::move(nodeRows));
+    PublishData(io, std::move(data));
     return 0;
 }
 

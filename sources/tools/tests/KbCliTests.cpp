@@ -21,6 +21,7 @@
 #include "engine/scene/ParticleEffectAssetIO.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
+#include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/SceneJointComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
@@ -5093,6 +5094,204 @@ void RunCodeMapTests() {
     std::filesystem::remove_all(tree, removeError);
 }
 
+// ---- --json data: the answer of a read command as structured data ----
+
+// A command line of a command marked structured, and the schema id its data must carry. Every such command has at
+// least one probe; the catalog test and the data suite both run them.
+struct DataProbe {
+    std::string command;
+    std::vector<std::string> words; // the command line without --json
+    std::string schema;
+};
+
+[[nodiscard]] std::vector<DataProbe> PrepareDataProbes() {
+    PrepareProject();
+    const std::filesystem::path rootPath = TestRoot();
+    const std::string root = rootPath.string();
+    const auto must = [](const CliRun& run, std::string_view what) { Require(run.exitCode == 0, std::string{ what } + ": " + run.out + run.err); };
+    must(RunCliProgram({ "input-action", "new", "--project", root, "--name", "Fire", "--key", "Space" }), "input-action new");
+
+    kb::scene::SkeletonAsset skeleton;
+    kb::scene::SkeletonBone rootBone;
+    rootBone.id = 1U;
+    rootBone.name = "Root";
+    kb::scene::SkeletonBone hand;
+    hand.id = 2U;
+    hand.parentIndex = 0;
+    hand.name = "Hand";
+    skeleton.bones = { rootBone, hand };
+    std::error_code error;
+    std::filesystem::create_directories(rootPath / "Assets" / "Characters", error);
+    Require(kb::scene::SkeletonAssetIO::Save(rootPath / "Assets" / "Characters" / "Probe.kbskeleton", skeleton), "the probe skeleton could not be saved");
+
+    {
+        kb::scene::Scene level;
+        const kb::scene::SceneObject floor = level.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Floor" });
+        level.Components().Colliders().Set(floor.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Box, .boxSize = { 20.0F, 1.0F, 20.0F } });
+        Require(kb::scene::SceneDocumentService::Save(level, rootPath / "Assets" / "Level.21kbscene", "Level"), "the probe level could not be saved");
+    }
+    must(RunCliProgram({ "navmesh", "bake", "--project", root, "--scene", "Assets/Level.21kbscene" }), "navmesh bake");
+
+    std::vector<DataProbe> probes{
+        { "scene-list", { "scene-list", "--project", root, "--scene", "Assets/Scenes/Main.21kbscene" }, "21kb.cli.scene-list/v1" },
+        { "entity", { "entity", "show", "--project", root, "--name", "Player" }, "21kb.cli.entity-show/v1" },
+        { "schema", { "schema" }, "21kb.cli.schema/v1" },
+        { "validate", { "validate", "--project", root, "Assets/Logic/Player.lua" }, "21kb.cli.validate/v1" },
+        { "input-action", { "input-action", "list", "--project", root }, "21kb.cli.input-action-list/v1" },
+        { "layout", { "layout", "list", "--project", root }, "21kb.cli.layout-list/v1" },
+        { "physics-layers", { "physics-layers", "--project", root }, "21kb.cli.physics-layers/v1" },
+        { "lighting-quality", { "lighting-quality", "--project", root }, "21kb.cli.lighting-quality/v1" },
+        { "skeleton", { "skeleton", "show", "--project", root, "--skeleton", "/Game/Characters/Probe.kbskeleton" }, "21kb.cli.skeleton-show/v1" },
+        { "navmesh", { "navmesh", "info", (rootPath / "Assets" / "Level.21kbnavmesh").string() }, "21kb.cli.navmesh-info/v1" },
+    };
+#if KB_CLI_RENDERER
+    must(RunCliProgram({ "material-new", "--project", root, "--name", "Probe", "--set", "Base Color=#C8202A", "--set", "Roughness=0.4" }), "material-new");
+    must(RunCliProgram({ "material-instance-new", "--project", root, "--parent", "/Game/Materials/Probe.kbmat", "--name", "ProbeInst" }), "material-instance-new");
+    probes.push_back({ "material-show", { "material-show", "--project", root, "--material", "/Game/Materials/Probe.kbmat" }, "21kb.cli.material-show/v1" });
+    probes.push_back({ "material-instance-show", { "material-instance-show", "--project", root, "--instance", "/Game/Materials/ProbeInst.kbmatinst" },
+        "21kb.cli.material-instance-show/v1" });
+#endif
+    return probes;
+}
+
+// The probe with --json: the one result object of the envelope, whose data field must be a filled object with the schema id.
+[[nodiscard]] JsonValue RunDataProbe(const DataProbe& probe, std::string* text = nullptr) {
+    std::vector<std::string> words = probe.words;
+    words.emplace_back("--json");
+    std::istringstream in;
+    std::ostringstream out;
+    std::ostringstream err;
+    const int exitCode = kb::cli::RunCli(words, in, kb::cli::CommandIo{ .out = out, .err = err });
+    Require(exitCode == 0, "'" + probe.command + "' failed with --json: " + out.str() + err.str());
+    JsonValue result;
+    std::string error;
+    Require(JsonValue::Parse(out.str(), result, error) && result.GetKind() == JsonValue::Kind::Object &&
+            result.Find("schema") != nullptr && result.Find("schema")->AsString() == "21kb.cli-result/v1",
+        "'" + probe.command + "' did not print one result object: " + out.str());
+    const JsonValue* data = result.Find("data");
+    Require(data != nullptr && data->GetKind() == JsonValue::Kind::Object && data->Size() > 1U,
+        "'" + probe.command + "' is marked structured but its data field is empty: " + out.str());
+    Require(data->Find("schema") != nullptr && data->Find("schema")->AsString() == probe.schema,
+        "'" + probe.command + "' must carry the schema id " + probe.schema + " in its data: " + out.str());
+    if (text != nullptr) *text = result.Find("output")->AsString();
+    return *data;
+}
+
+void RunStructuredOutputTests() {
+    const std::vector<DataProbe> probes = PrepareDataProbes();
+    const auto data = [&](std::string_view command, std::string* text = nullptr) {
+        for (const DataProbe& probe : probes)
+            if (probe.command == command) return RunDataProbe(probe, text);
+        Require(false, "no probe for " + std::string{ command });
+        return JsonValue{};
+    };
+    const auto number = [](const JsonValue* value) { return value != nullptr ? value->AsNumber(-1.0e9) : -1.0e9; };
+    const auto close = [](double a, double b) { return std::abs(a - b) < 1.0e-4; };
+
+    // The text stays what it was: the envelope's output is what the command prints without --json.
+    std::string text;
+    const JsonValue list = data("scene-list", &text);
+    const CliRun plainList = RunCliProgram({ "scene-list", "--project", TestRoot().string(), "--scene", "Assets/Scenes/Main.21kbscene" });
+    Require(plainList.exitCode == 0 && plainList.out == text, "--json must keep the text of scene-list as output: " + text);
+    Require(number(list.Find("nodeCount")) == 2.0 && list.Find("scene")->AsString() == "Main" && list.Find("nodes")->Size() == 2U,
+        "scene-list data must count the nodes");
+    const JsonValue& player = *list.Find("nodes")->At(0U);
+    Require(player.Find("name")->AsString() == "Player" && player.Find("parent")->IsNull() && player.Find("components")->At(0U)->AsString() == "Button" &&
+            player.Find("position")->Size() == 3U && player.Find("behaviour")->IsNull(),
+        "scene-list data must describe a node: name, parent, components, behaviour and position");
+
+    const JsonValue entity = data("entity", &text);
+    const CliRun plainEntity = RunCliProgram({ "entity", "show", "--project", TestRoot().string(), "--name", "Player" });
+    Require(plainEntity.out == text, "--json must keep the text of entity show as output");
+    const JsonValue* transform = entity.Find("components")->Find("Transform");
+    Require(entity.Find("entity")->AsString() == "Player" && entity.Find("parent")->IsNull() && entity.Find("children")->Size() == 0U &&
+            transform != nullptr && transform->Find("worldPosition")->Size() == 3U && close(number(transform->Find("localScale")->At(0U)), 1.0),
+        "entity show data must carry the path, parent, children and the transform");
+
+    const JsonValue schema = data("schema");
+    bool hasTransform = false;
+    for (std::size_t index = 0U; index < schema.Find("components")->Size(); ++index)
+        hasTransform = hasTransform || schema.Find("components")->At(index)->Find("id")->AsString() == "Transform";
+    Require(hasTransform && schema.Find("uiComponents")->Size() > 0U && schema.Find("createItems")->Size() > 0U, "schema data must list the components");
+    {
+        std::istringstream in;
+        std::ostringstream out;
+        std::ostringstream err;
+        const std::vector<std::string> words{ "schema", "--component", "Transform", "--json" };
+        Require(kb::cli::RunCli(words, in, kb::cli::CommandIo{ .out = out, .err = err }) == 0, "schema --component failed");
+        JsonValue result;
+        std::string error;
+        Require(JsonValue::Parse(out.str(), result, error) && result.Find("data") != nullptr && result.Find("data")->Find("components")->Size() == 1U &&
+                result.Find("data")->Find("components")->At(0U)->Find("properties")->Size() > 3U,
+            "schema --component must list that component's properties as data: " + out.str());
+    }
+
+    const JsonValue validated = data("validate");
+    Require(validated.Find("ok")->AsBool() && validated.Find("results")->Size() == 1U && validated.Find("results")->At(0U)->Find("ok")->AsBool() &&
+            validated.Find("results")->At(0U)->Find("target")->AsString() == "Assets/Logic/Player.lua",
+        "validate data must report each file");
+    {
+        std::istringstream in;
+        std::ostringstream out;
+        std::ostringstream err;
+        const std::vector<std::string> words{ "validate", "--project", TestRoot().string(), "Assets/Logic/Broken.lua", "--json" };
+        Require(kb::cli::RunCli(words, in, kb::cli::CommandIo{ .out = out, .err = err }) == 1, "validate of a broken script must fail");
+        JsonValue result;
+        std::string error;
+        Require(JsonValue::Parse(out.str(), result, error) && !result.Find("ok")->AsBool() && !result.Find("data")->Find("ok")->AsBool() &&
+                result.Find("data")->Find("results")->At(0U)->Find("errors")->Size() == 1U,
+            "validate data must carry the errors of a broken script: " + out.str());
+    }
+
+    const JsonValue actions = data("input-action");
+    Require(actions.Find("actions")->Size() == 1U && actions.Find("actions")->At(0U)->Find("name")->AsString() == "Fire" &&
+            actions.Find("actions")->At(0U)->Find("valueType")->AsString() == "Bool" && Contains(actions.Find("actions")->At(0U)->Find("bindings")->AsString(), "Space") &&
+            Contains(actions.Find("actions")->At(0U)->Find("path")->AsString(), "Fire"),
+        "input-action list data must list the actions with their bindings");
+    Require(data("layout").Find("layouts")->GetKind() == JsonValue::Kind::Array, "layout list data must hold an array");
+    const JsonValue layers = data("physics-layers");
+    Require(layers.Find("asset")->AsString() == "/Game/Settings/PhysicsLayers.21kbphysicslayers" && layers.Find("layers")->GetKind() == JsonValue::Kind::Array &&
+            layers.Find("ignoredPairs")->GetKind() == JsonValue::Kind::Array,
+        "physics-layers data must name the asset");
+    const JsonValue quality = data("lighting-quality");
+    Require(quality.Find("settings")->Size() == 4U && quality.Find("settings")->At(0U)->Find("option")->AsString() == "--shadows" &&
+            quality.Find("settings")->At(0U)->Find("level")->AsString() == "Auto",
+        "lighting-quality data must list the four quality levels");
+    const JsonValue bones = data("skeleton");
+    Require(bones.Find("bones")->Size() == 2U && bones.Find("bones")->At(0U)->Find("name")->AsString() == "Root" &&
+            bones.Find("bones")->At(0U)->Find("parent")->IsNull() && number(bones.Find("bones")->At(1U)->Find("parent")) == 0.0,
+        "skeleton show data must list the bones with their parent");
+    const JsonValue navmesh = data("navmesh");
+    Require(navmesh.Find("agents")->Size() >= 1U && number(navmesh.Find("cellSize")) > 0.0 && number(navmesh.Find("agents")->At(0U)->Find("tiles")) > 0.0,
+        "navmesh info data must give the cell size and the agents' tiles");
+#if KB_CLI_RENDERER
+    const JsonValue material = data("material-show");
+    Require(material.Find("material")->AsString() == "/Game/Materials/Probe.kbmat" && material.Find("values")->Find("baseColor")->AsString() == "#C8202A" &&
+            close(number(material.Find("values")->Find("roughness")), 0.4) && number(material.Find("graphNodes")) == 0.0,
+        "material-show data must carry the values of the material");
+    const JsonValue instance = data("material-instance-show");
+    Require(instance.Find("parent")->AsString() == "/Game/Materials/Probe.kbmat" && instance.Find("parameters")->GetKind() == JsonValue::Kind::Array &&
+            instance.Find("values")->Find("baseColor")->AsString() == "#C8202A",
+        "material-instance-show data must name the parent and carry the effective values");
+#endif
+}
+
+// Every command marked structured returns a filled data object with its schema id, and a probe exists for it.
+void CheckStructuredCommands() {
+    const std::vector<DataProbe> probes = PrepareDataProbes();
+    for (const DataProbe& probe : probes) {
+        const auto* command = kb::cli::FindCliCommand(probe.command);
+        Require(command != nullptr && command->json == kb::cli::CliJsonOutput::Structured,
+            "'" + probe.command + "' has a data probe, so the table must mark it structured");
+        static_cast<void>(RunDataProbe(probe));
+    }
+    for (const auto& entry : kb::cli::CliCommandCatalog()) {
+        if (entry.json != kb::cli::CliJsonOutput::Structured || !entry.available) continue;
+        Require(std::ranges::any_of(probes, [&](const DataProbe& probe) { return probe.command == entry.name; }),
+            "'" + std::string{ entry.name } + "' is marked structured, so a data probe must check it");
+    }
+}
+
 void RunCommandCatalogTests() {
     PrepareProject();
     const auto root = TestRoot().string();
@@ -5130,7 +5329,7 @@ void RunCommandCatalogTests() {
         Require(std::ranges::find(documented, name) != documented.end(), "Dispatched command '" + name + "' has no entry in the usage text");
         Require(!row.Find("purpose")->AsString().empty(), "Catalog entry '" + name + "' has no purpose");
         const std::string& jsonKind = row.Find("json")->AsString();
-        Require(jsonKind == "envelope" || jsonKind == "native" || jsonKind == "partial" || jsonKind == "protocol",
+        Require(jsonKind == "envelope" || jsonKind == "native" || jsonKind == "partial" || jsonKind == "protocol" || jsonKind == "structured",
             "Catalog entry '" + name + "' must say how --json answers");
         Require(row.Find("options")->Size() + row.Find("subcommands")->Size() > 0U || name == "commands" || name == "mcp",
             "Catalog entry '" + name + "' lists no options or subcommands");
@@ -5173,7 +5372,8 @@ void RunCommandCatalogTests() {
     Require(findNamed(*findRow("terrain").Find("subcommands"), "brush") != nullptr && findNamed(*findRow("pack").Find("subcommands"), "sign") != nullptr,
         "Subcommands must be listed");
     Require(findRow("run").Find("json")->AsString() == "partial" && findRow("audio-mixer").Find("json")->AsString() == "native" &&
-            findRow("entity").Find("json")->AsString() == "envelope" && findRow("mcp").Find("json")->AsString() == "protocol",
+            findRow("entity").Find("json")->AsString() == "structured" && findRow("component").Find("json")->AsString() == "envelope" &&
+            findRow("mcp").Find("json")->AsString() == "protocol",
         "Catalog must say which commands print their own JSON");
     Require(described.Find("globalOptions")->Size() > 0U && described.Find("exitCodes")->Size() > 0U, "Catalog must list the global options and exit codes");
 
@@ -5264,6 +5464,7 @@ void RunCommandCatalogTests() {
     const auto unknown = RunCliProgram({"vfx-unregistered", "--project", root, "--module", "1", "--json"});
     Require(unknown.exitCode != 0 && Contains(unknown.out, "unknown command"),
         "An unregistered particle command must never fall through to module removal");
+    CheckStructuredCommands();
 }
 
 // Every file of a folder with its bytes: two of these are equal when nothing was touched.
@@ -6000,6 +6201,10 @@ int main(int argc, char** argv) {
         RunCommandCatalogTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{argv[1]} == "structured-output") {
+        RunStructuredOutputTests();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{argv[1]} == "code-map") {
         RunCodeMapTests();
         return EXIT_SUCCESS;
@@ -6067,6 +6272,7 @@ int main(int argc, char** argv) {
     RunAudioMixerCommandTests();
     RunCliJsonTests();
     RunCommandCatalogTests();
+    RunStructuredOutputTests();
     RunCodeMapTests();
     RunBatchCommandTests();
     RunBatchSceneSessionTests();

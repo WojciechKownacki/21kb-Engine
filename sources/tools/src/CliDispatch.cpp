@@ -749,27 +749,27 @@ constexpr CliCommandDescriptor kCommands[]{
     {"animator", &RunAnimatorCommand, CliCommandKind::Normal, true, ""},
     {"blend-space", &RunBlendSpace2DCommand, CliCommandKind::Normal, true, "blend_space", CliJsonOutput::Native},
     {"graph", &RunVisualGraphCommand, CliCommandKind::Normal, true, "visual_graph", CliJsonOutput::Native},
-    {"skeleton", &RunSkeletonCommand, CliCommandKind::Normal, true, ""},
+    {"skeleton", &RunSkeletonCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured},
     {"ability", &RunAbilityCommand, CliCommandKind::Normal, true, ""},
     {"ai", &RunAiCommand, CliCommandKind::Normal, true, ""},
     {"api", &RunApiCommand, CliCommandKind::Normal, true, "api_reference", CliJsonOutput::Partial},
     {"guide", &RunGuideCommand, CliCommandKind::Normal, true, "guide"},
     {"code", &RunCodeCommand, CliCommandKind::Normal, true, "code", CliJsonOutput::Partial},
     {"api-check", &RunApiCheckCommand, CliCommandKind::Normal, true, ""},
-    {"entity", &RunEntityCommand, CliCommandKind::Normal, true, "entity_edit"},
+    {"entity", &RunEntityCommand, CliCommandKind::Normal, true, "entity_edit", CliJsonOutput::Structured},
     {"component", &RunComponentCommand, CliCommandKind::Normal, true, "component_edit"},
     {"audio-mixer", &RunAudioMixerCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Native},
-    {"schema", &RunSchemaCommand, CliCommandKind::Normal, true, "component_schema"},
+    {"schema", &RunSchemaCommand, CliCommandKind::Normal, true, "component_schema", CliJsonOutput::Structured},
     {"new", &RunNewCommand, CliCommandKind::Normal, true, ""},
     {"init-agent", &RunInitAgentCommand, CliCommandKind::Normal, true, ""},
     {"import", &RunImportCommand, CliCommandKind::Normal, true, "import_asset"},
     {"import-preset-new", &RunImportPresetNewCommand, CliCommandKind::Normal, true, ""},
-    {"validate", &RunValidateCommand, CliCommandKind::Normal, true, "validate_script"},
-    {"scene-list", &RunSceneListCommand, CliCommandKind::Normal, true, "scene_list"},
+    {"validate", &RunValidateCommand, CliCommandKind::Normal, true, "validate_script", CliJsonOutput::Structured},
+    {"scene-list", &RunSceneListCommand, CliCommandKind::Normal, true, "scene_list", CliJsonOutput::Structured},
     {"scene-attach", &RunSceneAttachCommand, CliCommandKind::Normal, true, "scene_attach"},
-    {"input-action", &RunInputActionCommand, CliCommandKind::Normal, true, {}},
+    {"input-action", &RunInputActionCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured},
     {"prefab", &RunPrefabCommand, CliCommandKind::Normal, true, {}},
-    {"layout", &RunLayoutCommand, CliCommandKind::Normal, true, {}},
+    {"layout", &RunLayoutCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured},
     {"scene-new", &RunSceneNewCommand, CliCommandKind::Normal, true, "scene_create"},
     {"scene-duplicate", &RunSceneDuplicateCommand, CliCommandKind::Normal, true, ""},
     {"script-new", &RunScriptNewCommand, CliCommandKind::Normal, true, "script_create"},
@@ -782,9 +782,9 @@ constexpr CliCommandDescriptor kCommands[]{
     {"build", &RunBuildCommand, CliCommandKind::Normal, true, ""},
     {"capture", &RunCaptureCommand, CliCommandKind::Normal, true, ""},
     {"world", &RunWorldCommand, CliCommandKind::Normal, true, ""},
-    {"navmesh", &RunNavMeshCommand, CliCommandKind::Normal, true, ""},
-    {"physics-layers", &RunPhysicsLayersCommand, CliCommandKind::Normal, true, ""},
-    {"lighting-quality", &RunLightingQualityCommand, CliCommandKind::Normal, true, ""},
+    {"navmesh", &RunNavMeshCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured},
+    {"physics-layers", &RunPhysicsLayersCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured},
+    {"lighting-quality", &RunLightingQualityCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured},
 #if KB_CLI_RENDERER
     {"csg", &RunCsgCommand, CliCommandKind::Normal, true, {}},
     {"rig2d", &RunRig2DCommand, CliCommandKind::Normal, true, {}},
@@ -798,11 +798,11 @@ constexpr CliCommandDescriptor kCommands[]{
     {"scene-bake-lighting", &RunSceneBakeLightingCommand, CliCommandKind::Normal, true, {}},
     {"material-new", &RunMaterialNewCommand, CliCommandKind::Normal, true, {}},
     {"material-set", &RunMaterialSetCommand, CliCommandKind::Normal, true, {}},
-    {"material-show", &RunMaterialShowCommand, CliCommandKind::Normal, true, {}},
+    {"material-show", &RunMaterialShowCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured},
     {"material-graph", &RunMaterialGraphCommand, CliCommandKind::Normal, true, {}},
     {"material-instance-new", &RunMaterialInstanceNewCommand, CliCommandKind::Normal, true, {}},
     {"material-instance-set", &RunMaterialInstanceSetCommand, CliCommandKind::Normal, true, {}},
-    {"material-instance-show", &RunMaterialInstanceShowCommand, CliCommandKind::Normal, true, {}},
+    {"material-instance-show", &RunMaterialInstanceShowCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured},
     {"post-process-new", &RunPostProcessNewCommand, CliCommandKind::Normal, true, {}},
     {"post-process-set", &RunPostProcessSetCommand, CliCommandKind::Normal, true, {}},
     {"scene-post-process", &RunScenePostProcessCommand, CliCommandKind::Normal, true, {}},
@@ -824,11 +824,11 @@ constexpr CliCommandDescriptor kCommands[]{
     {"scene-bake-lighting", nullptr, CliCommandKind::Normal, false, {}},
     {"material-new", nullptr, CliCommandKind::Normal, false, {}},
     {"material-set", nullptr, CliCommandKind::Normal, false, {}},
-    {"material-show", nullptr, CliCommandKind::Normal, false, {}},
+    {"material-show", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured},
     {"material-graph", nullptr, CliCommandKind::Normal, false, {}},
     {"material-instance-new", nullptr, CliCommandKind::Normal, false, {}},
     {"material-instance-set", nullptr, CliCommandKind::Normal, false, {}},
-    {"material-instance-show", nullptr, CliCommandKind::Normal, false, {}},
+    {"material-instance-show", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured},
     {"post-process-new", nullptr, CliCommandKind::Normal, false, {}},
     {"post-process-set", nullptr, CliCommandKind::Normal, false, {}},
     {"scene-post-process", nullptr, CliCommandKind::Normal, false, {}},
@@ -952,8 +952,9 @@ int RunAsJson(std::string_view command, CommandIo io, const std::function<int(Co
     std::ostringstream out;
     std::ostringstream err;
     int exitCode = 1;
+    kb::core::JsonValue data;
     try {
-        exitCode = run(CommandIo{ .out = out, .err = err });
+        exitCode = run(CommandIo{ .out = out, .err = err, .data = &data });
     } catch (const std::exception& exception) {
         err << "error: " << exception.what() << '\n';
     } catch (...) {
@@ -976,6 +977,7 @@ int RunAsJson(std::string_view command, CommandIo io, const std::function<int(Co
     result.Set("command", JsonValue::MakeString(ToValidUtf8(command)));
     result.Set("output", JsonValue::MakeString(ToValidUtf8(out.str())));
     result.Set("errors", StderrLines(err.str()));
+    if (data.GetKind() == JsonValue::Kind::Object) result.Set("data", std::move(data));
     io.out << result.Dump() << '\n';
     return exitCode;
 }

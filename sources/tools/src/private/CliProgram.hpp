@@ -15,8 +15,9 @@ namespace kb::cli {
 enum class CliCommandKind { Normal, Particle, Batch, Mcp, Help, Catalog };
 
 // What --json gives for a command: Envelope wraps its text in the common result object, Native is its own
-// versioned JSON, Partial is native for some forms only, Protocol is a JSON protocol on stdin and stdout.
-enum class CliJsonOutput { Envelope, Native, Partial, Protocol };
+// versioned JSON, Partial is native for some forms only, Protocol is a JSON protocol on stdin and stdout,
+// Structured puts the answer of its read forms in the "data" field of the result object (a schema id inside).
+enum class CliJsonOutput { Envelope, Native, Partial, Protocol, Structured };
 
 struct CliCommandDescriptor {
     std::string_view name;

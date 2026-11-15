@@ -1,6 +1,7 @@
 #include "CliCommon.hpp"
 
 #include "engine/assets/AssetImportPreset.hpp"
+#include "engine/core/JsonValue.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/math/ColorSpace.hpp"
@@ -25,6 +26,16 @@
 #include <system_error>
 
 namespace kb::cli {
+
+kb::core::JsonValue DataObject(std::string_view schema) {
+    auto data = kb::core::JsonValue::MakeObject();
+    data.Set("schema", kb::core::JsonValue::MakeString(std::string{ schema }));
+    return data;
+}
+
+void PublishData(CommandIo io, kb::core::JsonValue data) {
+    if (io.data != nullptr) *io.data = std::move(data);
+}
 
 ArgumentList::ArgumentList(std::span<const std::string> arguments, std::span<const std::string_view> flagNames) {
     for (std::size_t index = 0U; index < arguments.size(); ++index) {

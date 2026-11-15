@@ -2,6 +2,8 @@
 #include "CliPlayerPreset.hpp"
 #include "CliProgram.hpp"
 
+#include "engine/core/JsonValue.hpp"
+
 #include "engine/assets/AssetFileName.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetRegistry.hpp"
@@ -403,6 +405,37 @@ void ListProperties(std::string_view component, std::ostream& out) {
             out << ' ' << desc.name;
         }
     }
+}
+
+// A component of `schema` for the data field: id, display name, plugin and the writable properties (as ListProperties
+// lists them; left out when the text lists none).
+[[nodiscard]] kb::core::JsonValue SchemaComponentJson(std::string_view id, std::string_view displayName, std::string_view plugin, bool withProperties) {
+    using kb::core::JsonValue;
+    auto row = JsonValue::MakeObject();
+    row.Set("id", JsonValue::MakeString(std::string{ id }));
+    row.Set("displayName", JsonValue::MakeString(std::string{ displayName }));
+    row.Set("plugin", plugin.empty() ? JsonValue::MakeNull() : JsonValue::MakeString(std::string{ plugin }));
+    if (withProperties) {
+        auto names = JsonValue::MakeArray();
+        for (const kb::script::ScriptSceneComponentPropertyDesc& desc : kb::script::ScriptSceneComponentApi::ComponentProperties(id)) {
+            if (desc.writable) names.Append(JsonValue::MakeString(std::string{ desc.name }));
+        }
+        row.Set("properties", std::move(names));
+    }
+    return row;
+}
+
+// The names `entity add --create` accepts, as the text of `schema` lists them.
+[[nodiscard]] kb::core::JsonValue CreateItemsJson(bool withPlayers) {
+    using kb::core::JsonValue;
+    auto items = JsonValue::MakeArray();
+    for (const kb::scene::SceneCreateItem& item : kb::scene::SceneCreateMenu::Items()) items.Append(JsonValue::MakeString(std::string{ item.id }));
+    for (const auto& preset : kb::scene::UIComponentPresetCatalog()) items.Append(JsonValue::MakeString(std::string{ preset.name }));
+    if (withPlayers) {
+        items.Append(JsonValue::MakeString("Platformer Player"));
+        items.Append(JsonValue::MakeString("Top Down Player"));
+    }
+    return items;
 }
 
 // One `name=value`: a property of `component` as ScriptSceneComponentApi names it, or a vector
@@ -1345,11 +1378,51 @@ void ListProperties(std::string_view component, std::ostream& out) {
     }
 }
 
+// The same value for the data field: numbers and booleans as such; enum values, assets and entities as the text shows them.
+[[nodiscard]] kb::core::JsonValue ShownValueJson(kb::scene::Scene& scene, const kb::script::ScriptSceneComponentPropertyDesc& desc,
+    const kb::script::ScriptValue& value) {
+    using enum kb::script::ScriptValueType;
+    using kb::core::JsonValue;
+    switch (value.Type()) {
+    case Bool: return JsonValue::MakeBool(value.AsBool());
+    case Int: {
+        const int number = value.AsInt();
+        if (number >= 0 && static_cast<std::size_t>(number) < desc.enumNames.size()) {
+            return JsonValue::MakeString(std::string{ desc.enumNames[static_cast<std::size_t>(number)] });
+        }
+        return JsonValue::MakeNumber(number);
+    }
+    case Int64: return JsonValue::MakeNumber(static_cast<double>(value.AsInt64()));
+    case UInt32: return JsonValue::MakeNumber(value.AsUInt32());
+    case Float: return JsonValue::MakeNumber(value.AsFloat());
+    case Double: return JsonValue::MakeNumber(value.AsDouble());
+    case String: case Name: case Guid: return JsonValue::MakeString(ToValidUtf8(value.AsString()));
+    case Hash: return JsonValue::MakeString(IsAssetProperty(desc.name) ? ShownAsset(scene, value.AsUInt64()) : std::to_string(value.AsUInt64()));
+    case Entity: {
+        const kb::scene::SceneEntity other{ value.AsUInt64() };
+        return other.IsValid() && scene.Entities().IsAlive(other) ? JsonValue::MakeString(ToValidUtf8(EntityPath(scene, other))) : JsonValue::MakeNull();
+    }
+    default: return JsonValue::MakeNull();
+    }
+}
+
 // One line: `Rigidbody: bodyType=Dynamic mass=1 ...`, vectors once (`color=1,0.5,0.25`) and assets by
 // path, in the names and forms `component set --set` accepts.
-void PrintComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::string_view component, std::ostream& out) {
+// With `json` set, the same properties go there too, a vector as one array (`color: [1, 0.5, 0.25]`).
+void PrintComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::string_view component, std::ostream& out,
+    kb::core::JsonValue* json = nullptr) {
     std::string line{ component };
     line += ':';
+    std::string vectorJsonName;
+    std::vector<kb::core::JsonValue> vectorJson;
+    const auto flushVector = [&] {
+        if (vectorJsonName.empty()) return;
+        auto array = kb::core::JsonValue::MakeArray();
+        for (kb::core::JsonValue& part : vectorJson) array.Append(std::move(part));
+        json->Set(vectorJsonName, std::move(array));
+        vectorJsonName.clear();
+        vectorJson.clear();
+    };
     if (component == "MeshRenderer") {
         const kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(entity);
         line += " mesh=" + ShownAsset(scene, renderer->meshAssetId) + " material=" + ShownAsset(scene, renderer->materialAssetId);
@@ -1370,21 +1443,45 @@ void PrintComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std:
             const std::string_view base = name.substr(0, dot);
             if (name.back() != 'x' && vector == base) {
                 line += ',' + value;
+                if (json != nullptr) vectorJson.push_back(ShownValueJson(scene, desc, read.value));
                 continue;
             }
             vector = base;
             line += ' ' + std::string{ base } + '=' + value;
+            if (json != nullptr) {
+                flushVector();
+                vectorJsonName = base;
+                vectorJson.push_back(ShownValueJson(scene, desc, read.value));
+            }
             continue;
         }
         vector.clear();
         line += ' ' + std::string{ name } + '=' + value;
+        if (json != nullptr) {
+            flushVector();
+            json->Set(std::string{ name }, ShownValueJson(scene, desc, read.value));
+        }
     }
+    if (json != nullptr) flushVector();
     out << line << '\n';
 }
 
 // What an agent needs instead of reading the scene file: where the entity is, what holds it, and
 // every component's values.
-void PrintEntity(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::ostream& out) {
+// With `data` set, the same facts go there: name, path, parent, children, and the components with their values.
+void PrintEntity(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::ostream& out, kb::core::JsonValue* data = nullptr) {
+    using kb::core::JsonValue;
+    const auto triple = [](double x, double y, double z) {
+        auto array = JsonValue::MakeArray();
+        for (const double component : { x, y, z }) array.Append(JsonValue::MakeNumber(std::stod(FormatCliNumber(component))));
+        return array;
+    };
+    auto components = JsonValue::MakeObject();
+    const auto printComponent = [&](std::string_view name) {
+        JsonValue properties = JsonValue::MakeObject();
+        PrintComponent(scene, entity, name, out, data != nullptr ? &properties : nullptr);
+        if (data != nullptr) components.Set(std::string{ name }, std::move(properties));
+    };
     scene.Runtime().SynchronizeTransforms(); // world translations are fresh after the transform sync
     out << "entity: " << EntityPath(scene, entity) << '\n';
     const kb::scene::SceneEntity parent = scene.Hierarchy().Parent(entity);
@@ -1395,6 +1492,14 @@ void PrintEntity(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::os
         out << (index == 0U ? " " : ", ") << scene.Entities().Name(children[index]);
     }
     out << '\n';
+    if (data != nullptr) {
+        data->Set("entity", JsonValue::MakeString(ToValidUtf8(EntityPath(scene, entity))));
+        data->Set("name", JsonValue::MakeString(ToValidUtf8(scene.Entities().Name(entity))));
+        data->Set("parent", parent.IsValid() ? JsonValue::MakeString(ToValidUtf8(EntityPath(scene, parent))) : JsonValue::MakeNull());
+        auto childNames = JsonValue::MakeArray();
+        for (const kb::scene::SceneEntity child : children) childNames.Append(JsonValue::MakeString(ToValidUtf8(scene.Entities().Name(child))));
+        data->Set("children", std::move(childNames));
+    }
     if (const kb::scene::TransformComponent* transform = scene.Transforms().TryGet(entity); transform != nullptr) {
         const kb::math::DVec3 local = scene.Transforms().LocalTranslation(entity, *transform);
         const kb::math::DVec3 world = scene.Transforms().WorldTranslation(entity, *transform);
@@ -1403,11 +1508,19 @@ void PrintEntity(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::os
             << " rotation=" << ShownTriple(degrees.x, degrees.y, degrees.z)
             << " localScale=" << ShownTriple(transform->localScale.x, transform->localScale.y, transform->localScale.z)
             << " worldPosition=" << ShownTriple(world.x, world.y, world.z) << '\n';
+        if (data != nullptr) {
+            auto properties = JsonValue::MakeObject();
+            properties.Set("localPosition", triple(local.x, local.y, local.z));
+            properties.Set("rotation", triple(degrees.x, degrees.y, degrees.z));
+            properties.Set("localScale", triple(transform->localScale.x, transform->localScale.y, transform->localScale.z));
+            properties.Set("worldPosition", triple(world.x, world.y, world.z));
+            components.Set("Transform", std::move(properties));
+        }
     }
     std::vector<std::string_view> shown;
     for (const kb::scene::SceneComponentKind& kind : kb::scene::SceneComponentAuthoring::Kinds()) {
         if (!kb::scene::SceneComponentAuthoring::Has(scene, entity, kind.id)) continue;
-        PrintComponent(scene, entity, kind.id, out);
+        printComponent(kind.id);
         shown.push_back(kind.id);
     }
     // Behaviour and UI components are scriptable but not in the Inspector's add table; Visibility,
@@ -1416,9 +1529,10 @@ void PrintEntity(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::os
         const std::string_view name = kb::scene::SceneComponentAuthoring::CanonicalName(listed);
         if (name == "Transform" || name == "Visibility" || std::ranges::find(shown, name) != shown.end() ||
             !kb::script::ScriptSceneComponentApi::HasComponent(scene, entity, name)) continue;
-        PrintComponent(scene, entity, name, out);
+        printComponent(name);
         shown.push_back(name);
     }
+    if (data != nullptr) data->Set("components", std::move(components));
 }
 
 [[nodiscard]] int EntityShow(const ArgumentList& arguments, CommandIo io) {
@@ -1431,7 +1545,9 @@ void PrintEntity(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::os
     if (!session) return 1;
     const std::optional<kb::scene::SceneEntity> entity = FindEntity(*session->scene, *name, io);
     if (!entity.has_value()) return 1;
-    PrintEntity(*session->scene, *entity, io.out);
+    kb::core::JsonValue data = DataObject("21kb.cli.entity-show/v1");
+    PrintEntity(*session->scene, *entity, io.out, io.WantsData() ? &data : nullptr);
+    PublishData(io, std::move(data));
     return 0; // read only: the scene is not saved
 }
 
@@ -2198,12 +2314,18 @@ int RunAiCommand(const ArgumentList& arguments, CommandIo io) {
 }
 
 int RunSchemaCommand(const ArgumentList& arguments, CommandIo io) {
+    using kb::core::JsonValue;
+    JsonValue data = DataObject("21kb.cli.schema/v1");
+    auto components = JsonValue::MakeArray();
     // One component's properties when asked for (by name or display name): what an agent needs
     // before setting them, without every other component.
     if (const std::optional<std::string> wanted = arguments.Option("--component"); wanted.has_value()) {
         const std::string_view name = kb::scene::SceneComponentAuthoring::CanonicalName(*wanted);
         for (const kb::scene::SceneComponentKind& kind : kb::scene::SceneComponentAuthoring::Kinds()) {
             if (kind.id != name && kind.displayName != *wanted) continue;
+            components.Append(SchemaComponentJson(kind.id, kind.displayName, kind.requiredPlugin, true));
+            data.Set("components", std::move(components));
+            PublishData(io, std::move(data));
             io.out << kind.id;
             if (kind.displayName != kind.id) io.out << " (" << kind.displayName << ')';
             if (!kind.requiredPlugin.empty()) io.out << " [plugin " << kind.requiredPlugin << ']';
@@ -2219,6 +2341,9 @@ int RunSchemaCommand(const ArgumentList& arguments, CommandIo io) {
         const std::span<const kb::script::ScriptSceneComponentPropertyDesc> properties =
             kb::script::ScriptSceneComponentApi::ComponentProperties(name);
         if (!properties.empty()) {
+            components.Append(SchemaComponentJson(name, name, {}, true));
+            data.Set("components", std::move(components));
+            PublishData(io, std::move(data));
             io.out << name << ':';
             ListProperties(name, io.out);
             io.out << '\n';
@@ -2231,6 +2356,16 @@ int RunSchemaCommand(const ArgumentList& arguments, CommandIo io) {
     // Every component with every property is long; by default the names, one component's
     // properties on request (--component), or all of them with --all.
     if (!arguments.Flag("--all")) {
+        components.Append(SchemaComponentJson("Transform", "Transform", {}, false));
+        auto ui = JsonValue::MakeArray();
+        for (const kb::scene::UIComponentDescriptor& component : kb::scene::UIComponentCatalog()) ui.Append(JsonValue::MakeString(std::string{ component.displayName }));
+        for (const kb::scene::SceneComponentKind& kind : kb::scene::SceneComponentAuthoring::Kinds()) {
+            components.Append(SchemaComponentJson(kind.id, kind.displayName, kind.requiredPlugin, false));
+        }
+        data.Set("components", std::move(components));
+        data.Set("uiComponents", std::move(ui));
+        data.Set("createItems", CreateItemsJson(false));
+        PublishData(io, std::move(data));
         io.out << "Components (their properties: component_schema with component, or kb_cli schema --component <Name>): Transform";
         for (const kb::scene::SceneComponentKind& kind : kb::scene::SceneComponentAuthoring::Kinds()) {
             io.out << ' ' << kind.id;
@@ -2244,6 +2379,16 @@ int RunSchemaCommand(const ArgumentList& arguments, CommandIo io) {
         io.out << "MeshRenderer references: mesh=<asset path | engine shape> material=<asset path | none>\n";
         return 0;
     }
+    components.Append(SchemaComponentJson("Transform", "Transform", {}, true));
+    for (const kb::scene::SceneComponentKind& kind : kb::scene::SceneComponentAuthoring::Kinds()) {
+        components.Append(SchemaComponentJson(kind.id, kind.displayName, kind.requiredPlugin, true));
+    }
+    auto shapes = JsonValue::MakeArray();
+    for (const kb::assets::BuiltInShapeDesc& shape : kb::assets::BuiltInShapes()) shapes.Append(JsonValue::MakeString(std::string{ shape.virtualPath }));
+    data.Set("components", std::move(components));
+    data.Set("engineShapes", std::move(shapes));
+    data.Set("createItems", CreateItemsJson(true));
+    PublishData(io, std::move(data));
     io.out << "Transform: rotation (degrees x,y,z)";
     ListProperties("Transform", io.out);
     io.out << "\nMeshRenderer references: mesh=<asset path | engine shape> material=<asset path | none>\n";

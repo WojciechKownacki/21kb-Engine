@@ -445,6 +445,7 @@ void MergeInto(std::vector<OptionSpec>& target, const FormSpec& form, bool first
     case CliJsonOutput::Native: return "native";
     case CliJsonOutput::Partial: return "partial";
     case CliJsonOutput::Protocol: return "protocol";
+    case CliJsonOutput::Structured: return "structured";
     }
     return "envelope";
 }
@@ -558,6 +559,8 @@ std::string CliCatalogJson() {
     kinds.Set("envelope", JsonValue::MakeString("--json wraps the text output in a 21kb.cli-result/v1 object with ok, exitCode and errors."));
     kinds.Set("native", JsonValue::MakeString("The command prints its own versioned JSON object; --json keeps it unchanged."));
     kinds.Set("partial", JsonValue::MakeString("Some forms print their own JSON (see the purpose); the others use the envelope."));
+    kinds.Set("structured", JsonValue::MakeString("The read forms put their answer in the result object's data field: the facts the text prints, with a schema id; "
+        "the forms that change something report in the text."));
     kinds.Set("protocol", JsonValue::MakeString("The command speaks a JSON protocol on its standard streams; --json is ignored."));
     result.Set("jsonOutput", std::move(kinds));
     result.Set("note", JsonValue::MakeString("Options listed on a command apply to all of its subcommands; a subcommand lists its own. "

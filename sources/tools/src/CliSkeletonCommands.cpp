@@ -1,4 +1,6 @@
 #include "CliCommands.hpp"
+#include "engine/core/JsonValue.hpp"
+#include "CliProgram.hpp"
 
 #include "engine/assets/AssetFileName.hpp"
 #include "engine/assets/AssetMetadata.hpp"
@@ -138,6 +140,25 @@ void PrintBone(const kb::scene::SkeletonAsset& skeleton, std::size_t index, std:
     for (std::size_t index = 0U; index < session.skeleton.bones.size(); ++index) {
         if (session.skeleton.bones[index].parentIndex < 0) PrintBone(session.skeleton, index, 0U, io.out);
     }
+    using kb::core::JsonValue;
+    JsonValue data = DataObject("21kb.cli.skeleton-show/v1");
+    data.Set("skeleton", JsonValue::MakeString(ToValidUtf8(session.virtualPath)));
+    data.Set("assetId", JsonValue::MakeString(std::to_string(session.assetId)));
+    data.Set("compatibilitySignature", JsonValue::MakeString(std::to_string(kb::scene::SkeletonCompatibilitySignature(session.skeleton))));
+    auto bones = JsonValue::MakeArray();
+    for (const kb::scene::SkeletonBone& bone : session.skeleton.bones) {
+        auto row = JsonValue::MakeObject();
+        row.Set("name", JsonValue::MakeString(ToValidUtf8(bone.name)));
+        row.Set("parent", bone.parentIndex < 0 ? JsonValue::MakeNull() : JsonValue::MakeNumber(bone.parentIndex));
+        auto sockets = JsonValue::MakeArray();
+        for (const kb::scene::SkeletonSocket& socket : session.skeleton.sockets) {
+            if (socket.boneId == bone.id) sockets.Append(JsonValue::MakeString(ToValidUtf8(socket.name)));
+        }
+        row.Set("sockets", std::move(sockets));
+        bones.Append(std::move(row));
+    }
+    data.Set("bones", std::move(bones));
+    PublishData(io, std::move(data));
     return 0;
 }
 

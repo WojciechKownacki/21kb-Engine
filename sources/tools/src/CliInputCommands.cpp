@@ -1,4 +1,6 @@
 #include "CliCommands.hpp"
+#include "engine/core/JsonValue.hpp"
+#include "CliProgram.hpp"
 #include "CliMaterialShared.hpp"
 
 #include "engine/assets/AssetFileName.hpp"
@@ -118,6 +120,10 @@ struct ProjectInput {
         return 1;
     }
     io.out << "context: " << (input->settings.inputMappingContext.empty() ? std::string{ "none" } : input->contextPath) << '\n';
+    using kb::core::JsonValue;
+    JsonValue data = DataObject("21kb.cli.input-action-list/v1");
+    data.Set("context", input->settings.inputMappingContext.empty() ? JsonValue::MakeNull() : JsonValue::MakeString(ToValidUtf8(input->contextPath)));
+    auto actions = JsonValue::MakeArray();
     std::size_t count = 0U;
     for (const kb::assets::AssetMetadata& metadata : scene.Assets().Manager().Registry().All()) {
         const std::string path = metadata.virtualPath.generic_string();
@@ -126,9 +132,17 @@ struct ProjectInput {
         if (!action.succeeded) continue;
         io.out << action.asset.name << " (" << kb::input::ToString(action.asset.valueType) << "): " << BindingText(input->context, metadata.id.value)
                << "  " << path << '\n';
+        auto row = JsonValue::MakeObject();
+        row.Set("name", JsonValue::MakeString(ToValidUtf8(action.asset.name)));
+        row.Set("valueType", JsonValue::MakeString(std::string{ kb::input::ToString(action.asset.valueType) }));
+        row.Set("bindings", JsonValue::MakeString(ToValidUtf8(BindingText(input->context, metadata.id.value))));
+        row.Set("path", JsonValue::MakeString(ToValidUtf8(path)));
+        actions.Append(std::move(row));
         ++count;
     }
     if (count == 0U) io.out << "no input actions; input-action new --name Fire --key Space makes one\n";
+    data.Set("actions", std::move(actions));
+    PublishData(io, std::move(data));
     return 0;
 }
 

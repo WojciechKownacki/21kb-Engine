@@ -1,4 +1,6 @@
 #include "CliCommands.hpp"
+#include "engine/core/JsonValue.hpp"
+#include "CliProgram.hpp"
 
 #include "engine/assets/AssetFileName.hpp"
 #include "engine/project/ProjectManager.hpp"
@@ -107,15 +109,33 @@ int RunPhysicsLayersCommand(const ArgumentList& arguments, CommandIo io) {
             }
         }
     }
+    using kb::core::JsonValue;
+    JsonValue data = DataObject("21kb.cli.physics-layers/v1");
+    data.Set("asset", JsonValue::MakeString(ToValidUtf8(virtualPath)));
+    auto layers = JsonValue::MakeArray();
+    auto ignored = JsonValue::MakeArray();
     io.out << "Physics layers: " << virtualPath << '\n';
     for (std::uint32_t index = 0U; index < kb::scene::kPhysicsLayerCount; ++index) {
-        if (!asset.layerNames[index].empty()) io.out << "  " << index << ' ' << asset.layerNames[index] << '\n';
+        if (asset.layerNames[index].empty()) continue;
+        io.out << "  " << index << ' ' << asset.layerNames[index] << '\n';
+        auto layer = JsonValue::MakeObject();
+        layer.Set("index", JsonValue::MakeNumber(index));
+        layer.Set("name", JsonValue::MakeString(ToValidUtf8(asset.layerNames[index])));
+        layers.Append(std::move(layer));
     }
     for (std::uint32_t first = 0U; first < kb::scene::kPhysicsLayerCount; ++first) {
         for (std::uint32_t second = first; second < kb::scene::kPhysicsLayerCount; ++second) {
-            if (!asset.LayersInteract(first, second)) io.out << "  ignore " << first << ',' << second << '\n';
+            if (asset.LayersInteract(first, second)) continue;
+            io.out << "  ignore " << first << ',' << second << '\n';
+            auto pair = JsonValue::MakeArray();
+            pair.Append(JsonValue::MakeNumber(first));
+            pair.Append(JsonValue::MakeNumber(second));
+            ignored.Append(std::move(pair));
         }
     }
+    data.Set("layers", std::move(layers));
+    data.Set("ignoredPairs", std::move(ignored));
+    PublishData(io, std::move(data));
     return 0;
 }
 

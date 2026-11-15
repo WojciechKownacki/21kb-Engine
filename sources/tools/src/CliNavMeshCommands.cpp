@@ -1,4 +1,6 @@
 #include "CliCommands.hpp"
+#include "engine/core/JsonValue.hpp"
+#include "CliProgram.hpp"
 
 #include "engine/navigation/NavGeometryCollector.hpp"
 #include "engine/navigation/NavMeshAsset.hpp"
@@ -168,6 +170,13 @@ namespace {
         return 1;
     }
     const kb::navigation::NavMeshBuildSettings& settings = read.asset.settings;
+    using kb::core::JsonValue;
+    JsonValue data = DataObject("21kb.cli.navmesh-info/v1");
+    data.Set("cellSize", JsonValue::MakeNumber(settings.cellSize));
+    data.Set("cellHeight", JsonValue::MakeNumber(settings.cellHeight));
+    data.Set("tileCells", JsonValue::MakeNumber(settings.tileCells));
+    data.Set("tileWorldSize", JsonValue::MakeNumber(settings.TileWorldSize()));
+    auto agents = JsonValue::MakeArray();
     io.out << "cell size " << settings.cellSize << " m, cell height " << settings.cellHeight << " m, tiles " << settings.tileCells
            << " cells (" << settings.TileWorldSize() << " m)\n";
     std::map<std::uint32_t, std::pair<std::size_t, std::size_t>> perProfile;
@@ -180,7 +189,18 @@ namespace {
         io.out << "agent " << agent.name << ": radius " << agent.radius << ", height " << agent.height << ", climb " << agent.maxClimb
                << ", slope " << agent.maxSlopeDegrees << "; " << perProfile[profile].first << " tiles, " << perProfile[profile].second
                << " layers\n";
+        auto row = JsonValue::MakeObject();
+        row.Set("name", JsonValue::MakeString(ToValidUtf8(agent.name)));
+        row.Set("radius", JsonValue::MakeNumber(agent.radius));
+        row.Set("height", JsonValue::MakeNumber(agent.height));
+        row.Set("climb", JsonValue::MakeNumber(agent.maxClimb));
+        row.Set("slopeDegrees", JsonValue::MakeNumber(agent.maxSlopeDegrees));
+        row.Set("tiles", JsonValue::MakeNumber(static_cast<double>(perProfile[profile].first)));
+        row.Set("layers", JsonValue::MakeNumber(static_cast<double>(perProfile[profile].second)));
+        agents.Append(std::move(row));
     }
+    data.Set("agents", std::move(agents));
+    PublishData(io, std::move(data));
     return 0;
 }
 

@@ -2,6 +2,8 @@
 
 #include "CliCommon.hpp"
 
+#include "engine/core/JsonValue.hpp"
+
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 
 #include <cstdint>
@@ -63,5 +65,8 @@ using TextureResolver = std::function<std::optional<std::uint64_t>(std::string_v
 
 // The built-in values and textures, as material-show prints them.
 void PrintBuiltinValues(const kb::render::RenderMaterialDesc& desc, const kb::assets::AssetRegistry* registry, CommandIo io);
+// The same values as an object for the data field: baseColor (#RRGGBB), baseColorLinear, roughness, metallic,
+// emissiveStrength and the textures by field name.
+[[nodiscard]] kb::core::JsonValue BuiltinValuesJson(const kb::render::RenderMaterialDesc& desc, const kb::assets::AssetRegistry* registry);
 
 } // namespace kb::cli::material

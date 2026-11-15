@@ -262,6 +262,27 @@ void PrintBuiltinValues(const kb::render::RenderMaterialDesc& d, const kb::asset
     }
 }
 
+kb::core::JsonValue BuiltinValuesJson(const kb::render::RenderMaterialDesc& d, const kb::assets::AssetRegistry* registry) {
+    using kb::core::JsonValue;
+    auto values = JsonValue::MakeObject();
+    values.Set("baseColor", JsonValue::MakeString(ColorHex(d.baseColor)));
+    auto linear = JsonValue::MakeArray();
+    for (const float channel : d.baseColor) linear.Append(JsonValue::MakeNumber(channel));
+    values.Set("baseColorLinear", std::move(linear));
+    values.Set("roughness", JsonValue::MakeNumber(d.roughnessFactor));
+    values.Set("metallic", JsonValue::MakeNumber(d.metallicFactor));
+    values.Set("emissiveStrength", JsonValue::MakeNumber(d.emissiveStrength));
+    auto textures = JsonValue::MakeObject();
+    for (const TextureField& field : kTextureFields) {
+        const std::uint64_t id = d.*(field.slot);
+        if (id == 0U) continue;
+        const std::string path = registry != nullptr ? TexturePath(*registry, id) : std::string{};
+        textures.Set(std::string{ field.name }, JsonValue::MakeString(path.empty() ? "missing texture " + std::to_string(id) : path));
+    }
+    values.Set("textures", std::move(textures));
+    return values;
+}
+
 } // namespace material
 
 namespace {
@@ -402,6 +423,14 @@ int RunMaterialShowCommand(const ArgumentList& arguments, CommandIo io) {
     kb::scene::Scene scene;
     if (!MountProject(scene, projectRoot, io)) return 1;
     PrintMaterial(*asset, located->virtualPath, scene.Assets().Manager().Registry(), io);
+    if (io.WantsData()) {
+        kb::core::JsonValue data = DataObject("21kb.cli.material-show/v1");
+        data.Set("material", kb::core::JsonValue::MakeString(located->virtualPath));
+        data.Set("values", material::BuiltinValuesJson(asset->desc, &scene.Assets().Manager().Registry()));
+        data.Set("graphNodes", kb::core::JsonValue::MakeNumber(
+            kb::render::HasGraphAuthoringData(asset->graph) ? static_cast<double>(asset->graph.nodes.size()) : 0.0));
+        PublishData(io, std::move(data));
+    }
     return 0;
 }
 
