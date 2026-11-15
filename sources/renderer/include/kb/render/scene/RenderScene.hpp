@@ -18,6 +18,10 @@
 #include <unordered_map>
 #include <vector>
 
+namespace kb::ecs {
+class WorkerPool;
+}
+
 namespace kb::render {
 
 enum class RenderProxyDirtyFlag : std::uint32_t {
@@ -480,6 +484,9 @@ public:
     [[nodiscard]] const CameraRenderProxyDesc* FindPrimaryCameraProxy(std::uint32_t targetViewportId = 0U) const noexcept;
     // The returned cache is refreshed lazily and remains stable until the next mesh proxy mutation.
     [[nodiscard]] const std::vector<SceneRenderDrawGroup>& DrawGroups() const;
+    // What DrawGroups does before it returns, with the visibility indexes of the groups brought up to date on `workers` when
+    // there are groups enough for that to pay (DrawGroups itself does it on the calling thread).
+    void PrepareDrawGroups(kb::ecs::WorkerPool* workers) const;
     // Draw groups can supply the resource IDs only when every mesh proxy is represented
     // and no per-proxy resource state is hidden by grouping.
     [[nodiscard]] ResourceGroupCoverage ResourceGroupsCoverMeshProxies() const;
@@ -535,9 +542,9 @@ private:
     [[nodiscard]] SceneRenderMeshInstance BuildMeshInstance(const MeshRenderProxy& proxy) const;
     [[nodiscard]] SceneRenderMeshInstance BuildGeometrySwarmInstance(
         std::uint64_t entityId, const GeometrySwarmRenderProxy& proxy, std::uint32_t index) const;
-    void RebuildDrawGroupsIfNeeded() const;
+    void RebuildDrawGroupsIfNeeded(kb::ecs::WorkerPool* workers) const;
     // Brings the visibility index of every draw group up to date with the instances that moved or changed.
-    void RefreshVisibility() const;
+    void RefreshVisibility(kb::ecs::WorkerPool* workers) const;
     void ApplySurfaceCasts(SceneRenderMeshInstance& instance) const;
     // InvalidateDrawGroups for a change of a non-mesh proxy, which also marks every cached local shadow stale.
     void InvalidateDrawGroupsOfNonMeshProxy() noexcept;

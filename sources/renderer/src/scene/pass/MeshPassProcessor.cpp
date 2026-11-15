@@ -600,7 +600,7 @@ void SelectInstances(const MeshScanContext& context, MeshScanState& state, const
         for (std::uint32_t member = 0U; member < cluster.count; ++member) {
             const SceneMeshVisibilityIndex::Entry& entry = members[member];
             if (visibility != MeshPipelineBoundsVisibility::Inside && !entry.unbounded &&
-                MeshPipelineVisibility::IsReachOutsideFrustum(context.frustum, entry.origin, reachOf(entry.scale, entry.overrideReach))) {
+                MeshPipelineVisibility::IsReachOutsideFrustum(context.frustum, entry.origin, reachOf(entry.scale, entry.scale * entry.overrideExtent))) {
                 if ((entry.layer & context.cullingMask) != 0U) {
                     ++ruledOut[entry.kind];
                 }

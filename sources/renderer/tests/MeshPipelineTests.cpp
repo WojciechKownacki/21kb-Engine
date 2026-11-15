@@ -2780,7 +2780,8 @@ void RequireIndexDescribesInstances(std::span<const SceneRenderMeshInstance> ins
     }
     constexpr std::uint32_t capacity = SceneMeshVisibilityIndex::kClusterCapacity;
     Require(index.slots.size() == instances.size() && index.entries.size() == index.clusters.size() * capacity &&
-            index.root.count == instances.size(), message);
+            index.root.count == instances.size() && index.moved.size() == instances.size() &&
+            std::ranges::all_of(index.moved, [](std::uint8_t moved) { return moved == 0U; }), message);
     std::size_t counted = 0U;
     std::array<std::uint32_t, 4> rootKinds{};
     for (std::size_t clusterIndex = 0U; clusterIndex < index.clusters.size(); ++clusterIndex) {
@@ -2805,7 +2806,7 @@ void RequireIndexDescribesInstances(std::span<const SceneRenderMeshInstance> ins
                 for (std::size_t axis = 0U; axis < 3U; ++axis) {
                     Require(std::abs(entry.origin[axis] - cluster.center[axis]) <= cluster.halfExtent[axis] * 1.0001F + 1.0e-3F, message);
                 }
-                Require(entry.scale <= cluster.maximumScale && entry.overrideReach <= cluster.overrideReach, message);
+                Require(entry.scale <= cluster.maximumScale && entry.scale * entry.overrideExtent <= cluster.overrideReach, message);
             } else {
                 Require(cluster.unbounded, message);
             }
@@ -2923,10 +2924,11 @@ void RunVisibilityIndexStaysInStepWithInstancesTest() {
             // A nudge, which mostly leaves the instance within its cluster.
             instances[position].model[12] += random.Range(-0.05F, 0.05F);
             instances[position].model[14] += random.Range(-0.05F, 0.05F);
+            SceneMeshVisibilityIndexBuilder::MarkMoved(index, position);
         } else {
             instances[position] = makeInstance(jump ? 600.0F : 60.0F);
+            SceneMeshVisibilityIndexBuilder::MarkChanged(index, position);
         }
-        SceneMeshVisibilityIndexBuilder::Update(index, instances[position], position);
     };
     const auto check = [&](const char* message) {
         SceneMeshVisibilityIndexBuilder::Refresh(instances, index);
@@ -2953,7 +2955,7 @@ void RunVisibilityIndexStaysInStepWithInstancesTest() {
         instances[position].model[12] = random.Range(-3000.0F, 3000.0F);
         instances[position].model[13] = random.Range(-3000.0F, 3000.0F);
         instances[position].model[14] = random.Range(-3000.0F, 3000.0F);
-        SceneMeshVisibilityIndexBuilder::Update(index, instances[position], static_cast<std::uint32_t>(position));
+        SceneMeshVisibilityIndexBuilder::MarkMoved(index, static_cast<std::uint32_t>(position));
     }
     check("The index of instances that moved far apart does not describe them");
     Require(index.builtSize > builtBefore * 4.0F && index.currentSize <= index.builtSize * 1.001F,
@@ -3160,6 +3162,46 @@ void RunMeshPipelineVisibilityIndexFollowsChangingSceneTest() {
         const std::vector<SceneRenderDrawGroup>& groups = scene.DrawGroups();
         RequireIndexDescribesGroups(groups, "The index does not describe the groups of a scene that changed");
         static_cast<void>(RequireIndexMatchesScan(groups, cameras, "The visibility index changed what a pass builds from a scene that changed"));
+    }
+}
+
+// Objects of a scene of many groups move and change, and the indexes of the groups are brought up to date on workers, as
+// they are for the passes of a frame: they describe the groups as they do when the calling thread does it, and the passes built
+// from them are those the scan builds.
+void RunMeshPipelineVisibilityIndexRefreshOnWorkersTest() {
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 8U } };
+    pool.Start(kb::ecs::WorkerPoolConfig{ .workerCount = 8U });
+    IndexTestRandom random(17U);
+    const std::vector<SceneRenderCamera> cameras = IndexTestCameras(random, 3U);
+    RenderScene scene;
+    constexpr std::size_t kObjects = 9000U;
+    constexpr std::uint64_t kStep = 31U;
+    for (std::size_t index = 0U; index < kObjects; ++index) {
+        // One mesh and one material: the groups are the blocks of ids, a few dozen objects each.
+        MeshRenderProxyDesc proxy = RandomIndexProxy(random, 1U + index * kStep, 60.0F);
+        proxy.meshAssetId = 500U;
+        proxy.materialAssetId = 600U;
+        static_cast<void>(scene.UpsertMesh(proxy));
+    }
+    scene.PrepareDrawGroups(&pool);
+    Require(scene.DrawGroups().size() >= 256U, "The refresh test scene has too few groups for the workers");
+    for (int frame = 0; frame < 6; ++frame) {
+        for (std::size_t index = 0U; index < kObjects / 3U; ++index) {
+            const std::uint64_t entity = 1U + random.Below(static_cast<std::uint32_t>(kObjects)) * kStep;
+            if (frame % 2 == 1 && index % 4U == 0U) {
+                // A change of what the object is, not only of where.
+                MeshRenderProxyDesc proxy = RandomIndexProxy(random, entity, 60.0F);
+                proxy.meshAssetId = 500U;
+                proxy.materialAssetId = 600U;
+                static_cast<void>(scene.UpsertMesh(proxy));
+            } else {
+                Require(scene.UpdateMeshTransform(entity, RandomIndexModel(random, frame == 5 ? 500.0F : 60.0F, 0.3F, 2.5F, false)),
+                    "A mesh proxy to move was not found");
+            }
+        }
+        scene.PrepareDrawGroups(&pool);
+        RequireIndexDescribesGroups(scene.DrawGroups(), "The index refreshed on workers does not describe the groups of the scene");
+        static_cast<void>(RequireIndexMatchesScan(scene.DrawGroups(), cameras, "The visibility index refreshed on workers changed what a pass builds"));
     }
 }
 
@@ -3805,16 +3847,34 @@ SceneRenderCamera CasterViewerCamera(int frame, float farClip) {
     return camera;
 }
 
-// Microseconds that moving a share of the objects of a large scene takes every frame, with the visibility index of its draw
-// groups kept in step and without it, that bringing the index up to date for the passes that follow takes, and that making
-// the index takes. `percents` are the shares of the objects that move.
-void RunMovingSceneBenchmark(std::size_t objectCount, const std::vector<std::size_t>& percents, int frames, bool shuffled) {
+// What moving a share of the objects of a large scene takes every frame, in nanoseconds for each object moved: the walk over
+// the objects alone, with the look-up of each proxy, and with the move itself, which is kept in step with the visibility index
+// of the draw groups of the scene and with none (a second scene of the same objects, which the moves alternate with); and in
+// microseconds, what bringing the index up to date for the passes that follow takes on the calling thread and on the workers,
+// and what making the index takes. `percents` are the shares of the objects that move, `stride` is the distance between the ids
+// of two that follow each other (1 moves the objects in the order they were made, 7919 in an order that has no relation to
+// where they are in memory).
+void RunMovingSceneBenchmark(std::size_t objectCount, const std::vector<std::size_t>& percents, int frames, bool shuffled,
+    kb::ecs::WorkerPool& pool, std::size_t stride) {
+    // Small steps from a table, so that the move itself is what is timed.
+    std::array<std::array<float, 2>, 256> steps{};
+    for (std::size_t index = 0U; index < steps.size(); ++index) {
+        steps[index] = { 0.1F * std::sin(static_cast<float>(index)), 0.1F * std::cos(static_cast<float>(index) * 0.7F) };
+    }
+    volatile float sink = 0.0F;
     for (const std::size_t percent : percents) {
-        RenderScene scene;
-        FillCasterGridScene(scene, objectCount, shuffled);
+        RenderScene indexed;
+        RenderScene plain;
+        FillCasterGridScene(indexed, objectCount, shuffled);
+        FillCasterGridScene(plain, objectCount, shuffled);
         const auto buildBegin = std::chrono::steady_clock::now();
-        const std::vector<SceneRenderDrawGroup>& groups = scene.DrawGroups();
+        const std::vector<SceneRenderDrawGroup>& groups = indexed.DrawGroups();
         const double groupsMicroseconds = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - buildBegin).count();
+        // The same objects, their groups and indexes made on the workers.
+        const auto workersBegin = std::chrono::steady_clock::now();
+        plain.PrepareDrawGroups(&pool);
+        const double workersMicroseconds = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - workersBegin).count();
+        for (SceneRenderDrawGroup& group : const_cast<std::vector<SceneRenderDrawGroup>&>(plain.DrawGroups())) group.visibility = {};
         const auto indexBegin = std::chrono::steady_clock::now();
         std::size_t clusters = 0U;
         for (const SceneRenderDrawGroup& group : groups) {
@@ -3823,38 +3883,83 @@ void RunMovingSceneBenchmark(std::size_t objectCount, const std::vector<std::siz
             clusters += index.clusters.size();
         }
         const double indexMicroseconds = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - indexBegin).count();
-        std::vector<double> updatesWith;
-        std::vector<double> refreshes;
-        std::vector<double> updatesWithout;
-        const std::size_t moving = std::max<std::size_t>(1U, objectCount * percent / 100U);
-        for (const bool withIndex : { true, false }) {
-            if (!withIndex) {
-                // The same moves with no index to keep: what the scene did before it had one.
-                for (SceneRenderDrawGroup& group : const_cast<std::vector<SceneRenderDrawGroup>&>(groups)) group.visibility = {};
+        // The same indexes made on the workers.
+        std::vector<SceneMeshVisibilityIndex> made(groups.size());
+        const auto madeBegin = std::chrono::steady_clock::now();
+        pool.ParallelForChunks(groups.size(), 32U, [&](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
+            for (std::size_t group = chunk.begin; group < chunk.begin + chunk.count; ++group) {
+                SceneMeshVisibilityIndexBuilder::Build(groups[group].instances, made[group]);
             }
-            for (int frame = 0; frame < frames + 2; ++frame) {
-                const auto updateBegin = std::chrono::steady_clock::now();
-                for (std::size_t move = 0U; move < moving; ++move) {
-                    const std::uint64_t entity = 1U + (move * 7919U + static_cast<std::size_t>(frame) * 104729U) % objectCount;
-                    const MeshRenderProxy* proxy = scene.FindMeshByEntity(entity);
-                    auto model = proxy->desc.model;
-                    model[12] += 0.1F * std::sin(static_cast<float>(frame + static_cast<int>(move)));
-                    model[14] += 0.1F * std::cos(static_cast<float>(frame));
-                    static_cast<void>(scene.UpdateMeshTransform(entity, model));
-                }
-                const double update = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - updateBegin).count();
-                const auto refreshBegin = std::chrono::steady_clock::now();
-                static_cast<void>(scene.DrawGroups());
-                const double refresh = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - refreshBegin).count();
-                if (frame >= 2) {
-                    (withIndex ? updatesWith : updatesWithout).push_back(update);
-                    if (withIndex) refreshes.push_back(refresh);
-                }
+        });
+        const double indexWorkersMicroseconds = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - madeBegin).count();
+        const std::size_t moving = percent == 0U ? 0U : std::max<std::size_t>(1U, objectCount * percent / 100U);
+        const auto entityOf = [objectCount, stride](std::size_t move, int frame) {
+            return 1U + (move * stride + static_cast<std::size_t>(frame) * 104729U) % objectCount;
+        };
+        const auto perObject = [moving](std::chrono::steady_clock::time_point begin) {
+            return std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - begin).count() / static_cast<double>(std::max<std::size_t>(1U, moving));
+        };
+        const auto moveAll = [&](RenderScene& scene, int frame) {
+            const auto begin = std::chrono::steady_clock::now();
+            for (std::size_t move = 0U; move < moving; ++move) {
+                const std::uint64_t entity = entityOf(move, frame);
+                const MeshRenderProxy* proxy = scene.FindMeshByEntity(entity);
+                auto model = proxy->desc.model;
+                const auto& step = steps[(move + static_cast<std::size_t>(frame)) & 255U];
+                model[12] += step[0];
+                model[14] += step[1];
+                scene.UpdateMeshTransform(entity, *proxy, model);
+            }
+            return perObject(begin);
+        };
+        std::vector<double> walk;
+        std::vector<double> find;
+        std::vector<double> update;
+        std::vector<double> updateWithout;
+        std::vector<double> refreshSerial;
+        std::vector<double> refreshPool;
+        for (int frame = 0; frame < frames + 2; ++frame) {
+            auto begin = std::chrono::steady_clock::now();
+            float total = 0.0F;
+            for (std::size_t move = 0U; move < moving; ++move) {
+                total += steps[(move + static_cast<std::size_t>(frame)) & 255U][0] + static_cast<float>(entityOf(move, frame) & 1U);
+            }
+            const double walkTime = perObject(begin);
+            begin = std::chrono::steady_clock::now();
+            for (std::size_t move = 0U; move < moving; ++move) {
+                const MeshRenderProxy* proxy = indexed.FindMeshByEntity(entityOf(move, frame));
+                total += proxy->desc.model[12] + steps[(move + static_cast<std::size_t>(frame)) & 255U][0];
+            }
+            sink = total;
+            const double findTime = perObject(begin);
+            // The two scenes take their moves in turns, first the one and then the other.
+            double updateTime = 0.0;
+            double updateWithoutTime = 0.0;
+            if (frame % 2 == 0) {
+                updateTime = moveAll(indexed, frame);
+                updateWithoutTime = moveAll(plain, frame);
+            } else {
+                updateWithoutTime = moveAll(plain, frame);
+                updateTime = moveAll(indexed, frame);
+            }
+            begin = std::chrono::steady_clock::now();
+            indexed.PrepareDrawGroups(frame % 4 < 2 ? nullptr : &pool);
+            const double refreshTime = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - begin).count();
+            plain.PrepareDrawGroups(nullptr);
+            if (frame >= 2) {
+                walk.push_back(walkTime);
+                find.push_back(findTime);
+                update.push_back(updateTime);
+                updateWithout.push_back(updateWithoutTime);
+                (frame % 4 < 2 ? refreshSerial : refreshPool).push_back(refreshTime);
             }
         }
-        std::fprintf(stderr, "shadow_scale_move percent objects groups clusters scene_build_us index_build_us update_with_index_us update_without_index_us refresh_us" "\n");
-        std::fprintf(stderr, "shadow_scale_move %zu %zu %zu %zu %.0f %.0f %.1f %.1f %.1f" "\n", percent, objectCount, groups.size(), clusters,
-            groupsMicroseconds, indexMicroseconds, MedianOf(updatesWith), MedianOf(updatesWithout), MedianOf(refreshes));
+        std::fprintf(stderr, "shadow_scale_move bytes: proxy %zu instance %zu entry %zu" "\n", sizeof(MeshRenderProxy), sizeof(SceneRenderMeshInstance),
+            sizeof(SceneMeshVisibilityIndex::Entry));
+        std::fprintf(stderr, "shadow_scale_move percent objects groups clusters scene_build_us scene_build_workers_us index_build_us index_build_workers_us walk_ns find_ns update_with_index_ns update_without_index_ns refresh_serial_us refresh_workers_us" "\n");
+        std::fprintf(stderr, "shadow_scale_move %zu %zu %zu %zu %.0f %.0f %.0f %.0f %.1f %.1f %.1f %.1f %.1f %.1f" "\n", percent, objectCount, groups.size(), clusters,
+            groupsMicroseconds, workersMicroseconds, indexMicroseconds, indexWorkersMicroseconds, MedianOf(walk), MedianOf(find), MedianOf(update), MedianOf(updateWithout),
+            MedianOf(refreshSerial), MedianOf(refreshPool));
     }
 }
 
@@ -3882,6 +3987,9 @@ void RunShadowLargeSceneBenchmark(const std::string& sizeList) {
     const float mainFar = mainFarText.empty() ? 150.0F : std::max(1.0F, static_cast<float>(std::atof(mainFarText.c_str())));
     // `KB_SHADOW_SCALE_MOVING` is a list of the shares of the objects (percent) that move every frame, for a row of their own.
     const std::string movingText = EnvironmentValue("KB_SHADOW_SCALE_MOVING");
+    // `KB_SHADOW_SCALE_MOVING_STRIDE` is the distance between the ids of the objects moved one after the other (7919 unless set).
+    const std::string strideText = EnvironmentValue("KB_SHADOW_SCALE_MOVING_STRIDE");
+    const std::size_t movingStride = strideText.empty() ? 7919U : std::max<std::size_t>(1U, static_cast<std::size_t>(std::atoll(strideText.c_str())));
     // `KB_SHADOW_SCALE_INDEX=off` builds the passes from groups without their visibility index, which scans every instance.
     const bool withoutIndex = EnvironmentValue("KB_SHADOW_SCALE_INDEX") == "off";
     const std::string modeText = EnvironmentValue("KB_SHADOW_SCALE_MODES");
@@ -3924,7 +4032,7 @@ void RunShadowLargeSceneBenchmark(const std::string& sizeList) {
                 MedianOf(together), WorstOf(together), MedianOf(serial), WorstOf(serial), pool.WorkerCount());
         }
         if (!movingText.empty()) {
-            RunMovingSceneBenchmark(objectCount, ParseCountList(movingText), frames, shuffled);
+            RunMovingSceneBenchmark(objectCount, ParseCountList(movingText), frames, shuffled, pool, movingStride);
         }
         for (const bool cascades : { true, false }) {
             if (cascades ? !withCascades : !withPoints) continue;
@@ -4182,6 +4290,7 @@ void RunMeshPipelineTests() {
     RunMeshPipelineVisibilityIndexFollowsChangingSceneTest();
     RunMeshPipelineVisibilityIndexOnWorkersMatchesSerialTest();
     RunMeshPipelineVisibilityIndexMatchesScanWithResourcesTest();
+    RunMeshPipelineVisibilityIndexRefreshOnWorkersTest();
 }
 
 } // namespace kb::render::tests

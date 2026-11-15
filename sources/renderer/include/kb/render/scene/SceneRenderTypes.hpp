@@ -269,17 +269,20 @@ struct SceneMeshVisibilityIndex {
     struct Entry {
         std::array<float, 3> origin{};
         float scale = 0.0F;
-        float overrideReach = 0.0F;
+        // How far a bounds override of the instance reaches from its origin, per unit of scale; 0 for an instance without one.
+        float overrideExtent = 0.0F;
         std::uint32_t instance = 0U;
         std::uint32_t layer = 0U;
         std::uint8_t kind = 0U;
         bool unbounded = false;
+        // The bounds override of the instance is too small to enclose.
+        bool overrideTiny = false;
     };
 
     struct Cluster : SceneMeshVisibilityBounds {
         // The sum of the box sides, which tells how well the members of the cluster still lie together.
         float size = 0.0F;
-        // Set when a member moved or changed: the bounds are stale until the next refresh.
+        // Set when the bounds no longer enclose the members: they are made again by the next refresh.
         std::uint8_t stale = 0U;
     };
 
@@ -291,9 +294,12 @@ struct SceneMeshVisibilityIndex {
     std::vector<Entry> entries;
     // The entry of each instance of the group.
     std::vector<std::uint32_t> slots;
+    // Whether each instance moved (1) or changed (2) since its entry was made: the entry is made again by the next refresh.
+    std::vector<std::uint8_t> moved;
     // The total cluster size as the clusters were built and as they are now.
     float builtSize = 0.0F;
     float currentSize = 0.0F;
+    // Set when an instance moved or changed, or the clusters do not enclose their members: the next refresh looks into it.
     std::uint8_t stale = 0U;
 };
 

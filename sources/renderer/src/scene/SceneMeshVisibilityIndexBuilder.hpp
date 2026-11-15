@@ -26,11 +26,13 @@ public:
     // The instance at `position` is about to leave its group: the last instance takes its place.
     static void Remove(SceneMeshVisibilityIndex& index, std::uint32_t position) noexcept;
 
-    // The instance at `position` changed. Different threads may update different instances of one group at once; the bounds
-    // that depend on them are left stale until Refresh.
-    static void Update(SceneMeshVisibilityIndex& index, const SceneRenderMeshInstance& instance, std::uint32_t position) noexcept;
+    // The instance at `position` moved, or changed; its entry is made again by the next Refresh, from the instance. Different
+    // threads may mark different instances of one group at once.
+    static void MarkMoved(SceneMeshVisibilityIndex& index, std::uint32_t position) noexcept;
+    static void MarkChanged(SceneMeshVisibilityIndex& index, std::uint32_t position) noexcept;
 
-    // Brings the stale bounds up to date. Instances that drifted far apart since the clusters were made are indexed again.
+    // Makes again the entries of the instances that moved or changed and the bounds they leave stale. Instances that drifted
+    // far apart since the clusters were made are indexed again.
     static void Refresh(std::span<const SceneRenderMeshInstance> instances, SceneMeshVisibilityIndex& index);
 };
 

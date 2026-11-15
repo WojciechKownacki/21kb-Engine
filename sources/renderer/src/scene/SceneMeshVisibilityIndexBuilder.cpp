@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <numeric>
 #include <vector>
@@ -28,22 +29,26 @@ constexpr float kMinimumOverrideRadius = 1.0e-6F;
 constexpr float kDriftLimit = 2.0F;
 constexpr float kDriftRootShare = 0.01F;
 
-[[nodiscard]] Entry MakeEntry(const SceneRenderMeshInstance& instance, std::uint32_t position) noexcept {
-    const std::array<float, 16>& m = instance.model;
-    Entry entry;
+// What an entry holds of an instance that does not change when the instance moves.
+void FitToModel(Entry& entry, const std::array<float, 16>& m) noexcept {
     entry.origin = { m[12], m[13], m[14] };
     entry.scale = std::sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2] + m[4] * m[4] + m[5] * m[5] + m[6] * m[6] +
         m[8] * m[8] + m[9] * m[9] + m[10] * m[10]);
+    entry.unbounded = entry.overrideTiny || !(entry.scale >= kMinimumScale) ||
+        !std::isfinite(entry.origin[0] + entry.origin[1] + entry.origin[2] + entry.scale + entry.scale * entry.overrideExtent);
+}
+
+[[nodiscard]] Entry MakeEntry(const SceneRenderMeshInstance& instance, std::uint32_t position) noexcept {
+    Entry entry;
     entry.instance = position;
     entry.layer = instance.layer;
     entry.kind = static_cast<std::uint8_t>((instance.castsShadow ? 1U : 0U) | (instance.shadowOnly ? 2U : 0U));
-    bool unbounded = !(entry.scale >= kMinimumScale);
     if (instance.boundsOverride.IsValid()) {
         const std::array<float, 3>& c = instance.boundsOverride.center;
-        entry.overrideReach = entry.scale * (std::sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]) + instance.boundsOverride.radius);
-        unbounded = unbounded || !(instance.boundsOverride.radius >= kMinimumOverrideRadius);
+        entry.overrideExtent = std::sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]) + instance.boundsOverride.radius;
+        entry.overrideTiny = !(instance.boundsOverride.radius >= kMinimumOverrideRadius);
     }
-    entry.unbounded = unbounded || !std::isfinite(entry.origin[0] + entry.origin[1] + entry.origin[2] + entry.scale + entry.overrideReach);
+    FitToModel(entry, instance.model);
     return entry;
 }
 
@@ -72,7 +77,7 @@ void Recompute(Cluster& cluster, const Entry* entries) noexcept {
             high[axis] = std::max(high[axis], entry.origin[axis]);
         }
         cluster.maximumScale = std::max(cluster.maximumScale, entry.scale);
-        cluster.overrideReach = std::max(cluster.overrideReach, entry.overrideReach);
+        cluster.overrideReach = std::max(cluster.overrideReach, entry.scale * entry.overrideExtent);
     }
     cluster.size = 0.0F;
     for (std::size_t axis = 0U; axis < 3U; ++axis) {
@@ -188,6 +193,7 @@ void SceneMeshVisibilityIndexBuilder::Build(std::span<const SceneRenderMeshInsta
     index.clusters.clear();
     index.entries.clear();
     index.slots.clear();
+    index.moved.clear();
     index.builtSize = 0.0F;
     index.currentSize = 0.0F;
     index.stale = 0U;
@@ -201,6 +207,7 @@ void SceneMeshVisibilityIndexBuilder::Build(std::span<const SceneRenderMeshInsta
     std::vector<std::uint32_t> order(instances.size());
     std::iota(order.begin(), order.end(), 0U);
     index.slots.resize(instances.size());
+    index.moved.assign(instances.size(), 0U);
     const std::size_t clusterCount = (instances.size() + kBuildFill - 1U) / kBuildFill;
     index.clusters.reserve(clusterCount);
     index.entries.reserve(clusterCount * kCapacity);
@@ -252,6 +259,7 @@ void SceneMeshVisibilityIndexBuilder::Append(std::span<const SceneRenderMeshInst
     ++cluster.count;
     cluster.stale = 1U;
     index.slots.push_back(static_cast<std::uint32_t>(slot));
+    index.moved.push_back(0U);
     index.stale = 1U;
 }
 
@@ -278,35 +286,41 @@ void SceneMeshVisibilityIndexBuilder::Remove(SceneMeshVisibilityIndex& index, st
     if (position != last) {
         index.slots[position] = index.slots[last];
         index.entries[index.slots[position]].instance = position;
+        index.moved[position] = index.moved[last];
     }
     index.slots.pop_back();
+    index.moved.pop_back();
     index.stale = 1U;
     if (index.slots.size() < kMinimumInstances / 2U) {
         index = {};
     }
 }
 
-void SceneMeshVisibilityIndexBuilder::Update(SceneMeshVisibilityIndex& index, const SceneRenderMeshInstance& instance,
-    std::uint32_t position) noexcept {
-    if (position >= index.slots.size()) {
+void SceneMeshVisibilityIndexBuilder::MarkMoved(SceneMeshVisibilityIndex& index, std::uint32_t position) noexcept {
+    if (position >= index.moved.size()) {
         return;
     }
-    const std::uint32_t slot = index.slots[position];
-    Entry& entry = index.entries[slot];
-    const Entry previous = entry;
-    entry = MakeEntry(instance, position);
-    // An instance that stays within the bounds of its cluster, and changes nothing else they say, leaves them as they are.
-    Cluster& cluster = index.clusters[slot / kCapacity];
-    const bool withinBounds = !entry.unbounded && !previous.unbounded && entry.kind == previous.kind && entry.layer == previous.layer &&
-        entry.scale <= cluster.maximumScale && entry.overrideReach <= cluster.overrideReach &&
-        std::abs(entry.origin[0] - cluster.center[0]) <= cluster.halfExtent[0] &&
-        std::abs(entry.origin[1] - cluster.center[1]) <= cluster.halfExtent[1] &&
-        std::abs(entry.origin[2] - cluster.center[2]) <= cluster.halfExtent[2];
-    if (withinBounds) {
+    // A change of the instance, which asks for more, is not to be forgotten.
+    std::atomic_ref<std::uint8_t> moved(index.moved[position]);
+    if (moved.load(std::memory_order_relaxed) == 0U) {
+        moved.store(1U, std::memory_order_relaxed);
+    }
+    // Every instance that moves would write the flag: only the first does.
+    std::atomic_ref<std::uint8_t> stale(index.stale);
+    if (stale.load(std::memory_order_relaxed) == 0U) {
+        stale.store(1U, std::memory_order_relaxed);
+    }
+}
+
+void SceneMeshVisibilityIndexBuilder::MarkChanged(SceneMeshVisibilityIndex& index, std::uint32_t position) noexcept {
+    if (position >= index.moved.size()) {
         return;
     }
-    std::atomic_ref<std::uint8_t>(cluster.stale).store(1U, std::memory_order_relaxed);
-    std::atomic_ref<std::uint8_t>(index.stale).store(1U, std::memory_order_relaxed);
+    std::atomic_ref<std::uint8_t>(index.moved[position]).store(2U, std::memory_order_relaxed);
+    std::atomic_ref<std::uint8_t> stale(index.stale);
+    if (stale.load(std::memory_order_relaxed) == 0U) {
+        stale.store(1U, std::memory_order_relaxed);
+    }
 }
 
 void SceneMeshVisibilityIndexBuilder::Refresh(std::span<const SceneRenderMeshInstance> instances, SceneMeshVisibilityIndex& index) {
@@ -318,15 +332,57 @@ void SceneMeshVisibilityIndexBuilder::Refresh(std::span<const SceneRenderMeshIns
         Build(instances, index);
         return;
     }
+    // Entries of the instances that moved or changed are made again from the instances. A cluster keeps its bounds when the
+    // instance stays within them and changes nothing else they say.
+    constexpr std::size_t kWord = sizeof(std::uint64_t);
+    for (std::size_t first = 0U; first < index.moved.size(); first += kWord) {
+        const std::size_t last = std::min(first + kWord, index.moved.size());
+        if (last - first == kWord) {
+            std::uint64_t word = 0U;
+            std::memcpy(&word, index.moved.data() + first, kWord);
+            if (word == 0U) {
+                continue;
+            }
+        }
+        for (std::size_t position = first; position < last; ++position) {
+            if (index.moved[position] == 0U) {
+                continue;
+            }
+            const bool changed = index.moved[position] == 2U;
+            index.moved[position] = 0U;
+            const std::uint32_t slot = index.slots[position];
+            Entry& entry = index.entries[slot];
+            const Entry previous = entry;
+            // An instance that only moved is told by its model alone.
+            if (changed) {
+                entry = MakeEntry(instances[position], static_cast<std::uint32_t>(position));
+            } else {
+                FitToModel(entry, instances[position].model);
+            }
+            Cluster& cluster = index.clusters[slot / kCapacity];
+            const bool withinBounds = !entry.unbounded && !previous.unbounded && entry.kind == previous.kind && entry.layer == previous.layer &&
+                entry.scale <= cluster.maximumScale && entry.scale * entry.overrideExtent <= cluster.overrideReach &&
+                std::abs(entry.origin[0] - cluster.center[0]) <= cluster.halfExtent[0] &&
+                std::abs(entry.origin[1] - cluster.center[1]) <= cluster.halfExtent[1] &&
+                std::abs(entry.origin[2] - cluster.center[2]) <= cluster.halfExtent[2];
+            if (!withinBounds) {
+                cluster.stale = 1U;
+            }
+        }
+    }
     float total = 0.0F;
+    bool changed = false;
     for (std::size_t cluster = 0U; cluster < index.clusters.size(); ++cluster) {
         Cluster& stale = index.clusters[cluster];
         if (stale.stale != 0U) {
             Recompute(stale, index.entries.data() + cluster * kCapacity);
+            changed = true;
         }
         total += stale.size;
     }
-    index.root = Aggregate(index.clusters);
+    if (changed) {
+        index.root = Aggregate(index.clusters);
+    }
     index.currentSize = total;
     const float rootSize = 2.0F * (index.root.halfExtent[0] + index.root.halfExtent[1] + index.root.halfExtent[2]);
     if (total > index.builtSize * kDriftLimit + rootSize * kDriftRootShare) {

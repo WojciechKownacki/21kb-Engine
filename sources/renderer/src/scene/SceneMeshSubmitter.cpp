@@ -153,6 +153,7 @@ void SceneMeshSubmitter::PrebuildPasses(
     BindDetailSwitchScene(renderScene);
     std::vector<SceneRenderVisibilityBlocker> visibilityBlockers;
     BuildVisibilityBlockerInputs(renderScene, visibilityBlockers);
+    renderScene.PrepareDrawGroups(workerPool_);
     SceneMeshBatchBuilder::BuildInto(renderScene.DrawGroups(), meshBatchSubmissionScratch_);
     // Whatever the camera, such a pass holds the same commands, which Submit builds once and reuses for the cameras.
     const bool reuseAllowed = pass != MeshPassType::BaseTransparent && renderScene.VisibilityBlockerProxyCount() == 0U &&
@@ -337,6 +338,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         ~RestorePassCommands() { active.swap(stored); }
     } restoreCommands{pipelineScratch_.commands, passCommands};
 
+    renderScene.PrepareDrawGroups(workerPool_);
     const std::vector<SceneRenderDrawGroup>& drawGroups = renderScene.DrawGroups();
     std::vector<SceneRenderVisibilityBlocker> visibilityBlockers;
     BuildVisibilityBlockerInputs(renderScene, visibilityBlockers);

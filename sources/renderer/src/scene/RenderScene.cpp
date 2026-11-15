@@ -5,6 +5,8 @@
 #include "scene/GeometrySwarmVisibilityClusters.hpp"
 #include "scene/SceneMeshVisibilityIndexBuilder.hpp"
 
+#include "engine/ecs/WorkerPool.hpp"
+
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -14,6 +16,10 @@
 
 namespace kb::render {
 namespace {
+
+// The indexes of the draw groups are made and refreshed on workers from this many groups, in chunks of this many.
+constexpr std::size_t kMinGroupsOnWorkers = 256U;
+constexpr std::size_t kGroupsPerChunk = 32U;
 
 [[nodiscard]] std::array<float, 16> GeometrySwarmModel(
     const GeometrySwarmRenderProxyDesc& swarm, std::uint32_t index) noexcept {
@@ -237,7 +243,7 @@ RenderProxyId RenderScene::UpsertMesh(const MeshRenderProxyDesc& desc) {
                 const SceneRenderMeshInstance instance = BuildMeshInstance(updated);
                 if (instance.meshAssetId == group.meshAssetId && instance.materialAssetId == group.materialAssetId) {
                     group.instances[proxy.instanceIndexInGroup] = instance;
-                    SceneMeshVisibilityIndexBuilder::Update(group.visibility, instance, proxy.instanceIndexInGroup);
+                    SceneMeshVisibilityIndexBuilder::MarkChanged(group.visibility, proxy.instanceIndexInGroup);
                     visibilityStale_ = 1U;
                     group.contentRevision = NextContentRevision();
                     proxy.desc = desc;
@@ -759,9 +765,13 @@ std::optional<SceneRenderCamera> RenderScene::BuildPrimaryCamera(std::uint32_t v
 }
 
 const std::vector<SceneRenderDrawGroup>& RenderScene::DrawGroups() const {
-    RebuildDrawGroupsIfNeeded();
-    RefreshVisibility();
+    PrepareDrawGroups(nullptr);
     return drawGroups_;
+}
+
+void RenderScene::PrepareDrawGroups(kb::ecs::WorkerPool* workers) const {
+    RebuildDrawGroupsIfNeeded(workers);
+    RefreshVisibility(workers);
 }
 
 RenderScene::ResourceGroupCoverage RenderScene::ResourceGroupsCoverMeshProxies() const {
@@ -977,7 +987,7 @@ std::uint64_t RenderScene::NextContentRevision() noexcept {
     return next.fetch_add(1U, std::memory_order_relaxed);
 }
 
-void RenderScene::RebuildDrawGroupsIfNeeded() const {
+void RenderScene::RebuildDrawGroupsIfNeeded(kb::ecs::WorkerPool* workers) const {
     if (!drawGroupsDirty_) {
         return;
     }
@@ -1080,21 +1090,40 @@ void RenderScene::RebuildDrawGroupsIfNeeded() const {
     }
 
     drawGroups_.resize(writeGroupCount);
-    for (SceneRenderDrawGroup& group : drawGroups_) {
-        if (group.partitionKind == 0U) SceneMeshVisibilityIndexBuilder::Build(group.instances, group.visibility);
-        else group.visibility = {};
+    const auto index = [this](std::size_t begin, std::size_t end) {
+        for (std::size_t groupIndex = begin; groupIndex < end; ++groupIndex) {
+            SceneRenderDrawGroup& group = drawGroups_[groupIndex];
+            if (group.partitionKind == 0U) SceneMeshVisibilityIndexBuilder::Build(group.instances, group.visibility);
+            else group.visibility = {};
+        }
+    };
+    if (workers != nullptr && workers->Running() && drawGroups_.size() >= kMinGroupsOnWorkers) {
+        workers->ParallelForChunks(drawGroups_.size(), kGroupsPerChunk,
+            [&index](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) { index(chunk.begin, chunk.begin + chunk.count); });
+    } else {
+        index(0U, drawGroups_.size());
     }
     visibilityStale_ = 0U;
     drawGroupsDirty_ = false;
 }
 
-void RenderScene::RefreshVisibility() const {
+void RenderScene::RefreshVisibility(kb::ecs::WorkerPool* workers) const {
     if (visibilityStale_ == 0U) {
         return;
     }
     visibilityStale_ = 0U;
-    for (SceneRenderDrawGroup& group : drawGroups_) {
-        SceneMeshVisibilityIndexBuilder::Refresh(group.instances, group.visibility);
+    const auto refresh = [this](std::size_t begin, std::size_t end) {
+        for (std::size_t index = begin; index < end; ++index) {
+            SceneRenderDrawGroup& group = drawGroups_[index];
+            SceneMeshVisibilityIndexBuilder::Refresh(group.instances, group.visibility);
+        }
+    };
+    // The groups are independent: each refresh reads its own instances and writes its own index.
+    if (workers != nullptr && workers->Running() && drawGroups_.size() >= kMinGroupsOnWorkers) {
+        workers->ParallelForChunks(drawGroups_.size(), kGroupsPerChunk,
+            [&refresh](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) { refresh(chunk.begin, chunk.begin + chunk.count); });
+    } else {
+        refresh(0U, drawGroups_.size());
     }
 }
 
@@ -1159,8 +1188,9 @@ RenderScene::TransformUpdateOutcome RenderScene::ApplyMeshTransform(std::uint64_
             instance.model = model;
             instance.previousModel = proxy.previousModel;
             instance.previousModelFrame = proxy.previousModelFrame;
-            SceneMeshVisibilityIndexBuilder::Update(group.visibility, instance, proxy.instanceIndexInGroup);
-            std::atomic_ref<std::uint8_t>(visibilityStale_).store(1U, std::memory_order_relaxed);
+            SceneMeshVisibilityIndexBuilder::MarkMoved(group.visibility, proxy.instanceIndexInGroup);
+            std::atomic_ref<std::uint8_t> stale(visibilityStale_);
+            if (stale.load(std::memory_order_relaxed) == 0U) stale.store(1U, std::memory_order_relaxed);
             // Parallel affine publication writes disjoint instances in the same page.
             if (markGroupChanged) std::atomic_ref<std::uint64_t>(group.contentRevision).store(NextContentRevision(), std::memory_order_relaxed);
             proxy.dirty |= RenderProxyDirtyFlag::Transform;
