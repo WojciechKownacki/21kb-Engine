@@ -19,6 +19,7 @@
 #include "../src/scene/cache/SceneMeshCommandReuseGate.hpp"
 #include "../src/scene/cache/SceneMeshBatchCommandCache.hpp"
 #include "../src/renderer/RendererTemporalJitter.hpp"
+#include "../src/scene/SceneMeshVisibilityIndexBuilder.hpp"
 #include "../src/scene/SceneRenderVisibilityPublisher.hpp"
 
 #include "engine/ecs/WorkerPool.hpp"
@@ -45,6 +46,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <span>
 #include <string>
 #include <string_view>
@@ -2558,6 +2560,717 @@ void RunMeshPipelineBuildsPassesTogetherMatchesSerialTest() {
     }
 }
 
+// ---- Visibility index of the draw groups ------------------------------------------------------------------------
+
+// Pseudo-random numbers that every platform draws the same.
+class IndexTestRandom {
+public:
+    explicit IndexTestRandom(std::uint32_t seed) noexcept : state_(seed) {}
+    [[nodiscard]] std::uint32_t Next() noexcept {
+        state_ = state_ * 1664525U + 1013904223U;
+        return state_ >> 8U;
+    }
+    [[nodiscard]] float Unit() noexcept { return static_cast<float>(Next() & 0xFFFFU) / 65536.0F; }
+    [[nodiscard]] float Range(float low, float high) noexcept { return low + (high - low) * Unit(); }
+    [[nodiscard]] std::uint32_t Below(std::uint32_t limit) noexcept { return Next() % limit; }
+
+private:
+    std::uint32_t state_;
+};
+
+// A model of random rotation, size and place, sheared when `shear` is set.
+std::array<float, 16> RandomIndexModel(IndexTestRandom& random, float spread, float minimumScale, float maximumScale, bool shear) {
+    const float a = random.Range(0.0F, 6.2831853F);
+    const float b = random.Range(0.0F, 6.2831853F);
+    const float c = random.Range(0.0F, 6.2831853F);
+    const float ca = std::cos(a), sa = std::sin(a), cb = std::cos(b), sb = std::sin(b), cc = std::cos(c), sc = std::sin(c);
+    const std::array<float, 9> rotation{
+        cc * cb, sc * cb, -sb,
+        cc * sb * sa - sc * ca, sc * sb * sa + cc * ca, cb * sa,
+        cc * sb * ca + sc * sa, sc * sb * ca - cc * sa, cb * ca,
+    };
+    std::array<float, 16> model = IdentityMatrix();
+    for (std::size_t column = 0U; column < 3U; ++column) {
+        const float scale = random.Range(minimumScale, maximumScale);
+        for (std::size_t row = 0U; row < 3U; ++row) model[column * 4U + row] = rotation[column * 3U + row] * scale;
+    }
+    if (shear) {
+        model[4] += random.Range(-1.0F, 1.0F);
+        model[9] += random.Range(-1.0F, 1.0F);
+    }
+    model[12] = random.Range(-spread, spread);
+    model[13] = random.Range(-spread, spread);
+    model[14] = random.Range(-spread, spread);
+    return model;
+}
+
+// An object of every kind a pass tells apart: layers, shadow casting, and bounds of its own now and then.
+MeshRenderProxyDesc RandomIndexProxy(IndexTestRandom& random, std::uint64_t entityId, float spread) {
+    constexpr std::array<std::uint32_t, 6> layers{ 1U, 1U, 1U, 2U, 4U, 6U };
+    MeshRenderProxyDesc proxy{
+        .entityId = entityId,
+        .meshAssetId = 500U + entityId % 2U,
+        .materialAssetId = 600U + (entityId / 2U) % 2U,
+        .model = RandomIndexModel(random, spread, 0.3F, 2.5F, random.Below(8U) == 0U),
+        .castsShadow = random.Below(5U) != 0U,
+        .receivesShadow = random.Below(3U) != 0U,
+        .shadowOnly = random.Below(40U) == 0U,
+        .layer = layers[random.Below(6U)],
+    };
+    if (random.Below(16U) == 0U) {
+        proxy.boundsOverride = RenderBoundsSphere{
+            .center = { random.Range(-1.0F, 1.0F), random.Range(-1.0F, 1.0F), random.Range(-1.0F, 1.0F) },
+            .radius = random.Range(0.3F, 2.0F),
+        };
+    }
+    return proxy;
+}
+
+void FillRandomIndexScene(RenderScene& scene, IndexTestRandom& random, std::size_t count, std::uint64_t firstEntity, std::uint64_t step, float spread) {
+    for (std::size_t index = 0U; index < count; ++index) {
+        static_cast<void>(scene.UpsertMesh(RandomIndexProxy(random, firstEntity + index * step, spread)));
+    }
+}
+
+// Cameras of a scene that spreads 60 around the origin: from far and near, perspective and orthographic, with and
+// without a guard band, and taking some layers only. The last two see all of it and none of it.
+std::vector<SceneRenderCamera> IndexTestCameras(IndexTestRandom& random, std::size_t count) {
+    constexpr std::array<std::uint32_t, 5> masks{ 0xFFFFFFFFU, 1U, 4U, 6U, 0U };
+    constexpr std::array<float, 5> farClips{ 6.0F, 25.0F, 90.0F, 400.0F, 4000.0F };
+    std::vector<SceneRenderCamera> cameras;
+    for (std::size_t index = 0U; index < count; ++index) {
+        SceneRenderCamera camera{};
+        const bx::Vec3 eye{ random.Range(-90.0F, 90.0F), random.Range(-90.0F, 90.0F), random.Range(-90.0F, 90.0F) };
+        const bx::Vec3 target{ random.Range(-30.0F, 30.0F), random.Range(-30.0F, 30.0F), random.Range(-30.0F, 30.0F) };
+        bx::mtxLookAt(camera.view.data(), eye, target, bx::Vec3{ 0.0F, 1.0F, 0.0F });
+        const float farClip = farClips[random.Below(5U)];
+        if (index % 4U == 3U) {
+            SceneDepthPolicy::MakeOrthographic(camera.projection.data(), random.Range(5.0F, 120.0F), random.Range(0.5F, 2.0F), 0.1F, farClip,
+                SceneDepthPolicy::HomogeneousDepth());
+        } else {
+            SceneDepthPolicy::MakePerspective(camera.projection.data(), random.Range(20.0F, 130.0F), random.Range(0.5F, 2.0F), 0.1F, farClip,
+                SceneDepthPolicy::HomogeneousDepth());
+        }
+        if (index % 3U == 0U) {
+            camera.cullingGuardBand = { 0.04F, 0.04F };
+            camera.temporalProjectionOffset = { 0.002F, -0.003F };
+        }
+        camera.cullingMask = masks[index % masks.size()];
+        cameras.push_back(camera);
+    }
+    SceneRenderCamera seesAll{};
+    bx::mtxLookAt(seesAll.view.data(), bx::Vec3{ 0.0F, 0.0F, -300.0F }, bx::Vec3{ 0.0F, 0.0F, 0.0F }, bx::Vec3{ 0.0F, 1.0F, 0.0F });
+    SceneDepthPolicy::MakeOrthographic(seesAll.projection.data(), 600.0F, 1.0F, 0.1F, 4000.0F, SceneDepthPolicy::HomogeneousDepth());
+    cameras.push_back(seesAll);
+    SceneRenderCamera seesNone = seesAll;
+    bx::mtxLookAt(seesNone.view.data(), bx::Vec3{ 0.0F, 0.0F, 1000.0F }, bx::Vec3{ 0.0F, 0.0F, 2000.0F }, bx::Vec3{ 0.0F, 1.0F, 0.0F });
+    cameras.push_back(seesNone);
+    return cameras;
+}
+
+// Meshes that put a scan through each of its paths: bounds off the origin, sections without bounds of their own, one level
+// of detail and a chain of them.
+RenderMeshResource IndexTestMesh(std::size_t variant) {
+    RenderMeshResource mesh{};
+    mesh.indexCount = 3U;
+    switch (variant) {
+    case 0U:
+        mesh.bounds = RenderBoundsSphere{ .center = { 0.0F, 0.0F, 0.0F }, .radius = 0.9F };
+        mesh.sections = { RenderMeshSection{ .indexStart = 0U, .indexCount = 3U, .bounds = mesh.bounds } };
+        break;
+    case 1U:
+        mesh.bounds = RenderBoundsSphere{ .center = { 0.7F, -0.4F, 1.1F }, .radius = 0.6F };
+        mesh.sections = {
+            RenderMeshSection{ .indexStart = 0U, .indexCount = 3U, .materialSlot = 0U },
+            RenderMeshSection{ .indexStart = 0U, .indexCount = 3U, .materialSlot = 1U,
+                .bounds = RenderBoundsSphere{ .center = { -1.0F, 0.5F, 0.0F }, .radius = 1.4F } },
+        };
+        break;
+    case 2U:
+        mesh.bounds = RenderBoundsSphere{ .center = { 0.0F, 0.3F, 0.0F }, .radius = 1.2F };
+        mesh.sections = { RenderMeshSection{ .indexStart = 0U, .indexCount = 3U, .bounds = mesh.bounds, .lodLevel = 0U } };
+        mesh.lods = { RenderMeshLodDesc{ .firstSection = 0U, .sectionCount = 1U, .minScreenCoverage = 0.0F } };
+        break;
+    default:
+        mesh.bounds = RenderBoundsSphere{ .center = { 0.0F, 0.0F, 0.0F }, .radius = 1.0F };
+        for (std::uint8_t level = 0U; level < 2U; ++level) {
+            mesh.lods.push_back(RenderMeshLodDesc{ .firstSection = level, .sectionCount = 1U, .minScreenCoverage = level == 0U ? 0.02F : 0.0F });
+            mesh.sections.push_back(RenderMeshSection{ .indexStart = 0U, .indexCount = 3U, .bounds = mesh.bounds, .lodLevel = level });
+        }
+        break;
+    }
+    return mesh;
+}
+
+// Opaque; reaching beyond its objects, as a material that moves vertices does; and blended.
+std::array<RenderMaterialResource, 3> IndexTestMaterials() {
+    std::array<RenderMaterialResource, 3> materials{};
+    materials[1].graphProgram.active = true;
+    materials[1].graphProgram.boundsMargin = 3.0F;
+    materials[2].alphaMode = RenderMaterialAlphaMode::Blend;
+    return materials;
+}
+
+constexpr std::array<MeshPassType, 8> kIndexTestPasses{ MeshPassType::BaseOpaque, MeshPassType::Depth, MeshPassType::GBuffer,
+    MeshPassType::BaseTransparent, MeshPassType::ShadowDepth, MeshPassType::MotionVectors, MeshPassType::SelectionId, MeshPassType::Gizmo };
+
+// Builds `groups`, and the same groups without their visibility index, for every pass with every camera and without one,
+// and requires the same draw commands, counters and diagnostics. `makeDesc(pass, camera, source, diagnostics, selected,
+// motionFrame, step)` describes a build; `step` rotates meshes and materials through the combinations. Returns the number of
+// builds in which the frustum turned instances away.
+template <typename MakeDesc>
+std::size_t RequireIndexMatchesScan(const std::vector<SceneRenderDrawGroup>& groups, std::span<const SceneRenderCamera> cameras,
+    MakeDesc&& makeDesc, const char* message) {
+    std::vector<SceneRenderDrawGroup> reference = groups;
+    for (SceneRenderDrawGroup& group : reference) group.visibility = {};
+    std::vector<std::uint64_t> selected;
+    for (const SceneRenderDrawGroup& group : groups) {
+        for (std::size_t index = 0U; index < group.instances.size(); index += 7U) selected.push_back(group.instances[index].entityId);
+    }
+    std::size_t turnedAway = 0U;
+    for (std::size_t cameraIndex = 0U; cameraIndex <= cameras.size(); ++cameraIndex) {
+        const SceneRenderCamera* camera = cameraIndex == cameras.size() ? nullptr : &cameras[cameraIndex];
+        for (std::size_t passIndex = 0U; passIndex < kIndexTestPasses.size(); ++passIndex) {
+            const MeshPassType pass = kIndexTestPasses[passIndex];
+            const std::uint64_t motionFrame = pass == MeshPassType::MotionVectors && cameraIndex % 2U == 1U ? 5U : 0U;
+            SceneRenderDiagnostics acceleratedDiagnostics;
+            SceneRenderDiagnostics referenceDiagnostics;
+            const MeshPipelineBuildResult accelerated = MeshPipelineProcessor::Build(
+                makeDesc(pass, camera, groups, acceleratedDiagnostics, selected, motionFrame, cameraIndex + passIndex));
+            const MeshPipelineBuildResult original = MeshPipelineProcessor::Build(
+                makeDesc(pass, camera, reference, referenceDiagnostics, selected, motionFrame, cameraIndex + passIndex));
+            Require(SameBuild(accelerated, original) && SameDiagnostics(acceleratedDiagnostics, referenceDiagnostics), message);
+            turnedAway += accelerated.stats.culledInstanceCount != 0U ? 1U : 0U;
+        }
+    }
+    return turnedAway;
+}
+
+// Meshes and materials of the builds that skip resource validation, in every combination a build can take.
+struct IndexTestResources {
+    std::array<RenderMeshResource, 4> meshes{ IndexTestMesh(0U), IndexTestMesh(1U), IndexTestMesh(2U), IndexTestMesh(3U) };
+    std::array<RenderMaterialResource, 3> materials = IndexTestMaterials();
+};
+
+std::size_t RequireIndexMatchesScan(const std::vector<SceneRenderDrawGroup>& groups, std::span<const SceneRenderCamera> cameras, const char* message) {
+    const IndexTestResources resources;
+    return RequireIndexMatchesScan(groups, cameras,
+        [&resources](MeshPassType pass, const SceneRenderCamera* camera, const std::vector<SceneRenderDrawGroup>& source,
+            SceneRenderDiagnostics& diagnostics, std::span<const std::uint64_t> selected, std::uint64_t motionFrame, std::size_t step) {
+            return MeshPipelineBuildDesc{
+                .pass = pass,
+                .drawGroups = &source,
+                .resolvedMeshResource = &resources.meshes[step % resources.meshes.size()],
+                .resolvedMaterialResource = &resources.materials[(2U * step + 1U) % resources.materials.size()],
+                .camera = camera,
+                .diagnostics = &diagnostics,
+                .selectedEntityIds = selected,
+                .resourceValidation = MeshPipelineResourceValidation::Skip,
+                .motionFrame = motionFrame,
+            };
+        }, message);
+}
+
+// What the index holds of a group is what the group holds: every instance has an entry with its facts, in a cluster whose
+// bounds enclose it, and the bounds of the clusters add up to those of the group.
+void RequireIndexDescribesInstances(std::span<const SceneRenderMeshInstance> instances, const SceneMeshVisibilityIndex& index, const char* message) {
+    if (index.Empty()) {
+        Require(instances.size() < SceneMeshVisibilityIndexBuilder::kMinimumInstances && index.slots.empty(), message);
+        return;
+    }
+    constexpr std::uint32_t capacity = SceneMeshVisibilityIndex::kClusterCapacity;
+    Require(index.slots.size() == instances.size() && index.entries.size() == index.clusters.size() * capacity &&
+            index.root.count == instances.size(), message);
+    std::size_t counted = 0U;
+    std::array<std::uint32_t, 4> rootKinds{};
+    for (std::size_t clusterIndex = 0U; clusterIndex < index.clusters.size(); ++clusterIndex) {
+        const SceneMeshVisibilityIndex::Cluster& cluster = index.clusters[clusterIndex];
+        Require(cluster.count >= 1U && cluster.count <= capacity && cluster.stale == 0U, message);
+        counted += cluster.count;
+        std::array<std::uint32_t, 4> kinds{};
+        std::uint32_t layersAny = 0U;
+        std::uint32_t layersAll = 0xFFFFFFFFU;
+        for (std::uint32_t member = 0U; member < cluster.count; ++member) {
+            const std::size_t slot = clusterIndex * capacity + member;
+            const SceneMeshVisibilityIndex::Entry& entry = index.entries[slot];
+            Require(entry.instance < instances.size() && index.slots[entry.instance] == slot, message);
+            const SceneRenderMeshInstance& instance = instances[entry.instance];
+            const std::uint8_t kind = static_cast<std::uint8_t>((instance.castsShadow ? 1U : 0U) | (instance.shadowOnly ? 2U : 0U));
+            Require(entry.layer == instance.layer && entry.kind == kind, message);
+            ++kinds[kind];
+            layersAny |= entry.layer;
+            layersAll &= entry.layer;
+            if (!entry.unbounded) {
+                Require(entry.origin == std::array<float, 3>{ instance.model[12], instance.model[13], instance.model[14] }, message);
+                for (std::size_t axis = 0U; axis < 3U; ++axis) {
+                    Require(std::abs(entry.origin[axis] - cluster.center[axis]) <= cluster.halfExtent[axis] * 1.0001F + 1.0e-3F, message);
+                }
+                Require(entry.scale <= cluster.maximumScale && entry.overrideReach <= cluster.overrideReach, message);
+            } else {
+                Require(cluster.unbounded, message);
+            }
+        }
+        Require(kinds == cluster.kindCount && layersAny == cluster.layersAny && layersAll == cluster.layersAll, message);
+        for (std::size_t kind = 0U; kind < kinds.size(); ++kind) rootKinds[kind] += kinds[kind];
+        if (!cluster.unbounded) {
+            for (std::size_t axis = 0U; axis < 3U; ++axis) {
+                Require(cluster.center[axis] - cluster.halfExtent[axis] >= index.root.center[axis] - index.root.halfExtent[axis] - 1.0e-3F &&
+                        cluster.center[axis] + cluster.halfExtent[axis] <= index.root.center[axis] + index.root.halfExtent[axis] + 1.0e-3F, message);
+            }
+        }
+    }
+    Require(counted == instances.size() && rootKinds == index.root.kindCount, message);
+}
+
+// The groups made of mesh proxies are indexed from the size the index is worth.
+void RequireIndexDescribesGroups(const std::vector<SceneRenderDrawGroup>& groups, const char* message) {
+    for (const SceneRenderDrawGroup& group : groups) {
+        RequireIndexDescribesInstances(group.instances, group.visibility, message);
+        Require(!group.visibility.Empty() || group.instances.size() < SceneMeshVisibilityIndexBuilder::kMinimumInstances, message);
+    }
+}
+
+// The answers of the box and of the point against the frustum never rule out an instance IsInsideFrustum lets through, nor
+// say inside of one it turns away, whatever the frustum, the box and the reach.
+void RunVisibilityBoundsClassificationIsConservativeTest() {
+    IndexTestRandom random(7U);
+    std::vector<SceneRenderCamera> cameras = IndexTestCameras(random, 60U);
+    // A camera that sees to a very far plane.
+    SceneRenderCamera distant{};
+    distant.view = IdentityMatrix();
+    SceneDepthPolicy::MakePerspective(distant.projection.data(), 60.0F, 1.0F, 0.1F, 1.0e6F, SceneDepthPolicy::HomogeneousDepth());
+    cameras.push_back(distant);
+    std::size_t outside = 0U;
+    std::size_t inside = 0U;
+    std::size_t partial = 0U;
+    for (const SceneRenderCamera& camera : cameras) {
+        const MeshPipelineFrustum frustum = MeshPipelineVisibility::BuildFrustum(&camera);
+        for (int boxIndex = 0; boxIndex < 300; ++boxIndex) {
+            SceneMeshVisibilityBounds bounds;
+            bounds.center = { random.Range(-120.0F, 120.0F), random.Range(-120.0F, 120.0F), random.Range(-120.0F, 120.0F) };
+            // Boxes of every shape, among them slabs that are long in one direction.
+            const float side = random.Range(0.01F, 60.0F);
+            bounds.halfExtent = { side * random.Range(0.01F, 1.0F), side * random.Range(0.01F, 1.0F), side * random.Range(0.01F, 1.0F) };
+            bounds.halfExtent[random.Below(3U)] = side * 3.0F;
+            // Instances have bounds of a size above nothing, which a frustum would never turn away.
+            const float reach = random.Below(4U) == 0U ? 0.01F : random.Range(0.01F, 6.0F);
+            const MeshPipelineBoundsVisibility visibility = MeshPipelineVisibility::ClassifyBounds(frustum, bounds, reach);
+            outside += visibility == MeshPipelineBoundsVisibility::Outside ? 1U : 0U;
+            inside += visibility == MeshPipelineBoundsVisibility::Inside ? 1U : 0U;
+            partial += visibility == MeshPipelineBoundsVisibility::Partial ? 1U : 0U;
+            for (int sample = 0; sample < 40; ++sample) {
+                // An instance whose origin is in the box and whose bounds reach no farther than `reach` from it.
+                std::array<float, 3> origin{};
+                for (std::size_t axis = 0U; axis < 3U; ++axis) {
+                    const float unit = sample < 8 ? (((sample >> axis) & 1) != 0 ? 1.0F : -1.0F) : random.Range(-1.0F, 1.0F);
+                    origin[axis] = bounds.center[axis] + unit * bounds.halfExtent[axis];
+                }
+                const float share = random.Unit();
+                const RenderBoundsSphere sphere{
+                    .center = { origin[0] + reach * share * 0.5F, origin[1] - reach * share * 0.5F, origin[2] + reach * share * 0.5F },
+                    .radius = reach * (1.0F - share),
+                };
+                Require(sphere.IsValid(), "The classification test made an instance without bounds");
+                const bool lets = MeshPipelineVisibility::IsInsideFrustum(frustum, sphere);
+                Require(visibility != MeshPipelineBoundsVisibility::Outside || !lets, "A box said outside holds an instance the frustum lets through");
+                Require(visibility != MeshPipelineBoundsVisibility::Inside || lets, "A box said inside holds an instance the frustum turns away");
+                Require(!MeshPipelineVisibility::IsReachOutsideFrustum(frustum, origin, reach) || !lets,
+                    "A point said outside is an instance the frustum lets through");
+            }
+        }
+    }
+    Require(outside > 1000U && inside > 100U && partial > 1000U, "The classification test did not meet every answer");
+    // Without a frustum nothing is ruled out, nor with an instance that has no bounds.
+    const MeshPipelineFrustum none = MeshPipelineVisibility::BuildFrustum(nullptr);
+    SceneMeshVisibilityBounds bounds;
+    bounds.center = { 1.0e6F, 0.0F, 0.0F };
+    Require(MeshPipelineVisibility::ClassifyBounds(none, bounds, 1.0F) == MeshPipelineBoundsVisibility::Partial &&
+            !MeshPipelineVisibility::IsReachOutsideFrustum(none, bounds.center, 1.0F), "A frustum that is not there ruled instances out");
+    bounds.unbounded = true;
+    Require(MeshPipelineVisibility::ClassifyBounds(MeshPipelineVisibility::BuildFrustum(&cameras[0]), bounds, 1.0F) == MeshPipelineBoundsVisibility::Partial,
+        "A box with an instance of no bounds ruled instances out");
+}
+
+// Instances come, go, move and change in any order: the index describes them after every step, and after the instances
+// have drifted far from where it placed them, it places them again.
+void RunVisibilityIndexStaysInStepWithInstancesTest() {
+    IndexTestRandom random(11U);
+    std::vector<SceneRenderMeshInstance> instances;
+    SceneMeshVisibilityIndex index;
+    const auto makeInstance = [&random](float spread) {
+        SceneRenderMeshInstance instance;
+        const MeshRenderProxyDesc proxy = RandomIndexProxy(random, 1U, spread);
+        instance.model = proxy.model;
+        instance.castsShadow = proxy.castsShadow;
+        instance.shadowOnly = proxy.shadowOnly;
+        instance.layer = proxy.layer;
+        instance.boundsOverride = proxy.boundsOverride;
+        return instance;
+    };
+    const auto append = [&] {
+        instances.push_back(makeInstance(60.0F));
+        SceneMeshVisibilityIndexBuilder::Append(instances, index);
+    };
+    const auto remove = [&] {
+        const std::uint32_t position = random.Below(static_cast<std::uint32_t>(instances.size()));
+        SceneMeshVisibilityIndexBuilder::Remove(index, position);
+        if (position + 1U != instances.size()) instances[position] = std::move(instances.back());
+        instances.pop_back();
+    };
+    const auto update = [&](bool jump) {
+        const std::uint32_t position = random.Below(static_cast<std::uint32_t>(instances.size()));
+        if (!jump && random.Below(2U) == 0U) {
+            // A nudge, which mostly leaves the instance within its cluster.
+            instances[position].model[12] += random.Range(-0.05F, 0.05F);
+            instances[position].model[14] += random.Range(-0.05F, 0.05F);
+        } else {
+            instances[position] = makeInstance(jump ? 600.0F : 60.0F);
+        }
+        SceneMeshVisibilityIndexBuilder::Update(index, instances[position], position);
+    };
+    const auto check = [&](const char* message) {
+        SceneMeshVisibilityIndexBuilder::Refresh(instances, index);
+        RequireIndexDescribesInstances(instances, index, message);
+    };
+    // Growing past the size that is indexed, to many clusters.
+    for (int step = 0; step < 700; ++step) {
+        append();
+        if (step % 29 == 0 || step == 31 || step == 32) check("The index of a growing group does not describe it");
+    }
+    Require(!index.Empty(), "A group of many instances was not indexed");
+    // Mixed changes.
+    for (int step = 0; step < 4000; ++step) {
+        const std::uint32_t kind = random.Below(100U);
+        if (kind < 35U) append();
+        else if (kind < 60U && instances.size() > 40U) remove();
+        else update(random.Below(10U) == 0U);
+        if (step % 37 == 0) check("The index of a changing group does not describe it");
+    }
+    check("The index of a changed group does not describe it");
+    // The instances all land somewhere else: the clusters are made again.
+    const float builtBefore = index.builtSize;
+    for (std::size_t position = 0U; position < instances.size(); ++position) {
+        instances[position].model[12] = random.Range(-3000.0F, 3000.0F);
+        instances[position].model[13] = random.Range(-3000.0F, 3000.0F);
+        instances[position].model[14] = random.Range(-3000.0F, 3000.0F);
+        SceneMeshVisibilityIndexBuilder::Update(index, instances[position], static_cast<std::uint32_t>(position));
+    }
+    check("The index of instances that moved far apart does not describe them");
+    Require(index.builtSize > builtBefore * 4.0F && index.currentSize <= index.builtSize * 1.001F,
+        "The clusters of instances that moved far apart were not made again");
+    // Shrinking to a few instances empties the index, and growing again indexes them again.
+    while (instances.size() > 5U) {
+        remove();
+        if (instances.size() % 53U == 0U) check("The index of a shrinking group does not describe it");
+    }
+    check("The index of a group that shrank does not describe it");
+    Require(index.Empty(), "A group of a few instances kept its index");
+    while (instances.size() < 70U) append();
+    check("The index of a group that grew again does not describe it");
+    Require(!index.Empty(), "A group that grew again was not indexed");
+    // Instances whose models have no bounds the index can enclose are never ruled out with their cluster.
+    SceneRenderMeshInstance flawed = makeInstance(60.0F);
+    flawed.model[0] = flawed.model[5] = flawed.model[10] = 0.0F;
+    instances.push_back(flawed);
+    SceneMeshVisibilityIndexBuilder::Append(instances, index);
+    instances.push_back(makeInstance(60.0F));
+    instances.back().model[12] = std::numeric_limits<float>::quiet_NaN();
+    SceneMeshVisibilityIndexBuilder::Append(instances, index);
+    check("The index of instances without bounds does not describe them");
+    std::size_t unbounded = 0U;
+    for (const SceneMeshVisibilityIndex::Cluster& cluster : index.clusters) unbounded += cluster.unbounded ? 1U : 0U;
+    Require(unbounded >= 1U && unbounded <= 2U, "Instances without bounds did not mark their clusters");
+    // An index that fell out of step with its instances is made again.
+    instances.pop_back();
+    instances.pop_back();
+    index.stale = 1U;
+    check("An index that fell out of step with its instances was not made again");
+}
+
+// The visibility index changes nothing a pass builds. Scenes of every shape, with every pass, camera, mesh and material,
+// give the commands, counters and diagnostics the scan of every instance gives.
+void RunMeshPipelineVisibilityIndexMatchesScanTest() {
+    IndexTestRandom random(3U);
+    const std::vector<SceneRenderCamera> cameras = IndexTestCameras(random, 12U);
+    std::size_t turnedAway = 0U;
+    // Scenes of no object, of one, around the size that is indexed, and of many.
+    for (const std::size_t count : { std::size_t{ 0U }, std::size_t{ 1U }, std::size_t{ 31U }, std::size_t{ 32U }, std::size_t{ 33U },
+             std::size_t{ 120U }, std::size_t{ 1500U } }) {
+        // Up to a few dozen, the ids are such that all objects share a group.
+        RenderScene scene;
+        FillRandomIndexScene(scene, random, count, 1U, count < 100U ? 4U : 1U, 60.0F);
+        const std::vector<SceneRenderDrawGroup>& groups = scene.DrawGroups();
+        RequireIndexDescribesGroups(groups, "The index of the scene does not describe its groups");
+        turnedAway += RequireIndexMatchesScan(groups, cameras, "The visibility index changed what a pass builds from a scene of random objects");
+    }
+    {
+        // Ids far apart: many groups of a few dozen each.
+        RenderScene scene;
+        FillRandomIndexScene(scene, random, 1200U, 1U, 17U, 60.0F);
+        RequireIndexDescribesGroups(scene.DrawGroups(), "The index of a scene of groups of a few dozen does not describe it");
+        turnedAway += RequireIndexMatchesScan(scene.DrawGroups(), cameras, "The visibility index changed what a pass builds from many small groups");
+    }
+    {
+        // Every object in one point, in every layer and of every kind.
+        RenderScene scene;
+        for (std::uint64_t entity = 1U; entity <= 400U; ++entity) {
+            MeshRenderProxyDesc proxy = RandomIndexProxy(random, entity, 1.0F);
+            proxy.model = TranslationMatrix(10.0F, 5.0F, -7.0F);
+            static_cast<void>(scene.UpsertMesh(proxy));
+        }
+        RequireIndexDescribesGroups(scene.DrawGroups(), "The index of objects in one point does not describe them");
+        turnedAway += RequireIndexMatchesScan(scene.DrawGroups(), cameras, "The visibility index changed what a pass builds from objects in one point");
+    }
+    {
+        // Objects that cover the whole scene among small ones, and bounds overrides that do.
+        RenderScene scene;
+        FillRandomIndexScene(scene, random, 300U, 1U, 1U, 60.0F);
+        for (std::uint64_t entity = 301U; entity <= 308U; ++entity) {
+            MeshRenderProxyDesc proxy = RandomIndexProxy(random, entity, 60.0F);
+            proxy.model = RandomIndexModel(random, 400.0F, 2000.0F, 4000.0F, false);
+            static_cast<void>(scene.UpsertMesh(proxy));
+        }
+        for (std::uint64_t entity = 309U; entity <= 312U; ++entity) {
+            MeshRenderProxyDesc proxy = RandomIndexProxy(random, entity, 60.0F);
+            proxy.boundsOverride = RenderBoundsSphere{ .center = { 100.0F, 0.0F, 0.0F }, .radius = 5.0e4F };
+            static_cast<void>(scene.UpsertMesh(proxy));
+        }
+        RequireIndexDescribesGroups(scene.DrawGroups(), "The index of a scene of huge objects does not describe it");
+        turnedAway += RequireIndexMatchesScan(scene.DrawGroups(), cameras, "The visibility index changed what a pass builds from huge objects");
+    }
+    {
+        // Objects that have no size, or next to none, are never turned away.
+        RenderScene scene;
+        FillRandomIndexScene(scene, random, 120U, 1U, 1U, 60.0F);
+        for (std::uint64_t entity = 121U; entity <= 130U; ++entity) {
+            MeshRenderProxyDesc proxy = RandomIndexProxy(random, entity, 60.0F);
+            proxy.model[0] = proxy.model[1] = proxy.model[2] = proxy.model[4] = proxy.model[5] = proxy.model[6] = 0.0F;
+            proxy.model[8] = proxy.model[9] = proxy.model[10] = 0.0F;
+            static_cast<void>(scene.UpsertMesh(proxy));
+        }
+        for (std::uint64_t entity = 131U; entity <= 140U; ++entity) {
+            MeshRenderProxyDesc proxy = RandomIndexProxy(random, entity, 60.0F);
+            proxy.model = RandomIndexModel(random, 60.0F, 1.0e-9F, 2.0e-9F, false);
+            static_cast<void>(scene.UpsertMesh(proxy));
+        }
+        RequireIndexDescribesGroups(scene.DrawGroups(), "The index of a scene of objects without size does not describe it");
+        turnedAway += RequireIndexMatchesScan(scene.DrawGroups(), cameras, "The visibility index changed what a pass builds from objects without size");
+    }
+    Require(turnedAway > 100U, "The visibility index test scenes did not turn instances away");
+
+    // A camera that sees all of a large scene turns nothing away, and one that sees none of it admits nothing.
+    RenderScene scene;
+    FillRandomIndexScene(scene, random, 1500U, 1U, 1U, 60.0F);
+    const std::vector<SceneRenderDrawGroup>& groups = scene.DrawGroups();
+    const RenderMeshResource mesh = IndexTestMesh(0U);
+    const RenderMaterialResource material{};
+    const auto build = [&](const std::vector<SceneRenderDrawGroup>& source, const SceneRenderCamera& camera, MeshPassType pass) {
+        return MeshPipelineProcessor::Build(MeshPipelineBuildDesc{ .pass = pass, .drawGroups = &source, .resolvedMeshResource = &mesh,
+            .resolvedMaterialResource = &material, .camera = &camera, .resourceValidation = MeshPipelineResourceValidation::Skip });
+    };
+    const MeshPipelineBuildResult everything = build(groups, cameras[cameras.size() - 2U], MeshPassType::BaseOpaque);
+    Require(everything.stats.culledInstanceCount == 0U && everything.stats.visibleMeshCount > 1000U, "A camera that sees the whole scene turned instances away");
+    const MeshPipelineBuildResult nothing = build(groups, cameras.back(), MeshPassType::BaseOpaque);
+    Require(nothing.stats.visibleMeshCount == 0U && nothing.commands.empty() && nothing.stats.culledInstanceCount > 1000U,
+        "A camera that sees none of the scene admitted instances");
+
+    // The index is what rules instances out: an instance that does not lie where the index says is ruled out with it.
+    std::vector<SceneRenderDrawGroup> tampered = groups;
+    SceneRenderDrawGroup& group = *std::ranges::max_element(tampered, {}, [](const SceneRenderDrawGroup& candidate) { return candidate.instances.size(); });
+    for (SceneRenderMeshInstance& instance : group.instances) {
+        instance.model = TranslationMatrix(1.0e5F, 0.0F, 1.0e5F);
+        instance.layer = 1U;
+        instance.shadowOnly = false;
+        instance.castsShadow = true;
+        instance.boundsOverride = {};
+    }
+    SceneMeshVisibilityIndexBuilder::Build(group.instances, group.visibility);
+    group.instances[3].model = TranslationMatrix(0.0F, 0.0F, 10.0F);
+    std::vector<SceneRenderDrawGroup> unindexed = tampered;
+    for (SceneRenderDrawGroup& candidate : unindexed) candidate.visibility = {};
+    SceneRenderCamera front{};
+    bx::mtxLookAt(front.view.data(), bx::Vec3{ 0.0F, 0.0F, 0.0F }, bx::Vec3{ 0.0F, 0.0F, 1.0F }, bx::Vec3{ 0.0F, 1.0F, 0.0F });
+    SceneDepthPolicy::MakePerspective(front.projection.data(), 90.0F, 1.0F, 0.1F, 50.0F, SceneDepthPolicy::HomogeneousDepth());
+    const std::uint64_t moved = group.instances[3].entityId;
+    const auto admits = [&](const std::vector<SceneRenderDrawGroup>& source) {
+        const MeshPipelineBuildResult result = build(source, front, MeshPassType::Depth);
+        return std::ranges::any_of(result.commands, [moved](const MeshDrawCommand& command) {
+            return std::ranges::any_of(command.instances, [moved](const SceneRenderMeshInstance& instance) { return instance.entityId == moved; });
+        });
+    };
+    Require(admits(unindexed) && !admits(tampered), "The visibility index did not rule out the instances it holds far away");
+}
+
+// Objects move, change, come and go between frames, and the passes built from them are those the scan builds.
+void RunMeshPipelineVisibilityIndexFollowsChangingSceneTest() {
+    IndexTestRandom random(5U);
+    const std::vector<SceneRenderCamera> cameras = IndexTestCameras(random, 6U);
+    RenderScene scene;
+    std::vector<std::uint64_t> entities;
+    std::uint64_t nextEntity = 1U;
+    const auto addObject = [&] {
+        // Now and then in a block of ids of its own, so that groups come and go.
+        if (random.Below(40U) == 0U) nextEntity += 1024U;
+        static_cast<void>(scene.UpsertMesh(RandomIndexProxy(random, nextEntity, 60.0F)));
+        entities.push_back(nextEntity++);
+    };
+    for (int index = 0; index < 1400; ++index) addObject();
+    static_cast<void>(scene.DrawGroups());
+    for (int frame = 0; frame < 14; ++frame) {
+        const bool farMoves = frame % 5 == 4;
+        const std::size_t moving = entities.size() * (farMoves ? 70U : 8U) / 100U;
+        // Some move, in place.
+        for (std::size_t index = 0U; index < moving; ++index) {
+            const std::uint64_t entity = entities[random.Below(static_cast<std::uint32_t>(entities.size()))];
+            Require(scene.UpdateMeshTransform(entity, RandomIndexModel(random, farMoves ? 400.0F : 60.0F, 0.3F, 2.5F, false)),
+                "A mesh proxy to move was not found");
+        }
+        // Some change what they are, in place or by going to another group.
+        for (std::size_t index = 0U; index < entities.size() / 40U; ++index) {
+            const std::uint64_t entity = entities[random.Below(static_cast<std::uint32_t>(entities.size()))];
+            MeshRenderProxyDesc proxy = RandomIndexProxy(random, entity, 60.0F);
+            if (random.Below(3U) != 0U) {
+                const MeshRenderProxy* existing = scene.FindMeshByEntity(entity);
+                Require(existing != nullptr, "A mesh proxy to change was not found");
+                proxy.meshAssetId = existing->desc.meshAssetId;
+                proxy.materialAssetId = existing->desc.materialAssetId;
+            } else {
+                proxy.meshAssetId = 500U + random.Below(3U);
+                proxy.materialAssetId = 600U + random.Below(3U);
+            }
+            static_cast<void>(scene.UpsertMesh(proxy));
+        }
+        // Some go and some come.
+        for (std::size_t index = 0U; index < entities.size() / 30U; ++index) {
+            const std::size_t position = random.Below(static_cast<std::uint32_t>(entities.size()));
+            Require(scene.RemoveMesh(entities[position]), "A mesh proxy to remove was not found");
+            entities[position] = entities.back();
+            entities.pop_back();
+        }
+        for (std::size_t index = 0U; index < 50U; ++index) addObject();
+        // Once, nearly all go, and come again.
+        if (frame == 9) {
+            while (entities.size() > 60U) {
+                Require(scene.RemoveMesh(entities.back()), "A mesh proxy to remove was not found");
+                entities.pop_back();
+            }
+            static_cast<void>(scene.DrawGroups());
+            for (int index = 0; index < 600; ++index) addObject();
+        }
+        const std::vector<SceneRenderDrawGroup>& groups = scene.DrawGroups();
+        RequireIndexDescribesGroups(groups, "The index does not describe the groups of a scene that changed");
+        static_cast<void>(RequireIndexMatchesScan(groups, cameras, "The visibility index changed what a pass builds from a scene that changed"));
+    }
+}
+
+// The same through a renderer that resolves its resources: batches that miss a mesh, a material or a texture report each of
+// their instances as the scan does, batches with slot overrides are scanned instance by instance, and the others are ruled
+// out by their index.
+void RunMeshPipelineVisibilityIndexMatchesScanWithResourcesTest() {
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "The visibility index test could not initialize bgfx");
+    {
+        const std::array<RenderStaticMeshVertexP3N3UV2, 3> vertices{ {
+            { .x = 0.0F, .y = 0.0F, .z = 0.0F }, { .x = 1.0F, .y = 0.0F, .z = 0.0F }, { .x = 0.0F, .y = 1.0F, .z = 0.0F } } };
+        const std::array<std::uint16_t, 6> indices{ 0U, 1U, 2U, 0U, 2U, 1U };
+        const std::array<RenderMeshSectionDesc, 2> sections{ {
+            { .indexStart = 0U, .indexCount = 3U, .vertexStart = 0U, .vertexCount = 3U, .materialSlot = 0U, .bounds = { .radius = 1.0F } },
+            { .indexStart = 3U, .indexCount = 3U, .vertexStart = 0U, .vertexCount = 3U, .materialSlot = 1U,
+                .bounds = { .center = { 1.0F, 0.0F, 0.0F }, .radius = 1.5F } } } };
+        RenderResourceRegistry registry;
+        SceneRenderResourceMap resourceMap;
+        // Meshes 500 (two sections) and 501 (one) resolve; 502 has no binding. Materials 600 and 601 resolve, 602 blends,
+        // 603 reads a texture that has no binding and 604 has none.
+        resourceMap.BindMesh(500U, registry.RegisterMesh(RenderMeshDesc{
+            .vertexData = vertices.data(), .vertexCount = 3U, .indices = indices.data(), .indexCount = 6U,
+            .vertexFormat = RenderVertexFormat::P3N3UV2, .sections = sections.data(), .sectionCount = 2U, .bounds = { .radius = 1.0F } }));
+        resourceMap.BindMesh(501U, registry.RegisterMesh(RenderMeshDesc{
+            .vertexData = vertices.data(), .vertexCount = 3U, .indices = indices.data(), .indexCount = 3U,
+            .vertexFormat = RenderVertexFormat::P3N3UV2, .bounds = { .center = { 0.0F, 0.5F, 0.0F }, .radius = 1.2F } }));
+        RenderMaterialDesc plain{};
+        RenderMaterialDesc blending{};
+        blending.alphaMode = RenderMaterialAlphaMode::Blend;
+        RenderMaterialDesc textured{};
+        textured.occlusionTextureAssetId = 909U;
+        resourceMap.BindMaterial(600U, registry.RegisterMaterial(plain));
+        resourceMap.BindMaterial(601U, registry.RegisterMaterial(plain));
+        resourceMap.BindMaterial(602U, registry.RegisterMaterial(blending));
+        resourceMap.BindMaterial(603U, registry.RegisterMaterial(textured));
+
+        IndexTestRandom random(9U);
+        const std::vector<SceneRenderCamera> cameras = IndexTestCameras(random, 8U);
+        RenderScene scene;
+        constexpr std::size_t kObjects = 4096U;
+        for (std::size_t index = 0U; index < kObjects; ++index) {
+            const std::size_t block = index / 1024U;
+            MeshRenderProxyDesc proxy = RandomIndexProxy(random, index + 1U, 60.0F);
+            proxy.meshAssetId = block == 2U ? 502U : 500U + index % 2U;
+            proxy.materialAssetId = block == 1U ? 604U : (block == 3U ? 603U : 600U + (index / 2U) % 3U);
+            if (index % 17U == 0U && block == 0U) {
+                proxy.materialSlotAssetIds[1] = 600U + index % 2U;
+                proxy.materialSlotOverrideCount = 2U;
+            }
+            static_cast<void>(scene.UpsertMesh(proxy));
+        }
+        const std::vector<SceneRenderDrawGroup>& groups = scene.DrawGroups();
+        RequireIndexDescribesGroups(groups, "The index of a scene with resources does not describe it");
+        const std::size_t turnedAway = RequireIndexMatchesScan(groups, cameras,
+            [&](MeshPassType pass, const SceneRenderCamera* camera, const std::vector<SceneRenderDrawGroup>& source,
+                SceneRenderDiagnostics& diagnostics, std::span<const std::uint64_t> selected, std::uint64_t motionFrame, std::size_t) {
+                return MeshPipelineBuildDesc{
+                    .pass = pass,
+                    .drawGroups = &source,
+                    .resources = &registry,
+                    .resourceMap = &resourceMap,
+                    .camera = camera,
+                    .diagnostics = &diagnostics,
+                    .selectedEntityIds = selected,
+                    .motionFrame = motionFrame,
+                };
+            }, "The visibility index changed what a pass builds from a scene with resources");
+        Require(turnedAway > 20U, "The visibility index test with resources did not turn instances away");
+        // And built on workers, as the passes of a frame are.
+        kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 8U } };
+        pool.Start(kb::ecs::WorkerPoolConfig{ .workerCount = 8U });
+        const std::vector<SceneMeshBatch> batches = SceneMeshBatchBuilder::Build(groups);
+        for (const MeshPassType pass : { MeshPassType::BaseOpaque, MeshPassType::ShadowDepth }) {
+            RequireParallelBuildMatchesSerial(pool, [&](kb::ecs::WorkerPool* workers, SceneRenderDiagnostics* diagnostics) {
+                return MeshPipelineBuildDesc{ .pass = pass, .meshBatches = &batches, .resources = &registry, .resourceMap = &resourceMap,
+                    .camera = &cameras[1], .diagnostics = diagnostics, .workerPool = workers };
+            }, true, "Workers built the batches of an index differently from the calling thread");
+        }
+    }
+    renderer.Shutdown();
+}
+
+// Passes of a large scene built together, and in chunks, rule out the same instances as ones built on the calling thread.
+void RunMeshPipelineVisibilityIndexOnWorkersMatchesSerialTest() {
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 8U } };
+    pool.Start(kb::ecs::WorkerPoolConfig{ .workerCount = 8U });
+    IndexTestRandom random(13U);
+    RenderScene scene;
+    FillRandomIndexScene(scene, random, 6000U, 1U, 1U, 60.0F);
+    const std::vector<SceneMeshBatch> batches = SceneMeshBatchBuilder::Build(scene.DrawGroups());
+    const std::vector<SceneRenderCamera> cameras = IndexTestCameras(random, 4U);
+    const RenderMeshResource mesh = IndexTestMesh(1U);
+    const RenderMaterialResource material{};
+    for (const MeshPassType pass : { MeshPassType::BaseOpaque, MeshPassType::ShadowDepth, MeshPassType::GBuffer }) {
+        RequireParallelBuildMatchesSerial(pool, [&](kb::ecs::WorkerPool* workers, SceneRenderDiagnostics* diagnostics) {
+            return MeshPipelineBuildDesc{ .pass = pass, .meshBatches = &batches, .resolvedMeshResource = &mesh, .resolvedMaterialResource = &material,
+                .camera = &cameras[0], .diagnostics = diagnostics, .resourceValidation = MeshPipelineResourceValidation::Skip, .workerPool = workers };
+        }, true, "Workers built the batches of an index differently from the calling thread");
+    }
+    RequireTogetherBuildMatchesSerial(pool, [&](std::size_t index, kb::ecs::WorkerPool* workers, SceneRenderDiagnostics* diagnostics) {
+        return MeshPipelineBuildDesc{ .pass = index % 2U == 0U ? MeshPassType::ShadowDepth : MeshPassType::BaseOpaque, .meshBatches = &batches,
+            .resolvedMeshResource = &mesh, .resolvedMaterialResource = &material, .camera = &cameras[index], .diagnostics = diagnostics,
+            .resourceValidation = MeshPipelineResourceValidation::Skip, .workerPool = workers };
+    }, cameras.size(), "Passes built together from an index differ from the same passes built one by one");
+}
+
 // Resources the workers cannot resolve cleanly are reported by the calling thread, which builds the batches that use
 // them in order: the same counters and the same diagnostics in the same order as without workers.
 void RunMeshPipelineParallelScanReportsMissingResourcesInOrderTest() {
@@ -3038,11 +3751,11 @@ std::vector<SceneRenderCamera> CasterPointFaceCameras(int frame, float range) {
 // one on the calling thread. `results` keeps the commands of the passes from one frame to the next, as a renderer does.
 double ShadowFrameMicroseconds(const std::vector<SceneMeshBatch>& batches, const RenderMeshResource& mesh,
     std::span<const SceneRenderCamera> cameras, kb::ecs::WorkerPool* workerPool, ShadowBuildMode mode,
-    std::vector<MeshPipelineBuildResult>& results, std::size_t& admittedCount) {
+    std::vector<MeshPipelineBuildResult>& results, std::size_t& admittedCount, MeshPassType pass = MeshPassType::ShadowDepth) {
     const RenderMaterialResource material{};
     const auto describe = [&](const SceneRenderCamera& camera) {
         return MeshPipelineBuildDesc{
-            .pass = MeshPassType::ShadowDepth,
+            .pass = pass,
             .meshBatches = &batches,
             .resolvedMeshResource = &mesh,
             .resolvedMaterialResource = &material,
@@ -3083,13 +3796,77 @@ double ShadowFrameMicroseconds(const std::vector<SceneMeshBatch>& batches, const
     return samples.empty() ? -1.0 : *std::ranges::max_element(samples);
 }
 
+// The camera of the viewer of a frame of the large scenes, which sees 70 degrees to `farClip`.
+SceneRenderCamera CasterViewerCamera(int frame, float farClip) {
+    const CasterViewer viewer = CasterViewerAtFrame(frame);
+    SceneRenderCamera camera{};
+    bx::mtxLookAt(camera.view.data(), viewer.position, bx::add(viewer.position, viewer.forward), viewer.up);
+    SceneDepthPolicy::MakePerspective(camera.projection.data(), 70.0F, 16.0F / 9.0F, 0.5F, farClip, SceneDepthPolicy::HomogeneousDepth());
+    return camera;
+}
+
+// Microseconds that moving a share of the objects of a large scene takes every frame, with the visibility index of its draw
+// groups kept in step and without it, that bringing the index up to date for the passes that follow takes, and that making
+// the index takes. `percents` are the shares of the objects that move.
+void RunMovingSceneBenchmark(std::size_t objectCount, const std::vector<std::size_t>& percents, int frames, bool shuffled) {
+    for (const std::size_t percent : percents) {
+        RenderScene scene;
+        FillCasterGridScene(scene, objectCount, shuffled);
+        const auto buildBegin = std::chrono::steady_clock::now();
+        const std::vector<SceneRenderDrawGroup>& groups = scene.DrawGroups();
+        const double groupsMicroseconds = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - buildBegin).count();
+        const auto indexBegin = std::chrono::steady_clock::now();
+        std::size_t clusters = 0U;
+        for (const SceneRenderDrawGroup& group : groups) {
+            SceneMeshVisibilityIndex index;
+            SceneMeshVisibilityIndexBuilder::Build(group.instances, index);
+            clusters += index.clusters.size();
+        }
+        const double indexMicroseconds = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - indexBegin).count();
+        std::vector<double> updatesWith;
+        std::vector<double> refreshes;
+        std::vector<double> updatesWithout;
+        const std::size_t moving = std::max<std::size_t>(1U, objectCount * percent / 100U);
+        for (const bool withIndex : { true, false }) {
+            if (!withIndex) {
+                // The same moves with no index to keep: what the scene did before it had one.
+                for (SceneRenderDrawGroup& group : const_cast<std::vector<SceneRenderDrawGroup>&>(groups)) group.visibility = {};
+            }
+            for (int frame = 0; frame < frames + 2; ++frame) {
+                const auto updateBegin = std::chrono::steady_clock::now();
+                for (std::size_t move = 0U; move < moving; ++move) {
+                    const std::uint64_t entity = 1U + (move * 7919U + static_cast<std::size_t>(frame) * 104729U) % objectCount;
+                    const MeshRenderProxy* proxy = scene.FindMeshByEntity(entity);
+                    auto model = proxy->desc.model;
+                    model[12] += 0.1F * std::sin(static_cast<float>(frame + static_cast<int>(move)));
+                    model[14] += 0.1F * std::cos(static_cast<float>(frame));
+                    static_cast<void>(scene.UpdateMeshTransform(entity, model));
+                }
+                const double update = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - updateBegin).count();
+                const auto refreshBegin = std::chrono::steady_clock::now();
+                static_cast<void>(scene.DrawGroups());
+                const double refresh = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - refreshBegin).count();
+                if (frame >= 2) {
+                    (withIndex ? updatesWith : updatesWithout).push_back(update);
+                    if (withIndex) refreshes.push_back(refresh);
+                }
+            }
+        }
+        std::fprintf(stderr, "shadow_scale_move percent objects groups clusters scene_build_us index_build_us update_with_index_us update_without_index_us refresh_us" "\n");
+        std::fprintf(stderr, "shadow_scale_move %zu %zu %zu %zu %.0f %.0f %.1f %.1f %.1f" "\n", percent, objectCount, groups.size(), clusters,
+            groupsMicroseconds, indexMicroseconds, MedianOf(updatesWith), MedianOf(updatesWithout), MedianOf(refreshes));
+    }
+}
+
 // Median and worst microseconds of the shadow passes of a frame, over scenes of the sizes in `sizeList` that are far
 // larger than the ones the benchmark otherwise builds. Every frame the camera and the lights move, so no pass repeats
 // the one before, and each size is a row of its own whose passes are built on the workers and, unless `KB_SHADOW_SCALE_MODES`
 // leaves it out, one after the other on the calling thread. `KB_SHADOW_SCALE_FRAMES` sets the frames measured (after three
-// that are not), `KB_SHADOW_SCALE_STAGES` is cascades, points or both, `KB_SHADOW_SCALE_ORDER` is raster or shuffle and
-// `KB_SHADOW_SCALE_POINT_RANGE` is the range of the point lights (25 unless set) and `KB_SHADOW_SCALE_CASCADE_REACH` is how
-// far the cascades reach (150 unless set).
+// that are not), `KB_SHADOW_SCALE_STAGES` is cascades, points, main (the opaque pass of the viewer), both or all,
+// `KB_SHADOW_SCALE_ORDER` is raster or shuffle and `KB_SHADOW_SCALE_POINT_RANGE` is the range of the point lights (25 unless
+// set) and `KB_SHADOW_SCALE_CASCADE_REACH` is how far the cascades reach (150 unless set). `KB_SHADOW_SCALE_INDEX=off`
+// builds without the visibility index of the draw groups, and `KB_SHADOW_SCALE_MOVING` lists shares of the objects (percent)
+// to move every frame, which prints what keeping the index in step takes.
 void RunShadowLargeSceneBenchmark(const std::string& sizeList) {
     kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{} };
     pool.Start(kb::ecs::WorkerPoolConfig{});
@@ -3097,8 +3874,16 @@ void RunShadowLargeSceneBenchmark(const std::string& sizeList) {
     const int frames = frameText.empty() ? 10 : std::max(1, std::atoi(frameText.c_str()));
     constexpr int kWarmupFrames = 3;
     const std::string stageText = EnvironmentValue("KB_SHADOW_SCALE_STAGES");
-    const bool withCascades = stageText.empty() || stageText == "both" || stageText == "cascades";
-    const bool withPoints = stageText.empty() || stageText == "both" || stageText == "points";
+    const bool withCascades = stageText.empty() || stageText == "both" || stageText == "cascades" || stageText == "all";
+    const bool withPoints = stageText.empty() || stageText == "both" || stageText == "points" || stageText == "all";
+    // The pass of the viewer, the opaque one, which sees 70 degrees to `KB_SHADOW_SCALE_MAIN_FAR` (150 unless set).
+    const bool withMain = stageText == "main" || stageText == "all";
+    const std::string mainFarText = EnvironmentValue("KB_SHADOW_SCALE_MAIN_FAR");
+    const float mainFar = mainFarText.empty() ? 150.0F : std::max(1.0F, static_cast<float>(std::atof(mainFarText.c_str())));
+    // `KB_SHADOW_SCALE_MOVING` is a list of the shares of the objects (percent) that move every frame, for a row of their own.
+    const std::string movingText = EnvironmentValue("KB_SHADOW_SCALE_MOVING");
+    // `KB_SHADOW_SCALE_INDEX=off` builds the passes from groups without their visibility index, which scans every instance.
+    const bool withoutIndex = EnvironmentValue("KB_SHADOW_SCALE_INDEX") == "off";
     const std::string modeText = EnvironmentValue("KB_SHADOW_SCALE_MODES");
     const bool withSerial = modeText.empty() || modeText.find("serial") != std::string::npos;
     const bool shuffled = EnvironmentValue("KB_SHADOW_SCALE_ORDER") == "shuffle";
@@ -3114,7 +3899,33 @@ void RunShadowLargeSceneBenchmark(const std::string& sizeList) {
     for (const std::size_t objectCount : ParseCountList(sizeList)) {
         RenderScene scene;
         FillCasterGridScene(scene, objectCount, shuffled);
+        if (withoutIndex) {
+            for (SceneRenderDrawGroup& group : const_cast<std::vector<SceneRenderDrawGroup>&>(scene.DrawGroups())) group.visibility = {};
+        }
         const std::vector<SceneMeshBatch> batches = SceneMeshBatchBuilder::Build(scene.DrawGroups());
+        if (withMain) {
+            std::vector<MeshPipelineBuildResult> togetherResults(1U);
+            std::vector<MeshPipelineBuildResult> serialResults(1U);
+            std::vector<double> together;
+            std::vector<double> serial;
+            std::size_t admitted = 0U;
+            for (int frame = -kWarmupFrames; frame < frames; ++frame) {
+                const std::array<SceneRenderCamera, 1> cameras{ CasterViewerCamera(frame + kWarmupFrames, mainFar) };
+                const double togetherTime = ShadowFrameMicroseconds(batches, mesh, cameras, &pool, ShadowBuildMode::Together, togetherResults, admitted, MeshPassType::BaseOpaque);
+                if (frame >= 0) together.push_back(togetherTime);
+                if (withSerial) {
+                    std::size_t serialAdmitted = 0U;
+                    const double serialTime = ShadowFrameMicroseconds(batches, mesh, cameras, nullptr, ShadowBuildMode::OneByOne, serialResults, serialAdmitted, MeshPassType::BaseOpaque);
+                    Require(serialAdmitted == admitted, "The opaque pass built on one thread admitted other instances than the one built on workers");
+                    if (frame >= 0) serial.push_back(serialTime);
+                }
+            }
+            std::fprintf(stderr, "shadow_scale_large main %zu 1 %zu %d %.1f %.1f %.1f %.1f %zu" "\n", objectCount, admitted, frames,
+                MedianOf(together), WorstOf(together), MedianOf(serial), WorstOf(serial), pool.WorkerCount());
+        }
+        if (!movingText.empty()) {
+            RunMovingSceneBenchmark(objectCount, ParseCountList(movingText), frames, shuffled);
+        }
         for (const bool cascades : { true, false }) {
             if (cascades ? !withCascades : !withPoints) continue;
             std::vector<MeshPipelineBuildResult> togetherResults(cascades ? 4U : 24U);
@@ -3365,6 +4176,12 @@ void RunMeshPipelineTests() {
     RunMeshPipelineBuildsPassesTogetherMatchesSerialTest();
     RunSceneRendererPreparedShadowPassesMatchOneByOneTest();
     RunMeshPipelineParallelScanReportsMissingResourcesInOrderTest();
+    RunVisibilityBoundsClassificationIsConservativeTest();
+    RunVisibilityIndexStaysInStepWithInstancesTest();
+    RunMeshPipelineVisibilityIndexMatchesScanTest();
+    RunMeshPipelineVisibilityIndexFollowsChangingSceneTest();
+    RunMeshPipelineVisibilityIndexOnWorkersMatchesSerialTest();
+    RunMeshPipelineVisibilityIndexMatchesScanWithResourcesTest();
 }
 
 } // namespace kb::render::tests

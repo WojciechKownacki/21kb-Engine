@@ -197,6 +197,7 @@ struct MeshPipelineScanChunk {
     std::vector<MeshPipelineScanRun> runs;
     std::vector<MeshPipelineScanInstance> instances;
     std::vector<std::uint8_t> chainLevels;
+    std::vector<std::uint64_t> selectionBits;
     std::unordered_map<std::uint64_t, MeshPipelineMaterialResolution> materialResolutions;
     std::vector<std::unordered_map<std::uint64_t, MeshPipelineMaterialResolution>::node_type> materialResolutionNodes;
     // What the scan counted. A chunk whose scan found a resource missing is not clean: the scan reported nothing, and

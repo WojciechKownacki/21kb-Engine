@@ -536,6 +536,8 @@ private:
     [[nodiscard]] SceneRenderMeshInstance BuildGeometrySwarmInstance(
         std::uint64_t entityId, const GeometrySwarmRenderProxy& proxy, std::uint32_t index) const;
     void RebuildDrawGroupsIfNeeded() const;
+    // Brings the visibility index of every draw group up to date with the instances that moved or changed.
+    void RefreshVisibility() const;
     void ApplySurfaceCasts(SceneRenderMeshInstance& instance) const;
     // InvalidateDrawGroups for a change of a non-mesh proxy, which also marks every cached local shadow stale.
     void InvalidateDrawGroupsOfNonMeshProxy() noexcept;
@@ -561,6 +563,8 @@ private:
     mutable std::unordered_map<DrawGroupKey, std::size_t, DrawGroupKeyHash> drawGroupLookupScratch_;
     std::uint64_t nextProxyId_ = 1U;
     mutable bool drawGroupsDirty_ = true;
+    // Set when an instance of a draw group moved or changed, which leaves its visibility index stale.
+    mutable std::uint8_t visibilityStale_ = 0U;
     mutable std::uint64_t drawGroupBuildVersion_ = 1U;
     std::uint64_t transformInPlaceUpdateCount_ = 0;
     std::uint64_t transformFallbackUpdateCount_ = 0;

@@ -16,6 +16,8 @@ struct SceneMeshBatch {
     std::span<const SceneMeshVisibilityCluster> visibilityClusters{};
     std::uint64_t cacheId = 0U;
     std::uint64_t contentRevision = 0U;
+    // Where the instances are, when the draw group keeps that; null otherwise.
+    const SceneMeshVisibilityIndex* visibility = nullptr;
 
     [[nodiscard]] bool Empty() const noexcept {
         return instances.empty();

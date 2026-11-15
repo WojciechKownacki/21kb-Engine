@@ -145,6 +145,58 @@ MeshPipelineFrustum MeshPipelineVisibility::BuildFrustum(const SceneRenderCamera
     return BuildFrustum(camera, SceneDepthPolicy::HomogeneousDepth());
 }
 
+namespace {
+
+// Finds where the corners of the frustum are with every plane moved out by `reach`, as a function of `reach`: the corner of
+// a plane of each of the three pairs (left and right, bottom and top, near and far) is where the three meet.
+void BuildFrustumCorners(MeshPipelineFrustum& frustum) noexcept {
+    frustum.cornersValid = false;
+    for (std::size_t corner = 0U; corner < frustum.cornerBase.size(); ++corner) {
+        const MeshPipelineFrustumPlane& a = frustum.planes[(corner & 1U) != 0U ? 1U : 0U];
+        const MeshPipelineFrustumPlane& b = frustum.planes[2U + ((corner >> 1U) & 1U)];
+        const MeshPipelineFrustumPlane& c = frustum.planes[4U + ((corner >> 2U) & 1U)];
+        const double rows[3][3] = {
+            { a.x, a.y, a.z },
+            { b.x, b.y, b.z },
+            { c.x, c.y, c.z },
+        };
+        const auto determinant = [](const double (&m)[3][3]) noexcept {
+            return m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
+                m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+        };
+        const double det = determinant(rows);
+        if (!(std::abs(det) > 1.0e-6)) {
+            return;
+        }
+        // The point p with rows * p = rhs, by Cramer's rule.
+        const auto solve = [&](double rhs0, double rhs1, double rhs2) noexcept {
+            const double rhs[3] = { rhs0, rhs1, rhs2 };
+            std::array<double, 3> point{};
+            for (std::size_t column = 0U; column < 3U; ++column) {
+                double replaced[3][3] = {};
+                for (std::size_t row = 0U; row < 3U; ++row) {
+                    for (std::size_t k = 0U; k < 3U; ++k) replaced[row][k] = k == column ? rhs[row] : rows[row][k];
+                }
+                point[column] = determinant(replaced) / det;
+            }
+            return point;
+        };
+        // The three planes of the corner are n * p + w + reach = 0.
+        const std::array<double, 3> base = solve(-static_cast<double>(a.w), -static_cast<double>(b.w), -static_cast<double>(c.w));
+        const std::array<double, 3> slope = solve(-1.0, -1.0, -1.0);
+        for (std::size_t axis = 0U; axis < 3U; ++axis) {
+            frustum.cornerBase[corner][axis] = static_cast<float>(base[axis]);
+            frustum.cornerSlope[corner][axis] = static_cast<float>(slope[axis]);
+            if (!std::isfinite(frustum.cornerBase[corner][axis]) || !std::isfinite(frustum.cornerSlope[corner][axis])) {
+                return;
+            }
+        }
+    }
+    frustum.cornersValid = true;
+}
+
+} // namespace
+
 MeshPipelineFrustum MeshPipelineVisibility::BuildFrustum(const SceneRenderCamera* camera, bool homogeneousDepth) noexcept {
     if (camera == nullptr) {
         return {};
@@ -164,7 +216,7 @@ MeshPipelineFrustum MeshPipelineVisibility::BuildFrustum(const SceneRenderCamera
     // Reverse-Z changes which boundary is far, but not the clip inequalities.
     const float lower = homogeneousDepth ? 1.0F : 0.0F;
 
-    return MeshPipelineFrustum{
+    MeshPipelineFrustum frustum{
         .planes = {
             NormalizePlane(MeshPipelineFrustumPlane{ rowX[0] + row0[0], rowX[1] + row0[1], rowX[2] + row0[2], rowX[3] + row0[3] }),
             NormalizePlane(MeshPipelineFrustumPlane{ rowX[0] - row0[0], rowX[1] - row0[1], rowX[2] - row0[2], rowX[3] - row0[3] }),
@@ -175,6 +227,8 @@ MeshPipelineFrustum MeshPipelineVisibility::BuildFrustum(const SceneRenderCamera
         },
         .valid = true,
     };
+    BuildFrustumCorners(frustum);
+    return frustum;
 }
 
 bool MeshPipelineVisibility::IsInsideFrustum(const MeshPipelineFrustum& frustum, const RenderBoundsSphere& bounds) noexcept {

@@ -335,6 +335,8 @@ add_library(kb_renderer STATIC
     src/scene/cache/SceneMaterialTextureDependencySignature.hpp
     src/scene/RenderInstanceBuffer.cpp
     src/scene/RenderScene.cpp
+    src/scene/SceneMeshVisibilityIndexBuilder.cpp
+    src/scene/SceneMeshVisibilityIndexBuilder.hpp
     src/scene/RenderSceneProxyConverters.cpp
     src/scene/RenderSceneProxyConverters.hpp
     src/scene/RenderSceneProxyDirtyTracker.cpp

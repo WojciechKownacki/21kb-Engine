@@ -233,12 +233,68 @@ struct SceneRenderMeshInstance {
 }
 
 // A homogeneous generated range; origin bounds are padded by the resolved
-// section bound at submission. Ordinary mesh proxies keep per-instance culling.
+// section bound at submission. Ordinary mesh proxies are covered by SceneMeshVisibilityIndex.
 struct SceneMeshVisibilityCluster {
     std::uint32_t firstInstance = 0U;
     std::uint32_t instanceCount = 0U;
     RenderBoundsSphere origins{};
     float maximumScale = 0.0F;
+};
+
+// What a pass needs to know about a set of instances to rule them out together: the box their origins lie in, how far
+// their meshes reach beyond an origin and which of them the pass counts as it rules them out.
+struct SceneMeshVisibilityBounds {
+    std::array<float, 3> center{};
+    std::array<float, 3> halfExtent{};
+    // The largest scale of a model (the norm of its linear part) and the farthest a bounds override reaches from its origin.
+    float maximumScale = 0.0F;
+    float overrideReach = 0.0F;
+    std::uint32_t count = 0U;
+    // The layers any member has and the layers every member has.
+    std::uint32_t layersAny = 0U;
+    std::uint32_t layersAll = 0xFFFFFFFFU;
+    // The members by their shadow flags: bit 0 casts shadows, bit 1 is shadow only.
+    std::array<std::uint32_t, 4> kindCount{};
+    // A member has no bounds the box can enclose (its model is not finite or has no size): nothing is ruled out with it.
+    bool unbounded = false;
+};
+
+// Where the instances of a draw group are, for a pass to rule most of them out with a few tests instead of one each, as
+// the clusters of a generated range do for the ones that are in a row. The instances, in any order, are held by clusters
+// of nearby ones; the group as a whole and each cluster keep their bounds. The index keeps the facts of each instance it
+// needs beside the instance, and is kept in step as instances come, go and move (SceneMeshVisibilityIndexBuilder).
+struct SceneMeshVisibilityIndex {
+    static constexpr std::uint32_t kClusterCapacity = 16U;
+
+    struct Entry {
+        std::array<float, 3> origin{};
+        float scale = 0.0F;
+        float overrideReach = 0.0F;
+        std::uint32_t instance = 0U;
+        std::uint32_t layer = 0U;
+        std::uint8_t kind = 0U;
+        bool unbounded = false;
+    };
+
+    struct Cluster : SceneMeshVisibilityBounds {
+        // The sum of the box sides, which tells how well the members of the cluster still lie together.
+        float size = 0.0F;
+        // Set when a member moved or changed: the bounds are stale until the next refresh.
+        std::uint8_t stale = 0U;
+    };
+
+    [[nodiscard]] bool Empty() const noexcept { return clusters.empty(); }
+
+    SceneMeshVisibilityBounds root;
+    std::vector<Cluster> clusters;
+    // kClusterCapacity entries for each cluster, of which the first `count` are members.
+    std::vector<Entry> entries;
+    // The entry of each instance of the group.
+    std::vector<std::uint32_t> slots;
+    // The total cluster size as the clusters were built and as they are now.
+    float builtSize = 0.0F;
+    float currentSize = 0.0F;
+    std::uint8_t stale = 0U;
 };
 
 struct SceneRenderDrawGroup {
@@ -248,6 +304,7 @@ struct SceneRenderDrawGroup {
     bool hasMorphDeformation = false;
     std::vector<SceneRenderMeshInstance> instances;
     std::vector<SceneMeshVisibilityCluster> visibilityClusters;
+    SceneMeshVisibilityIndex visibility;
     // Renderer-derived partition and validity. Authored data remains in the proxies.
     std::uint64_t cacheId = 0U;
     std::uint64_t contentRevision = 0U;

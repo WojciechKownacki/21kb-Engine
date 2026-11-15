@@ -28,6 +28,7 @@ void SceneMeshBatchBuilder::BuildInto(std::span<const SceneRenderDrawGroup> draw
             .instances = std::span<const SceneRenderMeshInstance>(group.instances.data(), group.instances.size()),
             .visibilityClusters = group.visibilityClusters,
             .cacheId = group.cacheId, .contentRevision = group.contentRevision,
+            .visibility = group.visibility.Empty() ? nullptr : &group.visibility,
         });
     }
 }

@@ -3,6 +3,7 @@
 #include "RenderSceneProxyConverters.hpp"
 #include "RenderSceneProxyDirtyTracker.hpp"
 #include "scene/GeometrySwarmVisibilityClusters.hpp"
+#include "scene/SceneMeshVisibilityIndexBuilder.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -236,6 +237,8 @@ RenderProxyId RenderScene::UpsertMesh(const MeshRenderProxyDesc& desc) {
                 const SceneRenderMeshInstance instance = BuildMeshInstance(updated);
                 if (instance.meshAssetId == group.meshAssetId && instance.materialAssetId == group.materialAssetId) {
                     group.instances[proxy.instanceIndexInGroup] = instance;
+                    SceneMeshVisibilityIndexBuilder::Update(group.visibility, instance, proxy.instanceIndexInGroup);
+                    visibilityStale_ = 1U;
                     group.contentRevision = NextContentRevision();
                     proxy.desc = desc;
                     proxy.dirty |= dirty;
@@ -757,6 +760,7 @@ std::optional<SceneRenderCamera> RenderScene::BuildPrimaryCamera(std::uint32_t v
 
 const std::vector<SceneRenderDrawGroup>& RenderScene::DrawGroups() const {
     RebuildDrawGroupsIfNeeded();
+    RefreshVisibility();
     return drawGroups_;
 }
 
@@ -916,6 +920,8 @@ void RenderScene::AppendMeshInstance(MeshRenderProxy& proxy) {
     group.hasMaterialSlotOverrides = group.hasMaterialSlotOverrides || instance.materialSlotOverrideCount != 0U;
     group.hasMorphDeformation = group.hasMorphDeformation || proxy.desc.morphDeformationEnabled;
     group.instances.push_back(instance);
+    SceneMeshVisibilityIndexBuilder::Append(group.instances, group.visibility);
+    visibilityStale_ = 1U;
 }
 
 bool RenderScene::RemoveMeshInstance(const MeshRenderProxy& proxy) noexcept {
@@ -926,6 +932,8 @@ bool RenderScene::RemoveMeshInstance(const MeshRenderProxy& proxy) noexcept {
     SceneRenderDrawGroup& group = drawGroups_[groupIndex];
     const std::size_t instanceIndex = proxy.instanceIndexInGroup;
     if (instanceIndex >= group.instances.size() || group.instances[instanceIndex].entityId != proxy.desc.entityId) return false;
+    SceneMeshVisibilityIndexBuilder::Remove(group.visibility, static_cast<std::uint32_t>(instanceIndex));
+    visibilityStale_ = 1U;
     if (instanceIndex + 1U != group.instances.size()) {
         group.instances[instanceIndex] = std::move(group.instances.back());
         meshes_.at(group.instances[instanceIndex].entityId).instanceIndexInGroup = static_cast<std::uint32_t>(instanceIndex);
@@ -1072,7 +1080,22 @@ void RenderScene::RebuildDrawGroupsIfNeeded() const {
     }
 
     drawGroups_.resize(writeGroupCount);
+    for (SceneRenderDrawGroup& group : drawGroups_) {
+        if (group.partitionKind == 0U) SceneMeshVisibilityIndexBuilder::Build(group.instances, group.visibility);
+        else group.visibility = {};
+    }
+    visibilityStale_ = 0U;
     drawGroupsDirty_ = false;
+}
+
+void RenderScene::RefreshVisibility() const {
+    if (visibilityStale_ == 0U) {
+        return;
+    }
+    visibilityStale_ = 0U;
+    for (SceneRenderDrawGroup& group : drawGroups_) {
+        SceneMeshVisibilityIndexBuilder::Refresh(group.instances, group.visibility);
+    }
 }
 
 void RenderScene::ApplySurfaceCasts(SceneRenderMeshInstance& instance) const {
@@ -1136,6 +1159,8 @@ RenderScene::TransformUpdateOutcome RenderScene::ApplyMeshTransform(std::uint64_
             instance.model = model;
             instance.previousModel = proxy.previousModel;
             instance.previousModelFrame = proxy.previousModelFrame;
+            SceneMeshVisibilityIndexBuilder::Update(group.visibility, instance, proxy.instanceIndexInGroup);
+            std::atomic_ref<std::uint8_t>(visibilityStale_).store(1U, std::memory_order_relaxed);
             // Parallel affine publication writes disjoint instances in the same page.
             if (markGroupChanged) std::atomic_ref<std::uint64_t>(group.contentRevision).store(NextContentRevision(), std::memory_order_relaxed);
             proxy.dirty |= RenderProxyDirtyFlag::Transform;

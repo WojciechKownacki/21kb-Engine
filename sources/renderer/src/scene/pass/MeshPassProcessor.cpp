@@ -1,6 +1,7 @@
 #include "scene/pass/MeshPassProcessor.hpp"
 #include "scene/cache/SceneMeshBatchCommandCache.hpp"
 
+#include "engine/ecs/QueryPrefetch.hpp"
 #include "engine/ecs/WorkerPool.hpp"
 #include "engine/scene/ScenePortalVisibility.hpp"
 #include "kb/render/scene/cache/SceneCachedDrawCommand.hpp"
@@ -15,6 +16,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <optional>
@@ -124,7 +126,10 @@ void ResolveDetailSwitchLevels(const MeshPassProcessorDesc& desc, MeshPipelineBu
     result.detailSwitchLevels.clear();
     const bool advancesHistory = desc.pass == MeshPassType::BaseOpaque || desc.pass == MeshPassType::GBuffer;
     std::unordered_map<std::uint64_t, DetailSwitchCandidate> candidates;
-    for (const SceneMeshBatch& batch : desc.meshBatches) {
+    // A pass with one resolved mesh that has no chain of levels has no instance to choose a level for.
+    const bool noLevelChains = desc.resourceValidation != MeshPipelineResourceValidation::ResolveAndValidate &&
+        (desc.resolvedMeshResource == nullptr || desc.resolvedMeshResource->lods.size() <= 1U);
+    for (const SceneMeshBatch& batch : noLevelChains ? std::span<const SceneMeshBatch>{} : desc.meshBatches) {
         const RenderMeshResource* mesh = nullptr;
         if (desc.resourceValidation == MeshPipelineResourceValidation::ResolveAndValidate) {
             const RenderMeshHandle handle = desc.resourceMap->ResolveMesh(batch.meshAssetId);
@@ -202,6 +207,13 @@ constexpr std::size_t kMinChunks = 4U;
 // after the other than to hand to the workers.
 constexpr std::size_t kMinSideBySideInstances = 512U;
 
+// Passes built together are planned side by side once they have this many batches; fewer take less to plan one after the
+// other than to hand to the workers.
+constexpr std::size_t kMinSideBySidePlanBatches = 1024U;
+
+// How many admitted instances ahead the merge of a chunk fetches the instance it copies into a draw command.
+constexpr std::uint32_t kMergePrefetchDistance = 4U;
+
 // The workers that scan a pass beside the calling thread. Scanning costs a few times what writing the draw commands does,
 // so a few workers keep ahead of the calling thread, and every worker woken costs it time.
 constexpr std::size_t kMaxScanWorkers = 8U;
@@ -222,7 +234,21 @@ struct MeshScanState {
     std::vector<std::unordered_map<std::uint64_t, MeshPipelineMaterialResolution>::node_type>& materialResolutionNodes;
     // The level each instance of the batch being scanned draws; empty for a mesh without a chain of levels.
     std::vector<std::uint8_t>& chainLevels;
+    // The instances of the batch section being scanned that its visibility index leaves to the scan, one bit each.
+    std::vector<std::uint64_t>& selectionBits;
     std::uint32_t culledInstanceCount = 0U;
+    // Stands for the instances of one kind (castsShadow, shadowOnly) when a pass tells what it makes of them.
+    SceneRenderMeshInstance kindProbe{};
+    // What the pass makes of an instance of each kind, which it makes the same of every batch, told once: whether it can
+    // contain it, and, for the material and terrain layer the last scanned section had, whether only the frustum can still
+    // turn it away. Negative while not yet told.
+    std::array<std::int8_t, 4> candidateKinds{ -1, -1, -1, -1 };
+    struct SectionKinds {
+        const RenderMaterialResource* material = nullptr;
+        bool terrainLayerActive = false;
+        std::uint8_t terrainLayerIndex = 0U;
+        std::array<std::int8_t, 4> verdicts{ -1, -1, -1, -1 };
+    } sectionKinds;
 };
 
 // What the scan of one section of a batch keeps the same for every instance.
@@ -237,11 +263,57 @@ struct MeshSectionScope {
     bool gpuDrivenCandidate = false;
 };
 
-[[nodiscard]] std::uint32_t CountCandidates(const MeshScanContext& context, const SceneMeshBatch& batch) noexcept {
+// The visibility index of a batch, when it covers the instances of the batch.
+[[nodiscard]] const SceneMeshVisibilityIndex* UsableIndex(const SceneMeshBatch& batch) noexcept {
+    const SceneMeshVisibilityIndex* index = batch.visibility;
+    return index != nullptr && !index->Empty() && index->slots.size() == batch.instances.size() ? index : nullptr;
+}
+
+// Makes the probe an instance of the given kind (see SceneMeshVisibilityBounds::kindCount) in every layer.
+void SetProbeKind(SceneRenderMeshInstance& probe, std::uint32_t kind) noexcept {
+    probe.castsShadow = (kind & 1U) != 0U;
+    probe.shadowOnly = (kind & 2U) != 0U;
+    probe.layer = 0xFFFFFFFFU;
+}
+
+// The candidates of a batch counted from the kinds of its instances, when its layers say which of them the pass takes.
+[[nodiscard]] std::optional<std::uint32_t> CountIndexedCandidates(const MeshScanContext& context, MeshScanState& state,
+    const SceneMeshBatch& batch) noexcept {
+    const SceneMeshVisibilityIndex* index = UsableIndex(batch);
+    const MeshPassType pass = context.desc.pass;
+    if (index == nullptr || pass == MeshPassType::SelectionId || pass == MeshPassType::EditorSelection) {
+        return std::nullopt;
+    }
+    const SceneMeshVisibilityBounds& root = index->root;
+    if ((root.layersAll & context.cullingMask) == 0U) {
+        return (root.layersAny & context.cullingMask) == 0U ? std::optional<std::uint32_t>{ 0U } : std::nullopt;
+    }
+    std::uint32_t count = 0U;
+    for (std::uint32_t kind = 0U; kind < root.kindCount.size(); ++kind) {
+        if (root.kindCount[kind] == 0U) {
+            continue;
+        }
+        std::int8_t& candidate = state.candidateKinds[kind];
+        if (candidate < 0) {
+            SetProbeKind(state.kindProbe, kind);
+            candidate = MeshPipelinePassPolicy::CanEverContain(pass, state.kindProbe, context.desc.selectedEntityIds, context.cullingMask) ? 1 : 0;
+        }
+        if (candidate != 0) {
+            count += root.kindCount[kind];
+        }
+    }
+    return count;
+}
+
+[[nodiscard]] std::uint32_t CountCandidates(const MeshScanContext& context, MeshScanState& state, const SceneMeshBatch& batch) noexcept {
     const bool wholeBatchIsCandidate = context.cullingMask == 0xFFFFFFFFU && !PassNeedsPerInstanceCandidateFilter(context.desc.pass);
-    return wholeBatchIsCandidate
-        ? static_cast<std::uint32_t>(batch.instances.size())
-        : MeshPipelinePassPolicy::CountCandidateInstances(context.desc.pass, batch, context.desc.selectedEntityIds, context.cullingMask);
+    if (wholeBatchIsCandidate) {
+        return static_cast<std::uint32_t>(batch.instances.size());
+    }
+    if (const std::optional<std::uint32_t> counted = CountIndexedCandidates(context, state, batch)) {
+        return *counted;
+    }
+    return MeshPipelinePassPolicy::CountCandidateInstances(context.desc.pass, batch, context.desc.selectedEntityIds, context.cullingMask);
 }
 
 // Resolves the mesh of a batch that has candidate instances. A batch that is not drawn builds nothing: its mesh is
@@ -314,6 +386,232 @@ struct MeshSectionScope {
     return !(desc.terrainLayersOnly && (section.terrainLayerIndex == UINT8_MAX || section.terrainLayerIndex == 0U));
 }
 
+// Which instances of a batch section the scan visits: every one, or those whose bit is set.
+struct InstanceSelection {
+    const std::vector<std::uint64_t>* bits = nullptr;
+
+    [[nodiscard]] std::size_t First(std::size_t count) const noexcept {
+        return bits == nullptr ? 0U : NextSet(0U, count);
+    }
+    [[nodiscard]] std::size_t After(std::size_t instanceIndex, std::size_t count) const noexcept {
+        return bits == nullptr ? instanceIndex + 1U : NextSet(instanceIndex + 1U, count);
+    }
+
+private:
+    [[nodiscard]] std::size_t NextSet(std::size_t from, std::size_t count) const noexcept {
+        std::size_t word = from >> 6U;
+        if (word >= bits->size()) {
+            return count;
+        }
+        std::uint64_t value = (*bits)[word] & (~std::uint64_t{ 0U } << (from & 63U));
+        while (value == 0U) {
+            if (++word >= bits->size()) {
+                return count;
+            }
+            value = (*bits)[word];
+        }
+        return (word << 6U) + static_cast<std::size_t>(std::countr_zero(value));
+    }
+};
+
+// Fetches the memory of an instance that will be read soon: instances far apart are not read ahead of time.
+void PrefetchInstance(const SceneRenderMeshInstance& instance) noexcept {
+    const char* bytes = reinterpret_cast<const char*>(&instance);
+    for (std::size_t offset = 0U; offset < sizeof(SceneRenderMeshInstance); offset += 64U) {
+        kb::ecs::PrefetchQueryMemory(bytes + offset);
+    }
+}
+
+// A pass makes use of the visibility index only where it admits instances by what the index counts and by the frustum:
+// a pass that admits them by entity, or by whether they moved, reads more of each.
+[[nodiscard]] bool PassUsesVisibilityIndex(const MeshPassProcessorDesc& desc) noexcept {
+    switch (desc.pass) {
+    case MeshPassType::SelectionId:
+    case MeshPassType::EditorSelection:
+        return false;
+    case MeshPassType::MotionVectors:
+        return desc.motionFrame == 0U;
+    case MeshPassType::Depth:
+    case MeshPassType::BaseOpaque:
+    case MeshPassType::GBuffer:
+    case MeshPassType::BaseTransparent:
+    case MeshPassType::ShadowDepth:
+    case MeshPassType::Gizmo:
+        return true;
+    }
+    return false;
+}
+
+// What a scan of one batch section holds the same for every instance, which lets the visibility index rule instances out.
+struct IndexedSectionPlan {
+    const RenderMaterialResource* material = nullptr;
+    float margin = 0.0F;
+    // How far from its origin the bounds of an instance without a bounds override of its own reach, per unit of its scale.
+    float localReach = 0.0F;
+    // Whether the scan counts the LOD selection of every instance.
+    bool countsLods = false;
+    // Whether the pass leaves out the material's instances for being blended.
+    bool blendSkipped = false;
+    // What the scan makes of an instance of each kind: bit 0 when it takes it as a candidate, bit 1 when nothing but the
+    // frustum can still turn it away; negative while not yet told.
+    std::array<std::int8_t, 4>* verdicts = nullptr;
+};
+
+// A bounds radius below this could scale to nothing in the arithmetic of a scan, which then never culls it.
+constexpr float kMinimumIndexedRadius = 1.0e-6F;
+
+// Whether the scan of a batch section is the same for every instance up to what the instances themselves tell (their
+// flags, their layers, their place), which is when the visibility index may rule instances out, and tells what it holds the
+// same. A section whose resources are not found cleanly is left to the scan, which reports what is missing instance by instance.
+[[nodiscard]] bool PlanIndexedSection(const MeshScanContext& context, MeshScanState& state, const SceneMeshBatch& batch,
+    const MeshSectionScope& scope, IndexedSectionPlan& plan) {
+    const MeshPassProcessorDesc& desc = context.desc;
+    const RenderMeshResource* mesh = scope.meshResource;
+    if (!PassUsesVisibilityIndex(desc) || !context.frustum.valid || scope.gpuFrustumCull || mesh == nullptr ||
+        mesh->lods.size() > 1U || scope.section.lodLevel != 0U || batch.hasMaterialSlotOverrides) {
+        return false;
+    }
+    const RenderBoundsSphere& local = scope.section.bounds.IsValid() ? scope.section.bounds : mesh->bounds;
+    if (!(local.radius >= kMinimumIndexedRadius)) {
+        return false;
+    }
+    const RenderMaterialResource* material = desc.resolvedMaterialResource;
+    if (desc.resourceValidation == MeshPipelineResourceValidation::ResolveAndValidate) {
+        const SceneRenderMeshInstance& first = batch.instances.front();
+        const std::uint64_t materialAssetId = MeshPipelineResourceResolver::MaterialAssetForSectionInstance(batch, first, mesh, scope.section);
+        material = nullptr;
+        if (const auto cached = state.materialResolutions.find(materialAssetId); cached != state.materialResolutions.end()) {
+            material = cached->second.resource;
+        } else {
+            SceneRenderSubmitStats found;
+            RenderMaterialHandle handle{};
+            material = MeshPipelineResourceResolver::ResolveMaterialOrFallback(first, materialAssetId, *desc.resources, *desc.resourceMap, handle, found, nullptr);
+            MeshPipelineResourceResolver::ValidateMaterialTextureOrFallback(first, materialAssetId, material, *desc.resources, *desc.resourceMap, found, nullptr);
+            if (found.HasMissingResources() || (materialAssetId != 0U && (!handle.IsValid() || material == nullptr))) {
+                return false;
+            }
+            if (handle.IsValid() && material != nullptr) {
+                EmplaceKeptNode(state.materialResolutions, state.materialResolutionNodes, materialAssetId, MeshPipelineMaterialResolution{
+                    .handle = handle,
+                    .resource = material,
+                });
+            }
+        }
+    }
+    plan.material = material;
+    MeshScanState::SectionKinds& kinds = state.sectionKinds;
+    if (kinds.material != material || kinds.terrainLayerActive != scope.section.terrainLayerActive ||
+        kinds.terrainLayerIndex != scope.section.terrainLayerIndex) {
+        kinds = MeshScanState::SectionKinds{ .material = material, .terrainLayerActive = scope.section.terrainLayerActive,
+            .terrainLayerIndex = scope.section.terrainLayerIndex };
+    }
+    plan.verdicts = &kinds.verdicts;
+    plan.margin = MeshPipelineVisibility::MaterialBoundsMargin(material);
+    plan.localReach = local.radius + std::sqrt(local.center[0] * local.center[0] + local.center[1] * local.center[1] + local.center[2] * local.center[2]);
+    plan.countsLods = !mesh->lods.empty();
+    plan.blendSkipped = PassDisablesAlphaBlend(desc.pass) && MeshPipelinePassPolicy::UsesDisabledAlphaBlend(material);
+    return true;
+}
+
+// What the scan makes of an instance of the kind, in a layer the pass takes.
+[[nodiscard]] std::int8_t KindVerdict(const MeshScanContext& context, MeshScanState& state, const MeshSectionScope& scope,
+    IndexedSectionPlan& plan, std::uint32_t kind) noexcept {
+    std::int8_t& verdict = (*plan.verdicts)[kind];
+    if (verdict < 0) {
+        const MeshPassProcessorDesc& desc = context.desc;
+        SetProbeKind(state.kindProbe, kind);
+        const bool candidate = MeshPipelinePassPolicy::CanEverContain(desc.pass, state.kindProbe, desc.selectedEntityIds, context.cullingMask);
+        const bool reachesFrustum = candidate && !plan.blendSkipped &&
+            MeshPipelinePassPolicy::Accepts(desc.pass, state.kindProbe, plan.material, desc.selectedEntityIds, context.cullingMask, &scope.section);
+        verdict = static_cast<std::int8_t>((candidate ? 1 : 0) | (reachesFrustum ? 2 : 0));
+    }
+    return verdict;
+}
+
+// The members the frustum turns away that no cluster or batch holds, by kind: what a pass counts of them in the end.
+using RuledOutByKind = std::array<std::uint32_t, 4>;
+
+// Adds the members of a set that the frustum turns away. False, and nothing added, when the layers of the members do not tell
+// which of them the pass takes.
+[[nodiscard]] bool TallyRuledOut(std::uint32_t cullingMask, const SceneMeshVisibilityBounds& bounds, RuledOutByKind& ruledOut) noexcept {
+    if ((bounds.layersAll & cullingMask) == 0U) {
+        // None of them is a candidate when none has a layer the pass takes.
+        return (bounds.layersAny & cullingMask) == 0U;
+    }
+    for (std::size_t kind = 0U; kind < ruledOut.size(); ++kind) {
+        ruledOut[kind] += bounds.kindCount[kind];
+    }
+    return true;
+}
+
+// Counts the instances the frustum turned away as scanning each of them would have counted it.
+void CountRuledOut(const MeshScanContext& context, MeshScanState& state, const MeshSectionScope& scope,
+    IndexedSectionPlan& plan, const RuledOutByKind& ruledOut) noexcept {
+    for (std::uint32_t kind = 0U; kind < ruledOut.size(); ++kind) {
+        if (ruledOut[kind] == 0U) {
+            continue;
+        }
+        const std::int8_t verdict = KindVerdict(context, state, scope, plan, kind);
+        if (plan.countsLods && (verdict & 1) != 0) {
+            state.stats.lodSelectionCount += ruledOut[kind];
+        }
+        if ((verdict & 2) != 0) {
+            state.culledInstanceCount += ruledOut[kind];
+        }
+    }
+}
+
+// Rules out the instances of a batch section that lie in clusters of its visibility index outside the frustum, and counts
+// them as scanning each would have. In a cluster the frustum cuts across, each instance is told by its entry, which is
+// quicker than reading the instance. The instances that are left are scanned as ever.
+void SelectInstances(const MeshScanContext& context, MeshScanState& state, const SceneMeshBatch& batch,
+    const MeshSectionScope& scope, InstanceSelection& selection) {
+    const SceneMeshVisibilityIndex* index = UsableIndex(batch);
+    IndexedSectionPlan plan;
+    if (index == nullptr || !PlanIndexedSection(context, state, batch, scope, plan)) {
+        return;
+    }
+    const auto reachOf = [&plan](float maximumScale, float overrideReach) noexcept {
+        return std::max(maximumScale * plan.localReach, overrideReach) + plan.margin;
+    };
+    const SceneMeshVisibilityBounds& root = index->root;
+    const MeshPipelineBoundsVisibility rootVisibility = MeshPipelineVisibility::ClassifyBounds(
+        context.frustum, root, reachOf(root.maximumScale, root.overrideReach));
+    if (rootVisibility == MeshPipelineBoundsVisibility::Inside) {
+        return;
+    }
+    std::vector<std::uint64_t>& bits = state.selectionBits;
+    selection.bits = &bits;
+    RuledOutByKind ruledOut{};
+    if (rootVisibility == MeshPipelineBoundsVisibility::Outside && TallyRuledOut(context.cullingMask, root, ruledOut)) {
+        bits.clear();
+        CountRuledOut(context, state, scope, plan, ruledOut);
+        return;
+    }
+    bits.assign((batch.instances.size() + 63U) / 64U, 0U);
+    for (std::size_t clusterIndex = 0U; clusterIndex < index->clusters.size(); ++clusterIndex) {
+        const SceneMeshVisibilityIndex::Cluster& cluster = index->clusters[clusterIndex];
+        const MeshPipelineBoundsVisibility visibility = MeshPipelineVisibility::ClassifyBounds(
+            context.frustum, cluster, reachOf(cluster.maximumScale, cluster.overrideReach));
+        if (visibility == MeshPipelineBoundsVisibility::Outside && TallyRuledOut(context.cullingMask, cluster, ruledOut)) {
+            continue;
+        }
+        const SceneMeshVisibilityIndex::Entry* members = index->entries.data() + clusterIndex * SceneMeshVisibilityIndex::kClusterCapacity;
+        for (std::uint32_t member = 0U; member < cluster.count; ++member) {
+            const SceneMeshVisibilityIndex::Entry& entry = members[member];
+            if (visibility != MeshPipelineBoundsVisibility::Inside && !entry.unbounded &&
+                MeshPipelineVisibility::IsReachOutsideFrustum(context.frustum, entry.origin, reachOf(entry.scale, entry.overrideReach))) {
+                if ((entry.layer & context.cullingMask) != 0U) {
+                    ++ruledOut[entry.kind];
+                }
+                continue;
+            }
+            bits[entry.instance >> 6U] |= std::uint64_t{ 1U } << (entry.instance & 63U);
+        }
+    }
+    CountRuledOut(context, state, scope, plan, ruledOut);
+}
+
 // Scans the instances of a batch for one section and hands each one the pass draws to `sink`, with the draw command it
 // joins. Nothing is written but the state of the thread, so batches can be scanned on several threads.
 template <typename Sink>
@@ -326,7 +624,18 @@ void ScanSection(const MeshScanContext& context, MeshScanState& state, const Sce
     std::uint64_t lastMaterialAssetId = 0U;
     MeshPipelineMaterialResolution lastMaterialResolution{};
     std::size_t clusterIndex = 0U;
-    for (std::size_t instanceIndex = 0U; instanceIndex < batch.instances.size(); ++instanceIndex) {
+    InstanceSelection selection;
+    if (batch.visibility != nullptr) {
+        SelectInstances(context, state, batch, scope, selection);
+    }
+    const std::size_t instanceCount = batch.instances.size();
+    for (std::size_t instanceIndex = selection.First(instanceCount); instanceIndex < instanceCount;
+         instanceIndex = selection.After(instanceIndex, instanceCount)) {
+        if (selection.bits != nullptr) {
+            // The instances that are left may lie far apart: the next is fetched while this one is scanned.
+            const std::size_t ahead = selection.After(instanceIndex, instanceCount);
+            if (ahead < instanceCount && ahead != instanceIndex + 1U) PrefetchInstance(batch.instances[ahead]);
+        }
         const SceneRenderMeshInstance& instance = batch.instances[instanceIndex];
         if (!MeshPipelinePassPolicy::CanEverContain(desc.pass, instance, desc.selectedEntityIds, context.cullingMask)) {
             continue;
@@ -611,11 +920,14 @@ struct MeshCommandWriter {
 // Builds one batch into the draw commands on the calling thread.
 void BuildBatch(const MeshScanContext& context, MeshScanState& state, MeshCommandWriter& writer, const SceneMeshBatch& batch) {
     const MeshPassProcessorDesc& desc = context.desc;
-    SceneMeshBatchCommandCache::BatchScope batchScope(desc.batchCommandCache, writer.result, batch,
-        writer.commandCount, writer.acceptedInstanceCount, desc.diagnostics);
-    if (batchScope.TryReuse()) return;
-    batchScope.RecycleStorage();
-    const std::uint32_t candidateCount = CountCandidates(context, batch);
+    // Without a cache, which most passes have none of, there is nothing to reuse and nothing to record.
+    std::optional<SceneMeshBatchCommandCache::BatchScope> batchScope;
+    if (desc.batchCommandCache != nullptr) {
+        batchScope.emplace(desc.batchCommandCache, writer.result, batch, writer.commandCount, writer.acceptedInstanceCount, desc.diagnostics);
+        if (batchScope->TryReuse()) return;
+        batchScope->RecycleStorage();
+    }
+    const std::uint32_t candidateCount = CountCandidates(context, state, batch);
     if (candidateCount == 0U) {
         return;
     }
@@ -647,6 +959,7 @@ void ScanChunk(const MeshScanContext& context, MeshPipelineScanChunk& chunk) {
         .materialResolutions = chunk.materialResolutions,
         .materialResolutionNodes = chunk.materialResolutionNodes,
         .chainLevels = chunk.chainLevels,
+        .selectionBits = chunk.selectionBits,
     };
     for (std::size_t offset = 0U; offset < chunk.batchCount; ++offset) {
         const MeshPipelineScanBatch& resolved = chunk.batches[offset];
@@ -687,6 +1000,9 @@ void MergeChunk(const MeshScanContext& context, const MeshPipelineScanChunk& chu
         MeshDrawCommand* command = nullptr;
         std::uint32_t drawCommandIndex = 0U;
         for (std::uint32_t index = 0U; index < run.instanceCount; ++index) {
+            if (index + kMergePrefetchDistance < run.instanceCount) {
+                PrefetchInstance(batch.instances[chunk.instances[instanceCursor + kMergePrefetchDistance].instanceIndex]);
+            }
             const MeshPipelineScanInstance& admitted = chunk.instances[instanceCursor++];
             const SceneRenderMeshInstance& instance = batch.instances[admitted.instanceIndex];
             if (index == 0U || budgeted) {
@@ -785,12 +1101,14 @@ public:
         const MeshPassProcessorDesc& desc = context_.desc;
         MeshCommandWriter writer{ .desc = desc, .result = result_ };
         std::vector<std::uint8_t> chainLevels;
+        std::vector<std::uint64_t> selectionBits;
         MeshScanState state{
             .stats = result_.stats,
             .diagnostics = desc.diagnostics,
             .materialResolutions = result_.materialResolutionScratch,
             .materialResolutionNodes = result_.materialResolutionNodes,
             .chainLevels = chainLevels,
+            .selectionBits = selectionBits,
         };
         std::size_t nextChunk = 0U;
         for (std::size_t batchIndex = 0U; batchIndex < desc.meshBatches.size(); ++batchIndex) {
@@ -933,8 +1251,17 @@ void MeshPassProcessor::BuildCommandsInto(std::span<const MeshPassBuild> passes)
     std::optional<PassBuild> single;
     std::vector<std::optional<PassBuild>> many(passes.size() > 1U ? passes.size() : 0U);
     const std::span<std::optional<PassBuild>> builds = passes.size() > 1U ? std::span{ many } : std::span{ &single, 1U };
-    for (std::size_t index = 0U; index < passes.size(); ++index) {
-        builds[index].emplace(passes[index].desc, *passes[index].result, pool);
+    // Planning a pass reads all its batches: with batches enough to make it worth the workers, the passes are planned side by side.
+    if (pool != nullptr && pool->Running() && passes.size() > 1U && passes.front().desc.meshBatches.size() >= kMinSideBySidePlanBatches) {
+        pool->ParallelForChunks(passes.size(), 1U, [&](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
+            for (std::size_t index = chunk.begin; index < chunk.begin + chunk.count; ++index) {
+                builds[index].emplace(passes[index].desc, *passes[index].result, pool);
+            }
+        });
+    } else {
+        for (std::size_t index = 0U; index < passes.size(); ++index) {
+            builds[index].emplace(passes[index].desc, *passes[index].result, pool);
+        }
     }
     MeshPassScheduler scheduler(builds, pool);
     scheduler.Run();
