@@ -42,6 +42,8 @@ struct CommandIo {
 [[nodiscard]] kb::core::JsonValue DataObject(std::string_view schema);
 // Gives `data` to the result object of --json; does nothing without --json.
 void PublishData(CommandIo io, kb::core::JsonValue data);
+// The text a command prints, as a data value: parsed when it is a JSON document (a source asset), else the text itself.
+[[nodiscard]] kb::core::JsonValue JsonDocumentOrText(std::string_view text);
 
 // Parses "--name value" options, "--name" boolean flags (from a caller-provided
 // flag list), and bare positionals from a command's argument tail.

@@ -21,6 +21,7 @@
 #include "engine/scene/ParticleEffectAssetIO.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
+#include "engine/scene/AnimationAssetIO.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/SceneJointComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -5132,7 +5133,47 @@ struct DataProbe {
     }
     must(RunCliProgram({ "navmesh", "bake", "--project", root, "--scene", "Assets/Level.21kbscene" }), "navmesh bake");
 
+    // Fixtures of the other read commands: a second scene (so the startup scene stays as it is), assets of every kind.
+    must(RunCliProgram({ "scene-new", "--project", root, "--name", "Probe", "--template", "Empty", "--default", "no" }), "scene-new");
+    const std::string side = "Assets/Scenes/Probe.21kbscene";
+    must(RunCliProgram({ "entity", "add", "--project", root, "--scene", side, "--name", "Goblin" }), "entity add");
+    must(RunCliProgram({ "ai", "make", "--project", root, "--scene", side, "--entity", "Goblin", "--preset", "Melee" }), "ai make");
+    must(RunCliProgram({ "ability", "new", "--project", root, "--name", "Probe", "--set", "amount=25" }), "ability new");
+    must(RunCliProgram({ "terrain", "new", "--project", root, "--terrain", "/Game/Terrains/Probe.kbterrain" }), "terrain new");
+    const std::string baseline = (rootPath / "baseline.probe.json").string();
+    must(RunCliProgram({ "api-check", "--baseline", baseline, "--update-baseline" }), "api-check --update-baseline");
+    const std::string packFile = (rootPath / "Probe.kbpack").string();
+    WriteRuntimeCook(packFile, "rock", false);
+    std::filesystem::create_directories(rootPath / "Mods", error);
+    const std::string mods = (rootPath / "Mods").string();
+    {
+        kb::scene::AnimationClip clip;
+        clip.durationSeconds = 1.0F;
+        clip.tracks.push_back(kb::scene::AnimationTransformTrack{ .keyframes = { kb::scene::AnimationTransformKeyframe{ .timeSeconds = 0.0F }, kb::scene::AnimationTransformKeyframe{ .timeSeconds = 1.0F } } });
+        std::filesystem::create_directories(rootPath / "Assets" / "Animation", error);
+        Require(kb::scene::AnimationAssetIO::SaveClip(rootPath / "Assets" / "Animation" / "Hero_Walk.kbanim", clip), "the probe clip could not be saved");
+    }
+    must(RunCliProgram({ "animator", "new", "--project", root, "--name", "Probe", "--clip", "/Game/Animation/Hero_Walk.kbanim" }), "animator new");
+
     std::vector<DataProbe> probes{
+        { "guide", { "guide" }, "21kb.cli.guide/v1" },
+        { "api", { "api", "--topic", "index" }, "21kb.cli.api-topic/v1" },
+        { "api", { "api", "--search", "vector" }, "21kb.cli.api-search/v1" },
+        { "api-check", { "api-check", "--baseline", baseline }, "21kb.cli.api-check/v1" },
+        { "code", { "code", "map", "--depth", "1" }, "21kb.cli.code-map/v1" },
+        { "code", { "code", "find", "--text", "argument list positionals", "--limit", "5" }, "21kb.cli.code-find/v1" },
+        { "code", { "code", "show", "--symbol", "ArgumentList" }, "21kb.cli.code-show/v1" },
+        { "ability", { "ability", "show", "--project", root, "--ability", "/Game/Abilities/Probe.kbability" }, "21kb.cli.ability-show/v1" },
+        { "ai", { "ai", "show", "--project", root, "--scene", side, "--entity", "Goblin" }, "21kb.cli.ai-show/v1" },
+        { "ai", { "ai", "presets" }, "21kb.cli.ai-presets/v1" },
+        { "animator", { "animator", "show", "--project", root, "--controller", "/Game/Animation/Probe.kbanimcontroller" }, "21kb.cli.animator-show/v1" },
+        { "terrain", { "terrain", "info", "--project", root, "--terrain", "/Game/Terrains/Probe.kbterrain" }, "21kb.cli.terrain-info/v1" },
+        { "terrain", { "terrain", "sample", "--project", root, "--terrain", "/Game/Terrains/Probe.kbterrain", "--x", "0", "--z", "0" }, "21kb.cli.terrain-sample/v1" },
+        { "terrain", { "terrain", "layer", "list", "--project", root, "--terrain", "/Game/Terrains/Probe.kbterrain" }, "21kb.cli.terrain-layer-list/v1" },
+        { "pack", { "pack", "info", packFile }, "21kb.cli.pack-info/v1" },
+        { "mod", { "mod", "list", "--mods", mods }, "21kb.cli.mod-list/v1" },
+        { "world", { "world", "chunks", "--project", root }, "21kb.cli.world-chunks/v1" },
+        { "import", { "import", "--project", root, "--list-backups" }, "21kb.cli.import-backups/v1" },
         { "scene-list", { "scene-list", "--project", root, "--scene", "Assets/Scenes/Main.21kbscene" }, "21kb.cli.scene-list/v1" },
         { "entity", { "entity", "show", "--project", root, "--name", "Player" }, "21kb.cli.entity-show/v1" },
         { "schema", { "schema" }, "21kb.cli.schema/v1" },
@@ -5145,6 +5186,21 @@ struct DataProbe {
         { "navmesh", { "navmesh", "info", (rootPath / "Assets" / "Level.21kbnavmesh").string() }, "21kb.cli.navmesh-info/v1" },
     };
 #if KB_CLI_RENDERER
+    must(RunCliProgram({ "map2d", "new", "--project", root, "--scene", side, "--name", "World", "--size", "8x8" }), "map2d new");
+    must(RunCliProgram({ "csg", "new", "--project", root, "--name", "Probe" }), "csg new");
+    must(RunCliProgram({ "rig2d", "new", "--project", root, "--name", "Probe" }), "rig2d new");
+    must(RunCliProgram({ "vector2d-new", "--project", root, "--name", "Probe" }), "vector2d-new");
+    must(RunCliProgram({ "vfx-new", "--project", root, "--name", "Probe" }), "vfx-new");
+    const std::filesystem::path crate = rootPath / "External" / "Crate.obj";
+    WriteTextFile(crate, "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+    must(RunCliProgram({ "import", "--project", root, "--destination", "/Game/Models", crate.string() }), "import");
+    probes.push_back({ "map2d", { "map2d", "info", "--project", root, "--map", "/Game/Maps/World.kbmap2d" }, "21kb.cli.map2d-info/v1" });
+    probes.push_back({ "map2d", { "map2d", "ground", "list", "--project", root }, "21kb.cli.map2d-ground-list/v1" });
+    probes.push_back({ "csg", { "csg", "show", "--project", root, "--source", "/Game/Geometry/Probe.kbcsg" }, "21kb.cli.csg-show/v1" });
+    probes.push_back({ "rig2d", { "rig2d", "show", "--project", root, "--rig", "/Game/Rigs/Probe.kbrig2d" }, "21kb.cli.rig2d-show/v1" });
+    probes.push_back({ "vector2d-show", { "vector2d-show", "--project", root, "--shape", "/Game/Shapes/Probe.kbvector2d" }, "21kb.cli.vector2d-show/v1" });
+    probes.push_back({ "vfx-show", { "vfx-show", "--project", root, "--effect", "/Game/Particles/Probe.kbvfx" }, "21kb.cli.vfx-show/v1" });
+    probes.push_back({ "mesh-lod", { "mesh-lod", "show", "--project", root, "--mesh", "/Game/Models/Crate.21kb" }, "21kb.cli.mesh-lod-show/v1" });
     must(RunCliProgram({ "material-new", "--project", root, "--name", "Probe", "--set", "Base Color=#C8202A", "--set", "Roughness=0.4" }), "material-new");
     must(RunCliProgram({ "material-instance-new", "--project", root, "--parent", "/Game/Materials/Probe.kbmat", "--name", "ProbeInst" }), "material-instance-new");
     probes.push_back({ "material-show", { "material-show", "--project", root, "--material", "/Game/Materials/Probe.kbmat" }, "21kb.cli.material-show/v1" });
@@ -5179,10 +5235,10 @@ struct DataProbe {
 
 void RunStructuredOutputTests() {
     const std::vector<DataProbe> probes = PrepareDataProbes();
-    const auto data = [&](std::string_view command, std::string* text = nullptr) {
+    const auto data = [&](std::string_view key, std::string* text = nullptr) {
         for (const DataProbe& probe : probes)
-            if (probe.command == command) return RunDataProbe(probe, text);
-        Require(false, "no probe for " + std::string{ command });
+            if (probe.command == key || probe.schema == key) return RunDataProbe(probe, text);
+        Require(false, "no probe for " + std::string{ key });
         return JsonValue{};
     };
     const auto number = [](const JsonValue* value) { return value != nullptr ? value->AsNumber(-1.0e9) : -1.0e9; };
@@ -5264,7 +5320,70 @@ void RunStructuredOutputTests() {
     const JsonValue navmesh = data("navmesh");
     Require(navmesh.Find("agents")->Size() >= 1U && number(navmesh.Find("cellSize")) > 0.0 && number(navmesh.Find("agents")->At(0U)->Find("tiles")) > 0.0,
         "navmesh info data must give the cell size and the agents' tiles");
+    // The remaining read commands: guides and the script API, the code map, authored assets and their settings.
+    const JsonValue guide = data("guide");
+    Require(guide.Find("guides")->Size() > 3U && Contains(guide.Find("text")->AsString(), "How-to") && guide.Find("topic")->AsString() == "index",
+        "guide data must hold the index text and the list of guides");
+    Require(Contains(data("21kb.cli.api-topic/v1").Find("text")->AsString(), "script API") && !data("21kb.cli.api-search/v1").Find("text")->AsString().empty(),
+        "api data must carry the page of a topic and the matches of a search");
+    const JsonValue apiCheck = data("api-check");
+    Require(apiCheck.Find("compatible")->AsBool() && number(apiCheck.Find("breakingCount")) == 0.0 && apiCheck.Find("changes")->GetKind() == JsonValue::Kind::Array,
+        "api-check data must say the surface is compatible with its baseline");
+    Require(data("21kb.cli.code-map/v1").Find("folders")->Size() > 0U, "code map data must list folders");
+    const JsonValue found = data("21kb.cli.code-find/v1");
+    Require(found.Find("hits")->Size() > 0U && number(found.Find("hits")->At(0U)->Find("line")) >= 1.0 && !found.Find("hits")->At(0U)->Find("file")->AsString().empty(),
+        "code find data must list files with a line each");
+    const JsonValue shownSymbol = data("21kb.cli.code-show/v1");
+    Require(shownSymbol.Find("declarations")->Size() > 0U && shownSymbol.Find("usedIn")->Size() > 0U &&
+            Contains(shownSymbol.Find("declarations")->At(0U)->Find("declaration")->AsString(), "ArgumentList"),
+        "code show data must give the declaration and where the symbol is used");
+    const JsonValue ability = data("ability");
+    Require(ability.Find("name")->AsString() == "Probe" && ability.Find("target")->AsString() == "Enemy" && close(number(ability.Find("amount")), 25.0),
+        "ability show data must carry the values of the ability");
+    const JsonValue brain = data("21kb.cli.ai-show/v1");
+    Require(brain.Find("hasBrain")->AsBool() && brain.Find("preset")->AsString() == "Melee" && brain.Find("rules")->Size() == 3U &&
+            brain.Find("rules")->At(0U)->Find("when")->AsString() == "KnowsEnemy" && number(brain.Find("combatant")->Find("maximumHealth")) > 0.0,
+        "ai show data must carry the preset, the combatant and the rules");
+    const JsonValue presets = data("21kb.cli.ai-presets/v1");
+    Require(presets.Find("presets")->Size() == 5U && presets.Find("presets")->At(0U)->Find("name")->AsString() == "Melee", "ai presets data must list the presets");
+    const JsonValue controller = data("animator");
+    Require(controller.Find("layers")->Size() >= 1U && controller.Find("layers")->At(0U)->Find("states")->Size() == 1U &&
+            controller.Find("layers")->At(0U)->Find("states")->At(0U)->Find("name")->AsString() == "Walk" &&
+            Contains(controller.Find("layers")->At(0U)->Find("states")->At(0U)->Find("clip")->AsString(), "Hero_Walk"),
+        "animator show data must list the states with their clips");
+    const JsonValue terrainInfo = data("21kb.cli.terrain-info/v1");
+    Require(number(terrainInfo.Find("width")) == 129.0 && terrainInfo.Find("slopeHistogram")->Size() == 9U && terrainInfo.Find("layers")->Size() == 0U &&
+            !terrainInfo.Find("heightHash")->AsString().empty(),
+        "terrain info data must give the size, the slopes and the layers");
+    const JsonValue terrainSample = data("21kb.cli.terrain-sample/v1");
+    Require(terrainSample.Find("normal")->Size() == 3U && !terrainSample.Find("hole")->AsBool(), "terrain sample data must give the surface at the point");
+    Require(data("21kb.cli.terrain-layer-list/v1").Find("layers")->GetKind() == JsonValue::Kind::Array, "terrain layer list data must hold an array");
+    const JsonValue pack = data("pack");
+    Require(pack.Find("role")->AsString() == "base" && number(pack.Find("formatVersion")) == 3.0 && number(pack.Find("artifacts")) > 0.0 && !pack.Find("sealed")->AsBool() &&
+            pack.Find("base")->IsNull(),
+        "pack info data must describe the pack");
+    Require(data("mod").Find("mods")->GetKind() == JsonValue::Kind::Array && data("world").Find("chunks")->GetKind() == JsonValue::Kind::Array &&
+            data("import").Find("backups")->GetKind() == JsonValue::Kind::Array,
+        "mod list, world chunks and the import backups must return arrays");
 #if KB_CLI_RENDERER
+    const JsonValue mapInfo = data("21kb.cli.map2d-info/v1");
+    Require(number(mapInfo.Find("width")) == 8.0 && number(mapInfo.Find("height")) == 8.0 && number(mapInfo.Find("tileCount")) == 0.0 && mapInfo.Find("camera")->IsNull(),
+        "map2d info data must give the size of the map");
+    Require(data("21kb.cli.map2d-ground-list/v1").Find("grounds")->GetKind() == JsonValue::Kind::Array, "map2d ground list data must hold an array");
+    // A source asset is a JSON document: it is data, not the whole result, so the envelope keeps its text beside it.
+    std::string csgText;
+    const JsonValue csg = data("csg", &csgText);
+    Require(csg.Find("content")->Find("brushes")->Size() == 1U && Contains(csgText, "brushes"), "csg show data must carry the source");
+    Require(data("rig2d").Find("content")->Find("bones")->Size() == 2U, "rig2d show data must carry the rig");
+    Require(data("vector2d-show").Find("source")->Find("points")->Size() == 3U, "vector2d-show data must carry the shape");
+    const JsonValue effect = data("vfx-show");
+    bool hasEmitterCount = false;
+    for (std::size_t index = 0U; index < effect.Find("entries")->Size(); ++index)
+        hasEmitterCount = hasEmitterCount || effect.Find("entries")->At(index)->Find("key")->AsString() == "effect.emitterCount";
+    Require(hasEmitterCount && effect.Find("effect")->AsString() == "/Game/Particles/Probe.kbvfx", "vfx-show data must list the key and value of the effect file");
+    const JsonValue lod = data("mesh-lod");
+    Require(number(lod.Find("triangles")) == 1.0 && !lod.Find("buildsChain")->AsBool() && lod.Find("levels")->GetKind() == JsonValue::Kind::Array,
+        "mesh-lod show data must give the triangles and whether a chain is built");
     const JsonValue material = data("material-show");
     Require(material.Find("material")->AsString() == "/Game/Materials/Probe.kbmat" && material.Find("values")->Find("baseColor")->AsString() == "#C8202A" &&
             close(number(material.Find("values")->Find("roughness")), 0.4) && number(material.Find("graphNodes")) == 0.0,

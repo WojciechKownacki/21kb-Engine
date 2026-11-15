@@ -1,4 +1,5 @@
 #include "CliCommands.hpp"
+#include "CliProgram.hpp"
 #include "CliMaterialShared.hpp"
 #include "engine/assets/AssetFileName.hpp"
 #include "engine/core/JsonValue.hpp"
@@ -42,7 +43,12 @@ int Run(std::string_view command,const ArgumentList& arguments,CommandIo io) {
         if(directoryError) return fail(directoryError.message());
         if(!kb::scene::SaveVectorShape2D(file,shape,error)) return fail(error);
     }
-    io.out<<kb::scene::EncodeVectorShape2D(shape);return 0;
+    const std::string text=kb::scene::EncodeVectorShape2D(shape);io.out<<text;
+    if(command=="vector2d-show"&&io.WantsData()) {
+        auto data=DataObject("21kb.cli.vector2d-show/v1");data.Set("shape",kb::core::JsonValue::MakeString(ToValidUtf8(arguments.Option("--shape").value_or(""))));
+        data.Set("source",JsonDocumentOrText(text));PublishData(io,std::move(data));
+    }
+    return 0;
 }
 }
 int RunVectorShapeNewCommand(const ArgumentList& args,CommandIo io){return Run("vector2d-new",args,io);}

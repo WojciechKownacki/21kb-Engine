@@ -1889,6 +1889,49 @@ void PrintBrain(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::ost
     }
 }
 
+// The brain PrintBrain describes, as data: the preset, the movement limits, the combatant's numbers and the rules.
+[[nodiscard]] kb::core::JsonValue BrainData(kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+    using kb::core::JsonValue;
+    JsonValue data = DataObject("21kb.cli.ai-show/v1");
+    const kb::scene::AIBrainComponent* brain = scene.Components().AIBrains().TryGet(entity);
+    const kb::scene::CombatantComponent* combatant = scene.Components().Combatants().TryGet(entity);
+    data.Set("hasBrain", JsonValue::MakeBool(brain != nullptr));
+    if (brain == nullptr) return data;
+    data.Set("preset", JsonValue::MakeString(std::string{ kb::scene::kAIBrainPresetNames[static_cast<std::size_t>(brain->preset)] }));
+    data.Set("enabled", JsonValue::MakeBool(brain->enabled));
+    data.Set("moveSpeed", JsonValue::MakeNumber(brain->moveSpeed));
+    data.Set("wanderRadius", JsonValue::MakeNumber(brain->wanderRadius));
+    data.Set("leashDistance", JsonValue::MakeNumber(brain->leashDistance));
+    if (combatant != nullptr) {
+        JsonValue fighter = JsonValue::MakeObject();
+        fighter.Set("team", JsonValue::MakeNumber(combatant->team));
+        fighter.Set("health", JsonValue::MakeNumber(combatant->health));
+        fighter.Set("maximumHealth", JsonValue::MakeNumber(combatant->maximumHealth));
+        fighter.Set("mana", JsonValue::MakeNumber(combatant->mana));
+        fighter.Set("maximumMana", JsonValue::MakeNumber(combatant->maximumMana));
+        fighter.Set("sightRange", JsonValue::MakeNumber(combatant->sightRange));
+        fighter.Set("hearingRange", JsonValue::MakeNumber(combatant->hearingRange));
+        data.Set("combatant", std::move(fighter));
+    } else {
+        data.Set("combatant", JsonValue{});
+    }
+    auto rules = JsonValue::MakeArray();
+    for (std::size_t index = 0U; index < kb::scene::kAIBrainRuleCount; ++index) {
+        const kb::scene::AIRule& rule = brain->rules[index];
+        if (rule.when == kb::scene::AICondition::Never) continue;
+        JsonValue item = JsonValue::MakeObject();
+        item.Set("slot", JsonValue::MakeNumber(static_cast<double>(index + 1U)));
+        item.Set("when", JsonValue::MakeString(std::string{ kb::scene::kAIConditionNames[static_cast<std::size_t>(rule.when)] }));
+        item.Set("whenValue", kb::scene::AIConditionTakesValue(rule.when) ? JsonValue::MakeNumber(rule.whenValue) : JsonValue{});
+        item.Set("action", JsonValue::MakeString(std::string{ kb::scene::kAIActionNames[static_cast<std::size_t>(rule.action)] }));
+        item.Set("actionValue", kb::scene::AIActionTakesValue(rule.action) ? JsonValue::MakeNumber(rule.actionValue) : JsonValue{});
+        if (rule.action == kb::scene::AIAction::UseAbility) item.Set("ability", JsonValue::MakeString(ToValidUtf8(AbilityName(scene, combatant, rule.actionValue))));
+        rules.Append(std::move(item));
+    }
+    data.Set("rules", std::move(rules));
+    return data;
+}
+
 template <typename Enum, std::size_t Count>
 [[nodiscard]] std::optional<Enum> NameOf(std::string_view text, const std::array<std::string_view, Count>& names) {
     for (std::size_t index = 0U; index < Count; ++index) {
@@ -2057,6 +2100,11 @@ void ListNames(const std::array<std::string_view, Count>& names, std::ostream& o
     const std::optional<kb::scene::SceneEntity> entity = FindEntity(*session->scene, *entityName, io);
     if (!entity.has_value()) return 1;
     PrintBrain(*session->scene, *entity, io.out);
+    if (io.WantsData()) {
+        kb::core::JsonValue data = BrainData(*session->scene, *entity);
+        data.Set("entity", kb::core::JsonValue::MakeString(ToValidUtf8(*entityName)));
+        PublishData(io, std::move(data));
+    }
     return 0;
 }
 
@@ -2301,8 +2349,19 @@ int RunAiCommand(const ArgumentList& arguments, CommandIo io) {
     const std::vector<std::string>& positionals = arguments.Positionals();
     const std::string action = positionals.empty() ? std::string{} : positionals.front();
     if (action == "presets") {
+        auto presets = kb::core::JsonValue::MakeArray();
         for (std::size_t index = 1U; index < kb::scene::kAIBrainPresetCount; ++index) {
-            io.out << kb::scene::kAIBrainPresetNames[index] << ": " << PresetSummary(static_cast<kb::scene::AIBrainPreset>(index)) << '\n';
+            const std::string_view summary = PresetSummary(static_cast<kb::scene::AIBrainPreset>(index));
+            io.out << kb::scene::kAIBrainPresetNames[index] << ": " << summary << '\n';
+            auto preset = kb::core::JsonValue::MakeObject();
+            preset.Set("name", kb::core::JsonValue::MakeString(std::string{ kb::scene::kAIBrainPresetNames[index] }));
+            preset.Set("summary", kb::core::JsonValue::MakeString(ToValidUtf8(summary)));
+            presets.Append(std::move(preset));
+        }
+        if (io.WantsData()) {
+            kb::core::JsonValue data = DataObject("21kb.cli.ai-presets/v1");
+            data.Set("presets", std::move(presets));
+            PublishData(io, std::move(data));
         }
         return 0;
     }

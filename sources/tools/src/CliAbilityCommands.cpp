@@ -1,8 +1,10 @@
 #include "CliCommands.hpp"
+#include "CliProgram.hpp"
 
 #include "engine/assets/AssetFileName.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetRegistry.hpp"
+#include "engine/core/JsonValue.hpp"
 #include "engine/gameplay/AbilityAsset.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -141,6 +143,21 @@ constexpr std::string_view kUsage =
         return 1;
     }
     io.out << metadata->virtualPath.generic_string() << '\n' << kb::gameplay::AbilityAssetIO::Write(*ability);
+    if (io.WantsData()) {
+        using kb::core::JsonValue;
+        JsonValue data = DataObject("21kb.cli.ability-show/v1");
+        data.Set("ability", JsonValue::MakeString(ToValidUtf8(metadata->virtualPath.generic_string())));
+        data.Set("name", JsonValue::MakeString(ToValidUtf8(ability->name)));
+        data.Set("target", JsonValue::MakeString(std::string{ kb::gameplay::AbilityTargetName(ability->target) }));
+        data.Set("range", JsonValue::MakeNumber(ability->range));
+        data.Set("radius", JsonValue::MakeNumber(ability->radius));
+        data.Set("amount", JsonValue::MakeNumber(ability->amount));
+        data.Set("damageType", JsonValue::MakeString(std::string{ kb::gameplay::DamageTypeName(ability->damageType) }));
+        data.Set("manaCost", JsonValue::MakeNumber(ability->manaCost));
+        data.Set("cooldown", JsonValue::MakeNumber(ability->cooldownSeconds));
+        data.Set("animatorTrigger", JsonValue::MakeString(ToValidUtf8(ability->animatorTrigger)));
+        PublishData(io, std::move(data));
+    }
     return 0;
 }
 

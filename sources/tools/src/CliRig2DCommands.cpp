@@ -1,8 +1,10 @@
 #include "CliCommands.hpp"
+#include "CliProgram.hpp"
 #include "CliMaterialShared.hpp"
 #include "engine/assets/AssetFileName.hpp"
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetMetadata.hpp"
+#include "engine/core/JsonValue.hpp"
 #include "engine/scene/Rig2DAsset.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
@@ -40,7 +42,11 @@ int RunRig2DCommand(const ArgumentList& args,CommandIo io) {
         if(json&&!kb::scene::DecodeRig2D(*json,rig,error)) return fail(error);
         std::error_code ec;std::filesystem::create_directories(file.parent_path(),ec);if(ec||!kb::scene::SaveRig2D(file,rig,error)) return fail(ec?ec.message():error);
     }
-    if(action!="build") {io.out<<kb::scene::EncodeRig2D(rig);return 0;}
+    if(action!="build") {
+        const std::string text=kb::scene::EncodeRig2D(rig);io.out<<text;
+        if(action=="show"&&io.WantsData()) {auto data=DataObject("21kb.cli.rig2d-show/v1");data.Set("rig",kb::core::JsonValue::MakeString(ToValidUtf8(virtualPath)));data.Set("content",JsonDocumentOrText(text));PublishData(io,std::move(data));}
+        return 0;
+    }
     const std::string folderPath=virtualPath.substr(0,virtualPath.size()-std::string_view{".kbrig2d"}.size());
     const auto folder=kb::assets::ResolveProjectAssetFolder(root,folderPath);if(!folder.error.empty()) return fail(folder.error);
     const auto skeletonPath=folder.virtualPath+"/Skeleton.kbskeleton",clipPath=folder.virtualPath+"/Motion.kbanim";

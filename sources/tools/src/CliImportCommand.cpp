@@ -1,10 +1,12 @@
 #include "CliCommands.hpp"
+#include "CliProgram.hpp"
 
 #include "engine/assets/AssetFileName.hpp"
 #include "engine/assets/AssetImportPreset.hpp"
 #include "engine/assets/AssetImportRecord.hpp"
 #include "engine/assets/AssetImportService.hpp"
 #include "engine/assets/AssetManager.hpp"
+#include "engine/core/JsonValue.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -139,7 +141,16 @@ int RunImportCommand(const ArgumentList& arguments, CommandIo io) {
     }
     // What a reimport overwrote can be put back; the backups are kept in Saved/ImportBackups until then.
     if (listBackups) {
-        for (const std::string& id : kb::assets::AssetImportBackups::List(scene.Assets().Manager())) io.out << id << '\n';
+        auto backups = kb::core::JsonValue::MakeArray();
+        for (const std::string& id : kb::assets::AssetImportBackups::List(scene.Assets().Manager())) {
+            io.out << id << '\n';
+            backups.Append(kb::core::JsonValue::MakeString(ToValidUtf8(id)));
+        }
+        if (io.WantsData()) {
+            kb::core::JsonValue data = DataObject("21kb.cli.import-backups/v1");
+            data.Set("backups", std::move(backups));
+            PublishData(io, std::move(data));
+        }
         return 0;
     }
     if (undo.has_value()) {

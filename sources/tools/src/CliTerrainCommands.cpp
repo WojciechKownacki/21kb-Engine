@@ -1,4 +1,5 @@
 #include "CliCommands.hpp"
+#include "CliProgram.hpp"
 
 #include "TerrainAnalysis.hpp"
 #include "TerrainErosion.hpp"
@@ -394,6 +395,29 @@ template <typename... Lists>
         io.out << "  layer " << index << ": " << LayerMaterialText(*session, terrain.materialLayers[index].materialAssetId) << '\n';
     }
     io.out << "heightHash " << Hex(stats.heightHash) << '\n';
+    if (io.WantsData()) {
+        using kb::core::JsonValue;
+        JsonValue data = DataObject("21kb.cli.terrain-info/v1");
+        data.Set("terrain", JsonValue::MakeString(ToValidUtf8(session->file.generic_string())));
+        data.Set("width", JsonValue::MakeNumber(terrain.width));
+        data.Set("height", JsonValue::MakeNumber(terrain.height));
+        data.Set("worldSizeX", JsonValue::MakeNumber(terrain.worldSizeX));
+        data.Set("worldSizeZ", JsonValue::MakeNumber(terrain.worldSizeZ));
+        data.Set("chunkQuads", JsonValue::MakeNumber(terrain.chunkQuads));
+        data.Set("lodCount", JsonValue::MakeNumber(terrain.lodCount));
+        data.Set("minHeight", JsonValue::MakeNumber(stats.minHeight));
+        data.Set("maxHeight", JsonValue::MakeNumber(stats.maxHeight));
+        data.Set("meanHeight", JsonValue::MakeNumber(stats.meanHeight));
+        data.Set("holeCells", JsonValue::MakeNumber(stats.holeCells));
+        auto slopes = JsonValue::MakeArray();
+        for (const std::uint32_t count : stats.slopeHistogram) slopes.Append(JsonValue::MakeNumber(count));
+        data.Set("slopeHistogram", std::move(slopes));
+        auto layers = JsonValue::MakeArray();
+        for (const auto& layer : terrain.materialLayers) layers.Append(JsonValue::MakeString(ToValidUtf8(LayerMaterialText(*session, layer.materialAssetId))));
+        data.Set("layers", std::move(layers));
+        data.Set("heightHash", JsonValue::MakeString(Hex(stats.heightHash)));
+        PublishData(io, std::move(data));
+    }
     return 0;
 }
 
@@ -421,11 +445,27 @@ template <typename... Lists>
            << "hole " << (sample.hole ? "yes" : "no") << '\n';
     if (terrain.materialLayers.empty()) {
         io.out << "weights none (no layers)\n";
-        return 0;
+    } else {
+        io.out << "weights";
+        for (std::size_t layer = 0U; layer < terrain.materialLayers.size(); ++layer) io.out << ' ' << FormatCliNumber(sample.layerWeights[layer]);
+        io.out << '\n';
     }
-    io.out << "weights";
-    for (std::size_t layer = 0U; layer < terrain.materialLayers.size(); ++layer) io.out << ' ' << FormatCliNumber(sample.layerWeights[layer]);
-    io.out << '\n';
+    if (io.WantsData()) {
+        using kb::core::JsonValue;
+        JsonValue data = DataObject("21kb.cli.terrain-sample/v1");
+        data.Set("x", JsonValue::MakeNumber(*x));
+        data.Set("z", JsonValue::MakeNumber(*z));
+        data.Set("height", JsonValue::MakeNumber(sample.height));
+        auto normal = JsonValue::MakeArray();
+        for (const float component : sample.normal) normal.Append(JsonValue::MakeNumber(component));
+        data.Set("normal", std::move(normal));
+        data.Set("slopeDegrees", JsonValue::MakeNumber(sample.slopeDegrees));
+        data.Set("hole", JsonValue::MakeBool(sample.hole));
+        auto weights = JsonValue::MakeArray();
+        for (std::size_t layer = 0U; layer < terrain.materialLayers.size(); ++layer) weights.Append(JsonValue::MakeNumber(sample.layerWeights[layer]));
+        data.Set("layerWeights", std::move(weights));
+        PublishData(io, std::move(data));
+    }
     return 0;
 }
 
@@ -623,6 +663,14 @@ constexpr OptionKey kPaintOptions[]{ { "layer", "layer" }, { "x", "x" }, { "z", 
         io.out << terrain.materialLayers.size() << " layers\n";
         for (std::size_t index = 0U; index < terrain.materialLayers.size(); ++index) {
             io.out << index << ' ' << LayerMaterialText(*session, terrain.materialLayers[index].materialAssetId) << '\n';
+        }
+        if (io.WantsData()) {
+            using kb::core::JsonValue;
+            JsonValue data = DataObject("21kb.cli.terrain-layer-list/v1");
+            auto layers = JsonValue::MakeArray();
+            for (const auto& layer : terrain.materialLayers) layers.Append(JsonValue::MakeString(ToValidUtf8(LayerMaterialText(*session, layer.materialAssetId))));
+            data.Set("layers", std::move(layers));
+            PublishData(io, std::move(data));
         }
         return 0;
     }

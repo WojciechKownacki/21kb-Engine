@@ -1,7 +1,9 @@
 #include "CliCommands.hpp"
+#include "CliProgram.hpp"
 #include "CliMaterialShared.hpp"
 #include "engine/assets/AssetFileName.hpp"
 #include "engine/assets/AssetManager.hpp"
+#include "engine/core/JsonValue.hpp"
 #include "engine/scene/CsgAsset.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -28,7 +30,11 @@ int RunCsgCommand(const ArgumentList& args,CommandIo io) {
         kb::scene::CompiledCsg check;if(!kb::scene::CompileCsg(source,check,error)) return fail(error);
         std::error_code ec;std::filesystem::create_directories(file.parent_path(),ec);if(ec) return fail(ec.message());std::ofstream out(file,std::ios::binary|std::ios::trunc);out<<kb::scene::EncodeCsg(source);out.close();if(!out) return fail("could not save CSG source");io.out<<path<<'\n';return 0;
     }
-    if(action=="show") {io.out<<kb::scene::EncodeCsg(source);return 0;}
+    if(action=="show") {
+        const std::string text=kb::scene::EncodeCsg(source);io.out<<text;
+        if(io.WantsData()) {auto data=DataObject("21kb.cli.csg-show/v1");data.Set("source",kb::core::JsonValue::MakeString(ToValidUtf8(path)));data.Set("content",JsonDocumentOrText(text));PublishData(io,std::move(data));}
+        return 0;
+    }
 #if !KB_CLI_RENDERER
     return fail("CSG mesh import requires a renderer-enabled CLI");
 #else

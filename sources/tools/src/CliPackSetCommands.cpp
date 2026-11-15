@@ -1,4 +1,5 @@
 #include "CliCommands.hpp"
+#include "CliProgram.hpp"
 
 #include "engine/assets/bake/AssetPackReader.hpp"
 #include "engine/assets/bake/AssetPackSeal.hpp"
@@ -6,6 +7,7 @@
 #include "engine/assets/bake/AssetPackTools.hpp"
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
+#include "engine/core/JsonValue.hpp"
 #include "engine/security/Crypto.hpp"
 #include "engine/security/ReleaseKeys.hpp"
 
@@ -159,6 +161,25 @@ int RunPackInfoCommand(const ArgumentList& arguments, CommandIo io) {
            << "payload-bytes " << report.payloadBytes << '\n'
            << "stored-bytes " << report.storedBytes << '\n'
            << "sealed " << (reader.Seal() != nullptr ? "yes" : "no") << '\n';
+    if (io.WantsData()) {
+        using kb::core::JsonValue;
+        JsonValue data = DataObject("21kb.cli.pack-info/v1");
+        data.Set("formatVersion", JsonValue::MakeNumber(header.formatVersion));
+        data.Set("profile", JsonValue::MakeString(ToValidUtf8(header.targetProfileId)));
+        data.Set("role", JsonValue::MakeString(ToValidUtf8(std::string{ bake::ToString(header.role) })));
+        data.Set("label", JsonValue::MakeString(ToValidUtf8(header.label)));
+        data.Set("patchLevel", JsonValue::MakeNumber(header.patchLevel));
+        data.Set("identity", JsonValue::MakeString(reader.CatalogIdentity().ToString()));
+        const bool hasBase = header.baseIdentity.high != 0U || header.baseIdentity.low != 0U;
+        data.Set("base", hasBase ? JsonValue::MakeString(header.baseIdentity.ToString()) : JsonValue{});
+        data.Set("artifacts", JsonValue::MakeNumber(static_cast<double>(report.artifacts)));
+        data.Set("blocks", JsonValue::MakeNumber(static_cast<double>(report.blocks)));
+        data.Set("compressedBlocks", JsonValue::MakeNumber(static_cast<double>(report.compressedBlocks)));
+        data.Set("payloadBytes", JsonValue::MakeNumber(static_cast<double>(report.payloadBytes)));
+        data.Set("storedBytes", JsonValue::MakeNumber(static_cast<double>(report.storedBytes)));
+        data.Set("sealed", JsonValue::MakeBool(reader.Seal() != nullptr));
+        PublishData(io, std::move(data));
+    }
     return 0;
 }
 

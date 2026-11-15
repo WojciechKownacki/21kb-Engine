@@ -1,15 +1,18 @@
 #include "CliCommands.hpp"
 #include "CliMaterialShared.hpp"
+#include "CliProgram.hpp"
 
 #include "editor/ParticleAssetGateway.hpp"
 #include "editor/ParticleEditorCommands.hpp"
 #include "engine/assets/AssetFileName.hpp"
+#include "engine/core/JsonValue.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/platform/FileSystemPath.hpp"
 #include "engine/scene/ParticleEffectAssetIO.hpp"
 
 #include <charconv>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <variant>
 #include <vector>
@@ -166,7 +169,26 @@ int RunVfxCommand(std::string_view command, const ArgumentList& arguments, Comma
     }
     if (command == "vfx-show") {
         std::vector<kb::scene::ParticleEffectDiagnostic> diagnostics;
-        io.out << kb::scene::ParticleEffectAssetIO::Serialize(*loaded.asset, diagnostics).value_or("");
+        const std::string text = kb::scene::ParticleEffectAssetIO::Serialize(*loaded.asset, diagnostics).value_or("");
+        io.out << text;
+        if (io.WantsData()) {
+            using kb::core::JsonValue;
+            JsonValue data = DataObject("21kb.cli.vfx-show/v1");
+            data.Set("effect", JsonValue::MakeString(ToValidUtf8(effect->virtualPath)));
+            auto entries = JsonValue::MakeArray();
+            std::istringstream lines{ text };
+            for (std::string line; std::getline(lines, line);) {
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                const std::size_t space = line.find(' ');
+                if (line.empty() || space == std::string::npos) continue;
+                JsonValue entry = JsonValue::MakeObject();
+                entry.Set("key", JsonValue::MakeString(ToValidUtf8(line.substr(0U, space))));
+                entry.Set("value", JsonValue::MakeString(ToValidUtf8(line.substr(space + 1U))));
+                entries.Append(std::move(entry));
+            }
+            data.Set("entries", std::move(entries));
+            PublishData(io, std::move(data));
+        }
         return 0;
     }
     if (command == "vfx-set") {

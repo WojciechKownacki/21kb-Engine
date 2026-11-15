@@ -1,4 +1,5 @@
 #include "CliCommands.hpp"
+#include "CliProgram.hpp"
 #include "engine/core/JsonValue.hpp"
 
 #include "engine/library/EngineLibraryManifest.hpp"
@@ -233,7 +234,14 @@ int RunApiCommand(const ArgumentList& arguments, CommandIo io) {
 
     // One page or a search, never the whole reference: what an agent asks for.
     if (const std::optional<std::string> search = arguments.Option("--search"); search.has_value()) {
-        io.out << kb::script::ScriptApiExport::SearchReference(built.catalog, *search);
+        const std::string matches = kb::script::ScriptApiExport::SearchReference(built.catalog, *search);
+        io.out << matches;
+        if (io.WantsData()) {
+            kb::core::JsonValue data = DataObject("21kb.cli.api-search/v1");
+            data.Set("search", kb::core::JsonValue::MakeString(ToValidUtf8(*search)));
+            data.Set("text", kb::core::JsonValue::MakeString(ToValidUtf8(matches)));
+            PublishData(io, std::move(data));
+        }
         return 0;
     }
     if (const std::optional<std::string> topic = arguments.Option("--topic"); topic.has_value()) {
@@ -244,6 +252,12 @@ int RunApiCommand(const ArgumentList& arguments, CommandIo io) {
             return 1;
         }
         io.out << *page;
+        if (io.WantsData()) {
+            kb::core::JsonValue data = DataObject("21kb.cli.api-topic/v1");
+            data.Set("topic", kb::core::JsonValue::MakeString(ToValidUtf8(*topic)));
+            data.Set("text", kb::core::JsonValue::MakeString(ToValidUtf8(*page)));
+            PublishData(io, std::move(data));
+        }
         return 0;
     }
 
@@ -311,6 +325,21 @@ int RunGuideCommand(const ArgumentList& arguments, CommandIo io) {
         return 1;
     }
     io.out << *guide;
+    if (io.WantsData()) {
+        kb::core::JsonValue data = DataObject("21kb.cli.guide/v1");
+        data.Set("topic", kb::core::JsonValue::MakeString(topic.empty() ? "index" : topic));
+        data.Set("text", kb::core::JsonValue::MakeString(ToValidUtf8(*guide)));
+        auto guides = kb::core::JsonValue::MakeArray();
+        for (const kb::script::ScriptAgentGuide& entry : kb::script::ScriptAgentGuides::All()) {
+            auto item = kb::core::JsonValue::MakeObject();
+            item.Set("name", kb::core::JsonValue::MakeString(std::string{ entry.name }));
+            item.Set("title", kb::core::JsonValue::MakeString(std::string{ entry.title }));
+            item.Set("summary", kb::core::JsonValue::MakeString(std::string{ entry.summary }));
+            guides.Append(std::move(item));
+        }
+        data.Set("guides", std::move(guides));
+        PublishData(io, std::move(data));
+    }
     return 0;
 }
 
@@ -499,6 +528,22 @@ int RunApiCheckCommand(const ArgumentList& arguments, CommandIo io) {
         }
         std::ostream& stream = breaking ? io.err : io.out;
         stream << (breaking ? "BREAKING: " : "additive: ") << change.description << '\n';
+    }
+
+    if (io.WantsData()) {
+        kb::core::JsonValue data = DataObject("21kb.cli.api-check/v1");
+        data.Set("baseline", kb::core::JsonValue::MakeString(ToValidUtf8(baselinePath.generic_string())));
+        data.Set("compatible", kb::core::JsonValue::MakeBool(!report.HasBreakingChanges()));
+        data.Set("breakingCount", kb::core::JsonValue::MakeNumber(static_cast<double>(breakingCount)));
+        auto changes = kb::core::JsonValue::MakeArray();
+        for (const kb::library::ApiChange& change : report.changes) {
+            auto item = kb::core::JsonValue::MakeObject();
+            item.Set("breaking", kb::core::JsonValue::MakeBool(change.severity == kb::library::ApiChangeSeverity::Breaking));
+            item.Set("description", kb::core::JsonValue::MakeString(ToValidUtf8(change.description)));
+            changes.Append(std::move(item));
+        }
+        data.Set("changes", std::move(changes));
+        PublishData(io, std::move(data));
     }
 
     if (report.HasBreakingChanges()) {

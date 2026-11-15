@@ -1,5 +1,7 @@
 #include "CliCommands.hpp"
+#include "CliProgram.hpp"
 
+#include "engine/core/JsonValue.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/world/WorldCellBuilder.hpp"
 #include "engine/world/WorldDescriptor.hpp"
@@ -170,12 +172,24 @@ namespace {
         io.err << "error: " << chunks.error << '\n';
         return 1;
     }
+    auto rules = kb::core::JsonValue::MakeArray();
     for (const kb::world::WorldRegionChunk& chunk : chunks.chunks) {
         io.out << "chunk " << chunk.label << '=';
+        auto prefixes = kb::core::JsonValue::MakeArray();
         for (std::size_t prefix = 0U; prefix < chunk.prefixes.size(); ++prefix) {
             io.out << (prefix == 0U ? "" : ",") << chunk.prefixes[prefix];
+            prefixes.Append(kb::core::JsonValue::MakeString(ToValidUtf8(chunk.prefixes[prefix])));
         }
         io.out << '\n';
+        auto rule = kb::core::JsonValue::MakeObject();
+        rule.Set("label", kb::core::JsonValue::MakeString(ToValidUtf8(chunk.label)));
+        rule.Set("prefixes", std::move(prefixes));
+        rules.Append(std::move(rule));
+    }
+    if (io.WantsData()) {
+        kb::core::JsonValue data = DataObject("21kb.cli.world-chunks/v1");
+        data.Set("chunks", std::move(rules));
+        PublishData(io, std::move(data));
     }
     return 0;
 }

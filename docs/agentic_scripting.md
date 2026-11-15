@@ -477,10 +477,16 @@ The scene runner also returns `124` on timeout and `130` on cancellation.
   `21kb.cli.entity-show/v1`. `output` keeps the text, so nothing printed before is lost. The
   structured read forms are `scene-list`, `entity show`, `schema`, `validate`, `skeleton show`,
   `input-action list`, `layout list`, `navmesh info`, `physics-layers`, `lighting-quality`,
-  `material-show` and `material-instance-show`. The forms that change something report what they did in
+  `material-show`, `material-instance-show`, `guide`, `api --topic` and `api --search`, `api-check`,
+  `code map`, `code find` and `code show`, `import --list-backups`, `csg show`, `rig2d show`,
+  `vector2d-show`, `vfx-show`, `mesh-lod show`, `ability show`, `ai show` and `ai presets`,
+  `animator show`, `terrain info`, `terrain sample` and `terrain layer list`, `map2d info` and
+  `map2d ground list`, `pack info`, `mod list` and `mod info`, and `world chunks`. A source asset
+  (`csg show`, `rig2d show`, `vector2d-show`) comes back parsed under `content` or `source`, and its
+  text stays in `output`. The forms that change something report what they did in
   `output` (the options-given forms of `physics-layers` and `lighting-quality` also return the resulting state as `data`).
 - A command that prints a JSON object of its own (`audio-mixer ... --json`, `run --report ...`,
-  `api --print json`) keeps it unchanged and is not wrapped; its failures that print nothing
+  `api --print json`, `code modules`, `map2d path`) keeps it unchanged and is not wrapped; its failures that print nothing
   on stdout still come as the object above.
 - The whole output is collected first, so a long command prints nothing until it ends.
   `mcp` ignores `--json`; it speaks JSON-RPC on stdout.

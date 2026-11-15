@@ -1,7 +1,9 @@
 #include "CliCommands.hpp"
+#include "CliProgram.hpp"
 
 #include "engine/assets/bake/AssetPackSeal.hpp"
 #include "engine/assets/bake/AssetPackTools.hpp"
+#include "engine/core/JsonValue.hpp"
 #include "engine/mods/ModCatalog.hpp"
 #include "engine/mods/ModRuntime.hpp"
 #include "engine/security/Crypto.hpp"
@@ -100,6 +102,30 @@ void PrintInfo(CommandIo io, const mods::ModInfo& info) {
         io.out << (info.sealed ? "  sealed by " + kb::security::ToHex(*info.sealSigner).substr(0U, 16U) : std::string{ "  unsigned" });
     }
     io.out << '\n';
+}
+
+// One mod as data: what PrintInfo says, with its dependencies and entry scene.
+[[nodiscard]] kb::core::JsonValue ModData(const mods::ModInfo& info) {
+    using kb::core::JsonValue;
+    JsonValue item = JsonValue::MakeObject();
+    item.Set("id", JsonValue::MakeString(ToValidUtf8(info.manifest.id)));
+    item.Set("version", JsonValue::MakeString(ToValidUtf8(mods::ToString(info.manifest.version))));
+    item.Set("name", JsonValue::MakeString(ToValidUtf8(info.manifest.name)));
+    item.Set("enabled", JsonValue::MakeBool(info.enabled));
+    item.Set("problem", info.problem == mods::ModProblem::None ? JsonValue{} : JsonValue::MakeString(ToValidUtf8(std::string{ mods::ToString(info.problem) })));
+    item.Set("detail", JsonValue::MakeString(ToValidUtf8(info.detail)));
+    item.Set("sealed", JsonValue::MakeBool(info.sealed));
+    item.Set("signer", info.sealed && info.sealSigner.has_value() ? JsonValue::MakeString(kb::security::ToHex(*info.sealSigner)) : JsonValue{});
+    auto dependencies = JsonValue::MakeArray();
+    for (const mods::ModDependency& dependency : info.manifest.dependencies) {
+        JsonValue entry = JsonValue::MakeObject();
+        entry.Set("id", JsonValue::MakeString(ToValidUtf8(dependency.id)));
+        entry.Set("range", JsonValue::MakeString(ToValidUtf8(mods::ToString(dependency.range))));
+        dependencies.Append(std::move(entry));
+    }
+    item.Set("dependencies", std::move(dependencies));
+    item.Set("entryScene", info.manifest.entryScene.empty() ? JsonValue{} : JsonValue::MakeString(ToValidUtf8(info.manifest.entryScene)));
+    return item;
 }
 
 [[nodiscard]] bool ParseLevelOption(const std::optional<std::string>& text, int& level, std::string& error) {
@@ -255,6 +281,13 @@ int RunModList(const ArgumentList& arguments, CommandIo io) {
         PrintInfo(io, info);
     }
     io.out << infos.size() << " mod(s) installed, " << std::ranges::count_if(infos, [](const mods::ModInfo& info) { return info.enabled; }) << " enabled\n";
+    if (io.WantsData()) {
+        kb::core::JsonValue data = DataObject("21kb.cli.mod-list/v1");
+        auto list = kb::core::JsonValue::MakeArray();
+        for (const mods::ModInfo& info : infos) list.Append(ModData(info));
+        data.Set("mods", std::move(list));
+        PublishData(io, std::move(data));
+    }
     return 0;
 }
 
@@ -386,6 +419,11 @@ int RunModInfo(const ArgumentList& arguments, CommandIo io) {
             io.out << dependency.id << ' ' << mods::ToString(dependency.range) << "; ";
         }
         io.out << "\n  entry scene: " << (info.manifest.entryScene.empty() ? std::string{ "none" } : info.manifest.entryScene) << '\n';
+    }
+    if (io.WantsData()) {
+        kb::core::JsonValue data = DataObject("21kb.cli.mod-info/v1");
+        data.Set("mod", ModData(info));
+        PublishData(io, std::move(data));
     }
     return info.problem == mods::ModProblem::None ? 0 : 1;
 }

@@ -1,9 +1,11 @@
 #include "CliCommands.hpp"
+#include "CliProgram.hpp"
 
 #include "engine/assets/AssetFileName.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetRegistry.hpp"
+#include "engine/core/JsonValue.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
 #include "engine/scene/AnimationRetargeting.hpp"
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
@@ -320,6 +322,66 @@ void PrintController(const Session& session, std::ostream& out) {
             out << " over " << transition.durationSeconds << " s\n";
         }
     }
+}
+
+// What PrintController prints, as data: the parameters, and per layer its states and transitions.
+[[nodiscard]] kb::core::JsonValue ControllerData(const Session& session) {
+    using kb::core::JsonValue;
+    const AnimatorController& controller = session.controller;
+    JsonValue data = DataObject("21kb.cli.animator-show/v1");
+    data.Set("controller", JsonValue::MakeString(ToValidUtf8(session.virtualPath)));
+    auto parameters = JsonValue::MakeArray();
+    for (const AnimatorParameterDefinition& parameter : controller.parameters) {
+        JsonValue item = JsonValue::MakeObject();
+        item.Set("name", JsonValue::MakeString(ToValidUtf8(parameter.name)));
+        item.Set("type", JsonValue::MakeString(std::string{ TypeName(parameter.type) }));
+        if (parameter.type == AnimatorParameterType::Float) item.Set("default", JsonValue::MakeNumber(parameter.floatDefault));
+        else if (parameter.type == AnimatorParameterType::Int) item.Set("default", JsonValue::MakeNumber(parameter.intDefault));
+        else if (parameter.type == AnimatorParameterType::Bool) item.Set("default", JsonValue::MakeBool(parameter.boolDefault));
+        else item.Set("default", JsonValue{});
+        parameters.Append(std::move(item));
+    }
+    data.Set("parameters", std::move(parameters));
+    auto layers = JsonValue::MakeArray();
+    for (const AnimatorControllerLayer& layer : controller.layers) {
+        JsonValue item = JsonValue::MakeObject();
+        item.Set("name", JsonValue::MakeString(ToValidUtf8(layer.name)));
+        item.Set("weight", JsonValue::MakeNumber(layer.weight));
+        item.Set("defaultState", JsonValue::MakeString(ToValidUtf8(layer.defaultState)));
+        auto states = JsonValue::MakeArray();
+        for (const AnimatorControllerState& state : layer.states) {
+            JsonValue entry = JsonValue::MakeObject();
+            entry.Set("name", JsonValue::MakeString(ToValidUtf8(state.name)));
+            entry.Set("clip", state.clipReference.empty() ? JsonValue{} : JsonValue::MakeString(ToValidUtf8(state.clipReference)));
+            entry.Set("blendParameter", state.clipReference.empty() ? JsonValue::MakeString(ToValidUtf8(state.blendParameter)) : JsonValue{});
+            auto children = JsonValue::MakeArray();
+            for (const AnimatorControllerState::BlendChild& child : state.blendChildren) {
+                JsonValue blend = JsonValue::MakeObject();
+                blend.Set("threshold", JsonValue::MakeNumber(child.threshold));
+                blend.Set("clip", JsonValue::MakeString(ToValidUtf8(child.clipReference)));
+                children.Append(std::move(blend));
+            }
+            entry.Set("blendChildren", std::move(children));
+            states.Append(std::move(entry));
+        }
+        item.Set("states", std::move(states));
+        auto transitions = JsonValue::MakeArray();
+        for (const AnimatorControllerTransition& transition : layer.transitions) {
+            JsonValue entry = JsonValue::MakeObject();
+            entry.Set("from", JsonValue::MakeString(ToValidUtf8(transition.fromState == kb::scene::kAnimatorAnyState ? std::string{ "Any" } : transition.fromState)));
+            entry.Set("to", JsonValue::MakeString(ToValidUtf8(transition.toState)));
+            auto conditions = JsonValue::MakeArray();
+            for (const AnimatorTransitionCondition& condition : transition.conditions) conditions.Append(JsonValue::MakeString(ToValidUtf8(ConditionText(condition))));
+            entry.Set("conditions", std::move(conditions));
+            entry.Set("exitTime", transition.exitNormalizedTime >= 0.0F ? JsonValue::MakeNumber(transition.exitNormalizedTime) : JsonValue{});
+            entry.Set("duration", JsonValue::MakeNumber(transition.durationSeconds));
+            transitions.Append(std::move(entry));
+        }
+        item.Set("transitions", std::move(transitions));
+        layers.Append(std::move(item));
+    }
+    data.Set("layers", std::move(layers));
+    return data;
 }
 
 [[nodiscard]] int New(const ArgumentList& arguments, CommandIo io) {
@@ -801,6 +863,7 @@ int RunAnimatorCommand(const ArgumentList& arguments, CommandIo io) {
         Session session;
         if (!OpenController(session, arguments, io)) return 1;
         PrintController(session, io.out);
+        if (io.WantsData()) PublishData(io, ControllerData(session));
         return 0;
     }
     io.err << kUsage;

@@ -2,7 +2,9 @@
 // the source tree when the command runs, so the answers are never older than the code. modules (CliCodeModules.cpp)
 // is the machine-readable map; map, find and show are the text views down to files and declarations.
 #include "CliCommands.hpp"
+#include "CliProgram.hpp"
 
+#include "engine/core/JsonValue.hpp"
 #include "engine/platform/FileSystemPath.hpp"
 
 #include <algorithm>
@@ -227,11 +229,20 @@ int RunMap(const fs::path& root, const ArgumentList& arguments, CommandIo io) {
             entry.summary += (index == 0U ? " " : ", ") + entry.largest[index].second;
         }
     }
+    using kb::core::JsonValue;
+    auto folderList = JsonValue::MakeArray();
+    auto fileList = JsonValue::MakeArray();
     for (const auto& [folder, entry] : folders) {
         if (Depth(folder) > baseDepth + depth) continue;
         io.out << std::string(2U * (Depth(folder) - baseDepth), ' ') << folder << "/  (" << entry.files << " files, " << entry.lines << " lines)";
         if (!entry.summary.empty()) io.out << " - " << entry.summary;
         io.out << '\n';
+        JsonValue item = JsonValue::MakeObject();
+        item.Set("path", JsonValue::MakeString(ToValidUtf8(folder)));
+        item.Set("files", JsonValue::MakeNumber(static_cast<double>(entry.files)));
+        item.Set("lines", JsonValue::MakeNumber(static_cast<double>(entry.lines)));
+        item.Set("summary", JsonValue::MakeString(ToValidUtf8(entry.summary)));
+        folderList.Append(std::move(item));
     }
     // The files of the folder itself, each with what it is for.
     for (const SourceFile& file : files) {
@@ -239,6 +250,18 @@ int RunMap(const fs::path& root, const ArgumentList& arguments, CommandIo io) {
         io.out << "  " << file.path << "  (" << file.lines.size() << " lines)";
         if (!file.summary.empty()) io.out << " - " << file.summary;
         io.out << '\n';
+        JsonValue item = JsonValue::MakeObject();
+        item.Set("path", JsonValue::MakeString(ToValidUtf8(file.path)));
+        item.Set("lines", JsonValue::MakeNumber(static_cast<double>(file.lines.size())));
+        item.Set("summary", JsonValue::MakeString(ToValidUtf8(file.summary)));
+        fileList.Append(std::move(item));
+    }
+    if (io.WantsData()) {
+        JsonValue data = DataObject("21kb.cli.code-map/v1");
+        data.Set("path", JsonValue::MakeString(ToValidUtf8(below)));
+        data.Set("folders", std::move(folderList));
+        data.Set("files", std::move(fileList));
+        PublishData(io, std::move(data));
     }
     io.out << "Next: kb_cli code modules --topic <words>, kb_cli code map --path <folder>, kb_cli code find --text <words>, kb_cli code show --symbol <Name>\n";
     return 0;
@@ -293,14 +316,27 @@ int RunFind(const fs::path& root, const ArgumentList& arguments, CommandIo io) {
         io.err << "error: nothing in the source mentions all of: " << arguments.Option("--text").value_or(std::string{}) << "\n";
         return 1;
     }
+    auto found = kb::core::JsonValue::MakeArray();
     for (std::size_t index = 0U; index < hits.size() && index < limit; ++index) {
         const Hit& hit = hits[index];
         io.out << hit.file->path << ':' << std::max<std::size_t>(hit.line, 1U);
         if (!hit.file->summary.empty()) io.out << " - " << hit.file->summary;
         io.out << '\n';
         if (hit.line != 0U) io.out << "    " << Trimmed(hit.file->lines[hit.line - 1U]).substr(0U, kSummaryLength) << '\n';
+        auto item = kb::core::JsonValue::MakeObject();
+        item.Set("file", kb::core::JsonValue::MakeString(ToValidUtf8(hit.file->path)));
+        item.Set("line", kb::core::JsonValue::MakeNumber(static_cast<double>(std::max<std::size_t>(hit.line, 1U))));
+        item.Set("summary", kb::core::JsonValue::MakeString(ToValidUtf8(hit.file->summary)));
+        item.Set("text", kb::core::JsonValue::MakeString(hit.line != 0U ? ToValidUtf8(Trimmed(hit.file->lines[hit.line - 1U]).substr(0U, kSummaryLength)) : std::string{}));
+        found.Append(std::move(item));
     }
     if (hits.size() > limit) io.out << "(" << hits.size() - limit << " more; narrow the words or pass --limit)\n";
+    if (io.WantsData()) {
+        auto data = DataObject("21kb.cli.code-find/v1");
+        data.Set("total", kb::core::JsonValue::MakeNumber(static_cast<double>(hits.size())));
+        data.Set("hits", std::move(found));
+        PublishData(io, std::move(data));
+    }
     return 0;
 }
 
@@ -320,6 +356,7 @@ int RunShow(const fs::path& root, const ArgumentList& arguments, CommandIo io) {
         return false;
     };
     std::size_t shown = 0U;
+    auto declarations = kb::core::JsonValue::MakeArray();
     std::vector<std::pair<std::size_t, const SourceFile*>> users;
     for (const SourceFile& file : files) {
         std::size_t uses = 0U;
@@ -332,16 +369,25 @@ int RunShow(const fs::path& root, const ArgumentList& arguments, CommandIo io) {
             ++shown;
             shownHere = true;
             io.out << file.path << ':' << index + 1U << '\n';
-            if (const std::string comment = CommentAbove(file.lines, index); !comment.empty()) io.out << "  " << comment << '\n';
+            auto declaration = kb::core::JsonValue::MakeObject();
+            declaration.Set("file", kb::core::JsonValue::MakeString(ToValidUtf8(file.path)));
+            declaration.Set("line", kb::core::JsonValue::MakeNumber(static_cast<double>(index + 1U)));
+            const std::string comment = CommentAbove(file.lines, index);
+            if (!comment.empty()) io.out << "  " << comment << '\n';
+            declaration.Set("comment", kb::core::JsonValue::MakeString(ToValidUtf8(comment)));
+            std::string declared;
             // The declaration: to the end of the statement, or the public face of a type.
             int braces = 0;
             for (std::size_t line = index; line < file.lines.size() && line < index + 60U; ++line) {
                 io.out << "    " << file.lines[line] << '\n';
+                declared += file.lines[line] + '\n';
                 braces += static_cast<int>(std::ranges::count(file.lines[line], '{')) - static_cast<int>(std::ranges::count(file.lines[line], '}'));
                 const std::string_view text = Trimmed(file.lines[line]);
                 if (braces <= 0 && (text.ends_with(';') || text.ends_with('}'))) break;
                 if (text.starts_with("private:")) break;
             }
+            declaration.Set("declaration", kb::core::JsonValue::MakeString(ToValidUtf8(declared)));
+            declarations.Append(std::move(declaration));
         }
         if (uses != 0U) users.emplace_back(uses, &file);
     }
@@ -351,11 +397,20 @@ int RunShow(const fs::path& root, const ArgumentList& arguments, CommandIo io) {
     }
     std::ranges::stable_sort(users, [](const auto& left, const auto& right) { return left.first > right.first; });
     io.out << "Used in " << users.size() << " files:\n";
+    const auto usage = [](const SourceFile* file, std::size_t uses) {
+        auto item = kb::core::JsonValue::MakeObject();
+        item.Set("file", kb::core::JsonValue::MakeString(ToValidUtf8(file->path)));
+        item.Set("uses", kb::core::JsonValue::MakeNumber(static_cast<double>(uses)));
+        return item;
+    };
+    auto usedIn = kb::core::JsonValue::MakeArray();
+    auto testedIn = kb::core::JsonValue::MakeArray();
     std::size_t listed = 0U;
     for (const auto& [uses, file] : users) {
         if (file->path.find("/tests/") != std::string::npos) continue;
         if (++listed > 10U) break;
         io.out << "  " << file->path << " (" << uses << ")\n";
+        usedIn.Append(usage(file, uses));
     }
     listed = 0U;
     for (const auto& [uses, file] : users) {
@@ -363,6 +418,16 @@ int RunShow(const fs::path& root, const ArgumentList& arguments, CommandIo io) {
         if (listed++ == 0U) io.out << "Tests:\n";
         if (listed > 6U) break;
         io.out << "  " << file->path << " (" << uses << ")\n";
+        testedIn.Append(usage(file, uses));
+    }
+    if (io.WantsData()) {
+        auto data = DataObject("21kb.cli.code-show/v1");
+        data.Set("symbol", kb::core::JsonValue::MakeString(ToValidUtf8(symbol)));
+        data.Set("declarations", std::move(declarations));
+        data.Set("fileCount", kb::core::JsonValue::MakeNumber(static_cast<double>(users.size())));
+        data.Set("usedIn", std::move(usedIn));
+        data.Set("testedIn", std::move(testedIn));
+        PublishData(io, std::move(data));
     }
     return 0;
 }

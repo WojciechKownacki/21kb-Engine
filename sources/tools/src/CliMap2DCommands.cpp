@@ -1,4 +1,5 @@
 #include "CliCommands.hpp"
+#include "CliProgram.hpp"
 
 #include "Map2DEditing.hpp"
 #include "Map2DTileset.hpp"
@@ -272,6 +273,57 @@ struct MapSession {
     }
     for (const kb::world2d::Map2DGroundBrush* ground : session->library.Grounds()) {
         io.out << "ground: " << ground->name << " z " << ground->zOrder << (ground->HasBorders() ? ", with borders" : "") << '\n';
+    }
+    if (io.WantsData()) {
+        using kb::core::JsonValue;
+        JsonValue data = DataObject("21kb.cli.map2d-info/v1");
+        data.Set("map", JsonValue::MakeString(ToValidUtf8(kb::world2d::Map2DVirtualPath(session->assetsRoot, session->file))));
+        data.Set("width", JsonValue::MakeNumber(map.width));
+        data.Set("height", JsonValue::MakeNumber(map.height));
+        data.Set("tileSize", JsonValue::MakeNumber(map.tileSize));
+        data.Set("floorHeight", JsonValue::MakeNumber(map.floorHeight));
+        data.Set("topology", JsonValue::MakeString(std::string{ kb::assets::Map2DTopologyName(map.topology) }));
+        data.Set("orientation", JsonValue::MakeString(std::string{ kb::assets::Map2DOrientationName(map.orientation) }));
+        data.Set("viewWidth", JsonValue::MakeNumber(map.viewWidth));
+        data.Set("viewHeight", JsonValue::MakeNumber(map.viewHeight));
+        data.Set("tileCount", JsonValue::MakeNumber(static_cast<double>(map.tiles.size())));
+        auto floors = JsonValue::MakeArray();
+        for (const std::int32_t floor : Floors(map)) floors.Append(JsonValue::MakeNumber(floor));
+        data.Set("floors", std::move(floors));
+        auto sheets = JsonValue::MakeArray();
+        for (const kb::assets::Map2DSheet& sheet : map.sheets) {
+            JsonValue item = JsonValue::MakeObject();
+            item.Set("texture", JsonValue::MakeString(ToValidUtf8(sheet.texture)));
+            item.Set("columns", JsonValue::MakeNumber(sheet.columns));
+            item.Set("rows", JsonValue::MakeNumber(sheet.rows));
+            item.Set("cellSize", JsonValue::MakeNumber(sheet.cellSize));
+            sheets.Append(std::move(item));
+        }
+        data.Set("sheets", std::move(sheets));
+        auto grounds = JsonValue::MakeArray();
+        for (const kb::world2d::Map2DGroundBrush* ground : session->library.Grounds()) {
+            JsonValue item = JsonValue::MakeObject();
+            item.Set("name", JsonValue::MakeString(ToValidUtf8(ground->name)));
+            item.Set("z", JsonValue::MakeNumber(ground->zOrder));
+            item.Set("borders", JsonValue::MakeBool(ground->HasBorders()));
+            grounds.Append(std::move(item));
+        }
+        data.Set("grounds", std::move(grounds));
+        if (map.camera != kb::assets::Map2DCamera{}) {
+            const kb::assets::Map2DCamera& camera = map.camera;
+            JsonValue view = JsonValue::MakeObject();
+            view.Set("pixelsPerUnit", JsonValue::MakeNumber(camera.pixelsPerUnit));
+            view.Set("followTarget", JsonValue::MakeString(ToValidUtf8(camera.followTarget)));
+            view.Set("smoothingSeconds", JsonValue::MakeNumber(camera.smoothingSeconds));
+            view.Set("deadZoneWidth", JsonValue::MakeNumber(camera.deadZoneWidth));
+            view.Set("deadZoneHeight", JsonValue::MakeNumber(camera.deadZoneHeight));
+            view.Set("clampToMap", JsonValue::MakeBool(camera.clampToMap));
+            view.Set("zoom", JsonValue::MakeNumber(camera.zoom));
+            data.Set("camera", std::move(view));
+        } else {
+            data.Set("camera", JsonValue{});
+        }
+        PublishData(io, std::move(data));
     }
     return 0;
 }
@@ -661,6 +713,25 @@ void PrintGround(const kb::world2d::Map2DGroundBrush& ground, CommandIo io) {
             }
         }
         if (library.files.empty()) io.out << "no tilesets yet: kb_cli map2d ground new --name Grass --texture <png> --island <cell>\n";
+        if (io.WantsData()) {
+            using kb::core::JsonValue;
+            JsonValue data = DataObject("21kb.cli.map2d-ground-list/v1");
+            auto grounds = JsonValue::MakeArray();
+            for (const kb::world2d::Map2DTilesetFile& file : library.files) {
+                for (const kb::world2d::Map2DGroundBrush& ground : file.tileset.grounds) {
+                    JsonValue item = JsonValue::MakeObject();
+                    item.Set("tileset", JsonValue::MakeString(ToValidUtf8(file.virtualPath)));
+                    item.Set("name", JsonValue::MakeString(ToValidUtf8(ground.name)));
+                    item.Set("z", JsonValue::MakeNumber(ground.zOrder));
+                    item.Set("texture", JsonValue::MakeString(ToValidUtf8(ground.texture)));
+                    item.Set("cellSize", JsonValue::MakeNumber(ground.cellSize));
+                    item.Set("borders", JsonValue::MakeBool(ground.HasBorders()));
+                    grounds.Append(std::move(item));
+                }
+            }
+            data.Set("grounds", std::move(grounds));
+            PublishData(io, std::move(data));
+        }
         return 0;
     }
     const std::optional<std::string> name = arguments.Option("--name");

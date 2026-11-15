@@ -37,6 +37,13 @@ void PublishData(CommandIo io, kb::core::JsonValue data) {
     if (io.data != nullptr) *io.data = std::move(data);
 }
 
+kb::core::JsonValue JsonDocumentOrText(std::string_view text) {
+    kb::core::JsonValue parsed;
+    std::string error;
+    if (kb::core::JsonValue::Parse(text, parsed, error)) return parsed;
+    return kb::core::JsonValue::MakeString(std::string{ text });
+}
+
 ArgumentList::ArgumentList(std::span<const std::string> arguments, std::span<const std::string_view> flagNames) {
     for (std::size_t index = 0U; index < arguments.size(); ++index) {
         const std::string& token = arguments[index];

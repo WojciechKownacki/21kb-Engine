@@ -1,4 +1,5 @@
 #include "CliCommands.hpp"
+#include "CliProgram.hpp"
 
 #include "engine/assets/AssetFileName.hpp"
 #include "engine/assets/AssetImportService.hpp"
@@ -6,6 +7,7 @@
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/assets/bake/BakeTargetProfile.hpp"
+#include "engine/core/JsonValue.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "kb/render/bake/MeshBaker.hpp"
@@ -127,12 +129,25 @@ void ToManual(kb::assets::AssetMeshLodSettings& lod) {
     const std::size_t indexCount = source->indices32.empty() ? source->indices16.size() : source->indices32.size();
     const std::uint64_t triangles = indexCount / 3U;
     const kb::assets::AssetMeshLodSettings& lod = session.lod;
+    using kb::core::JsonValue;
+    JsonValue data = DataObject("21kb.cli.mesh-lod-show/v1");
+    data.Set("mesh", JsonValue::MakeString(ToValidUtf8(session.metadata->virtualPath.generic_string())));
+    data.Set("triangles", JsonValue::MakeNumber(static_cast<double>(triangles)));
+    data.Set("manual", JsonValue::MakeBool(lod.manual));
+    data.Set("levelsAsked", JsonValue::MakeNumber(lod.levelCount));
+    data.Set("keepPercent", JsonValue::MakeNumber(lod.keepPercent));
+    data.Set("errorPercent", JsonValue::MakeNumber(lod.errorPercent));
+    data.Set("minTriangles", JsonValue::MakeNumber(static_cast<double>(lod.minTriangles)));
+    data.Set("buildsChain", JsonValue::MakeBool(lod.BuildsChain(triangles)));
+    auto levels = JsonValue::MakeArray();
     io.out << session.metadata->virtualPath.generic_string() << ": " << triangles << " triangles, "
            << (lod.manual ? "manual levels" : "automatic levels") << ", " << static_cast<int>(lod.levelCount) << " asked for";
     if (!lod.manual) io.out << " (each keeps " << lod.keepPercent << "%, adds up to " << lod.errorPercent << "% deviation)";
     io.out << ", chain from " << lod.minTriangles << " triangles\n";
     if (!lod.BuildsChain(triangles)) {
         io.out << "  no chain: " << (lod.levelCount <= 1U ? "one level was asked for" : "the mesh is under the triangle threshold") << '\n';
+        data.Set("levels", std::move(levels));
+        if (io.WantsData()) PublishData(io, std::move(data));
         return true;
     }
     const kb::render::bake::MeshBakeOutput baked = kb::render::bake::BakeMeshInMemory(*source, kb::assets::bake::WindowsX64BakeTargetProfile());
@@ -160,10 +175,20 @@ void ToManual(kb::assets::AssetMeshLodSettings& lod) {
         else io.out << "drawn from " << std::setprecision(0) << mesh.lods[level - 1U].minScreenCoverage * kb::render::bake::kRuntimeLodReferenceViewportHeight
                     << " px tall at 1080p down";
         io.out << '\n';
+        JsonValue item = JsonValue::MakeObject();
+        item.Set("level", JsonValue::MakeNumber(static_cast<double>(level)));
+        item.Set("triangles", JsonValue::MakeNumber(static_cast<double>(levelIndices / 3U)));
+        item.Set("percent", JsonValue::MakeNumber(100.0 * static_cast<double>(levelIndices) / static_cast<double>(finest)));
+        item.Set("error", JsonValue::MakeNumber(layout.lods[level].error));
+        item.Set("drawnFromPixels", level == 0U ? JsonValue{} : JsonValue::MakeNumber(
+            mesh.lods[level - 1U].minScreenCoverage * kb::render::bake::kRuntimeLodReferenceViewportHeight));
+        levels.Append(std::move(item));
     }
     if (mesh.lods.size() < lod.levelCount) {
         io.out << "  (the simplifier stopped at " << mesh.lods.size() << " levels: the next one could not get smaller inside the deviation allowed)\n";
     }
+    data.Set("levels", std::move(levels));
+    if (io.WantsData()) PublishData(io, std::move(data));
     return true;
 }
 
