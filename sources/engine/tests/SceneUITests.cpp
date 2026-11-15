@@ -41,6 +41,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <limits>
@@ -2960,6 +2961,103 @@ void TestFrameAmongManyRootsMatchesRecordedFrame() {
     kb::tests::Require(hash == expected, "UI frame among many roots differs from the recorded frame");
 }
 
+// An update that finds nothing changed keeps the frame it has; every kind of change must still show up. After each
+// step the frame the update holds must equal one laid out from scratch.
+void TestKeptLayoutMatchesFullLayout() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
+    kb::scene::UIComponentSet column = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::VerticalBox);
+    column.rectTransform = Rect(20.0F, 20.0F, 300.0F, 400.0F);
+    const kb::scene::SceneObject box = AddUI(scene, canvas, column);
+    std::vector<kb::scene::SceneObject> rows;
+    for (int index = 0; index < 6; ++index) {
+        kb::scene::UIComponentSet button = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Button);
+        button.rectTransform = Rect(0.0F, 0.0F, 280.0F, 30.0F);
+        rows.push_back(AddUI(scene, box, button));
+    }
+    kb::scene::UIComponentSet label = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Text);
+    label.rectTransform = Rect(340.0F, 20.0F, 200.0F, 24.0F);
+    const kb::scene::SceneObject labelObject = AddUI(scene, canvas, label);
+    kb::scene::UIComponentSet view = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::ScrollView);
+    view.rectTransform = Rect(340.0F, 100.0F, 300.0F, 200.0F);
+    view.scrollView->horizontal = false;
+    const kb::scene::SceneObject viewObject = AddUI(scene, canvas, view);
+    kb::scene::UIComponentSet content = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::VerticalBox);
+    content.rectTransform = Rect(0.0F, 0.0F, 300.0F, 600.0F);
+    const kb::scene::SceneObject contentObject = AddUI(scene, viewObject, content);
+    for (int index = 0; index < 20; ++index) {
+        kb::scene::UIComponentSet row = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Border);
+        row.rectTransform = Rect(0.0F, 0.0F, 300.0F, 30.0F);
+        static_cast<void>(AddUI(scene, contentObject, row));
+    }
+
+    float width = 1280.0F;
+    kb::scene::SceneUIInput input{};
+    const auto step = [&](const char* what) {
+        for (int pass = 0; pass < 3; ++pass)
+            kb::tests::Require(scene.UI().Update(width, 720.0F, input, 1.0F), "A UI update must lay out");
+        kb::scene::SceneUIFrame full;
+        kb::tests::Require(kb::scene::SceneUIQueries{scene}.BuildFrame(width, 720.0F, full), "A full UI layout must build");
+        if (HashUIFrame(scene.UI().Frame()) != HashUIFrame(full))
+            std::cerr << "kept layout differs after: " << what << '\n';
+        kb::tests::Require(HashUIFrame(scene.UI().Frame()) == HashUIFrame(full),
+            "An update's frame must equal a layout computed from scratch");
+    };
+    step("start");
+    step("nothing changed");
+
+    kb::scene::UIRectTransform* rect = scene.Components().UI().TryGet<kb::scene::UIRectTransform>(rows[2].Entity());
+    rect->offsetMax.y += 12.0F;
+    step("row height written without a mark");
+
+    kb::scene::UIText* text = scene.Components().UI().TryGet<kb::scene::UIText>(labelObject.Entity());
+    static_cast<void>(kb::scene::SetUITextContent(*text, "A longer caption than before"));
+    scene.Components().UI().MarkModified<kb::scene::UIText>(labelObject.Entity());
+    step("text edited");
+
+    kb::scene::UIComponentSet extra = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Button);
+    extra.rectTransform = Rect(0.0F, 0.0F, 280.0F, 30.0F);
+    const kb::scene::SceneObject added = AddUI(scene, box, extra);
+    step("element added");
+
+    scene.Entities().SetActive(rows[1], false);
+    step("element deactivated");
+    scene.Entities().SetActive(rows[1], true);
+    step("element activated");
+
+    kb::tests::Require(scene.Hierarchy().SetParent(rows[3], canvas), "A row must move under the canvas");
+    step("element reparented");
+
+    kb::scene::VisibilityComponent hidden;
+    hidden.visible = false;
+    scene.Components().Visibility().Set(rows[4].Entity(), hidden);
+    step("visibility hidden");
+
+    kb::scene::UICanvasGroup* group = scene.Components().UI().TryGet<kb::scene::UICanvasGroup>(canvas.Entity());
+    if (group != nullptr) {
+        group->opacity = 0.5F;
+        scene.Components().UI().MarkModified<kb::scene::UICanvasGroup>(canvas.Entity());
+        step("canvas group faded");
+    }
+
+    kb::tests::Require(scene.UI().SetSafeAreaInsets({10.0F, 24.0F, 10.0F, 34.0F}), "Safe area insets must be accepted");
+    step("safe area changed");
+
+    width = 900.0F;
+    step("viewport resized");
+
+    input.pointerAvailable = true;
+    input.pointerPosition = {60.0F, 40.0F};
+    step("pointer over a button");
+    input.primaryDown = true;
+    step("button pressed");
+    input.primaryDown = false;
+    step("button released");
+
+    scene.Entities().Destroy(added);
+    step("element destroyed");
+}
+
 void PopulateMillionRootOverlay(kb::scene::Scene& scene) {
     const std::vector<kb::scene::SceneObjectDesc> descs(1'000'000U);
     static_cast<void>(scene.Entities().CreateObjects(descs));
@@ -3070,6 +3168,7 @@ void RunSceneUITests() {
     TestModalCanvasBlocksCanvasesBelow();
     TestNestedModalsRestoreFocusAndBlockGameplayImmediately();
     TestFrameAmongManyRootsMatchesRecordedFrame();
+    TestKeptLayoutMatchesFullLayout();
     TestFrameNextToMillionRootsIsCheap();
     TestSteadyUpdatesReuseFrameStorage();
     TestInputFieldEditsGraphemeClusters();
@@ -3257,6 +3356,175 @@ void RunSceneUIWorkloadBenchmark() {
     RunUIWorkload("hud50", PopulateHudWorkload);
     RunUIWorkload("inventory500", PopulateInventoryWorkload);
     RunUIWorkload("labels2000", PopulateLabelWorkload);
+}
+
+// Layout cost by element count, shape and what changed between updates. Sizes come from KB_UI_BENCH_SIZES
+// (comma separated, default 100,1000,10000,100000) and shapes from KB_UI_BENCH_SHAPES (flat, nested, list).
+namespace {
+
+[[nodiscard]] std::string BenchEnvironment(const char* name) {
+#if defined(_MSC_VER)
+    char* value = nullptr;
+    std::size_t size = 0U;
+    if (_dupenv_s(&value, &size, name) != 0 || value == nullptr)
+        return {};
+    std::string result{value};
+    std::free(value);
+    return result;
+#else
+    const char* value = std::getenv(name);
+    return value != nullptr ? value : "";
+#endif
+}
+
+[[nodiscard]] std::vector<std::size_t> BenchSizes() {
+    std::vector<std::size_t> sizes;
+    std::string list = BenchEnvironment("KB_UI_BENCH_SIZES");
+    if (list.empty())
+        list = "100,1000,10000,100000";
+    std::size_t begin = 0U;
+    while (begin < list.size()) {
+        std::size_t end = list.find(',', begin);
+        if (end == std::string::npos) end = list.size();
+        sizes.push_back(static_cast<std::size_t>(std::stoull(list.substr(begin, end - begin))));
+        begin = end + 1U;
+    }
+    return sizes;
+}
+
+[[nodiscard]] bool BenchShapeEnabled(std::string_view shape) {
+    const std::string shapes = BenchEnvironment("KB_UI_BENCH_SHAPES");
+    return shapes.empty() || shapes.find(shape) != std::string::npos;
+}
+
+[[nodiscard]] double MedianOf(std::vector<double>& values) {
+    std::ranges::sort(values);
+    return values[values.size() / 2U];
+}
+
+// Elements as children of one canvas (flat), or as a tree whose branching gives about eight levels (nested).
+// Containers stretch over their parent, leaves have a fixed rectangle, so no container's size depends on its children.
+std::size_t PopulateLayoutBench(kb::scene::Scene& scene, std::size_t count, bool nested, std::vector<SceneEntity>& leaves) {
+    const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
+    const std::size_t branching = nested ? static_cast<std::size_t>(std::ceil(std::pow(static_cast<double>(count), 1.0 / 7.0))) : 0U;
+    const kb::scene::UIBorder border = *kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Border).border;
+    std::vector<kb::scene::SceneObject> objects;
+    objects.reserve(count);
+    std::size_t deepest = 1U;
+    std::vector<std::uint8_t> depth(count, 1U);
+    for (std::size_t index = 0U; index < count; ++index) {
+        kb::scene::SceneObject parent = canvas;
+        if (nested && index > 0U) {
+            parent = objects[(index - 1U) / branching];
+            depth[index] = static_cast<std::uint8_t>(depth[(index - 1U) / branching] + 1U);
+            deepest = std::max<std::size_t>(deepest, depth[index]);
+        }
+        const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{.parent = parent});
+        const bool container = nested && index * branching + 1U < count;
+        kb::scene::UIRectTransform rect = Rect(static_cast<float>(index % 100U) * 10.0F, static_cast<float>(index / 100U % 100U) * 10.0F, 9.0F, 9.0F);
+        if (container) {
+            rect = {};
+            rect.anchorMin = {0.0F, 0.0F};
+            rect.anchorMax = {1.0F, 1.0F};
+        }
+        scene.Components().UI().Set(object.Entity(), rect);
+        scene.Components().UI().Set(object.Entity(), border);
+        objects.push_back(object);
+        if (!container)
+            leaves.push_back(object.Entity());
+    }
+    return deepest;
+}
+
+void NudgeLeaf(kb::scene::Scene& scene, SceneEntity entity, float amount) {
+    kb::scene::UIRectTransform* rect = scene.Components().UI().TryGet<kb::scene::UIRectTransform>(entity);
+    rect->offsetMax.x += amount;
+    scene.Components().UI().MarkModified<kb::scene::UIRectTransform>(entity);
+}
+
+[[nodiscard]] double TimedUpdate(kb::scene::Scene& scene, const kb::scene::SceneUIInput& input) {
+    const auto start = std::chrono::steady_clock::now();
+    const bool ok = scene.UI().Update(1920.0F, 1080.0F, input, 0.016F);
+    const double elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    kb::tests::Require(ok, "A UI benchmark update must lay out");
+    return elapsed;
+}
+
+void RunLayoutBenchCase(std::size_t count, bool nested) {
+    const char* shape = nested ? "nested" : "flat";
+    kb::scene::Scene scene;
+    std::vector<SceneEntity> leaves;
+    const auto buildStart = std::chrono::steady_clock::now();
+    const std::size_t depth = PopulateLayoutBench(scene, count, nested, leaves);
+    const double buildMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - buildStart).count();
+    const kb::scene::SceneUIInput input{};
+    const double firstMs = TimedUpdate(scene, input);
+    kb::tests::Require(scene.UI().Frame().elements.size() == count + 1U, "The layout benchmark must lay out every element");
+    static_cast<void>(TimedUpdate(scene, input));
+    const std::size_t reps = count <= 1'000U ? 15U : (count <= 10'000U ? 7U : 3U);
+    std::vector<double> unchanged;
+    std::vector<double> one;
+    std::vector<double> all;
+    const SceneEntity middle = leaves[leaves.size() / 2U];
+    float amount = 1.0F;
+    for (std::size_t rep = 0U; rep < reps; ++rep) {
+        unchanged.push_back(TimedUpdate(scene, input));
+        NudgeLeaf(scene, middle, amount);
+        amount = -amount;
+        one.push_back(TimedUpdate(scene, input));
+    }
+    for (std::size_t rep = 0U; rep < std::min<std::size_t>(reps, 3U); ++rep) {
+        for (const SceneEntity leaf : leaves)
+            NudgeLeaf(scene, leaf, amount);
+        amount = -amount;
+        all.push_back(TimedUpdate(scene, input));
+    }
+    std::cout << "ui_layout_bench shape=" << shape << " n=" << count << " depth=" << depth << " setup_ms=" << buildMs
+              << " first_ms=" << firstMs << " unchanged_ms=" << MedianOf(unchanged) << " one_ms=" << MedianOf(one)
+              << " all_ms=" << MedianOf(all) << " element_bytes=" << sizeof(kb::scene::SceneUIFrameElement) << std::endl;
+}
+
+// A scroll view over a vertical list of fixed-height rows, scrolled one row per update.
+void RunListBenchCase(std::size_t rows) {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
+    kb::scene::UIComponentSet view = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::ScrollView);
+    view.rectTransform = Rect(100.0F, 100.0F, 600.0F, 600.0F);
+    view.scrollView->horizontal = false;
+    const kb::scene::SceneObject viewObject = AddUI(scene, canvas, view);
+    kb::scene::UIComponentSet content = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::VerticalBox);
+    content.rectTransform = Rect(0.0F, 0.0F, 600.0F, static_cast<float>(rows) * 30.0F);
+    const kb::scene::SceneObject contentObject = AddUI(scene, viewObject, content);
+    const kb::scene::UIBorder border = *kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Border).border;
+    for (std::size_t index = 0U; index < rows; ++index) {
+        const kb::scene::SceneObject row = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{.parent = contentObject});
+        scene.Components().UI().Set(row.Entity(), Rect(0.0F, 0.0F, 600.0F, 30.0F));
+        scene.Components().UI().Set(row.Entity(), border);
+    }
+    const kb::scene::SceneUIInput input{};
+    const double firstMs = TimedUpdate(scene, input);
+    static_cast<void>(TimedUpdate(scene, input));
+    std::vector<double> scrolled;
+    float offset = 0.0F;
+    for (int rep = 0; rep < (rows <= 1'000U ? 15 : 3); ++rep) {
+        offset += 30.0F;
+        kb::scene::UIScrollView* scroll = scene.Components().UI().TryGet<kb::scene::UIScrollView>(viewObject.Entity());
+        scroll->scrollY = offset;
+        scene.Components().UI().MarkModified<kb::scene::UIScrollView>(viewObject.Entity());
+        scrolled.push_back(TimedUpdate(scene, input));
+    }
+    std::cout << "ui_layout_bench shape=list n=" << rows << " first_ms=" << firstMs << " scroll_ms=" << MedianOf(scrolled)
+              << " frame_elements=" << scene.UI().Frame().elements.size() << std::endl;
+}
+
+} // namespace
+
+void RunSceneUILayoutBenchmark() {
+    for (const std::size_t count : BenchSizes()) {
+        if (BenchShapeEnabled("flat")) RunLayoutBenchCase(count, false);
+        if (BenchShapeEnabled("nested")) RunLayoutBenchCase(count, true);
+        if (BenchShapeEnabled("list")) RunListBenchCase(count);
+    }
 }
 
 void RunSceneUIBuildFrameProfile() {

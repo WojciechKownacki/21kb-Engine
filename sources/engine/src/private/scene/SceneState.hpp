@@ -970,6 +970,49 @@ public:
     kb::math::DVec3 particleSimulationOrigin{};
     mutable std::vector<kb::particles::ParticleRuntimeState> particleRuntimeStateScratch;
     SceneUIFrame uiFrame;
+    // What the current frame was laid out from, so an update whose inputs are all unchanged keeps it instead of
+    // laying out again. The revisions only grow: a write to a UI component, a change of which entities are
+    // active, and a published image opacity each move one.
+    struct UILayoutCache {
+        bool valid = false;
+        std::uint64_t writeRevision = 0U;
+        std::uint64_t topologyVersion = 0U;
+        std::uint64_t activityRevision = 0U;
+        std::uint64_t imageAlphaRevision = 0U;
+        std::uint64_t visibilityStamp = 0U;
+        std::uint64_t catalogGeneration = 0U;
+        kb::math::Vec2 viewport{};
+        UIEdges safeAreaInsets{};
+        SceneEntity hovered{};
+        SceneEntity focused{};
+        kb::math::Vec2 tooltipPointer{};
+        bool tooltipDue = false;
+        bool dragging = false;
+        bool primaryDown = false;
+        bool caretVisible = false;
+        std::size_t textCursor = 0U;
+        std::size_t textAnchor = 0U;
+        SceneEntity dropdown{};
+        bool dropdownClosing = false;
+        float dropdownAlpha = 0.0F;
+        // The frame cannot be kept: a world space canvas follows the camera and a theme can finish loading.
+        bool volatileFrame = false;
+        // Positions of the scroll views in the frame, found while laying out, so their per-frame upkeep does not
+        // visit every element.
+        std::vector<std::size_t> scrollViews;
+        // The selection state the widgets were last tinted for, and whether every colour had arrived.
+        SceneEntity interactionPressed{};
+        SceneEntity interactionHovered{};
+        SceneEntity interactionFocused{};
+        std::array<SceneEntity, 3U> interactionPlayers{};
+        bool interactionPrimaryDown = false;
+        bool interactionSettled = false;
+        bool interactionValid = false;
+    };
+    UILayoutCache uiLayoutCache;
+    std::uint64_t uiWriteRevision = 1U;
+    std::uint64_t uiActivityRevision = 1U;
+    std::uint64_t uiImageAlphaRevision = 1U;
     // Element storage left over from the frame before, lent to the next build so a steady frame allocates nothing.
     std::vector<SceneUIFrameElement> uiSpareElements;
     std::vector<SceneUIEvent> uiEvents;

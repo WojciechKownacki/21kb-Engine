@@ -34,6 +34,7 @@
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <utility>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -422,6 +423,24 @@ class FrameBuilder {
         });
         output = std::move(frame_);
         return true;
+    }
+
+    // Whether the layout read something that moves without a write the scene can see: a world space canvas follows
+    // the camera, and a theme that was still loading finishes in the background.
+    [[nodiscard]] bool Volatile() const noexcept {
+        return volatile_ || !themes_.empty();
+    }
+
+    // Positions in `frame` of the scroll views, in frame order. `frame` is the one this builder produced.
+    [[nodiscard]] std::vector<std::size_t> ScrollViewPositions(const SceneUIFrame& frame) const {
+        std::vector<std::size_t> positions;
+        if (scrollViewCount_ == 0U)
+            return positions;
+        positions.reserve(scrollViewCount_);
+        for (std::size_t index = 0U; index < frame.elements.size(); ++index)
+            if (frame.elements[index].scrollView.has_value())
+                positions.push_back(index);
+        return positions;
     }
 
   private:
@@ -856,6 +875,8 @@ class FrameBuilder {
             }
         }
         element.hitCorners = element.corners;
+        if (element.scrollView.has_value())
+            ++scrollViewCount_;
         if (const UISelectable* padded = ui_.TryGet<UISelectable>(entity)) {
             const UIEdges padding = padded->raycastPadding;
             if (padding.left != 0.0F || padding.top != 0.0F || padding.right != 0.0F || padding.bottom != 0.0F) {
@@ -1208,6 +1229,7 @@ class FrameBuilder {
             Refuse(entity, "World Space Canvas has no Transform");
             return;
         }
+        volatile_ = true;
         const float width = Width(rect);
         const float height = Height(rect);
         // Projected from the canvas' double-precision position: a canvas far from the origin stays steady on screen.
@@ -1375,6 +1397,8 @@ class FrameBuilder {
     SceneUIFrame frame_;
     SceneUIFrameRefusal refusal_{};
     std::uint32_t traversal_ = 0U;
+    std::size_t scrollViewCount_ = 0U;
+    bool volatile_ = false;
     bool valid_ = true;
 };
 
@@ -1462,29 +1486,36 @@ void KeepSpareStorage(SceneState& state, std::vector<SceneUIFrameElement>&& elem
 // being dragged springs back over its elasticity; an unrestricted view is left where it is.
 [[nodiscard]] bool ClampAllScrollOffsets(Scene& scene, SceneState& state, const SceneUIInput& input, float deltaSeconds) {
     bool changed = false;
+    // Reads go through the const view: a mutable lookup counts as a write and would keep the layout from being reused.
+    const SceneUIComponentQueries reader = std::as_const(scene).Components().UI();
     SceneUIComponents ui = scene.Components().UI();
-    for (const SceneUIFrameElement& element : state.uiFrame.elements) {
-        UIScrollView* scrollView = ui.TryGet<UIScrollView>(element.entity);
-        if (scrollView == nullptr || scrollView->movementType == UIScrollMovement::Unrestricted)
+    for (const std::size_t position : state.uiLayoutCache.scrollViews) {
+        const SceneEntity entity = state.uiFrame.elements[position].entity;
+        const UIScrollView* current = reader.TryGet<UIScrollView>(entity);
+        if (current == nullptr || current->movementType == UIScrollMovement::Unrestricted)
             continue;
-        if (scrollView->movementType == UIScrollMovement::Elastic) {
-            if (input.primaryDown && state.uiPressed.IsValid() && IsDescendantOrSelf(scene, state.uiPressed, element.entity))
+        UIScrollView next = *current;
+        if (current->movementType == UIScrollMovement::Elastic) {
+            if (input.primaryDown && state.uiPressed.IsValid() && IsDescendantOrSelf(scene, state.uiPressed, entity))
                 continue;
-            UIScrollView clamped = *scrollView;
-            static_cast<void>(ClampScrollOffsets(scene, state.uiFrame, element.entity, clamped));
-            if (clamped.scrollX == scrollView->scrollX && clamped.scrollY == scrollView->scrollY)
+            UIScrollView clamped = next;
+            static_cast<void>(ClampScrollOffsets(scene, state.uiFrame, entity, clamped));
+            if (clamped.scrollX == next.scrollX && clamped.scrollY == next.scrollY)
                 continue;
-            const float amount = scrollView->elasticity <= 0.0F ? 1.0F : 1.0F - std::exp(-deltaSeconds / scrollView->elasticity);
+            const float amount = next.elasticity <= 0.0F ? 1.0F : 1.0F - std::exp(-deltaSeconds / next.elasticity);
             const auto spring = [amount](float& value, float target) {
                 value = std::abs(target - value) < 0.5F ? target : std::lerp(value, target, amount);
             };
-            spring(scrollView->scrollX, clamped.scrollX);
-            spring(scrollView->scrollY, clamped.scrollY);
-        } else if (!ClampScrollOffsets(scene, state.uiFrame, element.entity, *scrollView)) {
+            spring(next.scrollX, clamped.scrollX);
+            spring(next.scrollY, clamped.scrollY);
+        } else if (!ClampScrollOffsets(scene, state.uiFrame, entity, next)) {
             continue;
         }
-        ui.MarkModified<UIScrollView>(element.entity);
-        Queue(state, scene, SceneUIEventType::Changed, element.entity, &input, scrollView->scrollX,
+        UIScrollView* scrollView = ui.TryGet<UIScrollView>(entity);
+        scrollView->scrollX = next.scrollX;
+        scrollView->scrollY = next.scrollY;
+        ui.MarkModified<UIScrollView>(entity);
+        Queue(state, scene, SceneUIEventType::Changed, entity, &input, scrollView->scrollX,
               scrollView->scrollY);
         changed = true;
     }
@@ -1516,8 +1547,11 @@ void KeepSpareStorage(SceneState& state, std::vector<SceneUIFrameElement>&& elem
     };
 }
 
-void ResolveInteractionPresentation(const Scene& scene, const SceneState& state, bool primaryDown, float deltaSeconds,
+// Returns whether every selectable's colour has reached the colour its state asks for, so a later pass with the same
+// state would change nothing.
+bool ResolveInteractionPresentation(const Scene& scene, const SceneState& state, bool primaryDown, float deltaSeconds,
                                     const SceneUIFrame& previous, SceneUIFrame& current, bool advanceTransition) {
+    bool settled = true;
     // A frame lists its widgets in the order the last one did unless the layout changed, so the previous record is
     // found at the same position; only a frame that moved things around pays for an index.
     std::unordered_map<std::uint64_t, std::size_t> previousIndex;
@@ -1568,6 +1602,8 @@ void ResolveInteractionPresentation(const Scene& scene, const SceneState& state,
                                  ? 1.0F
                                  : std::clamp(deltaSeconds / selectable->colorFadeSeconds, 0.0F, 1.0F);
         element.selectableTransitionTint = LerpColor(prior->selectableTransitionTint, target, amount);
+        const kb::math::Color& tint = element.selectableTransitionTint;
+        settled = settled && tint.r == target.r && tint.g == target.g && tint.b == target.b && tint.a == target.a;
     }
     // A selectable shows its state on its target graphic, or on itself without one: tinted with the state
     // colour, with the image swapped for the state image, or not at all.
@@ -1603,6 +1639,7 @@ void ResolveInteractionPresentation(const Scene& scene, const SceneState& state,
                 graphic.image->imageAssetId = image;
         }
     }
+    return settled;
 }
 
 template <typename T> [[nodiscard]] SceneEntity ClosestAncestorWith(const Scene& scene, SceneEntity entity) noexcept {
@@ -2485,28 +2522,29 @@ void DestroyEntity(Scene& scene, SceneEntity entity) noexcept {
 // everything fits.
 [[nodiscard]] bool SyncScrollbars(Scene& scene, SceneState& state) {
     bool changed = false;
+    const SceneUIComponentQueries reader = std::as_const(scene).Components().UI();
     SceneUIComponents ui = scene.Components().UI();
-    for (const SceneUIFrameElement& element : state.uiFrame.elements) {
+    for (const std::size_t position : state.uiLayoutCache.scrollViews) {
+      const SceneUIFrameElement& element = state.uiFrame.elements[position];
       for (const bool vertical : {true, false}) {
-        if (!element.scrollView.has_value())
-            continue;
         const std::uint64_t linked = vertical ? element.scrollView->verticalScrollbar : element.scrollView->horizontalScrollbar;
         if (linked == 0U)
             continue;
         const SceneEntity scrollbarEntity{linked};
-        UIScrollView* scrollView = ui.TryGet<UIScrollView>(element.entity);
-        UIScrollbar* scrollbar = scene.Entities().IsAlive(scrollbarEntity) ? ui.TryGet<UIScrollbar>(scrollbarEntity) : nullptr;
+        const UIScrollView* scrollView = reader.TryGet<UIScrollView>(element.entity);
+        const UIScrollbar* scrollbar = scene.Entities().IsAlive(scrollbarEntity) ? reader.TryGet<UIScrollbar>(scrollbarEntity) : nullptr;
         if (scrollView == nullptr || scrollbar == nullptr)
             continue;
         const Vec2 limits = ScrollLimits(scene, state.uiFrame, element.entity, *scrollView);
         const float limit = vertical ? limits.y : limits.x;
-        float& offset = vertical ? scrollView->scrollY : scrollView->scrollX;
+        const float offset = vertical ? scrollView->scrollY : scrollView->scrollX;
         const float viewSize = (vertical ? element.rect.height : element.rect.width) / std::max(element.canvasScale, 0.0001F);
         const bool dragging = state.uiPressed.IsValid() && IsDescendantOrSelf(scene, state.uiPressed, scrollbarEntity);
         if (dragging && limit > 0.0F) {
             const float dragged = scrollbar->value * limit;
             if (dragged != offset) {
-                offset = dragged;
+                UIScrollView* mutableView = ui.TryGet<UIScrollView>(element.entity);
+                (vertical ? mutableView->scrollY : mutableView->scrollX) = dragged;
                 ui.MarkModified<UIScrollView>(element.entity);
                 changed = true;
             }
@@ -2515,12 +2553,13 @@ void DestroyEntity(Scene& scene, SceneEntity entity) noexcept {
         const float size = limit > 0.0F ? std::clamp(viewSize / (viewSize + limit), 0.0F, 1.0F) : 1.0F;
         const float value = limit > 0.0F ? std::clamp(offset / limit, 0.0F, 1.0F) : 0.0F;
         if (size != scrollbar->size || value != scrollbar->value) {
-            scrollbar->size = size;
-            scrollbar->value = value;
+            UIScrollbar* mutableBar = ui.TryGet<UIScrollbar>(scrollbarEntity);
+            mutableBar->size = size;
+            mutableBar->value = value;
             ui.MarkModified<UIScrollbar>(scrollbarEntity);
             changed = true;
         }
-        const UICanvasGroup* shown = ui.TryGet<UICanvasGroup>(scrollbarEntity);
+        const UICanvasGroup* shown = reader.TryGet<UICanvasGroup>(scrollbarEntity);
         const bool visible = limit > 0.0F;
         if (shown == nullptr || (shown->opacity > 0.0F) != visible) {
             SetGroup(scene, scrollbarEntity, visible ? 1.0F : 0.0F, visible);
@@ -2856,6 +2895,7 @@ UIEdges SceneUIAccess::SafeAreaInsets() const noexcept {
 }
 void SceneUIAccess::PublishImageAlpha(std::uint64_t imageAssetId, SceneUIImageAlpha alpha) {
     SceneAccess::State(scene_).uiImageAlpha[imageAssetId] = std::make_shared<const SceneUIImageAlpha>(std::move(alpha));
+    ++SceneAccess::State(scene_).uiImageAlphaRevision;
 }
 bool SceneUIAccess::UpdateFromInput(float deltaSeconds) {
     SceneState& state = SceneAccess::State(scene_);
@@ -3075,6 +3115,81 @@ void SceneUIAccess::PublishTextLayouts(std::vector<SceneUITextLayout> layouts) {
     }
 }
 
+namespace {
+
+// What the layout of a frame was computed from, apart from the UI components themselves: the revisions that move on
+// every write, the selection, tooltip and caret state the builder draws, and the screen. An update that finds all of it
+// as it was keeps the frame it has.
+[[nodiscard]] SceneState::UILayoutCache CaptureLayoutInputs(const SceneState& state, Vec2 viewport) {
+    SceneState::UILayoutCache inputs;
+    inputs.writeRevision = state.uiWriteRevision;
+    inputs.topologyVersion = state.hierarchyTopologyVersion;
+    inputs.activityRevision = state.uiActivityRevision;
+    inputs.imageAlphaRevision = state.uiImageAlphaRevision;
+    const kb::ecs::ComponentId visibility = state.world.Component<VisibilityComponent>();
+    inputs.visibilityStamp = visibility == 0U ? 0U : state.world.NativeStorage().ComponentChangeStamp(visibility);
+    inputs.catalogGeneration = state.localizationCatalogGeneration;
+    inputs.viewport = viewport;
+    inputs.safeAreaInsets = state.uiSafeAreaInsets;
+    inputs.hovered = state.uiHovered;
+    inputs.focused = state.uiFocused;
+    inputs.tooltipPointer = state.uiTooltipPointer;
+    inputs.tooltipDue = state.uiHoverSeconds >= kUITooltipDelaySeconds;
+    inputs.dragging = state.uiDragging;
+    inputs.primaryDown = state.previousUIInput.primaryDown;
+    inputs.caretVisible = IsUITextCaretVisible(state.uiTextCaretPhase);
+    inputs.textCursor = state.uiTextCursorByteOffset;
+    inputs.textAnchor = state.uiTextSelectionAnchor;
+    if (state.uiDropdownList) {
+        inputs.dropdown = state.uiDropdownList->dropdown;
+        inputs.dropdownClosing = state.uiDropdownList->closing;
+        inputs.dropdownAlpha = state.uiDropdownList->alpha;
+    }
+    return inputs;
+}
+
+[[nodiscard]] bool SameLayoutInputs(const SceneState::UILayoutCache& a, const SceneState::UILayoutCache& b) noexcept {
+    return a.writeRevision == b.writeRevision && a.topologyVersion == b.topologyVersion &&
+           a.activityRevision == b.activityRevision && a.imageAlphaRevision == b.imageAlphaRevision &&
+           a.visibilityStamp == b.visibilityStamp && a.catalogGeneration == b.catalogGeneration &&
+           a.viewport.x == b.viewport.x && a.viewport.y == b.viewport.y &&
+           a.safeAreaInsets.left == b.safeAreaInsets.left && a.safeAreaInsets.top == b.safeAreaInsets.top &&
+           a.safeAreaInsets.right == b.safeAreaInsets.right && a.safeAreaInsets.bottom == b.safeAreaInsets.bottom &&
+           a.hovered == b.hovered && a.focused == b.focused && a.tooltipPointer.x == b.tooltipPointer.x &&
+           a.tooltipPointer.y == b.tooltipPointer.y && a.tooltipDue == b.tooltipDue && a.dragging == b.dragging &&
+           a.primaryDown == b.primaryDown && a.caretVisible == b.caretVisible && a.textCursor == b.textCursor &&
+           a.textAnchor == b.textAnchor && a.dropdown == b.dropdown && a.dropdownClosing == b.dropdownClosing &&
+           a.dropdownAlpha == b.dropdownAlpha;
+}
+
+// Whether the frame in the scene is exactly what a new layout would produce. Anything the cache cannot see moving
+// (a camera, a theme still loading, a playing video, focus waiting for its widget) forces a layout.
+[[nodiscard]] bool CanKeepLayout(const Scene& scene, const SceneState& state, Vec2 viewport) {
+    const SceneState::UILayoutCache& cache = state.uiLayoutCache;
+    if (!cache.valid || cache.volatileFrame || state.uiPendingFocus.IsValid() ||
+        (state.uiMedia != nullptr && !state.uiMedia->videos.empty()))
+        return false;
+    return SameLayoutInputs(cache, CaptureLayoutInputs(state, viewport)) &&
+           scene.Localization().Language() == state.uiFrame.language;
+}
+
+// Lays the frame out and remembers what it was laid out from.
+[[nodiscard]] bool BuildLayout(const Scene& scene, SceneState& state, Vec2 viewport, SceneUIFrame& frame) {
+    FrameBuilder builder{scene, viewport};
+    if (!builder.Build(frame)) {
+        state.uiLayoutCache.valid = false;
+        return false;
+    }
+    SceneState::UILayoutCache cache = CaptureLayoutInputs(state, viewport);
+    cache.valid = true;
+    cache.volatileFrame = builder.Volatile();
+    cache.scrollViews = builder.ScrollViewPositions(frame);
+    state.uiLayoutCache = std::move(cache);
+    return true;
+}
+
+} // namespace
+
 bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const SceneUIInput& sourceInput, float deltaSeconds) {
     SceneUIInput input = sourceInput;
     bool pointerCancelled = false;
@@ -3092,30 +3207,45 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
         if (!std::isfinite(touch.x) || !std::isfinite(touch.y) || touch.phase > kb::input::InputTouchPhase::Cancelled) return false;
     }
     UpdateUIMedia(scene_);
-    SceneUIFrame frame;
-    // Two frames are alive at once, the one being built and the one it replaces, so their element storage trades
-    // places instead of being allocated and cleared again every frame.
-    frame.elements = std::move(SceneAccess::State(scene_).uiSpareElements);
-    if (!FrameBuilder{scene_, {viewportWidth, viewportHeight}}.Build(frame)) {
-        // Keep the last good frame so hit testing still answers, but carry the refusal on it
-        // so the host can name what to fix. A later successful build replaces the whole frame
-        // and clears this by construction.
-        SceneAccess::State(scene_).uiFrame.refusal = frame.refusal;
-        return false;
-    }
     SceneState& state = SceneAccess::State(scene_);
-    SceneUIFrame previousFrame = std::move(state.uiFrame);
-    state.uiFrame = std::move(frame);
+    const Vec2 viewport{viewportWidth, viewportHeight};
+    // A frame whose layout inputs are all as they were is kept as it is. `keptFrame` stays true until some step below
+    // lays the frame out again, which is also when the frame it replaces becomes the previous one.
+    bool keptFrame = CanKeepLayout(scene_, state, viewport);
+    SceneUIFrame previousFrame;
+    if (!keptFrame) {
+        SceneUIFrame frame;
+        // Two frames are alive at once, the one being built and the one it replaces, so their element storage trades
+        // places instead of being allocated and cleared again every frame.
+        frame.elements = std::move(state.uiSpareElements);
+        if (!BuildLayout(scene_, state, viewport, frame)) {
+            // Keep the last good frame so hit testing still answers, but carry the refusal on it
+            // so the host can name what to fix. A later successful build replaces the whole frame
+            // and clears this by construction.
+            state.uiFrame.refusal = frame.refusal;
+            return false;
+        }
+        previousFrame = std::move(state.uiFrame);
+        state.uiFrame = std::move(frame);
+    }
+    const auto replaceFrame = [&](SceneUIFrame&& next) {
+        if (keptFrame) {
+            previousFrame = std::move(state.uiFrame);
+            keptFrame = false;
+        } else {
+            KeepSpareStorage(state, std::move(state.uiFrame.elements));
+        }
+        state.uiFrame = std::move(next);
+    };
     bool presentationDirty = SceneUIGroupTransitions::Update(scene_, deltaSeconds);
     presentationDirty = ClampAllScrollOffsets(scene_, state, input, deltaSeconds) || presentationDirty;
     if (presentationDirty) {
         SceneUIFrame clampedFrame;
-        if (!FrameBuilder{scene_, {viewportWidth, viewportHeight}}.Build(clampedFrame)) {
+        if (!BuildLayout(scene_, state, viewport, clampedFrame)) {
             state.uiFrame.refusal = clampedFrame.refusal;
             return false;
         }
-        KeepSpareStorage(state, std::move(state.uiFrame.elements));
-        state.uiFrame = std::move(clampedFrame);
+        replaceFrame(std::move(clampedFrame));
         presentationDirty = false;
     }
     std::array<SceneEntity, 4U> focusBeforeModal{state.uiFocused,
@@ -3432,19 +3562,21 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
     presentationDirty = SyncScrollbars(scene_, state) || presentationDirty;
     if (presentationDirty || state.uiPendingFocus.IsValid()) {
         SceneUIFrame refreshed;
-        if (!FrameBuilder{scene_, {viewportWidth, viewportHeight}}.Build(refreshed))
+        if (!BuildLayout(scene_, state, viewport, refreshed))
             return false;
-        KeepSpareStorage(state, std::move(state.uiFrame.elements));
-        state.uiFrame = std::move(refreshed);
+        replaceFrame(std::move(refreshed));
     }
-    bool revealFocus = previousFrame.viewportSize.x != viewportWidth || previousFrame.viewportSize.y != viewportHeight;
-    const auto* previousFocused = Find(previousFrame, state.uiFocused);
-    const auto* currentFocused = Find(state.uiFrame, state.uiFocused);
-    if (previousFocused != nullptr && currentFocused != nullptr) {
-        const auto& before = previousFocused->clipRect;
-        const auto& after = currentFocused->clipRect;
-        revealFocus = revealFocus || before.x != after.x || before.y != after.y ||
-            before.width != after.width || before.height != after.height;
+    bool revealFocus = false;
+    if (!keptFrame) {
+        revealFocus = previousFrame.viewportSize.x != viewportWidth || previousFrame.viewportSize.y != viewportHeight;
+        const auto* previousFocused = Find(previousFrame, state.uiFocused);
+        const auto* currentFocused = Find(state.uiFrame, state.uiFocused);
+        if (previousFocused != nullptr && currentFocused != nullptr) {
+            const auto& before = previousFocused->clipRect;
+            const auto& after = currentFocused->clipRect;
+            revealFocus = revealFocus || before.x != after.x || before.y != after.y ||
+                before.width != after.width || before.height != after.height;
+        }
     }
     // Focus handed to a widget created this frame - an opened list's item - lands once it has been laid out.
     if (state.uiPendingFocus.IsValid()) {
@@ -3455,12 +3587,28 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
     // Viewport and safe-area changes must keep the active field inside its scroll view's clip.
     if (revealFocus && ScrollFocusedIntoView(scene_, state, input)) {
         SceneUIFrame scrolled;
-        if (!FrameBuilder{scene_, {viewportWidth, viewportHeight}}.Build(scrolled))
+        if (!BuildLayout(scene_, state, viewport, scrolled))
             return false;
-        KeepSpareStorage(state, std::move(state.uiFrame.elements));
-        state.uiFrame = std::move(scrolled);
+        replaceFrame(std::move(scrolled));
     }
-    ResolveInteractionPresentation(scene_, state, input.primaryDown, deltaSeconds, previousFrame, state.uiFrame, true);
+    // The widgets are tinted for the selection state; a kept frame whose state and colours have not moved needs no pass.
+    SceneState::UILayoutCache& cache = state.uiLayoutCache;
+    const std::array<SceneEntity, 3U> playerFocus{state.uiPlayers[0].focused, state.uiPlayers[1].focused,
+                                                  state.uiPlayers[2].focused};
+    const bool tintsCurrent = keptFrame && cache.interactionValid && cache.interactionSettled &&
+                              cache.interactionPressed == state.uiPressed && cache.interactionHovered == state.uiHovered &&
+                              cache.interactionFocused == state.uiFocused && cache.interactionPlayers == playerFocus &&
+                              cache.interactionPrimaryDown == input.primaryDown;
+    if (!tintsCurrent) {
+        cache.interactionSettled = ResolveInteractionPresentation(
+            scene_, state, input.primaryDown, deltaSeconds, keptFrame ? state.uiFrame : previousFrame, state.uiFrame, true);
+        cache.interactionValid = true;
+        cache.interactionPressed = state.uiPressed;
+        cache.interactionHovered = state.uiHovered;
+        cache.interactionFocused = state.uiFocused;
+        cache.interactionPlayers = playerFocus;
+        cache.interactionPrimaryDown = input.primaryDown;
+    }
     KeepSpareStorage(state, std::move(previousFrame.elements));
     UpdateUIReader(scene_);
     return true;

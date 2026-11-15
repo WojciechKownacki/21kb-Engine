@@ -16,6 +16,7 @@ void RunSceneTransformScaleBenchmark();
 void RunSceneUITests();
 void RunSceneUIBuildFrameBenchmark();
 void RunSceneUIWorkloadBenchmark();
+void RunSceneUILayoutBenchmark();
 void RunSceneSystemTests();
 void RunScenePrefabTests();
 void RunProjectSceneTests();

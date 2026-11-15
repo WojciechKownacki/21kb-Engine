@@ -38,6 +38,7 @@ void SceneEntityService::SetActive(Scene& scene, SceneEntity entity, bool active
     }
     SceneHistoryService::NoteObjectChanging(scene, entity);
     SceneState& state = SceneAccess::State(scene);
+    ++state.uiActivityRevision;
     if (active) {
         state.inactiveEntities.erase(entity.Id());
     } else {
