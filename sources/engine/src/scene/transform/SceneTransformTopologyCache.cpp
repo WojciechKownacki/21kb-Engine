@@ -57,7 +57,9 @@ void SceneTransformTopologyCache::Refresh(const SceneState& state) {
     levels_.clear();
     dense_.clear();
     sparse_.clear();
-    for (const auto root : state.hierarchyRoots) Append(root, 0U);
+    for (const auto root : state.hierarchyRoots) {
+        if (root.IsValid()) Append(root, 0U);
+    }
     for (std::size_t level = 0U; level < levels_.size(); ++level) {
         // Index by offset: appending a new level can relocate levels_.
         for (std::size_t offset = 0U; offset < levels_[level].size(); ++offset) {

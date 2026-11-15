@@ -374,7 +374,7 @@ class FrameBuilder {
         IncludeHierarchy<UISlider>();
         IncludeHierarchy<UIProgressBar>();
         // Only the roots above UI objects hold UI, walked in the order of the scene's root list.
-        std::ranges::sort(uiRoots_, {}, [this](SceneEntity root) { return SceneHierarchyCache::RootSequence(state_, root); });
+        std::ranges::sort(uiRoots_, {}, [this](SceneEntity root) { return SceneHierarchyCache::RootSlot(state_, root); });
         std::vector<SceneEntity> pending(uiRoots_.begin(), uiRoots_.end());
         while (!pending.empty()) {
             const SceneEntity entity = pending.back();
@@ -432,7 +432,7 @@ class FrameBuilder {
                 auto& builder = *static_cast<FrameBuilder*>(context);
                 while (entity.IsValid() && builder.uiHierarchy_.insert(entity.Id()).second) {
                     const SceneEntity parent = builder.scene_.Hierarchy().Parent(entity);
-                    if (!parent.IsValid() && SceneHierarchyCache::RootSequence(builder.state_, entity) != 0U)
+                    if (!parent.IsValid() && SceneHierarchyCache::RootSlot(builder.state_, entity) != 0U)
                         builder.uiRoots_.push_back(entity);
                     entity = parent;
                 }

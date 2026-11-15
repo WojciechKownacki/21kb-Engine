@@ -90,7 +90,7 @@ void PrintRootSyncProfile(
     if (timings == nullptr) {
         return;
     }
-    std::cout << "root_sync_profile,roots=" << state.hierarchyRoots.size()
+    std::cout << "root_sync_profile,roots=" << SceneHierarchyCache::RootCount(state)
               << ",full_builds=" << state.transformTopology.BuildCount()
               << ",dirty_rows=" << dirtyRows
               << ",topology_ns=" << timings->topologyNanoseconds

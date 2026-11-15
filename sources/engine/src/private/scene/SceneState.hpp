@@ -701,12 +701,15 @@ public:
     std::vector<SceneEntity> pendingDeferredDestroys;
     std::unordered_map<SceneEntity::IdType, std::uint64_t> hierarchyOrder;
     std::vector<std::uint64_t> denseHierarchyOrder;
+    // The roots in order. A removed root leaves an invalid entity (a hole) in its place, so removing costs the same
+    // for any number of roots; SceneHierarchyCache closes the holes once they are half of the list.
     std::vector<SceneEntity> hierarchyRoots;
-    // When each root was last appended to hierarchyRoots (0: not a root since its slot was cleared): their order
-    // there, for a walk over a few roots that must not scan all of them.
-    std::vector<std::uint64_t> denseHierarchyRootSequence;
-    std::unordered_map<SceneEntity::IdType, std::uint64_t> hierarchyRootSequence;
-    std::uint64_t nextHierarchyRootSequence = 1U;
+    std::size_t hierarchyRootHoles = 0U;
+    std::size_t hierarchyRootLastHole = 0U;
+    // Where each root stands in hierarchyRoots, plus one (0: not a root): finds it to remove it, and gives the order of
+    // the roots for a walk over a few of them that must not scan all of them.
+    std::vector<std::uint64_t> denseHierarchyRootSlot;
+    std::unordered_map<SceneEntity::IdType, std::uint64_t> hierarchyRootSlot;
     std::unordered_map<SceneEntity::IdType, SceneEntity> hierarchyParents;
     std::unordered_map<SceneEntity::IdType, std::vector<SceneEntity>> hierarchyChildren;
     std::vector<SceneEntity> denseHierarchyParents;

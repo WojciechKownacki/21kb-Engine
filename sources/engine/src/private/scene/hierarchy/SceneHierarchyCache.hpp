@@ -31,7 +31,7 @@ public:
     static void AddRoot(SceneState& state, SceneEntity entity) {
         const auto previousVersion = state.hierarchyTopologyVersion;
         // Entity creation calls this once for a fresh entity. Moving an existing
-        // entity into the root list still goes through Move/AppendUnique.
+        // entity into the root list still goes through Move.
         if (!state.hierarchyParents.emplace(entity.Id(), SceneEntity{}).second) {
             throw std::logic_error("Scene hierarchy root already registered");
         }
@@ -229,7 +229,7 @@ public:
         state.hierarchyParents.erase(entity.Id());
         state.hierarchyChildren.erase(entity.Id());
         state.hierarchyOrder.erase(entity.Id());
-        state.hierarchyRootSequence.erase(entity.Id());
+        state.hierarchyRootSlot.erase(entity.Id());
         ClearDenseEntry(state, entity);
         RefreshTransformLink(state, entity);
         RefreshTransformLink(state, parent);
@@ -238,15 +238,44 @@ public:
     }
 
     [[nodiscard]] static std::vector<SceneEntity> Roots(const SceneState& state) {
-        return state.hierarchyRoots;
+        if (state.hierarchyRootHoles == 0U) {
+            return state.hierarchyRoots;
+        }
+        std::vector<SceneEntity> roots;
+        roots.reserve(RootCount(state));
+        for (const SceneEntity root : state.hierarchyRoots) {
+            if (root.IsValid()) {
+                roots.push_back(root);
+            }
+        }
+        return roots;
     }
 
     [[nodiscard]] static std::size_t RootCount(const SceneState& state) noexcept {
-        return state.hierarchyRoots.size();
+        return state.hierarchyRoots.size() - state.hierarchyRootHoles;
     }
 
     [[nodiscard]] static SceneEntity RootAt(const SceneState& state, std::size_t index) noexcept {
-        return index < state.hierarchyRoots.size() ? state.hierarchyRoots[index] : SceneEntity{};
+        const std::vector<SceneEntity>& roots = state.hierarchyRoots;
+        const std::size_t count = RootCount(state);
+        if (index >= count) {
+            return {};
+        }
+        if (state.hierarchyRootHoles == 0U) {
+            return roots[index];
+        }
+        // The roots after the last hole stand together at the end of the list, where a pass that reads what was appended
+        // since its last one looks.
+        if (index + (roots.size() - 1U - state.hierarchyRootLastHole) >= count) {
+            return roots[roots.size() - (count - index)];
+        }
+        std::size_t remaining = index;
+        for (const SceneEntity root : roots) {
+            if (root.IsValid() && remaining-- == 0U) {
+                return root;
+            }
+        }
+        return {};
     }
 
     [[nodiscard]] static std::uint64_t RootAppendEpoch(const SceneState& state) noexcept {
@@ -323,29 +352,22 @@ public:
 
     // Records that the entity was just appended to hierarchyRoots.
     static void NoteRootAppended(SceneState& state, SceneEntity entity) {
-        const std::uint64_t sequence = state.nextHierarchyRootSequence++;
-        const std::uint32_t index = DenseIndex(entity);
-        if (index == kb::ecs::kInvalidGeneratedEntityIndex) {
-            state.hierarchyRootSequence[entity.Id()] = sequence;
-            return;
-        }
-        if (state.denseHierarchyRootSequence.size() <= index) {
-            state.denseHierarchyRootSequence.resize(static_cast<std::size_t>(index) + 1U, 0U);
-        }
-        state.denseHierarchyRootSequence[index] = sequence;
+        NoteRootSlot(state, entity, state.hierarchyRoots.size() - 1U);
+    }
+
+    // Records where the entity stands in hierarchyRoots.
+    static void NoteRootSlot(SceneState& state, SceneEntity entity, std::size_t position) {
+        StoreRootSlot(state, entity, static_cast<std::uint64_t>(position) + 1U);
     }
 
     // Orders roots as hierarchyRoots does; 0 for an entity that is not a root.
-    [[nodiscard]] static std::uint64_t RootSequence(const SceneState& state, SceneEntity entity) noexcept {
-        if (Parent(state, entity).IsValid()) {
-            return 0U;
-        }
+    [[nodiscard]] static std::uint64_t RootSlot(const SceneState& state, SceneEntity entity) noexcept {
         const std::uint32_t index = DenseIndex(entity);
         if (index == kb::ecs::kInvalidGeneratedEntityIndex) {
-            const auto sequence = state.hierarchyRootSequence.find(entity.Id());
-            return sequence == state.hierarchyRootSequence.end() ? 0U : sequence->second;
+            const auto slot = state.hierarchyRootSlot.find(entity.Id());
+            return slot == state.hierarchyRootSlot.end() ? 0U : slot->second;
         }
-        return index < state.denseHierarchyRootSequence.size() ? state.denseHierarchyRootSequence[index] : 0U;
+        return index < state.denseHierarchyRootSlot.size() ? state.denseHierarchyRootSlot[index] : 0U;
     }
 
     static void RefreshTransformLinks(SceneState& state, std::span<const SceneEntity> entities, std::span<const SceneEntity> parents) {
@@ -379,9 +401,10 @@ public:
             }
         };
         if (!parent.IsValid()) {
+            CompactRoots(state);
             reorder(state.hierarchyRoots);
-            for (const SceneEntity root : state.hierarchyRoots) {
-                NoteRootAppended(state, root);
+            for (std::size_t position = 0U; position < state.hierarchyRoots.size(); ++position) {
+                NoteRootSlot(state, state.hierarchyRoots[position], position);
             }
         } else {
             if (const auto children = state.hierarchyChildren.find(parent.Id()); children != state.hierarchyChildren.end()) {
@@ -506,16 +529,17 @@ private:
         if (index < state.denseHierarchyOrder.size()) {
             state.denseHierarchyOrder[index] = 0U;
         }
-        if (index < state.denseHierarchyRootSequence.size()) {
-            state.denseHierarchyRootSequence[index] = 0U;
+        if (index < state.denseHierarchyRootSlot.size()) {
+            state.denseHierarchyRootSlot[index] = 0U;
         }
     }
 
+    // The child has just left the list of its old parent (or is new), so it is not in this list yet: no search.
     static void AddToParentList(SceneState& state, SceneEntity parent, SceneEntity child) {
         if (parent.IsValid()) {
-            AppendUnique(state.hierarchyChildren[parent.Id()], child);
+            state.hierarchyChildren[parent.Id()].push_back(child);
             AddDenseChild(state, parent, child);
-        } else if (std::ranges::find(state.hierarchyRoots, child) == state.hierarchyRoots.end()) {
+        } else if (RootSlot(state, child) == 0U) {
             state.hierarchyRoots.push_back(child);
             NoteRootAppended(state, child);
         }
@@ -534,8 +558,75 @@ private:
             }
             RemoveDenseChild(state, parent, child);
         } else {
-            Erase(state.hierarchyRoots, child);
+            RemoveRoot(state, child);
         }
+    }
+
+    // Leaves a hole in the place of the root, so the other roots keep their order and slots. The last root is popped, and
+    // the holes are closed once they are half of the list: the cost of a removal does not depend on the number of roots.
+    static void RemoveRoot(SceneState& state, SceneEntity root) {
+        const std::uint64_t slot = RootSlot(state, root);
+        if (slot == 0U) {
+            return;
+        }
+        std::vector<SceneEntity>& roots = state.hierarchyRoots;
+        const std::size_t position = static_cast<std::size_t>(slot - 1U);
+        if (position >= roots.size() || roots[position] != root) {
+            throw std::logic_error("Scene hierarchy root slot is out of sync");
+        }
+        StoreRootSlot(state, root, 0U);
+        if (position + 1U == roots.size()) {
+            roots.pop_back();
+            return;
+        }
+        roots[position] = SceneEntity{};
+        state.hierarchyRootLastHole = state.hierarchyRootHoles == 0U ? position : std::max(state.hierarchyRootLastHole, position);
+        ++state.hierarchyRootHoles;
+        if (state.hierarchyRootHoles * 2U > roots.size()) {
+            CompactRoots(state);
+        }
+    }
+
+    static void CompactRoots(SceneState& state) {
+        if (state.hierarchyRootHoles == 0U) {
+            return;
+        }
+        std::vector<SceneEntity>& roots = state.hierarchyRoots;
+        std::size_t kept = 0U;
+        for (std::size_t position = 0U; position < roots.size(); ++position) {
+            const SceneEntity root = roots[position];
+            if (!root.IsValid()) {
+                continue;
+            }
+            if (kept != position) {
+                roots[kept] = root;
+                NoteRootSlot(state, root, kept);
+            }
+            ++kept;
+        }
+        roots.resize(kept);
+        state.hierarchyRootHoles = 0U;
+        state.hierarchyRootLastHole = 0U;
+    }
+
+    // `value` is the position in hierarchyRoots plus one, or 0 for an entity that leaves the list.
+    static void StoreRootSlot(SceneState& state, SceneEntity entity, std::uint64_t value) {
+        const std::uint32_t index = DenseIndex(entity);
+        if (index == kb::ecs::kInvalidGeneratedEntityIndex) {
+            if (value == 0U) {
+                state.hierarchyRootSlot.erase(entity.Id());
+            } else {
+                state.hierarchyRootSlot[entity.Id()] = value;
+            }
+            return;
+        }
+        if (state.denseHierarchyRootSlot.size() <= index) {
+            if (value == 0U) {
+                return;
+            }
+            state.denseHierarchyRootSlot.resize(static_cast<std::size_t>(index) + 1U, 0U);
+        }
+        state.denseHierarchyRootSlot[index] = value;
     }
 
     static void RemoveDenseChild(SceneState& state, SceneEntity parent, SceneEntity child) {
@@ -544,12 +635,6 @@ private:
             return;
         }
         Erase(state.denseHierarchyChildren[index], child);
-    }
-
-    static void AppendUnique(std::vector<SceneEntity>& entities, SceneEntity entity) {
-        if (std::ranges::find(entities, entity) == entities.end()) {
-            entities.push_back(entity);
-        }
     }
 
     static void Erase(std::vector<SceneEntity>& entities, SceneEntity entity) {

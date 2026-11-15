@@ -719,8 +719,9 @@ void AssignPrefabHierarchyOrderRange(SceneState& state, std::span<const SceneEnt
 
         for (std::size_t rootNodeIndex : rootNodeIndices) {
             const SceneEntity root = entities[EntityIndex(instanceIndex, rootNodeIndex, nodes.size())];
-            (*rootAppendTarget)[rootWriteCursor++] = root;
-            if (rootAppendTarget == &state.hierarchyRoots) SceneHierarchyCache::NoteRootAppended(state, root);
+            const std::size_t position = rootWriteCursor++;
+            (*rootAppendTarget)[position] = root;
+            if (rootAppendTarget == &state.hierarchyRoots) SceneHierarchyCache::NoteRootSlot(state, root, position);
         }
 
         for (std::size_t parentNodeIndex = 0; parentNodeIndex < childNodesByParentNode.size(); ++parentNodeIndex) {

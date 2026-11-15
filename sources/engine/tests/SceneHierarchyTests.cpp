@@ -611,6 +611,45 @@ void RunHierarchyCreationOrderSurvivesDeletionTest() {
     kb::tests::Require(roots[1] == third.Entity(), "New root should be appended at the bottom after deletion");
 }
 
+// Roots that leave the list (destroyed, or parented) keep the order of the others, which stay reachable by index, also
+// when new roots are appended after the removals and when the removals close up the list.
+void RunHierarchyRootRemovalKeepsOrderTest() {
+    kb::scene::Scene scene;
+    std::vector<kb::scene::SceneObject> objects;
+    std::vector<kb::scene::SceneEntity> expected;
+    for (int index = 0; index < 40; ++index) {
+        objects.push_back(scene.Entities().CreateObject());
+        expected.push_back(objects.back().Entity());
+    }
+    const auto check = [&](const char* message) {
+        kb::tests::Require(scene.Hierarchy().RootEntities() == expected && scene.Hierarchy().RootCount() == expected.size(), message);
+        for (std::size_t index = 0U; index < expected.size(); ++index) {
+            kb::tests::Require(scene.Hierarchy().RootAt(index) == expected[index], message);
+        }
+        kb::tests::Require(!scene.Hierarchy().RootAt(expected.size()).IsValid(), message);
+    };
+    for (const std::size_t index : { 5U, 20U, 3U, 30U }) {
+        scene.Entities().Destroy(objects[index]);
+        std::erase(expected, objects[index].Entity());
+    }
+    check("Roots lost their order after destroying roots in the middle");
+    objects.push_back(scene.Entities().CreateObject());
+    expected.push_back(objects.back().Entity());
+    check("A root appended after removed roots is not at the end");
+    kb::tests::Require(scene.Hierarchy().SetParent(objects[10], objects[11]), "Root could not be parented");
+    std::erase(expected, objects[10].Entity());
+    check("Roots lost their order after parenting a root");
+    kb::tests::Require(scene.Hierarchy().SetParent(objects[10], {}), "Child could not become a root");
+    expected.push_back(objects[10].Entity());
+    check("A child made a root is not at the end of the roots");
+    for (std::size_t index = 0U; index < 30U; ++index) {
+        if (index == 10U || index == 11U || !scene.Entities().IsAlive(objects[index])) continue;
+        scene.Entities().Destroy(objects[index]);
+        std::erase(expected, objects[index].Entity());
+    }
+    check("Roots lost their order after most of them were destroyed");
+}
+
 void RunHierarchyNoOpParentingKeepsSiblingOrderTest() {
     kb::scene::Scene scene;
     const kb::scene::SceneObject parent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Parent" });
@@ -2103,6 +2142,86 @@ void BuildTransformScaleObjects(kb::scene::Scene& scene, std::size_t count, std:
     return values.empty() ? 0.0 : values[values.size() / 2U];
 }
 
+// Object lifecycle in a scene of `size` flat roots. Every round destroys 8 objects spread over the root list (timed
+// one by one), destroys 1% of the objects (every 100th; it stops at the time budget and the row says how many were
+// destroyed), then times a bulk create of `batch` flat objects and of `batch` objects that name one existing parent.
+// The objects of a round are put back afterwards, so each round starts from the same scene size.
+void RunSceneLifecycleScale(std::size_t size, std::size_t rounds, double budgetSeconds) {
+    using Clock = std::chrono::steady_clock;
+    const auto millis = [](Clock::time_point from, Clock::time_point to) { return std::chrono::duration<double, std::milli>(to - from).count(); };
+    kb::scene::Scene scene;
+    std::vector<kb::scene::SceneObject> objects;
+    BuildTransformScaleObjects(scene, size, 0U, objects);
+    scene.Runtime().SynchronizeTransforms();
+    const std::size_t batch = std::min<std::size_t>(size, 10000U);
+    // drops the handles at `picks` (ascending) from `objects`, which stays in the order of the root list
+    const auto drop = [&objects](const std::vector<std::size_t>& picks, std::size_t count) {
+        std::vector<char> gone(objects.size(), 0);
+        for (std::size_t index = 0U; index < count; ++index) gone[picks[index]] = 1;
+        std::size_t kept = 0U;
+        for (std::size_t index = 0U; index < objects.size(); ++index) {
+            if (gone[index] == 0) objects[kept++] = objects[index];
+        }
+        objects.resize(kept);
+    };
+    std::vector<double> oneUs, pctMs, flatMs, parentedMs;
+    std::size_t pctTarget = 0U;
+    std::size_t pctDone = 0U;
+    for (std::size_t round = 0U; round < rounds; ++round) {
+        std::vector<std::size_t> picks;
+        for (std::size_t index = 0U; index < 8U; ++index) picks.push_back(size / 4U + index * std::max<std::size_t>(size / 32U, 1U));
+        std::vector<double> single;
+        for (const std::size_t pick : picks) {
+            const auto start = Clock::now();
+            scene.Entities().Destroy(objects[pick]);
+            single.push_back(millis(start, Clock::now()) * 1000.0);
+        }
+        oneUs.push_back(MedianOf(single));
+        drop(picks, picks.size());
+
+        pctTarget = std::max<std::size_t>(size / 100U, 1U);
+        const std::size_t stride = std::max<std::size_t>(objects.size() / pctTarget, 1U);
+        picks.clear();
+        for (std::size_t index = 0U; index < pctTarget && stride / 2U + index * stride < objects.size(); ++index) picks.push_back(stride / 2U + index * stride);
+        pctDone = 0U;
+        const auto pctStart = Clock::now();
+        for (const std::size_t pick : picks) {
+            scene.Entities().Destroy(objects[pick]);
+            ++pctDone;
+            if ((pctDone & 127U) == 0U && millis(pctStart, Clock::now()) > budgetSeconds * 1000.0) break;
+        }
+        pctMs.push_back(millis(pctStart, Clock::now()));
+        drop(picks, pctDone);
+        // put back what was destroyed
+        for (const kb::scene::SceneObject& object : scene.Entities().CreateObjects(std::vector<kb::scene::SceneObjectDesc>(size - objects.size()))) objects.push_back(object);
+        kb::tests::Require(scene.Hierarchy().RootCount() == objects.size(), "Scene lifecycle benchmark lost track of its roots after destroying");
+
+        std::vector<kb::scene::SceneObjectDesc> descs(batch);
+        auto start = Clock::now();
+        std::vector<kb::scene::SceneObject> created = scene.Entities().CreateObjects(descs);
+        flatMs.push_back(millis(start, Clock::now()));
+        kb::tests::Require(created.size() == batch && scene.Hierarchy().RootCount() == objects.size() + batch, "Scene lifecycle benchmark: bulk create of flat objects went wrong");
+        for (std::size_t index = created.size(); index-- > 0U;) scene.Entities().Destroy(created[index]);
+
+        const kb::scene::SceneObject parent = objects[size / 2U];
+        for (kb::scene::SceneObjectDesc& desc : descs) desc.parent = parent;
+        start = Clock::now();
+        created = scene.Entities().CreateObjects(descs);
+        parentedMs.push_back(millis(start, Clock::now()));
+        kb::tests::Require(created.size() == batch && scene.Hierarchy().RootCount() == objects.size()
+                && scene.Hierarchy().ChildCount(parent.Entity()) == batch, "Scene lifecycle benchmark: bulk create of parented objects went wrong");
+        for (std::size_t index = created.size(); index-- > 0U;) scene.Entities().Destroy(created[index]);
+        kb::tests::Require(scene.Hierarchy().RootCount() == objects.size() && scene.Hierarchy().ChildCount(parent.Entity()) == 0U, "Scene lifecycle benchmark lost track of its roots after destroying");
+    }
+    const double pct = MedianOf(pctMs);
+    std::cout << "scene_lifecycle size=" << size << " rounds=" << rounds << " batch=" << batch
+              << " destroy_one_us=" << MedianOf(oneUs)
+              << " destroy_pct_done=" << pctDone << "/" << pctTarget << " destroy_pct_ms=" << pct << " destroy_pct_us_per=" << (pctDone == 0U ? 0.0 : pct * 1000.0 / static_cast<double>(pctDone))
+              << " create_flat_ms=" << MedianOf(flatMs) << " create_flat_us_per=" << MedianOf(flatMs) * 1000.0 / static_cast<double>(batch)
+              << " create_parented_ms=" << MedianOf(parentedMs) << " create_parented_us_per=" << MedianOf(parentedMs) * 1000.0 / static_cast<double>(batch)
+              << '\n' << std::flush;
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -2169,7 +2288,8 @@ void RunTransformWriteBenchmark() {
 // scenes of the given depth (see BuildTransformScaleObjects), medians of the measured frames. Sizes, depths, the
 // moving fractions (0 = nothing moves), the frame count and the write mode come from KB_TSCALE_SIZES,
 // KB_TSCALE_DEPTHS, KB_TSCALE_MOVE, KB_TSCALE_ROUNDS and KB_TSCALE_WRITE; KB_TSCALE_CHURN objects are also born and
-// destroyed in every frame. A scene that cannot be built is reported.
+// destroyed in every frame. A scene that cannot be built is reported. With KB_TSCALE_LIFECYCLE=1 the suite times object
+// creation and destruction instead (see RunSceneLifecycleScale; KB_TSCALE_BUDGET_S caps the destroy of 1%, in seconds).
 void RunSceneTransformScaleBenchmark() {
     using Clock = std::chrono::steady_clock;
     const std::vector<std::size_t> sizes = ScaleEnvList("KB_TSCALE_SIZES", "1000,10000,100000,1000000,2000000,5000000");
@@ -2179,6 +2299,17 @@ void RunSceneTransformScaleBenchmark() {
     const std::string write = ScaleEnvText("KB_TSCALE_WRITE", "setmany");
     const std::size_t churn = ScaleEnvList("KB_TSCALE_CHURN", "0").front();
     constexpr std::size_t kWarmupFrames = 3U;
+    if (ScaleEnvList("KB_TSCALE_LIFECYCLE", "0").front() != 0U) {
+        const std::size_t budgetSeconds = ScaleEnvList("KB_TSCALE_BUDGET_S", "30").front();
+        for (const std::size_t size : sizes) {
+            try {
+                RunSceneLifecycleScale(size, rounds, static_cast<double>(budgetSeconds));
+            } catch (const std::exception& error) {
+                std::cout << "scene_lifecycle size=" << size << " FAILED " << error.what() << '\n' << std::flush;
+            }
+        }
+        return;
+    }
     for (const std::size_t size : sizes) {
         for (const std::size_t depth : depths) {
             try {
@@ -2272,6 +2403,7 @@ void RunSceneHierarchyTests() {
     RunParentChildrenOwnershipTest();
     RunHierarchyStableCreationOrderTest();
     RunHierarchyCreationOrderSurvivesDeletionTest();
+    RunHierarchyRootRemovalKeepsOrderTest();
     RunHierarchyNoOpParentingKeepsSiblingOrderTest();
     RunTransformTopologicalBatchMassParentingTest();
     RunTransformTopologicalBatchCacheInvalidationTest();
