@@ -687,6 +687,37 @@ public:
         version_ += entities.size();
     }
 
+    // Appends the rows of one chunk of `source` after the live rows. The columns both tables hold are copied and
+    // flagged; `ranges` receives where the rows landed so the caller can fill the columns only this table has.
+    void AppendRowsFrom(const ArchetypeTable& source, std::size_t sourceChunk, std::vector<BulkAppendRange>& ranges) {
+        const NativeChunk& from = source.chunks_[sourceChunk];
+        AddManyRanges(std::span<const Entity>{ from.entities.data(), from.rowCount }, ranges, false);
+        std::size_t consumed = 0;
+        for (const BulkAppendRange& range : ranges) {
+            for (const NativeComponentType& type : source.types_) {
+                const ComponentLayout* targetColumn = FindColumn(type.id);
+                if (targetColumn == nullptr) {
+                    continue;
+                }
+                std::memcpy(
+                    ColumnData(range.chunk, *targetColumn, range.firstRow),
+                    source.ColumnData(sourceChunk, *source.FindColumn(type.id), consumed),
+                    range.count * type.size);
+                TouchComponent(type.id);
+                MarkComponentRowsDirty(type.id, range.chunk, range.firstRow, range.count);
+            }
+            consumed += range.count;
+        }
+    }
+
+    void AppendEntitiesTo(std::vector<Entity>& output) const {
+        output.reserve(output.size() + liveEntities_);
+        for (std::size_t chunkIndex = 0; chunkIndex < chunks_.size(); ++chunkIndex) {
+            const std::span<const Entity> rows = ChunkEntities(chunkIndex);
+            output.insert(output.end(), rows.begin(), rows.end());
+        }
+    }
+
     void RollbackAppendedRows(std::size_t originalLiveEntities) {
         if (originalLiveEntities > liveEntities_) {
             throw std::logic_error("Native ECS bulk append rollback exceeds live rows");
@@ -1225,6 +1256,13 @@ public:
             throw std::out_of_range("Invalid native ECS chunk index");
         }
         return reinterpret_cast<const Entity::IdType*>(chunks_[chunkIndex].entities.data());
+    }
+
+    [[nodiscard]] std::span<const Entity> ChunkEntities(std::size_t chunkIndex) const {
+        if (chunkIndex >= chunks_.size()) {
+            throw std::out_of_range("Invalid native ECS chunk index");
+        }
+        return std::span<const Entity>{ chunks_[chunkIndex].entities.data(), chunks_[chunkIndex].rowCount };
     }
 
     [[nodiscard]] std::size_t ChunkRowCount(std::size_t chunkIndex) const {
@@ -2570,6 +2608,86 @@ public:
         removalVersion_ = structuralVersion_;
     }
 
+    // Entities of the archetypes that hold every required component, none of the excluded ones and, when `adding`
+    // is false, `componentId` (or, when it is true, not that component). Those are the rows a whole-archetype
+    // component change moves.
+    [[nodiscard]] std::size_t CountBulkChangeEntities(
+        ComponentId componentId,
+        bool adding,
+        std::span<const ComponentId> requiredComponentIds,
+        std::span<const ComponentId> excludedComponentIds) const {
+        std::size_t count = 0U;
+        for (const ArchetypeTable& table : tables_) {
+            if (MatchesBulkChange(table, componentId, adding, requiredComponentIds, excludedComponentIds)) {
+                count += table.LiveEntities();
+            }
+        }
+        return count;
+    }
+
+    // Moves every row of each matching archetype to the archetype without `componentId`, one migration per
+    // archetype. The rows keep their order, after the rows the target already holds. When `affected` is not null
+    // it receives the moved entities in that order, before the move.
+    std::size_t RemoveComponentFromMatching(
+        ComponentId componentId,
+        std::span<const ComponentId> requiredComponentIds,
+        std::span<const ComponentId> excludedComponentIds,
+        std::vector<Entity>* affected) {
+        if (componentId == 0U) {
+            throw std::invalid_argument("Native ECS component id must be non-zero");
+        }
+        std::size_t moved = 0U;
+        const std::size_t tableCount = tables_.size();
+        for (std::size_t sourceIndex = 0; sourceIndex < tableCount; ++sourceIndex) {
+            const ArchetypeTable& source = tables_[sourceIndex];
+            if (!MatchesBulkChange(source, componentId, false, requiredComponentIds, excludedComponentIds)) {
+                continue;
+            }
+            auto& targetTypes = ResetTargetTypes(source.Types().size());
+            for (const NativeComponentType& type : source.Types()) {
+                if (type.id != componentId) {
+                    targetTypes.push_back(type);
+                }
+            }
+            const std::size_t rows = MoveTableRows(sourceIndex, EdgeKind::Remove, componentId, targetTypes, nullptr, affected);
+            moved += rows;
+            BumpStructuralVersion(rows);
+            removalVersion_ = structuralVersion_;
+        }
+        return moved;
+    }
+
+    // Like RemoveComponentFromMatching, for the archetypes that lack `component`: the rows move to the archetype
+    // with it, and every moved row gets the one value (a broadcast column, stride 0).
+    std::size_t AddComponentToMatching(
+        const NativeBulkComponentColumn& component,
+        std::span<const ComponentId> requiredComponentIds,
+        std::span<const ComponentId> excludedComponentIds,
+        std::vector<Entity>* affected) {
+        ValidateNativeComponentType(component.type);
+        if (component.data == nullptr || component.stride != 0U) {
+            throw std::invalid_argument("Native ECS whole-archetype add requires one broadcast value");
+        }
+        std::size_t moved = 0U;
+        const std::size_t tableCount = tables_.size();
+        for (std::size_t sourceIndex = 0; sourceIndex < tableCount; ++sourceIndex) {
+            const ArchetypeTable& source = tables_[sourceIndex];
+            if (!MatchesBulkChange(source, component.type.id, true, requiredComponentIds, excludedComponentIds)) {
+                continue;
+            }
+            auto& targetTypes = ResetTargetTypesFrom(source.Types());
+            const auto position = std::lower_bound(targetTypes.begin(), targetTypes.end(), component.type.id, [](const NativeComponentType& type, ComponentId id) {
+                return type.id < id;
+            });
+            targetTypes.insert(position, component.type);
+            const std::size_t rows = MoveTableRows(sourceIndex, EdgeKind::Add, component.type.id, targetTypes, &component, affected);
+            moved += rows;
+            BumpStructuralVersion(rows);
+            migrationVersion_ = structuralVersion_;
+        }
+        return moved;
+    }
+
     void SetComponent(Entity entity, ComponentId componentId, const void* data, std::size_t size) {
         EntityRecord& record = LiveRecord(entity);
         tables_[record.location.table].WriteComponent(record.location, componentId, data, size);
@@ -3395,6 +3513,75 @@ private:
         return targetTypes;
     }
 
+    [[nodiscard]] static bool MatchesBulkChange(
+        const ArchetypeTable& table,
+        ComponentId componentId,
+        bool adding,
+        std::span<const ComponentId> requiredComponentIds,
+        std::span<const ComponentId> excludedComponentIds) noexcept {
+        if (table.LiveEntities() == 0U || table.HasComponent(componentId) == adding) {
+            return false;
+        }
+        for (ComponentId requiredId : requiredComponentIds) {
+            if (!table.HasComponent(requiredId)) {
+                return false;
+            }
+        }
+        return !HasExcludedComponent(table, excludedComponentIds);
+    }
+
+    // Appends all rows of the source table to the table `targetTypes` describes, fills the added column when there
+    // is one, and empties the source. A failure before the records move leaves the world as it was.
+    std::size_t MoveTableRows(
+        std::size_t sourceIndex,
+        EdgeKind edgeKind,
+        ComponentId changedId,
+        std::span<const NativeComponentType> targetTypes,
+        const NativeBulkComponentColumn* added,
+        std::vector<Entity>* affected) {
+        const std::size_t targetIndex = ResolveMigrationTarget(sourceIndex, edgeKind, std::span<const ComponentId>{ &changedId, 1U }, targetTypes);
+        ArchetypeTable& source = tables_[sourceIndex];
+        ArchetypeTable& target = tables_[targetIndex];
+        const std::size_t count = source.LiveEntities();
+        const std::size_t firstTargetRow = target.LiveEntities();
+        EnsureChunkCommitBudget(target.NewChunkAcquiresForAppend(count));
+        if (affected != nullptr) {
+            source.AppendEntitiesTo(*affected);
+        }
+        auto& ranges = appendRangesScratch_;
+        try {
+            for (std::size_t chunkIndex = 0; chunkIndex < source.ChunkCount(); ++chunkIndex) {
+                if (source.ChunkRowCount(chunkIndex) == 0U) {
+                    continue;
+                }
+                target.AppendRowsFrom(source, chunkIndex, ranges);
+                if (added != nullptr) {
+                    for (const BulkAppendRange& range : ranges) {
+                        target.WriteComponentColumn(range.chunk, range.firstRow, added->type.id, added->data, range.count, 0U);
+                    }
+                }
+            }
+        } catch (...) {
+            target.RollbackAppendedRows(firstTargetRow);
+            throw;
+        }
+
+        const std::size_t targetCapacity = target.Capacity();
+        std::size_t targetChunk = firstTargetRow / targetCapacity;
+        std::size_t targetRow = firstTargetRow % targetCapacity;
+        for (std::size_t chunkIndex = 0; chunkIndex < source.ChunkCount(); ++chunkIndex) {
+            for (const Entity entity : source.ChunkEntities(chunkIndex)) {
+                records_[RecordIndexUnchecked(entity)].location = EntityLocation{ .table = targetIndex, .chunk = targetChunk, .row = targetRow };
+                if (++targetRow == targetCapacity) {
+                    targetRow = 0U;
+                    ++targetChunk;
+                }
+            }
+        }
+        source.RemoveAll();
+        return count;
+    }
+
     void BulkMigrate(
         std::size_t sourceIndex,
         EdgeKind edgeKind,
@@ -4074,6 +4261,30 @@ void NativeArchetypeStorage::RemoveComponents(Entity entity, std::span<const Com
 
 void NativeArchetypeStorage::RemoveComponents(std::span<const Entity> entities, std::span<const ComponentId> componentIds) {
     impl_->RemoveComponents(entities, componentIds);
+}
+
+std::size_t NativeArchetypeStorage::CountBulkChangeEntities(
+    ComponentId componentId,
+    bool adding,
+    std::span<const ComponentId> requiredComponentIds,
+    std::span<const ComponentId> excludedComponentIds) const {
+    return impl_->CountBulkChangeEntities(componentId, adding, requiredComponentIds, excludedComponentIds);
+}
+
+std::size_t NativeArchetypeStorage::RemoveComponentFromMatching(
+    ComponentId componentId,
+    std::span<const ComponentId> requiredComponentIds,
+    std::span<const ComponentId> excludedComponentIds,
+    std::vector<Entity>* affected) {
+    return impl_->RemoveComponentFromMatching(componentId, requiredComponentIds, excludedComponentIds, affected);
+}
+
+std::size_t NativeArchetypeStorage::AddComponentToMatching(
+    const NativeBulkComponentColumn& component,
+    std::span<const ComponentId> requiredComponentIds,
+    std::span<const ComponentId> excludedComponentIds,
+    std::vector<Entity>* affected) {
+    return impl_->AddComponentToMatching(component, requiredComponentIds, excludedComponentIds, affected);
 }
 
 void NativeArchetypeStorage::SetComponent(Entity entity, ComponentId componentId, const void* data, std::size_t size) {

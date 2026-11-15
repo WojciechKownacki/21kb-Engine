@@ -219,6 +219,27 @@ public:
     void RemoveComponents(Entity entity, std::span<const ComponentId> componentIds);
     void RemoveComponents(std::span<const Entity> entities, std::span<const ComponentId> componentIds);
 
+    // Whole-archetype component changes: every row of an archetype that matches (all required components, none of
+    // the excluded ones, and the changed component present for a removal or absent for an addition) moves to the
+    // target archetype in one migration, with no per-entity pass. Rows keep their order after the rows the target
+    // already holds. Return the number of entities moved; `affected` (optional) receives them in that order.
+    [[nodiscard]] std::size_t CountBulkChangeEntities(
+        ComponentId componentId,
+        bool adding,
+        std::span<const ComponentId> requiredComponentIds,
+        std::span<const ComponentId> excludedComponentIds) const;
+    std::size_t RemoveComponentFromMatching(
+        ComponentId componentId,
+        std::span<const ComponentId> requiredComponentIds,
+        std::span<const ComponentId> excludedComponentIds,
+        std::vector<Entity>* affected = nullptr);
+    // `component` is a broadcast column (stride 0): every moved row gets the one value.
+    std::size_t AddComponentToMatching(
+        const NativeBulkComponentColumn& component,
+        std::span<const ComponentId> requiredComponentIds,
+        std::span<const ComponentId> excludedComponentIds,
+        std::vector<Entity>* affected = nullptr);
+
     void SetComponent(Entity entity, ComponentId componentId, const void* data, std::size_t size);
     void SetComponents(std::span<const Entity> entities, std::span<const NativeBulkComponentColumn> components);
     void MarkComponentModified(Entity entity, ComponentId componentId);

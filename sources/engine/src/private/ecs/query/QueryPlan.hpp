@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ecs/query/QueryParallelismController.hpp"
 #include "engine/ecs/ComponentId.hpp"
 
 #include <cstddef>
@@ -31,6 +32,8 @@ public:
     [[nodiscard]] std::span<const ComponentId> ExcludedComponentIds() const noexcept;
     [[nodiscard]] std::span<const ComponentId> ChangedComponentIds() const noexcept;
     [[nodiscard]] bool HasChangeFilters() const noexcept;
+    // Timings that decide whether QueryExecutionSettings::autoParallel dispatches to the pool; shared by the queries of the plan.
+    [[nodiscard]] QueryParallelismController& Parallelism() const noexcept { return parallelism_; }
 
 private:
     std::vector<ComponentId> componentIds_;
@@ -39,6 +42,7 @@ private:
     std::vector<ComponentId> optionalComponentIds_;
     std::vector<ComponentId> excludedComponentIds_;
     std::vector<ComponentId> changedComponentIds_;
+    mutable QueryParallelismController parallelism_;
     bool hasChangeFilters_ = false;
     bool valid_ = false;
 };

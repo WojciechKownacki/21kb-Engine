@@ -3,6 +3,7 @@
 #include "EcsChangedQueryTests.inl"
 #include "TestSupport.hpp"
 
+#include "ecs/query/QueryParallelismController.hpp"
 #include "engine/ecs/QueryExecutionScratch.hpp"
 #include "engine/ecs/UnsafeHotQuery.hpp"
 #include "engine/ecs/WorkerPool.hpp"
@@ -12,8 +13,10 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <initializer_list>
+#include <memory>
 #include <span>
 #include <stdexcept>
 #include <thread>
@@ -2370,11 +2373,191 @@ void RunTypedEcsQuerySurvivesWorldMoveTest() {
     kb::tests::Require(counters.visited == 4U && kb::tests::NearlyEqual(counters.sumX, 10.0F), "ECS query lost native storage after World move");
 }
 
+void HeavyAutoParallelStep(kb::ecs::MutableQueryBatch<EcsPosition, EcsVelocity>& batch) {
+    EcsPosition* positions = batch.Components<0>();
+    const EcsVelocity* velocities = batch.Components<1>();
+    for (std::size_t row = 0; row < batch.Count(); ++row) {
+        float x = positions[row].x;
+        for (int step = 0; step < 48; ++step) {
+            x = (x * 0.999F) + (velocities[row].x * 0.001F) + (std::sqrt((x * x) + 1.0F) * 0.0001F);
+        }
+        positions[row].x = x;
+    }
+}
+
+[[nodiscard]] std::unique_ptr<kb::ecs::World> MakeAutoParallelWorld(std::size_t count) {
+    kb::ecs::WorldConfig config;
+    config.mirrorEntitiesToBackend = false;
+    config.mirrorNativeComponentChangesToBackend = false;
+    auto world = std::make_unique<kb::ecs::World>(config);
+    std::vector<EcsPosition> positions(count);
+    std::vector<EcsVelocity> velocities(count);
+    for (std::size_t index = 0; index < count; ++index) {
+        positions[index] = EcsPosition{ .x = static_cast<float>(index % 97U), .y = 0.0F };
+        velocities[index] = EcsVelocity{ .x = 1.0F + static_cast<float>(index % 5U), .y = 0.0F };
+    }
+    const std::array views{
+        kb::ecs::World::MakeBulkComponentView<EcsPosition>(std::span<const EcsPosition>{ positions }),
+        kb::ecs::World::MakeBulkComponentView<EcsVelocity>(std::span<const EcsVelocity>{ velocities }),
+    };
+    static_cast<void>(world->CreateEntitiesNativeOnly(count, views));
+    return world;
+}
+
+// The controller decides from measured times only, so synthetic times make its behaviour exact.
+void RunQueryParallelismControllerTest() {
+    using Controller = kb::ecs::QueryParallelismController;
+    Controller controller;
+    constexpr std::uintptr_t kCheap = 1U;
+    constexpr std::uintptr_t kCostly = 2U;
+    constexpr std::uintptr_t kPoolSlower = 3U;
+
+    const Controller::Choice tiny = controller.Choose(kCheap, Controller::kMinEntities - 1U);
+    kb::tests::Require(!tiny.parallel && !tiny.timed, "A set below the entity floor must run serially without timing");
+
+    // The first runs of a visitor are serial and timed (the second replaces the warm-up); a serial run shorter than
+    // a pool dispatch costs ends the probing.
+    Controller::Choice choice = controller.Choose(kCheap, 5000U);
+    kb::tests::Require(!choice.parallel && choice.timed, "The first run of a visitor must be a timed serial run");
+    controller.Record(choice, 50'000U);
+    choice = controller.Choose(kCheap, 5000U);
+    kb::tests::Require(!choice.parallel && choice.timed, "The second run of a visitor must be a timed serial run");
+    controller.Record(choice, 5'000U);
+    for (int run = 0; run < 100; ++run) {
+        choice = controller.Choose(kCheap, 5000U);
+        kb::tests::Require(!choice.parallel, "A cheap visitor must never be handed to the pool");
+        controller.Record(choice, 5'000U);
+    }
+
+    // A costly visitor probes the pool twice, then keeps whichever is faster and retries the other one rarely.
+    for (int run = 0; run < 2; ++run) {
+        choice = controller.Choose(kCostly, 5000U);
+        kb::tests::Require(!choice.parallel, "The first runs of a costly visitor must be serial");
+        controller.Record(choice, run == 0 ? 3'000'000U : 1'000'000U);
+    }
+    for (int run = 0; run < 2; ++run) {
+        choice = controller.Choose(kCostly, 5000U);
+        kb::tests::Require(choice.parallel && choice.timed, "A costly visitor must probe the pool after its serial runs");
+        controller.Record(choice, run == 0 ? 900'000U : 200'000U);
+    }
+    std::size_t serialRetries = 0U;
+    for (int run = 0; run < 2 * 256; ++run) {
+        choice = controller.Choose(kCostly, 5000U);
+        if (!choice.parallel) {
+            ++serialRetries;
+            controller.Record(choice, 1'000'000U);
+        } else {
+            controller.Record(choice, 200'000U);
+        }
+    }
+    kb::tests::Require(serialRetries == 2U, "A pool that is five times faster must retry the serial run every 256 runs");
+
+    // Another entity count is another bucket and starts over.
+    kb::tests::Require(!controller.Choose(kCostly, 500'000U).parallel, "A new size class must start with a serial run");
+
+    // A pool that turns out slower is dropped, and probed again only occasionally.
+    for (int run = 0; run < 2; ++run) {
+        choice = controller.Choose(kPoolSlower, 5000U);
+        controller.Record(choice, 1'000'000U);
+    }
+    for (int run = 0; run < 2; ++run) {
+        choice = controller.Choose(kPoolSlower, 5000U);
+        kb::tests::Require(choice.parallel, "The pool must be probed after the serial runs");
+        controller.Record(choice, 3'000'000U);
+    }
+    std::size_t poolRetries = 0U;
+    for (int run = 0; run < 2 * 256; ++run) {
+        choice = controller.Choose(kPoolSlower, 5000U);
+        if (choice.parallel) {
+            ++poolRetries;
+            controller.Record(choice, 3'000'000U);
+        } else {
+            controller.Record(choice, 1'000'000U);
+        }
+    }
+    kb::tests::Require(poolRetries == 2U, "A pool that is three times slower must be retried every 256 runs");
+}
+
+void RunTypedEcsAutoParallelQueryTest() {
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 3 } };
+    const kb::ecs::QueryExecutionSettings autoSettings{
+        .policy = kb::ecs::QueryExecutionPolicy::ParallelChunks,
+        .workerPool = &pool,
+        .autoParallel = true,
+    };
+
+    // Below the entity floor the pool is never used, however costly the kernel is.
+    {
+        const auto world = MakeAutoParallelWorld(512U);
+        const auto query = world->CreateQuery<EcsPosition, EcsVelocity>();
+        std::atomic_size_t workerBatches{ 0U };
+        for (int run = 0; run < 6; ++run) {
+            query.ForEachMutableBatchKernel(autoSettings, [&workerBatches](kb::ecs::MutableQueryBatch<EcsPosition, EcsVelocity>& batch) {
+                if (kb::ecs::CurrentQueryWorkerContext().active) workerBatches.fetch_add(1U, std::memory_order_acq_rel);
+                HeavyAutoParallelStep(batch);
+            });
+        }
+        kb::tests::Require(workerBatches.load(std::memory_order_acquire) == 0U, "autoParallel handed a set below the entity floor to the pool");
+    }
+
+    // A costly kernel over a large set: the first two runs are serial and timed, the third probes the pool, and the
+    // result after every run equals the one of a plain serial query.
+    constexpr std::size_t kCount = 40'000U;
+    const auto reference = MakeAutoParallelWorld(kCount);
+    const auto automatic = MakeAutoParallelWorld(kCount);
+    const auto referenceQuery = reference->CreateQuery<EcsPosition, EcsVelocity>();
+    const auto automaticQuery = automatic->CreateQuery<EcsPosition, EcsVelocity>();
+    std::atomic_size_t workerBatches{ 0U };
+    auto automaticKernel = [&workerBatches](kb::ecs::MutableQueryBatch<EcsPosition, EcsVelocity>& batch) {
+        if (kb::ecs::CurrentQueryWorkerContext().active) workerBatches.fetch_add(1U, std::memory_order_acq_rel);
+        HeavyAutoParallelStep(batch);
+    };
+    for (int run = 0; run < 12; ++run) {
+        referenceQuery.ForEachMutableBatchKernel(kb::ecs::QueryExecutionSettings{}, &HeavyAutoParallelStep);
+        automaticQuery.ForEachMutableBatchKernel(autoSettings, automaticKernel);
+        if (run <= 1) {
+            kb::tests::Require(workerBatches.load(std::memory_order_acquire) == 0U, "The first autoParallel runs must be serial");
+        } else if (run == 2) {
+            kb::tests::Require(workerBatches.load(std::memory_order_acquire) > 0U, "A costly kernel over a large set must probe the pool after its serial runs");
+        }
+    }
+    std::vector<float> expected;
+    std::vector<float> actual;
+    reference->CreateQuery<EcsPosition>().ForEachBatchKernel([&expected](const kb::ecs::QueryBatch<EcsPosition>& batch) {
+        for (std::size_t row = 0; row < batch.Count(); ++row) expected.push_back(batch.Components<0>()[row].x);
+    });
+    automatic->CreateQuery<EcsPosition>().ForEachBatchKernel([&actual](const kb::ecs::QueryBatch<EcsPosition>& batch) {
+        for (std::size_t row = 0; row < batch.Count(); ++row) actual.push_back(batch.Components<0>()[row].x);
+    });
+    kb::tests::Require(expected.size() == kCount && expected == actual, "autoParallel changed the result of a query");
+
+    // The read-only path decides the same way.
+    std::atomic_size_t visited{ 0U };
+    std::atomic_size_t readWorkerBatches{ 0U };
+    for (int run = 0; run < 4; ++run) {
+        automaticQuery.ForEachBatchKernel(autoSettings, [&](const kb::ecs::QueryBatch<EcsPosition, EcsVelocity>& batch) {
+            if (kb::ecs::CurrentQueryWorkerContext().active) readWorkerBatches.fetch_add(1U, std::memory_order_acq_rel);
+            float sum = 0.0F;
+            for (std::size_t row = 0; row < batch.Count(); ++row) {
+                float x = batch.Components<0>()[row].x;
+                for (int step = 0; step < 48; ++step) x = (x * 0.999F) + (std::sqrt((x * x) + 1.0F) * 0.0001F);
+                sum += x;
+            }
+            if (sum >= 0.0F) visited.fetch_add(batch.Count(), std::memory_order_acq_rel);
+        });
+        if (run <= 1) kb::tests::Require(readWorkerBatches.load(std::memory_order_acquire) == 0U, "The first read-only autoParallel runs must be serial");
+        if (run == 2) kb::tests::Require(readWorkerBatches.load(std::memory_order_acquire) > 0U, "A costly read-only kernel must probe the pool after its serial runs");
+    }
+    kb::tests::Require(visited.load(std::memory_order_acquire) == 4U * kCount, "Read-only autoParallel runs did not visit every entity");
+}
+
 } // namespace
 
 namespace kb::tests {
 
 void RunEcsQueryTests() {
+    RunQueryParallelismControllerTest();
+    RunTypedEcsAutoParallelQueryTest();
     RunTypedEcsQueryRowBatchAdapterTest();
     RunTypedEcsQueryBatchTest();
     RunTypedEcsQueryBatchPointerContractTest();

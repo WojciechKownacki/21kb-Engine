@@ -703,11 +703,167 @@ void RunTypedEcsArchetypeChurnStressTest() {
     }
 }
 
+struct WholeArchetypeFlag {
+    int value = 0;
+};
+
+// Whole-archetype component changes must leave the world exactly as changing the entities one by one in query order does:
+// component values, the order entities are visited in, and the observer events a mirrored world raises.
+struct WholeArchetypeLog {
+    std::vector<std::pair<int, std::uint64_t>> events;
+};
+
+void LogWholeArchetypeEvent(kb::ecs::Entity entity, kb::ecs::ComponentEventKind kind, const EcsQueryMarker*, void* context) {
+    static_cast<WholeArchetypeLog*>(context)->events.emplace_back(static_cast<int>(kind), entity.Id());
+}
+
+struct WholeArchetypeWorld {
+    explicit WholeArchetypeWorld(bool mirror)
+        : world(MakeConfig(mirror)) {
+        static_cast<void>(world.ObserveComponent<EcsQueryMarker>(kb::ecs::ComponentEventKind::Added, &LogWholeArchetypeEvent, &log));
+        static_cast<void>(world.ObserveComponent<EcsQueryMarker>(kb::ecs::ComponentEventKind::Removed, &LogWholeArchetypeEvent, &log));
+        for (int index = 0; index < 1500; ++index) {
+            const kb::ecs::Entity entity = world.CreateEntity();
+            world.Set(entity, EcsPosition{ .x = static_cast<float>(index) });
+            if (index % 2 == 0) world.Set(entity, EcsVelocity{ .x = 1.0F, .y = 2.0F });
+            if (index % 3 == 0) world.Set(entity, EcsQueryMarker{ .value = index });
+            if (index % 5 == 0) world.Set(entity, WholeArchetypeFlag{ .value = index });
+            entities.push_back(entity);
+        }
+        for (std::size_t index = 3; index < entities.size(); index += 7U) world.DestroyEntity(entities[index]);
+        log.events.clear();
+    }
+
+    [[nodiscard]] static kb::ecs::WorldConfig MakeConfig(bool mirror) {
+        kb::ecs::WorldConfig config;
+        config.chunkSizeProfile = kb::ecs::ChunkSizeProfile::Chunk4KB;
+        config.mirrorEntitiesToBackend = mirror;
+        config.mirrorNativeComponentChangesToBackend = mirror;
+        return config;
+    }
+
+    // The entities of a query over T, in the order the query visits them.
+    template <typename T>
+    [[nodiscard]] std::vector<kb::ecs::Entity> Visited() {
+        std::vector<kb::ecs::Entity> visited;
+        world.CreateQuery<T>().ForEachBatchKernel([&visited](const kb::ecs::QueryBatch<T>& batch) {
+            for (std::size_t row = 0; row < batch.Count(); ++row) visited.push_back(batch.EntityAt(row));
+        });
+        return visited;
+    }
+
+    // The world is destroyed first: its observers still write to the log while it tears down.
+    WholeArchetypeLog log;
+    std::vector<kb::ecs::Entity> entities;
+    kb::ecs::World world;
+};
+
+void RequireSameWholeArchetypeState(WholeArchetypeWorld& expected, WholeArchetypeWorld& actual, const char* message) {
+    kb::tests::Require(expected.log.events == actual.log.events, message);
+    kb::tests::Require(expected.Visited<EcsPosition>() == actual.Visited<EcsPosition>(), message);
+    kb::tests::Require(expected.Visited<EcsVelocity>() == actual.Visited<EcsVelocity>(), message);
+    kb::tests::Require(expected.Visited<EcsQueryMarker>() == actual.Visited<EcsQueryMarker>(), message);
+    kb::tests::Require(expected.Visited<WholeArchetypeFlag>() == actual.Visited<WholeArchetypeFlag>(), message);
+    kb::tests::Require(expected.world.NativeStorageStats().liveEntities == actual.world.NativeStorageStats().liveEntities, message);
+    for (const kb::ecs::Entity entity : expected.entities) {
+        kb::tests::Require(expected.world.IsAlive(entity) == actual.world.IsAlive(entity), message);
+        if (!expected.world.IsAlive(entity)) continue;
+        const EcsPosition* expectedPosition = expected.world.TryGet<EcsPosition>(entity);
+        const EcsPosition* actualPosition = actual.world.TryGet<EcsPosition>(entity);
+        kb::tests::Require((expectedPosition == nullptr) == (actualPosition == nullptr)
+            && (expectedPosition == nullptr || expectedPosition->x == actualPosition->x), message);
+        const EcsVelocity* expectedVelocity = expected.world.TryGet<EcsVelocity>(entity);
+        const EcsVelocity* actualVelocity = actual.world.TryGet<EcsVelocity>(entity);
+        kb::tests::Require((expectedVelocity == nullptr) == (actualVelocity == nullptr)
+            && (expectedVelocity == nullptr || expectedVelocity->y == actualVelocity->y), message);
+        const EcsQueryMarker* expectedMarker = expected.world.TryGet<EcsQueryMarker>(entity);
+        const EcsQueryMarker* actualMarker = actual.world.TryGet<EcsQueryMarker>(entity);
+        kb::tests::Require((expectedMarker == nullptr) == (actualMarker == nullptr)
+            && (expectedMarker == nullptr || expectedMarker->value == actualMarker->value), message);
+        const WholeArchetypeFlag* expectedDisabled = expected.world.TryGet<WholeArchetypeFlag>(entity);
+        const WholeArchetypeFlag* actualDisabled = actual.world.TryGet<WholeArchetypeFlag>(entity);
+        kb::tests::Require((expectedDisabled == nullptr) == (actualDisabled == nullptr)
+            && (expectedDisabled == nullptr || expectedDisabled->value == actualDisabled->value), message);
+    }
+}
+
+void RunWholeArchetypeComponentChangeTest() {
+    for (const bool mirror : { false, true }) {
+        {
+            WholeArchetypeWorld expected{ mirror };
+            WholeArchetypeWorld actual{ mirror };
+            for (const kb::ecs::Entity entity : expected.Visited<EcsQueryMarker>()) expected.world.Remove<EcsQueryMarker>(entity);
+            const std::size_t changed = actual.world.RemoveFromAll<EcsQueryMarker>();
+            kb::tests::Require(changed > 100U && actual.Visited<EcsQueryMarker>().empty(), "Whole-archetype removal missed entities");
+            kb::tests::Require(!mirror || actual.log.events.size() == changed, "Whole-archetype removal did not raise one removal event per entity");
+            RequireSameWholeArchetypeState(expected, actual, "Whole-archetype removal differs from removing the entities one by one");
+            kb::tests::Require(actual.world.RemoveFromAll<EcsQueryMarker>() == 0U, "Whole-archetype removal found entities that no longer have the component");
+        }
+        {
+            WholeArchetypeWorld expected{ mirror };
+            WholeArchetypeWorld actual{ mirror };
+            const kb::ecs::ComponentId velocityId = actual.world.Component<EcsVelocity>();
+            for (const kb::ecs::Entity entity : expected.Visited<EcsPosition>()) {
+                if (!expected.world.Has<EcsVelocity>(entity)) expected.world.Remove<EcsPosition>(entity);
+            }
+            kb::ecs::QueryFilter filter;
+            filter.Exclude(velocityId);
+            const std::size_t changed = actual.world.RemoveFromAll<EcsPosition>(filter);
+            kb::tests::Require(changed > 100U, "Filtered whole-archetype removal missed entities");
+            RequireSameWholeArchetypeState(expected, actual, "Filtered whole-archetype removal differs from removing the entities one by one");
+        }
+        {
+            WholeArchetypeWorld expected{ mirror };
+            WholeArchetypeWorld actual{ mirror };
+            const kb::ecs::ComponentId velocityId = actual.world.Component<EcsVelocity>();
+            // Entities that already hold the component keep their value; the others get the new one.
+            for (const kb::ecs::Entity entity : expected.Visited<EcsVelocity>()) {
+                if (!expected.world.Has<EcsQueryMarker>(entity)) expected.world.Set(entity, EcsQueryMarker{ .value = -7 });
+            }
+            kb::ecs::QueryFilter filter;
+            filter.Require(velocityId);
+            const std::size_t changed = actual.world.AddToAll<EcsQueryMarker>(EcsQueryMarker{ .value = -7 }, filter);
+            kb::tests::Require(changed > 100U, "Whole-archetype addition missed entities");
+            kb::tests::Require(!mirror || actual.log.events.size() == changed, "Whole-archetype addition did not raise one added event per entity");
+            RequireSameWholeArchetypeState(expected, actual, "Whole-archetype addition differs from adding the component one entity at a time");
+            kb::tests::Require(actual.world.AddToAll<EcsQueryMarker>(EcsQueryMarker{ .value = 1 }, filter) == 0U, "Whole-archetype addition changed entities that already had the component");
+        }
+    }
+
+    // A change during iteration is refused like any structural change, and the world stays as it was; a call that
+    // matches nothing is not a change and does not throw.
+    WholeArchetypeWorld world{ true };
+    const std::size_t velocities = world.Visited<EcsVelocity>().size();
+    bool refused = false;
+    world.world.CreateQuery<EcsPosition>().ForEachBatchKernel([&](const kb::ecs::QueryBatch<EcsPosition>&) {
+        try {
+            static_cast<void>(world.world.RemoveFromAll<EcsVelocity>());
+        } catch (const std::logic_error&) {
+            refused = true;
+        }
+        kb::ecs::QueryFilter nothing;
+        nothing.Exclude(world.world.Component<EcsPosition>());
+        kb::tests::Require(world.world.RemoveFromAll<EcsPosition>(nothing) == 0U,
+            "A whole-archetype removal that matches nothing must not count as a structural change");
+    });
+    kb::tests::Require(refused && world.Visited<EcsVelocity>().size() == velocities, "Whole-archetype removal ran during a query");
+    bool rejectedChangedFilter = false;
+    try {
+        kb::ecs::QueryFilter changed;
+        changed.Changed(world.world.Component<EcsPosition>());
+        static_cast<void>(world.world.RemoveFromAll<EcsVelocity>(changed));
+    } catch (const std::invalid_argument&) {
+        rejectedChangedFilter = true;
+    }
+    kb::tests::Require(rejectedChangedFilter, "Whole-archetype removal accepted a Changed filter");
+}
+
 } // namespace
 
 namespace kb::tests {
 
 void RunEcsComponentApiTests() {
+    RunWholeArchetypeComponentChangeTest();
     RunComponentMirrorNotificationTest();
     RunComponentMirrorStructuralCallbackTest();
     RunTypedEcsComponentApiTest();

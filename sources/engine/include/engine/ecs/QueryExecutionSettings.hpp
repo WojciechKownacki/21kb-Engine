@@ -108,6 +108,10 @@ struct QueryExecutionSettings {
     WorkerPool* workerPool = nullptr;
     bool telemetryEnabled = false;
     bool adaptiveGrain = false;
+    // With a worker pool and a parallel policy: each execution picks serial or pool dispatch from the wall times
+    // measured for the same visitor, so a set too small or a kernel too cheap for the pool stays on the calling
+    // thread and the choice follows the hardware. Replaces the size limits of adaptiveGrain for the policy.
+    bool autoParallel = false;
 };
 
 struct QueryWorkerContext {

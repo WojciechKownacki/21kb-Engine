@@ -22,6 +22,8 @@ void SetComponentColumn(std::span<const Entity> entities, const BulkComponentDat
 [[nodiscard]] const void* TryGetComponent(Entity entity, ComponentId componentId) const;
 [[nodiscard]] void* TryGetMutableComponent(Entity entity, ComponentId componentId);
 void RemoveComponent(Entity entity, ComponentId componentId);
+[[nodiscard]] std::size_t RemoveComponentFromAll(ComponentId componentId, const QueryFilter& filter);
+[[nodiscard]] std::size_t AddComponentToAll(const BulkComponentData& component, const QueryFilter& filter);
 void MarkComponentModified(Entity entity, ComponentId componentId);
 void ForEachComponent(ComponentId componentId, std::size_t componentSize, RawConstComponentVisitor visitor, void* context) const;
 void ForEachMutableComponent(ComponentId componentId, std::size_t componentSize, RawMutableComponentVisitor visitor, void* context);

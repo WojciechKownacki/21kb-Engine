@@ -51,6 +51,18 @@ template <typename T>
 template <typename T>
 void Remove(Entity entity);
 
+// Whole-archetype changes: each archetype that matches moves in one migration instead of one per entity. The
+// filter narrows the entities by required and excluded components (Changed filters are not supported). Entities
+// that already lack (RemoveFromAll) or already hold (AddToAll) the component are left alone. Return the number
+// of entities changed. The world ends up as if the entities had been changed one by one in the order a query
+// visits them: same values, same visiting order afterwards, same observer events in the same order. As with the
+// command buffer's bulk removal, the events are raised after the whole change reached the native storage.
+template <typename T>
+std::size_t RemoveFromAll(const QueryFilter& filter = QueryFilter{});
+
+template <typename T>
+std::size_t AddToAll(const T& component, const QueryFilter& filter = QueryFilter{});
+
 template <typename T>
 void MarkModified(Entity entity);
 

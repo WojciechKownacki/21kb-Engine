@@ -1,6 +1,7 @@
 #include "EcsBenchmarkMeasurements.hpp"
 #include "engine/ecs/CommandBuffer.hpp"
 #include "engine/ecs/Query.hpp"
+#include "engine/ecs/WorkerPool.hpp"
 #include "engine/ecs/World.hpp"
 #include "engine/ecs/WorldConfigPresets.hpp"
 
@@ -14,6 +15,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <span>
 #include <stdexcept>
 #include <string_view>
@@ -177,8 +179,9 @@ void RunFlecsReference(std::size_t entityCount, std::size_t measuredFrames) {
 
 int main(int argc, char** argv) {
     try {
-        if (argc > 5) {
-            std::cerr << "usage: kb_ecs_workload_benchmark [entity_count] [measured_frames] [native-only|flecs-reference] [direct-add]\n";
+        if (argc > 8) {
+            std::cerr << "usage: kb_ecs_workload_benchmark [entity_count] [measured_frames] [native-only|flecs-reference] [direct-add] "
+                         "[auto-parallel] [remove-single|remove-all]\n";
             return EXIT_FAILURE;
         }
         const std::size_t entityCount = argc > 1 ? ParsePositive(argv[1]) : 1'000'000U;
@@ -186,6 +189,9 @@ int main(int argc, char** argv) {
         bool nativeOnly = false;
         bool directAdd = false;
         bool reference = false;
+        bool autoParallel = false;
+        bool removeSingle = false;
+        bool removeAll = false;
         for (int index = 3; index < argc; ++index) {
             const std::string_view option{ argv[index] };
             if (option == "flecs-reference" && !reference) {
@@ -194,6 +200,12 @@ int main(int argc, char** argv) {
                 nativeOnly = true;
             } else if (option == "direct-add" && !directAdd) {
                 directAdd = true;
+            } else if (option == "auto-parallel" && !autoParallel) {
+                autoParallel = true;
+            } else if (option == "remove-single" && !removeSingle && !removeAll) {
+                removeSingle = true;
+            } else if (option == "remove-all" && !removeAll && !removeSingle) {
+                removeAll = true;
             } else {
                 throw std::invalid_argument("unknown or duplicate workload benchmark option");
             }
@@ -204,7 +216,7 @@ int main(int argc, char** argv) {
         }
 
         if (reference) {
-            if (nativeOnly || directAdd) throw std::invalid_argument("Reference mode does not accept engine options");
+            if (nativeOnly || directAdd || autoParallel || removeSingle || removeAll) throw std::invalid_argument("Reference mode does not accept engine options");
             RunFlecsReference(entityCount, measuredFrames);
             return EXIT_SUCCESS;
         }
@@ -243,30 +255,43 @@ int main(int argc, char** argv) {
         velocities.shrink_to_fit();
 
         kb::ecs::Query<Position, Velocity> query = world.CreateQuery<Position, Velocity>();
+        // auto-parallel: the query decides from measured times whether the pool beats the calling thread.
+        std::unique_ptr<kb::ecs::WorkerPool> pool;
+        kb::ecs::QueryExecutionSettings updateSettings;
+        if (autoParallel) {
+            pool = std::make_unique<kb::ecs::WorkerPool>(kb::ecs::WorkerPoolConfig{});
+            updateSettings = world.DefaultQueryExecutionSettings(pool.get());
+            updateSettings.autoParallel = true;
+        }
         std::vector<double> frameSamples;
         frameSamples.reserve(measuredFrames);
         const ecs_benchmark::Sample updateAllocations;
         for (std::size_t frame = 0; frame < warmupFrames + measuredFrames; ++frame) {
             const auto start = Clock::now();
-            query.ForEachMutableBatchKernel(&Integrate);
+            query.ForEachMutableBatchKernel(updateSettings, &Integrate);
             if (frame >= warmupFrames) {
                 frameSamples.push_back(Milliseconds(start));
             }
         }
 
         ecs_benchmark::PrintAllocations("position_update", updateAllocations);
-        double checksumX = 0.0, checksumY = 0.0;
-        for (std::size_t index = 0; index < entityCount; ++index) {
-            const Position* position = world.TryGet<Position>(entities[index]);
-            const float expectedX = static_cast<float>(index % 1024U) * 0.01F
-                + (1.0F + static_cast<float>(index % 7U) * 0.1F)
-                    * static_cast<float>(warmupFrames + measuredFrames) / 60.0F;
-            if (position == nullptr || !std::isfinite(position->x)
-                || std::fabs(position->x - expectedX) > 0.02F) {
-                throw std::runtime_error("position verification failed");
+        const auto verifyPositions = [&](double& checksumX, double& checksumY) {
+            checksumX = 0.0;
+            checksumY = 0.0;
+            for (std::size_t index = 0; index < entityCount; ++index) {
+                const Position* position = world.TryGet<Position>(entities[index]);
+                const float expectedX = static_cast<float>(index % 1024U) * 0.01F
+                    + (1.0F + static_cast<float>(index % 7U) * 0.1F)
+                        * static_cast<float>(warmupFrames + measuredFrames) / 60.0F;
+                if (position == nullptr || !std::isfinite(position->x)
+                    || std::fabs(position->x - expectedX) > 0.02F) {
+                    throw std::runtime_error("position verification failed");
+                }
+                checksumX += position->x; checksumY += position->y;
             }
-            checksumX += position->x; checksumY += position->y;
-        }
+        };
+        double checksumX = 0.0, checksumY = 0.0;
+        verifyPositions(checksumX, checksumY);
 
         std::vector<Active> active(entityCount, Active{ 1U });
         kb::ecs::CommandBuffer buffer{ 1 };
@@ -291,6 +316,31 @@ int main(int argc, char** argv) {
         active.clear();
         active.shrink_to_fit();
 
+        // remove-single changes the entities one by one, remove-all moves each archetype in one migration.
+        double removeMs = 0.0;
+        if (removeSingle || removeAll) {
+            const ecs_benchmark::Sample removeAllocations;
+            const auto removeStart = Clock::now();
+            if (removeSingle) {
+                for (const kb::ecs::Entity entity : entities) {
+                    world.Remove<Active>(entity);
+                }
+            } else if (world.RemoveFromAll<Active>() != entityCount) {
+                throw std::runtime_error("whole-archetype removal changed the wrong number of entities");
+            }
+            removeMs = Milliseconds(removeStart);
+            ecs_benchmark::PrintAllocations("bulk_remove_component", removeAllocations);
+            std::size_t remaining = 0;
+            world.CreateQuery<Active>().ForEachBatchKernel([&remaining](const kb::ecs::QueryBatch<Active>& batch) {
+                remaining += batch.Count();
+            });
+            double afterX = 0.0, afterY = 0.0;
+            verifyPositions(afterX, afterY);
+            if (remaining != 0U || afterX != checksumX || afterY != checksumY) {
+                throw std::runtime_error("component removal verification failed");
+            }
+        }
+
         ecs_benchmark::PrintMemory("resident");
         const auto memory = world.TelemetrySnapshot();
         std::cout << "native_storage,tracked_bytes=" << memory.trackedBytes << ",system_allocations=" << memory.storageSystemAllocationCount << ",basis=accounted_storage_capacity\n";
@@ -299,12 +349,17 @@ int main(int argc, char** argv) {
         std::cout << "mode=" << (nativeOnly ? "native-only" : "full")
                   << ",entities=" << entityCount << ",warmup_frames=" << warmupFrames
                   << ",measured_frames=" << measuredFrames << ",step_seconds=0.016666667"
-                  << ",add_mode=" << (directAdd ? "direct-set-many" : "command-buffer-transactional") << '\n';
+                  << ",add_mode=" << (directAdd ? "direct-set-many" : "command-buffer-transactional")
+                  << ",update_mode=" << (autoParallel ? "auto-parallel" : "serial") << '\n';
         std::cout << "bulk_create,ms=" << createMs << ",entities_per_second="
                   << static_cast<double>(entityCount) * 1000.0 / createMs << '\n';
         PrintSamples("position_update", std::move(frameSamples), entityCount);
         std::cout << "bulk_add_component,ms=" << addMs << ",entities_per_second="
                   << static_cast<double>(entityCount) * 1000.0 / addMs << '\n';
+        if (removeSingle || removeAll) {
+            std::cout << "bulk_remove_component,ms=" << removeMs << ",mode=" << (removeAll ? "whole-archetype" : "single")
+                      << ",entities_per_second=" << static_cast<double>(entityCount) * 1000.0 / removeMs << '\n';
+        }
         std::cout << "sample_last_position_x=" << world.TryGet<Position>(entities.back())->x << '\n';
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {

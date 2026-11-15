@@ -1,5 +1,6 @@
 #include "ecs/QueryState.hpp"
 
+#include "ecs/query/QueryParallelismController.hpp"
 #include "ecs/query/QueryPlan.hpp"
 #include "ecs/query/QueryTableBatchDispatcher.hpp"
 #include "ecs/query/QueryLimits.hpp"
@@ -114,6 +115,33 @@ private:
     return settings.workerPool != nullptr
         && !IsDeterministicExecution(settings)
         && QueryExecutionPolicyUsesParallelism(settings.policy);
+}
+
+// Under autoParallel a run the pool would not speed up is demoted to the calling thread; the returned choice carries
+// what the timing of the run needs to be recorded.
+[[nodiscard]] QueryParallelismController::Choice ChooseParallelism(
+    QueryParallelismController& controller,
+    QueryExecutionSettings& settings,
+    std::uintptr_t visitorKey,
+    std::size_t entityCount) {
+    if (!settings.autoParallel || !CanExecuteInParallel(settings)) {
+        return {};
+    }
+    const QueryParallelismController::Choice choice = controller.Choose(visitorKey, entityCount);
+    if (!choice.parallel) {
+        settings.policy = QueryExecutionPolicy::SingleThread;
+    }
+    return choice;
+}
+
+void RecordParallelism(
+    QueryParallelismController& controller,
+    const QueryParallelismController::Choice& choice,
+    std::chrono::steady_clock::time_point startedAt) {
+    if (choice.timed) {
+        controller.Record(choice, static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - startedAt).count()));
+    }
 }
 
 [[nodiscard]] bool ShouldSplitParallelRanges(QueryExecutionSettings settings) noexcept {
@@ -326,6 +354,7 @@ template <typename Record>
         .entityCount = CountRecordEntities(records),
         .workerCount = ResolveQueryWorkerCount(settings),
         .fallbackGrainSize = defaultExecutionGrainSize,
+        .keepPolicy = settings.autoParallel,
     });
 }
 
@@ -609,6 +638,12 @@ void QueryState::ForEachBatch(QueryExecutionSettings settings, QueryRawBatchVisi
         std::span<const QueryTableDispatchRecord>{ scratch.records_.data(), scratch.records_.size() },
         InferReadOnlyWorkload(plan_->ComponentSizes()),
         defaultExecutionGrainSize_);
+    const QueryParallelismController::Choice parallelChoice = ChooseParallelism(
+        plan_->Parallelism(),
+        settings,
+        reinterpret_cast<std::uintptr_t>(visitor),
+        CountRecordEntities(std::span<const QueryTableDispatchRecord>{ scratch.records_.data(), scratch.records_.size() }));
+    const auto parallelStartedAt = parallelChoice.timed ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     const std::size_t maxBatchSize = ResolveBatchSize(settings, defaultExecutionGrainSize_);
     const bool splitParallelRanges = ShouldSplitParallelRanges(settings);
     const std::size_t telemetryBytesPerEntity = QueryBytesPerEntity(plan_->ComponentSizes());
@@ -655,6 +690,7 @@ void QueryState::ForEachBatch(QueryExecutionSettings settings, QueryRawBatchVisi
         };
         const auto kernelStartedAt = BeginQueryTelemetryTiming(telemetryCounters_, settings);
         settings.workerPool->ParallelForChunks(scratch.chunks_, chunkJob);
+        RecordParallelism(plan_->Parallelism(), parallelChoice, parallelStartedAt);
         const std::uint64_t kernelElapsedNanoseconds = EndQueryTelemetryTiming(telemetryCounters_, settings, kernelStartedAt);
         CommitRecordVersions(versionSnapshots);
         RecordQueryExecutionTelemetry(
@@ -690,6 +726,7 @@ void QueryState::ForEachBatch(QueryExecutionSettings settings, QueryRawBatchVisi
             visitor,
             context);
     }
+    RecordParallelism(plan_->Parallelism(), parallelChoice, parallelStartedAt);
     const std::uint64_t kernelElapsedNanoseconds = EndQueryTelemetryTiming(telemetryCounters_, settings, kernelStartedAt);
     CommitRecordVersions(versionSnapshots);
     RecordQueryExecutionTelemetry(
@@ -759,6 +796,12 @@ void QueryState::ForEachMutableBatch(QueryExecutionSettings settings, QueryRawMu
         std::span<const MutableQueryTableDispatchRecord>{ scratch.mutableRecords_.data(), scratch.mutableRecords_.size() },
         InferMutableWorkload(plan_->ComponentSizes()),
         defaultExecutionGrainSize_);
+    const QueryParallelismController::Choice parallelChoice = ChooseParallelism(
+        plan_->Parallelism(),
+        settings,
+        reinterpret_cast<std::uintptr_t>(visitor),
+        CountRecordEntities(std::span<const MutableQueryTableDispatchRecord>{ scratch.mutableRecords_.data(), scratch.mutableRecords_.size() }));
+    const auto parallelStartedAt = parallelChoice.timed ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     const std::size_t maxBatchSize = ResolveBatchSize(settings, defaultExecutionGrainSize_);
     const bool splitParallelRanges = ShouldSplitParallelRanges(settings);
     const std::size_t telemetryBytesPerEntity = MutableQueryBytesPerEntity(plan_->ComponentSizes());
@@ -839,6 +882,7 @@ void QueryState::ForEachMutableBatch(QueryExecutionSettings settings, QueryRawMu
         }
         const std::uint64_t kernelElapsedNanoseconds = EndQueryTelemetryTiming(telemetryCounters_, settings, kernelStartedAt);
         publishWrites();
+        RecordParallelism(plan_->Parallelism(), parallelChoice, parallelStartedAt);
         CommitRecordVersions(versionSnapshots);
         RecordQueryExecutionTelemetry(
             telemetryCounters_,
@@ -889,6 +933,7 @@ void QueryState::ForEachMutableBatch(QueryExecutionSettings settings, QueryRawMu
             record.entityCount,
             plan_->ComponentIds());
     }
+    RecordParallelism(plan_->Parallelism(), parallelChoice, parallelStartedAt);
     const std::uint64_t kernelElapsedNanoseconds = EndQueryTelemetryTiming(telemetryCounters_, settings, kernelStartedAt);
     CommitRecordVersions(versionSnapshots);
     RecordQueryExecutionTelemetry(

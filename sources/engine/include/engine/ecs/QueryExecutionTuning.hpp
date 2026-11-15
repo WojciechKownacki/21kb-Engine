@@ -22,6 +22,8 @@ struct QueryExecutionTuningInput {
     std::size_t workerCount = 1U;
     std::size_t fallbackGrainSize = kDefaultQueryExecutionGrainSize;
     std::size_t minChunksPerWorker = 4U;
+    // Keep the requested policy instead of collapsing small workloads to serial: the caller decides that itself.
+    bool keepPolicy = false;
 };
 
 struct QueryExecutionGrainLimits {
@@ -73,6 +75,9 @@ inline constexpr std::size_t kDenseMatrixWriteSingleThreadEntityLimit = 64U * 10
 [[nodiscard]] constexpr QueryExecutionPolicy ResolveQueryExecutionPolicy(
     QueryExecutionSettings settings,
     QueryExecutionTuningInput input) noexcept {
+    if (input.keepPolicy) {
+        return settings.policy;
+    }
     // Small parallel workloads pay more in scheduling overhead than they gain;
     // collapse them to serial execution. The kernel backend (not the policy)
     // drives SIMD in the hot path, so SingleThread keeps the measured fast path

@@ -603,6 +603,62 @@ void World::RemoveExistingComponentsTrusted(std::span<const Entity> entities, st
     InvalidateQueryPlansForArchetypeChange(nullptr, nullptr);
 }
 
+std::size_t World::RemoveComponentFromAll(ComponentId componentId, const QueryFilter& filter) {
+    if (!filter.ChangedComponents().empty()) {
+        throw std::invalid_argument("ECS whole-archetype component removal does not support Changed filters");
+    }
+    if (nativeStorage_ == nullptr || componentId == 0U) {
+        return 0U;
+    }
+    const std::size_t count = nativeStorage_->CountBulkChangeEntities(componentId, false, filter.RequiredComponents(), filter.ExcludedComponents());
+    if (count == 0U) {
+        return 0U;
+    }
+    ValidateStructuralChangeAllowed("RemoveFromAll");
+
+    const bool mirrorToBackend = config_.mirrorNativeComponentChangesToBackend;
+    std::vector<Entity> affected;
+    static_cast<void>(nativeStorage_->RemoveComponentFromMatching(
+        componentId, filter.RequiredComponents(), filter.ExcludedComponents(), mirrorToBackend ? &affected : nullptr));
+    for (Entity entity : affected) {
+        if (BackendEntityAlive(entity)) {
+            WorldComponentMutator::Remove(world_, entity, componentId);
+        }
+    }
+    InvalidateQueryPlansForArchetypeChange(nullptr, nullptr);
+    return count;
+}
+
+std::size_t World::AddComponentToAll(const BulkComponentData& component, const QueryFilter& filter) {
+    if (!filter.ChangedComponents().empty()) {
+        throw std::invalid_argument("ECS whole-archetype component addition does not support Changed filters");
+    }
+    if (component.componentId == 0U || component.componentSize == 0U || component.sourceCount != 1U || component.data == nullptr) {
+        throw std::invalid_argument("ECS whole-archetype component addition requires one component value");
+    }
+    if (nativeStorage_ == nullptr) {
+        return 0U;
+    }
+    const std::size_t count = nativeStorage_->CountBulkChangeEntities(component.componentId, true, filter.RequiredComponents(), filter.ExcludedComponents());
+    if (count == 0U) {
+        return 0U;
+    }
+    ValidateStructuralChangeAllowed("AddToAll");
+
+    const bool mirrorToBackend = config_.mirrorNativeComponentChangesToBackend;
+    const std::vector<NativeBulkComponentColumn> column = MakeNativeBulkComponentColumns(std::span<const BulkComponentData>{ &component, 1U });
+    std::vector<Entity> affected;
+    static_cast<void>(nativeStorage_->AddComponentToMatching(
+        column.front(), filter.RequiredComponents(), filter.ExcludedComponents(), mirrorToBackend ? &affected : nullptr));
+    for (Entity entity : affected) {
+        if (BackendEntityAlive(entity)) {
+            WorldComponentMutator::Set(world_, entity, component.componentId, component.componentSize, component.data);
+        }
+    }
+    InvalidateQueryPlansForArchetypeChange(nullptr, nullptr);
+    return count;
+}
+
 bool World::HasComponent(Entity entity, ComponentId componentId) const {
     ValidateEntityHandle(entity, "HasComponent");
     return nativeStorage_ != nullptr && nativeStorage_->IsAlive(entity)

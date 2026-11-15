@@ -158,6 +158,26 @@ void World::Remove(Entity entity) {
 }
 
 template <typename T>
+std::size_t World::RemoveFromAll(const QueryFilter& filter) {
+    ValidateComponentType<T>();
+    const ComponentId componentId = Component<T>();
+    return componentId == 0 ? 0U : RemoveComponentFromAll(componentId, filter);
+}
+
+template <typename T>
+std::size_t World::AddToAll(const T& component, const QueryFilter& filter) {
+    ValidateComponentType<T>();
+    const ComponentId componentId = RegisterComponent<T>();
+    return AddComponentToAll(BulkComponentData{
+        .componentId = componentId,
+        .componentSize = sizeof(T),
+        .componentCount = 1U,
+        .sourceCount = 1U,
+        .data = &component,
+    }, filter);
+}
+
+template <typename T>
 void World::MarkModified(Entity entity) {
     ValidateEntityHandle(entity, "MarkModified");
     const ComponentId componentId = Component<T>();
