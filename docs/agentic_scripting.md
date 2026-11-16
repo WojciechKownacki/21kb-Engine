@@ -483,10 +483,34 @@ The scene runner also returns `124` on timeout and `130` on cancellation.
   `animator show`, `terrain info`, `terrain sample` and `terrain layer list`, `map2d info` and
   `map2d ground list`, `pack info`, `mod list` and `mod info`, and `world chunks`. A source asset
   (`csg show`, `rig2d show`, `vector2d-show`) comes back parsed under `content` or `source`, and its
-  text stays in `output`. The forms that change something report what they did in
-  `output` (the options-given forms of `physics-layers` and `lighting-quality` also return the resulting state as `data`).
+  text stays in `output`.
+- A command that writes (`writes: true` in the catalog, and always `structured`) lists what it changed in
+  `data.changes`. On Windows the file system reports each change while the command runs, so the cost follows
+  the number of changes, not the size of the project; platforms without that API list the folders before
+  and after the run instead (a full scan). If the system's notification buffer overflows, `data.changesError`
+  says the list may be incomplete:
+  `{"path": "Assets/Materials/Rock.kbmat", "kind": "created", "asset": "/Game/Materials/Rock.kbmat"}`.
+  `kind` is `created`, `modified` or `removed`; `path` is relative to the project (absolute for a file
+  outside it, such as an `--out` file); `asset` is the `/Game/` path of a project asset (a `.meta` file has
+  none). A command that gives no other data returns `{"schema": "21kb.cli.<command>-write/v1", "changes": [...]}`.
+  The list is there on a failure too (what was written before it stopped), and a
+  read form of such a command (`entity show`, `map2d info`) keeps its own data and adds the list only when
+  a file changed (the options-given forms of `physics-layers` and `lighting-quality` return the resulting
+  state as `data`, with the list beside it). Edits of a scene name what they touched in `21kb.cli.scene-edit/v1`: `scene`,
+  `entity` (`id`, `name`, `path`), `removed` and, for `component`, the `component`. The writing commands are
+  `animator`, `skeleton`, `ability`, `ai`, `entity`, `component`, `new`, `init-agent`, `import`,
+  `import-preset-new`, `scene-attach`, `input-action`, `prefab`, `layout`, `scene-new`, `scene-duplicate`,
+  `script-new`, `script-build`, `pack`, `mod`, `release`, `keys`, `build`, `capture`, `world`, `navmesh`,
+  `physics-layers`, `lighting-quality`, `csg`, `rig2d`, `vector2d-new`, `vector2d-set`, `map2d`, `terrain`,
+  `mesh-lod`, `scene-lightmap`, `scene-bake-lighting`, `material-new`, `material-set`, `material-graph`,
+  `material-instance-new`, `material-instance-set`, `post-process-new`, `post-process-set`,
+  `scene-post-process`, `particle-process-cook`, `render-effect-run`, `render-effect-export`, `vfx-new`,
+  `vfx-set`, `vfx-emitter-add`, `vfx-emitter-remove`, `vfx-module-add`, `vfx-module-remove`, `api` and
+  `api-check`. `batch` has its own `changes` (with a diff) for the whole transaction; the commands that
+  print their own versioned JSON (`graph`, `blend-space`, `audio-mixer`) keep it.
 - A command that prints a JSON object of its own (`audio-mixer ... --json`, `run --report ...`,
-  `api --print json`, `code modules`, `map2d path`) keeps it unchanged and is not wrapped; its failures that print nothing
+  `api --print json`, `code modules`, `map2d path`) keeps it unchanged and is not wrapped, unless it changed files (then
+  `data.changes` comes beside its text); its failures that print nothing
   on stdout still come as the object above.
 - The whole output is collected first, so a long command prints nothing until it ends.
   `mcp` ignores `--json`; it speaks JSON-RPC on stdout.

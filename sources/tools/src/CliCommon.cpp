@@ -1,4 +1,5 @@
 #include "CliCommon.hpp"
+#include "CliProgram.hpp"
 
 #include "engine/assets/AssetImportPreset.hpp"
 #include "engine/core/JsonValue.hpp"
@@ -22,6 +23,7 @@
 #include <cmath>
 #include <charconv>
 #include <algorithm>
+#include <fstream>
 #include <memory>
 #include <system_error>
 
@@ -42,6 +44,73 @@ kb::core::JsonValue JsonDocumentOrText(std::string_view text) {
     std::string error;
     if (kb::core::JsonValue::Parse(text, parsed, error)) return parsed;
     return kb::core::JsonValue::MakeString(std::string{ text });
+}
+
+namespace fs = std::filesystem;
+
+// Folders of generated or foreign data: neither listed nor restored.
+bool IsExcludedFolder(const fs::path& relative) {
+    if (relative.empty()) return false;
+    const std::string first = relative.begin()->generic_string();
+    return first == "Binaries" || first == "Intermediate" || first == "Saved" || first == "Library" ||
+           first == "Build" || first == ".git" || first == ".vs";
+}
+
+bool ScanProject(const fs::path& root, Listing& listing, std::string& error, bool strict) {
+    std::error_code ec;
+    fs::recursive_directory_iterator it{ root, fs::directory_options::none, ec };
+    for (; !ec && it != fs::recursive_directory_iterator{}; it.increment(ec)) {
+        const fs::path relative = it->path().lexically_relative(root);
+        if (IsExcludedFolder(relative)) {
+            it.disable_recursion_pending();
+            continue;
+        }
+        std::error_code statusError;
+        const auto status = it->symlink_status(statusError);
+        if (statusError) {
+            error = "cannot inspect " + relative.generic_string() + ": " + statusError.message();
+            return false;
+        }
+        if (fs::is_symlink(status)) {
+            if (!strict) continue;
+            error = "transactions cannot cover symbolic links: " + relative.generic_string();
+            return false;
+        }
+        if (fs::is_directory(status)) {
+            listing.directories.insert(relative);
+        } else if (fs::is_regular_file(status)) {
+            const std::uintmax_t size = it->file_size(statusError);
+            if (statusError) {
+                error = "cannot read file size for " + relative.generic_string() + ": " + statusError.message();
+                return false;
+            }
+            listing.files[relative] = size;
+            listing.times[relative] = it->last_write_time(statusError);
+        } else if (strict) {
+            error = "transactions require regular files and directories: " + relative.generic_string();
+            return false;
+        }
+    }
+    if (ec) {
+        error = "cannot read the project folder: " + ec.message();
+        return false;
+    }
+    return true;
+}
+
+bool SameContent(const fs::path& left, const fs::path& right) {
+    std::ifstream first{ left, std::ios::binary };
+    std::ifstream second{ right, std::ios::binary };
+    if (!first || !second) return false;
+    std::vector<char> firstBlock(1U << 16U);
+    std::vector<char> secondBlock(firstBlock.size());
+    for (;;) {
+        first.read(firstBlock.data(), static_cast<std::streamsize>(firstBlock.size()));
+        second.read(secondBlock.data(), static_cast<std::streamsize>(secondBlock.size()));
+        const std::streamsize count = first.gcount();
+        if (count != second.gcount() || !std::equal(firstBlock.begin(), firstBlock.begin() + count, secondBlock.begin())) return false;
+        if (count < static_cast<std::streamsize>(firstBlock.size())) return !first.bad() && !second.bad();
+    }
 }
 
 ArgumentList::ArgumentList(std::span<const std::string> arguments, std::span<const std::string_view> flagNames) {

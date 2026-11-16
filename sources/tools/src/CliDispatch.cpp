@@ -746,105 +746,105 @@ constexpr bool kRendererAvailable = false;
 
 constexpr CliCommandDescriptor kCommands[]{
     {"debug", &RunLuaDebugCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Native},
-    {"animator", &RunAnimatorCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured},
+    {"animator", &RunAnimatorCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
     {"blend-space", &RunBlendSpace2DCommand, CliCommandKind::Normal, true, "blend_space", CliJsonOutput::Native},
     {"graph", &RunVisualGraphCommand, CliCommandKind::Normal, true, "visual_graph", CliJsonOutput::Native},
-    {"skeleton", &RunSkeletonCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured},
-    {"ability", &RunAbilityCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured},
-    {"ai", &RunAiCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured},
-    {"api", &RunApiCommand, CliCommandKind::Normal, true, "api_reference", CliJsonOutput::Structured},
+    {"skeleton", &RunSkeletonCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
+    {"ability", &RunAbilityCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
+    {"ai", &RunAiCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
+    {"api", &RunApiCommand, CliCommandKind::Normal, true, "api_reference", CliJsonOutput::Structured, true},
     {"guide", &RunGuideCommand, CliCommandKind::Normal, true, "guide", CliJsonOutput::Structured},
     {"code", &RunCodeCommand, CliCommandKind::Normal, true, "code", CliJsonOutput::Structured},
-    {"api-check", &RunApiCheckCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured},
-    {"entity", &RunEntityCommand, CliCommandKind::Normal, true, "entity_edit", CliJsonOutput::Structured},
-    {"component", &RunComponentCommand, CliCommandKind::Normal, true, "component_edit"},
+    {"api-check", &RunApiCheckCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
+    {"entity", &RunEntityCommand, CliCommandKind::Normal, true, "entity_edit", CliJsonOutput::Structured, true},
+    {"component", &RunComponentCommand, CliCommandKind::Normal, true, "component_edit", CliJsonOutput::Structured, true},
     {"audio-mixer", &RunAudioMixerCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Native},
     {"schema", &RunSchemaCommand, CliCommandKind::Normal, true, "component_schema", CliJsonOutput::Structured},
-    {"new", &RunNewCommand, CliCommandKind::Normal, true, ""},
-    {"init-agent", &RunInitAgentCommand, CliCommandKind::Normal, true, ""},
-    {"import", &RunImportCommand, CliCommandKind::Normal, true, "import_asset", CliJsonOutput::Structured},
-    {"import-preset-new", &RunImportPresetNewCommand, CliCommandKind::Normal, true, ""},
+    {"new", &RunNewCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
+    {"init-agent", &RunInitAgentCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
+    {"import", &RunImportCommand, CliCommandKind::Normal, true, "import_asset", CliJsonOutput::Structured, true},
+    {"import-preset-new", &RunImportPresetNewCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
     {"validate", &RunValidateCommand, CliCommandKind::Normal, true, "validate_script", CliJsonOutput::Structured},
     {"scene-list", &RunSceneListCommand, CliCommandKind::Normal, true, "scene_list", CliJsonOutput::Structured},
-    {"scene-attach", &RunSceneAttachCommand, CliCommandKind::Normal, true, "scene_attach"},
-    {"input-action", &RunInputActionCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured},
-    {"prefab", &RunPrefabCommand, CliCommandKind::Normal, true, {}},
-    {"layout", &RunLayoutCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured},
-    {"scene-new", &RunSceneNewCommand, CliCommandKind::Normal, true, "scene_create"},
-    {"scene-duplicate", &RunSceneDuplicateCommand, CliCommandKind::Normal, true, ""},
-    {"script-new", &RunScriptNewCommand, CliCommandKind::Normal, true, "script_create"},
-    {"script-build", &RunScriptBuildCommand, CliCommandKind::Normal, true, ""},
+    {"scene-attach", &RunSceneAttachCommand, CliCommandKind::Normal, true, "scene_attach", CliJsonOutput::Structured, true},
+    {"input-action", &RunInputActionCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
+    {"prefab", &RunPrefabCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
+    {"layout", &RunLayoutCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
+    {"scene-new", &RunSceneNewCommand, CliCommandKind::Normal, true, "scene_create", CliJsonOutput::Structured, true},
+    {"scene-duplicate", &RunSceneDuplicateCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
+    {"script-new", &RunScriptNewCommand, CliCommandKind::Normal, true, "script_create", CliJsonOutput::Structured, true},
+    {"script-build", &RunScriptBuildCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
     {"run", &RunRunCommand, CliCommandKind::Normal, true, "run_scene", CliJsonOutput::Partial},
-    {"keys", &RunKeysCommand, CliCommandKind::Normal, true, ""},
-    {"pack", &RunPackCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured},
-    {"mod", &RunModCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured},
-    {"release", &RunReleaseCommand, CliCommandKind::Normal, true, ""},
-    {"build", &RunBuildCommand, CliCommandKind::Normal, true, ""},
-    {"capture", &RunCaptureCommand, CliCommandKind::Normal, true, ""},
-    {"world", &RunWorldCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured},
-    {"navmesh", &RunNavMeshCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured},
-    {"physics-layers", &RunPhysicsLayersCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured},
-    {"lighting-quality", &RunLightingQualityCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured},
+    {"keys", &RunKeysCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
+    {"pack", &RunPackCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
+    {"mod", &RunModCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
+    {"release", &RunReleaseCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
+    {"build", &RunBuildCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
+    {"capture", &RunCaptureCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
+    {"world", &RunWorldCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
+    {"navmesh", &RunNavMeshCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
+    {"physics-layers", &RunPhysicsLayersCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
+    {"lighting-quality", &RunLightingQualityCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
 #if KB_CLI_RENDERER
-    {"csg", &RunCsgCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured},
-    {"rig2d", &RunRig2DCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured},
-    {"vector2d-new", &RunVectorShapeNewCommand, CliCommandKind::Normal, true, {}},
+    {"csg", &RunCsgCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
+    {"rig2d", &RunRig2DCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
+    {"vector2d-new", &RunVectorShapeNewCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
     {"vector2d-show", &RunVectorShapeShowCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured},
-    {"vector2d-set", &RunVectorShapeSetCommand, CliCommandKind::Normal, true, {}},
-    {"map2d", &RunMap2DCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured},
-    {"terrain", &RunTerrainCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured},
-    {"mesh-lod", &RunMeshLodCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured},
-    {"scene-lightmap", &RunSceneLightmapCommand, CliCommandKind::Normal, true, {}},
-    {"scene-bake-lighting", &RunSceneBakeLightingCommand, CliCommandKind::Normal, true, {}},
-    {"material-new", &RunMaterialNewCommand, CliCommandKind::Normal, true, {}},
-    {"material-set", &RunMaterialSetCommand, CliCommandKind::Normal, true, {}},
+    {"vector2d-set", &RunVectorShapeSetCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
+    {"map2d", &RunMap2DCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
+    {"terrain", &RunTerrainCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
+    {"mesh-lod", &RunMeshLodCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
+    {"scene-lightmap", &RunSceneLightmapCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
+    {"scene-bake-lighting", &RunSceneBakeLightingCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
+    {"material-new", &RunMaterialNewCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
+    {"material-set", &RunMaterialSetCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
     {"material-show", &RunMaterialShowCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured},
-    {"material-graph", &RunMaterialGraphCommand, CliCommandKind::Normal, true, {}},
-    {"material-instance-new", &RunMaterialInstanceNewCommand, CliCommandKind::Normal, true, {}},
-    {"material-instance-set", &RunMaterialInstanceSetCommand, CliCommandKind::Normal, true, {}},
+    {"material-graph", &RunMaterialGraphCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
+    {"material-instance-new", &RunMaterialInstanceNewCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
+    {"material-instance-set", &RunMaterialInstanceSetCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
     {"material-instance-show", &RunMaterialInstanceShowCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured},
-    {"post-process-new", &RunPostProcessNewCommand, CliCommandKind::Normal, true, {}},
-    {"post-process-set", &RunPostProcessSetCommand, CliCommandKind::Normal, true, {}},
-    {"scene-post-process", &RunScenePostProcessCommand, CliCommandKind::Normal, true, {}},
-    {"particle-process-cook", &RunParticleProcessCookCommand, CliCommandKind::Normal, true, {}},
-    {"render-effect-run", &RunRenderEffectRunCommand, CliCommandKind::Normal, true, {}},
-    {"render-effect-export", &RunRenderEffectExportCommand, CliCommandKind::Normal, true, {}},
+    {"post-process-new", &RunPostProcessNewCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
+    {"post-process-set", &RunPostProcessSetCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
+    {"scene-post-process", &RunScenePostProcessCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
+    {"particle-process-cook", &RunParticleProcessCookCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
+    {"render-effect-run", &RunRenderEffectRunCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
+    {"render-effect-export", &RunRenderEffectExportCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
     {"renderer-info", &RunRendererInfoCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Native},
     {"vfx-profile", &RunVfxProfileCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Native},
 #else
-    {"csg", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured},
-    {"rig2d", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured},
-    {"vector2d-new", nullptr, CliCommandKind::Normal, false, {}},
+    {"csg", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured, true},
+    {"rig2d", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured, true},
+    {"vector2d-new", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured, true},
     {"vector2d-show", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured},
-    {"vector2d-set", nullptr, CliCommandKind::Normal, false, {}},
-    {"map2d", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured},
-    {"terrain", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured},
-    {"mesh-lod", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured},
-    {"scene-lightmap", nullptr, CliCommandKind::Normal, false, {}},
-    {"scene-bake-lighting", nullptr, CliCommandKind::Normal, false, {}},
-    {"material-new", nullptr, CliCommandKind::Normal, false, {}},
-    {"material-set", nullptr, CliCommandKind::Normal, false, {}},
+    {"vector2d-set", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured, true},
+    {"map2d", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured, true},
+    {"terrain", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured, true},
+    {"mesh-lod", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured, true},
+    {"scene-lightmap", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured, true},
+    {"scene-bake-lighting", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured, true},
+    {"material-new", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured, true},
+    {"material-set", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured, true},
     {"material-show", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured},
-    {"material-graph", nullptr, CliCommandKind::Normal, false, {}},
-    {"material-instance-new", nullptr, CliCommandKind::Normal, false, {}},
-    {"material-instance-set", nullptr, CliCommandKind::Normal, false, {}},
+    {"material-graph", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured, true},
+    {"material-instance-new", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured, true},
+    {"material-instance-set", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured, true},
     {"material-instance-show", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured},
-    {"post-process-new", nullptr, CliCommandKind::Normal, false, {}},
-    {"post-process-set", nullptr, CliCommandKind::Normal, false, {}},
-    {"scene-post-process", nullptr, CliCommandKind::Normal, false, {}},
-    {"particle-process-cook", nullptr, CliCommandKind::Normal, false, {}},
-    {"render-effect-run", nullptr, CliCommandKind::Normal, false, {}},
-    {"render-effect-export", nullptr, CliCommandKind::Normal, false, {}},
+    {"post-process-new", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured, true},
+    {"post-process-set", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured, true},
+    {"scene-post-process", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured, true},
+    {"particle-process-cook", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured, true},
+    {"render-effect-run", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured, true},
+    {"render-effect-export", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured, true},
     {"renderer-info", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Native},
     {"vfx-profile", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Native},
 #endif
-    {"vfx-new", nullptr, CliCommandKind::Particle, kRendererAvailable, {}},
+    {"vfx-new", nullptr, CliCommandKind::Particle, kRendererAvailable, {}, CliJsonOutput::Structured, true},
     {"vfx-show", nullptr, CliCommandKind::Particle, kRendererAvailable, {}, CliJsonOutput::Structured},
-    {"vfx-set", nullptr, CliCommandKind::Particle, kRendererAvailable, {}},
-    {"vfx-emitter-add", nullptr, CliCommandKind::Particle, kRendererAvailable, {}},
-    {"vfx-emitter-remove", nullptr, CliCommandKind::Particle, kRendererAvailable, {}},
-    {"vfx-module-add", nullptr, CliCommandKind::Particle, kRendererAvailable, {}},
-    {"vfx-module-remove", nullptr, CliCommandKind::Particle, kRendererAvailable, {}},
+    {"vfx-set", nullptr, CliCommandKind::Particle, kRendererAvailable, {}, CliJsonOutput::Structured, true},
+    {"vfx-emitter-add", nullptr, CliCommandKind::Particle, kRendererAvailable, {}, CliJsonOutput::Structured, true},
+    {"vfx-emitter-remove", nullptr, CliCommandKind::Particle, kRendererAvailable, {}, CliJsonOutput::Structured, true},
+    {"vfx-module-add", nullptr, CliCommandKind::Particle, kRendererAvailable, {}, CliJsonOutput::Structured, true},
+    {"vfx-module-remove", nullptr, CliCommandKind::Particle, kRendererAvailable, {}, CliJsonOutput::Structured, true},
     {"batch", nullptr, CliCommandKind::Batch, true, {}, CliJsonOutput::Native},
     {"mcp", nullptr, CliCommandKind::Mcp, true, {}, CliJsonOutput::Protocol},
     {"help", nullptr, CliCommandKind::Help, true, {}},
@@ -948,7 +948,7 @@ kb::core::JsonValue StderrLines(const std::string& text) {
 
 // Runs `run` with its output captured and prints one result object. A command that printed a
 // JSON object of its own keeps it: it goes out unchanged, with its stderr and exit code.
-int RunAsJson(std::string_view command, CommandIo io, const std::function<int(CommandIo)>& run) {
+int RunAsJson(std::string_view command, CommandIo io, const ChangeWatch* watch, const std::function<int(CommandIo)>& run) {
     std::ostringstream out;
     std::ostringstream err;
     int exitCode = 1;
@@ -963,8 +963,11 @@ int RunAsJson(std::string_view command, CommandIo io, const std::function<int(Co
 
     kb::core::JsonValue own;
     std::string parseError;
-    if (data.GetKind() != kb::core::JsonValue::Kind::Object && kb::core::JsonValue::Parse(out.str(), own, parseError) &&
-        own.GetKind() == kb::core::JsonValue::Kind::Object) {
+    const bool printedObject = data.GetKind() != kb::core::JsonValue::Kind::Object && kb::core::JsonValue::Parse(out.str(), own, parseError) &&
+        own.GetKind() == kb::core::JsonValue::Kind::Object;
+    // A command's own JSON object stays as it is, unless the command changed files: then they are listed beside it.
+    const bool listed = watch != nullptr && watch->Publish(data, printedObject);
+    if (printedObject && !listed) {
         io.out << out.str();
         io.err << err.str();
         return exitCode;
@@ -1037,8 +1040,12 @@ int RunCli(std::span<const std::string> args, std::istream& in, CommandIo io) {
         return 1;
     };
 
-    if (json) return RunAsJson(command, io, execute);
-    return execute(io);
+    if (!json) return execute(io);
+    // The files a writing command changes are listed from a look at the disk before it runs and after.
+    const CliCommandDescriptor* descriptor = FindCliCommand(command);
+    std::optional<ChangeWatch> watch;
+    if (descriptor != nullptr && descriptor->writes && arguments.Errors().empty()) watch.emplace(command, arguments);
+    return RunAsJson(command, io, watch ? &*watch : nullptr, execute);
 }
 
 } // namespace kb::cli

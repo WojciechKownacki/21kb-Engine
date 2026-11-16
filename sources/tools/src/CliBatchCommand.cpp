@@ -31,82 +31,11 @@ constexpr std::uintmax_t kDiffReadLimitBytes = 16ULL * 1024ULL * 1024ULL;
 constexpr std::size_t kDiffLineLimit = 40U;
 constexpr std::size_t kDiffContextLines = 2U;
 
-// Folders of generated or foreign data: neither copied nor restored.
-bool IsExcluded(const fs::path& relative) {
-    if (relative.empty()) return false;
-    const std::string first = relative.begin()->generic_string();
-    return first == "Binaries" || first == "Intermediate" || first == "Saved" || first == "Library" ||
-           first == "Build" || first == ".git" || first == ".vs";
-}
-
-struct Listing {
-    std::map<fs::path, std::uintmax_t> files;
-    std::set<fs::path> directories;
-};
-
-// Every file and folder of the project below the root, by path relative to it.
-bool ScanProject(const fs::path& root, Listing& listing, std::string& error) {
-    std::error_code ec;
-    fs::recursive_directory_iterator it{ root, fs::directory_options::none, ec };
-    for (; !ec && it != fs::recursive_directory_iterator{}; it.increment(ec)) {
-        const fs::path relative = it->path().lexically_relative(root);
-        if (IsExcluded(relative)) {
-            it.disable_recursion_pending();
-            continue;
-        }
-        std::error_code statusError;
-        const auto status = it->symlink_status(statusError);
-        if (statusError) {
-            error = "cannot inspect " + relative.generic_string() + ": " + statusError.message();
-            return false;
-        }
-        if (fs::is_symlink(status)) {
-            error = "transactions cannot cover symbolic links: " + relative.generic_string();
-            return false;
-        }
-        if (fs::is_directory(status)) {
-            listing.directories.insert(relative);
-        } else if (fs::is_regular_file(status)) {
-            const std::uintmax_t size = it->file_size(statusError);
-            if (statusError) {
-                error = "cannot read file size for " + relative.generic_string() + ": " + statusError.message();
-                return false;
-            }
-            listing.files[relative] = size;
-        } else {
-            error = "transactions require regular files and directories: " + relative.generic_string();
-            return false;
-        }
-    }
-    if (ec) {
-        error = "cannot read the project folder: " + ec.message();
-        return false;
-    }
-    return true;
-}
-
 bool ReadFile(const fs::path& path, std::string& content) {
     std::ifstream input{ path, std::ios::binary };
     if (!input) return false;
     content.assign(std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{});
     return !input.bad();
-}
-
-// Whether two files hold the same bytes, read in blocks side by side: the files of a project are compared one by
-// one after every batch, and most of them did not change.
-bool SameContent(const fs::path& left, const fs::path& right) {
-    std::ifstream first{ left, std::ios::binary };
-    std::ifstream second{ right, std::ios::binary };
-    if (!first || !second) return false;
-    std::vector<char> firstBlock(1U << 16U);
-    std::vector<char> secondBlock(firstBlock.size());
-    for (;;) {
-        first.read(firstBlock.data(), static_cast<std::streamsize>(firstBlock.size()));
-        second.read(secondBlock.data(), static_cast<std::streamsize>(secondBlock.size()));
-        const std::streamsize count = first.gcount();
-        if (count != second.gcount() || !std::equal(firstBlock.begin(), firstBlock.begin() + count, secondBlock.begin())) return false;
-        if (count < static_cast<std::streamsize>(firstBlock.size())) return !first.bad() && !second.bad();
-    }
 }
 
 // The files as they were before the operations, copied beside the project.

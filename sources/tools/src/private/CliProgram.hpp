@@ -16,7 +16,8 @@ enum class CliCommandKind { Normal, Particle, Batch, Mcp, Help, Catalog };
 
 // What --json gives for a command: Envelope wraps its text in the common result object, Native is its own
 // versioned JSON, Partial is native for some forms only, Protocol is a JSON protocol on stdin and stdout,
-// Structured puts the answer of its read forms in the "data" field of the result object (a schema id inside).
+// Structured puts the answer of its read forms in the "data" field of the result object (a schema id inside); a
+// command that writes (CliCommandDescriptor::writes) is always Structured: its data lists the changes it made.
 enum class CliJsonOutput { Envelope, Native, Partial, Protocol, Structured };
 
 struct CliCommandDescriptor {
@@ -26,6 +27,8 @@ struct CliCommandDescriptor {
     bool available = true;
     std::string_view mcpTool;
     CliJsonOutput json = CliJsonOutput::Envelope;
+    // Some form changes files: with --json its data holds "changes", every file it created, modified or removed.
+    bool writes = false;
 };
 
 [[nodiscard]] std::span<const CliCommandDescriptor> CliCommandCatalog() noexcept;

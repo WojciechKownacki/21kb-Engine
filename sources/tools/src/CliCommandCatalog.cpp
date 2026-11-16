@@ -456,6 +456,7 @@ void MergeInto(std::vector<OptionSpec>& target, const FormSpec& form, bool first
     row.Set("available", JsonValue::MakeBool(command.available));
     row.Set("mcpTool", command.mcpTool.empty() ? JsonValue::MakeNull() : JsonValue::MakeString(std::string{ command.mcpTool }));
     row.Set("json", JsonValue::MakeString(std::string{ JsonKindName(command.json) }));
+    row.Set("writes", JsonValue::MakeBool(command.writes));
     const UsageRow* usage = FindRow(command.name);
     row.Set("purpose", JsonValue::MakeString(usage != nullptr ? usage->purpose : std::string{}));
 

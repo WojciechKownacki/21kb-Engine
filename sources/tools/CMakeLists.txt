@@ -13,6 +13,7 @@ add_library(kb_cli_core STATIC
     src/CliBuildCommands.cpp
     src/CliCommandCatalog.cpp
     src/CliLayoutCommands.cpp
+    src/CliChangeWatch.cpp
     src/CliCommon.cpp
     src/CliUiReport.cpp
     src/CliDispatch.cpp

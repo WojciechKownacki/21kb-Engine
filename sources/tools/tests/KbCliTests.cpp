@@ -5395,6 +5395,184 @@ void RunStructuredOutputTests() {
 #endif
 }
 
+// ---- --json data: the files a writing command changed ----
+
+// One command line of a command that writes, run in order on the data-probe project. `path` is the file it must list
+// (project-relative, "*" for any) with `kind` (created, modified, removed or "*"); without a path the line only has to
+// return the list - it may be refused, and then the list is empty.
+struct ChangeProbe {
+    std::string command;
+    std::vector<std::string> words;
+    std::string path;
+    std::string kind;
+};
+
+[[nodiscard]] std::vector<ChangeProbe> ChangeProbeTable(const std::string& root, const std::string& outside) {
+    const std::string side = "Assets/Scenes/Probe.21kbscene";
+    const auto line = [&](std::vector<std::string> words) {
+        words.insert(words.end(), { "--project", root });
+        return words;
+    };
+    const auto withScene = [&](std::vector<std::string> words) {
+        words.insert(words.end(), { "--scene", side });
+        return line(std::move(words));
+    };
+    std::vector<ChangeProbe> table{
+        { "entity", withScene({ "entity", "add", "--name", "Crate", "--create", "Cube" }), side, "modified" },
+        { "entity", withScene({ "entity", "set", "--name", "Crate", "--position", "1,2,3" }), side, "modified" },
+        { "entity", withScene({ "entity", "rename", "--name", "Crate", "--to", "Box" }), side, "modified" },
+        { "entity", withScene({ "entity", "attach", "--name", "Box" }), "", "" },
+        { "component", withScene({ "component", "add", "--entity", "Box", "--type", "Tags" }), side, "modified" },
+        { "component", withScene({ "component", "set", "--entity", "Box", "--type", "Transform", "--set", "localScale=2,2,2" }), side, "modified" },
+        { "component", withScene({ "component", "remove", "--entity", "Box", "--type", "Tags" }), side, "modified" },
+        { "prefab", withScene({ "prefab", "new", "--from-entity", "Box", "--name", "BoxPrefab" }), "Assets/Prefabs/BoxPrefab.kbprefab", "created" },
+        { "entity", withScene({ "entity", "remove", "--name", "Box" }), side, "modified" },
+        { "prefab", withScene({ "prefab", "place", "--prefab", "/Game/Prefabs/BoxPrefab.kbprefab" }), side, "modified" },
+        { "scene-new", line({ "scene-new", "--name", "Fresh", "--template", "Empty", "--default", "no" }), "Assets/Scenes/Fresh.21kbscene", "created" },
+        { "scene-duplicate", withScene({ "scene-duplicate", "--name", "Copy" }), "Assets/Scenes/Copy.21kbscene", "created" },
+        { "script-new", line({ "script-new", "--name", "Walker", "--language", "lua" }), "Assets/Scripts/Walker.lua", "created" },
+        { "scene-attach", withScene({ "scene-attach", "--node", "Goblin", "--script", "/Game/Scripts/Walker.lua" }), side, "modified" },
+        { "script-build", line({ "script-build", "--script", "/Game/Scripts/Walker.lua" }), "", "" },
+        { "init-agent", line({ "init-agent" }), "*", "created" },
+        { "import-preset-new", line({ "import-preset-new", "--name", "Pixels" }), "*", "created" },
+        { "layout", line({ "layout", "save", "--name", "Probe" }), "*", "created" },
+        { "input-action", line({ "input-action", "new", "--name", "Jump", "--key", "J" }), "*", "created" },
+        { "physics-layers", line({ "physics-layers", "--name", "3=Enemy" }), "*", "*" },
+        { "lighting-quality", line({ "lighting-quality", "--shadows", "low" }), "*", "modified" },
+        { "navmesh", line({ "navmesh", "bake", "--scene", "Assets/Level.21kbscene" }), "*", "*" },
+        { "ability", line({ "ability", "new", "--name", "Strike" }), "Assets/Abilities/Strike.kbability", "created" },
+        { "ai", withScene({ "ai", "make", "--entity", "Goblin", "--preset", "Ranged" }), side, "modified" },
+        { "animator", line({ "animator", "new", "--name", "Second", "--clip", "/Game/Animation/Hero_Walk.kbanim" }), "Assets/Animation/Second.kbanimcontroller", "created" },
+        { "skeleton", line({ "skeleton", "socket", "add", "--skeleton", "/Game/Characters/Probe.kbskeleton", "--name", "Grip", "--bone", "Hand" }),
+            "Assets/Characters/Probe.kbskeleton", "modified" },
+        { "world", line({ "world", "build" }), "", "" },
+        { "api-check", { "api-check", "--baseline", outside + "/baseline.second.json", "--update-baseline" }, outside + "/baseline.second.json", "created" },
+        { "api", { "api", "--out", outside + "/ApiDocs" }, "*", "created" },
+        { "pack", { "pack", "compress", "--level", "3", outside + "/Probe.kbpack", outside + "/Probe.small.kbpack" }, outside + "/Probe.small.kbpack", "created" },
+        { "mod", { "mod", "enable", "--mods", outside + "/Mods", "none" }, "", "" },
+        { "release", { "release", "sign", "--key", outside + "/none.key", "--dir", outside + "/Release", "--product", "p", "--content-version", "1", "--release", "1" }, "", "" },
+        { "keys", { "keys", "content-key", "--out", outside + "/content.key" }, outside + "/content.key", "created" },
+        { "new", { "new", "--parent", outside, "--name", "Fresh", "--template", "Empty" }, "Fresh.21kbproject", "created" },
+        { "import", line({ "import", "--destination", "/Game/Models", outside + "/Wedge.obj" }), "*", "created" },
+        { "build", line({ "build", "--out", outside + "/Out", "--engine-root", outside + "/NoEngine" }), "", "" },
+        { "capture", line({ "capture", "--scene", "Assets/Missing.21kbscene", "--out", outside + "/shot.png" }), "", "" },
+#if KB_CLI_RENDERER
+        { "csg", line({ "csg", "new", "--name", "Second" }), "Assets/Geometry/Second.kbcsg", "created" },
+        { "rig2d", line({ "rig2d", "new", "--name", "Second" }), "Assets/Rigs/Second.kbrig2d", "created" },
+        { "vector2d-new", line({ "vector2d-new", "--name", "Second" }), "Assets/Shapes/Second.kbvector2d", "created" },
+        { "vector2d-set", line({ "vector2d-set", "--shape", "/Game/Shapes/Probe.kbvector2d", "--kind", "Line" }), "Assets/Shapes/Probe.kbvector2d", "modified" },
+        { "map2d", withScene({ "map2d", "new", "--name", "Second", "--size", "4x4" }), "*", "created" },
+        { "terrain", line({ "terrain", "new", "--terrain", "/Game/Terrains/Second.kbterrain" }), "Assets/Terrains/Second.kbterrain", "created" },
+        { "mesh-lod", line({ "mesh-lod", "set", "--mesh", "/Game/Models/Crate.21kb", "--mode", "manual" }), "", "" },
+        { "scene-lightmap", withScene({ "scene-lightmap", "--entity", "Nobody", "--out", "/Game/Lightmaps/None.tga" }), "", "" },
+        { "scene-bake-lighting", line({ "scene-bake-lighting", "--scene", "Assets/Level.21kbscene", "--resolution", "16" }), "", "" },
+        { "material-new", line({ "material-new", "--name", "Second" }), "Assets/Materials/Second.kbmat", "created" },
+        { "material-set", line({ "material-set", "--material", "/Game/Materials/Second.kbmat", "--set", "Roughness=0.3" }), "Assets/Materials/Second.kbmat", "modified" },
+        { "material-graph", line({ "material-graph", "add-node", "--material", "/Game/Materials/Second.kbmat", "--kind", "Constant", "--value", "1" }),
+            "Assets/Materials/Second.kbmat", "modified" },
+        { "material-instance-new", line({ "material-instance-new", "--parent", "/Game/Materials/Second.kbmat", "--name", "SecondInst" }),
+            "Assets/Materials/SecondInst.kbmatinst", "created" },
+        { "material-instance-set", line({ "material-instance-set", "--instance", "/Game/Materials/SecondInst.kbmatinst", "--set", "Roughness=0.2" }),
+            "Assets/Materials/SecondInst.kbmatinst", "modified" },
+        { "post-process-new", line({ "post-process-new", "--name", "Second" }), "Assets/PostProcess/Second.kbppfx", "created" },
+        { "post-process-set", line({ "post-process-set", "--profile", "/Game/PostProcess/Second.kbppfx", "--set", "bloomEnabled=0" }),
+            "Assets/PostProcess/Second.kbppfx", "modified" },
+        { "scene-post-process", withScene({ "scene-post-process", "--profile", "/Game/PostProcess/Second.kbppfx" }), side, "modified" },
+        { "particle-process-cook", { "particle-process-cook", "--source", outside + "/none.json", "--output", outside + "/none.bin" }, "", "" },
+        { "render-effect-run", { "render-effect-run", "--manifest", outside + "/none.json" }, "", "" },
+        { "render-effect-export", { "render-effect-export", "--manifest", outside + "/none.json", "--output", outside + "/none" }, "", "" },
+        { "vfx-new", line({ "vfx-new", "--name", "Second" }), "Assets/Particles/Second.kbvfx", "created" },
+        { "vfx-set", line({ "vfx-set", "--effect", "/Game/Particles/Second.kbvfx", "--set", "effect.emitter[0].spawn.shape.type=Sphere" }), "", "" },
+        { "vfx-emitter-add", line({ "vfx-emitter-add", "--effect", "/Game/Particles/Second.kbvfx", "--name", "Extra" }), "Assets/Particles/Second.kbvfx", "modified" },
+        { "vfx-module-add", line({ "vfx-module-add", "--effect", "/Game/Particles/Second.kbvfx", "--emitter", "1", "--type", "Gravity" }),
+            "Assets/Particles/Second.kbvfx", "modified" },
+        { "vfx-module-remove", line({ "vfx-module-remove", "--effect", "/Game/Particles/Second.kbvfx", "--emitter", "1", "--module", "1" }), "Assets/Particles/Second.kbvfx", "modified" },
+        { "vfx-emitter-remove", line({ "vfx-emitter-remove", "--effect", "/Game/Particles/Second.kbvfx", "--emitter", "1" }), "Assets/Particles/Second.kbvfx", "modified" },
+#endif
+    };
+    return table;
+}
+
+void RunChangeReportTests() {
+    static_cast<void>(PrepareDataProbes());
+    const std::filesystem::path rootPath = TestRoot();
+    const std::string root = rootPath.string();
+    // Files the commands write outside the project go to a folder beside it, which each line names in full.
+    const std::filesystem::path outsidePath = rootPath.parent_path() / (rootPath.filename().string() + "-outside");
+    std::error_code error;
+    std::filesystem::remove_all(outsidePath, error);
+    std::filesystem::create_directories(outsidePath, error);
+    const std::string outside = outsidePath.generic_string();
+    WriteTextFile(outsidePath / "Wedge.obj", "v 0 0 0\nv 2 0 0\nv 0 3 0\nv 0 0 4\nf 1 2 3\nf 1 2 4\n");
+    std::filesystem::copy_file(rootPath / "Probe.kbpack", outsidePath / "Probe.kbpack", error);
+
+    for (const ChangeProbe& probe : ChangeProbeTable(root, outside)) {
+        std::vector<std::string> words = probe.words;
+        words.emplace_back("--json");
+        std::istringstream in;
+        std::ostringstream out;
+        std::ostringstream err;
+        static_cast<void>(kb::cli::RunCli(words, in, kb::cli::CommandIo{ .out = out, .err = err }));
+        const std::string what = "'" + probe.command + "' (" + probe.words.front() + (probe.words.size() > 1U ? " " + probe.words[1] : "") + "): ";
+        JsonValue result;
+        std::string parseError;
+        Require(JsonValue::Parse(out.str(), result, parseError) && result.Find("data") != nullptr && result.Find("data")->GetKind() == JsonValue::Kind::Object,
+            what + "a writing command must return a data object: " + out.str());
+        const JsonValue& data = *result.Find("data");
+        Require(data.Find("schema") != nullptr && data.Find("schema")->AsString().starts_with("21kb.cli.") && data.Find("changes") != nullptr &&
+                data.Find("changes")->GetKind() == JsonValue::Kind::Array && data.Find("changesError") == nullptr,
+            what + "data must carry a schema id and the list of changes: " + out.str());
+        bool listed = false;
+        for (std::size_t index = 0U; index < data.Find("changes")->Size(); ++index) {
+            const JsonValue& change = *data.Find("changes")->At(index);
+            const std::string& kind = change.Find("kind")->AsString();
+            const std::string& path = change.Find("path")->AsString();
+            Require(!path.empty() && (kind == "created" || kind == "modified" || kind == "removed"), what + "a change names a path and a kind: " + out.str());
+            Require((change.Find("asset") != nullptr) == (path.starts_with("Assets/") && !path.ends_with(".meta")),
+                what + "a project asset names its /Game/ path, and only an asset does: " + out.str());
+            if (change.Find("asset") != nullptr) Require(change.Find("asset")->AsString() == "/Game/" + path.substr(7U), what + "the asset path follows the file: " + out.str());
+            listed = listed || ((probe.path == "*" || path == probe.path) && (probe.kind == "*" || kind == probe.kind));
+        }
+        if (probe.path.empty()) continue;
+        Require(result.Find("ok")->AsBool(), what + "the command must succeed: " + out.str() + err.str());
+        Require(listed, what + "data.changes must list " + probe.path + " as " + probe.kind + ": " + out.str());
+    }
+    std::filesystem::remove_all(outsidePath, error);
+
+    // The edit of an entity names it: its id and its path in the scene, beside the scene's change.
+    const std::string side = "Assets/Scenes/Probe.21kbscene";
+    const auto edit = [&](std::vector<std::string> words) {
+        words.insert(words.end(), { "--project", root, "--scene", side, "--json" });
+        std::istringstream in;
+        std::ostringstream out;
+        std::ostringstream err;
+        const int exitCode = kb::cli::RunCli(words, in, kb::cli::CommandIo{ .out = out, .err = err });
+        JsonValue result;
+        std::string parseError;
+        Require(exitCode == 0 && JsonValue::Parse(out.str(), result, parseError), "entity edit: " + out.str() + err.str());
+        return *result.Find("data");
+    };
+    const JsonValue added = edit({ "entity", "add", "--name", "Marker" });
+    Require(added.Find("schema")->AsString() == "21kb.cli.scene-edit/v1" && added.Find("scene")->AsString() == "/Game/Scenes/Probe.21kbscene" &&
+            added.Find("entity")->Find("name")->AsString() == "Marker" && added.Find("entity")->Find("path")->AsString() == "Marker" &&
+            !added.Find("entity")->Find("id")->AsString().empty() && !added.Find("removed")->AsBool() && added.Find("changes")->Size() >= 1U,
+        "entity add must name the entity it made: " + added.Dump());
+    const JsonValue removed = edit({ "entity", "remove", "--name", "Marker" });
+    Require(removed.Find("removed")->AsBool() && removed.Find("entity")->Find("id")->AsString() == added.Find("entity")->Find("id")->AsString(),
+        "entity remove must name the entity it removed: " + removed.Dump());
+    const JsonValue componentAdded = edit({ "component", "add", "--entity", "Goblin", "--type", "Tags" });
+    Require(componentAdded.Find("component")->AsString() == "Object Classification" && componentAdded.Find("entity")->Find("name")->AsString() == "Goblin",
+        "component add must name the component and its entity: " + componentAdded.Dump());
+
+    // A read form keeps its own data and lists no change.
+    const CliRun idle = RunCliProgram({ "entity", "show", "--project", root, "--name", "Goblin", "--scene", side, "--json" });
+    JsonValue idleResult;
+    std::string idleError;
+    Require(idle.exitCode == 0 && JsonValue::Parse(idle.out, idleResult, idleError) && idleResult.Find("data")->Find("schema")->AsString() == "21kb.cli.entity-show/v1" &&
+            idleResult.Find("data")->Find("changes") == nullptr,
+        "a read form must not report changes: " + idle.out);
+}
+
 // Every command marked structured returns a filled data object with its schema id, and a probe exists for it.
 void CheckStructuredCommands() {
     const std::vector<DataProbe> probes = PrepareDataProbes();
@@ -5404,10 +5582,21 @@ void CheckStructuredCommands() {
             "'" + probe.command + "' has a data probe, so the table must mark it structured");
         static_cast<void>(RunDataProbe(probe));
     }
+    const std::vector<ChangeProbe> changeProbes = ChangeProbeTable("", "");
+    const auto hasChangeProbe = [&](std::string_view name) {
+        return std::ranges::any_of(changeProbes, [&](const ChangeProbe& probe) { return probe.command == name; });
+    };
     for (const auto& entry : kb::cli::CliCommandCatalog()) {
         if (entry.json != kb::cli::CliJsonOutput::Structured || !entry.available) continue;
-        Require(std::ranges::any_of(probes, [&](const DataProbe& probe) { return probe.command == entry.name; }),
+        Require(std::ranges::any_of(probes, [&](const DataProbe& probe) { return probe.command == entry.name; }) || (entry.writes && hasChangeProbe(entry.name)),
             "'" + std::string{ entry.name } + "' is marked structured, so a data probe must check it");
+        // A command that writes lists its changes in data: it is structured, and a change probe checks the list.
+        Require(!entry.writes || hasChangeProbe(entry.name), "'" + std::string{ entry.name } + "' writes files, so a change probe must check its data.changes");
+    }
+    for (const ChangeProbe& probe : changeProbes) {
+        const auto* command = kb::cli::FindCliCommand(probe.command);
+        Require(command != nullptr && command->writes && command->json == kb::cli::CliJsonOutput::Structured,
+            "'" + probe.command + "' has a change probe, so the table must mark it as writing and structured");
     }
 }
 
@@ -5491,7 +5680,8 @@ void RunCommandCatalogTests() {
     Require(findNamed(*findRow("terrain").Find("subcommands"), "brush") != nullptr && findNamed(*findRow("pack").Find("subcommands"), "sign") != nullptr,
         "Subcommands must be listed");
     Require(findRow("run").Find("json")->AsString() == "partial" && findRow("audio-mixer").Find("json")->AsString() == "native" &&
-            findRow("entity").Find("json")->AsString() == "structured" && findRow("component").Find("json")->AsString() == "envelope" &&
+            findRow("entity").Find("json")->AsString() == "structured" && findRow("component").Find("json")->AsString() == "structured" &&
+            findRow("component").Find("writes")->AsBool() && !findRow("schema").Find("writes")->AsBool() &&
             findRow("mcp").Find("json")->AsString() == "protocol",
         "Catalog must say which commands print their own JSON");
     Require(described.Find("globalOptions")->Size() > 0U && described.Find("exitCodes")->Size() > 0U, "Catalog must list the global options and exit codes");
@@ -6322,6 +6512,7 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{argv[1]} == "structured-output") {
         RunStructuredOutputTests();
+        RunChangeReportTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{argv[1]} == "code-map") {
@@ -6392,6 +6583,7 @@ int main(int argc, char** argv) {
     RunCliJsonTests();
     RunCommandCatalogTests();
     RunStructuredOutputTests();
+    RunChangeReportTests();
     RunCodeMapTests();
     RunBatchCommandTests();
     RunBatchSceneSessionTests();

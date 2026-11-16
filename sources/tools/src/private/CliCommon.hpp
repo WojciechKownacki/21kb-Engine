@@ -5,8 +5,11 @@
 
 #include <array>
 #include <filesystem>
+#include <map>
+#include <memory>
 #include <optional>
 #include <ostream>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -67,6 +70,48 @@ private:
     std::vector<std::string> flags_;
     std::vector<std::string> positionals_;
     std::vector<std::string> errors_;
+};
+
+// The files of a folder tree, by path relative to its root.
+struct Listing {
+    std::map<std::filesystem::path, std::uintmax_t> files;
+    std::map<std::filesystem::path, std::filesystem::file_time_type> times;
+    std::set<std::filesystem::path> directories;
+};
+// Whether a path relative to a scanned root lies in such a folder (its first component names one).
+[[nodiscard]] bool IsExcludedFolder(const std::filesystem::path& relative);
+// Lists every file and folder below `root`, except folders of generated or foreign data (Library, Saved, .git ...).
+// Strict: a symbolic link or other irregular entry is an error; otherwise it is left out.
+[[nodiscard]] bool ScanProject(const std::filesystem::path& root, Listing& listing, std::string& error, bool strict = true);
+// Whether two files hold the same bytes.
+[[nodiscard]] bool SameContent(const std::filesystem::path& left, const std::filesystem::path& right);
+
+// What a command changed on disk, the one source of the "changes" of a command's data: the files of the project and
+// of the output paths the arguments name. On Windows the file system reports each change while the command runs
+// (ReadDirectoryChangesW, started by the constructor), so the cost follows the number of changes, not the size of
+// the project. Platforms without that API list the same folders before and after the run instead (a full scan, so
+// the cost follows the size of the project).
+class ChangeWatch final {
+public:
+    ChangeWatch(std::string_view command, const ArgumentList& arguments);
+    ~ChangeWatch();
+    ChangeWatch(const ChangeWatch&) = delete;
+    ChangeWatch& operator=(const ChangeWatch&) = delete;
+
+    // Sets data.changes [{path, kind: created|modified|removed, asset}]: path is relative to the project, or absolute
+    // outside it; asset is the /Game/ path of a project asset. A command that gave no data gets the object
+    // "21kb.cli.<command>-write/v1" for it; data the command gave itself gets "changes" only when something changed.
+    // With `onlyIfChanged`, nothing is set when no file changed. Returns whether it set anything. When the list could
+    // not be complete (the system's notification buffer overflowed) data.changesError says so.
+    bool Publish(kb::core::JsonValue& data, bool onlyIfChanged = false) const;
+
+private:
+    struct State;
+
+    std::string command_;
+    std::filesystem::path project_;
+    std::vector<std::filesystem::path> roots_;
+    std::unique_ptr<State> state_;
 };
 
 // Mounts <projectRoot>/Assets and runs asset discovery. Returns false with a

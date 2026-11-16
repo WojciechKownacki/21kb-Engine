@@ -753,6 +753,21 @@ void ListProperties(std::string_view component, std::ostream& out) {
     return assets == std::string::npos ? text : "/Game/" + text.substr(assets + 8U);
 }
 
+// For --json: the entity an edit created, changed or removed (call before it is destroyed), beside the scene's change.
+void NoteEntity(CommandIo io, const SceneSession& session, kb::scene::SceneEntity entity, bool removed = false, std::string_view component = {}) {
+    if (!io.WantsData()) return;
+    kb::core::JsonValue data = DataObject("21kb.cli.scene-edit/v1");
+    data.Set("scene", kb::core::JsonValue::MakeString(ProjectScenePath(session.path)));
+    auto row = kb::core::JsonValue::MakeObject();
+    row.Set("id", kb::core::JsonValue::MakeString(std::to_string(entity.Id())));
+    row.Set("name", kb::core::JsonValue::MakeString(session.scene->Entities().Name(entity)));
+    row.Set("path", kb::core::JsonValue::MakeString(EntityPath(*session.scene, entity)));
+    data.Set("entity", std::move(row));
+    data.Set("removed", kb::core::JsonValue::MakeBool(removed));
+    if (!component.empty()) data.Set("component", kb::core::JsonValue::MakeString(std::string{ component }));
+    PublishData(io, std::move(data));
+}
+
 [[nodiscard]] int Saved(SceneSession& session, std::string_view what, CommandIo io) {
     if (!session.Save()) {
         io.err << "error: scene " << session.path.generic_string() << " could not be written\n";
@@ -993,6 +1008,7 @@ void ListProperties(std::string_view component, std::ostream& out) {
         }
         added += " with a " + *body2D + " Body 2D and a " + shape + " Collider 2D";
     }
+    NoteEntity(io, *session, entity);
     return Saved(*session, added, io);
 }
 
@@ -1006,6 +1022,7 @@ void ListProperties(std::string_view component, std::ostream& out) {
     if (!session) return 1;
     const std::optional<kb::scene::SceneEntity> entity = FindEntity(*session->scene, *name, io);
     if (!entity.has_value()) return 1;
+    NoteEntity(io, *session, *entity, true);
     session->scene->Entities().Destroy(*entity);
     return Saved(*session, "removed entity '" + *name + "' and its children", io);
 }
@@ -1085,6 +1102,7 @@ void ListProperties(std::string_view component, std::ostream& out) {
         scene.Entities().SetName(entity, *name);
     }
     if (!ApplyTransformOptions(scene, entity, arguments, io)) return 1;
+    NoteEntity(io, *session, entity);
     return Saved(*session, "placed " + *prefab + " as '" + scene.Entities().Name(entity) + "'", io);
 }
 
@@ -1136,6 +1154,7 @@ void ListProperties(std::string_view component, std::ostream& out) {
     if (!ApplyTransformOptions(scene, *entity, arguments, io)) return 1;
     const kb::scene::TransformComponent transform = scene.Transforms().Get(*entity);
     const kb::math::Vec3 degrees = kb::math::ToEulerDegrees(transform.localRotation);
+    NoteEntity(io, *session, *entity);
     return Saved(*session, "set '" + *name + "': localPosition=" + FormatCliNumber(transform.localPosition.x) + ',' +
         FormatCliNumber(transform.localPosition.y) + ',' + FormatCliNumber(transform.localPosition.z) + " rotation=" +
         FormatCliNumber(degrees.x) + ',' + FormatCliNumber(degrees.y) + ',' + FormatCliNumber(degrees.z), io);
@@ -1172,6 +1191,7 @@ void ListProperties(std::string_view component, std::ostream& out) {
     }
     const std::string before = EntityPath(scene, entity);
     scene.Entities().SetName(entity, *newName);
+    NoteEntity(io, *session, entity);
     return Saved(*session, "renamed entity '" + before + "' to '" + *newName + "'", io);
 }
 
@@ -1582,6 +1602,7 @@ void PrintEntity(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::os
         }
         kb::scene::SynchronizeSceneUIComponents(scene.Components().UI(), *entity, components);
         if (!ApplySettings(scene, *entity, *type, arguments, io)) return 1;
+        NoteEntity(io, *session, *entity, false, ui->displayName);
         return Saved(*session, (action == "add" ? "added " : "updated ") + std::string{ ui->displayName } + " on '" + *entityName + "'", io);
     }
     if (action == "add") {
@@ -1606,6 +1627,7 @@ void PrintEntity(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::os
             return 1;
         }
         if (!ApplySettings(scene, *entity, *type, arguments, io)) return 1;
+        NoteEntity(io, *session, *entity, false, added.kind->displayName);
         return Saved(*session, "added " + std::string{ added.kind->displayName } + " to '" + *entityName + "'", io);
     }
     if (action == "set") {
@@ -1619,6 +1641,7 @@ void PrintEntity(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::os
             return 1;
         }
         if (!ApplySettings(scene, *entity, *type, arguments, io)) return 1;
+        NoteEntity(io, *session, *entity, false, *type);
         return Saved(*session, "updated " + *type + " on '" + *entityName + "'", io);
     }
     if (action == "remove") {
@@ -1626,6 +1649,7 @@ void PrintEntity(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::os
             io.err << "error: '" << *entityName << "' has no removable " << *type << '\n';
             return 1;
         }
+        NoteEntity(io, *session, *entity, false, *type);
         return Saved(*session, "removed " + *type + " from '" + *entityName + "'", io);
     }
     io.err << "error: component expects add, set or remove\n";
