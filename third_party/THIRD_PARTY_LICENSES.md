@@ -153,7 +153,10 @@ Recast generates the navigation meshes the engine bakes from scene geometry; Det
 as tiles, answers path queries and moves agents along path corridors. The Zlib notice is
 reproduced with the shipped licenses.
 CMake compiles a marked generated copy of `DetourCrowd.cpp` that cancels an agent's
-off-mesh animation when its crowd slot is removed. The pinned upstream archive is unchanged.
+off-mesh animation when its crowd slot is removed. It also compiles marked generated copies of
+`DetourProximityGrid.h` and `DetourProximityGrid.cpp` that are changed: their item and member
+indices are 32-bit instead of 16-bit, and `DetourCrowd.cpp` takes 32-bit neighbour ids. The pinned
+upstream archive is unchanged.
 
 ## etcpak
 

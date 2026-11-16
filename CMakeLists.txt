@@ -721,6 +721,28 @@ if(NOT TARGET kb_recast)
         message(FATAL_ERROR "The pinned crowd source no longer matches the parallel update patch")
     endif()
     string(SUBSTRING "${_kb_crowd_source}" 0 ${_kb_crowd_update_offset} _kb_crowd_source)
+    # The proximity grid is a generated copy with 32-bit item and member indices (upstream: 16 bits, which
+    # wrap beyond about 28 000 members), so the neighbour ids of a query are 32-bit too.
+    set(_kb_crowd_ids "unsigned short ids[MAX_NEIS];")
+    string(FIND "${_kb_crowd_source}" "${_kb_crowd_ids}" _kb_crowd_ids_offset)
+    file(READ "${kb_recast_SOURCE_DIR}/DetourCrowd/Include/DetourProximityGrid.h" _kb_grid_header)
+    file(READ "${kb_recast_SOURCE_DIR}/DetourCrowd/Source/DetourProximityGrid.cpp" _kb_grid_source)
+    string(FIND "${_kb_grid_header}" "unsigned short" _kb_grid_header_offset)
+    string(FIND "${_kb_grid_source}" "idx != 0xffff" _kb_grid_source_offset)
+    if(_kb_crowd_ids_offset EQUAL -1 OR _kb_grid_header_offset EQUAL -1 OR _kb_grid_source_offset EQUAL -1)
+        message(FATAL_ERROR "The pinned crowd source no longer matches the proximity grid patch")
+    endif()
+    string(REPLACE "${_kb_crowd_ids}" "unsigned int ids[MAX_NEIS];" _kb_crowd_source "${_kb_crowd_source}")
+    string(REPLACE "unsigned short" "unsigned int" _kb_grid_header "${_kb_grid_header}")
+    string(REPLACE "unsigned short" "unsigned int" _kb_grid_source "${_kb_grid_source}")
+    string(REPLACE "idx != 0xffff" "idx != 0xffffffffu" _kb_grid_source "${_kb_grid_source}")
+    set(_kb_grid_mark "// Engine patch: altered copy of the upstream file, item and member indices are 32-bit.\n")
+    string(PREPEND _kb_grid_header "${_kb_grid_mark}")
+    string(PREPEND _kb_grid_source "${_kb_grid_mark}")
+    file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/navigation/DetourProximityGrid.h"
+        CONTENT "${_kb_grid_header}" @ONLY)
+    file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/navigation/DetourProximityGrid.cpp"
+        CONTENT "${_kb_grid_source}" @ONLY)
     string(REPLACE "${_kb_crowd_purge}" "${_kb_crowd_purge}\treleaseWorkers();\n" _kb_crowd_source "${_kb_crowd_source}")
     file(READ "${CMAKE_CURRENT_SOURCE_DIR}/sources/engine/src/navigation/DetourCrowdUpdate.inl" _kb_crowd_update_source)
     string(APPEND _kb_crowd_source "${_kb_crowd_update_source}")
@@ -800,7 +822,7 @@ class dtCrowd
         ${kb_recast_SOURCE_DIR}/DetourCrowd/Source/DetourObstacleAvoidance.cpp
         ${kb_recast_SOURCE_DIR}/DetourCrowd/Source/DetourPathCorridor.cpp
         ${kb_recast_SOURCE_DIR}/DetourCrowd/Source/DetourPathQueue.cpp
-        ${kb_recast_SOURCE_DIR}/DetourCrowd/Source/DetourProximityGrid.cpp
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/navigation/DetourProximityGrid.cpp
         ${kb_recast_SOURCE_DIR}/DetourTileCache/Source/DetourTileCacheBuilder.cpp
     )
     target_include_directories(kb_recast PUBLIC

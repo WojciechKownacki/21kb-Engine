@@ -36,6 +36,8 @@
 #include "scene/asset/io/components/SceneAssetPhysicsComponentCodec.hpp"
 #include "scene/asset/io/components/SceneAssetRenderComponentCodec.hpp"
 
+#include <DetourProximityGrid.h>
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -549,8 +551,9 @@ struct CrowdRun {
     std::vector<Vec3> positions;
     std::size_t arrived = 0U;
     double milliseconds = 0.0;
-    // The slowest measured step.
+    // The slowest and the median measured step.
     double worst = 0.0;
+    double median = 0.0;
     // Average stage times of the measured steps, and the stages of the slowest one.
     scene::NavigationCrowdStats stages{};
     scene::NavigationCrowdStats worstStages{};
@@ -592,10 +595,12 @@ struct CrowdRun {
     }
     scene.Runtime().SynchronizeTransforms();
     CrowdRun run;
+    std::vector<double> measuredSteps;
     for (int step = 0; step < steps; ++step) {
         static_cast<void>(scene.Runtime().Update(kFrame));
         if (step >= steps / 2) {
             const scene::NavigationCrowdStats stats = scene.Navigation().CrowdStats();
+            measuredSteps.push_back(stats.milliseconds);
             run.milliseconds += stats.milliseconds;
             if (stats.milliseconds > run.worst) run.worstStages = stats;
             run.worst = std::max(run.worst, stats.milliseconds);
@@ -610,6 +615,8 @@ struct CrowdRun {
     }
     const double measured = static_cast<double>(steps - steps / 2);
     run.milliseconds /= measured;
+    std::ranges::sort(measuredSteps);
+    run.median = measuredSteps[measuredSteps.size() / 2U];
     for (double* stage : { &run.stages.syncMilliseconds, &run.stages.pathMilliseconds, &run.stages.neighbourMilliseconds, &run.stages.cornerMilliseconds,
              &run.stages.steeringMilliseconds, &run.stages.avoidanceMilliseconds, &run.stages.moveMilliseconds }) {
         *stage /= measured;
@@ -620,6 +627,50 @@ struct CrowdRun {
         run.arrived += component.remainingDistance <= 0.5F ? 1U : 0U;
     }
     return run;
+}
+
+// The proximity grid a crowd finds neighbours with, filled as the crowd fills it (four items per member, cells of
+// three radii) from a lattice of agents of one density: queries find as many neighbours at 100 000 agents as at
+// 20 000, as the grid's 16-bit item index once made them lose neighbours beyond about 28 000.
+[[nodiscard]] double GridNeighboursPerQuery(int count) {
+    constexpr float kRadius = 0.4F;
+    constexpr float kSpacing = 3.0F;
+    constexpr int kEdge = 8;
+    const int side = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(count))));
+    dtProximityGrid grid;
+    Check(grid.init(count * 4, 0.5F * 3.0F), "the proximity grid must allocate");
+    const auto at = [&](int index) { return Vec3{ static_cast<float>(index % side) * kSpacing, 0.0F, static_cast<float>(index / side) * kSpacing }; };
+    for (int index = 0; index < count; ++index) {
+        const Vec3 position = at(index);
+        grid.addItem(static_cast<unsigned int>(index), position.x - kRadius, position.z - kRadius, position.x + kRadius, position.z + kRadius);
+    }
+    // Agents away from the lattice's edge, so its size does not change what they have around them.
+    std::uint64_t found = 0U;
+    int queries = 0;
+    std::vector<unsigned int> ids(32U);
+    for (int row = kEdge; row < side - kEdge; row += 7) {
+        for (int column = kEdge; column < side - kEdge; column += 7) {
+            const int index = row * side + column;
+            if (index >= count) continue;
+            const Vec3 position = at(index);
+            const float range = kRadius * 12.0F;
+            found += static_cast<std::uint64_t>(grid.queryItems(position.x - range, position.z - range, position.x + range, position.z + range,
+                ids.data(), static_cast<int>(ids.size())));
+            ++queries;
+        }
+    }
+    return queries > 0 ? static_cast<double>(found) / queries : 0.0;
+}
+
+void TestCrowdGridKeepsItsNeighbours() {
+    const double reference = GridNeighboursPerQuery(20000);
+    Check(reference > 4.0, "a query on the proximity grid finds the agents around it: " + std::to_string(reference));
+    for (const int count : { 40000, 100000 }) {
+        const double neighbours = GridNeighboursPerQuery(count);
+        Check(std::fabs(neighbours - reference) <= 0.1 * reference,
+            std::to_string(count) + " agents on the proximity grid must keep their neighbours (" + std::to_string(neighbours) +
+                " per query against " + std::to_string(reference) + " at 20000)");
+    }
 }
 
 void TestCrowdIsDeterministic() {
@@ -1722,6 +1773,7 @@ void RunNavigationMeshTests() {
     TestInterruptedLinkCrossing();
     TestFarFromTheWorldOrigin();
     TestCrowdIsDeterministic();
+    TestCrowdGridKeepsItsNeighbours();
     TestCrowdLevelOfDetail();
     TestCrowdLevelOfDetailTransitions();
     TestCrowdPathBudgetPriority();
@@ -1801,12 +1853,15 @@ void RunNavigationCrowdBenchmark() {
               << " ms (slowest " << twentyThousand.worst << " ms over 600 steps)\n";
     const CrowdRun fiveThousandStages = RunCrowd(arena, kHalf, 5000, 240);
     const CrowdRun fiveThousandLodStages = RunCrowd(arena, kHalf, 5000, 240, { DVec3{ -50.0, 0.0, -50.0 } });
-    for (const auto& [label, stages] : { std::pair{ "1000 agents", thousand.stages }, std::pair{ "5000 agents", fiveThousandStages.stages }, std::pair{ "5000 agents with level of detail", fiveThousandLodStages.stages },
-             std::pair{ "10000 agents", tenThousand.stages }, std::pair{ "10000 agents on one thread", tenThousandOneThread.stages },
-             std::pair{ "the slowest of 20000 agents", twentyThousand.worstStages } }) {
+    const auto printStages = [](std::string_view label, const scene::NavigationCrowdStats& stages) {
         std::cout << "navigation: stages of a step, " << label << ": sync " << stages.syncMilliseconds << " ms, paths " << stages.pathMilliseconds
                   << " ms, neighbours " << stages.neighbourMilliseconds << " ms, corners " << stages.cornerMilliseconds << " ms, steering "
                   << stages.steeringMilliseconds << " ms, avoidance " << stages.avoidanceMilliseconds << " ms, move " << stages.moveMilliseconds << " ms\n";
+    };
+    for (const auto& [label, stages] : { std::pair{ "1000 agents", thousand.stages }, std::pair{ "5000 agents", fiveThousandStages.stages }, std::pair{ "5000 agents with level of detail", fiveThousandLodStages.stages },
+             std::pair{ "10000 agents", tenThousand.stages }, std::pair{ "10000 agents on one thread", tenThousandOneThread.stages },
+             std::pair{ "the slowest of 20000 agents", twentyThousand.worstStages } }) {
+        printStages(label, stages);
     }
 
     // Path queries across the arena (around the pillars) and over a few metres, the first in a fresh scene and repeated.
@@ -1825,6 +1880,34 @@ void RunNavigationCrowdBenchmark() {
     pathMilliseconds(DVec3{ -5.0, 0.0, -5.0 }, DVec3{ 5.0, 0.0, 5.0 }, 2000, "over 14 m");
     Check(fiveThousandLod.milliseconds < fiveThousand.milliseconds, "level of detail must make a large crowd cheaper");
     Check(tenThousand.milliseconds < 24.0 * kSanitizerTimeScale, "10000 crowd agents must step within 24 ms: " + std::to_string(tenThousand.milliseconds));
+
+    // The crowd grows linearly: the arena grows with the agent count, so every size has the density of 10 000 agents, and
+    // every agent asks for its path in the first step. The neighbour test above guards the cause, so these limits only catch a
+    // collapse (the step once grew hundreds of times), not swings of load. A sanitizer build is too slow for the large sizes.
+    if constexpr (kSanitizerTimeScale <= 1.0) {
+        const auto scaledStep = [&](int count) {
+            const double half = kHalf * std::sqrt(static_cast<double>(count) / 10000.0);
+            const auto scaledArena = std::make_shared<const nav::NavMeshAsset>(CrowdArena(half));
+            const scene::NavigationCrowdSettings settings{ .maxPathRequestsPerStep = static_cast<std::uint32_t>(count) };
+            // The faster of two runs: load from other processes only makes a run slower than it is.
+            CrowdRun first = RunCrowd(scaledArena, half, count, 40, {}, settings);
+            CrowdRun second = RunCrowd(scaledArena, half, count, 40, {}, settings);
+            return second.median < first.median ? std::move(second) : std::move(first);
+        };
+        const CrowdRun run10 = scaledStep(10000);
+        const CrowdRun run50 = scaledStep(50000);
+        const CrowdRun run100 = scaledStep(100000);
+        const double step10 = run10.median;
+        const double step50 = run50.median;
+        const double step100 = run100.median;
+        printStages("10000 agents at one density", run10.stages);
+        printStages("50000 agents at one density", run50.stages);
+        printStages("100000 agents at one density", run100.stages);
+        std::cout << "navigation: crowd step at one density, median, 10000 agents " << step10 << " ms, 50000 agents " << step50 << " ms ("
+                  << step50 / step10 << " times), 100000 agents " << step100 << " ms (" << step100 / step10 << " times)\n";
+        Check(step50 <= 24.0 * step10, "50000 crowd agents must step within 24 times the step of 10000: " + std::to_string(step50 / step10));
+        Check(step100 <= 48.0 * step10, "100000 crowd agents must step within 48 times the step of 10000: " + std::to_string(step100 / step10));
+    }
 }
 
 // Horde cost: 10 000 and 50 000 agents chasing 1, 10 and 100 moving targets on the two-storey level

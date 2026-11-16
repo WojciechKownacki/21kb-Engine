@@ -19,8 +19,8 @@ using kb::scene::NavPathStatus;
 namespace {
 
 constexpr int kInitialCapacity = 64;
-// The crowd's proximity grid addresses members with 16 bits.
-constexpr int kMaxCapacity = 0xFFFF;
+// Members of one crowd; its proximity grid indexes four items per member with 32 bits.
+constexpr int kMaxCapacity = 1 << 24;
 constexpr float kEpsilon = 1.0e-5F;
 // Box searched for the polygon an agent or a destination stands on.
 const Vec3 kSearchExtents{ 2.0F, 4.0F, 2.0F };
@@ -633,7 +633,9 @@ void NavMeshCrowd::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
 
     // 6. Hand waiting destinations to the crowd, as many as the step allows: nearer levels of detail
     // first, then the longest waiting.
-    std::ranges::sort(waiting, [&](std::size_t left, std::size_t right) {
+    // Only the first of them are handed over this step, so only those are put in order.
+    const std::size_t handedOver = std::min<std::size_t>(waiting.size(), settings.maxPathRequestsPerStep);
+    std::ranges::partial_sort(waiting, waiting.begin() + static_cast<std::ptrdiff_t>(handedOver), [&](std::size_t left, std::size_t right) {
         const AgentRecord& a = *records[left];
         const AgentRecord& b = *records[right];
         if (a.detail != b.detail) return a.detail < b.detail;

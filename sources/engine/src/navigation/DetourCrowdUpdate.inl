@@ -201,7 +201,7 @@ void dtCrowd::update(const float dt, dtCrowdAgentDebugInfo* debug)
 	{
 		const float* p = agents[i]->npos;
 		const float r = agents[i]->params.radius;
-		m_grid->addItem((unsigned short)i, p[0] - r, p[2] - r, p[0] + r, p[2] + r);
+		m_grid->addItem((unsigned int)i, p[0] - r, p[2] - r, p[0] + r, p[2] + r);
 	}
 	auto gatherNeighbours = [&](const int begin, const int end, const int worker) {
 		dtNavMeshQuery* query = queryOf(worker);
@@ -408,6 +408,14 @@ void dtCrowd::update(const float dt, dtCrowdAgentDebugInfo* debug)
 	// pushes, then applies them.
 	static const float COLLISION_RESOLVE_FACTOR = 0.7f;
 	std::atomic<bool> pushing(false);
+	auto applyPush = [&](const int begin, const int end, const int) {
+		for (int i = begin; i < end; ++i)
+		{
+			dtCrowdAgent* ag = agents[i];
+			if (ag->state == DT_CROWDAGENT_STATE_WALKING)
+				dtVadd(ag->npos, ag->npos, ag->disp);
+		}
+	};
 	auto measurePush = [&](const int begin, const int end, const int) {
 		bool pushes = false;
 		for (int i = begin; i < end; ++i)
@@ -462,56 +470,47 @@ void dtCrowd::update(const float dt, dtCrowdAgentDebugInfo* debug)
 		// Nobody pushed, so nothing moves and the rounds left would measure the same.
 		if (!pushing.load(std::memory_order_relaxed))
 			break;
-		for (int i = 0; i < nagents; ++i)
-		{
-			dtCrowdAgent* ag = agents[i];
-			if (ag->state == DT_CROWDAGENT_STATE_WALKING)
-				dtVadd(ag->npos, ag->npos, ag->disp);
-		}
+		runPass(nagents, applyPush);
 	}
 
-	// Members move along the surface to their new positions.
+	// Members move along the surface to their new positions; those crossing off-mesh connections are eased onto the
+	// start, then across.
 	auto moveAlongSurface = [&](const int begin, const int end, const int worker) {
 		dtNavMeshQuery* query = queryOf(worker);
 		for (int i = begin; i < end; ++i)
 		{
 			dtCrowdAgent* ag = agents[i];
-			if (ag->state != DT_CROWDAGENT_STATE_WALKING)
-				continue;
-			ag->corridor.movePosition(ag->npos, query, &m_filters[ag->params.queryFilterType]);
-			dtVcopy(ag->npos, ag->corridor.getPos());
-			// Without a path the corridor keeps only the polygon under the member.
-			if (ag->targetState == DT_CROWDAGENT_TARGET_NONE || ag->targetState == DT_CROWDAGENT_TARGET_VELOCITY)
+			if (ag->state == DT_CROWDAGENT_STATE_WALKING)
 			{
-				ag->corridor.reset(ag->corridor.getFirstPoly(), ag->npos);
-				ag->partial = false;
+				ag->corridor.movePosition(ag->npos, query, &m_filters[ag->params.queryFilterType]);
+				dtVcopy(ag->npos, ag->corridor.getPos());
+				// Without a path the corridor keeps only the polygon under the member.
+				if (ag->targetState == DT_CROWDAGENT_TARGET_NONE || ag->targetState == DT_CROWDAGENT_TARGET_VELOCITY)
+				{
+					ag->corridor.reset(ag->corridor.getFirstPoly(), ag->npos);
+					ag->partial = false;
+				}
 			}
+			dtCrowdAgentAnimation* anim = &m_agentAnims[getAgentIndex(ag)];
+			if (!anim->active)
+				continue;
+			anim->t += dt;
+			if (anim->t > anim->tmax)
+			{
+				anim->active = false;
+				ag->state = DT_CROWDAGENT_STATE_WALKING;
+				continue;
+			}
+			const float ta = anim->tmax * 0.15f;
+			const float tb = anim->tmax;
+			if (anim->t < ta)
+				dtVlerp(ag->npos, anim->initPos, anim->startPos, tween(anim->t, 0.0, ta));
+			else
+				dtVlerp(ag->npos, anim->startPos, anim->endPos, tween(anim->t, ta, tb));
+			dtVset(ag->vel, 0, 0, 0);
+			dtVset(ag->dvel, 0, 0, 0);
 		}
 	};
 	runPass(nagents, moveAlongSurface);
-
-	// Members crossing off-mesh connections: eased onto the start, then across.
-	for (int i = 0; i < nagents; ++i)
-	{
-		dtCrowdAgent* ag = agents[i];
-		dtCrowdAgentAnimation* anim = &m_agentAnims[getAgentIndex(ag)];
-		if (!anim->active)
-			continue;
-		anim->t += dt;
-		if (anim->t > anim->tmax)
-		{
-			anim->active = false;
-			ag->state = DT_CROWDAGENT_STATE_WALKING;
-			continue;
-		}
-		const float ta = anim->tmax * 0.15f;
-		const float tb = anim->tmax;
-		if (anim->t < ta)
-			dtVlerp(ag->npos, anim->initPos, anim->startPos, tween(anim->t, 0.0, ta));
-		else
-			dtVlerp(ag->npos, anim->startPos, anim->endPos, tween(anim->t, ta, tb));
-		dtVset(ag->vel, 0, 0, 0);
-		dtVset(ag->dvel, 0, 0, 0);
-	}
 	m_passMilliseconds[DT_CROWD_PASS_MOVE] = clock.lap();
 }

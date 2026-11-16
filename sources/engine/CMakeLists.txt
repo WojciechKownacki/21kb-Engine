@@ -2295,6 +2295,7 @@ if(BUILD_TESTING)
     target_link_libraries(kb_engine_tests
         PRIVATE
             kb_engine
+            kb_recast
             flecs::flecs_static
     )
     target_include_directories(kb_engine_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/private)
