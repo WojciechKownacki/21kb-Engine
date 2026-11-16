@@ -56,6 +56,16 @@ constexpr std::string_view kCrashReports = "Project.CrashReports";
     return fallback;
 }
 
+[[nodiscard]] std::string_view HdrOutputName(ProjectHdrOutput mode) noexcept {
+    return mode == ProjectHdrOutput::Auto ? "Auto" : "Off";
+}
+
+[[nodiscard]] ProjectHdrOutput ParseHdrOutput(std::string_view name, ProjectHdrOutput fallback) noexcept {
+    if (name == "Off") return ProjectHdrOutput::Off;
+    if (name == "Auto") return ProjectHdrOutput::Auto;
+    return fallback;
+}
+
 [[nodiscard]] std::string_view AndroidGraphicsApiName(ProjectAndroidGraphicsApi api) noexcept {
     switch (api) {
     case ProjectAndroidGraphicsApi::Vulkan: return "Vulkan";
@@ -282,6 +292,13 @@ ProjectSettingsLoadResult ProjectSettingsStore::Load(const std::filesystem::path
         0U, kProjectFrameRateCapMax);
     display.renderScale = ReadBoundedFloat(document, kDisplay, "RenderScale", defaults.display.renderScale,
         kProjectRenderScaleMin, kProjectRenderScaleMax);
+    display.hdrOutput = ParseHdrOutput(
+        ReadString(document, kDisplay, "HdrOutput", std::string{HdrOutputName(defaults.display.hdrOutput)}),
+        defaults.display.hdrOutput);
+    display.hdrPaperWhiteNits = ReadBoundedFloat(document, kDisplay, "HdrPaperWhiteNits", defaults.display.hdrPaperWhiteNits,
+        kProjectHdrPaperWhiteNitsMin, kProjectHdrPaperWhiteNitsMax);
+    display.hdrMaxNits = ReadBoundedFloat(document, kDisplay, "HdrMaxNits", defaults.display.hdrMaxNits,
+        kProjectHdrMaxNitsMin, kProjectHdrMaxNitsMax);
     display.androidGraphicsApi = ParseAndroidGraphicsApi(
         ReadString(document, kDisplay, "AndroidGraphicsApi", std::string{AndroidGraphicsApiName(defaults.display.androidGraphicsApi)}),
         defaults.display.androidGraphicsApi);
@@ -401,6 +418,9 @@ bool ProjectSettingsStore::Save(
     document.SetBool(kDisplay, "VSync", settings.display.vsync);
     document.SetInt(kDisplay, "FrameRateCap", settings.display.frameRateCap);
     document.SetFloat(kDisplay, "RenderScale", settings.display.renderScale);
+    document.SetString(kDisplay, "HdrOutput", std::string{HdrOutputName(settings.display.hdrOutput)});
+    document.SetFloat(kDisplay, "HdrPaperWhiteNits", settings.display.hdrPaperWhiteNits);
+    document.SetFloat(kDisplay, "HdrMaxNits", settings.display.hdrMaxNits);
     document.SetString(kDisplay, "AndroidGraphicsApi", std::string{AndroidGraphicsApiName(settings.display.androidGraphicsApi)});
     document.SetString(kDisplay, "SplashImage", settings.display.splash.image);
     constexpr std::array<std::string_view, 3U> splashColorKeys{ "SplashBackgroundRed", "SplashBackgroundGreen", "SplashBackgroundBlue" };

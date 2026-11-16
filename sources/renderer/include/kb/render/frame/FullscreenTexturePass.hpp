@@ -26,12 +26,29 @@ struct FullscreenTextureAutoExposureSettings {
     float darkAdaptationRate = 1.5F;
 };
 
+// How the display image is made for an HDR display. Compose keeps the highlights of the tonemap up to
+// `peakRatio` (the display's peak over paper white) and writes a float image in which 1 is paper white;
+// everything that draws onto it afterwards, such as the interface, stays in display values. Encode turns
+// that image into the HDR10 signal (PQ, Rec.2020) of `paperWhiteNits`.
+enum class FullscreenTextureHdrStage : std::uint8_t {
+    Off,
+    Compose,
+    Encode,
+};
+
+struct FullscreenTextureHdrOutput {
+    FullscreenTextureHdrStage stage = FullscreenTextureHdrStage::Off;
+    float peakRatio = 1.0F;
+    float paperWhiteNits = 200.0F;
+};
+
 struct FullscreenTextureOutputTransform {
     float exposureStops = 0.0F;
     float gamma = 2.2F;  // 2.2 = the sRGB transfer curve; other values a plain power
     FullscreenTextureTonemapOperator tonemap = FullscreenTextureTonemapOperator::Aces;
     float colorGradingLutStrength = 0.0F;
     FullscreenTextureAutoExposureSettings autoExposure{};
+    FullscreenTextureHdrOutput hdr{};
 };
 
 [[nodiscard]] float ResolveFullscreenTextureExposureStops(const FullscreenTextureOutputTransform& transform) noexcept;
@@ -96,6 +113,7 @@ private:
     bgfx::UniformHandle vignetteParams_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle imageEffectParams_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle displayAntiAliasing_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle hdrOutputParams_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle neutralColorGradeLut_ = BGFX_INVALID_HANDLE;
 };
 

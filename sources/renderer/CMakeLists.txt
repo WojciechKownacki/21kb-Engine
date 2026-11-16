@@ -986,6 +986,7 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         tests/ParticleGpuStripTests.cpp
         tests/MeshPipelineTests.cpp
         tests/SceneDisplayCompositeTests.cpp
+        tests/DisplayHdrOutputTests.cpp
         tests/SceneExposureMeterTests.cpp
         tests/SceneDepthPolicyTests.cpp
         tests/RenderSceneSyncTests.cpp
@@ -1061,6 +1062,8 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
 
     # The complete node/profile sweep has separate bounded processes below.
     add_test(NAME kb_renderer_tests COMMAND $<TARGET_FILE:kb_renderer_tests> renderer-integration)
+    add_test(NAME kb_renderer_hdr_output_cpu COMMAND $<TARGET_FILE:kb_renderer_tests> hdr-output-cpu)
+    set_tests_properties(kb_renderer_hdr_output_cpu PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;hdr;cpu" TIMEOUT 60)
     if(WIN32)
         add_test(NAME kb_renderer_ui_overdraw COMMAND $<TARGET_FILE:kb_renderer_tests> screen-ui-overdraw)
         set_tests_properties(kb_renderer_ui_overdraw PROPERTIES
@@ -1076,6 +1079,10 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         add_test(NAME kb_renderer_display_alpha COMMAND $<TARGET_FILE:kb_renderer_tests> display-alpha)
         set_tests_properties(kb_renderer_display_alpha PROPERTIES
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;headless" TIMEOUT 180
+            FAIL_REGULAR_EXPRESSION "MEMORY LEAK: Number of leaked blocks")
+        add_test(NAME kb_renderer_hdr_output COMMAND $<TARGET_FILE:kb_renderer_tests> hdr-output)
+        set_tests_properties(kb_renderer_hdr_output PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;headless;hdr" TIMEOUT 180
             FAIL_REGULAR_EXPRESSION "MEMORY LEAK: Number of leaked blocks")
         add_test(NAME kb_renderer_temporal_history COMMAND $<TARGET_FILE:kb_renderer_tests> detached-final-composite)
         set_tests_properties(kb_renderer_temporal_history PROPERTIES

@@ -202,6 +202,8 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
         return ProjectSettingsTooltipKind::FrameRateLimit;
     case ProjectSettingsHitKind::AndroidGraphicsApiOption:
         return ProjectSettingsTooltipKind::AndroidGraphicsApi;
+    case ProjectSettingsHitKind::HdrOutputOption:
+        return ProjectSettingsTooltipKind::HdrOutput;
     case ProjectSettingsHitKind::SplashImageField:
         return ProjectSettingsTooltipKind::SplashImage;
     case ProjectSettingsHitKind::SplashScaleOption:
@@ -236,6 +238,9 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
             return ProjectSettingsTooltipKind::MasterVolume;
         case ProjectSettingsNumber::RenderScale:
             return ProjectSettingsTooltipKind::RenderScale;
+        case ProjectSettingsNumber::HdrPaperWhiteNits:
+        case ProjectSettingsNumber::HdrMaxNits:
+            return ProjectSettingsTooltipKind::HdrOutput;
         case ProjectSettingsNumber::Count:
         default:
             return ProjectSettingsTooltipKind::None;
@@ -549,6 +554,7 @@ bool CommitNavAreaEdit(EditorSceneContext& sceneContext, int edit, std::string t
     case ProjectSettingsHitKind::DisplayToggle:
     case ProjectSettingsHitKind::FrameRateOption:
     case ProjectSettingsHitKind::AndroidGraphicsApiOption:
+    case ProjectSettingsHitKind::HdrOutputOption:
     case ProjectSettingsHitKind::SplashScaleOption:
     case ProjectSettingsHitKind::SplashColorOption:
     case ProjectSettingsHitKind::SplashMinimumOption: {
@@ -580,6 +586,9 @@ bool CommitNavAreaEdit(EditorSceneContext& sceneContext, int edit, std::string t
                 break;
             case ProjectSettingsHitKind::AndroidGraphicsApiOption:
                 display.androidGraphicsApi = static_cast<kb::project::ProjectAndroidGraphicsApi>(hit.index);
+                break;
+            case ProjectSettingsHitKind::HdrOutputOption:
+                display.hdrOutput = static_cast<kb::project::ProjectHdrOutput>(hit.index);
                 break;
             default:
                 display.frameRateCap = kProjectSettingsFrameRates[static_cast<std::size_t>(hit.index)];

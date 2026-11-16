@@ -786,6 +786,23 @@ void RuntimeManifestIsCanonicalAndHostileInputSafe() {
     std::vector<std::uint8_t> tooSmallBytes;
     Require(bake::EncodeRuntimeAssetManifest(tooSmall, tooSmallBytes) == bake::RuntimeAssetManifestStatus::InvalidProject,
         "A runtime manifest accepted a render scale below 0.5");
+    // HDR output travels on its own flag, only while it differs from the defaults; a level outside its bounds is refused.
+    bake::RuntimeAssetManifest hdr = first;
+    hdr.settings.display.hdrOutput = kb::project::ProjectHdrOutput::Auto;
+    hdr.settings.display.hdrPaperWhiteNits = 300.0F;
+    hdr.settings.display.hdrMaxNits = 4000.0F;
+    std::vector<std::uint8_t> hdrBytes;
+    bake::RuntimeAssetManifest hdrDecoded{};
+    Require(bake::EncodeRuntimeAssetManifest(hdr, hdrBytes) == bake::RuntimeAssetManifestStatus::Success &&
+            hdrBytes.size() > firstBytes.size() &&
+            bake::DecodeRuntimeAssetManifest(hdrBytes, hdrDecoded) == bake::RuntimeAssetManifestStatus::Success &&
+            hdrDecoded.settings == hdr.settings && hdrDecoded.settings.display.hdrMaxNits == 4000.0F,
+        "A runtime manifest lost the HDR output settings during the round trip");
+    bake::RuntimeAssetManifest hdrTooBright = hdr;
+    hdrTooBright.settings.display.hdrPaperWhiteNits = 500.0F;
+    std::vector<std::uint8_t> hdrTooBrightBytes;
+    Require(bake::EncodeRuntimeAssetManifest(hdrTooBright, hdrTooBrightBytes) == bake::RuntimeAssetManifestStatus::InvalidProject,
+        "A runtime manifest accepted a paper white above the supported maximum");
     bake::RuntimeAssetManifest outOfBounds = first;
     outOfBounds.settings.display.windowWidth = 10U;
     std::vector<std::uint8_t> outOfBoundsBytes;

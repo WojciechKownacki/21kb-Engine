@@ -3,6 +3,7 @@
 #include "engine/math/DVec3.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "engine/scene/SceneUI.hpp"
+#include "kb/render/frame/FullscreenTexturePass.hpp"
 #include "kb/render/frame/RenderViewportDesc.hpp"
 #include "kb/render/overlay/EditorCameraWireframe.hpp"
 #include "kb/render/overlay/EditorLightWireframe.hpp"
@@ -53,6 +54,8 @@ struct RenderFinalCompositeTargetBinding {
     bgfx::FrameBufferHandle frameBuffer = BGFX_INVALID_HANDLE;
     RenderExtent extent{};
     RenderViewportRect outputRect{};
+    // Compose when `frameBuffer` is the float image an HDR display is encoded from.
+    FullscreenTextureHdrOutput hdr{};
     bool enabled = false;
     bool clearTarget = true;
 

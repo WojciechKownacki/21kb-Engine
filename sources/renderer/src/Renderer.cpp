@@ -352,6 +352,10 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
         Shutdown();
         return false;
     }
+    if (context_->HdrOutput().active && !hdrOutputPass_.Initialize()) {
+        Shutdown();
+        return false;
+    }
     screenUIRenderer_ = std::make_unique<ScreenUIRenderer>();
     if (!screenUIRenderer_->Initialize()) {
         Shutdown();
@@ -440,6 +444,9 @@ void Renderer::Shutdown() {
         finalCompositePass_->Shutdown();
         finalCompositePass_.reset();
     }
+    hdrOutputPass_.Shutdown();
+    hdrDisplayTarget_.Shutdown();
+    hdrDisplayWritten_ = false;
     if (bgfx::isValid(transparentDepthCopy_)) bgfx::destroy(transparentDepthCopy_);
     transparentDepthCopy_ = BGFX_INVALID_HANDLE;
     giVoxelGrid_.Shutdown();
@@ -503,6 +510,20 @@ void Renderer::EndFrame() {
             UINT16_MAX, source.idx)) {
             WriteRendererDebugLog("render_effect", renderEffects_->LastError());
         }
+    }
+    if (hdrDisplayWritten_) {
+        const DisplayHdrOutputState& hdr = context_->HdrOutput();
+        if (!hdrOutputPass_.Submit(FullscreenTexturePassDesc{
+                .viewId = ViewId::HdrOutput,
+                .sourceTexture = hdrDisplayTarget_.ColorTexture(),
+                .extent = hdrDisplayTarget_.Extent(),
+                .outputTransform = FullscreenTextureOutputTransform{
+                    .hdr = { .stage = FullscreenTextureHdrStage::Encode, .paperWhiteNits = hdr.paperWhiteNits } },
+                .viewName = "KB HDR10 Output",
+                .forceOpaqueAlpha = true })) {
+            WriteRendererDebugLog("renderer", "HDR10 output pass submit failed");
+        }
+        hdrDisplayWritten_ = false;
     }
     lastCompletedFrame_ = context_->EndFrame();
     if (deferredLightingPass_ != nullptr) deferredLightingPass_->EndFrame();
@@ -576,6 +597,17 @@ std::optional<RenderSceneSubmitDesc> Renderer::RuntimeSceneSubmitDesc(const Runt
         return std::nullopt;
     }
     const RenderExtent extent = ScaledRenderExtent(outputExtent, renderScale_);
+    const DisplayHdrOutputState& hdr = context_->HdrOutput();
+    bgfx::FrameBufferHandle displayFrameBuffer = BGFX_INVALID_HANDLE;
+    FullscreenTextureHdrOutput displayHdr{};
+    if (hdr.active) {
+        if (!hdrDisplayTarget_.Ensure(outputExtent.width, outputExtent.height, SceneColorFormatPolicy::Rgba16F)) {
+            return std::nullopt;
+        }
+        hdrDisplayWritten_ = true;
+        displayFrameBuffer = hdrDisplayTarget_.FrameBuffer();
+        displayHdr = { .stage = FullscreenTextureHdrStage::Compose, .peakRatio = hdr.maxNits / hdr.paperWhiteNits };
+    }
     if (!defaultSceneTarget_.Ensure(SceneRenderTargetDesc{
             .extent = extent,
             .colorPolicy = SceneColorFormatPolicy::Auto,
@@ -605,8 +637,9 @@ std::optional<RenderSceneSubmitDesc> Renderer::RuntimeSceneSubmitDesc(const Runt
         },
         .postProcess = defaultPostProcessTargets_.Binding(),
         .finalComposite = RenderFinalCompositeTargetBinding{
-            .frameBuffer = BGFX_INVALID_HANDLE,
+            .frameBuffer = displayFrameBuffer,
             .extent = outputExtent,
+            .hdr = displayHdr,
             .enabled = true,
         },
         .upscaledExtent = extent == outputExtent ? RenderExtent{} : outputExtent,

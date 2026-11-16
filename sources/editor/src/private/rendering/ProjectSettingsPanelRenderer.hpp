@@ -42,6 +42,7 @@ enum class ProjectSettingsHitKind : std::uint8_t {
     DisplayToggle,        // Display: Resizable (0) or VSync (1).
     FrameRateOption,      // Display: one of the frame rate limits; -1 over the label.
     AndroidGraphicsApiOption, // Display: Auto (0), Vulkan (1) or OpenGL ES (2); -1 over the label.
+    HdrOutputOption,      // Display: HDR output Off (0) or Auto (1); -1 over the label.
     SplashScaleOption,    // Display: how the launch screen image fits: Fit (0), Fill (1) or Center (2); -1 over the label.
     SplashColorOption,    // Display: one of the launch screen background colours; -1 over the label.
     SplashMinimumOption,  // Display: one of the launch screen minimum display times; -1 over the label.
@@ -131,6 +132,8 @@ enum class ProjectSettingsNumber : int {
     FrameRateCap,
     MasterVolume,
     RenderScale,
+    HdrPaperWhiteNits,
+    HdrMaxNits,
     NavNearDistance,
     NavMidDistance,
     NavFarPathInterval,

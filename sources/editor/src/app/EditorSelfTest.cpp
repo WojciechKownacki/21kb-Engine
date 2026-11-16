@@ -414,20 +414,26 @@ void RunProjectSettingsSuite(Report& report) {
     const POINT resizableLabel = Center(lightingRects.displayLabel[2]);
     const POINT frameCap60 = Center(lightingRects.frameRateButton[2]);
     const POINT androidVulkan = Center(lightingRects.androidGraphicsApiButton[1]);
+    const POINT hdrAuto = Center(lightingRects.hdrOutputButton[1]);
     report.Check(HitKindAt(context, borderless) == ProjectSettingsHitKind::WindowModeOption &&
             HitKindAt(context, size1080) == ProjectSettingsHitKind::WindowSizeOption &&
             HitKindAt(context, vsyncSwitch) == ProjectSettingsHitKind::DisplayToggle &&
             HitKindAt(context, resizableLabel) == ProjectSettingsHitKind::DisplayToggle &&
             HitKindAt(context, frameCap60) == ProjectSettingsHitKind::FrameRateOption &&
-            HitKindAt(context, androidVulkan) == ProjectSettingsHitKind::AndroidGraphicsApiOption,
+            HitKindAt(context, androidVulkan) == ProjectSettingsHitKind::AndroidGraphicsApiOption &&
+            HitKindAt(context, hdrAuto) == ProjectSettingsHitKind::HdrOutputOption,
         "The Display controls hit-test as their own kinds");
-    for (const POINT point : { borderless, size1080, vsyncSwitch, resizableLabel, frameCap60, androidVulkan }) {
+    report.Check(ProjectSettingsPanelRenderer::NumberText(context.ProjectConfiguration(), ProjectSettingsNumber::HdrPaperWhiteNits) == "200" &&
+            ProjectSettingsPanelRenderer::NumberText(context.ProjectConfiguration(), ProjectSettingsNumber::HdrMaxNits) == "1000",
+        "The HDR cells show the default paper white and maximum brightness");
+    for (const POINT point : { borderless, size1080, vsyncSwitch, resizableLabel, frameCap60, androidVulkan, hdrAuto }) {
         report.Check(controller.HandlePointerDown(kContent, point.x, point.y), "Clicking a Display control is handled");
     }
     const kb::project::ProjectDisplaySettings& display = context.ProjectConfiguration().display;
     report.Check(display.windowMode == kb::project::ProjectWindowMode::BorderlessFullscreen && display.windowWidth == 1920U &&
             display.windowHeight == 1080U && !display.vsync && !display.resizable && display.frameRateCap == 60U &&
-            display.androidGraphicsApi == kb::project::ProjectAndroidGraphicsApi::Vulkan,
+            display.androidGraphicsApi == kb::project::ProjectAndroidGraphicsApi::Vulkan &&
+            display.hdrOutput == kb::project::ProjectHdrOutput::Auto,
         "The Display buttons change the project's display settings");
     report.Check(stored().Succeeded() && stored().settings.display == display, "Display settings persisted to the settings file");
     const POINT displayLabel = Center(lightingRects.displayLabel[4]);

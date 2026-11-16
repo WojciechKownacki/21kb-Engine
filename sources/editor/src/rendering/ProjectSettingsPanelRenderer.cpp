@@ -248,6 +248,8 @@ struct TooltipContent {
         return EditorText("projectSettings.renderScale", "Render Scale");
     case ProjectSettingsTooltipKind::AndroidGraphicsApi:
         return EditorText("projectSettings.androidGraphicsApi", "Android Graphics API");
+    case ProjectSettingsTooltipKind::HdrOutput:
+        return EditorText("projectSettings.hdrOutput", "HDR Output");
     case ProjectSettingsTooltipKind::SplashImage:
         return EditorText("projectSettings.splashImage", "Launch Screen Image");
     case ProjectSettingsTooltipKind::SplashScale:
@@ -389,6 +391,7 @@ struct TooltipContent {
     case ProjectSettingsTooltipKind::FrameRateLimit:
     case ProjectSettingsTooltipKind::RenderScale:
     case ProjectSettingsTooltipKind::AndroidGraphicsApi:
+    case ProjectSettingsTooltipKind::HdrOutput:
     case ProjectSettingsTooltipKind::SplashImage:
     case ProjectSettingsTooltipKind::SplashScale:
     case ProjectSettingsTooltipKind::SplashBackground:
@@ -459,6 +462,8 @@ struct TooltipContent {
         return EditorText("projectSettings.renderScaleDescription", "Share of the screen resolution the 3D scene renders at (0.5 to 1); the interface stays sharp.");
     case ProjectSettingsTooltipKind::AndroidGraphicsApi:
         return EditorText("projectSettings.androidGraphicsApiDescription", "Graphics API of the Android package. Auto uses Vulkan where available; if the device cannot start the chosen API, the other one runs.");
+    case ProjectSettingsTooltipKind::HdrOutput:
+        return EditorText("projectSettings.hdrOutputDescription", "Auto shows HDR on a display that supports it; otherwise the game looks as with Off. Cells: paper white (80 to 400) and maximum brightness (400 to 10000), in nits.");
     case ProjectSettingsTooltipKind::SplashImage:
         return EditorText("projectSettings.splashImageDescription", "Picture the game shows while a scene loads; none shows the engine's mark.");
     case ProjectSettingsTooltipKind::SplashScale:
@@ -527,7 +532,7 @@ struct SearchableSetting {
         return fromKinds({ Kind::ShadowQuality, Kind::ShadowQualityMobile, Kind::GiQuality, Kind::GiQualityMobile });
     case ProjectSettingsCategory::Display:
         return fromKinds({ Kind::WindowMode, Kind::WindowSize, Kind::Resizable, Kind::VSync, Kind::FrameRateLimit, Kind::RenderScale, Kind::AndroidGraphicsApi,
-            Kind::SplashScale, Kind::SplashBackground, Kind::SplashMinimumTime, Kind::SplashProgress, Kind::SplashImage });
+            Kind::SplashScale, Kind::SplashBackground, Kind::SplashMinimumTime, Kind::SplashProgress, Kind::SplashImage, Kind::HdrOutput });
     case ProjectSettingsCategory::Audio:
         return fromKinds({ Kind::MasterVolume, Kind::Microphone });
     case ProjectSettingsCategory::Tags:
@@ -855,6 +860,11 @@ void DrawDisplayPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const
     }
     DrawSetting(dc, rects, rects.displayLabel[10], SettingLabel(Kind::SplashProgress), Kind::SplashProgress, theme, query);
     DrawCheckbox(dc, rects.splashProgressCheckbox, theme, splash.showProgress);
+    DrawSetting(dc, rects, rects.displayLabel[12], SettingLabel(Kind::HdrOutput), Kind::HdrOutput, theme, query);
+    DrawOptionButton(dc, rects.hdrOutputButton[0], theme, EditorText("projectSettings.msaaOff", "Off"), display.hdrOutput == kb::project::ProjectHdrOutput::Off);
+    DrawOptionButton(dc, rects.hdrOutputButton[1], theme, EditorText("projectSettings.backendAuto", "Auto"), display.hdrOutput == kb::project::ProjectHdrOutput::Auto);
+    DrawNumberCell(dc, rects.hdrPaperWhiteValue, theme, sceneContext, ProjectSettingsNumber::HdrPaperWhiteNits);
+    DrawNumberCell(dc, rects.hdrMaxNitsValue, theme, sceneContext, ProjectSettingsNumber::HdrMaxNits);
     // The image row last, so that its open list covers what is under it.
     DrawSetting(dc, rects, rects.displayLabel[11], SettingLabel(Kind::SplashImage), Kind::SplashImage, theme, query);
     const RECT imageBox = ProjectSettingsPanelLayout::SplashImageFieldBox(rects);
@@ -1224,6 +1234,11 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
                 return Hit{ .kind = ProjectSettingsHitKind::AndroidGraphicsApiOption, .index = index, .rect = rects.androidGraphicsApiButton[index] };
             }
         }
+        for (int index = 0; index < 2; ++index) {
+            if (PointInRect(rects.hdrOutputButton[index], x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::HdrOutputOption, .index = index, .rect = rects.hdrOutputButton[index] };
+            }
+        }
         for (int index = 0; index < 5; ++index) {
             if (PointInRect(rects.frameRateButton[index], x, y)) {
                 return Hit{ .kind = ProjectSettingsHitKind::FrameRateOption, .index = index, .rect = rects.frameRateButton[index] };
@@ -1247,11 +1262,13 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
         if (PointInRect(rects.splashProgressCheckbox, x, y) || PointInRect(rects.displayLabel[10], x, y)) {
             return Hit{ .kind = ProjectSettingsHitKind::DisplayToggle, .index = 2, .rect = rects.splashProgressCheckbox };
         }
-        const std::array<std::pair<const RECT*, ProjectSettingsNumber>, 4U> cells{ {
+        const std::array<std::pair<const RECT*, ProjectSettingsNumber>, 6U> cells{ {
             { &rects.windowWidthValue, ProjectSettingsNumber::WindowWidth },
             { &rects.windowHeightValue, ProjectSettingsNumber::WindowHeight },
             { &rects.frameRateValue, ProjectSettingsNumber::FrameRateCap },
-            { &rects.renderScaleValue, ProjectSettingsNumber::RenderScale } } };
+            { &rects.renderScaleValue, ProjectSettingsNumber::RenderScale },
+            { &rects.hdrPaperWhiteValue, ProjectSettingsNumber::HdrPaperWhiteNits },
+            { &rects.hdrMaxNitsValue, ProjectSettingsNumber::HdrMaxNits } } };
         for (const auto& [cell, number] : cells) {
             if (PointInRect(*cell, x, y)) {
                 return Hit{ .kind = ProjectSettingsHitKind::NumberField, .index = static_cast<int>(number), .rect = *cell };
@@ -1446,6 +1463,10 @@ ProjectSettingsNumberLimits ProjectSettingsPanelRenderer::NumberLimits(ProjectSe
         return { 0.0, 1.0, false };
     case ProjectSettingsNumber::RenderScale:
         return { static_cast<double>(kb::project::kProjectRenderScaleMin), static_cast<double>(kb::project::kProjectRenderScaleMax), false };
+    case ProjectSettingsNumber::HdrPaperWhiteNits:
+        return { static_cast<double>(kb::project::kProjectHdrPaperWhiteNitsMin), static_cast<double>(kb::project::kProjectHdrPaperWhiteNitsMax), false };
+    case ProjectSettingsNumber::HdrMaxNits:
+        return { static_cast<double>(kb::project::kProjectHdrMaxNitsMin), static_cast<double>(kb::project::kProjectHdrMaxNitsMax), false };
     case ProjectSettingsNumber::NavNearDistance:
     case ProjectSettingsNumber::NavMidDistance:
         return { 0.0, static_cast<double>(kb::project::kProjectNavigationDistanceMax), false };
@@ -1487,6 +1508,12 @@ std::string ProjectSettingsPanelRenderer::NumberText(const kb::project::ProjectS
         break;
     case ProjectSettingsNumber::RenderScale:
         std::snprintf(text, sizeof(text), "%g", static_cast<double>(settings.display.renderScale));
+        break;
+    case ProjectSettingsNumber::HdrPaperWhiteNits:
+        std::snprintf(text, sizeof(text), "%g", static_cast<double>(settings.display.hdrPaperWhiteNits));
+        break;
+    case ProjectSettingsNumber::HdrMaxNits:
+        std::snprintf(text, sizeof(text), "%g", static_cast<double>(settings.display.hdrMaxNits));
         break;
     case ProjectSettingsNumber::NavNearDistance:
         std::snprintf(text, sizeof(text), "%g", static_cast<double>(settings.navigationNearDistance));
@@ -1535,6 +1562,12 @@ kb::project::ProjectSettings ProjectSettingsPanelRenderer::WithNumber(
         break;
     case ProjectSettingsNumber::RenderScale:
         settings.display.renderScale = static_cast<float>(value);
+        break;
+    case ProjectSettingsNumber::HdrPaperWhiteNits:
+        settings.display.hdrPaperWhiteNits = static_cast<float>(value);
+        break;
+    case ProjectSettingsNumber::HdrMaxNits:
+        settings.display.hdrMaxNits = static_cast<float>(value);
         break;
     case ProjectSettingsNumber::NavNearDistance:
         settings.navigationNearDistance = static_cast<float>(value);
@@ -1650,6 +1683,9 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::TooltipHitTest(c
         }
         if (PointInRect(rects.displayLabel[11], x, y)) {
             return Hit{ .kind = ProjectSettingsHitKind::SplashImageField, .index = -1, .rect = rects.splashImageField };
+        }
+        if (PointInRect(rects.displayLabel[12], x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::HdrOutputOption, .index = -1, .rect = rects.displayLabel[12] };
         }
         for (int row = 0; row < 5; ++row) {
             if (PointInRect(rects.displayLabel[row], x, y)) {

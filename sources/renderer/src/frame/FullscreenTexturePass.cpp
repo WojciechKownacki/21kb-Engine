@@ -140,10 +140,12 @@ bool FullscreenTexturePass::Initialize() {
     vignetteParams_ = bgfx::createUniform("u_vignetteParams", bgfx::UniformType::Vec4);
     imageEffectParams_ = bgfx::createUniform("u_imageEffectParams", bgfx::UniformType::Vec4);
     displayAntiAliasing_ = bgfx::createUniform("u_displayAntiAliasing", bgfx::UniformType::Vec4);
+    hdrOutputParams_ = bgfx::createUniform("u_hdrOutputParams", bgfx::UniformType::Vec4);
     neutralColorGradeLut_ = CreateNeutralColorGradeLut();
     if (!bgfx::isValid(program_) || !bgfx::isValid(colorSampler_) || !bgfx::isValid(colorGradeSampler_) ||
         !bgfx::isValid(tonemapParams_) || !bgfx::isValid(colorGradeParams_) || !bgfx::isValid(vignetteParams_) ||
-        !bgfx::isValid(imageEffectParams_) || !bgfx::isValid(displayAntiAliasing_) || !bgfx::isValid(neutralColorGradeLut_)) {
+        !bgfx::isValid(imageEffectParams_) || !bgfx::isValid(displayAntiAliasing_) || !bgfx::isValid(hdrOutputParams_) ||
+        !bgfx::isValid(neutralColorGradeLut_)) {
         Shutdown();
         return false;
     }
@@ -155,6 +157,10 @@ void FullscreenTexturePass::Shutdown() noexcept {
     if (bgfx::isValid(neutralColorGradeLut_)) {
         bgfx::destroy(neutralColorGradeLut_);
         neutralColorGradeLut_ = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(hdrOutputParams_)) {
+        bgfx::destroy(hdrOutputParams_);
+        hdrOutputParams_ = BGFX_INVALID_HANDLE;
     }
     if (bgfx::isValid(displayAntiAliasing_)) {
         bgfx::destroy(displayAntiAliasing_);
@@ -272,6 +278,14 @@ bool FullscreenTexturePass::Submit(const FullscreenTexturePassDesc& desc) const 
         desc.upscale ? kUpscaleSharpening : 0.0F,
     };
     bgfx::setUniform(displayAntiAliasing_, displayAntiAliasing);
+    const FullscreenTextureHdrOutput& hdr = desc.outputTransform.hdr;
+    const float hdrOutputParams[4] = {
+        static_cast<float>(hdr.stage),
+        std::max(hdr.peakRatio, 1.0F),
+        hdr.paperWhiteNits,
+        0.0F,
+    };
+    bgfx::setUniform(hdrOutputParams_, hdrOutputParams);
     bgfx::setTexture(0, colorSampler_, desc.sourceTexture);
     bgfx::setTexture(1, colorGradeSampler_, neutralColorGradeLut_);
     bgfx::setVertexBuffer(0, &vertices);
@@ -283,7 +297,8 @@ bool FullscreenTexturePass::Submit(const FullscreenTexturePassDesc& desc) const 
 bool FullscreenTexturePass::IsInitialized() const noexcept {
     return bgfx::isValid(program_) && bgfx::isValid(colorSampler_) && bgfx::isValid(colorGradeSampler_) &&
            bgfx::isValid(tonemapParams_) && bgfx::isValid(colorGradeParams_) && bgfx::isValid(vignetteParams_) &&
-           bgfx::isValid(imageEffectParams_) && bgfx::isValid(displayAntiAliasing_) && bgfx::isValid(neutralColorGradeLut_);
+           bgfx::isValid(imageEffectParams_) && bgfx::isValid(displayAntiAliasing_) && bgfx::isValid(hdrOutputParams_) &&
+           bgfx::isValid(neutralColorGradeLut_);
 }
 
 } // namespace kb::render

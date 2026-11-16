@@ -45,7 +45,12 @@ bool RendererFinalCompositeSubmitter::Submit(
     const PostProcessOutput& postProcessOutput,
     bgfx::TextureHandle scenePostProcessOutput,
     std::uint64_t frameIndex) {
-    const SceneDisplayOutputTransform outputTransform = DisplayTransform(postProcessOutput);
+    SceneDisplayOutputTransform outputTransform = DisplayTransform(postProcessOutput);
+    outputTransform.hdr = desc.finalComposite.hdr;
+    if (outputTransform.hdr.stage != FullscreenTextureHdrStage::Off) {
+        // The HDR10 encode reads the image back as sRGB display values.
+        outputTransform.gamma = SceneDisplayOutputTransform{}.gamma;
+    }
 
     {
         std::ostringstream message;

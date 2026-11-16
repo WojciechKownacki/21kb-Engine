@@ -46,6 +46,7 @@ enum class ProjectSettingsTooltipKind : std::uint8_t {
     Microphone,
     Tags,
     NavigationAreas,
+    HdrOutput,
 };
 
 // Transient UI state for the Project Settings panel: which category is selected

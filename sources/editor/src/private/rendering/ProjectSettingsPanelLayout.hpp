@@ -60,8 +60,9 @@ struct ProjectSettingsPanelLayoutRects {
     RECT qualityLabel[4]{};
     RECT qualityButton[4][5]{};
     // Display page, one row per setting: window mode, window size, resizable, vsync, frame rate limit, render scale,
-    // Android graphics API, then the launch screen: image scale, background colour, minimum time, progress bar, image.
-    RECT displayLabel[12]{};
+    // Android graphics API, then the launch screen: image scale, background colour, minimum time, progress bar, image,
+    // then HDR output.
+    RECT displayLabel[13]{};
     RECT splashScaleButton[3]{};
     RECT splashColorButton[6]{};
     RECT splashMinimumButton[5]{};
@@ -70,6 +71,10 @@ struct ProjectSettingsPanelLayoutRects {
     RECT splashImageField{};
     RECT windowModeButton[2]{};
     RECT androidGraphicsApiButton[3]{};
+    // HDR output: Off and Auto, then the cells that take the paper white and the maximum brightness in nits.
+    RECT hdrOutputButton[2]{};
+    RECT hdrPaperWhiteValue{};
+    RECT hdrMaxNitsValue{};
     RECT windowSizeButton[4]{};
     RECT resizableCheckbox{};
     RECT vsyncCheckbox{};

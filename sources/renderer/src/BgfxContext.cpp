@@ -446,6 +446,19 @@ bool BgfxContext::InitializeImpl(std::uint32_t width, std::uint32_t height, void
     height_ = height;
     initialized_ = true;
     capabilityReport_ = BuildRendererCapabilityReport(preferredBackend);
+    // The device is only known to offer HDR10 once bgfx runs, so the swap chain changes to it here.
+    const bgfx::Caps* caps = bgfx::getCaps();
+    capabilityReport_.hdrOutput = ResolveHdrOutput(config, HdrOutputCapabilities{
+        .backend = capabilityReport_.selectedBackend,
+        .supportedFlags = capabilityReport_.supportedFlags,
+        .hasWindow = nwh != nullptr,
+        .tenBitBackbuffer = caps != nullptr && (caps->formats[bgfx::TextureFormat::RGB10A2] & BGFX_CAPS_FORMAT_TEXTURE_BACKBUFFER) != 0U,
+        .floatDisplayTarget = capabilityReport_.hdrTextureSupported,
+    });
+    if (capabilityReport_.hdrOutput.active) {
+        const bgfx::SwapChain swapChain = MainSwapChain(width, height, resetFlags_);
+        bgfx::reset(resetFlags_ & ~BGFX_SWAP_CHAIN_MSAA_MASK, &swapChain);
+    }
 #if defined(__EMSCRIPTEN__)
     bgfx::setDebug(BGFX_DEBUG_NONE);
 #else
@@ -482,11 +495,20 @@ void BgfxContext::Reset(std::uint32_t width, std::uint32_t height, std::uint32_t
     width_ = width;
     height_ = height;
     resetFlags_ = resetFlags;
+    const bgfx::SwapChain swapChain = MainSwapChain(width, height, resetFlags);
+    bgfx::reset(resetFlags & ~BGFX_SWAP_CHAIN_MSAA_MASK, nativeWindowHandle_ != nullptr ? &swapChain : nullptr);
+}
+
+bgfx::SwapChain BgfxContext::MainSwapChain(std::uint32_t width, std::uint32_t height, std::uint32_t resetFlags) const noexcept {
     bgfx::SwapChain swapChain{};
     swapChain.width = width;
     swapChain.height = height;
     swapChain.flags = resetFlags & BGFX_SWAP_CHAIN_MSAA_MASK;
-    bgfx::reset(resetFlags & ~BGFX_SWAP_CHAIN_MSAA_MASK, nativeWindowHandle_ != nullptr ? &swapChain : nullptr);
+    if (capabilityReport_.hdrOutput.active) {
+        swapChain.flags |= BGFX_SWAP_CHAIN_HDR10;
+        swapChain.formatColor = bgfx::TextureFormat::RGB10A2;
+    }
+    return swapChain;
 }
 
 bool BgfxContext::BeginFrame() const noexcept {
@@ -515,6 +537,10 @@ void* BgfxContext::NativeWindowHandle() const noexcept {
 
 const RendererCapabilityReport& BgfxContext::CapabilityReport() const noexcept {
     return capabilityReport_;
+}
+
+const DisplayHdrOutputState& BgfxContext::HdrOutput() const noexcept {
+    return capabilityReport_.hdrOutput;
 }
 
 } // namespace kb::render

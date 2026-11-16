@@ -46,6 +46,10 @@ inline constexpr std::uint32_t kProjectFixedStepHzMax = 480U;
 inline constexpr std::uint32_t kProjectFrameRateCapMax = 1000U;
 inline constexpr float kProjectRenderScaleMin = 0.5F;
 inline constexpr float kProjectRenderScaleMax = 1.0F;
+inline constexpr float kProjectHdrPaperWhiteNitsMin = 80.0F;
+inline constexpr float kProjectHdrPaperWhiteNitsMax = 400.0F;
+inline constexpr float kProjectHdrMaxNitsMin = 400.0F;
+inline constexpr float kProjectHdrMaxNitsMax = 10000.0F;
 inline constexpr float kProjectGravityLimit = 1000.0F;
 inline constexpr float kProjectTimeScaleMax = 100.0F;
 // Bounds of the crowd level-of-detail settings: distances in metres, the far path interval in steps.
@@ -65,6 +69,15 @@ enum class ProjectAndroidGraphicsApi : std::uint8_t {
 };
 
 inline constexpr std::uint8_t kProjectAndroidGraphicsApiCount = 3U;
+
+// Whether the game presents in HDR10 on a display that supports it. Auto turns it on only when the graphics API
+// and a connected display allow it; otherwise the game looks as it does with Off.
+enum class ProjectHdrOutput : std::uint8_t {
+    Off = 0,
+    Auto,
+};
+
+inline constexpr std::uint8_t kProjectHdrOutputCount = 2U;
 
 // How the launch screen fits its image into the window.
 enum class ProjectSplashScale : std::uint8_t {
@@ -107,6 +120,11 @@ struct ProjectDisplaySettings {
     // Fraction of the output resolution the 3D scene renders at before it is upscaled; the UI stays at
     // full resolution. 1 renders at the output resolution with no upscale pass.
     float renderScale = 1.0F;
+    ProjectHdrOutput hdrOutput = ProjectHdrOutput::Off;
+    // With HDR output: the brightness of white paper and of a UI panel, and the brightest level the display
+    // can show, in nits.
+    float hdrPaperWhiteNits = 200.0F;
+    float hdrMaxNits = 1000.0F;
     // The graphics API of the Android package; the other platforms ignore it.
     ProjectAndroidGraphicsApi androidGraphicsApi = ProjectAndroidGraphicsApi::Auto;
     ProjectSplashSettings splash;

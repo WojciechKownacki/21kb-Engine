@@ -620,6 +620,37 @@ void RunProjectDisplayAndSimulationSettingsTest() {
             clamped.simulation.timeScale == 0.0F,
         "a value outside its bounds must be brought back inside them and an unreadable one left at its default");
 
+    // HDR output: off with a paper white of 200 and a maximum of 1000 nits by default (the older file above read as
+    // exactly that); the mode and both levels round-trip, and a level outside its bounds is brought back inside them.
+    Require(defaults.display.hdrOutput == kb::project::ProjectHdrOutput::Off && defaults.display.hdrPaperWhiteNits == 200.0F &&
+            defaults.display.hdrMaxNits == 1000.0F,
+        "HDR output must default to off at 200 and 1000 nits");
+    kb::project::ProjectSettings hdrChosen = defaults;
+    hdrChosen.display.hdrOutput = kb::project::ProjectHdrOutput::Auto;
+    hdrChosen.display.hdrPaperWhiteNits = 300.0F;
+    hdrChosen.display.hdrMaxNits = 600.0F;
+    Require(kb::project::ProjectSettingsStore::Save(file, hdrChosen, error) &&
+            kb::project::ProjectSettingsStore::Load(file).settings == hdrChosen,
+        "the settings file did not keep the HDR output settings");
+    {
+        std::ofstream output{ file, std::ios::binary | std::ios::trunc };
+        output << "[Project.Display]\nHdrOutput=Auto\nHdrPaperWhiteNits=9000\nHdrMaxNits=1\n";
+    }
+    const kb::project::ProjectSettings hdrClamped = kb::project::ProjectSettingsStore::Load(file).settings;
+    Require(hdrClamped.display.hdrOutput == kb::project::ProjectHdrOutput::Auto &&
+            hdrClamped.display.hdrPaperWhiteNits == kb::project::kProjectHdrPaperWhiteNitsMax &&
+            hdrClamped.display.hdrMaxNits == kb::project::kProjectHdrMaxNitsMin,
+        "HDR levels outside their bounds must be brought back inside them");
+    {
+        std::ofstream output{ file, std::ios::binary | std::ios::trunc };
+        output << "[Project.Display]\nHdrOutput=Maybe\nHdrPaperWhiteNits=10\nHdrMaxNits=99999\n";
+    }
+    const kb::project::ProjectSettings hdrUnreadable = kb::project::ProjectSettingsStore::Load(file).settings;
+    Require(hdrUnreadable.display.hdrOutput == kb::project::ProjectHdrOutput::Off &&
+            hdrUnreadable.display.hdrPaperWhiteNits == kb::project::kProjectHdrPaperWhiteNitsMin &&
+            hdrUnreadable.display.hdrMaxNits == kb::project::kProjectHdrMaxNitsMax,
+        "an unknown HDR mode must stay off and the levels must be clamped");
+
     // The launch screen: shown by default with the engine's mark on a dark background and no minimum time; every
     // choice round-trips, and a value outside its bounds is brought back inside them.
     Require(defaults.display.splash.image.empty() && defaults.display.splash.scale == kb::project::ProjectSplashScale::Fit &&

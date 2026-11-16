@@ -109,6 +109,8 @@ void RunMeshPipelineTests();
 void RunMeshPipelineBuildScaleBenchmark();
 void RunMeshPipelineShadowBuildScaleBenchmark();
 void RunSceneDisplayCompositeTests();
+void RunDisplayHdrOutputCpuTests();
+void RunDisplayHdrOutputGpuTests();
 void RunSceneExposureMeterTests();
 void RunExposureReadbackResetTest();
 void RunSceneDepthPolicyTests();
@@ -387,6 +389,14 @@ int main(int argc, char** argv) {
         kb::render::tests::RunRendererCapabilityReportTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{ argv[1] } == "hdr-output-cpu") {
+        kb::render::tests::RunDisplayHdrOutputCpuTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "hdr-output") {
+        kb::render::tests::RunDisplayHdrOutputGpuTests();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{ argv[1] } == "display-alpha") {
         kb::render::tests::RunDisplayAlphaGpuTests();
         return EXIT_SUCCESS;
@@ -593,6 +603,7 @@ int main(int argc, char** argv) {
     RunSuite("RunRendererDefaultSubmissionResultTest", &kb::render::tests::RunRendererDefaultSubmissionResultTest);
     RunSuite("RunMeshPipelineTests", &kb::render::tests::RunMeshPipelineTests);
     RunSuite("RunSceneDisplayCompositeTests", &kb::render::tests::RunSceneDisplayCompositeTests);
+    RunSuite("RunDisplayHdrOutputCpuTests", &kb::render::tests::RunDisplayHdrOutputCpuTests);
     RunSuite("RunSceneExposureMeterTests", &kb::render::tests::RunSceneExposureMeterTests);
     RunSuite("RunSceneDepthPolicyTests", &kb::render::tests::RunSceneDepthPolicyTests);
     RunSuite("RunRenderSceneSyncTests", &kb::render::tests::RunRenderSceneSyncTests);

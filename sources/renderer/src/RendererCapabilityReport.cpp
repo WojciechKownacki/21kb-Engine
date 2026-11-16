@@ -1,6 +1,7 @@
 #include "kb/render/RendererCapabilityReport.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 namespace kb::render {
 namespace {
@@ -39,6 +40,33 @@ void AddFallbackReason(RendererCapabilityReport& report, const char* reason) noe
 }
 
 } // namespace
+
+DisplayHdrOutputState ResolveHdrOutput(const DisplayConfig& config, const HdrOutputCapabilities& capabilities) noexcept {
+    DisplayHdrOutputState state{};
+    if (config.hdrOutputMode == DisplayHdrOutputMode::Off) {
+        return state;
+    }
+    if (!capabilities.hasWindow) {
+        state.reason = "HDR output needs a window to present to";
+    } else if (capabilities.backend == bgfx::RendererType::Metal) {
+        state.reason = "HDR output shader variants are not generated for Metal";
+    } else if (!SupportedFlagsContain(capabilities.supportedFlags, BGFX_CAPS_HDR10)) {
+        state.reason = "no connected display reports HDR10 support (turn on HDR in the operating system display settings)";
+    } else if (!capabilities.tenBitBackbuffer) {
+        state.reason = "the graphics backend cannot present a 10-bit swap chain";
+    } else if (!capabilities.floatDisplayTarget) {
+        state.reason = "the graphics backend cannot render to 16-bit float targets";
+    } else if (!std::isfinite(config.hdrPaperWhiteNits) || !std::isfinite(config.hdrMaxNits) || config.hdrPaperWhiteNits <= 0.0F ||
+               config.hdrMaxNits < config.hdrPaperWhiteNits || config.hdrMaxNits > 10000.0F) {
+        state.reason = "HDR paper white and maximum brightness must satisfy 0 < paper white <= maximum <= 10000 nits";
+    } else {
+        state.active = true;
+        state.paperWhiteNits = config.hdrPaperWhiteNits;
+        state.maxNits = config.hdrMaxNits;
+        state.reason = "HDR10 output active";
+    }
+    return state;
+}
 
 const char* RendererBackendName(bgfx::RendererType::Enum renderer) noexcept {
     const char* name = bgfx::getRendererName(renderer);

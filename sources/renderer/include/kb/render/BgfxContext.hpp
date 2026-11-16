@@ -33,8 +33,10 @@ public:
     [[nodiscard]] std::uint32_t Height() const noexcept;
     [[nodiscard]] void* NativeWindowHandle() const noexcept;
     [[nodiscard]] const RendererCapabilityReport& CapabilityReport() const noexcept;
+    [[nodiscard]] const DisplayHdrOutputState& HdrOutput() const noexcept;
 
 private:
+    [[nodiscard]] bgfx::SwapChain MainSwapChain(std::uint32_t width, std::uint32_t height, std::uint32_t resetFlags) const noexcept;
     [[nodiscard]] bool InitializeImpl(std::uint32_t width, std::uint32_t height, void* nwh, void* ndt, const DisplayConfig& config, bgfx::RendererType::Enum preferredBackend);
 
     bool initialized_ = false;

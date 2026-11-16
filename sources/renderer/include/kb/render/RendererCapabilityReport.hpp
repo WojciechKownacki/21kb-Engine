@@ -1,5 +1,6 @@
 #pragma once
 
+#include "kb/render/DisplayConfig.hpp"
 #include "kb/render/SceneRenderTargetFormat.hpp"
 
 #include <bgfx/bgfx.h>
@@ -56,6 +57,7 @@ struct RendererCapabilityReport {
     bool nativePresentColorOnly = true;
     bool homogeneousDepth = false;
     bool originBottomLeft = false;
+    DisplayHdrOutputState hdrOutput{};
     SceneColorFormatSelection sceneColor{};
     SceneDepthFormatSelection sceneDepth{};
     bgfx::TextureFormat::Enum nativePresentColor = bgfx::TextureFormat::BGRA8;
@@ -65,6 +67,16 @@ struct RendererCapabilityReport {
     std::uint32_t fallbackReasonCount = 0;
 };
 
+// What the device offers HDR10 output through; the same facts the report holds, plus the window and the formats.
+struct HdrOutputCapabilities {
+    bgfx::RendererType::Enum backend = bgfx::RendererType::Count;
+    std::uint64_t supportedFlags = 0;
+    bool hasWindow = false;
+    bool tenBitBackbuffer = false;
+    bool floatDisplayTarget = false;
+};
+
+[[nodiscard]] DisplayHdrOutputState ResolveHdrOutput(const DisplayConfig& config, const HdrOutputCapabilities& capabilities) noexcept;
 [[nodiscard]] const char* RendererBackendName(bgfx::RendererType::Enum renderer) noexcept;
 [[nodiscard]] bgfx::RendererType::Enum ResolvePreferredRendererBackend(const bgfx::RendererType::Enum* supportedBackends, std::uint8_t supportedBackendCount) noexcept;
 [[nodiscard]] RendererCapabilityReport BuildRendererCapabilityReport(bgfx::RendererType::Enum requestedBackend) noexcept;

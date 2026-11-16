@@ -17,10 +17,12 @@
 #include "kb/render/scene/SceneLightProbeTexture.hpp"
 #include "kb/render/gi/SceneGiVoxelGrid.hpp"
 #include "kb/render/frame/FinalCompositePass.hpp"
+#include "kb/render/frame/FullscreenTexturePass.hpp"
 #include "kb/render/frame/RenderFramePipeline.hpp"
 #include "kb/render/frame/RenderFrameState.hpp"
 #include "kb/render/frame/RenderSceneSubmitDesc.hpp"
 #include "kb/render/post/PostProcessChain.hpp"
+#include "kb/render/post/PostProcessRenderTarget.hpp"
 #include "kb/render/post/SceneExposureMeter.hpp"
 #include "kb/render/post/ScenePostProcessRenderer.hpp"
 #include "kb/render/post/ScenePostProcessTargets.hpp"
@@ -357,6 +359,11 @@ private:
     std::unique_ptr<SceneRenderer> sceneRenderer_;
     std::unique_ptr<ScenePostProcessRenderer> scenePostProcessRenderer_;
     std::unique_ptr<FinalCompositePass> finalCompositePass_;
+    // HDR output: the runtime scene composes into this float image (and the interface draws onto it), and the
+    // end of the frame encodes it into the HDR10 swap chain.
+    PostProcessRenderTarget hdrDisplayTarget_;
+    FullscreenTexturePass hdrOutputPass_;
+    bool hdrDisplayWritten_ = false;
     std::unique_ptr<SceneDeferredLightingPass> deferredLightingPass_;
     SceneGiResolvePass giResolvePass_;
     // Sky light: the backdrop captured and prefiltered for the reflections of the lighting.

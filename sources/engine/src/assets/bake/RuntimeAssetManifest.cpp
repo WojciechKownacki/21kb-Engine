@@ -31,7 +31,7 @@ constexpr std::array<std::uint8_t, 8U> kSourceMagic{ '2', '1', 'K', 'B', 'S', 'R
 // render scale as one byte (left out while it is Auto); bit 8 says the launch screen settings follow (left out while
 // they are all defaults); bit 9 says the navigation areas follow the launch screen (left out while they are the
 // default areas); bit 10 says the crowd level-of-detail distances and far path interval follow them (left out while
-// they are the defaults).
+// they are the defaults); bit 11 says the HDR output settings follow them (left out while they are the defaults).
 constexpr std::uint32_t kPartialManifestFlag = 1U;
 constexpr std::uint32_t kTombstonesManifestFlag = 2U;
 constexpr std::uint32_t kRuntimeSettingsManifestFlag = 4U;
@@ -43,9 +43,10 @@ constexpr std::uint32_t kAndroidGraphicsApiManifestFlag = 128U;
 constexpr std::uint32_t kSplashManifestFlag = 256U;
 constexpr std::uint32_t kNavigationAreasManifestFlag = 512U;
 constexpr std::uint32_t kNavigationCrowdManifestFlag = 1024U;
+constexpr std::uint32_t kHdrOutputManifestFlag = 2048U;
 constexpr std::uint32_t kSettingsManifestFlags = kRuntimeSettingsManifestFlag | kMasterVolumeManifestFlag | kTagsManifestFlag |
     kRenderScaleManifestFlag | kMicrophoneManifestFlag | kAndroidGraphicsApiManifestFlag | kSplashManifestFlag |
-    kNavigationAreasManifestFlag | kNavigationCrowdManifestFlag;
+    kNavigationAreasManifestFlag | kNavigationCrowdManifestFlag | kHdrOutputManifestFlag;
 constexpr std::uint64_t kMaxManifestBytes = 64ULL * 1024ULL * 1024ULL;
 constexpr std::uint32_t kMaxDescriptorTargetPlatforms =
     kb::project::ProjectDescriptorFormat::MaxTargetPlatformCount;
@@ -265,6 +266,9 @@ private:
         display.windowMode <= kb::project::ProjectWindowMode::BorderlessFullscreen &&
         display.frameRateCap <= kb::project::kProjectFrameRateCapMax &&
         within(display.renderScale, kb::project::kProjectRenderScaleMin, kb::project::kProjectRenderScaleMax) &&
+        static_cast<std::uint8_t>(display.hdrOutput) < kb::project::kProjectHdrOutputCount &&
+        within(display.hdrPaperWhiteNits, kb::project::kProjectHdrPaperWhiteNitsMin, kb::project::kProjectHdrPaperWhiteNitsMax) &&
+        within(display.hdrMaxNits, kb::project::kProjectHdrMaxNitsMin, kb::project::kProjectHdrMaxNitsMax) &&
         static_cast<std::uint8_t>(display.androidGraphicsApi) < kb::project::kProjectAndroidGraphicsApiCount &&
         static_cast<std::uint8_t>(display.splash.scale) < kb::project::kProjectSplashScaleCount &&
         display.splash.minimumDisplayMilliseconds <= kb::project::kProjectSplashMinimumMillisecondsMax &&
@@ -297,6 +301,10 @@ private:
         (settings.navigationNearDistance != defaults.navigationNearDistance || settings.navigationMidDistance != defaults.navigationMidDistance ||
                 settings.navigationFarPathInterval != defaults.navigationFarPathInterval
             ? kNavigationCrowdManifestFlag
+            : 0U) |
+        (settings.display.hdrOutput != defaults.display.hdrOutput || settings.display.hdrPaperWhiteNits != defaults.display.hdrPaperWhiteNits ||
+                settings.display.hdrMaxNits != defaults.display.hdrMaxNits
+            ? kHdrOutputManifestFlag
             : 0U);
 }
 
@@ -567,6 +575,11 @@ void EncodeSettings(std::vector<std::uint8_t>& bytes, const kb::project::Project
         PutFloat(bytes, settings.navigationMidDistance);
         PutUInt32(bytes, settings.navigationFarPathInterval);
     }
+    if ((flags & kHdrOutputManifestFlag) != 0U) {
+        PutUInt8(bytes, static_cast<std::uint8_t>(settings.display.hdrOutput));
+        PutFloat(bytes, settings.display.hdrPaperWhiteNits);
+        PutFloat(bytes, settings.display.hdrMaxNits);
+    }
 }
 
 [[nodiscard]] bool DecodeRuntimeSettings(Reader& reader, kb::project::ProjectSettings& settings) {
@@ -596,6 +609,16 @@ void EncodeSettings(std::vector<std::uint8_t>& bytes, const kb::project::Project
         return false;
     }
     display.androidGraphicsApi = static_cast<kb::project::ProjectAndroidGraphicsApi>(api);
+    return true;
+}
+
+[[nodiscard]] bool DecodeHdrOutput(Reader& reader, kb::project::ProjectDisplaySettings& display) {
+    std::uint8_t mode = 0U;
+    if (!reader.ReadUInt8(mode) || mode >= kb::project::kProjectHdrOutputCount || !reader.ReadFloat(display.hdrPaperWhiteNits) ||
+        !reader.ReadFloat(display.hdrMaxNits)) {
+        return false;
+    }
+    display.hdrOutput = static_cast<kb::project::ProjectHdrOutput>(mode);
     return true;
 }
 
@@ -667,7 +690,8 @@ void EncodeSettings(std::vector<std::uint8_t>& bytes, const kb::project::Project
         ((flags & kNavigationAreasManifestFlag) == 0U || DecodeNavigationAreas(reader, settings.navigationAreas)) &&
         ((flags & kNavigationCrowdManifestFlag) == 0U ||
             (reader.ReadFloat(settings.navigationNearDistance) && reader.ReadFloat(settings.navigationMidDistance) &&
-                reader.ReadUInt32(settings.navigationFarPathInterval)));
+                reader.ReadUInt32(settings.navigationFarPathInterval))) &&
+        ((flags & kHdrOutputManifestFlag) == 0U || DecodeHdrOutput(reader, settings.display));
 }
 
 } // namespace

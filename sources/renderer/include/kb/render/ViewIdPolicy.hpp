@@ -37,6 +37,8 @@ constexpr std::uint16_t DetachedViewportStride = 36;
 constexpr std::uint16_t Max = 512;
 // Global asynchronous capture runs after every remapped viewport draw.
 constexpr std::uint16_t ScreenCapture = Max - 1U;
+// The HDR10 encode of the finished frame into the swap chain: after every view that draws the frame.
+constexpr std::uint16_t HdrOutput = ScreenCapture - 1U;
 // Detached viewports occupy ids below this limit (six of them, as before the view budget grew).
 constexpr std::uint16_t DetachedViewportLimit = 253;
 // Shadow views of the primary viewport live above the detached range: one extra depth view per
@@ -47,7 +49,7 @@ constexpr std::uint16_t MaxPointShadowLights = 32;
 constexpr std::uint16_t PointShadowFaceCount = 6;
 constexpr std::uint16_t PointShadowViewCount = MaxPointShadowLights * PointShadowFaceCount;
 constexpr std::uint16_t PointShadowStart = ShadowCascadeExtraStart + ShadowCascadeExtraViews;
-static_assert(PointShadowStart + PointShadowViewCount <= ScreenCapture, "Shadow views overlap the capture view");
+static_assert(PointShadowStart + PointShadowViewCount <= HdrOutput, "Shadow views overlap the HDR output view");
 // The screen-space GI resolve of a viewport runs after every other view of the frame (it reads the
 // lit colour the scene produced and feeds the next frame): one view per viewport index.
 constexpr std::uint16_t GiResolveStart = PointShadowStart + PointShadowViewCount;
@@ -75,7 +77,7 @@ static_assert(RenderEffectStart + RenderEffectViewCount <= ScreenCapture, "Rende
 // The copy of reflection probe cube maps into the shared atlas (SceneLocalReflectionAtlas): one view, after
 // every view that samples the atlas.
 constexpr std::uint16_t LocalReflectionAtlas = RenderEffectStart + RenderEffectViewCount;
-static_assert(LocalReflectionAtlas < ScreenCapture, "The local reflection atlas view overlaps the capture view");
+static_assert(LocalReflectionAtlas < HdrOutput, "The local reflection atlas view overlaps the HDR output view");
 
 [[nodiscard]] constexpr bool IsValid(std::uint16_t viewId) noexcept {
     return viewId < Max;

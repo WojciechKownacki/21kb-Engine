@@ -14,6 +14,10 @@ uniform vec4 u_imageEffectParams;
 // x: 1 runs FXAA on the display image (after tonemapping), yz: texel size of the source, w: sharpening
 // of the upscaling present.
 uniform vec4 u_displayAntiAliasing;
+// x: 0 for an SDR display, 1 when the display image is composed for an HDR display (the tonemap then keeps
+// its highlights up to the ratio y, the display's peak over paper white), 2 when that image is encoded as
+// HDR10 for the swap chain (z: paper white in nits).
+uniform vec4 u_hdrOutputParams;
 
 vec3 aces_fitted(vec3 color)
 {
@@ -29,12 +33,42 @@ vec3 agx_approx(vec3 color)
     return saturate(compressed * vec3_splat(1.18));
 }
 
+// The selected operator, with no clamp to the SDR range for None.
+vec3 tonemap_operator(vec3 color)
+{
+    vec3 mapped = max(color, vec3_splat(0.0));
+    if (u_tonemapParams.z >= 0.0) {
+        mapped = u_tonemapParams.z < 0.5 ? aces_fitted(color) : agx_approx(color);
+    }
+    return mapped;
+}
+
+// The tonemap of an HDR display: the operator up to scene value 1, then a shoulder that continues from the
+// operator's value and slope there and approaches the display's peak (u_hdrOutputParams.y, relative to
+// paper white) instead of clipping at paper white.
+vec3 tonemap_highlights(vec3 color)
+{
+    float probe = 1.0 / 64.0;
+    color = max(color, vec3_splat(0.0));
+    vec3 base = tonemap_operator(min(color, vec3_splat(1.0)));
+    vec3 kneeValue = tonemap_operator(vec3_splat(1.0));
+    vec3 kneeSlope = (tonemap_operator(vec3_splat(1.0 + probe)) - tonemap_operator(vec3_splat(1.0 - probe))) * (0.5 / probe);
+    vec3 over = max(color - vec3_splat(1.0), vec3_splat(0.0));
+    vec3 room = max(vec3_splat(u_hdrOutputParams.y) - kneeValue, vec3_splat(1.0e-4));
+    return base + kneeSlope * over / (vec3_splat(1.0) + kneeSlope * over / room);
+}
+
 vec3 tonemap_display(vec3 color)
 {
-    if (u_tonemapParams.z < 0.0) {
-        return saturate(color);
+    vec3 mapped;
+    if (u_hdrOutputParams.x > 0.5) {
+        mapped = tonemap_highlights(color);
+    } else if (u_tonemapParams.z < 0.0) {
+        mapped = saturate(color);
+    } else {
+        mapped = u_tonemapParams.z < 0.5 ? aces_fitted(color) : agx_approx(color);
     }
-    return u_tonemapParams.z < 0.5 ? aces_fitted(color) : agx_approx(color);
+    return mapped;
 }
 
 vec3 apply_color_grade_lut(vec3 displayLinear)
@@ -105,6 +139,40 @@ vec3 encode_display(vec3 display)
         return mix(low, high, step(vec3_splat(0.0031308), display));
     }
     return pow(display, vec3_splat(u_tonemapParams.y));
+}
+
+// The scene light of a display value: the inverse of encode_display.
+vec3 decode_display(vec3 display)
+{
+    display = max(display, vec3_splat(0.0));
+    if (abs(u_tonemapParams.y - 1.0 / 2.2) < 1.0e-4) {
+        vec3 low = display / 12.92;
+        vec3 high = pow((display + vec3_splat(0.055)) / 1.055, vec3_splat(2.4));
+        return mix(low, high, step(vec3_splat(0.04045), display));
+    }
+    return pow(display, vec3_splat(1.0 / u_tonemapParams.y));
+}
+
+// Rec.709 to Rec.2020 primaries (ITU-R BT.2087), linear light.
+vec3 rec709_to_rec2020(vec3 color)
+{
+    return vec3(
+        dot(color, vec3(0.6274, 0.3293, 0.0433)),
+        dot(color, vec3(0.0691, 0.9195, 0.0114)),
+        dot(color, vec3(0.0164, 0.0880, 0.8956)));
+}
+
+// SMPTE ST 2084 (PQ): luminance in units of 10000 nits to the signal.
+vec3 pq_encode(vec3 luminance)
+{
+    vec3 power = pow(max(luminance, vec3_splat(0.0)), vec3_splat(0.1593017578125));
+    return pow((vec3_splat(0.8359375) + 18.8515625 * power) / (vec3_splat(1.0) + 18.6875 * power), vec3_splat(78.84375));
+}
+
+// The HDR10 signal of a display image the composite made for an HDR display: paper white at 1.
+vec3 hdr10_encode(vec3 display)
+{
+    return pq_encode(rec709_to_rec2020(decode_display(display)) * (u_hdrOutputParams.z / 10000.0));
 }
 
 // The display image of a scene colour at `uv`: exposed, vignetted, tonemapped, graded and display encoded.
