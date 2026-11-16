@@ -42,7 +42,11 @@
 #include "engine/scene/SceneObject.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneUI.hpp"
+#include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/SkeletalMeshAssetIO.hpp"
+#include "engine/scene/SkeletonAssetIO.hpp"
+#include "engine/scene/SkeletonBindingComponent.hpp"
 #include "engine/scene/SceneNavigation.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/world/WorldCellIndex.hpp"
@@ -470,6 +474,107 @@ void WriteSettings(const std::filesystem::path& root, const kb::project::Project
         kb::project::ProjectSettingsStore::Save(
             kb::project::ProjectSettingsStore::FilePath(root), settings, error),
         "kb_game_core test project settings could not be written");
+}
+
+// The levels of detail of a skeletal mesh are built by kb_cli mesh-lod, reach the game package and load back from it
+// with their triangles, the sizes they are drawn from and the bone data of every level.
+void RunSkeletalMeshLodPackTest() {
+    namespace bake = kb::assets::bake;
+    const Fixture fixture = BuildFixture(TestRoot() / "skeletal_lod_pack", "Project");
+    kb::project::ProjectSettings settings;
+    settings.defaultMap = fixture.sceneVirtualPath;
+    settings.physicsLayersAsset.clear();
+    settings.inputEnabled = false;
+    WriteSettings(fixture.root, settings);
+
+    kb::scene::SkeletonAsset skeleton;
+    skeleton.bones.push_back({ .id = 1U, .name = "Root" });
+    const std::uint64_t signature = kb::scene::SkeletonCompatibilitySignature(skeleton);
+    std::filesystem::create_directories(fixture.root / "Assets" / "Characters");
+    Require(kb::scene::SkeletonAssetIO::Save(fixture.root / "Assets" / "Characters" / "Hero.kbskeleton", skeleton),
+        "The skeletal LOD fixture skeleton could not be written");
+    kb::scene::Scene authored;
+    Require(authored.Assets().MountProject(fixture.root), "The skeletal LOD fixture could not be mounted");
+    static_cast<void>(authored.Assets().Discover());
+    const auto* skeletonMetadata = authored.Assets().Manager().Registry().FindByPath("/Game/Characters/Hero.kbskeleton");
+    Require(skeletonMetadata != nullptr, "The skeletal LOD fixture skeleton was not discovered");
+
+    // A flat grid of 24 x 24 quads on one bone: 1152 triangles, over the threshold below which a mesh gets no chain.
+    kb::scene::SkeletalMeshAsset mesh;
+    mesh.skeletonAssetId = skeletonMetadata->id.value;
+    mesh.skeletonCompatibilitySignature = signature;
+    mesh.conservativeBounds = { .center = {}, .extents = { 1.0F, 1.0F, 0.1F } };
+    mesh.fixedBounds = mesh.conservativeBounds;
+    constexpr unsigned kQuads = 24U;
+    kb::scene::SkeletalMeshLod finest;
+    for (unsigned row = 0U; row <= kQuads; ++row) {
+        for (unsigned column = 0U; column <= kQuads; ++column) {
+            finest.vertices.push_back({ .position = { 2.0F * column / kQuads - 1.0F, 2.0F * row / kQuads - 1.0F, 0.0F },
+                .normal = { 0.0F, 0.0F, 1.0F } });
+        }
+    }
+    for (unsigned row = 0U; row < kQuads; ++row) {
+        for (unsigned column = 0U; column < kQuads; ++column) {
+            const unsigned a = row * (kQuads + 1U) + column, b = a + 1U, c = a + kQuads + 1U, d = c + 1U;
+            finest.indices.insert(finest.indices.end(), { a, b, c, b, d, c });
+        }
+    }
+    finest.sections.push_back({ .indexCount = static_cast<std::uint32_t>(finest.indices.size()), .boneMap = { 1U } });
+    finest.requiredBones = { 1U };
+    kb::scene::BuildSkeletalMeshLodBoneBounds(finest);
+    mesh.lods.push_back(std::move(finest));
+    const auto meshPath = fixture.root / "Assets" / "Characters" / "Hero.kbskeletalmesh";
+    Require(kb::scene::ValidateSkeletalMeshAsset(mesh).valid && kb::scene::SkeletalMeshAssetIO::Save(meshPath, mesh),
+        "The skeletal LOD fixture mesh could not be written");
+    {
+        const std::vector<std::string> arguments{ "generate", "--project", fixture.root.string(),
+            "--mesh", "/Game/Characters/Hero.kbskeletalmesh", "--levels", "3", "--error", "100" };
+        std::ostringstream output;
+        Require(kb::cli::RunMeshLodCommand(kb::cli::ArgumentList{ arguments }, kb::cli::CommandIo{ .out = output, .err = output }) == 0 &&
+                Mentions(output.str(), "LOD2") && !Mentions(output.str(), "LOD3"),
+            "kb_cli mesh-lod generate did not build three levels of the skeletal mesh");
+    }
+    const auto generated = kb::scene::SkeletalMeshAssetIO::Load(meshPath);
+    Require(generated.has_value() && generated->lods.size() == 3U &&
+            generated->lods[1].indices.size() < generated->lods[0].indices.size() &&
+            generated->lods[2].indices.size() < generated->lods[1].indices.size(),
+        "The skeletal mesh asset does not hold the levels the tool built");
+
+    static_cast<void>(authored.Assets().Discover());
+    const auto* meshMetadata = authored.Assets().Manager().Registry().FindByPath("/Game/Characters/Hero.kbskeletalmesh");
+    Require(meshMetadata != nullptr, "The skeletal LOD fixture mesh was not discovered");
+    const std::uint64_t meshId = meshMetadata->id.value;
+    const kb::scene::SceneEntity hero = authored.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Hero" });
+    authored.Components().MeshRenderers().Set(hero, kb::scene::MeshRendererComponent{ .meshAssetId = meshId });
+    Require(authored.Components().SkeletonBindings().Set(hero, { .skeletonAssetId = skeletonMetadata->id.value,
+                .skeletonCompatibilitySignature = signature, .enabled = true }) &&
+            authored.Components().DeformedGeometries().Set(hero, { .skeletalMeshAssetId = meshId, .enabled = true }) &&
+            kb::scene::SceneDocumentService::Save(authored, fixture.root / "Assets" / "Scenes" / "Main.21kbscene", "Main"),
+        "The skeletal LOD fixture scene could not be saved");
+
+    const auto packPath = fixture.root / "Game.kbpack";
+    std::ostringstream diagnostics;
+    const auto cooked = kb::game::CookProject(kb::game::ProjectCookRequest{
+        .projectPath = fixture.root, .targetProfileId = "Windows.x64", .outputPackPath = packPath }, diagnostics);
+    Require(cooked.succeeded, cooked.error.c_str());
+    auto pack = std::make_shared<bake::RuntimeAssetPack>();
+    Require(pack->Mount(packPath, bake::WindowsX64BakeTargetProfile()) == bake::RuntimeAssetPackStatus::Success,
+        "The skeletal LOD package could not be mounted");
+    kb::scene::Scene runtime{ kb::scene::SceneMode::PrefabPrivate };
+    Require(runtime.Assets().Manager().MountRuntimePack(pack), "The skeletal LOD package registry mount failed");
+    const auto loaded = runtime.Assets().Manager().Load<kb::scene::SkeletalMeshAsset>(kb::assets::AssetId{ meshId });
+    Require(loaded.IsLoaded() && kb::scene::ValidateSkeletalMeshAsset(*loaded).valid && loaded->lods.size() == generated->lods.size(),
+        "The packaged skeletal mesh lost levels of detail");
+    for (std::size_t level = 0U; level < generated->lods.size(); ++level) {
+        const kb::scene::SkeletalMeshLod& expected = generated->lods[level];
+        const kb::scene::SkeletalMeshLod& packaged = loaded->lods[level];
+        Require(packaged.indices == expected.indices && packaged.vertices.size() == expected.vertices.size() &&
+                packaged.minScreenCoverage == expected.minScreenCoverage && packaged.requiredBones == expected.requiredBones &&
+                packaged.sections.size() == 1U && packaged.sections[0].boneMap == expected.sections[0].boneMap,
+            "A packaged skeletal mesh level differs from the level that was cooked");
+    }
+    std::printf("skeletal_mesh_lod_pack levels=%zu triangles=%zu,%zu,%zu\n", loaded->lods.size(), loaded->lods[0].indices.size() / 3U,
+        loaded->lods[1].indices.size() / 3U, loaded->lods[2].indices.size() / 3U);
 }
 
 void RunTextureReuseCookTests() {
@@ -3086,6 +3191,12 @@ int main(int argc, char** argv) {
         return EXIT_SUCCESS;
     }
 
+    if (argc == 2 && std::string_view{ argv[1] } == "--skeletal-lod") {
+        RunSkeletalMeshLodPackTest();
+        std::fputs("kb_game_core skeletal mesh level tests passed\n", stdout);
+        return EXIT_SUCCESS;
+    }
+
     if (argc == 2 && std::string_view{ argv[1] } == "--windows-runtime-modules") {
         RunPackagedRuntimeModuleContractTests();
         RunWindowsRuntimeModulePackagingTests();
@@ -3123,6 +3234,7 @@ int main(int argc, char** argv) {
     RunPackagedRuntimeModuleContractTests();
     RunCookOutputLockTest();
     RunTextureReuseCookTests();
+    RunSkeletalMeshLodPackTest();
     RunBuildSceneListCookTest();
     RunDeepOutputPathCookTest();
     RunWindowsRuntimeModulePackagingTests();

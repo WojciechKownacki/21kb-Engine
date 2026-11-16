@@ -11,6 +11,10 @@
 #include <string_view>
 #include <vector>
 
+namespace kb::scene {
+struct SkeletalMeshAsset;
+}
+
 // Turns an imported mesh into the exact bytes a cluster renderer streams: real clusters with
 // real bounds and cones, a LOD chain whose error is absolute, indices at the width the target
 // guarantees, and geometry cut into chunks that fit the target's budget.
@@ -79,6 +83,8 @@ inline constexpr float kSimplifyNormalWeight = 0.1F;
 inline constexpr float kSimplifyTangentWeight = 0.1F;
 inline constexpr float kSimplifyUvWeight = 0.25F;
 inline constexpr float kSimplifyColorWeight = 0.1F;
+// A skinned mesh's bone weights: a collapse between vertices that bend differently is dearer than one between twins.
+inline constexpr float kSimplifySkinWeight = 0.25F;
 
 enum class MeshBakeStatus : std::uint8_t {
     Success,
@@ -187,6 +193,14 @@ inline constexpr float kRuntimeLodReferenceViewportHeight = 1080.0F;
 // radius. A mesh read from a package carries no coverage (the bytes hold the errors, never a screen size), so the
 // loader and the streamer call this to draw each instance at the level its distance allows.
 void AssignLodScreenCoverage(RenderMeshAssetData& mesh, std::span<const float> errors, float radius) noexcept;
+
+// Replaces every level of `mesh` but the finest with the chain `settings` ask for, simplified from the finest level
+// section by section as a static mesh's chain is. A level keeps the vertices it uses unchanged, so bone indices and
+// weights are the finest level's own and every section keeps its bone map. Each level's minScreenCoverage is set from
+// its absolute error as AssignLodScreenCoverage does. A mesh under the triangle threshold keeps its finest level only.
+// `mesh` is untouched unless the status is Success.
+[[nodiscard]] MeshBakeStatus BuildSkeletalMeshLods(
+    kb::scene::SkeletalMeshAsset& mesh, const kb::assets::AssetMeshLodSettings& settings);
 
 // Reads a primary block and its chunks back into the runtime's mesh shape. The counterpart of
 // the bake, and the only way a baked mesh becomes a RenderMeshAssetData - the ordinary importer

@@ -320,14 +320,15 @@ std::uint16_t MeshPipelineVisibility::DepthBucket(float depth) noexcept {
 std::uint8_t MeshPipelineVisibility::SelectLodLevel(
     const RenderMeshResource* mesh,
     const SceneRenderMeshInstance& instance,
-    const SceneRenderCamera* camera) noexcept {
+    const SceneRenderCamera* camera,
+    float coverageScale) noexcept {
     if (mesh == nullptr || mesh->lods.size() <= 1U) {
         return 0U;
     }
 
     const RenderBoundsSphere worldBounds = TransformBounds(
         instance.boundsOverride.IsValid() ? instance.boundsOverride : mesh->bounds, instance.model);
-    const float coverage = ScreenCoverage(camera, worldBounds);
+    const float coverage = ScreenCoverage(camera, worldBounds) * coverageScale;
     std::uint8_t selected = static_cast<std::uint8_t>(std::min<std::size_t>(mesh->lods.size() - 1U, UINT8_MAX));
     for (std::size_t lodIndex = 0U; lodIndex < mesh->lods.size(); ++lodIndex) {
         const RenderMeshLodDesc& lod = mesh->lods[lodIndex];

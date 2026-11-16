@@ -102,8 +102,16 @@ void EmitInstanceDiagnostic(
     return true;
 }
 
+// A skinned mesh keeps the level it drew until its screen size has moved this far, in proportion, past a threshold.
+constexpr float kSkinnedLodHysteresis = 0.05F;
+
+// An instance whose level the pass remembers from frame to frame: one of a Detail Switch, or a skinned one.
+[[nodiscard]] bool KeepsLevelHistory(const SceneRenderMeshInstance& instance) noexcept {
+    return instance.detailSwitchEnabled || instance.currentSkinningPalette.IsValid();
+}
+
 [[nodiscard]] std::uint64_t DetailSwitchKey(const SceneRenderMeshInstance& instance) noexcept {
-    return instance.detailSwitchGroupId != 0U ? instance.detailSwitchGroupId : (instance.entityId ^ 0x9e3779b97f4a7c15ULL);
+    return instance.detailSwitchEnabled && instance.detailSwitchGroupId != 0U ? instance.detailSwitchGroupId : (instance.entityId ^ 0x9e3779b97f4a7c15ULL);
 }
 
 [[nodiscard]] bool ReversesWinding(const std::array<float, 16>& m) noexcept {
@@ -121,6 +129,11 @@ struct DetailSwitchCandidate {
     std::uint32_t maximumLod = 255U;
     float promoteCoverage = 0.20F;
     float demoteCoverage = 0.15F;
+    // A skinned mesh: it keeps its previous level while that lies between the levels a little nearer and a little
+    // farther would draw.
+    bool skinned = false;
+    std::uint8_t finestLod = 0U;
+    std::uint8_t coarsestLod = UINT8_MAX;
 };
 
 void ResolveDetailSwitchLevels(const MeshPassProcessorDesc& desc, MeshPipelineBuildResult& result) {
@@ -140,11 +153,17 @@ void ResolveDetailSwitchLevels(const MeshPassProcessorDesc& desc, MeshPipelineBu
         }
         if (mesh == nullptr || mesh->lods.size() <= 1U) continue;
         for (const SceneRenderMeshInstance& instance : batch.instances) {
-            if (!instance.detailSwitchEnabled) continue;
+            if (!KeepsLevelHistory(instance)) continue;
             const std::uint64_t key = DetailSwitchKey(instance);
             DetailSwitchCandidate& candidate = candidates[key];
             const std::uint8_t desired = MeshPipelineVisibility::SelectLodLevel(mesh, instance, desc.camera);
             candidate.desiredLod = std::min(candidate.desiredLod, desired);
+            if (!instance.detailSwitchEnabled) {
+                candidate.skinned = true;
+                candidate.finestLod = MeshPipelineVisibility::SelectLodLevel(mesh, instance, desc.camera, 1.0F + kSkinnedLodHysteresis);
+                candidate.coarsestLod = MeshPipelineVisibility::SelectLodLevel(mesh, instance, desc.camera, 1.0F - kSkinnedLodHysteresis);
+                continue;
+            }
             const RenderBoundsSphere bounds = MeshPipelineVisibility::TransformBounds(
                 instance.boundsOverride.IsValid() ? instance.boundsOverride : mesh->bounds, instance.model);
             candidate.coverage = std::max(candidate.coverage, MeshPipelineVisibility::ScreenCoverage(desc.camera, bounds));
@@ -178,7 +197,9 @@ void ResolveDetailSwitchLevels(const MeshPassProcessorDesc& desc, MeshPipelineBu
         std::uint8_t resolved = requested;
         if (const auto previous = result.detailSwitchPreviousLevels.find(key); previous != result.detailSwitchPreviousLevels.end()) {
             resolved = previous->second;
-            if (advancesHistory) {
+            if (advancesHistory && candidate.skinned) {
+                resolved = std::clamp(resolved, candidate.finestLod, candidate.coarsestLod);
+            } else if (advancesHistory) {
                 if (requested < resolved && candidate.coverage >= candidate.promoteCoverage) resolved = requested;
                 if (requested > resolved && candidate.coverage < candidate.demoteCoverage) resolved = requested;
             }
@@ -677,7 +698,7 @@ void ScanSection(const MeshScanContext& context, MeshScanState& state, const Sce
         std::uint8_t selectedLod = state.chainLevels.empty() ? std::uint8_t{ 0U } : state.chainLevels[instanceIndex];
         if (selectedLod == kLevelNotChosen || state.chainLevels.empty()) {
             selectedLod = MeshPipelineVisibility::SelectLodLevel(meshResource, instance, desc.camera);
-            if (instance.detailSwitchEnabled) {
+            if (KeepsLevelHistory(instance)) {
                 if (const auto selected = context.detailSwitchLevels.find(DetailSwitchKey(instance)); selected != context.detailSwitchLevels.end()) {
                     selectedLod = static_cast<std::uint8_t>(std::min<std::uint32_t>(selected->second, meshResource == nullptr || meshResource->lods.empty() ? 0U : static_cast<std::uint32_t>(meshResource->lods.size() - 1U)));
                 }

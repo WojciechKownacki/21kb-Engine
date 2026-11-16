@@ -8,6 +8,7 @@
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/core/JsonValue.hpp"
+#include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "kb/render/bake/MeshBaker.hpp"
@@ -46,6 +47,8 @@ struct Session {
     kb::scene::Scene scene;
     const kb::assets::AssetMetadata* metadata = nullptr;
     kb::assets::AssetMeshLodSettings lod{};
+    // Set for a skeletal mesh asset, whose levels are stored in the asset itself.
+    std::optional<kb::scene::SkeletalMeshAsset> skeletal;
 };
 
 [[nodiscard]] std::optional<float> ParsePercent(const ArgumentList& arguments, std::string_view name, CommandIo io, bool& bad) {
@@ -74,7 +77,7 @@ struct Session {
     return value;
 }
 
-[[nodiscard]] bool Open(Session& session, const ArgumentList& arguments, CommandIo io) {
+[[nodiscard]] bool Open(Session& session, const ArgumentList& arguments, CommandIo io, bool allowSkeletal = false) {
     const std::optional<std::string> project = arguments.Option("--project");
     const std::optional<std::string> mesh = arguments.Option("--mesh");
     if (!project.has_value() || !mesh.has_value()) {
@@ -87,6 +90,15 @@ struct Session {
         return false;
     }
     session.metadata = FindAssetByFlexiblePath(session.scene.Assets().Manager().Registry(), kb::assets::Utf8Path(*mesh));
+    if (session.metadata != nullptr && session.metadata->type == kb::scene::kSkeletalMeshAssetType) {
+        if (!allowSkeletal) {
+            io.err << "error: a skeletal mesh takes mesh-lod show and generate only\n";
+            return false;
+        }
+        session.skeletal = kb::scene::SkeletalMeshAssetIO::Load(session.metadata->physicalPath, &error);
+        if (!session.skeletal.has_value()) io.err << "error: the skeletal mesh could not be read: " << error << '\n';
+        return session.skeletal.has_value();
+    }
     const std::optional<kb::assets::AssetMeshLodSettings> lod = session.metadata == nullptr || session.metadata->physicalPath.empty()
         ? std::nullopt : kb::assets::AssetImportService::ReadMeshLod(session.metadata->physicalPath);
     if (!lod.has_value()) {
@@ -192,15 +204,48 @@ void ToManual(kb::assets::AssetMeshLodSettings& lod) {
     return true;
 }
 
+// The levels the skeletal mesh asset holds now, each with the size it is drawn from at 1080p.
+void PrintSkeletalChain(const Session& session, CommandIo io) {
+    using kb::core::JsonValue;
+    const std::vector<kb::scene::SkeletalMeshLod>& lods = session.skeletal->lods;
+    const double finest = static_cast<double>(std::max<std::size_t>(lods.front().indices.size(), 1U));
+    JsonValue data = DataObject("21kb.cli.mesh-lod-show/v1");
+    data.Set("mesh", JsonValue::MakeString(ToValidUtf8(session.metadata->virtualPath.generic_string())));
+    data.Set("skeletal", JsonValue::MakeBool(true));
+    data.Set("triangles", JsonValue::MakeNumber(static_cast<double>(lods.front().indices.size() / 3U)));
+    auto levels = JsonValue::MakeArray();
+    io.out << session.metadata->virtualPath.generic_string() << ": skeletal mesh, " << lods.size() << " levels\n";
+    for (std::size_t level = 0U; level < lods.size(); ++level) {
+        const double percent = 100.0 * static_cast<double>(lods[level].indices.size()) / finest;
+        const double pixels = level == 0U ? 0.0 : lods[level - 1U].minScreenCoverage * kb::render::bake::kRuntimeLodReferenceViewportHeight;
+        io.out << "  LOD" << level << "  " << std::setw(9) << lods[level].indices.size() / 3U << " triangles  " << std::fixed << std::setprecision(1)
+               << std::setw(5) << percent << "%  ";
+        if (level == 0U) io.out << "drawn from the closest\n";
+        else io.out << "drawn from " << std::setprecision(0) << pixels << " px tall at 1080p down\n";
+        JsonValue item = JsonValue::MakeObject();
+        item.Set("level", JsonValue::MakeNumber(static_cast<double>(level)));
+        item.Set("triangles", JsonValue::MakeNumber(static_cast<double>(lods[level].indices.size() / 3U)));
+        item.Set("percent", JsonValue::MakeNumber(percent));
+        item.Set("drawnFromPixels", level == 0U ? JsonValue{} : JsonValue::MakeNumber(pixels));
+        levels.Append(std::move(item));
+    }
+    data.Set("levels", std::move(levels));
+    if (io.WantsData()) PublishData(io, std::move(data));
+}
+
 [[nodiscard]] int Show(const ArgumentList& arguments, CommandIo io) {
     Session session;
-    if (!Open(session, arguments, io)) return 1;
+    if (!Open(session, arguments, io, true)) return 1;
+    if (session.skeletal.has_value()) {
+        PrintSkeletalChain(session, io);
+        return 0;
+    }
     return PrintChain(session, io) ? 0 : 1;
 }
 
 [[nodiscard]] int Generate(const ArgumentList& arguments, CommandIo io) {
     Session session;
-    if (!Open(session, arguments, io)) return 1;
+    if (!Open(session, arguments, io, true)) return 1;
     bool bad = false;
     const auto levels = ParseCount(arguments, "--levels", kb::assets::kMeshLodMaxLevels, io, bad);
     const auto keep = ParsePercent(arguments, "--keep", io, bad);
@@ -217,6 +262,19 @@ void ToManual(kb::assets::AssetMeshLodSettings& lod) {
     if (keep.has_value()) lod.keepPercent = *keep;
     if (error.has_value()) lod.errorPercent = *error;
     if (minimum.has_value()) lod.minTriangles = *minimum;
+    if (session.skeletal.has_value()) {
+        const kb::render::bake::MeshBakeStatus built = kb::render::bake::BuildSkeletalMeshLods(*session.skeletal, lod);
+        if (built != kb::render::bake::MeshBakeStatus::Success) {
+            io.err << "error: the levels could not be built (" << kb::render::bake::ToString(built) << ")\n";
+            return 1;
+        }
+        if (!kb::scene::SkeletalMeshAssetIO::Save(session.metadata->physicalPath, *session.skeletal)) {
+            io.err << "error: the skeletal mesh could not be written\n";
+            return 1;
+        }
+        PrintSkeletalChain(session, io);
+        return 0;
+    }
     if (!Save(session, io)) return 1;
     return PrintChain(session, io) ? 0 : 1;
 }

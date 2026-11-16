@@ -1,9 +1,11 @@
 #include "RendererTestSupport.hpp"
+#include "SkinnedMeshLodFixture.hpp"
 
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "kb/render/RuntimeAssetShaderProvider.hpp"
+#include "kb/render/bake/MeshBaker.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/particles/ParticlePlayback.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
@@ -11497,6 +11499,144 @@ void RunRendererLightProbeTests() {
         "A deferred frame with reflections and a baked grid must bind the shared stage once per draw");
 #else
     throw std::runtime_error("Light probe readback requires a supported native GPU test surface");
+#endif
+}
+
+// A skinned sphere of about twenty thousand triangles with three coarser levels, drawn in the same bent pose: every
+// level draws the shape of the finest one and sends only its own triangles to the GPU, and the camera distance alone
+// chooses the level.
+void RunRendererSkinnedMeshLodDrawTests() {
+#if defined(_WIN32)
+    kb::scene::Scene scene;
+    kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderTextureAssetLoader>()),
+        "The skinned LOD draw test could not register render asset loaders");
+    auto skeleton = std::make_shared<kb::scene::SkeletonAsset>(MakeSkinnedSphereSkeleton());
+    const std::uint64_t signature = kb::scene::SkeletonCompatibilitySignature(*skeleton);
+    Require(signature != 0U, "The skinned LOD draw test skeleton is not valid");
+    const kb::assets::AssetId skeletonId = kb::assets::MakeAssetId("LodSphereSkeleton");
+    const kb::assets::AssetId meshId = kb::assets::MakeAssetId("LodSphereMesh");
+    auto mesh = std::make_shared<kb::scene::SkeletalMeshAsset>(MakeSkinnedSphereAsset(100U, 101U, skeletonId.value, signature));
+    kb::assets::AssetMeshLodSettings settings{};
+    settings.levelCount = 4U;
+    Require(bake::BuildSkeletalMeshLods(*mesh, settings) == bake::MeshBakeStatus::Success && mesh->lods.size() == 4U,
+        "The skinned LOD draw test could not build its levels");
+    // Drawn from these sizes down; the camera distances below sit well inside each band, hysteresis included.
+    constexpr std::array<float, 4U> kCoverages{ 0.5F, 0.25F, 0.12F, 0.0F };
+    for (std::size_t level = 0U; level < kCoverages.size(); ++level) mesh->lods[level].minScreenCoverage = kCoverages[level];
+    Require(manager.RegisterAsset({ .id = skeletonId, .type = kb::scene::kSkeletonAssetType, .name = "LodSphereSkeleton",
+                .virtualPath = "/Game/LodSphere.kbskeleton", .runtimeLoadable = true }) &&
+            manager.RegisterAsset({ .id = meshId, .type = kb::scene::kSkeletalMeshAssetType, .name = "LodSphereMesh",
+                .virtualPath = "/Game/LodSphere.kbskeletalmesh", .runtimeLoadable = true }) &&
+            manager.PublishRuntimeAsset(skeletonId, skeleton) && manager.PublishRuntimeAsset(meshId, mesh),
+        "The skinned LOD draw test could not publish its assets");
+    const kb::scene::SceneEntity character = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Character", .transform = TransformAt(0.0F, 0.0F, 0.0F) });
+    scene.Components().MeshRenderers().Set(character, kb::scene::MeshRendererComponent{
+        .meshAssetId = meshId.value, .materialAssetId = 0U, .castsShadow = false });
+    Require(scene.Components().SkeletonBindings().Set(character, { .skeletonAssetId = skeletonId.value,
+                .skeletonCompatibilitySignature = signature, .enabled = true }),
+        "The skinned LOD draw test could not bind its skeleton");
+    const kb::scene::SceneEntity light = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Point Light", .transform = TransformAt(3.0F, 4.0F, -8.0F) });
+    scene.Components().Lights().Set(light, kb::scene::LightComponent{
+        .kind = kb::scene::LightKind::Point, .intensity = 1.27F, .range = 40.0F, .castsShadow = false });
+
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "The skinned LOD draw test could not create a hidden D3D11 surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "The skinned LOD draw test could not initialize the renderer");
+    renderer.SetRuntimeAssetDiscoveryEnabled(false);
+    constexpr std::uint16_t kSize = 128U;
+    ParticleMeshReadbackTarget readback;
+    Require(readback.Initialize(kSize, kSize), "The skinned LOD draw test could not create its readback target");
+    SceneRenderLightingConfig lighting{};
+    lighting.shadowsEnabled = false;
+    RenderSceneSubmitDesc desc{
+        .target = readback.Binding(),
+        .lightingConfig = lighting,
+        .meshPassMode = SceneRenderMeshPassMode::OpaqueOnly,
+        .clearRgba = 0x000000FFU,
+        .editorSceneOverlaysEnabled = false,
+        .shadowPassEnabled = false,
+        .postProcessEnabled = false,
+        .selectionMaskEnabled = false,
+        .selectionOutlineEnabled = false,
+    };
+    struct Frame {
+        std::vector<std::uint8_t> pixels;
+        std::uint64_t triangles = 0U;
+    };
+    const auto draw = [&](float distance, bool lodEnabled, std::int32_t bias) {
+        Require(scene.Components().DeformedGeometries().Set(character, { .skeletalMeshAssetId = meshId.value, .lodBias = bias,
+                    .lodEnabled = lodEnabled, .fixedBounds = true, .castsShadow = false, .enabled = true }),
+            "The skinned LOD draw test could not set its deformed geometry");
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        SceneRenderCamera camera{};
+        bx::mtxLookAt(camera.view.data(), bx::Vec3{ 0.35F, 0.0F, -distance }, bx::Vec3{ 0.35F, 0.0F, 0.0F });
+        SceneDepthPolicy::MakePerspective(camera.projection.data(), 60.0F, 1.0F, 0.1F, 100.0F, SceneDepthPolicy::HomogeneousDepth());
+        desc.cameraOverride = camera;
+        for (int frame = 0; frame < 4; ++frame) SubmitLifecycleFrame(renderer, scene, desc, "The skinned LOD draw test did not submit a frame");
+        Require(!renderer.LastSceneDiagnostics().HasErrors(), "The skinned LOD draw test reported rendering errors");
+        return Frame{ readback.ReadPixels(), renderer.LastSceneSubmitStats().submittedTriangleCount };
+    };
+    const auto meanDifference = [](const Frame& lhs, const Frame& rhs) {
+        double sum = 0.0;
+        for (std::size_t index = 0U; index < lhs.pixels.size(); ++index) {
+            if (index % 4U != 3U) sum += std::abs(static_cast<int>(lhs.pixels[index]) - static_cast<int>(rhs.pixels[index]));
+        }
+        return sum / (static_cast<double>(lhs.pixels.size() / 4U) * 3.0);
+    };
+    const auto litPixels = [](const Frame& frame) {
+        std::size_t count = 0U;
+        for (std::size_t index = 0U; index + 3U < frame.pixels.size(); index += 4U) {
+            if (frame.pixels[index] + frame.pixels[index + 1U] + frame.pixels[index + 2U] > 48U) ++count;
+        }
+        return count;
+    };
+
+    // The same pose and camera at each level in turn: level 0 is asked for by switching levels off, the others by a bias
+    // from the level the distance chooses, which is level 0 here.
+    constexpr float kNear = 6.0F;
+    std::array<Frame, 4U> levels;
+    levels[0] = draw(kNear, false, 0);
+    for (std::int32_t level = 1; level < 4; ++level) levels[static_cast<std::size_t>(level)] = draw(kNear, true, level);
+    const std::uint64_t perPass = levels[0].triangles / (mesh->lods[0].indices.size() / 3U);
+    Require(perPass >= 1U && levels[0].triangles == perPass * (mesh->lods[0].indices.size() / 3U) && litPixels(levels[0]) > 300U,
+        "The finest level of the skinned sphere was not drawn with its own triangles");
+    for (std::size_t level = 1U; level < levels.size(); ++level) {
+        Require(levels[level].triangles == perPass * (mesh->lods[level].indices.size() / 3U) && levels[level].triangles < levels[level - 1U].triangles,
+            "A coarser level of the skinned sphere sent a number of triangles that is not its own to the GPU");
+    }
+    const double meanDifferenceLevelOne = meanDifference(levels[0], levels[1]);
+    const double meanDifferenceLevelThree = meanDifference(levels[0], levels[3]);
+    constexpr double kMeanDifferenceLimit = 0.25;
+    Require(meanDifferenceLevelOne < kMeanDifferenceLimit,
+        "The first coarser level of the skinned sphere does not draw the image of the finest level in the same pose");
+    // The camera distance alone, with no bias, chooses the levels in turn.
+    constexpr std::array<float, 4U> kDistances{ 6.0F, 10.0F, 20.0F, 40.0F };
+    std::string chosen;
+    for (std::size_t level = 0U; level < kDistances.size(); ++level) {
+        const Frame frame = draw(kDistances[level], true, 0);
+        chosen += " " + std::to_string(frame.triangles / perPass);
+        Require(frame.triangles == perPass * (mesh->lods[level].indices.size() / 3U),
+            "The distance of the skinned sphere did not choose the level whose size it is drawn from");
+    }
+    std::printf("skinned_mesh_lod_draw level_triangles=%zu,%zu,%zu,%zu passes=%llu mean_difference_l0_l1=%.3f mean_difference_l0_l3=%.3f limit=%.1f "
+                "chosen_by_distance:%s lit_pixels=%zu\n",
+        mesh->lods[0].indices.size() / 3U, mesh->lods[1].indices.size() / 3U, mesh->lods[2].indices.size() / 3U, mesh->lods[3].indices.size() / 3U,
+        static_cast<unsigned long long>(perPass), meanDifferenceLevelOne, meanDifferenceLevelThree, kMeanDifferenceLimit, chosen.c_str(),
+        litPixels(levels[0]));
+    readback.Shutdown();
+    renderer.Shutdown();
+#else
+    throw std::runtime_error("The skinned LOD draw test requires a supported native GPU test surface");
 #endif
 }
 

@@ -84,10 +84,13 @@ public:
     [[nodiscard]] static RenderBoundsSphere GrowBounds(RenderBoundsSphere bounds, float margin) noexcept;
     // The camera's culling view-projection, position and layers as the portal visibility pass takes them.
     [[nodiscard]] static kb::scene::ScenePortalCamera PortalCamera(const SceneRenderCamera& camera) noexcept;
+    // `coverageScale` multiplies the instance's screen coverage before the level is chosen; the hysteresis of a
+    // skinned mesh asks for the level a little nearer and a little farther than it is.
     [[nodiscard]] static std::uint8_t SelectLodLevel(
         const RenderMeshResource* mesh,
         const SceneRenderMeshInstance& instance,
-        const SceneRenderCamera* camera) noexcept;
+        const SceneRenderCamera* camera,
+        float coverageScale = 1.0F) noexcept;
     [[nodiscard]] static std::pair<std::uint32_t, std::uint32_t> MeshletRangeForSection(
         const RenderMeshResource* mesh,
         std::uint32_t sectionIndex) noexcept;

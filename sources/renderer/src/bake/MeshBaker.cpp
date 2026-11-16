@@ -2,6 +2,7 @@
 
 #include "engine/assets/bake/AssetPack.hpp"
 #include "engine/ecs/WorkerPool.hpp"
+#include "engine/scene/SkeletalMeshAsset.hpp"
 
 #include <meshoptimizer/src/meshoptimizer.h>
 
@@ -1726,16 +1727,100 @@ MeshBakeStatus BuildRuntimeLodMesh(const RenderMeshAssetData& source, RenderMesh
     return MeshBakeStatus::Success;
 }
 
-void AssignLodScreenCoverage(RenderMeshAssetData& mesh, std::span<const float> errors, float radius) noexcept {
-    // A level is used while its error, projected at the reference height, stays under the pixel budget:
-    // error / radius * coverage * height / 2 <= budget. Levels are in order of growing error, so the
-    // thresholds fall from the finest level to the last, which draws at any coverage below the rest.
+namespace {
+
+// A level is used while its error, projected at the reference height, stays under the pixel budget:
+// error / radius * coverage * height / 2 <= budget. Levels are in order of growing error, so the
+// thresholds fall from the finest level to the last, which draws at any coverage below the rest.
+[[nodiscard]] float ScreenCoverageBelowWhichLevelIsCoarser(float nextLevelError, float radius) noexcept {
     const float errorBudget = 2.0F * kRuntimeLodMaxScreenErrorPixels * radius / kRuntimeLodReferenceViewportHeight;
+    return std::clamp(errorBudget / std::max(nextLevelError, 1.0e-9F), 0.0F, 1.0F);
+}
+
+} // namespace
+
+void AssignLodScreenCoverage(RenderMeshAssetData& mesh, std::span<const float> errors, float radius) noexcept {
     for (std::size_t level = 0U; level < mesh.lods.size(); ++level) {
         mesh.lods[level].minScreenCoverage = level + 1U >= mesh.lods.size() || level + 1U >= errors.size()
             ? 0.0F
-            : std::clamp(errorBudget / std::max(errors[level + 1U], 1.0e-9F), 0.0F, 1.0F);
+            : ScreenCoverageBelowWhichLevelIsCoarser(errors[level + 1U], radius);
     }
+}
+
+MeshBakeStatus BuildSkeletalMeshLods(kb::scene::SkeletalMeshAsset& mesh, const kb::assets::AssetMeshLodSettings& settings) {
+    // A morph target of a coarser level would lose the level it deforms.
+    if (!kb::scene::ValidateSkeletalMeshAsset(mesh).valid || !settings.IsValid() ||
+        std::ranges::any_of(mesh.morphTargets, [](const kb::scene::SkeletalMeshMorphTarget& morph) noexcept { return morph.lodIndex != 0U; })) {
+        return MeshBakeStatus::UnsupportedSourceShape;
+    }
+    const kb::scene::SkeletalMeshLod& finest = mesh.lods.front();
+    constexpr std::uint32_t kAttributeCount = 9U;
+    SourceGeometry source{};
+    source.positions = &finest.vertices.front().position.x;
+    source.vertexStride = static_cast<std::uint32_t>(sizeof(kb::scene::SkeletalMeshVertex));
+    source.vertexCount = static_cast<std::uint32_t>(finest.vertices.size());
+    source.attributeCount = kAttributeCount;
+    source.attributes.reserve(finest.vertices.size() * kAttributeCount);
+    source.attributeWeights = { kSimplifyNormalWeight, kSimplifyNormalWeight, kSimplifyNormalWeight,
+        kSimplifyUvWeight, kSimplifyUvWeight, kSimplifySkinWeight, kSimplifySkinWeight, kSimplifySkinWeight, kSimplifySkinWeight };
+    for (const kb::scene::SkeletalMeshVertex& vertex : finest.vertices) {
+        const std::array<float, kAttributeCount> values{ vertex.normal.x, vertex.normal.y, vertex.normal.z, vertex.uv[0], vertex.uv[1],
+            vertex.jointWeights[0], vertex.jointWeights[1], vertex.jointWeights[2], vertex.jointWeights[3] };
+        if (!std::isfinite(vertex.position.x) || !std::isfinite(vertex.position.y) || !std::isfinite(vertex.position.z) ||
+            !std::ranges::all_of(values, [](float value) noexcept { return std::isfinite(value); })) {
+            return MeshBakeStatus::NonFiniteGeometry;
+        }
+        source.attributes.insert(source.attributes.end(), values.begin(), values.end());
+    }
+    source.sections.reserve(finest.sections.size());
+    for (std::size_t section = 0U; section < finest.sections.size(); ++section) {
+        const kb::scene::SkeletalMeshSection& range = finest.sections[section];
+        source.sections.push_back(LodSection{
+            .indices = { finest.indices.begin() + range.firstIndex, finest.indices.begin() + range.firstIndex + range.indexCount },
+            .materialSlot = static_cast<std::uint32_t>(section) });
+    }
+    std::vector<LodLevel> chain;
+    if (const MeshBakeStatus status = BuildLodChain(source, settings, chain); status != MeshBakeStatus::Success) {
+        return status;
+    }
+
+    const float radius = std::sqrt(mesh.conservativeBounds.extents.x * mesh.conservativeBounds.extents.x +
+        mesh.conservativeBounds.extents.y * mesh.conservativeBounds.extents.y +
+        mesh.conservativeBounds.extents.z * mesh.conservativeBounds.extents.z);
+    std::vector<kb::scene::SkeletalMeshLod> levels;
+    levels.reserve(chain.size());
+    for (std::size_t level = 1U; level < chain.size(); ++level) {
+        kb::scene::SkeletalMeshLod lod{};
+        std::vector<std::uint32_t> remap(finest.vertices.size(), std::numeric_limits<std::uint32_t>::max());
+        for (std::size_t section = 0U; section < chain[level].sections.size(); ++section) {
+            const kb::scene::SkeletalMeshSection& original = finest.sections[chain[level].sections[section].materialSlot];
+            kb::scene::SkeletalMeshSection next{ .firstIndex = static_cast<std::uint32_t>(lod.indices.size()),
+                .materialAssetId = original.materialAssetId, .boneMap = original.boneMap };
+            for (const std::uint32_t index : chain[level].sections[section].indices) {
+                std::uint32_t& mapped = remap[index];
+                if (mapped == std::numeric_limits<std::uint32_t>::max()) {
+                    mapped = static_cast<std::uint32_t>(lod.vertices.size());
+                    lod.vertices.push_back(finest.vertices[index]);
+                }
+                lod.indices.push_back(mapped);
+            }
+            next.indexCount = static_cast<std::uint32_t>(lod.indices.size()) - next.firstIndex;
+            lod.requiredBones.insert(lod.requiredBones.end(), next.boneMap.begin(), next.boneMap.end());
+            lod.sections.push_back(std::move(next));
+        }
+        std::ranges::sort(lod.requiredBones);
+        lod.requiredBones.erase(std::ranges::unique(lod.requiredBones).begin(), lod.requiredBones.end());
+        kb::scene::BuildSkeletalMeshLodBoneBounds(lod);
+        levels.push_back(std::move(lod));
+    }
+    mesh.lods.resize(1U);
+    for (kb::scene::SkeletalMeshLod& lod : levels) mesh.lods.push_back(std::move(lod));
+    for (std::size_t level = 0U; level < mesh.lods.size(); ++level) {
+        mesh.lods[level].minScreenCoverage = level + 1U >= mesh.lods.size()
+            ? 0.0F
+            : ScreenCoverageBelowWhichLevelIsCoarser(chain[level + 1U].absoluteError, radius);
+    }
+    return MeshBakeStatus::Success;
 }
 
 bool BakedMeshMatchesTargetProfile(
