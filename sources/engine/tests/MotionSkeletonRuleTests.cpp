@@ -2,6 +2,7 @@
 #include "TestSuites.hpp"
 
 #include "engine/scene/AnimationAssetIO.hpp"
+#include "engine/scene/AnimationChainIk.hpp"
 #include "engine/scene/MotionSkeletonRuleComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAnimators.hpp"
@@ -14,10 +15,17 @@
 #include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/SkeletonBindingComponent.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <filesystem>
+#include <optional>
+#include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace kb::tests {
 namespace {
@@ -31,6 +39,7 @@ constexpr kb::scene::SkeletonBoneId kLower = 102U;
 constexpr kb::scene::SkeletonBoneId kHand = 900U;
 constexpr kb::scene::SkeletonBoneId kTwist = 950U;
 // Pose indices follow the skeleton's bone order.
+constexpr std::size_t kRootIndex = 0U;
 constexpr std::size_t kUpperIndex = 1U;
 constexpr std::size_t kLowerIndex = 2U;
 constexpr std::size_t kHandIndex = 3U;
@@ -231,12 +240,240 @@ void TestSpringRule() {
         "A Spring rule must settle on the animated rotation once it stops changing");
 }
 
+using kb::scene::ChainIkSettings;
+using kb::scene::ChainIkSolver;
+
+[[nodiscard]] std::vector<Vec3> StraightChain(std::size_t count) {
+    std::vector<Vec3> joints(count);
+    for (std::size_t index = 0U; index < count; ++index) joints[index] = Vec3{ 0.0F, static_cast<float>(index), 0.0F };
+    return joints;
+}
+
+[[nodiscard]] bool KeepsUnitLengths(std::span<const Vec3> joints) {
+    for (std::size_t index = 0U; index + 1U < joints.size(); ++index) {
+        if (std::fabs(kb::math::Length(joints[index + 1U] - joints[index]) - 1.0F) > 1.0e-4F) return false;
+    }
+    return true;
+}
+
+// The unit direction, across the root-to-effector axis, of the most bent joint; zero for a straight chain.
+[[nodiscard]] Vec3 BendSide(std::span<const Vec3> joints) {
+    const Vec3 root = joints.front();
+    const Vec3 axis = kb::math::Normalize(joints.back() - root);
+    Vec3 bent{};
+    for (std::size_t index = 1U; index + 1U < joints.size(); ++index) {
+        const Vec3 offset = (joints[index] - root) - axis * kb::math::Dot(joints[index] - root, axis);
+        if (kb::math::Dot(offset, offset) > kb::math::Dot(bent, bent)) bent = offset;
+    }
+    return kb::math::Normalize(bent);
+}
+
+// How well the bend lies toward `pole`: 1 is exactly in the plane of the axis and the pole, on its side.
+[[nodiscard]] float BendTowardsPole(std::span<const Vec3> joints, Vec3 pole) {
+    const Vec3 axis = kb::math::Normalize(joints.back() - joints.front());
+    const Vec3 side = kb::math::Normalize((pole - joints.front()) - axis * kb::math::Dot(pole - joints.front(), axis));
+    const Vec3 bend = BendSide(joints);
+    const bool sameCrossSign = kb::math::Dot(kb::math::Cross(axis, bend), kb::math::Cross(axis, side)) > 0.0F;
+    return sameCrossSign ? kb::math::Dot(bend, side) : -1.0F;
+}
+
+void TestChainIkSolver() {
+    const ChainIkSettings fabrik{ .solver = ChainIkSolver::Fabrik, .maxIterations = 64U, .tolerance = 1.0e-4F };
+    const ChainIkSettings ccd{ .solver = ChainIkSolver::Ccd, .maxIterations = 256U, .tolerance = 1.0e-4F };
+    std::array<float, 40> scratch{};
+
+    for (const ChainIkSettings& settings : { fabrik, ccd }) {
+        // A reachable target: the effector lands on it, the root stays, every bone keeps its length.
+        std::vector<Vec3> reach = StraightChain(4U);
+        const Vec3 target{ 1.5F, 1.5F, 1.0F };
+        kb::scene::SolveChainIk(reach, scratch, target, std::nullopt, settings);
+        Require(kb::math::Length(reach.back() - target) < 1.0e-3F, "Chain IK must bring a 4-bone chain's effector onto a reachable target");
+        Require(kb::math::Length(reach.front()) == 0.0F && KeepsUnitLengths(reach), "Chain IK must keep the root and the bone lengths");
+
+        // Out of reach: stretched straight toward the target.
+        std::vector<Vec3> far = StraightChain(4U);
+        kb::scene::SolveChainIk(far, scratch, Vec3{ 0.0F, 5.0F, 5.0F }, std::nullopt, settings);
+        const Vec3 toward = kb::math::Normalize(Vec3{ 0.0F, 1.0F, 1.0F });
+        for (std::size_t index = 0U; index < far.size(); ++index) {
+            Require(kb::math::Length(far[index] - toward * static_cast<float>(index)) < 1.0e-4F,
+                "A target out of reach must leave the chain straight toward it");
+        }
+
+        // The pole picks the side the chain bends to.
+        for (const float side : { 5.0F, -5.0F }) {
+            std::vector<Vec3> bent = StraightChain(4U);
+            const Vec3 pole{ 0.0F, 1.5F, side };
+            kb::scene::SolveChainIk(bent, scratch, Vec3{ 1.0F, 2.0F, 0.0F }, pole, settings);
+            Require(BendTowardsPole(bent, pole) > 0.999F, "A pole must bend the chain toward its side");
+            Require(kb::math::Length(bent.back() - Vec3{ 1.0F, 2.0F, 0.0F }) < 1.0e-3F && KeepsUnitLengths(bent),
+                "A pole must not change where the effector lands or the bone lengths");
+        }
+
+        // A straight chain under a nearer target on its own line still folds.
+        std::vector<Vec3> folded = StraightChain(4U);
+        kb::scene::SolveChainIk(folded, scratch, Vec3{ 0.0F, 2.0F, 0.0F }, std::nullopt, settings);
+        Require(kb::math::Length(folded.back() - Vec3{ 0.0F, 2.0F, 0.0F }) < 1.0e-3F && KeepsUnitLengths(folded),
+            "A straight chain must fold onto a nearer target on its own line");
+
+        // A long chain converges within the iteration limit.
+        std::vector<Vec3> longChain = StraightChain(32U);
+        const Vec3 longTarget{ 10.0F, 12.0F, 8.0F };
+        kb::scene::SolveChainIk(longChain, scratch, longTarget, std::nullopt, settings);
+        Require(kb::math::Length(longChain.back() - longTarget) < 1.0e-3F && KeepsUnitLengths(longChain),
+            "A 32-bone chain must reach its target within the iteration limit");
+    }
+
+    std::vector<Vec3> bad = StraightChain(1U);
+    bool refused = false;
+    try {
+        kb::scene::SolveChainIk(bad, scratch, Vec3{ 1.0F, 1.0F, 0.0F }, std::nullopt, fabrik);
+    } catch (const std::invalid_argument&) {
+        refused = true;
+    }
+    Require(refused, "A one-joint chain is not a chain");
+    bad = { Vec3{}, Vec3{} };
+    refused = false;
+    try {
+        kb::scene::SolveChainIk(bad, scratch, Vec3{ 1.0F, 1.0F, 0.0F }, std::nullopt, fabrik);
+    } catch (const std::invalid_argument&) {
+        refused = true;
+    }
+    Require(refused, "A zero-length bone must be refused");
+
+    // A thousand 4-bone chains solve without touching the heap.
+    std::array<Vec3, 4> joints{};
+    std::array<float, 3> lengths{};
+    float worst = 0.0F;
+    BeginAllocationTally();
+    for (int chain = 0; chain < 1000; ++chain) {
+        joints = { Vec3{ 0.0F, 0.0F, 0.0F }, Vec3{ 0.0F, 1.0F, 0.0F }, Vec3{ 0.0F, 2.0F, 0.0F }, Vec3{ 0.0F, 3.0F, 0.0F } };
+        const Vec3 target{ 1.0F + 0.001F * static_cast<float>(chain), 1.5F, 0.5F };
+        kb::scene::SolveChainIk(joints, lengths, target, Vec3{ 0.0F, 1.0F, 3.0F }, fabrik);
+        worst = std::max(worst, kb::math::Length(joints.back() - target));
+    }
+    const AllocationTally tally = EndAllocationTally();
+    Require(tally.count == 0U, "Solving chains must not allocate");
+    Require(worst < 1.0e-3F, "Every chain of the batch must reach its target");
+}
+
+// The chain Root -> Upper -> Lower -> Hand driven by a ChainIK rig constraint, with the Twist helper hanging off Lower.
+void TestChainIkConstraint() {
+    RuleFixture fixture;
+    const auto controllerFor = [](ChainIkSettings settings, float weight) {
+        kb::scene::AnimatorController value{};
+        value.layers = { { .name = "Base", .defaultState = "Pose", .states = { { .name = "Pose", .clipReference = "/Game/Rig/Static.kbanim" } } } };
+        value.rigConstraints.push_back({ .name = "Reach", .type = kb::scene::AnimatorRigConstraintType::ChainIK, .target = "Reach",
+            .poleTarget = "Bend", .weight = weight, .constrainedBoneId = kRoot, .tipBoneId = kHand, .chainIk = settings });
+        return value;
+    };
+    const auto discover = [&fixture](std::string_view name, const kb::scene::AnimatorController& controller) {
+        const std::string file = std::string{ name } + ".kbanimcontroller";
+        Require(kb::scene::AnimationAssetIO::SaveController(fixture.root / "Assets" / "Rig" / file, controller), "A ChainIK controller must save");
+        static_cast<void>(fixture.scene.Assets().Discover());
+        return fixture.scene.Assets().Manager().Registry().FindByPath("/Game/Rig/" + file)->id.value;
+    };
+
+    // Settings survive a save and a load; invalid ones are refused.
+    const ChainIkSettings ccd{ .solver = ChainIkSolver::Ccd, .maxIterations = 256U, .tolerance = 1.0e-4F };
+    static_cast<void>(discover("ChainSaved", controllerFor(ccd, 0.75F)));
+    const auto loaded = kb::scene::AnimationAssetIO::LoadController(fixture.root / "Assets" / "Rig" / "ChainSaved.kbanimcontroller");
+    Require(loaded.has_value() && loaded->rigConstraints.size() == 1U, "A ChainIK controller must load");
+    const kb::scene::AnimatorRigConstraint& saved = loaded->rigConstraints[0];
+    Require(saved.type == kb::scene::AnimatorRigConstraintType::ChainIK && saved.constrainedBoneId == kRoot && saved.tipBoneId == kHand &&
+            saved.midBoneId == 0U && saved.target == "Reach" && saved.poleTarget == "Bend" && saved.weight == 0.75F &&
+            saved.chainIk.solver == ChainIkSolver::Ccd && saved.chainIk.maxIterations == 256U && saved.chainIk.tolerance == 1.0e-4F,
+        "ChainIK settings must survive a save and a load");
+    Require(!kb::scene::AnimationAssetIO::SaveController(fixture.root / "Assets" / "Rig" / "Bad.kbanimcontroller",
+                controllerFor(ChainIkSettings{ .maxIterations = 0U }, 1.0F)),
+        "A ChainIK constraint with no iterations must be refused");
+
+    const kb::scene::SceneEntity fabrikOwner = fixture.Owner(
+        discover("ChainFabrik", controllerFor(ChainIkSettings{ .solver = ChainIkSolver::Fabrik, .maxIterations = 64U, .tolerance = 1.0e-4F }, 1.0F)),
+        kb::scene::MotionSkeletonRuleComponent{});
+    const kb::scene::SceneEntity ccdOwner = fixture.Owner(discover("ChainCcd", controllerFor(ccd, 1.0F)), kb::scene::MotionSkeletonRuleComponent{});
+    fixture.Update(0.0F);
+    Require(kb::math::Length(fixture.Pose(fabrikOwner).currentComponentPose.positions[kHandIndex] - Vec3{ 0.0F, 3.0F, 0.0F }) < 1.0e-4F,
+        "A ChainIK constraint without a target must leave the animated pose alone");
+
+    const Vec3 reach{ 1.5F, 1.5F, 1.0F };
+    const Vec3 bendTo{ 0.0F, 1.5F, 5.0F };
+    const auto aim = [&fixture, reach, bendTo](kb::scene::SceneEntity owner, float positionWeight, float rotationWeight, Quat rotation) {
+        Require(fixture.scene.Animators().SetIkTarget(owner, "Reach", kb::scene::AnimatorIkTarget{ .worldPosition = reach, .worldRotation = rotation,
+                    .positionWeight = positionWeight, .rotationWeight = rotationWeight }) &&
+                fixture.scene.Animators().SetIkTarget(owner, "Bend", kb::scene::AnimatorIkTarget{ .worldPosition = bendTo }),
+            "ChainIK targets must be accepted");
+        fixture.Update(0.0F);
+    };
+    const auto chainOf = [](const kb::scene::AnimatorInstanceSkeletonView& pose) {
+        const std::span<const Vec3> positions = pose.currentComponentPose.positions;
+        return std::array<Vec3, 4>{ positions[kRootIndex], positions[kUpperIndex], positions[kLowerIndex], positions[kHandIndex] };
+    };
+
+    aim(fabrikOwner, 1.0F, 0.0F, Quat{});
+    aim(ccdOwner, 1.0F, 0.0F, Quat{});
+    for (const kb::scene::SceneEntity owner : { fabrikOwner, ccdOwner }) {
+        const kb::scene::AnimatorInstanceSkeletonView pose = fixture.Pose(owner);
+        const std::array<Vec3, 4> chain = chainOf(pose);
+        Require(kb::math::Length(chain[3] - reach) < 1.0e-3F, "The ChainIK constraint must bring the tip bone onto its target");
+        Require(kb::math::Length(chain[0]) < 1.0e-4F, "The ChainIK constraint must keep the chain root in place");
+        Require(KeepsUnitLengths(chain), "The ChainIK constraint must keep the bone lengths");
+        const std::span<const Vec3> positions = pose.currentComponentPose.positions;
+        Require(std::fabs(kb::math::Length(positions[kTwistIndex] - positions[kLowerIndex]) - 0.5F) < 1.0e-4F &&
+                kb::math::Length(positions[kTwistIndex] - Vec3{ 0.0F, 2.5F, 0.0F }) > 0.1F,
+            "A bone hanging off the chain must follow it");
+        Require(BendTowardsPole(chain, bendTo) > 0.999F, "The ChainIK constraint must bend toward its pole target");
+    }
+
+    // The tip can also take the target's orientation.
+    aim(fabrikOwner, 1.0F, 1.0F, AboutY(45.0F));
+    Require(SameRotation(fixture.Pose(fabrikOwner).currentComponentPose.rotations[kHandIndex], AboutY(45.0F)),
+        "A rotation weight must turn the tip bone to the target's orientation");
+
+    // Weight 0 is the animated pose; weight 0.5 turns every bone halfway to the solved one.
+    aim(fabrikOwner, 0.0F, 0.0F, Quat{});
+    const kb::scene::AnimatorInstanceSkeletonView animated = fixture.Pose(fabrikOwner);
+    Require(kb::math::Length(chainOf(animated)[3] - Vec3{ 0.0F, 3.0F, 0.0F }) < 1.0e-4F &&
+            SameRotation(animated.currentLocalPose.rotations[kLowerIndex], AboutY(120.0F)) &&
+            SameRotation(animated.currentLocalPose.rotations[kHandIndex], AboutY(90.0F)),
+        "A zero weight must leave the animated pose");
+    const std::array<Quat, 3> animatedLocal{ animated.currentLocalPose.rotations[kRootIndex], animated.currentLocalPose.rotations[kUpperIndex],
+        animated.currentLocalPose.rotations[kLowerIndex] };
+    aim(fabrikOwner, 1.0F, 0.0F, Quat{});
+    const kb::scene::AnimatorInstanceSkeletonView solved = fixture.Pose(fabrikOwner);
+    const std::array<Quat, 3> solvedLocal{ solved.currentLocalPose.rotations[kRootIndex], solved.currentLocalPose.rotations[kUpperIndex],
+        solved.currentLocalPose.rotations[kLowerIndex] };
+    aim(fabrikOwner, 0.5F, 0.0F, Quat{});
+    const kb::scene::AnimatorInstanceSkeletonView halfway = fixture.Pose(fabrikOwner);
+    for (std::size_t bone = 0U; bone < 3U; ++bone) {
+        Require(SameRotation(halfway.currentLocalPose.rotations[kRootIndex + bone], kb::math::Slerp(animatedLocal[bone], solvedLocal[bone], 0.5F)),
+            "A half weight must interpolate each bone's rotation between the animated and the solved pose");
+    }
+
+    // A chain must follow the skeleton's parent links and may not share bones with another constraint.
+    kb::scene::AnimatorController overlapping = controllerFor(ChainIkSettings{}, 1.0F);
+    overlapping.rigConstraints.push_back({ .name = "Inner", .type = kb::scene::AnimatorRigConstraintType::ChainIK, .target = "Inner",
+        .constrainedBoneId = kUpper, .tipBoneId = kLower });
+    kb::scene::AnimatorController unrelated = controllerFor(ChainIkSettings{}, 1.0F);
+    unrelated.rigConstraints[0].constrainedBoneId = kTwist;
+    for (const auto& [name, controller] : { std::pair{ "ChainOverlap", overlapping }, std::pair{ "ChainUnrelated", unrelated } }) {
+        const kb::scene::SceneEntity owner = fixture.Owner(discover(name, controller), kb::scene::MotionSkeletonRuleComponent{});
+        static_cast<void>(fixture.scene.Runtime().Update(0.0F));
+        const std::vector<std::string> errors = fixture.scene.Runtime().DrainSceneSystemErrors();
+        Require(!fixture.scene.Animators().Exists(owner) &&
+                std::any_of(errors.begin(), errors.end(), [](const std::string& error) { return error.find("cannot bind") != std::string::npos; }),
+            "A ChainIK constraint with an unrelated tip or shared bones must be refused at binding");
+        fixture.scene.Entities().Destroy(owner);
+    }
+}
+
 } // namespace
 
 void RunMotionSkeletonRuleTests() {
     TestTargetRules();
     TestLocalRules();
     TestSpringRule();
+    TestChainIkSolver();
+    TestChainIkConstraint();
 }
 
 } // namespace kb::tests

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/core/ReadSnapshotQueue.hpp"
+#include "engine/scene/AnimationChainIk.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/SkeletonAsset.hpp"
 #include "engine/scene/TransformComponent.hpp"
@@ -171,6 +172,9 @@ enum class AnimatorRigConstraintType : std::uint8_t {
     TwoBoneIK,
     Aim,
     CopyTransform,
+    // Any number of bones from constrainedBoneId (the chain root) down to tipBoneId (the effector), found through
+    // their parent links. Skeletal controllers only; midBoneId stays unset.
+    ChainIK,
 };
 
 // Constraints are evaluated in authored order after all controller layers.
@@ -191,6 +195,8 @@ struct AnimatorRigConstraint {
     SkeletonBoneId constrainedBoneId = 0U;
     SkeletonBoneId midBoneId = 0U;
     SkeletonBoneId tipBoneId = 0U;
+    // ChainIK only: solver, pass limit and reach tolerance.
+    ChainIkSettings chainIk{};
 };
 
 struct AnimatorGraphNodeLayout {

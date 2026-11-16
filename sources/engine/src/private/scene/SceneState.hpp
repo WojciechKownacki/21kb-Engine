@@ -159,6 +159,10 @@ struct AnimatorRuntimeConstraint {
         std::numeric_limits<std::uint32_t>::max();
     std::uint32_t tipBoneIndex =
         std::numeric_limits<std::uint32_t>::max();
+    // ChainIK: the chain's bones, root first, and the solver's scratch, sized once when the constraint binds.
+    std::vector<std::uint32_t> chainBoneIndices;
+    std::vector<Vec3> chainJoints;
+    std::vector<float> chainSegmentLengths;
 };
 
 struct AnimatorInstanceSkeleton {

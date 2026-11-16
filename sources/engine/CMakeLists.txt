@@ -282,6 +282,7 @@ add_library(kb_engine STATIC
     include/engine/scene/ScenePrefabOverrides.hpp
     include/engine/scene/ScenePrefabPrivateScene.hpp
     include/engine/scene/SceneMaterialInstances.hpp
+    include/engine/scene/AnimationChainIk.hpp
     include/engine/scene/AnimationAssets.hpp
     include/engine/scene/SkeletonBindingComponent.hpp
     include/engine/scene/AnimationRetargeting.hpp
@@ -853,6 +854,7 @@ add_library(kb_engine STATIC
     src/scene/ScenePhysicsBodyIterationService.cpp
     src/scene/SceneMaterialInstanceService.cpp
     src/scene/AnimationAssetIO.cpp
+    src/scene/AnimationChainIk.cpp
     src/scene/AnimationAssetLoaders.cpp
     src/scene/SkeletonAsset.cpp
     src/scene/SkeletonAssetIO.cpp

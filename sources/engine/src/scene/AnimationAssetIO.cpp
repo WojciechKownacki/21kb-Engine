@@ -85,6 +85,7 @@ const char* RigConstraintTypeName(AnimatorRigConstraintType type) {
     case AnimatorRigConstraintType::TwoBoneIK: return "TwoBoneIK";
     case AnimatorRigConstraintType::Aim: return "Aim";
     case AnimatorRigConstraintType::CopyTransform: return "CopyTransform";
+    case AnimatorRigConstraintType::ChainIK: return "ChainIK";
     }
     return "";
 }
@@ -93,6 +94,17 @@ bool ParseRigConstraintType(std::string_view text, AnimatorRigConstraintType& ty
     if (text == "TwoBoneIK") type = AnimatorRigConstraintType::TwoBoneIK;
     else if (text == "Aim") type = AnimatorRigConstraintType::Aim;
     else if (text == "CopyTransform") type = AnimatorRigConstraintType::CopyTransform;
+    else return false;
+    return true;
+}
+
+const char* ChainIkSolverName(ChainIkSolver solver) {
+    return solver == ChainIkSolver::Ccd ? "CCD" : "FABRIK";
+}
+
+bool ParseChainIkSolver(std::string_view text, ChainIkSolver& solver) {
+    if (text == "FABRIK") solver = ChainIkSolver::Fabrik;
+    else if (text == "CCD") solver = ChainIkSolver::Ccd;
     else return false;
     return true;
 }
@@ -401,6 +413,15 @@ bool ValidateAnimatorController(const AnimatorController& controller, std::strin
                            constraint.constrainedPath).second ||
                        !drivenPaths.insert(constraint.midPath).second ||
                        !drivenPaths.insert(constraint.tipPath).second) return false;
+            break;
+        case AnimatorRigConstraintType::ChainIK:
+            // Intermediate bones are known only against a skeleton; the runtime binding checks them.
+            if (constraint.constrainedBoneId == 0U || constraint.tipBoneId == 0U ||
+                constraint.midBoneId != 0U ||
+                constraint.constrainedBoneId == constraint.tipBoneId ||
+                !IsChainIkSettingsValid(constraint.chainIk) ||
+                !drivenBones.insert(constraint.constrainedBoneId).second ||
+                !drivenBones.insert(constraint.tipBoneId).second) return false;
             break;
         case AnimatorRigConstraintType::Aim:
         case AnimatorRigConstraintType::CopyTransform:
@@ -821,6 +842,16 @@ std::optional<AnimatorController> AnimationAssetIO::LoadController(
                 !ParseRigConstraintType(type, constraint.type) ||
                 !EndOfRecord(input)) return std::nullopt;
             controller.rigConstraints.push_back(std::move(constraint));
+        } else if (command == "chainConstraint") {
+            if (schemaVersion != 0U && schemaVersion < 5U) return std::nullopt;
+            AnimatorRigConstraint constraint{ .type = AnimatorRigConstraintType::ChainIK };
+            std::string solver;
+            if (!(input >> std::quoted(constraint.name) >> constraint.constrainedBoneId >>
+                    constraint.tipBoneId >> std::quoted(constraint.target) >>
+                    std::quoted(constraint.poleTarget) >> constraint.weight >> solver >>
+                    constraint.chainIk.maxIterations >> constraint.chainIk.tolerance) ||
+                !ParseChainIkSolver(solver, constraint.chainIk.solver) || !EndOfRecord(input)) return std::nullopt;
+            controller.rigConstraints.push_back(std::move(constraint));
         } else {
             return std::nullopt;
         }
@@ -959,6 +990,18 @@ bool AnimationAssetIO::SaveController(
         }
     }
     for (const AnimatorRigConstraint& constraint : normalized.rigConstraints) {
+        if (constraint.type == AnimatorRigConstraintType::ChainIK) {
+            output << "chainConstraint " << std::quoted(constraint.name) << ' '
+                   << constraint.constrainedBoneId << ' '
+                   << constraint.tipBoneId << ' '
+                   << std::quoted(constraint.target) << ' '
+                   << std::quoted(constraint.poleTarget) << ' '
+                   << constraint.weight << ' '
+                   << ChainIkSolverName(constraint.chainIk.solver) << ' '
+                   << constraint.chainIk.maxIterations << ' '
+                   << constraint.chainIk.tolerance << '\n';
+            continue;
+        }
         if (constraint.constrainedBoneId != 0U) {
             output << "skeletalConstraint "
                    << RigConstraintTypeName(constraint.type) << ' '
