@@ -24,6 +24,7 @@
 #include "rendering/EditorHostSurfaceLayoutResolver.hpp"
 #include "rendering/HierarchyToolbarLayout.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
+#include "rendering/ProjectSettingsPanelRenderer.hpp"
 #include "rendering/ParticleEditorPanelLayout.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 #include "rendering/SkeletalMeshEditorPanelLayout.hpp"
@@ -538,6 +539,24 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
     }
 
     const std::optional<RECT> projectSettingsContent = EditorPanelContentResolver::Resolve(DockPanelKind::ProjectSettings, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+    // The Plugins page of Settings: row hover and the scrollbar drag.
+    std::optional<RECT> pluginsPage;
+    if (projectSettingsContent.has_value() &&
+        static_cast<ProjectSettingsCategory>(sceneContext_.ProjectSettings().SelectedCategory()) == ProjectSettingsCategory::Plugins) {
+        pluginsPage = ProjectSettingsPanelRenderer::EmbeddedPage(*projectSettingsContent, sceneContext_);
+    }
+    EditorPluginsPointerController pluginsPointer(sceneContext_);
+    if (pluginsPointer.HandlePointerMove(pluginsPage, x, y, leftButtonDown)) {
+        if (projectSettingsContent.has_value()) {
+            EditorWindowInvalidator::InvalidatePanel(messageWindow, *projectSettingsContent);
+        }
+        if (sceneContext_.Plugins().IsScrollbarDragging()) {
+            return;
+        }
+    }
+    if (pluginsPointer.Contains(pluginsPage, x, y)) {
+        return;
+    }
     EditorProjectSettingsPointerController projectSettingsPointer(sceneContext_);
     if (projectSettingsPointer.UpdateHoverOrClear(projectSettingsContent, x, y) &&
         projectSettingsContent.has_value()) {
@@ -547,19 +566,6 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
         return;
     }
 
-    const std::optional<RECT> pluginsContent = EditorPanelContentResolver::Resolve(DockPanelKind::Plugins, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
-    EditorPluginsPointerController pluginsPointer(sceneContext_);
-    if (pluginsPointer.HandlePointerMove(pluginsContent, x, y, leftButtonDown)) {
-        if (pluginsContent.has_value()) {
-            EditorWindowInvalidator::InvalidatePanel(messageWindow, *pluginsContent);
-        }
-        if (sceneContext_.Plugins().IsScrollbarDragging()) {
-            return;
-        }
-    }
-    if (pluginsPointer.Contains(pluginsContent, x, y)) {
-        return;
-    }
     if (dockController_.HandlePointerMove(messageWindow, x, y, leftButtonDown)) {
         if (messageWindow == mainWindow_) {
             EditorHostSurfaceLayoutResolver::SyncMainWindow(mainWindow_, dockModel_, metrics_, sceneContext_, sceneViewport_);

@@ -25,11 +25,9 @@
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/ParticleEditorPanelRenderer.hpp"
 #include "rendering/BuildGamePanelRenderer.hpp"
-#include "rendering/PluginsPanelRenderer.hpp"
 #include "rendering/AgentPanelRenderer.hpp"
 #include "rendering/ProjectFilesPanelRenderer.hpp"
 #include "rendering/ProjectSettingsPanelRenderer.hpp"
-#include "rendering/EditorSettingsPanelRenderer.hpp"
 #include "rendering/ScriptEditorPanelRenderer.hpp"
 #include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
 #include "rendering/GamePanelContentRenderer.hpp"
@@ -458,12 +456,6 @@ void PanelContentRenderer::Paint(
         break;
     case DockPanelKind::ProjectSettings:
         ProjectSettingsPanelRenderer{}.Paint(dc, content, theme, sceneContext, renderBackendSettings);
-        break;
-    case DockPanelKind::EditorSettings:
-        EditorSettingsPanelRenderer{}.Paint(dc, content, theme, sceneContext);
-        break;
-    case DockPanelKind::Plugins:
-        PluginsPanelRenderer{}.Paint(dc, content, theme, sceneContext);
         break;
     case DockPanelKind::BuildGame:
         BuildGamePanelRenderer{}.Paint(dc, content, theme, sceneContext);

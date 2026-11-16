@@ -2527,6 +2527,10 @@ ReadScriptValue(
             index = static_cast<int>(ProjectSettingsCategory::Tags);
         } else if (*category == "navigation") {
             index = static_cast<int>(ProjectSettingsCategory::Navigation);
+        } else if (*category == "editor") {
+            index = static_cast<int>(ProjectSettingsCategory::EditorGeneral);
+        } else if (*category == "plugins") {
+            index = static_cast<int>(ProjectSettingsCategory::Plugins);
         } else {
             return { false, "unknown project settings category" };
         }

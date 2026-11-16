@@ -101,11 +101,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "pl-plugins",
       "text_fits": true
     },
@@ -225,11 +225,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "de-plugins",
       "text_fits": true
     },
@@ -349,11 +349,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "fr-plugins",
       "text_fits": true
     },
@@ -473,11 +473,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "es-plugins",
       "text_fits": true
     },
@@ -597,11 +597,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "it-plugins",
       "text_fits": true
     },
@@ -721,11 +721,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "ru-plugins",
       "text_fits": true
     },
@@ -845,11 +845,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "ja-plugins",
       "text_fits": true
     },
@@ -969,11 +969,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "zh-Hans-plugins",
       "text_fits": true
     },
@@ -1093,11 +1093,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "ko-plugins",
       "text_fits": true
     },
@@ -1217,11 +1217,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "pt-PT-plugins",
       "text_fits": true
     },
@@ -1341,11 +1341,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "pt-BR-plugins",
       "text_fits": true
     },
@@ -1465,11 +1465,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "nl-plugins",
       "text_fits": true
     },
@@ -1589,11 +1589,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "cs-plugins",
       "text_fits": true
     },
@@ -1713,11 +1713,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "hu-plugins",
       "text_fits": true
     },
@@ -1837,11 +1837,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "ro-plugins",
       "text_fits": true
     },
@@ -1961,11 +1961,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "uk-plugins",
       "text_fits": true
     },
@@ -2085,11 +2085,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "sv-plugins",
       "text_fits": true
     },
@@ -2209,11 +2209,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "tr-plugins",
       "text_fits": true
     },
@@ -2333,11 +2333,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "hi-plugins",
       "text_fits": true
     },
@@ -2457,11 +2457,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "el-plugins",
       "text_fits": true
     },
@@ -2581,11 +2581,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "da-plugins",
       "text_fits": true
     },
@@ -2705,11 +2705,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "nb-plugins",
       "text_fits": true
     },
@@ -2829,11 +2829,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "fi-plugins",
       "text_fits": true
     },
@@ -2953,11 +2953,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "sk-plugins",
       "text_fits": true
     },
@@ -3077,11 +3077,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "bg-plugins",
       "text_fits": true
     },
@@ -3201,11 +3201,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "sr-plugins",
       "text_fits": true
     },
@@ -3325,11 +3325,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "hr-plugins",
       "text_fits": true
     },
@@ -3449,11 +3449,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "ar-plugins",
       "text_fits": true
     },
@@ -3573,11 +3573,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "id-plugins",
       "text_fits": true
     },
@@ -3697,11 +3697,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "th-plugins",
       "text_fits": true
     },
@@ -3821,11 +3821,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "vi-plugins",
       "text_fits": true
     },
@@ -3945,11 +3945,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "ms-plugins",
       "text_fits": true
     },
@@ -4069,11 +4069,11 @@
     },
     {
       "op": "select_project_settings_category",
-      "category": "inputs"
+      "category": "plugins"
     },
     {
       "op": "capture",
-      "panel": "plugins",
+      "panel": "project_settings",
       "checkpoint": "en-plugins",
       "text_fits": true
     },

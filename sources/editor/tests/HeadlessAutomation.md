@@ -56,7 +56,7 @@ scenario-local aliases.
 | `map2d_dock` | Map `entity`. Creates a hidden native host, docks the production map canvas at a known size, then verifies hiding it with its panel. |
 | `assert_map2d_camera` | Map `entity`; optional `orientation`: `flat` or `wall`. Verifies a primary orthographic map camera and its direction. |
 | `assert_map2d_collision` | Map `entity`, expected `boxes` count. Checks the generated solid colliders, including shared-map updates and Undo/Redo. |
-| `select_project_settings_category` | `category`: `inputs`, `graphics`, `physics`, `display`, `audio`, `scenes`, or `tags`; selects the visible Project Settings page before a panel capture |
+| `select_project_settings_category` | `category`: `inputs`, `graphics`, `physics`, `display`, `audio`, `scenes`, `tags`, `navigation`, `editor`, or `plugins`; selects the visible Project Settings page before a panel capture |
 | `set_joint_connection` | `entity` (a Joint owner) and `connected_entity`; assigns the Joint's referenced entity and marks it modified for scene persistence |
 | `assert_joint_connection` | `entity` and `connected_entity`; verifies the Joint still targets that entity, including after scene reload |
 | `set_visibility_mode` | `entity`, authoring `mode`: `inherit`, `visible`, or `hidden`; uses the production Inspector command and its undo stack |
@@ -202,7 +202,7 @@ scenario-local aliases.
 | `inspector_pointer` | `action` (`down`, `drag`, `up`); `x`,`y` for down/drag |
 | `inspector_text` | `text` |
 | `inspector_key` | `key` (`enter`, `escape`, `backspace`, `delete`, `left`, `right`, `home`, `end`) |
-| `capture` | `panel`, `checkpoint`; panels: `hierarchy`, `scene`, `inspector`, `assets`, `console`, `project_settings`, `script_editor`, `plugins`, `material_editor`, `skeletal_mesh_editor`, `animation_clip_editor`, `animator_editor`. `script_editor` captures the real child editor renderer and loaded document, not only panel chrome. |
+| `capture` | `panel`, `checkpoint`; panels: `hierarchy`, `scene`, `inspector`, `assets`, `console`, `project_settings`, `script_editor`, `material_editor`, `skeletal_mesh_editor`, `animation_clip_editor`, `animator_editor`. `script_editor` captures the real child editor renderer and loaded document, not only panel chrome. |
 | `capture_screenshot_matrix` | `panel`, `checkpoint`; captures `material_editor`, `skeletal_mesh_editor`, `animation_clip_editor`, or `animator_editor` through production docked and floating renderers. Every invocation writes six checked BMPs: 1920x1080, 1366x768, and a 1280x720 logical client at 150% DPI (a 1920x1080 bitmap), each in both layouts. |
 | `verify_viewport_host_lifecycle` | none; renders the real native viewport child plus, when an Animator Controller asset is open, the Animator Editor preview surface (the shared host-surface mechanism keyed by `panel.id` used by all three animation editors). Verifies over every host surface registered for the window that minimize, application deactivation, DPI transition, resize/move, and removing the panel leave no viewport overlay visible over its host, and that an owned overlay popup (scene viewport toolbar dropdown) shown through the production paint path is hidden by the `WM_ACTIVATEAPP` deactivation path and restored by the repaint after reactivation. |
 | `capture_runtime` | `checkpoint`; optional `require_non_uniform`; requires Play Mode and writes a PNG from the production GPU readback path |

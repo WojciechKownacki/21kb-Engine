@@ -101,14 +101,8 @@ struct TabTitleSlot {
     case DockPanelKind::ProjectSettings:
         icon = HeroIconKind::Gamepad2;
         return true;
-    case DockPanelKind::EditorSettings:
-        icon = HeroIconKind::AdjustmentsHorizontal;
-        return true;
     case DockPanelKind::ScriptEditor:
         icon = HeroIconKind::CommandLine;
-        return true;
-    case DockPanelKind::Plugins:
-        icon = HeroIconKind::AdjustmentsHorizontal;
         return true;
     case DockPanelKind::MaterialEditor:
         icon = HeroIconKind::RectangleGroup;

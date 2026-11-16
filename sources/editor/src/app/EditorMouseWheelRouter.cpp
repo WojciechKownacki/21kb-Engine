@@ -281,17 +281,12 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
         return true;
     }
 
-    const std::optional<RECT> pluginsContent = EditorPanelContentResolver::Resolve(DockPanelKind::Plugins, messageWindow_, mainWindow_, dockModel_, floatingWindows_, metrics_);
-    EditorPluginsPointerController pluginsPointer(sceneContext_);
-    if (pluginsContent.has_value() && pluginsPointer.HandleMouseWheel(*pluginsContent, x, y, wheelDelta)) {
-        EditorWindowInvalidator::InvalidatePanel(messageWindow_, *pluginsContent);
-        return true;
-    }
-    // The same list on the Plugins page of Settings.
+    // The list on the Plugins page of Settings.
     if (const std::optional<RECT> settingsContent = EditorPanelContentResolver::Resolve(DockPanelKind::ProjectSettings, messageWindow_, mainWindow_, dockModel_, floatingWindows_, metrics_);
         settingsContent.has_value() &&
         static_cast<ProjectSettingsCategory>(sceneContext_.ProjectSettings().SelectedCategory()) == ProjectSettingsCategory::Plugins) {
         const std::optional<RECT> page = ProjectSettingsPanelRenderer::EmbeddedPage(*settingsContent, sceneContext_);
+        EditorPluginsPointerController pluginsPointer(sceneContext_);
         if (page.has_value() && pluginsPointer.HandleMouseWheel(*page, x, y, wheelDelta)) {
             EditorWindowInvalidator::InvalidatePanel(messageWindow_, *settingsContent);
             return true;

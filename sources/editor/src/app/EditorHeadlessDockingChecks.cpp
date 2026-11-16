@@ -177,6 +177,14 @@ EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::VerifyDockingInteracti
     };
     const auto tabOf = [&](DockPanelKind kind) { return LayoutOf(editor.Layout(), id(kind)); };
     const auto floatingWindow = [&](DockPanelKind kind) { return editor.FloatingWindows().Queries().WindowForPanel(id(kind)); };
+    // Opens a panel as a tab of the Inspector's group, whichever area it usually opens in.
+    const auto openBesideInspector = [&](DockPanelKind kind) {
+        static_cast<void>(dock.Commands().ActivatePanelKind(kind, DockArea::Right));
+        const std::uint32_t leaf = dock.Queries().LeafOfPanel(id(DockPanelKind::Inspector));
+        if (dock.Queries().LeafOfPanel(id(kind)) != leaf) {
+            dock.Commands().DockPanelTo(id(kind), DockDropPreview{ .zone = DockDropZone::Center, .leafId = leaf });
+        }
+    };
 
     // A new project opens with the everyday panels and nothing else.
     {
@@ -428,8 +436,8 @@ EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::VerifyDockingInteracti
 
     // A group with more tabs than its strip has room for keeps every tab reachable.
     {
-        for (const DockPanelKind kind : { DockPanelKind::ProjectSettings, DockPanelKind::Plugins, DockPanelKind::EditorSettings }) {
-            static_cast<void>(dock.Commands().ActivatePanelKind(kind, DockArea::Right));
+        for (const DockPanelKind kind : { DockPanelKind::ProjectSettings, DockPanelKind::ScriptEditor, DockPanelKind::BuildGame }) {
+            openBesideInspector(kind);
         }
         const DockLayout layout = editor.Layout();
         const auto inspector = LayoutOf(layout, id(DockPanelKind::Inspector));
@@ -440,12 +448,12 @@ EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::VerifyDockingInteracti
             }
         }
         expect(reachable, "crowded strip keeps every tab inside it");
-        const auto active = LayoutOf(layout, id(DockPanelKind::EditorSettings));
+        const auto active = LayoutOf(layout, id(DockPanelKind::BuildGame));
         expect(active && inspector && active->tab.width > inspector->tab.width, "crowded strip leaves the active tab its title");
         InvalidateRect(main, nullptr, FALSE);
         editor.Pump();
         capture(main, "dock-crowded-strip");
-        if (const auto last = LayoutOf(layout, id(DockPanelKind::EditorSettings)); last.has_value()) {
+        if (const auto last = LayoutOf(layout, id(DockPanelKind::BuildGame)); last.has_value()) {
             pointer.Down(main, POINT{ last->tab.x + (last->tab.width / 3), last->tab.y + (last->tab.height / 2) });
             pointer.Up(main);
         }
@@ -454,8 +462,8 @@ EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::VerifyDockingInteracti
 
     // A tab whose title is cut short shows the whole title under the pointer; a tab that fits shows nothing.
     {
-        for (const DockPanelKind kind : { DockPanelKind::ProjectSettings, DockPanelKind::Plugins, DockPanelKind::EditorSettings }) {
-            static_cast<void>(dock.Commands().ActivatePanelKind(kind, DockArea::Right));
+        for (const DockPanelKind kind : { DockPanelKind::ProjectSettings, DockPanelKind::ScriptEditor, DockPanelKind::BuildGame }) {
+            openBesideInspector(kind);
         }
         InvalidateRect(main, nullptr, FALSE);
         editor.Pump();

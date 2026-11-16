@@ -1589,39 +1589,45 @@ void RunCameraInspectorSuite(Report& report) {
             return InspectorHitKind::TextField;
         }
     };
-    const int maxScroll =
-        InspectorPanelRenderer::MaxScrollOffset(kContent, context);
-    const int scrollStep =
-        std::max(1, static_cast<int>(kContent.bottom - kContent.top) - 80);
-    for (int scroll = 0;;) {
-        static_cast<void>(
-            context.Inspector().SetScrollOffset(scroll, maxScroll));
-        for (int y = kContent.top; y < kContent.bottom; ++y) {
-            for (int x = kContent.left; x < kContent.right; ++x) {
-                const InspectorPanelRenderer::Hit hit =
-                    InspectorPanelRenderer::HitTest(kContent, context, x, y);
-                if (hit.section != InspectorSectionId::Camera) {
-                    continue;
-                }
-                for (std::size_t index = 0U; index < properties.size(); ++index) {
-                    if (hits[index].kind == InspectorHitKind::None &&
-                        hit.property == properties[index] &&
-                        hit.kind == expectedKind(properties[index])) {
-                        hits[index] = hit;
+    // Perspective shows the vertical FOV row; orthographic shows the height row instead.
+    const auto scanHits = [&]() {
+        const int maxScroll =
+            InspectorPanelRenderer::MaxScrollOffset(kContent, context);
+        const int scrollStep =
+            std::max(1, static_cast<int>(kContent.bottom - kContent.top) - 80);
+        for (int scroll = 0;;) {
+            static_cast<void>(
+                context.Inspector().SetScrollOffset(scroll, maxScroll));
+            for (int y = kContent.top; y < kContent.bottom; ++y) {
+                for (int x = kContent.left; x < kContent.right; ++x) {
+                    const InspectorPanelRenderer::Hit hit =
+                        InspectorPanelRenderer::HitTest(kContent, context, x, y);
+                    if (hit.section != InspectorSectionId::Camera) {
+                        continue;
+                    }
+                    for (std::size_t index = 0U; index < properties.size(); ++index) {
+                        if (hits[index].kind == InspectorHitKind::None &&
+                            hit.property == properties[index] &&
+                            hit.kind == expectedKind(properties[index])) {
+                            hits[index] = hit;
+                        }
                     }
                 }
             }
+            if (scroll >= maxScroll) {
+                break;
+            }
+            scroll = std::min(scroll + scrollStep, maxScroll);
         }
-        if (scroll >= maxScroll) {
-            break;
+        static_cast<void>(context.Inspector().SetScrollOffset(0, maxScroll));
+    };
+    scanHits();
+    for (std::size_t index = 0U; index < hits.size(); ++index) {
+        if (properties[index] != InspectorPropertyId::CameraOrthographicHeight) {
+            report.Check(
+                hits[index].kind != InspectorHitKind::None,
+                "LIB-135 Camera field is visible and hit-testable in the production Inspector");
         }
-        scroll = std::min(scroll + scrollStep, maxScroll);
-    }
-    static_cast<void>(context.Inspector().SetScrollOffset(0, maxScroll));
-    for (const InspectorPanelRenderer::Hit& hit : hits) {
-        report.Check(
-            hit.kind != InspectorHitKind::None,
-            "LIB-135 Camera field is visible and hit-testable in the production Inspector");
     }
 
     const auto hitFor = [&properties, &hits](InspectorPropertyId property) {
@@ -1672,6 +1678,10 @@ void RunCameraInspectorSuite(Report& report) {
             camera()->projection ==
             kb::scene::CameraProjection::Orthographic,
         "LIB-135 Camera projection edit reaches the live component");
+    scanHits();
+    report.Check(
+        hitFor(InspectorPropertyId::CameraOrthographicHeight).kind != InspectorHitKind::None,
+        "LIB-135 Camera orthographic height is visible and hit-testable once projection is orthographic");
     report.Check(
         click(hitFor(InspectorPropertyId::CameraPrimary)),
         "LIB-135 Camera primary click is handled");

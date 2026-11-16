@@ -65,17 +65,20 @@ struct ParseState {
     std::unordered_set<std::uint32_t>& claimed;
     std::uint32_t& nextNodeId;
     std::uint32_t depth = 0U;
+    // Set when the text is malformed; a group left empty by dropped panels is not a failure.
+    bool failed = false;
 };
 
 // A saved file is untrusted input: bound the recursion rather than trusting the
 // stream to terminate.
 constexpr std::uint32_t kMaximumDepth = 32U;
 
-// The tabs of a leaf, after its tag: the active panel, the count and the panels.
+// The tabs of a leaf, after its tag: the active panel, the count and the panels. A panel this build
+// no longer has is dropped; the leaf may end up empty, which the caller removes.
 [[nodiscard]] bool ParseLeafBody(ParseState& state, DockNode& node) {
     std::uint32_t activePanelId = 0U;
     std::uint32_t count = 0U;
-    if (!state.reader.Read(activePanelId) || !state.reader.Read(count) || count > 64U) {
+    if (!state.reader.Read(activePanelId) || !state.reader.Read(count) || count == 0U || count > 64U) {
         return false;
     }
     node.kind = DockNode::Kind::Leaf;
@@ -84,15 +87,17 @@ constexpr std::uint32_t kMaximumDepth = 32U;
         if (!state.reader.Read(panelId)) {
             return false;
         }
-        // A layout naming a panel this build does not have, or naming one twice, is
-        // refused outright - half a workspace is worse than the default one.
-        if (!state.knownPanels.contains(panelId) || !state.claimed.insert(panelId).second) {
+        if (!state.knownPanels.contains(panelId)) {
+            continue;
+        }
+        // Naming a panel twice is refused outright - half a workspace is worse than the default one.
+        if (!state.claimed.insert(panelId).second) {
             return false;
         }
         node.panels.push_back(panelId);
     }
     if (node.panels.empty()) {
-        return false;
+        return true;
     }
     node.activePanelId = std::ranges::find(node.panels, activePanelId) == node.panels.end()
         ? node.panels.front()
@@ -100,7 +105,9 @@ constexpr std::uint32_t kMaximumDepth = 32U;
     return true;
 }
 
+// Null when the text is malformed (state.failed) or when every panel under the node was dropped.
 [[nodiscard]] std::unique_ptr<DockNode> ParseNode(ParseState& state) {
+    state.failed = true;
     if (state.depth >= kMaximumDepth) {
         return nullptr;
     }
@@ -125,15 +132,26 @@ constexpr std::uint32_t kMaximumDepth = 32U;
         node->ratio = ratio;
         ++state.depth;
         node->first = ParseNode(state);
+        if (state.failed) {
+            return nullptr;
+        }
         node->second = ParseNode(state);
         --state.depth;
-        return node->first != nullptr && node->second != nullptr ? std::move(node) : nullptr;
+        if (state.failed) {
+            return nullptr;
+        }
+        // A side left empty collapses into the other one, as when its last tab is closed.
+        if (node->first == nullptr || node->second == nullptr) {
+            return node->first != nullptr ? std::move(node->first) : std::move(node->second);
+        }
+        return node;
     }
 
     if (kind != "L" || !ParseLeafBody(state, *node)) {
         return nullptr;
     }
-    return node;
+    state.failed = false;
+    return node->panels.empty() ? nullptr : std::move(node);
 }
 
 } // namespace
@@ -195,7 +213,7 @@ bool DockLayoutSerializer::Parse(
     std::unique_ptr<DockNode> parsedRoot;
     if (!reader.NextIsFloating()) {
         parsedRoot = ParseNode(state);
-        if (parsedRoot == nullptr) {
+        if (state.failed) {
             return false;
         }
     }
@@ -207,7 +225,12 @@ bool DockLayoutSerializer::Parse(
         if (tag != "F" || !ParseLeafBody(state, group)) {
             return false;
         }
-        groups.push_back(std::move(group));
+        if (!group.panels.empty()) {
+            groups.push_back(std::move(group));
+        }
+    }
+    if (parsedRoot == nullptr && groups.empty()) {
+        return false;
     }
     nextNodeId = candidateNodeId;
     root = std::move(parsedRoot);

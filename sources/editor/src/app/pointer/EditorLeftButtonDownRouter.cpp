@@ -2325,6 +2325,9 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             if (static_cast<ProjectSettingsCategory>(sceneContext_.ProjectSettings().SelectedCategory()) == ProjectSettingsCategory::Plugins) {
                 EditorPluginsPointerController pluginsPointer(sceneContext_);
                 handled = pluginsPointer.HandlePointerDown(*page, x, y);
+                if (sceneContext_.Plugins().IsScrollbarDragging()) {
+                    SetCapture(messageWindow);
+                }
             } else {
                 EditorSettingsPointerController editorSettingsPointer(sceneContext_, dockModel_, floatingWindows_);
                 handled = editorSettingsPointer.HandlePointerDown(messageWindow, EditorSettingsPanelRenderer::ContentForPage(*page), x, y);
@@ -2343,28 +2346,6 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 renderBackendSettings_,
                 mainWindow_)) {
             sceneViewport_.RequestPresent();
-        }
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-        return;
-    }
-
-    if (panelHit.inEditorSettingsPanel) {
-        EditorSettingsPointerController editorSettingsPointer(sceneContext_, dockModel_, floatingWindows_);
-        if (editorSettingsPointer.HandlePointerDown(messageWindow, *panelHit.editorSettingsContent, x, y)) {
-            sceneViewport_.RequestPresent();
-        }
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-        return;
-    }
-
-    if (panelHit.inPluginsPanel) {
-        EditorPluginsPointerController pluginsPointer(sceneContext_);
-        if (pluginsPointer.HandlePointerDown(*panelHit.pluginsContent, x, y)) {
-            // A plugin change or a scene reload can change what the viewport draws.
-            sceneViewport_.RequestPresent();
-        }
-        if (sceneContext_.Plugins().IsScrollbarDragging()) {
-            SetCapture(messageWindow);
         }
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         return;

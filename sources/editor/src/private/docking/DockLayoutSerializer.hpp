@@ -28,10 +28,11 @@ public:
     [[nodiscard]] static std::string Serialize(const DockNode* root);
     [[nodiscard]] static std::string Serialize(const DockNode* root, const std::vector<DockNode>& floating);
 
-    // Rebuilds the tree. Returns nullptr when the text is malformed, when a leaf
-    // would end up empty, or when it names a panel outside knownPanels or names one
-    // twice - such a layout is refused rather than half-applied. Panels the text does
-    // not mention are left to the caller: they were closed or floating when it was
+    // Rebuilds the tree. Returns nullptr when the text is malformed, names a panel
+    // twice, or holds no panel this build has - such a layout is refused rather than
+    // half-applied. A panel outside knownPanels (one a later build removed) is dropped:
+    // its tab goes, an emptied group goes with it, and the rest is kept. Panels the text
+    // does not mention are left to the caller: they were closed or floating when it was
     // written, and neither belongs in the dock tree.
     [[nodiscard]] static std::unique_ptr<DockNode> Parse(
         std::string_view text,

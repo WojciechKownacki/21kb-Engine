@@ -375,13 +375,9 @@ FindInspectorHit(
     if (panel == "project_settings") {
         return DockPanelKind::ProjectSettings;
     }
-    if (panel == "editor_settings") {
-        return DockPanelKind::EditorSettings;
-    }
     if (panel == "script_editor") {
         return DockPanelKind::ScriptEditor;
     }
-    if (panel == "plugins") return DockPanelKind::Plugins;
     if (panel == "build_game") return DockPanelKind::BuildGame;
     if (panel == "material_editor") {
         return DockPanelKind::MaterialEditor;

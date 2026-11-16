@@ -1043,8 +1043,6 @@ void RunSkeletalMeshEditorDefaultLayoutTest() {
 void RunClosedUtilityPanelsReopenInRightDockTest() {
     constexpr std::array utilityPanels{
         kb::editor::DockPanelKind::ProjectSettings,
-        kb::editor::DockPanelKind::EditorSettings,
-        kb::editor::DockPanelKind::Plugins,
     };
 
     kb::editor::EditorDockModel model;
@@ -1341,10 +1339,18 @@ void RunCrowdedTabStripTest() {
 
     kb::editor::EditorDockModel model;
     const kb::editor::DockPanel& inspector = *RequirePanel(model, 4U);
-    for (const kb::editor::DockPanelKind kind : { kb::editor::DockPanelKind::ProjectSettings, kb::editor::DockPanelKind::Plugins, kb::editor::DockPanelKind::EditorSettings }) {
-        kb::editor::tests::Require(model.Commands().ActivatePanelKind(kind, kb::editor::DockArea::Right), "a side panel should open beside the Inspector");
-    }
     const std::uint32_t leaf = model.Queries().LeafOfPanel(inspector.id);
+    for (const kb::editor::DockPanelKind kind : { kb::editor::DockPanelKind::ProjectSettings, kb::editor::DockPanelKind::ScriptEditor, kb::editor::DockPanelKind::BuildGame }) {
+        kb::editor::tests::Require(model.Commands().ActivatePanelKind(kind, kb::editor::DockArea::Right), "a side panel should open");
+        const kb::editor::DockPanel* opened = nullptr;
+        for (const kb::editor::DockPanel& candidate : model.Queries().Panels()) {
+            if (candidate.kind == kind) opened = &candidate;
+        }
+        kb::editor::tests::Require(opened != nullptr, "an opened panel should be registered");
+        if (model.Queries().LeafOfPanel(opened->id) != leaf) {
+            model.Commands().DockPanelTo(opened->id, kb::editor::DockDropPreview{ .zone = kb::editor::DockDropZone::Center, .leafId = leaf });
+        }
+    }
     kb::editor::tests::Require(leaf != 0U && model.Queries().PanelsSharingLeaf(inspector.id).size() == 5U,
         "the Inspector's group should hold the panels opened beside it");
     const kb::editor::DockLayout layout = model.Queries().BuildLayout(1280, 760, 48, 24, 28, 92, 156, 3);
@@ -1358,8 +1364,8 @@ void RunCrowdedTabStripTest() {
         "the maximized group should be reported by the model");
     kb::editor::tests::Require(model.Commands().RestoreMaximizedLeaf() && model.Queries().MaximizedLeafId() == 0U,
         "restoring should leave no group maximized");
-    kb::editor::tests::Require(model.Queries().LeafOfPanel(RequirePanel(model, 8U)->id) == 0U &&
-            model.Queries().PanelsSharingLeaf(RequirePanel(model, 8U)->id).empty(),
+    kb::editor::tests::Require(model.Queries().LeafOfPanel(RequirePanel(model, 10U)->id) == 0U &&
+            model.Queries().PanelsSharingLeaf(RequirePanel(model, 10U)->id).empty(),
         "a closed panel belongs to no group");
 }
 
@@ -2127,7 +2133,48 @@ void RunLayoutWithSingleFloatingPanelStillLoadsTest() {
         "restoring a layout with no windows should close the windows of the arrangement it replaces");
 }
 
+void RunLayoutNamingRemovedPanelsKeepsTheRestTest() {
+    // Panels 9 and 15 no longer exist. A layout saved while they were open still loads: their tabs
+    // go, an emptied window goes, and everything else stays where it was.
+    kb::editor::EditorDockModel reference;
+    const std::string defaults = reference.Commands().SerializeWorkspace();
+    const std::string rightGroup = "L 4 2 4 23";
+    kb::editor::tests::Require(defaults.find(rightGroup) != std::string::npos, "the default Inspector group should read as expected");
+    std::string saved = defaults;
+    saved.replace(saved.find(rightGroup), rightGroup.size(), "L 9 3 4 9 23");
+    saved += " F 15 1 15";
+
+    kb::editor::EditorDockModel restored;
+    kb::editor::tests::Require(restored.Commands().RestoreWorkspace(saved),
+        "a layout naming removed panels should still load");
+    kb::editor::tests::Require(restored.Commands().SerializeWorkspace() == defaults,
+        "the removed panels should vanish and the rest of the layout stay as saved");
+    kb::editor::tests::Require(restored.Queries().FloatingGroups().empty(),
+        "a window holding only a removed panel should not exist");
+    kb::editor::tests::Require(RequirePanel(restored, 4U)->visible && RequirePanel(restored, 23U)->visible,
+        "the panels that stayed in the group should still be open");
+
+    // The session of a removed floating panel is ignored the same way.
+    const std::vector<kb::editor::EditorPanelSession> sessions{
+        kb::editor::EditorPanelSession{ .panelId = 15U, .visible = true, .area = kb::editor::DockArea::Floating,
+            .floatingRect = kb::editor::DockRect{ 168, 128, 720, 600 } },
+    };
+    kb::editor::EditorDockModel applied;
+    kb::editor::tests::Require(kb::editor::EditorWorkspaceArrangement::Apply(applied,
+            kb::editor::EditorLayoutPreset{ .tree = saved, .panels = sessions }) &&
+            applied.Commands().SerializeWorkspace() == defaults && applied.Queries().FloatingGroups().empty(),
+        "a saved arrangement with a removed floating panel should load without it");
+
+    // A branch whose panels are all gone collapses into its sibling; a layout with nothing left is refused.
+    kb::editor::tests::Require(restored.Commands().RestoreWorkspace("S H 0.5 L 15 1 15 L 2 1 2") &&
+            restored.Commands().SerializeWorkspace() == "L 2 1 2",
+        "an emptied branch should collapse into the other side");
+    kb::editor::tests::Require(!restored.Commands().RestoreWorkspace("L 9 2 9 15"),
+        "a layout holding no panel of this build should be refused");
+}
+
 void RunEditorDockingTests() {
+    RunLayoutNamingRemovedPanelsKeepsTheRestTest();
     RunTabActivationPreservesOrderTest();
     RunClosePanelRemovesTabFromLayoutTest();
     RunMaximizedLeafBuildsSingleGroupLayoutTest();

@@ -222,8 +222,10 @@
     { "op": "capture_screenshot_matrix", "panel": "animation_clip_editor", "checkpoint": "02b-animation-clip-editor" },
     { "op": "capture", "panel": "assets", "checkpoint": "03-assets" },
     { "op": "capture", "panel": "project_settings", "checkpoint": "04-project-settings" },
-    { "op": "capture", "panel": "editor_settings", "checkpoint": "04b-editor-settings" },
-    { "op": "capture", "panel": "plugins", "checkpoint": "05-plugins" },
+    { "op": "select_project_settings_category", "category": "editor" },
+    { "op": "capture", "panel": "project_settings", "checkpoint": "04b-editor-settings" },
+    { "op": "select_project_settings_category", "category": "plugins" },
+    { "op": "capture", "panel": "project_settings", "checkpoint": "05-plugins" },
     { "op": "capture", "panel": "build_game", "checkpoint": "05b-build-game" },
 
     { "op": "select_entity", "entity": "player" },
