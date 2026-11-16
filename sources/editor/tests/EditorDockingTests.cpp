@@ -551,7 +551,7 @@ void RunMenuTableTest() {
     }
     std::sort(ids.begin(), ids.end());
     kb::editor::tests::Require(!ids.empty() && std::adjacent_find(ids.begin(), ids.end()) == ids.end(), "Every menu row id is unique");
-    kb::editor::tests::Require(all.size() == 5U + 7U + 3U + 7U + 13U + 4U + 7U + 1U + 6U + 5U + 1U, "AllRows lists the rows of every menu");
+    kb::editor::tests::Require(all.size() == 5U + 7U + 3U + 8U + 13U + 4U + 7U + 1U + 6U + 5U + 1U, "AllRows lists the rows of every menu");
 
     // Rules and captions of the menus whose rows a project supplies: three scenes, two platforms, two projects.
     kb::editor::tests::Require(!EditorMenuTable::StartsGroup(EditorMenuCommand::File, 1, 5) && EditorMenuTable::StartsGroup(EditorMenuCommand::File, 2, 5) &&

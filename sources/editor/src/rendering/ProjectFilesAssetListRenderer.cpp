@@ -89,6 +89,7 @@ void DrawAssetRow(HDC dc, RECT row, const EditorTheme& theme, const EditorAssetI
     RECT icon{ row.left + 6, row.top + 4, row.left + 22, row.bottom - 4 };
     const ProjectFilesAssetIcon assetIcon = ProjectFilesAssetIconResolver::Resolve(asset.metadata, asset.selected);
     Draw::DrawIconWithShadow(dc, icon, assetIcon.kind, assetIcon.color, assetIcon.strokeWidth);
+    Draw::DrawChangeMarker(dc, icon, asset.metadata.physicalPath);
     RECT name{ icon.right + 8, row.top, row.left + 268, row.bottom };
     if (state.TextEditMode() == EditorAssetTextEditMode::RenameAsset && state.TextEditTargetAsset() == asset.metadata.id) {
         Draw::DrawEditField(dc, name, theme, state.TextEditValue());

@@ -12,6 +12,13 @@
 
 namespace kb::editor {
 
+bool EditorHierarchyRowBuilder::IsTransient(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+    const auto* renderer = scene.Components().MeshRenderers().TryGet(entity);
+    // Only the const query is missing from the const scene; reading the flag changes nothing.
+    return (renderer != nullptr && renderer->transient) ||
+        kb::scene::SceneEntities{ const_cast<kb::scene::Scene&>(scene) }.IsTransient(entity);
+}
+
 std::vector<EditorHierarchyRow> EditorHierarchyRowBuilder::Build(const kb::scene::Scene& scene, const CollapsedEntitySet& collapsedEntities, std::string_view searchQuery) {
     std::vector<EditorHierarchyRow> rows;
     const std::string normalizedQuery = EditorHierarchySearchMatcher::Normalize(searchQuery);
@@ -47,7 +54,7 @@ void EditorHierarchyRowBuilder::AppendRoot(const kb::scene::Scene& scene,
 }
 
 void EditorHierarchyRowBuilder::Append(const kb::scene::Scene& scene, const CollapsedEntitySet& collapsedEntities, kb::scene::SceneEntity entity, std::uint32_t depth, std::vector<EditorHierarchyRow>& rows, std::size_t limit) {
-    if (const auto* renderer = scene.Components().MeshRenderers().TryGet(entity); renderer && renderer->transient) return;
+    if (IsTransient(scene, entity)) return;
     const EditorHierarchyRow row = EditorHierarchyRowFactory::Make(scene, collapsedEntities, entity, depth);
     rows.push_back(row);
     if (!row.expanded) {
@@ -61,7 +68,7 @@ void EditorHierarchyRowBuilder::Append(const kb::scene::Scene& scene, const Coll
 }
 
 bool EditorHierarchyRowBuilder::AppendFiltered(const kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::uint32_t depth, std::string_view normalizedQuery, std::vector<EditorHierarchyRow>& rows) {
-    if (const auto* renderer = scene.Components().MeshRenderers().TryGet(entity); renderer && renderer->transient) return false;
+    if (IsTransient(scene, entity)) return false;
     std::vector<EditorHierarchyRow> childRows;
     for (const kb::scene::SceneEntity child : scene.Hierarchy().ChildEntities(entity)) {
         static_cast<void>(AppendFiltered(scene, child, depth + 1U, normalizedQuery, childRows));

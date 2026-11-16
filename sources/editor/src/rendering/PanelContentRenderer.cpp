@@ -38,6 +38,7 @@
 #include "rendering/gdi/ScopedGdiObject.hpp"
 #include "platform/win32/Utf8Gdi.hpp"
 #include "profiler/ProfilerPanel.hpp"
+#include "rendering/VersionControlPanel.hpp"
 
 #include <algorithm>
 #include <array>
@@ -384,6 +385,9 @@ void PanelContentRenderer::Paint(
     }
     case DockPanelKind::Profiler:
         ProfilerPanel::Paint(dc, content, theme, sceneContext);
+        break;
+    case DockPanelKind::VersionControl:
+        VersionControlPanel::Paint(dc, content, theme, sceneContext);
         break;
     case DockPanelKind::Hierarchy:
         HierarchyPanelRenderer{}.Paint(dc, content, theme, sceneContext);

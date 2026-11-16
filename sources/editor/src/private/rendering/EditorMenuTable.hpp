@@ -67,6 +67,7 @@ enum class EditorMenuAction : std::uint8_t {
     OpenEditorSettings,
     OpenPlugins,
     OpenProfiler,
+    OpenVersionControl,
     OpenAudioMixer,
     OpenAgent,
     // World.

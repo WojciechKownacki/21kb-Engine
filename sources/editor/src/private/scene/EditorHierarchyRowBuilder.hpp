@@ -24,6 +24,9 @@ public:
     [[nodiscard]] static std::vector<EditorHierarchyRow> BuildLeading(const kb::scene::Scene& scene, const CollapsedEntitySet& collapsedEntities, std::string_view searchQuery, std::size_t limit);
     static void AppendRoot(const kb::scene::Scene& scene, const CollapsedEntitySet& collapsedEntities,
         kb::scene::SceneEntity root, std::vector<EditorHierarchyRow>& rows);
+    // An object the engine or a preview makes while it runs (a list row, an open dropdown list, a transient mesh):
+    // it is neither listed nor picked as the author's selection.
+    [[nodiscard]] static bool IsTransient(const kb::scene::Scene& scene, kb::scene::SceneEntity entity);
 
 private:
     static void Append(const kb::scene::Scene& scene, const CollapsedEntitySet& collapsedEntities, kb::scene::SceneEntity entity, std::uint32_t depth, std::vector<EditorHierarchyRow>& rows, std::size_t limit = std::numeric_limits<std::size_t>::max());

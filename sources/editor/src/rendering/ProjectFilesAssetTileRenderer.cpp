@@ -625,6 +625,7 @@ void DrawAssetTile(
         const ProjectFilesAssetIcon icon = ProjectFilesAssetIconResolver::Resolve(asset.metadata, asset.selected);
         Draw::DrawIconWithShadow(dc, LargeIconRect(tile, visual), icon.kind, icon.color, icon.strokeWidth);
     }
+    Draw::DrawChangeMarker(dc, RECT{ tile.left, tile.top, tile.right - 4, tile.top + 18 }, asset.metadata.physicalPath);
     if (EditorAudioAssetPreview::IsPlaying(asset.metadata.id)) {
         const int badgeHeight = 32;
         const int badgeTop = (visual.icon.top + visual.icon.bottom - badgeHeight) / 2;

@@ -82,7 +82,7 @@ constexpr std::array<EditorMenuRowSpec, 7> kEditRows{{
       .shortcut = "Ctrl+Shift+P", .action = Action::OpenCommandPalette, .startsGroup = true, .closesFirst = true },
 }};
 
-constexpr std::array<EditorMenuRowSpec, 7> kOptionsRows{{
+constexpr std::array<EditorMenuRowSpec, 8> kOptionsRows{{
     { .id = "options.renderer", .label = EditorMenuText("menu.options.renderer", "Renderer"),
       .detail = EditorMenuText("menu.detail.renderer", "The next graphics backend"), .icon = Icon::Monitor, .action = Action::CycleRenderBackend },
     { .id = "options.projectSettings", .label = EditorMenuText("menu.options.projectSettings", "Project Settings"),
@@ -96,6 +96,9 @@ constexpr std::array<EditorMenuRowSpec, 7> kOptionsRows{{
     { .id = "options.profiler", .label = EditorMenuText("panel.profiler", "Profiler"),
       .detail = EditorMenuText("menu.detail.profiler", "Frame timings"), .icon = Icon::Activity, .action = Action::OpenProfiler,
       .startsGroup = true },
+    { .id = "options.versionControl", .label = EditorMenuText("panel.versionControl", "Version Control"),
+      .detail = EditorMenuText("menu.detail.versionControl", "Changes since the last saved version"), .icon = Icon::Clock,
+      .action = Action::OpenVersionControl },
     { .id = "options.audioMixer", .label = EditorMenuText("inspector.audioMixer.subtitle", "Audio Mixer"),
       .detail = EditorMenuText("menu.detail.audioMixer", "Buses and volumes"), .icon = Icon::SpeakerWave, .action = Action::OpenAudioMixer },
     { .id = "options.agent", .label = EditorMenuText("menu.options.agent", "AI Agent"),

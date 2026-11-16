@@ -41,6 +41,8 @@ enum class DockPanelKind : std::uint8_t {
     StaticMeshEditor,
     // What the player sees through the game's camera, at a chosen resolution, while the game runs.
     Game,
+    // The files of the project that differ from the last saved version, and what changed in the open scene.
+    VersionControl,
 };
 
 enum class DockSplitAxis : std::uint8_t {

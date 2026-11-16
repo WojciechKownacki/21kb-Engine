@@ -14,12 +14,17 @@
 #include "engine/scene/ScenePrefabInstance.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/SceneUI.hpp"
+#include "engine/scene/SceneUIComponentSet.hpp"
+#include "engine/scene/SceneUIHierarchyPresets.hpp"
+#include "engine/ui/UIComponentCatalog.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/SkeletonBindingComponent.hpp"
 #include "scene/EditorSceneMeshAssetActions.hpp"
 #include "scene/EditorScenePrefabActions.hpp"
 #include "scene/EditorHierarchyExpansionState.hpp"
 #include "scene/EditorHierarchyRowBuilder.hpp"
+#include "scene/EditorHierarchyRowModel.hpp"
 #include "scene/EditorHierarchySearchMatcher.hpp"
 #include "scene/EditorHierarchySelectionState.hpp"
 #include "scene/EditorHierarchySelectionNormalizer.hpp"
@@ -419,6 +424,72 @@ void RunSceneSelectionPivotUsesTopLevelSelectionCenterTest() {
     kb::editor::tests::Require(pivot->x == 4.0F && pivot->y == 0.0F && pivot->z == 0.0F, "Selection pivot should average top-level selected transforms only");
 }
 
+// The list an open dropdown makes is the engine's own, not the author's: no row, not selectable from the view.
+void RunOpenDropdownListStaysOutOfHierarchyTest() {
+    kb::scene::Scene scene{ kb::scene::SceneMode::PrefabPrivate };
+    kb::scene::UIComponentSet canvasComponents = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Canvas);
+    canvasComponents.canvasScaler->scaleMode = kb::scene::UICanvasScaleMode::ConstantPixelSize;
+    const kb::scene::SceneObject canvas = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Canvas" });
+    kb::scene::ApplySceneUIComponents(scene.Components().UI(), canvas.Entity(), canvasComponents);
+    const kb::scene::SceneEntity dropdown = kb::scene::CreateUIDropdownHierarchy(scene, canvas, "Quality");
+    kb::scene::SceneUIComponents ui = scene.Components().UI();
+    kb::scene::UIRectTransform rect;
+    rect.offsetMin = { 0.0F, 0.0F };
+    rect.offsetMax = { 160.0F, 30.0F };
+    ui.Set(dropdown, rect);
+    kb::scene::UIDropdown value = *ui.TryGet<kb::scene::UIDropdown>(dropdown);
+    value.optionCount = 2U;
+    static_cast<void>(kb::scene::SetUIDropdownOptionText(value.options[0], "Low"));
+    static_cast<void>(kb::scene::SetUIDropdownOptionText(value.options[1], "High"));
+    ui.Set(dropdown, value);
+
+    kb::scene::SceneUIInput input;
+    input.pointerAvailable = true;
+    input.pointerPosition = { 390.0F, 390.0F };
+    const auto step = [&] { kb::editor::tests::Require(scene.UI().Update(400.0F, 400.0F, input, 0.016F), "The dropdown frame must build"); };
+    step();
+    const auto& elements = scene.UI().Frame().elements;
+    const auto shown = std::ranges::find(elements, dropdown, &kb::scene::SceneUIFrameElement::entity);
+    kb::editor::tests::Require(shown != elements.end(), "The dropdown must be laid out");
+    input.pointerPosition = { shown->rect.x + shown->rect.width * 0.5F, shown->rect.y + shown->rect.height * 0.5F };
+    input.primaryDown = true;
+    step();
+    input.primaryDown = false;
+    step();
+
+    kb::scene::SceneEntity list{};
+    std::vector<kb::scene::SceneEntity> pending{ canvas.Entity() };
+    while (!pending.empty()) {
+        const kb::scene::SceneEntity entity = pending.back();
+        pending.pop_back();
+        if (scene.Entities().Name(entity) == "Dropdown List") {
+            list = entity;
+        }
+        for (const kb::scene::SceneEntity child : scene.Hierarchy().ChildEntities(entity)) {
+            pending.push_back(child);
+        }
+    }
+    kb::editor::tests::Require(list.IsValid() && scene.Entities().IsTransient(list), "Opening the dropdown must make a transient list");
+
+    const kb::editor::EditorHierarchyRowBuilder::CollapsedEntitySet expanded;
+    for (const kb::editor::EditorHierarchyRow& row : kb::editor::EditorHierarchyRowBuilder::Build(scene, expanded, "")) {
+        kb::editor::tests::Require(row.name.find("Dropdown List") == std::string::npos && row.name.find("Blocker") == std::string::npos,
+            "The hierarchy must not list the open dropdown's list or its blocker");
+    }
+    for (const kb::editor::EditorHierarchyRow& row : kb::editor::EditorHierarchyRowBuilder::Build(scene, expanded, "Dropdown List")) {
+        static_cast<void>(row);
+        kb::editor::tests::Require(false, "Searching must not find the open dropdown's list");
+    }
+    kb::editor::EditorHierarchyRowModel model;
+    model.Sync(scene, expanded, "", true);
+    const std::vector<kb::editor::EditorHierarchyRow> listed = model.Window(0U, model.Count());
+    for (const kb::editor::EditorHierarchyRow& row : listed) {
+        kb::editor::tests::Require(row.entity != list, "The row model must not list the open dropdown's list");
+    }
+    kb::editor::tests::Require(model.Count() == listed.size(), "The row model must not count the open dropdown's list");
+    kb::editor::tests::Require(!model.IsListed(list), "The open dropdown's list must not be listed");
+}
+
 void RunRowBuilderMarksOnlyPrefabRootsTest() {
     kb::scene::Scene scene;
     kb::scene::ScenePrefab prefab;
@@ -526,6 +597,7 @@ void RunEditorHierarchyTests() {
     RunHierarchySelectionNormalizerSelectsFirstVisibleWhenSelectionIsDeadTest();
     RunPlayModeSelectionSnapshotRestoresHierarchyIdentityTest();
     RunSceneSelectionPivotUsesTopLevelSelectionCenterTest();
+    RunOpenDropdownListStaysOutOfHierarchyTest();
     RunRowBuilderMarksOnlyPrefabRootsTest();
     RunDroppedPrefabAssetBuildsPrefabHierarchyRowsTest();
     RunMeshAssetActionCreatesRenderableSceneEntityTest();

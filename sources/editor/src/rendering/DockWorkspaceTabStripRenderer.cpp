@@ -98,6 +98,9 @@ struct TabTitleSlot {
     case DockPanelKind::Agent:
         icon = HeroIconKind::Bolt;
         return true;
+    case DockPanelKind::VersionControl:
+        icon = HeroIconKind::Clock;
+        return true;
     case DockPanelKind::ProjectSettings:
         icon = HeroIconKind::Gamepad2;
         return true;

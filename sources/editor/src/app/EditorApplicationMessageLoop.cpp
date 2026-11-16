@@ -26,6 +26,7 @@
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #include "scene/material_preview/EditorMaterialPreviewMeshFactory.hpp"
 #include "project/EditorProjectPaths.hpp"
+#include "project/EditorVersionControl.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "app/EditorPlayCommands.hpp"
 #include "profiler/EditorProfilerSampler.hpp"
@@ -701,6 +702,22 @@ void PumpAgentPanel(EditorApplicationState& state) {
     }
     state.sceneViewport.RequestPresent();
     InvalidateRect(state.window, nullptr, FALSE);
+}
+
+// The changes against the last saved version are read in the background: once a few seconds, and at once when the
+// scene has just been saved. The panel and the markers in Project Files repaint when a reading lands.
+void PumpVersionControl(EditorApplicationState& state) {
+    static bool wasDirty = false;
+    const bool dirty = state.sceneContext.SceneDocumentDirty();
+    EditorVersionControl& control = EditorVersionControl::Instance();
+    if (wasDirty && !dirty) {
+        control.RequestRefresh();
+    }
+    wasDirty = dirty;
+    if (control.Pump(EditorProjectPaths::ProjectRoot(), std::chrono::steady_clock::now())) {
+        InvalidatePanelKind(state, DockPanelKind::VersionControl);
+        InvalidatePanelKind(state, DockPanelKind::Assets);
+    }
 }
 
 // The "Used by" column of Project Files follows the scene a few times a second, and only while the
@@ -1495,6 +1512,7 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
 
 [[nodiscard]] bool TickEditorFrame(EditorApplicationState& state, float deltaSeconds) {
     state.sceneContext.TickEditModeScripts();
+    PumpVersionControl(state);
     const bool asyncAssetsPending = state.sceneContext.HasPendingSkeletalMeshEditorOpen() ||
         EditorMeshPreviewCache().HasPendingPreviewWork();
     if (asyncAssetsPending) {

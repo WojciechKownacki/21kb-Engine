@@ -22,6 +22,7 @@
 #include "app/EditorPointerDragSourceResolver.hpp"
 #include "app/EditorWindowInvalidator.hpp"
 #include "profiler/ProfilerPanel.hpp"
+#include "rendering/VersionControlPanel.hpp"
 #include "app/EditorWindowToolbarPointerHandler.hpp"
 #include "app/console/EditorConsolePointerController.hpp"
 #include "app/docking/EditorMainDockSplitterPointerController.hpp"
@@ -2157,6 +2158,15 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             DockPanelKind::Profiler, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
         content.has_value() && PointInRect(*content, x, y)) {
         static_cast<void>(ProfilerPanel::Pointer(messageWindow, *content, x, y, sceneContext_));
+        sceneViewport_.RequestPresent();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
+    if (const auto content = EditorPanelContentResolver::Resolve(
+            DockPanelKind::VersionControl, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+        content.has_value() && PointInRect(*content, x, y)) {
+        static_cast<void>(VersionControlPanel::Pointer(messageWindow, *content, x, y, sceneContext_));
         sceneViewport_.RequestPresent();
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         return;

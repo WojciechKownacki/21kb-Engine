@@ -8,6 +8,8 @@
 #include "app/EditorEditCommandPolicy.hpp"
 #include "rendering/EditorMenuTable.hpp"
 #include "profiler/ProfilerPanel.hpp"
+#include "project/EditorVersionControl.hpp"
+#include "rendering/VersionControlPanel.hpp"
 #include "app/EditorSceneFileCommands.hpp"
 #include "app/EditorProjectCommands.hpp"
 #include "app/EditorPlayCommands.hpp"
@@ -587,6 +589,9 @@ bool SavePlayPreference(EditorSceneContext& sceneContext, Change change) {
         return false;
     case EditorMenuAction::OpenProfiler:
         return activate(DockPanelKind::Profiler, ProfilerPanel::kOpenArea);
+    case EditorMenuAction::OpenVersionControl:
+        EditorVersionControl::Instance().RequestRefresh();
+        return activate(DockPanelKind::VersionControl, VersionControlPanel::kOpenArea);
     case EditorMenuAction::OpenAudioMixer:
         return activate(DockPanelKind::AudioMixer, DockArea::Center);
     case EditorMenuAction::OpenAgent:

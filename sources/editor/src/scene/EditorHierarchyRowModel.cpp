@@ -71,8 +71,7 @@ bool EditorHierarchyRowModel::Expanded(kb::scene::SceneEntity entity) const {
 }
 
 bool EditorHierarchyRowModel::IsTransient(kb::scene::SceneEntity entity) const {
-    const auto* renderer = scene_->Components().MeshRenderers().TryGet(entity);
-    return renderer != nullptr && renderer->transient;
+    return EditorHierarchyRowBuilder::IsTransient(*scene_, entity);
 }
 
 // A transient subtree is not listed; the first walk that meets it takes its rows out of the count.

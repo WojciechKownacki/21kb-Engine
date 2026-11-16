@@ -37,6 +37,8 @@ public:
     static void DrawIconButton(HDC dc, RECT rect, const EditorTheme& theme, HeroIconKind icon, bool active);
     static void DrawTextButton(HDC dc, RECT rect, const EditorTheme& theme, std::string_view text, bool active);
     static void DrawDisclosureTriangle(HDC dc, RECT rect, COLORREF color, bool expanded);
+    // A small square at the corner of `area` when the file differs from the last saved version.
+    static void DrawChangeMarker(HDC dc, const RECT& area, const std::filesystem::path& file);
     static void DrawIconWithShadow(HDC dc, RECT icon, HeroIconKind kind, COLORREF color, int strokeWidth = 2);
 };
 

@@ -493,6 +493,9 @@ add_executable(kb_editor WIN32
     src/private/platform/win32/EditorTextEntryDialog.hpp
     src/private/platform/win32/EditorRepositoryWindow.hpp
     src/private/project/EditorProjectRepository.hpp
+    src/private/project/EditorVersionControl.hpp
+    src/private/scene/EditorSceneComparison.hpp
+    src/private/rendering/VersionControlPanel.hpp
     src/private/app/EditorProjectCommands.hpp
     src/private/app/EditorPlayCommands.hpp
     src/private/app/EditorPlayPreferences.hpp
@@ -783,6 +786,9 @@ add_executable(kb_editor WIN32
     src/platform/win32/EditorTextEntryDialog.cpp
     src/platform/win32/EditorRepositoryWindow.cpp
     src/project/EditorProjectRepository.cpp
+    src/project/EditorVersionControl.cpp
+    src/scene/EditorSceneComparison.cpp
+    src/rendering/VersionControlPanel.cpp
     src/app/EditorProjectCommands.cpp
     src/app/EditorPlayCommands.cpp
     src/platform/win32/EditorMap2DForm.cpp
@@ -1477,6 +1483,10 @@ if(BUILD_TESTING)
         tests/EditorMaterialAssetAuthoringTests.cpp
         tests/EditorMaterialGraphCanvasTests.cpp
         tests/EditorTerrainFoliageTests.cpp
+        tests/EditorVersionControlTests.cpp
+        src/project/EditorProjectRepository.cpp
+        src/rendering/script_editor/ScriptEditorTextEncoding.cpp
+        src/scene/EditorSceneComparison.cpp
         tests/EditorRuntimeTests.cpp
         tests/EditorPlayModeSceneSessionTests.cpp
         tests/EditorCommandStackTests.cpp
@@ -1741,6 +1751,7 @@ if(BUILD_TESTING)
     target_compile_definitions(kb_editor_tests
         PRIVATE
             KB_EDITOR_GRAPH_SHADER_CACHE_DIR="${CMAKE_BINARY_DIR}/editor_graph_cook_tests"
+            KB_EDITOR_VERSION_CONTROL_TEST_ROOT="${CMAKE_BINARY_DIR}/editor-version-control-test"
             KB_EDITOR_LOCALIZATION_DIR="${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Localization"
     )
 

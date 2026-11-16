@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "engine/assets/AssetMetadata.hpp"
+#include "project/EditorVersionControl.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/HeroIconPainter.hpp"
 #include "rendering/gdi/ScopedBrush.hpp"
@@ -208,6 +209,20 @@ void DrawFastCube(HDC dc, RECT icon, COLORREF color) {
 }
 
 } // namespace
+
+void ProjectFilesPanelDrawing::DrawChangeMarker(HDC dc, const RECT& area, const std::filesystem::path& file) {
+    const EditorVersionControl& control = EditorVersionControl::Instance();
+    if (file.empty() || control.Changes().changes.empty()) {
+        return;
+    }
+    const EditorChangeState* state = control.StateOf(file);
+    if (state == nullptr) {
+        return;
+    }
+    const COLORREF color = *state == EditorChangeState::Modified ? RGB(224, 165, 54)
+        : *state == EditorChangeState::Deleted ? RGB(232, 108, 108) : RGB(63, 194, 123);
+    GdiDrawing::DrawSharpFrame(dc, RECT{ area.right - 8, area.bottom - 8, area.right, area.bottom }, color, RGB(21, 21, 21));
+}
 
 void ProjectFilesPanelDrawing::DrawIconWithShadow(HDC dc, RECT icon, HeroIconKind kind, COLORREF color, int strokeWidth) {
     if (kind == HeroIconKind::Folder || kind == HeroIconKind::Cube) {

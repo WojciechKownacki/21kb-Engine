@@ -1,8 +1,8 @@
 #include "app/scene_viewport/EditorSceneViewportSelectionController.hpp"
 
 #if defined(_WIN32)
-#include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "scene/EditorHierarchyRowBuilder.hpp"
 #include <algorithm>
 #include <vector>
 
@@ -12,7 +12,7 @@ namespace {
 kb::scene::SceneEntity AuthoredEntity(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
     auto result = entity;
     for (auto ancestor = entity; ancestor.IsValid(); ancestor = scene.Hierarchy().Parent(ancestor)) {
-        if (const auto* renderer = scene.Components().MeshRenderers().TryGet(ancestor); renderer && renderer->transient) result = scene.Hierarchy().Parent(ancestor);
+        if (EditorHierarchyRowBuilder::IsTransient(scene, ancestor)) result = scene.Hierarchy().Parent(ancestor);
     }
     return result;
 }

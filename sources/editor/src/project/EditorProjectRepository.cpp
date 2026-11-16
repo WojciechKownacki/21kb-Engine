@@ -8,6 +8,7 @@
 #define NOMINMAX
 #include <Windows.h>
 
+#include <algorithm>
 #include <array>
 #include <cctype>
 #include <fstream>
@@ -64,8 +65,9 @@ struct ProcessResult {
 }
 
 // Runs a program without a window and hands back everything it printed.
+// `mergeErrors` false drops what the program says on its error stream, for output that is read as data.
 [[nodiscard]] ProcessResult Run(std::string_view program, const std::vector<std::string>& arguments,
-    const std::filesystem::path& workingDirectory, DWORD timeoutMs) {
+    const std::filesystem::path& workingDirectory, DWORD timeoutMs, bool mergeErrors = true) {
     // Nothing is there to answer a credentials prompt; asking would only hang until the timeout.
     SetEnvironmentVariableW(L"GIT_TERMINAL_PROMPT", L"0");
 
@@ -78,13 +80,15 @@ struct ProcessResult {
     }
     SetHandleInformation(readEnd, HANDLE_FLAG_INHERIT, 0U);
     HANDLE noInput = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &inheritable, OPEN_EXISTING, 0U, nullptr);
+    HANDLE errorSink = mergeErrors ? INVALID_HANDLE_VALUE
+        : CreateFileW(L"NUL", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &inheritable, OPEN_EXISTING, 0U, nullptr);
 
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     startup.dwFlags = STARTF_USESTDHANDLES;
     startup.hStdInput = noInput;
     startup.hStdOutput = writeEnd;
-    startup.hStdError = writeEnd;
+    startup.hStdError = mergeErrors ? writeEnd : errorSink;
     PROCESS_INFORMATION process{};
     std::wstring line = CommandLine(program, arguments);
     const std::wstring directory = workingDirectory.wstring();
@@ -93,6 +97,9 @@ struct ProcessResult {
     CloseHandle(writeEnd);
     if (noInput != INVALID_HANDLE_VALUE) {
         CloseHandle(noInput);
+    }
+    if (errorSink != INVALID_HANDLE_VALUE) {
+        CloseHandle(errorSink);
     }
     if (!result.started) {
         CloseHandle(readEnd);
@@ -230,6 +237,83 @@ EditorRepositoryState EditorProjectRepository::Query(const std::filesystem::path
         state.remoteUrl = Trim(remote.output);
     }
     return state;
+}
+
+EditorChangeList EditorProjectRepository::Changes(const std::filesystem::path& projectRoot) {
+    EditorChangeList list;
+    // No optional locks: this runs in the background and must not block the user's own git commands.
+    const ProcessResult top = Run("git", { "--no-optional-locks", "rev-parse", "--show-toplevel" }, projectRoot, kQuickTimeoutMs, false);
+    if (!top.Succeeded() || Trim(top.output).empty()) {
+        return list;
+    }
+    const ProcessResult status = Run("git", { "--no-optional-locks", "status", "--porcelain=v2", "-z", "--no-renames", "--untracked-files=all", "--", "." },
+        projectRoot, kReachTimeoutMs, false);
+    if (!status.Succeeded()) {
+        return list;
+    }
+    list.available = true;
+    list.root = std::filesystem::path{ ScriptEditorTextEncoding::Widen(Trim(top.output)) };
+    if (const ProcessResult branch = Run("git", { "--no-optional-locks", "branch", "--show-current" }, projectRoot, kQuickTimeoutMs, false); branch.Succeeded()) {
+        list.branch = Trim(branch.output);
+    }
+    // Entries end in NUL. "? path" is untracked; "1 XY <6 more fields> path" changed; "u XY <8 more fields> path" in conflict.
+    const auto pathAfterFields = [](const std::string_view entry, int fields) {
+        std::size_t at = 0U;
+        for (int skipped = 0; skipped < fields; ++skipped) {
+            at = entry.find(' ', at);
+            if (at == std::string_view::npos) {
+                return std::string{};
+            }
+            ++at;
+        }
+        return std::string{ entry.substr(at) };
+    };
+    std::size_t start = 0U;
+    while (start < status.output.size()) {
+        std::size_t end = status.output.find('\0', start);
+        if (end == std::string::npos) {
+            end = status.output.size();
+        }
+        const std::string_view entry{ status.output.data() + start, end - start };
+        start = end + 1U;
+        EditorFileChange change;
+        if (entry.size() > 2U && entry[0] == '?') {
+            change.path = std::string{ entry.substr(2U) };
+            change.state = EditorChangeState::Untracked;
+        } else if (entry.size() > 4U && (entry[0] == '1' || entry[0] == 'u')) {
+            change.path = pathAfterFields(entry, entry[0] == '1' ? 8 : 10);
+            const char staged = entry[2];
+            const char working = entry[3];
+            if (entry[0] == '1' && (staged == 'A' || working == 'A')) {
+                change.state = EditorChangeState::Added;
+            } else if (entry[0] == '1' && (staged == 'D' || working == 'D')) {
+                change.state = EditorChangeState::Deleted;
+            }
+        }
+        if (!change.path.empty()) {
+            list.changes.push_back(std::move(change));
+        }
+    }
+    std::ranges::sort(list.changes, {}, &EditorFileChange::path);
+    return list;
+}
+
+std::optional<std::string> EditorProjectRepository::SavedContent(const std::filesystem::path& projectRoot, const std::string& repositoryPath) {
+    ProcessResult shown = Run("git", { "--no-optional-locks", "show", "HEAD:" + repositoryPath }, projectRoot, kReachTimeoutMs, false);
+    if (!shown.Succeeded()) {
+        return std::nullopt;
+    }
+    return std::move(shown.output);
+}
+
+bool EditorProjectRepository::CanRestore(EditorChangeState state) noexcept {
+    return state == EditorChangeState::Modified || state == EditorChangeState::Deleted;
+}
+
+EditorRepositoryResult EditorProjectRepository::Restore(const std::filesystem::path& projectRoot, const std::string& repositoryPath) {
+    // Literal paths: a file named like a pattern is still only that file.
+    const ProcessResult restored = Run("git", { "--literal-pathspecs", "checkout", "HEAD", "--", repositoryPath }, projectRoot, kQuickTimeoutMs);
+    return restored.Succeeded() ? EditorRepositoryResult{ true, {} } : FailedRun(restored, "Git");
 }
 
 bool EditorProjectRepository::GitHubCliAvailable() {
