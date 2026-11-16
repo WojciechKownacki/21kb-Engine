@@ -3510,22 +3510,132 @@ void RunRendererDrawsDetachedViewportFinalCompositePixelsTest() {
     renderer.Shutdown();
 }
 
+// An emissive, double-sided material at half opacity: alone over the clear colour it shows (colour + clear) / 2.
+void WriteBlendMaterial(const std::filesystem::path& path, float red, float green, float blue) {
+    std::ofstream output{path, std::ios::trunc};
+    Require(output.is_open(), "Transparent pixel test could not write a material");
+    output << "baseColor " << red << ' ' << green << ' ' << blue << " 0.5\n"
+           << "emissiveColor " << red << ' ' << green << ' ' << blue << "\n"
+           << "emissiveStrength 1\nalphaMode BLEND\ndoubleSided true\n";
+}
+
+// Two half-transparent planes cross along a vertical line. Transparent surfaces are sorted per object by the view depth
+// of their bounds centre, farthest first, and do not write depth. So the plane with the nearer centre covers the other
+// one over their whole overlap, also on the side where the other is geometrically in front, and swapping the centre
+// depths swaps the composition. There is no per-pixel ordering.
+void RunRendererTransparentCrossingPlanesGpuReadbackTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_transparent_crossing_pixels";
+    std::error_code error;
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Crossing planes test could not create its asset root");
+    {
+        std::ofstream output{root / "quad.obj", std::ios::trunc};
+        Require(output.is_open(), "Crossing planes test could not write its mesh");
+        output << "v -0.5 -0.5 0.0\nv 0.5 -0.5 0.0\nv 0.5 0.5 0.0\nv -0.5 0.5 0.0\n"
+               << "vt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\nvn 0 0 1\n"
+               << "f 1/1/1 2/2/1 3/3/1\nf 1/1/1 3/3/1 4/4/1\n";
+    }
+    WriteBlendMaterial(root / "red.kbmat", 1.0F, 0.0F, 0.0F);
+    WriteBlendMaterial(root / "blue.kbmat", 0.0F, 0.0F, 1.0F);
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()) &&
+        manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()) &&
+        manager.Mounts().Mount("Game", root) && manager.DiscoverMountedAssets() >= 3U,
+        "Crossing planes test could not load its assets");
+    const auto* mesh = manager.Registry().FindByPath("/Game/quad.obj");
+    const auto* red = manager.Registry().FindByPath("/Game/red.kbmat");
+    const auto* blue = manager.Registry().FindByPath("/Game/blue.kbmat");
+    Require(mesh != nullptr && red != nullptr && blue != nullptr, "Crossing planes test could not resolve its assets");
+    const auto add = [&](const char* name, std::uint64_t materialId) {
+        const auto entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = name, .transform = TransformAt(0.0F, 0.0F, 0.5F) });
+        scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{ .meshAssetId = mesh->id.value, .materialAssetId = materialId });
+        return entity;
+    };
+    const std::array planes{ add("Red Plane", red->id.value), add("Blue Plane", blue->id.value) };
+    // The planes turn by +/- 0.5 rad about the vertical axis, so they cross where their depths are equal.
+    const auto place = [&](float redDepth, float blueDepth) {
+        const auto set = [&](kb::scene::SceneEntity entity, float depth, float halfAngle) {
+            auto transform = TransformAt(0.0F, 0.0F, depth);
+            transform.localRotation = transform.worldRotation = { 0.0F, std::sin(halfAngle), 0.0F, std::cos(halfAngle) };
+            scene.Transforms().Set(entity, transform);
+        };
+        set(planes[0], redDepth, 0.25F);
+        set(planes[1], blueDepth, -0.25F);
+    };
+
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "Crossing planes test could not create a native surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Crossing planes test renderer did not initialize");
+    {
+        ParticleMeshReadbackTarget target;
+        Require(target.Initialize(), "Crossing planes test could not create its readback target");
+        const auto capture = [&](bool showRed, bool showBlue) {
+            scene.Components().Visibility().Set(planes[0], kb::scene::VisibilityComponent{ .visible = showRed });
+            scene.Components().Visibility().Set(planes[1], kb::scene::VisibilityComponent{ .visible = showBlue });
+            const RenderSceneSubmitDesc desc{
+                .target = target.Binding(), .cameraOverride = IdentityCamera(), .clearRgba = 0x000000FFU,
+                .editorSceneOverlaysEnabled = false, .postProcessEnabled = false,
+                .selectionMaskEnabled = false, .selectionOutlineEnabled = false,
+            };
+            SubmitLifecycleFrame(renderer, scene, desc, "Crossing planes test could not submit its scene");
+            return target.ReadPixels();
+        };
+        const auto at = [](const std::vector<std::uint8_t>& image, std::size_t x) {
+            const std::size_t offset = (32U * NativeTestSurface::kExtent + x) * 4U;
+            return std::array<int, 3U>{ image[offset], image[offset + 1U], image[offset + 2U] };
+        };
+        // One pixel on each side of the crossing line (the planes cross about 6 pixels off the centre column), both inside
+        // the overlap of the two planes.
+        constexpr std::array<std::size_t, 2U> kSides{ 22U, 41U };
+        std::array<std::array<int, 3U>, 2U> composed[2]{};
+        for (int redNearer = 0; redNearer < 2; ++redNearer) {
+            place(redNearer != 0 ? 0.4F : 0.6F, redNearer != 0 ? 0.6F : 0.4F);
+            const auto background = capture(false, false);
+            const auto redOnly = capture(true, false);
+            const auto blueOnly = capture(false, true);
+            const auto both = capture(true, true);
+            for (std::size_t side = 0U; side < kSides.size(); ++side) {
+                const auto clear = at(background, kSides[side]);
+                const auto redAlone = at(redOnly, kSides[side]);
+                const auto blueAlone = at(blueOnly, kSides[side]);
+                const auto pixel = at(both, kSides[side]);
+                composed[redNearer][side] = pixel;
+                Require(redAlone[0] > clear[0] + 20 && blueAlone[2] > clear[2] + 20,
+                    "Crossing planes test: each plane must cover both sampled pixels");
+                for (std::size_t channel = 0U; channel < 3U; ++channel) {
+                    const float c = static_cast<float>(clear[channel]);
+                    const float nearColour = 2.0F * static_cast<float>((redNearer != 0 ? redAlone : blueAlone)[channel]) - c;
+                    const float farColour = 2.0F * static_cast<float>((redNearer != 0 ? blueAlone : redAlone)[channel]) - c;
+                    const float expected = 0.5F * nearColour + 0.5F * (0.5F * farColour + 0.5F * c);
+                    Require(std::abs(static_cast<float>(pixel[channel]) - expected) <= 12.0F,
+                        "Crossing planes test: the overlap is not the nearer-centred plane over the farther-centred one");
+                }
+            }
+        }
+        // Moving the centre depths across each other turns red-over-blue into blue-over-red on both sides of the line.
+        for (std::size_t side = 0U; side < kSides.size(); ++side) {
+            Require(composed[1][side][0] > composed[0][side][0] + 40 && composed[0][side][2] > composed[1][side][2] + 40,
+                "Crossing planes test: swapping the centre depths did not swap the composition");
+        }
+    }
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+}
+
 void RunRendererTransparentInterleaveGpuReadbackTest() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_transparent_interleave_pixels";
     std::error_code error;
     std::filesystem::create_directories(root, error);
     Require(!error, "Transparent pixel test could not create its asset root");
     WriteTriangleObj(root / "triangle.obj");
-    const auto writeBlendMaterial = [&](const char* name, float red, float green, float blue) {
-        std::ofstream output{root / name, std::ios::trunc};
-        Require(output.is_open(), "Transparent pixel test could not write a material");
-        output << "baseColor " << red << ' ' << green << ' ' << blue << " 0.5\n"
-               << "emissiveColor " << red << ' ' << green << ' ' << blue << "\n"
-               << "emissiveStrength 1\nalphaMode BLEND\ndoubleSided true\n";
-    };
-    writeBlendMaterial("red.kbmat", 1.0F, 0.0F, 0.0F);
-    writeBlendMaterial("green.kbmat", 0.0F, 1.0F, 0.0F);
-    writeBlendMaterial("blue.kbmat", 0.0F, 0.0F, 1.0F);
+    WriteBlendMaterial(root / "red.kbmat", 1.0F, 0.0F, 0.0F);
+    WriteBlendMaterial(root / "green.kbmat", 0.0F, 1.0F, 0.0F);
+    WriteBlendMaterial(root / "blue.kbmat", 0.0F, 0.0F, 1.0F);
     kb::scene::Scene scene;
     kb::assets::AssetManager& manager = scene.Assets().Manager();
     Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()) &&
@@ -8387,7 +8497,8 @@ void RunBloomOutputProfilePixelsTest() {
 // A lit triangle rendered through the full scene, post-process and display composite path into a 64x64
 // output. `sceneExtent` is the size of the scene and post-process targets; below the output size the frame
 // takes the reduced render scale path (upscaledExtent). `moveX` moves the triangle (or, with `moveCamera`,
-// the camera the other way) by that much each frame.
+// the camera the other way) by that much each frame. With `stillNeighbour` a smaller triangle that never moves
+// stays in the lower half of the frame while the moving one is drawn in the upper half.
 struct PostProcessedTriangleCapture {
     std::vector<std::uint8_t> pixels;
     RenderExtent sceneTargetExtent{};
@@ -8395,17 +8506,35 @@ struct PostProcessedTriangleCapture {
 };
 
 [[nodiscard]] PostProcessedTriangleCapture RenderPostProcessedTriangle(
-    const ScenePostProcessSettings& settings, RenderExtent sceneExtent, float moveX, const char* tag, bool moveCamera = false) {
+    const ScenePostProcessSettings& settings, RenderExtent sceneExtent, float moveX, const char* tag, bool moveCamera = false,
+    bool stillNeighbour = false) {
     const std::filesystem::path root = std::filesystem::temp_directory_path() /
         (std::string("21kb_post_triangle_") + tag + "_" + std::to_string(GetCurrentProcessId()));
     LifecycleSceneFixture fixture;
     PrepareLifecycleScene(fixture, root);
     kb::scene::SceneLightingAccess::SetBasicLightingEnabled(fixture.scene, true);
+    const float movingY = stillNeighbour ? 0.85F : 0.0F;
+    bool scaled = false;
     const auto placeAt = [&](float x) {
-        kb::scene::TransformComponent transform = TransformAt(x, 0.0F, 0.0F);
+        if (scaled) {
+            // The mesh moves the way a running scene moves it, which is what gives it motion of its own.
+            fixture.scene.Transforms().SetLocalTranslation(fixture.entity, kb::math::DVec3{ x, movingY, 0.0 });
+            fixture.scene.Runtime().SynchronizeTransforms();
+            return;
+        }
+        kb::scene::TransformComponent transform = TransformAt(x, movingY, 0.0F);
         transform.localScale = { 8.0F, 8.0F, 8.0F };
         fixture.scene.Transforms().Set(fixture.entity, transform);
+        scaled = true;
     };
+    if (stillNeighbour) {
+        const kb::scene::SceneEntity neighbour = fixture.scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+            .name = "Still Mesh", .transform = TransformAt(0.0F, -0.85F, 0.0F) });
+        fixture.scene.Components().MeshRenderers().Set(neighbour, kb::scene::MeshRendererComponent{ .meshAssetId = fixture.meshAssetId });
+        kb::scene::TransformComponent transform = TransformAt(0.0F, -0.85F, 0.0F);
+        transform.localScale = { 6.0F, 6.0F, 6.0F };
+        fixture.scene.Transforms().Set(neighbour, transform);
+    }
     NativeTestSurface surface;
     Require(surface.IsValid(), "Post-processed triangle test could not create a hidden native surface");
     DisplayConfig config{};
@@ -8436,6 +8565,7 @@ struct PostProcessedTriangleCapture {
                 .viewport = RenderViewportDesc{ .id = RenderViewportId{ 1U }, .extent = sceneExtent, .viewportIndex = 0U },
                 .msaaSamples = sceneTarget.MsaaSamples(),
                 .colorFormat = sceneTarget.ColorSelection().format,
+                .depthFormat = sceneTarget.DepthSelection().format,
             },
             .postProcess = postTargets.Binding(),
             .finalComposite = output.Binding(),
@@ -8532,6 +8662,99 @@ void RunRendererMotionBlurSmearsMovingObjectsTest() {
     Require(std::abs(partialStill - partialStillOff) <= 4, "Motion blur test: a still object must stay sharp with motion blur on");
     // The trail grows the lit row by at most the longest blur (4 pixels at this size) and a pixel of filtering.
     Require(widthOn <= widthOff + 6, "Motion blur test: the blur length must be clamped");
+}
+
+// What a half of the frame shows: its soft border, its lit pixels and the box around everything above a faint level.
+struct BlurRegion {
+    int partial = 0;
+    int lit = 0;
+    int minX = 1 << 20;
+    int maxX = -1;
+    int minY = 1 << 20;
+    int maxY = -1;
+};
+
+[[nodiscard]] BlurRegion MeasureBlurRegion(const std::vector<std::uint8_t>& pixels, std::uint32_t firstRow, std::uint32_t endRow, int brightest) {
+    BlurRegion region;
+    for (std::uint32_t y = firstRow; y < endRow; ++y) {
+        for (std::uint32_t x = 0; x < NativeTestSurface::kExtent; ++x) {
+            const int value = CapturedLuminance(pixels, x, y);
+            if (value * 100 > brightest * 15 && value * 100 < brightest * 85) ++region.partial;
+            if (value > 24) ++region.lit;
+            if (value * 100 > brightest * 5) {
+                region.minX = std::min(region.minX, static_cast<int>(x));
+                region.maxX = std::max(region.maxX, static_cast<int>(x));
+                region.minY = std::min(region.minY, static_cast<int>(y));
+                region.maxY = std::max(region.maxY, static_cast<int>(y));
+            }
+        }
+    }
+    return region;
+}
+
+// With a still camera, a triangle that moves along x is softened along x only (its slanted sides blur, its flat base
+// stays sharp), while a second triangle in the same frame that does not move stays exactly as sharp as it is with
+// motion blur off.
+void RunRendererMotionBlurSmearsObjectMotionTest() {
+    const RenderExtent full{ NativeTestSurface::kExtent, NativeTestSurface::kExtent };
+    ScenePostProcessSettings off = PlainPostProcessSettings();
+    ScenePostProcessSettings on = off;
+    on.motionBlurEnabled = true;
+    on.motionBlurIntensity = 1.0F;
+    on.motionBlurSamples = 12U;
+    const auto sharp = RenderPostProcessedTriangle(off, full, 0.3F, "object_blur_off", false, true);
+    const auto blurred = RenderPostProcessedTriangle(on, full, 0.3F, "object_blur_on", false, true);
+    int brightest = 0;
+    for (std::uint32_t y = 0; y < NativeTestSurface::kExtent; ++y)
+        for (std::uint32_t x = 0; x < NativeTestSurface::kExtent; ++x) brightest = std::max(brightest, CapturedLuminance(sharp.pixels, x, y));
+    constexpr std::uint32_t kHalf = NativeTestSurface::kExtent / 2U;
+    const std::array<BlurRegion, 2U> sharpHalves{ MeasureBlurRegion(sharp.pixels, 0U, kHalf, brightest),
+        MeasureBlurRegion(sharp.pixels, kHalf, NativeTestSurface::kExtent, brightest) };
+    const std::array<BlurRegion, 2U> blurredHalves{ MeasureBlurRegion(blurred.pixels, 0U, kHalf, brightest),
+        MeasureBlurRegion(blurred.pixels, kHalf, NativeTestSurface::kExtent, brightest) };
+    // The moving triangle is the larger one.
+    const std::size_t moving = sharpHalves[0].lit > sharpHalves[1].lit ? 0U : 1U;
+    const std::size_t still = 1U - moving;
+    const auto& movingOff = sharpHalves[moving];
+    const auto& movingOn = blurredHalves[moving];
+    const auto& stillOff = sharpHalves[still];
+    const auto& stillOn = blurredHalves[still];
+    // The widest lit row of the sharp frame is the flat base of the moving triangle; away from its corners the pixels
+    // around it have the same neighbours along x, so a blur along x leaves them as they are.
+    int baseRow = movingOff.minY;
+    int baseFirst = 0;
+    int baseLast = -1;
+    for (int y = movingOff.minY; y <= movingOff.maxY; ++y) {
+        int first = -1;
+        int last = -1;
+        for (int x = 0; x < static_cast<int>(NativeTestSurface::kExtent); ++x) {
+            if (CapturedLuminance(sharp.pixels, static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y)) > 24) {
+                if (first < 0) first = x;
+                last = x;
+            }
+        }
+        if (last - first > baseLast - baseFirst) {
+            baseRow = y;
+            baseFirst = first;
+            baseLast = last;
+        }
+    }
+    int baseEdgePartial = 0;
+    for (int y = baseRow - 1; y <= baseRow + 1; ++y) {
+        for (int x = baseFirst + 6; x <= baseLast - 6; ++x) {
+            const int value = CapturedLuminance(blurred.pixels, static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y));
+            if (value * 100 > brightest * 15 && value * 100 < brightest * 85) ++baseEdgePartial;
+        }
+    }
+    std::fprintf(stderr, "motion_blur_object moving partial off=%d on=%d base_edge_partial=%d still partial off=%d on=%d%c",
+        movingOff.partial, movingOn.partial, baseEdgePartial, stillOff.partial, stillOn.partial, 10);
+    Require(movingOff.lit > 40 && stillOff.lit > 20 && movingOff.lit > stillOff.lit + 10 && baseLast - baseFirst > 12,
+        "Object motion blur test: both triangles must be drawn");
+    Require(movingOn.partial > movingOff.partial + 20, "Object motion blur test: a moving object must blur with a still camera");
+    Require(baseEdgePartial <= 2, "Object motion blur test: the blur must follow the motion, not soften the edge across it");
+    Require(std::abs(stillOn.partial - stillOff.partial) <= 4 && stillOn.minX == stillOff.minX && stillOn.maxX == stillOff.maxX &&
+            stillOn.minY == stillOff.minY && stillOn.maxY == stillOff.maxY,
+        "Object motion blur test: an object that does not move must stay sharp");
 }
 
 // At render scale 0.5 the scene and post-process targets are half the output size and the display composite
@@ -11670,6 +11893,19 @@ void RunRendererGiResolveTests() {
 #endif
 }
 
+// GPU-simulated particles drawn as meshes through the mesh pipeline, read back from a Direct3D 11 frame.
+void RunRendererGpuMeshParticleTests() {
+#if defined(_WIN32)
+    RunRendererDrawsGpuMeshParticlesTest();
+    RunRendererSpinsGpuMeshParticlesTest();
+    RunRendererAlignsGpuMeshParticlesToVelocityTest();
+    RunRendererSortsTranslucentGpuMeshParticlesTest();
+    RunRendererOrdersGpuMeshParticlesAmongSceneMeshesTest();
+#else
+    throw std::runtime_error("The GPU mesh particle tests require a supported native GPU test surface");
+#endif
+}
+
 void RunRendererParticleMeshSnapshotSubmitTest() {
     RunRendererSubmitsParticleMeshSnapshotAsOneDrawTest();
 #if defined(_WIN32)
@@ -11693,11 +11929,7 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
     RunRendererTurnsGpuParticlesByFieldTest();
     RunRendererProjectsParticleDecalsTest();
     RunRendererSortsAlphaGpuParticlesTest();
-    RunRendererDrawsGpuMeshParticlesTest();
-    RunRendererSpinsGpuMeshParticlesTest();
-    RunRendererAlignsGpuMeshParticlesToVelocityTest();
-    RunRendererSortsTranslucentGpuMeshParticlesTest();
-    RunRendererOrdersGpuMeshParticlesAmongSceneMeshesTest();
+    RunRendererGpuMeshParticleTests();
     RunRendererDrawsGpuTrailParticlesTest();
     RunRendererFollowsLocalSpaceGpuParticlesTest();
     RunRendererKeepsGpuParticlesAcrossRenderOriginMovesTest();
@@ -11792,6 +12024,7 @@ void RunRendererDiagnosticsTests() {
 
 void RunRendererTransparentGpuReadbackTests() {
     RunRendererTransparentInterleaveGpuReadbackTest();
+    RunRendererTransparentCrossingPlanesGpuReadbackTest();
 }
 
 void RunRendererResourceGroupEnsureFallbacksTest() {
@@ -13132,6 +13365,14 @@ void RunRendererPostProcessProfileAuthoringTests() {
     RunRendererChromaticAberrationAndFilmGrainChangeFinalCompositeTest();
     RunRendererMotionBlurSmearsMovingObjectsTest();
     RunRendererRenderScaleUpscalesSceneTest();
+#endif
+}
+
+void RunRendererObjectMotionBlurTest() {
+#if defined(_WIN32)
+    RunRendererMotionBlurSmearsObjectMotionTest();
+#else
+    throw std::runtime_error("The object motion blur test requires a supported native GPU test surface");
 #endif
 }
 

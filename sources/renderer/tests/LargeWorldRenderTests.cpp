@@ -132,6 +132,66 @@ void RunCameraRelativeSyncTest() {
         kb::math::RelativeTo(movedEye, movedOrigin), 1.0e-4F), "A rebase did not re-derive the moved camera proxy");
 }
 
+// A camera travels 150 km along x in 100 m steps while the render origin follows it by the policy. A mesh that keeps
+// 5 m ahead of the camera stays there in view space at every step, and meshes standing every 25 km keep their exact
+// double-precision offset from the camera as it passes them, so nothing jitters however far the journey goes.
+void RunLongTravelRenderSpaceTest() {
+    constexpr double kStep = 100.0;
+    constexpr double kJourney = 150'000.0;
+    constexpr float kTolerance = 3.0e-4F;
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity camera = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Travelling Camera" });
+    scene.Components().Cameras().Set(camera, kb::scene::CameraComponent{ .primary = true });
+    const auto addMesh = [&](const char* name) {
+        const kb::scene::SceneEntity mesh = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = name });
+        scene.Components().MeshRenderers().Set(mesh, kb::scene::MeshRendererComponent{ .meshAssetId = 42U, .materialAssetId = 7U });
+        return mesh;
+    };
+    const kb::scene::SceneEntity companion = addMesh("Companion");
+    constexpr double kLandmarkSpacing = 25'000.0;
+    std::array<kb::scene::SceneEntity, 6U> landmarks{};
+    std::array<DVec3, 6U> landmarkPositions{};
+    for (std::size_t index = 0U; index < landmarks.size(); ++index) {
+        landmarks[index] = addMesh("Landmark");
+        landmarkPositions[index] = DVec3{ kLandmarkSpacing * static_cast<double>(index + 1U) + 0.3, 1.0, 0.25 };
+        scene.Transforms().SetLocalTranslation(landmarks[index], landmarkPositions[index]);
+    }
+
+    RenderScene renderScene;
+    EcsRenderSceneSynchronizer synchronizer;
+    const RenderOriginPolicy policy{};
+    std::size_t originMoves = 0U;
+    std::size_t landmarkChecks = 0U;
+    for (double travelled = 0.0; travelled <= kJourney; travelled += kStep) {
+        const DVec3 eye{ 0.3 + travelled, 2.0, 0.7 };
+        scene.Transforms().SetLocalTranslation(camera, eye);
+        scene.Transforms().SetLocalTranslation(companion, eye + DVec3{ 0.0005, 0.0, 5.0 });
+        scene.Runtime().SynchronizeTransforms();
+        const DVec3 origin = renderScene.RenderOriginFor(eye, policy);
+        if (renderScene.SetRenderOrigin(origin)) ++originMoves;
+        if (travelled == 0.0) synchronizer.Sync(scene, renderScene);
+        else synchronizer.PullTransforms(scene, renderScene);
+        const std::optional<SceneRenderCamera> view = renderScene.BuildPrimaryCamera(64U, 64U);
+        Require(view.has_value(), "The travelling camera did not build a view");
+        const MeshRenderProxy* companionProxy = renderScene.FindMeshByEntity(companion.Id());
+        Require(companionProxy != nullptr &&
+                Near(ViewPoint(view->view, ModelTranslation(companionProxy->desc.model)), kb::math::Vec3{ 0.0005F, 0.0F, 5.0F }, kTolerance),
+            "A mesh kept ahead of a travelling camera moved in view space");
+        for (std::size_t index = 0U; index < landmarks.size(); ++index) {
+            const DVec3 offset = landmarkPositions[index] - eye;
+            if (std::fabs(offset.x) > 200.0) continue;
+            const MeshRenderProxy* proxy = renderScene.FindMeshByEntity(landmarks[index].Id());
+            Require(proxy != nullptr &&
+                    Near(ViewPoint(view->view, ModelTranslation(proxy->desc.model)),
+                        kb::math::Vec3{ static_cast<float>(offset.x), static_cast<float>(offset.y), static_cast<float>(offset.z) }, kTolerance),
+                "A stationary mesh lost its offset from a camera passing it far from the world origin");
+            ++landmarkChecks;
+        }
+    }
+    // 150 km in grid steps of 1024 m with a rebase distance of 1024 m: about 70 moves at least.
+    Require(originMoves >= 70U && landmarkChecks >= landmarks.size() * 4U, "The long journey did not rebase the render origin along the way");
+}
+
 // The renderer moves the origin to a far camera by itself and publishes it with the visibility feedback, through
 // which gameplay projects double-precision world points to the screen.
 void RunRendererFollowsFarCameraTest() {
@@ -304,6 +364,7 @@ void RunOverlayOriginTest() {
 void RunLargeWorldRenderTests() {
     RunRenderOriginPolicyTest();
     RunCameraRelativeSyncTest();
+    RunLongTravelRenderSpaceTest();
     RunRendererFollowsFarCameraTest();
     RunParticleRenderSpaceTest();
     RunOverlayOriginTest();

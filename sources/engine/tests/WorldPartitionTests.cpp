@@ -28,6 +28,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -1142,6 +1143,91 @@ void RunFarWorldTests() {
     std::filesystem::remove_all(root);
 }
 
+// Markers every 5 km along x out to 150 km. A source that walks the whole line in 500 m steps has exactly the cell of
+// the marker it stands at loaded and none it has left. Teleports of 15 km and 150 km, the first of them with loads
+// possibly still pending, end with exactly the target's cell loaded, and once the source has left the world the scene
+// and the streaming counters are back where they started.
+void RunWorldPartitionJourneyTests() {
+    constexpr int kMarkers = 31;
+    constexpr double kSpacing = 5000.0;
+    constexpr double kStep = 500.0;
+    const std::filesystem::path root = FreshDirectory("journey");
+    const std::filesystem::path descriptorPath = root / "Worlds" / "Line.21kbworld";
+    WorldDescriptor descriptor;
+    descriptor.guid = "line-world";
+    descriptor.name = "Line";
+    descriptor.cellSize = 100.0;
+    descriptor.objectsDirectory = "Line.objects";
+    std::string error;
+    Check(WorldDescriptorIO::Write(descriptorPath, descriptor, error), "journey world must write: " + error);
+    const std::filesystem::path objects = WorldPaths::ObjectsDirectory(descriptorPath, descriptor);
+    for (int marker = 0; marker < kMarkers; ++marker) {
+        WriteObject(objects, MakeObject("marker" + std::to_string(marker), "Marker " + std::to_string(marker), kSpacing * marker + 50.0, 50.0));
+    }
+    Check(WorldCellBuilder::Build(descriptorPath, nullptr).succeeded, "journey world must build");
+
+    StreamingHarness harness;
+    harness.scene = std::make_unique<scene::Scene>();
+    kb::assets::AssetManager& manager = harness.scene->Assets().Manager();
+    Check(manager.Mounts().Mount("Game", root) && manager.DiscoverMountedAssets() > 0U, "the journey world must mount");
+    const kb::assets::AssetMetadata* world = manager.Registry().FindByPath("/Game/Worlds/Line.21kbworld");
+    Check(world != nullptr, "the journey world asset is registered");
+    const scene::SceneObject owner = harness.scene->Entities().CreateObject(scene::SceneObjectDesc{ .name = "World" });
+    harness.scene->Components().ContentInstances().Set(owner.Entity(), scene::ContentInstanceComponent{
+        .assetId = world->id.value, .kind = scene::ContentInstanceKind::PartitionedWorld, .lifetime = scene::ContentInstanceLifetime::Owner, .active = true });
+    harness.world = owner.Entity();
+    WorldPartitionRuntime runtime = harness.Runtime();
+    Settle(harness);
+    const std::size_t baselineEntities = harness.scene->Entities().Count();
+    const std::uint64_t baselineBytes = runtime.Stats().residentBytes;
+    const std::uint64_t baselineEcs = static_cast<std::uint64_t>(harness.scene->Runtime().EcsWorld().TelemetrySnapshot().usedBytes);
+
+    const auto place = [](double x) { return WorldStreamingSource{ .position = { x, 0.0, 50.0 }, .loadRadius = 120.0, .unloadRadius = 180.0 }; };
+    const std::uint64_t source = runtime.AddSource(place(50.0));
+    const auto markerCell = [](int marker) { return std::set<WorldCellCoord>{ WorldCellCoord{ 50 * marker, 0 } }; };
+    const auto settleAt = [&](double x) {
+        Check(runtime.UpdateSource(source, place(x)), "the journey source exists");
+        Settle(harness);
+        const WorldStreamingStats stats = runtime.Stats();
+        Check(stats.failedUnits == 0U && stats.loadingUnits == 0U && stats.unloadingUnits == 0U, "a settled source has no failed or pending cell");
+    };
+    int visited = 0;
+    for (double travelled = 0.0; travelled <= kSpacing * (kMarkers - 1); travelled += kStep) {
+        settleAt(50.0 + travelled);
+        if (std::fmod(travelled, kSpacing) == 0.0) {
+            const int marker = static_cast<int>(travelled / kSpacing);
+            Check(Loaded(harness) == markerCell(marker) && HasEntityNamed(*harness.scene, "Marker " + std::to_string(marker)),
+                "the source standing at a marker has exactly that marker's cell loaded");
+            ++visited;
+        } else {
+            Check(Loaded(harness).empty(), "a source between markers has no cell loaded");
+        }
+    }
+    Check(visited == kMarkers, "the journey must pass every marker");
+
+    // A teleport of 15 km, interrupted by another before its loads need have finished, then one of 150 km and one back.
+    settleAt(50.0);
+    Check(runtime.UpdateSource(source, place(50.0 + 3.0 * kSpacing)), "the teleport source exists");
+    static_cast<void>(harness.scene->Runtime().Update(1.0F / 60.0F));
+    settleAt(50.0 + 6.0 * kSpacing);
+    Check(Loaded(harness) == markerCell(6) && !HasEntityNamed(*harness.scene, "Marker 3"),
+        "a teleport must end with the target's cell loaded and the interrupted target's cell not");
+    settleAt(50.0 + kSpacing * (kMarkers - 1));
+    Check(Loaded(harness) == markerCell(kMarkers - 1), "a 150 km teleport must end with the target's cell loaded");
+    settleAt(50.0);
+    Check(Loaded(harness) == markerCell(0), "a 150 km teleport back must end with the first cell loaded");
+
+    // Nothing is left behind once the source has left the world.
+    settleAt(-5000.0);
+    const WorldStreamingStats stats = runtime.Stats();
+    Check(Loaded(harness).empty() && stats.loadedUnits == 0U && stats.residentBytes == baselineBytes &&
+            harness.scene->Entities().Count() == baselineEntities &&
+            static_cast<std::uint64_t>(harness.scene->Runtime().EcsWorld().TelemetrySnapshot().usedBytes) <= baselineEcs + 4096U,
+        "the scene and the streaming counters must return to their start after the journey");
+    harness.scene.reset();
+    std::filesystem::remove_all(root);
+}
+
 void RunWorldPartitionTests() {
     RunGridTests();
     RunFormatTests();
@@ -1154,6 +1240,7 @@ void RunWorldPartitionTests() {
     RunLongTraversalTests();
     RunUnbuiltWorldTests();
     RunFarWorldTests();
+    RunWorldPartitionJourneyTests();
 }
 
 } // namespace kb::tests

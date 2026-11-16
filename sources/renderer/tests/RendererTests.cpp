@@ -83,6 +83,7 @@ void RunRendererTransparentGpuReadbackTests();
 void RunRendererDefaultSubmissionResultTest();
 void RunRendererPostProcessProfileDiagnosticTest();
 void RunRendererPostProcessProfileAuthoringTests();
+void RunRendererObjectMotionBlurTest();
 void RunRendererResourceGroupEnsureTests();
 void RunRendererSceneSubmitScaleBenchmark(bool spiralLayout);
 void RunRendererPacedSceneSubmitStressBenchmark(bool staticMillionSnapshot,
@@ -90,6 +91,7 @@ void RunRendererPacedSceneSubmitStressBenchmark(bool staticMillionSnapshot,
 void RunRendererVisibilityFeedbackTest();
 void RunEditorUIViewTransformValidationTests();
 void RunRendererParticleMeshSnapshotSubmitTest();
+void RunRendererGpuMeshParticleTests();
 void RunRendererParticleContactDeathTest();
 void RunRendererParticleCollisionEventChainTest();
 void RunParticleGpuCollisionEventTests(bgfx::RendererType::Enum backend);
@@ -524,6 +526,14 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "%s\n", error.what());
             return EXIT_FAILURE;
         }
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "object-motion-blur") {
+        kb::render::tests::RunRendererObjectMotionBlurTest();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "particle-gpu-mesh") {
+        kb::render::tests::RunRendererGpuMeshParticleTests();
+        return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "particle-mesh-submit") {
         kb::render::tests::RunRendererParticleMeshSnapshotSubmitTest();

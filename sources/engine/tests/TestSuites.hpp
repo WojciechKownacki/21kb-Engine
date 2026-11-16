@@ -52,6 +52,7 @@ void RunNavigationCompareBenchmark();
 void RunPortalVisibilityTests();
 void RunMotionSkeletonRuleTests();
 void RunWorldPartitionTests();
+void RunWorldPartitionJourneyTests();
 void RunLargeWorldTests();
 void RunSceneBehaviourVariableTests();
 

@@ -1070,6 +1070,8 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
 
     # The complete node/profile sweep has separate bounded processes below.
     add_test(NAME kb_renderer_tests COMMAND $<TARGET_FILE:kb_renderer_tests> renderer-integration)
+    add_test(NAME kb_renderer_large_world COMMAND $<TARGET_FILE:kb_renderer_tests> large-world)
+    set_tests_properties(kb_renderer_large_world PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;large-world" TIMEOUT 120)
     add_test(NAME kb_renderer_hdr_output_cpu COMMAND $<TARGET_FILE:kb_renderer_tests> hdr-output-cpu)
     set_tests_properties(kb_renderer_hdr_output_cpu PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;hdr;cpu" TIMEOUT 60)
     if(WIN32)
@@ -1139,6 +1141,15 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;diagnostics" TIMEOUT 180)
         set_tests_properties(kb_renderer_screen_space PROPERTIES
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;screen-space" TIMEOUT 180)
+        add_test(NAME kb_renderer_particle_gpu_mesh COMMAND $<TARGET_FILE:kb_renderer_tests> particle-gpu-mesh)
+        set_tests_properties(kb_renderer_particle_gpu_mesh PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;particle;headless" TIMEOUT 180)
+        add_test(NAME kb_renderer_transparent_gpu_readback COMMAND $<TARGET_FILE:kb_renderer_tests> transparent-gpu-readback)
+        set_tests_properties(kb_renderer_transparent_gpu_readback PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;transparency;headless" TIMEOUT 180)
+        add_test(NAME kb_renderer_object_motion_blur COMMAND $<TARGET_FILE:kb_renderer_tests> object-motion-blur)
+        set_tests_properties(kb_renderer_object_motion_blur PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;post-process;headless" TIMEOUT 180)
         # Point, spot, directional and cascaded shadows, and GPU mesh particles, with image readback.
         add_test(NAME kb_renderer_shadows_particle_mesh COMMAND $<TARGET_FILE:kb_renderer_tests> particle-mesh-submit)
         set_tests_properties(kb_renderer_shadows_particle_mesh PROPERTIES
