@@ -48,3 +48,48 @@ receive connection, spawn, despawn and RPC events. A signed-token session enable
 client calls only after the server grants play scope. A transport disconnect
 clears replicas and retries after one second, up to the configured lifetime
 attempt limit; rejected authorization is not retried automatically.
+
+## WebRTC data channels
+
+WebRTC is a third transport for the same session, authorization and replication
+layers. A link is one peer connection with two data channels: a reliable ordered
+one for whole messages up to `WebRtcConfig::maxMessageBytes` (256 KiB by default,
+which every browser accepts), and an unreliable unordered one that carries the
+session datagrams. The session layer adds its own reliability and fragmentation,
+so it runs over WebRTC unchanged and, unlike WebSocket, a lost packet never
+delays the ones behind it. UDP, WebSocket and WebRTC peers can share one `Host`;
+WebRTC peers take identities in the upper half of the `0/8` range.
+
+Setup. Peers first exchange a session description and ICE candidates over a
+signaling channel, then talk directly and the signaling channel closes.
+
+- Server: start the dedicated server with `--websocket-port 27016 --webrtc`.
+  The same listener then also serves signaling at `/21kb-rtc` with subprotocol
+  `21kb.signal.v1` (text messages `offer`, `answer` and `candidate`, each a
+  first line naming the kind followed by its body). `--websocket-origin` applies
+  to it as well. In code, set `WebSocketServerOptions::signaling` to a shared
+  `SignalingListener` and wrap the listener's transport with
+  `CreateWebRtcServerTransport`.
+- Client: open `CreateWebSocketSignalingClient("ws://host:27016/21kb-rtc")` and
+  pass it to `CreateWebRtcClientTransport` together with the logical server
+  endpoint; use that transport with `kb::net::Client` as with any other.
+  Browser builds do the same with the page's RTCPeerConnection and can only
+  offer. The signaling channel is any `ISignalingChannel`, so a game can also
+  carry the messages over its own service; `CreateSignalingPair` connects two
+  peers inside one process.
+- Close a link by destroying its transport. The other side sees the link close
+  at once, or after `WebRtcConfig::timeoutMilliseconds` of silence (10 s by
+  default); empty messages are keep-alives and are never delivered.
+
+ICE servers. `WebRtcConfig::iceServers` (and `--ice-servers` on the server, a
+comma separated list) take `stun:host:3478` entries, which let a peer behind a
+NAT learn its public address, and `turn:user:password@host:3478` entries, which
+relay traffic when no direct path exists. With none, only host candidates are
+used, which is enough on one machine or one network. `bindAddress` restricts the
+native side to one local address. Browsers reach the server over the public
+Internet only when the server's address is reachable, directly or through STUN
+or TURN; HTTPS pages must use `wss://` for signaling, which a reverse proxy can
+terminate as for WebSocket.
+
+Native support uses the pinned libdatachannel dependency with Mbed TLS and can be
+disabled with `KB_NET_WEBRTC=OFF`; the archives are fetched once per build tree.

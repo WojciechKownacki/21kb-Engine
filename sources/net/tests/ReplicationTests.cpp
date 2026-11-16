@@ -3,8 +3,12 @@
 
 #include "kb/net/Prediction.hpp"
 #include "kb/net/Replication.hpp"
+#if defined(KB_NET_WEBRTC)
+#include "kb/net/WebRtcTransport.hpp"
+#endif
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -13,6 +17,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -112,10 +117,21 @@ struct Rig {
         std::vector<NetEvent> events;
     };
 
-    explicit Rig(LinkConditions conditions = {}, ReplicationConfig config = {}) : network(conditions), config_(config) {
+    // With `webRtc` the server and the clients talk over WebRTC data channels on this machine instead of the simulated
+    // network; the simulated link conditions then do not apply, and time is real.
+    explicit Rig(LinkConditions conditions = {}, ReplicationConfig config = {}, bool webRtc = false) : network(conditions), config_(config), webRtc_(webRtc) {
         components = MakeComponents();
         rpcs = MakeRpcs();
-        hostPort = network.CreateTransport(Endpoint::Loopback(9000));
+        if (webRtc_) {
+#if defined(KB_NET_WEBRTC)
+            std::string error;
+            listener_ = std::make_shared<SignalingListener>();
+            hostPort = CreateWebRtcServerTransport(WebRtcServerOptions{ RtcConfig(), 8U }, listener_, nullptr, error);
+            Require(hostPort != nullptr, error);
+#endif
+        } else {
+            hostPort = network.CreateTransport(Endpoint::Loopback(9000));
+        }
         keys.Set(1U, MakeKey(1U));
         keys.Set(2U, MakeKey(2U));
         keys.Set(3U, MakeKey(3U));
@@ -125,10 +141,33 @@ struct Rig {
         server = std::make_unique<ReplicationServer>(*host, *world, *components, *rpcs, config);
     }
 
+    [[nodiscard]] static WebRtcConfig RtcConfig() {
+        WebRtcConfig config;
+        config.bindAddress = "127.0.0.1";
+        return config;
+    }
+
+    // A client's transport to the server: a simulated port, or a WebRTC link signaled in memory.
+    [[nodiscard]] std::unique_ptr<IDatagramTransport> MakePort(std::uint16_t port) {
+        if (!webRtc_) {
+            return network.CreateTransport(Endpoint::Loopback(port));
+        }
+#if defined(KB_NET_WEBRTC)
+        auto [clientEnd, serverEnd] = CreateSignalingPair();
+        listener_->Push(std::move(serverEnd));
+        std::string error;
+        auto transport = CreateWebRtcClientTransport(std::move(clientEnd), RtcConfig(), Endpoint::Loopback(9000), error);
+        Require(transport != nullptr, error);
+        return transport;
+#else
+        return nullptr;
+#endif
+    }
+
     Peer& AddPeer(std::uint64_t id, std::uint16_t port, std::uint64_t now) {
         auto peer = std::make_unique<Peer>();
         peer->id = id;
-        peer->port = network.CreateTransport(Endpoint::Loopback(port));
+        peer->port = MakePort(port);
         ClientConfig clientConfig;
         clientConfig.connectTimeoutMilliseconds = 60'000U;
         peer->client = std::make_unique<Client>(*peer->port, clientConfig, id, MakeKey(static_cast<std::uint8_t>(id)), Endpoint::Loopback(9000), now);
@@ -182,6 +221,9 @@ struct Rig {
             Step(now);
             if (done()) {
                 break;
+            }
+            if (webRtc_) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
         }
         return now;
@@ -270,6 +312,10 @@ struct Rig {
 
     LoopbackNetwork network;
     ReplicationConfig config_;
+    bool webRtc_ = false;
+#if defined(KB_NET_WEBRTC)
+    std::shared_ptr<SignalingListener> listener_;
+#endif
     std::unique_ptr<ReplicationRegistry> components;
     std::unique_ptr<RpcRegistry> rpcs;
     std::unique_ptr<IDatagramTransport> hostPort;
@@ -435,8 +481,8 @@ void TestRpcRegistryAndWire() {
     Require(limiter.Allow(1U, 1U, 10U, 200U), "a forgotten caller keeps its bucket");
 }
 
-void TestReplicationOnPerfectNetwork() {
-    Rig rig;
+void RunPerfectNetworkScenario(bool webRtc) {
+    Rig rig({}, {}, webRtc);
     rig.AddPeer(1U, 9101U, 0U);
     rig.AddPeer(2U, 9102U, 0U);
     std::vector<kb::ecs::Entity> entities;
@@ -494,7 +540,7 @@ void TestReplicationOnPerfectNetwork() {
     rig.peers[1]->port.reset();
     rig.peers[1]->world = std::make_unique<kb::ecs::World>();
     {
-        auto port = rig.network.CreateTransport(Endpoint::Loopback(9104U));
+        auto port = rig.MakePort(9104U);
         ClientConfig clientConfig;
         clientConfig.connectTimeoutMilliseconds = 60'000U;
         rig.peers[1]->port = std::move(port);
@@ -506,6 +552,17 @@ void TestReplicationOnPerfectNetwork() {
     Require(rig.AllReady() && rig.AllConverged() && rig.peers[1]->replication->ReplicaCount() == 3U, "a reconnected client did not converge");
     Require(rig.server->Stats().despawnsSent >= 2U && rig.server->Stats().entriesSent > 0U, "the server statistics are empty");
 }
+
+void TestReplicationOnPerfectNetwork() {
+    RunPerfectNetworkScenario(false);
+}
+
+#if defined(KB_NET_WEBRTC)
+// The same scenario with the server and its clients on WebRTC data channels.
+void TestReplicationOverWebRtc() {
+    RunPerfectNetworkScenario(true);
+}
+#endif
 
 void RunBadNetworkScenario(std::uint64_t seed, int steps, int entityCount, bool report) {
     Rig rig(BadLink(seed));
@@ -1051,6 +1108,9 @@ int main() {
         { "codecs", &TestCodecs },
         { "rpc-registry-and-wire", &TestRpcRegistryAndWire },
         { "replication-perfect-network", &TestReplicationOnPerfectNetwork },
+#if defined(KB_NET_WEBRTC)
+        { "replication-webrtc", &TestReplicationOverWebRtc },
+#endif
         { "replication-bad-network", &TestReplicationOnBadNetwork },
         { "replication-many-seeds", &TestReplicationManySeeds },
         { "rpc-and-permissions", &TestRpcAndPermissions },

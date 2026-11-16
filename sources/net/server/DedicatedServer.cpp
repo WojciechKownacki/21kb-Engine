@@ -1,3 +1,4 @@
+#include "kb/net/WebRtcTransport.hpp"
 #include "kb/net/WebSocketTransport.hpp"
 #include "DedicatedServer.hpp"
 
@@ -492,7 +493,24 @@ bool DedicatedServer::Start(std::string& error) {
         web.webSocketPort = options.webSocketPort;
         web.maxClients = options.maxClients;
         web.allowedOrigin = options.webSocketOrigin;
+        std::shared_ptr<SignalingListener> signaling;
+        if (options.webRtcEnabled) {
+#if defined(KB_NET_WEBRTC)
+            signaling = web.signaling = std::make_shared<SignalingListener>();
+#else
+            error = "WebRTC support was not enabled in this build";
+            return false;
+#endif
+        }
         s.transport = CreateWebSocketServerTransport(web, s.summary.webSocketPort, bindError);
+#if defined(KB_NET_WEBRTC)
+        if (s.transport != nullptr && signaling != nullptr) {
+            WebRtcServerOptions rtc;
+            rtc.link.iceServers = options.iceServers;
+            rtc.maxClients = options.maxClients;
+            s.transport = CreateWebRtcServerTransport(rtc, std::move(signaling), std::move(s.transport), bindError);
+        }
+#endif
     } else {
         s.transport = CreateUdpTransport(Endpoint{address, options.port}, bindError);
     }

@@ -11,8 +11,11 @@ add_library(kb_net STATIC
     include/kb/net/SceneReplication.hpp
     include/kb/net/ScriptBridge.hpp
     include/kb/net/Session.hpp
+    include/kb/net/Signaling.hpp
     include/kb/net/Transport.hpp
+    include/kb/net/WebRtcTransport.hpp
     include/kb/net/WebSocketTransport.hpp
+    src/BrowserWebRtc.cpp
     src/BrowserWebSocketTransport.cpp
     src/Auth.cpp
     src/Host.cpp
@@ -24,7 +27,9 @@ add_library(kb_net STATIC
     include/kb/net/SceneClient.hpp
     src/ScriptBridge.cpp
     src/Session.cpp
+    src/Signaling.cpp
     src/UdpTransport.cpp
+    src/WebRtcTransport.cpp
     src/Wire.hpp
 )
 
@@ -91,6 +96,31 @@ if(KB_NET_WEBSOCKET_SERVER)
         add_executable(kb_websocket_transport_harness tests/WebSocketTransportHarness.cpp)
         target_link_libraries(kb_websocket_transport_harness PRIVATE kb_net_server)
         kb_apply_quality_gates(kb_websocket_transport_harness)
+    endif()
+endif()
+set(_kb_webrtc_default OFF)
+if(NOT ANDROID AND NOT EMSCRIPTEN AND (WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux"))
+    set(_kb_webrtc_default ON)
+endif()
+option(KB_NET_WEBRTC "Enable native WebRTC data channels (kb_net_webrtc)" ${_kb_webrtc_default})
+if(KB_NET_WEBRTC)
+    include(${CMAKE_SOURCE_DIR}/CMake/NetworkWebRtc.cmake)
+    add_library(kb_net_webrtc STATIC src/WebRtcNative.cpp)
+    target_link_libraries(kb_net_webrtc PUBLIC kb_net PRIVATE datachannel-static)
+    kb_apply_quality_gates(kb_net_webrtc)
+    target_compile_definitions(kb_net_server PRIVATE KB_NET_WEBRTC=1)
+    target_link_libraries(kb_net_server PRIVATE kb_net_webrtc)
+    if(BUILD_TESTING)
+        target_link_libraries(kb_net_replication_tests PRIVATE kb_net_webrtc)
+        target_compile_definitions(kb_net_replication_tests PRIVATE KB_NET_WEBRTC=1)
+        add_executable(kb_net_webrtc_tests tests/WebRtcTests.cpp)
+        target_link_libraries(kb_net_webrtc_tests PRIVATE kb_net_server kb_net_webrtc)
+        if(KB_NET_WEBSOCKET_SERVER)
+            target_compile_definitions(kb_net_webrtc_tests PRIVATE KB_NET_WEBSOCKET_SERVER=1)
+        endif()
+        add_test(NAME kb_net_webrtc_tests COMMAND $<TARGET_FILE:kb_net_webrtc_tests>)
+        set_tests_properties(kb_net_webrtc_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 240 LABELS "network;correctness")
+        kb_apply_quality_gates(kb_net_webrtc_tests)
     endif()
 endif()
 target_include_directories(kb_net_server PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/server)

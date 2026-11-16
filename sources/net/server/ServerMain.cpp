@@ -7,6 +7,7 @@
 #include <iostream>
 #include <map>
 #include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -52,6 +53,8 @@ usage: kb_dedicated_server --project <dir> --keys <file> [options]
   --scene <path>           scene to run (default: the project's startup scene)
   --websocket-port <n>    enable WebSocket /21kb listener; 0 selects an available TCP port
   --websocket-origin <s>  optionally restrict the browser Origin to this exact value
+  --webrtc                accept WebRTC data channel peers; signaling is served on the WebSocket listener at /21kb-rtc
+  --ice-servers <list>    comma separated stun:host:port or turn:user:pass@host:port entries for WebRTC (default: none)
   --port <n>               UDP port, 0 lets the system choose (default 27015)
   --bind <ipv4>            address to listen on (default 0.0.0.0)
   --max-clients <n>        connected clients allowed (default 16)
@@ -92,7 +95,7 @@ struct ParsedArguments {
 
 ParsedArguments Parse(const std::vector<std::string>& arguments) {
     ParsedArguments parsed;
-    const std::set<std::string> flags{ "--json", "--quiet", "--help" };
+    const std::set<std::string> flags{ "--json", "--quiet", "--help", "--webrtc" };
     std::map<std::string, std::string> values;
     for (std::size_t index = 0U; index < arguments.size(); ++index) {
         const std::string& argument = arguments[index];
@@ -110,7 +113,7 @@ ParsedArguments Parse(const std::vector<std::string>& arguments) {
         }
     }
     static const std::set<std::string> known{ "--project", "--keys", "--scene", "--port", "--bind", "--max-clients", "--tick-rate", "--idle-timeout",
-        "--empty-timeout", "--max-seconds", "--replicate", "--world-extent", "--stop-file", "--port-file", "--status-file", "--state-file", "--auth-provider-key", "--auth-revocations", "--websocket-port", "--websocket-origin", "--json", "--quiet", "--help" };
+        "--empty-timeout", "--max-seconds", "--replicate", "--world-extent", "--stop-file", "--port-file", "--status-file", "--state-file", "--auth-provider-key", "--auth-revocations", "--websocket-port", "--websocket-origin", "--ice-servers", "--webrtc", "--json", "--quiet", "--help" };
     for (const auto& [name, value] : values) {
         if (!known.contains(name)) {
             parsed.error = "unknown option: " + name;
@@ -157,6 +160,17 @@ ParsedArguments Parse(const std::vector<std::string>& arguments) {
     if (!options.webSocketOrigin.empty() && !options.webSocketEnabled) {
         parsed.error = "--websocket-origin requires --websocket-port";
         return parsed;
+    }
+    options.webRtcEnabled = values.contains("--webrtc");
+    if ((options.webRtcEnabled || values.contains("--ice-servers")) && !options.webSocketEnabled) {
+        parsed.error = "--webrtc and --ice-servers require --websocket-port";
+        return parsed;
+    }
+    if (values.contains("--ice-servers")) {
+        std::istringstream list(values["--ice-servers"]);
+        for (std::string server; std::getline(list, server, ',');) {
+            if (!server.empty()) options.iceServers.push_back(server);
+        }
     }
     if (!number("--port", 65535U, options.port) || !number("--max-clients", 4096U, options.maxClients) || !number("--tick-rate", 240U, options.tickRate) ||
         !number("--idle-timeout", 3600U, options.idleTimeoutSeconds) || !number("--empty-timeout", 86400U, options.emptyTimeoutSeconds) ||

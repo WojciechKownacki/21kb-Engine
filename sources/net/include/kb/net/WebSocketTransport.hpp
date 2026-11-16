@@ -1,10 +1,15 @@
 #pragma once
 
+#include "kb/net/Signaling.hpp"
 #include "kb/net/Transport.hpp"
+
+#include <memory>
 
 namespace kb::net {
 
 inline constexpr const char* kDatagramWebSocketProtocol = "21kb.datagram.v1";
+inline constexpr const char* kSignalingWebSocketProtocol = "21kb.signal.v1";
+inline constexpr const char* kSignalingWebSocketPath = "/21kb-rtc";
 
 // One binary WebSocket message carries one session datagram. The underlying
 // stream is ordered, so packet loss can delay subsequent unreliable messages.
@@ -21,6 +26,9 @@ struct WebSocketServerOptions {
     std::size_t maxClients = 64U;
     // Empty accepts any Origin; session authentication still applies.
     std::string allowedOrigin;
+    // When set, the listener also serves WebRTC signaling at kSignalingWebSocketPath: each peer that
+    // connects there is handed to this listener as a text channel (see WebRtcTransport.hpp).
+    std::shared_ptr<SignalingListener> signaling;
 };
 
 // Native UDP and WebSocket peers share one Host and its authenticated sessions.

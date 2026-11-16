@@ -18,6 +18,56 @@ builds the same for the editor and tools. Add a dependency there before it is bu
 Fetched by CMake for the optional native dedicated-server WebSocket listener.
 Browser clients use the platform WebSocket implementation.
 
+## libdatachannel
+
+- Repository: https://github.com/paullouisageneau/libdatachannel
+- Version: 0.24.6 (`6b1e2e620f1e37f0eafeee702eaea0043cb305fd`)
+- License: MPL-2.0
+- License file: `third_party/licenses/mpl-2.0.txt`
+
+Fetched by CMake for the optional native WebRTC data channel transport
+(`KB_NET_WEBRTC`). The MPL-2.0 is file-level: the library is linked unmodified, so
+the engine's own MIT-licensed sources are unaffected, and the source of the
+library is the pinned upstream revision. Browser clients use the browser's
+WebRTC implementation.
+
+## libjuice
+
+- Repository: https://github.com/paullouisageneau/libjuice
+- Version: `b89c792e3612faf2f12cf35bcc56857313a06be3`
+- License: MPL-2.0
+- License file: `third_party/licenses/mpl-2.0.txt`
+
+The ICE implementation behind libdatachannel; fetched and linked unmodified.
+
+## usrsctp
+
+- Repository: https://github.com/paullouisageneau/usrsctp (fork pinned by libdatachannel)
+- Version: `fec583d54493f879d2ae44a743423bf8a04371ab`
+- License: BSD-3-Clause
+- License file: `third_party/licenses/usrsctp.txt`
+
+The SCTP stack behind libdatachannel; fetched and linked unmodified.
+
+## plog
+
+- Repository: https://github.com/SergiusTheBest/plog
+- Version: `94899e0b926ac1b0f4750bfbd495167b4a6ae9ef`
+- License: MIT
+- License file: `third_party/licenses/plog.txt`
+
+The logging header used by libdatachannel.
+
+## Mbed TLS
+
+- Repository: https://github.com/Mbed-TLS/mbedtls
+- Version: 3.6.7
+- License: Apache-2.0 (Mbed TLS is dual licensed Apache-2.0 OR GPL-2.0-or-later; the Apache-2.0 option is used)
+- License file: `third_party/licenses/apache-2.0.txt`
+
+The DTLS and cryptography backend of libdatachannel, built from the pinned release
+archive with DTLS-SRTP enabled.
+
 ## bgfx
 
 - Repository: https://github.com/bkaradzic/bgfx

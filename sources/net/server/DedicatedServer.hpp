@@ -31,6 +31,8 @@ struct ServerOptions {
     bool webSocketEnabled = false;
     std::uint16_t webSocketPort = 0U;
     std::string webSocketOrigin;     // optional exact browser Origin allowlist
+    bool webRtcEnabled = false;       // WebRTC peers, signaled over the WebSocket listener at /21kb-rtc
+    std::vector<std::string> iceServers; // "stun:host:port" or "turn:user:pass@host:port" for WebRTC peers
     std::filesystem::path keysFile;   // lines of "<client id> <64 hex digits>"; '#' starts a comment
     std::size_t maxClients = 16U;
     std::uint32_t tickRate = 30U;     // fixed simulation and replication steps per second
