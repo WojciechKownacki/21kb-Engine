@@ -1,6 +1,8 @@
 #include "engine/scene/SceneEntities.hpp"
 
+#include "scene/SceneAccess.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneState.hpp"
 
 namespace kb::scene {
 
@@ -94,6 +96,10 @@ void SceneEntities::SetTransient(SceneEntity entity, bool transient) noexcept {
 
 std::size_t SceneEntities::Count() const {
     return SceneEntityService::Count(scene_);
+}
+
+const std::vector<std::string>& SceneEntities::StableIdConflicts() const noexcept {
+    return SceneAccess::State(scene_).stableObjectIds.Conflicts();
 }
 
 } // namespace kb::scene

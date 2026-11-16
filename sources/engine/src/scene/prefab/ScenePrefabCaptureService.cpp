@@ -1,5 +1,6 @@
 #include "scene/prefab/ScenePrefabCaptureService.hpp"
 
+#include "engine/script/ScriptValue.hpp"
 #include "engine/ui/UIEntityReferences.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
@@ -9,13 +10,44 @@
 
 #include <algorithm>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace kb::scene {
 
 namespace {
 
-void ResolveEntityReferences(ScenePrefab& prefab, std::span<const SceneEntity> capturedEntities) {
+// Objects keep their ids across saves; two that came to hold one (scenes merged) cannot both keep it. The later one
+// in capture order takes a new id, which it then keeps, and the scene notes it.
+void ResolveDuplicateIds(Scene& scene, ScenePrefab& prefab, std::span<const SceneEntity> capturedEntities) {
+    std::vector<std::uint64_t> sorted;
+    sorted.reserve(prefab.NodeCount());
+    for (const ScenePrefabNodeDesc& node : prefab.Nodes()) {
+        sorted.push_back(node.stableId);
+    }
+    std::ranges::sort(sorted);
+    if (std::ranges::adjacent_find(sorted) == sorted.end()) {
+        return;
+    }
+    SceneStableObjectIds& ids = SceneAccess::State(scene).stableObjectIds;
+    std::unordered_set<std::uint64_t> seen;
+    seen.reserve(prefab.NodeCount());
+    for (std::uint32_t index = 0U; index < static_cast<std::uint32_t>(std::min(prefab.NodeCount(), capturedEntities.size())); ++index) {
+        ScenePrefabNodeDesc* node = prefab.TryGetMutableNode(index);
+        if (seen.insert(node->stableId).second) {
+            continue;
+        }
+        const std::uint64_t shared = node->stableId;
+        ids.Clear(capturedEntities[index]);
+        node->stableId = ids.Ensure(capturedEntities[index]);
+        seen.insert(node->stableId);
+        ids.NoteConflict("Object \"" + node->name + "\" shared id " + std::to_string(shared) + " with another object and was given id " +
+            std::to_string(node->stableId) + ".");
+    }
+}
+
+void ResolveEntityReferences(Scene& scene, ScenePrefab& prefab, std::span<const SceneEntity> capturedEntities) {
+    SceneState& state = SceneAccess::State(scene);
     const std::span<const ScenePrefabNodeDesc> nodes = prefab.Nodes();
     std::unordered_map<SceneEntity::IdType, std::uint64_t> stableNodeIds;
     stableNodeIds.reserve(capturedEntities.size());
@@ -64,6 +96,17 @@ void ResolveEntityReferences(ScenePrefab& prefab, std::span<const SceneEntity> c
             const auto target = stableNodeIds.find(reference);
             reference = target == stableNodeIds.end() ? 0U : target->second;
         });
+        // A script variable that holds an object names it by stable id too. A target outside the capture keeps its own id,
+        // which instantiating finds among the objects of the scene. A value that names no object stays as it is.
+        for (BehaviourVariableOverride& entry : node->components.behaviourVariableOverrides) {
+            const std::uint64_t reference = entry.value.Type() == kb::script::ScriptValueType::Entity ? entry.value.AsUInt64() : 0U;
+            if (reference == 0U) continue;
+            const auto inside = stableNodeIds.find(reference);
+            const SceneEntity outside{ reference };
+            const std::uint64_t id = inside != stableNodeIds.end() ? inside->second
+                : state.world.IsAlive(outside) ? state.stableObjectIds.Ensure(outside) : 0U;
+            if (id != 0U) entry.value = kb::script::ScriptValue{ id, kb::script::ScriptValueType::Entity };
+        }
     }
 }
 
@@ -122,7 +165,8 @@ ScenePrefab ScenePrefabCaptureService::CaptureRoots(Scene& scene, std::span<cons
     for (const SceneObject root : capturable) {
         ScenePrefabCaptureTraversal::Append(scene, root, settings, prefab, ScenePrefabNodeDesc::NoParent, capturedEntities);
     }
-    ResolveEntityReferences(prefab, capturedEntities);
+    ResolveDuplicateIds(scene, prefab, capturedEntities);
+    ResolveEntityReferences(scene, prefab, capturedEntities);
     RecordNestedNodeIds(scene, prefab, capturedEntities);
     return prefab;
 }

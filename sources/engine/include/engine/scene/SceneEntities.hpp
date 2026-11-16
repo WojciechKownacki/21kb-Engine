@@ -103,6 +103,8 @@ public:
     [[nodiscard]] bool IsTransient(SceneEntity entity) const noexcept;
     void SetTransient(SceneEntity entity, bool transient) noexcept;
     [[nodiscard]] std::size_t Count() const;
+    // Notes of objects that held an id another object held too, when a save gave one of them a new id.
+    [[nodiscard]] const std::vector<std::string>& StableIdConflicts() const noexcept;
 
 private:
     Scene& scene_;

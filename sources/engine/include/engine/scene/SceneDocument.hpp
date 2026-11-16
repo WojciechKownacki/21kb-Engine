@@ -73,6 +73,9 @@ struct SceneDocument {
     //      one is; older files load with the list off.
     // v68: a node persists the components that modules register, each by name with its values encoded by field name;
     //      older files load with none.
+    // v69: an object keeps the id it was given, so saving never renumbers objects and a script variable that names an
+    //      object persists that id. The node layout is unchanged; ids in older files, renumbered on every save, load as
+    //      they are, and only a document of this version is paired object by object by id.
     static constexpr std::uint32_t TilemapFileVersion = 50U;
     static constexpr std::uint32_t OneWayColliderFileVersion = 51U;
     static constexpr std::uint32_t ModalCanvasFileVersion = 52U;
@@ -95,7 +98,8 @@ struct SceneDocument {
     static constexpr std::uint32_t PlanarReflectionFileVersion = 66U;
     static constexpr std::uint32_t VirtualListFileVersion = 67U;
     static constexpr std::uint32_t ModuleComponentsFileVersion = 68U;
-    static constexpr std::uint32_t CurrentFileVersion = 68U;
+    static constexpr std::uint32_t StableObjectIdsFileVersion = 69U;
+    static constexpr std::uint32_t CurrentFileVersion = 69U;
     static constexpr std::uint32_t SocketAttachmentFileVersion = 49U;
     static constexpr std::uint32_t CombatantFileVersion = 49U;
     static constexpr std::uint32_t AIBrainFileVersion = 49U;

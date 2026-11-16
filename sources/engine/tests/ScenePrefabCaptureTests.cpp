@@ -9,6 +9,7 @@
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneHistory.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/ScenePrefab.hpp"
 #include "engine/scene/ScenePrefabCaptureSettings.hpp"
@@ -16,7 +17,11 @@
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/script/ScriptValue.hpp"
 #include "scene/asset/io/SceneAssetBinaryIO.hpp"
+#include "scene/asset/io/SceneAssetFormat.hpp"
+#include "scene/asset/io/SceneAssetReader.hpp"
+#include "scene/asset/io/SceneAssetWriter.hpp"
 #include "scene/asset/io/components/SceneAssetPhysicsComponentCodec.hpp"
 
 #include <algorithm>
@@ -24,6 +29,8 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <span>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -1308,6 +1315,282 @@ void RunExtendedJointSerializationTest() {
 
 namespace kb::tests {
 
+// An object keeps the id it was given: saving, loading and saving again never renumbers anything.
+std::filesystem::path StableIdRoot() {
+    return std::filesystem::temp_directory_path() / "kb_stable_object_ids";
+}
+
+[[nodiscard]] kb::scene::SceneObject FindObject(const kb::scene::SceneObject& from, const std::string& name) {
+    if (from.Name() == name) return from;
+    for (const kb::scene::SceneObject child : from.Children()) {
+        if (const kb::scene::SceneObject found = FindObject(child, name); found.IsValid()) return found;
+    }
+    return {};
+}
+
+[[nodiscard]] kb::scene::SceneObject FindObject(kb::scene::Scene& scene, const std::string& name) {
+    for (const kb::scene::SceneObject root : scene.Hierarchy().RootObjects()) {
+        if (const kb::scene::SceneObject found = FindObject(root, name); found.IsValid()) return found;
+    }
+    return {};
+}
+
+[[nodiscard]] std::map<std::string, std::uint64_t> IdsByName(const kb::scene::SceneDocument& document) {
+    std::map<std::string, std::uint64_t> ids;
+    for (const kb::scene::ScenePrefabNodeDesc& node : document.worldPrefab.Nodes()) {
+        ids[node.name] = node.stableId;
+    }
+    return ids;
+}
+
+[[nodiscard]] std::map<std::uint64_t, int> IdCounts(const kb::scene::SceneDocument& document) {
+    std::map<std::uint64_t, int> counts;
+    for (const kb::scene::ScenePrefabNodeDesc& node : document.worldPrefab.Nodes()) ++counts[node.stableId];
+    return counts;
+}
+
+// A thousand objects under one root, with a joint and script variables that name other objects.
+void BuildStableIdScene(kb::scene::Scene& scene) {
+    const kb::scene::SceneObject level = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Level" });
+    for (std::uint32_t index = 0U; index < 1000U; ++index) {
+        static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+            .name = "Obj" + std::to_string(index),
+            .parent = level,
+            .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ static_cast<float>(index), 0.0F, 0.0F } },
+        }));
+    }
+    const kb::scene::SceneObject door = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Door", .parent = level });
+    const kb::scene::SceneObject frame = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Frame", .parent = door });
+    const kb::scene::SceneObject lamp = FindObject(scene, "Obj7");
+    scene.Components().Joints().Set(door.Entity(), kb::scene::JointComponent{ .type = kb::scene::JointType::Fixed, .connectedEntity = frame.Entity() });
+    scene.Components().Behaviours().Set(door.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = 77U, .backend = kb::scene::BehaviourBackend::Lua });
+    scene.Entities().ReplaceBehaviourVariableOverrides(door.Entity(), {
+        { "frame", kb::script::ScriptValue{ frame.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        { "lamp", kb::script::ScriptValue{ lamp.Entity().Id(), kb::script::ScriptValueType::Entity } },
+    });
+}
+
+[[nodiscard]] std::vector<std::uint8_t> SaveStableIdScene(kb::scene::Scene& scene, const char* folder) {
+    const std::filesystem::path path = StableIdRoot() / folder / "Stable.21kbscene";
+    std::filesystem::create_directories(path.parent_path());
+    kb::tests::Require(kb::scene::SceneDocumentService::Save(scene, path, "Stable"), "A scene with stable ids did not save");
+    return kb::scene::SceneAssetBinaryIO::ReadAllBytes(path);
+}
+
+void LoadStableIdScene(kb::scene::Scene& scene, const char* folder) {
+    const kb::scene::SceneDocumentLoadResult loaded = kb::scene::SceneDocumentService::Load(StableIdRoot() / folder / "Stable.21kbscene");
+    kb::tests::Require(loaded.succeeded && kb::scene::SceneDocumentService::LoadIntoScene(scene, loaded.document), "A saved scene did not load");
+}
+
+// What the door's joint and script variables and the frame's parent point at, by object name.
+struct ObjectLinks {
+    std::string jointTarget;
+    std::string frameVariable;
+    std::string lampVariable;
+    std::string frameParent;
+};
+
+[[nodiscard]] ObjectLinks LinksOf(kb::scene::Scene& scene) {
+    const auto nameOf = [&scene](std::uint64_t entityId) { return scene.Entities().Name(kb::scene::SceneEntity{ entityId }); };
+    const kb::scene::SceneObject door = FindObject(scene, "Door");
+    const kb::scene::SceneObject frame = FindObject(scene, "Frame");
+    ObjectLinks links;
+    if (const auto* joint = scene.Components().Joints().TryGet(door.Entity())) links.jointTarget = nameOf(joint->connectedEntity.Id());
+    for (const kb::scene::BehaviourVariableOverride& entry : scene.Entities().BehaviourVariableOverrides(door.Entity())) {
+        (entry.name == "frame" ? links.frameVariable : links.lampVariable) = nameOf(entry.value.AsUInt64());
+    }
+    links.frameParent = frame.Parent().Name();
+    return links;
+}
+
+// What a node writes, with its parent named by id rather than by place, counted by record.
+[[nodiscard]] std::map<std::vector<std::uint8_t>, int> NodeRecords(const kb::scene::SceneDocument& document) {
+    std::map<std::vector<std::uint8_t>, int> counts;
+    const std::span<const kb::scene::ScenePrefabNodeDesc> nodes = document.worldPrefab.Nodes();
+    for (const kb::scene::ScenePrefabNodeDesc& node : nodes) {
+        kb::scene::SceneDocument single;
+        single.guid = "scene:Record";
+        single.name = "Record";
+        kb::scene::ScenePrefabNodeDesc copy = node;
+        copy.parentNode = kb::scene::ScenePrefabNodeDesc::NoParent;
+        copy.components.joint.reset();
+        static_cast<void>(single.worldPrefab.AddNode(std::move(copy)));
+        std::vector<std::uint8_t> bytes = kb::scene::SceneAssetWriter::Encode(single);
+        kb::tests::Require(!bytes.empty(), "A node did not encode on its own");
+        kb::scene::SceneAssetBinaryIO::WriteUInt64(bytes, node.parentNode == kb::scene::ScenePrefabNodeDesc::NoParent ? 0U : nodes[node.parentNode].stableId);
+        ++counts[std::move(bytes)];
+    }
+    return counts;
+}
+
+// The records of `now` that `was` does not have.
+[[nodiscard]] int NewRecords(const std::map<std::vector<std::uint8_t>, int>& was, const std::map<std::vector<std::uint8_t>, int>& now) {
+    int total = 0;
+    for (const auto& [bytes, count] : now) {
+        const auto found = was.find(bytes);
+        total += count - (found == was.end() ? 0 : std::min(count, found->second));
+    }
+    return total;
+}
+
+void RunSceneObjectsKeepIdsAcrossSavesTest() {
+    std::error_code removeError;
+    std::filesystem::remove_all(StableIdRoot(), removeError);
+    kb::scene::Scene first;
+    BuildStableIdScene(first);
+    const std::vector<std::uint8_t> firstBytes = SaveStableIdScene(first, "first");
+    kb::tests::Require(SaveStableIdScene(first, "again") == firstBytes, "Saving a scene twice produced different files");
+
+    // Save, load, save: the same bytes, and the links point at the same objects.
+    kb::scene::Scene second;
+    LoadStableIdScene(second, "first");
+    kb::tests::Require(SaveStableIdScene(second, "second") == firstBytes, "Loading and saving a scene changed its file");
+    kb::scene::Scene third;
+    LoadStableIdScene(third, "second");
+    kb::tests::Require(SaveStableIdScene(third, "third") == firstBytes, "A third save changed the file");
+    for (kb::scene::Scene* scene : { &first, &second, &third }) {
+        const ObjectLinks links = LinksOf(*scene);
+        kb::tests::Require(links.jointTarget == "Frame" && links.frameVariable == "Frame" && links.lampVariable == "Obj7" && links.frameParent == "Door",
+            "A parent, joint or script variable no longer points at the object it named");
+    }
+
+    // A file of the version before objects kept their ids reads as it is, and takes the current version when saved.
+    std::vector<std::uint8_t> older = firstBytes;
+    for (std::size_t byte = 0U; byte < sizeof(std::uint32_t); ++byte) {
+        older[kb::scene::SceneAssetFormat::Magic.size() + byte] = static_cast<std::uint8_t>((68U >> (8U * byte)) & 0xFFU);
+    }
+    const kb::scene::SceneDocumentLoadResult legacy = kb::scene::SceneAssetReader::Read(older);
+    kb::tests::Require(legacy.succeeded && legacy.document.fileVersion == 68U && legacy.document.fileVersion < kb::scene::SceneDocument::StableObjectIdsFileVersion,
+        "A scene of version 68 did not load as version 68");
+    kb::scene::Scene fromLegacy;
+    kb::tests::Require(kb::scene::SceneDocumentService::LoadIntoScene(fromLegacy, legacy.document), "A scene of version 68 did not load into a scene");
+    kb::tests::Require(SaveStableIdScene(fromLegacy, "legacy") == firstBytes, "A scene of version 68 changed its ids when it was saved again");
+
+    // Remove one object and add another: every other object keeps its id and its record.
+    const kb::scene::SceneDocument before = kb::scene::SceneDocumentService::Capture(second, "Stable");
+    second.Entities().Destroy(FindObject(second, "Obj500"));
+    static_cast<void>(second.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Fresh", .parent = FindObject(second, "Level") }));
+    const kb::scene::SceneDocument after = kb::scene::SceneDocumentService::Capture(second, "Stable");
+    const std::map<std::string, std::uint64_t> idsBefore = IdsByName(before);
+    const std::map<std::string, std::uint64_t> idsAfter = IdsByName(after);
+    for (const auto& [name, id] : idsBefore) {
+        if (name == "Obj500") continue;
+        const auto found = idsAfter.find(name);
+        kb::tests::Require(found != idsAfter.end() && found->second == id, "An object lost its id when another was removed and one added");
+    }
+    kb::tests::Require(idsAfter.size() == idsBefore.size() && !idsAfter.contains("Obj500") && idsAfter.contains("Fresh"), "The edit did not remove one object and add one");
+    kb::tests::Require(std::ranges::none_of(idsBefore, [&](const auto& entry) { return entry.second == idsAfter.at("Fresh"); }),
+        "A new object took the id of an object that was there");
+    const std::map<std::vector<std::uint8_t>, int> recordsBefore = NodeRecords(before);
+    const std::map<std::vector<std::uint8_t>, int> recordsAfter = NodeRecords(after);
+    kb::tests::Require(NewRecords(recordsBefore, recordsAfter) == 1 && NewRecords(recordsAfter, recordsBefore) == 1,
+        "More than the removed and the added object changed in the file");
+    std::filesystem::remove_all(StableIdRoot(), removeError);
+}
+
+// A copy of objects, made the way the editor pastes and duplicates, gets ids of its own; what it links inside itself it
+// links in the copy, and what it links outside stays on the same object.
+void RunCopiedObjectsGetOwnIdsTest() {
+    kb::scene::Scene scene;
+    BuildStableIdScene(scene);
+    const kb::scene::ScenePrefab payload = scene.Prefabs().Capture(FindObject(scene, "Door"));
+    const kb::scene::ScenePrefabInstance copy = scene.Prefabs().Instantiate(
+        payload, kb::scene::ScenePrefabInstantiationSettings{ .parent = FindObject(scene, "Level"), .linkPrefabInstances = true });
+    kb::tests::Require(copy.ObjectCount() == 2U, "The copy of the door did not hold the door and its frame");
+    const kb::scene::SceneObject copyDoor = copy.ObjectAt(0U);
+    const kb::scene::SceneObject copyFrame = copy.ObjectAt(1U);
+    const auto* joint = scene.Components().Joints().TryGet(copyDoor.Entity());
+    kb::tests::Require(joint != nullptr && joint->connectedEntity == copyFrame.Entity(), "A joint in the copy did not connect to the copy");
+    for (const kb::scene::BehaviourVariableOverride& entry : scene.Entities().BehaviourVariableOverrides(copyDoor.Entity())) {
+        const kb::scene::SceneEntity expected = entry.name == "frame" ? copyFrame.Entity() : FindObject(scene, "Obj7").Entity();
+        kb::tests::Require(entry.value.AsUInt64() == expected.Id(), "A script variable in the copy did not name the copy or the object outside it");
+    }
+
+    const kb::scene::SceneDocument document = kb::scene::SceneDocumentService::Capture(scene, "Copies");
+    kb::tests::Require(std::ranges::all_of(IdCounts(document), [](const auto& entry) { return entry.second == 1; }), "The copy shares an id with another object");
+    // Each saved door names the frame saved below that door, never the other door's.
+    std::map<std::uint64_t, std::uint64_t> parentOfFrame;
+    for (const kb::scene::ScenePrefabNodeDesc& node : document.worldPrefab.Nodes()) {
+        if (node.name == "Frame") parentOfFrame[node.stableId] = document.worldPrefab.Nodes()[node.parentNode].stableId;
+    }
+    std::size_t doors = 0U;
+    for (const kb::scene::ScenePrefabNodeDesc& node : document.worldPrefab.Nodes()) {
+        if (node.name != "Door") continue;
+        ++doors;
+        kb::tests::Require(node.components.joint.has_value() && parentOfFrame.contains(node.components.joint->connectedNodeStableId) &&
+                parentOfFrame.at(node.components.joint->connectedNodeStableId) == node.stableId,
+            "A saved joint did not name the frame under its own door");
+    }
+    kb::tests::Require(doors == 2U && scene.Entities().StableIdConflicts().empty(), "The saved scene did not hold both doors, or noted a conflict that never was");
+
+    // Instances of a prefab get ids of their own and keep them.
+    kb::scene::ScenePrefab crate;
+    const std::uint32_t crateRoot = crate.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Crate" });
+    static_cast<void>(crate.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Lid", .parentNode = crateRoot }));
+    const kb::scene::ScenePrefabHandle crateHandle = scene.Prefabs().Register("Crate", std::move(crate));
+    static_cast<void>(scene.Prefabs().Instantiate(crateHandle));
+    static_cast<void>(scene.Prefabs().Instantiate(crateHandle));
+    const kb::scene::SceneDocument withCrates = kb::scene::SceneDocumentService::Capture(scene, "Copies");
+    kb::tests::Require(IdCounts(withCrates).size() == withCrates.worldPrefab.NodeCount(), "Two instances of a prefab share an id");
+    const kb::scene::SceneDocument again = kb::scene::SceneDocumentService::Capture(scene, "Copies");
+    for (std::size_t index = 0U; index < withCrates.worldPrefab.NodeCount(); ++index) {
+        kb::tests::Require(again.worldPrefab.Nodes()[index].stableId == withCrates.worldPrefab.Nodes()[index].stableId, "Capturing twice renumbered an object");
+    }
+}
+
+// Two objects that came to hold one id (scenes merged) are told apart when the scene is saved, and the scene says so.
+void RunDuplicateObjectIdsAreResolvedTest() {
+    kb::scene::Scene scene;
+    BuildStableIdScene(scene);
+    kb::scene::Scene other;
+    static_cast<void>(other.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Level" }));
+    static_cast<void>(other.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Extra" }));
+    // Both scenes numbered their first objects alike; loading the second into the first brings the same ids twice.
+    const kb::scene::SceneDocument extra = kb::scene::SceneDocumentService::Capture(other, "Extra");
+    const kb::scene::SceneDocument alone = kb::scene::SceneDocumentService::Capture(scene, "Merged");
+    kb::tests::Require(kb::scene::SceneDocumentService::LoadIntoSceneAdditive(scene, extra).succeeded, "The second scene did not load additively");
+    const kb::scene::SceneDocument merged = kb::scene::SceneDocumentService::Capture(scene, "Merged");
+    kb::tests::Require(merged.worldPrefab.NodeCount() == alone.worldPrefab.NodeCount() + 3U &&
+            std::ranges::all_of(IdCounts(merged), [](const auto& entry) { return entry.second == 1; }),
+        "Objects of merged scenes share an id");
+    kb::tests::Require(!scene.Entities().StableIdConflicts().empty(), "A resolved id conflict was not noted");
+    const kb::scene::SceneDocument again = kb::scene::SceneDocumentService::Capture(scene, "Merged");
+    for (std::size_t index = 0U; index < merged.worldPrefab.NodeCount(); ++index) {
+        kb::tests::Require(again.worldPrefab.Nodes()[index].stableId == merged.worldPrefab.Nodes()[index].stableId, "A resolved id changed on the next save");
+    }
+}
+
+// A prefab file keeps the node ids it was saved with.
+void RunPrefabFileKeepsNodeIdsTest() {
+    const std::filesystem::path first = StableIdRoot() / "prefab" / "Door.kbprefab";
+    const std::filesystem::path second = StableIdRoot() / "prefab" / "DoorAgain.kbprefab";
+    std::filesystem::create_directories(first.parent_path());
+    kb::scene::Scene scene;
+    BuildStableIdScene(scene);
+    const kb::scene::ScenePrefabHandle handle = scene.Prefabs().CaptureRegistered(FindObject(scene, "Door"), "Door");
+    kb::tests::Require(handle.IsValid() && scene.Prefabs().Save(handle, first), "The door prefab did not save");
+    kb::scene::Scene reader;
+    const kb::scene::ScenePrefabHandle loaded = reader.Prefabs().Load(first);
+    kb::tests::Require(loaded.IsValid() && reader.Prefabs().Save(loaded, second), "The door prefab did not load and save again");
+    kb::tests::Require(kb::scene::SceneAssetBinaryIO::ReadAllBytes(first) == kb::scene::SceneAssetBinaryIO::ReadAllBytes(second),
+        "Loading and saving a prefab changed its file");
+    std::error_code removeError;
+    std::filesystem::remove_all(StableIdRoot(), removeError);
+}
+
+// Undo brings a destroyed object back under the id it had.
+void RunUndoKeepsObjectIdTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject kept = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Kept" });
+    static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Other" }));
+    const std::map<std::string, std::uint64_t> before = IdsByName(kb::scene::SceneDocumentService::Capture(scene, "Undo"));
+    kb::tests::Require(scene.History().Record("Delete"), "The history did not open a command");
+    scene.Entities().Destroy(kept);
+    scene.History().Commit();
+    kb::tests::Require(scene.History().Undo(), "The history did not undo the deletion");
+    kb::tests::Require(IdsByName(kb::scene::SceneDocumentService::Capture(scene, "Undo")) == before, "Undo gave a restored object another id");
+}
+
 void RunScenePrefabCaptureTests() {
     const auto run = [](const char* name, void (*test)()) {
         TracePrefabCaptureTest(name);
@@ -1336,6 +1619,11 @@ void RunScenePrefabCaptureTests() {
     run("RunPrefabCaptureRejectsExternalJointTargetTest", RunPrefabCaptureRejectsExternalJointTargetTest);
     run("RunPhysicsComponentPrefabHashCoverageTest", RunPhysicsComponentPrefabHashCoverageTest);
     run("RunExtendedJointSerializationTest", RunExtendedJointSerializationTest);
+    run("RunSceneObjectsKeepIdsAcrossSavesTest", RunSceneObjectsKeepIdsAcrossSavesTest);
+    run("RunCopiedObjectsGetOwnIdsTest", RunCopiedObjectsGetOwnIdsTest);
+    run("RunDuplicateObjectIdsAreResolvedTest", RunDuplicateObjectIdsAreResolvedTest);
+    run("RunPrefabFileKeepsNodeIdsTest", RunPrefabFileKeepsNodeIdsTest);
+    run("RunUndoKeepsObjectIdTest", RunUndoKeepsObjectIdTest);
 }
 
 } // namespace kb::tests

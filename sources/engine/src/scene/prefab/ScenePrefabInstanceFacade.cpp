@@ -1,7 +1,9 @@
 #include "scene/prefab/ScenePrefabInstanceFacade.hpp"
 
 #include "engine/scene/ScenePrefabs.hpp"
+#include "scene/SceneAccess.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabInstanceRelinker.hpp"
 #include "scene/prefab/ScenePrefabInstantiationService.hpp"
 #include "scene/prefab/ScenePrefabRegisteredInstantiationService.hpp"
@@ -22,6 +24,13 @@ void ValidateParent(const Scene& scene, const ScenePrefabInstantiationSettings& 
 ScenePrefabInstance ScenePrefabInstanceFacade::Instantiate(Scene& scene, const ScenePrefab& prefab, const ScenePrefabInstantiationSettings& settings) {
     ValidateParent(scene, settings, 1U);
     ScenePrefabInstance instance = ScenePrefabInstantiationService::Instantiate(scene, prefab, settings);
+    if (settings.keepStableIds) {
+        SceneStableObjectIds& ids = SceneAccess::State(scene).stableObjectIds;
+        const std::span<const ScenePrefabNodeDesc> nodes = prefab.Nodes();
+        for (std::uint32_t index = 0U; index < nodes.size() && index < instance.ObjectCount(); ++index) {
+            ids.Set(instance.ObjectAt(index).Entity(), nodes[index].stableId);
+        }
+    }
     if (settings.linkPrefabInstances) {
         ScenePrefabInstanceRelinker::Relink(scene, prefab, settings.parent, instance);
     }

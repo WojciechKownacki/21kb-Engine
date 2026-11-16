@@ -73,6 +73,16 @@ std::uint32_t AddNode(kb::scene::SceneDocument& document, const std::string& nam
 
 constexpr std::uint32_t kRoot = kb::scene::ScenePrefabNodeDesc::NoParent;
 
+// An object with the id it keeps across saves.
+std::uint32_t AddObject(kb::scene::SceneDocument& document, const std::string& name, std::uint32_t parent, std::uint64_t id, float x = 0.0F) {
+    kb::scene::ScenePrefabNodeDesc node;
+    node.stableId = id;
+    node.name = name;
+    node.parentNode = parent;
+    node.transform.localPosition = { x, 0.0F, 0.0F };
+    return document.worldPrefab.AddNode(std::move(node));
+}
+
 [[nodiscard]] kb::scene::SceneDocument LevelScene(bool changed) {
     kb::scene::SceneDocument document;
     document.name = "Level";
@@ -87,7 +97,8 @@ constexpr std::uint32_t kRoot = kb::scene::ScenePrefabNodeDesc::NoParent;
     lamp.components.light = kb::scene::LightComponent{};
     lamp.components.light->intensity = changed ? 7.0F : 3.0F;
     static_cast<void>(document.worldPrefab.AddNode(std::move(lamp)));
-    static_cast<void>(AddNode(document, changed ? "Window" : "Crate", level));
+    // The crate and the window are two objects, so they do not share an id.
+    static_cast<void>(AddObject(document, changed ? "Window" : "Crate", level, changed ? 100U : 4U));
     return document;
 }
 
@@ -143,6 +154,61 @@ void RunSceneComparisonTest() {
         const std::string path = object.path.substr(object.path.rfind('/') + 1U);
         Require(found.IsValid() && live.Entities().Name(found) == path, "A change must find its object in the scene");
     }
+}
+
+// A scene of two versions of a level: the door is renamed, the second of two twins moves and the box goes under the shelf.
+[[nodiscard]] kb::scene::SceneDocument TwinScene(bool changed, std::uint32_t fileVersion) {
+    kb::scene::SceneDocument document;
+    document.name = "Level";
+    document.guid = "scene:Level";
+    document.fileVersion = fileVersion;
+    const std::uint32_t level = AddObject(document, "Level", kRoot, 1U);
+    static_cast<void>(AddObject(document, changed ? "Gate" : "Door", level, 2U));
+    static_cast<void>(AddObject(document, "Twin", level, 3U, 1.0F));
+    static_cast<void>(AddObject(document, "Twin", level, 4U, changed ? 9.0F : 2.0F));
+    const std::uint32_t shelf = AddObject(document, "Shelf", level, 5U);
+    static_cast<void>(AddObject(document, "Box", changed ? shelf : level, 6U));
+    return document;
+}
+
+[[nodiscard]] const kb::editor::EditorSceneObjectChange* FindChange(const EditorSceneComparison& comparison, const std::string& path) {
+    const auto found = std::ranges::find(comparison.objects, path, &kb::editor::EditorSceneObjectChange::path);
+    return found == comparison.objects.end() ? nullptr : &*found;
+}
+
+[[nodiscard]] const kb::editor::EditorSceneFieldChange* FindField(const kb::editor::EditorSceneObjectChange& object, const char* component, const char* property) {
+    const auto found = std::ranges::find_if(object.fields, [&](const kb::editor::EditorSceneFieldChange& change) {
+        return change.component == component && change.property == property;
+    });
+    return found == object.fields.end() ? nullptr : &*found;
+}
+
+// Objects pair by the id they keep: a rename is one change, two objects of one name stay apart and a moved object is one
+// change. Files from before objects kept their ids pair by name, so there the same edits read as objects gone and new.
+void RunSceneComparisonByIdTest() {
+    const EditorSceneComparison comparison = EditorSceneComparer::Compare(
+        TwinScene(false, kb::scene::SceneDocument::CurrentFileVersion), TwinScene(true, kb::scene::SceneDocument::CurrentFileVersion));
+    Require(comparison.succeeded && comparison.objects.size() == 3U, "A rename, a move of one twin and a reparent must be three changes");
+    const kb::editor::EditorSceneObjectChange* renamed = FindChange(comparison, "Level/Gate");
+    Require(renamed != nullptr && renamed->kind == EditorSceneChangeKind::Changed && renamed->fields.size() == 1U, "A rename must be one changed object");
+    const kb::editor::EditorSceneFieldChange* name = FindField(*renamed, "Object", "name");
+    Require(name != nullptr && name->before == "Door" && name->after == "Gate", "A rename must show the old and the new name");
+    const kb::editor::EditorSceneObjectChange* twin = FindChange(comparison, "Level/Twin");
+    Require(twin != nullptr && twin->kind == EditorSceneChangeKind::Changed && twin->address == std::vector<std::uint32_t>{ 0U, 2U },
+        "Only the second of two objects named alike must change, at its place in the newer scene");
+    const kb::editor::EditorSceneFieldChange* moved = FindField(*twin, "Transform", "localPosition.x");
+    Require(twin->fields.size() == 1U && moved != nullptr && moved->before == "2" && moved->after == "9", "The twin must show its own old and new position");
+    const kb::editor::EditorSceneObjectChange* box = FindChange(comparison, "Level/Shelf/Box");
+    const kb::editor::EditorSceneFieldChange* parent = box == nullptr ? nullptr : FindField(*box, "Object", "parent");
+    Require(box != nullptr && box->kind == EditorSceneChangeKind::Changed && parent != nullptr && parent->before == "Level" && parent->after == "Level/Shelf",
+        "A moved object must be one change that names its old and new parent");
+
+    const EditorSceneComparison legacy = EditorSceneComparer::Compare(TwinScene(false, 68U), TwinScene(true, 68U));
+    Require(legacy.succeeded && legacy.objects.size() == 5U &&
+            std::ranges::none_of(legacy.objects, [](const kb::editor::EditorSceneObjectChange& object) { return FindField(object, "Object", "name") != nullptr; }),
+        "Files that renumbered their objects must pair them by name");
+    Require(FindChange(legacy, "Level/Door") != nullptr && FindChange(legacy, "Level/Gate") != nullptr && FindChange(legacy, "Level/Twin") != nullptr,
+        "By name, a rename is an object gone and a new one, and the twins pair in order");
 }
 
 constexpr std::uint32_t kLargeObjects = 100000U;
@@ -340,6 +406,7 @@ namespace kb::editor::tests {
 
 void RunEditorVersionControlTests() {
     RunSceneComparisonTest();
+    RunSceneComparisonByIdTest();
     RunLargeSceneComparisonTest();
     RunBackgroundComparisonTest();
     RunChangesAndRestoreTest();

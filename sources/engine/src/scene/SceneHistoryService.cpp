@@ -80,6 +80,7 @@ constexpr std::uint32_t kNoSiblingIndex = SceneHistoryObjectChange::NoSiblingInd
     const SceneObject object = SceneAccess::MakeObject(scene, entity);
     state.alive = true;
     state.parent = SceneHierarchyService::Parent(scene, entity);
+    state.node.stableId = SceneAccess::State(scene).stableObjectIds.Find(entity);
     state.node.name = SceneEntityService::Name(scene, entity);
     state.node.transform = SceneTransformService::Get(scene, entity);
     state.node.SetLocalTranslation(scene.Transforms().LocalTranslation(entity));
@@ -398,6 +399,8 @@ void Seal(Scene& scene, SceneState& state) {
         const SceneHistoryObjectState& objectState = target(change);
         if (objectState.alive && !SceneEntityService::IsAlive(scene, change.entity)) {
             const SceneEntity entity = SceneEntityService::CreateEntity(scene, SceneObjectDesc{ .name = objectState.node.name });
+            // The object that comes back is the same object, so it keeps the id it had.
+            state.stableObjectIds.Set(entity, objectState.node.stableId);
             replacements.emplace(change.entity.Id(), entity);
             recreated.push_back(SceneEntityRemap{ .from = change.entity, .to = entity });
         }

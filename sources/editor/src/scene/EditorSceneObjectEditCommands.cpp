@@ -374,9 +374,10 @@ bool EditorScenePrefabRemoveCommand::RestorePayloads() {
     std::vector<kb::scene::SceneObject> restoredObjects;
     for (EditorSceneObjectPrefabPayload& payload : payloads_) {
         kb::scene::SceneObject parent = AliveParentObject(scene, payload.parent);
+        // An object that comes back is the same object: it keeps the ids it was saved under.
         const kb::scene::ScenePrefabInstance instance = scene.Prefabs().Instantiate(
             payload.prefab,
-            kb::scene::ScenePrefabInstantiationSettings{ .parent = parent, .linkPrefabInstances = true });
+            kb::scene::ScenePrefabInstantiationSettings{ .parent = parent, .linkPrefabInstances = true, .keepStableIds = true });
         if (!instance.Empty() && instance.RootObject().IsValid()) {
             currentEntities_.push_back(instance.RootObject().Entity());
         }

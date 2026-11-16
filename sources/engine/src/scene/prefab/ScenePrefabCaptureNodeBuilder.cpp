@@ -36,6 +36,7 @@ void ApplyNestedPrefabMetadata(Scene& scene, SceneObject object, ScenePrefabNode
 
 ScenePrefabNodeDesc ScenePrefabCaptureNodeBuilder::Build(Scene& scene, SceneObject object, std::uint32_t parentNode) {
     ScenePrefabNodeDesc node{
+        .stableId = SceneAccess::State(scene).stableObjectIds.Ensure(object.Entity()),
         .name = object.Name(),
         .nestedPrefabGuid = {},
         .nestedPrefabOverrides = {},

@@ -6,6 +6,7 @@
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneModuleComponents.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
+#include "engine/script/ScriptValue.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneHistoryService.hpp"
 #include "scene/SceneRenderProxyComponentMask.hpp"
@@ -1072,15 +1073,53 @@ void ApplyTranslationResiduals(Scene& scene, std::span<const ScenePrefabNodeDesc
     }
 }
 
+[[nodiscard]] bool HoldsEntityVariable(const ScenePrefabNodeDesc& node) {
+    return std::ranges::any_of(node.components.behaviourVariableOverrides, [](const BehaviourVariableOverride& entry) {
+        return entry.value.Type() == kb::script::ScriptValueType::Entity && entry.value.AsUInt64() != 0U;
+    });
+}
+
 // The exposed script variables a node's behaviour overrides are stored per entity, so each instance gets its own copy.
+// With `resolveEntities` (a capture of objects) an Entity-valued variable holds its target's stable id: the copy of the
+// target made with the instance, or else an object that was already in the scene; a value that names neither stays.
 void ApplyBehaviourVariableOverrides(Scene& scene, std::span<const ScenePrefabNodeDesc> nodes,
-    std::span<const SceneEntity> entities, std::size_t instanceCount) {
+    std::span<const SceneEntity> entities, std::size_t instanceCount, bool resolveEntities) {
     if (std::ranges::none_of(nodes, [](const ScenePrefabNodeDesc& node) { return !node.components.behaviourVariableOverrides.empty(); })) return;
     SceneState& state = SceneAccess::State(scene);
+    resolveEntities = resolveEntities && std::ranges::any_of(nodes, HoldsEntityVariable);
+    ScenePrefabReferenceResolver::EntityMap copies;
+    ScenePrefabReferenceResolver::EntityMap inScene;
+    bool inSceneBuilt = false;
     for (std::size_t instance = 0U; instance < instanceCount; ++instance) {
+        if (resolveEntities) {
+            copies.clear();
+            for (std::size_t index = 0U; index < nodes.size(); ++index) {
+                copies.emplace(nodes[index].stableId, entities[EntityIndex(instance, index, nodes.size())]);
+            }
+        }
         for (std::size_t index = 0U; index < nodes.size(); ++index) {
-            if (!nodes[index].components.behaviourVariableOverrides.empty()) {
-                state.behaviourVariableOverrides[entities[EntityIndex(instance, index, nodes.size())].Id()] = nodes[index].components.behaviourVariableOverrides;
+            if (nodes[index].components.behaviourVariableOverrides.empty()) continue;
+            std::vector<BehaviourVariableOverride>& stored = state.behaviourVariableOverrides[entities[EntityIndex(instance, index, nodes.size())].Id()] =
+                nodes[index].components.behaviourVariableOverrides;
+            for (BehaviourVariableOverride& entry : stored) {
+                if (!resolveEntities || entry.value.Type() != kb::script::ScriptValueType::Entity || entry.value.AsUInt64() == 0U) continue;
+                const std::uint64_t id = entry.value.AsUInt64();
+                SceneEntity target{};
+                if (const auto copy = copies.find(id); copy != copies.end()) {
+                    target = copy->second;
+                } else {
+                    if (!inSceneBuilt) {
+                        inSceneBuilt = true;
+                        const std::vector<std::uint64_t>& dense = state.stableObjectIds.Dense();
+                        for (std::uint32_t slot = 0U; slot < dense.size(); ++slot) {
+                            const SceneEntity alive = dense[slot] == SceneStableObjectIds::None ? SceneEntity{}
+                                : state.world.NativeStorage().ResolveAliveEntity(kb::ecs::kGeneratedEntityIndexBase + slot);
+                            if (alive.IsValid()) inScene.emplace(dense[slot], alive);
+                        }
+                    }
+                    if (const auto found = inScene.find(id); found != inScene.end()) target = found->second;
+                }
+                if (target.IsValid()) entry.value = kb::script::ScriptValue{ target.Id(), kb::script::ScriptValueType::Entity };
             }
         }
     }
@@ -1203,7 +1242,7 @@ void ApplyModuleComponents(Scene& scene, std::span<const ScenePrefabNodeDesc> no
         SceneHistoryService::NoteObjectsCreated(scene, entities);
         ResolvePrefabReferences(scene, nodes, std::span<const SceneEntity>{ entities }, count);
         ApplyTranslationResiduals(scene, nodes, std::span<const SceneEntity>{ entities }, count);
-        ApplyBehaviourVariableOverrides(scene, nodes, std::span<const SceneEntity>{ entities }, count);
+        ApplyBehaviourVariableOverrides(scene, nodes, std::span<const SceneEntity>{ entities }, count, settings.linkPrefabInstances);
         ApplyModuleComponents(scene, nodes, std::span<const SceneEntity>{ entities }, count);
 
         const kb::ecs::NativeEcsStorageStats afterStorage = state.world.NativeStorageStats();
@@ -1271,7 +1310,7 @@ void ApplyModuleComponents(Scene& scene, std::span<const ScenePrefabNodeDesc> no
     SceneHistoryService::NoteObjectsCreated(scene, resolvedEntities);
     ResolvePrefabReferences(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
     ApplyTranslationResiduals(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
-    ApplyBehaviourVariableOverrides(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
+    ApplyBehaviourVariableOverrides(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count, settings.linkPrefabInstances);
     ApplyModuleComponents(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
 
     std::uint64_t instanceObjectSlabNanoseconds = 0;

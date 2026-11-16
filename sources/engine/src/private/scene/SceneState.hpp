@@ -53,6 +53,7 @@
 #include "scene/navigation/SceneNavigationState.hpp"
 #include "scene/prefab/ScenePrefabInstanceRegistry.hpp"
 #include "scene/prefab/ScenePrefabRegistry.hpp"
+#include "scene/entities/SceneStableObjectIds.hpp"
 #include "scene/systems/SceneSystemScheduler.hpp"
 #include "scene/transform/SceneTransformBranchUpdater.hpp"
 #include "scene/transform/SceneTransformTopologyCache.hpp"
@@ -649,6 +650,7 @@ public:
     std::uint64_t fixedTransformInterpolationVersion = 0U;
     bool fixedTransformCapturing = false;
     std::vector<std::string> denseEntityNames;
+    SceneStableObjectIds stableObjectIds;
     std::unordered_map<SceneEntity::IdType, std::string> entityNames;
     // Per-instance overrides of behaviours' exposed ("@expose") script variables,
     // authored in the Inspector — a side-table because BehaviourComponent is a

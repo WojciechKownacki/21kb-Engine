@@ -46,9 +46,11 @@ struct EditorSceneComparison {
     std::vector<EditorSceneObjectChange> objects;
 };
 
-// Compares two versions of a scene by what they hold, not by how their files read. Objects are paired by their
-// names under their parents (the nth object of a name under one parent pairs with the nth of that name); the
-// values of every component both have are read through the same component fields scripts and tools use.
+// Compares two versions of a scene by what they hold, not by how their files read. Objects are paired by the id they
+// keep across saves, so a renamed or moved object is one change; files from before objects kept their ids pair them
+// by their names under their parents instead (the nth object of a name under one parent pairs with the nth of that
+// name). The values of every component both have are read through the same component fields scripts and tools use,
+// and a paired object's name and parent are compared as the fields "Object name" and "Object parent".
 class EditorSceneComparer final {
 public:
     EditorSceneComparer() = delete;

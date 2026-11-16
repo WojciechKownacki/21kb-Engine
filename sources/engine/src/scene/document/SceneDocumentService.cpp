@@ -128,7 +128,7 @@ SceneDocumentOwnedLoadResult LoadIntoSceneInternal(Scene& scene, const SceneDocu
         ScenePrefabInstance instance;
         try {
             instance = scene.Prefabs().Instantiate(
-                document.worldPrefab, ScenePrefabInstantiationSettings{ .parent = owner, .linkPrefabInstances = true });
+                document.worldPrefab, ScenePrefabInstantiationSettings{ .parent = owner, .linkPrefabInstances = true, .keepStableIds = true });
         } catch (...) {
             if (owner.IsValid()) {
                 scene.Entities().Destroy(owner);
@@ -180,7 +180,8 @@ SceneDocumentAdditiveLoadResult SceneDocumentService::LoadIntoSceneAdditive(Scen
         ? scene.Entities().CreateObject(SceneObjectDesc{ .name = document.name })
         : SceneObject{};
     try {
-        const ScenePrefabInstance instance = scene.Prefabs().Instantiate(document.worldPrefab, ScenePrefabInstantiationSettings{ .parent = owner, .linkPrefabInstances = true });
+        const ScenePrefabInstance instance = scene.Prefabs().Instantiate(document.worldPrefab,
+            ScenePrefabInstantiationSettings{ .parent = owner, .linkPrefabInstances = true, .keepStableIds = true });
         if (instance.Empty()) {
             if (owner.IsValid()) {
                 scene.Entities().Destroy(owner);

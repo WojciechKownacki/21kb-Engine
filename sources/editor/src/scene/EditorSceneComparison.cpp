@@ -38,7 +38,9 @@ struct IndexedScene {
     std::vector<std::uint32_t> position;
 };
 
-[[nodiscard]] IndexedScene Index(const kb::scene::ScenePrefab& prefab) {
+// `byId` pairs objects by the id they keep across saves; otherwise by their names under their parents, for files that
+// renumbered their objects on every save.
+[[nodiscard]] IndexedScene Index(const kb::scene::ScenePrefab& prefab, bool byId) {
     IndexedScene indexed{ .nodes = prefab.Nodes() };
     indexed.keys.resize(indexed.nodes.size());
     indexed.position.resize(indexed.nodes.size());
@@ -47,6 +49,10 @@ struct IndexedScene {
     for (std::uint32_t index = 0U; index < indexed.nodes.size(); ++index) {
         const ScenePrefabNodeDesc& node = indexed.nodes[index];
         indexed.position[index] = childCounts[node.parentNode]++;
+        if (byId) {
+            indexed.keys[index] = std::to_string(node.stableId);
+            continue;
+        }
         // The control characters keep a name that looks like a path from reading as one.
         std::string group = std::to_string(node.parentNode) + '\x1f' + node.name;
         const std::uint32_t occurrence = sameName[std::move(group)]++;
@@ -97,6 +103,20 @@ struct ComponentFields {
     return all;
 }
 
+// What an object carries besides its components: its name and the object it hangs under.
+void CompareIdentity(const IndexedScene& before, std::uint32_t beforeIndex, const IndexedScene& after, std::uint32_t afterIndex,
+    const std::vector<std::uint32_t>& pairOfBefore, std::vector<EditorSceneFieldChange>& changes) {
+    if (before.nodes[beforeIndex].name != after.nodes[afterIndex].name) {
+        changes.push_back({ "Object", "name", before.nodes[beforeIndex].name, after.nodes[afterIndex].name });
+    }
+    const std::uint32_t beforeParent = before.nodes[beforeIndex].parentNode;
+    const std::uint32_t afterParent = after.nodes[afterIndex].parentNode;
+    if ((beforeParent == kNoNode) != (afterParent == kNoNode) || (beforeParent != kNoNode && pairOfBefore[beforeParent] != afterParent)) {
+        changes.push_back({ "Object", "parent", beforeParent == kNoNode ? std::string{} : PathOf(before, beforeParent),
+            afterParent == kNoNode ? std::string{} : PathOf(after, afterParent) });
+    }
+}
+
 void CompareObjects(const std::vector<ComponentFields>& components, kb::scene::Scene& before, kb::scene::SceneEntity beforeEntity,
     kb::scene::Scene& after, kb::scene::SceneEntity afterEntity, std::vector<EditorSceneFieldChange>& changes) {
     for (const ComponentFields& component : components) {
@@ -133,8 +153,10 @@ void CompareObjects(const std::vector<ComponentFields>& components, kb::scene::S
 EditorSceneComparison EditorSceneComparer::Compare(const kb::scene::SceneDocument& before, const kb::scene::SceneDocument& after,
     const std::atomic<bool>* cancel) {
     EditorSceneComparison result;
-    const IndexedScene old = Index(before.worldPrefab);
-    const IndexedScene now = Index(after.worldPrefab);
+    const bool byId = before.fileVersion >= kb::scene::SceneDocument::StableObjectIdsFileVersion &&
+        after.fileVersion >= kb::scene::SceneDocument::StableObjectIdsFileVersion;
+    const IndexedScene old = Index(before.worldPrefab, byId);
+    const IndexedScene now = Index(after.worldPrefab, byId);
     std::unordered_map<std::string_view, std::uint32_t> nowByKey;
     nowByKey.reserve(now.keys.size());
     for (std::uint32_t index = 0U; index < now.keys.size(); ++index) {
@@ -190,6 +212,7 @@ EditorSceneComparison EditorSceneComparer::Compare(const kb::scene::SceneDocumen
                     return result;
                 }
                 std::vector<EditorSceneFieldChange> fields;
+                CompareIdentity(old, index, now, oldPair[index], oldPair, fields);
                 CompareObjects(components, oldScene, oldInstance.ObjectAt(index).Entity(),
                     nowScene, nowInstance.ObjectAt(oldPair[index]).Entity(), fields);
                 if (!fields.empty()) {
