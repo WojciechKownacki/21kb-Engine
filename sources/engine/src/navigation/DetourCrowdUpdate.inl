@@ -5,9 +5,10 @@
 // writes only itself (path validity, wall and neighbour search, corners, steering, velocity
 // sampling, integration, collision push, moving along the surface) run through the parallel-for set
 // with setParallelFor, each worker with its own Detour
-// query objects. Path requests, topology optimisation, off-mesh links and every write to another
-// member stay on the calling thread, so the result does not depend on the number of workers.
+// query objects. Path requests, topology optimisation and every write to another member stay on
+// the calling thread, so the result does not depend on the number of workers.
 
+#include <atomic>
 #include <chrono>
 
 namespace {
@@ -220,7 +221,6 @@ void dtCrowd::update(const float dt, dtCrowdAgentDebugInfo* debug)
 				ag->neis[j].idx = getAgentIndex(agents[ag->neis[j].idx]);
 		}
 	};
-	runPass(nagents, gatherNeighbours);
 	m_passMilliseconds[DT_CROWD_PASS_NEIGHBOURS] = clock.lap();
 
 	// The corners each member steers through, its path shortened toward the second one when visible.
@@ -253,32 +253,33 @@ void dtCrowd::update(const float dt, dtCrowdAgentDebugInfo* debug)
 			}
 		}
 	};
-	runPass(nagents, findCorners);
 
 	// Members whose next corner is an off-mesh connection start crossing it.
-	for (int i = 0; i < nagents; ++i)
-	{
-		dtCrowdAgent* ag = agents[i];
-		if (ag->state != DT_CROWDAGENT_STATE_WALKING || ag->targetState == DT_CROWDAGENT_TARGET_NONE ||
-			ag->targetState == DT_CROWDAGENT_TARGET_VELOCITY)
-			continue;
-		if (!overOffmeshConnection(ag, ag->params.radius * 2.25f))
-			continue;
-		dtCrowdAgentAnimation* anim = &m_agentAnims[getAgentIndex(ag)];
-		dtPolyRef refs[2];
-		// A connection that cannot be entered is replanned by the path validity check.
-		if (!ag->corridor.moveOverOffmeshConnection(ag->cornerPolys[ag->ncorners - 1], refs, anim->startPos, anim->endPos, m_navquery))
-			continue;
-		dtVcopy(anim->initPos, ag->npos);
-		anim->polyRef = refs[1];
-		anim->active = true;
-		anim->t = 0.0f;
-		anim->tmax = (dtVdist2D(anim->startPos, anim->endPos) / ag->params.maxSpeed) * 0.5f;
-		ag->state = DT_CROWDAGENT_STATE_OFFMESH;
-		ag->ncorners = 0;
-		ag->nneis = 0;
-	}
-	m_passMilliseconds[DT_CROWD_PASS_CORNERS] = clock.lap();
+	auto startLinks = [&](const int begin, const int end, const int worker) {
+		dtNavMeshQuery* query = queryOf(worker);
+		for (int i = begin; i < end; ++i)
+		{
+			dtCrowdAgent* ag = agents[i];
+			if (ag->state != DT_CROWDAGENT_STATE_WALKING || ag->targetState == DT_CROWDAGENT_TARGET_NONE ||
+				ag->targetState == DT_CROWDAGENT_TARGET_VELOCITY)
+				continue;
+			if (!overOffmeshConnection(ag, ag->params.radius * 2.25f))
+				continue;
+			dtCrowdAgentAnimation* anim = &m_agentAnims[getAgentIndex(ag)];
+			dtPolyRef refs[2];
+			// A connection that cannot be entered is replanned by the path validity check.
+			if (!ag->corridor.moveOverOffmeshConnection(ag->cornerPolys[ag->ncorners - 1], refs, anim->startPos, anim->endPos, query))
+				continue;
+			dtVcopy(anim->initPos, ag->npos);
+			anim->polyRef = refs[1];
+			anim->active = true;
+			anim->t = 0.0f;
+			anim->tmax = (dtVdist2D(anim->startPos, anim->endPos) / ag->params.maxSpeed) * 0.5f;
+			ag->state = DT_CROWDAGENT_STATE_OFFMESH;
+			ag->ncorners = 0;
+			ag->nneis = 0;
+		}
+	};
 
 	// Desired velocities: toward the corners, slowing near the goal, pushed apart from neighbours.
 	auto steer = [&](const int begin, const int end, const int) {
@@ -337,8 +338,18 @@ void dtCrowd::update(const float dt, dtCrowdAgentDebugInfo* debug)
 			dtVcopy(ag->dvel, dvel);
 		}
 	};
-	runPass(nagents, steer);
-	m_passMilliseconds[DT_CROWD_PASS_STEERING] = clock.lap();
+
+	// Neighbours, corners, off-mesh starts and steering of a member read only that member's own state and the positions of
+	// others, which do not change until integration, so one pass runs the four in turn over each piece of members. Its
+	// time is reported as the corners'.
+	auto prepare = [&](const int begin, const int end, const int worker) {
+		gatherNeighbours(begin, end, worker);
+		findCorners(begin, end, worker);
+		startLinks(begin, end, worker);
+		steer(begin, end, worker);
+	};
+	runPass(nagents, prepare);
+	m_passMilliseconds[DT_CROWD_PASS_CORNERS] = clock.lap();
 
 	// New velocities: sampled around neighbours and walls, or the desired one.
 	for (int i = 0; i < m_workerCount; ++i)
@@ -396,7 +407,9 @@ void dtCrowd::update(const float dt, dtCrowdAgentDebugInfo* debug)
 	// Overlapping members push each other apart over four rounds; every round first measures all
 	// pushes, then applies them.
 	static const float COLLISION_RESOLVE_FACTOR = 0.7f;
+	std::atomic<bool> pushing(false);
 	auto measurePush = [&](const int begin, const int end, const int) {
+		bool pushes = false;
 		for (int i = begin; i < end; ++i)
 		{
 			dtCrowdAgent* ag = agents[i];
@@ -434,12 +447,21 @@ void dtCrowd::update(const float dt, dtCrowdAgentDebugInfo* debug)
 				w += 1.0f;
 			}
 			if (w > 0.0001f)
+			{
 				dtVscale(ag->disp, ag->disp, 1.0f / w);
+				pushes = true;
+			}
 		}
+		if (pushes)
+			pushing.store(true, std::memory_order_relaxed);
 	};
 	for (int round = 0; round < 4; ++round)
 	{
+		pushing.store(false, std::memory_order_relaxed);
 		runPass(nagents, measurePush);
+		// Nobody pushed, so nothing moves and the rounds left would measure the same.
+		if (!pushing.load(std::memory_order_relaxed))
+			break;
 		for (int i = 0; i < nagents; ++i)
 		{
 			dtCrowdAgent* ag = agents[i];
