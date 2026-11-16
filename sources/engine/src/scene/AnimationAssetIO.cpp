@@ -87,6 +87,7 @@ const char* RigConstraintTypeName(AnimatorRigConstraintType type) {
     case AnimatorRigConstraintType::CopyTransform: return "CopyTransform";
     case AnimatorRigConstraintType::ChainIK: return "ChainIK";
     case AnimatorRigConstraintType::SpringBones: return "SpringBones";
+    case AnimatorRigConstraintType::FullBodyIK: return "FullBodyIK";
     }
     return "";
 }
@@ -396,10 +397,12 @@ bool ValidateAnimatorController(const AnimatorController& controller, std::strin
     std::unordered_set<SkeletonBoneId> drivenBones;
     setError("Animator controller has invalid rig constraints.");
     for (const AnimatorRigConstraint& constraint : controller.rigConstraints) {
-        // Spring bones follow the animation and take no target; every other constraint needs one.
-        const bool springBones = constraint.type == AnimatorRigConstraintType::SpringBones;
+        // Spring bones follow the animation and a full body names its targets in its settings; every other
+        // constraint needs a target.
+        const bool targetless = constraint.type == AnimatorRigConstraintType::SpringBones ||
+            constraint.type == AnimatorRigConstraintType::FullBodyIK;
         if (constraint.name.empty() || !constraintNames.insert(constraint.name).second ||
-            (springBones ? !constraint.target.empty() || !constraint.poleTarget.empty() : constraint.target.empty()) ||
+            (targetless ? !constraint.target.empty() || !constraint.poleTarget.empty() : constraint.target.empty()) ||
             !std::isfinite(constraint.weight) ||
             constraint.weight <= 0.0F || constraint.weight > 1.0F) return false;
         const bool skeletal = constraint.constrainedBoneId != 0U ||
@@ -445,6 +448,14 @@ bool ValidateAnimatorController(const AnimatorController& controller, std::strin
                 !IsSpringBoneSettingsValid(constraint.spring) ||
                 !drivenBones.insert(constraint.constrainedBoneId).second ||
                 !drivenBones.insert(constraint.tipBoneId).second) return false;
+            break;
+        case AnimatorRigConstraintType::FullBodyIK:
+            if (constraint.constrainedBoneId == 0U || constraint.midBoneId != 0U || constraint.tipBoneId != 0U ||
+                !IsFullBodyIkSettingsValid(constraint.fullBody) || !IsChainIkSettingsValid(constraint.chainIk) ||
+                !drivenBones.insert(constraint.constrainedBoneId).second) return false;
+            for (const SkeletonBoneId bone : FullBodyIkBones(constraint.fullBody)) {
+                if (bone != 0U && !drivenBones.insert(bone).second) return false;
+            }
             break;
         case AnimatorRigConstraintType::Aim:
         case AnimatorRigConstraintType::CopyTransform:
@@ -894,6 +905,28 @@ std::optional<AnimatorController> AnimationAssetIO::LoadController(
             }
             if (!EndOfRecord(input)) return std::nullopt;
             controller.rigConstraints.push_back(std::move(constraint));
+        } else if (command == "bodyConstraint") {
+            if (schemaVersion != 0U && schemaVersion < 7U) return std::nullopt;
+            AnimatorRigConstraint constraint{ .type = AnimatorRigConstraintType::FullBodyIK };
+            FullBodyIkSettings& body = constraint.fullBody;
+            std::string solver;
+            int footPlacement = 0;
+            if (!(input >> std::quoted(constraint.name) >> constraint.constrainedBoneId >> constraint.weight >> solver >>
+                    constraint.chainIk.maxIterations >> constraint.chainIk.tolerance >> body.spineBoneId >> body.headBoneId >>
+                    std::quoted(body.hipsTarget) >> std::quoted(body.lookTarget) >> body.lookAxis.x >> body.lookAxis.y >>
+                    body.lookAxis.z >> body.lookLimitDegrees >> footPlacement >> body.groundProbeDistance >>
+                    body.groundLayerMask) ||
+                !ParseChainIkSolver(solver, constraint.chainIk.solver) || (footPlacement != 0 && footPlacement != 1)) {
+                return std::nullopt;
+            }
+            body.footPlacement = footPlacement == 1;
+            for (FullBodyIkLimbSettings& limb : body.limbs) {
+                if (!(input >> limb.upperBoneId >> limb.tipBoneId >> std::quoted(limb.target) >> std::quoted(limb.poleTarget))) {
+                    return std::nullopt;
+                }
+            }
+            if (!EndOfRecord(input)) return std::nullopt;
+            controller.rigConstraints.push_back(std::move(constraint));
         } else {
             return std::nullopt;
         }
@@ -1032,6 +1065,30 @@ bool AnimationAssetIO::SaveController(
         }
     }
     for (const AnimatorRigConstraint& constraint : normalized.rigConstraints) {
+        if (constraint.type == AnimatorRigConstraintType::FullBodyIK) {
+            const FullBodyIkSettings& body = constraint.fullBody;
+            output << "bodyConstraint " << std::quoted(constraint.name) << ' '
+                   << constraint.constrainedBoneId << ' '
+                   << constraint.weight << ' '
+                   << ChainIkSolverName(constraint.chainIk.solver) << ' '
+                   << constraint.chainIk.maxIterations << ' '
+                   << constraint.chainIk.tolerance << ' '
+                   << body.spineBoneId << ' '
+                   << body.headBoneId << ' '
+                   << std::quoted(body.hipsTarget) << ' '
+                   << std::quoted(body.lookTarget) << ' '
+                   << body.lookAxis.x << ' ' << body.lookAxis.y << ' ' << body.lookAxis.z << ' '
+                   << body.lookLimitDegrees << ' '
+                   << (body.footPlacement ? 1 : 0) << ' '
+                   << body.groundProbeDistance << ' '
+                   << body.groundLayerMask;
+            for (const FullBodyIkLimbSettings& limb : body.limbs) {
+                output << ' ' << limb.upperBoneId << ' ' << limb.tipBoneId << ' ' << std::quoted(limb.target) << ' '
+                       << std::quoted(limb.poleTarget);
+            }
+            output << '\n';
+            continue;
+        }
         if (constraint.type == AnimatorRigConstraintType::SpringBones) {
             const SpringBoneSettings& spring = constraint.spring;
             output << "springConstraint " << std::quoted(constraint.name) << ' '

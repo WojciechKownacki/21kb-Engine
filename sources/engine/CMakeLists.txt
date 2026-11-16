@@ -284,6 +284,7 @@ add_library(kb_engine STATIC
     include/engine/scene/ScenePrefabPrivateScene.hpp
     include/engine/scene/SceneMaterialInstances.hpp
     include/engine/scene/AnimationChainIk.hpp
+    include/engine/scene/AnimationFullBodyIk.hpp
     include/engine/scene/AnimationSpringBones.hpp
     include/engine/scene/AnimationAssets.hpp
     include/engine/scene/SkeletonBindingComponent.hpp
@@ -860,6 +861,7 @@ add_library(kb_engine STATIC
     src/scene/AnimationChainIk.cpp
     src/scene/AnimationSpringBones.cpp
     src/scene/AnimationAssetLoaders.cpp
+    src/scene/AnimationFullBodyIk.cpp
     src/scene/SkeletonAsset.cpp
     src/scene/SkeletonAssetIO.cpp
     src/scene/SkeletonAssetLoader.cpp

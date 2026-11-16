@@ -169,6 +169,9 @@ struct AnimatorRuntimeConstraint {
     std::vector<std::uint32_t> springColliderBones;
     std::vector<SpringCapsule> springColliders;
 };
+    // FullBodyIK: the limbs' chains and the spine's, as kFullBodyIkChainCount entries that use only the chain
+    // fields above (an unused one has no bones). constrainedBoneIndex is the hips.
+    std::vector<AnimatorRuntimeConstraint> fullBodyChains;
 
 struct AnimatorInstanceSkeleton {
     struct PoseSoa {
@@ -233,6 +236,9 @@ struct AnimatorInstance {
     // Seconds that passed since the last skeletal pose evaluation, which the spring bones then simulate.
     double springElapsedSeconds = 0.0;
     std::map<std::string, AnimatorIkTarget, std::less<>> ikTargets;
+    // A FullBodyIK constraint with foot placement casts rays through the scene, so this pose is evaluated on the
+    // updating thread.
+    bool probesGround = false;
     Vec3 extractedRootMotionTranslation{};
     Quat extractedRootMotionRotation{};
     bool hasExtractedRootMotion = false;

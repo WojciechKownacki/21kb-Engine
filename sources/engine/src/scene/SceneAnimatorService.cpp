@@ -894,6 +894,28 @@ void RestoreCompatibleRuntimeState(
     return true;
 }
 
+// Whether the chains bound for a FullBodyIK constraint are still the skeleton's bones its settings name.
+[[nodiscard]] bool FullBodyChainsMatch(
+    const AnimatorInstanceSkeleton& skeleton, const FullBodyIkSettings& settings, const AnimatorRuntimeConstraint& body) {
+    if (body.fullBodyChains.size() != kFullBodyIkChainCount) return false;
+    for (std::size_t index = 0U; index < kFullBodyIkChainCount; ++index) {
+        const FullBodyIkChainBones bones = FullBodyIkChain(settings, index);
+        const AnimatorRuntimeConstraint& chain = body.fullBodyChains[index];
+        if (bones.root == 0U) {
+            if (!chain.chainBoneIndices.empty()) return false;
+            continue;
+        }
+        const auto root = skeleton.boneIndices.find(bones.root);
+        const auto tip = skeleton.boneIndices.find(bones.tip);
+        if (root == skeleton.boneIndices.end() || tip == skeleton.boneIndices.end() ||
+            root->second != chain.constrainedBoneIndex || tip->second != chain.tipBoneIndex ||
+            !ChainFollowsHierarchy(*skeleton.asset, chain)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 [[nodiscard]] bool RuntimeBindingsMatchCanonicalHierarchy(
     Scene& scene, const AnimatorRuntimeRecord& record) {
     if (record.layers.size() != record.controller->layers.size()) return false;
@@ -975,6 +997,10 @@ void RestoreCompatibleRuntimeState(
                     !ChainFollowsHierarchy(*skeleton.asset, constraint)) {
                     return false;
                 }
+            }
+            if (definition.type == AnimatorRigConstraintType::FullBodyIK &&
+                !FullBodyChainsMatch(skeleton, definition.fullBody, constraint)) {
+                return false;
             }
             if (definition.type == AnimatorRigConstraintType::SpringBones) {
                 const std::vector<SpringBoneCollider>& colliders = definition.spring.colliders;
@@ -2314,6 +2340,214 @@ void SolveSkeletalSpringBones(
     SwingChainToJoints(skeleton, pose, bones, chain.chainJoints, weight);
 }
 
+// Whether `entity` is `owner` or lies below it.
+[[nodiscard]] bool IsAtOrBelow(Scene& scene, SceneEntity entity, SceneEntity owner) {
+    for (SceneEntity current = entity; current.IsValid(); current = scene.Hierarchy().Parent(current)) {
+        if (current == owner) return true;
+    }
+    return false;
+}
+
+// Binds the chains a FullBodyIK constraint names. False when a bone is missing, a chain does not run down the
+// hierarchy, or a chain does not start below the hips.
+[[nodiscard]] bool BindFullBodyChains(
+    const AnimatorInstanceSkeleton& skeleton, const FullBodyIkSettings& settings, AnimatorRuntimeConstraint& body) {
+    body.fullBodyChains.assign(kFullBodyIkChainCount, AnimatorRuntimeConstraint{});
+    for (std::size_t index = 0U; index < kFullBodyIkChainCount; ++index) {
+        const FullBodyIkChainBones bones = FullBodyIkChain(settings, index);
+        if (bones.root == 0U) continue;
+        const auto root = skeleton.boneIndices.find(bones.root);
+        const auto tip = skeleton.boneIndices.find(bones.tip);
+        if (root == skeleton.boneIndices.end() || tip == skeleton.boneIndices.end()) return false;
+        AnimatorRuntimeConstraint& chain = body.fullBodyChains[index];
+        chain.constrainedBoneIndex = root->second;
+        chain.tipBoneIndex = tip->second;
+        if (!BindChainBones(*skeleton.asset, chain) || root->second == body.constrainedBoneIndex ||
+            !IsBoneDescendant(*skeleton.asset, root->second, body.constrainedBoneIndex)) {
+            return false;
+        }
+        chain.chainSegmentLengths.resize(chain.chainBoneIndices.size() - 1U);
+    }
+    return true;
+}
+
+// The first surface below an animated foot that is not the character itself: its height above the character's
+// origin plane and its normal, both in animator space.
+struct GroundHit {
+    float height = 0.0F;
+    Vec3 normal{ 0.0F, 1.0F, 0.0F };
+};
+
+[[nodiscard]] std::optional<GroundHit> ProbeGround(
+    Scene& scene, SceneEntity ownerEntity, const TransformComponent& owner, Vec3 foot, const FullBodyIkSettings& settings) {
+    const Vec3 up = kb::math::Rotate(owner.worldRotation, Vec3{ 0.0F, 1.0F, 0.0F });
+    const Vec3 offset = kb::math::Rotate(
+        owner.worldRotation, Vec3{ foot.x * owner.worldScale.x, foot.y * owner.worldScale.y, foot.z * owner.worldScale.z });
+    const kb::math::DVec3 origin =
+        scene.Transforms().WorldTranslation(ownerEntity, owner) + offset + up * settings.groundProbeDistance;
+    std::array<PhysicsCastResult, 4U> storage{};
+    kb::library::ArrayNonAlloc<PhysicsCastResult> hits{ std::span<PhysicsCastResult>(storage) };
+    RaycastAllNonAllocPrecise(scene, origin, up * -1.0F, 2.0F * settings.groundProbeDistance, settings.groundLayerMask, hits);
+    for (std::size_t index = 0U; index < hits.Count(); ++index) {
+        const PhysicsCastResult& hit = *hits.GetAt(index);
+        if (IsAtOrBelow(scene, hit.entity, ownerEntity)) continue;
+        return GroundHit{
+            .height = TargetToAnimatorPosition(scene, ownerEntity, owner, AnimatorIkTarget{ .preciseWorldPosition = hit.worldPoint }).y,
+            .normal = kb::math::Normalize(kb::math::Rotate(kb::math::Inverse(owner.worldRotation), hit.normal)),
+        };
+    }
+    return std::nullopt;
+}
+
+// Turns the spine, neck and head toward `target`, by no more than the settings' limit and the weight: one turn
+// about one axis, shared among the bones with the head taking the most, so that together they bring the head's
+// look axis onto the target. The head's position shifts a little as the spine bends, so a turn about any axis but
+// the spine's own ends close to the target rather than exactly on it.
+void TurnBodyToLook(
+    const SkeletonAsset& skeleton, AnimatorInstanceSkeleton::PoseBuffer& pose, std::span<const std::uint32_t> bones,
+    const FullBodyIkSettings& settings, Vec3 target, float weight) {
+    const std::size_t head = bones.back();
+    const Quat arc = ShortestArc(
+        kb::math::Rotate(pose.component.rotations[head], settings.lookAxis), target - pose.component.positions[head]);
+    const float angle = 2.0F * std::atan2(kb::math::Length(Vec3{ arc.x, arc.y, arc.z }), arc.w);
+    if (angle <= 1.0e-6F) return;
+    const float limit = settings.lookLimitDegrees * kb::math::kPi / 180.0F;
+    const Quat turn = kb::math::Slerp(Quat{}, arc, std::min(angle, limit) / angle * weight);
+    const float shares = 0.5F * static_cast<float>(bones.size() * (bones.size() + 1U));
+    for (std::size_t index = 0U; index < bones.size(); ++index) {
+        const std::size_t bone = bones[index];
+        const Quat part = kb::math::Slerp(Quat{}, turn, static_cast<float>(index + 1U) / shares);
+        SetBoneComponentPose(
+            skeleton, pose, bone, pose.component.positions[bone], kb::math::Normalize(part * pose.component.rotations[bone]), false);
+    }
+}
+
+// Full-body IK in animator space. In this order: the hips take their target's orientation, the spine and head turn
+// toward the look target, the hips move until every limb target is within reach (the legs' targets keep
+// priority), and the limbs solve to their targets as chain IK. While the body moves, a leg without a target of its
+// own stays where the animation put its foot.
+void SolveSkeletalFullBody(
+    Scene& scene, const AnimatorRuntimeRecord& record, const TransformComponent& owner, const SkeletonAsset& skeleton,
+    AnimatorInstanceSkeleton::PoseBuffer& pose, AnimatorRuntimeConstraint& body, const AnimatorRigConstraint& definition) {
+    const FullBodyIkSettings& settings = definition.fullBody;
+    const std::size_t hips = body.constrainedBoneIndex;
+    const Vec3 up{ 0.0F, 1.0F, 0.0F };
+    const auto find = [&record](const std::string& name) -> const AnimatorIkTarget* {
+        if (name.empty()) return nullptr;
+        const auto found = record.ikTargets.find(name);
+        return found == record.ikTargets.end() ? nullptr : &found->second;
+    };
+    const auto place = [&](const AnimatorIkTarget& target) {
+        return TargetToAnimatorPosition(scene, record.entity, owner, target);
+    };
+    // Where each limb's tip goes. `own` marks a goal of its own (a target or foot placement); without one a leg
+    // is pinned to the animated foot and an arm is left alone.
+    struct Goal {
+        bool own = false;
+        Vec3 position{};
+        Quat rotation{};
+        float positionWeight = 0.0F;
+        float rotationWeight = 0.0F;
+        std::optional<Vec3> pole;
+    };
+    std::array<Goal, kFullBodyIkLimbCount> goals{};
+    std::array<Vec3, kFullBodyIkLimbCount> animatedTip{};
+    float lowestRise = 0.0F;
+    bool placedFeet = false;
+    for (std::size_t limb = 0U; limb < kFullBodyIkLimbCount; ++limb) {
+        const AnimatorRuntimeConstraint& chain = body.fullBodyChains[limb];
+        if (chain.chainBoneIndices.empty()) continue;
+        const FullBodyIkLimbSettings& limbSettings = settings.limbs[limb];
+        const bool leg = limb < kFullBodyIkLegCount;
+        Goal& goal = goals[limb];
+        animatedTip[limb] = goal.position = pose.component.positions[chain.tipBoneIndex];
+        goal.rotation = pose.component.rotations[chain.tipBoneIndex];
+        goal.positionWeight = goal.rotationWeight = leg ? 1.0F : 0.0F;
+        if (const AnimatorIkTarget* target = find(limbSettings.target)) {
+            const float positionWeight = definition.weight * target->positionWeight;
+            const float rotationWeight = definition.weight * target->rotationWeight;
+            if (positionWeight > 0.0F || rotationWeight > 0.0F) {
+                goal = Goal{ .own = true, .position = place(*target), .rotation = WorldToAnimatorRotation(owner, target->worldRotation),
+                    .positionWeight = positionWeight, .rotationWeight = rotationWeight };
+            }
+        } else if (leg && settings.footPlacement) {
+            const std::optional<GroundHit> ground = ProbeGround(scene, record.entity, owner, animatedTip[limb], settings);
+            const float rise = ground.has_value() ? ground->height : 0.0F;
+            lowestRise = placedFeet ? std::min(lowestRise, rise) : rise;
+            placedFeet = true;
+            if (ground.has_value() && (std::abs(rise) > 1.0e-5F || ground->normal.y < 0.99999F)) {
+                goal = Goal{ .own = true, .position = animatedTip[limb] + up * rise,
+                    .rotation = kb::math::Normalize(ShortestArc(up, ground->normal) * goal.rotation),
+                    .positionWeight = definition.weight, .rotationWeight = definition.weight };
+            }
+        }
+        if (const AnimatorIkTarget* pole = find(limbSettings.poleTarget)) goal.pole = place(*pole);
+    }
+
+    bool bodyMoved = false;
+    Vec3 shift{};
+    if (const AnimatorIkTarget* target = find(settings.hipsTarget)) {
+        shift = (place(*target) - pose.component.positions[hips]) * (definition.weight * target->positionWeight);
+        const float rotationWeight = definition.weight * target->rotationWeight;
+        if (rotationWeight > 0.0F) {
+            SetBoneComponentPose(
+                skeleton, pose, hips, pose.component.positions[hips],
+                kb::math::Slerp(pose.component.rotations[hips], WorldToAnimatorRotation(owner, target->worldRotation), rotationWeight),
+                false);
+            bodyMoved = true;
+        }
+    }
+    const AnimatorRuntimeConstraint& spine = body.fullBodyChains[kFullBodyIkSpineChain];
+    if (const AnimatorIkTarget* target = find(settings.lookTarget); target != nullptr && !spine.chainBoneIndices.empty()) {
+        const float weight = definition.weight * target->positionWeight;
+        if (weight > 0.0F) {
+            TurnBodyToLook(skeleton, pose, spine.chainBoneIndices, settings, place(*target), weight);
+        }
+    }
+    // The hips go down with the lowest foot, up with it when both stand higher.
+    if (placedFeet) shift = shift + up * (lowestRise * definition.weight);
+
+    std::array<FullBodyReach, kFullBodyIkLimbCount> reaches{};
+    std::size_t reachCount = 0U;
+    for (std::size_t limb = 0U; limb < kFullBodyIkLimbCount; ++limb) {
+        const AnimatorRuntimeConstraint& chain = body.fullBodyChains[limb];
+        if (chain.chainBoneIndices.empty() || !(goals[limb].own || limb < kFullBodyIkLegCount)) continue;
+        FullBodyReach& reach = reaches[reachCount++];
+        const std::vector<std::uint32_t>& bones = chain.chainBoneIndices;
+        for (std::size_t index = 0U; index + 1U < bones.size(); ++index) {
+            reach.length += kb::math::Length(pose.component.positions[bones[index + 1U]] - pose.component.positions[bones[index]]);
+        }
+        const Vec3 tip = pose.component.positions[chain.tipBoneIndex];
+        reach.root = pose.component.positions[bones.front()];
+        reach.target = tip + (goals[limb].position - tip) * goals[limb].positionWeight;
+        reach.priority = limb < kFullBodyIkLegCount;
+    }
+    shift = SolveFullBodyHipsShift(shift, std::span<const FullBodyReach>(reaches.data(), reachCount));
+    if (kb::math::Dot(shift, shift) > 1.0e-12F) {
+        SetBoneComponentPose(
+            skeleton, pose, hips, pose.component.positions[hips] + shift, pose.component.rotations[hips], true);
+        bodyMoved = true;
+    }
+
+    for (std::size_t limb = 0U; limb < kFullBodyIkLimbCount; ++limb) {
+        AnimatorRuntimeConstraint& chain = body.fullBodyChains[limb];
+        const Goal& goal = goals[limb];
+        if (chain.chainBoneIndices.empty() || !(goal.own || (bodyMoved && limb < kFullBodyIkLegCount))) continue;
+        SolveSkeletalChainIk(
+            skeleton, pose, chain, definition.chainIk, goal.position, goal.rotation, goal.pole, goal.positionWeight,
+            goal.rotationWeight);
+    }
+}
+
+// Whether a constraint moves `bone`.
+[[nodiscard]] bool DrivesBone(const AnimatorRuntimeConstraint& constraint, std::uint32_t bone) {
+    return constraint.constrainedBoneIndex == bone || constraint.midBoneIndex == bone || constraint.tipBoneIndex == bone ||
+        std::ranges::find(constraint.chainBoneIndices, bone) != constraint.chainBoneIndices.end() ||
+        std::ranges::any_of(constraint.fullBodyChains, [bone](const AnimatorRuntimeConstraint& chain) {
+            return DrivesBone(chain, bone);
+        });
+}
+
 [[noreturn]] void ThrowRigConstraintError(const AnimatorRigConstraint& definition, const std::exception& error) {
     throw std::runtime_error("Rig constraint '" + definition.name + "' [bone " +
         std::to_string(definition.constrainedBoneId) + ", path '" + definition.constrainedPath +
@@ -2334,14 +2568,17 @@ void ApplySkeletalRigConstraints(
     for (AnimatorRuntimeConstraint& constraint : record.rigConstraints) {
         const AnimatorRigConstraint& definition =
             record.controller->rigConstraints[constraint.definitionIndex];
-        if (extractedRootMotionBone.has_value() &&
-            (constraint.constrainedBoneIndex == *extractedRootMotionBone ||
-             constraint.midBoneIndex == *extractedRootMotionBone ||
-             constraint.tipBoneIndex == *extractedRootMotionBone ||
-             std::ranges::find(constraint.chainBoneIndices, *extractedRootMotionBone) !=
-                 constraint.chainBoneIndices.end())) {
+        if (extractedRootMotionBone.has_value() && DrivesBone(constraint, *extractedRootMotionBone)) {
             throw std::runtime_error(
                 "Rig constraint cannot drive the root-motion source bone");
+        }
+        if (definition.type == AnimatorRigConstraintType::FullBodyIK) {
+            try {
+                SolveSkeletalFullBody(scene, record, *owner, skeleton, pose, constraint, definition);
+            } catch (const std::exception& error) {
+                ThrowRigConstraintError(definition, error);
+            }
+            continue;
         }
         if (definition.type == AnimatorRigConstraintType::SpringBones) {
             try {
@@ -2659,6 +2896,7 @@ void ApplyRigConstraints(Scene& scene, AnimatorRuntimeRecord& record) {
             }
             case AnimatorRigConstraintType::ChainIK:
             case AnimatorRigConstraintType::SpringBones:
+            case AnimatorRigConstraintType::FullBodyIK:
                 throw std::logic_error("Bone chain constraints bind only to skeletal animators");
             case AnimatorRigConstraintType::Aim: {
                 const float aimWeight =
@@ -3011,6 +3249,10 @@ static bool AttachController(Scene& scene, SceneEntity entity, kb::assets::Asset
             if (definition.type == AnimatorRigConstraintType::ChainIK) {
                 constraint.chainSegmentLengths.resize(constraint.chainBoneIndices.size() - 1U);
             }
+            if (definition.type == AnimatorRigConstraintType::FullBodyIK &&
+                !BindFullBodyChains(*candidate.skeleton, definition.fullBody, constraint)) {
+                return invalidBinding();
+            }
             if (definition.type == AnimatorRigConstraintType::SpringBones) {
                 PrepareSpringChain(constraint.spring, constraint.chainBoneIndices.size());
                 for (const SpringBoneCollider& collider : definition.spring.colliders) {
@@ -3026,7 +3268,10 @@ static bool AttachController(Scene& scene, SceneEntity entity, kb::assets::Asset
                 ? std::ranges::all_of(constraint.chainBoneIndices, claim)
                 : claim(constraint.constrainedBoneIndex) &&
                     (definition.type != AnimatorRigConstraintType::TwoBoneIK ||
-                     (claim(constraint.midBoneIndex) && claim(constraint.tipBoneIndex)));
+                     (claim(constraint.midBoneIndex) && claim(constraint.tipBoneIndex))) &&
+                    std::ranges::all_of(constraint.fullBodyChains, [&claim](const AnimatorRuntimeConstraint& chain) {
+                        return std::ranges::all_of(chain.chainBoneIndices, claim);
+                    });
             if (!distinct) return invalidBinding();
         } else {
             if (UsesBoneChain(definition.type)) return invalidBinding();
@@ -3045,6 +3290,9 @@ static bool AttachController(Scene& scene, SceneEntity entity, kb::assets::Asset
         }
         candidate.rigConstraints.push_back(std::move(constraint));
     }
+    candidate.probesGround = std::ranges::any_of(controller->rigConstraints, [](const AnimatorRigConstraint& definition) {
+        return definition.type == AnimatorRigConstraintType::FullBodyIK && definition.fullBody.footPlacement;
+    });
     SceneAccess::State(scene).animators[entity.Id()] = std::move(candidate);
     return true;
 }
@@ -3636,7 +3884,8 @@ bool SceneAnimatorService::SetIkTarget(
         record->controller->rigConstraints.begin(),
         record->controller->rigConstraints.end(),
         [name](const AnimatorRigConstraint& constraint) {
-            return constraint.target == name || constraint.poleTarget == name;
+            return constraint.target == name || constraint.poleTarget == name ||
+                FullBodyIkUsesTarget(constraint.fullBody, name);
         }) ||
         (rule != nullptr && IsMotionSkeletonRuleComponentValid(*rule) &&
          (MotionSkeletonRuleTargetText(*rule) == name ||
@@ -4263,6 +4512,15 @@ void SceneAnimatorService::Advance(Scene& scene, float deltaSeconds) {
                 transform->localRotation * animatorMotion.rotation);
             scene.Transforms().MarkModified(record.entity);
         }
+    }
+    if (!state.animatorParallelPoseScratch.empty()) {
+        // Foot placement casts rays through the scene, which only this thread may do: those characters pose first.
+        std::vector<SceneState::AnimatorPoseJob>& jobs = state.animatorParallelPoseScratch;
+        const auto parallel = std::partition(jobs.begin(), jobs.end(), [](const SceneState::AnimatorPoseJob& job) {
+            return job.kind == SceneState::AnimatorPoseJobKind::Evaluate && job.record->probesGround;
+        });
+        for (auto job = jobs.begin(); job != parallel; ++job) RunPoseJob(scene, *job);
+        jobs.erase(jobs.begin(), parallel);
     }
     if (!state.animatorParallelPoseScratch.empty()) {
         if (state.animatorParallelPoseScratch.size() < kAnimatorParallelEvaluationThreshold) {

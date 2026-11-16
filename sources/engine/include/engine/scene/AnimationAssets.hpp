@@ -2,6 +2,7 @@
 
 #include "engine/core/ReadSnapshotQueue.hpp"
 #include "engine/scene/AnimationChainIk.hpp"
+#include "engine/scene/AnimationFullBodyIk.hpp"
 #include "engine/scene/AnimationSpringBones.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/SkeletonAsset.hpp"
@@ -179,6 +180,10 @@ enum class AnimatorRigConstraintType : std::uint8_t {
     // The same bone chain, swung by a spring simulation instead of a solver: it follows the animation with
     // inertia, gravity and colliders. Skeletal controllers only; it needs no target, and midBoneId stays unset.
     SpringBones,
+    // A humanoid body solved as one: the hips move so the limb targets are in reach, the limbs follow them, and the
+    // head looks at a target. constrainedBoneId is the hips bone; every other bone and target lives in `fullBody`.
+    // Skeletal controllers only; target, poleTarget, midBoneId and tipBoneId stay unset.
+    FullBodyIK,
 };
 
 // Constraints are evaluated in authored order after all controller layers.
@@ -203,6 +208,8 @@ struct AnimatorRigConstraint {
     ChainIkSettings chainIk{};
     // SpringBones only.
     SpringBoneSettings spring{};
+    // FullBodyIK only.
+    FullBodyIkSettings fullBody{};
 };
 
 struct AnimatorGraphNodeLayout {

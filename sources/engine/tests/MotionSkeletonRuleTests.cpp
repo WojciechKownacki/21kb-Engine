@@ -3,7 +3,12 @@
 
 #include "engine/scene/AnimationAssetIO.hpp"
 #include "engine/scene/AnimationChainIk.hpp"
+#include "engine/scene/AnimationFullBodyIk.hpp"
 #include "engine/scene/AnimationSpringBones.hpp"
+#include "engine/library/EngineLibraryCollections.hpp"
+#include "engine/math/DVec3.hpp"
+#include "engine/scene/ColliderComponent.hpp"
+#include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/MotionSkeletonRuleComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAnimators.hpp"
@@ -687,12 +692,12 @@ void TestSpringBonesController() {
     Require(!kb::scene::AnimationAssetIO::SaveController(fixture.root / "Assets" / "Rig" / "Bad.kbanimcontroller", targeted),
         "Spring bones take no target");
 
-    // The controller records schema 6; a file of schema 5 still loads, but cannot hold a spring record.
+    // A file of schema 5 still loads, but cannot hold a spring record.
     const auto rewritten = [](const std::filesystem::path& from, const std::filesystem::path& to, int schema) {
         std::ifstream input(from, std::ios::binary);
         const std::string text{ std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>() };
         const std::size_t headerEnd = text.find('\n');
-        Require(headerEnd != std::string::npos && text.starts_with("21kb AnimatorController 6"), "A controller must open with its schema header");
+        Require(headerEnd != std::string::npos && text.starts_with("21kb AnimatorController " + std::to_string(kb::scene::kAnimatorControllerAssetSchemaVersion)), "A controller must open with its schema header");
         std::ofstream output(to, std::ios::binary);
         output << "21kb AnimatorController " << schema << text.substr(headerEnd);
     };
@@ -820,6 +825,494 @@ void TestSpringBonesDoNotAllocate() {
     std::filesystem::remove_all(root, ignored);
 }
 
+// A humanoid facing +Z with knees and elbows bent a little: hips 1 m up, ankles 0.3 m, head 1.57 m.
+namespace body {
+
+enum Bone : std::size_t {
+    Root, Hips, Spine, Chest, Neck, Head, UpperArmL, ForearmL, HandL, UpperArmR, ForearmR, HandR,
+    ThighL, CalfL, FootL, ThighR, CalfR, FootR, BoneCount,
+};
+
+[[nodiscard]] constexpr kb::scene::SkeletonBoneId Id(Bone bone) noexcept {
+    return 1000U + static_cast<kb::scene::SkeletonBoneId>(bone);
+}
+
+struct Row {
+    int parent;
+    Vec3 offset;
+    const char* name;
+};
+
+[[nodiscard]] std::array<Row, BoneCount> Rows() {
+    return { {
+        { -1, { 0.0F, 0.0F, 0.0F }, "Root" },
+        { Root, { 0.0F, 1.0F, 0.0F }, "Hips" },
+        { Hips, { 0.0F, 0.12F, 0.0F }, "Spine" },
+        { Spine, { 0.0F, 0.15F, 0.0F }, "Chest" },
+        { Chest, { 0.0F, 0.2F, 0.0F }, "Neck" },
+        { Neck, { 0.0F, 0.1F, 0.0F }, "Head" },
+        { Chest, { 0.18F, 0.15F, 0.0F }, "UpperArmL" },
+        { UpperArmL, { 0.0F, -0.27F, 0.07F }, "ForearmL" },
+        { ForearmL, { 0.0F, -0.27F, -0.07F }, "HandL" },
+        { Chest, { -0.18F, 0.15F, 0.0F }, "UpperArmR" },
+        { UpperArmR, { 0.0F, -0.27F, 0.07F }, "ForearmR" },
+        { ForearmR, { 0.0F, -0.27F, -0.07F }, "HandR" },
+        { Hips, { 0.1F, 0.0F, 0.0F }, "ThighL" },
+        { ThighL, { 0.0F, -0.35F, 0.18F }, "CalfL" },
+        { CalfL, { 0.0F, -0.35F, -0.18F }, "FootL" },
+        { Hips, { -0.1F, 0.0F, 0.0F }, "ThighR" },
+        { ThighR, { 0.0F, -0.35F, 0.18F }, "CalfR" },
+        { CalfR, { 0.0F, -0.35F, -0.18F }, "FootR" },
+    } };
+}
+
+[[nodiscard]] kb::scene::SkeletonAsset Skeleton() {
+    const std::array<Row, BoneCount> rows = Rows();
+    kb::scene::SkeletonAsset skeleton{};
+    for (std::size_t index = 0U; index < rows.size(); ++index) {
+        skeleton.bones.push_back({ .id = Id(static_cast<Bone>(index)), .parentIndex = rows[index].parent, .name = rows[index].name,
+            .referencePose = { .position = rows[index].offset }, .inverseBind = {} });
+    }
+    return skeleton;
+}
+
+[[nodiscard]] kb::scene::FullBodyIkSettings Settings() {
+    kb::scene::FullBodyIkSettings settings;
+    settings.spineBoneId = Id(Spine);
+    settings.headBoneId = Id(Head);
+    settings.limbs[0] = { .upperBoneId = Id(ThighL), .tipBoneId = Id(FootL), .target = "FootL", .poleTarget = "KneeL" };
+    settings.limbs[1] = { .upperBoneId = Id(ThighR), .tipBoneId = Id(FootR), .target = "FootR", .poleTarget = "KneeR" };
+    settings.limbs[2] = { .upperBoneId = Id(UpperArmL), .tipBoneId = Id(HandL), .target = "HandL", .poleTarget = "ElbowL" };
+    settings.limbs[3] = { .upperBoneId = Id(UpperArmR), .tipBoneId = Id(HandR), .target = "HandR", .poleTarget = "ElbowR" };
+    settings.hipsTarget = "Hips";
+    settings.lookTarget = "Look";
+    return settings;
+}
+
+[[nodiscard]] kb::scene::AnimatorController Controller() {
+    kb::scene::AnimatorController value{};
+    value.layers = { { .name = "Base", .defaultState = "Pose", .states = { { .name = "Pose", .clipReference = "/Game/Rig/Body.kbanim" } } } };
+    return value;
+}
+
+[[nodiscard]] kb::scene::AnimatorController BodyController(kb::scene::FullBodyIkSettings settings, float weight = 1.0F) {
+    kb::scene::AnimatorController value = Controller();
+    value.rigConstraints.push_back({ .name = "Body", .type = kb::scene::AnimatorRigConstraintType::FullBodyIK, .weight = weight,
+        .constrainedBoneId = Id(Hips), .chainIk = ChainIkSettings{ .maxIterations = 64U, .tolerance = 1.0e-4F },
+        .fullBody = std::move(settings) });
+    return value;
+}
+
+struct Fixture {
+    std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb-full-body-ik-tests";
+    kb::scene::Scene scene;
+    std::uint64_t skeletonId = 0U;
+    std::uint64_t signature = 0U;
+
+    Fixture() {
+        std::filesystem::remove_all(root);
+        const kb::scene::SkeletonAsset skeleton = Skeleton();
+        signature = kb::scene::SkeletonCompatibilitySignature(skeleton);
+        Require(kb::scene::SkeletonAssetIO::Save(root / "Assets" / "Rig" / "Body.kbskeleton", skeleton) &&
+                scene.Assets().MountProject(root) && scene.Assets().Discover() == 1U,
+            "The full body fixture could not save its skeleton");
+        skeletonId = scene.Assets().Manager().Registry().FindByPath("/Game/Rig/Body.kbskeleton")->id.value;
+        kb::scene::AnimationClip clip{ .durationSeconds = 1.0F, .looping = true };
+        clip.targetSkeletonAssetId = skeletonId;
+        clip.targetSkeletonCompatibilitySignature = signature;
+        clip.skeletalTracks = { { .boneId = Id(Root), .keyframes = { { .timeSeconds = 0.0F, .transform = {} }, { .timeSeconds = 1.0F, .transform = {} } } } };
+        Require(kb::scene::AnimationAssetIO::SaveClip(root / "Assets" / "Rig" / "Body.kbanim", clip),
+            "The full body fixture could not save its clip");
+        static_cast<void>(scene.Assets().Discover());
+    }
+    ~Fixture() {
+        std::error_code ignored;
+        std::filesystem::remove_all(root, ignored);
+    }
+
+    [[nodiscard]] std::uint64_t Register(std::string_view name, const kb::scene::AnimatorController& controller) {
+        const std::string file = std::string{ name } + ".kbanimcontroller";
+        Require(kb::scene::AnimationAssetIO::SaveController(root / "Assets" / "Rig" / file, controller), "A full body controller must save");
+        static_cast<void>(scene.Assets().Discover());
+        return scene.Assets().Manager().Registry().FindByPath("/Game/Rig/" + file)->id.value;
+    }
+
+    [[nodiscard]] kb::scene::SceneEntity Owner(std::uint64_t controllerId, Vec3 position = {}) {
+        const kb::scene::SceneObject object = scene.Entities().CreateObject({ .name = "Body" });
+        Require(scene.Components().SkeletonBindings().Set(object.Entity(), kb::scene::SkeletonBindingComponent{
+                    .skeletonAssetId = skeletonId, .skeletonCompatibilitySignature = signature, .enabled = true }),
+            "The full body owner could not bind its skeleton");
+        scene.Components().Animators().Set(object.Entity(), kb::scene::Animator{ .controllerAssetId = controllerId, .speed = 1.0F, .enabled = true });
+        scene.Transforms().Set(object.Entity(), kb::scene::TransformComponent{ .localPosition = position });
+        return object.Entity();
+    }
+
+    void Update(float seconds) {
+        static_cast<void>(scene.Runtime().Update(seconds));
+        const std::vector<std::string> errors = scene.Runtime().DrainSceneSystemErrors();
+        Require(errors.empty(), errors.empty() ? "" : errors.front().c_str());
+    }
+
+    void Aim(kb::scene::SceneEntity owner, std::string_view name, Vec3 position, float positionWeight = 1.0F,
+        float rotationWeight = 0.0F, Quat rotation = Quat{}) {
+        Require(scene.Animators().SetIkTarget(owner, name, kb::scene::AnimatorIkTarget{ .worldPosition = position, .worldRotation = rotation,
+                    .positionWeight = positionWeight, .rotationWeight = rotationWeight }),
+            "A full body target must be accepted");
+    }
+
+    [[nodiscard]] kb::scene::SceneEntity Ground(Vec3 position, Quat rotation, Vec3 size) {
+        const kb::scene::SceneObject object = scene.Entities().CreateObject({ .name = "Ground" });
+        scene.Components().Colliders().Set(object.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Box, .boxSize = size });
+        Place(object.Entity(), position, rotation);
+        return object.Entity();
+    }
+
+    void Place(kb::scene::SceneEntity entity, Vec3 position, Quat rotation) {
+        scene.Transforms().Set(entity, kb::scene::TransformComponent{ .localPosition = position, .localRotation = rotation });
+    }
+};
+
+struct PoseCopy {
+    std::vector<Vec3> positions;
+    std::vector<Quat> rotations;
+    std::vector<Quat> localRotations;
+};
+
+[[nodiscard]] PoseCopy Copy(const kb::scene::AnimatorInstanceSkeletonView& view) {
+    return { { view.currentComponentPose.positions.begin(), view.currentComponentPose.positions.end() },
+        { view.currentComponentPose.rotations.begin(), view.currentComponentPose.rotations.end() },
+        { view.currentLocalPose.rotations.begin(), view.currentLocalPose.rotations.end() } };
+}
+
+[[nodiscard]] PoseCopy PoseOf(Fixture& fixture, kb::scene::SceneEntity owner) {
+    const std::optional<kb::scene::AnimatorInstanceSkeletonView> view = fixture.scene.Animators().InstanceSkeleton(owner);
+    Require(view.has_value(), "The full body owner has no evaluated skeleton pose");
+    return Copy(*view);
+}
+
+[[nodiscard]] float TurnDegrees(Quat a, Quat b) {
+    const Quat delta = kb::math::Normalize(b * kb::math::Inverse(a));
+    return 2.0F * std::atan2(kb::math::Length(Vec3{ delta.x, delta.y, delta.z }), std::fabs(delta.w)) * 180.0F / kb::math::kPi;
+}
+
+[[nodiscard]] float AngleDegrees(Vec3 a, Vec3 b) {
+    return std::acos(kb::math::Clamp(kb::math::Dot(kb::math::Normalize(a), kb::math::Normalize(b)), -1.0F, 1.0F)) * 180.0F / kb::math::kPi;
+}
+
+[[nodiscard]] bool SamePose(const PoseCopy& a, const PoseCopy& b, float tolerance) {
+    for (std::size_t bone = 0U; bone < BoneCount; ++bone) {
+        if (kb::math::Length(a.positions[bone] - b.positions[bone]) > tolerance || TurnDegrees(a.rotations[bone], b.rotations[bone]) > 0.01F) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] Vec3 At(const PoseCopy& pose, Bone bone) { return pose.positions[bone]; }
+
+// The length of the limb chain, from its upper bone to its tip, through the middle one.
+[[nodiscard]] float ChainLength(const PoseCopy& pose, Bone upper, Bone middle, Bone tip) {
+    return kb::math::Length(At(pose, middle) - At(pose, upper)) + kb::math::Length(At(pose, tip) - At(pose, middle));
+}
+
+} // namespace body
+
+void TestFullBodyReach() {
+    using namespace body;
+    Fixture fixture;
+    const kb::scene::SceneEntity plain = fixture.Owner(fixture.Register("Plain", Controller()));
+    const kb::scene::SceneEntity owner = fixture.Owner(fixture.Register("Reach", BodyController(Settings())));
+    fixture.Update(0.0F);
+    const PoseCopy animated = PoseOf(fixture, plain);
+    Require(SamePose(PoseOf(fixture, owner), animated, 1.0e-5F), "A full body constraint without targets must leave the animated pose alone");
+
+    // Every target is farther from its limb's root than the limb is long, so no limb reaches it with the hips
+    // where the animation has them.
+    struct Reach {
+        Bone upper, middle, tip;
+        const char* name;
+        Vec3 target;
+    };
+    const std::array<Reach, 4> reaches{ {
+        { ThighL, CalfL, FootL, "FootL", { 0.1F, 0.20F, 0.35F } },
+        { ThighR, CalfR, FootR, "FootR", { -0.1F, 0.20F, 0.10F } },
+        { UpperArmL, ForearmL, HandL, "HandL", { 0.5F, 1.25F, 0.5F } },
+        { UpperArmR, ForearmR, HandR, "HandR", { -0.5F, 1.25F, 0.5F } },
+    } };
+    for (const Reach& reach : reaches) {
+        Require(kb::math::Length(reach.target - At(animated, reach.upper)) > ChainLength(animated, reach.upper, reach.middle, reach.tip),
+            "Every full body target must lie out of its limb's reach before the hips move");
+        fixture.Aim(owner, reach.name, reach.target);
+    }
+    const Vec3 kneePole{ 4.0F, 0.6F, 0.0F };
+    const Vec3 elbowPole{ -4.0F, 1.2F, 0.0F };
+    fixture.Aim(owner, "KneeL", kneePole);
+    fixture.Aim(owner, "ElbowR", elbowPole);
+    fixture.Update(0.0F);
+    const PoseCopy solved = PoseOf(fixture, owner);
+    for (const Reach& reach : reaches) {
+        Require(kb::math::Length(At(solved, reach.tip) - reach.target) < 0.01F,
+            "The full body constraint must bring every limb tip within a centimetre of its target");
+    }
+    Require(kb::math::Length(At(solved, Hips) - At(animated, Hips)) > 0.05F, "The full body constraint must move the hips to bring the targets into reach");
+    for (std::size_t bone = 0U; bone < BoneCount; ++bone) {
+        if (bone == Hips || bone == Root) continue;
+        const std::size_t parent = static_cast<std::size_t>(Rows()[bone].parent);
+        Require(std::fabs(kb::math::Length(solved.positions[bone] - solved.positions[parent]) -
+                    kb::math::Length(animated.positions[bone] - animated.positions[parent])) < 1.0e-4F,
+            "The full body constraint must keep every bone length");
+    }
+    const std::array<Vec3, 3> leftLeg{ At(solved, ThighL), At(solved, CalfL), At(solved, FootL) };
+    const std::array<Vec3, 3> rightArm{ At(solved, UpperArmR), At(solved, ForearmR), At(solved, HandR) };
+    Require(BendTowardsPole(leftLeg, kneePole) > 0.99F && BendTowardsPole(rightArm, elbowPole) > 0.99F,
+        "Knees and elbows must bend toward their pole targets");
+}
+
+void TestFullBodyPriority() {
+    using namespace body;
+    Fixture fixture;
+    const kb::scene::SceneEntity plain = fixture.Owner(fixture.Register("Plain", Controller()));
+    const kb::scene::SceneEntity owner = fixture.Owner(fixture.Register("Priority", BodyController(Settings())));
+    fixture.Update(0.0F);
+    const PoseCopy animated = PoseOf(fixture, plain);
+    // Both feet stay where they are while a hand is asked for a point well beyond anything it can touch.
+    const Vec3 handTarget{ 0.3F, 1.3F, 2.0F };
+    fixture.Aim(owner, "FootL", At(animated, FootL));
+    fixture.Aim(owner, "FootR", At(animated, FootR));
+    fixture.Aim(owner, "HandL", handTarget);
+    fixture.Update(0.0F);
+    const PoseCopy solved = PoseOf(fixture, owner);
+    Require(kb::math::Length(At(solved, FootL) - At(animated, FootL)) < 0.01F && kb::math::Length(At(solved, FootR) - At(animated, FootR)) < 0.01F,
+        "Pinned feet must keep their targets when a hand cannot be satisfied");
+    const Vec3 toTarget = handTarget - At(solved, UpperArmL);
+    const Vec3 reached = At(solved, HandL) - At(solved, UpperArmL);
+    Require(std::fabs(kb::math::Length(reached) - ChainLength(animated, UpperArmL, ForearmL, HandL)) < 2.0e-3F &&
+            AngleDegrees(reached, toTarget) < 1.0F,
+        "An arm that cannot reach its target must stretch straight toward it");
+    Require(kb::math::Dot(At(solved, Hips) - At(animated, Hips), kb::math::Normalize(handTarget - At(animated, Hips))) > 0.02F,
+        "The hips must lean toward a target out of reach as far as the feet allow");
+}
+
+void TestFootPlacement() {
+    using namespace body;
+    Fixture fixture;
+    kb::scene::FullBodyIkSettings settings = Settings();
+    settings.footPlacement = true;
+    settings.groundProbeDistance = 0.6F;
+    const kb::scene::SceneEntity plain = fixture.Owner(fixture.Register("Plain", Controller()));
+    const kb::scene::SceneEntity owner = fixture.Owner(fixture.Register("Feet", BodyController(settings)));
+    // The character's own collider is in the way of the rays and must be ignored.
+    fixture.scene.Components().Colliders().Set(owner, kb::scene::ColliderComponent{
+        .shape = kb::scene::ColliderShape::Box, .center = { 0.0F, 0.55F, 0.0F }, .boxSize = { 0.6F, 0.4F, 0.6F } });
+    static_cast<void>(fixture.Ground({ 1.0F, -0.5F, 0.0F }, Quat{}, { 2.0F, 1.0F, 4.0F }));
+    const kb::scene::SceneEntity low = fixture.Ground({ -1.0F, -0.5F, 0.0F }, Quat{}, { 2.0F, 1.0F, 4.0F });
+    fixture.Update(0.0F);
+    const PoseCopy animated = PoseOf(fixture, plain);
+    Require(SamePose(PoseOf(fixture, owner), animated, 1.0e-4F), "Foot placement on level ground must leave the animated pose alone");
+
+    // The right foot stands 20 cm below the left one.
+    fixture.Place(low, { -1.0F, -0.7F, 0.0F }, Quat{});
+    fixture.Update(0.0F);
+    const PoseCopy stair = PoseOf(fixture, owner);
+    Require(kb::math::Length(At(stair, FootL) - At(animated, FootL)) < 0.01F &&
+            kb::math::Length(At(stair, FootR) - (At(animated, FootR) + Vec3{ 0.0F, -0.2F, 0.0F })) < 0.01F,
+        "Foot placement must put both feet on the ground they stand on");
+    Require(std::fabs((At(animated, Hips).y - At(stair, Hips).y) - 0.2F) < 0.01F, "Foot placement must lower the hips with the lowest foot");
+    for (const Bone foot : { FootL, FootR }) {
+        Require(AngleDegrees(kb::math::Rotate(stair.rotations[foot], Vec3{ 0.0F, 1.0F, 0.0F }), Vec3{ 0.0F, 1.0F, 0.0F }) < 2.0F,
+            "A foot on level ground must stay flat");
+    }
+
+    // The right foot on a slope: it follows the slope's height and turns to its normal.
+    const Quat tilt{ 0.0F, 0.0F, std::sin(7.5F * kb::math::kPi / 180.0F), std::cos(7.5F * kb::math::kPi / 180.0F) };
+    const Vec3 slopeCentre{ -0.6F, -0.8F, 0.0F };
+    fixture.Place(low, slopeCentre, tilt);
+    fixture.Update(0.0F);
+    const PoseCopy slope = PoseOf(fixture, owner);
+    const Vec3 normal = kb::math::Rotate(tilt, Vec3{ 0.0F, 1.0F, 0.0F });
+    const float surface = (kb::math::Dot(normal, slopeCentre) + 0.5F - normal.x * At(animated, FootR).x) / normal.y;
+    Require(kb::math::Length(At(slope, FootR) - (At(animated, FootR) + Vec3{ 0.0F, surface, 0.0F })) < 0.01F &&
+            std::fabs(At(slope, Hips).y - (At(animated, Hips).y + surface)) < 0.01F,
+        "Foot placement must follow the height of a slope and lower the hips to it");
+    Require(AngleDegrees(kb::math::Rotate(slope.rotations[FootR], Vec3{ 0.0F, 1.0F, 0.0F }), normal) < 2.0F,
+        "A foot on a slope must turn to the slope's normal");
+}
+
+void TestFullBodyLookAt() {
+    using namespace body;
+    Fixture fixture;
+    const kb::scene::SceneEntity plain = fixture.Owner(fixture.Register("Plain", Controller()));
+    const kb::scene::SceneEntity owner = fixture.Owner(fixture.Register("Look", BodyController(Settings())));
+    fixture.Update(0.0F);
+    const PoseCopy animated = PoseOf(fixture, plain);
+    const Vec3 forward{ 0.0F, 0.0F, 1.0F };
+    const std::array<Bone, 4> spine{ Spine, Chest, Neck, Head };
+    const auto look = [&](Vec3 target, float weight) {
+        fixture.Aim(owner, "Look", target, weight);
+        fixture.Update(0.0F);
+        return PoseOf(fixture, owner);
+    };
+
+    // Within the limit the head looks straight at the target, and the turn is shared among the bones, the head
+    // taking the most.
+    const Vec3 inRange = At(animated, Head) + Vec3{ 1.0F, 0.0F, 1.0F };
+    PoseCopy turned = look(inRange, 1.0F);
+    Require(AngleDegrees(kb::math::Rotate(turned.rotations[Head], forward), inRange - At(animated, Head)) < 0.5F,
+        "The head must look at a target within its limit");
+    for (std::size_t index = 0U; index < spine.size(); ++index) {
+        const float turn = TurnDegrees(animated.localRotations[spine[index]], turned.localRotations[spine[index]]);
+        Require(std::fabs(turn - 45.0F * static_cast<float>(index + 1U) / 10.0F) < 0.5F && turn <= 80.0F,
+            "Every bone of the spine must take its share of the turn, within the limit");
+    }
+    Require(kb::math::Length(At(turned, FootL) - At(animated, FootL)) < 1.0e-4F, "Looking must not move the legs");
+
+    // Beyond the limit the head stops at it.
+    turned = look(At(animated, Head) + Vec3{ 1.0F, 0.0F, -0.2F }, 1.0F);
+    Require(std::fabs(TurnDegrees(animated.rotations[Head], turned.rotations[Head]) - 80.0F) < 0.5F, "The head must stop at the look limit");
+    for (const Bone bone : spine) {
+        Require(TurnDegrees(animated.localRotations[bone], turned.localRotations[bone]) <= 80.0F, "No bone may turn past the look limit");
+    }
+
+    // A half weight turns the head half as far.
+    turned = look(inRange, 0.5F);
+    Require(std::fabs(TurnDegrees(animated.rotations[Head], turned.rotations[Head]) - 22.5F) < 0.5F, "A half weight must turn the head half as far");
+}
+
+void TestFullBodyWeightAndStorage() {
+    using namespace body;
+    Fixture fixture;
+    const kb::scene::SceneEntity plain = fixture.Owner(fixture.Register("Plain", Controller()));
+    kb::scene::FullBodyIkSettings settings = Settings();
+    settings.footPlacement = true;
+    const kb::scene::SceneEntity owner = fixture.Owner(fixture.Register("Weight", BodyController(settings)));
+    fixture.Update(0.0F);
+    const PoseCopy animated = PoseOf(fixture, plain);
+    for (const char* name : { "FootL", "FootR", "HandL", "HandR", "KneeL", "ElbowR", "Hips", "Look" }) {
+        fixture.Aim(owner, name, Vec3{ 0.7F, 0.4F, 1.2F }, 0.0F, 0.0F, Quat{ 0.0F, 0.38268343F, 0.0F, 0.92387953F });
+    }
+    fixture.Update(0.0F);
+    Require(SamePose(PoseOf(fixture, owner), animated, 1.0e-4F), "A weight of zero on every target must leave the animated pose alone");
+    Require(!fixture.scene.Animators().SetIkTarget(owner, "Unrelated", kb::scene::AnimatorIkTarget{}), "A target no constraint reads must be refused");
+
+    // The settings survive a save and a load; invalid ones are refused; the previous schema still loads.
+    kb::scene::FullBodyIkSettings stored = Settings();
+    stored.lookAxis = { 0.0F, 1.0F, 0.0F };
+    stored.lookLimitDegrees = 55.0F;
+    stored.footPlacement = true;
+    stored.groundProbeDistance = 0.75F;
+    stored.groundLayerMask = 0x5U;
+    stored.limbs[3].poleTarget.clear();
+    static_cast<void>(fixture.Register("Stored", BodyController(stored, 0.75F)));
+    const auto loaded = kb::scene::AnimationAssetIO::LoadController(fixture.root / "Assets" / "Rig" / "Stored.kbanimcontroller");
+    Require(loaded.has_value() && loaded->rigConstraints.size() == 1U, "A full body controller must load");
+    const kb::scene::AnimatorRigConstraint& saved = loaded->rigConstraints[0];
+    const kb::scene::FullBodyIkSettings& back = saved.fullBody;
+    Require(saved.type == kb::scene::AnimatorRigConstraintType::FullBodyIK && saved.constrainedBoneId == Id(Hips) && saved.weight == 0.75F &&
+            saved.chainIk.maxIterations == 64U && saved.chainIk.tolerance == 1.0e-4F && saved.target.empty(),
+        "A full body constraint must survive a save and a load");
+    Require(back.spineBoneId == Id(Spine) && back.headBoneId == Id(Head) && back.hipsTarget == "Hips" && back.lookTarget == "Look" &&
+            back.lookAxis.y == 1.0F && back.lookLimitDegrees == 55.0F && back.footPlacement && back.groundProbeDistance == 0.75F &&
+            back.groundLayerMask == 0x5U && back.limbs[0].target == "FootL" && back.limbs[0].poleTarget == "KneeL" &&
+            back.limbs[2].upperBoneId == Id(UpperArmL) && back.limbs[2].tipBoneId == Id(HandL) && back.limbs[3].target == "HandR" &&
+            back.limbs[3].poleTarget.empty(),
+        "Every full body setting must survive a save and a load");
+    kb::scene::FullBodyIkSettings sharedBone = Settings();
+    sharedBone.headBoneId = Id(Spine);
+    kb::scene::FullBodyIkSettings lookWithoutSpine = Settings();
+    lookWithoutSpine.spineBoneId = lookWithoutSpine.headBoneId = 0U;
+    kb::scene::FullBodyIkSettings halfLimb = Settings();
+    halfLimb.limbs[1].tipBoneId = 0U;
+    for (const kb::scene::FullBodyIkSettings& invalid : { sharedBone, lookWithoutSpine, halfLimb }) {
+        Require(!kb::scene::AnimationAssetIO::SaveController(fixture.root / "Assets" / "Rig" / "Bad.kbanimcontroller", BodyController(invalid)),
+            "A full body constraint with inconsistent bones must be refused");
+    }
+    const std::filesystem::path file = fixture.root / "Assets" / "Rig" / "Stored.kbanimcontroller";
+    std::string text;
+    {
+        std::ifstream input{ file, std::ios::binary };
+        text.assign(std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{});
+    }
+    const std::size_t header = text.find("AnimatorController 7");
+    Require(header != std::string::npos, "A saved controller must name the current schema");
+    text[header + std::string_view{ "AnimatorController " }.size()] = '6';
+    const std::vector<std::uint8_t> bytes{ text.begin(), text.end() };
+    Require(!kb::scene::AnimationAssetIO::LoadController(std::span<const std::uint8_t>{ bytes }).has_value(),
+        "A full body record in a controller of the previous schema must be refused");
+    kb::scene::AnimatorController chains = Controller();
+    chains.rigConstraints.push_back({ .name = "Reach", .type = kb::scene::AnimatorRigConstraintType::ChainIK, .target = "Reach",
+        .constrainedBoneId = Id(Hips), .tipBoneId = Id(Head) });
+    static_cast<void>(fixture.Register("Chains", chains));
+    std::ifstream chainInput{ fixture.root / "Assets" / "Rig" / "Chains.kbanimcontroller", std::ios::binary };
+    std::string chainText{ std::istreambuf_iterator<char>{ chainInput }, std::istreambuf_iterator<char>{} };
+    const std::size_t chainHeader = chainText.find("AnimatorController 7");
+    Require(chainHeader != std::string::npos, "A saved controller must name the current schema");
+    chainText[chainHeader + std::string_view{ "AnimatorController " }.size()] = '6';
+    const std::vector<std::uint8_t> chainBytes{ chainText.begin(), chainText.end() };
+    const auto previous = kb::scene::AnimationAssetIO::LoadController(std::span<const std::uint8_t>{ chainBytes });
+    Require(previous.has_value() && previous->rigConstraints.size() == 1U &&
+            previous->rigConstraints[0].type == kb::scene::AnimatorRigConstraintType::ChainIK,
+        "A controller of the previous schema must still load");
+}
+
+void TestFullBodyDoesNotAllocate() {
+    using namespace body;
+    constexpr std::size_t kCharacters = 100U;
+    Fixture fixture;
+    kb::scene::FullBodyIkSettings grounded = Settings();
+    grounded.footPlacement = true;
+    const std::uint64_t plainController = fixture.Register("Plain", Controller());
+    const std::uint64_t bodyController = fixture.Register("Allocation", BodyController(Settings()));
+    const std::uint64_t groundedController = fixture.Register("Grounded", BodyController(grounded));
+    static_cast<void>(fixture.Ground({ 150.0F, -0.5F, 0.0F }, Quat{}, { 400.0F, 1.0F, 10.0F }));
+    // Foot placement casts one ray per character and update. Without a physics backend a ray visits the scene's
+    // colliders through the ECS, which allocates; the animator must add nothing to that.
+    std::array<kb::scene::PhysicsCastResult, 4U> storage{};
+    kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult> hits{ std::span<kb::scene::PhysicsCastResult>(storage) };
+    // Heap allocations of ten updates of a hundred characters, where the last character's left foot ended, and the
+    // allocations of as many plain rays through the same scene.
+    struct Measured {
+        std::size_t allocations;
+        float miss;
+        std::size_t rays;
+    };
+    const auto measure = [&](std::uint64_t controller, bool aimed) {
+        std::vector<kb::scene::SceneEntity> owners;
+        for (std::size_t index = 0U; index < kCharacters; ++index) {
+            owners.push_back(fixture.Owner(controller, Vec3{ 3.0F * static_cast<float>(index), 0.0F, 0.0F }));
+        }
+        fixture.Update(0.0F);
+        for (std::size_t index = 0U; index < kCharacters && aimed; ++index) {
+            const Vec3 place{ 3.0F * static_cast<float>(index), 0.0F, 0.0F };
+            fixture.Aim(owners[index], "FootL", place + Vec3{ 0.1F, 0.20F, 0.35F });
+            fixture.Aim(owners[index], "HandL", place + Vec3{ 0.5F, 1.25F, 0.5F }, 1.0F, 1.0F, Quat{ 0.0F, 0.38268343F, 0.0F, 0.92387953F });
+            fixture.Aim(owners[index], "Look", place + Vec3{ 1.0F, 1.57F, 1.0F });
+        }
+        fixture.Update(0.0F);
+        std::size_t allocations = 0U;
+        for (int frame = 1; frame <= 13; ++frame) {
+            BeginAllocationTally();
+            static_cast<void>(fixture.scene.Runtime().Update(kFrame));
+            const AllocationTally tally = EndAllocationTally();
+            if (frame > 3) allocations += tally.count;
+        }
+        BeginAllocationTally();
+        for (std::size_t ray = 0U; ray < kCharacters * 10U; ++ray) {
+            kb::scene::RaycastAllNonAllocPrecise(fixture.scene, kb::math::DVec3{ 1.0, 1.0, 0.0 }, Vec3{ 0.0F, -1.0F, 0.0F }, 2.0F, 0x7FFFFFFFU, hits);
+        }
+        const std::size_t rays = EndAllocationTally().count;
+        const PoseCopy last = PoseOf(fixture, owners.back());
+        const float miss = kb::math::Length(At(last, FootL) - Vec3{ 0.1F, 0.20F, 0.35F });
+        for (const kb::scene::SceneEntity owner : owners) fixture.scene.Entities().Destroy(owner);
+        return Measured{ allocations, miss, rays };
+    };
+    const Measured plainRun = measure(plainController, false);
+    const Measured bodyRun = measure(bodyController, true);
+    const Measured groundedRun = measure(groundedController, true);
+    Require(plainRun.miss > 0.1F && bodyRun.miss < 0.01F && groundedRun.miss < 0.01F, "The hundred characters must reach their targets");
+    Require(bodyRun.allocations <= plainRun.allocations, "A hundred full body constraints must not make an animator allocate when it updates");
+    Require(groundedRun.allocations <= plainRun.allocations + groundedRun.rays, "Foot placement must not allocate beyond the rays it casts");
+}
+
 } // namespace
 
 void RunMotionSkeletonRuleTests() {
@@ -835,6 +1328,12 @@ void RunMotionSkeletonRuleTests() {
     TestSpringBonesLimitAndWeight();
     TestSpringBonesController();
     TestSpringBonesDoNotAllocate();
+    TestFullBodyReach();
+    TestFullBodyPriority();
+    TestFootPlacement();
+    TestFullBodyLookAt();
+    TestFullBodyWeightAndStorage();
+    TestFullBodyDoesNotAllocate();
 }
 
 } // namespace kb::tests
