@@ -58,8 +58,6 @@ constexpr std::array<std::string_view, 12> kSprite2DBasicRows{ "imageAssetId", "
 constexpr std::array<std::string_view, 10> kNavBoundsBasicRows{ "size.x", "size.y", "size.z", "center.x", "center.y", "center.z",
     "agentRadius", "agentHeight", "maxStepHeight", "maxSlopeDegrees" };
 
-constexpr std::size_t kModuleSectionCount = 8U;
-
 // The built-in sections, then one for each component a module registered, in name order. The list is rebuilt when the
 // registrations change; an earlier list stays valid, so a section found before a reload can still be read.
 [[nodiscard]] const std::vector<InspectorGenericComponentModel::Section>& CurrentSections() {
@@ -69,9 +67,9 @@ constexpr std::size_t kModuleSectionCount = 8U;
     if (lists.empty() || now != generation) {
         auto list = std::make_unique<std::vector<InspectorGenericComponentModel::Section>>(kSections.begin(), kSections.end());
         const std::vector<const kb::scene::SceneModuleComponentInfo*> modules = kb::scene::SceneModuleComponentCatalog::All();
-        for (std::size_t index = 0U; index < modules.size() && index < kModuleSectionCount; ++index) {
+        for (std::size_t index = 0U; index < modules.size(); ++index) {
             list->push_back({ modules[index]->name,
-                static_cast<InspectorSectionId>(static_cast<std::size_t>(InspectorSectionId::ModuleComponent0) + index),
+                static_cast<InspectorSectionId>(static_cast<std::size_t>(InspectorSectionId::ModuleComponentFirst) + index),
                 HeroIconKind::Cube, modules[index]->label });
         }
         lists.push_back(std::move(list));
@@ -117,7 +115,17 @@ struct DefaultComponent {
     kb::scene::SceneEntity entity{};
 };
 
+// What a property has in a new component: for a built-in component, in a scene of its own that is built once; for a
+// component a module registered, the defaults it registered.
+[[nodiscard]] kb::script::ScriptSceneComponentPropertyResult FreshValue(
+    const DefaultComponent* defaults, std::string_view component, std::string_view property) {
+    return defaults != nullptr
+        ? kb::script::ScriptSceneComponentApi::GetProperty(const_cast<kb::scene::Scene&>(defaults->scene), defaults->entity, component, property)
+        : kb::script::ScriptSceneComponentApi::DefaultProperty(component, property);
+}
+
 [[nodiscard]] const DefaultComponent* DefaultsOf(std::string_view component) {
+    if (kb::scene::SceneModuleComponentCatalog::Find(component) != nullptr) return nullptr;
     // Never destroyed: a scene torn down during static destruction could outlive the services it releases into.
     static auto& built = *new std::map<std::string, std::unique_ptr<DefaultComponent>, std::less<>>();
     if (const auto found = built.find(component); found != built.end()) return found->second.get();
@@ -296,10 +304,9 @@ std::string_view InspectorGenericComponentModel::Tooltip(int editIndex) {
 std::vector<int> InspectorGenericComponentModel::ChangedRows(const kb::scene::Scene& scene, kb::scene::SceneEntity entity, const Section& section) {
     std::vector<int> changed;
     const DefaultComponent* defaults = DefaultsOf(section.component);
-    if (defaults == nullptr) return changed;
+    if (defaults == nullptr && kb::scene::SceneModuleComponentCatalog::Find(section.component) == nullptr) return changed;
     // Reading a property takes the scene by reference; nothing is written.
     kb::scene::Scene& readable = const_cast<kb::scene::Scene&>(scene);
-    kb::scene::Scene& defaultScene = const_cast<kb::scene::Scene&>(defaults->scene);
     const int sectionIndex = SectionIndexOf(section);
     const auto properties = kb::script::ScriptSceneComponentApi::ComponentProperties(section.component);
     for (std::size_t index = 0U; index < properties.size() && index < static_cast<std::size_t>(kFieldsPerSection); ++index) {
@@ -307,8 +314,7 @@ std::vector<int> InspectorGenericComponentModel::ChangedRows(const kb::scene::Sc
         if (!desc.writable || !AssetTypeFor(section.component, desc.name).empty() || desc.type == ScriptValueType::Hash) continue;
         const kb::script::ScriptSceneComponentPropertyResult now =
             kb::script::ScriptSceneComponentApi::GetProperty(readable, entity, section.component, desc.name);
-        const kb::script::ScriptSceneComponentPropertyResult fresh =
-            kb::script::ScriptSceneComponentApi::GetProperty(defaultScene, defaults->entity, section.component, desc.name);
+        const kb::script::ScriptSceneComponentPropertyResult fresh = FreshValue(defaults, section.component, desc.name);
         if (now.succeeded && fresh.succeeded && !(now.value == fresh.value)) {
             changed.push_back(sectionIndex * kFieldsPerSection + static_cast<int>(index));
         }
@@ -320,9 +326,8 @@ bool InspectorGenericComponentModel::ResetRow(kb::scene::Scene& scene, kb::scene
     const Field field = FieldAt(editIndex);
     if (field.desc == nullptr || !field.desc->writable) return false;
     const DefaultComponent* defaults = DefaultsOf(field.section->component);
-    if (defaults == nullptr) return false;
-    const kb::script::ScriptSceneComponentPropertyResult fresh = kb::script::ScriptSceneComponentApi::GetProperty(
-        const_cast<kb::scene::Scene&>(defaults->scene), defaults->entity, field.section->component, field.desc->name);
+    if (defaults == nullptr && kb::scene::SceneModuleComponentCatalog::Find(field.section->component) == nullptr) return false;
+    const kb::script::ScriptSceneComponentPropertyResult fresh = FreshValue(defaults, field.section->component, field.desc->name);
     return fresh.succeeded && kb::script::ScriptSceneComponentApi::SetProperty(
         scene, entity, field.section->component, field.desc->name, fresh.value).succeeded;
 }

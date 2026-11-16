@@ -4,6 +4,7 @@
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "scene/prefab/ScenePrefabComponentOverrideReporter.hpp"
+#include "scene/prefab/ScenePrefabModuleComponentOverrides.hpp"
 #include "scene/prefab/ScenePrefabObjectOverrideReporter.hpp"
 #include "scene/prefab/ScenePrefabTransformOverrideReporter.hpp"
 
@@ -55,6 +56,7 @@ void ScenePrefabOverridePropertyReporter::AppendChangedProperties(
     const SceneEntity entity = object.Entity();
     ScenePrefabTransformOverrideReporter::Append(scene, node, nodeIndex, object, report);
     ScenePrefabComponentOverrideReporter::Append(scene.Components(), entity, node.components, report, nodeIndex, object);
+    ScenePrefabModuleComponentOverrides::Append(scene, entity, node.components, report, nodeIndex, object);
     if (scene.Components().Behaviours().TryGet(entity) != nullptr) {
         ScenePrefabComponentOverrideReporter::AppendBehaviourVariables(scene.Entities().BehaviourVariableOverrides(entity), node.components, report, nodeIndex, object);
     }

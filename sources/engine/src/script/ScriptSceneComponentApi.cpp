@@ -2495,6 +2495,16 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
     return {};
 }
 
+ScriptSceneComponentPropertyResult ScriptSceneComponentApi::DefaultProperty(std::string_view componentName, std::string_view propertyName) {
+    const kb::scene::SceneModuleComponentInfo* info = kb::scene::SceneModuleComponentCatalog::Find(componentName);
+    const kb::scene::SceneModuleComponentProperty* property = info == nullptr ? nullptr : FindModuleProperty(*info, propertyName);
+    const std::size_t size = property == nullptr ? 0U : property->type == kb::ecs::ComponentFieldType::Bool ? 1U : property->type == kb::ecs::ComponentFieldType::Float64 ? 8U : 4U;
+    if (property == nullptr || property->offset + size > info->defaults.size()) {
+        return ScriptSceneComponentPropertyResult{ .error = "component property is not registered for scripts" };
+    }
+    return ScriptSceneComponentPropertyResult{ .succeeded = true, .value = ReadModuleValue(info->defaults.data() + property->offset, property->type) };
+}
+
 bool ScriptSceneComponentApi::HasComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::string_view componentName) noexcept {
     componentName = kb::scene::SceneComponentAuthoring::CanonicalName(componentName);
     if (ScriptUIComponentApi::IsComponent(componentName)) {

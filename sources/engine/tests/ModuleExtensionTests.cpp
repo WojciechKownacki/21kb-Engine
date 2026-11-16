@@ -8,6 +8,7 @@
 #include "engine/library/EngineLibraryComponentInspectorDesc.hpp"
 #include "engine/modules/EngineModuleHost.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneComponentAuthoring.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -302,11 +303,96 @@ void ReloadKeepsModuleComponentData() {
     std::filesystem::remove_all(folder);
 }
 
+// ---- prefab overrides -----------------------------------------------------------------------------------------
+
+void ModuleComponentOverridesFollowPrefabRules() {
+    const std::filesystem::path folder = Fresh("21kb_module_extension_overrides");
+    const std::filesystem::path library = LibraryCopy(folder);
+    Scene scene;
+    Attached attached{ scene, library };
+    const kb::scene::SceneObject source = scene.Entities().CreateObject({ .name = "Source" });
+    scene.Runtime().EcsWorld().Set<Component>(source.Entity(), { 2.0F, 7, false });
+    const kb::scene::ScenePrefabHandle prefab = scene.Prefabs().CaptureRegistered(source, "Overridable");
+    const kb::scene::ScenePrefabInstance first = scene.Prefabs().Instantiate(prefab);
+    const kb::scene::ScenePrefabInstance second = scene.Prefabs().Instantiate(prefab);
+    constexpr std::uint32_t kRoot = 0U;
+    const SceneEntity a = first.ObjectAt(kRoot).Entity();
+    const SceneEntity b = second.ObjectAt(kRoot).Entity();
+    const auto set = [&](SceneEntity entity, std::string_view property, const kb::script::ScriptValue& value) {
+        Require(kb::script::ScriptSceneComponentApi::SetProperty(scene, entity, kComponentName, property, value).succeeded, "A module property was not set");
+    };
+    const std::string countPath = "moduleComponents.ModuleExtension/count";
+    const std::string strengthPath = "moduleComponents.ModuleExtension/strength";
+    Require(ReadComponent(scene, a).count == 7 && scene.Prefabs().Overrides(first.Handle()).Empty(), "A fresh prefab instance reports an override");
+
+    // An edit of one field in an instance is one override, of that field alone.
+    set(a, "count", kb::script::ScriptValue{ 9 });
+    const kb::scene::ScenePrefabOverrideReport report = scene.Prefabs().Overrides(first.Handle());
+    Require(report.nodes.size() == 1U && report.nodes[0].moduleComponents == std::vector<std::string>{ "ModuleExtension" } &&
+            report.properties.size() == 1U && report.properties[0].propertyPath == countPath,
+        "A module field edit in an instance is not reported as one override");
+
+    // The prefab changes another field; the instance keeps its own value and takes the prefab's new one.
+    set(b, "strength", kb::script::ScriptValue{ 8.0F });
+    Require(scene.Prefabs().ApplyOverride(second.Handle(), kRoot, strengthPath), "A module field was not applied to the prefab");
+    static_cast<void>(scene.Prefabs().RefreshInstances(prefab));
+    Require(ReadComponent(scene, a).count == 9 && ReadComponent(scene, a).strength == 8.0F,
+        "A prefab update overwrote a module field an instance had overridden, or missed one it had not");
+    Require(scene.Prefabs().Overrides(second.Handle()).Empty() && ReadComponent(scene, b).strength == 8.0F && ReadComponent(scene, b).count == 7,
+        "A prefab update changed an instance that overrode nothing");
+
+    // Revert puts the prefab's value back; Apply makes the instance's value the prefab's.
+    Require(scene.Prefabs().RevertOverride(first.Handle(), kRoot, countPath) && ReadComponent(scene, a).count == 7 &&
+            scene.Prefabs().Overrides(first.Handle()).Empty(),
+        "Revert did not put a module field back to the prefab's value");
+    set(a, "count", kb::script::ScriptValue{ 11 });
+    Require(scene.Prefabs().ApplyOverride(first.Handle(), kRoot, countPath) && scene.Prefabs().Overrides(first.Handle()).Empty(), "A module field was not applied to the prefab");
+    const kb::scene::ScenePrefabInstance third = scene.Prefabs().Instantiate(prefab);
+    Require(ReadComponent(scene, third.ObjectAt(kRoot).Entity()).count == 11 && ReadComponent(scene, third.ObjectAt(kRoot).Entity()).strength == 8.0F,
+        "An applied module field did not reach new instances");
+
+    // A component an instance removed stays removed through a prefab update, and Revert brings it back.
+    Require(kb::scene::SceneComponentAuthoring::Remove(scene, a, kComponentName), "The module component was not removed");
+    const kb::scene::ScenePrefabOverrideReport removed = scene.Prefabs().Overrides(first.Handle());
+    Require(removed.properties.size() == 1U && removed.properties[0].propertyPath == "moduleComponents.ModuleExtension" && removed.properties[0].value == "null",
+        "A removed module component is not reported as an override");
+    static_cast<void>(scene.Prefabs().RefreshInstances(prefab));
+    Require(!kb::scene::SceneComponentAuthoring::Has(scene, a, kComponentName), "A prefab update put back a module component an instance had removed");
+    Require(scene.Prefabs().RevertOverrides(first.Handle()) && ReadComponent(scene, a).count == 11, "Revert did not bring back a removed module component");
+
+    // A prefab file written before module components has none and still loads and instantiates.
+    const std::filesystem::path prefabPath = folder / "Source.kbprefab";
+    const auto created = scene.Prefabs().CreateAsset(source, "Source", prefabPath);
+    Require(created.IsValid() && scene.Prefabs().Unload(created), "The prefab file was not written");
+    {
+        std::string text;
+        std::ifstream input{ prefabPath };
+        for (std::string line; std::getline(input, line);) {
+            if (!line.starts_with("moduleComponents")) text += line + '\n';
+        }
+        input.close();
+        std::ofstream{ prefabPath, std::ios::trunc } << text;
+    }
+    const auto legacy = scene.Prefabs().Load(prefabPath);
+    const kb::scene::ScenePrefabInstance legacyInstance = scene.Prefabs().Instantiate(legacy);
+    Require(legacy.IsValid() && !legacyInstance.Empty() && !kb::scene::SceneComponentAuthoring::Has(scene, legacyInstance.ObjectAt(kRoot).Entity(), kComponentName),
+        "A prefab file without module components did not load as one without");
+
+    // A scene file from before them loads too, with or without the module.
+    const std::filesystem::path fixtures = std::filesystem::path{ __FILE__ }.parent_path() / "fixtures" / "scene" / "LegacyPrefabs.21kbscene";
+    Scene legacyScene;
+    Attached legacyModule{ legacyScene, library };
+    Require(kb::scene::SceneDocumentService::LoadFileIntoScene(legacyScene, fixtures) && legacyScene.Entities().Count() == 9U,
+        "A scene file from before module components did not load");
+    std::filesystem::remove_all(folder);
+}
+
 } // namespace
 
 void RunModuleExtensionTests() {
     ModuleAssetTypeLoadsAndCooks();
     ModuleComponentLivesInSceneAndPrefab();
+    ModuleComponentOverridesFollowPrefabRules();
     UnknownComponentSurvivesTheRoundTrip();
     ReloadKeepsModuleComponentData();
     std::cout << "Module extension tests passed\n";

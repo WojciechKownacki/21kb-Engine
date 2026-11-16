@@ -1,5 +1,6 @@
 #include "scene/prefab/ScenePrefabPropertyOverrideApplier.hpp"
 #include "engine/script/ScriptValue.hpp"
+#include "scene/prefab/ScenePrefabModuleComponentOverrides.hpp"
 #include "scene/prefab/ScenePrefabOverrideValueFormatter.hpp"
 #include "scene/ui/SceneUIComponentTextCodec.hpp"
 #include "scene/CombatantFields.hpp"
@@ -114,6 +115,7 @@ template <typename T>
 } // namespace
 
 bool ScenePrefabPropertyOverrideApplier::Apply(ScenePrefabNodeDesc& node, const ScenePrefabPropertyOverride& property) {
+    if (ScenePrefabModuleComponentOverrides::Handles(property.propertyPath)) return ScenePrefabModuleComponentOverrides::ApplyToNode(node, property);
     if (property.propertyPath == "ui") return SceneUIComponentTextCodec::Decode(property.value, node.components.ui);
     if (property.propertyPath == "name") {
         node.name = property.value;

@@ -92,6 +92,8 @@ struct ScenePrefabNodeOverride {
     std::uint64_t nodeId = 0;
     SceneObject object{};
     ScenePrefabOverrideFlag flags = ScenePrefabOverrideFlag::None;
+    // The module components that differ from the prefab, by name. The flag bits are full, so these are a list.
+    std::vector<std::string> moduleComponents;
 };
 
 struct ScenePrefabPropertyOverride {

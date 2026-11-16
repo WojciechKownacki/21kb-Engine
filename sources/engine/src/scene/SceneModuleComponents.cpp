@@ -62,12 +62,8 @@ void AddProperties(SceneModuleComponentInfo& info, const SceneModuleComponentFie
 }
 
 // Field values by name and type. Reading never trusts a size: a truncated or oversized value fails the decode.
-[[nodiscard]] std::vector<std::uint8_t> Encode(const kb::ecs::SerializedComponent& component) {
-    std::vector<std::uint8_t> bytes;
-    IO::WriteUInt32(bytes, static_cast<std::uint32_t>(component.fields.size()));
-    for (const kb::ecs::SerializedComponentField& field : component.fields) {
-        IO::WriteString(bytes, field.name);
-        IO::WriteUInt8(bytes, static_cast<std::uint8_t>(field.type));
+void WriteValue(std::vector<std::uint8_t>& bytes, const kb::ecs::SerializedComponentField& field) {
+    {
         switch (field.type) {
         case ComponentFieldType::Bool: IO::WriteBool(bytes, std::get<bool>(field.value)); break;
         case ComponentFieldType::Int32:
@@ -91,6 +87,16 @@ void AddProperties(SceneModuleComponentInfo& info, const SceneModuleComponentFie
             break;
         }
         }
+    }
+}
+
+[[nodiscard]] std::vector<std::uint8_t> Encode(const kb::ecs::SerializedComponent& component) {
+    std::vector<std::uint8_t> bytes;
+    IO::WriteUInt32(bytes, static_cast<std::uint32_t>(component.fields.size()));
+    for (const kb::ecs::SerializedComponentField& field : component.fields) {
+        IO::WriteString(bytes, field.name);
+        IO::WriteUInt8(bytes, static_cast<std::uint8_t>(field.type));
+        WriteValue(bytes, field);
     }
     return bytes;
 }
@@ -142,6 +148,12 @@ template <std::size_t N>
         if (!ReadValue(reader, field.type, field.value)) return false;
     }
     return reader.Exhausted();
+}
+
+[[nodiscard]] std::vector<std::uint8_t> ValueBytes(const kb::ecs::SerializedComponentField& field) {
+    std::vector<std::uint8_t> bytes;
+    WriteValue(bytes, field);
+    return bytes;
 }
 
 void Note(SceneState& state, std::string message) {
@@ -205,8 +217,9 @@ std::vector<kb::ecs::ComponentFieldDesc> SceneModuleComponents::ReflectionFields
     return fields;
 }
 
-bool SceneModuleComponents::Activate(const SceneModuleComponentDesc& desc, const std::type_info& type, std::size_t size, std::size_t alignment) {
-    if (desc.name.empty() || SceneComponentAuthoring::IsBuiltIn(desc.name)) {
+bool SceneModuleComponents::Activate(const SceneModuleComponentDesc& desc, const std::type_info& type, std::size_t size, std::size_t alignment, const void* defaults) {
+    // A prefab override names a component and a field as "<component>/<field>", so a name cannot hold a slash.
+    if (desc.name.empty() || desc.name.find('/') != std::string_view::npos || SceneComponentAuthoring::IsBuiltIn(desc.name)) {
         return false;
     }
     SceneState& state = SceneAccess::State(scene_);
@@ -217,6 +230,7 @@ bool SceneModuleComponents::Activate(const SceneModuleComponentDesc& desc, const
     }
     SceneModuleComponentInfo info{ .name = std::string{ desc.name }, .label = std::string{ desc.label.empty() ? desc.name : desc.label },
         .category = std::string{ desc.category } };
+    info.defaults.assign(static_cast<const std::byte*>(defaults), static_cast<const std::byte*>(defaults) + size);
     for (const SceneModuleComponentField& field : desc.fields) {
         AddProperties(info, field);
     }
@@ -311,8 +325,8 @@ bool SceneModuleComponents::Add(SceneEntity entity, std::string_view name) {
         return false;
     }
     SceneHistoryService::NoteObjectChanging(scene_, entity);
-    const std::vector<std::byte> zero(state.world.Reflection(type->second.id)->Size());
-    WorldInternalAccess::SetComponent(state.world, entity, type->second.id, zero.size(), zero.data());
+    const std::vector<std::byte>& defaults = type->second.info->defaults;
+    WorldInternalAccess::SetComponent(state.world, entity, type->second.id, defaults.size(), defaults.data());
     return true;
 }
 
@@ -325,6 +339,65 @@ bool SceneModuleComponents::Remove(SceneEntity entity, std::string_view name) {
     }
     SceneHistoryService::NoteObjectChanging(scene_, entity);
     WorldInternalAccess::RemoveComponent(state.world, entity, type->second.id);
+    return true;
+}
+
+void SceneModuleComponents::RestoreComponent(SceneEntity entity, std::string_view name, const SceneModuleComponentData* data) {
+    std::vector<SceneModuleComponentData> components = Capture(entity);
+    std::erase_if(components, [name](const SceneModuleComponentData& existing) { return existing.name == name; });
+    if (data != nullptr) {
+        components.push_back(*data);
+    }
+    Restore(entity, components);
+}
+
+std::optional<std::vector<std::string>> SceneModuleComponents::DifferingFields(const SceneModuleComponentData& left, const SceneModuleComponentData& right) {
+    kb::ecs::SerializedComponent a;
+    kb::ecs::SerializedComponent b;
+    if (!Decode(left, a) || !Decode(right, b)) {
+        return std::nullopt;
+    }
+    std::vector<std::string> differing;
+    for (const kb::ecs::SerializedComponentField& field : a.fields) {
+        const auto other = std::ranges::find(b.fields, field.name, &kb::ecs::SerializedComponentField::name);
+        if (other == b.fields.end() || other->type != field.type || ValueBytes(*other) != ValueBytes(field)) {
+            differing.push_back(field.name);
+        }
+    }
+    for (const kb::ecs::SerializedComponentField& field : b.fields) {
+        if (std::ranges::find(a.fields, field.name, &kb::ecs::SerializedComponentField::name) == a.fields.end()) {
+            differing.push_back(field.name);
+        }
+    }
+    return differing;
+}
+
+std::optional<std::vector<std::uint8_t>> SceneModuleComponents::FieldValue(const SceneModuleComponentData& data, std::string_view field) {
+    kb::ecs::SerializedComponent component;
+    if (!Decode(data, component)) {
+        return std::nullopt;
+    }
+    const auto found = std::ranges::find(component.fields, field, &kb::ecs::SerializedComponentField::name);
+    if (found == component.fields.end()) {
+        return std::nullopt;
+    }
+    return ValueBytes(*found);
+}
+
+bool SceneModuleComponents::SetFieldValue(SceneModuleComponentData& data, std::string_view field, std::span<const std::uint8_t> value) {
+    kb::ecs::SerializedComponent component;
+    if (!Decode(data, component)) {
+        return false;
+    }
+    const auto found = std::ranges::find(component.fields, field, &kb::ecs::SerializedComponentField::name);
+    if (found == component.fields.end()) {
+        return false;
+    }
+    IO::ByteReader reader{ std::vector<std::uint8_t>{ value.begin(), value.end() } };
+    if (!ReadValue(reader, found->type, found->value) || !reader.Exhausted()) {
+        return false;
+    }
+    data.bytes = Encode(component);
     return true;
 }
 

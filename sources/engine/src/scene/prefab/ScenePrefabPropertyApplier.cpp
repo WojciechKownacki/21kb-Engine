@@ -5,6 +5,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "scene/prefab/ScenePrefabComponentSnapshot.hpp"
+#include "scene/prefab/ScenePrefabModuleComponentOverrides.hpp"
 #include "scene/prefab/ScenePrefabPropertyPath.hpp"
 
 namespace kb::scene {
@@ -32,6 +33,10 @@ bool ScenePrefabPropertyApplier::Apply(Scene& scene, ScenePrefabNodeDesc& node, 
     }
     if (ScenePrefabPropertyPath::StartsWith(propertyPath, "visibility.")) {
         node.visibility = scene.Components().Visibility().Get(object.Entity());
+        return true;
+    }
+    if (ScenePrefabModuleComponentOverrides::Handles(propertyPath)) {
+        ScenePrefabModuleComponentOverrides::CopyToNode(scene, object, node, propertyPath);
         return true;
     }
     if (ScenePrefabPropertyPath::IsComponent(propertyPath)) {

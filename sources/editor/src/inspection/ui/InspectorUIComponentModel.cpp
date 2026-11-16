@@ -651,8 +651,8 @@ InspectorPropertyId InspectorUIComponentModel::Property(kb::scene::UIComponentTy
 
 std::optional<kb::scene::UIComponentType> InspectorUIComponentModel::Component(
     InspectorSectionId section) noexcept {
-    const auto value = static_cast<std::uint8_t>(section);
-    const auto first = static_cast<std::uint8_t>(InspectorSectionId::UIRectTransform);
+    const auto value = static_cast<std::uint16_t>(section);
+    const auto first = static_cast<std::uint16_t>(InspectorSectionId::UIRectTransform);
     return value >= first && value < first + kComponentCount
         ? std::optional<kb::scene::UIComponentType>{
               static_cast<kb::scene::UIComponentType>(value - first) }

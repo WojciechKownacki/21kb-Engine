@@ -35,6 +35,8 @@ public:
 
     [[nodiscard]] static std::span<const std::string_view> ComponentNames() noexcept;
     [[nodiscard]] static std::span<const ScriptSceneComponentPropertyDesc> ComponentProperties(std::string_view componentName) noexcept;
+    // The value a property has in a new component of a module's type, from the defaults it registered.
+    [[nodiscard]] static ScriptSceneComponentPropertyResult DefaultProperty(std::string_view componentName, std::string_view propertyName);
     [[nodiscard]] static bool HasComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::string_view componentName) noexcept;
     [[nodiscard]] static ScriptSceneComponentPropertyResult GetProperty(
         kb::scene::Scene& scene,

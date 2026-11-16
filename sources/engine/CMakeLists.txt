@@ -1258,6 +1258,7 @@ add_library(kb_engine STATIC
     src/scene/prefab/io/ScenePrefabAssetWriter.cpp
     src/scene/prefab/ScenePrefabComponentApplier.cpp
     src/scene/prefab/ScenePrefabComponentComparator.cpp
+    src/scene/prefab/ScenePrefabModuleComponentOverrides.cpp
     src/scene/prefab/ScenePrefabComponentOverrideReporter.cpp
     src/scene/prefab/ScenePrefabInstantiationService.cpp
     src/scene/prefab/ScenePrefabNameResolver.cpp

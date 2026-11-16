@@ -4295,10 +4295,25 @@ void RunUIThemeEditorModelTest() {
 }
 
 struct ModuleInspectorComponent {
-    float strength;
-    std::int32_t count;
-    bool armed;
+    float strength = 1.0F;
+    std::int32_t count = 2;
+    bool armed = false;
 };
+
+template <int N>
+struct ModuleInspectorFiller {
+    float value = 0.0F;
+};
+
+template <int N>
+void RegisterModuleInspectorFiller(kb::scene::Scene& scene) {
+    constexpr kb::scene::SceneModuleComponentField fields[] = {
+        KB_SCENE_MODULE_FIELD(ModuleInspectorFiller<N>, value, kb::ecs::ComponentFieldType::Float32, "Value", ""),
+    };
+    const std::string name = "ModuleFiller" + std::to_string(N);
+    kb::editor::tests::Require(kb::scene::SceneModuleComponents{ scene }.Register<ModuleInspectorFiller<N>>({ .name = name, .label = name, .category = "Tests", .fields = fields }),
+        "Register a further module component");
+}
 
 // A component a module registers takes the same path as a built-in one: the Add Component catalog lists it, it gets an
 // Inspector section drawn from its registered fields, and an edit reaches its data and the history.
@@ -4337,12 +4352,34 @@ void RunModuleComponentInspectorTest() {
             kb::editor::InspectorGenericComponentModel::Apply(scene, entity, section, { { "count", kb::script::ScriptValue{ 5 } }, { "armed", kb::script::ScriptValue{ true } } }) &&
             count() == 5 && scene.Runtime().EcsWorld().TryGet<ModuleInspectorComponent>(entity)->armed,
         "An edit reaches the component's data");
-    kb::editor::tests::Require(scene.History().Undo() && count() == 0 && !scene.Runtime().EcsWorld().TryGet<ModuleInspectorComponent>(entity)->armed,
+    // A change against the registered defaults is marked, and a reset puts the default back.
+    const std::vector<kb::editor::InspectorFieldKey> changed = kb::editor::InspectorComponentDefaults::ChangedFields(scene, entity);
+    const auto changedKey = [&](int editIndex) {
+        return std::ranges::find(changed, kb::editor::InspectorFieldKey{ .section = section.id, .property = kb::editor::InspectorPropertyId::GenericComponentField, .index = editIndex }) != changed.end();
+    };
+    kb::editor::tests::Require(changed.size() == 2U && changedKey(rows[1].editIndex) && changedKey(rows[2].editIndex) && !changedKey(rows[0].editIndex),
+        "Exactly the fields that differ from the registered defaults are marked");
+    kb::editor::tests::Require(kb::editor::InspectorComponentDefaults::ResetField(scene, entity,
+            kb::editor::InspectorFieldKey{ .section = section.id, .property = kb::editor::InspectorPropertyId::GenericComponentField, .index = rows[1].editIndex }) && count() == 2,
+        "A reset puts a module field back to its registered default");
+    kb::editor::tests::Require(kb::script::ScriptSceneComponentApi::SetProperty(scene, entity, "ModuleInspector", "count", kb::script::ScriptValue{ 5 }).succeeded,
+        "Set the field again");
+    kb::editor::tests::Require(scene.History().Undo() && count() == 2 && !scene.Runtime().EcsWorld().TryGet<ModuleInspectorComponent>(entity)->armed,
         "An edit of a module component undoes");
     kb::editor::tests::Require(scene.History().Redo() && count() == 5, "An edit of a module component redoes");
     kb::editor::tests::Require(kb::scene::SceneComponentAuthoring::Remove(scene, entity, "ModuleInspector") &&
             !kb::scene::SceneComponentAuthoring::Has(scene, entity, "ModuleInspector"),
         "A module component is removed through the same call as a built-in one");
+
+    // Any number of module components get a section.
+    [&]<int... N>(std::integer_sequence<int, N...>) { (RegisterModuleInspectorFiller<N>(scene), ...); }(std::make_integer_sequence<int, 12>{});
+    const auto many = kb::editor::InspectorGenericComponentModel::Sections();
+    const std::size_t moduleSections = static_cast<std::size_t>(std::ranges::count_if(many, [](const kb::editor::InspectorGenericComponentModel::Section& generic) {
+        return static_cast<std::size_t>(generic.id) >= static_cast<std::size_t>(kb::editor::InspectorSectionId::ModuleComponentFirst);
+    }));
+    const kb::editor::InspectorGenericComponentModel::Section& last = many.back();
+    kb::editor::tests::Require(moduleSections == 13U && kb::editor::InspectorGenericComponentModel::Find(last.id) == &last && last.component.starts_with("ModuleInspector"),
+        "Every registered module component has a section of its own");
 }
 
 } // namespace

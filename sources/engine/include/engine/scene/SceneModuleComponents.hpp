@@ -5,6 +5,7 @@
 #include "engine/scene/SceneModuleComponentData.hpp"
 
 #include <cstddef>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -57,6 +58,8 @@ struct SceneModuleComponentInfo {
     std::string label;
     std::string category;
     std::vector<SceneModuleComponentProperty> properties;
+    // The value the component has when it is added: what the module's type constructs.
+    std::vector<std::byte> defaults;
 
     [[nodiscard]] bool operator==(const SceneModuleComponentInfo&) const noexcept = default;
 };
@@ -92,12 +95,13 @@ public:
     // waiting for the name become live components. A name a built-in component uses is refused. T must be trivially
     // copyable, like every ECS component. A module registers through EngineModuleContext::RegisterSceneComponent,
     // which reaches Activate on the host side: module code does not call into the ECS itself.
+    // `defaults` is the value a new component gets, and what the Inspector marks changes against.
     template <typename T>
-    [[nodiscard]] bool Register(const SceneModuleComponentDesc& desc) {
+    [[nodiscard]] bool Register(const SceneModuleComponentDesc& desc, const T& defaults = T{}) {
         static_assert(std::is_trivially_copyable_v<T> && std::is_trivially_destructible_v<T>, "A module component must be plain data");
-        return Activate(desc, typeid(T), sizeof(T), alignof(T));
+        return Activate(desc, typeid(T), sizeof(T), alignof(T), &defaults);
     }
-    [[nodiscard]] bool Activate(const SceneModuleComponentDesc& desc, const std::type_info& type, std::size_t size, std::size_t alignment);
+    [[nodiscard]] bool Activate(const SceneModuleComponentDesc& desc, const std::type_info& type, std::size_t size, std::size_t alignment, const void* defaults);
     // Moves the component's values on every object to opaque bytes and removes the type from this scene.
     [[nodiscard]] bool Unregister(std::string_view name);
     [[nodiscard]] bool IsRegistered(std::string_view name) const;
@@ -107,7 +111,7 @@ public:
     // Makes the object's module components exactly `components`.
     void Restore(SceneEntity entity, std::span<const SceneModuleComponentData> components);
 
-    // Adds the component with every field zero, as Add Component does. False when the type is not registered in this
+    // Adds the component with its default value, as Add Component does. False when the type is not registered in this
     // scene or the object already has it.
     [[nodiscard]] bool Add(SceneEntity entity, std::string_view name);
     [[nodiscard]] bool Remove(SceneEntity entity, std::string_view name);
@@ -117,6 +121,16 @@ public:
     [[nodiscard]] void* MutableData(SceneEntity entity, std::string_view name);
     // Tells the ECS that a value written through MutableData changed.
     void MarkModified(SceneEntity entity, std::string_view name);
+
+    // Puts one component of an object back to `data`, or removes it when `data` is null; the others stay as they are.
+    void RestoreComponent(SceneEntity entity, std::string_view name, const SceneModuleComponentData* data);
+
+    // Saved components one field at a time, which is what prefab overrides record. A field is a registered field name
+    // (a vector is one field); its value is the bytes it takes in the saved encoding.
+    // The fields whose values differ, or nothing when either side does not decode.
+    [[nodiscard]] static std::optional<std::vector<std::string>> DifferingFields(const SceneModuleComponentData& left, const SceneModuleComponentData& right);
+    [[nodiscard]] static std::optional<std::vector<std::uint8_t>> FieldValue(const SceneModuleComponentData& data, std::string_view field);
+    [[nodiscard]] static bool SetFieldValue(SceneModuleComponentData& data, std::string_view field, std::span<const std::uint8_t> value);
 
     [[nodiscard]] std::span<const std::string> Diagnostics() const noexcept;
 

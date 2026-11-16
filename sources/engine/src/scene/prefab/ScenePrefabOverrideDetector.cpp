@@ -3,10 +3,16 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/ScenePrefab.hpp"
 #include "scene/prefab/ScenePrefabInstanceTopology.hpp"
+#include "scene/prefab/ScenePrefabModuleComponentOverrides.hpp"
 #include "scene/prefab/ScenePrefabNodeComparator.hpp"
 #include "scene/prefab/ScenePrefabOverridePropertyReporter.hpp"
 
+#include "engine/scene/SceneEntities.hpp"
+
 #include <span>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace kb::scene {
 
@@ -23,12 +29,15 @@ ScenePrefabOverrideReport ScenePrefabOverrideDetector::Detect(Scene& scene, cons
             flags |= ScenePrefabOverrideFlag::AddedChild;
             ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "children", "added", ScenePrefabOverrideFlag::AddedChild, {}, nodes[nodeIndex].stableId);
         }
-        if (flags != ScenePrefabOverrideFlag::None) {
+        std::vector<std::string> moduleComponents = object.IsValid() && scene.Entities().IsAlive(object)
+            ? ScenePrefabModuleComponentOverrides::Differing(scene, object.Entity(), nodes[nodeIndex].components) : std::vector<std::string>{};
+        if (flags != ScenePrefabOverrideFlag::None || !moduleComponents.empty()) {
             report.nodes.push_back(ScenePrefabNodeOverride{
                 .nodeIndex = nodeIndex,
                 .nodeId = nodes[nodeIndex].stableId,
                 .object = object,
                 .flags = flags,
+                .moduleComponents = std::move(moduleComponents),
             });
             ScenePrefabOverridePropertyReporter::AppendChangedProperties(scene, nodes[nodeIndex], expectedParent, nodeIndex, object, report, objects, nodes);
         }

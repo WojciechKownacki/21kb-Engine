@@ -7,6 +7,7 @@
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "scene/prefab/ScenePrefabInstanceTopology.hpp"
+#include "scene/prefab/ScenePrefabModuleComponentOverrides.hpp"
 #include "scene/prefab/ScenePrefabPropertyPath.hpp"
 
 namespace kb::scene {
@@ -156,6 +157,10 @@ bool ScenePrefabPropertyReverter::Revert(Scene& scene, const ScenePrefabInstance
     }
     if (ScenePrefabPropertyPath::StartsWith(propertyPath, "visibility.")) {
         scene.Components().Visibility().Set(object.Entity(), node.visibility);
+        return true;
+    }
+    if (ScenePrefabModuleComponentOverrides::Handles(propertyPath)) {
+        ScenePrefabModuleComponentOverrides::Revert(scene, object, node, propertyPath);
         return true;
     }
     if (ScenePrefabPropertyPath::IsComponent(propertyPath)) {

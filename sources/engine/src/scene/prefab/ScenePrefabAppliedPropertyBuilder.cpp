@@ -6,6 +6,7 @@
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
 #include "engine/script/ScriptValue.hpp"
+#include "scene/prefab/ScenePrefabModuleComponentOverrides.hpp"
 #include "scene/prefab/ScenePrefabOverrideValueFormatter.hpp"
 #include "scene/ui/SceneUIComponentTextCodec.hpp"
 
@@ -125,6 +126,9 @@ bool ScenePrefabAppliedPropertyBuilder::Build(Scene& scene, std::uint32_t nodeIn
         .objectReference = {},
         .flag = FlagForProperty(propertyPath),
     };
+    if (ScenePrefabModuleComponentOverrides::Handles(propertyPath)) {
+        return ScenePrefabModuleComponentOverrides::Value(scene, object, propertyPath, property.value);
+    }
     if (propertyPath == "name") {
         property.value = scene.Entities().Name(object);
         return true;

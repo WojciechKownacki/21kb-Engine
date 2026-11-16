@@ -16,7 +16,7 @@
 
 namespace kb::editor {
 
-enum class InspectorSectionId : std::uint8_t {
+enum class InspectorSectionId : std::uint16_t {
     None,
     General,
     Transform,
@@ -133,15 +133,9 @@ enum class InspectorSectionId : std::uint8_t {
     TilemapCollider,
     UITheme,
     NavBounds,
-    // The components that modules register, one slot each in name order (InspectorGenericComponentModel::Sections).
-    ModuleComponent0,
-    ModuleComponent1,
-    ModuleComponent2,
-    ModuleComponent3,
-    ModuleComponent4,
-    ModuleComponent5,
-    ModuleComponent6,
-    ModuleComponent7,
+    // The components that modules register take the values from here on, one each in name order
+    // (InspectorGenericComponentModel::Sections), so there is no limit on how many a project registers.
+    ModuleComponentFirst = 256,
 };
 
 // The list that opens under a section: the component menu behind the header button, or the Joint's presets.

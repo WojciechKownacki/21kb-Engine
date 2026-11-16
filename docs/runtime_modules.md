@@ -193,7 +193,21 @@ reloaded type, for example after a field was added, stays opaque and unchanged, 
 `SceneModuleComponents::Diagnostics()` reports it. Changing the binary layout of a component that live data still
 uses is not migrated beyond this; restore the type to read the data again.
 
+### Defaults and prefabs
+
+`RegisterSceneComponent<T>(scene, desc, defaults)` takes the value a new component gets; it is `T{}` when left out, so
+a constructor or default member initializers of the type give it. Add Component uses it, and the Inspector marks the
+fields that differ from it and resets a field to it.
+
+A field of a module component edited in a prefab instance is recorded as an override of that field alone, so a prefab
+update keeps it and changes the other fields. Overrides are a list of property overrides rather than flag bits:
+`moduleComponents.<name>/<field>` for a field, and `moduleComponents.<name>` for a component the instance added or
+removed. Revert puts the prefab's component back and Apply copies the instance's component into the prefab. An
+override of a field the prefab no longer has changes nothing. The override list adds no scene file field; files that
+predate module components load with none.
+
 ### Limits
 
-Prefab overrides do not yet track module components, so an instance that edits one is not listed as overridden. The
-editor's Inspector panel does not yet draw a section for a module component; its description is ready for it.
+A component name cannot contain a slash. A module's Inspector section is drawn from its registered fields, with the
+label and tooltip of each; there is no limit on how many module components a project registers. Revert and Apply work
+on a whole component, as they do for built-in ones.
