@@ -180,6 +180,9 @@ public:
     // bindings write positions through. An entity without a stored transform gets one with the default rotation and scale.
     // False when the entity is not alive.
     bool SetLocalPosition(SceneEntity entity, const Vec3& position, std::uint8_t axes);
+    // Adds `delta` to the local position of a live entity, in the same single lookup and publish as SetLocalPosition. False
+    // when the entity is not alive.
+    bool TranslateLocalPosition(SceneEntity entity, const Vec3& delta);
     void MarkModified(SceneEntity entity) noexcept;
     // Bulk dirty signal: marks many transforms modified in one batched pass.
     void MarkModified(std::span<const SceneEntity> entities) noexcept;

@@ -143,6 +143,74 @@ void TestSubsystemAndConsume() {
     Require(subsystem.WasActionReleased("Jump"), "Jump should report Released when Space goes up");
 }
 
+// An action read by handle gives what the by-name queries give, after every Evaluate and when the mapping contexts change
+// in between, and a handle of another subsystem (or of one that was copied over) is refused.
+void TestActionHandles() {
+    auto move = MakeAction("Move", InputActionValueType::Axis1D, true);
+    auto jump = MakeAction("Jump", InputActionValueType::Bool, true);
+    auto first = std::make_shared<InputMappingContextAsset>();
+    first->mappings.push_back(InputKeyMapping{.actionId = 1U, .key = InputKey::W, .modifiers = {}, .triggers = {}});
+    auto second = std::make_shared<InputMappingContextAsset>();
+    second->mappings.push_back(InputKeyMapping{.actionId = 1U, .key = InputKey::S, .modifiers = {}, .triggers = {}});
+    second->mappings.push_back(InputKeyMapping{.actionId = 2U, .key = InputKey::W, .modifiers = {}, .triggers = {}});
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputActionAsset>> actions{{1U, move}, {2U, jump}};
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputMappingContextAsset>> contexts{{10U, first}, {20U, second}};
+    const auto resolvers = [&](InputSubsystem& subsystem) {
+        subsystem.SetResolvers(
+            [&actions](std::uint64_t id) -> std::shared_ptr<const InputActionAsset> {
+                const auto found = actions.find(id);
+                return found != actions.end() ? found->second : nullptr;
+            },
+            [&contexts](std::uint64_t id) -> std::shared_ptr<const InputMappingContextAsset> {
+                const auto found = contexts.find(id);
+                return found != contexts.end() ? found->second : nullptr;
+            });
+    };
+    InputSubsystem subsystem;
+    resolvers(subsystem);
+    const std::uint32_t moveHandle = subsystem.ActionHandle("Move");
+    const std::uint32_t jumpHandle = subsystem.ActionHandle("Jump");
+    Require(moveHandle != InputSubsystem::kInvalidActionHandle && jumpHandle != moveHandle && subsystem.ActionHandle("Move") == moveHandle,
+        "an action must keep its handle");
+    Require(subsystem.ActionStateOf(moveHandle) != nullptr && !subsystem.ActionStateOf(moveHandle)->IsPressed() && subsystem.ActionStateOf(InputSubsystem::kInvalidActionHandle) == nullptr,
+        "a registered action that was never evaluated is idle; an invalid handle reads nothing");
+
+    const auto agrees = [&](const char* when) {
+        for (const char* name : { "Move", "Jump" }) {
+            const InputActionState* state = subsystem.ActionStateOf(subsystem.ActionHandle(name));
+            Require(state != nullptr && state->IsPressed() == subsystem.IsActionPressed(name) && state->started == subsystem.WasActionStarted(name) &&
+                    state->WasReleased() == subsystem.WasActionReleased(name) && NearlyEqual(state->value.x, subsystem.GetActionValue(name).x),
+                when);
+        }
+    };
+    Require(subsystem.AddMappingContext(10U, 0), "the first context must resolve");
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::W, true);
+    subsystem.Evaluate(0.016F);
+    agrees("a handle must read what the queries read after an Evaluate");
+    Require(subsystem.ActionStateOf(moveHandle)->IsPressed() && subsystem.ActionStateOf(moveHandle)->started, "W must press Move through its handle");
+
+    // The mapping contexts change between two Evaluates: the handle follows the next Evaluate, as the queries do.
+    subsystem.RemoveMappingContext(10U);
+    agrees("a change of contexts is not seen before the next Evaluate, by either read");
+    Require(subsystem.AddMappingContext(20U, 0), "the second context must resolve");
+    subsystem.Evaluate(0.016F);
+    agrees("a handle must read what the queries read after the contexts changed");
+    Require(!subsystem.ActionStateOf(moveHandle)->IsPressed() && subsystem.ActionStateOf(jumpHandle)->IsPressed(), "W now presses Jump, not Move");
+    subsystem.SetGameplayInputBlocked(true);
+    subsystem.Evaluate(0.016F);
+    agrees("a handle must read what the queries read while gameplay input is blocked");
+    Require(!subsystem.ActionStateOf(jumpHandle)->IsPressed(), "a blocked action must read as idle");
+
+    // Another subsystem, or this one after a copy was assigned to it, has another serial.
+    InputSubsystem other;
+    Require(other.Serial() != subsystem.Serial(), "two subsystems must have different serials");
+    const std::uint64_t before = subsystem.Serial();
+    subsystem = other;
+    Require(subsystem.Serial() != before && subsystem.Serial() != other.Serial(), "a copy assigned to a subsystem must give it a serial of its own");
+    InputSubsystem copied{ other };
+    Require(copied.Serial() != other.Serial(), "a copied subsystem must have a serial of its own");
+}
+
 void TestModalGameplayInputQuarantine() {
     auto action = MakeAction("Use", InputActionValueType::Bool, false);
     auto mapping = std::make_shared<InputMappingContextAsset>();
@@ -1528,6 +1596,7 @@ void RunInputTests() {
     TestModifiers();
     TestTriggers();
     TestSubsystemAndConsume();
+    TestActionHandles();
     TestModalGameplayInputQuarantine();
     TestAxisScaleAndContinuous();
     TestAssetRoundTrip();

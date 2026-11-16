@@ -33,6 +33,10 @@ struct InputActionState {
     bool completed = false;
     bool canceled = false;
     TriggerState combined = TriggerState::None;
+
+    // What the by-name queries of InputSubsystem and the handle reads report, defined once.
+    [[nodiscard]] constexpr bool IsPressed() const noexcept { return combined == TriggerState::Triggered; }
+    [[nodiscard]] constexpr bool WasReleased() const noexcept { return completed || canceled; }
 };
 
 struct InputActionEvent {
@@ -132,6 +136,19 @@ public:
     [[nodiscard]] bool WasActionCompleted(std::string_view action) const;
     [[nodiscard]] bool WasActionReleased(std::string_view action) const;
 
+    // A number for an action that a query made every frame reads the state by, instead of looking the name up. A handle
+    // is valid for as long as the subsystem lives; the state it reads is what the by-name queries read (as of the last
+    // Evaluate), also after mapping contexts changed. It carries the serial of the subsystem, so a handle of another one
+    // is refused by ActionStateOf; a subsystem that is copied (a restored play session) has a serial of its own.
+    static constexpr std::uint32_t kInvalidActionHandle = 0xFFFFFFFFU;
+    static constexpr std::uint32_t kMaxActionHandles = 4096U;
+    [[nodiscard]] std::uint64_t Serial() const noexcept { return handles_.serial; }
+    // Registers the action on first use. kInvalidActionHandle when the subsystem has kMaxActionHandles of them.
+    [[nodiscard]] std::uint32_t ActionHandle(std::string_view action);
+    [[nodiscard]] const InputActionState* ActionStateOf(std::uint32_t handle) const noexcept {
+        return handle < handles_.states.size() ? &handles_.states[handle] : nullptr;
+    }
+
     [[nodiscard]] const std::vector<InputActionEvent>& FrameEvents() const noexcept {
         return frameEvents_;
     }
@@ -142,6 +159,8 @@ public:
 private:
     [[nodiscard]] const InputActionState* FindState(std::string_view action) const;
     [[nodiscard]] const InputActionState* FindState(const InputActionName& action) const;
+    void EvaluateStates(const InputDeviceState& physical, float deltaSeconds);
+    void PublishHandleStates();
 
     InputDeviceState deviceState_;
     InputDeviceState gameplayDevice_;
@@ -151,6 +170,25 @@ private:
     bool gameplayInputFiltered_ = false;
     InputMappingContextStack stack_;
     ActionStateMap actionStates_;
+    // The registered actions, by handle: their names and the state published for each after every Evaluate.
+    struct ActionHandleTable {
+        std::vector<std::string> names;
+        std::vector<InputActionState> states;
+        std::uint64_t serial = NextSerial();
+
+        ActionHandleTable() = default;
+        ActionHandleTable(const ActionHandleTable& other) : names(other.names), states(other.states) {}
+        ActionHandleTable& operator=(const ActionHandleTable& other) {
+            names = other.names;
+            states = other.states;
+            serial = NextSerial();
+            return *this;
+        }
+        ActionHandleTable(ActionHandleTable&&) noexcept = default;
+        ActionHandleTable& operator=(ActionHandleTable&&) noexcept = default;
+        [[nodiscard]] static std::uint64_t NextSerial() noexcept;
+    };
+    ActionHandleTable handles_;
     std::unordered_map<std::string, TriggerState> previousCombined_;
     std::vector<InputActionEvent> frameEvents_;
 };

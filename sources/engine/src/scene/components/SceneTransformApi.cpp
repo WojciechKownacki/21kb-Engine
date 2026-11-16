@@ -115,6 +115,35 @@ bool WriteTransform(SceneState& state, SceneEntity entity, const TransformCompon
     return true;
 }
 
+// Changes the local position of a live entity with one lookup of its row, publishing it as EndWrite does. Nothing runs
+// between the lookup and the publish, so the row cannot have moved (BeginWrite/EndWrite check that because the caller's
+// code runs in between). An entity without a stored row gets one with the default rotation and scale; false when the
+// entity is not alive.
+template <typename Change>
+bool ChangeLocalPosition(Scene& scene, SceneEntity entity, Change&& change) {
+    if (!entity.IsValid()) {
+        return false;
+    }
+    SceneState& state = SceneAccess::State(scene);
+    const SceneTransformWrite write = OpenTransformRow(state, entity);
+    if (write.row != nullptr) {
+        SceneHistoryService::NoteObjectChanging(scene, entity);
+        TransformComponent& row = *write.row;
+        row.localPosition = change(row.localPosition);
+        ++row.localVersion;
+        row.worldDirty = true;
+        PublishTransformRow(state, write);
+        return true;
+    }
+    if (!SceneEntityService::IsAlive(scene, entity)) {
+        return false;
+    }
+    TransformComponent transform{};
+    transform.localPosition = change(transform.localPosition);
+    SceneTransformService::Set(scene, entity, transform);
+    return true;
+}
+
 } // namespace
 
 TransformComponent SceneTransformService::Get(const Scene& scene, SceneObject object) {
@@ -171,33 +200,16 @@ void SceneTransformService::EndWrite(Scene& scene, const SceneTransformWrite& wr
 }
 
 bool SceneTransformService::SetLocalPosition(Scene& scene, SceneEntity entity, const Vec3& position, std::uint8_t axes) {
-    if (!entity.IsValid()) {
-        return false;
-    }
-    SceneState& state = SceneAccess::State(scene);
-    const SceneTransformWrite write = OpenTransformRow(state, entity);
-    if (write.row != nullptr) {
-        // Nothing runs between the lookup and the publish, so the row cannot have moved (BeginWrite/EndWrite check that
-        // because the caller's code runs in between).
-        SceneHistoryService::NoteObjectChanging(scene, entity);
-        TransformComponent& row = *write.row;
-        if ((axes & kTransformAxisX) != 0U) row.localPosition.x = position.x;
-        if ((axes & kTransformAxisY) != 0U) row.localPosition.y = position.y;
-        if ((axes & kTransformAxisZ) != 0U) row.localPosition.z = position.z;
-        ++row.localVersion;
-        row.worldDirty = true;
-        PublishTransformRow(state, write);
-        return true;
-    }
-    if (!SceneEntityService::IsAlive(scene, entity)) {
-        return false;
-    }
-    TransformComponent transform{};
-    if ((axes & kTransformAxisX) != 0U) transform.localPosition.x = position.x;
-    if ((axes & kTransformAxisY) != 0U) transform.localPosition.y = position.y;
-    if ((axes & kTransformAxisZ) != 0U) transform.localPosition.z = position.z;
-    Set(scene, entity, transform);
-    return true;
+    return ChangeLocalPosition(scene, entity, [&position, axes](Vec3 local) {
+        if ((axes & kTransformAxisX) != 0U) local.x = position.x;
+        if ((axes & kTransformAxisY) != 0U) local.y = position.y;
+        if ((axes & kTransformAxisZ) != 0U) local.z = position.z;
+        return local;
+    });
+}
+
+bool SceneTransformService::TranslateLocalPosition(Scene& scene, SceneEntity entity, const Vec3& delta) {
+    return ChangeLocalPosition(scene, entity, [&delta](const Vec3& local) { return Vec3{ local.x + delta.x, local.y + delta.y, local.z + delta.z }; });
 }
 
 void SceneTransformService::SetMany(Scene& scene, std::span<const SceneEntity> entities, std::span<const TransformComponent> transforms) {

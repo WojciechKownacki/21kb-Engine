@@ -763,32 +763,6 @@ bool ScriptTransformApi::GetLocalPosition(kb::scene::Scene& scene, kb::scene::Sc
     return true;
 }
 
-namespace {
-
-// Changes the local position of a live entity in place; one without a stored transform gets one with the default
-// rotation and scale.
-template <typename Change>
-bool WriteLocalPosition(kb::scene::Scene& scene, kb::scene::SceneEntity entity, Change&& change) {
-    if (!entity.IsValid()) {
-        return false;
-    }
-    const kb::scene::SceneTransformWrite write = scene.Transforms().BeginWrite(entity);
-    if (write.row != nullptr) {
-        write.row->localPosition = change(write.row->localPosition);
-        scene.Transforms().EndWrite(write);
-        return true;
-    }
-    if (!scene.Entities().IsAlive(entity)) {
-        return false;
-    }
-    kb::scene::TransformComponent transform{};
-    transform.localPosition = change(transform.localPosition);
-    scene.Transforms().Set(entity, transform);
-    return true;
-}
-
-} // namespace
-
 bool ScriptTransformApi::SetLocalPosition(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::optional<float> x, std::optional<float> y, std::optional<float> z) {
     const std::uint8_t axes = static_cast<std::uint8_t>((x.has_value() ? kb::scene::kTransformAxisX : 0U) |
         (y.has_value() ? kb::scene::kTransformAxisY : 0U) | (z.has_value() ? kb::scene::kTransformAxisZ : 0U));
@@ -796,9 +770,7 @@ bool ScriptTransformApi::SetLocalPosition(kb::scene::Scene& scene, kb::scene::Sc
 }
 
 bool ScriptTransformApi::TranslateLocalPosition(kb::scene::Scene& scene, kb::scene::SceneEntity entity, float x, float y, float z) {
-    return WriteLocalPosition(scene, entity, [x, y, z](const kb::scene::Vec3& position) {
-        return kb::scene::Vec3{ position.x + x, position.y + y, position.z + z };
-    });
+    return scene.Transforms().TranslateLocalPosition(entity, kb::scene::Vec3{ x, y, z });
 }
 
 namespace {

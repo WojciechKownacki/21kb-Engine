@@ -2,11 +2,17 @@
 
 #include "engine/input/InputMappingEvaluator.hpp"
 
+#include <atomic>
 #include <cmath>
 #include <string>
 #include <utility>
 
 namespace kb::input {
+
+std::uint64_t InputSubsystem::ActionHandleTable::NextSerial() noexcept {
+    static std::atomic<std::uint64_t> next{ 1U };
+    return next.fetch_add(1U, std::memory_order_relaxed);
+}
 
 void InputSubsystem::SetResolvers(ActionResolver actionResolver, ContextResolver contextResolver) {
     stack_.SetResolvers(std::move(actionResolver), std::move(contextResolver));
@@ -49,6 +55,29 @@ void InputSubsystem::Evaluate(float deltaSeconds) {
 }
 
 void InputSubsystem::EvaluateWithDeviceState(const InputDeviceState& physical, float deltaSeconds) {
+    EvaluateStates(physical, deltaSeconds);
+    PublishHandleStates();
+}
+
+void InputSubsystem::PublishHandleStates() {
+    for (std::size_t handle = 0U; handle < handles_.names.size(); ++handle) {
+        const InputActionState* state = FindState(std::string_view{ handles_.names[handle] });
+        handles_.states[handle] = state != nullptr ? *state : InputActionState{};
+    }
+}
+
+std::uint32_t InputSubsystem::ActionHandle(std::string_view action) {
+    for (std::size_t handle = 0U; handle < handles_.names.size(); ++handle) {
+        if (handles_.names[handle] == action) return static_cast<std::uint32_t>(handle);
+    }
+    if (handles_.names.size() >= kMaxActionHandles) return kInvalidActionHandle;
+    handles_.names.emplace_back(action);
+    const InputActionState* state = FindState(action);
+    handles_.states.push_back(state != nullptr ? *state : InputActionState{});
+    return static_cast<std::uint32_t>(handles_.names.size() - 1U);
+}
+
+void InputSubsystem::EvaluateStates(const InputDeviceState& physical, float deltaSeconds) {
     gameplayDevice_ = physical;
     gameplayInputFiltered_ = gameplayInputBlocked_;
     for (std::size_t index = 0U; index < InputDeviceState::kKeyCount; ++index) {
@@ -278,12 +307,12 @@ const InputActionState* InputSubsystem::FindState(const InputActionName& action)
 
 bool InputSubsystem::IsActionPressed(std::string_view action) const {
     const InputActionState* state = FindState(action);
-    return state != nullptr && state->combined == TriggerState::Triggered;
+    return state != nullptr && state->IsPressed();
 }
 
 bool InputSubsystem::IsActionPressed(const InputActionName& action) const {
     const InputActionState* state = FindState(action);
-    return state != nullptr && state->combined == TriggerState::Triggered;
+    return state != nullptr && state->IsPressed();
 }
 
 InputValue InputSubsystem::GetActionValue(std::string_view action) const {
@@ -308,7 +337,7 @@ bool InputSubsystem::WasActionCompleted(std::string_view action) const {
 
 bool InputSubsystem::WasActionReleased(std::string_view action) const {
     const InputActionState* state = FindState(action);
-    return state != nullptr && (state->completed || state->canceled);
+    return state != nullptr && state->WasReleased();
 }
 
 } // namespace kb::input

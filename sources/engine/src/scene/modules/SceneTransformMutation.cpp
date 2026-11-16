@@ -31,6 +31,10 @@ bool SceneTransforms::SetLocalPosition(SceneEntity entity, const Vec3& position,
     return SceneTransformService::SetLocalPosition(scene_, entity, position, axes);
 }
 
+bool SceneTransforms::TranslateLocalPosition(SceneEntity entity, const Vec3& delta) {
+    return SceneTransformService::TranslateLocalPosition(scene_, entity, delta);
+}
+
 void SceneTransforms::MarkModified(SceneEntity entity) noexcept {
     SceneTransformService::MarkModified(scene_, entity);
 }

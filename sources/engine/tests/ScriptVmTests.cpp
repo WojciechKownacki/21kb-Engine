@@ -381,6 +381,96 @@ void RunFastCallEquivalenceTest() {
     Require(TextOf(event, "checks") == "121", ("The fast call script must make every check: " + TextOf(event, "checks")).c_str());
 }
 
+// Input actions read by name every frame, with the mapping contexts and the input subsystem changing between frames: each
+// read of the script functions gives the registered function's answer in every frame, and follows the change.
+constexpr const char* kActionChangeScript = R"lua(
+function Tick(self, dt)
+  local registered = CallFunction
+  local bad = {}
+  local function check(label, hot, classic)
+    if tostring(hot) ~= tostring(classic) then bad[#bad + 1] = label .. ": " .. tostring(hot) .. " ~= " .. tostring(classic) end
+  end
+  for _ = 1, 3 do
+    check("ActionBool", Input.ActionBool("Move"), registered("Input.ActionBool", { action = "Move" }))
+    check("IsPressed", Input.IsPressed("Move"), registered("Input.IsPressed", { action = "Move" }))
+    check("WasPressed", Input.WasPressed("Move"), registered("Input.WasPressed", { action = "Move" }))
+    check("WasReleased", Input.WasReleased("Move"), registered("Input.WasReleased", { action = "Move" }))
+    check("Value", Input.Value("Move"), registered("Input.Value", { action = "Move" }))
+    check("ActionBool unmapped", Input.ActionBool("Unmapped"), registered("Input.ActionBool", { action = "Unmapped" }))
+    local v, c = Input.Vector2("Move"), registered("Input.Vector2", { action = "Move" })
+    check("Vector2", tostring(v.x) .. "," .. tostring(v.y), tostring(c.x) .. "," .. tostring(c.y))
+    local x, y = Input.Vector2XY("Move")
+    check("Vector2XY", tostring(x) .. "," .. tostring(y), tostring(c.x) .. "," .. tostring(c.y))
+  end
+  Emit('Actions', { bad = table.concat(bad, "; "), x = Input.Vector2("Move").x, pressed = Input.IsPressed("Move") })
+end
+)lua";
+
+void RunActionChangeTest() {
+    VmRig rig(kActionChangeScript);
+    auto moveAction = std::make_shared<kb::input::InputActionAsset>();
+    moveAction->name = "Move";
+    moveAction->valueType = kb::input::InputActionValueType::Axis2D;
+    const auto context = [](kb::input::InputKey key, float scale) {
+        auto asset = std::make_shared<kb::input::InputMappingContextAsset>();
+        asset->composites.push_back(kb::input::InputCompositeBinding{ .actionId = 1U, .slots = { kb::input::InputCompositeSlot{ .key = key, .axis = 0U, .scale = scale } } });
+        return asset;
+    };
+    const std::shared_ptr<kb::input::InputMappingContextAsset> right = context(kb::input::InputKey::D, 1.0F);
+    const std::shared_ptr<kb::input::InputMappingContextAsset> left = context(kb::input::InputKey::A, -2.0F);
+    const auto resolvers = [&](kb::input::InputSubsystem& input) {
+        input.SetResolvers(
+            [moveAction](std::uint64_t id) -> std::shared_ptr<const kb::input::InputActionAsset> { return id == 1U ? moveAction : nullptr; },
+            [right, left](std::uint64_t id) -> std::shared_ptr<const kb::input::InputMappingContextAsset> { return id == 60U ? right : id == 61U ? left : nullptr; });
+    };
+    resolvers(rig.scene.Input());
+    static_cast<void>(rig.Add());
+
+    struct Step {
+        const char* what;
+        float expectedX;
+        bool expectedPressed;
+    };
+    const auto frame = [&](const Step& step) {
+        rig.scene.EvaluateAllLocalUserInput(kVmStep);
+        const kb::script::ScriptRuntimeExecutionResult& result = rig.CleanFrame();
+        Require(result.emittedEvents.size() == 1U, "the action script must run");
+        const kb::script::ScriptEvent& event = result.emittedEvents.front();
+        Require(TextOf(event, "bad").empty(), (std::string{ "A script action read differs from the registered function " } + step.what + ": " + TextOf(event, "bad")).c_str());
+        float x = 99.0F;
+        bool pressed = !step.expectedPressed;
+        for (const kb::script::ScriptEventArgument& argument : event.arguments) {
+            if (argument.name == "x") x = argument.value.AsFloat();
+            if (argument.name == "pressed") pressed = argument.value.AsBool();
+        }
+        Require(NearlyEqual(x, step.expectedX) && pressed == step.expectedPressed, (std::string{ "A script action read must follow the input " } + step.what).c_str());
+    };
+    kb::input::InputSubsystem& input = rig.scene.Input();
+    Require(input.AddMappingContext(60U, 0), "the first action context could not be added");
+    input.MutableDeviceState().SetKeyDown(kb::input::InputKey::D, true);
+    frame({ "(key held)", 1.0F, true });
+    frame({ "(key still held)", 1.0F, true });
+    input.RemoveMappingContext(60U);
+    frame({ "(context removed)", 0.0F, false });
+    Require(input.AddMappingContext(61U, 0), "the second action context could not be added");
+    input.MutableDeviceState().SetKeyDown(kb::input::InputKey::D, false);
+    input.MutableDeviceState().SetKeyDown(kb::input::InputKey::A, true);
+    frame({ "(other context and key)", -2.0F, true });
+    // The input subsystem is replaced by a copy of itself (as a restored play session does): every handle the script holds is stale.
+    kb::input::InputSubsystem copy = input;
+    const std::uint64_t serial = input.Serial();
+    input = copy;
+    Require(input.Serial() != serial, "the replaced input subsystem must have a new serial");
+    frame({ "(subsystem replaced)", -2.0F, true });
+    frame({ "(subsystem replaced, next frame)", -2.0F, true });
+    input.ClearMappingContexts();
+    frame({ "(contexts cleared)", 0.0F, false });
+    Require(input.AddMappingContext(60U, 0), "the first action context could not be added again");
+    input.MutableDeviceState().SetKeyDown(kb::input::InputKey::A, false);
+    input.MutableDeviceState().SetKeyDown(kb::input::InputKey::D, true);
+    frame({ "(first context again)", 1.0F, true });
+}
+
 // A script that never returns is stopped by the budget, also when it catches the error, and the next entry runs.
 void RunBudgetTest() {
     VmRig rig("function Tick(self, dt)\n  if self.entity % 2 == 0 then\n    pcall(function() while true do end end)\n    while true do end\n  end\n  Emit('Ran')\nend\n");
@@ -722,6 +812,7 @@ void RunScriptVmTests() {
     RunHotCallErrorsTest();
     RunHotTableFormsTest();
     RunFastCallEquivalenceTest();
+    RunActionChangeTest();
     RunBudgetTest();
     RunDebuggerWorkflowTest();
     RunWatchdogCoreTest();

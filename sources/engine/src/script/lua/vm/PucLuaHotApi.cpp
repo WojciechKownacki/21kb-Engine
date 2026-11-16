@@ -162,6 +162,49 @@ int HotAction3D(void* slot, const char* action, int player, double* out) noexcep
     });
 }
 
+// A script that reads an action every frame resolves its name to a handle once (the Lua side keeps it) and then reads the
+// state by handle. A handle is the serial of the primary input subsystem and the index of the action, in one number below
+// 2^53; one that is not the subsystem's own (another scene) reads nothing and is resolved again.
+double HotResolveAction(void* slot, const char* action) noexcept {
+    ScriptExecutionContext* context = ActiveContext(slot);
+    if (context == nullptr) return -1.0;
+    try {
+        kb::input::InputSubsystem& input = context->GetScene().Input();
+        const std::uint32_t index = input.ActionHandle(std::string_view{ action });
+        return index == kb::input::InputSubsystem::kInvalidActionHandle ? -1.0
+            : static_cast<double>(input.Serial()) * kb::input::InputSubsystem::kMaxActionHandles + index;
+    } catch (...) {
+        return -1.0;
+    }
+}
+
+template <void (*Write)(const kb::input::InputActionState&, double*) noexcept>
+int HotActionHandle(void* slot, double handle, double* out) noexcept {
+    return Run(slot, [&](ScriptExecutionContext& context) {
+        const kb::input::InputSubsystem& input = context.GetScene().Input();
+        const auto packed = static_cast<std::uint64_t>(handle);
+        if (packed / kb::input::InputSubsystem::kMaxActionHandles != input.Serial()) return false;
+        const kb::input::InputActionState* state = input.ActionStateOf(static_cast<std::uint32_t>(packed % kb::input::InputSubsystem::kMaxActionHandles));
+        if (state == nullptr) return false;
+        Write(*state, out);
+        return true;
+    });
+}
+
+void WriteIsPressed(const kb::input::InputActionState& state, double* out) noexcept { out[0] = Flag(state.IsPressed()); }
+void WriteStarted(const kb::input::InputActionState& state, double* out) noexcept { out[0] = Flag(state.started); }
+void WriteWasReleased(const kb::input::InputActionState& state, double* out) noexcept { out[0] = Flag(state.WasReleased()); }
+void WriteBool(const kb::input::InputActionState& state, double* out) noexcept { out[0] = Flag(state.value.AsBool()); }
+void WriteAxis1D(const kb::input::InputActionState& state, double* out) noexcept { out[0] = static_cast<double>(state.value.AsAxis1D()); }
+void WriteAxes2(const kb::input::InputActionState& state, double* out) noexcept {
+    out[0] = static_cast<double>(state.value.x);
+    out[1] = static_cast<double>(state.value.y);
+}
+void WriteAxes3(const kb::input::InputActionState& state, double* out) noexcept {
+    WriteAxes2(state, out);
+    out[2] = static_cast<double>(state.value.z);
+}
+
 // ---- Time ----------------------------------------------------------------------------------------------------------
 
 int HotDelta(void* slot, double* out) noexcept {
@@ -243,6 +286,8 @@ struct HotBinding {
     void* function;
     std::string signature;
     std::vector<double> defaults;
+    void* handleFunction = nullptr; // an action read by handle (see HotResolveAction), when the first input is the action
+    std::string handleSignature;
 };
 
 template <typename Function>
@@ -250,10 +295,18 @@ HotBinding Bind(std::string_view table, std::string_view name, Function* functio
     return HotBinding{ table, name, reinterpret_cast<void*>(function), SignatureText(function), std::move(defaults) };
 }
 
+// An action read (action name, optional player): the primary player's read goes by handle.
+template <typename Function, typename HandleFunction>
+HotBinding BindAction(std::string_view table, std::string_view name, Function* function, HandleFunction* handleFunction) {
+    HotBinding binding = Bind(table, name, function, { 0.0 });
+    binding.handleFunction = reinterpret_cast<void*>(handleFunction);
+    binding.handleSignature = SignatureText(handleFunction);
+    return binding;
+}
+
 [[nodiscard]] std::vector<HotBinding> Bindings() {
     using Input = kb::input::InputSubsystem;
     using Backend = kb::scene::PhysicsBackend;
-    const std::vector<double> player{ 0.0 };
     const std::vector<double> ray{ 1000.0, static_cast<double>(kb::scene::kPhysicsAllLayers) };
     return {
         Bind("Time", "delta", &HotDelta),
@@ -268,19 +321,19 @@ HotBinding Bind(std::string_view table, std::string_view name, Function* functio
         Bind("Transform", "SetLocalRotation", &HotSetLocalRotation),
         Bind("Transform", "Rotation", &HotGetRotation),
         Bind("Transform", "SetRotation", &HotSetRotation),
-        Bind("Input", "IsPressed", &HotAction<&Input::IsActionPressed>, player),
-        Bind("Input", "Held", &HotAction<&Input::IsActionPressed>, player),
-        Bind("Input", "WasPressed", &HotAction<&Input::WasActionStarted>, player),
-        Bind("Input", "Pressed", &HotAction<&Input::WasActionStarted>, player),
-        Bind("Input", "WasReleased", &HotAction<&Input::WasActionReleased>, player),
-        Bind("Input", "Released", &HotAction<&Input::WasActionReleased>, player),
-        Bind("Input", "ActionBool", &HotActionBool, player),
-        Bind("Input", "Value", &HotActionFloat, player),
-        Bind("Input", "ActionFloat", &HotActionFloat, player),
-        Bind("Input", "Vector2", &HotAction2D, player),
-        Bind("Input", "Vector2XY", &HotAction2D, player),
-        Bind("Input", "Action2D", &HotAction2D, player),
-        Bind("Input", "Vector3", &HotAction3D, player),
+        BindAction("Input", "IsPressed", &HotAction<&Input::IsActionPressed>, &HotActionHandle<&WriteIsPressed>),
+        BindAction("Input", "Held", &HotAction<&Input::IsActionPressed>, &HotActionHandle<&WriteIsPressed>),
+        BindAction("Input", "WasPressed", &HotAction<&Input::WasActionStarted>, &HotActionHandle<&WriteStarted>),
+        BindAction("Input", "Pressed", &HotAction<&Input::WasActionStarted>, &HotActionHandle<&WriteStarted>),
+        BindAction("Input", "WasReleased", &HotAction<&Input::WasActionReleased>, &HotActionHandle<&WriteWasReleased>),
+        BindAction("Input", "Released", &HotAction<&Input::WasActionReleased>, &HotActionHandle<&WriteWasReleased>),
+        BindAction("Input", "ActionBool", &HotActionBool, &HotActionHandle<&WriteBool>),
+        BindAction("Input", "Value", &HotActionFloat, &HotActionHandle<&WriteAxis1D>),
+        BindAction("Input", "ActionFloat", &HotActionFloat, &HotActionHandle<&WriteAxis1D>),
+        BindAction("Input", "Vector2", &HotAction2D, &HotActionHandle<&WriteAxes2>),
+        BindAction("Input", "Vector2XY", &HotAction2D, &HotActionHandle<&WriteAxes2>),
+        BindAction("Input", "Action2D", &HotAction2D, &HotActionHandle<&WriteAxes2>),
+        BindAction("Input", "Vector3", &HotAction3D, &HotActionHandle<&WriteAxes3>),
         Bind("Physics", "Raycast", &HotRaycast, ray),
         Bind("Physics", "GetVelocity", &HotVectorRead<&Backend::GetVelocity>),
         Bind("Physics", "GetAngularVelocity", &HotVectorRead<&Backend::GetAngularVelocity>),
@@ -353,8 +406,15 @@ struct Resolved {
         problems.push_back(label + " has the C signature " + binding.signature + ", its pins call for " + PinSignature(*resolved.signature));
         return std::nullopt;
     }
+    const std::vector<ScriptFunctionPin>& inputs = resolved.signature->inputs;
+    if (binding.handleFunction != nullptr &&
+        (binding.handleSignature != "int(void*,double,double*)" || inputs.size() != 2U || inputs[0].type != ScriptValueType::String || !inputs[0].required ||
+            inputs[1].type != ScriptValueType::Int || inputs[1].required || resolved.signature->outputs.empty())) {
+        problems.push_back(label + " is read by handle, but its pins are not an action and an optional player");
+        return std::nullopt;
+    }
     std::size_t optional = 0;
-    for (const ScriptFunctionPin& input : resolved.signature->inputs) optional += input.required ? 0U : 1U;
+    for (const ScriptFunctionPin& input : inputs) optional += input.required ? 0U : 1U;
     if (optional != binding.defaults.size()) {
         problems.push_back(label + " has " + std::to_string(binding.defaults.size()) + " defaults for " + std::to_string(optional) + " optional inputs");
         return std::nullopt;
@@ -455,8 +515,21 @@ struct Resolved {
     const std::string table{ resolved.binding->table };
     const std::string name{ resolved.binding->name };
     std::string text = "  do\n    local target = env." + table + "\n    local original = target and target." + name + "\n    if original then\n      local call = calls[" +
-        std::to_string(index + 1U) + "]\n      target." + name + " = function(...)\n";
+        std::to_string(index + 1U) + "]\n      local read = reads[" + std::to_string(index + 1U) + "]\n      target." + name + " = function(...)\n";
     if (!signature.inputs.empty()) text += "        local " + names + " = ...\n";
+    if (resolved.binding->handleFunction != nullptr) {
+        text += "        if type(a1) == \"string\" and a2 == nil then\n"
+                "          local handle = actions[a1]\n"
+                "          if handle == nil then\n"
+                "            handle = resolve(slot, a1)\n"
+                "            if handle >= 0 then actions[a1] = handle end\n"
+                "          end\n"
+                "          if handle >= 0 then\n"
+                "            if read(slot, handle, out) ~= 0 then " + ReturnText(resolved) + " end\n"
+                "            actions[a1] = nil\n"
+                "          end\n"
+                "        end\n";
+    }
     text += "        if " + (checks.empty() ? std::string{ "true" } : checks) + " then\n";
     text += "          if call(slot" + passed + (signature.outputs.empty() ? "" : ", out") + ") ~= 0 then " + ReturnText(resolved) + " end\n        end\n";
     text += "        return original(...)\n      end\n    end\n  end\n";
@@ -476,9 +549,15 @@ struct Resolved {
         declarations += "typedef int (*" + type + ")(" + parameters + ");\n";
         casts += "calls[" + std::to_string(index + 1U) + "] = ffi.cast(\"" + type + "\", pointers[" + std::to_string(index + 1U) + "])\n";
         replacements += ReplacementText(plan[index], index);
+        if (plan[index].binding->handleFunction != nullptr) {
+            casts += "reads[" + std::to_string(index + 1U) + "] = ffi.cast(\"KbHotRead\", pointers[" + std::to_string(plan.size() + 2U + index) + "])\n";
+        }
     }
-    return "local ffi, pointers, slotPointer = ...\nffi.cdef[[\n" + declarations + "]]\nlocal slot = ffi.cast(\"void*\", slotPointer)\n" +
-        "local out = ffi.new(\"double[" + std::to_string(kMaxOutputs) + "]\")\nlocal type, floor = type, math.floor\nlocal calls = {}\n" + casts +
+    // The pointers: the functions of the plan, then the one that resolves an action name, then the reads by handle.
+    return "local ffi, pointers, slotPointer = ...\nffi.cdef[[\ntypedef double (*KbHotResolve)(void*, const char*);\ntypedef int (*KbHotRead)(void*, double, double*);\n" +
+        declarations + "]]\nlocal slot = ffi.cast(\"void*\", slotPointer)\n" +
+        "local out = ffi.new(\"double[" + std::to_string(kMaxOutputs) + "]\")\nlocal type, floor = type, math.floor\nlocal calls, reads, actions = {}, {}, {}\n" +
+        "local resolve = ffi.cast(\"KbHotResolve\", pointers[" + std::to_string(plan.size() + 1U) + "])\n" + casts +
         "return function(env)\n" + replacements + "end\n";
 }
 
@@ -507,11 +586,17 @@ bool BuildInstaller(lua_State* state, const std::vector<HotBinding>& bindings, c
     bool built = false;
     if (luaL_loadbuffer(state, source.data(), source.size(), "=hot-api") == 0) {
         lua_pushvalue(state, -2);
-        lua_createtable(state, static_cast<int>(plan.size()), 0);
+        lua_createtable(state, static_cast<int>(2U * plan.size() + 1U), 0);
         for (std::size_t index = 0; index < plan.size(); ++index) {
             lua_pushlightuserdata(state, plan[index].binding->function);
             lua_rawseti(state, -2, static_cast<int>(index + 1U));
+            if (plan[index].binding->handleFunction != nullptr) {
+                lua_pushlightuserdata(state, plan[index].binding->handleFunction);
+                lua_rawseti(state, -2, static_cast<int>(plan.size() + 2U + index));
+            }
         }
+        lua_pushlightuserdata(state, reinterpret_cast<void*>(&HotResolveAction));
+        lua_rawseti(state, -2, static_cast<int>(plan.size() + 1U));
         lua_pushlightuserdata(state, slot);
         built = lua_pcall(state, 3, 1, 0) == 0 && lua_isfunction(state, -1) != 0;
     }

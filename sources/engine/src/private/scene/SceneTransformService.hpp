@@ -28,6 +28,7 @@ public:
     [[nodiscard]] static SceneTransformWrite BeginWrite(Scene& scene, SceneEntity entity) noexcept;
     static void EndWrite(Scene& scene, const SceneTransformWrite& write);
     static bool SetLocalPosition(Scene& scene, SceneEntity entity, const Vec3& position, std::uint8_t axes);
+    static bool TranslateLocalPosition(Scene& scene, SceneEntity entity, const Vec3& delta);
     static void MarkModified(Scene& scene, SceneEntity entity) noexcept;
     // Bulk transform dirty signal. Fetches scene state once and resolves the
     // prefab-tracking decision once for the whole batch, so a scene with no
