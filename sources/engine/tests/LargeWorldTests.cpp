@@ -345,7 +345,17 @@ void RunVersion41SceneMigrationTest() {
     }
     const auto found = std::search(bytes.begin(), bytes.end(), doubles.begin(), doubles.end());
     Require(found != bytes.end(), "The version 41 fixture did not hold the double translation");
-    const auto at = bytes.erase(found, found + 24);
+    // What later versions add to a version 41 file, and where it sits: after the translation a node holds its rotation,
+    // scale, visibility and component bits, then (version 68) the count of its module components; the file ends with
+    // the version 44 post-process profile id. A node without components has a zero count.
+    constexpr std::size_t kNodeBytesAfterTranslation = 16U + 12U + 1U + 1U + 4U + 8U;
+    const std::size_t translationAt = static_cast<std::size_t>(found - bytes.begin());
+    const std::size_t moduleCountAt = translationAt + 24U + kNodeBytesAfterTranslation;
+    Require(moduleCountAt + 4U <= bytes.size() && std::all_of(bytes.begin() + static_cast<std::ptrdiff_t>(moduleCountAt),
+            bytes.begin() + static_cast<std::ptrdiff_t>(moduleCountAt + 4U), [](std::uint8_t byte) { return byte == 0U; }),
+        "The version 41 fixture did not hold an empty module component count after its node");
+    bytes.erase(bytes.begin() + static_cast<std::ptrdiff_t>(moduleCountAt), bytes.begin() + static_cast<std::ptrdiff_t>(moduleCountAt + 4U));
+    const auto at = bytes.erase(bytes.begin() + static_cast<std::ptrdiff_t>(translationAt), bytes.begin() + static_cast<std::ptrdiff_t>(translationAt + 24U));
     bytes.insert(at, floats.begin(), floats.end());
     bytes.resize(bytes.size() - sizeof(std::uint64_t)); // a version 41 file has no v44 post-process profile id
     WriteLittleEndian(bytes, 8U, 41U, 4U);

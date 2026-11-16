@@ -32,6 +32,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <iostream>
 #include <map>
 #include <optional>
@@ -1102,17 +1103,27 @@ void RunFarWorldTests() {
             harness.scene->Transforms().WorldTranslation(*streamed) == movedPosition,
         "a far stream focus loads the cell around it and the object streams in at its exact translation");
 
-    // An object file whose payload stores float translations (scene version 41) still loads.
+    // An object file whose payload is a real scene file saved before double translations (the stored version 40 fixture,
+    // float translations) still loads, with the translations and names the scene reader gives that file. The payload is
+    // the file's own bytes, so it does not move when a later scene version adds a field.
+    const std::filesystem::path fixture = std::filesystem::path{ __FILE__ }.parent_path() / "fixtures" / "scene" / "LegacyPrefabs.21kbscene";
+    const scene::SceneDocumentLoadResult legacyScene = scene::SceneDocumentService::Load(fixture);
+    Check(legacyScene.succeeded && legacyScene.document.fileVersion < scene::SceneDocument::DoubleTranslationFileVersion,
+        "the stored scene fixture must be a version before double translations: " + legacyScene.error);
+    const auto fixtureNodes = legacyScene.document.worldPrefab.Nodes();
+    // An object holds one root, so a shell with as many nodes is written and its payload replaced by the fixture's bytes.
     WorldObjectFile legacy;
     legacy.header.guid = MakeDeterministicWorldObjectGuid("legacy-rock");
     legacy.header.name = "Legacy Rock";
     legacy.header.position = { 120.5, 0.0, -40.25 };
-    scene::ScenePrefabNodeDesc legacyRoot;
-    legacyRoot.stableId = WorldObjectStableId(legacy.header.guid, 0U);
-    legacyRoot.name = "Legacy Rock";
-    legacyRoot.transform.localPosition = { 120.5F, 0.0F, -40.25F };
-    static_cast<void>(legacy.prefab.AddNode(std::move(legacyRoot)));
-    legacy.header.nodeCount = 1U;
+    for (std::size_t node = 0U; node < fixtureNodes.size(); ++node) {
+        scene::ScenePrefabNodeDesc shell;
+        shell.stableId = WorldObjectStableId(legacy.header.guid, static_cast<std::uint32_t>(node));
+        shell.name = "Shell";
+        shell.parentNode = node == 0U ? scene::ScenePrefabNodeDesc::NoParent : 0U;
+        static_cast<void>(legacy.prefab.AddNode(std::move(shell)));
+    }
+    legacy.header.nodeCount = static_cast<std::uint32_t>(fixtureNodes.size());
     std::vector<std::uint8_t> bytes = WorldObjectFileIO::Serialize(legacy, error);
     Check(!bytes.empty(), "the legacy object must serialize: " + error);
     // The scene payload is the file's tail: its byte count, then the scene magic.
@@ -1120,26 +1131,20 @@ void RunFarWorldTests() {
     const auto magic = std::search(bytes.begin(), bytes.end(), sceneMagic.begin(), sceneMagic.end());
     Check(magic != bytes.end() && magic - bytes.begin() >= 4, "the legacy object must carry a scene payload");
     const std::size_t payloadSizeOffset = static_cast<std::size_t>(magic - bytes.begin()) - 4U;
-    const double doubles[3]{ 120.5, 0.0, -40.25 };
-    std::vector<std::uint8_t> doubleBytes(24U);
-    std::vector<std::uint8_t> floatBytes(12U);
-    for (std::size_t axis = 0U; axis < 3U; ++axis) {
-        const float value = static_cast<float>(doubles[axis]);
-        std::memcpy(doubleBytes.data() + axis * 8U, &doubles[axis], 8U);
-        std::memcpy(floatBytes.data() + axis * 4U, &value, 4U);
-    }
-    const auto found = std::search(bytes.begin() + static_cast<std::ptrdiff_t>(payloadSizeOffset + 4U), bytes.end(), doubleBytes.begin(), doubleBytes.end());
-    Check(found != bytes.end(), "the legacy object payload holds its double translation");
-    const auto at = bytes.erase(found, found + 24);
-    bytes.insert(at, floatBytes.begin(), floatBytes.end());
-    bytes.resize(bytes.size() - sizeof(std::uint64_t)); // a v41 payload has no v44 post-process profile id
-    const std::uint32_t legacySize = static_cast<std::uint32_t>(bytes.size() - payloadSizeOffset - 4U);
-    const std::uint32_t legacyVersion = 41U;
+    std::ifstream fixtureInput{ fixture, std::ios::binary };
+    const std::vector<std::uint8_t> fixtureBytes{ std::istreambuf_iterator<char>{ fixtureInput }, std::istreambuf_iterator<char>{} };
+    const std::uint32_t legacySize = static_cast<std::uint32_t>(fixtureBytes.size());
+    bytes.resize(payloadSizeOffset + 4U);
     std::memcpy(bytes.data() + payloadSizeOffset, &legacySize, 4U);
-    std::memcpy(bytes.data() + payloadSizeOffset + 4U + 8U, &legacyVersion, 4U);
+    bytes.insert(bytes.end(), fixtureBytes.begin(), fixtureBytes.end());
     const WorldObjectReadResult legacyRead = WorldObjectFileIO::Parse(bytes);
-    Check(legacyRead.succeeded && legacyRead.object.prefab.Nodes().front().LocalTranslation() == kb::math::DVec3{ 120.5, 0.0, -40.25 },
-        "an object file with a float-translation payload must still load: " + legacyRead.error);
+    bool sameNodes = legacyRead.succeeded && legacyRead.object.prefab.NodeCount() == fixtureNodes.size();
+    for (std::size_t node = 0U; sameNodes && node < fixtureNodes.size(); ++node) {
+        const scene::ScenePrefabNodeDesc& read = legacyRead.object.prefab.Nodes()[node];
+        sameNodes = read.name == fixtureNodes[node].name && read.parentNode == fixtureNodes[node].parentNode &&
+            read.LocalTranslation() == fixtureNodes[node].LocalTranslation();
+    }
+    Check(sameNodes, "an object file with a float-translation payload must still load: " + legacyRead.error);
     std::filesystem::remove_all(root);
 }
 
