@@ -608,6 +608,14 @@ R"(  run          Run a scene headless and report logs, events, and errors (the
                  trust --mods <Mods folder> [--add <public key>]
                        [--remove <public key>] [--allow-unsigned|--deny-unsigned]
                  info [--game <Game pack>] <mod folder>
+  package      Packages of a project: folders of assets and scripts taken from a registry
+               folder and installed under Assets/Packages (docs/packages.md).
+                 list|verify --project <dir>
+                 search --project <dir> [--registry <dir>] [<text>]
+                 info --project <dir> [--registry <dir>] <name>[@<range>]
+                 add --project <dir> [--registry <dir>] <name>[@<range>]
+                 update --project <dir> [--registry <dir>] [<name>]
+                 remove --project <dir> <name>
   release      Sign the manifest of a finished release directory, or verify one
                against the trust anchor of the player it ships.
                  sign --key <key file> --dir <dir> --product <id>
@@ -721,7 +729,8 @@ std::size_t EditDistance(std::string_view a, std::string_view b) {
 // A misspelled option must fail, not be ignored: for these commands the options accepted are the
 // ones their usage block names, plus the global ones. The other commands check their own.
 constexpr std::string_view kUsageCheckedCommands[]{ "entity", "component", "schema", "guide", "code", "api", "validate", "scene-list",
-    "scene-attach", "scene-new", "scene-duplicate", "run", "material-new", "material-set", "material-show", "input-action", "prefab", "build", "capture" };
+    "scene-attach", "scene-new", "scene-duplicate", "run", "material-new", "material-set", "material-show", "input-action", "prefab", "build", "capture",
+    "package" };
 
 bool RejectUnknownOptions(std::string_view command, const ArgumentList& arguments, std::ostream& err) {
     if (std::ranges::find(kUsageCheckedCommands, command) == std::end(kUsageCheckedCommands)) return false;
@@ -788,6 +797,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"keys", &RunKeysCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
     {"pack", &RunPackCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
     {"mod", &RunModCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
+    {"package", &RunPackageCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
     {"release", &RunReleaseCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
     {"build", &RunBuildCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
     {"capture", &RunCaptureCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},

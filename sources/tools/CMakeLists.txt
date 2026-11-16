@@ -26,6 +26,8 @@ add_library(kb_cli_core STATIC
     src/CliMcpCommand.cpp
     src/CliNavMeshCommands.cpp
     src/CliModCommands.cpp
+    src/CliPackageCommands.cpp
+    src/CliPackages.cpp
     src/CliPackSetCommands.cpp
     src/CliInputCommands.cpp
     src/CliPlayerPreset.cpp
@@ -41,6 +43,7 @@ add_library(kb_cli_core STATIC
     src/private/CliCommon.hpp
     src/private/CliLuaSourceIndex.hpp
     src/private/CliProtocolStream.hpp
+    src/private/CliPackages.hpp
     src/private/CliPlayerPreset.hpp
     src/private/CliProgram.hpp
 )
@@ -186,6 +189,7 @@ if(BUILD_TESTING)
         tests/KbCliTests.cpp
         tests/KbCliLanguageServerTests.cpp
         tests/KbCliDebugAdapterTests.cpp
+        tests/KbCliPackageTests.cpp
     )
 
     target_link_libraries(kb_cli_tests PRIVATE kb_cli_core)

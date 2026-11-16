@@ -5172,6 +5172,7 @@ struct DataProbe {
         { "terrain", { "terrain", "layer", "list", "--project", root, "--terrain", "/Game/Terrains/Probe.kbterrain" }, "21kb.cli.terrain-layer-list/v1" },
         { "pack", { "pack", "info", packFile }, "21kb.cli.pack-info/v1" },
         { "mod", { "mod", "list", "--mods", mods }, "21kb.cli.mod-list/v1" },
+        { "package", { "package", "list", "--project", root }, "21kb.cli.package-list/v1" },
         { "world", { "world", "chunks", "--project", root }, "21kb.cli.world-chunks/v1" },
         { "import", { "import", "--project", root, "--list-backups" }, "21kb.cli.import-backups/v1" },
         { "scene-list", { "scene-list", "--project", root, "--scene", "Assets/Scenes/Main.21kbscene" }, "21kb.cli.scene-list/v1" },
@@ -5450,6 +5451,7 @@ struct ChangeProbe {
         { "api", { "api", "--out", outside + "/ApiDocs" }, "*", "created" },
         { "pack", { "pack", "compress", "--level", "3", outside + "/Probe.kbpack", outside + "/Probe.small.kbpack" }, outside + "/Probe.small.kbpack", "created" },
         { "mod", { "mod", "enable", "--mods", outside + "/Mods", "none" }, "", "" },
+        { "package", line({ "package", "add", "--registry", outside + "/Registry", "demo" }), "Assets/Packages/demo/package.json", "created" },
         { "release", { "release", "sign", "--key", outside + "/none.key", "--dir", outside + "/Release", "--product", "p", "--content-version", "1", "--release", "1" }, "", "" },
         { "keys", { "keys", "content-key", "--out", outside + "/content.key" }, outside + "/content.key", "created" },
         { "new", { "new", "--parent", outside, "--name", "Fresh", "--template", "Empty" }, "Fresh.21kbproject", "created" },
@@ -5504,6 +5506,7 @@ void RunChangeReportTests() {
     std::filesystem::create_directories(outsidePath, error);
     const std::string outside = outsidePath.generic_string();
     WriteTextFile(outsidePath / "Wedge.obj", "v 0 0 0\nv 2 0 0\nv 0 3 0\nv 0 0 4\nf 1 2 3\nf 1 2 4\n");
+    WriteTextFile(outsidePath / "Registry" / "demo" / "1.0.0" / "package.json", R"({"name":"demo","version":"1.0.0"})");
     std::filesystem::copy_file(rootPath / "Probe.kbpack", outsidePath / "Probe.kbpack", error);
 
     for (const ChangeProbe& probe : ChangeProbeTable(root, outside)) {
@@ -5679,6 +5682,15 @@ void RunCommandCatalogTests() {
             !findNamed(*entityAdd->Find("options"), "--position")->Find("required")->AsBool(), "entity add must list its own options with required flags");
     Require(findNamed(*findRow("terrain").Find("subcommands"), "brush") != nullptr && findNamed(*findRow("pack").Find("subcommands"), "sign") != nullptr,
         "Subcommands must be listed");
+    const JsonValue& packageRow = findRow("package");
+    const JsonValue* packageAdd = findNamed(*packageRow.Find("subcommands"), "add");
+    const JsonValue* packageProject = packageAdd != nullptr ? findNamed(*packageAdd->Find("options"), "--project") : nullptr;
+    const JsonValue* packageRegistry = packageAdd != nullptr ? findNamed(*packageAdd->Find("options"), "--registry") : nullptr;
+    Require(packageRow.Find("json")->AsString() == "structured" && packageRow.Find("writes")->AsBool() && packageProject != nullptr &&
+            packageProject->Find("required")->AsBool() && packageRegistry != nullptr && !packageRegistry->Find("required")->AsBool() &&
+            findNamed(*packageRow.Find("subcommands"), "verify") != nullptr && findNamed(*packageRow.Find("subcommands"), "update") != nullptr &&
+            findNamed(*packageRow.Find("subcommands"), "remove") != nullptr,
+        "package must be a structured, writing command that lists its subcommands and their options");
     Require(findRow("run").Find("json")->AsString() == "partial" && findRow("audio-mixer").Find("json")->AsString() == "native" &&
             findRow("entity").Find("json")->AsString() == "structured" && findRow("component").Find("json")->AsString() == "structured" &&
             findRow("component").Find("writes")->AsBool() && !findRow("schema").Find("writes")->AsBool() &&
@@ -6498,6 +6510,7 @@ void RunSprite2DAssetRefusalTests() {
 
 void RunLanguageServerTests();
 void RunDebugAdapterTests();
+void RunPackageCommandTests();
 
 int main(int argc, char** argv) {
 #if KB_CLI_RENDERER
@@ -6581,6 +6594,10 @@ int main(int argc, char** argv) {
         RunWorldMemoryCliTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{argv[1]} == "packages") {
+        RunPackageCommandTests();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{argv[1]} == "lsp") {
         RunLanguageServerTests();
         return EXIT_SUCCESS;
@@ -6650,6 +6667,7 @@ int main(int argc, char** argv) {
     RunLightingQualityCommandTests();
     RunPackSetCommandTests();
     RunEncryptedPatchCommandTests();
+    RunPackageCommandTests();
     // Keep the production physics fixture on disk after the test process so
     // the built kb_cli executable can be run against it as a separate-process
     // runtime verification.

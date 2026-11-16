@@ -335,6 +335,7 @@ the folder.
 | `kb_cli run --project <dir> --frames <n> --timeout-ms <ms> --cancel-file <path>` | stop playback cooperatively on a wall-time limit or when the cancellation file exists; shutdown still runs; exit 124 means timeout and 130 means cancelled |
 | `kb_cli batch --project <dir> --file <list> [--dry-run]` | run many commands as one all-or-nothing transaction, or preview their changes |
 | `kb_cli mod <build\|install\|list\|verify\|enable\|disable\|remove\|trust\|info>` | build content mods and manage their installation, dependencies and trust; see [Modding](modding.md) for arguments and package compatibility |
+| `kb_cli package <list\|search\|info\|add\|update\|remove\|verify>` | install packages of content from a registry folder into the project, with version ranges, a lock file and checksums; see [Packages](packages.md) |
 
 More commands, each with its options in `kb_cli help`:
 
