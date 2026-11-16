@@ -5,6 +5,7 @@
 #include "rendering/script_editor/ScriptEditorDocument.hpp"
 #include "rendering/script_editor/ScriptEditorTextEncoding.hpp"
 #include "rendering/script_editor/ScriptEditorTheme.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #include <algorithm>
 #include <string>
@@ -28,6 +29,60 @@ void FillColor(HDC dc, const RECT& rect, COLORREF color) {
     DeleteObject(brush);
 }
 
+// A wavy line under [x0, x1) whose top is at y.
+void DrawSquiggle(HDC dc, int x0, int x1, int y, COLORREF color) {
+    HBRUSH brush = CreateSolidBrush(color);
+    for (int x = x0; x < x1; x += 2) {
+        const RECT step{ x, y + ((x / 2) & 1), std::min(x + 2, x1), y + 1 + ((x / 2) & 1) };
+        FillRect(dc, &step, brush);
+    }
+    DeleteObject(brush);
+}
+
+[[nodiscard]] std::string ProblemCode(const ScriptEditorDocument& document, const ScriptProblem& problem) {
+    if (problem.line >= document.LineCount() || problem.column > document.LineLength(problem.line)) {
+        return {}; // the text was edited since the analysis
+    }
+    return document.Lines()[static_cast<std::size_t>(problem.line)].substr(static_cast<std::size_t>(problem.column), static_cast<std::size_t>(problem.length));
+}
+
+void DrawProblemPanel(HDC dc, const RECT& client, const ScriptEditorDocument& document, const ScriptEditorMetrics& metrics, const std::vector<ScriptProblem>& problems) {
+    const int top = client.bottom - metrics.reservedBottom;
+    FillColor(dc, RECT{ 0, top, client.right, client.bottom }, kProblemPanel);
+    FillColor(dc, RECT{ 0, top, client.right, top + 1 }, kProblemPanelBorder);
+    const int shown = ScriptEditorLayout::ShownProblemCount(problems.size());
+    SetTextColor(dc, kTextDefault);
+    for (int row = 0; row <= shown && row < static_cast<int>(problems.size()); ++row) {
+        const bool more = row == shown && problems.size() > static_cast<std::size_t>(shown);
+        const ScriptProblem* problem = more ? nullptr : &problems[static_cast<std::size_t>(row)];
+        const std::string text = more
+            ? EditorLocalization::Format("scriptEditor.problem.more", "and {count} more", { { "count", std::to_string(problems.size() - static_cast<std::size_t>(shown)) } })
+            : EditorLocalization::Format("scriptEditor.problem.row", "Line {line}: \"{code}\" does not work on every platform",
+                  { { "line", std::to_string(problem->line + 1) }, { "code", ProblemCode(document, *problem) } });
+        const int y = top + 1 + row * metrics.lineHeight;
+        if (!more) {
+            FillColor(dc, RECT{ 10, y + metrics.lineHeight / 2 - 3, 16, y + metrics.lineHeight / 2 + 3 }, kProblemMark);
+        }
+        const std::wstring wide = ScriptEditorTextEncoding::Widen(text);
+        RECT rect{ 24, y, client.right - kScrollbarWidth, y + metrics.lineHeight };
+        DrawTextW(dc, wide.c_str(), static_cast<int>(wide.size()), &rect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    }
+}
+
+void DrawProblemTooltip(HDC dc, const RECT& client, POINT anchor, const std::string& message) {
+    const std::wstring wide = ScriptEditorTextEncoding::Widen(message);
+    SIZE size{};
+    GetTextExtentPoint32W(dc, wide.c_str(), static_cast<int>(wide.size()), &size);
+    const int width = static_cast<int>(size.cx) + 16;
+    const int height = static_cast<int>(size.cy) + 8;
+    const int left = std::max(0, std::min(static_cast<int>(anchor.x) + 12, static_cast<int>(client.right) - width));
+    const int top = std::max(0, std::min(static_cast<int>(anchor.y) + 18, static_cast<int>(client.bottom) - height));
+    FillColor(dc, RECT{ left, top, left + width, top + height }, kProblemPanelBorder);
+    FillColor(dc, RECT{ left + 1, top + 1, left + width - 1, top + height - 1 }, kProblemPanel);
+    SetTextColor(dc, kTextDefault);
+    TextOutW(dc, left + 8, top + 4, wide.c_str(), static_cast<int>(wide.size()));
+}
+
 } // namespace
 
 bool ScriptEditorRenderer::PaintTo(
@@ -36,6 +91,7 @@ bool ScriptEditorRenderer::PaintTo(
     const ScriptEditorDocument& document,
     const ScriptEditorViewport& viewport,
     ScriptEditorMetrics& metrics,
+    const ScriptProblemOverlay& overlay,
     bool caretVisible,
     bool focused,
     HWND interactionWindow) {
@@ -118,8 +174,16 @@ bool ScriptEditorRenderer::PaintTo(
             const int x = textLeft - viewport.scrollX + token.start * metrics.charWidth;
             TextOutW(dc, x, textTop, segment.c_str(), static_cast<int>(segment.size()));
         }
+        const auto firstProblem = std::ranges::lower_bound(overlay.problems, line, {}, &ScriptProblem::line);
+        for (auto problem = firstProblem; problem != overlay.problems.end() && problem->line == line; ++problem) {
+            const int x0 = textLeft - viewport.scrollX + problem->column * metrics.charWidth;
+            DrawSquiggle(dc, x0, x0 + problem->length * metrics.charWidth, y + metrics.lineHeight - 4, kProblemMark);
+        }
         SelectClipRgn(dc, nullptr);
         DeleteObject(clip);
+        if (firstProblem != overlay.problems.end() && firstProblem->line == line) {
+            FillColor(dc, RECT{ 4, y + metrics.lineHeight / 2 - 3, 10, y + metrics.lineHeight / 2 + 3 }, kProblemMark);
+        }
 
         if (line == caret.line && caretVisible && focused) {
             const int caretX = textLeft - viewport.scrollX + caret.column * metrics.charWidth;
@@ -139,6 +203,13 @@ bool ScriptEditorRenderer::PaintTo(
         FillColor(dc, RECT{ thumb.left + 3, thumb.top + 2, thumb.right - 3, thumb.bottom - 2 }, hot ? kScrollThumbHot : kScrollThumb);
     }
 
+    if (metrics.reservedBottom > 0) {
+        DrawProblemPanel(dc, client, document, metrics, overlay.problems);
+    }
+    if (overlay.hovered >= 0 && overlay.hovered < static_cast<int>(overlay.problems.size())) {
+        DrawProblemTooltip(dc, client, overlay.hoverPoint, overlay.problems[static_cast<std::size_t>(overlay.hovered)].message);
+    }
+
     const bool copied = BitBlt(
         target, bounds.left, bounds.top, width, height,
         dc, 0, 0, SRCCOPY) != 0;
@@ -149,13 +220,13 @@ bool ScriptEditorRenderer::PaintTo(
     return copied;
 }
 
-void ScriptEditorRenderer::Paint(HWND window, const ScriptEditorDocument& document, const ScriptEditorViewport& viewport, ScriptEditorMetrics& metrics, bool caretVisible, bool focused) {
+void ScriptEditorRenderer::Paint(HWND window, const ScriptEditorDocument& document, const ScriptEditorViewport& viewport, ScriptEditorMetrics& metrics, const ScriptProblemOverlay& overlay, bool caretVisible, bool focused) {
     RECT client{};
     GetClientRect(window, &client);
     PAINTSTRUCT paint{};
     HDC windowDc = BeginPaint(window, &paint);
     static_cast<void>(PaintTo(
-        windowDc, client, document, viewport, metrics,
+        windowDc, client, document, viewport, metrics, overlay,
         caretVisible, focused, window));
     EndPaint(window, &paint);
 }

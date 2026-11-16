@@ -13,6 +13,9 @@ namespace kb::script {
 // A construct outside it works on one VM and fails, or means something else, on the other.
 struct ScriptSubsetFinding {
     std::uint32_t line = 0U;
+    // First byte of the construct within its line (1 is the first byte) and how many bytes it spans on that line.
+    std::uint32_t column = 1U;
+    std::uint32_t length = 1U;
     // What is outside the subset and what to write instead.
     std::string message;
 };

@@ -31,6 +31,7 @@ void ScriptEditorDocument::Load(const std::string& text) {
     caret_ = {};
     anchor_ = {};
     desiredColumn_ = 0;
+    ++revision_;
     ClearHistory();
 }
 
@@ -99,6 +100,7 @@ void ScriptEditorDocument::DeleteSelection() {
     if (!HasSelection()) {
         return;
     }
+    ++revision_;
     ScriptCaret start;
     ScriptCaret end;
     OrderedSelection(start, end);
@@ -115,6 +117,7 @@ void ScriptEditorDocument::DeleteSelection() {
 
 void ScriptEditorDocument::InsertText(const std::string& text) {
     DeleteSelection();
+    ++revision_;
     std::string& line = lines_[static_cast<std::size_t>(caret_.line)];
     const std::string tail = line.substr(static_cast<std::size_t>(caret_.column));
     line = line.substr(0, static_cast<std::size_t>(caret_.column));
@@ -157,6 +160,7 @@ void ScriptEditorDocument::DeleteBackward() {
         DeleteSelection();
         return;
     }
+    ++revision_;
     if (caret_.column > 0) {
         lines_[static_cast<std::size_t>(caret_.line)].erase(static_cast<std::size_t>(caret_.column) - 1, 1);
         --caret_.column;
@@ -176,6 +180,7 @@ void ScriptEditorDocument::DeleteForward() {
         DeleteSelection();
         return;
     }
+    ++revision_;
     std::string& line = lines_[static_cast<std::size_t>(caret_.line)];
     if (caret_.column < static_cast<int>(line.size())) {
         line.erase(static_cast<std::size_t>(caret_.column), 1);
@@ -248,6 +253,7 @@ bool ScriptEditorDocument::RestoreFrom(std::vector<Snapshot>& from, std::vector<
     Snapshot snapshot = std::move(from.back());
     from.pop_back();
     lines_ = std::move(snapshot.lines);
+    ++revision_;
     caret_ = snapshot.caret;
     anchor_ = snapshot.caret;
     desiredColumn_ = caret_.column;

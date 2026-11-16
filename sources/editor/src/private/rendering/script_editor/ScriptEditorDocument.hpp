@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -23,6 +24,8 @@ public:
     [[nodiscard]] const std::vector<std::string>& Lines() const noexcept { return lines_; }
     [[nodiscard]] int LineCount() const noexcept;
     [[nodiscard]] int LineLength(int line) const noexcept;
+    // Bumped by every change of the text (not of the caret), so a host can tell that it was edited.
+    [[nodiscard]] std::uint64_t Revision() const noexcept { return revision_; }
 
     [[nodiscard]] ScriptCaret Caret() const noexcept { return caret_; }
     [[nodiscard]] ScriptCaret Anchor() const noexcept { return anchor_; }
@@ -65,6 +68,7 @@ private:
     ScriptCaret caret_;
     ScriptCaret anchor_;
     int desiredColumn_ = 0;
+    std::uint64_t revision_ = 0;
     std::vector<Snapshot> undo_;
     std::vector<Snapshot> redo_;
 };

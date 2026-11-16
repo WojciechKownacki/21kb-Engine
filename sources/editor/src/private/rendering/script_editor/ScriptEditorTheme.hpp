@@ -24,6 +24,9 @@ inline constexpr COLORREF kActiveLine = RGB(38, 38, 38);
 inline constexpr COLORREF kTextDefault = RGB(212, 212, 212);
 inline constexpr COLORREF kSelection = RGB(38, 79, 120);
 inline constexpr COLORREF kCaret = RGB(220, 220, 220);
+inline constexpr COLORREF kProblemMark = RGB(226, 170, 60);
+inline constexpr COLORREF kProblemPanel = RGB(37, 37, 38);
+inline constexpr COLORREF kProblemPanelBorder = RGB(69, 69, 69);
 inline constexpr COLORREF kScrollThumb = RGB(77, 77, 77);
 inline constexpr COLORREF kScrollThumbHot = RGB(110, 110, 110);
 

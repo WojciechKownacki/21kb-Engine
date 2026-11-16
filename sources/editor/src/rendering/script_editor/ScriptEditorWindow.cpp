@@ -7,6 +7,7 @@
 #include "rendering/script_editor/ScriptEditorLayout.hpp"
 #include "rendering/script_editor/ScriptEditorRenderer.hpp"
 #include "rendering/script_editor/ScriptEditorTheme.hpp"
+#include "rendering/script_editor/ScriptProblemService.hpp"
 #include "rendering/script_editor/ScriptSourceFile.hpp"
 
 #include <algorithm>
@@ -18,6 +19,8 @@ namespace kb::editor {
 namespace {
 
 constexpr wchar_t kClassName[] = L"KbScriptCodeEditor";
+constexpr UINT_PTR kAnalysisTimer = 2; // polls the background analysis while one is pending
+constexpr UINT kAnalysisPollMs = 50;
 
 struct ScriptEditorInstance {
     ScriptEditorDocument document;
@@ -26,6 +29,10 @@ struct ScriptEditorInstance {
     std::string savedText;
     std::filesystem::path filePath;
     std::uint64_t generation = 0;
+    ScriptProblemService problems;
+    std::uint64_t seenRevision = 0;
+    int hovered = -1; // the warning under the mouse
+    POINT hoverPoint{};
     bool caretVisible = true;
     bool scrollbarDragging = false;
     int scrollbarGrabOffset = 0;
@@ -57,6 +64,45 @@ void SaveInstance(ScriptEditorInstance& instance) {
     }
 }
 
+[[nodiscard]] ScriptProblemOverlay OverlayOf(const ScriptEditorInstance& instance) {
+    return ScriptProblemOverlay{ instance.problems.Problems(), instance.hovered, instance.hoverPoint };
+}
+
+void StartAnalysisPolling(HWND window) {
+    SetTimer(window, kAnalysisTimer, kAnalysisPollMs, nullptr);
+}
+
+// Tells the analysis that the text was edited, if it was.
+void NoteEdits(HWND window, ScriptEditorInstance& instance) {
+    if (instance.document.Revision() != instance.seenRevision) {
+        instance.seenRevision = instance.document.Revision();
+        instance.problems.TextChanged(ScriptProblemService::Clock::now());
+        StartAnalysisPolling(window);
+    }
+}
+
+// New warnings: resize the text area for the list and keep the caret line out from under it.
+void ShowProblems(HWND window, ScriptEditorInstance& instance) {
+    instance.hovered = -1;
+    instance.metrics.reservedBottom = ScriptEditorLayout::ProblemPanelHeight(instance.problems.Problems().size(), instance.metrics);
+    const RECT client = ClientRect(window);
+    const int visible = ScriptEditorLayout::VisibleLineCount(client, instance.metrics);
+    instance.viewport.scrollLine = std::min(instance.viewport.scrollLine, ScriptEditorLayout::MaxScrollLine(instance.document, client, instance.metrics));
+    if (instance.document.Caret().line >= instance.viewport.scrollLine + visible) {
+        instance.viewport.scrollLine = instance.document.Caret().line - visible + 1;
+    }
+    InvalidateRect(window, nullptr, FALSE);
+}
+
+void PollAnalysis(HWND window, ScriptEditorInstance& instance) {
+    if (instance.problems.Update(ScriptProblemService::Clock::now(), [&instance] { return instance.document.ToText(); })) {
+        ShowProblems(window, instance);
+    }
+    if (instance.problems.Idle()) {
+        KillTimer(window, kAnalysisTimer);
+    }
+}
+
 [[nodiscard]] bool OverScrollbar(HWND window, ScriptEditorInstance& instance, int x, int y) {
     const RECT thumb = ScriptEditorLayout::ScrollbarThumb(instance.document, instance.viewport, ClientRect(window), instance.metrics);
     return thumb.bottom > thumb.top && x >= thumb.left && y >= thumb.top && y < thumb.bottom;
@@ -65,7 +111,7 @@ void SaveInstance(ScriptEditorInstance& instance) {
 void DragScrollbar(HWND window, ScriptEditorInstance& instance, int y) {
     const RECT client = ClientRect(window);
     const RECT thumb = ScriptEditorLayout::ScrollbarThumb(instance.document, instance.viewport, client, instance.metrics);
-    const int trackHeight = static_cast<int>(client.bottom - client.top);
+    const int trackHeight = static_cast<int>(client.bottom - client.top) - instance.metrics.reservedBottom;
     const int travel = std::max(1, trackHeight - static_cast<int>(thumb.bottom - thumb.top));
     const int maxScroll = ScriptEditorLayout::MaxScrollLine(instance.document, client, instance.metrics);
     instance.viewport.scrollLine = std::clamp((y - instance.scrollbarGrabOffset) * maxScroll / travel, 0, maxScroll);
@@ -88,7 +134,7 @@ LRESULT CALLBACK EditorProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         return 1;
     case WM_PAINT:
         if (instance != nullptr) {
-            ScriptEditorRenderer::Paint(window, instance->document, instance->viewport, instance->metrics, instance->caretVisible, GetFocus() == window);
+            ScriptEditorRenderer::Paint(window, instance->document, instance->viewport, instance->metrics, OverlayOf(*instance), instance->caretVisible, GetFocus() == window);
         }
         return 0;
     case WM_PRINTCLIENT:
@@ -100,6 +146,7 @@ LRESULT CALLBACK EditorProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
                        instance->document,
                        instance->viewport,
                        instance->metrics,
+                       OverlayOf(*instance),
                        false,
                        false)
                 ? 1
@@ -115,7 +162,9 @@ LRESULT CALLBACK EditorProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         InvalidateRect(window, nullptr, FALSE);
         return 0;
     case WM_TIMER:
-        if (instance != nullptr) {
+        if (instance != nullptr && wparam == kAnalysisTimer) {
+            PollAnalysis(window, *instance);
+        } else if (instance != nullptr) {
             instance->caretVisible = !instance->caretVisible;
             InvalidateRect(window, nullptr, FALSE);
         }
@@ -143,6 +192,17 @@ LRESULT CALLBACK EditorProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
             SetFocus(window);
             const int x = GET_X_LPARAM(lparam);
             const int y = GET_Y_LPARAM(lparam);
+            const RECT client = ClientRect(window);
+            if (y >= client.bottom - instance->metrics.reservedBottom && instance->metrics.reservedBottom > 0) { // the problem list
+                const int row = ScriptEditorLayout::ProblemRowAt(instance->problems.Problems().size(), client, instance->metrics, y);
+                if (row >= 0) {
+                    const ScriptProblem& problem = instance->problems.Problems()[static_cast<std::size_t>(row)];
+                    instance->document.SetCaret(ScriptCaret{ problem.line, problem.column }, false);
+                    ScriptEditorLayout::EnsureCaretVisible(instance->document, instance->viewport, client, instance->metrics);
+                    InvalidateRect(window, nullptr, FALSE);
+                }
+                return 0;
+            }
             if (OverScrollbar(window, *instance, x, y)) {
                 const RECT thumb = ScriptEditorLayout::ScrollbarThumb(instance->document, instance->viewport, ClientRect(window), instance->metrics);
                 instance->scrollbarDragging = true;
@@ -155,8 +215,25 @@ LRESULT CALLBACK EditorProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
             InvalidateRect(window, nullptr, FALSE);
         }
         return 0;
+    case WM_MOUSELEAVE:
+        if (instance != nullptr && instance->hovered >= 0) {
+            instance->hovered = -1;
+            InvalidateRect(window, nullptr, FALSE);
+        }
+        return 0;
     case WM_MOUSEMOVE:
-        if (instance != nullptr && (wparam & MK_LBUTTON) != 0) {
+        if (instance != nullptr && (wparam & MK_LBUTTON) == 0) {
+            TRACKMOUSEEVENT track{ sizeof(track), TME_LEAVE, window, 0 };
+            TrackMouseEvent(&track);
+            const int x = GET_X_LPARAM(lparam);
+            const int y = GET_Y_LPARAM(lparam);
+            const int hovered = ScriptEditorLayout::ProblemAt(instance->problems.Problems(), instance->document, instance->viewport, ClientRect(window), instance->metrics, x, y);
+            if (hovered >= 0 || instance->hovered >= 0) { // the tooltip follows the mouse
+                instance->hovered = hovered;
+                instance->hoverPoint = POINT{ x, y };
+                InvalidateRect(window, nullptr, FALSE);
+            }
+        } else if (instance != nullptr) {
             if (instance->scrollbarDragging) {
                 DragScrollbar(window, *instance, GET_Y_LPARAM(lparam));
             } else {
@@ -173,6 +250,7 @@ LRESULT CALLBACK EditorProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         return 0;
     case WM_CHAR:
         if (instance != nullptr && ScriptEditorInput::HandleChar(window, instance->document, instance->viewport, instance->metrics, static_cast<wchar_t>(wparam))) {
+            NoteEdits(window, *instance);
             InvalidateRect(window, nullptr, FALSE);
         }
         return 0;
@@ -183,6 +261,7 @@ LRESULT CALLBACK EditorProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
             if (result.saveRequested) {
                 SaveInstance(*instance);
             }
+            NoteEdits(window, *instance);
             if (result.changed || result.saveRequested) {
                 InvalidateRect(window, nullptr, FALSE);
             }
@@ -243,6 +322,11 @@ void ScriptEditorWindow::Sync(HWND window, const RECT& bounds, const std::filesy
         instance->savedText = ScriptSourceFile::Read(filePath);
         instance->document.Load(instance->savedText);
         instance->viewport = ScriptEditorViewport{};
+        instance->metrics.reservedBottom = 0;
+        instance->hovered = -1;
+        instance->seenRevision = instance->document.Revision();
+        instance->problems.Reset(ScriptProblemService::Clock::now());
+        StartAnalysisPolling(window);
         instance->generation = generation;
         InvalidateRect(window, nullptr, FALSE);
         SetFocus(window);

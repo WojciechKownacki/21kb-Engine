@@ -68,8 +68,15 @@ constexpr std::string_view kForeignGlobals[] = { "_ENV", "rawlen", "loadstring",
 std::vector<ScriptSubsetFinding> FindOutOfSubsetConstructs(std::string_view source) {
     std::vector<ScriptSubsetFinding> findings;
     std::uint32_t line = 1U;
-    const auto report = [&](std::string message) {
-        findings.push_back(ScriptSubsetFinding{ .line = line, .message = std::move(message) });
+    // Records a finding for the `length` bytes at `at`, which are on the current line.
+    const auto report = [&](std::size_t at, std::size_t length, std::string message) {
+        const std::size_t lineStart = at == 0U ? 0U : source.rfind('\n', at - 1U) + 1U; // npos + 1 wraps to 0
+        findings.push_back(ScriptSubsetFinding{
+            .line = line,
+            .column = static_cast<std::uint32_t>(at - lineStart + 1U),
+            .length = static_cast<std::uint32_t>(length),
+            .message = std::move(message),
+        });
     };
     // Skips a long bracket that opens at `position` (after counting its lines); returns the position after it.
     const auto skipLong = [&](std::size_t position, int level) {
@@ -131,13 +138,14 @@ std::vector<ScriptSubsetFinding> FindOutOfSubsetConstructs(std::string_view sour
             const std::string_view name = source.substr(position, end - position);
             if (!afterDotOrColon) {
                 if (std::ranges::find(kForeignGlobals, name) != std::end(kForeignGlobals)) {
-                    report(std::string{ name } + " exists on one VM only; scripts must run on both");
+                    report(position, name.size(), std::string{ name } + " exists on one VM only; scripts must run on both");
                 } else if (name == "utf8") {
-                    report("the utf8 library exists on Lua 5.4 only; scripts must run on both");
+                    report(position, name.size(), "the utf8 library exists on Lua 5.4 only; scripts must run on both");
                 } else if (const std::string_view member = nameAfterDot(end); !member.empty()) {
                     for (const LibraryName& entry : kLibraryNames) {
                         if (entry.library == name && entry.name == member) {
-                            report(std::string{ name } + "." + std::string{ member } + ": " + std::string{ entry.advice });
+                            report(position, static_cast<std::size_t>(member.data() + member.size() - (source.data() + position)),
+                                   std::string{ name } + "." + std::string{ member } + ": " + std::string{ entry.advice });
                         }
                     }
                 }
@@ -161,7 +169,7 @@ std::vector<ScriptSubsetFinding> FindOutOfSubsetConstructs(std::string_view sour
                 const std::size_t digits = significant == std::string::npos ? 0U : text.size() - significant;
                 const bool tooLarge = hex ? digits > 14U || (digits == 14U && text[significant] > '1')
                                           : digits > 16U || (digits == 16U && text.compare(significant, 16U, "9007199254740992") > 0);
-                if (tooLarge) report("an integer literal above 2^53 is not exact on every platform");
+                if (tooLarge) report(position, end - position, "an integer literal above 2^53 is not exact on every platform");
             }
             position = end;
             afterDotOrColon = false;
@@ -169,22 +177,22 @@ std::vector<ScriptSubsetFinding> FindOutOfSubsetConstructs(std::string_view sour
         }
         const char next = position + 1U < source.size() ? source[position + 1U] : '\0';
         if (c == '/' && next == '/') {
-            report("'//' (integer division) exists on Lua 5.4 only; write math.floor(a / b)");
+            report(position, 2U, "'//' (integer division) exists on Lua 5.4 only; write math.floor(a / b)");
             position += 2U;
         } else if (c == '<' && next == '<') {
-            report("'<<' exists on Lua 5.4 only; use the bit library: bit.lshift(a, n)");
+            report(position, 2U, "'<<' exists on Lua 5.4 only; use the bit library: bit.lshift(a, n)");
             position += 2U;
         } else if (c == '>' && next == '>') {
-            report("'>>' exists on Lua 5.4 only; use the bit library: bit.rshift(a, n)");
+            report(position, 2U, "'>>' exists on Lua 5.4 only; use the bit library: bit.rshift(a, n)");
             position += 2U;
         } else if (c == '&') {
-            report("'&' exists on Lua 5.4 only; use the bit library: bit.band(a, b)");
+            report(position, 1U, "'&' exists on Lua 5.4 only; use the bit library: bit.band(a, b)");
             ++position;
         } else if (c == '|') {
-            report("'|' exists on Lua 5.4 only; use the bit library: bit.bor(a, b)");
+            report(position, 1U, "'|' exists on Lua 5.4 only; use the bit library: bit.bor(a, b)");
             ++position;
         } else if (c == '~' && next != '=') {
-            report("'~' exists on Lua 5.4 only; use the bit library: bit.bxor(a, b) or bit.bnot(a)");
+            report(position, 1U, "'~' exists on Lua 5.4 only; use the bit library: bit.bxor(a, b) or bit.bnot(a)");
             ++position;
         } else if (c == '<') { // <const> and <close>
             std::size_t cursor = position + 1U;
@@ -194,7 +202,7 @@ std::vector<ScriptSubsetFinding> FindOutOfSubsetConstructs(std::string_view sour
             const std::string_view attribute = source.substr(cursor, end - cursor);
             while (end < source.size() && (source[end] == ' ' || source[end] == '\t')) ++end;
             if ((attribute == "const" || attribute == "close") && end < source.size() && source[end] == '>') {
-                report("'<" + std::string{ attribute } + ">' exists on Lua 5.4 only; leave the attribute out");
+                report(position, end + 1U - position, "'<" + std::string{ attribute } + ">' exists on Lua 5.4 only; leave the attribute out");
                 position = end + 1U;
             } else {
                 ++position;

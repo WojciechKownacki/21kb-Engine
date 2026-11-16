@@ -645,6 +645,8 @@ add_executable(kb_editor WIN32
     src/private/rendering/script_editor/ScriptEditorTextEncoding.hpp
     src/private/rendering/script_editor/ScriptEditorTheme.hpp
     src/private/rendering/script_editor/ScriptEditorWindow.hpp
+    src/private/rendering/script_editor/ScriptProblem.hpp
+    src/private/rendering/script_editor/ScriptProblemService.hpp
     src/private/rendering/script_editor/ScriptSourceFile.hpp
     src/private/rendering/ScriptEditorPanelRenderer.hpp
     src/private/rendering/SceneViewportToolbarRenderer.hpp
@@ -934,6 +936,7 @@ add_executable(kb_editor WIN32
     src/rendering/script_editor/ScriptEditorRenderer.cpp
     src/rendering/script_editor/ScriptEditorTextEncoding.cpp
     src/rendering/script_editor/ScriptEditorWindow.cpp
+    src/rendering/script_editor/ScriptProblemService.cpp
     src/rendering/script_editor/ScriptSourceFile.cpp
     src/rendering/ScriptEditorPanelRenderer.cpp
     src/rendering/SceneViewportToolbarRenderer.cpp
@@ -1494,6 +1497,8 @@ if(BUILD_TESTING)
         src/rendering/material_graph/MaterialGraphCanvas.cpp
         src/rendering/script_editor/LuaSyntaxHighlighter.cpp
         src/rendering/script_editor/ScriptEditorDocument.cpp
+        src/rendering/script_editor/ScriptEditorLayout.cpp
+        src/rendering/script_editor/ScriptProblemService.cpp
         src/docking/DefaultDockWorkspace.cpp
         src/docking/DockCenterPanelInserter.cpp
         src/docking/DockDropEdgeBandClassifier.cpp
