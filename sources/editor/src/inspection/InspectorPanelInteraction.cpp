@@ -946,9 +946,32 @@ template <typename Mutator>
         property == InspectorPropertyId::TerrainImportMaximumHeight;
 }
 
+[[nodiscard]] std::optional<EditorFoliageField> FoliageFieldForProperty(InspectorPropertyId property) noexcept {
+    switch (property) {
+    case InspectorPropertyId::TerrainFoliageDensity: return EditorFoliageField::Density;
+    case InspectorPropertyId::TerrainFoliageMinScale: return EditorFoliageField::MinScale;
+    case InspectorPropertyId::TerrainFoliageMaxScale: return EditorFoliageField::MaxScale;
+    case InspectorPropertyId::TerrainFoliageRotation: return EditorFoliageField::Rotation;
+    case InspectorPropertyId::TerrainFoliageAlign: return EditorFoliageField::AlignToSlope;
+    case InspectorPropertyId::TerrainFoliageFadeStart: return EditorFoliageField::FadeStart;
+    case InspectorPropertyId::TerrainFoliageCullDistance: return EditorFoliageField::CullDistance;
+    default: return std::nullopt;
+    }
+}
+
+// The foliage layer the Inspector rows edit: the one picked in the list (a copy, the terrain read cache is reset by an edit).
+[[nodiscard]] std::optional<kb::assets::TerrainFoliageLayer> SelectedFoliageLayer(
+    const EditorSceneContext& sceneContext, kb::scene::SceneEntity entity) {
+    const kb::assets::TerrainAsset* terrain = sceneContext.TerrainForEditing(entity);
+    const std::size_t index = EditorTerrainService::ToolState().selectedFoliageLayer;
+    if (terrain == nullptr || index >= terrain->foliageLayers.size()) return std::nullopt;
+    return terrain->foliageLayers[index];
+}
+
 [[nodiscard]] bool IsTerrainTextProperty(InspectorPropertyId property) noexcept {
     return IsTerrainBrushFloatProperty(property) ||
         IsTerrainImportFloatProperty(property) ||
+        FoliageFieldForProperty(property).has_value() ||
         property == InspectorPropertyId::TerrainNoiseSeed ||
         property == InspectorPropertyId::TerrainResolutionX ||
         property == InspectorPropertyId::TerrainResolutionZ ||
@@ -1030,6 +1053,52 @@ template <typename Mutator>
                 entity, layerIndex, &error)) {
             sceneContext.Console().Warning("Terrain", error.empty() ? "Material layer could not be removed." : error);
         }
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::TerrainFoliageLayer) {
+        sceneContext.Inspector().EndTextEdit();
+        terrain_material_layer_menu::Close();
+        const kb::assets::TerrainAsset* terrain = sceneContext.TerrainForEditing(entity);
+        if (terrain != nullptr && hit.index >= 0 && static_cast<std::size_t>(hit.index) < terrain->foliageLayers.size()) {
+            EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+            tool.selectedFoliageLayer = static_cast<std::uint8_t>(hit.index);
+            tool.mode = EditorTerrainToolMode::Foliage;
+            tool.editingEnabled = true;
+            tool.brush.strength = std::min(tool.brush.strength, 1.0F);
+            tool.brushMenuOpen = false;
+        }
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::TerrainFoliageRemove) {
+        sceneContext.Inspector().EndTextEdit();
+        std::string error;
+        if (!sceneContext.RemoveTerrainFoliageLayer(entity, EditorTerrainService::ToolState().selectedFoliageLayer, &error)) {
+            sceneContext.Console().Warning("Terrain", error.empty() ? "Foliage layer could not be removed." : error);
+        }
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::TerrainFoliageCastsShadow) {
+        sceneContext.Inspector().EndTextEdit();
+        if (std::optional<kb::assets::TerrainFoliageLayer> layer = SelectedFoliageLayer(sceneContext, entity)) {
+            layer->castsShadow = !layer->castsShadow;
+            std::string error;
+            if (!sceneContext.SetTerrainFoliageLayer(entity, EditorTerrainService::ToolState().selectedFoliageLayer, *layer, &error)) {
+                sceneContext.Console().Warning("Terrain", error.empty() ? "Foliage layer could not be changed." : error);
+            }
+        }
+        return true;
+    }
+    if (const std::optional<EditorFoliageField> field = FoliageFieldForProperty(hit.property)) {
+        if (const std::optional<kb::assets::TerrainFoliageLayer> layer = SelectedFoliageLayer(sceneContext, entity)) {
+            sceneContext.Inspector().BeginTextEdit(hit.property, FormatCompactFloat(EditorTerrainService::FoliageFieldValue(*layer, *field)));
+        }
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::TerrainFoliageAdd || hit.property == InspectorPropertyId::TerrainFoliageMesh ||
+        hit.property == InspectorPropertyId::TerrainFoliageMeshPicker || hit.property == InspectorPropertyId::TerrainFoliageMaterial ||
+        hit.property == InspectorPropertyId::TerrainFoliageMaterialPicker) {
+        // The asset pickers open from the pointer router, which owns the window.
+        sceneContext.Inspector().EndTextEdit();
         return true;
     }
     if (hit.property == InspectorPropertyId::TerrainBrushMode) {
@@ -1128,6 +1197,16 @@ template <typename Mutator>
         }
         if (!(candidate.minimumHeight < candidate.maximumHeight)) return false;
         EditorTerrainService::ToolState().heightmapImport = candidate;
+        return true;
+    }
+    if (const std::optional<EditorFoliageField> field = FoliageFieldForProperty(property)) {
+        std::optional<kb::assets::TerrainFoliageLayer> layer = SelectedFoliageLayer(sceneContext, entity);
+        if (!layer.has_value() || !EditorTerrainService::SetFoliageField(*layer, *field, value)) return false;
+        std::string error;
+        if (!sceneContext.SetTerrainFoliageLayer(entity, EditorTerrainService::ToolState().selectedFoliageLayer, *layer, &error)) {
+            sceneContext.Console().Warning("Terrain", error.empty() ? "Foliage layer could not be changed." : error);
+            return false;
+        }
         return true;
     }
     if (property == InspectorPropertyId::TerrainResolutionX ||
@@ -3290,6 +3369,8 @@ void ApplyEntityFloatField(EditorSceneContext& sceneContext, kb::scene::SceneEnt
         return InspectorDisclosureId::GenericAdvanced;
     case InspectorPropertyId::TerrainAdvanced:
         return InspectorDisclosureId::TerrainAdvanced;
+    case InspectorPropertyId::TerrainFoliageAdvanced:
+        return InspectorDisclosureId::TerrainFoliageAdvanced;
     case InspectorPropertyId::UIAnchorPresets:
         return InspectorDisclosureId::UIAnchorPresets;
     case InspectorPropertyId::UIRectAdvanced:

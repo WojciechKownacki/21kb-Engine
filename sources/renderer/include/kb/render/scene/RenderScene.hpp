@@ -195,6 +195,8 @@ struct TerrainFoliageRenderProxyDesc {
     std::array<float, 16> model{};
     std::shared_ptr<const kb::assets::TerrainAsset> terrain;
     std::uint32_t layer = 1U;
+    // Changes when `terrain` is edited in place; the chunks whose own inputs changed are made again.
+    std::uint64_t revision = 0U;
 };
 
 enum class RenderSurfaceCastRegion : std::uint8_t { Circle2D, Rectangle2D, Sphere, Box, Capsule };

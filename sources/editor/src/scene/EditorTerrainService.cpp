@@ -16,8 +16,10 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cmath>
+#include <cstring>
 #include <memory>
 #include <system_error>
 
@@ -90,13 +92,15 @@ constexpr std::array<DefaultTerrainLayer, 2U> kDefaultTerrainLayers{ {
     std::shared_ptr<kb::render::RenderMeshAssetData> mesh,
     bool persist,
     bool refreshMetadata,
-    std::string* error) {
+    std::string* error,
+    bool foliageInSync = false) {
     const kb::assets::AssetMetadata* sourceMetadata = TerrainMetadata(scene, assetId);
     if (sourceMetadata == nullptr) {
         if (error != nullptr) *error = "Terrain asset is not registered";
         return false;
     }
-    if (mesh == nullptr) {
+    const bool builtHere = mesh == nullptr;
+    if (builtHere) {
         std::optional<kb::render::RenderMeshAssetData> built =
             kb::render::RenderTerrainMeshBuilder::Build(terrain);
         if (built.has_value()) {
@@ -107,6 +111,8 @@ constexpr std::array<DefaultTerrainLayer, 2U> kDefaultTerrainLayers{ {
         if (error != nullptr) *error = "Terrain preview mesh could not be built";
         return false;
     }
+    // A saved terrain, or one built here, carries its foliage; a stroke preview keeps what it has.
+    if ((persist && !foliageInSync) || builtHere) EditorTerrainService::AttachFoliageSource(terrain, *mesh);
     const kb::assets::AssetMetadata sourceCopy = *sourceMetadata;
     if (persist && !kb::assets::TerrainAssetIO::Save(sourceCopy.physicalPath, terrain, error)) {
         return false;
@@ -151,6 +157,7 @@ EditorTerrainTool EditorTerrainService::ActiveTool(const EditorTerrainToolState&
     using Mode = kb::terrain_editor::TerrainBrushMode;
     if (!tool.editingEnabled || tool.mode == EditorTerrainToolMode::Select) return EditorTerrainTool::None;
     if (tool.mode == EditorTerrainToolMode::Paint) return EditorTerrainTool::Paint;
+    if (tool.mode == EditorTerrainToolMode::Foliage) return EditorTerrainTool::Foliage;
     if (tool.mode == EditorTerrainToolMode::Holes) return EditorTerrainTool::Holes;
     switch (tool.brush.mode) {
     case Mode::Smooth:
@@ -182,6 +189,13 @@ bool EditorTerrainService::SelectTool(
         }
         tool.selectedMaterialLayer = std::min<std::uint8_t>(tool.selectedMaterialLayer, static_cast<std::uint8_t>(terrain->materialLayers.size() - 1U));
         tool.brush.strength = std::min(tool.brush.strength, 1.0F);
+    } else if (selected == EditorTerrainTool::Foliage) {
+        if (terrain == nullptr || terrain->foliageLayers.empty()) {
+            if (error != nullptr) *error = "Add a foliage layer in the Inspector before painting.";
+            return false;
+        }
+        tool.selectedFoliageLayer = std::min<std::uint8_t>(tool.selectedFoliageLayer, static_cast<std::uint8_t>(terrain->foliageLayers.size() - 1U));
+        tool.brush.strength = std::min(tool.brush.strength, 1.0F);
     } else if (selected == EditorTerrainTool::Stamp && tool.brush.stampImage == nullptr) {
         if (error != nullptr) *error = "Pick a height image for the stamp first.";
         return false;
@@ -191,6 +205,7 @@ bool EditorTerrainService::SelectTool(
     tool.brush.sampleTargetHeight = true;
     switch (selected) {
     case EditorTerrainTool::Paint: tool.mode = EditorTerrainToolMode::Paint; return true;
+    case EditorTerrainTool::Foliage: tool.mode = EditorTerrainToolMode::Foliage; return true;
     case EditorTerrainTool::Holes: tool.mode = EditorTerrainToolMode::Holes; tool.brush.mode = Mode::CutHole; return true;
     case EditorTerrainTool::Smooth: tool.brush.mode = Mode::Smooth; break;
     case EditorTerrainTool::Ramp: tool.brush.mode = Mode::Ramp; break;
@@ -201,8 +216,10 @@ bool EditorTerrainService::SelectTool(
     return true;
 }
 
-void EditorTerrainService::CycleToolVariant(EditorTerrainToolState& tool, std::size_t layerCount) noexcept {
+void EditorTerrainService::CycleToolVariant(EditorTerrainToolState& tool, const kb::assets::TerrainAsset* terrain) noexcept {
     using Mode = kb::terrain_editor::TerrainBrushMode;
+    const std::size_t layerCount = terrain != nullptr ? terrain->materialLayers.size() : 0U;
+    const std::size_t foliageCount = terrain != nullptr ? terrain->foliageLayers.size() : 0U;
     switch (ActiveTool(tool)) {
     case EditorTerrainTool::Smooth:
         tool.brush.mode = tool.brush.mode == Mode::Smooth ? Mode::Flatten : Mode::Smooth;
@@ -219,12 +236,113 @@ void EditorTerrainService::CycleToolVariant(EditorTerrainToolState& tool, std::s
             ++tool.selectedMaterialLayer;
         }
         break;
+    case EditorTerrainTool::Foliage:
+        if (foliageCount != 0U) tool.selectedFoliageLayer = static_cast<std::uint8_t>((tool.selectedFoliageLayer + 1U) % foliageCount);
+        break;
     case EditorTerrainTool::Stamp:
         tool.brush.stampBlend = static_cast<kb::terrain_editor::TerrainStampBlend>(
             (static_cast<std::uint8_t>(tool.brush.stampBlend) + 1U) % 3U);
         break;
     default: break;
     }
+}
+
+bool EditorTerrainService::AddFoliageLayer(
+    kb::assets::TerrainAsset& terrain, std::uint64_t meshAssetId, std::uint64_t materialAssetId) noexcept {
+    if (meshAssetId == 0U) return false;
+    return kb::terrain_editor::AddTerrainFoliageLayer(
+        terrain, kb::assets::TerrainFoliageLayer{ .meshAssetId = meshAssetId, .materialAssetId = materialAssetId });
+}
+
+bool EditorTerrainService::SetFoliageField(
+    kb::assets::TerrainFoliageLayer& layer, EditorFoliageField field, float value) noexcept {
+    if (!std::isfinite(value)) return false;
+    constexpr float kMinimumScale = 0.01F;
+    switch (field) {
+    case EditorFoliageField::Density: layer.density = std::clamp(value, 0.01F, 100.0F); break;
+    case EditorFoliageField::MinScale:
+        layer.minScale = std::max(value, kMinimumScale);
+        layer.maxScale = std::max(layer.maxScale, layer.minScale);
+        break;
+    case EditorFoliageField::MaxScale:
+        layer.maxScale = std::max(value, kMinimumScale);
+        layer.minScale = std::min(layer.minScale, layer.maxScale);
+        break;
+    case EditorFoliageField::Rotation: layer.rotationRangeDegrees = std::clamp(value, 0.0F, 360.0F); break;
+    case EditorFoliageField::AlignToSlope: layer.alignToNormal = std::clamp(value, 0.0F, 1.0F); break;
+    case EditorFoliageField::FadeStart:
+        layer.fadeStartDistance = std::max(value, 0.0F);
+        layer.cullDistance = std::max(layer.cullDistance, layer.fadeStartDistance + 1.0F);
+        break;
+    case EditorFoliageField::CullDistance: layer.cullDistance = std::max(value, layer.fadeStartDistance + 1.0F); break;
+    }
+    return true;
+}
+
+float EditorTerrainService::FoliageFieldValue(const kb::assets::TerrainFoliageLayer& layer, EditorFoliageField field) noexcept {
+    switch (field) {
+    case EditorFoliageField::Density: return layer.density;
+    case EditorFoliageField::MinScale: return layer.minScale;
+    case EditorFoliageField::MaxScale: return layer.maxScale;
+    case EditorFoliageField::Rotation: return layer.rotationRangeDegrees;
+    case EditorFoliageField::AlignToSlope: return layer.alignToNormal;
+    case EditorFoliageField::FadeStart: return layer.fadeStartDistance;
+    case EditorFoliageField::CullDistance: return layer.cullDistance;
+    }
+    return 0.0F;
+}
+
+kb::terrain_editor::TerrainFoliagePaintSettings EditorTerrainService::FoliagePaintSettings(
+    const EditorTerrainToolState& tool, bool erase) noexcept {
+    return kb::terrain_editor::TerrainFoliagePaintSettings{
+        .shape = tool.brush.shape,
+        .layerIndex = tool.selectedFoliageLayer,
+        .radius = tool.brush.radius,
+        .opacity = std::clamp(tool.brush.strength, 0.0F, 1.0F),
+        .falloff = tool.brush.falloff,
+        .noiseSeed = tool.brush.noiseSeed,
+        .mode = erase ? kb::terrain_editor::TerrainFoliagePaintMode::Erase : kb::terrain_editor::TerrainFoliagePaintMode::Add,
+    };
+}
+
+namespace {
+std::atomic<std::uint64_t> g_foliagePreviewBytes{ 0U };
+} // namespace
+
+void EditorTerrainService::AttachFoliageSource(const kb::assets::TerrainAsset& terrain, kb::render::RenderMeshAssetData& mesh) {
+    mesh.terrainFoliage = terrain.foliageLayers.empty() ? nullptr : std::make_shared<const kb::assets::TerrainAsset>(terrain);
+    ++mesh.terrainFoliageRevision;
+    if (mesh.terrainFoliage != nullptr) {
+        g_foliagePreviewBytes += terrain.heights.size() * sizeof(float) + terrain.holes.size() + terrain.layerWeights.size() + terrain.foliageDensity.size();
+    }
+}
+
+void EditorTerrainService::UpdateFoliagePreview(
+    const kb::assets::TerrainAsset& working, std::uint32_t layerIndex,
+    const kb::terrain_editor::TerrainLayerPaintResult& changed, kb::render::RenderMeshAssetData& mesh) {
+    const kb::assets::TerrainAsset* source = mesh.terrainFoliage.get();
+    const std::size_t plane = static_cast<std::size_t>(working.foliageMapWidth) * working.foliageMapHeight;
+    const bool follows = source != nullptr && source->width == working.width && source->height == working.height &&
+        source->foliageMapWidth == working.foliageMapWidth && source->foliageMapHeight == working.foliageMapHeight &&
+        source->foliageLayers.size() == working.foliageLayers.size() && source->foliageDensity.size() == working.foliageDensity.size() &&
+        layerIndex < working.foliageLayers.size() && changed.maxX < working.foliageMapWidth && changed.maxY < working.foliageMapHeight;
+    if (!follows) {
+        AttachFoliageSource(working, mesh);
+        return;
+    }
+    // The source is the editor's own working copy of the published mesh: edited in place, like the layer weights.
+    auto& target = const_cast<kb::assets::TerrainAsset&>(*source);
+    const std::size_t columns = changed.maxX - changed.minX + 1U;
+    for (std::uint32_t row = changed.minY; row <= changed.maxY; ++row) {
+        const std::size_t offset = plane * layerIndex + static_cast<std::size_t>(row) * working.foliageMapWidth + changed.minX;
+        std::memcpy(target.foliageDensity.data() + offset, working.foliageDensity.data() + offset, columns);
+    }
+    g_foliagePreviewBytes += columns * (changed.maxY - changed.minY + 1U);
+    ++mesh.terrainFoliageRevision;
+}
+
+std::uint64_t EditorTerrainService::FoliagePreviewBytesCopied() noexcept {
+    return g_foliagePreviewBytes.load();
 }
 
 bool EditorTerrainService::LoadStampImage(EditorTerrainToolState& tool, const std::filesystem::path& path, std::string* error) {
@@ -482,8 +600,9 @@ bool EditorTerrainService::Persist(
     kb::assets::AssetId assetId,
     const kb::assets::TerrainAsset& terrain,
     std::shared_ptr<kb::render::RenderMeshAssetData> mesh,
-    std::string* error) {
-    return Refresh(scene, assetId, terrain, std::move(mesh), true, true, error);
+    std::string* error,
+    bool foliageInSync) {
+    return Refresh(scene, assetId, terrain, std::move(mesh), true, true, error, foliageInSync);
 }
 
 std::optional<kb::assets::TerrainAsset> EditorTerrainService::BuildHeightmapImport(

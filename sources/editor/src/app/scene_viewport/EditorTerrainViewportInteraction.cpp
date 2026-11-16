@@ -281,14 +281,17 @@ void ConsiderTerrainPick(
         std::abs(local->z) > terrain->worldSizeZ * 0.5F) {
         return std::nullopt;
     }
+    const bool foliage = tool.mode == EditorTerrainToolMode::Foliage;
+    const std::uint32_t mapWidth = foliage ? terrain->foliageMapWidth : terrain->layerWeightWidth;
+    const std::uint32_t mapHeight = foliage ? terrain->foliageMapHeight : terrain->layerWeightHeight;
     return ResolvedTerrainPointer{
         .entity = entity,
         .local = *local,
-        .minimumSampleSpacing = tool.mode == EditorTerrainToolMode::Paint &&
-                terrain->layerWeightWidth > 1U && terrain->layerWeightHeight > 1U
+        .minimumSampleSpacing = (tool.mode == EditorTerrainToolMode::Paint || foliage) &&
+                mapWidth > 1U && mapHeight > 1U
             ? std::max(
-                terrain->worldSizeX / static_cast<float>(terrain->layerWeightWidth - 1U),
-                terrain->worldSizeZ / static_cast<float>(terrain->layerWeightHeight - 1U))
+                terrain->worldSizeX / static_cast<float>(mapWidth - 1U),
+                terrain->worldSizeZ / static_cast<float>(mapHeight - 1U))
             : std::max(
                 terrain->worldSizeX / static_cast<float>(terrain->width - 1U),
                 terrain->worldSizeZ / static_cast<float>(terrain->height - 1U)),
@@ -403,7 +406,8 @@ bool EditorTerrainViewportInteraction::Stamp(
         .localX = pointer->local.x,
         .localZ = pointer->local.z };
     using Mode = kb::terrain_editor::TerrainBrushMode;
-    const bool paint = tool.mode == EditorTerrainToolMode::Paint;
+    // Painting a material and painting foliage share the stroke below; only the data they change differs.
+    const bool paint = tool.mode == EditorTerrainToolMode::Paint || tool.mode == EditorTerrainToolMode::Foliage;
     if (beginStroke && !paint && tool.brush.mode == Mode::Flatten && EditorKeyDown(VK_MENU)) {
         // Alt picks the height under the cursor as the height to flatten to.
         const kb::assets::TerrainAsset* terrain = sceneContext.TerrainForEditing(pointer->entity);
@@ -441,7 +445,11 @@ bool EditorTerrainViewportInteraction::Stamp(
         segmentStart.localZ = tool.lastStampZ;
     }
     std::string error;
-    const bool applied = tool.mode == EditorTerrainToolMode::Paint
+    const bool applied = tool.mode == EditorTerrainToolMode::Foliage
+        ? sceneContext.ApplyTerrainFoliagePaintSegment(
+            pointer->entity, EditorTerrainService::FoliagePaintSettings(tool, EditorKeyDown(VK_CONTROL)),
+            segmentStart, stamp, beginStroke, &error)
+        : tool.mode == EditorTerrainToolMode::Paint
         ? sceneContext.ApplyTerrainLayerPaintSegment(
             pointer->entity,
             kb::terrain_editor::TerrainLayerPaintSettings{

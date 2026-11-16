@@ -1,6 +1,8 @@
 #include "extensions/EditorExtensionHost.hpp"
 #include "docking/EditorDockModel.hpp"
 #include "engine/assets/AssetFileName.hpp"
+#include "engine/assets/BuiltInShapes.hpp"
+#include "engine/assets/TerrainFoliage.hpp"
 #include "authoring/EditorAuthoringHost.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
 #include "inspection/InspectorGenericComponentModel.hpp"
@@ -233,6 +235,7 @@ struct ScenarioState {
     std::unordered_map<std::string, EntityAlias> entities;
     std::unordered_map<std::string, kb::assets::AssetId> assets;
     std::unordered_map<std::string, kb::scene::MeshRendererComponent> rememberedMeshes;
+    std::unordered_map<std::string, kb::assets::TerrainAsset> terrainSnapshots;
     std::unordered_map<std::string, std::uint32_t> materialNodes;
     // The dock workspace the workspace_* steps arrange, and the layouts saved by name.
     EditorDockModel dock;
@@ -3462,6 +3465,126 @@ ReadScriptValue(
         return { true, "terrain paint committed" };
     }
 
+    if (*operation == "terrain_foliage") {
+        // action: add (mesh), remove (layer), set (layer, then density min_scale max_scale rotation align fade cull
+        // shadows mesh material) or paint (layer, x, z, to_x, to_z, radius, opacity, erase: a stroke of the foliage tool).
+        const auto alias = StringMember(step, "entity", error);
+        const auto action = StringMember(step, "action", error);
+        if (!alias || !action) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        if (!EditorTerrainService::IsTerrainEntity(state.context.Scene(), entity)) {
+            return { false, "entity does not have a Terrain Editor component" };
+        }
+        EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+        if (*action == "add") {
+            const auto mesh = StringMember(step, "mesh", error);
+            if (!mesh) return { false, error };
+            kb::assets::AssetId meshId = ResolveAsset(state, *mesh);
+            if (!meshId.IsValid()) {
+                if (const kb::assets::BuiltInShapeDesc* shape = kb::assets::FindBuiltInShape(*mesh)) meshId = kb::assets::BuiltInShapeId(shape->shape);
+            }
+            const bool added = meshId.IsValid() && state.context.AddTerrainFoliageLayer(entity, meshId, &error);
+            return { added, added ? "foliage layer added" : (error.empty() ? "mesh was not found" : error) };
+        }
+        const auto layer = UInt32Member(step, "layer", error);
+        if (!layer || *layer > 255U) return { false, error.empty() ? "'layer' is a foliage layer index" : error };
+        if (*action == "remove") {
+            const bool removed = state.context.RemoveTerrainFoliageLayer(entity, static_cast<std::uint8_t>(*layer), &error);
+            return { removed, removed ? "foliage layer removed" : error };
+        }
+        const kb::assets::TerrainAsset* terrain = state.context.TerrainForEditing(entity, &error);
+        if (terrain == nullptr) return { false, error };
+        if (*layer >= terrain->foliageLayers.size()) return { false, "'layer' is not a foliage layer of the terrain" };
+        if (*action == "set") {
+            kb::assets::TerrainFoliageLayer edited = terrain->foliageLayers[*layer];
+            constexpr std::pair<std::string_view, EditorFoliageField> fields[]{ { "density", EditorFoliageField::Density },
+                { "min_scale", EditorFoliageField::MinScale }, { "max_scale", EditorFoliageField::MaxScale },
+                { "rotation", EditorFoliageField::Rotation }, { "align", EditorFoliageField::AlignToSlope },
+                { "fade", EditorFoliageField::FadeStart }, { "cull", EditorFoliageField::CullDistance } };
+            for (const auto& [name, field] : fields) {
+                if (const auto value = NumberMember(step, name, error, false)) {
+                    if (!EditorTerrainService::SetFoliageField(edited, field, static_cast<float>(*value))) return { false, "foliage value is not usable" };
+                }
+            }
+            if (const auto shadows = BoolMember(step, "shadows", error, false)) edited.castsShadow = *shadows;
+            if (const auto mesh = StringMember(step, "mesh", error, false)) edited.meshAssetId = ResolveAsset(state, *mesh).value;
+            if (const auto material = StringMember(step, "material", error, false)) edited.materialAssetId = ResolveAsset(state, *material).value;
+            if (!error.empty()) return { false, error };
+            const bool done = state.context.SetTerrainFoliageLayer(entity, static_cast<std::uint8_t>(*layer), edited, &error);
+            return { done, done ? "foliage layer changed" : error };
+        }
+        if (*action != "paint") return { false, "'action' is add, remove, set or paint" };
+        const auto x = NumberMember(step, "x", error);
+        const auto z = NumberMember(step, "z", error);
+        const auto toX = NumberMember(step, "to_x", error, false);
+        const auto toZ = NumberMember(step, "to_z", error, false);
+        const auto radius = NumberMember(step, "radius", error, false);
+        const auto opacity = NumberMember(step, "opacity", error, false);
+        const bool erase = BoolMember(step, "erase", error, false).value_or(false);
+        if (!x || !z || !error.empty()) return { false, error };
+        tool.selectedFoliageLayer = static_cast<std::uint8_t>(*layer);
+        if (radius) tool.brush.radius = static_cast<float>(*radius);
+        if (opacity) tool.brush.strength = static_cast<float>(*opacity);
+        const kb::terrain_editor::TerrainBrushStamp start{ .localX = static_cast<float>(*x), .localZ = static_cast<float>(*z) };
+        const kb::terrain_editor::TerrainBrushStamp end{
+            .localX = static_cast<float>(toX.value_or(*x)), .localZ = static_cast<float>(toZ.value_or(*z)) };
+        const bool applied = state.context.ApplyTerrainFoliagePaintSegment(
+            entity, EditorTerrainService::FoliagePaintSettings(tool, erase), start, end, true, &error);
+        if (!applied) return { false, error };
+        if (!state.context.CommitTerrainBrushStroke(&error)) return { false, error };
+        return { true, "terrain foliage stroke committed" };
+    }
+
+    if (*operation == "assert_terrain_foliage") {
+        // layers (how many), instances (min, max: all plants, or those of `chunk_x`, `chunk_z`), has_map, remember (a
+        // name: keeps the terrain as it is) and same_as (a name: the foliage data is the same, bit for bit).
+        const auto alias = StringMember(step, "entity", error);
+        if (!alias) return { false, error };
+        const std::optional<kb::assets::TerrainAsset> terrain =
+            EditorTerrainService::Load(state.context.Scene(), ResolveEntity(state, *alias), &error);
+        if (!terrain.has_value()) return { false, error };
+        if (const auto remember = StringMember(step, "remember", error, false)) {
+            state.terrainSnapshots[*remember] = *terrain;
+            return { true, "terrain remembered" };
+        }
+        if (const auto same = StringMember(step, "same_as", error, false)) {
+            const auto found = state.terrainSnapshots.find(*same);
+            if (found == state.terrainSnapshots.end()) return { false, "terrain was not remembered" };
+            const kb::assets::TerrainAsset& saved = found->second;
+            bool identical = saved.foliageLayers.size() == terrain->foliageLayers.size() &&
+                saved.foliageMapWidth == terrain->foliageMapWidth && saved.foliageMapHeight == terrain->foliageMapHeight &&
+                saved.foliageDensity == terrain->foliageDensity;
+            for (std::size_t index = 0U; identical && index < saved.foliageLayers.size(); ++index) {
+                const kb::assets::TerrainFoliageLayer& a = saved.foliageLayers[index];
+                const kb::assets::TerrainFoliageLayer& b = terrain->foliageLayers[index];
+                identical = a.meshAssetId == b.meshAssetId && a.materialAssetId == b.materialAssetId && a.density == b.density &&
+                    a.minScale == b.minScale && a.maxScale == b.maxScale && a.rotationRangeDegrees == b.rotationRangeDegrees &&
+                    a.alignToNormal == b.alignToNormal && a.fadeStartDistance == b.fadeStartDistance &&
+                    a.cullDistance == b.cullDistance && a.seed == b.seed && a.castsShadow == b.castsShadow;
+            }
+            return { identical, identical ? "foliage data matched" : "foliage data differs from the remembered terrain" };
+        }
+        const auto layers = UInt32Member(step, "layers", error, false);
+        const auto hasMap = BoolMember(step, "has_map", error, false);
+        const auto minimum = UInt32Member(step, "min", error, false);
+        const auto maximum = UInt32Member(step, "max", error, false);
+        const auto chunkX = UInt32Member(step, "chunk_x", error, false);
+        const auto chunkZ = UInt32Member(step, "chunk_z", error, false);
+        if (!error.empty()) return { false, error };
+        if (layers && terrain->foliageLayers.size() != *layers) return { false, "foliage layers: " + std::to_string(terrain->foliageLayers.size()) };
+        if (hasMap && (terrain->foliageDensity.empty() == *hasMap)) return { false, "foliage density map presence differs" };
+        if (minimum || maximum) {
+            std::uint64_t count = 0U;
+            for (const kb::assets::TerrainFoliageChunk& chunk : kb::assets::BuildTerrainFoliage(*terrain)) {
+                if (chunkX && chunk.coord.x != *chunkX) continue;
+                if (chunkZ && chunk.coord.z != *chunkZ) continue;
+                count += chunk.instances.size();
+            }
+            if ((minimum && count < *minimum) || (maximum && count > *maximum)) return { false, "foliage instances: " + std::to_string(count) };
+        }
+        return { true, "terrain foliage matched" };
+    }
+
     if (*operation == "assert_terrain_height") {
         const auto alias = StringMember(step, "entity", error);
         const auto x = NumberMember(step, "x", error);
@@ -3542,7 +3665,7 @@ ReadScriptValue(
     }
 
     if (*operation == "terrain_tool") {
-        // tool: none sculpt smooth flatten paint ramp stamp holes; stamp takes `image` (a height image), paint
+        // tool: none sculpt smooth flatten paint foliage ramp stamp holes; stamp takes `image` (a height image), paint
         // `auto` (the layer by slope); radius and strength are optional; `cycle` clicks the variant button that many times
         // (Smooth to Flatten, the next paint layer and then Auto, the next stamp blend).
         const auto alias = StringMember(step, "entity", error);
@@ -3551,9 +3674,9 @@ ReadScriptValue(
         const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
         using Tool = EditorTerrainTool;
         constexpr std::pair<std::string_view, Tool> names[]{ { "none", Tool::None }, { "sculpt", Tool::Sculpt }, { "smooth", Tool::Smooth },
-            { "flatten", Tool::Smooth }, { "paint", Tool::Paint }, { "ramp", Tool::Ramp }, { "stamp", Tool::Stamp }, { "holes", Tool::Holes } };
+            { "flatten", Tool::Smooth }, { "paint", Tool::Paint }, { "foliage", Tool::Foliage }, { "ramp", Tool::Ramp }, { "stamp", Tool::Stamp }, { "holes", Tool::Holes } };
         const auto* const found = std::ranges::find(names, *name, &std::pair<std::string_view, Tool>::first);
-        if (found == std::end(names)) return { false, "unknown terrain tool '" + *name + "' (none sculpt smooth flatten paint ramp stamp holes)" };
+        if (found == std::end(names)) return { false, "unknown terrain tool '" + *name + "' (none sculpt smooth flatten paint foliage ramp stamp holes)" };
         EditorTerrainToolState& tool = EditorTerrainService::ToolState();
         if (const auto image = StringMember(step, "image", error, false)) {
             if (!EditorTerrainService::LoadStampImage(tool, *image, &error)) return { false, error };
@@ -3573,7 +3696,7 @@ ReadScriptValue(
         if (*name == "flatten") tool.brush.mode = kb::terrain_editor::TerrainBrushMode::Flatten;
         const kb::assets::TerrainAsset* const terrain = state.context.TerrainForEditing(entity, &error);
         for (std::uint32_t click = 0U; cycle && click < *cycle && terrain != nullptr; ++click) {
-            EditorTerrainService::CycleToolVariant(tool, terrain->materialLayers.size());
+            EditorTerrainService::CycleToolVariant(tool, terrain);
         }
         return { true, "terrain tool " + *name };
     }

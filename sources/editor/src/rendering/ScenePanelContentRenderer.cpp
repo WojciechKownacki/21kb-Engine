@@ -568,7 +568,9 @@ void AppendTerrainBrushRing(
         ? std::array<float, 3U>{ 1.0F, 0.38F, 0.12F }
         : tool.mode == EditorTerrainToolMode::Paint
             ? std::array<float, 3U>{ 1.0F, 0.63F, 0.16F }
-            : std::array<float, 3U>{ 0.16F, 0.88F, 1.0F };
+            : tool.mode == EditorTerrainToolMode::Foliage
+                ? std::array<float, 3U>{ 0.36F, 0.9F, 0.26F }
+                : std::array<float, 3U>{ 0.16F, 0.88F, 1.0F };
     const auto point = [&](std::size_t index) -> std::optional<kb::scene::Vec3> {
         const float angle = twoPi * static_cast<float>(index) / static_cast<float>(segmentCount);
         const float x = tool.hoverLocalX + std::cos(angle) * tool.brush.radius;

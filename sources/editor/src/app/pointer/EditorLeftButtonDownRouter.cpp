@@ -1773,6 +1773,49 @@ bool EditorLeftButtonDownRouter::HandleInspectorDown(HWND messageWindow, int x, 
     }
     const std::optional<std::uint32_t> materialSlotPicker = MeshRendererMaterialSlotPickerForProperty(hit.property);
     if (hit.section == InspectorSectionId::Terrain &&
+        (hit.property == InspectorPropertyId::TerrainFoliageAdd ||
+         hit.property == InspectorPropertyId::TerrainFoliageMesh || hit.property == InspectorPropertyId::TerrainFoliageMeshPicker ||
+         hit.property == InspectorPropertyId::TerrainFoliageMaterial || hit.property == InspectorPropertyId::TerrainFoliageMaterialPicker)) {
+        // Add asks for the plant's mesh first; the Mesh and Material fields change the layer picked in the list.
+        const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
+        const kb::assets::TerrainAsset* terrain = sceneContext_.TerrainForEditing(entity);
+        const std::uint8_t selected = EditorTerrainService::ToolState().selectedFoliageLayer;
+        const bool adding = hit.property == InspectorPropertyId::TerrainFoliageAdd;
+        const bool material = hit.property == InspectorPropertyId::TerrainFoliageMaterial || hit.property == InspectorPropertyId::TerrainFoliageMaterialPicker;
+        std::string error;
+        if (terrain == nullptr || (!adding && selected >= terrain->foliageLayers.size())) {
+            sceneContext_.Console().Warning("Terrain", "Terrain asset is unavailable.");
+        } else if (adding && terrain->foliageLayers.size() >= kb::assets::TerrainAsset::MaximumFoliageLayers) {
+            sceneContext_.Console().Warning("Terrain", "Terrain supports at most eight foliage layers.");
+        } else {
+            kb::assets::TerrainFoliageLayer layer = adding ? kb::assets::TerrainFoliageLayer{} : terrain->foliageLayers[selected];
+            bool accepted = false;
+            if (material) {
+                const EditorMaterialAssetPickerDialog::Result result = EditorMaterialAssetPickerDialog::Show(
+                    mainWindow_, MakeEditorDarkTheme(), sceneContext_, sceneViewport_, kb::assets::AssetId{ layer.materialAssetId });
+                accepted = result.accepted;
+                layer.materialAssetId = result.assetId.value;
+            } else {
+                const EditorMeshAssetPickerDialog::Result result = EditorMeshAssetPickerDialog::Show(
+                    mainWindow_, MakeEditorDarkTheme(), sceneContext_, kb::assets::AssetId{ layer.meshAssetId });
+                accepted = result.accepted && result.assetId.IsValid();
+                layer.meshAssetId = result.assetId.value;
+            }
+            if (accepted) {
+                const bool done = adding
+                    ? sceneContext_.AddTerrainFoliageLayer(entity, kb::assets::AssetId{ layer.meshAssetId }, &error)
+                    : sceneContext_.SetTerrainFoliageLayer(entity, selected, layer, &error);
+                if (!done) {
+                    sceneContext_.Console().Warning("Terrain", error.empty() ? "Foliage layer could not be changed." : error);
+                } else {
+                    sceneViewport_.RequestPresent();
+                }
+            }
+        }
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return true;
+    }
+    if (hit.section == InspectorSectionId::Terrain &&
         hit.property == InspectorPropertyId::TerrainMaterialLayerCreate) {
         terrain_material_layer_menu::Close();
         const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();

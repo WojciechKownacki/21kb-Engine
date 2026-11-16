@@ -1705,6 +1705,135 @@ bool EditorSceneContext::RemoveTerrainMaterialLayer(
     return true;
 }
 
+bool EditorSceneContext::ApplyTerrainFoliagePaintSegment(
+    kb::scene::SceneEntity entity,
+    const kb::terrain_editor::TerrainFoliagePaintSettings& settings,
+    const kb::terrain_editor::TerrainBrushStamp& start,
+    const kb::terrain_editor::TerrainBrushStamp& end,
+    bool beginStroke,
+    std::string* error) {
+    if (beginStroke && !BeginTerrainBrushStroke(entity, "Paint Terrain Foliage", false, error)) return false;
+    if (!terrainStroke_.has_value() || terrainStroke_->entity != entity) {
+        if (error != nullptr) *error = "Terrain foliage paint stroke is not active";
+        return false;
+    }
+    const kb::terrain_editor::TerrainLayerPaintResult result =
+        kb::terrain_editor::ApplyTerrainFoliagePaintSegment(terrainStroke_->working, settings, start, end);
+    if (!result.Changed()) {
+        if (error != nullptr) error->clear();
+        return true;
+    }
+    // The ground does not change: only the painted density texels go to the preview, which places those chunks again.
+    EditorTerrainService::UpdateFoliagePreview(terrainStroke_->working, settings.layerIndex, result, *terrainStroke_->previewMesh);
+    terrainStroke_->foliagePaint = true;
+    if (!terrainStroke_->previewPublished && !EditorTerrainService::PublishPreview(
+            *scene_, terrainStroke_->assetId,
+            terrainStroke_->working, terrainStroke_->previewMesh,
+            true, error)) {
+        CancelTerrainBrushStroke();
+        return false;
+    }
+    terrainStroke_->previewPublished = true;
+    terrainStroke_->changed = true;
+    return true;
+}
+
+bool EditorSceneContext::AddTerrainFoliageLayer(
+    kb::scene::SceneEntity entity,
+    kb::assets::AssetId meshAssetId,
+    std::string* error) {
+    CancelTerrainBrushStroke();
+    std::optional<EditorTerrainAssetState> captured =
+        EditorTerrainService::Capture(*scene_, entity, error);
+    if (!captured.has_value()) return false;
+    kb::assets::TerrainAsset edited = captured->terrain;
+    if (!EditorTerrainService::AddFoliageLayer(edited, meshAssetId.value)) {
+        if (error != nullptr) *error = "Terrain supports at most eight foliage layers";
+        return false;
+    }
+    const std::uint8_t selected = static_cast<std::uint8_t>(edited.foliageLayers.size() - 1U);
+    auto command = std::make_unique<EditorTerrainAssetEditCommand>(
+        *scene_, captured->assetId, "Add Terrain Foliage Layer",
+        std::move(captured->terrain), std::move(edited));
+    if (!commandStack_.Execute(std::move(command))) {
+        if (error != nullptr && error->empty()) *error = "Terrain foliage layer could not be saved";
+        return false;
+    }
+    EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+    tool.selectedFoliageLayer = selected;
+    tool.mode = EditorTerrainToolMode::Foliage;
+    tool.editingEnabled = true;
+    tool.brush.strength = std::min(tool.brush.strength, 1.0F);
+    terrainReadCache_.reset();
+    MarkSceneEntitiesRenderDirty(std::span<const kb::scene::SceneEntity>{ &entity, 1U });
+    if (error != nullptr) error->clear();
+    return true;
+}
+
+bool EditorSceneContext::SetTerrainFoliageLayer(
+    kb::scene::SceneEntity entity,
+    std::uint8_t layerIndex,
+    const kb::assets::TerrainFoliageLayer& layer,
+    std::string* error) {
+    CancelTerrainBrushStroke();
+    std::optional<EditorTerrainAssetState> captured =
+        EditorTerrainService::Capture(*scene_, entity, error);
+    if (!captured.has_value()) return false;
+    kb::assets::TerrainAsset edited = captured->terrain;
+    if (layerIndex >= edited.foliageLayers.size()) {
+        if (error != nullptr) *error = "Terrain foliage layer index is invalid";
+        return false;
+    }
+    edited.foliageLayers[layerIndex] = layer;
+    if (!kb::assets::IsTerrainAssetValid(edited, error)) return false;
+    auto command = std::make_unique<EditorTerrainAssetEditCommand>(
+        *scene_, captured->assetId, "Edit Terrain Foliage Layer",
+        std::move(captured->terrain), std::move(edited));
+    if (!commandStack_.Execute(std::move(command))) {
+        if (error != nullptr && error->empty()) *error = "Terrain foliage layer could not be saved";
+        return false;
+    }
+    EditorTerrainService::ToolState().selectedFoliageLayer = layerIndex;
+    terrainReadCache_.reset();
+    MarkSceneEntitiesRenderDirty(std::span<const kb::scene::SceneEntity>{ &entity, 1U });
+    if (error != nullptr) error->clear();
+    return true;
+}
+
+bool EditorSceneContext::RemoveTerrainFoliageLayer(
+    kb::scene::SceneEntity entity,
+    std::uint8_t layerIndex,
+    std::string* error) {
+    CancelTerrainBrushStroke();
+    std::optional<EditorTerrainAssetState> captured =
+        EditorTerrainService::Capture(*scene_, entity, error);
+    if (!captured.has_value()) return false;
+    kb::assets::TerrainAsset edited = captured->terrain;
+    if (!kb::terrain_editor::RemoveTerrainFoliageLayer(edited, layerIndex)) {
+        if (error != nullptr) *error = "Terrain foliage layer index is invalid";
+        return false;
+    }
+    const std::size_t remainingLayerCount = edited.foliageLayers.size();
+    auto command = std::make_unique<EditorTerrainAssetEditCommand>(
+        *scene_, captured->assetId, "Remove Terrain Foliage Layer",
+        std::move(captured->terrain), std::move(edited));
+    if (!commandStack_.Execute(std::move(command))) {
+        if (error != nullptr && error->empty()) *error = "Terrain foliage layer could not be saved";
+        return false;
+    }
+    EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+    tool.selectedFoliageLayer = remainingLayerCount == 0U
+        ? 0U
+        : std::min<std::uint8_t>(layerIndex, static_cast<std::uint8_t>(remainingLayerCount - 1U));
+    if (remainingLayerCount == 0U && tool.mode == EditorTerrainToolMode::Foliage) {
+        tool.mode = EditorTerrainToolMode::Sculpt;
+    }
+    terrainReadCache_.reset();
+    MarkSceneEntitiesRenderDirty(std::span<const kb::scene::SceneEntity>{ &entity, 1U });
+    if (error != nullptr) error->clear();
+    return true;
+}
+
 bool EditorSceneContext::CommitTerrainBrushStroke(std::string* error) {
     if (!terrainStroke_.has_value()) {
         if (error != nullptr) error->clear();
@@ -1718,7 +1847,7 @@ bool EditorSceneContext::CommitTerrainBrushStroke(std::string* error) {
     }
     if (!EditorTerrainService::Persist(
             *scene_, completed.assetId, completed.working,
-            completed.previewMesh, error)) {
+            completed.previewMesh, error, completed.foliagePaint)) {
         static_cast<void>(EditorTerrainService::PublishPreview(
             *scene_, completed.assetId, completed.before));
         terrainReadCache_.reset();

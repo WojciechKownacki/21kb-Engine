@@ -70,6 +70,10 @@ int main(int argumentCount, char** arguments) {
         kb::editor::tests::RunEditorGameViewTests();
         return 0;
     }
+    if (argumentCount == 2 && std::string_view{ arguments[1] } == "terrain-foliage") {
+        kb::editor::tests::RunEditorTerrainFoliageTests();
+        return 0;
+    }
     kb::editor::tests::RunEditorTimelineTests();
     kb::editor::tests::RunEditorBlendSpace2DTests();
     kb::editor::tests::RunEditorStaticMeshTests();
@@ -94,6 +98,7 @@ int main(int argumentCount, char** arguments) {
     kb::editor::tests::RunEditorStartupProgressTests();
     kb::editor::tests::RunEditorInspectorTests();
     kb::editor::tests::RunEditorMaterialAssetAuthoringTests();
+    kb::editor::tests::RunEditorTerrainFoliageTests();
     kb::editor::tests::RunScriptEditorTests();
     kb::editor::tests::RunSvgPathTests();
     return 0;

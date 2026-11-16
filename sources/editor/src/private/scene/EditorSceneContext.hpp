@@ -136,6 +136,7 @@ struct TerrainBrushSettings;
 struct TerrainBrushStamp;
 struct TerrainHeightmapImportSettings;
 struct TerrainLayerPaintSettings;
+struct TerrainFoliagePaintSettings;
 
 } // namespace kb::terrain_editor
 
@@ -197,6 +198,8 @@ class EditorSceneContext {
         bool changed = false;
         bool previewPublished = false;
         bool layerPaint = false;
+        // A foliage stroke keeps the preview's foliage source up to date as it goes.
+        bool foliagePaint = false;
         std::string label = "Sculpt Terrain";
     };
 
@@ -470,6 +473,27 @@ public:
         kb::assets::AssetId materialAssetId,
         std::string* error = nullptr);
     [[nodiscard]] bool RemoveTerrainMaterialLayer(
+        kb::scene::SceneEntity entity,
+        std::uint8_t layerIndex,
+        std::string* error = nullptr);
+    // Foliage painting goes through the same stroke as material painting: one Undo step per stroke.
+    [[nodiscard]] bool ApplyTerrainFoliagePaintSegment(
+        kb::scene::SceneEntity entity,
+        const kb::terrain_editor::TerrainFoliagePaintSettings& settings,
+        const kb::terrain_editor::TerrainBrushStamp& start,
+        const kb::terrain_editor::TerrainBrushStamp& end,
+        bool beginStroke,
+        std::string* error = nullptr);
+    [[nodiscard]] bool AddTerrainFoliageLayer(
+        kb::scene::SceneEntity entity,
+        kb::assets::AssetId meshAssetId,
+        std::string* error = nullptr);
+    [[nodiscard]] bool SetTerrainFoliageLayer(
+        kb::scene::SceneEntity entity,
+        std::uint8_t layerIndex,
+        const kb::assets::TerrainFoliageLayer& layer,
+        std::string* error = nullptr);
+    [[nodiscard]] bool RemoveTerrainFoliageLayer(
         kb::scene::SceneEntity entity,
         std::uint8_t layerIndex,
         std::string* error = nullptr);

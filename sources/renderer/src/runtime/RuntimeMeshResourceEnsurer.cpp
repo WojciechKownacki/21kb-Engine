@@ -555,6 +555,7 @@ void RuntimeMeshResourceEnsurer::Ensure(
     // The terrain meshes of the scene with what their foliage is made from, found once per mesh.
     struct TerrainFoliageSource {
         std::shared_ptr<const kb::assets::TerrainAsset> terrain;
+        std::uint64_t revision = 0U;
         // A terrain whose mesh is not loaded, or is an editor preview without the foliage source, keeps the foliage it has.
         bool keep = false;
     };
@@ -569,6 +570,7 @@ void RuntimeMeshResourceEnsurer::Ensure(
             source.keep = true;
         } else {
             source.terrain = asset->terrainFoliage;
+            source.revision = asset->terrainFoliageRevision;
             source.keep = source.terrain == nullptr &&
                 (asset->dynamicVertexUpdates || !asset->dynamicTerrainLayerWeightUpdates.empty());
         }
@@ -588,7 +590,7 @@ void RuntimeMeshResourceEnsurer::Ensure(
         if (found == terrainSources.end()) return;
         if (found->second.terrain != nullptr) {
             foliageTerrains.push_back(TerrainFoliageRenderProxyDesc{
-                .entityId = entityId, .model = model, .terrain = found->second.terrain, .layer = layer });
+                .entityId = entityId, .model = model, .terrain = found->second.terrain, .layer = layer, .revision = found->second.revision });
         } else if (found->second.keep) {
             foliageKept.push_back(entityId);
         }

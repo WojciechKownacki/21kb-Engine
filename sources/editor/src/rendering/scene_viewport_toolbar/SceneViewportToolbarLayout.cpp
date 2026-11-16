@@ -150,6 +150,7 @@ TerrainViewportToolbarRects SceneViewportToolbarLayout::ResolveTerrainTools(cons
     rects.sculptButton = button(58);
     rects.smoothButton = button(60);
     rects.paintButton = button(52);
+    rects.foliageButton = button(66);
     rects.rampButton = button(52);
     rects.stampButton = button(56);
     rects.worldButton = button(88);

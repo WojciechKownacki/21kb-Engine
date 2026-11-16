@@ -235,6 +235,7 @@ void SceneViewportToolbarRenderer::PaintTerrainTools(
     Drawing::DrawChip(dc, rects.sculptButton, EditorText("terrainTool.sculpt", "Sculpt"), theme, active == EditorTerrainTool::Sculpt);
     Drawing::DrawChip(dc, rects.smoothButton, EditorText("terrainTool.smooth", "Smooth"), theme, active == EditorTerrainTool::Smooth);
     Drawing::DrawChip(dc, rects.paintButton, EditorText("terrainTool.paint", "Paint"), theme, active == EditorTerrainTool::Paint);
+    Drawing::DrawChip(dc, rects.foliageButton, EditorText("terrainTool.foliage", "Foliage"), theme, active == EditorTerrainTool::Foliage);
     Drawing::DrawChip(dc, rects.rampButton, EditorText("terrainTool.ramp", "Ramp"), theme, active == EditorTerrainTool::Ramp);
     Drawing::DrawChip(dc, rects.stampButton, EditorText("terrainTool.stamp", "Stamp"), theme, active == EditorTerrainTool::Stamp);
     Drawing::DrawChip(dc, rects.worldButton, EditorText("terrainTool.newWorld", "New World"), theme, tool.drawer == EditorTerrainDrawer::NewWorld);
@@ -250,6 +251,9 @@ void SceneViewportToolbarRenderer::PaintTerrainTools(
             ? std::string{ EditorText("terrainTool.paintAuto", "Auto") }
             : EditorLocalization::Format("terrainTool.paintLayer", "Layer {index}",
                 { { "index", std::to_string(static_cast<unsigned>(tool.selectedMaterialLayer) + 1U) } });
+    } else if (active == EditorTerrainTool::Foliage) {
+        variant = EditorLocalization::Format("terrainTool.foliageLayer", "Plant {index}",
+            { { "index", std::to_string(static_cast<unsigned>(tool.selectedFoliageLayer) + 1U) } });
     } else if (active == EditorTerrainTool::Stamp) {
         using Blend = kb::terrain_editor::TerrainStampBlend;
         variant = tool.brush.stampBlend == Blend::Add ? std::string{ EditorText("terrainTool.blend.add", "Blend: Add") }
@@ -261,7 +265,7 @@ void SceneViewportToolbarRenderer::PaintTerrainTools(
     Drawing::DrawStepper(dc, rects.size.minus, rects.size.value, rects.size.plus,
         EditorLocalization::Format("terrainTool.size", "Size {value}", { { "value", TerrainToolbarLabels::FormatNumber(tool.brush.radius) } }), theme);
     Drawing::DrawStepper(dc, rects.strength.minus, rects.strength.value, rects.strength.plus,
-        active == EditorTerrainTool::Paint
+        active == EditorTerrainTool::Paint || active == EditorTerrainTool::Foliage
             ? EditorLocalization::Format("terrainTool.opacity", "Opacity {value}", { { "value", TerrainToolbarLabels::FormatNumber(tool.brush.strength) } })
             : EditorLocalization::Format("terrainTool.strength", "Strength {value}", { { "value", TerrainToolbarLabels::FormatNumber(tool.brush.strength) } }),
         theme);

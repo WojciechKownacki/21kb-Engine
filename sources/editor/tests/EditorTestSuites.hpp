@@ -29,6 +29,7 @@ void RunEditorStartupProgressTests();
 void RunEditorInspectorTests();
 void RunEditorMaterialAssetAuthoringTests();
 void RunEditorMaterialGraphCanvasTests();
+void RunEditorTerrainFoliageTests();
 void RunScriptEditorTests();
 void RunSvgPathTests();
 

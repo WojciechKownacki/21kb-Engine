@@ -1476,6 +1476,7 @@ if(BUILD_TESTING)
         tests/EditorInspectorTests.cpp
         tests/EditorMaterialAssetAuthoringTests.cpp
         tests/EditorMaterialGraphCanvasTests.cpp
+        tests/EditorTerrainFoliageTests.cpp
         tests/EditorRuntimeTests.cpp
         tests/EditorPlayModeSceneSessionTests.cpp
         tests/EditorCommandStackTests.cpp

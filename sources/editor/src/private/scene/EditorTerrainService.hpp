@@ -26,15 +26,17 @@ enum class EditorTerrainToolMode : std::uint8_t {
     Sculpt,
     Holes,
     Paint,
+    Foliage,
 };
 
-// The six tools of the terrain bar. Holes (cut and fill) are reached through the operation menu of the
+// The tools of the terrain bar. Holes (cut and fill) are reached through the operation menu of the
 // Advanced drawer and name no button.
 enum class EditorTerrainTool : std::uint8_t {
     None,
     Sculpt,
     Smooth, // Smooth, or Flatten to a height
     Paint,
+    Foliage,
     Ramp,
     Stamp,
     Holes,
@@ -74,12 +76,24 @@ struct EditorTerrainToolState {
     float lastStampZ = 0.0F;
     EditorTerrainToolMode mode = EditorTerrainToolMode::Sculpt;
     std::uint8_t selectedMaterialLayer = 0U;
+    std::uint8_t selectedFoliageLayer = 0U;
     bool brushMenuOpen = false;
     bool brushShapeMenuOpen = false;
     bool hoverVisible = false;
     std::uint64_t hoverEntityId = 0U;
     float hoverLocalX = 0.0F;
     float hoverLocalZ = 0.0F;
+};
+
+// The numbers of a foliage layer the Inspector edits one by one.
+enum class EditorFoliageField : std::uint8_t {
+    Density,
+    MinScale,
+    MaxScale,
+    Rotation,
+    AlignToSlope,
+    FadeStart,
+    CullDistance,
 };
 
 struct EditorTerrainAssetState {
@@ -107,8 +121,31 @@ public:
     // False with the reason when the tool cannot work yet: Paint needs a material layer, Stamp a height image.
     [[nodiscard]] static bool SelectTool(
         EditorTerrainToolState& tool, EditorTerrainTool selected, const kb::assets::TerrainAsset* terrain, std::string* error);
-    // The next variant of the active tool: Smooth <-> Flatten, the next paint layer then Auto, the next stamp blend.
-    static void CycleToolVariant(EditorTerrainToolState& tool, std::size_t layerCount) noexcept;
+    // The next variant of the active tool: Smooth <-> Flatten, the next paint layer then Auto, the next foliage
+    // layer, the next stamp blend.
+    static void CycleToolVariant(EditorTerrainToolState& tool, const kb::assets::TerrainAsset* terrain) noexcept;
+
+    // Adds a foliage layer for `meshAssetId` with the default look; false when the terrain holds the most layers.
+    [[nodiscard]] static bool AddFoliageLayer(
+        kb::assets::TerrainAsset& terrain, std::uint64_t meshAssetId, std::uint64_t materialAssetId = 0U) noexcept;
+    // Sets one number of a foliage layer, kept inside what a terrain accepts (a larger minimum scale lifts the
+    // maximum, a fade distance past the cull distance pushes it out). False for a number that is not finite.
+    [[nodiscard]] static bool SetFoliageField(
+        kb::assets::TerrainFoliageLayer& layer, EditorFoliageField field, float value) noexcept;
+    [[nodiscard]] static float FoliageFieldValue(const kb::assets::TerrainFoliageLayer& layer, EditorFoliageField field) noexcept;
+    // The foliage brush from the bar: the same size, tip, falloff and seed as painting a material; Ctrl erases.
+    [[nodiscard]] static kb::terrain_editor::TerrainFoliagePaintSettings FoliagePaintSettings(
+        const EditorTerrainToolState& tool, bool erase) noexcept;
+    // Points a preview mesh at a copy of the terrain its foliage is placed from (none when the terrain has no
+    // foliage). The whole terrain is copied: used when a terrain is saved or rebuilt, not while painting.
+    static void AttachFoliageSource(const kb::assets::TerrainAsset& terrain, kb::render::RenderMeshAssetData& mesh);
+    // Brings the foliage source of a preview up to a painted region of `layerIndex`: only the changed density
+    // texels are copied, in place, and the scene is told to place the plants of the chunks that changed again.
+    static void UpdateFoliagePreview(
+        const kb::assets::TerrainAsset& working, std::uint32_t layerIndex,
+        const kb::terrain_editor::TerrainLayerPaintResult& changed, kb::render::RenderMeshAssetData& mesh);
+    // Bytes of terrain data copied into foliage sources since the program started.
+    [[nodiscard]] static std::uint64_t FoliagePreviewBytesCopied() noexcept;
     // Loads the height image the Stamp tool presses into the ground.
     [[nodiscard]] static bool LoadStampImage(EditorTerrainToolState& tool, const std::filesystem::path& path, std::string* error);
 
@@ -170,7 +207,8 @@ public:
         kb::assets::AssetId assetId,
         const kb::assets::TerrainAsset& terrain,
         std::shared_ptr<kb::render::RenderMeshAssetData> mesh,
-        std::string* error = nullptr);
+        std::string* error = nullptr,
+        bool foliageInSync = false); // true: the mesh's foliage source already follows `terrain` (a foliage stroke)
     [[nodiscard]] static std::optional<kb::assets::TerrainAsset> BuildHeightmapImport(
         const kb::assets::TerrainAsset& current,
         const std::filesystem::path& heightmapPath,

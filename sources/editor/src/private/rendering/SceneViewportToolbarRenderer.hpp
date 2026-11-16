@@ -56,10 +56,11 @@ struct TerrainStepperRects {
 
 struct TerrainViewportToolbarRects {
     RECT panel{};
-    // The six tools, then what the active one can vary (Smooth/Flatten, the paint layer, the stamp blend).
+    // The tools, then what the active one can vary (Smooth/Flatten, the paint or foliage layer, the stamp blend).
     RECT sculptButton{};
     RECT smoothButton{};
     RECT paintButton{};
+    RECT foliageButton{};
     RECT rampButton{};
     RECT stampButton{};
     RECT worldButton{};

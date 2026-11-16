@@ -152,7 +152,8 @@ void RenderScene::SyncTerrainFoliage(
         alive.insert(desc.entityId);
         const auto [it, inserted] = terrainFoliage_.try_emplace(desc.entityId);
         TerrainFoliageRenderProxy& proxy = it->second;
-        if (!inserted && proxy.desc.terrain == desc.terrain && proxy.desc.model == desc.model && proxy.desc.layer == desc.layer) {
+        if (!inserted && proxy.desc.terrain == desc.terrain && proxy.desc.model == desc.model && proxy.desc.layer == desc.layer &&
+            proxy.desc.revision == desc.revision) {
             continue;
         }
         if (inserted) proxy.id = AllocateProxyId();

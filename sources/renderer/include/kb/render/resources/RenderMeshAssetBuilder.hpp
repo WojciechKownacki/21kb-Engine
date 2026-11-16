@@ -129,6 +129,8 @@ struct RenderMeshAssetData {
     std::vector<std::uint8_t> terrainLayerWeights;
     // The terrain a mesh was built from when it has foliage layers; the scene places the plants from it.
     std::shared_ptr<const kb::assets::TerrainAsset> terrainFoliage;
+    // Raised when the editor edits that terrain's foliage in place, so the scene places the plants again.
+    std::uint64_t terrainFoliageRevision = 0U;
     std::vector<RenderTerrainLayerWeightUpdateRegion> dynamicTerrainLayerWeightUpdates;
     std::uint32_t vertexUpdateFirst = 0U;
     std::uint32_t vertexUpdateCount = 0U;

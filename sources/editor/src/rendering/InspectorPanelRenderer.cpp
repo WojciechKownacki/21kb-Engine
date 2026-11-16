@@ -2767,7 +2767,7 @@ void PaintMultiSelection(HDC dc, RECT content, const EditorTheme& theme, const E
     return AdvancedSectionHeight(state, section, InspectorDisclosureId::GenericAdvanced, basic, static_cast<int>(rows.size()));
 }
 [[nodiscard]] int MeshRendererSectionHeight(const EditorSceneContext& sceneContext, const kb::scene::MeshRendererComponent& renderer);
-[[nodiscard]] int TerrainSectionHeight(const InspectorPanelState& inspector, std::size_t layerCount) noexcept;
+[[nodiscard]] int TerrainSectionHeight(const InspectorPanelState& inspector, const kb::assets::TerrainAsset* terrain) noexcept;
 
 constexpr int kUIRectGeometryHeight = 88;
 constexpr int kUIAnchorGridHeight = 198;
@@ -3657,6 +3657,43 @@ void PaintTerrainSection(
     if (RectWidth(layerBody) > 0 && RectHeight(layerBody) > 0) {
         DrawTerrainMaterialLayers(dc, layerBody, theme, inspector, sceneContext, terrain, tool.selectedMaterialLayer);
     }
+
+    // Foliage layers: pick one to paint it with the brush; the rows below edit the picked layer.
+    const std::size_t foliageCount = terrain != nullptr ? terrain->foliageLayers.size() : 0U;
+    const std::size_t foliageSelected = std::min<std::size_t>(tool.selectedFoliageLayer, foliageCount == 0U ? 0U : foliageCount - 1U);
+    section.Group(EditorText("inspector.terrainEditor.foliageLayers", "FOLIAGE"));
+    for (std::size_t index = 0U; index < foliageCount; ++index) {
+        section.DropdownItem(
+            EditorLocalization::Format("inspector.terrainEditor.foliagePlant", "Plant {index}: {mesh}",
+                { { "index", std::to_string(index + 1U) }, { "mesh", AssetDisplayName(sceneContext, terrain->foliageLayers[index].meshAssetId) } }),
+            InspectorPropertyId::TerrainFoliageLayer, static_cast<int>(index), index == foliageSelected);
+    }
+    section.Action(EditorText("inspector.terrainEditor.addFoliage", "Add Foliage Layer"), InspectorPropertyId::TerrainFoliageAdd);
+    if (foliageCount > 0U) {
+        const kb::assets::TerrainFoliageLayer& plant = terrain->foliageLayers[foliageSelected];
+        section.Action(EditorText("inspector.terrainEditor.removeFoliage", "Remove Foliage Layer"), InspectorPropertyId::TerrainFoliageRemove);
+        section.AssetField(EditorText("inspector.terrainEditor.foliageMesh", "Mesh"), AssetDisplayName(sceneContext, plant.meshAssetId),
+            InspectorPropertyId::TerrainFoliageMesh, InspectorPropertyId::TerrainFoliageMeshPicker);
+        section.AssetField(EditorText("inspector.terrainEditor.foliageMaterial", "Material"), MaterialDisplayName(sceneContext, plant.materialAssetId),
+            InspectorPropertyId::TerrainFoliageMaterial, InspectorPropertyId::TerrainFoliageMaterialPicker);
+        section.Float(EditorText("inspector.terrainEditor.foliageDensity", "Density"), FormatFloat(plant.density, 2), InspectorPropertyId::TerrainFoliageDensity);
+        const bool foliageAdvanced = inspector.IsDisclosureExpanded(InspectorDisclosureId::TerrainFoliageAdvanced);
+        section.Disclosure(
+            EditorText("inspector.terrainEditor.foliageAdvanced", "Advanced Foliage Settings"),
+            InspectorPropertyId::TerrainFoliageAdvanced, foliageAdvanced);
+        if (foliageAdvanced) {
+            section.Pair(
+                EditorText("inspector.terrainEditor.foliageScale", "Scale"),
+                EditorText("inspector.terrainEditor.min", "Min"), FormatFloat(plant.minScale, 2), InspectorPropertyId::TerrainFoliageMinScale,
+                EditorText("inspector.terrainEditor.max", "Max"), FormatFloat(plant.maxScale, 2), InspectorPropertyId::TerrainFoliageMaxScale);
+            section.Float(EditorText("inspector.terrainEditor.foliageTurn", "Random Turn"), FormatFloat(plant.rotationRangeDegrees, 1), InspectorPropertyId::TerrainFoliageRotation);
+            section.Float(EditorText("inspector.terrainEditor.foliageSlope", "Align to Slope"), FormatFloat(plant.alignToNormal, 2), InspectorPropertyId::TerrainFoliageAlign);
+            section.Float(EditorText("inspector.terrainEditor.foliageFade", "Fade Distance"), FormatFloat(plant.fadeStartDistance, 1), InspectorPropertyId::TerrainFoliageFadeStart);
+            section.Float(EditorText("inspector.terrainEditor.foliageCull", "Cull Distance"), FormatFloat(plant.cullDistance, 1), InspectorPropertyId::TerrainFoliageCullDistance);
+            section.Bool(EditorText("inspector.terrainEditor.foliageShadows", "Cast Shadows"), plant.castsShadow, InspectorPropertyId::TerrainFoliageCastsShadow);
+        }
+    }
+
     section.Group(EditorText("inspector.terrainEditor.brushBehavior", "BRUSH BEHAVIOR"));
     section.Float(EditorText("inspector.terrainEditor.falloff", "Falloff"), FormatFloat(brush.falloff, 2), InspectorPropertyId::TerrainBrushFalloff);
     section.Float(EditorText("inspector.terrainEditor.flattenHeight", "Flatten Height"), FormatFloat(brush.targetHeight, 2), InspectorPropertyId::TerrainFlattenHeight);
@@ -4157,8 +4194,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
             const kb::assets::TerrainAsset* terrain = isTerrain
                 ? sceneContext.TerrainForEditing(selected)
                 : nullptr;
-            const std::size_t terrainLayerCount = terrain != nullptr ? terrain->materialLayers.size() : 0U;
-            const int h = isTerrain ? TerrainSectionHeight(inspector, terrainLayerCount) : MeshRendererSectionHeight(sceneContext, *meshRenderer);
+            const int h = isTerrain ? TerrainSectionHeight(inspector, terrain) : MeshRendererSectionHeight(sceneContext, *meshRenderer);
             if (sectionVisible(y, h)) {
                 if (isTerrain) PaintTerrainSection(dc, content, y, theme, inspector, sceneContext, *meshRenderer, terrain);
                 else PaintMeshRendererSection(dc, content, y, theme, inspector, sceneContext, *meshRenderer);
@@ -4318,10 +4354,23 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     return kSectionHeaderHeight + kDividerHeight + rows * (kFieldRowHeight + kDividerHeight) + OpenMenuHeight(inspector, section);
 }
 
-[[nodiscard]] int TerrainSectionHeight(const InspectorPanelState& inspector, std::size_t layerCount) noexcept {
+// The foliage block under the material layers: a heading, a row per layer and Add; with a layer also Remove, Mesh,
+// Material, Density and the folded rest (scale, turn, slope, distances, shadows).
+[[nodiscard]] int TerrainFoliageBodyHeight(const InspectorPanelState& inspector, std::size_t foliageCount) noexcept {
+    constexpr int row = kFieldRowHeight + kDividerHeight;
+    int height = kGroupRowHeight + kDividerHeight + static_cast<int>(foliageCount) * row + row;
+    if (foliageCount == 0U) return height;
+    height += 4 * row + kDisclosureRowHeight + kDividerHeight;
+    if (inspector.IsDisclosureExpanded(InspectorDisclosureId::TerrainFoliageAdvanced)) height += 6 * row;
+    return height;
+}
+
+[[nodiscard]] int TerrainSectionHeight(const InspectorPanelState& inspector, const kb::assets::TerrainAsset* terrain) noexcept {
     if (inspector.IsCollapsed(InspectorSectionId::Terrain)) {
         return kSectionHeaderHeight;
     }
+    const std::size_t layerCount = terrain != nullptr ? terrain->materialLayers.size() : 0U;
+    const std::size_t foliageCount = terrain != nullptr ? terrain->foliageLayers.size() : 0U;
     constexpr int fixedRows = 8;
     constexpr int groupCount = 4;
     const int advancedRows = inspector.IsDisclosureExpanded(InspectorDisclosureId::TerrainAdvanced) ? 4 : 0;
@@ -4329,6 +4378,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         + fixedRows * (kFieldRowHeight + kDividerHeight)
         + groupCount * (kGroupRowHeight + kDividerHeight)
         + TerrainMaterialLayersBodyHeight(layerCount)
+        + TerrainFoliageBodyHeight(inspector, foliageCount)
         + kDisclosureRowHeight + kDividerHeight
         + advancedRows * (kFieldRowHeight + kDividerHeight);
 }
@@ -4500,7 +4550,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
                 ? sceneContext.TerrainForEditing(selected)
                 : nullptr;
             height += (terrain
-                ? TerrainSectionHeight(inspector, terrainAsset != nullptr ? terrainAsset->materialLayers.size() : 0U)
+                ? TerrainSectionHeight(inspector, terrainAsset)
                 : MeshRendererSectionHeight(sceneContext, *renderer)) + kSectionGap;
         }
     }
@@ -5333,6 +5383,65 @@ void AdvanceGroup(int& y) noexcept {
         }
     }
     y += layerBodyHeight;
+
+    AdvanceGroup(y); // Foliage.
+    const std::size_t foliageCount = terrain != nullptr ? terrain->foliageLayers.size() : 0U;
+    for (std::size_t index = 0U; index < foliageCount; ++index) {
+        const RECT row = RowRect(content, y);
+        if (Contains(row, x, yPoint)) {
+            InspectorPanelRenderer::Hit hit = MakeHit(InspectorHitKind::Row, InspectorSectionId::Terrain, InspectorPropertyId::TerrainFoliageLayer, row);
+            hit.index = static_cast<int>(index);
+            return hit;
+        }
+        AdvanceRow(y);
+    }
+    const auto hitAction = [&](InspectorPropertyId property) {
+        const RECT row = RowRect(content, y);
+        return Contains(row, x, yPoint)
+            ? MakeHit(InspectorHitKind::Row, InspectorSectionId::Terrain, property, row)
+            : InspectorPanelRenderer::Hit{};
+    };
+    if (InspectorPanelRenderer::Hit hit = hitAction(InspectorPropertyId::TerrainFoliageAdd); hit.kind != InspectorHitKind::None) return hit;
+    AdvanceRow(y);
+    if (foliageCount > 0U) {
+        if (InspectorPanelRenderer::Hit hit = hitAction(InspectorPropertyId::TerrainFoliageRemove); hit.kind != InspectorHitKind::None) return hit;
+        AdvanceRow(y);
+        if (InspectorPanelRenderer::Hit hit = HitAssetFieldRow(RowRect(content, y), InspectorSectionId::Terrain,
+                InspectorPropertyId::TerrainFoliageMesh, InspectorPropertyId::TerrainFoliageMeshPicker, x, yPoint);
+            hit.kind != InspectorHitKind::None) return hit;
+        AdvanceRow(y);
+        if (InspectorPanelRenderer::Hit hit = HitAssetFieldRow(RowRect(content, y), InspectorSectionId::Terrain,
+                InspectorPropertyId::TerrainFoliageMaterial, InspectorPropertyId::TerrainFoliageMaterialPicker, x, yPoint);
+            hit.kind != InspectorHitKind::None) return hit;
+        AdvanceRow(y);
+        if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::Terrain,
+                InspectorPropertyId::TerrainFoliageDensity, x, yPoint);
+            hit.kind != InspectorHitKind::None) return hit;
+        AdvanceRow(y);
+        const RECT foliageAdvanced = Rect(content.left, y, content.right, y + kDisclosureRowHeight);
+        if (Contains(foliageAdvanced, x, yPoint)) {
+            return MakeHit(InspectorHitKind::Row, InspectorSectionId::Terrain, InspectorPropertyId::TerrainFoliageAdvanced, foliageAdvanced);
+        }
+        y += kDisclosureRowHeight + kDividerHeight;
+        if (state.IsDisclosureExpanded(InspectorDisclosureId::TerrainFoliageAdvanced)) {
+            if (InspectorPanelRenderer::Hit hit = HitPair(
+                    RowRect(content, y), InspectorSectionId::Terrain,
+                    EditorText("inspector.terrainEditor.min", "Min"), InspectorPropertyId::TerrainFoliageMinScale,
+                    EditorText("inspector.terrainEditor.max", "Max"), InspectorPropertyId::TerrainFoliageMaxScale,
+                    x, yPoint); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+            for (const InspectorPropertyId property : { InspectorPropertyId::TerrainFoliageRotation, InspectorPropertyId::TerrainFoliageAlign,
+                     InspectorPropertyId::TerrainFoliageFadeStart, InspectorPropertyId::TerrainFoliageCullDistance }) {
+                if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::Terrain, property, x, yPoint);
+                    hit.kind != InspectorHitKind::None) return hit;
+                AdvanceRow(y);
+            }
+            if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(content, y), InspectorSectionId::Terrain,
+                    InspectorPropertyId::TerrainFoliageCastsShadow, x, yPoint);
+                hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+        }
+    }
 
     AdvanceGroup(y); // Brush Behavior.
     constexpr std::array brushRows{

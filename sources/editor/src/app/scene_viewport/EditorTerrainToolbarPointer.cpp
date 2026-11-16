@@ -122,9 +122,9 @@ bool EditorTerrainToolbarPointer::HandleClick(EditorSceneContext& sceneContext, 
     }
     EditorTerrainToolState& tool = EditorTerrainService::ToolState();
     using Tool = EditorTerrainTool;
-    const std::array<std::pair<const RECT*, Tool>, 5U> tools{ {
+    const std::array<std::pair<const RECT*, Tool>, 6U> tools{ {
         { &bar.sculptButton, Tool::Sculpt }, { &bar.smoothButton, Tool::Smooth }, { &bar.paintButton, Tool::Paint },
-        { &bar.rampButton, Tool::Ramp }, { &bar.stampButton, Tool::Stamp } } };
+        { &bar.foliageButton, Tool::Foliage }, { &bar.rampButton, Tool::Ramp }, { &bar.stampButton, Tool::Stamp } } };
     for (const auto& [rect, which] : tools) {
         if (PointInRect(*rect, x, y)) {
             ClickTool(sceneContext, selected, which);
@@ -150,7 +150,7 @@ bool EditorTerrainToolbarPointer::HandleClick(EditorSceneContext& sceneContext, 
     }
     if (PointInRect(bar.variantButton, x, y)) {
         const kb::assets::TerrainAsset* terrain = sceneContext.TerrainForEditing(selected);
-        EditorTerrainService::CycleToolVariant(tool, terrain != nullptr ? terrain->materialLayers.size() : 0U);
+        EditorTerrainService::CycleToolVariant(tool, terrain);
         return true;
     }
     if (PointInRect(bar.size.minus, x, y)) {
@@ -166,7 +166,7 @@ bool EditorTerrainToolbarPointer::HandleClick(EditorSceneContext& sceneContext, 
         return true;
     }
     if (PointInRect(bar.strength.plus, x, y)) {
-        const float maximum = tool.mode == EditorTerrainToolMode::Paint ? 1.0F : 100'000.0F;
+        const float maximum = tool.mode == EditorTerrainToolMode::Paint || tool.mode == EditorTerrainToolMode::Foliage ? 1.0F : 100'000.0F;
         tool.brush.strength = std::min(maximum, tool.brush.strength + 0.25F);
         return true;
     }
