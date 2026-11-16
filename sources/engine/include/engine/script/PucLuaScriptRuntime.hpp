@@ -26,6 +26,7 @@ struct lua_State;
 namespace kb::script {
 
 class PucLuaRunaway;
+class ScriptFunctionRegistry;
 struct PucLuaMemoryBudget;
 struct PucLuaStateLifetime;
 
@@ -446,5 +447,10 @@ private:
     std::uint64_t generation_ = 1U;
     PucLuaCollectionStats collectionStats_;
 };
+
+// What keeps the fast engine calls of the LuaJIT build from being installed against `functions`, one text per problem (a call
+// that is not in the API catalog, a C signature that differs from the pins of its function, Lua that does not load). Always
+// empty on Lua 5.4, which has none.
+[[nodiscard]] std::vector<std::string> VerifyLuaFastCalls(const ScriptFunctionRegistry& functions);
 
 } // namespace kb::script

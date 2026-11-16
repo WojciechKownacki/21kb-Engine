@@ -3,6 +3,7 @@
 #include "engine/script/ScriptLanguageSubset.hpp"
 
 #include "script/lua/PucLuaDebugHook.hpp"
+#include "script/lua/PucLuaHotApi.hpp"
 #include "script/lua/PucLuaRunaway.hpp"
 #include "script/lua/PucLuaRuntimeApi.hpp"
 #include "script/lua/PucLuaSandboxEnvironment.hpp"
@@ -1516,6 +1517,11 @@ std::optional<ScriptSyntaxError> FindSyntaxError(std::string_view luaSource) {
     }
     lua_close(state);
     return error;
+}
+
+// Declared in PucLuaScriptRuntime.hpp; defined here because this file has the script VM's headers.
+std::vector<std::string> VerifyLuaFastCalls(const ScriptFunctionRegistry& functions) {
+    return PucLuaHotApi::Verify(functions);
 }
 
 } // namespace kb::script

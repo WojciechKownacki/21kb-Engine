@@ -267,19 +267,17 @@ ScriptFunctionCallResult SetPreciseWorldPosition(const ScriptFunctionCallContext
 }
 
 ScriptFunctionCallResult GetLocalRotation(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
-    const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
-    if (!Alive(context, entity)) {
+    kb::scene::Quat rotation{};
+    if (context.scene == nullptr || !ScriptTransformApi::GetLocalQuaternion(*context.scene, EntityArg(arguments, "entity"), rotation.x, rotation.y, rotation.z, rotation.w)) {
         return RotationResult(false, {});
     }
-    const kb::scene::TransformComponent transform = context.scene->Transforms().Get(entity);
-    return RotationResult(true, transform.localRotation);
+    return RotationResult(true, rotation);
 }
 
 // The local rotation in degrees - the numbers the Inspector and kb_cli show.
 ScriptFunctionCallResult GetRotation(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
-    const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
-    const bool found = Alive(context, entity);
-    const kb::math::Vec3 degrees = found ? kb::math::ToEulerDegrees(context.scene->Transforms().Get(entity).localRotation) : kb::math::Vec3{};
+    kb::math::Vec3 degrees{};
+    const bool found = context.scene != nullptr && ScriptTransformApi::GetRotationDegrees(*context.scene, EntityArg(arguments, "entity"), degrees.x, degrees.y, degrees.z);
     return ScriptFunctionCallResult{
         .executed = true,
         .outputs = {
@@ -292,31 +290,13 @@ ScriptFunctionCallResult GetRotation(const ScriptFunctionCallContext& context, s
 }
 
 ScriptFunctionCallResult SetRotation(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
-    const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
-    if (!Alive(context, entity)) {
-        return BoolResult("moved", false);
-    }
-    kb::scene::TransformComponent transform = context.scene->Transforms().Get(entity);
-    transform.localRotation = kb::math::FromEulerDegrees(
-        { FloatArg(arguments, "x", 0.0F), FloatArg(arguments, "y", 0.0F), FloatArg(arguments, "z", 0.0F) });
-    context.scene->Transforms().Set(entity, transform);
-    return BoolResult("moved", true);
+    return BoolResult("moved", context.scene != nullptr && ScriptTransformApi::SetRotationDegrees(*context.scene, EntityArg(arguments, "entity"),
+        FloatArg(arguments, "x", 0.0F), FloatArg(arguments, "y", 0.0F), FloatArg(arguments, "z", 0.0F)));
 }
 
 ScriptFunctionCallResult SetLocalRotation(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
-    const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
-    if (!Alive(context, entity)) {
-        return BoolResult("moved", false);
-    }
-    kb::scene::TransformComponent transform = context.scene->Transforms().Get(entity);
-    transform.localRotation = kb::scene::Quat{
-        FloatArg(arguments, "x", transform.localRotation.x),
-        FloatArg(arguments, "y", transform.localRotation.y),
-        FloatArg(arguments, "z", transform.localRotation.z),
-        FloatArg(arguments, "w", transform.localRotation.w),
-    };
-    context.scene->Transforms().Set(entity, transform);
-    return BoolResult("moved", true);
+    return BoolResult("moved", context.scene != nullptr && ScriptTransformApi::SetLocalQuaternion(*context.scene, EntityArg(arguments, "entity"),
+        OptionalFloatArg(arguments, "x"), OptionalFloatArg(arguments, "y"), OptionalFloatArg(arguments, "z"), OptionalFloatArg(arguments, "w")));
 }
 
 ScriptFunctionCallResult GetLocalScale(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
@@ -819,6 +799,62 @@ bool ScriptTransformApi::TranslateLocalPosition(kb::scene::Scene& scene, kb::sce
     return WriteLocalPosition(scene, entity, [x, y, z](const kb::scene::Vec3& position) {
         return kb::scene::Vec3{ position.x + x, position.y + y, position.z + z };
     });
+}
+
+namespace {
+
+[[nodiscard]] bool LiveEntity(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+    return entity.IsValid() && scene.Entities().IsAlive(entity);
+}
+
+} // namespace
+
+bool ScriptTransformApi::GetLocalQuaternion(kb::scene::Scene& scene, kb::scene::SceneEntity entity, float& x, float& y, float& z, float& w) {
+    if (!LiveEntity(scene, entity)) {
+        return false;
+    }
+    const kb::scene::Quat rotation = scene.Transforms().Get(entity).localRotation;
+    x = rotation.x;
+    y = rotation.y;
+    z = rotation.z;
+    w = rotation.w;
+    return true;
+}
+
+bool ScriptTransformApi::SetLocalQuaternion(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::optional<float> x, std::optional<float> y, std::optional<float> z, std::optional<float> w) {
+    if (!LiveEntity(scene, entity)) {
+        return false;
+    }
+    kb::scene::TransformComponent transform = scene.Transforms().Get(entity);
+    transform.localRotation = kb::scene::Quat{
+        x.value_or(transform.localRotation.x),
+        y.value_or(transform.localRotation.y),
+        z.value_or(transform.localRotation.z),
+        w.value_or(transform.localRotation.w),
+    };
+    scene.Transforms().Set(entity, transform);
+    return true;
+}
+
+bool ScriptTransformApi::GetRotationDegrees(kb::scene::Scene& scene, kb::scene::SceneEntity entity, float& x, float& y, float& z) {
+    if (!LiveEntity(scene, entity)) {
+        return false;
+    }
+    const kb::math::Vec3 degrees = kb::math::ToEulerDegrees(scene.Transforms().Get(entity).localRotation);
+    x = degrees.x;
+    y = degrees.y;
+    z = degrees.z;
+    return true;
+}
+
+bool ScriptTransformApi::SetRotationDegrees(kb::scene::Scene& scene, kb::scene::SceneEntity entity, float x, float y, float z) {
+    if (!LiveEntity(scene, entity)) {
+        return false;
+    }
+    kb::scene::TransformComponent transform = scene.Transforms().Get(entity);
+    transform.localRotation = kb::math::FromEulerDegrees({ x, y, z });
+    scene.Transforms().Set(entity, transform);
+    return true;
 }
 
 bool ScriptTransformApi::Register(ScriptRuntimeHost& host) {

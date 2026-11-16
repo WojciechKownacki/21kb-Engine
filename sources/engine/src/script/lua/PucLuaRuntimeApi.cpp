@@ -119,7 +119,7 @@ std::optional<std::string> PucLuaRuntimeApi::AttachExecutionApi(lua_State* state
     PucLuaEventsApi::Attach(state, environmentIndex, context, runtime);
     PucLuaSharedApi::Attach(state, environmentIndex, context);
     PucLuaFunctionApi::Attach(state, environmentIndex, context);
-    PucLuaHotApi::Attach(state, environmentIndex);
+    PucLuaHotApi::Attach(state, environmentIndex, context);
     // Re-attach `Inspector` bound to THIS execution's context so `Inspector.x`
     // read/write routes to the current entity's exposed-variable instance.
     PucLuaSelfApi::AttachInspector(state, environmentIndex, &context);

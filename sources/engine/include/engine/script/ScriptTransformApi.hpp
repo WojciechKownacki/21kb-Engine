@@ -25,6 +25,14 @@ public:
     // An axis left empty keeps its value.
     static bool SetLocalPosition(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::optional<float> x, std::optional<float> y, std::optional<float> z);
     static bool TranslateLocalPosition(kb::scene::Scene& scene, kb::scene::SceneEntity entity, float x, float y, float z);
+
+    // The local-rotation operations behind Transform.LocalRotation, SetLocalRotation, Rotation (degrees) and SetRotation,
+    // shared by the registered functions and the Lua fast path. False when the entity does not exist.
+    [[nodiscard]] static bool GetLocalQuaternion(kb::scene::Scene& scene, kb::scene::SceneEntity entity, float& x, float& y, float& z, float& w);
+    // A component left empty keeps its value.
+    static bool SetLocalQuaternion(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::optional<float> x, std::optional<float> y, std::optional<float> z, std::optional<float> w);
+    [[nodiscard]] static bool GetRotationDegrees(kb::scene::Scene& scene, kb::scene::SceneEntity entity, float& x, float& y, float& z);
+    static bool SetRotationDegrees(kb::scene::Scene& scene, kb::scene::SceneEntity entity, float x, float y, float z);
 };
 
 } // namespace kb::script

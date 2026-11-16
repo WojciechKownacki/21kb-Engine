@@ -3,7 +3,12 @@
 #include "script/lua/PucLuaMemoryArena.hpp"
 #include "script/lua/PucLuaWatchdogCore.hpp"
 
+#include "engine/input/InputActionAsset.hpp"
+#include "engine/input/InputKey.hpp"
+#include "engine/input/InputMappingContextAsset.hpp"
+#include "engine/input/InputSubsystem.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
+#include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -198,6 +203,182 @@ end
     const kb::script::ScriptEvent& event = result.emittedEvents.front();
     Require(TextOf(event, "position") == "same" && TextOf(event, "input") == "same" && TextOf(event, "gone") == "nil" && TextOf(event, "shape") == "plain",
         "The table forms of the position and of 2D input must match the other forms");
+}
+
+// The calls the engine API gets in every frame, made through the script functions and through the registry, with the
+// arguments in the form the LuaJIT fast path takes and in the forms it hands to the C API. CallFunction is the registered
+// function itself; each check below compares a script function with it.
+constexpr const char* kFastCallScript = R"lua(
+local function flat(v)
+  if type(v) ~= "table" then return tostring(v) end
+  local keys = {}
+  for k in pairs(v) do keys[#keys + 1] = k end
+  table.sort(keys)
+  local parts = {}
+  for i = 1, #keys do parts[i] = keys[i] .. "=" .. flat(v[keys[i]]) end
+  return "{" .. table.concat(parts, ",") .. "}"
+end
+local function all(...)
+  local parts = {}
+  for i = 1, select("#", ...) do parts[i] = flat((select(i, ...))) end
+  return table.concat(parts, ";")
+end
+local function xyz(p)
+  if p.found then return p.x, p.y, p.z end
+  return nil
+end
+local bad, checks = {}, 0
+local function check(label, hot, classic)
+  checks = checks + 1
+  if hot ~= classic then bad[#bad + 1] = label .. ": " .. hot .. " ~= " .. classic end
+end
+local function attempt(f)
+  local ok, err = pcall(f)
+  return ok and "no error" or err
+end
+
+function Tick(self, dt)
+  local e = self.entity
+  local registered = CallFunction
+
+  -- reads of the transform and the velocities, of an entity that exists and one that is gone
+  for _, entity in ipairs({ e, GONE }) do
+    local p = registered("Transform.GetPosition", { entity = entity })
+    check("GetPosition", all(Transform.GetPosition(entity)), all(p.found and { x = p.x, y = p.y, z = p.z } or nil))
+    check("GetPositionXYZ", all(Transform.GetPositionXYZ(entity)), all(xyz(p)))
+    check("LocalPosition", all(Transform.LocalPosition(entity)), all(registered("Transform.LocalPosition", { entity = entity })))
+    check("LocalRotation", all(Transform.LocalRotation(entity)), all(registered("Transform.LocalRotation", { entity = entity })))
+    check("Rotation", all(Transform.Rotation(entity)), all(registered("Transform.Rotation", { entity = entity })))
+    check("GetVelocity", all(Physics.GetVelocity(entity)), all(registered("Physics.GetVelocity", { entity = entity })))
+    check("GetAngularVelocity", all(Physics.GetAngularVelocity(entity)), all(registered("Physics.GetAngularVelocity", { entity = entity })))
+  end
+
+  -- writes: both forms start from the same state and must give the same result and leave the same state
+  local function reset()
+    registered("Transform.SetPosition", { entity = e, x = 1, y = 2, z = 3 })
+    registered("Transform.SetLocalRotation", { entity = e, x = 0, y = 0, z = 0, w = 1 })
+  end
+  local function state()
+    return all(registered("Transform.LocalPosition", { entity = e }), registered("Transform.LocalRotation", { entity = e }))
+  end
+  local function written(label, hot, classic)
+    reset()
+    local a = all(hot()) .. "|" .. state()
+    reset()
+    local b = all(classic()) .. "|" .. state()
+    check(label, a, b)
+  end
+  for _, entity in ipairs({ e, GONE }) do
+    written("SetPosition", function() return Transform.SetPosition(entity, 0.5, 0.25, 0.125) end,
+      function() return registered("Transform.SetPosition", { entity = entity, x = 0.5, y = 0.25, z = 0.125 }) end)
+    written("SetLocalPosition", function() return Transform.SetLocalPosition(entity, -4, 5.5, 6) end,
+      function() return registered("Transform.SetLocalPosition", { entity = entity, x = -4, y = 5.5, z = 6 }) end)
+    written("Translate", function() return Transform.Translate(entity, 0.5, 0.25, 0.125) end,
+      function() return registered("Transform.Translate", { entity = entity, x = 0.5, y = 0.25, z = 0.125 }) end)
+    written("SetLocalRotation", function() return Transform.SetLocalRotation(entity, 0.1, 0.2, 0.3, 0.9) end,
+      function() return registered("Transform.SetLocalRotation", { entity = entity, x = 0.1, y = 0.2, z = 0.3, w = 0.9 }) end)
+    written("SetRotation", function() return Transform.SetRotation(entity, 10, 20, 30) end,
+      function() return registered("Transform.SetRotation", { entity = entity, x = 10, y = 20, z = 30 }) end)
+    written("SetVelocity", function() return Physics.SetVelocity(entity, 1, 2, 3) end,
+      function() return registered("Physics.SetVelocity", { entity = entity, velocityX = 1, velocityY = 2, velocityZ = 3 }) end)
+    written("SetAngularVelocity", function() return Physics.SetAngularVelocity(entity, 1, 2, 3) end,
+      function() return registered("Physics.SetAngularVelocity", { entity = entity, angularVelocityX = 1, angularVelocityY = 2, angularVelocityZ = 3 }) end)
+  end
+  reset()
+  local before = registered("Transform.LocalPosition", { entity = e })
+  check("Translate result", all(Transform.Translate(e, 1, 1, 1)), "true")
+  check("Translate moved", all(Transform.GetPositionXYZ(e)), all(before.x + 1, before.y + 1, before.z + 1))
+
+  -- input actions with a key held and one that is not an action, with the player left out, nil and given
+  local inputs = {
+    { "IsPressed", "Input.IsPressed" }, { "Held", "Input.Held" }, { "WasPressed", "Input.WasPressed" }, { "Pressed", "Input.Pressed" },
+    { "WasReleased", "Input.WasReleased" }, { "Released", "Input.Released" }, { "ActionBool", "Input.ActionBool" },
+    { "Value", "Input.Value" }, { "ActionFloat", "Input.ActionFloat" }, { "Vector2", "Input.Vector2" }, { "Action2D", "Input.Action2D" },
+    { "Vector3", "Input.Vector3" } }
+  for _, input in ipairs(inputs) do
+    for _, action in ipairs({ "Move", "NoSuchAction" }) do
+      check(input[1] .. " " .. action, all(Input[input[1]](action)), all(registered(input[2], { action = action })))
+      check(input[1] .. " " .. action .. " nil player", all(Input[input[1]](action, nil)), all(registered(input[2], { action = action })))
+      check(input[1] .. " " .. action .. " player 1", all(Input[input[1]](action, 1)), all(registered(input[2], { action = action, player = 1 })))
+    end
+  end
+  local xy = registered("Input.Vector2", { action = "Move" })
+  check("Vector2XY", all(Input.Vector2XY("Move")), all(xy.x, xy.y))
+  check("Move is held", all(Input.ActionBool("Move"), Input.Vector2("Move").x == 1), "true;true")
+
+  check("Time.delta", all(Time.delta()), all(registered("Time.Delta", {})))
+  check("Time.Delta", all(Time.Delta()), all(registered("Time.Delta", {})))
+
+  -- a ray that hits the floor, defaults, a mask, rays that are not valid and the table form
+  local function ray(direction, distance, mask)
+    return all(registered("Physics.Raycast", { originX = 0, originY = 5, originZ = 0, directionX = 0, directionY = direction, directionZ = 0,
+      distance = distance, layerMask = mask }))
+  end
+  check("Raycast hit", all(Physics.Raycast(0, 5, 0, 0, -1, 0, 10)), ray(-1, 10, nil))
+  check("Raycast defaults", all(Physics.Raycast(0, 5, 0, 0, -1, 0)), ray(-1, nil, nil))
+  check("Raycast mask 0", all(Physics.Raycast(0, 5, 0, 0, -1, 0, 10, 0)), ray(-1, 10, 0))
+  check("Raycast mask 1", all(Physics.Raycast(0, 5, 0, 0, -1, 0, 10, 1)), ray(-1, 10, 1))
+  check("Raycast short", all(Physics.Raycast(0, 5, 0, 0, -1, 0, 1)), ray(-1, 1, nil))
+  check("Raycast up", all(Physics.Raycast(0, 5, 0, 0, 1, 0, 10)), ray(1, 10, nil))
+  check("Raycast no direction", all(Physics.Raycast(0, 5, 0, 0, 0, 0, 10)), ray(0, 10, nil))
+  check("Raycast no distance", all(Physics.Raycast(0, 5, 0, 0, -1, 0, 0)), ray(-1, 0, nil))
+  check("Raycast table", all(Physics.Raycast({ originX = 0, originY = 5, originZ = 0, directionX = 0, directionY = -1, directionZ = 0 })), ray(-1, nil, nil))
+
+  -- a value of the wrong kind is the C API's error, at the line of the call
+  local errors = {
+    attempt(function() return (Transform.Translate("abc", 1, 2, 3)) end),
+    attempt(function() return (Transform.Translate(e, 1, "x", 3)) end),
+    attempt(function() return (Input.ActionBool(nil)) end),
+    attempt(function() return (Input.ActionFloat("Move", 1.5)) end),
+    attempt(function() return (Physics.Raycast("x", 5, 0, 0, -1, 0, 10)) end),
+    attempt(function() return (Physics.GetVelocity(1.5)) end) }
+  for index, text in ipairs(errors) do
+    local reported = text:find("Test.lua:", 1, true) and (text:find("bad argument", 1, true) or text:find("integer representation", 1, true))
+    check("error " .. index, reported and "reported" or text, "reported")
+  end
+  Emit('Fast', { bad = table.concat(bad, "; "), checks = tostring(checks) })
+end
+)lua";
+
+void RunFastCallEquivalenceTest() {
+    VmRig rig("function Tick(self, dt) end\n");
+    const std::vector<std::string> problems = kb::script::VerifyLuaFastCalls(rig.host.Functions());
+    std::string joined;
+    for (const std::string& problem : problems) joined += problem + "; ";
+    Require(problems.empty(), ("Every fast call must resolve to the API catalog: " + joined).c_str());
+
+    // The floor the rays hit, an entity that is gone, and a key held for the "Move" action.
+    const kb::scene::SceneObject floor = rig.scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Floor" });
+    rig.scene.Components().Colliders().Set(floor.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Box, .boxSize = kb::scene::Vec3{ 10.0F, 1.0F, 10.0F } });
+    const kb::scene::SceneObject gone = rig.scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Gone" });
+    const std::uint64_t goneId = gone.Entity().Id();
+    rig.scene.Entities().Destroy(gone.Entity());
+    auto moveAction = std::make_shared<kb::input::InputActionAsset>();
+    moveAction->name = "Move";
+    moveAction->valueType = kb::input::InputActionValueType::Axis2D;
+    auto moveContext = std::make_shared<kb::input::InputMappingContextAsset>();
+    moveContext->composites.push_back(kb::input::InputCompositeBinding{ .actionId = 1U, .slots = {
+        kb::input::InputCompositeSlot{ .key = kb::input::InputKey::D, .axis = 0U, .scale = 1.0F },
+        kb::input::InputCompositeSlot{ .key = kb::input::InputKey::W, .axis = 1U, .scale = 1.0F } } });
+    rig.scene.Input().SetResolvers(
+        [moveAction](std::uint64_t id) -> std::shared_ptr<const kb::input::InputActionAsset> { return id == 1U ? moveAction : nullptr; },
+        [moveContext](std::uint64_t id) -> std::shared_ptr<const kb::input::InputMappingContextAsset> { return id == 60U ? moveContext : nullptr; });
+    Require(rig.scene.Input().AddMappingContext(60U, 0), "the fast call test mapping context could not be added");
+    rig.scene.Input().MutableDeviceState().SetKeyDown(kb::input::InputKey::D, true);
+
+    const std::string source = "local GONE = " + std::to_string(goneId) + "\n" + kFastCallScript;
+    const kb::script::PucLuaLoadResult reloaded = rig.host.LuaRuntime().ReloadScript(kVmAsset, source, "Test.lua");
+    Require(reloaded.succeeded, reloaded.error.c_str());
+    const kb::scene::SceneEntity entity = rig.Add();
+    kb::scene::TransformComponent transform = rig.scene.Transforms().Get(entity);
+    transform.localPosition = kb::scene::Vec3{ 1.5F, -2.0F, 4.25F };
+    rig.scene.Transforms().Set(entity, transform);
+    rig.scene.EvaluateAllLocalUserInput(kVmStep);
+    const kb::script::ScriptRuntimeExecutionResult& result = rig.CleanFrame();
+    Require(result.emittedEvents.size() == 1U, "the fast call script must run");
+    const kb::script::ScriptEvent& event = result.emittedEvents.front();
+    Require(TextOf(event, "bad").empty(), ("A script function differs from the registered function it stands for: " + TextOf(event, "bad")).c_str());
+    Require(TextOf(event, "checks") == "121", ("The fast call script must make every check: " + TextOf(event, "checks")).c_str());
 }
 
 // A script that never returns is stopped by the budget, also when it catches the error, and the next entry runs.
@@ -540,6 +721,7 @@ void RunScriptVmTests() {
     RunSharedSubsetTest();
     RunHotCallErrorsTest();
     RunHotTableFormsTest();
+    RunFastCallEquivalenceTest();
     RunBudgetTest();
     RunDebuggerWorkflowTest();
     RunWatchdogCoreTest();

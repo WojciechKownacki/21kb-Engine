@@ -839,6 +839,15 @@ void RunScriptDispatchBenchmark() {
         { "self:GetProperty", "local x = self:GetProperty('Transform', 'localPosition.x')" },
         { "self:SetProperty", "self:SetProperty('Transform', 'localPosition.x', 1.5)" },
         { "Input.IsPressed", "local b = Input.IsPressed('Jump')" },
+        { "Transform.Translate", "Transform.Translate(self.entity, 0.001, 0, 0)" },
+        { "Transform.LocalRotation", "local r = Transform.LocalRotation(self.entity)" },
+        { "Transform.SetLocalRotation", "Transform.SetLocalRotation(self.entity, 0, 0, 0, 1)" },
+        { "Input.ActionBool", "local b = Input.ActionBool('Jump')" },
+        { "Input.ActionFloat", "local v = Input.ActionFloat('Jump')" },
+        { "Input.Action2D", "local v = Input.Action2D('Move')" },
+        { "Physics.Raycast", "local h = Physics.Raycast(0, 10, 0, 0, -1, 0, 100)" },
+        { "Physics.GetVelocity", "local v = Physics.GetVelocity(self.entity)" },
+        { "Physics.SetVelocity", "Physics.SetVelocity(self.entity, 1, 2, 3)" },
     };
     for (const auto& binding : bindings) {
         bool succeeded = false;
@@ -848,6 +857,8 @@ void RunScriptDispatchBenchmark() {
         if (std::string_view{ binding.label } == "Transform.GetPosition") Require(nanoseconds < 700.0, "Transform.GetPosition must not go through the function registry");
         if (std::string_view{ binding.label } == "Transform.SetPosition") Require(nanoseconds < 600.0, "Transform.SetPosition must not go through the function registry");
         if (std::string_view{ binding.label } == "Input.IsPressed") Require(nanoseconds < 400.0, "Input.IsPressed must not go through the function registry");
+        if (std::string_view{ binding.label } == "Transform.LocalRotation") Require(nanoseconds < 400.0, "Transform.LocalRotation must not go through the function registry");
+        if (std::string_view{ binding.label } == "Physics.GetVelocity") Require(nanoseconds < 400.0, "Physics.GetVelocity must not go through the function registry");
     }
 }
 
@@ -899,6 +910,14 @@ function Tick(self, dt)
   local delta = Time.delta()
   local x, y, z = Transform.GetPositionXYZ(self.entity)
   Transform.SetPosition(self.entity, x + move.x * speed * delta, y, z + move.y * speed * delta)
+end
+)";
+
+// One input read and one position write per object and frame (scenario translate-action).
+constexpr const char* kFrameTranslateActionLua = R"(
+function Tick(self, dt)
+  local still = Input.ActionBool("jump")
+  Transform.Translate(self.entity, still and 0.0 or 0.01, 0.0, 0.0)
 end
 )";
 
@@ -1007,7 +1026,7 @@ bool RegisterFrameScripts(kb::script::NativeScriptPluginApi* api) {
 // One scenario of the scripting comparison: `count` objects, each running the chosen script every frame (or one event
 // broadcast to all of them), measured as wall time per frame. Settings come from the environment so that every run is
 // a fresh process with its own peak memory: KB_BENCH_BACKEND (lua, native), KB_BENCH_SCENARIO (empty, typical, heavy,
-// event; native also typical-inline, Lua also typical-table and custom, whose script text is KB_BENCH_SOURCE), KB_BENCH_COUNT, KB_BENCH_FRAMES, KB_BENCH_WARMUP, and for Lua
+// event; native also typical-inline, Lua also typical-table, translate-action and custom, whose script text is KB_BENCH_SOURCE), KB_BENCH_COUNT, KB_BENCH_FRAMES, KB_BENCH_WARMUP, and for Lua
 // KB_BENCH_LUA_INSTRUCTIONS (the per-call instruction budget; 0 turns it off, unset keeps the default).
 void RunScriptFrameBenchmark() {
     const std::string backend = EnvText("KB_BENCH_BACKEND", "lua");
@@ -1035,7 +1054,7 @@ void RunScriptFrameBenchmark() {
         }
         const std::string customSource = scenario == "custom" ? EnvText("KB_BENCH_SOURCE", kEmptyScript) : std::string{};
         const char* source = scenario == "custom" ? customSource.c_str() : scenario == "empty" ? kEmptyScript : scenario == "typical" ? kFrameTypicalLua
-            : scenario == "typical-table" ? kFrameTypicalTableLua : scenario == "movement" ? kFrameMovementLua : scenario == "movement-xy" ? kFrameMovementXYLua : scenario == "heavy" ? kFrameHeavyLua : kFrameEventLua;
+            : scenario == "typical-table" ? kFrameTypicalTableLua : scenario == "movement" ? kFrameMovementLua : scenario == "movement-xy" ? kFrameMovementXYLua : scenario == "translate-action" ? kFrameTranslateActionLua : scenario == "heavy" ? kFrameHeavyLua : kFrameEventLua;
         const kb::script::PucLuaLoadResult loaded = host.LuaRuntime().LoadScript(kBenchAsset, source, "Bench.lua");
         Require(loaded.succeeded, loaded.error.c_str());
     }

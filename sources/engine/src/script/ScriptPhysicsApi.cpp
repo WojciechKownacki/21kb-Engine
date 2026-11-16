@@ -97,7 +97,7 @@ const ScriptValue* FindArg(std::span<const ScriptFunctionArgument> arguments, st
 // included), not just the newly added queries.
 [[nodiscard]] std::uint32_t LayerMaskArg(std::span<const ScriptFunctionArgument> arguments) noexcept {
     const ScriptValue* value = FindArg(arguments, "layerMask");
-    return value == nullptr ? kb::scene::kPhysicsAllLayers : static_cast<std::uint32_t>(std::max(0, value->AsInt(static_cast<int>(kb::scene::kPhysicsAllLayers))));
+    return value == nullptr ? kb::scene::kPhysicsAllLayers : ScriptPhysicsApi::LayerMaskFromInt(value->AsInt(static_cast<int>(kb::scene::kPhysicsAllLayers)));
 }
 
 [[nodiscard]] int IntArg(std::span<const ScriptFunctionArgument> arguments, std::string_view name, int fallback) noexcept {
@@ -130,49 +130,29 @@ ScriptFunctionCallResult VectorResult(bool found, Vec3 value) {
     };
 }
 
-ScriptFunctionCallResult Raycast(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+ScriptFunctionCallResult RaycastCallback(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     if (context.scene == nullptr) {
         return Error("physics api requires an active scene");
     }
     const Vec3 origin = VecArg(arguments, "origin");
-    const Vec3 rawDirection = VecArg(arguments, "direction", Vec3{ 0.0F, -1.0F, 0.0F });
-    const float maxDistance = FloatArg(arguments, "distance", 1000.0F);
-    if (!IsFinite(origin) || !IsFinite(rawDirection) || !IsPositiveFinite(maxDistance)) {
-        return Error("raycast origin, direction, or distance is invalid");
+    const Vec3 direction = VecArg(arguments, "direction", Vec3{ 0.0F, -1.0F, 0.0F });
+    ScriptRaycastHit hit;
+    if (const char* error = ScriptPhysicsApi::Raycast(*context.scene, origin.x, origin.y, origin.z, direction.x, direction.y, direction.z,
+            FloatArg(arguments, "distance", 1000.0F), LayerMaskArg(arguments), hit)) {
+        return Error(error);
     }
-    const Vec3 direction = Normalize(rawDirection);
-    if (!IsFinite(direction) || Length(direction) <= 0.000001F) {
-        return Error("raycast direction is invalid");
-    }
-    std::array<kb::scene::PhysicsCastResult, 1U> hitStorage{};
-    kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult> hits(hitStorage);
-    kb::scene::RaycastAllNonAlloc(
-        *context.scene, origin, direction, maxDistance, LayerMaskArg(arguments), hits);
-    const kb::scene::PhysicsCastResult hit =
-        hits.Empty() ? kb::scene::PhysicsCastResult{} : *hits.GetAt(0U);
-
-    // LIB-132: single-query trace - RecordQueryTrace is an honest no-op unless debug draw is
-    // enabled on this scene (see PhysicsDebugDraw.hpp), so this costs nothing when disabled.
-    kb::scene::PhysicsDebugDraw::RecordQueryTrace(*context.scene, kb::scene::PhysicsDebugQueryTrace{
-                                                                       .valid = true,
-                                                                       .hit = hit.hit,
-                                                                       .origin = origin,
-                                                                       .endpoint = hit.hit ? hit.point : (origin + direction * maxDistance),
-                                                                       .normal = hit.normal,
-                                                                   });
-
     return ScriptFunctionCallResult{
         .executed = true,
         .outputs = {
             ScriptFunctionArgument{ "hit", ScriptValue{ hit.hit } },
-            ScriptFunctionArgument{ "entity", ScriptValue{ hit.entity.Id(), ScriptValueType::Entity } },
-            ScriptFunctionArgument{ "distance", ScriptValue{ hit.hit ? hit.distance : 0.0F } },
-            ScriptFunctionArgument{ "x", ScriptValue{ hit.hit ? hit.point.x : 0.0F } },
-            ScriptFunctionArgument{ "y", ScriptValue{ hit.hit ? hit.point.y : 0.0F } },
-            ScriptFunctionArgument{ "z", ScriptValue{ hit.hit ? hit.point.z : 0.0F } },
-            ScriptFunctionArgument{ "normalX", ScriptValue{ hit.hit ? hit.normal.x : 0.0F } },
-            ScriptFunctionArgument{ "normalY", ScriptValue{ hit.hit ? hit.normal.y : 0.0F } },
-            ScriptFunctionArgument{ "normalZ", ScriptValue{ hit.hit ? hit.normal.z : 0.0F } },
+            ScriptFunctionArgument{ "entity", ScriptValue{ hit.entity, ScriptValueType::Entity } },
+            ScriptFunctionArgument{ "distance", ScriptValue{ hit.distance } },
+            ScriptFunctionArgument{ "x", ScriptValue{ hit.x } },
+            ScriptFunctionArgument{ "y", ScriptValue{ hit.y } },
+            ScriptFunctionArgument{ "z", ScriptValue{ hit.z } },
+            ScriptFunctionArgument{ "normalX", ScriptValue{ hit.normalX } },
+            ScriptFunctionArgument{ "normalY", ScriptValue{ hit.normalY } },
+            ScriptFunctionArgument{ "normalZ", ScriptValue{ hit.normalZ } },
         },
         .errors = {},
     };
@@ -625,6 +605,49 @@ ScriptFunctionCallResult LayerBit(const ScriptFunctionCallContext& context, std:
 
 } // namespace
 
+std::uint32_t ScriptPhysicsApi::LayerMaskFromInt(int value) noexcept {
+    return static_cast<std::uint32_t>(std::max(0, value));
+}
+
+const char* ScriptPhysicsApi::Raycast(kb::scene::Scene& scene, float originX, float originY, float originZ, float directionX,
+    float directionY, float directionZ, float distance, std::uint32_t layerMask, ScriptRaycastHit& result) {
+    const Vec3 origin{ originX, originY, originZ };
+    const Vec3 rawDirection{ directionX, directionY, directionZ };
+    if (!IsFinite(origin) || !IsFinite(rawDirection) || !IsPositiveFinite(distance)) {
+        return "raycast origin, direction, or distance is invalid";
+    }
+    const Vec3 direction = Normalize(rawDirection);
+    if (!IsFinite(direction) || Length(direction) <= 0.000001F) {
+        return "raycast direction is invalid";
+    }
+    std::array<kb::scene::PhysicsCastResult, 1U> hitStorage{};
+    kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult> hits(hitStorage);
+    kb::scene::RaycastAllNonAlloc(scene, origin, direction, distance, layerMask, hits);
+    const kb::scene::PhysicsCastResult hit = hits.Empty() ? kb::scene::PhysicsCastResult{} : *hits.GetAt(0U);
+
+    // LIB-132: single-query trace - RecordQueryTrace is an honest no-op unless debug draw is
+    // enabled on this scene (see PhysicsDebugDraw.hpp), so this costs nothing when disabled.
+    kb::scene::PhysicsDebugDraw::RecordQueryTrace(scene, kb::scene::PhysicsDebugQueryTrace{
+                                                             .valid = true,
+                                                             .hit = hit.hit,
+                                                             .origin = origin,
+                                                             .endpoint = hit.hit ? hit.point : (origin + direction * distance),
+                                                             .normal = hit.normal,
+                                                         });
+    result = ScriptRaycastHit{
+        .hit = hit.hit,
+        .entity = hit.entity.Id(),
+        .distance = hit.hit ? hit.distance : 0.0F,
+        .x = hit.hit ? hit.point.x : 0.0F,
+        .y = hit.hit ? hit.point.y : 0.0F,
+        .z = hit.hit ? hit.point.z : 0.0F,
+        .normalX = hit.hit ? hit.normal.x : 0.0F,
+        .normalY = hit.hit ? hit.normal.y : 0.0F,
+        .normalZ = hit.hit ? hit.normal.z : 0.0F,
+    };
+    return nullptr;
+}
+
 bool ScriptPhysicsApi::Register(ScriptRuntimeHost& host) {
     ScriptFunctionDesc desc;
     desc.signature.name = "Physics.Raycast";
@@ -649,7 +672,7 @@ bool ScriptPhysicsApi::Register(ScriptRuntimeHost& host) {
         ScriptFunctionPin{ "normalY", ScriptValueType::Float, true },
         ScriptFunctionPin{ "normalZ", ScriptValueType::Float, true },
     };
-    desc.callback = &Raycast;
+    desc.callback = &RaycastCallback;
     bool ok = host.RegisterFunction(std::move(desc));
 
     ok = RegisterVectorSetter(host, "Physics.AddForce", "force", &AddForce) && ok;
