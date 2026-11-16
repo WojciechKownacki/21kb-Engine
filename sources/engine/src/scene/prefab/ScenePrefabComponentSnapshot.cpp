@@ -97,6 +97,12 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
     if (const Sprite2DComponent* content = sceneComponents.Sprites2D().TryGet(entity)) {
         components.sprite2D = *content;
     }
+    if (const PostProcessVolumeComponent* content = sceneComponents.PostProcessVolumes().TryGet(entity)) {
+        components.postProcessVolume = *content;
+    }
+    if (const PlanarReflectionComponent* content = sceneComponents.PlanarReflections().TryGet(entity)) {
+        components.planarReflection = *content;
+    }
     if (const StreamFocusComponent* focus = sceneComponents.StreamFocuses().TryGet(entity)) {
         components.streamFocus = *focus;
     }

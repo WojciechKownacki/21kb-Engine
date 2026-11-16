@@ -911,6 +911,37 @@ template <typename T>
     return true;
 }
 
+[[nodiscard]] bool ParsePostProcessVolume(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "postProcessVolume", present)) return false;
+    if (!present) return true;
+    PostProcessVolumeComponent value{};
+    if (!ParseOptionalField(fields, "postProcessVolume.profileAssetId", value.profileAssetId)) return false;
+    if (!ParseOptionalField(fields, "postProcessVolume.priority", value.priority)) return false;
+    if (!ParseOptionalField(fields, "postProcessVolume.weight", value.weight)) return false;
+    if (!ParseOptionalField(fields, "postProcessVolume.blendDistance", value.blendDistance)) return false;
+    if (!ParseOptionalBool(fields, "postProcessVolume.enabled", value.enabled)) return false;
+    if (!IsPostProcessVolumeComponentValid(value)) return false;
+    components.postProcessVolume = value;
+    return true;
+}
+[[nodiscard]] bool ParsePlanarReflection(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "planarReflection", present)) return false;
+    if (!present) return true;
+    PlanarReflectionComponent value{};
+    if (!ParseOptionalField(fields, "planarReflection.width", value.width)) return false;
+    if (!ParseOptionalField(fields, "planarReflection.depth", value.depth)) return false;
+    if (!ParseOptionalField(fields, "planarReflection.resolutionScale", value.resolutionScale)) return false;
+    if (!ParseOptionalField(fields, "planarReflection.reflectedLayers", value.reflectedLayers)) return false;
+    if (!ParseOptionalField(fields, "planarReflection.maxDistance", value.maxDistance)) return false;
+    if (!ParseOptionalBool(fields, "planarReflection.reflectShadows", value.reflectShadows)) return false;
+    if (!ParseOptionalBool(fields, "planarReflection.enabled", value.enabled)) return false;
+    if (!IsPlanarReflectionComponentValid(value)) return false;
+    components.planarReflection = value;
+    return true;
+}
+
 [[nodiscard]] bool ParseTilemapCollider(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
     bool present = false;
     if (!ParseOptionalComponentFlag(fields, "tilemapCollider", present)) return false;
@@ -942,6 +973,8 @@ bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fiel
         && ParseCollider2D(fields, components)
         && ParseBody2D(fields, components)
         && ParseSprite2D(fields, components)
+        && ParsePostProcessVolume(fields, components)
+        && ParsePlanarReflection(fields, components)
 
         && ParseStreamFocus(fields, components)
         && ParseWorldBackdrop(fields, components)

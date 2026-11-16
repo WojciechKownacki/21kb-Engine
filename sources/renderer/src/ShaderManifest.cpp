@@ -36,6 +36,8 @@ constexpr auto kRequiredShaders = std::to_array<ShaderManifestEntry>({
     ShaderManifestEntry{.name = "cs_particle_gpu_inspect.sc", .stage = ShaderStage::Compute, .required = false},
     ShaderManifestEntry{.name = "cs_particle_gpu_rebase.sc", .stage = ShaderStage::Compute,
         .requiredFeature = ShaderRuntimeFeatureBit(ShaderRuntimeFeature::ParticleGpuEmitters)},
+    ShaderManifestEntry{.name = "cs_particle_gpu_strip.sc", .stage = ShaderStage::Compute,
+        .requiredFeature = ShaderRuntimeFeatureBit(ShaderRuntimeFeature::ParticleGpuEmitters)},
     ShaderManifestEntry{.name = "cs_particle_gpu_sort_keys.sc", .stage = ShaderStage::Compute,
         .requiredFeature = ShaderRuntimeFeatureBit(ShaderRuntimeFeature::ParticleGpuEmitters)},
     ShaderManifestEntry{.name = "cs_particle_gpu_sort_step.sc", .stage = ShaderStage::Compute,
@@ -69,6 +71,7 @@ constexpr auto kRequiredShaders = std::to_array<ShaderManifestEntry>({
     // the environment colour instead of the captured sky.
     ShaderManifestEntry{.name = "fs_sky_capture.sc", .stage = ShaderStage::Fragment, .required = false},
     ShaderManifestEntry{.name = "fs_sky_prefilter.sc", .stage = ShaderStage::Fragment, .required = false},
+    ShaderManifestEntry{.name = "fs_local_reflection_atlas.sc", .stage = ShaderStage::Fragment, .required = false},
     ShaderManifestEntry{.name = "fs_mesh.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_mesh_gbuffer_instanced.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_mesh_gbuffer_layered_instanced.sc", .stage = ShaderStage::Fragment, .required = false},

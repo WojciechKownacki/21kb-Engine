@@ -33,6 +33,12 @@ public:
     [[nodiscard]] ParticleStripSubmitResult SubmitDraw(
         bgfx::ViewId viewId, std::uint32_t drawIndex, bgfx::TextureHandle texture) noexcept;
 
+    // A strip a compute pass built (ParticleGpuEmitterSimulation::Draw): `segmentCount` quads of four vertices each.
+    [[nodiscard]] ParticleStripSubmitResult SubmitGpuStrip(
+        bgfx::ViewId viewId, bgfx::DynamicVertexBufferHandle vertices, bgfx::IndexBufferHandle indices,
+        std::uint32_t segmentCount, kb::particles::ParticleRenderBlendMode blend,
+        kb::particles::ParticleRenderDepthMode depth, bgfx::TextureHandle texture) noexcept;
+
 private:
     SceneMeshCoverageProbe* coverageProbe_ = nullptr;
     ParticleStripGeometryBuilder geometryBuilder_;

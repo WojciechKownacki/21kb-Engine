@@ -2434,6 +2434,34 @@ void RunPrefabCameraAssetSaveLoadRoundTripTest() {
     std::filesystem::remove(prefabPath, removeError);
 }
 
+// A Planar Reflection survives the on-disk prefab text asset: saved, loaded and instantiated with every field.
+void RunPrefabPlanarReflectionAssetSaveLoadRoundTripTest() {
+    const std::filesystem::path prefabPath = std::filesystem::temp_directory_path() / "21kb_engine_prefab_planar_reflection_round_trip.kbprefab";
+    std::error_code removeError;
+    std::filesystem::remove(prefabPath, removeError);
+
+    const kb::scene::PlanarReflectionComponent mirror{
+        .width = 12.0F, .depth = 8.0F, .resolutionScale = 0.25F, .reflectedLayers = 0x0000F0F0U, .maxDistance = 55.0F,
+        .reflectShadows = true, .enabled = false };
+    kb::scene::Scene scene;
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t mirrorNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Planar Reflection Round Trip",
+        .components = kb::scene::ScenePrefabNodeComponents{ .planarReflection = mirror },
+    });
+    const kb::scene::ScenePrefabHandle prefabHandle = scene.Prefabs().Register("PlanarReflectionRoundTripPrefab", std::move(prefab));
+    kb::tests::Require(scene.Prefabs().Save(prefabHandle, prefabPath), "Planar Reflection prefab asset save failed");
+
+    kb::scene::Scene loadedScene;
+    const kb::scene::ScenePrefabHandle loadedHandle = loadedScene.Prefabs().Load(prefabPath);
+    kb::tests::Require(loadedHandle.IsValid(), "Planar Reflection prefab asset did not load");
+    const kb::scene::ScenePrefabInstance instance = loadedScene.Prefabs().Instantiate(loadedHandle);
+    const kb::scene::PlanarReflectionComponent* restored = loadedScene.Components().PlanarReflections().TryGet(instance.ObjectAt(mirrorNode).Entity());
+    kb::tests::Require(restored != nullptr && *restored == mirror, "Planar Reflection prefab asset round trip lost a field");
+
+    std::filesystem::remove(prefabPath, removeError);
+}
+
 // LIB-141: mirrors RunPrefabCameraAssetSaveLoadRoundTripTest exactly - exercises the actual
 // on-disk text asset round trip (ScenePrefabAssetComponentWriter -> ScenePrefabAssetLightParser)
 // for Light's new useColorTemperature/colorTemperatureKelvin/layerMask fields (plus the
@@ -3005,6 +3033,7 @@ void RunScenePrefabInstantiationTests() {
     run("RunPrefabApplyOverrideToAssetTest", RunPrefabApplyOverrideToAssetTest);
     run("RunPrefabAudioSourceAssetValidationTest", RunPrefabAudioSourceAssetValidationTest);
     run("RunPrefabCameraAssetSaveLoadRoundTripTest", RunPrefabCameraAssetSaveLoadRoundTripTest);
+    run("RunPrefabPlanarReflectionAssetSaveLoadRoundTripTest", RunPrefabPlanarReflectionAssetSaveLoadRoundTripTest);
     run("RunPrefabLightAssetSaveLoadRoundTripTest", RunPrefabLightAssetSaveLoadRoundTripTest);
     run("RunPrefabAssetLoadMigratesMissingNodeStableIdsTest", RunPrefabAssetLoadMigratesMissingNodeStableIdsTest);
     run("RunNestedPrefabCompositionTest", RunNestedPrefabCompositionTest);

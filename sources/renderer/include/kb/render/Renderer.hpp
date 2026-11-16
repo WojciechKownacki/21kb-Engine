@@ -13,6 +13,7 @@
 #include "kb/render/gi/SceneGiResolvePass.hpp"
 #include "kb/render/scene/SceneSkyBackdropPass.hpp"
 #include "kb/render/scene/SceneSkyReflection.hpp"
+#include "kb/render/scene/SceneLocalReflectionAtlas.hpp"
 #include "kb/render/scene/SceneLightProbeTexture.hpp"
 #include "kb/render/gi/SceneGiVoxelGrid.hpp"
 #include "kb/render/frame/FinalCompositePass.hpp"
@@ -360,6 +361,8 @@ private:
     SceneGiResolvePass giResolvePass_;
     // Sky light: the backdrop captured and prefiltered for the reflections of the lighting.
     SceneSkyReflection skyReflection_;
+    // Local reflection probes: their cube maps copied into one HDR atlas the lighting samples.
+    SceneLocalReflectionAtlas localReflectionAtlas_;
     // The backdrop of the forward path, drawn after its opaque geometry.
     SceneSkyBackdropPass skyBackdropPass_;
     SceneLightProbeTexture lightProbes_;

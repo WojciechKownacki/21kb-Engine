@@ -103,6 +103,7 @@ bool SceneDeferredLightingPassDesc::IsValid() const noexcept {
 
 bool SceneDeferredLightingPass::Initialize() {
     if (!localReflections_.Initialize()) return false;
+    if (!planarReflections_.Initialize()) return false;
     if (IsInitialized()) {
         WriteRendererDebugLog("deferred_lighting", "Initialize skipped already initialized");
         return true;
@@ -180,6 +181,7 @@ bool SceneDeferredLightingPass::Initialize() {
 
 void SceneDeferredLightingPass::Shutdown() noexcept {
     localReflections_.Shutdown();
+    planarReflections_.Shutdown();
     lightGrid_.Shutdown();
     if (IsInitialized() || bgfx::isValid(program_)) {
         std::ostringstream message;
@@ -472,7 +474,8 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
     bgfx::setUniform(backdropSunUniform_, backdrop.sun.data());
     bgfx::setUniform(backdropSunColorUniform_, backdrop.sunColor.data());
     bgfx::setUniform(skyReflectionParamsUniform_, lighting.skyReflectionParams.data());
-    localReflections_.Set(desc.lightingConfig.ibl,fallbackSkyReflection_,14U,15U);
+    localReflections_.Set(desc.lightingConfig.ibl,14U);
+    planarReflections_.Set(desc.lightingConfig.ibl.planar, PlanarReflectionUniforms::kDeferredStage);
     // Deferred's key light used to be applied at full strength everywhere, with no shadow term at
     // all, while the forward opaque pass darkens light index 0 by a sampled shadow map -- same light,
     // same scene, but deferred came out visibly brighter/flatter. Feed the same shadow binding used
@@ -585,7 +588,7 @@ bool SceneDeferredLightingPass::IsInitialized() const noexcept {
         bgfx::isValid(backdropHorizonUniform_) && bgfx::isValid(backdropZenithUniform_) && bgfx::isValid(backdropParamsUniform_) &&
         bgfx::isValid(backdropEnvironmentSampler_) && bgfx::isValid(fallbackShadowTexture_) &&
         bgfx::isValid(fallbackBackdropEnvironmentTexture_) && bgfx::isValid(skyReflectionSampler_) &&
-        bgfx::isValid(skyReflectionParamsUniform_) && bgfx::isValid(fallbackSkyReflection_) && localReflections_.IsInitialized();
+        bgfx::isValid(skyReflectionParamsUniform_) && bgfx::isValid(fallbackSkyReflection_) && localReflections_.IsInitialized() && planarReflections_.IsInitialized();
 }
 
 SceneDeferredLightingPass::SharedStageBindings SceneDeferredLightingPass::LitStageBindings() noexcept {

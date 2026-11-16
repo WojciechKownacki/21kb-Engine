@@ -42,6 +42,8 @@ uniform vec4 u_deferredShadowParams;
 #include "sky_reflection.sh"
 #define KB_LOCAL_REFLECTION_DEFERRED 1
 #include "local_reflection.sh"
+#define KB_PLANAR_REFLECTION_DEFERRED 1
+#include "planar_reflection.sh"
 
 #include "ssgi.sh"
 #include "ssr.sh"
@@ -109,9 +111,12 @@ vec3 EvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic,
     vec3 diffuseEnv = KbDiffuseAmbient(worldPos, normal, EnvironmentColor(normal)) * albedo * (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * occlusion * u_deferredEnvironmentParams.y;
     vec3 reflectionDir = reflect(-viewDir, normal);
     float specularEnergy = mix(1.0, 0.18, roughness * roughness);
-    vec3 specularEnv = KbLocalReflection(worldPos,reflectionDir,roughness,KbSkyReflection(reflectionDir, roughness, EnvironmentColor(reflectionDir))) * fresnel * specularEnergy * u_deferredEnvironmentParams.z;
+    vec3 environmentSpecular = KbLocalReflection(worldPos,reflectionDir,roughness,KbSkyReflection(reflectionDir, roughness, EnvironmentColor(reflectionDir)));
+    // A planar mirror's picture replaces the probes, the sky and the screen-space reflection on its surface.
+    vec4 planar = KbPlanarReflection(worldPos, normal, roughness);
+    vec3 specularEnv = mix(environmentSpecular, planar.rgb, planar.a) * fresnel * specularEnergy * u_deferredEnvironmentParams.z;
     vec3 specularSsr = reflection.rgb * fresnel * specularEnergy * u_ssrParams.x;
-    return diffuseEnv + mix(specularEnv, specularSsr, reflection.a);
+    return diffuseEnv + mix(specularEnv, specularSsr, reflection.a * (1.0 - planar.a));
 }
 
 void ReadSceneLight(int lightIndex, out vec4 dirKind, out vec4 positionRange, out vec4 colorIntensity, out vec4 spot, out vec4 areaRight)

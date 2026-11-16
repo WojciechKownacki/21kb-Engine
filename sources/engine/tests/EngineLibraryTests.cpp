@@ -2880,6 +2880,8 @@ void RunEngineLibraryComponentRegistryTest() {
     source.Components().TilemapRenderers().Set(object.Entity(), kb::scene::TilemapRendererComponent{ .sortingOrder = 5, .enabled = false });
     source.Components().TilemapColliders().Set(object.Entity(), kb::scene::TilemapColliderComponent{ .enabled = false });
     source.Components().Sprites2D().Set(object.Entity(), kb::scene::Sprite2DComponent{ .imageAssetId = 303U, .cellWidth = 16U, .cell = 2U, .frameCount = 3U, .pivotX = 0.25F, .flipX = true, .tintA = 0.5F, .sortingOrder = -4, .wall = false });
+    source.Components().PostProcessVolumes().Set(object.Entity(), kb::scene::PostProcessVolumeComponent{ .profileAssetId = 404U, .priority = -3, .weight = 0.75F, .blendDistance = 6.5F, .enabled = false });
+    source.Components().PlanarReflections().Set(object.Entity(), kb::scene::PlanarReflectionComponent{ .width = 12.0F, .depth = 8.0F, .resolutionScale = 0.25F, .reflectedLayers = 0x0000F0F0U, .maxDistance = 55.0F, .reflectShadows = true, .enabled = false });
     source.Components().Bodies2D().Set(object.Entity(), kb::scene::Body2DComponent{ .type = 1, .gravityScale = 0.5F, .fixedRotation = true, .sideView = false, .startVelocityX = 2.0F });
     source.Components().Colliders2D().Set(object.Entity(), kb::scene::Collider2DComponent{ .shape = 2, .width = 2.0F, .radius = 0.25F, .offsetX = 0.5F, .isTrigger = true, .friction = 0.2F, .layer = 3, .collidesWith = 9U, .sideView = false });
     source.Components().CharacterControllers2D().Set(object.Entity(), kb::scene::CharacterController2DComponent{ .radius = 0.4F, .height = 1.6F, .slopeLimitDegrees = 40.0F, .stepHeight = 0.3F, .layer = 2, .collidesWith = 5U });
@@ -3042,6 +3044,10 @@ void RunEngineLibraryComponentRegistryTest() {
         *target.Components().TilemapColliders().TryGet(restored) == *source.Components().TilemapColliders().TryGet(object.Entity()), "Tilemap collider fields survive the library serialization contract");
     kb::tests::Require(target.Components().Sprites2D().Has(restored) &&
         *target.Components().Sprites2D().TryGet(restored) == *source.Components().Sprites2D().TryGet(object.Entity()), "Sprite 2D fields survive the library serialization contract");
+    kb::tests::Require(target.Components().PostProcessVolumes().Has(restored) &&
+        *target.Components().PostProcessVolumes().TryGet(restored) == *source.Components().PostProcessVolumes().TryGet(object.Entity()), "Post Process Volume fields survive the library serialization contract and the scene file");
+    kb::tests::Require(target.Components().PlanarReflections().Has(restored) &&
+        *target.Components().PlanarReflections().TryGet(restored) == *source.Components().PlanarReflections().TryGet(object.Entity()), "Planar Reflection fields survive the library serialization contract and the scene file");
     kb::tests::Require(target.Components().Bodies2D().Has(restored) && *target.Components().Bodies2D().TryGet(restored) == *source.Components().Bodies2D().TryGet(object.Entity()) &&
         target.Components().Colliders2D().Has(restored) && *target.Components().Colliders2D().TryGet(restored) == *source.Components().Colliders2D().TryGet(object.Entity()) &&
         target.Components().CharacterControllers2D().Has(restored) && *target.Components().CharacterControllers2D().TryGet(restored) == *source.Components().CharacterControllers2D().TryGet(object.Entity()),
@@ -3553,8 +3559,8 @@ void RunComponentInspectorDescCatalogTest() {
     // Rigidbody damping adds two; Joint motor, spring and break force add five.
     // Joint freedom adds thirty-five (secondary axis, swing limits and six axes of five settings).
     // Audio Source contributes sixteen fields and Audio Listener four.
-    // NavBounds adds twelve (size, center, agent size, cell and tile size).
-    kb::tests::Require(fieldsChecked == 907U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (907, including text rendering, themes, collision mesh and the compatibility alias) across all components");
+    // NavBounds adds twelve (size, center, agent size, cell and tile size). Planar Reflection adds seven.
+    kb::tests::Require(fieldsChecked == 919U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (919, including text rendering, themes, collision mesh and the compatibility alias) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();

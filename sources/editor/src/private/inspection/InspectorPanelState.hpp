@@ -123,6 +123,8 @@ enum class InspectorSectionId : std::uint8_t {
     AudioMixerRuntime,
     CharacterController2D,
     Sprite2D,
+    PostProcessVolume,
+    PlanarReflection,
     Body2D,
     Collider2D,
     Grid,

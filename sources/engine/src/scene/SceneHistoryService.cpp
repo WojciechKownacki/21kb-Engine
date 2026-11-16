@@ -124,6 +124,8 @@ template <typename T>
         && SameValue(lhs.collider2D, rhs.collider2D)
         && SameValue(lhs.body2D, rhs.body2D)
         && SameValue(lhs.sprite2D, rhs.sprite2D)
+        && SameValue(lhs.postProcessVolume, rhs.postProcessVolume)
+        && SameValue(lhs.planarReflection, rhs.planarReflection)
         && SameValue(lhs.streamFocus, rhs.streamFocus)
         && SameValue(lhs.worldBackdrop, rhs.worldBackdrop)
         && SameValue(lhs.ambientRadiance, rhs.ambientRadiance)

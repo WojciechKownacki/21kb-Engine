@@ -33,6 +33,8 @@
 #include "engine/scene/SceneCollider2DComponents.hpp"
 #include "engine/scene/SceneBody2DComponents.hpp"
 #include "engine/scene/SceneSprite2DComponents.hpp"
+#include "engine/scene/ScenePostProcessVolumeComponents.hpp"
+#include "engine/scene/ScenePlanarReflectionComponents.hpp"
 #include "engine/scene/SceneStreamFocusComponents.hpp"
 #include "engine/scene/SceneWorldBackdropComponents.hpp"
 #include "engine/scene/SceneAmbientRadianceComponents.hpp"
@@ -85,6 +87,8 @@ struct ScenePrefabNodeStateWriterContext {
     SceneCollider2DComponents colliders2D;
     SceneBody2DComponents bodies2D;
     SceneSprite2DComponents sprites2D;
+    ScenePostProcessVolumeComponents postProcessVolumes;
+    ScenePlanarReflectionComponents planarReflections;
     SceneStreamFocusComponents streamFocuses;
     SceneWorldBackdropComponents worldBackdrops;
     SceneAmbientRadianceComponents ambientRadiances;

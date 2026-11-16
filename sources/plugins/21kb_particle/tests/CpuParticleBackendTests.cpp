@@ -3234,7 +3234,19 @@ void TestGpuFallbackReasonTable() {
         { "ribbon output", [](auto& e) {
               e.emitters[0].output.type = kb::scene::ParticleOutputType::Ribbon;
               e.emitters[0].output.payload = kb::scene::ParticleRibbonOutput{};
+          }, Reason::None },
+        { "ribbon bridging dead particles", [](auto& e) {
+              e.emitters[0].output.type = kb::scene::ParticleOutputType::Ribbon;
+              e.emitters[0].output.payload = kb::scene::ParticleRibbonOutput{ .breakOnDeath = false };
           }, Reason::Output },
+        { "ribbon shorter than its particle capacity", [](auto& e) {
+              e.emitters[0].output.type = kb::scene::ParticleOutputType::Ribbon;
+              e.emitters[0].output.payload = kb::scene::ParticleRibbonOutput{ .maxSegments = 16U };
+          }, Reason::ParticleCapacity },
+        { "beam output", [](auto& e) {
+              e.emitters[0].output.type = kb::scene::ParticleOutputType::Beam;
+              e.emitters[0].output.payload = kb::scene::ParticleBeamOutput{};
+          }, Reason::None },
         { "decal output", [](auto& e) {
               e.emitters[0].output.type = kb::scene::ParticleOutputType::Decal;
               e.emitters[0].output.payload = kb::scene::ParticleDecalOutput{.depth = 1.0F};

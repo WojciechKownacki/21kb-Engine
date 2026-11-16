@@ -26,6 +26,8 @@
 #include "engine/scene/Collider2DComponent.hpp"
 #include "engine/scene/Body2DComponent.hpp"
 #include "engine/scene/Sprite2DComponent.hpp"
+#include "engine/scene/PostProcessVolumeComponent.hpp"
+#include "engine/scene/PlanarReflectionComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
@@ -130,6 +132,8 @@ struct ScenePrefabNodeComponents {
     std::optional<Collider2DComponent> collider2D;
     std::optional<Body2DComponent> body2D;
     std::optional<Sprite2DComponent> sprite2D;
+    std::optional<PostProcessVolumeComponent> postProcessVolume;
+    std::optional<PlanarReflectionComponent> planarReflection;
     std::optional<StreamFocusComponent> streamFocus;
     std::optional<WorldBackdropComponent> worldBackdrop;
     std::optional<AmbientRadianceComponent> ambientRadiance;

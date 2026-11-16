@@ -21,6 +21,10 @@ constexpr std::uint32_t kInstanceBytes = 80U;
 constexpr std::uint32_t kStateBytes = 32U;
 static_assert(sizeof(kb::particles::ParticleGpuSpawn) == kStateBytes);
 constexpr std::uint32_t kSortKeyBytes = 16U;
+// A strip vertex: position, colour and texture coordinate, one vec4 each (the layout of ParticleStripVertex padded).
+constexpr std::uint32_t kStripVertexBytes = 48U;
+constexpr std::uint32_t kStripVerticesPerSegment = 4U;
+constexpr std::uint32_t kStripIndicesPerSegment = 6U;
 // How far behind a visible surface (m) a particle still counts as having hit it.
 constexpr float kDepthCollisionThickness = 0.5F;
 constexpr float kDefaultDepthRestitution = 0.5F;
@@ -45,6 +49,23 @@ constexpr double kFixedStepSeconds = 1.0 / static_cast<double>(kb::scene::kParti
         .add(bgfx::Attrib::TexCoord4, 4U, bgfx::AttribType::Float)
         .end();
     return layout;
+}
+
+[[nodiscard]] bgfx::VertexLayout StripLayout() {
+    bgfx::VertexLayout layout{};
+    layout.begin()
+        .add(bgfx::Attrib::Position, 4U, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::Color0, 4U, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::TexCoord0, 4U, bgfx::AttribType::Float)
+        .end();
+    return layout;
+}
+
+// Segments of the strip a ribbon (one per ring slot) or a beam emitter builds on the GPU; zero for the other outputs.
+[[nodiscard]] std::uint32_t StripSegments(const kb::particles::ParticleGpuEmitterParams& params, std::uint32_t capacity) noexcept {
+    if (params.output == kb::particles::ParticleRenderOutput::Ribbon) return capacity;
+    if (params.output == kb::particles::ParticleRenderOutput::Beam) return params.beamSegments;
+    return 0U;
 }
 
 // The rotation matrix of a quaternion (x, y, z, w) as three columns (padded to four floats).
@@ -121,6 +142,10 @@ bool ParticleGpuEmitterSimulation::Initialize(std::uint64_t maxBufferBytes) {
     inverseViewProjectionUniform_ = bgfx::createUniform("u_deferredInverseViewProjection", bgfx::UniformType::Mat4);
     depthParamsUniform_ = bgfx::createUniform("u_deferredDepthParams", bgfx::UniformType::Vec4);
     cameraPositionUniform_ = bgfx::createUniform("u_deferredCameraPosition", bgfx::UniformType::Vec4);
+    stripProgram_ = ShaderLoader::LoadComputeProgram("cs_particle_gpu_strip.sc");
+    stripModeUniform_ = bgfx::createUniform("u_gpuStripMode", bgfx::UniformType::Vec4);
+    stripBeamUniform_ = bgfx::createUniform("u_gpuStripBeam", bgfx::UniformType::Vec4, 3U);
+    stripCameraUniform_ = bgfx::createUniform("u_gpuStripCamera", bgfx::UniformType::Vec4, 2U);
     sortKeysProgram_ = ShaderLoader::LoadComputeProgram("cs_particle_gpu_sort_keys.sc");
     sortStepProgram_ = ShaderLoader::LoadComputeProgram("cs_particle_gpu_sort_step.sc");
     sortGatherProgram_ = ShaderLoader::LoadComputeProgram("cs_particle_gpu_sort_gather.sc");
@@ -140,7 +165,8 @@ bool ParticleGpuEmitterSimulation::IsReady() const noexcept {
     return bgfx::isValid(program_) && bgfx::isValid(motionUniform_) && bgfx::isValid(timeUniform_) &&
         bgfx::isValid(colorUniform_) && bgfx::isValid(sizeUniform_) && bgfx::isValid(collideProgram_) &&
         bgfx::isValid(forcesUniform_) && bgfx::isValid(fieldUniform_) && bgfx::isValid(noiseOriginUniform_) &&
-        bgfx::isValid(flipbookUniform_);
+        bgfx::isValid(flipbookUniform_) && bgfx::isValid(stripProgram_) && bgfx::isValid(stripModeUniform_) &&
+        bgfx::isValid(stripBeamUniform_) && bgfx::isValid(stripCameraUniform_);
 }
 
 void ParticleGpuEmitterSimulation::Shutdown() noexcept {
@@ -149,11 +175,11 @@ void ParticleGpuEmitterSimulation::Shutdown() noexcept {
              &collisionUniform_, &depthBounceUniform_, &texelUniform_, &viewProjectionUniform_, &depthSampler_,
              &inverseViewProjectionUniform_, &depthParamsUniform_, &cameraPositionUniform_, &sortCameraUniform_,
              &sortParamsUniform_, &sortDepthUniform_, &outputUniform_, &flipbookUniform_, &spinUniform_, &basisUniform_, &rebaseUniform_, &forcesUniform_,
-             &noiseOriginUniform_, &fieldUniform_ }) {
+             &noiseOriginUniform_, &fieldUniform_, &stripModeUniform_, &stripBeamUniform_, &stripCameraUniform_ }) {
         if (bgfx::isValid(*handle)) bgfx::destroy(*handle);
         *handle = BGFX_INVALID_HANDLE;
     }
-    for (bgfx::ProgramHandle* handle : { &sortKeysProgram_, &sortStepProgram_, &sortGatherProgram_, &rebaseProgram_ }) {
+    for (bgfx::ProgramHandle* handle : { &sortKeysProgram_, &sortStepProgram_, &sortGatherProgram_, &rebaseProgram_, &stripProgram_ }) {
         if (bgfx::isValid(*handle)) bgfx::destroy(*handle);
         *handle = BGFX_INVALID_HANDLE;
     }
@@ -173,13 +199,20 @@ bool ParticleGpuEmitterSimulation::Create(Emitter& emitter, const kb::particles:
     const std::uint32_t perSlot = InstancesPerSlot(params);
     if (static_cast<std::uint64_t>(capacity) * perSlot > kb::particles::kParticleGpuMaxTrailSegments &&
         perSlot > 1U) return false;
+    const std::uint32_t stripSegments = StripSegments(params, capacity);
+    if (stripSegments > kb::scene::kParticleEffectMaxStripSegmentsPerEmitter ||
+        (stripSegments == 0U && (params.output == kb::particles::ParticleRenderOutput::Ribbon ||
+            params.output == kb::particles::ParticleRenderOutput::Beam))) return false;
+    const std::uint64_t stripBytes = static_cast<std::uint64_t>(stripSegments) *
+        (kStripVerticesPerSegment * kStripVertexBytes + kStripIndicesPerSegment * sizeof(std::uint16_t));
     const std::uint64_t bytes = static_cast<std::uint64_t>(capacity) *
-        (2U * sizeof(kb::particles::ParticleGpuSpawn) + static_cast<std::uint64_t>(kInstanceBytes) * perSlot);
+        (2U * sizeof(kb::particles::ParticleGpuSpawn) + static_cast<std::uint64_t>(kInstanceBytes) * perSlot) + stripBytes;
     if (allocatedBytes_ + bytes > maxBufferBytes_) return false;
     emitter.params = params;
     emitter.params.capacity = capacity;
     emitter.capacity = capacity;
     emitter.perSlot = perSlot;
+    emitter.stripSegments = stripSegments;
     emitter.bytes = bytes;
     // Zeroed birth records have lifetime 0, so every slot starts dead.
     const std::uint32_t spawnBytes = capacity * static_cast<std::uint32_t>(sizeof(kb::particles::ParticleGpuSpawn));
@@ -191,7 +224,22 @@ bool ParticleGpuEmitterSimulation::Create(Emitter& emitter, const kb::particles:
     emitter.spawnUpload = bgfx::createDynamicVertexBuffer(zero, SpawnLayout(), BGFX_BUFFER_COMPUTE_READ);
     emitter.spawns = bgfx::createDynamicVertexBuffer(capacity, SpawnLayout(), BGFX_BUFFER_COMPUTE_READ_WRITE);
     emitter.instances = bgfx::createDynamicVertexBuffer(capacity * perSlot, InstanceLayout(), BGFX_BUFFER_COMPUTE_READ_WRITE);
-    if (!bgfx::isValid(emitter.spawnUpload) || !bgfx::isValid(emitter.spawns) || !bgfx::isValid(emitter.instances)) {
+    if (stripSegments != 0U) {
+        // One quad per segment with its own four vertices (so a dead slot hides only its segment), indexed once.
+        std::vector<std::uint16_t> indices;
+        indices.reserve(static_cast<std::size_t>(stripSegments) * kStripIndicesPerSegment);
+        for (std::uint32_t segment = 0U; segment < stripSegments; ++segment) {
+            const auto at = static_cast<std::uint16_t>(segment * kStripVerticesPerSegment);
+            indices.insert(indices.end(), {at, static_cast<std::uint16_t>(at + 1U), static_cast<std::uint16_t>(at + 3U),
+                at, static_cast<std::uint16_t>(at + 3U), static_cast<std::uint16_t>(at + 2U)});
+        }
+        emitter.stripVertices = bgfx::createDynamicVertexBuffer(stripSegments * kStripVerticesPerSegment, StripLayout(),
+            BGFX_BUFFER_COMPUTE_READ_WRITE);
+        emitter.stripIndices = bgfx::createIndexBuffer(
+            CopyMemory(indices.data(), static_cast<std::uint32_t>(indices.size() * sizeof(std::uint16_t))));
+    }
+    if (!bgfx::isValid(emitter.spawnUpload) || !bgfx::isValid(emitter.spawns) || !bgfx::isValid(emitter.instances) ||
+        (stripSegments != 0U && (!bgfx::isValid(emitter.stripVertices) || !bgfx::isValid(emitter.stripIndices)))) {
         Destroy(emitter);
         return false;
     }
@@ -259,6 +307,26 @@ void ParticleGpuEmitterSimulation::SortInstances(
     bgfx::setBuffer(2U, emitter.sortedInstances, bgfx::Access::Write);
     bgfx::setUniform(sortCameraUniform_, camera.data());
     bgfx::dispatch(viewId, sortGatherProgram_, groups(emitter.capacity), 1U, 1U);
+}
+
+void ParticleGpuEmitterSimulation::BuildStrip(
+    bgfx::ViewId viewId, const Emitter& emitter, const FrameContext& frame, float simTime) noexcept {
+    const bool beam = emitter.params.output == kb::particles::ParticleRenderOutput::Beam;
+    const float width = beam ? emitter.params.beamWidth : emitter.params.ribbonWidth;
+    const std::array<float, 4> mode{ beam ? 1.0F : 0.0F, static_cast<float>(emitter.stripSegments), width,
+        static_cast<float>(emitter.nextSlot % emitter.capacity) };
+    const std::array<float, 12> beamData{
+        emitter.beamStart[0], emitter.beamStart[1], emitter.beamStart[2], emitter.params.beamIntensity,
+        emitter.beamEnd[0], emitter.beamEnd[1], emitter.beamEnd[2], emitter.params.beamNoiseAmplitude,
+        emitter.params.beamNoiseFrequency, simTime * static_cast<float>(kb::scene::kParticleEffectFixedStepsPerSecond), 0.0F, 0.0F };
+    const std::array<float, 8> camera{ frame.cameraDepth[0], frame.cameraDepth[1], frame.cameraDepth[2], 0.0F,
+        frame.cameraRight[0], frame.cameraRight[1], frame.cameraRight[2], 0.0F };
+    bgfx::setBuffer(0U, emitter.instances, bgfx::Access::Read);
+    bgfx::setBuffer(1U, emitter.stripVertices, bgfx::Access::Write);
+    bgfx::setUniform(stripModeUniform_, mode.data());
+    bgfx::setUniform(stripBeamUniform_, beamData.data(), 3U);
+    bgfx::setUniform(stripCameraUniform_, camera.data(), 2U);
+    bgfx::dispatch(viewId, stripProgram_, (emitter.stripSegments + kThreadGroupSize - 1U) / kThreadGroupSize, 1U, 1U);
 }
 
 bool ParticleGpuEmitterSimulation::EnsureState(Emitter& emitter) noexcept {
@@ -345,6 +413,10 @@ void ParticleGpuEmitterSimulation::Destroy(Emitter& emitter) noexcept {
     if (bgfx::isValid(emitter.stateZeros)) bgfx::destroy(emitter.stateZeros);
     if (bgfx::isValid(emitter.sortKeys)) bgfx::destroy(emitter.sortKeys);
     if (bgfx::isValid(emitter.sortedInstances)) bgfx::destroy(emitter.sortedInstances);
+    if (bgfx::isValid(emitter.stripVertices)) bgfx::destroy(emitter.stripVertices);
+    if (bgfx::isValid(emitter.stripIndices)) bgfx::destroy(emitter.stripIndices);
+    emitter.stripVertices = BGFX_INVALID_HANDLE;
+    emitter.stripIndices = BGFX_INVALID_HANDLE;
     emitter.sortKeys = BGFX_INVALID_HANDLE;
     emitter.sortedInstances = BGFX_INVALID_HANDLE;
     emitter.spawns = BGFX_INVALID_HANDLE;
@@ -432,6 +504,8 @@ void ParticleGpuEmitterSimulation::SetRenderOrigin(std::uint64_t sceneId, const 
         emitter.world[14] += shift.z;
         bx::mtxInverse(emitter.worldInverse.data(), emitter.world.data());
         emitter.origin = { emitter.origin[0] + shift.x, emitter.origin[1] + shift.y, emitter.origin[2] + shift.z };
+        emitter.beamStart = { emitter.beamStart[0] + shift.x, emitter.beamStart[1] + shift.y, emitter.beamStart[2] + shift.z };
+        emitter.beamEnd = { emitter.beamEnd[0] + shift.x, emitter.beamEnd[1] + shift.y, emitter.beamEnd[2] + shift.z };
     }
 }
 
@@ -509,12 +583,24 @@ void ParticleGpuEmitterSimulation::Apply(
                 reject(command.key, ParticleGpuUpdateFailure::InvalidParameters);
                 continue;
             }
+            if (params.output == kb::particles::ParticleRenderOutput::Beam &&
+                (params.beamSegments == 0U || params.beamSegments > kb::scene::kParticleEffectMaxStripSegmentsPerEmitter ||
+                 !std::isfinite(params.beamWidth) || params.beamWidth <= 0.0F || !std::isfinite(params.beamIntensity) ||
+                 !std::isfinite(params.beamNoiseAmplitude) || !std::isfinite(params.beamNoiseFrequency))) {
+                reject(command.key, ParticleGpuUpdateFailure::InvalidParameters);
+                continue;
+            }
+            if (params.output == kb::particles::ParticleRenderOutput::Ribbon && (!std::isfinite(params.ribbonWidth) || params.ribbonWidth <= 0.0F)) {
+                reject(command.key, ParticleGpuUpdateFailure::InvalidParameters);
+                continue;
+            }
             if (params.customProcessAssetId != 0U && (params.output != kb::particles::ParticleRenderOutput::Billboard || !bgfx::isValid(collideProgram_))) {
                 reject(command.key, ParticleGpuUpdateFailure::CustomProcess); continue;
             }
             params.plane.distance += kb::math::Dot(params.plane.normal, recordOffset);
             const std::uint32_t capacity = std::clamp(params.capacity, 1U, kb::particles::kParticleGpuMaxCapacity);
-            if (found == emitters_.end() || found->second.capacity != capacity || found->second.perSlot != InstancesPerSlot(params)) {
+            if (found == emitters_.end() || found->second.capacity != capacity || found->second.perSlot != InstancesPerSlot(params) ||
+                found->second.stripSegments != StripSegments(params, capacity)) {
                 Emitter replacement{};
                 if (!Create(replacement, params)) {
                     reject(command.key, ParticleGpuUpdateFailure::ResourceCreation);
@@ -571,6 +657,10 @@ void ParticleGpuEmitterSimulation::Apply(
         }
         if (command.hasField) {
             found->second.fieldOrigin = command.fieldOrigin + recordOffset;
+        }
+        if (command.hasBeam) {
+            found->second.beamStart = { command.beamStart.x + offset.x, command.beamStart.y + offset.y, command.beamStart.z + offset.z };
+            found->second.beamEnd = { command.beamEnd.x + offset.x, command.beamEnd.y + offset.y, command.beamEnd.z + offset.z };
         }
         if (command.clear) Clear(found->second);
         if (found->second.params.localSpace || (recordOffset.x == 0.0F && recordOffset.y == 0.0F && recordOffset.z == 0.0F)) {
@@ -683,7 +773,11 @@ void ParticleGpuEmitterSimulation::Dispatch(bgfx::ViewId viewId, std::uint64_t s
         bgfx::setUniform(motionUniform_, motion.data());
         bgfx::setUniform(timeUniform_, time.data());
         bgfx::setUniform(colorUniform_, colors.data(), static_cast<std::uint16_t>(kb::particles::kParticleGpuCurveSamples));
-        bgfx::setUniform(sizeUniform_, params.size.data(), 2U);
+        // A ribbon has the width of its output: the size curve must not hide a slot (the strip kernel reads a live slot
+        // as one with a size).
+        std::array<float, kb::particles::kParticleGpuCurveSamples> sizes = params.size;
+        if (params.output == kb::particles::ParticleRenderOutput::Ribbon) sizes.fill(1.0F);
+        bgfx::setUniform(sizeUniform_, sizes.data(), 2U);
         const float outputMode = params.output == kb::particles::ParticleRenderOutput::Mesh ? 1.0F
             : params.output == kb::particles::ParticleRenderOutput::Trail ? 2.0F : 0.0F;
         const bool followsVelocity = params.output == kb::particles::ParticleRenderOutput::Mesh &&
@@ -701,7 +795,9 @@ void ParticleGpuEmitterSimulation::Dispatch(bgfx::ViewId viewId, std::uint64_t s
         bgfx::setUniform(spinUniform_, spin.data(), 4U);
         bgfx::setUniform(basisUniform_, emitter.basis.data(), 3U);
         const std::uint32_t threads = emitter.capacity * emitter.perSlot;
-        bgfx::dispatch(viewId, colliding ? collideProgram_ : program_, (threads + kThreadGroupSize - 1U) / kThreadGroupSize, 1U, 1U);
+        // A beam has no particles to draw: its strip comes from its ends alone.
+        if (params.output != kb::particles::ParticleRenderOutput::Beam)
+            bgfx::dispatch(viewId, colliding ? collideProgram_ : program_, (threads + kThreadGroupSize - 1U) / kThreadGroupSize, 1U, 1U);
         if (bgfx::isValid(emitter.customProgram)) {
             const std::array<float, 4> processFrame{static_cast<float>(clock.now), static_cast<float>(emitter.capacity), params.localSpace ? 1.0F : 0.0F, 0.0F};
             bgfx::setUniform(processFrameUniform_, processFrame.data());
@@ -717,8 +813,9 @@ void ParticleGpuEmitterSimulation::Dispatch(bgfx::ViewId viewId, std::uint64_t s
             SortInstances(viewId, emitter, collision, static_cast<float>(clock.now));
             drawn = emitter.sortedInstances;
         }
+        if (emitter.stripSegments != 0U) BuildStrip(viewId, emitter, collision, static_cast<float>(clock.now));
         clock.draws.push_back(Draw{ &emitter.params, drawn, emitter.capacity * emitter.perSlot, emitter.origin,
-            {key.instanceId, key.emitterId}, emitter.bytes });
+            {key.instanceId, key.emitterId}, emitter.bytes, emitter.stripVertices, emitter.stripIndices, emitter.stripSegments });
     }
 }
 

@@ -73,6 +73,7 @@ void ForEachReference(const ScenePrefabNodeComponents& components, Sink&& sink) 
         sink(components.sprite2D->imageAssetId, std::string_view{ "sprite2dImage" }, nullptr);
         sink(components.sprite2D->materialAssetId, std::string_view{ "sprite2dMaterial" }, nullptr);
     }
+    if (components.postProcessVolume.has_value()) sink(components.postProcessVolume->profileAssetId, std::string_view{ "postProcessVolumeProfile" }, nullptr);
     if (components.meshRenderer.has_value()) {
         sink(components.meshRenderer->meshAssetId, std::string_view{ "mesh" }, nullptr);
         sink(components.meshRenderer->materialAssetId, std::string_view{ "material" }, nullptr);

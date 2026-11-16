@@ -22,6 +22,8 @@
 #include "engine/scene/Collider2DComponent.hpp"
 #include "engine/scene/Body2DComponent.hpp"
 #include "engine/scene/Sprite2DComponent.hpp"
+#include "engine/scene/PlanarReflectionComponent.hpp"
+#include "engine/scene/PostProcessVolumeComponent.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
@@ -467,6 +469,30 @@ struct ScriptComponentAccess<kb::scene::Sprite2DComponent> {
     [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
         if (!scene.Components().Sprites2D().Has(entity)) return false;
         scene.Components().Sprites2D().Remove(entity);
+        return true;
+    }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::PostProcessVolumeComponent> {
+    [[nodiscard]] static const kb::scene::PostProcessVolumeComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().PostProcessVolumes().TryGet(entity); }
+    [[nodiscard]] static kb::scene::PostProcessVolumeComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().PostProcessVolumes().TryGet(entity); }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::PostProcessVolumeComponent& value) { scene.Components().PostProcessVolumes().Set(entity, value); }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+        if (!scene.Components().PostProcessVolumes().Has(entity)) return false;
+        scene.Components().PostProcessVolumes().Remove(entity);
+        return true;
+    }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::PlanarReflectionComponent> {
+    [[nodiscard]] static const kb::scene::PlanarReflectionComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().PlanarReflections().TryGet(entity); }
+    [[nodiscard]] static kb::scene::PlanarReflectionComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().PlanarReflections().TryGet(entity); }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::PlanarReflectionComponent& value) { scene.Components().PlanarReflections().Set(entity, value); }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+        if (!scene.Components().PlanarReflections().Has(entity)) return false;
+        scene.Components().PlanarReflections().Remove(entity);
         return true;
     }
 };

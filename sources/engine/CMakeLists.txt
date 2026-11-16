@@ -350,6 +350,8 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneLocalization.hpp
     include/engine/scene/SceneNavigation.hpp
     include/engine/scene/ScenePortalVisibility.hpp
+    include/engine/scene/ScenePostProcessVolumes.hpp
+    include/engine/scene/ScenePlanarReflections.hpp
     include/engine/scene/SceneCrashReportConsent.hpp
     include/engine/localization/LocalizationCatalog.hpp
     include/engine/localization/LocalizationCatalogIO.hpp
@@ -407,6 +409,7 @@ add_library(kb_engine STATIC
         include/engine/scene/Collider2DComponent.hpp
         include/engine/scene/Body2DComponent.hpp
         include/engine/scene/Sprite2DComponent.hpp
+        include/engine/scene/PostProcessVolumeComponent.hpp
         include/engine/scene/SceneContentInstanceComponents.hpp
         include/engine/scene/SceneGridComponents.hpp
         include/engine/scene/SceneTilemapComponents.hpp
@@ -416,6 +419,8 @@ add_library(kb_engine STATIC
         include/engine/scene/SceneCollider2DComponents.hpp
         include/engine/scene/SceneBody2DComponents.hpp
         include/engine/scene/SceneSprite2DComponents.hpp
+        include/engine/scene/ScenePostProcessVolumeComponents.hpp
+        include/engine/scene/ScenePlanarReflectionComponents.hpp
         include/engine/scene/StreamFocusComponent.hpp
         include/engine/scene/SceneStreamFocusComponents.hpp
         include/engine/scene/WorldBackdropComponent.hpp
@@ -1015,6 +1020,8 @@ add_library(kb_engine STATIC
         src/scene/components/SceneCollider2DApi.cpp
         src/scene/components/SceneBody2DApi.cpp
         src/scene/components/SceneSprite2DApi.cpp
+        src/scene/components/ScenePostProcessVolumeApi.cpp
+        src/scene/components/ScenePlanarReflectionApi.cpp
         src/scene/components/SceneContentInstanceStorage.cpp
         src/scene/components/SceneGridStorage.cpp
         src/scene/components/SceneTilemapStorage.cpp
@@ -1024,6 +1031,8 @@ add_library(kb_engine STATIC
         src/scene/components/SceneCollider2DStorage.cpp
         src/scene/components/SceneBody2DStorage.cpp
         src/scene/components/SceneSprite2DStorage.cpp
+        src/scene/components/ScenePostProcessVolumeStorage.cpp
+        src/scene/components/ScenePlanarReflectionStorage.cpp
         src/scene/components/SceneStreamFocusApi.cpp
         src/scene/components/SceneStreamFocusStorage.cpp
         src/scene/components/SceneWorldBackdropApi.cpp
@@ -1136,6 +1145,8 @@ add_library(kb_engine STATIC
         src/scene/modules/components/SceneCollider2DModule.cpp
         src/scene/modules/components/SceneBody2DModule.cpp
         src/scene/modules/components/SceneSprite2DModule.cpp
+        src/scene/modules/components/ScenePostProcessVolumeModule.cpp
+        src/scene/modules/components/ScenePlanarReflectionModule.cpp
         src/scene/modules/components/SceneStreamFocusModule.cpp
       src/scene/systems/ContentInstanceSceneSystem.cpp
     src/scene/modules/components/SceneVisibilityModule.cpp
@@ -1180,6 +1191,8 @@ add_library(kb_engine STATIC
     src/scene/systems/TimelineSceneSystem.cpp
     src/scene/navigation/SceneNavigationRuntime.cpp
     src/scene/components/ScenePortalVisibility.cpp
+    src/scene/components/ScenePostProcessVolumes.cpp
+    src/scene/components/ScenePlanarReflections.cpp
     src/scene/systems/SceneSystemTransformAccess.cpp
     src/scene/prefab/ScenePrefab.cpp
     src/scene/prefab/ScenePrefabAppliedPropertyBuilder.cpp
@@ -1465,6 +1478,8 @@ add_library(kb_engine STATIC
         src/private/scene/components/SceneCollider2DComponentStore.hpp
         src/private/scene/components/SceneBody2DComponentStore.hpp
         src/private/scene/components/SceneSprite2DComponentStore.hpp
+        src/private/scene/components/ScenePostProcessVolumeComponentStore.hpp
+        src/private/scene/components/ScenePlanarReflectionComponentStore.hpp
         src/private/scene/components/SceneStreamFocusComponentStore.hpp
         src/private/scene/components/SceneWorldBackdropComponentStore.hpp
         src/private/scene/components/SceneAmbientRadianceComponentStore.hpp

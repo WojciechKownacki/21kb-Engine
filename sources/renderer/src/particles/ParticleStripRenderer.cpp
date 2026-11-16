@@ -83,4 +83,24 @@ ParticleStripSubmitResult ParticleStripRenderer::SubmitDraw(
     return result;
 }
 
+ParticleStripSubmitResult ParticleStripRenderer::SubmitGpuStrip(
+    bgfx::ViewId viewId, bgfx::DynamicVertexBufferHandle vertices, bgfx::IndexBufferHandle indices,
+    std::uint32_t segmentCount, kb::particles::ParticleRenderBlendMode blend,
+    kb::particles::ParticleRenderDepthMode depth, bgfx::TextureHandle texture) noexcept {
+    ParticleStripSubmitResult result{};
+    if (!IsInitialized() || segmentCount == 0U || !bgfx::isValid(vertices) || !bgfx::isValid(indices) ||
+        !bgfx::isValid(texture)) return result;
+    const std::array<float, 4> featureParams{
+        0.0F, 0.0F, blend == kb::particles::ParticleRenderBlendMode::Add ? 1.0F : 0.0F, 0.0F};
+    bgfx::setUniform(featureParamsUniform_, featureParams.data());
+    bgfx::setTexture(0U, textureSampler_, texture);
+    bgfx::setVertexBuffer(0U, vertices, 0U, segmentCount * 4U);
+    bgfx::setIndexBuffer(indices, 0U, segmentCount * 6U);
+    SubmitWithSceneCoverage(coverageProbe_, viewId, program_, ParticleBlendState(blend, depth), true);
+    result.succeeded = true;
+    result.drawCalls = 1U;
+    result.submittedIndices = segmentCount * 6U;
+    return result;
+}
+
 } // namespace kb::render

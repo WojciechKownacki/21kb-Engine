@@ -11,6 +11,7 @@
 #include "kb/render/scene/SceneLightGridResources.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
 #include "kb/render/scene/LocalReflectionUniforms.hpp"
+#include "kb/render/scene/PlanarReflectionUniforms.hpp"
 #include "kb/render/scene/SceneLightProbeTexture.hpp"
 
 #include <bgfx/bgfx.h>
@@ -106,6 +107,7 @@ private:
     bgfx::UniformHandle skyReflectionParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle fallbackSkyReflection_ = BGFX_INVALID_HANDLE;
     LocalReflectionUniforms localReflections_{};
+    PlanarReflectionUniforms planarReflections_{};
     bgfx::UniformHandle backdropHorizonUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle backdropZenithUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle backdropParamsUniform_ = BGFX_INVALID_HANDLE;

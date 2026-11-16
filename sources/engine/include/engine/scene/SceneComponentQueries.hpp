@@ -31,6 +31,8 @@
 #include "engine/scene/SceneCollider2DComponents.hpp"
 #include "engine/scene/SceneBody2DComponents.hpp"
 #include "engine/scene/SceneSprite2DComponents.hpp"
+#include "engine/scene/ScenePostProcessVolumeComponents.hpp"
+#include "engine/scene/ScenePlanarReflectionComponents.hpp"
 #include "engine/scene/SceneStreamFocusComponents.hpp"
 #include "engine/scene/SceneWorldBackdropComponents.hpp"
 #include "engine/scene/SceneAmbientRadianceComponents.hpp"
@@ -80,6 +82,8 @@ public:
     [[nodiscard]] SceneCollider2DComponentQueries Colliders2D() const noexcept;
     [[nodiscard]] SceneBody2DComponentQueries Bodies2D() const noexcept;
     [[nodiscard]] SceneSprite2DComponentQueries Sprites2D() const noexcept;
+    [[nodiscard]] ScenePostProcessVolumeComponentQueries PostProcessVolumes() const noexcept;
+    [[nodiscard]] ScenePlanarReflectionComponentQueries PlanarReflections() const noexcept;
     [[nodiscard]] SceneStreamFocusComponentQueries StreamFocuses() const noexcept;
     [[nodiscard]] SceneWorldBackdropComponentQueries WorldBackdrops() const noexcept;
     [[nodiscard]] SceneAmbientRadianceComponentQueries AmbientRadiances() const noexcept;

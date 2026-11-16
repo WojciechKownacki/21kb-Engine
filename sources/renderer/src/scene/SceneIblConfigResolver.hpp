@@ -9,6 +9,8 @@ namespace kb::render {
     // Flags also apply to probes authored by the scene, resolved after this merge.
     if (requested.localProbeBlending != defaults.localProbeBlending) result.localProbeBlending = requested.localProbeBlending;
     if (requested.parallaxCorrection != defaults.parallaxCorrection) result.parallaxCorrection = requested.parallaxCorrection;
+    // The planar mirror belongs to the view, not to the environment the merge picks.
+    result.planar = requested.planar;
     return result;
 }
 }

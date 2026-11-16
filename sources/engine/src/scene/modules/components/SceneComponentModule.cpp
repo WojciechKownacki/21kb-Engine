@@ -66,6 +66,8 @@ SceneCharacterController2DComponentQueries SceneComponentQueries::CharacterContr
 SceneCollider2DComponentQueries SceneComponentQueries::Colliders2D() const noexcept { return SceneCollider2DComponentQueries{ scene_ }; }
 SceneBody2DComponentQueries SceneComponentQueries::Bodies2D() const noexcept { return SceneBody2DComponentQueries{ scene_ }; }
 SceneSprite2DComponentQueries SceneComponentQueries::Sprites2D() const noexcept { return SceneSprite2DComponentQueries{ scene_ }; }
+ScenePostProcessVolumeComponentQueries SceneComponentQueries::PostProcessVolumes() const noexcept { return ScenePostProcessVolumeComponentQueries{ scene_ }; }
+ScenePlanarReflectionComponentQueries SceneComponentQueries::PlanarReflections() const noexcept { return ScenePlanarReflectionComponentQueries{ scene_ }; }
 SceneStreamFocusComponentQueries SceneComponentQueries::StreamFocuses() const noexcept { return SceneStreamFocusComponentQueries{ scene_ }; }
 SceneWorldBackdropComponentQueries SceneComponentQueries::WorldBackdrops() const noexcept { return SceneWorldBackdropComponentQueries{ scene_ }; }
 SceneAmbientRadianceComponentQueries SceneComponentQueries::AmbientRadiances() const noexcept { return SceneAmbientRadianceComponentQueries{ scene_ }; }
@@ -183,6 +185,8 @@ SceneCharacterController2DComponents SceneComponents::CharacterControllers2D() c
 SceneCollider2DComponents SceneComponents::Colliders2D() const noexcept { return SceneCollider2DComponents{ scene_ }; }
 SceneBody2DComponents SceneComponents::Bodies2D() const noexcept { return SceneBody2DComponents{ scene_ }; }
 SceneSprite2DComponents SceneComponents::Sprites2D() const noexcept { return SceneSprite2DComponents{ scene_ }; }
+ScenePostProcessVolumeComponents SceneComponents::PostProcessVolumes() const noexcept { return ScenePostProcessVolumeComponents{ scene_ }; }
+ScenePlanarReflectionComponents SceneComponents::PlanarReflections() const noexcept { return ScenePlanarReflectionComponents{ scene_ }; }
 SceneStreamFocusComponents SceneComponents::StreamFocuses() const noexcept { return SceneStreamFocusComponents{ scene_ }; }
 SceneWorldBackdropComponents SceneComponents::WorldBackdrops() const noexcept { return SceneWorldBackdropComponents{ scene_ }; }
 SceneAmbientRadianceComponents SceneComponents::AmbientRadiances() const noexcept { return SceneAmbientRadianceComponents{ scene_ }; }

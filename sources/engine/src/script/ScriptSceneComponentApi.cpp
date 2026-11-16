@@ -36,6 +36,10 @@
 #include "engine/scene/SceneBody2DComponents.hpp"
 #include "engine/scene/Sprite2DComponent.hpp"
 #include "engine/scene/SceneSprite2DComponents.hpp"
+#include "engine/scene/PlanarReflectionComponent.hpp"
+#include "engine/scene/PostProcessVolumeComponent.hpp"
+#include "engine/scene/ScenePlanarReflectionComponents.hpp"
+#include "engine/scene/ScenePostProcessVolumeComponents.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
@@ -366,7 +370,7 @@ struct ComponentAccess {
 
 // clang-format on
 
-constexpr std::array<std::string_view, 49> kComponentNames{
+constexpr std::array<std::string_view, 51> kComponentNames{
     "AudioSource",
     "AudioListener",
     "Transform",
@@ -397,6 +401,8 @@ constexpr std::array<std::string_view, 49> kComponentNames{
     "Sprite2D",
     "ContentInstance",
     "StreamFocus",
+    "PostProcessVolume",
+    "PlanarReflection",
     "WorldBackdrop",
     "Ambient Radiance",
     "Detail Switch",
@@ -558,6 +564,24 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 4> kContentInstanceProper
     ScriptSceneComponentPropertyDesc{ "kind", ScriptValueType::Int, true, kContentInstanceKindNames },
     ScriptSceneComponentPropertyDesc{ "lifetime", ScriptValueType::Int, true, kContentInstanceLifetimeNames },
     ScriptSceneComponentPropertyDesc{ "active", ScriptValueType::Bool },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 5> kPostProcessVolumePropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "profileAssetId", ScriptValueType::Hash, true },
+    ScriptSceneComponentPropertyDesc{ "priority", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "weight", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "blendDistance", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool, true },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 7> kPlanarReflectionPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "width", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "depth", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "resolutionScale", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "reflectedLayers", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "maxDistance", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "reflectShadows", ScriptValueType::Bool, true },
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool, true },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 5> kStreamFocusPropertyDescs{
@@ -1751,6 +1775,28 @@ constexpr std::array<FieldBinding, 4> kContentInstanceFields{
     KB_BOOL(kb::scene::ContentInstanceComponent, active),
 };
 
+constexpr std::array<FieldBinding, 5> kPostProcessVolumeFields{
+    FieldBinding{ "profileAssetId", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::PostProcessVolumeComponent*>(component)->profileAssetId, ScriptValueType::Hash }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::PostProcessVolumeComponent*>(component)->profileAssetId = value.AsUInt64(); return true; } },
+    FieldBinding{ "priority", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::PostProcessVolumeComponent*>(component)->priority) }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Int || value.AsInt() < -1000 || value.AsInt() > 1000) return false; static_cast<kb::scene::PostProcessVolumeComponent*>(component)->priority = value.AsInt(); return true; } },
+    FieldBinding{ "weight", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::PostProcessVolumeComponent*>(component)->weight }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Float || !std::isfinite(value.AsFloat()) || value.AsFloat() < 0.0F || value.AsFloat() > 1.0F) return false; static_cast<kb::scene::PostProcessVolumeComponent*>(component)->weight = value.AsFloat(); return true; } },
+    FieldBinding{ "blendDistance", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::PostProcessVolumeComponent*>(component)->blendDistance }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Float || !std::isfinite(value.AsFloat()) || value.AsFloat() < 0.0F || value.AsFloat() > 1.0e6F) return false; static_cast<kb::scene::PostProcessVolumeComponent*>(component)->blendDistance = value.AsFloat(); return true; } },
+    KB_BOOL(kb::scene::PostProcessVolumeComponent, enabled),
+};
+
+constexpr std::array<FieldBinding, 7> kPlanarReflectionFields{
+    KB_FLOAT(kb::scene::PlanarReflectionComponent, width),
+    KB_FLOAT(kb::scene::PlanarReflectionComponent, depth),
+    KB_FLOAT(kb::scene::PlanarReflectionComponent, resolutionScale),
+    KB_UINT32(kb::scene::PlanarReflectionComponent, reflectedLayers),
+    KB_FLOAT(kb::scene::PlanarReflectionComponent, maxDistance),
+    KB_BOOL(kb::scene::PlanarReflectionComponent, reflectShadows),
+    KB_BOOL(kb::scene::PlanarReflectionComponent, enabled),
+};
+
 constexpr std::array<FieldBinding, 5> kStreamFocusFields{
     FieldBinding{ "innerRadius", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::StreamFocusComponent*>(component)->innerRadius }; },
         [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Float || !std::isfinite(value.AsFloat()) || value.AsFloat() < 0.0F) return false; auto& focus = *static_cast<kb::scene::StreamFocusComponent*>(component); if (value.AsFloat() > focus.outerRadius) return false; focus.innerRadius = value.AsFloat(); return true; } },
@@ -2045,6 +2091,8 @@ void MarkCharacterController2DModified(kb::scene::Scene& scene, kb::scene::Scene
 void MarkTilemapColliderModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().TilemapColliders().MarkModified(entity); }
 void MarkContentInstanceModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().ContentInstances().MarkModified(entity); }
 void MarkStreamFocusModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().StreamFocuses().MarkModified(entity); }
+void MarkPostProcessVolumeModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().PostProcessVolumes().MarkModified(entity); }
+void MarkPlanarReflectionModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().PlanarReflections().MarkModified(entity); }
 void MarkWorldBackdropModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().WorldBackdrops().MarkModified(entity); }
 void MarkAmbientRadianceModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().AmbientRadiances().MarkModified(entity); }
 void MarkDetailSwitchModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().DetailSwitches().MarkModified(entity); }
@@ -2198,6 +2246,14 @@ void MarkLensEchoModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity
         kb::scene::ContentInstanceComponent* component = scene.Components().ContentInstances().TryGet(entity);
         return ComponentAccess{ component, component, kContentInstanceFields, &MarkContentInstanceModified };
     }
+    if (componentName == "PostProcessVolume") {
+        auto* component = scene.Components().PostProcessVolumes().TryGet(entity);
+        return ComponentAccess{ component, component, kPostProcessVolumeFields, &MarkPostProcessVolumeModified };
+    }
+    if (componentName == "PlanarReflection") {
+        auto* component = scene.Components().PlanarReflections().TryGet(entity);
+        return ComponentAccess{ component, component, kPlanarReflectionFields, &MarkPlanarReflectionModified };
+    }
     if (componentName == "StreamFocus") {
         kb::scene::StreamFocusComponent* component = scene.Components().StreamFocuses().TryGet(entity);
         return ComponentAccess{ component, component, kStreamFocusFields, &MarkStreamFocusModified };
@@ -2299,6 +2355,8 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
     if (componentName == "Body2D") return kBody2DPropertyDescs;
     if (componentName == "Sprite2D") return kSprite2DPropertyDescs;
     if (componentName == "ContentInstance") return kContentInstancePropertyDescs;
+    if (componentName == "PostProcessVolume") return kPostProcessVolumePropertyDescs;
+    if (componentName == "PlanarReflection") return kPlanarReflectionPropertyDescs;
     if (componentName == "StreamFocus") return kStreamFocusPropertyDescs;
     if (componentName == "WorldBackdrop") return kWorldBackdropPropertyDescs;
     if (componentName == "Ambient Radiance") return kAmbientRadiancePropertyDescs;

@@ -2659,7 +2659,16 @@ kb::particles::ParticleGpuFallbackReason CpuParticleBackend::GpuFallbackReason(
     if (emitter.outputType != kb::scene::ParticleOutputType::Billboard &&
         emitter.outputType != kb::scene::ParticleOutputType::StretchedBillboard &&
         emitter.outputType != kb::scene::ParticleOutputType::Mesh &&
-        emitter.outputType != kb::scene::ParticleOutputType::Trail) return Reason::Output;
+        emitter.outputType != kb::scene::ParticleOutputType::Trail &&
+        emitter.outputType != kb::scene::ParticleOutputType::Ribbon &&
+        emitter.outputType != kb::scene::ParticleOutputType::Beam) return Reason::Output;
+    // The GPU strips a ribbon through consecutive ring slots, one per particle, and breaks it at a dead slot.
+    if (emitter.outputType == kb::scene::ParticleOutputType::Ribbon) {
+        if (!emitter.ribbonBreakOnDeath) return Reason::Output;
+        if (emitter.maxParticles > std::min(emitter.ribbonMaxSegments, kb::scene::kParticleEffectMaxStripSegmentsPerEmitter)) {
+            return Reason::ParticleCapacity;
+        }
+    }
     if (emitter.alignment == kb::scene::ParticleAlignment::Local) return Reason::LocalAlignment;
     // Keep integer frame selection exact in the compute shader's single-precision clock.
     if (emitter.flipbookFrameCount > 1U && static_cast<double>(emitter.lifetimeMax) *
@@ -2825,6 +2834,16 @@ kb::particles::ParticleGpuEmitterParams CpuParticleBackend::BuildGpuParams(
         params.materialAssetId = emitter.materialAssetId;
         params.castsShadow = emitter.meshCastsShadow;
         params.receivesShadow = emitter.meshReceivesShadow;
+    } else if (emitter.outputType == kb::scene::ParticleOutputType::Ribbon) {
+        params.ribbonWidth = emitter.ribbonWidth;
+    } else if (emitter.outputType == kb::scene::ParticleOutputType::Beam) {
+        // A beam is drawn whole from its ends; its particles are never drawn, so one slot is all it keeps.
+        params.capacity = 1U;
+        params.beamSegments = std::max(1U, emitter.beamSegments);
+        params.beamWidth = emitter.beamWidth;
+        params.beamNoiseAmplitude = emitter.beamNoiseAmplitude;
+        params.beamNoiseFrequency = emitter.beamNoiseFrequency;
+        params.beamIntensity = emitter.colorIntensity;
     } else if (emitter.outputType == kb::scene::ParticleOutputType::Trail) {
         // The CPU path records a sample every `cadence` fixed steps; the closed form is sampled at the same spacing.
         const float stepsPerSecond = static_cast<float>(kb::scene::kParticleEffectFixedStepsPerSecond);
@@ -2969,6 +2988,14 @@ void CpuParticleBackend::FlushGpuSpawns() noexcept {
                 const kb::math::Vec3 origin = owner.position + TransformDirection(owner,
                     Scale(effect.emitters[emitterIndex].localPosition, owner.scale));
                 command.origin = { origin.x, origin.y, origin.z };
+            }
+            if (emitter.outputType == kb::scene::ParticleOutputType::Beam) {
+                // The beam exists as long as its emitter does, not only after a birth: send its parameters and ends every step.
+                command.hasParams = true;
+                command.params = BuildGpuParams(denseIndex, emitterIndex);
+                command.hasBeam = true;
+                command.beamStart = TransformPoint(owner, emitter.localPosition);
+                command.beamEnd = TransformPoint(owner, emitter.localPosition + emitter.beamLocalEnd);
             }
             if (field) {
                 // Motion vectors remain in world axes, matching CPU execution even for local-space births.

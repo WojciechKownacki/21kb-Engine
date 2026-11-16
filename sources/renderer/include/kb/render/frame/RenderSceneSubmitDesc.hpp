@@ -246,6 +246,9 @@ struct RenderSceneSubmitDesc {
     // Set for one submission after a camera teleport or a cut using the same camera.
     // Scene/camera switches, projection-mode changes and resize invalidate history automatically.
     bool resetTemporalHistory = false;
+    // Set for the pass of a planar mirror (AuxFrameRenderer): a reduced frame with no screen-space effects, global
+    // illumination, volumetric lighting or mirrors of its own.
+    bool reducedMirrorPass = false;
 
     [[nodiscard]] bool IsValid() const noexcept {
         return target.IsValid() && postProcess.IsValid() && finalComposite.IsValid() &&

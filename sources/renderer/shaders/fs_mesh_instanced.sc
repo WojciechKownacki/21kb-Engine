@@ -38,6 +38,7 @@ uniform vec4 u_environmentGround;
 uniform vec4 u_environmentParams;
 #include "sky_reflection.sh"
 #include "local_reflection.sh"
+#include "planar_reflection.sh"
 #include "light_probes.sh"
 #include "height_fog.sh"
 uniform vec4 u_shadowParams;
@@ -191,7 +192,9 @@ vec3 EvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic,
     diffuseEnv *= 1.0 - u_materialOptics.x;
     vec3 reflectionDir = reflect(-viewDir, normal);
     float specularEnergy = mix(1.0, 0.18, roughness * roughness);
-    vec3 specularEnv = KbLocalReflection(worldPos,reflectionDir,roughness,KbSkyReflection(reflectionDir, roughness, EnvironmentColor(reflectionDir))) * fresnel * specularEnergy * u_environmentParams.z;
+    vec3 environmentSpecular = KbLocalReflection(worldPos,reflectionDir,roughness,KbSkyReflection(reflectionDir, roughness, EnvironmentColor(reflectionDir)));
+    vec4 planar = KbPlanarReflection(worldPos, normal, roughness);
+    vec3 specularEnv = mix(environmentSpecular, planar.rgb, planar.a) * fresnel * specularEnergy * u_environmentParams.z;
     vec3 sheenEnv = EnvironmentColor(normal) * u_materialSheen.rgb * pow(1.0 - nDotV,5.0) * occlusion * u_environmentParams.y;
     return diffuseEnv + specularEnv + sheenEnv;
 }

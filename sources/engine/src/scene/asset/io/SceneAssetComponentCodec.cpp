@@ -74,6 +74,10 @@ enum SceneNodeComponentBits : std::uint64_t {
       Sprite2DBit = 1ULL << 46U,
       // Read from NavBoundsFileVersion on; written after every other component.
       NavBoundsBit = 1ULL << 50U,
+      // Read from PostProcessVolumeFileVersion on; written after NavBounds.
+      PostProcessVolumeBit = 1ULL << 51U,
+      // Read from PlanarReflectionFileVersion on; written after PostProcessVolume.
+      PlanarReflectionBit = 1ULL << 52U,
 
 };
 
@@ -94,7 +98,7 @@ constexpr std::uint64_t KnownComponentBits = CameraBit |
     NavObstacleBit |
     RegionShapeBit |
     GuideCurveBit |
-      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit | SurfaceCastBit | FacingPanelBit | SpaceStrokeBit | HistoryRibbonBit | LensEchoBit | SkeletonBindingBit | DeformedGeometryBit | MotionSkeletonRuleBit | ParticleEffectBit | UIBit | NavLinkBit | SocketAttachmentBit | CombatantBit | AIBrainBit | GridBit | TilemapBit | TilemapRendererBit | TilemapColliderBit | Sprite2DBit | Body2DBit | Collider2DBit | CharacterController2DBit | NavBoundsBit;
+      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit | SurfaceCastBit | FacingPanelBit | SpaceStrokeBit | HistoryRibbonBit | LensEchoBit | SkeletonBindingBit | DeformedGeometryBit | MotionSkeletonRuleBit | ParticleEffectBit | UIBit | NavLinkBit | SocketAttachmentBit | CombatantBit | AIBrainBit | GridBit | TilemapBit | TilemapRendererBit | TilemapColliderBit | Sprite2DBit | Body2DBit | Collider2DBit | CharacterController2DBit | NavBoundsBit | PostProcessVolumeBit | PlanarReflectionBit;
 
 [[nodiscard]] std::uint64_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
     std::uint64_t componentBits = 0;
@@ -140,6 +144,8 @@ constexpr std::uint64_t KnownComponentBits = CameraBit |
     include(!components.ui.Empty(), UIBit);
     include(components.navLink.has_value(), NavLinkBit);
     include(components.navBounds.has_value(), NavBoundsBit);
+    include(components.postProcessVolume.has_value(), PostProcessVolumeBit);
+    include(components.planarReflection.has_value(), PlanarReflectionBit);
     include(components.socketAttachment.has_value(), SocketAttachmentBit);
     include(components.combatant.has_value(), CombatantBit);
     include(components.aiBrain.has_value(), AIBrainBit);
@@ -752,6 +758,30 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         }
         output.navBounds = bounds;
     }
+    if ((componentBits & PostProcessVolumeBit) != 0U) {
+        if (fileVersion < SceneDocument::PostProcessVolumeFileVersion) return false;
+        PostProcessVolumeComponent value{};
+        if (!input.ReadUInt64(value.profileAssetId)) return false;
+        if (!input.ReadInt32(value.priority)) return false;
+        if (!input.ReadFloat(value.weight)) return false;
+        if (!input.ReadFloat(value.blendDistance)) return false;
+        if (!input.ReadBool(value.enabled)) return false;
+        if (!IsPostProcessVolumeComponentValid(value)) return false;
+        output.postProcessVolume = value;
+    }
+    if ((componentBits & PlanarReflectionBit) != 0U) {
+        if (fileVersion < SceneDocument::PlanarReflectionFileVersion) return false;
+        PlanarReflectionComponent value{};
+        if (!input.ReadFloat(value.width)) return false;
+        if (!input.ReadFloat(value.depth)) return false;
+        if (!input.ReadFloat(value.resolutionScale)) return false;
+        if (!input.ReadUInt32(value.reflectedLayers)) return false;
+        if (!input.ReadFloat(value.maxDistance)) return false;
+        if (!input.ReadBool(value.reflectShadows)) return false;
+        if (!input.ReadBool(value.enabled)) return false;
+        if (!IsPlanarReflectionComponentValid(value)) return false;
+        output.planarReflection = value;
+    }
     return true;
 }
 
@@ -1202,6 +1232,24 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetBinaryIO::WriteFloat(output, bounds.maxSlopeDegrees);
         SceneAssetBinaryIO::WriteFloat(output, bounds.cellSize);
         SceneAssetBinaryIO::WriteFloat(output, bounds.tileSize);
+    }
+    if (components.postProcessVolume.has_value()) {
+        const auto& value = *components.postProcessVolume;
+        SceneAssetBinaryIO::WriteUInt64(output, value.profileAssetId);
+        SceneAssetBinaryIO::WriteInt32(output, value.priority);
+        SceneAssetBinaryIO::WriteFloat(output, value.weight);
+        SceneAssetBinaryIO::WriteFloat(output, value.blendDistance);
+        SceneAssetBinaryIO::WriteBool(output, value.enabled);
+    }
+    if (components.planarReflection.has_value()) {
+        const auto& value = *components.planarReflection;
+        SceneAssetBinaryIO::WriteFloat(output, value.width);
+        SceneAssetBinaryIO::WriteFloat(output, value.depth);
+        SceneAssetBinaryIO::WriteFloat(output, value.resolutionScale);
+        SceneAssetBinaryIO::WriteUInt32(output, value.reflectedLayers);
+        SceneAssetBinaryIO::WriteFloat(output, value.maxDistance);
+        SceneAssetBinaryIO::WriteBool(output, value.reflectShadows);
+        SceneAssetBinaryIO::WriteBool(output, value.enabled);
     }
 
 }

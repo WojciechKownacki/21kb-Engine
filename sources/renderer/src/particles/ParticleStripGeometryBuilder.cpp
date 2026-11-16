@@ -140,6 +140,13 @@ ParticleStripBuildResult ParticleStripGeometryBuilder::Build(
         if (emitter.output != kb::particles::ParticleRenderOutput::Trail &&
             emitter.output != kb::particles::ParticleRenderOutput::Ribbon &&
             emitter.output != kb::particles::ParticleRenderOutput::Beam) continue;
+        if (emitter.output != kb::particles::ParticleRenderOutput::Trail) {
+            // The GPU builds the strip of a GPU-simulated ribbon or beam; particles left over on the CPU after a live
+            // edit (a ribbon only) still finish here.
+            if (emitter.simulationPath == kb::particles::ParticleEmitterSimulationPath::Gpu &&
+                (emitter.output == kb::particles::ParticleRenderOutput::Beam || emitter.particleCount == 0U)) continue;
+            ++cpuRibbonBeamBuilds_;
+        }
         const std::size_t firstIndex = indexScratch_.size();
         const float intensity = emitter.colorIntensity;
         if (emitter.output == kb::particles::ParticleRenderOutput::Trail) {

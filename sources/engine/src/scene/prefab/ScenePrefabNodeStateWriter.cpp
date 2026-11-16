@@ -112,6 +112,8 @@ namespace {
 [[nodiscard]] bool Equals(const Collider2DComponent& lhs, const Collider2DComponent& rhs) noexcept { return lhs == rhs; }
 [[nodiscard]] bool Equals(const Body2DComponent& lhs, const Body2DComponent& rhs) noexcept { return lhs == rhs; }
 [[nodiscard]] bool Equals(const Sprite2DComponent& lhs, const Sprite2DComponent& rhs) noexcept { return lhs == rhs; }
+[[nodiscard]] bool Equals(const PostProcessVolumeComponent& lhs, const PostProcessVolumeComponent& rhs) noexcept { return lhs == rhs; }
+[[nodiscard]] bool Equals(const PlanarReflectionComponent& lhs, const PlanarReflectionComponent& rhs) noexcept { return lhs == rhs; }
 
 [[nodiscard]] bool Equals(const ContentInstanceComponent& lhs, const ContentInstanceComponent& rhs) noexcept {
     return lhs.assetId == rhs.assetId && lhs.kind == rhs.kind && lhs.lifetime == rhs.lifetime && lhs.active == rhs.active;
@@ -344,6 +346,8 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , colliders2D(scene.Components().Colliders2D())
     , bodies2D(scene.Components().Bodies2D())
     , sprites2D(scene.Components().Sprites2D())
+    , postProcessVolumes(scene.Components().PostProcessVolumes())
+    , planarReflections(scene.Components().PlanarReflections())
 
     , streamFocuses(scene.Components().StreamFocuses())
     , worldBackdrops(scene.Components().WorldBackdrops())
@@ -444,6 +448,8 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     WriteOptionalComponent(context.colliders2D, entity, node.components.collider2D);
     WriteOptionalComponent(context.bodies2D, entity, node.components.body2D);
     WriteOptionalComponent(context.sprites2D, entity, node.components.sprite2D);
+    WriteOptionalComponent(context.postProcessVolumes, entity, node.components.postProcessVolume);
+    WriteOptionalComponent(context.planarReflections, entity, node.components.planarReflection);
 
     WriteOptionalComponent(context.streamFocuses, entity, node.components.streamFocus);
     WriteOptionalComponent(context.worldBackdrops, entity, node.components.worldBackdrop);

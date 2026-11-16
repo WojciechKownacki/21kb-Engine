@@ -425,6 +425,7 @@ void ParticleGpuRenderer::DispatchGpuEmitters(
     collision.inverseViewProjection = RendererMatrixMath::Inverse(collision.viewProjection);
     collision.cameraPosition = SceneLightingPacker::CameraPosition(&camera);
     collision.cameraDepth = {camera.view[2], camera.view[6], camera.view[10], camera.view[14]};
+    collision.cameraRight = {camera.view[0], camera.view[4], camera.view[8]};
     collision.texelSize = { 1.0F / static_cast<float>(std::max(viewportWidth, 1U)), 1.0F / static_cast<float>(std::max(viewportHeight, 1U)) };
     collision.homogeneousDepth = SceneDepthPolicy::HomogeneousDepth();
     collision.resources = &resources;
@@ -476,6 +477,20 @@ ParticleGpuSubmitResult ParticleGpuRenderer::SubmitGpuEmitters(
     for (const ParticleGpuEmitterSimulation::Draw& draw : gpuEmitters_.Draws(sceneId)) {
         const kb::particles::ParticleGpuEmitterParams& params = *draw.params;
         if (params.output == kb::particles::ParticleRenderOutput::Mesh) continue; // drawn by the mesh pipeline
+        if (draw.stripSegments != 0U) {
+            // Ribbons and beams: the strip the compute pass built, drawn by the strip program with the emitter's texture.
+            bgfx::TextureHandle stripTexture = solidTexture_;
+            if (params.textureAtlasAssetId != 0U) {
+                const RenderTextureHandle atlasHandle =
+                    resourceMap.ResolveTexture(params.textureAtlasAssetId, RenderTextureColorSpace::Srgb);
+                if (const RenderTextureResource* texture = resources.FindTexture(atlasHandle);
+                    texture != nullptr && bgfx::isValid(texture->texture)) stripTexture = texture->texture;
+            }
+            const ParticleStripSubmitResult strip = stripRenderer_.SubmitGpuStrip(viewId, draw.stripVertices, draw.stripIndices,
+                draw.stripSegments, params.blend, params.depth, stripTexture);
+            result.drawCalls += strip.drawCalls;
+            continue;
+        }
         const bool trail = params.output == kb::particles::ParticleRenderOutput::Trail;
         bgfx::setUniform(cameraBasisUniform_, cameraBasis.data(), 3U);
         bgfx::setInstanceDataBuffer(draw.instances, 0U, draw.capacity);

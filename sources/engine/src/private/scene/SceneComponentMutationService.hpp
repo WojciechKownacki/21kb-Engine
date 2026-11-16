@@ -32,6 +32,8 @@
 #include "engine/scene/Collider2DComponent.hpp"
 #include "engine/scene/Body2DComponent.hpp"
 #include "engine/scene/Sprite2DComponent.hpp"
+#include "engine/scene/PostProcessVolumeComponent.hpp"
+#include "engine/scene/PlanarReflectionComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
@@ -128,6 +130,8 @@ public:
     [[nodiscard]] static Collider2DComponent* TryGetCollider2D(Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static Body2DComponent* TryGetBody2D(Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static Sprite2DComponent* TryGetSprite2D(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static PostProcessVolumeComponent* TryGetPostProcessVolume(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static PlanarReflectionComponent* TryGetPlanarReflection(Scene& scene, SceneEntity entity) noexcept;
     static void SetContentInstance(Scene& scene, SceneEntity entity, const ContentInstanceComponent& component);
     static void SetGrid(Scene& scene, SceneEntity entity, const GridComponent& component);
     static void SetTilemap(Scene& scene, SceneEntity entity, const TilemapComponent& component);
@@ -137,6 +141,8 @@ public:
     static void SetCollider2D(Scene& scene, SceneEntity entity, const Collider2DComponent& component);
     static void SetBody2D(Scene& scene, SceneEntity entity, const Body2DComponent& component);
     static void SetSprite2D(Scene& scene, SceneEntity entity, const Sprite2DComponent& component);
+    static void SetPostProcessVolume(Scene& scene, SceneEntity entity, const PostProcessVolumeComponent& component);
+    static void SetPlanarReflection(Scene& scene, SceneEntity entity, const PlanarReflectionComponent& component);
     static void RemoveContentInstance(Scene& scene, SceneEntity entity) noexcept;
     static void RemoveGrid(Scene& scene, SceneEntity entity) noexcept;
     static void RemoveTilemap(Scene& scene, SceneEntity entity) noexcept;
@@ -146,6 +152,8 @@ public:
     static void RemoveCollider2D(Scene& scene, SceneEntity entity) noexcept;
     static void RemoveBody2D(Scene& scene, SceneEntity entity) noexcept;
     static void RemoveSprite2D(Scene& scene, SceneEntity entity) noexcept;
+    static void RemovePostProcessVolume(Scene& scene, SceneEntity entity) noexcept;
+    static void RemovePlanarReflection(Scene& scene, SceneEntity entity) noexcept;
     static void MarkContentInstanceModified(Scene& scene, SceneEntity entity) noexcept;
     static void MarkGridModified(Scene& scene, SceneEntity entity) noexcept;
     static void MarkTilemapModified(Scene& scene, SceneEntity entity) noexcept;
@@ -155,6 +163,8 @@ public:
     static void MarkCollider2DModified(Scene& scene, SceneEntity entity) noexcept;
     static void MarkBody2DModified(Scene& scene, SceneEntity entity) noexcept;
     static void MarkSprite2DModified(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkPostProcessVolumeModified(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkPlanarReflectionModified(Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static StreamFocusComponent* TryGetStreamFocus(Scene& scene, SceneEntity entity) noexcept;
     static void SetStreamFocus(Scene& scene, SceneEntity entity, const StreamFocusComponent& component);
     static void RemoveStreamFocus(Scene& scene, SceneEntity entity) noexcept;

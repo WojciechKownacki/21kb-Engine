@@ -72,6 +72,11 @@ constexpr std::uint16_t RenderEffectStart = PostProcessMaterialStart + PostProce
 constexpr std::uint16_t RenderEffectViewCount = 12U;
 static_assert(RenderEffectStart + RenderEffectViewCount <= ScreenCapture, "Render effects overlap capture views");
 
+// The copy of reflection probe cube maps into the shared atlas (SceneLocalReflectionAtlas): one view, after
+// every view that samples the atlas.
+constexpr std::uint16_t LocalReflectionAtlas = RenderEffectStart + RenderEffectViewCount;
+static_assert(LocalReflectionAtlas < ScreenCapture, "The local reflection atlas view overlaps the capture view");
+
 [[nodiscard]] constexpr bool IsValid(std::uint16_t viewId) noexcept {
     return viewId < Max;
 }

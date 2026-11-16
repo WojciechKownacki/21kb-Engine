@@ -159,6 +159,8 @@ struct ScenePrefabArchetypeSpawnPayload {
     std::vector<Collider2DComponent> colliders2D;
     std::vector<Body2DComponent> bodies2D;
     std::vector<Sprite2DComponent> sprites2D;
+    std::vector<PostProcessVolumeComponent> postProcessVolumes;
+    std::vector<PlanarReflectionComponent> planarReflections;
 
     std::vector<StreamFocusComponent> streamFocuses;
     std::vector<WorldBackdropComponent> worldBackdrops;
@@ -283,6 +285,14 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Sprite2D)) {
             RepeatComponents(sprites2D, std::span<const Sprite2DComponent>{ archetype.sprites2D }, instanceCount);
             AddComponentViews(views, worldViews, std::span<const Sprite2DComponent>{ sprites2D });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::PostProcessVolume)) {
+            RepeatComponents(postProcessVolumes, std::span<const PostProcessVolumeComponent>{ archetype.postProcessVolumes }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const PostProcessVolumeComponent>{ postProcessVolumes });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::PlanarReflection)) {
+            RepeatComponents(planarReflections, std::span<const PlanarReflectionComponent>{ archetype.planarReflections }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const PlanarReflectionComponent>{ planarReflections });
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::StreamFocus)) {
             RepeatComponents(streamFocuses, std::span<const StreamFocusComponent>{ archetype.streamFocuses }, instanceCount);
@@ -488,6 +498,14 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Sprite2D)) {
             AddCommandComponentPatternView(views, std::span<const Sprite2DComponent>{ archetype.sprites2D }, instanceCount);
             AddWorldComponentPatternView(worldViews, std::span<const Sprite2DComponent>{ archetype.sprites2D }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::PostProcessVolume)) {
+            AddCommandComponentPatternView(views, std::span<const PostProcessVolumeComponent>{ archetype.postProcessVolumes }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const PostProcessVolumeComponent>{ archetype.postProcessVolumes }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::PlanarReflection)) {
+            AddCommandComponentPatternView(views, std::span<const PlanarReflectionComponent>{ archetype.planarReflections }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const PlanarReflectionComponent>{ archetype.planarReflections }, instanceCount);
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::StreamFocus)) {
             AddCommandComponentPatternView(views, std::span<const StreamFocusComponent>{ archetype.streamFocuses }, instanceCount);

@@ -203,6 +203,16 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
             .serializable = true,
         },
         LibraryComponentDesc{
+            .name = "PostProcessVolume",
+            .id = ComputeLibraryComponentId("PostProcessVolume"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "PlanarReflection",
+            .id = ComputeLibraryComponentId("PlanarReflection"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
             .name = "Body2D",
             .id = ComputeLibraryComponentId("Body2D"),
             .serializable = true,

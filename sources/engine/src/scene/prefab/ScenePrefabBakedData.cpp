@@ -69,6 +69,12 @@ namespace {
     if (components.sprite2D.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Sprite2D);
     }
+    if (components.postProcessVolume.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::PostProcessVolume);
+    }
+    if (components.planarReflection.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::PlanarReflection);
+    }
     if (components.streamFocus.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::StreamFocus);
     }
@@ -225,6 +231,12 @@ ScenePrefabBakedData ScenePrefabBakedData::Bake(std::span<const ScenePrefabNodeD
         }
         if (node.components.sprite2D.has_value()) {
             archetype.sprites2D.push_back(*node.components.sprite2D);
+        }
+        if (node.components.postProcessVolume.has_value()) {
+            archetype.postProcessVolumes.push_back(*node.components.postProcessVolume);
+        }
+        if (node.components.planarReflection.has_value()) {
+            archetype.planarReflections.push_back(*node.components.planarReflection);
         }
         if (node.components.streamFocus.has_value()) {
             archetype.streamFocuses.push_back(*node.components.streamFocus);

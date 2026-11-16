@@ -69,6 +69,12 @@ void ScenePrefabComponentApplier::Apply(Scene& scene, SceneObject object, const 
     if (components.sprite2D.has_value()) {
         sceneComponents.Sprites2D().Set(entity, *components.sprite2D);
     }
+    if (components.postProcessVolume.has_value()) {
+        sceneComponents.PostProcessVolumes().Set(entity, *components.postProcessVolume);
+    }
+    if (components.planarReflection.has_value()) {
+        sceneComponents.PlanarReflections().Set(entity, *components.planarReflection);
+    }
     if (components.streamFocus.has_value()) {
         sceneComponents.StreamFocuses().Set(entity, *components.streamFocus);
     }

@@ -31,12 +31,14 @@ namespace {
 using kb::script::ScriptValue;
 using kb::script::ScriptValueType;
 
-constexpr std::array<InspectorGenericComponentModel::Section, 11> kSections{ {
+constexpr std::array<InspectorGenericComponentModel::Section, 13> kSections{ {
     { "NavBounds", InspectorSectionId::NavBounds, HeroIconKind::Navigation, "Navigation Bounds" },
     { "Combatant", InspectorSectionId::Combatant, HeroIconKind::Gamepad2, "Combatant" },
     { "AIBrain", InspectorSectionId::AIBrain, HeroIconKind::Gamepad2, "AI Brain" },
     { "CharacterController2D", InspectorSectionId::CharacterController2D, HeroIconKind::RectangleGroup, "Character Controller 2D" },
     { "Sprite2D", InspectorSectionId::Sprite2D, HeroIconKind::RectangleGroup, "Sprite 2D" },
+    { "PostProcessVolume", InspectorSectionId::PostProcessVolume, HeroIconKind::Eye, "Post Process Volume" },
+    { "PlanarReflection", InspectorSectionId::PlanarReflection, HeroIconKind::Eye, "Planar Reflection" },
     { "Body2D", InspectorSectionId::Body2D, HeroIconKind::RectangleGroup, "Body 2D" },
     { "Collider2D", InspectorSectionId::Collider2D, HeroIconKind::RectangleGroup, "Collider 2D" },
     { "Grid", InspectorSectionId::Grid, HeroIconKind::RectangleGroup, "Grid" },
@@ -69,6 +71,8 @@ constexpr std::array<std::string_view, 10> kNavBoundsBasicRows{ "size.x", "size.
 // The unit shown after a number.
 [[nodiscard]] std::string_view UnitOf(std::string_view component, std::string_view property) noexcept {
     if (component == "NavBounds") return property == "maxSlopeDegrees" ? "\u00B0" : "m";
+    if (component == "PostProcessVolume") return property == "blendDistance" ? "m" : std::string_view{};
+    if (component == "PlanarReflection") return property == "width" || property == "depth" || property == "maxDistance" ? "m" : std::string_view{};
     if (component != "Sprite2D") return {};
     if (property == "cellWidth" || property == "cellHeight" || property == "margin" || property == "spacing" ||
         property == "imageWidth" || property == "imageHeight" || property == "pixelsPerUnit") return "px";
@@ -159,6 +163,7 @@ struct DefaultComponent {
 [[nodiscard]] std::string_view AssetTypeFor(std::string_view component, std::string_view property) noexcept {
     if (component == "Combatant" && property.starts_with("ability")) return kb::gameplay::kAbilityAssetType;
     if (component == "Sprite2D" && property == "imageAssetId") return "Texture";
+    if (component == "PostProcessVolume" && property == "profileAssetId") return "PostProcessProfile";
     if (component == "Sprite2D" && property == "materialAssetId") return "RenderMaterial";
     if (component == "Tilemap" && property == "mapAssetId") return "RenderMesh";
     return {};

@@ -60,6 +60,9 @@ public:
     void ReleaseScene(std::uint64_t sceneId) noexcept;
     void ReleaseAllScenes() noexcept;
     // `renderOffset` (ParticleRenderOffset) is added to every particle position.
+    // Ribbons and beams of GPU-simulated emitters (simulationPath Gpu, no retained CPU particles) are built by the GPU
+    // (ParticleGpuEmitterSimulation) and skipped here. Counts the ribbon and beam emitters this builder built on the CPU.
+    [[nodiscard]] std::uint64_t CpuRibbonBeamBuilds() const noexcept { return cpuRibbonBeamBuilds_; }
     [[nodiscard]] ParticleStripBuildResult Build(
         const kb::particles::ParticleRenderSnapshot& snapshot,
         const SceneRenderCamera& camera,
@@ -86,6 +89,7 @@ private:
     std::vector<ParticleStripVertex> vertexScratch_;
     std::vector<std::uint16_t> indexScratch_;
     std::vector<ParticleStripDraw> drawScratch_;
+    std::uint64_t cpuRibbonBeamBuilds_ = 0U;
     std::uint64_t trailHistoryRevision_ = 0U;
     std::uint64_t trailHistorySceneId_ = 0U;
     std::uint64_t trailHistoryBackendEpoch_ = 0U;

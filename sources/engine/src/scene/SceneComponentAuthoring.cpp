@@ -143,6 +143,8 @@ const std::array kEntries{
     Entry{ { "NavObstacle", "Nav Obstacle", {} }, KB_COMPONENT(NavObstacles, navObstacle, NavObstacle{}) },
     Entry{ { "NavLink", "Nav Link", {} }, KB_COMPONENT(NavLinks, navLink, NavLink{}) },
     Entry{ { "NavBounds", "Navigation Bounds", {} }, KB_COMPONENT(NavBounds, navBounds, NavBounds{}) },
+    Entry{ { "PostProcessVolume", "Post Process Volume", {} }, KB_COMPONENT(PostProcessVolumes, postProcessVolume, PostProcessVolumeComponent{}) },
+    Entry{ { "PlanarReflection", "Post Process Volume", {} }, KB_COMPONENT(PlanarReflections, planarReflection, PlanarReflectionComponent{}) },
 };
 
 #undef KB_COMPONENT

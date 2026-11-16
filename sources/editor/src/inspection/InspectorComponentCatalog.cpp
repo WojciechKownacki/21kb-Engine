@@ -24,6 +24,8 @@ namespace {
         InspectorComponentTile{ .id = "TilemapCollider", .category = "World", .label = "Tilemap Collider", .icon = HeroIconKind::RectangleGroup },
         InspectorComponentTile{ .id = "Sprite2D", .category = "World", .label = "Sprite 2D", .icon = HeroIconKind::RectangleGroup },
         InspectorComponentTile{ .id = "WorldBackdrop", .category = "Rendering", .label = "World Backdrop", .icon = HeroIconKind::Eye },
+        InspectorComponentTile{ .id = "PostProcessVolume", .category = "Rendering", .label = "Post Process Volume", .icon = HeroIconKind::Eye },
+        InspectorComponentTile{ .id = "PlanarReflection", .category = "Rendering", .label = "Planar Reflection", .icon = HeroIconKind::Eye },
         InspectorComponentTile{ .id = "Ambient Radiance", .category = "Rendering", .label = "Ambient Radiance", .icon = HeroIconKind::Bolt },
         InspectorComponentTile{ .id = "Detail Switch", .category = "Rendering", .label = "Detail Switch", .icon = HeroIconKind::Cube },
         InspectorComponentTile{ .id = "Visibility Blocker", .category = "Rendering", .label = "Visibility Blocker", .icon = HeroIconKind::Cube },
@@ -116,6 +118,8 @@ constexpr ComponentNames kComponentNames[] = {
     {"TilemapCollider", "tile collision, solid tiles, tilemap physics", "Builds collision shapes from the solid cells of a tilemap."},
     {"Sprite2D", "sprite, 2d sprite, animated sprite, picture, image, character art, flipbook, sprite sheet, atlas", "Draws a picture, or one cell of a sprite sheet, and plays a frame animation."},
     {"WorldBackdrop", "sky, skybox, background, horizon", "Draws the sky and distant background behind the scene."},
+    {"PostProcessVolume", "post process, look, color grading, bloom, vignette, fog, effect zone, volume", "Changes the look of the picture in an area, or everywhere, and fades it in as the camera comes close."},
+    {"PlanarReflection", "mirror, reflection, planar, water, shiny floor, glass, wet floor", "Turns a flat surface into a mirror that shows the scene reflected in it."},
     {"Ambient Radiance", "ambient light, global illumination, gi, light probe, bounce light", "Adds soft indirect light that fills shadows around it."},
     {"Detail Switch", "lod, level of detail, distance, simplify", "Swaps to simpler models as the object gets far from the camera, to save speed."},
     {"Visibility Blocker", "occluder, occlusion, hide behind, wall culling", "Marks solid geometry that hides what is behind it, so hidden objects are not drawn."},
@@ -253,6 +257,8 @@ std::string InspectorComponentCatalog::DisplayLabel(const InspectorComponentTile
     if (tile.id == "World2DMap") return std::string{ EditorText("component.world2dMap", "World 2D Map") };
     if (tile.id == "Sprite2D") return std::string{ EditorText("component.sprite2D", "Sprite 2D") };
     if (tile.id == "WorldBackdrop") return std::string{ EditorText("component.worldBackdrop", "World Backdrop") };
+    if (tile.id == "PostProcessVolume") return std::string{ EditorText("component.postProcessVolume", "Post Process Volume") };
+    if (tile.id == "PlanarReflection") return std::string{ EditorText("component.planarReflection", "Planar Reflection") };
     if (tile.id == "Ambient Radiance") return std::string{ EditorText("component.ambientRadiance", "Ambient Radiance") };
     if (tile.id == "Detail Switch") return std::string{ EditorText("component.detailSwitch", "Detail Switch") };
     if (tile.id == "Visibility Blocker") return std::string{ EditorText("component.visibilityBlocker", "Visibility Blocker") };

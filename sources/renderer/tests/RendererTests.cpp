@@ -72,6 +72,8 @@ void RunRendererRuntimeSubmitTests();
 void RunRendererStreamingLifetimeTests();
 void RunRendererGiResolveTests();
 void RunRendererSkyReflectionTests();
+void RunRendererLocalReflectionProbeTests();
+void RunRendererPlanarReflectionTests();
 void RunRendererLightProbeTests();
 void RunRendererCommandReuseTests();
 void RunRendererTransparentGpuReadbackTests();
@@ -87,6 +89,7 @@ void RunEditorUIViewTransformValidationTests();
 void RunRendererParticleMeshSnapshotSubmitTest();
 void RunRendererParticleContactDeathTest();
 void RunParticleGpuMotionTests(bool kernelOnly, bgfx::RendererType::Enum backend);
+void RunParticleGpuStripTests(bgfx::RendererType::Enum backend);
 void RunRendererParticleMotionPixelsTest(bgfx::RendererType::Enum backend);
 void RunRendererParticleDepthAuthoringTest();
 void RunRendererParticleSortModesTest();
@@ -352,6 +355,14 @@ int main(int argc, char** argv) {
         kb::render::tests::RunRendererSkyReflectionTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{ argv[1] } == "local-reflection") {
+        kb::render::tests::RunRendererLocalReflectionProbeTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "planar-reflection") {
+        kb::render::tests::RunRendererPlanarReflectionTests();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{ argv[1] } == "light-probes") {
         kb::render::tests::RunRendererLightProbeTests();
         return EXIT_SUCCESS;
@@ -420,6 +431,15 @@ int main(int argc, char** argv) {
     if (argc == 2 && std::string_view{ argv[1] } == "particle-depth-collision") {
         try {
             kb::render::tests::RunRendererParticleDepthAuthoringTest();
+            return EXIT_SUCCESS;
+        } catch (const std::exception& error) {
+            std::fprintf(stderr, "%s\n", error.what());
+            return EXIT_FAILURE;
+        }
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "particle-gpu-strips") {
+        try {
+            kb::render::tests::RunParticleGpuStripTests(bgfx::RendererType::Direct3D11);
             return EXIT_SUCCESS;
         } catch (const std::exception& error) {
             std::fprintf(stderr, "%s\n", error.what());

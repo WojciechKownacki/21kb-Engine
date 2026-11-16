@@ -8,6 +8,7 @@
 #include "kb/render/scene/MeshPipeline.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "kb/render/scene/LocalReflectionUniforms.hpp"
+#include "kb/render/scene/PlanarReflectionUniforms.hpp"
 #include "kb/render/scene/SceneLightProbeTexture.hpp"
 #include "scene/lighting/SceneLightingPacker.hpp"
 
@@ -212,6 +213,7 @@ private:
     bgfx::UniformHandle materialSubsurfaceUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle materialSheenUniform_ = BGFX_INVALID_HANDLE;
     LocalReflectionUniforms localReflections_{};
+    PlanarReflectionUniforms planarReflections_{};
     bgfx::UniformHandle materialOpticsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle materialAttenuationUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle builtinSceneColorSampler_ = BGFX_INVALID_HANDLE;

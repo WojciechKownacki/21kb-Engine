@@ -37,6 +37,8 @@ public:
     [[nodiscard]] std::uint64_t Collider2DComponentId() const noexcept;
     [[nodiscard]] std::uint64_t Body2DComponentId() const noexcept;
     [[nodiscard]] std::uint64_t Sprite2DComponentId() const noexcept;
+    [[nodiscard]] std::uint64_t PostProcessVolumeComponentId() const noexcept;
+    [[nodiscard]] std::uint64_t PlanarReflectionComponentId() const noexcept;
     [[nodiscard]] std::uint64_t StreamFocusComponentId() const noexcept;
     [[nodiscard]] std::uint64_t WorldBackdropComponentId() const noexcept;
     [[nodiscard]] std::uint64_t AmbientRadianceComponentId() const noexcept;
@@ -90,6 +92,8 @@ private:
     std::uint64_t collider2DComponentId_ = 0;
     std::uint64_t body2DComponentId_ = 0;
     std::uint64_t sprite2DComponentId_ = 0;
+    std::uint64_t postProcessVolumeComponentId_ = 0;
+    std::uint64_t planarReflectionComponentId_ = 0;
     std::uint64_t streamFocusComponentId_ = 0;
     std::uint64_t worldBackdropComponentId_ = 0;
     std::uint64_t ambientRadianceComponentId_ = 0;

@@ -14,6 +14,8 @@
 #include "scene/components/SceneCollider2DComponentStore.hpp"
 #include "scene/components/SceneBody2DComponentStore.hpp"
 #include "scene/components/SceneSprite2DComponentStore.hpp"
+#include "scene/components/ScenePostProcessVolumeComponentStore.hpp"
+#include "scene/components/ScenePlanarReflectionComponentStore.hpp"
 #include "scene/components/SceneStreamFocusComponentStore.hpp"
 #include "scene/components/SceneWorldBackdropComponentStore.hpp"
 #include "scene/components/SceneAmbientRadianceComponentStore.hpp"
@@ -105,6 +107,8 @@ public:
     [[nodiscard]] const SceneCollider2DComponentStore& Colliders2D() const noexcept;
     [[nodiscard]] const SceneBody2DComponentStore& Bodies2D() const noexcept;
     [[nodiscard]] const SceneSprite2DComponentStore& Sprites2D() const noexcept;
+    [[nodiscard]] const ScenePostProcessVolumeComponentStore& PostProcessVolumes() const noexcept;
+    [[nodiscard]] const ScenePlanarReflectionComponentStore& PlanarReflections() const noexcept;
     [[nodiscard]] SceneContentInstanceComponentStore& ContentInstances() noexcept;
     [[nodiscard]] SceneGridComponentStore& Grids() noexcept;
     [[nodiscard]] SceneTilemapComponentStore& Tilemaps() noexcept;
@@ -114,6 +118,8 @@ public:
     [[nodiscard]] SceneCollider2DComponentStore& Colliders2D() noexcept;
     [[nodiscard]] SceneBody2DComponentStore& Bodies2D() noexcept;
     [[nodiscard]] SceneSprite2DComponentStore& Sprites2D() noexcept;
+    [[nodiscard]] ScenePostProcessVolumeComponentStore& PostProcessVolumes() noexcept;
+    [[nodiscard]] ScenePlanarReflectionComponentStore& PlanarReflections() noexcept;
     [[nodiscard]] const SceneStreamFocusComponentStore& StreamFocuses() const noexcept;
     [[nodiscard]] SceneStreamFocusComponentStore& StreamFocuses() noexcept;
     [[nodiscard]] const SceneWorldBackdropComponentStore& WorldBackdrops() const noexcept;
@@ -189,6 +195,8 @@ private:
     SceneCollider2DComponentStore colliders2D_;
     SceneBody2DComponentStore bodies2D_;
     SceneSprite2DComponentStore sprites2D_;
+    ScenePostProcessVolumeComponentStore postProcessVolumes_;
+    ScenePlanarReflectionComponentStore planarReflections_;
     SceneStreamFocusComponentStore streamFocuses_;
     SceneWorldBackdropComponentStore worldBackdrops_;
     SceneAmbientRadianceComponentStore ambientRadiances_;

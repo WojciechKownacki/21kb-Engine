@@ -10915,6 +10915,325 @@ void RunRendererSkyReflectionTests() {
 #endif
 }
 
+// Sixteen local probes of distinct hues, stored four times as bright as a lit result can show: the hue of what a
+// surface reflects tells which probe (and whether its HDR value) reached it.
+[[nodiscard]] std::array<float, 3> LocalProbeHdrColor(unsigned index) {
+    const float hue = static_cast<float>(index) * 22.5F / 60.0F;
+    const float x = 1.0F - std::abs(std::fmod(hue, 2.0F) - 1.0F);
+    std::array<float, 3> rgb{};
+    switch (static_cast<int>(hue)) {
+    case 0: rgb = {1.0F, x, 0.0F}; break;
+    case 1: rgb = {x, 1.0F, 0.0F}; break;
+    case 2: rgb = {0.0F, 1.0F, x}; break;
+    case 3: rgb = {0.0F, x, 1.0F}; break;
+    case 4: rgb = {x, 0.0F, 1.0F}; break;
+    default: rgb = {1.0F, 0.0F, x}; break;
+    }
+    for (float& channel : rgb) channel *= 4.0F;
+    return rgb;
+}
+
+[[nodiscard]] bgfx::TextureHandle CreateSolidHdrCube(const std::array<float, 3>& rgb) {
+    constexpr std::uint16_t kSize = 4U;
+    std::vector<std::uint16_t> texels(6U * kSize * kSize * 4U);
+    for (std::size_t texel = 0U; texel < texels.size(); texel += 4U) {
+        texels[texel] = bx::halfFromFloat(rgb[0]);
+        texels[texel + 1U] = bx::halfFromFloat(rgb[1]);
+        texels[texel + 2U] = bx::halfFromFloat(rgb[2]);
+        texels[texel + 3U] = bx::halfFromFloat(1.0F);
+    }
+    return bgfx::createTextureCube(kSize, false, 1U, bgfx::TextureFormat::RGBA16F, BGFX_TEXTURE_NONE,
+        bgfx::copy(texels.data(), static_cast<std::uint32_t>(texels.size() * sizeof(std::uint16_t))));
+}
+
+[[nodiscard]] float HueDegrees(float r, float g, float b) {
+    const float high = std::max({r, g, b});
+    const float delta = high - std::min({r, g, b});
+    if (delta <= 0.0F) return -1.0F;
+    float hue = high == r ? std::fmod((g - b) / delta, 6.0F) : high == g ? (b - r) / delta + 2.0F : (r - g) / delta + 4.0F;
+    hue *= 60.0F;
+    return hue < 0.0F ? hue + 360.0F : hue;
+}
+
+void RunRendererLocalReflectionProbeTests() {
+#if defined(_WIN32)
+    using Layout = LocalReflectionAtlasLayout;
+    static_assert(kMaxSampledLocalReflectionProbes >= 16U, "At least sixteen local probes must be sampled in one frame");
+    {
+        // Storage: sixteen HDR cube maps, each into its own slot of the atlas, values above 1 intact.
+        NativeTestSurface surface;
+        Require(surface.IsValid(), "Local reflection atlas test needs a hidden native surface");
+        Renderer renderer;
+        DisplayConfig config;
+        config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+        Require(renderer.Initialize(surface, &config), "Local reflection atlas renderer initialization failed");
+        SceneLocalReflectionAtlas atlas;
+        SceneRenderIblConfig ibl{};
+        atlas.Update(ibl);
+        Require(!atlas.IsInitialized(), "A scene without probes must not create the reflection atlas");
+        ibl.reflectionProbeCount = Layout::kSlotCount;
+        for (unsigned index = 0U; index < Layout::kSlotCount; ++index) {
+            auto& probe = ibl.reflectionProbes[index];
+            probe.radianceTexture = CreateSolidHdrCube(LocalProbeHdrColor(index));
+            probe.maxMip = 1U;
+            probe.shape = SceneRenderReflectionProbeShape::Box;
+        }
+        Require(ValidLocalReflectionConfig(ibl), "Sixteen local probes must be a valid lighting configuration");
+        Require(renderer.BeginFrame(), "Local reflection atlas frame could not begin");
+        atlas.Update(ibl);
+        atlas.Apply(ibl);
+        Require(!ibl.reflectionProbes[0].atlasReady, "A probe must not be sampled in the frame that queues its copy");
+        renderer.EndFrame();
+        atlas.EndFrame();
+        atlas.Apply(ibl);
+        Require(bgfx::isValid(ibl.reflectionAtlas), "The reflection atlas was not published");
+        std::array<bool, Layout::kSlotCount> slotUsed{};
+        for (unsigned index = 0U; index < Layout::kSlotCount; ++index) {
+            const auto& probe = ibl.reflectionProbes[index];
+            Require(probe.atlasReady && probe.atlasSlot < Layout::kSlotCount && !slotUsed[probe.atlasSlot],
+                "Every probe needs its own ready atlas slot");
+            slotUsed[probe.atlasSlot] = true;
+        }
+        const std::uint16_t width = static_cast<std::uint16_t>(Layout::Width());
+        const std::uint16_t height = static_cast<std::uint16_t>(Layout::Height());
+        const auto readback = bgfx::createTexture2D(width, height, false, 1U, bgfx::TextureFormat::RGBA16F,
+            BGFX_TEXTURE_READ_BACK | BGFX_TEXTURE_BLIT_DST);
+        Require(bgfx::isValid(readback), "Local reflection atlas readback texture could not be created");
+        bgfx::blit(ViewId::ScreenCapture, bgfx::TextureRegion{.handle = readback},
+            bgfx::TextureRegion{.handle = atlas.Texture(), .width = width, .height = height});
+        std::vector<std::uint16_t> texels(static_cast<std::size_t>(width) * height * 4U);
+        const std::uint32_t readyFrame = bgfx::read(bgfx::TextureRegion{.handle = readback}, texels.data());
+        bool ready = false;
+        for (int frame = 0; frame < 16; ++frame) {
+            if (bgfx::frame() >= readyFrame) { ready = true; break; }
+        }
+        Require(ready, "Local reflection atlas GPU readback did not finish");
+        const auto texelAt = [&](unsigned x, unsigned y, unsigned channel) {
+            return bx::halfToFloat(texels[(static_cast<std::size_t>(y) * width + x) * 4U + channel]);
+        };
+        float brightest = 0.0F;
+        for (unsigned index = 0U; index < Layout::kSlotCount; ++index) {
+            const unsigned slot = ibl.reflectionProbes[index].atlasSlot;
+            const auto expected = LocalProbeHdrColor(index);
+            for (const unsigned level : {0U, Layout::kLevelCount - 1U}) {
+                const unsigned size = Layout::LevelSize(level);
+                const unsigned centreX = Layout::SlotX(slot) + Layout::LevelX(level) + Layout::kGutter + size / 2U;
+                const unsigned centreY = Layout::SlotY(slot) + Layout::LevelY(level) + Layout::kGutter + size / 2U;
+                const std::array<std::pair<unsigned, unsigned>, 2> probes{std::pair{centreX, centreY},
+                    std::pair{Layout::SlotX(slot) + Layout::LevelX(level), Layout::SlotY(slot) + Layout::LevelY(level)}};
+                for (unsigned channel = 0U; channel < 3U; ++channel) {
+                    for (const auto& texel : probes) {
+                        const float value = texelAt(texel.first, texel.second, channel);
+                        brightest = std::max(brightest, value);
+                        Require(std::abs(value - expected[channel]) <= 0.01F * std::max(1.0F, expected[channel]),
+                            "A probe's atlas texels must hold its HDR colour, including the border");
+                    }
+                }
+            }
+        }
+        std::fprintf(stderr, "local_reflection_atlas slots=%u brightest=%.3f\n", Layout::kSlotCount, brightest);
+        Require(brightest > 3.9F, "HDR values above 1 must survive in the reflection atlas");
+        bgfx::destroy(readback);
+        for (unsigned index = 0U; index < Layout::kSlotCount; ++index) bgfx::destroy(ibl.reflectionProbes[index].radianceTexture);
+        atlas.Shutdown();
+        renderer.Shutdown();
+    }
+    {
+        // Sampling: a 4x4 grid of small metal spheres, probe N around sphere N. Each sphere must reflect its own hue.
+        constexpr std::uint16_t kSize = 128U;
+        constexpr float kSpacing = 2.4F;
+        constexpr float kDistance = 14.0F;
+        constexpr float kFov = 40.0F;
+        const auto position = [&](unsigned index) {
+            return kb::scene::Vec3{(static_cast<float>(index % 4U) - 1.5F) * kSpacing, (1.5F - static_cast<float>(index / 4U)) * kSpacing, 0.0F};
+        };
+        std::vector<SsBox> spheres;
+        for (unsigned index = 0U; index < 16U; ++index) spheres.push_back({position(index), {0.5F, 0.5F, 0.5F}, SsMaterial::Glossy});
+        SsMaterialOptions options;
+        options.sphere = true;
+        RenderMaterialDesc metal{};
+        metal.baseColor[0] = metal.baseColor[1] = metal.baseColor[2] = 1.0F;
+        metal.metallicFactor = 1.0F;
+        metal.roughnessFactor = 0.05F;
+        options.glossy = metal;
+        const auto render = [&](SceneRenderLightingPath path, unsigned probeCount) {
+            SceneRenderLightingConfig lighting{};
+            lighting.lightingPath = path;
+            std::vector<bgfx::TextureHandle> cubes;
+            return RenderScreenSpaceScene(spheres, {}, {0.0F, 0.0F, -kDistance}, {0.0F, 0.0F, 0.0F}, kFov, lighting, 4, kSize,
+                SceneRenderMeshPassMode::OpaqueOnly, {}, false, 1.27F, 40.0F, nullptr,
+                [&](Renderer&, ParticleMeshReadbackTarget&, RenderSceneSubmitDesc& desc, int frame) {
+                    if (frame == 0) {
+                        for (unsigned index = 0U; index < probeCount; ++index) cubes.push_back(CreateSolidHdrCube(LocalProbeHdrColor(index)));
+                    }
+                    auto& ibl = desc.lightingConfig.ibl;
+                    ibl.reflectionProbeCount = probeCount;
+                    for (unsigned index = 0U; index < probeCount; ++index) {
+                        auto& probe = ibl.reflectionProbes[index];
+                        const kb::scene::Vec3 centre = position(index);
+                        probe.radianceTexture = cubes[index];
+                        probe.position[0] = centre.x; probe.position[1] = centre.y; probe.position[2] = centre.z;
+                        probe.extents[0] = probe.extents[1] = 0.5F * kSpacing - 0.05F;
+                        probe.extents[2] = 6.0F;
+                        probe.intensity = 0.25F;
+                        probe.maxMip = 1U;
+                        probe.shape = SceneRenderReflectionProbeShape::Box;
+                    }
+                }, 0.05F, bgfx::RendererType::Direct3D11, nullptr, &options);
+        };
+        const float halfExtent = kDistance * std::tan(kFov * 0.5F * 3.14159265F / 180.0F);
+        const auto colourOf = [&](const std::vector<std::uint8_t>& pixels, unsigned index) {
+            const kb::scene::Vec3 centre = position(index);
+            const int px = static_cast<int>(std::lround(kSize * 0.5F + centre.x / halfExtent * kSize * 0.5F));
+            const int py = static_cast<int>(std::lround(kSize * 0.5F - centre.y / halfExtent * kSize * 0.5F));
+            double r = 0.0, g = 0.0, b = 0.0;
+            for (int y = py - 2; y <= py + 2; ++y) {
+                for (int x = px - 2; x <= px + 2; ++x) {
+                    const std::size_t at = (static_cast<std::size_t>(y) * kSize + static_cast<std::size_t>(x)) * 4U;
+                    r += pixels[at]; g += pixels[at + 1U]; b += pixels[at + 2U];
+                }
+            }
+            return std::array<float, 3>{static_cast<float>(r / 25.0), static_cast<float>(g / 25.0), static_cast<float>(b / 25.0)};
+        };
+        const auto hueError = [](float hue, float expected) {
+            const float difference = std::abs(hue - expected);
+            return std::min(difference, 360.0F - difference);
+        };
+        for (const auto path : {SceneRenderLightingPath::Forward, SceneRenderLightingPath::Deferred}) {
+            const auto pixels = render(path, 16U);
+            for (unsigned index = 0U; index < 16U; ++index) {
+                const auto rgb = colourOf(pixels, index);
+                const float hue = HueDegrees(rgb[0], rgb[1], rgb[2]);
+                std::fprintf(stderr, "local_reflection_scene path=%u probe=%u rgb=%.0f,%.0f,%.0f hue=%.1f expected=%.1f\n",
+                    static_cast<unsigned>(path), index, rgb[0], rgb[1], rgb[2], hue, static_cast<float>(index) * 22.5F);
+                Require(hue >= 0.0F && hueError(hue, static_cast<float>(index) * 22.5F) < 8.0F,
+                    "A surface inside probe N must reflect the HDR colour of probe N");
+            }
+        }
+        // One probe: the other surfaces keep the environment (no hue), the covered one reflects its probe.
+        const auto one = render(SceneRenderLightingPath::Deferred, 1U);
+        const auto covered = colourOf(one, 0U);
+        Require(hueError(HueDegrees(covered[0], covered[1], covered[2]), 0.0F) < 8.0F, "A single local probe must reflect its colour");
+        const auto uncovered = colourOf(one, 7U);
+        Require(std::max({uncovered[0], uncovered[1], uncovered[2]}) - std::min({uncovered[0], uncovered[1], uncovered[2]}) < 40.0F,
+            "A surface outside every probe must keep the environment colour");
+    }
+#else
+    throw std::runtime_error("Local reflection probe tests require a supported native GPU test surface");
+#endif
+}
+
+void RunRendererPlanarReflectionTests() {
+#if defined(_WIN32)
+    // A metal floor with a Planar Reflection and a red cube standing on it: the strip of floor in front of the cube must
+    // show the cube's reflection. Without the component (or with it disabled) the floor shows no red, and the scene
+    // draws no pass beyond its own view.
+    constexpr std::uint16_t kSize = 128U;
+    constexpr int kFrames = 6;
+    constexpr float kFov = 50.0F;
+    const bx::Vec3 eye{0.0F, 3.0F, -8.0F};
+    const bx::Vec3 target{0.0F, 1.0F, 4.0F};
+    const std::vector<SsBox> boxes{
+        {{0.0F, -0.5F, 0.0F}, {40.0F, 1.0F, 40.0F}, SsMaterial::Glossy},
+        {{0.0F, 2.0F, 4.0F}, {2.0F, 2.0F, 2.0F}, SsMaterial::Red},
+    };
+    SsMaterialOptions options;
+    RenderMaterialDesc metal{};
+    metal.baseColor[0] = metal.baseColor[1] = metal.baseColor[2] = 1.0F;
+    metal.metallicFactor = 1.0F;
+    metal.roughnessFactor = 0.05F;
+    options.glossy = metal;
+    enum class Mirror { None, Disabled, On };
+    struct Shot {
+        std::vector<std::uint8_t> pixels;
+        std::size_t viewports = 0U;
+    };
+    const auto render = [&](SceneRenderLightingPath path, Mirror mirror, bool preciseEye = false, float slide = 0.0F) {
+        SceneRenderLightingConfig lighting{};
+        lighting.lightingPath = path;
+        Shot shot;
+        shot.pixels = RenderScreenSpaceScene(boxes, {{4.0F, 6.0F, -3.0F}}, eye, target, kFov, lighting, kFrames, kSize,
+            SceneRenderMeshPassMode::OpaqueOnly,
+            [&](kb::scene::Scene& scene, int frame) {
+                if (frame != 0 || mirror == Mirror::None) return;
+                const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(
+                    kb::scene::SceneObjectDesc{.name = "Mirror", .transform = TransformAt(0.0F, 0.0F, 0.0F)});
+                scene.Components().PlanarReflections().Set(entity,
+                    kb::scene::PlanarReflectionComponent{.width = 40.0F, .depth = 40.0F, .enabled = mirror == Mirror::On});
+            },
+            false, 1.27F, 40.0F, nullptr,
+            [&](Renderer& renderer, ParticleMeshReadbackTarget&, RenderSceneSubmitDesc& desc, int frame) {
+                // `slide` moves the eye along x each frame and ends on `eye`.
+                const bx::Vec3 at{eye.x - slide * static_cast<float>(kFrames - 1 - frame), eye.y, eye.z};
+                bx::mtxLookAt(desc.cameraOverride->view.data(), at, target);
+                if (preciseEye) desc.cameraOverrideEye = kb::math::DVec3{at.x, at.y, at.z};
+                if (frame == kFrames - 1) {
+                    // What the previous frame submitted: the viewports its passes drew into.
+                    std::vector<std::uint32_t> indices;
+                    for (const SceneRenderPassSubmitStats& pass : renderer.LastScenePassSubmitStats()) indices.push_back(pass.viewportIndex);
+                    std::sort(indices.begin(), indices.end());
+                    shot.viewports = static_cast<std::size_t>(std::unique(indices.begin(), indices.end()) - indices.begin());
+                }
+            },
+            0.05F, bgfx::RendererType::Direct3D11, nullptr, &options);
+        return shot;
+    };
+    // The floor strip between the camera and the cube whose reflection falls on it.
+    std::array<float, 16> view{};
+    bx::mtxLookAt(view.data(), eye, target);
+    const float tangent = std::tan(kFov * 0.5F * 3.14159265F / 180.0F);
+    int x0 = kSize, y0 = kSize, x1 = 0, y1 = 0;
+    for (const bx::Vec3 corner : {bx::Vec3{-0.5F, 0.0F, -2.2F}, bx::Vec3{0.5F, 0.0F, -2.2F}, bx::Vec3{-0.5F, 0.0F, -0.2F}, bx::Vec3{0.5F, 0.0F, -0.2F}}) {
+        const bx::Vec3 local = bx::mul(corner, view.data());
+        const int px = static_cast<int>(std::lround(kSize * 0.5F + local.x / (local.z * tangent) * kSize * 0.5F));
+        const int py = static_cast<int>(std::lround(kSize * 0.5F - local.y / (local.z * tangent) * kSize * 0.5F));
+        x0 = std::min(x0, px); x1 = std::max(x1, px); y0 = std::min(y0, py); y1 = std::max(y1, py);
+    }
+    Require(x0 >= 0 && y0 >= 0 && x1 < kSize && y1 < kSize && x1 - x0 >= 4 && y1 - y0 >= 4, "The planar reflection test region is not in view");
+    // Red minus the mean of green and blue, over the strip (8-bit levels).
+    const auto redExcess = [&](const std::vector<std::uint8_t>& pixels) {
+        double sum = 0.0;
+        for (int y = y0; y <= y1; ++y) for (int x = x0; x <= x1; ++x) {
+            const std::size_t at = (static_cast<std::size_t>(y) * kSize + static_cast<std::size_t>(x)) * 4U;
+            sum += static_cast<double>(pixels[at]) - 0.5 * (static_cast<double>(pixels[at + 1U]) + static_cast<double>(pixels[at + 2U]));
+        }
+        return sum / static_cast<double>((x1 - x0 + 1) * (y1 - y0 + 1));
+    };
+    const auto meanDifference = [](const std::vector<std::uint8_t>& a, const std::vector<std::uint8_t>& b) {
+        Require(a.size() == b.size(), "Planar reflection images differ in size");
+        double sum = 0.0;
+        for (std::size_t at = 0U; at < a.size(); ++at) sum += std::abs(static_cast<double>(a[at]) - static_cast<double>(b[at]));
+        return sum / static_cast<double>(a.size());
+    };
+    for (const SceneRenderLightingPath path : {SceneRenderLightingPath::Forward, SceneRenderLightingPath::Deferred}) {
+        const Shot none = render(path, Mirror::None);
+        const Shot disabled = render(path, Mirror::Disabled);
+        const Shot on = render(path, Mirror::On);
+        const double without = redExcess(none.pixels);
+        const double with = redExcess(on.pixels);
+        std::fprintf(stderr, "planar_reflection_pixels path=%u without=%.2f with=%.2f viewports none=%zu disabled=%zu on=%zu\n",
+            static_cast<unsigned>(path), without, with, none.viewports, disabled.viewports, on.viewports);
+        Require(none.viewports == 1U && disabled.viewports == 1U, "A scene without an enabled Planar Reflection must draw no extra pass");
+        Require(on.viewports == 2U, "A Planar Reflection in sight must draw one pass of its own");
+        Require(none.pixels == disabled.pixels, "A disabled Planar Reflection must leave the image as it is without the component");
+        Require(with > 25.0 && with > 3.0 * std::max(without, 1.0), "The floor must show the red cube's reflection only with a Planar Reflection");
+    }
+    // A host that gives the eye in double precision gets the same mirror, and the picture follows a moving camera
+    // frame for frame.
+    const Shot still = render(SceneRenderLightingPath::Deferred, Mirror::On);
+    const Shot precise = render(SceneRenderLightingPath::Deferred, Mirror::On, true);
+    const Shot moving = render(SceneRenderLightingPath::Deferred, Mirror::On, true, 0.4F);
+    const double preciseDifference = meanDifference(still.pixels, precise.pixels);
+    const double movingDifference = meanDifference(still.pixels, moving.pixels);
+    std::fprintf(stderr, "planar_reflection_follow precise=%.3f moving=%.3f withPrecise=%.2f withMoving=%.2f\n", preciseDifference,
+        movingDifference, redExcess(precise.pixels), redExcess(moving.pixels));
+    Require(precise.viewports == 2U && moving.viewports == 2U && preciseDifference < 0.5 && movingDifference < 0.5,
+        "The mirror must not change with a precise eye or lag behind a moving camera");
+#else
+    throw std::runtime_error("Planar reflection tests require a supported native GPU test surface");
+#endif
+}
+
 void RunRendererLightProbeTests() {
 #if defined(_WIN32)
     // A probe grid baked next to a lit red wall over a white floor; the rendered dynamic sphere is not baked.

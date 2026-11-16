@@ -57,6 +57,7 @@ add_library(kb_renderer STATIC
     include/kb/render/post/SceneExposureMeter.hpp
     include/kb/render/post/SceneDisplayCompositeRenderer.hpp
     include/kb/render/post/ScenePostProcessSettings.hpp
+    include/kb/render/post/ScenePostProcessVolumeBlend.hpp
     include/kb/render/post/ScenePostProcessRenderer.hpp
     include/kb/render/post/ScenePostProcessTargets.hpp
     include/kb/render/resources/RenderHandles.hpp
@@ -166,6 +167,7 @@ add_library(kb_renderer STATIC
     src/SceneDeferredLightingPass.cpp
     src/scene/SceneBackdropUniforms.cpp
     src/scene/SceneSkyReflection.cpp
+    src/scene/SceneLocalReflectionAtlas.cpp
     src/scene/SceneSkyBackdropPass.cpp
     src/scene/SceneLightProbeTexture.cpp
     src/SceneFramebuffer.cpp
@@ -203,6 +205,7 @@ add_library(kb_renderer STATIC
     src/post/SceneDisplayCompositeRenderer.cpp
     src/post/ScenePostProcessRenderer.cpp
     src/post/ScenePostProcessSubmitter.cpp
+    src/post/ScenePostProcessVolumeBlend.cpp
     src/post/ScenePostProcessTargets.cpp
     src/particles/ParticleGpuRenderer.cpp
     src/particles/ParticleGpuVisualSimulation.cpp
@@ -662,6 +665,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_sky_backdrop.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_sky_capture.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_sky_prefilter.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_local_reflection_atlas.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_gizmo.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_grid.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_selection_outline.sc
@@ -719,6 +723,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_gpu_collide.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_gpu_inspect.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_gpu_rebase.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_gpu_strip.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_gpu_sort_keys.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_gpu_sort_step.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_gpu_sort_gather.sc
@@ -753,6 +758,8 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             add_custom_command(OUTPUT "${_fog_shader_output}" APPEND
                 DEPENDS "${KB_RENDERER_SHADER_INCLUDE_DIR}/height_fog.sh"
                     "${KB_RENDERER_SHADER_INCLUDE_DIR}/local_reflection.sh"
+                    "${KB_RENDERER_SHADER_INCLUDE_DIR}/planar_reflection.sh"
+                    "${KB_RENDERER_SHADER_INCLUDE_DIR}/screen_uv.sh"
                     "${KB_RENDERER_SHADER_INCLUDE_DIR}/light_probes.sh")
         endif()
         if(_fog_shader_output MATCHES "/fs_mesh_instanced(_cmp)?\\.sc\\.bin$")
@@ -976,6 +983,7 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         tests/RendererRuntimeSubmitTests.cpp
         tests/ParticleProcessTests.cpp
         tests/ParticleGpuMotionTests.cpp
+        tests/ParticleGpuStripTests.cpp
         tests/MeshPipelineTests.cpp
         tests/SceneDisplayCompositeTests.cpp
         tests/SceneExposureMeterTests.cpp
@@ -1059,6 +1067,9 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;ui;gpu;headless" TIMEOUT 60)
     endif()
     if(WIN32)
+        add_test(NAME kb_renderer_particle_gpu_strips COMMAND $<TARGET_FILE:kb_renderer_tests> particle-gpu-strips)
+        set_tests_properties(kb_renderer_particle_gpu_strips PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;particle;headless" TIMEOUT 120)
         add_test(NAME kb_renderer_particle_depth_outputs COMMAND $<TARGET_FILE:kb_renderer_tests> particle-volumetric-submit)
         set_tests_properties(kb_renderer_particle_depth_outputs PROPERTIES
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;particle;headless" TIMEOUT 180)
@@ -1076,6 +1087,12 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         add_test(NAME kb_renderer_sky_reflection COMMAND $<TARGET_FILE:kb_renderer_tests> sky-reflection)
         set_tests_properties(kb_renderer_sky_reflection PROPERTIES
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;sky" TIMEOUT 180)
+        add_test(NAME kb_renderer_local_reflection COMMAND $<TARGET_FILE:kb_renderer_tests> local-reflection)
+        set_tests_properties(kb_renderer_local_reflection PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;reflection" TIMEOUT 180)
+        add_test(NAME kb_renderer_planar_reflection COMMAND $<TARGET_FILE:kb_renderer_tests> planar-reflection)
+        set_tests_properties(kb_renderer_planar_reflection PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;reflection" TIMEOUT 180)
         add_test(NAME kb_renderer_light_probes COMMAND $<TARGET_FILE:kb_renderer_tests> light-probes)
         set_tests_properties(kb_renderer_light_probes PROPERTIES
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu" TIMEOUT 180)

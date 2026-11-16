@@ -643,6 +643,32 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
             },
         },
         LibraryComponentInspectorDesc{
+            .componentName = "PostProcessVolume",
+            .displayName = "Post Process Volume",
+            .category = "Rendering",
+            .fields = {
+                LibraryComponentInspectorFieldDesc{ "profileAssetId", "Look", "The post-process profile to apply. Everywhere when the object has no Region Shape, otherwise only inside it." },
+                LibraryComponentInspectorFieldDesc{ "priority", "Priority", "When volumes overlap, the one with the higher number is applied last and wins." },
+                LibraryComponentInspectorFieldDesc{ "weight", "Strength", "How strongly the look applies inside, 0 to 1. Numbers fade toward it; switches and choices change when this passes half." },
+                LibraryComponentInspectorFieldDesc{ "blendDistance", "Fade Distance", "Metres outside the Region Shape over which the look fades in; 0 switches at the edge." },
+                LibraryComponentInspectorFieldDesc{ "enabled", "Enabled", "Whether this volume affects the camera." },
+            },
+        },
+        LibraryComponentInspectorDesc{
+            .componentName = "PlanarReflection",
+            .displayName = "Planar Reflection",
+            .category = "Rendering",
+            .fields = {
+                LibraryComponentInspectorFieldDesc{ "width", "Width", "Size of the mirror in metres along the object's X axis." },
+                LibraryComponentInspectorFieldDesc{ "depth", "Depth", "Size of the mirror in metres along the object's Z axis." },
+                LibraryComponentInspectorFieldDesc{ "resolutionScale", "Picture Quality", "Size of the reflection picture relative to the screen, 0.1 to 1. Lower is faster; 0.5 is a good balance." },
+                LibraryComponentInspectorFieldDesc{ "reflectedLayers", "Shown Layers", "Which layers appear in the reflection." },
+                LibraryComponentInspectorFieldDesc{ "maxDistance", "Reflection Distance", "Objects farther than this many metres from the mirror's point of view are left out." },
+                LibraryComponentInspectorFieldDesc{ "reflectShadows", "Shadows", "Whether the reflection shows shadows. Costs more." },
+                LibraryComponentInspectorFieldDesc{ "enabled", "Enabled", "Whether this mirror is drawn." },
+            },
+        },
+        LibraryComponentInspectorDesc{
             .componentName = "StreamFocus",
             .displayName = "Stream Focus",
             .category = "Scene",

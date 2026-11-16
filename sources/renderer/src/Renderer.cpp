@@ -1,4 +1,6 @@
 #include "kb/render/Renderer.hpp"
+#include "kb/render/post/ScenePostProcessVolumeBlend.hpp"
+#include "engine/scene/ScenePostProcessVolumes.hpp"
 #include "kb/render/scene/LocalReflectionUniforms.hpp"
 #include "kb/render/effects/RenderEffectHost.hpp"
 
@@ -15,6 +17,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAuxFrameComponents.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
+#include "engine/scene/ScenePlanarReflections.hpp"
 #include "engine/scene/ScenePortalVisibility.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/scene/SceneLightProbeAccess.hpp"
@@ -442,6 +445,7 @@ void Renderer::Shutdown() {
     giVoxelGrid_.Shutdown();
     giResolvePass_.Shutdown();
     skyReflection_.Shutdown();
+    localReflectionAtlas_.Shutdown();
     skyBackdropPass_.Shutdown();
     lightProbes_.Shutdown();
     if (deferredLightingPass_ != nullptr) {
@@ -503,6 +507,7 @@ void Renderer::EndFrame() {
     lastCompletedFrame_ = context_->EndFrame();
     if (deferredLightingPass_ != nullptr) deferredLightingPass_->EndFrame();
     skyReflection_.EndFrame();
+    localReflectionAtlas_.EndFrame();
     if (screenCapture_ != nullptr) {
         screenCapture_->Poll(
             static_cast<std::uint32_t>(lastCompletedFrame_));
@@ -699,7 +704,8 @@ bool Renderer::SubmitScenes(std::span<const SceneFrameSubmission> submissions) {
                 static_cast<void>(component);
                 *static_cast<bool*>(raw) = true;
             }, &hasAuxFrame);
-            if (!hasAuxFrame && !auxFrameRenderer_->HasSceneOutputs(submission.scene->Id())) {
+            if (!hasAuxFrame && !auxFrameRenderer_->HasSceneOutputs(submission.scene->Id()) &&
+                !kb::scene::SceneHasPlanarReflections(*submission.scene)) {
                 continue;
             }
             renderSceneSynchronizer_->Sync(*submission.scene, RenderSceneFor(*submission.scene));
@@ -743,6 +749,18 @@ bool Renderer::SubmitScenes(std::span<const SceneFrameSubmission> submissions) {
             const std::size_t consumed = auxSubmissions.size() - previousCount;
             if (consumed > 0U) {
                 availableViewportIndices.erase(availableViewportIndices.begin(), availableViewportIndices.begin() + static_cast<std::ptrdiff_t>(consumed));
+            }
+        }
+        // Planar mirrors: a pass for each view of these scenes that has a mirror in sight (none for a scene without one).
+        const std::size_t viewCount = expandedSubmissions.size();
+        for (std::size_t index = 0U; index < viewCount; ++index) {
+            const SceneFrameSubmission& view = expandedSubmissions[index];
+            if (std::find(auxScenes.begin(), auxScenes.end(), view.scene) == auxScenes.end()) {
+                continue;
+            }
+            if (auxFrameRenderer_->CollectPlanarReflection(*view.scene, RenderSceneFor(*view.scene), view.desc, availableViewportIndices,
+                    static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL, *sceneRenderer_, auxSubmissions)) {
+                availableViewportIndices.erase(availableViewportIndices.begin());
             }
         }
         expandedSubmissions.reserve(expandedSubmissions.size() + auxSubmissions.size());
@@ -953,7 +971,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
 
     // Resolve authored configuration before submitting any draw for this viewport.
     std::uint64_t unavailableProfileAssetId = 0U;
-    const std::optional<ScenePostProcessSettings> resolvedPostProcessSettings =
+    std::optional<ScenePostProcessSettings> resolvedPostProcessSettings =
         desc.postProcessSettings.has_value() ? desc.postProcessSettings :
             ResolveScenePostProcessProfile(scene, unavailableProfileAssetId);
     if (unavailableProfileAssetId != 0U) {
@@ -1167,6 +1185,40 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
     if (screenUIRenderer_ != nullptr) {
         ScreenUIRenderer::MarkTextureReferences(scene.Id(), screenUIFrame, frameReferences_);
     }
+    const std::optional<SceneRenderCamera> primaryCamera = desc.cameraOverride.has_value() ? std::optional<SceneRenderCamera>{} : renderScene.BuildPrimaryCamera(width, height, desc.target.viewport.id.value);
+    const SceneRenderCamera* overlayCamera = desc.cameraOverride.has_value()
+        ? &(*desc.cameraOverride)
+        : (primaryCamera.has_value() ? &(*primaryCamera) : nullptr);
+    // Post-process volumes the camera is in or near blend over the profile in effect; a scene without any costs
+    // nothing here, and one the camera is clear of leaves the settings untouched.
+    if (overlayCamera != nullptr && scene.Runtime().IsPlaying() && kb::scene::SceneHasPostProcessVolumes(scene)) {
+        const kb::math::Vec3 eye = MeshPipelineVisibility::PortalCamera(*overlayCamera).position;
+        const kb::math::DVec3 origin = renderScene.RenderOrigin();
+        kb::assets::AssetManager& assetManager = const_cast<kb::scene::Scene&>(scene).Assets().Manager();
+        std::uint64_t unavailableVolumeProfileAssetId = 0U;
+        const std::optional<ScenePostProcessSettings> blended = ResolveScenePostProcessVolumes(
+            scene, kb::math::DVec3{ origin.x + eye.x, origin.y + eye.y, origin.z + eye.z },
+            resolvedPostProcessSettings.has_value() ? *resolvedPostProcessSettings : defaultPostProcessSettings_,
+            [&assetManager](std::uint64_t profileAssetId) -> std::optional<ScenePostProcessSettings> {
+                const kb::assets::AssetHandle<ScenePostProcessSettings> handle =
+                    assetManager.Load<ScenePostProcessSettings>(kb::assets::AssetId{ profileAssetId });
+                if (!handle.IsLoaded()) return std::nullopt;
+                return *handle;
+            },
+            unavailableVolumeProfileAssetId);
+        if (unavailableVolumeProfileAssetId != 0U) {
+            lastSceneDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
+                .severity = SceneRenderDiagnosticSeverity::Error,
+                .kind = SceneRenderDiagnosticKind::PostProcessProfileUnavailable,
+                .postProcessProfileAssetId = unavailableVolumeProfileAssetId,
+            });
+            return false;
+        }
+        if (blended.has_value()) {
+            resolvedPostProcessSettings = blended;
+            lastResolvedPostProcessSettings_ = blended;
+        }
+    }
     SceneRenderLightingConfig effectiveLightingConfig = ApplyAmbientRadiance(
         RendererSceneLightingConfigResolver::Resolve(desc.lightingConfig, defaultSceneLightingConfig_), renderScene.AmbientRadiance());
     if (effectiveLightingConfig.ibl.reflectionProbeCount + renderScene.LocalReflectionProbes().size() > kMaxSampledLocalReflectionProbes) {
@@ -1195,6 +1247,14 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
     effectiveLightingConfig.fogBaseHeight -= static_cast<float>(renderScene.RenderOrigin().y);
     if (!desc.shadowPassEnabled) {
         effectiveLightingConfig.shadowsEnabled = false;
+    }
+    if (desc.reducedMirrorPass) {
+        // The picture of a planar mirror leaves out what needs passes of its own.
+        effectiveLightingConfig.ambientOcclusionEnabled = false;
+        effectiveLightingConfig.screenSpaceReflectionsEnabled = false;
+        effectiveLightingConfig.globalIllumination = SceneRenderGlobalIlluminationMode::Disabled;
+        effectiveLightingConfig.volumetricLightingEnabled = false;
+        effectiveLightingConfig.volumetricFogEnabled = false;
     }
     const std::optional<SceneRenderWorldBackdrop>& worldBackdrop = renderScene.WorldBackdrop();
     if (worldBackdrop.has_value() &&
@@ -1380,6 +1440,8 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
             .instanceCount = effectiveLightingConfig.ibl.reflectionProbeCount});
         return false;
     }
+    localReflectionAtlas_.Update(effectiveLightingConfig.ibl);
+    localReflectionAtlas_.Apply(effectiveLightingConfig.ibl);
     if (worldBackdrop.has_value() &&
         worldBackdrop->mode == SceneRenderWorldBackdropMode::EnvironmentMap &&
         worldBackdrop->environmentAssetId != 0U) {
@@ -1412,6 +1474,11 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
         }
         lightProbes_.Update(std::move(grid));
         lightProbes_.Apply(effectiveLightingConfig, renderScene.RenderOrigin());
+    }
+    // The picture of the Planar Reflection this view has in sight; a mirror pass has none of its own.
+    if (!desc.reducedMirrorPass && auxFrameRenderer_ != nullptr) {
+        effectiveLightingConfig.ibl.planar = auxFrameRenderer_->PlanarReflectionFor(
+            scene.Id(), desc.target.viewport.id.value, renderScene.RenderOrigin(), sceneRenderer_->Resources());
     }
     if (deferredLighting) {
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Configure GBuffer clear begin");
@@ -1464,10 +1531,6 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
     }
 
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport camera resolve begin");
-    const std::optional<SceneRenderCamera> primaryCamera = desc.cameraOverride.has_value() ? std::optional<SceneRenderCamera>{} : renderScene.BuildPrimaryCamera(width, height, desc.target.viewport.id.value);
-    const SceneRenderCamera* overlayCamera = desc.cameraOverride.has_value()
-        ? &(*desc.cameraOverride)
-        : (primaryCamera.has_value() ? &(*primaryCamera) : nullptr);
     // A playing scene with visibility cells culls what this camera cannot see through the portals; the
     // mesh passes and the visibility feedback below read it from the render scene.
     if (overlayCamera != nullptr && scene.Runtime().IsPlaying() && kb::scene::SceneHasVisibilityCells(scene)) {

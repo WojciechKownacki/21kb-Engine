@@ -1,6 +1,17 @@
 #include "RendererTestSupport.hpp"
 
 #include "kb/render/post/SceneExposureMeter.hpp"
+#include "kb/render/post/ScenePostProcessVolumeBlend.hpp"
+#include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
+#include "engine/scene/PostProcessVolumeComponent.hpp"
+#include "engine/scene/RegionShapeComponent.hpp"
+#include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneObject.hpp"
+#include "engine/scene/ScenePostProcessVolumes.hpp"
+#include "engine/scene/SceneRegionShapeComponents.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 #include "renderer/RendererExposureSubmitter.hpp"
 #include "renderer/RendererFinalCompositeSubmitter.hpp"
 
@@ -8,7 +19,11 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <numeric>
+#include <sstream>
+#include <string>
+#include <vector>
 
 namespace kb::render::tests {
 namespace {
@@ -270,6 +285,131 @@ void ImageEffectsFollowTheProfile() {
         "Chromatic aberration and film grain settings must clamp to their ranges");
 }
 
+// Every field of a profile moved off its default, so a blend that forgets a field shows.
+[[nodiscard]] ScenePostProcessSettings AllFieldsChanged() {
+    ScenePostProcessSettings s;
+    s.bloomEnabled = false; s.bloomStrength = 0.45F; s.bloomThreshold = 2.0F; s.bloomSoftKnee = 0.9F; s.bloomRadiusPixels = 3.5F;
+    s.depthOfFieldEnabled = true; s.depthOfFieldFocusDistance = 20.0F; s.depthOfFieldFocusRange = 9.0F; s.depthOfFieldMaxRadiusPixels = 12.0F;
+    s.temporalAntiAliasingEnabled = false; s.temporalJitterEnabled = false; s.temporalHistoryBlend = 0.5F; s.fxaaEnabled = true;
+    s.tonemapEnabled = false; s.autoExposureMetering = ScenePostProcessSettings::AutoExposureMeteringMode::Manual;
+    s.outputTransform.exposureStops = 1.5F; s.outputTransform.gamma = 2.0F; s.outputTransform.tonemap = FullscreenTextureTonemapOperator::AgxApprox;
+    s.outputTransform.colorGradingLutStrength = 0.5F;
+    s.outputTransform.autoExposure.enabled = false; s.outputTransform.autoExposure.meteredAverageLuminance = 0.3F;
+    s.outputTransform.autoExposure.middleGray = 0.25F; s.outputTransform.autoExposure.minExposureStops = -4.0F;
+    s.outputTransform.autoExposure.maxExposureStops = 4.0F; s.outputTransform.autoExposure.biasStops = 1.0F;
+    s.outputTransform.autoExposure.temporalAdaptationEnabled = false; s.outputTransform.autoExposure.brightAdaptationRate = 2.0F;
+    s.outputTransform.autoExposure.darkAdaptationRate = 0.5F;
+    s.vignetteEnabled = true; s.vignetteIntensity = 0.6F;
+    s.chromaticAberrationEnabled = true; s.chromaticAberrationIntensity = 0.7F;
+    s.filmGrainEnabled = true; s.filmGrainIntensity = 0.8F; s.filmGrainSize = 3.0F;
+    s.ambientOcclusionEnabled = true; s.ambientOcclusionIntensity = 2.0F; s.ambientOcclusionRadius = 1.2F;
+    s.screenSpaceReflectionsEnabled = true; s.screenSpaceReflectionsIntensity = 0.4F; s.screenSpaceReflectionsMaxDistance = 50.0F;
+    s.motionBlurEnabled = true; s.motionBlurIntensity = 0.9F; s.motionBlurSamples = 16U;
+    s.globalIllumination = ScenePostProcessSettings::GlobalIlluminationMethod::Voxel; s.globalIlluminationIntensity = 2.0F;
+    s.fogProfile = SceneFogProfile::Mobile; s.fogEnabled = true; s.fogDensity = 0.1F; s.fogHeightFalloff = 0.5F; s.fogBaseHeight = 5.0F;
+    s.fogColorR = 0.1F; s.fogColorG = 0.2F; s.fogColorB = 0.3F; s.volumetricFogEnabled = true; s.fogAnisotropy = 0.7F;
+    return s;
+}
+
+[[nodiscard]] std::vector<std::string> ProfileLines(const ScenePostProcessSettings& settings) {
+    std::vector<std::string> lines;
+    std::istringstream stream{ PostProcessProfileAssetLoader::Describe(settings) };
+    for (std::string line; std::getline(stream, line);) lines.push_back(line);
+    return lines;
+}
+
+void PostProcessVolumesBlendByPlaceAndPriority() {
+    const ScenePostProcessSettings base;
+    const ScenePostProcessSettings look = AllFieldsChanged();
+    const std::vector<std::string> baseLines = ProfileLines(base);
+    const std::vector<std::string> lookLines = ProfileLines(look);
+    Require(baseLines.size() == lookLines.size(), "A profile lists the same fields whatever their values");
+    for (std::size_t line = 0U; line < baseLines.size(); ++line) {
+        Require(baseLines[line] != lookLines[line], ("The blend test profile must change every field: " + baseLines[line]).c_str());
+    }
+    // The blend is exact at both ends, field for field.
+    Require(ProfileLines(BlendScenePostProcessSettings(base, look, 0.0F)) == baseLines, "A weight of 0 must leave every field at the base");
+    Require(ProfileLines(BlendScenePostProcessSettings(base, look, 1.0F)) == lookLines, "A weight of 1 must give every field the layer's value");
+    const ScenePostProcessSettings halfway = BlendScenePostProcessSettings(base, look, 0.5F);
+    Require(NearlyEqual(halfway.bloomStrength, 0.25F) && NearlyEqual(halfway.chromaticAberrationIntensity, 0.45F) &&
+            NearlyEqual(halfway.filmGrainIntensity, 0.55F) && NearlyEqual(halfway.filmGrainSize, 2.0F) && halfway.motionBlurSamples == 12U,
+        "Numbers, the chromatic aberration and the film grain among them, must meet halfway at a weight of one half");
+    Require(!halfway.vignetteEnabled && !halfway.fxaaEnabled && halfway.outputTransform.tonemap == base.outputTransform.tonemap,
+        "Switches and choices must stay with the base until the weight passes one half");
+    const ScenePostProcessSettings past = BlendScenePostProcessSettings(base, look, 0.51F);
+    Require(past.vignetteEnabled && past.fxaaEnabled && past.outputTransform.tonemap == FullscreenTextureTonemapOperator::AgxApprox &&
+            past.globalIllumination == ScenePostProcessSettings::GlobalIlluminationMethod::Voxel && past.fogProfile == SceneFogProfile::Mobile,
+        "Switches and choices must take the layer's value once the weight passes one half");
+
+    kb::scene::Scene empty;
+    Require(!kb::scene::SceneHasPostProcessVolumes(empty), "A scene without volumes must report none");
+
+    kb::scene::Scene scene;
+    const auto addVolume = [&scene](float size, kb::scene::PostProcessVolumeComponent volume) {
+        const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Volume" });
+        scene.Components().RegionShapes().Set(object.Entity(),
+            kb::scene::RegionShapeComponent{ .kind = kb::scene::RegionShapeKind::Box, .size = { size, size, size } });
+        scene.Components().PostProcessVolumes().Set(object.Entity(), volume);
+        return object.Entity();
+    };
+    ScenePostProcessSettings other = base;
+    other.bloomStrength = 0.85F;
+    other.vignetteEnabled = true;
+    other.vignetteIntensity = 0.9F;
+    std::map<std::uint64_t, ScenePostProcessSettings> profiles{ { 1U, look }, { 2U, other } };
+    const ScenePostProcessProfileLoader load = [&profiles](std::uint64_t id) -> std::optional<ScenePostProcessSettings> {
+        const auto found = profiles.find(id);
+        if (found == profiles.end()) return std::nullopt;
+        return found->second;
+    };
+    static_cast<void>(addVolume(10.0F, { .profileAssetId = 1U, .priority = 0, .weight = 1.0F, .blendDistance = 10.0F }));
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    Require(kb::scene::SceneHasPostProcessVolumes(scene), "A scene with a volume must report it");
+    std::uint64_t unavailable = 0U;
+    const auto resolveAt = [&](double x) { return ResolveScenePostProcessVolumes(scene, kb::math::DVec3{ x, 0.0, 0.0 }, base, load, unavailable); };
+
+    // (a) Outside the volume and its blend zone nothing changes: the caller keeps the global settings untouched.
+    Require(!resolveAt(100.0).has_value() && !resolveAt(15.5).has_value(), "Outside the blend zone no volume may apply");
+    // (b) Fully inside, the volume's values.
+    const std::optional<ScenePostProcessSettings> inside = resolveAt(0.0);
+    Require(inside.has_value() && ProfileLines(*inside) == lookLines, "Inside the volume every field must take the volume's value");
+    const std::optional<ScenePostProcessSettings> onEdge = resolveAt(5.0);
+    Require(onEdge.has_value() && ProfileLines(*onEdge) == lookLines, "On the edge of the volume the weight is still full");
+    // (c) Halfway through the blend zone, the midpoint.
+    const std::optional<ScenePostProcessSettings> middle = resolveAt(10.0);
+    Require(middle.has_value() && NearlyEqual(middle->bloomStrength, 0.25F) && NearlyEqual(middle->filmGrainIntensity, 0.55F) &&
+            NearlyEqual(middle->chromaticAberrationIntensity, 0.45F) && !middle->vignetteEnabled,
+        "Halfway through the blend zone the numbers must be the midpoint and the switches still the base's");
+    const std::optional<ScenePostProcessSettings> nearEdge = resolveAt(5.5);
+    Require(nearEdge.has_value() && nearEdge->vignetteEnabled && nearEdge->bloomStrength > 0.4F, "Close to the volume the switches must have changed");
+    // (d) Overlapping volumes: the higher priority is applied last, so it wins where both are at full weight.
+    const kb::scene::SceneEntity second = addVolume(4.0F, { .profileAssetId = 2U, .priority = 5, .weight = 1.0F, .blendDistance = 0.0F });
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    const std::optional<ScenePostProcessSettings> both = resolveAt(0.0);
+    Require(both.has_value() && ProfileLines(*both) == ProfileLines(other), "The volume with the higher priority must win where they overlap");
+    kb::scene::PostProcessVolumeComponent lowered = *scene.Components().PostProcessVolumes().TryGet(second);
+    lowered.priority = -5;
+    scene.Components().PostProcessVolumes().Set(second, lowered);
+    const std::optional<ScenePostProcessSettings> reversed = resolveAt(0.0);
+    Require(reversed.has_value() && ProfileLines(*reversed) == lookLines, "Swapping the priorities must swap the winner");
+    lowered.priority = 5;
+    lowered.weight = 0.5F;
+    scene.Components().PostProcessVolumes().Set(second, lowered);
+    const std::optional<ScenePostProcessSettings> mixed = resolveAt(0.0);
+    Require(mixed.has_value() && NearlyEqual(mixed->bloomStrength, 0.65F),
+        "A higher priority volume at half weight must move the result half way from the lower one");
+    // The global case: a volume on an object without a region shape reaches everywhere.
+    kb::scene::Scene everywhere;
+    const kb::scene::SceneObject anywhere = everywhere.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Global" });
+    everywhere.Components().PostProcessVolumes().Set(anywhere.Entity(), kb::scene::PostProcessVolumeComponent{ .profileAssetId = 2U, .weight = 1.0F });
+    const std::optional<ScenePostProcessSettings> distant = ResolveScenePostProcessVolumes(everywhere, kb::math::DVec3{ 1.0e6, -3.0e5, 42.0 }, base, load, unavailable);
+    Require(distant.has_value() && ProfileLines(*distant) == ProfileLines(other), "A volume without a region shape must reach everywhere");
+    // A volume whose profile is missing is reported, not skipped.
+    everywhere.Components().PostProcessVolumes().Set(anywhere.Entity(), kb::scene::PostProcessVolumeComponent{ .profileAssetId = 9U });
+    Require(!ResolveScenePostProcessVolumes(everywhere, kb::math::DVec3{}, base, load, unavailable).has_value() && unavailable == 9U,
+        "A volume whose profile cannot load must be reported");
+}
+
 } // namespace
 
 void RunSceneExposureMeterTests() {
@@ -285,6 +425,7 @@ void RunSceneExposureMeterTests() {
     TonemapOffKeepsExposureAndDisplayEncoding();
     VignetteFollowsTheProfile();
     ImageEffectsFollowTheProfile();
+    PostProcessVolumesBlendByPlaceAndPriority();
 }
 
 } // namespace kb::render::tests

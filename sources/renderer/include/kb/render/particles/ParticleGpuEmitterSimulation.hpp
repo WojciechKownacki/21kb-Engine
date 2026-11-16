@@ -45,6 +45,11 @@ public:
         kb::particles::ParticleGpuEmitterKey key{};
         // Requested buffer bytes, including birth/state/upload/instance and optional sort storage; not physical residency.
         std::uint64_t requestedBufferBytes = 0U;
+        // Ribbon and beam emitters: the strip the strip kernel built this frame (four vertices and six indices per
+        // segment, the vertex layout of ParticleStripVertex padded to four floats per attribute) instead of instances.
+        bgfx::DynamicVertexBufferHandle stripVertices = BGFX_INVALID_HANDLE;
+        bgfx::IndexBufferHandle stripIndices = BGFX_INVALID_HANDLE;
+        std::uint32_t stripSegments = 0U;
     };
 
     // Logical emitter buffer budget; zero uses the engine limit. Fixed until Shutdown.
@@ -82,6 +87,8 @@ public:
         // Resolve the material of a mesh emitter, whose base colour goes into the instance colour.
         const RenderResourceRegistry* resources = nullptr;
         const SceneRenderResourceMap* resourceMap = nullptr;
+        // The camera's right axis (strips are turned across the camera; cameraDepth.xyz is its forward axis).
+        std::array<float, 3> cameraRight{1.0F, 0.0F, 0.0F};
     };
 
     // Rebuilds the instance buffers of the scene emitters; call once per rendered frame.
@@ -140,6 +147,13 @@ private:
         std::uint32_t capacity = 0U;
         // Instances written per slot: 1, or the trail segments.
         std::uint32_t perSlot = 1U;
+        // Ribbon and beam emitters: segments of the strip (the ring slots of a ribbon), its vertices, the fixed indices.
+        std::uint32_t stripSegments = 0U;
+        bgfx::DynamicVertexBufferHandle stripVertices = BGFX_INVALID_HANDLE;
+        bgfx::IndexBufferHandle stripIndices = BGFX_INVALID_HANDLE;
+        // Beam ends in render space.
+        std::array<float, 3> beamStart{};
+        std::array<float, 3> beamEnd{};
         std::uint64_t nextSlot = 0U;
         std::uint32_t pendingBirths = 0U;
         bool initializeSpawns = true;
@@ -168,6 +182,8 @@ private:
     // Creates the sort buffers of an alpha-blended emitter; false when the budget or a kernel is missing.
     [[nodiscard]] bool EnsureSort(Emitter& emitter) noexcept;
     void SortInstances(bgfx::ViewId viewId, const Emitter& emitter, const FrameContext& frame, float simTime) noexcept;
+    // Writes the strip vertices of a ribbon (from the instance records) or a beam (from its ends) in the view.
+    void BuildStrip(bgfx::ViewId viewId, const Emitter& emitter, const FrameContext& frame, float simTime) noexcept;
     // Moves the records of the scene's world-space emitters from the record origin to the render origin.
     void Rebase(bgfx::ViewId viewId, std::uint64_t sceneId, SceneClock& clock) noexcept;
     // Whether the draw order of this emitter's instances matters: alpha-blended billboards, and mesh particles
@@ -201,6 +217,11 @@ private:
     bgfx::ProgramHandle sortKeysProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle sortStepProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle sortGatherProgram_ = BGFX_INVALID_HANDLE;
+    // Strip kernel of ribbon and beam emitters; without it those emitters are rejected (the CPU builds them).
+    bgfx::ProgramHandle stripProgram_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle stripModeUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle stripBeamUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle stripCameraUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle sortCameraUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle sortDepthUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle sortParamsUniform_ = BGFX_INVALID_HANDLE;

@@ -243,6 +243,26 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "sprite2D.wall=" << value.wall << '\n';
         output << "sprite2D.visible=" << value.visible << '\n';
     }
+    output << "postProcessVolume=" << (components.postProcessVolume.has_value() ? 1 : 0) << '\n';
+    if (components.postProcessVolume.has_value()) {
+        const auto& value = *components.postProcessVolume;
+        output << "postProcessVolume.profileAssetId=" << value.profileAssetId << '\n';
+        output << "postProcessVolume.priority=" << value.priority << '\n';
+        output << "postProcessVolume.weight=" << value.weight << '\n';
+        output << "postProcessVolume.blendDistance=" << value.blendDistance << '\n';
+        output << "postProcessVolume.enabled=" << value.enabled << '\n';
+    }
+    output << "planarReflection=" << (components.planarReflection.has_value() ? 1 : 0) << '\n';
+    if (components.planarReflection.has_value()) {
+        const auto& value = *components.planarReflection;
+        output << "planarReflection.width=" << value.width << '\n';
+        output << "planarReflection.depth=" << value.depth << '\n';
+        output << "planarReflection.resolutionScale=" << value.resolutionScale << '\n';
+        output << "planarReflection.reflectedLayers=" << value.reflectedLayers << '\n';
+        output << "planarReflection.maxDistance=" << value.maxDistance << '\n';
+        output << "planarReflection.reflectShadows=" << value.reflectShadows << '\n';
+        output << "planarReflection.enabled=" << value.enabled << '\n';
+    }
     output << "body2D=" << (components.body2D.has_value() ? 1 : 0) << '\n';
     if (components.body2D.has_value()) {
         const auto& value = *components.body2D;

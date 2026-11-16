@@ -34,6 +34,8 @@
 #include "engine/scene/Collider2DComponent.hpp"
 #include "engine/scene/Body2DComponent.hpp"
 #include "engine/scene/Sprite2DComponent.hpp"
+#include "engine/scene/PostProcessVolumeComponent.hpp"
+#include "engine/scene/PlanarReflectionComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
@@ -539,6 +541,27 @@ void RegisterSprite2DReflection(kb::ecs::World& world) {
         KB_ECS_FIELD(Sprite2DComponent, visible, kb::ecs::ComponentFieldType::Bool),
     }));
 }
+void RegisterPostProcessVolumeReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<PostProcessVolumeComponent>("kb.scene.PostProcessVolumeComponent", {
+        KB_ECS_FIELD(PostProcessVolumeComponent, profileAssetId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(PostProcessVolumeComponent, priority, kb::ecs::ComponentFieldType::Int32),
+        KB_ECS_FIELD(PostProcessVolumeComponent, weight, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(PostProcessVolumeComponent, blendDistance, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(PostProcessVolumeComponent, enabled, kb::ecs::ComponentFieldType::Bool),
+    }));
+}
+void RegisterPlanarReflectionReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<PlanarReflectionComponent>("kb.scene.PlanarReflectionComponent", {
+        KB_ECS_FIELD(PlanarReflectionComponent, width, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(PlanarReflectionComponent, depth, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(PlanarReflectionComponent, resolutionScale, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(PlanarReflectionComponent, reflectedLayers, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(PlanarReflectionComponent, maxDistance, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(PlanarReflectionComponent, reflectShadows, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(PlanarReflectionComponent, enabled, kb::ecs::ComponentFieldType::Bool),
+    }));
+}
+
 
 void RegisterBody2DReflection(kb::ecs::World& world) {
     static_cast<void>(world.RegisterComponentReflection<Body2DComponent>("kb.scene.Body2DComponent", {
@@ -703,6 +726,8 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , collider2DComponentId_(RegisterSceneComponent<Collider2DComponent>(world, Collider2DComponent::StableId))
     , body2DComponentId_(RegisterSceneComponent<Body2DComponent>(world, Body2DComponent::StableId))
     , sprite2DComponentId_(RegisterSceneComponent<Sprite2DComponent>(world, Sprite2DComponent::StableId))
+    , postProcessVolumeComponentId_(RegisterSceneComponent<PostProcessVolumeComponent>(world, PostProcessVolumeComponent::StableId))
+    , planarReflectionComponentId_(RegisterSceneComponent<PlanarReflectionComponent>(world, PlanarReflectionComponent::StableId))
     , streamFocusComponentId_(RegisterSceneComponent<StreamFocusComponent>(world, StreamFocusComponent::StableId))
     , worldBackdropComponentId_(RegisterSceneComponent<WorldBackdropComponent>(world, WorldBackdropComponent::StableId))
     , ambientRadianceComponentId_(RegisterSceneComponent<AmbientRadianceComponent>(world, AmbientRadianceComponent::StableId))
@@ -748,6 +773,8 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     RegisterCollider2DReflection(world);
     RegisterBody2DReflection(world);
     RegisterSprite2DReflection(world);
+    RegisterPostProcessVolumeReflection(world);
+    RegisterPlanarReflectionReflection(world);
     RegisterStreamFocusReflection(world);
     RegisterWorldBackdropReflection(world);
     RegisterAmbientRadianceReflection(world);
@@ -827,6 +854,8 @@ std::uint64_t SceneComponentRegistry::CharacterController2DComponentId() const n
 std::uint64_t SceneComponentRegistry::Collider2DComponentId() const noexcept { return collider2DComponentId_; }
 std::uint64_t SceneComponentRegistry::Body2DComponentId() const noexcept { return body2DComponentId_; }
 std::uint64_t SceneComponentRegistry::Sprite2DComponentId() const noexcept { return sprite2DComponentId_; }
+std::uint64_t SceneComponentRegistry::PostProcessVolumeComponentId() const noexcept { return postProcessVolumeComponentId_; }
+std::uint64_t SceneComponentRegistry::PlanarReflectionComponentId() const noexcept { return planarReflectionComponentId_; }
 std::uint64_t SceneComponentRegistry::StreamFocusComponentId() const noexcept { return streamFocusComponentId_; }
 std::uint64_t SceneComponentRegistry::WorldBackdropComponentId() const noexcept { return worldBackdropComponentId_; }
 std::uint64_t SceneComponentRegistry::AmbientRadianceComponentId() const noexcept { return ambientRadianceComponentId_; }

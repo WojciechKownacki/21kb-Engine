@@ -13835,6 +13835,8 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     scene.Components().TilemapRenderers().Set(object.Entity(), kb::scene::TilemapRendererComponent{});
     scene.Components().TilemapColliders().Set(object.Entity(), kb::scene::TilemapColliderComponent{});
     scene.Components().Sprites2D().Set(object.Entity(), kb::scene::Sprite2DComponent{ .imageAssetId = 21U, .cellWidth = 16U });
+    scene.Components().PostProcessVolumes().Set(object.Entity(), kb::scene::PostProcessVolumeComponent{ .profileAssetId = 23U });
+    scene.Components().PlanarReflections().Set(object.Entity(), kb::scene::PlanarReflectionComponent{});
     scene.Components().Bodies2D().Set(object.Entity(), kb::scene::Body2DComponent{});
     scene.Components().Colliders2D().Set(object.Entity(), kb::scene::Collider2DComponent{});
     scene.Components().CharacterControllers2D().Set(object.Entity(), kb::scene::CharacterController2DComponent{});
@@ -13945,6 +13947,10 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
                     validValue = kb::script::ScriptValue{ 0.4F };
                 } else if (componentName == "WorldBackdrop" && property.name == "sunSize") {
                     validValue = kb::script::ScriptValue{ 0.5F }; // the Sun Size range is 0..1
+                } else if (componentName == "PostProcessVolume" && property.name == "weight") {
+                    validValue = kb::script::ScriptValue{ 0.5F }; // the Weight range is 0..1
+                } else if (componentName == "PlanarReflection" && property.name == "resolutionScale") {
+                    validValue = kb::script::ScriptValue{ 0.5F }; // the Resolution Scale range is 0.1..1
                 } else {
                     validValue = kb::script::ScriptValue{ 2.5F };
                 }
@@ -14022,8 +14028,8 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     // NavLink adds eleven fields.
     // WorldBackdrop grew eleven procedural sky fields.
     // Animator (5), DeformedGeometry (8), SocketAttachment (9), Combatant (26) and AIBrain (37) fields: 681 -> 766.
-    // NavBounds adds twelve fields.
-    kb::tests::Require(fieldsChecked == 907U, "Script component API generated accessor coverage test did not exercise the expected total field count (907, including text rendering, themes, audio fields and the compatibility alias)");
+    // NavBounds adds twelve fields, Planar Reflection seven.
+    kb::tests::Require(fieldsChecked == 919U, "Script component API generated accessor coverage test did not exercise the expected total field count (919, including text rendering, themes, audio fields and the compatibility alias)");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -14050,6 +14056,8 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     scene.Components().TilemapRenderers().Set(object.Entity(), kb::scene::TilemapRendererComponent{});
     scene.Components().TilemapColliders().Set(object.Entity(), kb::scene::TilemapColliderComponent{});
     scene.Components().Sprites2D().Set(object.Entity(), kb::scene::Sprite2DComponent{ .imageAssetId = 21U, .cellWidth = 16U });
+    scene.Components().PostProcessVolumes().Set(object.Entity(), kb::scene::PostProcessVolumeComponent{ .profileAssetId = 23U });
+    scene.Components().PlanarReflections().Set(object.Entity(), kb::scene::PlanarReflectionComponent{});
     scene.Components().Bodies2D().Set(object.Entity(), kb::scene::Body2DComponent{});
     scene.Components().Colliders2D().Set(object.Entity(), kb::scene::Collider2DComponent{});
     scene.Components().CharacterControllers2D().Set(object.Entity(), kb::scene::CharacterController2DComponent{});
@@ -14121,7 +14129,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    kb::tests::Require(propertiesChecked == 907U, "LIB-082 raw-pointer audit did not exercise the expected total field count (907, including text rendering, themes, audio fields and the compatibility alias)");
+    kb::tests::Require(propertiesChecked == 919U, "LIB-082 raw-pointer audit did not exercise the expected total field count (919, including text rendering, themes, audio fields and the compatibility alias)");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {

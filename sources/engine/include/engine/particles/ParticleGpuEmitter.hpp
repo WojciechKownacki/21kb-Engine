@@ -97,6 +97,16 @@ struct ParticleGpuEmitterParams {
     std::uint32_t trailSegments = 0U;
     float trailSegmentSeconds = 0.0F;
     float trailWidth = 0.1F;
+    // Ribbon output: the live slots in ring (birth) order form one strip of `ribbonWidth`, built by a compute pass
+    // from the slots' own positions and colours; a dead slot breaks it.
+    float ribbonWidth = 0.1F;
+    // Beam output: a strip of `beamSegments` segments from the beamStart to the beamEnd of the commands (see
+    // ParticleGpuEmitterCommand::hasBeam), pushed across itself by a sine of the scene clock, white times `beamIntensity`.
+    std::uint32_t beamSegments = 0U;
+    float beamWidth = 0.1F;
+    float beamNoiseAmplitude = 0.0F;
+    float beamNoiseFrequency = 1.0F;
+    float beamIntensity = 1.0F;
     // Spin: every slot draws, per axis, an angle in [spinMin, spinMax] (radians) and an angular velocity in
     // [spinRateMin, spinRateMax] (radians per second) from a hash of its slot and birth time; its angle is
     // angle + velocity x age. Equal bounds mean a fixed value. Z turns a billboard about the view axis; a mesh
@@ -147,6 +157,10 @@ struct ParticleGpuEmitterCommand {
     bool hasOrientation = false;
     std::array<float, 4> orientation{ 0.0F, 0.0F, 0.0F, 1.0F };
     std::array<float, 3> origin{ 0.0F, 0.0F, 0.0F };
+    // Beam emitters: the ends of the beam, sent every step, relative to simulationOrigin.
+    bool hasBeam = false;
+    kb::math::Vec3 beamStart{};
+    kb::math::Vec3 beamEnd{};
     // Current emitter origin for world-axis rotation and attraction, relative to simulationOrigin.
     bool hasField = false;
     kb::math::Vec3 fieldOrigin{};

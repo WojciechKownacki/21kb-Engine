@@ -13,6 +13,8 @@ The editor and player submit through the same renderer. Editor panels do not par
 | `SceneGiHistory` | Per-viewport copied lit color and two GI/AO accumulation targets | Extent/format changes recreate targets; owner/camera/effect changes and frame gaps invalidate sampled history |
 | `SceneGiVoxelGrid` | Fixed 64-cubed CPU/GPU occupancy and bounded mesh masks | Scene changes rebuild occupancy; streamed-out meshes are pruned; scene release clears masks; shutdown releases buffers |
 | `SceneSkyReflection` | Capture cube, two prefiltered cubes and temporary face framebuffers | One capture/prefilter step per frame; only a completed mip chain is published; shutdown destroys its handles |
+| `SceneLocalReflectionAtlas` | One RGBA16F atlas texture and its framebuffer: sixteen probe slots, five roughness levels each | A probe's cube map is copied into a free slot once, on the view after the lit views; the slot is sampled from the next frame on; shutdown destroys its handles |
+| `AuxFrameRenderer` mirror pictures | One HDR color target and depth per view that has a Planar Reflection in sight (RGBA8 where the backend cannot filter half floats) | Created on first use and resized with the view; freed when the view has no mirror in sight, stops being submitted or its scene is released; shutdown destroys its handles |
 | bgfx | Backend objects, command queues, synchronization and native graphics API resources | Engine handles enqueue work; backend completion controls when queued work can retire |
 
 No component should destroy a handle owned by another row. Asset identifiers are not bgfx handle indices. Registry payload

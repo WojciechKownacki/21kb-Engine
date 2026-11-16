@@ -50,6 +50,8 @@ struct ScenePrefabOptionalComponentExpectation {
         { registry.Collider2DComponentId(), components.collider2D.has_value() },
         { registry.Body2DComponentId(), components.body2D.has_value() },
         { registry.Sprite2DComponentId(), components.sprite2D.has_value() },
+        { registry.PostProcessVolumeComponentId(), components.postProcessVolume.has_value() },
+        { registry.PlanarReflectionComponentId(), components.planarReflection.has_value() },
         { registry.StreamFocusComponentId(), components.streamFocus.has_value() },
         { registry.WorldBackdropComponentId(), components.worldBackdrop.has_value() },
         { registry.AmbientRadianceComponentId(), components.ambientRadiance.has_value() },

@@ -323,6 +323,7 @@ constexpr std::uint8_t kPreviousSkinningPaletteStage = 14U;
 
 bool SceneMeshPassResources::Initialize() {
     if (!localReflections_.Initialize()) return false;
+    if (!planarReflections_.Initialize()) return false;
     if (IsInitialized()) {
         return true;
     }
@@ -425,6 +426,7 @@ bool SceneMeshPassResources::Initialize() {
 
 void SceneMeshPassResources::Shutdown() {
     localReflections_.Shutdown();
+    planarReflections_.Shutdown();
     lightGrid_.Shutdown();
     if (bgfx::isValid(motionPreviousTimeUniform_)) {
         bgfx::destroy(motionPreviousTimeUniform_);
@@ -726,7 +728,7 @@ bool SceneMeshPassResources::IsInitialized() const noexcept {
         bgfx::isValid(terrainLayerParamsUniform_) &&
         bgfx::isValid(fogParamsUniform_) && bgfx::isValid(fogColorUniform_) &&
         bgfx::isValid(clearcoatSampler_) && bgfx::isValid(clearcoatRoughnessSampler_) &&
-        bgfx::isValid(materialLayersUniform_) && bgfx::isValid(materialSubsurfaceUniform_) && localReflections_.IsInitialized() &&
+        bgfx::isValid(materialLayersUniform_) && bgfx::isValid(materialSubsurfaceUniform_) && localReflections_.IsInitialized() && planarReflections_.IsInitialized() &&
         bgfx::isValid(materialSheenUniform_) && bgfx::isValid(materialOpticsUniform_) &&
         bgfx::isValid(materialAttenuationUniform_) && bgfx::isValid(builtinSceneColorSampler_) && bgfx::isValid(builtinSceneColorParamsUniform_) &&
         bgfx::isValid(materialParamsUniform_) &&
@@ -1489,7 +1491,9 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
     bgfx::setUniform(materialSubsurfaceUniform_, materialBinding.subsurface.data());
     bgfx::setUniform(materialSheenUniform_, materialBinding.sheen.data());
     bgfx::setUniform(materialOpticsUniform_, materialBinding.optics.data());
-    localReflections_.Set(desc.lighting.ibl,fallbackWhiteCubeTexture_,11U,13U);
+    localReflections_.Set(desc.lighting.ibl,11U);
+    if (desc.pass == MeshPassType::BaseOpaque || desc.pass == MeshPassType::BaseTransparent)
+        planarReflections_.Set(desc.lighting.ibl.planar, PlanarReflectionUniforms::kForwardStage);
     bgfx::setUniform(materialAttenuationUniform_, materialBinding.attenuation.data());
     const bool hasSceneColor = bgfx::isValid(desc.sceneColorTexture);
     bgfx::setTexture(10U, builtinSceneColorSampler_, hasSceneColor ? desc.sceneColorTexture : fallbackWhiteTexture_);

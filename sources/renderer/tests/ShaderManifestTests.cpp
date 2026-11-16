@@ -301,7 +301,8 @@ void ShaderManifestFeatureRequirementsAreTargetSelectable() {
     const auto emitterShaders = RequiredPackagedShaderNames(emitterFeature);
     const auto emitterValidation = ValidatePackagedShaderManifestProfile(root, emitterFeature);
     for (const std::string_view name : {"cs_particle_gpu_emit.sc", "cs_particle_gpu_collide.sc", "cs_particle_gpu_rebase.sc",
-             "cs_particle_gpu_sort_keys.sc", "cs_particle_gpu_sort_step.sc", "cs_particle_gpu_sort_gather.sc"}) {
+             "cs_particle_gpu_sort_keys.sc", "cs_particle_gpu_sort_step.sc", "cs_particle_gpu_sort_gather.sc",
+             "cs_particle_gpu_strip.sc"}) {
         Require(std::ranges::find(emitterShaders, name) != emitterShaders.end() && missing(emitterValidation, name),
             "A package can omit a required emitter kernel without failing validation");
     }

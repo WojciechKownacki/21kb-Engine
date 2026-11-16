@@ -23,7 +23,7 @@ enum class MeshPassType : std::uint8_t;
 inline constexpr std::uint32_t kMaxSceneMaterialSlotOverrides = 8U;
 inline constexpr std::uint32_t kMaxSceneForwardLights = 4U;
 inline constexpr std::uint32_t kMaxSceneForwardPlusLights = 32U;
-inline constexpr std::uint32_t kMaxSceneReflectionProbes = 8U;
+inline constexpr std::uint32_t kMaxSceneReflectionProbes = 16U;
 
 // Frame-local renderer input derived from a Visibility Blocker ECS component.
 // It is intentionally not a mesh and can never reach a draw-command path.
@@ -398,10 +398,31 @@ struct SceneRenderReflectionProbe {
     bool parallaxCorrection = false;
     // Optional authored cube texture; the runtime resolves this before submission.
     std::uint64_t radianceAssetId = 0U;
+    // Filled by SceneLocalReflectionAtlas::Apply: where this probe's radiance sits in the shared HDR atlas and
+    // whether that copy is ready to sample.
+    std::uint8_t atlasSlot = 0U;
+    bool atlasReady = false;
 
     [[nodiscard]] bool IsValid() const noexcept {
         return bgfx::isValid(radianceTexture) && intensity > 0.0F && maxMip > 0U;
     }
+};
+
+// A planar mirror as the lighting reads it (AuxFrameRenderer fills it per view): the HDR picture of the scene
+// mirrored in a plane and where the mirror's rectangle is, in render space. Invalid texture: no mirror this frame.
+struct SceneRenderPlanarReflection {
+    bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
+    // View-projection of the mirrored camera (maps a surface point to its place in the picture).
+    std::array<float, 16> viewProjection{};
+    std::array<float, 3> center{};
+    std::array<float, 3> normal{ 0.0F, 1.0F, 0.0F };
+    std::array<float, 3> right{ 1.0F, 0.0F, 0.0F };
+    std::array<float, 3> forward{ 0.0F, 0.0F, 1.0F };
+    float halfWidth = 0.0F;
+    float halfDepth = 0.0F;
+    std::array<std::uint16_t, 2> extent{};
+
+    [[nodiscard]] bool IsValid() const noexcept { return bgfx::isValid(texture) && extent[0] > 0U && extent[1] > 0U; }
 };
 
 struct SceneRenderIblConfig {
@@ -410,6 +431,10 @@ struct SceneRenderIblConfig {
     bgfx::TextureHandle brdfLut = BGFX_INVALID_HANDLE;
     std::array<SceneRenderReflectionProbe, kMaxSceneReflectionProbes> reflectionProbes{};
     std::uint32_t reflectionProbeCount = 0;
+    // The HDR octahedral atlas that holds every local probe (SceneLocalReflectionAtlas); invalid until built.
+    bgfx::TextureHandle reflectionAtlas = BGFX_INVALID_HANDLE;
+    // The planar mirror of this view, if any (set by the renderer, not by the caller).
+    SceneRenderPlanarReflection planar{};
     float diffuseIntensity = 1.0F;
     float specularIntensity = 1.0F;
     std::uint8_t environmentMipCount = 1U;
