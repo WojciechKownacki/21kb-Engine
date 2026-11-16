@@ -41,6 +41,9 @@ struct DisplayConfig {
     float hdrPaperWhiteNits = 200.0F;
     float hdrMaxNits = 1000.0F;
     std::int32_t preferredBgfxRendererType = -1;
+    // A Direct3D 11 device from GraphicsDevicePrewarm. The renderer uses it instead of creating one and takes over the
+    // reference the prewarm handed out, whether initialization succeeds or not.
+    void* preparedGraphicsDevice = nullptr;
     // Writable per-application storage for renderer caches and diagnostics. Empty preserves
     // the desktop host's existing current-directory/temp behavior. Sandboxed hosts such as
     // Android must provide their internal data directory explicitly.

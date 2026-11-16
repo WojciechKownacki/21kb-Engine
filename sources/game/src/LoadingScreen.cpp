@@ -5,6 +5,7 @@
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetRegistry.hpp"
+#include "engine/core/StartupTrace.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -250,6 +251,9 @@ bool LoadingScreen::Draw(kb::render::Renderer& renderer, float progress, bool he
         : sync_.Submit(*scene_, renderer);
     renderer.EndFrame();
     if (submitted) {
+        if (drawn_.empty()) {
+            kb::core::StartupTrace::Record("first_frame_drawn");
+        }
         drawn_.push_back(DrawnFrame{
             .progress = progress,
             .held = held,

@@ -6,6 +6,7 @@
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
 #include "engine/audio/AudioPlayback.hpp"
+#include "engine/core/StartupTrace.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/mods/ModRuntime.hpp"
 #include "engine/project/ParticleProjectPolicy.hpp"
@@ -48,12 +49,14 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <memory>
 #include <ostream>
 #include <span>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -751,6 +754,7 @@ bool LoadGameProjectScene(
         }
         discoveredAssets = scene.Assets().Discover();
     }
+    kb::core::StartupTrace::Record("assets_mounted");
     scene.LoadedContent().ReportLoadProgress(0.3F);
     if (!runtime.physicsLayersAsset.empty() &&
         !kb::scene::PhysicsBackend::LoadAndConfigureLayers(scene, runtime.physicsLayersAsset)) {
@@ -773,8 +777,26 @@ bool LoadGameProjectScene(
             err << "project scene asset was not found: " << runtime.sceneReference << '\n';
             return false;
         }
+        // A large scene takes long to decode. It is read on a background worker so the load keeps reporting, and a
+        // loading screen keeps drawing, while it runs; a read that fails is repeated below to report its error.
+        kb::assets::AssetManager& manager = scene.Assets().Manager();
+        if (manager.RequestLoadAsync(metadata->id)) {
+            constexpr std::chrono::milliseconds kReportInterval{ 16 };
+            auto reported = std::chrono::steady_clock::time_point{};
+            while (manager.AsyncLoadStatus(metadata->id) == kb::assets::AsyncAssetLoadStatus::Pending) {
+                manager.PumpAsyncLoads();
+                const auto now = std::chrono::steady_clock::now();
+                if (now - reported >= kReportInterval) {
+                    reported = now;
+                    scene.LoadedContent().ReportLoadProgress(0.4F);
+                } else {
+                    std::this_thread::sleep_for(std::chrono::milliseconds{ 1 });
+                }
+            }
+        }
         const kb::assets::AssetHandle<kb::scene::SceneDocument> document =
-            scene.Assets().Manager().Load<kb::scene::SceneDocument>(metadata->id);
+            manager.Load<kb::scene::SceneDocument>(metadata->id);
+        kb::core::StartupTrace::Record("scene_document_read");
         // The document is read and decoded; what is left is placing it in the scene.
         scene.LoadedContent().ReportLoadProgress(0.6F);
         if (!document.IsLoaded() ||
@@ -787,6 +809,7 @@ bool LoadGameProjectScene(
             err << '\n';
             return false;
         }
+        kb::core::StartupTrace::Record("scene_placed");
         scene.LoadedContent().ReportLoadProgress(0.9F);
         // Instantiation has transferred the scene data to its runtime owners.
         // Retain the decoded document only while an external handle still needs it,

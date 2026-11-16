@@ -12,6 +12,7 @@ add_library(kb_engine STATIC
     include/engine/core/CrashReport.hpp
     include/engine/core/ExecutionAffinity.hpp
     include/engine/core/ExecutionBudget.hpp
+    include/engine/core/StartupTrace.hpp
     include/engine/script/ScriptExecutionBudget.hpp
     include/engine/core/AllocationBudget.hpp
     include/engine/core/BindingCache.hpp
@@ -384,9 +385,9 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneRenderFeedback.hpp
     include/engine/scene/SceneRuntime.hpp
     include/engine/scene/SceneTagCatalog.hpp
-    include/engine/scene/SceneTasks.hpp
     include/engine/scene/SceneModuleComponentData.hpp
     include/engine/scene/SceneModuleComponents.hpp
+    include/engine/scene/SceneTasks.hpp
     include/engine/scene/SceneTimers.hpp
     include/engine/scene/SceneSystem.hpp
     include/engine/scene/StatelessSceneSystem.hpp
@@ -861,8 +862,8 @@ add_library(kb_engine STATIC
     src/scene/SceneMaterialInstanceService.cpp
     src/scene/AnimationAssetIO.cpp
     src/scene/AnimationChainIk.cpp
-    src/scene/AnimationSpringBones.cpp
     src/scene/AnimationFullBodyIk.cpp
+    src/scene/AnimationSpringBones.cpp
     src/scene/AnimationAssetLoaders.cpp
     src/scene/SkeletonAsset.cpp
     src/scene/SkeletonAssetIO.cpp
@@ -913,8 +914,8 @@ add_library(kb_engine STATIC
     src/project/ParticleProjectPolicy.cpp
     src/scene/SceneModules.cpp
     src/scene/SceneTagCatalog.cpp
-    src/scene/SceneObject.cpp
     src/scene/SceneModuleComponents.cpp
+    src/scene/SceneObject.cpp
     src/scene/SceneRuntime.cpp
     src/scene/SceneRuntimeState.cpp
     src/scene/SceneRenderProxyComponentMask.cpp
@@ -1257,8 +1258,8 @@ add_library(kb_engine STATIC
     src/scene/prefab/io/ScenePrefabAssetVariantWriter.cpp
     src/scene/prefab/io/ScenePrefabAssetWriter.cpp
     src/scene/prefab/ScenePrefabComponentApplier.cpp
-    src/scene/prefab/ScenePrefabComponentComparator.cpp
     src/scene/prefab/ScenePrefabModuleComponentOverrides.cpp
+    src/scene/prefab/ScenePrefabComponentComparator.cpp
     src/scene/prefab/ScenePrefabComponentOverrideReporter.cpp
     src/scene/prefab/ScenePrefabInstantiationService.cpp
     src/scene/prefab/ScenePrefabNameResolver.cpp
@@ -2294,8 +2295,8 @@ if(BUILD_TESTING)
         tests/WorldPartitionTests.cpp
         tests/InputTests.cpp
         tests/EngineModuleTests.cpp
-        tests/EngineLibraryTests.cpp
         tests/ModuleExtensionTests.cpp
+        tests/EngineLibraryTests.cpp
         tests/EngineMathTests.cpp
         tests/StaticLightmapBakerTests.cpp
         tests/SecurityTests.cpp
@@ -2316,20 +2317,20 @@ if(BUILD_TESTING)
     endif()
 
     add_dependencies(kb_engine_tests kb_native_script_test_plugin)
-    target_compile_definitions(kb_engine_tests
     add_library(kb_module_extension_fixture SHARED tests/ModuleExtensionFixture.cpp)
     target_link_libraries(kb_module_extension_fixture PRIVATE kb_engine)
     kb_apply_quality_gates(kb_module_extension_fixture)
     add_dependencies(kb_engine_tests kb_module_extension_fixture)
     set_property(SOURCE tests/ModuleExtensionTests.cpp APPEND PROPERTY COMPILE_DEFINITIONS
         "KB_MODULE_EXTENSION_PLUGIN=\"$<TARGET_FILE:kb_module_extension_fixture>\"")
+    target_compile_definitions(kb_engine_tests
         PRIVATE
             "KB_NATIVE_SCRIPT_TEST_PLUGIN_PATH=\"$<TARGET_FILE:kb_native_script_test_plugin>\""
     )
 
-    add_test(NAME kb_engine_module_abi_current COMMAND $<TARGET_FILE:kb_engine_tests> engine-module)
     add_test(NAME kb_engine_module_extensions COMMAND $<TARGET_FILE:kb_engine_tests> module-extensions)
     set_tests_properties(kb_engine_module_extensions PROPERTIES TIMEOUT 120 LABELS "engine;module")
+    add_test(NAME kb_engine_module_abi_current COMMAND $<TARGET_FILE:kb_engine_tests> engine-module)
     set_tests_properties(kb_engine_module_abi_current PROPERTIES TIMEOUT 60 LABELS "engine;module;abi")
     add_test(NAME kb_engine_lightmap_bake COMMAND $<TARGET_FILE:kb_engine_tests> lightmap-bake)
     set_tests_properties(kb_engine_lightmap_bake PROPERTIES TIMEOUT 120 LABELS "engine;lightmap;bake")

@@ -1,11 +1,14 @@
 #include "kb/render/BgfxContext.hpp"
 
+#include "engine/core/StartupTrace.hpp"
+#include "kb/render/GraphicsDevicePrewarm.hpp"
 #include "kb/render/RenderSurface.hpp"
 
 #include <bimg/bimg.h>
 #include <bx/error.h>
 #include <bx/file.h>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdarg>
@@ -16,6 +19,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 
@@ -25,6 +29,7 @@
 
 #if defined(_WIN32)
 #include <Windows.h>
+#include <unknwn.h>
 #elif defined(__ANDROID__)
 #include <android/log.h>
 #endif
@@ -383,6 +388,93 @@ private:
     std::unordered_map<std::uint64_t, CacheTraceState> cacheTrace_;
 };
 
+#if defined(_WIN32)
+struct GraphicsDevicePrewarm::State {
+    std::atomic<bool> done{ false };
+    void* device = nullptr;
+    std::thread worker;
+};
+#else
+struct GraphicsDevicePrewarm::State {};
+#endif
+
+GraphicsDevicePrewarm::GraphicsDevicePrewarm() = default;
+
+GraphicsDevicePrewarm::~GraphicsDevicePrewarm() {
+    Release(Take());
+}
+
+void GraphicsDevicePrewarm::Start() {
+#if defined(_WIN32)
+    if (state_ != nullptr) {
+        return;
+    }
+    state_ = std::make_unique<State>();
+    State& state = *state_;
+    state.worker = std::thread([&state] {
+        // The feature levels, flags and default adapter the renderer's own device creation uses.
+        using CreateDevice = HRESULT(WINAPI*)(void*, int, HMODULE, UINT, const int*, UINT, UINT, void**, int*, void**);
+        constexpr std::array<int, 4U> levels{ 0xC100, 0xC000, 0xB100, 0xB000 };
+        constexpr int kHardwareDriver = 1;
+        constexpr UINT kSingleThreaded = 0x1U;
+        constexpr UINT kBgraSupport = 0x20U;
+        constexpr UINT kSdkVersion = 7U;
+        kb::core::StartupTrace::Record("device_thread_started");
+        if (const HMODULE library = LoadLibraryW(L"d3d11.dll"); library != nullptr) {
+            kb::core::StartupTrace::Record("device_library_loaded");
+            if (const auto create = reinterpret_cast<CreateDevice>(GetProcAddress(library, "D3D11CreateDevice"));
+                create != nullptr) {
+                void* context = nullptr;
+                int level = 0;
+                if (FAILED(create(nullptr, kHardwareDriver, nullptr, kSingleThreaded | kBgraSupport, levels.data(),
+                        static_cast<UINT>(levels.size()), kSdkVersion, &state.device, &level, &context))) {
+                    state.device = nullptr;
+                }
+                Release(context);
+            }
+        }
+        kb::core::StartupTrace::Record("device_created");
+        state.done.store(true, std::memory_order_release);
+    });
+#endif
+}
+
+bool GraphicsDevicePrewarm::Pending() const noexcept {
+    return state_ != nullptr;
+}
+
+bool GraphicsDevicePrewarm::Ready() const noexcept {
+#if defined(_WIN32)
+    return state_ == nullptr || state_->done.load(std::memory_order_acquire);
+#else
+    return true;
+#endif
+}
+
+void* GraphicsDevicePrewarm::Take() {
+#if defined(_WIN32)
+    if (state_ == nullptr) {
+        return nullptr;
+    }
+    state_->worker.join();
+    void* device = state_->device;
+    state_.reset();
+    return device;
+#else
+    return nullptr;
+#endif
+}
+
+void GraphicsDevicePrewarm::Release(void* device) noexcept {
+#if defined(_WIN32)
+    if (device != nullptr) {
+        static_cast<IUnknown*>(device)->Release();
+    }
+#else
+    static_cast<void>(device);
+#endif
+}
+
 BgfxContext::BgfxContext() = default;
 
 BgfxContext::~BgfxContext() {
@@ -392,10 +484,14 @@ BgfxContext::~BgfxContext() {
 bool BgfxContext::Initialize(RenderSurface& surface, const DisplayConfig& config, bgfx::RendererType::Enum preferredBackend) {
     const bool headlessNoop = config.allowHeadlessNoop && preferredBackend == bgfx::RendererType::Noop;
     if (surface.NativeWindowHandle() == nullptr && !headlessNoop) {
+        GraphicsDevicePrewarm::Release(config.preparedGraphicsDevice);
         return false;
     }
 
-    return InitializeImpl(surface.Width(), surface.Height(), surface.NativeWindowHandle(), surface.NativeDisplayHandle(), config, preferredBackend);
+    const bool initialized = InitializeImpl(surface.Width(), surface.Height(), surface.NativeWindowHandle(), surface.NativeDisplayHandle(), config, preferredBackend);
+    // bgfx holds its own reference to a device it adopted.
+    GraphicsDevicePrewarm::Release(config.preparedGraphicsDevice);
+    return initialized;
 }
 
 bool BgfxContext::InitializeImpl(std::uint32_t width, std::uint32_t height, void* nwh, void* ndt, const DisplayConfig& config, bgfx::RendererType::Enum preferredBackend) {
@@ -417,7 +513,7 @@ bool BgfxContext::InitializeImpl(std::uint32_t width, std::uint32_t height, void
     bgfx::Init init{};
     resetFlags_ = config.ComputeResetFlags();
     init.callback = callback_.get();
-    init.platformData.context = nullptr;
+    init.platformData.context = preferredBackend == bgfx::RendererType::Direct3D11 ? config.preparedGraphicsDevice : nullptr;
     init.platformData.type = bgfx::NativeWindowHandleType::Default;
     init.swapChain.ndt = ndt;
     init.swapChain.nwh = nwh;

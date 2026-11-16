@@ -672,6 +672,27 @@ end
             "kb_game test settings could not be restored");
     }
 
+    // The start report names each step of a launch with the time it finished, in the order they finished.
+    {
+        const std::filesystem::path report = root / "startup.json";
+        const ProcessRun run = RunGame(
+            projectArgument + L"--headless --frames=1 --startup-report=\"" + report.wstring() + L"\"",
+            root / "startup.log");
+        Report("startup report", run);
+        Require(run.exitCode == 0U, "kb_game did not exit successfully with a startup report");
+        const std::string json = ReadTextFile(report);
+        for (const char* step : { "main", "project_read", "window_open", "scene_created", "renderer_ready",
+                 "first_frame_drawn", "scene_loaded", "scene_first_frame" }) {
+            Require(Contains(json, std::string{ "\"step\":\"" } + step + "\""),
+                (std::string{ "the startup report does not name the step " } + step).c_str());
+        }
+        const std::vector<double> milliseconds = ReportedNumbers(json, "ms");
+        Require(milliseconds.size() >= 8U && std::ranges::is_sorted(milliseconds) && milliseconds.front() > 0.0,
+            "the startup report's steps are not in the order they finished");
+        Require(json.find("\"first_frame_drawn\"") < json.find("\"scene_first_frame\""),
+            "the startup report shows the scene before the first frame was drawn");
+    }
+
     // A scene change a script starts goes through the same screen: the script changes scene in its first tick, so the
     // startup load and the change are two runs of the bar from empty to full, both ahead of the first frame of the scene.
     {

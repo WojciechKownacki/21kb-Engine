@@ -9,6 +9,7 @@
 
 #include "engine/input/InputHaptics.hpp"
 #include "engine/core/JsonValue.hpp"
+#include "engine/core/StartupTrace.hpp"
 #include "engine/ecs/SystemSchedulerTrace.hpp"
 #include "engine/input/InputRecording.hpp"
 #include "engine/input/InputSubsystem.hpp"
@@ -29,6 +30,7 @@
 #include "engine/script/ScriptModule.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "kb/render/DisplayConfig.hpp"
+#include "kb/render/GraphicsDevicePrewarm.hpp"
 #include "kb/render/Renderer.hpp"
 #include "kb/render/RendererMemory.hpp"
 #include "kb/render/scene/SceneLightingQuality.hpp"
@@ -51,6 +53,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
@@ -99,6 +102,8 @@ struct GameOptions {
     std::uint32_t screenshotFrame = 0U;
     // Where the run writes the frames the loading screen drew, as JSON.
     std::filesystem::path loadingReportPath;
+    // Where the run writes when each step of its start finished, as JSON.
+    std::filesystem::path startupReportPath;
     // 0 runs until the player closes the window; a positive value bounds the
     // run so an automated check can drive the real executable to completion.
     std::uint32_t frameLimit = 0U;
@@ -125,6 +130,7 @@ Usage: kb_game [options]
   --screenshot-file=<file.png>      write frame --screenshot-frame as PNG (the file must not exist)
   --screenshot-frame=<n>            which frame to capture (within --frames)
   --loading-report=<file.json>      write the progress of every loading screen frame as JSON
+  --startup-report=<file.json>      write when each step of the start finished, in ms from the process start
   --profile-file=<file>             per-frame timings (needs --frames=1..120000)
   --input-replay=<file>             replay recorded input and time (needs --headless --frames)
   --profile-fixed-step              fixed time step while profiling (needs --headless)
@@ -211,7 +217,7 @@ std::ostream& WriteWorldMemoryProfile(std::ostream& output, const kb::world::Wor
 // Switches that load content other than the game's own package, pick a scene
 // the game did not start in, or write files where the command line says. Only
 // a development player accepts them; a shipped game refuses them.
-constexpr std::array<std::wstring_view, 12U> kDevelopmentSwitches{
+constexpr std::array<std::wstring_view, 13U> kDevelopmentSwitches{
     L"--project=",
     L"--scene=",
     L"--profile-fixed-step",
@@ -222,6 +228,7 @@ constexpr std::array<std::wstring_view, 12U> kDevelopmentSwitches{
     L"--screenshot-file=",
     L"--screenshot-frame=",
     L"--loading-report=",
+    L"--startup-report=",
     L"--renderer=",
     L"--input-replay=",
 };
@@ -357,6 +364,12 @@ constexpr std::array<std::wstring_view, 12U> kDevelopmentSwitches{
                 return false;
             }
             options.loadingReportPath = std::filesystem::path{std::wstring{argument.substr(17U)}};
+        } else if (HasPrefix(argument, L"--startup-report=")) {
+            if (argument.size() == 17U) {
+                std::cerr << "kb_game: --startup-report requires a path\n";
+                return false;
+            }
+            options.startupReportPath = std::filesystem::path{std::wstring{argument.substr(17U)}};
         } else if (HasPrefix(argument, L"--renderer=")) {
             const auto value = argument.substr(11U);
             if (value == L"d3d11") options.rendererType = bgfx::RendererType::Direct3D11;
@@ -495,7 +508,79 @@ void WaitUntil(std::chrono::steady_clock::time_point deadline) {
     return root / directory / "Saves";
 }
 
+bool WriteStartupReport(const std::filesystem::path& path) {
+    using kb::core::JsonValue;
+    JsonValue steps = JsonValue::MakeArray();
+    for (const kb::core::StartupTrace::Mark& mark : kb::core::StartupTrace::Marks()) {
+        JsonValue step = JsonValue::MakeObject();
+        step.Set("step", JsonValue::MakeString(mark.step));
+        step.Set("ms", JsonValue::MakeNumber(mark.milliseconds));
+        steps.Append(std::move(step));
+    }
+    JsonValue report = JsonValue::MakeObject();
+    report.Set("startup", std::move(steps));
+    std::ofstream output(path, std::ios::trunc);
+    output << report.Dump() << '\n';
+    return static_cast<bool>(output);
+}
+
+// Libraries that are new to this machine load slowly the first time, because each is checked as it is mapped, and
+// while they load the graphics driver cannot load its own. A set that has loaded here before leaves an empty file
+// named after its identity (the files' paths, sizes and times); no file is named when no library can be found.
+[[nodiscard]] std::filesystem::path LibrariesSeenMarker(const kb::project::ProjectDescriptor& descriptor) {
+    std::uint64_t identity = 14695981039346656037ULL;
+    const auto mix = [&identity](std::uint64_t value) { identity = (identity ^ value) * 1099511628211ULL; };
+    const auto mixTime = [&mix](const FILETIME& time) {
+        mix((static_cast<std::uint64_t>(time.dwHighDateTime) << 32U) | time.dwLowDateTime);
+    };
+    bool found = false;
+    for (const kb::project::ProjectPluginReference& plugin : descriptor.plugins) {
+        WIN32_FILE_ATTRIBUTE_DATA file{};
+        const std::filesystem::path path{ plugin.binaryPath };
+        if (!plugin.enabled || plugin.binaryPath.empty() ||
+            !GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &file)) {
+            continue;
+        }
+        found = true;
+        for (const wchar_t character : path.native()) {
+            mix(character);
+        }
+        mix(file.nFileSizeLow);
+        mixTime(file.ftCreationTime);
+        mixTime(file.ftLastWriteTime);
+    }
+    std::error_code error;
+    const std::filesystem::path directory = std::filesystem::temp_directory_path(error);
+    if (!found || error) {
+        return {};
+    }
+    std::array<char, 17U> name{};
+    std::snprintf(name.data(), name.size(), "%016llx", static_cast<unsigned long long>(identity));
+    return directory / (std::string{ "21kb-libraries-" } + name.data());
+}
+
+// How long ago the operating system created this process, so the time spent loading the executable counts.
+[[nodiscard]] double ProcessAgeMilliseconds() noexcept {
+    FILETIME created{}, exited{}, kernel{}, user{}, now{};
+    GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user);
+    GetSystemTimeAsFileTime(&now);
+    const auto ticks = [](const FILETIME& time) {
+        return (static_cast<std::uint64_t>(time.dwHighDateTime) << 32U) | time.dwLowDateTime;
+    };
+    return static_cast<double>(ticks(now) - ticks(created)) / 10000.0;
+}
+
 int RunGame(const GameOptions& options) {
+    if (!options.startupReportPath.empty()) {
+        kb::core::StartupTrace::Enable(ProcessAgeMilliseconds());
+        kb::core::StartupTrace::Record("main");
+    }
+    // The graphics driver needs a large share of the time to the first frame to make its device, and does it on its
+    // own thread while the project loads.
+    kb::render::GraphicsDevicePrewarm devicePrewarm;
+    if (options.rendererType < 0 || options.rendererType == bgfx::RendererType::Direct3D11) {
+        devicePrewarm.Start();
+    }
     std::optional<kb::net::SceneClientOptions> networkOptions;
     if (!options.networkConfigPath.empty()) {
         std::ifstream input(options.networkConfigPath, std::ios::binary);
@@ -534,6 +619,7 @@ int RunGame(const GameOptions& options) {
             options.projectPath, options.sceneOverride, projectRuntime, std::cerr)) {
         return EXIT_FAILURE;
     }
+    kb::core::StartupTrace::Record("project_read");
 
     // The project's window settings, except where the command line chose the size or the headless mode.
     const kb::project::ProjectDisplaySettings& display = projectRuntime.display;
@@ -557,6 +643,7 @@ int RunGame(const GameOptions& options) {
         std::cerr << "kb_game: game window could not be created\n";
         return EXIT_FAILURE;
     }
+    kb::core::StartupTrace::Record("window_open");
 
     kb::render::DisplayConfig displayConfig{};
     displayConfig.enableEditorRendering = false;
@@ -602,15 +689,29 @@ int RunGame(const GameOptions& options) {
                       << " cannot be named in this system's code page\n";
         }
     }
-    if (!renderer.Initialize(window, &displayConfig)) {
-        std::cerr << "kb_game: renderer initialization failed\n";
+    // The loading screen is the first thing the window shows; the project's scene loads behind it.
+    kb::game::LoadingScreen loadingScreen;
+    if (!loadingScreen.Initialize(projectRuntime, std::cerr)) {
         return EXIT_FAILURE;
     }
-    renderer.SetRenderScale(display.renderScale);
-    // The project is discovered once by LoadGameProjectScene. A rescan from the renderer would cancel the loads that
-    // are in flight behind the loading screen, so the renderer never rescans here.
-    renderer.SetRuntimeAssetDiscoveryEnabled(false);
-    {
+    kb::core::StartupTrace::Record("loading_screen_ready");
+
+    // The renderer starts once its device exists. While a device is still being made the scene is created and loaded
+    // without a screen, and the first load report after the device is ready brings the screen up.
+    bool rendererReady = false;
+    const auto startRenderer = [&]() {
+        displayConfig.preparedGraphicsDevice = devicePrewarm.Take();
+        const bool initialized = renderer.Initialize(window, &displayConfig);
+        displayConfig.preparedGraphicsDevice = nullptr;
+        if (!initialized) {
+            std::cerr << "kb_game: renderer initialization failed\n";
+            return false;
+        }
+        kb::core::StartupTrace::Record("renderer_ready");
+        renderer.SetRenderScale(display.renderScale);
+        // The project is discovered once by LoadGameProjectScene. A rescan from the renderer would cancel the loads
+        // that are in flight behind the loading screen, so the renderer never rescans here.
+        renderer.SetRuntimeAssetDiscoveryEnabled(false);
         auto lighting = renderer.DefaultSceneLightingConfig();
         lighting.lightingPath = kb::render::ProjectLightingPath(projectRuntime.lightingPath, kb::game::kMobileDevice);
         if (options.profileLighting) lighting.lightingPath = *options.profileLighting;
@@ -618,14 +719,18 @@ int RunGame(const GameOptions& options) {
         lighting.maxForwardLights = lighting.lightingPath == kb::render::SceneRenderLightingPath::ClusteredForwardPlus
             ? kb::render::kMaxSceneForwardPlusLights : kb::render::kMaxSceneForwardLights;
         renderer.SetDefaultSceneLightingConfig(lighting);
-    }
-
-    // The loading screen is the first thing the window shows; the project's scene loads behind it.
-    kb::game::LoadingScreen loadingScreen;
-    if (!loadingScreen.Initialize(projectRuntime, std::cerr)) {
+        rendererReady = true;
+        loadingScreen.Report(renderer, 0.0F, nullptr);
+        return true;
+    };
+    // The device and the libraries of a set seen before load side by side; the libraries of a new set wait for the
+    // device and the first frame.
+    const std::filesystem::path librariesMarker = LibrariesSeenMarker(projectRuntime.descriptor);
+    std::error_code markerError;
+    const bool librariesSeen = !librariesMarker.empty() && std::filesystem::exists(librariesMarker, markerError);
+    if ((!devicePrewarm.Pending() || !librariesSeen) && !startRenderer()) {
         return EXIT_FAILURE;
     }
-    loadingScreen.Report(renderer, 0.0F, nullptr);
 
     const std::filesystem::path userStorageRoot = GameUserStorageRoot(projectRuntime);
     kb::script::ScriptModuleOptions scriptOptions;
@@ -633,11 +738,16 @@ int RunGame(const GameOptions& options) {
     scriptOptions.runtimeOptions.disableFailingBehaviours = true;
     scriptOptions.configureHost = &kb::game::ConfigureGameScriptLog;
     auto scriptModuleOwner = std::make_unique<kb::script::ScriptModule>(std::move(scriptOptions));
+    kb::core::StartupTrace::Record("script_module_created");
     kb::script::ScriptModule* scriptModule = scriptModuleOwner.get();
     std::vector<std::unique_ptr<kb::modules::IEngineModule>> staticModules;
     staticModules.push_back(std::move(scriptModuleOwner));
 
     kb::scene::Scene scene{ std::move(projectRuntime.descriptor), std::move(staticModules) };
+    kb::core::StartupTrace::Record("scene_created");
+    if (!librariesMarker.empty() && !librariesSeen) {
+        std::ofstream{ librariesMarker, std::ios::binary };
+    }
     if (!options.headless) {
         std::string accessibilityError;
         if (!kb::scene::SceneAccessibilityWindow::Attach(scene,window.Handle(),accessibilityError)) {
@@ -671,12 +781,18 @@ int RunGame(const GameOptions& options) {
         });
     }
     // The startup load and every later scene change report to the same screen.
-    scene.LoadedContent().SetLoadProgressObserver([&loadingScreen, &renderer, &scene](float fraction) {
-        loadingScreen.Report(renderer, fraction, &scene);
+    scene.LoadedContent().SetLoadProgressObserver([&](float fraction) {
+        if (!rendererReady && (fraction >= 1.0F || devicePrewarm.Ready())) {
+            static_cast<void>(startRenderer());
+        }
+        if (rendererReady) {
+            loadingScreen.Report(renderer, fraction, &scene);
+        }
     });
-    if (!LoadGameProjectScene(projectRuntime, scene, scenePath, discoveredAssets, std::cerr)) {
+    if (!LoadGameProjectScene(projectRuntime, scene, scenePath, discoveredAssets, std::cerr) || !rendererReady) {
         return EXIT_FAILURE;
     }
+    kb::core::StartupTrace::Record("scene_loaded");
     std::unique_ptr<kb::net::SceneClient> network;
     if (networkOptions) {
         network = std::make_unique<kb::net::SceneClient>(scene, std::move(*networkOptions),
@@ -880,6 +996,7 @@ int RunGame(const GameOptions& options) {
         const bool submitted = renderSceneSync.Submit(scene, renderer);
         if (submitted && !loadingFramesBeforeScene.has_value()) {
             loadingFramesBeforeScene = loadingScreen.DrawnFrames().size();
+            kb::core::StartupTrace::Record("scene_first_frame");
         }
         const auto& renderStats = renderer.LastSceneSubmitStats();
         // Meshes and textures still being read in the background are not missing: they are drawn once they arrive.
@@ -1199,6 +1316,10 @@ int RunGame(const GameOptions& options) {
     renderer.ReleaseScene(scene);
     loadingScreen.Release(renderer);
     renderer.Shutdown();
+    if (!options.startupReportPath.empty() && !WriteStartupReport(options.startupReportPath)) {
+        std::cerr << "kb_game: startup report could not be written\n";
+        runtimeClean = false;
+    }
     if (!options.loadingReportPath.empty()) {
         using kb::core::JsonValue;
         JsonValue frames = JsonValue::MakeArray();

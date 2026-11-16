@@ -2,6 +2,7 @@ include("${PROJECT_SOURCE_DIR}/CMake/EnableMsdfgen.cmake")
 add_library(kb_renderer STATIC
     include/kb/render/BgfxContext.hpp
     include/kb/render/DisplayConfig.hpp
+    include/kb/render/GraphicsDevicePrewarm.hpp
     include/kb/render/Renderer.hpp
     include/kb/render/RendererCapabilityReport.hpp
     include/kb/render/RenderSurface.hpp
