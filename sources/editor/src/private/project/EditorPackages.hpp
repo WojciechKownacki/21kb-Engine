@@ -24,6 +24,9 @@ struct EditorPackageRow {
     bool updatable = false;
 };
 
+// What the open project knows about the signature of its registry's index.
+enum class EditorRegistryTrust { Unknown, Unsigned, Signed };
+
 // What the Packages panel shows and does: the packages of the registry and of the open project, and the operations on
 // them (add, update, remove, verify, set the registry), each run in the background by the shared package library.
 // The editor has one (Instance); the project it shows is the open one.
@@ -40,6 +43,9 @@ public:
     [[nodiscard]] const std::vector<EditorPackageRow>& Rows() const noexcept { return rows_; }
     // The registry as packages.json names it; empty when none is set.
     [[nodiscard]] const std::string& Registry() const noexcept { return registry_; }
+    // Signed: the index carries a valid signature by a key packages.json trusts. Unsigned: the project trusts no key, so
+    // the registry is used as it is. Unknown: no registry, or it was refused.
+    [[nodiscard]] EditorRegistryTrust RegistryTrust() const noexcept { return trust_; }
     // What the last operation did, or why it was refused, in plain words.
     [[nodiscard]] const std::string& Message() const noexcept { return message_; }
     [[nodiscard]] bool MessageIsError() const noexcept { return messageIsError_; }
@@ -66,6 +72,7 @@ private:
     struct Outcome {
         std::vector<EditorPackageRow> rows;
         std::string registry;
+        EditorRegistryTrust trust = EditorRegistryTrust::Unknown;
         std::string message;
         bool isError = false;
         std::vector<std::string> problems;
@@ -79,6 +86,7 @@ private:
     std::filesystem::path root_;
     std::vector<EditorPackageRow> rows_;
     std::string registry_;
+    EditorRegistryTrust trust_ = EditorRegistryTrust::Unknown;
     std::string message_;
     bool messageIsError_ = false;
     std::vector<std::string> problems_;

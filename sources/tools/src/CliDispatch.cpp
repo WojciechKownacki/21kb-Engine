@@ -618,7 +618,9 @@ R"(  run          Run a scene headless and report logs, events, and errors (the
                  add --project <dir> [--registry <folder|url>] [--cache <dir>] <name>[@<range>]
                  update --project <dir> [--registry <folder|url>] [--cache <dir>] [<name>]
                  remove --project <dir> <name>
-                 publish --registry <dir> <package folder>
+                 trust --project <dir> [--add <public key>] [--remove <public key>]
+                 publish --registry <dir> [--key <key file>]... <package folder>
+                 sign --registry <dir> --key <key file> [--key <key file>]...
   release      Sign the manifest of a finished release directory, or verify one
                against the trust anchor of the player it ships.
                  sign --key <key file> --dir <dir> --product <id>

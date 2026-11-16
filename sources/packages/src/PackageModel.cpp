@@ -292,6 +292,22 @@ bool ReadProjectPackages(const fs::path& projectRoot, ProjectPackages& out, std:
     if (registry != nullptr) {
         out.registry = registry->AsString();
     }
+    if (const JsonValue* keys = json.Find("trustedKeys"); keys != nullptr) {
+        kb::security::Ed25519PublicKey parsed{};
+        bool valid = keys->GetKind() == JsonValue::Kind::Array;
+        for (std::size_t index = 0U; valid && index < keys->Size(); ++index) {
+            const JsonValue& key = *keys->At(index);
+            valid = key.GetKind() == JsonValue::Kind::String && kb::security::TryParseHex(key.AsString(), parsed);
+            if (valid) {
+                out.trustedKeys.push_back(kb::security::ToHex(parsed));
+            }
+        }
+        if (!valid) {
+            out = {};
+            error = std::string{ kProjectFile } + " cannot be used: \"trustedKeys\" must list public keys of 64 hexadecimal digits";
+            return false;
+        }
+    }
     return true;
 }
 
@@ -299,6 +315,13 @@ bool WriteProjectPackages(const fs::path& projectRoot, const ProjectPackages& va
     JsonValue json = JsonValue::MakeObject();
     if (!value.registry.empty()) {
         json.Set("registry", JsonValue::MakeString(value.registry));
+    }
+    if (!value.trustedKeys.empty()) {
+        JsonValue keys = JsonValue::MakeArray();
+        for (const std::string& key : value.trustedKeys) {
+            keys.Append(JsonValue::MakeString(key));
+        }
+        json.Set("trustedKeys", std::move(keys));
     }
     json.Set("dependencies", DependenciesJson(value.requested));
     return WriteText(projectRoot / std::string{ kProjectFile }, Document(json), error);

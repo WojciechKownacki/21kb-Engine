@@ -127,6 +127,111 @@ void Publish(
 }
 
 
+// A registry publisher's key file and its public key.
+struct TestKey {
+    std::string file;
+    std::string publicKey;
+};
+
+[[nodiscard]] TestKey MakeKey(const fs::path& base, const std::string& name) {
+    const std::string file = (base / "Keys" / (name + ".kbkey")).string();
+    const Run made = RunLine({ "keys", "generate", "--out", file });
+    Require(made.exitCode == 0 && made.out.size() >= 64U, "creating a registry key failed: " + made.out + made.err);
+    return { file, made.out.substr(0U, 64U) };
+}
+
+// A package published into a registry folder, its index signed by the given keys.
+void PublishSigned(const fs::path& registry, const std::string& name, const std::vector<TestKey>& keys) {
+    const fs::path folder = registry.parent_path() / "Sources" / name / "1.0.0";
+    WriteText(folder / "package.json", "{\"name\":\"" + name + "\",\"version\":\"1.0.0\"}");
+    WriteText(folder / "Data" / "item.txt", name);
+    std::vector<std::string> words{ "package", "publish", "--registry", registry.string(), folder.string() };
+    for (const TestKey& key : keys) {
+        words.insert(words.end(), { "--key", key.file });
+    }
+    const Run published = RunLine(words);
+    Require(published.exitCode == 0, "publishing " + name + " failed: " + published.out + published.err);
+}
+
+// Changes one hexadecimal digit of the first sum in an index.
+void FlipSum(const fs::path& index) {
+    std::string text = ReadText(index);
+    const std::size_t sum = text.find('"', text.find(':', text.find("\"sha512\"")) + 1U) + 1U;
+    text[sum] = text[sum] == '0' ? '1' : '0';
+    WriteText(index, text);
+}
+
+// Signed registry indexes: a project that trusts keys uses only an index signed by one of them.
+void RunSignedRegistryTests(const fs::path& base) {
+    const TestKey first = MakeKey(base, "first");
+    const TestKey second = MakeKey(base, "second");
+    const TestKey stranger = MakeKey(base, "stranger");
+    const auto project = [&](const std::string& name, const std::vector<std::string>& trusted) {
+        Require(RunLine({ "new", "--parent", base.string(), "--name", name, "--template", "Empty" }).exitCode == 0, "creating a project failed");
+        const fs::path root = base / name;
+        for (const std::string& key : trusted) {
+            Require(RunLine({ "package", "trust", "--project", root.string(), "--add", key }).exitCode == 0, "package trust failed");
+        }
+        return root;
+    };
+    const auto add = [&](const fs::path& root, const fs::path& registry) {
+        return RunLine({ "package", "add", "--project", root.string(), "--registry", registry.string(), "sig.pkg" });
+    };
+    const auto installed = [](const fs::path& root) { return fs::exists(root / "Assets" / "Packages" / "sig.pkg" / "package.json"); };
+    const auto refused = [&](const fs::path& root, const fs::path& registry, const std::string& reason) {
+        const auto before = Snapshot(root);
+        const Run run = add(root, registry);
+        Require(run.exitCode != 0 && run.err.find(reason) != std::string::npos && Snapshot(root) == before, "the registry must be refused (" + reason + "): " + run.err);
+    };
+
+    // The index is signed by the key of its publisher, and a project that trusts that key installs from it.
+    const fs::path signedRegistry = base / "SignedRegistry";
+    PublishSigned(signedRegistry, "sig.pkg", { first });
+    const fs::path trusting = project("Trusting", { first.publicKey });
+    const Run ok = add(trusting, signedRegistry);
+    Require(ok.exitCode == 0 && installed(trusting), "a project must install from an index signed by a key it trusts: " + ok.out + ok.err);
+    const Run signedInfo = RunLine({ "package", "info", "--project", trusting.string(), "sig.pkg", "--json" });
+    Require(signedInfo.exitCode == 0 && Parse(signedInfo.out).Find("data")->Find("signed")->AsBool(), "info must say the registry is signed: " + signedInfo.out);
+
+    // A byte of the index changed after signing.
+    const fs::path tampered = project("Tampered", { first.publicKey });
+    const std::string intact = ReadText(signedRegistry / "index.json");
+    FlipSum(signedRegistry / "index.json");
+    refused(tampered, signedRegistry, "changed after it was signed");
+    WriteText(signedRegistry / "index.json", intact);
+    Require(add(tampered, signedRegistry).exitCode == 0, "the restored index must verify again");
+
+    // Signed, but by a key the project does not trust.
+    const fs::path foreignRegistry = base / "ForeignRegistry";
+    PublishSigned(foreignRegistry, "sig.pkg", { stranger });
+    refused(project("Foreign", { first.publicKey }), foreignRegistry, "not signed by any key this project trusts");
+
+    // No signature at all: refused when the project has keys, used (and reported as unsigned) when it has none.
+    const fs::path plainRegistry = base / "PlainRegistry";
+    Publish(plainRegistry, "sig.pkg", "1.0.0", {});
+    refused(project("Strict", { first.publicKey }), plainRegistry, "is not signed");
+    const fs::path lenient = project("Lenient", {});
+    Require(add(lenient, plainRegistry).exitCode == 0 && installed(lenient), "a project without keys must use an unsigned registry");
+    const Run plainInfo = RunLine({ "package", "info", "--project", lenient.string(), "sig.pkg", "--json" });
+    Require(plainInfo.exitCode == 0 && !Parse(plainInfo.out).Find("data")->Find("signed")->AsBool() &&
+            RunLine({ "package", "info", "--project", lenient.string(), "sig.pkg" }).out.find("unsigned registry") != std::string::npos,
+        "info must call a registry the project has no keys for unsigned: " + plainInfo.out);
+
+    // Two keys on one index: a project that trusts only the second one installs, so a publisher can change keys.
+    const fs::path pairRegistry = base / "PairRegistry";
+    PublishSigned(pairRegistry, "sig.pkg", { first, second });
+    const fs::path second_only = project("SecondOnly", { second.publicKey });
+    Require(add(second_only, pairRegistry).exitCode == 0 && installed(second_only), "the second of two signing keys must be enough");
+    // sign adds a key to a registry that already has signatures; publishing into it without a key is refused.
+    const Run unkeyed = RunLine({ "package", "publish", "--registry", signedRegistry.string(), (base / "Sources" / "sig.pkg" / "1.0.0").string() });
+    Require(unkeyed.exitCode != 0 && unkeyed.err.find("is signed") != std::string::npos, "publishing without the key into a signed registry must be refused: " + unkeyed.err);
+    Require(RunLine({ "package", "sign", "--registry", signedRegistry.string(), "--key", first.file, "--key", second.file }).exitCode == 0, "package sign failed");
+    const fs::path rotated = project("Rotated", { second.publicKey });
+    Require(add(rotated, signedRegistry).exitCode == 0 && installed(rotated), "a re-signed index must carry both keys");
+    const Run untrusted = RunLine({ "package", "trust", "--project", rotated.string(), "--remove", second.publicKey });
+    Require(untrusted.exitCode == 0 && untrusted.out.find("no registry key is trusted") != std::string::npos, "package trust --remove must drop the key: " + untrusted.out);
+}
+
 #ifdef _WIN32
 // Serves the files of a folder over http on the local machine and counts the requests by path.
 class FileServer {
@@ -291,6 +396,21 @@ void RunRemoteRegistryTests(const fs::path& base) {
     // Plain http to another computer is refused before any request is made.
     const Run insecure = remote(second, { "search", "--registry", "http://example.invalid/index.json" });
     Require(insecure.exitCode != 0 && insecure.err.find("https://") != std::string::npos, "plain http to another host must be refused: " + insecure.err);
+
+    // A served index is checked against the keys of the project through index.json.sig.
+    const TestKey publisher = MakeKey(base, "served");
+    Require(RunLine({ "package", "sign", "--registry", served.string(), "--key", publisher.file }).exitCode == 0 &&
+            RunLine({ "package", "trust", "--project", second.string(), "--add", publisher.publicKey }).exitCode == 0,
+        "signing the served registry failed");
+    const Run servedInfo = remote(second, { "info", "net.pkg", "--json" });
+    Require(servedInfo.exitCode == 0 && Parse(servedInfo.out).Find("data")->Find("signed")->AsBool(), "a served, signed index must verify: " + servedInfo.out + servedInfo.err);
+    FlipSum(served / "index.json");
+    const Run servedTampered = remote(second, { "info", "net.pkg" });
+    Require(servedTampered.exitCode != 0 && servedTampered.err.find("changed after it was signed") != std::string::npos, "a changed served index must be refused: " + servedTampered.err);
+    std::error_code removeError;
+    fs::remove(served / "index.json.sig", removeError);
+    const Run servedUnsigned = remote(second, { "info", "net.pkg" });
+    Require(servedUnsigned.exitCode != 0 && servedUnsigned.err.find("is not signed") != std::string::npos, "a served index without a signature must be refused: " + servedUnsigned.err);
 }
 #endif
 
@@ -454,5 +574,6 @@ void RunPackageCommandTests() {
 #ifdef _WIN32
     RunRemoteRegistryTests(base);
 #endif
+    RunSignedRegistryTests(base);
     fs::remove_all(base, ec);
 }

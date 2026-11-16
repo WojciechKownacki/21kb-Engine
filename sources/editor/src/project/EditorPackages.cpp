@@ -115,6 +115,7 @@ bool EditorPackages::Pump(const std::filesystem::path& projectRoot) {
         root_ = projectRoot;
         rows_.clear();
         registry_.clear();
+        trust_ = EditorRegistryTrust::Unknown;
         message_.clear();
         problems_.clear();
         selected_ = kNone;
@@ -128,6 +129,7 @@ bool EditorPackages::Pump(const std::filesystem::path& projectRoot) {
         const std::string chosen = selected_ < rows_.size() ? rows_[selected_].name : std::string{};
         rows_ = std::move(outcome.rows);
         registry_ = std::move(outcome.registry);
+        trust_ = outcome.trust;
         if (outcome.replacesMessage || !outcome.message.empty()) {
             message_ = std::move(outcome.message);
             messageIsError_ = outcome.isError;
@@ -181,7 +183,7 @@ EditorPackages::Outcome EditorPackages::Run(const std::filesystem::path& project
     std::string registryError;
     const auto openRegistry = [&]() {
         if (!registry.has_value() && !state.config.registry.empty()) {
-            registry = pk::Registry::Open(state.config.registry, pk::RegistryOptions{ .projectRoot = projectRoot }, registryError);
+            registry = pk::Registry::Open(state.config.registry, pk::RegistryOptions{ .projectRoot = projectRoot, .trustedKeys = state.config.trustedKeys }, registryError);
         }
         return registry.has_value();
     };
@@ -237,6 +239,9 @@ EditorPackages::Outcome EditorPackages::Run(const std::filesystem::path& project
     }
     outcome.registry = state.config.registry;
     if (openRegistry() || state.config.registry.empty()) {
+        if (registry.has_value()) {
+            outcome.trust = registry->Signed() ? EditorRegistryTrust::Signed : EditorRegistryTrust::Unsigned;
+        }
         outcome.rows = MakeRows(state, registry.has_value() ? &*registry : nullptr);
     } else {
         outcome.rows = MakeRows(state, nullptr);

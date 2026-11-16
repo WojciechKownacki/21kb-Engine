@@ -4,12 +4,16 @@
 #include "engine/assets/AssetFileName.hpp"
 #include "engine/core/JsonValue.hpp"
 #include "engine/project/ProjectManager.hpp"
+#include "engine/security/Crypto.hpp"
+#include "engine/security/ReleaseKeys.hpp"
 
 #include "kb/packages/Packages.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <system_error>
@@ -91,7 +95,7 @@ struct Session {
     if (option.has_value() && !IsAddress(location)) {
         location = Utf8Text(fs::absolute(kb::assets::Utf8Path(location)));
     }
-    pkg::RegistryOptions options{ .projectRoot = session.root };
+    pkg::RegistryOptions options{ .projectRoot = session.root, .trustedKeys = session.config.trustedKeys };
     if (const std::optional<std::string> cache = arguments.Option("--cache"); cache.has_value()) {
         options.cacheFolder = fs::absolute(kb::assets::Utf8Path(*cache));
     }
@@ -286,6 +290,9 @@ int RunInfo(const ArgumentList& arguments, CommandIo io) {
     const std::uint64_t archiveBytes = registry->Find(spec->name, *chosen)->size;
     const auto installed = session->lock.find(spec->name);
     io.out << Show(spec->name, *chosen) << '\n';
+    if (!registry->Signed()) {
+        io.out << "  unsigned registry (packages.json trusts no key of its publisher; kb_cli package trust adds one)\n";
+    }
     if (!manifest.description.empty()) {
         io.out << "  " << manifest.description << '\n';
     }
@@ -308,6 +315,7 @@ int RunInfo(const ArgumentList& arguments, CommandIo io) {
     data.Set("versions", std::move(all));
     data.Set("dependencies", std::move(needs));
     data.Set("size", JsonValue::MakeNumber(static_cast<double>(archiveBytes)));
+    data.Set("signed", JsonValue::MakeBool(registry->Signed()));
     data.Set("installed", installed != session->lock.end() ? Text(kb::mods::ToString(installed->second.version)) : JsonValue{});
     PublishData(io, std::move(data));
     return 0;
@@ -366,24 +374,114 @@ int RunRemove(const ArgumentList& arguments, CommandIo io) {
     return Finish(*session, pkg::RemovePackage(session->root, arguments.Positionals()[1], state, error), state, error, "21kb.cli.package-remove/v1", io);
 }
 
+// Every --key <release signing key file> (made by kb_cli keys generate).
+[[nodiscard]] bool LoadSigningKeys(const ArgumentList& arguments, std::vector<kb::security::ReleaseSigningKey>& keys, std::string& error) {
+    for (const std::string& path : arguments.Options("--key")) {
+        std::ifstream input{ kb::assets::Utf8Path(path), std::ios::binary };
+        std::string text{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+        keys.emplace_back();
+        const bool decoded = !text.empty() && kb::security::DecodeReleaseSigningKey(text, keys.back(), error);
+        kb::security::SecureWipe(std::span{ reinterpret_cast<std::uint8_t*>(text.data()), text.size() });
+        if (!decoded) {
+            error = "--key " + path + ": " + (error.empty() ? "the key file cannot be read" : error);
+            return false;
+        }
+    }
+    return true;
+}
+
 int RunPublish(const ArgumentList& arguments, CommandIo io) {
     const std::optional<std::string> registry = arguments.Option("--registry");
     if (arguments.Positionals().size() != 2U || !registry.has_value() || IsAddress(*registry)) {
-        return Fail(io, "package publish expects --registry <folder> <package folder> (it writes a registry folder, not an address)");
+        return Fail(io, "package publish expects --registry <folder> <package folder> [--key <key file>]... (it writes a registry folder, not an address)");
     }
     pkg::IndexEntry entry;
+    std::vector<kb::security::ReleaseSigningKey> keys;
     std::string error;
-    if (!pkg::Publish(fs::absolute(kb::assets::Utf8Path(*registry)), fs::absolute(kb::assets::Utf8Path(arguments.Positionals()[1])), entry, error)) {
+    if (!LoadSigningKeys(arguments, keys, error) ||
+        !pkg::Publish(fs::absolute(kb::assets::Utf8Path(*registry)), fs::absolute(kb::assets::Utf8Path(arguments.Positionals()[1])), entry, error, keys)) {
         return Fail(io, error);
     }
     const std::string version = kb::mods::ToString(entry.manifest.version);
-    io.out << "published " << Show(entry.manifest.name, entry.manifest.version) << ": " << entry.archive << ", " << entry.size << " bytes\n";
+    io.out << "published " << Show(entry.manifest.name, entry.manifest.version) << ": " << entry.archive << ", " << entry.size << " bytes" << (keys.empty() ? "" : ", index signed") << '\n';
     JsonValue data = DataObject("21kb.cli.package-publish/v1");
     data.Set("name", Text(entry.manifest.name));
     data.Set("version", Text(version));
     data.Set("archive", Text(entry.archive));
     data.Set("sha512", Text(entry.sha512));
     data.Set("size", JsonValue::MakeNumber(static_cast<double>(entry.size)));
+    data.Set("signed", JsonValue::MakeBool(!keys.empty()));
+    PublishData(io, std::move(data));
+    return 0;
+}
+
+// Signs the index of a registry folder again, for example to add the key of a new publisher key pair.
+int RunSign(const ArgumentList& arguments, CommandIo io) {
+    const std::optional<std::string> registry = arguments.Option("--registry");
+    std::vector<kb::security::ReleaseSigningKey> keys;
+    std::string error;
+    if (arguments.Positionals().size() != 1U || !registry.has_value() || IsAddress(*registry) || arguments.Options("--key").empty()) {
+        return Fail(io, "package sign expects --registry <folder> --key <key file> [--key <key file>]...");
+    }
+    if (!LoadSigningKeys(arguments, keys, error) || !pkg::SignIndex(fs::absolute(kb::assets::Utf8Path(*registry)), keys, error)) {
+        return Fail(io, error);
+    }
+    io.out << "signed the index with " << keys.size() << " key(s)\n";
+    JsonValue published = JsonValue::MakeArray();
+    for (const kb::security::ReleaseSigningKey& key : keys) {
+        published.Append(Text(kb::security::ToHex(key.publicKey)));
+    }
+    JsonValue data = DataObject("21kb.cli.package-sign/v1");
+    data.Set("keys", std::move(published));
+    PublishData(io, std::move(data));
+    return 0;
+}
+
+// The public keys of the registry's publisher the project trusts: shows them, adds (--add) or removes (--remove) some.
+int RunTrust(const ArgumentList& arguments, CommandIo io) {
+    const std::optional<Session> session = OpenSession(arguments, io);
+    if (!session.has_value() || arguments.Positionals().size() != 1U) {
+        return session.has_value() ? Fail(io, "package trust expects [--add <public key>] [--remove <public key>]") : 1;
+    }
+    pkg::ProjectPackages wanted = session->config;
+    const auto parse = [](const std::string& text, std::string& key) {
+        kb::security::Ed25519PublicKey parsed{};
+        if (!kb::security::TryParseHex(text, parsed)) {
+            return false;
+        }
+        key = kb::security::ToHex(parsed);
+        return true;
+    };
+    for (const std::string& text : arguments.Options("--add")) {
+        std::string key;
+        if (!parse(text, key)) {
+            return Fail(io, "--add expects the 64 hexadecimal digits of a public key");
+        }
+        if (std::ranges::find(wanted.trustedKeys, key) == wanted.trustedKeys.end()) {
+            wanted.trustedKeys.push_back(key);
+        }
+    }
+    for (const std::string& text : arguments.Options("--remove")) {
+        std::string key;
+        if (!parse(text, key)) {
+            return Fail(io, "--remove expects the 64 hexadecimal digits of a public key");
+        }
+        std::erase(wanted.trustedKeys, key);
+    }
+    std::string error;
+    if (wanted != session->config && !pkg::WriteProjectPackages(session->root, wanted, error)) {
+        return Fail(io, error);
+    }
+    JsonValue keys = JsonValue::MakeArray();
+    for (const std::string& key : wanted.trustedKeys) {
+        io.out << "trusted registry key " << key << '\n';
+        keys.Append(Text(key));
+    }
+    if (wanted.trustedKeys.empty()) {
+        io.out << "no registry key is trusted: the registry is used unsigned\n";
+    }
+    JsonValue data = DataObject("21kb.cli.package-trust/v1");
+    data.Set("keys", std::move(keys));
     PublishData(io, std::move(data));
     return 0;
 }
@@ -444,7 +542,13 @@ int RunPackageCommand(const ArgumentList& arguments, CommandIo io) {
     if (action == "publish") {
         return RunPublish(arguments, io);
     }
-    return Fail(io, "package expects list, search, info, add, update, remove, verify or publish");
+    if (action == "sign") {
+        return RunSign(arguments, io);
+    }
+    if (action == "trust") {
+        return RunTrust(arguments, io);
+    }
+    return Fail(io, "package expects list, search, info, add, update, remove, verify, publish, sign or trust");
 }
 
 } // namespace kb::cli

@@ -1,11 +1,13 @@
 #pragma once
 
 #include "engine/mods/ModVersion.hpp"
+#include "engine/security/ReleaseKeys.hpp"
 
 #include <cstdint>
 #include <filesystem>
 #include <map>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -25,6 +27,8 @@ inline constexpr std::string_view kProjectFile = "packages.json";
 inline constexpr std::string_view kLockFile = "packages.lock.json";
 inline constexpr std::string_view kIndexFile = "index.json";
 inline constexpr std::string_view kArchiveExtension = ".kbpackage";
+// The signatures of an index: the file beside it with this name added (index.json.sig).
+inline constexpr std::string_view kIndexSignatureSuffix = ".sig";
 // The largest archive, as stored: the HTTP client's own limit.
 inline constexpr std::uint64_t kMaxArchiveBytes = 256U * 1024U * 1024U;
 
@@ -61,6 +65,9 @@ struct RegistryOptions {
     std::filesystem::path projectRoot;
     // Where downloaded archives are kept, by their sum; empty: <projectRoot>/Saved/PackageCache.
     std::filesystem::path cacheFolder;
+    // Public keys (64 hexadecimal digits) the project trusts. When there are any, the index must carry a valid signature
+    // by one of them (index.json.sig), or Open refuses it before a single sum of it is used.
+    std::vector<std::string> trustedKeys;
 };
 
 // The registry: the index of a local folder (or index.json file) or of an http(s) address.
@@ -70,6 +77,8 @@ public:
     [[nodiscard]] static std::optional<Registry> Open(std::string_view location, const RegistryOptions& options, std::string& error);
 
     [[nodiscard]] const std::string& Location() const noexcept { return location_; }
+    // True when the index was checked against a trusted key; false for a registry the project has no keys for.
+    [[nodiscard]] bool Signed() const noexcept { return signed_; }
     [[nodiscard]] std::vector<std::string> Names() const;
     // The versions of a package, lowest first.
     [[nodiscard]] std::vector<kb::mods::ModVersion> Versions(const std::string& name) const;
@@ -87,18 +96,30 @@ private:
     // The index's folder or address, ending in a separator, for the archives it names.
     std::string base_;
     bool remote_ = false;
+    bool signed_ = false;
     RegistryOptions options_;
     std::map<std::string, std::map<kb::mods::ModVersion, IndexEntry>> entries_;
 };
 
 // Builds the archive of a package folder into a local registry folder and adds its entry to the folder's index.json
-// (made when missing). A published version is never replaced.
-[[nodiscard]] bool Publish(const std::filesystem::path& registryFolder, const std::filesystem::path& packageFolder, IndexEntry& published, std::string& error);
+// (made when missing). A published version is never replaced. With `keys` the index is signed by each of them (SignIndex);
+// a registry that has signatures cannot be published into without keys, since the index would no longer match them.
+[[nodiscard]] bool Publish(
+    const std::filesystem::path& registryFolder,
+    const std::filesystem::path& packageFolder,
+    IndexEntry& published,
+    std::string& error,
+    std::span<const kb::security::ReleaseSigningKey> keys = {});
+// Writes index.json.sig beside the registry's index: one Ed25519 signature of its exact bytes by each key. A registry
+// signed with several keys lets a project move from one of them to another.
+[[nodiscard]] bool SignIndex(const std::filesystem::path& registryFolder, std::span<const kb::security::ReleaseSigningKey> keys, std::string& error);
 
 // packages.json: what the project asks for and where it takes it from.
 struct ProjectPackages {
     // A registry folder (relative to the project when not absolute), index file or http(s) address; empty when none is set.
     std::string registry;
+    // Public keys of the registry's publisher (64 lower case hexadecimal digits); see RegistryOptions::trustedKeys.
+    std::vector<std::string> trustedKeys;
     Dependencies requested;
 
     [[nodiscard]] bool operator==(const ProjectPackages&) const = default;

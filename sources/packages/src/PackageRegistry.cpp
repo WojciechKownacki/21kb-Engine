@@ -13,6 +13,7 @@
 #include <cctype>
 #include <cmath>
 #include <fstream>
+#include <span>
 #include <system_error>
 
 namespace kb::packages {
@@ -25,6 +26,9 @@ constexpr std::size_t kMaxRounds = 100U;
 constexpr std::uint64_t kMaxIndexBytes = 32U * 1024U * 1024U;
 constexpr std::uint32_t kIndexTimeoutMilliseconds = 30'000U;
 constexpr std::uint32_t kArchiveTimeoutMilliseconds = 300'000U;
+constexpr std::uint64_t kMaxSignatureBytes = 64U * 1024U;
+// What a signature covers: this line, then the exact bytes of index.json.
+constexpr std::string_view kIndexSignatureContext = "21kb package index v1\n";
 
 struct Need {
     // Who asks: "the project" or "<package> <version>".
@@ -254,6 +258,51 @@ using Entries = std::map<std::string, std::map<ModVersion, IndexEntry>>;
     return Document(index);
 }
 
+[[nodiscard]] std::vector<std::uint8_t> SignedMessage(std::string_view index) {
+    std::vector<std::uint8_t> message(kIndexSignatureContext.begin(), kIndexSignatureContext.end());
+    message.insert(message.end(), index.begin(), index.end());
+    return message;
+}
+
+// Accepts the index when one signature in `signatureText` (absent: the registry has none) is valid for one trusted key.
+[[nodiscard]] bool CheckIndexSignature(
+    std::string_view index, const std::optional<std::string>& signatureText, const std::vector<std::string>& trusted, const std::string& location, std::string& error) {
+    const std::string label = "The package registry " + location;
+    if (!signatureText.has_value()) {
+        error = label + " is not signed (" + std::string{ kIndexFile } + std::string{ kIndexSignatureSuffix } + " is missing), but this project trusts only signed registries (trustedKeys in " +
+            std::string{ kProjectFile } + ").";
+        return false;
+    }
+    JsonValue json;
+    std::string problem;
+    const JsonValue* list = JsonValue::Parse(*signatureText, json, problem) && json.GetKind() == JsonValue::Kind::Object ? json.Find("signatures") : nullptr;
+    if (list == nullptr || list->GetKind() != JsonValue::Kind::Array) {
+        error = label + " has a signature file that cannot be used (it needs a \"signatures\" list).";
+        return false;
+    }
+    const std::vector<std::uint8_t> message = SignedMessage(index);
+    bool trustedKeySeen = false;
+    for (std::size_t at = 0U; at < list->Size(); ++at) {
+        const JsonValue& row = *list->At(at);
+        const JsonValue* key = row.GetKind() == JsonValue::Kind::Object ? row.Find("key") : nullptr;
+        const JsonValue* signature = row.GetKind() == JsonValue::Kind::Object ? row.Find("signature") : nullptr;
+        kb::security::Ed25519PublicKey publicKey{};
+        kb::security::Ed25519Signature value{};
+        if (key == nullptr || signature == nullptr || key->GetKind() != JsonValue::Kind::String || signature->GetKind() != JsonValue::Kind::String ||
+            !kb::security::TryParseHex(key->AsString(), publicKey) || !kb::security::TryParseHex(signature->AsString(), value) ||
+            std::ranges::find(trusted, kb::security::ToHex(publicKey)) == trusted.end()) {
+            continue;
+        }
+        trustedKeySeen = true;
+        if (kb::security::Ed25519Verify(value, publicKey, message)) {
+            return true;
+        }
+    }
+    error = trustedKeySeen ? label + " was changed after it was signed: its signature does not match the index."
+                           : label + " is not signed by any key this project trusts (trustedKeys in " + std::string{ kProjectFile } + ").";
+    return false;
+}
+
 // Removes a folder when it goes out of scope.
 struct ScopedFolder {
     fs::path folder;
@@ -272,7 +321,17 @@ std::optional<Registry> Registry::Open(std::string_view location, const Registry
     if (registry.options_.cacheFolder.empty()) {
         registry.options_.cacheFolder = options.projectRoot / "Saved" / "PackageCache";
     }
+    for (const std::string& key : options.trustedKeys) {
+        kb::security::Ed25519PublicKey parsed{};
+        if (!kb::security::TryParseHex(key, parsed)) {
+            error = "A trusted registry key must be 64 hexadecimal digits: " + key;
+            return std::nullopt;
+        }
+    }
+    const bool mustBeSigned = !options.trustedKeys.empty();
     std::string text;
+    std::optional<std::string> signatureText;
+    std::string ignored;
     if (IsHttp(location)) {
         std::string url{ location };
         if (url.ends_with('/')) {
@@ -283,6 +342,9 @@ std::optional<Registry> Registry::Open(std::string_view location, const Registry
             return std::nullopt;
         }
         text = BytesText(body);
+        if (mustBeSigned && Download(url + std::string{ kIndexSignatureSuffix }, kMaxSignatureBytes, kIndexTimeoutMilliseconds, body, ignored)) {
+            signatureText = BytesText(body);
+        }
         registry.remote_ = true;
         registry.base_ = url.substr(0U, url.find_last_of('/') + 1U);
     } else {
@@ -301,8 +363,19 @@ std::optional<Registry> Registry::Open(std::string_view location, const Registry
         if (!ReadText(path, kMaxIndexBytes, text, error)) {
             return std::nullopt;
         }
+        fs::path signaturePath = path;
+        signaturePath += std::string{ kIndexSignatureSuffix };
+        std::string signature;
+        if (mustBeSigned && fs::is_regular_file(signaturePath, ec) && ReadText(signaturePath, kMaxSignatureBytes, signature, ignored)) {
+            signatureText = std::move(signature);
+        }
         registry.base_ = Utf8Text(path.parent_path()) + '/';
     }
+    // The signature is checked before any sum of the index is read.
+    if (mustBeSigned && !CheckIndexSignature(text, signatureText, options.trustedKeys, registry.location_, error)) {
+        return std::nullopt;
+    }
+    registry.signed_ = mustBeSigned;
     if (!ParseIndex(text, registry.entries_, error)) {
         error = "The package registry index of " + registry.location_ + " cannot be used: " + error;
         return std::nullopt;
@@ -406,7 +479,33 @@ bool Registry::Fetch(const std::string& name, const ModVersion& version, const f
     return true;
 }
 
-bool Publish(const fs::path& registryFolder, const fs::path& packageFolder, IndexEntry& published, std::string& error) {
+bool SignIndex(const fs::path& registryFolder, std::span<const kb::security::ReleaseSigningKey> keys, std::string& error) {
+    if (keys.empty()) {
+        error = "Signing the package index needs at least one key.";
+        return false;
+    }
+    const fs::path indexFile = registryFolder / std::string{ kIndexFile };
+    std::string index;
+    if (!ReadText(indexFile, kMaxIndexBytes, index, error)) {
+        return false;
+    }
+    const std::vector<std::uint8_t> message = SignedMessage(index);
+    JsonValue list = JsonValue::MakeArray();
+    for (const kb::security::ReleaseSigningKey& key : keys) {
+        JsonValue row = JsonValue::MakeObject();
+        row.Set("key", JsonValue::MakeString(kb::security::ToHex(key.publicKey)));
+        row.Set("signature", JsonValue::MakeString(kb::security::ToHex(kb::security::Ed25519Sign(key.secretKey, message))));
+        list.Append(std::move(row));
+    }
+    JsonValue signatures = JsonValue::MakeObject();
+    signatures.Set("signatures", std::move(list));
+    fs::path signatureFile = indexFile;
+    signatureFile += std::string{ kIndexSignatureSuffix };
+    return WriteText(signatureFile, Document(signatures), error);
+}
+
+bool Publish(
+    const fs::path& registryFolder, const fs::path& packageFolder, IndexEntry& published, std::string& error, std::span<const kb::security::ReleaseSigningKey> keys) {
     std::string text;
     IndexEntry entry;
     if (!ReadText(packageFolder / std::string{ kManifestFile }, kMaxManifestBytes, text, error) || !ParseManifest(text, entry.manifest, error)) {
@@ -419,6 +518,12 @@ bool Publish(const fs::path& registryFolder, const fs::path& packageFolder, Inde
     std::error_code ec;
     if (fs::exists(indexFile, ec) && (!ReadText(indexFile, kMaxIndexBytes, text, error) || !ParseIndex(text, entries, error))) {
         error = "The package registry index " + Utf8Text(indexFile) + " cannot be used: " + error;
+        return false;
+    }
+    fs::path signatureFile = indexFile;
+    signatureFile += std::string{ kIndexSignatureSuffix };
+    if (keys.empty() && fs::exists(signatureFile, ec)) {
+        error = "The registry is signed; publish with its key (--key) so the index keeps a valid signature.";
         return false;
     }
     if (entries[entry.manifest.name].contains(entry.manifest.version)) {
@@ -445,7 +550,7 @@ bool Publish(const fs::path& registryFolder, const fs::path& packageFolder, Inde
         }
     }
     entries[entry.manifest.name].emplace(entry.manifest.version, entry);
-    if (!WriteText(indexFile, IndexText(entries), error)) {
+    if (!WriteText(indexFile, IndexText(entries), error) || (!keys.empty() && !SignIndex(registryFolder, keys, error))) {
         return false;
     }
     published = std::move(entry);

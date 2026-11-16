@@ -134,7 +134,10 @@ void PackagesPanel::Paint(HDC dc, const RECT& content, const EditorTheme& theme)
 
     const std::string registry = packages.Registry().empty()
         ? std::string{ EditorText("packages.registryNone", "No package registry set. Choose Registry... and give a folder or an https address.") }
-        : EditorLocalization::Format("packages.registryLine", "Registry: {registry}", { { "registry", packages.Registry() } });
+        : EditorLocalization::Format("packages.registryLine", "Registry: {registry}", { { "registry", packages.Registry() } }) +
+            (packages.RegistryTrust() == EditorRegistryTrust::Signed ? " (" + std::string{ EditorText("packages.registrySigned", "signed") } + ")"
+                    : packages.RegistryTrust() == EditorRegistryTrust::Unsigned ? " (" + std::string{ EditorText("packages.registryUnsigned", "unsigned registry") } + ")"
+                                                                              : std::string{});
     Text(dc, layout.registry, registry, Color(packages.Registry().empty() ? theme.textDisabled : theme.textPrimary), FW_SEMIBOLD);
     for (std::size_t index = 0U; index < kButtonCount; ++index) {
         DrawButton(dc, layout.buttons[index], theme, Label(static_cast<Button>(index)), IsEnabled(packages, static_cast<Button>(index)));

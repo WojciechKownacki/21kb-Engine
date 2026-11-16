@@ -98,6 +98,36 @@ Installing from an address:
   it holds a link or any other entry that is not a plain file or folder, when it has no `package.json`, or unpacks to more than 1 GiB.
   Its `package.json` must also match the entry in the index.
 
+## Signed registries
+
+An index is trusted by its source only as far as https goes. A registry can also sign its index, and a project can say whose
+signature it accepts. The signature is an Ed25519 signature of the exact bytes of `index.json`, made with a release signing key
+(`kb_cli keys generate --out <key file>` makes one and prints its public key; keep the file out of the project).
+
+```
+kb_cli keys generate --out Keys/registry.kbkey                       prints the public key
+kb_cli package publish --registry Registry --key Keys/registry.kbkey Packages/acme.crates
+kb_cli package trust --project P --add <public key>                  packages.json now lists it under "trustedKeys"
+```
+
+`publish --key` writes `index.json.sig` beside the index each time it changes it. Put that file next to `index.json` on the web server.
+
+```json
+{ "signatures": [ { "key": "<public key, 64 hexadecimal digits>", "signature": "<128 hexadecimal digits>" } ] }
+```
+
+* A project with `"trustedKeys"` in `packages.json` uses an index only when `index.json.sig` has a valid signature by one of those
+  keys, and checks it before reading any sum from the index. `search`, `info`, `add` and `update` all do. A missing signature, a
+  signature by other keys, or an index changed after it was signed is refused with a sentence saying which, and the project is
+  not changed.
+* A project without keys uses the registry as before. `info` then says "unsigned registry" (`"signed": false` with `--json`), and
+  the Packages panel shows the same next to the registry. With a valid signature the panel shows "signed".
+* To change keys, sign the index with both: `publish --key old --key new`, or `kb_cli package sign --registry Registry --key old
+  --key new` for an index that is already published. Projects trusting either key keep working; once they trust the new one, publish
+  with only that key. The signature file lists exactly the keys given.
+* A registry that has `index.json.sig` is not published into without `--key`: the old signature would no longer match.
+* `kb_cli package trust --project P` lists the trusted keys; `--add` and `--remove` change them.
+
 ## Commands
 
 All commands take `--project <dir>` (except `publish`) and, with `--json`, return `data` with the result and, for commands that
@@ -111,7 +141,9 @@ kb_cli package update --project P [<name>]
 kb_cli package remove --project P <name>
 kb_cli package list   --project P                   what is installed and why
 kb_cli package verify --project P                   are the installed files as installed
-kb_cli package publish --registry <folder> <package folder>
+kb_cli package publish --registry <folder> [--key <key file>]... <package folder>
+kb_cli package sign   --registry <folder> --key <key file> [--key <key file>]...
+kb_cli package trust  --project P [--add <public key>] [--remove <public key>]
 ```
 
 * **add** picks the newest version that fits, together with everything it needs. Without a range the project asks for
@@ -159,5 +191,4 @@ The panel and `kb_cli package` use the same library, `kb_packages` (`sources/pac
 ## Not yet
 
 * Packages that carry native modules; a package holds content and scripts.
-* Signed registries (the checksum comes from the index, so the index must come from a source you trust, over https).
 * Searching for another combination of versions when the newest ones conflict.

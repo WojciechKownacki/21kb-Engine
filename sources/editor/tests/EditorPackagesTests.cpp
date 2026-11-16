@@ -7,6 +7,8 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <span>
 #include <string>
 #include <system_error>
 #include <thread>
@@ -32,13 +34,18 @@ void WriteFile(const fs::path& path, const std::string& text) {
 }
 
 // A package published into the registry folder with the library the panel uses.
-void Publish(const fs::path& registry, const std::string& name, const std::string& version, const std::string& dependencies) {
+void Publish(
+    const fs::path& registry,
+    const std::string& name,
+    const std::string& version,
+    const std::string& dependencies,
+    std::span<const kb::security::ReleaseSigningKey> keys = {}) {
     const fs::path source = registry.parent_path() / "Sources" / name / version;
     WriteFile(source / "package.json", "{\"name\":\"" + name + "\",\"version\":\"" + version + "\",\"dependencies\":{" + dependencies + "}}");
     WriteFile(source / "Data" / "item.txt", name + " " + version);
     kb::packages::IndexEntry entry;
     std::string error;
-    Check(kb::packages::Publish(registry, source, entry, error), "publishing " + name + " " + version + " failed: " + error);
+    Check(kb::packages::Publish(registry, source, entry, error, keys), "publishing " + name + " " + version + " failed: " + error);
 }
 
 // Pumps the model until its operation has finished.
@@ -145,6 +152,62 @@ void RunEditorPackagesTests() {
     Settle(model, project);
     Check(!model.MessageIsError() && Has(model.Message(), "Removed edit.a 1.1.0, edit.b 1.0.3") && Row(model, "edit.a")->installed.empty() && !fs::exists(project / "Assets" / "Packages"),
         "Remove must take the package and what only it needed: " + model.Message());
+
+    // The signature of the registry's index: the panel says whether it is signed, and a refused index shows no packages.
+    kb::security::ReleaseSigningKey key;
+    Check(kb::security::GenerateReleaseSigningKey(key), "a registry key could not be made");
+    const fs::path signedRegistry = base / "SignedRegistry";
+    Publish(signedRegistry, "sig.a", "1.0.0", "", std::span{ &key, 1U });
+    const auto projectWith = [&](const std::string& name, const fs::path& registryFolder, bool trusting) {
+        const fs::path root = base / name;
+        fs::create_directories(root, error);
+        kb::packages::ProjectPackages config;
+        config.registry = registryFolder.string();
+        if (trusting) {
+            config.trustedKeys.push_back(kb::security::ToHex(key.publicKey));
+        }
+        std::string writeError;
+        Check(kb::packages::WriteProjectPackages(root, config, writeError), writeError);
+        return root;
+    };
+    {
+        EditorPackages signedModel;
+        const fs::path trusting = projectWith("Trusting", signedRegistry, true);
+        Settle(signedModel, trusting);
+        Check(signedModel.RegistryTrust() == kb::editor::EditorRegistryTrust::Signed && Row(signedModel, "sig.a") != nullptr, "a signed registry must be shown as signed");
+        signedModel.Add("sig.a");
+        Settle(signedModel, trusting);
+        Check(!signedModel.MessageIsError() && Row(signedModel, "sig.a")->installed == "1.0.0", "Add from a signed registry must work: " + signedModel.Message());
+
+        EditorPackages plainModel;
+        Settle(plainModel, projectWith("Lenient", registry, false));
+        Check(plainModel.RegistryTrust() == kb::editor::EditorRegistryTrust::Unsigned && !plainModel.Rows().empty(), "a registry without trusted keys must be shown as unsigned");
+
+        EditorPackages strictModel;
+        Settle(strictModel, projectWith("Strict", registry, true));
+        Check(strictModel.RegistryTrust() == kb::editor::EditorRegistryTrust::Unknown && strictModel.MessageIsError() && Has(strictModel.Message(), "not signed") &&
+                strictModel.Rows().empty(),
+            "an unsigned registry must be refused when the project trusts keys: " + strictModel.Message());
+
+        // A changed index is refused and the project is left as it was.
+        const fs::path changed = projectWith("Changed", signedRegistry, true);
+        std::string text;
+        {
+            std::ifstream input(signedRegistry / "index.json", std::ios::binary);
+            text.assign(std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{});
+        }
+        const std::string original = text;
+        text.replace(text.find("sig.a"), 5U, "sig.b");
+        WriteFile(signedRegistry / "index.json", text);
+        EditorPackages changedModel;
+        Settle(changedModel, changed);
+        changedModel.Add("sig.a");
+        Settle(changedModel, changed);
+        Check(changedModel.MessageIsError() && Has(changedModel.Message(), "changed after it was signed") && !fs::exists(changed / "Assets" / "Packages") &&
+                changedModel.RegistryTrust() == kb::editor::EditorRegistryTrust::Unknown,
+            "a changed index must be refused: " + changedModel.Message());
+        WriteFile(signedRegistry / "index.json", original);
+    }
     fs::remove_all(base, error);
 }
 
