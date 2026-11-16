@@ -161,7 +161,8 @@ bool IsUIComponentValid(const UIScrollbar& value) noexcept {
 }
 bool IsUIComponentValid(const UIScrollView& value) noexcept {
     return Finite(value.scrollX) && Finite(value.scrollY) && Finite(value.scrollSensitivity) && value.scrollSensitivity >= 0.0F &&
-        EnumAtMost(value.movementType, UIScrollMovement::Unrestricted) && Finite(value.elasticity) && value.elasticity >= 0.0F;
+        EnumAtMost(value.movementType, UIScrollMovement::Unrestricted) && Finite(value.elasticity) && value.elasticity >= 0.0F &&
+        value.listItemCount <= UIScrollView::MaxListItems && Finite(value.listItemHeight) && value.listItemHeight >= 1.0F;
 }
 bool IsUIComponentValid(const UIInputField& value) noexcept {
     return EnumAtMost(value.contentType, UIInputContentType::Pin) && Utf8Terminated(value.placeholder);

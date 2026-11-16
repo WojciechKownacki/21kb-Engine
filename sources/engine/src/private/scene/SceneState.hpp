@@ -671,6 +671,9 @@ public:
     // likewise only applies at root level); this is an intentional, documented
     // scope limit, not an oversight.
     std::unordered_set<SceneEntity::IdType> persistentEntities;
+    // Entities the engine made while running (the rows of a virtual list, an open dropdown list): scene files, prefab
+    // capture and undo history leave them and what is below them out.
+    std::unordered_set<SceneEntity::IdType> transientEntities;
     // LIB-071: content loaded via Scene.Load (additive or not). Each
     // record names ONE loaded document's own root entity so it can later
     // be selectively Scene.Unload'ed without touching content loaded from
@@ -999,6 +1002,31 @@ public:
         std::uint64_t entity = 0U;
         std::uint32_t position = 0U;
     };
+    // A widget whose value moves another element, the target: a slider or progress bar moves its fill and handle, a
+    // toggle shows or hides its graphic, a dropdown sets the text and image of its caption.
+    enum class UIDriverKind : std::uint8_t { SliderFill, SliderHandle, ProgressFill, ToggleGraphic, CaptionText, CaptionImage };
+    struct UIDriverLink {
+        std::uint64_t target = 0U;
+        std::uint64_t driver = 0U;
+        UIDriverKind kind = UIDriverKind::SliderFill;
+    };
+    // A selectable that shows its state on another element.
+    struct UITintLink {
+        std::uint64_t target = 0U;
+        std::uint64_t selectable = 0U;
+    };
+    // The item a row of a virtualized scroll view stands for.
+    static constexpr std::uint32_t kNoUIItem = 0xFFFFFFFFU;
+    struct UIVirtualRow {
+        std::uint64_t entity = 0U;
+        std::uint32_t item = kNoUIItem;
+    };
+    struct UIVirtualList {
+        std::vector<UIVirtualRow> rows;
+        // Storage the upkeep of the rows reuses, so a scroll that moves no row allocates nothing.
+        std::vector<UIVirtualRow> spare;
+        std::vector<std::uint8_t> held;
+    };
     // A write to a UI component since the frame was laid out, so a layout can visit only what was written.
     struct UIWrite {
         std::uint64_t entity = 0U;
@@ -1036,11 +1064,14 @@ public:
         // Positions of the scroll views in the frame, found while laying out, so their per-frame upkeep does not
         // visit every element.
         std::vector<std::size_t> scrollViews;
-        // Whether a changed element can be laid out again where it stands: no modal canvas, and no widget whose value
-        // drives another widget, which would also have to move.
+        // Whether a changed element can be laid out again where it stands: no element is moved by two widgets at once.
         bool patchable = false;
-        // A selectable tints a widget other than itself, so the tint of one element can sit on another's record.
-        bool crossTargets = false;
+        // The widgets that move other elements, and the selectables that tint other elements, each listed by target and
+        // again by the widget or selectable.
+        std::vector<UIDriverLink> drivers;
+        std::vector<UIDriverLink> widgetDrivers;
+        std::vector<UITintLink> tints;
+        std::vector<UITintLink> selectableTints;
         // What each element was handed by its parent, by traversal order, and where each element sits in the frame.
         std::vector<UIElementContext> contexts;
         bool positionsBuilt = false;
@@ -1055,6 +1086,10 @@ public:
         bool interactionValid = false;
     };
     UILayoutCache uiLayoutCache;
+    // The rows of each virtualized scroll view in the frame, by the view's entity.
+    std::unordered_map<std::uint64_t, UIVirtualList> uiVirtualLists;
+    // Elements laid out since the scene was created.
+    std::uint64_t uiLaidOutElements = 0U;
     std::uint64_t uiWriteRevision = 1U;
     // The writes since the revision `uiWritesBase`, unless there were too many to keep.
     std::vector<UIWrite> uiWrites;

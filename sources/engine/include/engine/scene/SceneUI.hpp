@@ -114,6 +114,8 @@ enum class SceneUIEventType : std::uint8_t {
     DragEnded,
     Dropped,
     LinkActivated,
+    // A virtualized scroll view gave a row an item: `entity` is the view, `other` the row, `value` the item index.
+    ItemBound,
 };
 
 struct SceneUIEventDescriptor {
@@ -259,6 +261,8 @@ class SceneUIQueries {
     [[nodiscard]] SceneEntity Focused() const noexcept;
     [[nodiscard]] bool HasFocusedTextInput() const noexcept;
     [[nodiscard]] std::span<const SceneUIEvent> Events() const noexcept;
+    // How many frame elements the updates have laid out so far: whole frames, and the parts of a frame laid out again.
+    [[nodiscard]] std::uint64_t LaidOutElementCount() const noexcept;
 
   private:
     const Scene& scene_;

@@ -346,6 +346,9 @@ end
   send the named event to another object, for example the script on the menu root.
 - Every widget callback (OnUIHoverEntered, OnUIPressed, OnUIChanged, OnUIDragged, ...) and its `event.args`
   (`entity`, `pointerX`, `pointerY`, `value`, `text`, `action`, `other`): `api_reference` topic `UIEvents`.
+- Long lists: on a Scroll View set `virtualizeList`, `listItemCount` and `listItemHeight`; its first child is the
+  row template, and the view keeps rows only for the items in view. Fill each row in `OnUIItemBound(self, event)`
+  (`event.args.other` is the row, `event.args.value` the item index) on the script of the view.
 - Change widgets from the script: `self:SetProperty("Text", "content", "Score: 3")`, or another
   object with `World.FindByName` and `World.SetPropertyFloat`.
 - `validate` warns about what loads fine but never works: a widget outside a Canvas

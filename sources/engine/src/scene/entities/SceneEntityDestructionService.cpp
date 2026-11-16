@@ -55,6 +55,7 @@ void SceneEntityDestructionService::DestroyEntity(Scene& scene, SceneEntity enti
             ClearSceneRenderProxyComponentMask(state, entity);
             state.inactiveEntities.erase(entity.Id());
             state.persistentEntities.erase(entity.Id());
+            state.transientEntities.erase(entity.Id());
             state.behaviourVariableOverrides.erase(entity.Id());
             state.prefabInstances.ForgetDestroyedObject(entity);
             state.componentStorage.Behaviours().NoteEntityDestroyed(entity);

@@ -98,6 +98,10 @@ public:
     [[nodiscard]] bool IsPersistent(SceneEntity entity) const noexcept;
     void SetPersistent(SceneObject object, bool persistent) noexcept;
     void SetPersistent(SceneEntity entity, bool persistent) noexcept;
+    // An entity the engine makes while it runs, such as the rows of a virtual list or an open dropdown list. It and what
+    // is below it stay out of saved scenes, captured prefabs and undo history.
+    [[nodiscard]] bool IsTransient(SceneEntity entity) const noexcept;
+    void SetTransient(SceneEntity entity, bool transient) noexcept;
     [[nodiscard]] std::size_t Count() const;
 
 private:

@@ -11,6 +11,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneDocument.hpp"
+#include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneLocalization.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/scene/SceneTransforms.hpp"
@@ -1657,6 +1658,12 @@ void TestDropdownListFromTemplate() {
     }
     kb::tests::Require(scene.UI().Focused() == fixture.Item(0U, "Low"), "Opening must focus the chosen item");
     kb::tests::Require(FindNamed(scene, fixture.canvas.Entity(), "Blocker").IsValid(), "Opening must place a blocker under the list");
+    // The list and its blocker are made while the game runs, so a saved scene leaves them out.
+    const kb::scene::SceneDocument openDocument = kb::scene::SceneDocumentService::Capture(scene, "OpenDropdown");
+    kb::tests::Require(scene.Entities().IsTransient(list) &&
+        std::ranges::none_of(openDocument.worldPrefab.Nodes(), [](const kb::scene::ScenePrefabNodeDesc& node) {
+            return node.name == "Dropdown List" || node.name == "Blocker";
+        }), "An open dropdown list and its blocker must stay out of a saved scene");
     const auto* listElement = FindElement(scene.UI().Frame(), list);
     const auto* controlElement = FindElement(scene.UI().Frame(), fixture.dropdown);
     kb::tests::Require(listElement->rect.y >= controlElement->rect.y + controlElement->rect.height - 0.01F,
@@ -2650,6 +2657,9 @@ void TestWidgetSettingsPersistence() {
     authored.scrollView->movementType = kb::scene::UIScrollMovement::Elastic;
     authored.scrollView->elasticity = 0.25F;
     authored.scrollView->snapToChildren = true;
+    authored.scrollView->virtualizeList = true;
+    authored.scrollView->listItemCount = 1234U;
+    authored.scrollView->listItemHeight = 31.5F;
     authored.inputField.emplace();
     authored.inputField->contentType = kb::scene::UIInputContentType::Pin;
     static_cast<void>(kb::scene::SetUIInputPlaceholder(*authored.inputField, "PIN"));
@@ -2680,6 +2690,7 @@ void TestWidgetSettingsPersistence() {
         decoded.toggle->group == 41U && decoded.toggle->allowSwitchOff && decoded.slider->fillRect == 51U && decoded.slider->handleRect == 52U &&
         decoded.scrollView->horizontalScrollbar == 61U && decoded.scrollView->movementType == kb::scene::UIScrollMovement::Elastic &&
         decoded.scrollView->elasticity == 0.25F && decoded.scrollView->snapToChildren &&
+        decoded.scrollView->virtualizeList && decoded.scrollView->listItemCount == 1234U && decoded.scrollView->listItemHeight == 31.5F &&
         decoded.inputField->contentType == kb::scene::UIInputContentType::Pin && kb::scene::UIInputPlaceholder(*decoded.inputField) == "PIN" &&
         decoded.progressBar->direction == kb::scene::UIAxisDirection::TopToBottom && decoded.progressBar->fillRect == 71U,
         "Every v45 widget setting must round-trip");
@@ -2740,6 +2751,20 @@ void TestWidgetSettingsPersistence() {
         kb::tests::Require(kb::scene::SceneAssetUIComponentCodec::Read(legacyReader, 58U, decoded58) &&
             legacyReader.Exhausted() && decoded58.rectTransform->themeAssetId == 0U &&
             decoded58.rectTransform->offsetMax.x == 120.0F, "Version 58 Rect Transform must load without a theme");
+    }
+
+    // A scroll view saved before the list options existed loads with the list off.
+    {
+        kb::scene::UIComponentSet onlyView;
+        onlyView.scrollView.emplace();
+        std::vector<std::uint8_t> oldView;
+        kb::scene::SceneAssetUIComponentCodec::Write(oldView, onlyView);
+        oldView.resize(oldView.size() - sizeof(std::uint8_t) - sizeof(std::uint32_t) - sizeof(float));
+        kb::scene::SceneAssetBinaryIO::ByteReader oldViewReader{oldView};
+        kb::scene::UIComponentSet decoded66;
+        kb::tests::Require(kb::scene::SceneAssetUIComponentCodec::Read(oldViewReader, 66U, decoded66) && oldViewReader.Exhausted() &&
+            decoded66.scrollView && !decoded66.scrollView->virtualizeList && decoded66.scrollView->listItemCount == 0U,
+            "A scroll view saved before virtual lists must load with the list off");
     }
 
     // Text saved before v55 has no plural number; keep the authored translation key.
@@ -3199,6 +3224,270 @@ void TestPatchedLayoutMatchesFullLayout() {
     kb::tests::Require(step("container moved"), "A moved container must be laid out in place with what it holds");
 }
 
+[[nodiscard]] std::size_t SubtreeSize(const kb::scene::Scene& scene, SceneEntity entity) {
+    std::size_t size = 1U;
+    for (std::size_t index = 0U; index < scene.Hierarchy().ChildCount(entity); ++index)
+        size += SubtreeSize(scene, scene.Hierarchy().ChildAt(entity, index));
+    return size;
+}
+
+// A widget whose value moves another element lays out itself and that element, not the frame of ten thousand others,
+// whether or not a modal canvas is shown. After every change the frame must equal one laid out from scratch.
+void RunDrivingWidgetsScenario(bool withModalCanvas) {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
+    for (int index = 0; index < 10000; ++index) {
+        kb::scene::UIComponentSet filler = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Border);
+        filler.rectTransform = Rect(static_cast<float>(index % 100) * 12.0F, 300.0F + static_cast<float>(index / 100) * 12.0F, 10.0F, 10.0F);
+        static_cast<void>(AddUI(scene, canvas, filler));
+    }
+    kb::scene::SceneUIComponents ui = scene.Components().UI();
+    const SceneEntity health = kb::scene::CreateUIHierarchy(scene, kb::scene::UIComponentPreset::ProgressBar, canvas, "Health");
+    const SceneEntity volume = kb::scene::CreateUIHierarchy(scene, kb::scene::UIComponentPreset::Slider, canvas, "Volume");
+    const SceneEntity scroll = kb::scene::CreateUIHierarchy(scene, kb::scene::UIComponentPreset::ScrollView, canvas, "Scroll");
+    ui.Set(scroll, Rect(950.0F, 20.0F, 300.0F, 200.0F));
+    const SceneEntity viewport = scene.Hierarchy().ChildAt(scroll, 0U);
+    const SceneEntity scrollbar{ui.TryGet<kb::scene::UIScrollView>(viewport)->verticalScrollbar};
+
+    kb::scene::UIComponentSet tintTarget = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Border);
+    tintTarget.rectTransform = Rect(500.0F, 20.0F, 60.0F, 30.0F);
+    const kb::scene::SceneObject target = AddUI(scene, canvas, tintTarget);
+    kb::scene::UIComponentSet tintSource = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Button);
+    tintSource.rectTransform = Rect(600.0F, 20.0F, 80.0F, 30.0F);
+    tintSource.selectable->targetGraphic = target.Entity().Id();
+    const kb::scene::SceneObject source = AddUI(scene, canvas, tintSource);
+
+    kb::scene::UIComponentSet plain;
+    plain.rectTransform = Rect(700.0F, 20.0F, 200.0F, 60.0F);
+    const kb::scene::SceneObject group = AddUI(scene, canvas, plain);
+    std::array<kb::scene::SceneObject, 2U> toggles;
+    std::array<kb::scene::SceneObject, 2U> graphics;
+    for (std::size_t index = 0U; index < toggles.size(); ++index) {
+        kb::scene::UIComponentSet toggleSet = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Toggle);
+        toggleSet.rectTransform = Rect(0.0F, 30.0F * static_cast<float>(index), 100.0F, 24.0F);
+        toggleSet.toggle->group = group.Entity().Id();
+        toggleSet.toggle->toggled = index == 0U;
+        toggles[index] = AddUI(scene, group, toggleSet);
+        kb::scene::UIComponentSet graphicSet = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Border);
+        graphicSet.rectTransform = Rect(4.0F, 4.0F, 16.0F, 16.0F);
+        graphics[index] = AddUI(scene, toggles[index], graphicSet);
+        ui.TryGet<kb::scene::UIToggle>(toggles[index].Entity())->graphic = graphics[index].Entity().Id();
+    }
+    if (withModalCanvas) {
+        kb::scene::UIComponentSet modalSet = CanvasComponents();
+        modalSet.canvas->modal = true;
+        modalSet.canvas->sortingOrder = 10;
+        const kb::scene::SceneObject modal = AddUI(scene, {}, modalSet);
+        kb::scene::UIComponentSet dialog = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Border);
+        dialog.rectTransform = Rect(100.0F, 400.0F, 200.0F, 100.0F);
+        static_cast<void>(AddUI(scene, modal, dialog));
+    }
+
+    const kb::scene::SceneUIInput input{};
+    const auto update = [&](float width) {
+        kb::tests::Require(scene.UI().Update(width, 720.0F, input, 1.0F), "A UI update must lay out");
+    };
+    for (int pass = 0; pass < 3; ++pass)
+        update(1280.0F);
+    kb::tests::Require(!withModalCanvas || scene.UI().ModalCanvasActive(), "The modal canvas must be shown");
+    const auto elementsLaidOut = [&] { return std::as_const(scene).UI().LaidOutElementCount(); };
+    const auto step = [&](const char* what, std::size_t allowed) {
+        const std::uint64_t before = elementsLaidOut();
+        for (int pass = 0; pass < 3; ++pass)
+            update(1280.0F);
+        const std::uint64_t laidOut = elementsLaidOut() - before;
+        const std::uint64_t patched = HashUIFrame(scene.UI().Frame());
+        // A layout from scratch, which the viewport changing and changing back makes.
+        update(1281.0F);
+        update(1280.0F);
+        update(1280.0F);
+        if (patched != HashUIFrame(scene.UI().Frame()))
+            std::cerr << "driven layout differs after: " << what << '\n';
+        kb::tests::Require(patched == HashUIFrame(scene.UI().Frame()), "A patched frame must equal a layout computed from scratch");
+        if (laidOut > allowed)
+            std::cerr << what << " laid out " << laidOut << " elements, at most " << allowed << '\n';
+        kb::tests::Require(laidOut > 0U && laidOut <= allowed, "A driving widget must lay out only itself and what it moves");
+    };
+    const auto size = [&](SceneEntity entity) { return SubtreeSize(scene, entity); };
+
+    kb::scene::UIProgressBar* bar = ui.TryGet<kb::scene::UIProgressBar>(health);
+    bar->value = bar->minimum + (bar->maximum - bar->minimum) * 0.37F;
+    step("health bar value", size(health) + size(SceneEntity{bar->fillRect}));
+
+    kb::scene::UISlider* slider = ui.TryGet<kb::scene::UISlider>(volume);
+    slider->value = slider->minimum + (slider->maximum - slider->minimum) * 0.81F;
+    step("slider value", size(volume) + size(SceneEntity{slider->fillRect}) + size(SceneEntity{slider->handleRect}));
+
+    ui.TryGet<kb::scene::UIScrollView>(viewport)->scrollY = 120.0F;
+    step("scroll offset", size(scroll) + size(scrollbar));
+    ui.TryGet<kb::scene::UIScrollbar>(scrollbar)->value = 0.5F;
+    step("scrollbar value", 2U * size(scrollbar));
+
+    ui.TryGet<kb::scene::UIToggle>(toggles[0].Entity())->toggled = false;
+    ui.TryGet<kb::scene::UIToggle>(toggles[1].Entity())->toggled = true;
+    step("toggle in a group", size(toggles[0].Entity()) + size(toggles[1].Entity()));
+
+    ui.TryGet<kb::scene::UISelectable>(source.Entity())->normalColor = {0.2F, 0.7F, 0.3F, 1.0F};
+    step("selectable tinting another element", size(source.Entity()) + size(target.Entity()));
+    ui.TryGet<kb::scene::UIBorder>(target.Entity())->backgroundColor = {0.9F, 0.1F, 0.1F, 1.0F};
+    step("element tinted by a selectable", size(source.Entity()) + size(target.Entity()));
+}
+
+void TestDrivingWidgetsLayOutOnlyTheirOwnElements() {
+    RunDrivingWidgetsScenario(false);
+    RunDrivingWidgetsScenario(true);
+}
+
+// A list of a million items keeps rows for the dozen in view and a few more, reusing them as it scrolls.
+void TestVirtualListKeepsRowsForTheItemsInView() {
+    constexpr std::uint32_t kItems = 1'000'000U;
+    constexpr double kItemHeight = 30.0;
+    constexpr double kViewHeight = 600.0;
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
+    kb::scene::UIComponentSet viewSet = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::ScrollView);
+    viewSet.rectTransform = Rect(10.0F, 10.0F, 300.0F, static_cast<float>(kViewHeight));
+    viewSet.scrollView->horizontal = false;
+    viewSet.scrollView->virtualizeList = true;
+    viewSet.scrollView->listItemCount = kItems;
+    viewSet.scrollView->listItemHeight = static_cast<float>(kItemHeight);
+    const kb::scene::SceneObject list = AddUI(scene, canvas, viewSet);
+    kb::scene::UIComponentSet rowSet = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Text);
+    rowSet.rectTransform = Rect(0.0F, 0.0F, 300.0F, static_cast<float>(kItemHeight));
+    static_cast<void>(AddUI(scene, list, rowSet));
+    kb::scene::SceneUIComponents ui = scene.Components().UI();
+
+    // The data source: each row announced is filled in with the text of its item.
+    std::size_t bound = 0U;
+    const auto serve = [&] {
+        for (const kb::scene::SceneUIEvent& event : scene.UI().DrainEvents()) {
+            if (event.type != kb::scene::SceneUIEventType::ItemBound)
+                continue;
+            ++bound;
+            kb::tests::Require(event.entity == list.Entity(), "A row must be announced on its list");
+            kb::scene::UIText* text = ui.TryGet<kb::scene::UIText>(event.other);
+            kb::tests::Require(text != nullptr && kb::scene::SetUITextContent(*text, "Item " + std::to_string(static_cast<std::uint32_t>(event.value))),
+                "A row must be able to take its item's text");
+        }
+    };
+    const kb::scene::SceneUIInput input{};
+    const auto settle = [&] {
+        bound = 0U;
+        for (int pass = 0; pass < 4; ++pass) {
+            kb::tests::Require(scene.UI().Update(1280.0F, 720.0F, input, 1.0F), "A UI update must lay out");
+            serve();
+        }
+        return bound;
+    };
+    struct Window {
+        std::uint32_t first = 0U;
+        std::uint32_t last = 0U;
+    };
+    // The items in view and two rows' worth past each edge; every row the list has made is used, so once it has made
+    // as many as one window takes, windows are never narrower than that.
+    std::uint32_t rowsMade = 0U;
+    const auto windowAt = [&](double scroll) {
+        auto first = static_cast<std::uint32_t>(std::min(std::floor(scroll / kItemHeight), static_cast<double>(kItems)));
+        auto last = static_cast<std::uint32_t>(std::min(std::ceil((scroll + kViewHeight) / kItemHeight), static_cast<double>(kItems)));
+        first = first > 2U ? first - 2U : 0U;
+        last = std::min(kItems, last + 2U);
+        rowsMade = std::max(rowsMade, last - first);
+        if (rowsMade > last - first) {
+            last = std::min(kItems, first + rowsMade);
+            first = last - rowsMade;
+        }
+        return Window{first, last};
+    };
+    const auto scrollY = [&] { return std::as_const(scene).Components().UI().TryGet<kb::scene::UIScrollView>(list.Entity())->scrollY; };
+    const auto checkRows = [&](const char* what) {
+        const kb::scene::SceneUIFrame& frame = scene.UI().Frame();
+        if (frame.elements.size() > 30U)
+            std::cerr << what << ": " << frame.elements.size() << " elements in the frame\n";
+        kb::tests::Require(frame.elements.size() <= 30U, "A list of a million items must leave at most 30 elements in the frame");
+        const kb::scene::SceneUIFrameElement* viewport = FindElement(frame, list.Entity());
+        kb::tests::Require(viewport != nullptr, "The list must be in the frame");
+        std::size_t rows = 0U;
+        for (const kb::scene::SceneUIFrameElement& element : frame.elements) {
+            if (!element.text)
+                continue;
+            const double item = static_cast<double>(element.rect.y - viewport->rect.y) + static_cast<double>(scrollY());
+            const auto index = static_cast<std::uint32_t>(std::llround(item / kItemHeight));
+            if (kb::scene::UITextContent(*element.text) != "Item " + std::to_string(index))
+                std::cerr << what << ": row at item " << index << " shows " << kb::scene::UITextContent(*element.text) << '\n';
+            kb::tests::Require(kb::scene::UITextContent(*element.text) == "Item " + std::to_string(index),
+                "A row must show the item it stands for");
+            ++rows;
+        }
+        kb::tests::Require(rows >= 20U, "The rows must cover the view");
+    };
+    Window current = windowAt(0.0);
+    kb::tests::Require(settle() == current.last - current.first, "The first window must bind a row to each item in it");
+    checkRows("start");
+    const auto scrollTo = [&](double offset, const char* what) {
+        const Window next = windowAt(offset);
+        const std::uint32_t kept = std::min(current.last, next.last) > std::max(current.first, next.first)
+            ? std::min(current.last, next.last) - std::max(current.first, next.first) : 0U;
+        ui.TryGet<kb::scene::UIScrollView>(list.Entity())->scrollY = static_cast<float>(offset);
+        const std::size_t rebound = settle();
+        if (rebound != next.last - next.first - kept)
+            std::cerr << what << ": " << rebound << " rows rebound, " << next.last - next.first - kept << " items entered\n";
+        kb::tests::Require(rebound == next.last - next.first - kept, "Only the rows for items that entered the window may be filled in again");
+        current = next;
+        checkRows(what);
+    };
+    scrollTo(600.0, "one page down");
+    scrollTo(1200.0, "two pages down");
+    scrollTo(static_cast<double>(kItems) * kItemHeight - kViewHeight, "end of the list");
+    const kb::scene::SceneUIFrame& atEnd = scene.UI().Frame();
+    kb::tests::Require(std::ranges::any_of(atEnd.elements, [](const kb::scene::SceneUIFrameElement& element) {
+        return element.text && kb::scene::UITextContent(*element.text) == "Item 999999";
+    }), "The last item must have a row at the end of the list");
+    scrollTo(0.0, "back to the start");
+
+    // Once the pool has its size, scrolling creates no rows and allocates no large storage. A window is widest when a row
+    // is cut at both ends of the view.
+    scrollTo(105.0, "a row and a half down");
+    const std::size_t entities = scene.Entities().Count();
+    const std::size_t children = scene.Hierarchy().ChildCount(list.Entity());
+    kb::tests::Require(children - 1U <= 30U, "A list must keep at most 30 rows");
+    kb::tests::BeginAllocationTally();
+    for (int step = 0; step < 40; ++step) {
+        ui.TryGet<kb::scene::UIScrollView>(list.Entity())->scrollY += 7.0F;
+        kb::tests::Require(scene.UI().Update(1280.0F, 720.0F, input, 0.016F), "A UI update must lay out");
+        serve();
+    }
+    const auto tally = kb::tests::EndAllocationTally();
+    kb::tests::Require(tally.largeCount == 0U, "Scrolling a list must not allocate large storage");
+    kb::tests::Require(scene.Entities().Count() == entities && scene.Hierarchy().ChildCount(list.Entity()) == children,
+        "Scrolling a list must reuse its rows instead of creating more");
+    settle();
+    checkRows("scrolled in small steps");
+
+    // The rows are made while the game runs: a saved scene or a captured prefab holds the template row alone, and
+    // loading it again gives a list that works.
+    const kb::scene::SceneDocument document = kb::scene::SceneDocumentService::Capture(scene, "VirtualList");
+    kb::tests::Require(document.worldPrefab.NodeCount() == 3U && children > 3U,
+        "A saved scene must hold the canvas, the list and its template row, and no generated row");
+    kb::tests::Require(scene.Prefabs().Capture(list).NodeCount() == 2U, "A captured prefab must hold the list and its template row");
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb-ui-virtual-list";
+    std::filesystem::create_directories(root);
+    const std::filesystem::path path = root / "VirtualList.21kbscene";
+    kb::tests::Require(kb::scene::SceneDocumentService::Save(scene, path, "VirtualList"), "A scene with a virtual list must save");
+    const kb::scene::SceneDocumentLoadResult loaded = kb::scene::SceneDocumentService::Load(path);
+    kb::tests::Require(loaded.succeeded && loaded.document.worldPrefab.NodeCount() == 3U, "A saved virtual list must load without generated rows");
+    kb::scene::Scene reloaded;
+    kb::tests::Require(kb::scene::SceneDocumentService::LoadIntoScene(reloaded, loaded.document) && reloaded.Entities().Count() == 3U,
+        "A loaded virtual list must start with its template row alone");
+    for (int pass = 0; pass < 3; ++pass)
+        kb::tests::Require(reloaded.UI().Update(1280.0F, 720.0F, input, 1.0F), "A UI update must lay out");
+    const auto announced = std::ranges::count_if(reloaded.UI().Events(), [](const kb::scene::SceneUIEvent& event) {
+        return event.type == kb::scene::SceneUIEventType::ItemBound;
+    });
+    kb::tests::Require(announced >= 20 && reloaded.UI().Frame().elements.size() > 20U, "A loaded virtual list must make its rows again");
+    std::error_code ignored;
+    std::filesystem::remove_all(root, ignored);
+}
+
 void PopulateMillionRootOverlay(kb::scene::Scene& scene) {
     const std::vector<kb::scene::SceneObjectDesc> descs(1'000'000U);
     static_cast<void>(scene.Entities().CreateObjects(descs));
@@ -3311,6 +3600,8 @@ void RunSceneUITests() {
     TestFrameAmongManyRootsMatchesRecordedFrame();
     TestKeptLayoutMatchesFullLayout();
     TestPatchedLayoutMatchesFullLayout();
+    TestDrivingWidgetsLayOutOnlyTheirOwnElements();
+    TestVirtualListKeepsRowsForTheItemsInView();
     TestFrameNextToMillionRootsIsCheap();
     TestSteadyUpdatesReuseFrameStorage();
     TestInputFieldEditsGraphemeClusters();

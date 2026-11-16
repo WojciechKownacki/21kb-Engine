@@ -733,7 +733,7 @@ void SceneHistoryService::RemapEntities(Scene& scene, std::span<const SceneEntit
 void SceneHistoryService::NoteObjectChanging(Scene& scene, SceneEntity entity) noexcept {
     SceneState& state = SceneAccess::State(scene);
     SceneHistoryRecording* recording = ActiveRecording(state);
-    if (recording == nullptr || !entity.IsValid()) {
+    if (recording == nullptr || !entity.IsValid() || state.transientEntities.contains(entity.Id())) {
         return;
     }
     try {
@@ -746,7 +746,8 @@ void SceneHistoryService::NoteObjectChanging(Scene& scene, SceneEntity entity) n
 void SceneHistoryService::NoteObjectMoving(Scene& scene, SceneEntity entity, SceneEntity newParent) noexcept {
     SceneState& state = SceneAccess::State(scene);
     SceneHistoryRecording* recording = ActiveRecording(state);
-    if (recording == nullptr || !entity.IsValid() || !SceneEntityService::IsAlive(scene, entity)) {
+    if (recording == nullptr || !entity.IsValid() || !SceneEntityService::IsAlive(scene, entity) ||
+        state.transientEntities.contains(entity.Id())) {
         return;
     }
     try {
@@ -770,6 +771,9 @@ void SceneHistoryService::NoteSubtreeDestroying(Scene& scene, SceneEntity root) 
         while (!pending.empty()) {
             const SceneEntity entity = pending.back();
             pending.pop_back();
+            if (state.transientEntities.contains(entity.Id())) {
+                continue;
+            }
             const std::size_t index = Track(scene, *recording, entity);
             recording->structural[index] = true;
             KeepSiblings(state, *recording, SceneHierarchyCache::Parent(state, entity));

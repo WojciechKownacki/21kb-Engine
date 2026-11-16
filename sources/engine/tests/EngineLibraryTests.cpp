@@ -3560,7 +3560,7 @@ void RunComponentInspectorDescCatalogTest() {
     // Joint freedom adds thirty-five (secondary axis, swing limits and six axes of five settings).
     // Audio Source contributes sixteen fields and Audio Listener four.
     // NavBounds adds twelve (size, center, agent size, cell and tile size). Planar Reflection adds seven.
-    kb::tests::Require(fieldsChecked == 919U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (919, including text rendering, themes, collision mesh and the compatibility alias) across all components");
+    kb::tests::Require(fieldsChecked == 922U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (922, including text rendering, themes, collision mesh and the compatibility alias) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();

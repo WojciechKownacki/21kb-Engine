@@ -123,7 +123,8 @@ bool ReadValue(Reader& in, UIScrollView& v) { return in.ReadFloat(v.scrollX)&&in
 // v38 added the linked vertical scrollbar.
 bool ReadValue(Reader& in, UIScrollView& v, std::uint32_t fileVersion) {
     return ReadValue(in, v) && (fileVersion < 38U || in.ReadUInt64(v.verticalScrollbar)) &&
-        (fileVersion < 39U || (in.ReadUInt64(v.horizontalScrollbar)&&Read(in,v.movementType)&&in.ReadFloat(v.elasticity)&&in.ReadBool(v.snapToChildren)));
+        (fileVersion < 39U || (in.ReadUInt64(v.horizontalScrollbar)&&Read(in,v.movementType)&&in.ReadFloat(v.elasticity)&&in.ReadBool(v.snapToChildren))) &&
+        (fileVersion < SceneDocument::VirtualListFileVersion || (in.ReadBool(v.virtualizeList)&&in.ReadUInt32(v.listItemCount)&&in.ReadFloat(v.listItemHeight)));
 }
 bool ReadValue(Reader& in, UIInputField& v) { return in.ReadUInt32(v.characterLimit)&&in.ReadBool(v.multiline)&&in.ReadBool(v.readOnly); }
 // v39 added the content type and placeholder.
@@ -226,7 +227,7 @@ void WriteValue(std::vector<std::uint8_t>& out, const UIButton& v) { SceneAssetB
 void WriteValue(std::vector<std::uint8_t>& out, const UIToggle& v) { SceneAssetBinaryIO::WriteBool(out,v.toggled);SceneAssetBinaryIO::WriteUInt64(out,v.graphic);SceneAssetBinaryIO::WriteUInt64(out,v.group);SceneAssetBinaryIO::WriteBool(out,v.allowSwitchOff); }
 void WriteValue(std::vector<std::uint8_t>& out, const UISlider& v) { SceneAssetBinaryIO::WriteFloat(out,v.minimum);SceneAssetBinaryIO::WriteFloat(out,v.maximum);SceneAssetBinaryIO::WriteFloat(out,v.value);KB_WRITE_FIELD(direction);SceneAssetBinaryIO::WriteBool(out,v.wholeNumbers);SceneAssetBinaryIO::WriteUInt64(out,v.fillRect);SceneAssetBinaryIO::WriteUInt64(out,v.handleRect); }
 void WriteValue(std::vector<std::uint8_t>& out, const UIScrollbar& v) { SceneAssetBinaryIO::WriteFloat(out,v.value);SceneAssetBinaryIO::WriteFloat(out,v.size);KB_WRITE_FIELD(direction); }
-void WriteValue(std::vector<std::uint8_t>& out, const UIScrollView& v) { SceneAssetBinaryIO::WriteFloat(out,v.scrollX);SceneAssetBinaryIO::WriteFloat(out,v.scrollY);SceneAssetBinaryIO::WriteFloat(out,v.scrollSensitivity);SceneAssetBinaryIO::WriteBool(out,v.horizontal);SceneAssetBinaryIO::WriteBool(out,v.vertical);SceneAssetBinaryIO::WriteBool(out,v.inertia);SceneAssetBinaryIO::WriteUInt64(out,v.verticalScrollbar);SceneAssetBinaryIO::WriteUInt64(out,v.horizontalScrollbar);KB_WRITE_FIELD(movementType);SceneAssetBinaryIO::WriteFloat(out,v.elasticity);SceneAssetBinaryIO::WriteBool(out,v.snapToChildren); }
+void WriteValue(std::vector<std::uint8_t>& out, const UIScrollView& v) { SceneAssetBinaryIO::WriteFloat(out,v.scrollX);SceneAssetBinaryIO::WriteFloat(out,v.scrollY);SceneAssetBinaryIO::WriteFloat(out,v.scrollSensitivity);SceneAssetBinaryIO::WriteBool(out,v.horizontal);SceneAssetBinaryIO::WriteBool(out,v.vertical);SceneAssetBinaryIO::WriteBool(out,v.inertia);SceneAssetBinaryIO::WriteUInt64(out,v.verticalScrollbar);SceneAssetBinaryIO::WriteUInt64(out,v.horizontalScrollbar);KB_WRITE_FIELD(movementType);SceneAssetBinaryIO::WriteFloat(out,v.elasticity);SceneAssetBinaryIO::WriteBool(out,v.snapToChildren);SceneAssetBinaryIO::WriteBool(out,v.virtualizeList);SceneAssetBinaryIO::WriteUInt32(out,v.listItemCount);SceneAssetBinaryIO::WriteFloat(out,v.listItemHeight); }
 void WriteValue(std::vector<std::uint8_t>& out, const UIInputField& v) { SceneAssetBinaryIO::WriteUInt32(out,v.characterLimit);SceneAssetBinaryIO::WriteBool(out,v.multiline);SceneAssetBinaryIO::WriteBool(out,v.readOnly);KB_WRITE_FIELD(contentType);SceneAssetBinaryIO::WriteString(out,UIInputPlaceholder(v)); }
 void WriteValue(std::vector<std::uint8_t>& out, const UIDropdown& v) {
     SceneAssetBinaryIO::WriteUInt64(out, v.templateEntity);

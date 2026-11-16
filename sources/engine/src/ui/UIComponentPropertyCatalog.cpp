@@ -458,6 +458,7 @@ constexpr std::array kScrollViewProperties{
     KB_BOOL(UIScrollView, horizontal), KB_BOOL(UIScrollView, vertical), KB_BOOL(UIScrollView, inertia),
     KB_ENTITY(UIScrollView, verticalScrollbar), KB_ENTITY(UIScrollView, horizontalScrollbar),
     KB_ENUM(UIScrollView, movementType), KB_FLOAT(UIScrollView, elasticity), KB_BOOL(UIScrollView, snapToChildren),
+    KB_BOOL(UIScrollView, virtualizeList), KB_UINT(UIScrollView, listItemCount), KB_FLOAT(UIScrollView, listItemHeight),
 };
 constexpr std::array kInputFieldProperties{
     KB_UINT(UIInputField, characterLimit),

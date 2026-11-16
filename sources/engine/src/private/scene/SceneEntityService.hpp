@@ -65,6 +65,8 @@ public:
     [[nodiscard]] static bool IsPersistent(const Scene& scene, SceneEntity entity) noexcept;
     static void SetPersistent(Scene& scene, SceneObject object, bool persistent) noexcept;
     static void SetPersistent(Scene& scene, SceneEntity entity, bool persistent) noexcept;
+    [[nodiscard]] static bool IsTransient(const Scene& scene, SceneEntity entity) noexcept;
+    static void SetTransient(Scene& scene, SceneEntity entity, bool transient) noexcept;
     [[nodiscard]] static std::size_t Count(const Scene& scene);
 };
 

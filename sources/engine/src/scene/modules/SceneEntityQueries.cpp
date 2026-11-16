@@ -84,6 +84,14 @@ void SceneEntities::SetPersistent(SceneEntity entity, bool persistent) noexcept 
     SceneEntityService::SetPersistent(scene_, entity, persistent);
 }
 
+bool SceneEntities::IsTransient(SceneEntity entity) const noexcept {
+    return SceneEntityService::IsTransient(scene_, entity);
+}
+
+void SceneEntities::SetTransient(SceneEntity entity, bool transient) noexcept {
+    SceneEntityService::SetTransient(scene_, entity, transient);
+}
+
 std::size_t SceneEntities::Count() const {
     return SceneEntityService::Count(scene_);
 }

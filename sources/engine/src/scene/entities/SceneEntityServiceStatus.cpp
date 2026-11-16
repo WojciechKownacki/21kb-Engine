@@ -73,4 +73,20 @@ void SceneEntityService::SetPersistent(Scene& scene, SceneEntity entity, bool pe
     }
 }
 
+bool SceneEntityService::IsTransient(const Scene& scene, SceneEntity entity) noexcept {
+    return IsAlive(scene, entity) && SceneAccess::State(scene).transientEntities.contains(entity.Id());
+}
+
+void SceneEntityService::SetTransient(Scene& scene, SceneEntity entity, bool transient) noexcept {
+    if (!IsAlive(scene, entity)) {
+        return;
+    }
+    SceneState& state = SceneAccess::State(scene);
+    if (transient) {
+        state.transientEntities.insert(entity.Id());
+    } else {
+        state.transientEntities.erase(entity.Id());
+    }
+}
+
 } // namespace kb::scene

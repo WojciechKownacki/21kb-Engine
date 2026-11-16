@@ -13769,6 +13769,71 @@ end
         "A consumed button event must not be delivered again on the next frame");
 }
 
+// A script on a virtualized list answers OnUIItemBound by filling the announced row from the item index.
+void RunScriptVirtualListTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script virtual list host did not initialize");
+
+    const kb::scene::SceneObject canvas = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "List Canvas" });
+    kb::scene::ApplySceneUIComponents(scene.Components().UI(), canvas.Entity(),
+        kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Canvas));
+    const kb::scene::SceneObject list =
+        scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "List", .parent = canvas });
+    kb::scene::UIComponentSet listSet = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::ScrollView);
+    listSet.rectTransform->offsetMin = { 0.0F, 0.0F };
+    listSet.rectTransform->offsetMax = { 300.0F, 120.0F };
+    listSet.scrollView->horizontal = false;
+    listSet.scrollView->virtualizeList = true;
+    listSet.scrollView->listItemCount = 100U;
+    listSet.scrollView->listItemHeight = 30.0F;
+    kb::scene::ApplySceneUIComponents(scene.Components().UI(), list.Entity(), listSet);
+    const kb::scene::SceneObject templateRow =
+        scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Row", .parent = list });
+    kb::scene::ApplySceneUIComponents(scene.Components().UI(), templateRow.Entity(),
+        kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Text));
+    kb::scene::UIRectTransform* rowRect = scene.Components().UI().TryGet<kb::scene::UIRectTransform>(templateRow.Entity());
+    kb::tests::Require(rowRect != nullptr, "Script virtual list fixture did not author a row rect");
+    rowRect->offsetMax = { 300.0F, 30.0F };
+
+    constexpr kb::assets::AssetId kLuaAsset{ 17033U };
+    scene.Components().Behaviours().Set(list.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kLuaAsset.value, .backend = kb::scene::BehaviourBackend::Lua, .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loaded = host.LuaRuntime().LoadScript(kLuaAsset, R"(
+function OnUIItemBound(self, event)
+    CallFunction("World.SetPropertyString", {
+        entity = event.args.other, component = "Text", property = "content",
+        value = "Row " .. string.format("%d", event.args.value)
+    })
+end
+)");
+    kb::tests::Require(loaded.succeeded, "Script virtual list Lua fixture did not load");
+    kb::tests::Require(host.InstallSceneSystem(), "Script virtual list scene system install failed");
+
+    kb::input::InputDeviceState& input = scene.Input().MutableDeviceState();
+    input.SetHasFocus(true);
+    input.SetPointerViewportExtent(320U, 180U);
+    for (int frame = 0; frame < 4; ++frame)
+        static_cast<void>(scene.Runtime().Update(0.016F));
+
+    // 120 units of rows at 30 each is four rows in view, and two more kept ready past the end.
+    std::vector<bool> seen(6U, false);
+    std::size_t rows = 0U;
+    for (std::size_t index = 1U; index < scene.Hierarchy().ChildCount(list.Entity()); ++index) {
+        const kb::scene::UIText* text =
+            scene.Components().UI().TryGet<kb::scene::UIText>(scene.Hierarchy().ChildAt(list.Entity(), index));
+        kb::tests::Require(text != nullptr, "A list row must keep the text of its template");
+        const std::string_view content = kb::scene::UITextContent(*text);
+        kb::tests::Require(content.starts_with("Row ") && content.size() == 5U && content[4] >= '0' && content[4] < '6' &&
+                !seen[static_cast<std::size_t>(content[4] - '0')],
+            "A script must fill each row with the item it was announced for");
+        seen[static_cast<std::size_t>(content[4] - '0')] = true;
+        ++rows;
+    }
+    kb::tests::Require(rows == 6U, "A list must keep a row for each item in view and the extra rows");
+}
+
 void RunScriptAudioComponentPropertiesTest() {
     using Api = kb::script::ScriptSceneComponentApi;
     using Value = kb::script::ScriptValue;
@@ -14029,7 +14094,8 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     // WorldBackdrop grew eleven procedural sky fields.
     // Animator (5), DeformedGeometry (8), SocketAttachment (9), Combatant (26) and AIBrain (37) fields: 681 -> 766.
     // NavBounds adds twelve fields, Planar Reflection seven.
-    kb::tests::Require(fieldsChecked == 919U, "Script component API generated accessor coverage test did not exercise the expected total field count (919, including text rendering, themes, audio fields and the compatibility alias)");
+    // A Scroll View adds three list fields.
+    kb::tests::Require(fieldsChecked == 922U, "Script component API generated accessor coverage test did not exercise the expected total field count (922, including text rendering, themes, audio fields and the compatibility alias)");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -14129,7 +14195,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    kb::tests::Require(propertiesChecked == 919U, "LIB-082 raw-pointer audit did not exercise the expected total field count (919, including text rendering, themes, audio fields and the compatibility alias)");
+    kb::tests::Require(propertiesChecked == 922U, "LIB-082 raw-pointer audit did not exercise the expected total field count (922, including text rendering, themes, audio fields and the compatibility alias)");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {
@@ -18237,6 +18303,7 @@ void RunScriptRuntimeTests() {
     RunScriptAudioComponentPropertiesTest();
     RunScriptUIApiTest();
     RunScriptUIEventDispatchTest();
+    RunScriptVirtualListTest();
     RunScriptSceneComponentGeneratedAccessorCoverageTest();
     RunScriptSceneComponentPropertiesNeverExposeRawPointerTest();
     RunVisualGraphSceneComponentBindingTest();

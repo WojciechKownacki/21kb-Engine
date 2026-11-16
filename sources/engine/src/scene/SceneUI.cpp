@@ -62,6 +62,7 @@ constexpr std::array kEventDescriptors{
     SceneUIEventDescriptor{SceneUIEventType::DragEnded, "OnUIDragEnded"},
     SceneUIEventDescriptor{SceneUIEventType::Dropped, "OnUIDropped"},
     SceneUIEventDescriptor{SceneUIEventType::LinkActivated, "OnUILinkActivated"},
+    SceneUIEventDescriptor{SceneUIEventType::ItemBound, "OnUIItemBound"},
 };
 
 struct GroupState {
@@ -355,9 +356,12 @@ class FrameUIComponentQueries {
 
 class FrameBuilder {
   public:
-    // With `contexts`, what each element is handed by its parent is recorded there by traversal order.
-    FrameBuilder(const Scene& scene, Vec2 viewport, std::vector<SceneState::UIElementContext>* contexts = nullptr)
-        : scene_(scene), state_(SceneAccess::State(scene)), ui_(scene), viewport_(viewport), contexts_(contexts) {
+    // With `contexts`, what each element is handed by its parent is recorded there by traversal order. With `links`, the
+    // widgets that move other elements are not searched for: what moves an element is read from the widget it names.
+    FrameBuilder(const Scene& scene, Vec2 viewport, std::vector<SceneState::UIElementContext>* contexts = nullptr,
+                 const std::vector<SceneState::UIDriverLink>* links = nullptr)
+        : scene_(scene), state_(SceneAccess::State(scene)), ui_(scene), viewport_(viewport), links_(links),
+          contexts_(contexts) {
         frame_.viewportSize = viewport;
         frame_.language = scene_.Localization().Language();
     }
@@ -383,28 +387,44 @@ class FrameBuilder {
             pending.pop_back();
             if (!uiHierarchy_.contains(entity.Id()))
                 continue;
+            using Kind = SceneState::UIDriverKind;
             if (const UIDropdown* dropdown = ui_.TryGet<UIDropdown>(entity)) {
-                if (dropdown->captionText != 0U)
+                if (dropdown->captionText != 0U) {
                     captionTexts_.emplace(dropdown->captionText, dropdown);
-                if (dropdown->captionImage != 0U)
+                    driverLinks_.push_back({dropdown->captionText, entity.Id(), Kind::CaptionText});
+                }
+                if (dropdown->captionImage != 0U) {
                     captionImages_.emplace(dropdown->captionImage, dropdown);
+                    driverLinks_.push_back({dropdown->captionImage, entity.Id(), Kind::CaptionImage});
+                }
             }
-            if (const UIToggle* toggle = ui_.TryGet<UIToggle>(entity); toggle != nullptr && toggle->graphic != 0U)
+            if (const UIToggle* toggle = ui_.TryGet<UIToggle>(entity); toggle != nullptr && toggle->graphic != 0U) {
                 toggleGraphics_.emplace(toggle->graphic, toggle->toggled);
+                driverLinks_.push_back({toggle->graphic, entity.Id(), Kind::ToggleGraphic});
+            }
             if (const UISlider* slider = ui_.TryGet<UISlider>(entity)) {
                 const float fraction = NormalizedRange(slider->minimum, slider->maximum, slider->value);
-                if (slider->fillRect != 0U)
+                if (slider->fillRect != 0U) {
                     rangeParts_[slider->fillRect] = RangePart{fraction, slider->direction, false};
-                if (slider->handleRect != 0U)
+                    driverLinks_.push_back({slider->fillRect, entity.Id(), Kind::SliderFill});
+                }
+                if (slider->handleRect != 0U) {
                     rangeParts_[slider->handleRect] = RangePart{fraction, slider->direction, true};
+                    driverLinks_.push_back({slider->handleRect, entity.Id(), Kind::SliderHandle});
+                }
             }
-            if (const UIProgressBar* progress = ui_.TryGet<UIProgressBar>(entity); progress != nullptr && progress->fillRect != 0U)
+            if (const UIProgressBar* progress = ui_.TryGet<UIProgressBar>(entity); progress != nullptr && progress->fillRect != 0U) {
                 rangeParts_[progress->fillRect] =
                     RangePart{NormalizedRange(progress->minimum, progress->maximum, progress->value), progress->direction, false};
+                driverLinks_.push_back({progress->fillRect, entity.Id(), Kind::ProgressFill});
+            }
             for (std::size_t index = 0U; index < scene_.Hierarchy().ChildCount(entity); ++index)
                 pending.push_back(scene_.Hierarchy().ChildAt(entity, index));
         }
-        drivers_ = !rangeParts_.empty() || !toggleGraphics_.empty() || !captionTexts_.empty() || !captionImages_.empty();
+        // An element two widgets move has the one that comes last in the walk win, which a single widget cannot be
+        // laid out again to reproduce.
+        std::ranges::sort(driverLinks_, {}, &SceneState::UIDriverLink::target);
+        driverConflict_ = std::ranges::adjacent_find(driverLinks_, {}, &SceneState::UIDriverLink::target) != driverLinks_.end();
         for (const SceneEntity root : uiRoots_)
             SearchForCanvas(root);
         if (valid_)
@@ -433,16 +453,20 @@ class FrameBuilder {
         return volatile_ || !themes_.empty();
     }
 
-    // Whether an element can be laid out again alone: no modal canvas to apply across the frame, and no widget whose
-    // value moves another widget.
+    // Whether an element can be laid out again alone: no element is moved by two widgets at once.
     [[nodiscard]] bool Patchable() const noexcept {
-        return !sawModal_ && !drivers_;
-    }
-    [[nodiscard]] bool CrossTargets() const noexcept {
-        return crossTargets_;
+        return !driverConflict_;
     }
     [[nodiscard]] bool SawModal() const noexcept {
         return sawModal_;
+    }
+    // The widgets that move other elements, and the selectables that tint other elements, found while laying the frame
+    // out.
+    [[nodiscard]] std::vector<SceneState::UIDriverLink> TakeDriverLinks() noexcept {
+        return std::move(driverLinks_);
+    }
+    [[nodiscard]] std::vector<SceneState::UITintLink> TakeTintLinks() noexcept {
+        return std::move(tintLinks_);
     }
 
     // Lays the subtree under `entity` out again where it stands, from what its parent handed it, appending its
@@ -461,6 +485,10 @@ class FrameBuilder {
     }
     [[nodiscard]] std::vector<SceneUIFrameElement>& Records() noexcept {
         return frame_.elements;
+    }
+    // The rectangle an element anchored inside `content` is handed, as the parent that anchors it hands it.
+    [[nodiscard]] Rect AnchoredAllocation(SceneEntity entity, const UIRectTransform& transform, Rect content) const {
+        return AnchoredRect(Driven(entity, transform), content);
     }
 
     // Positions in `frame` of the scroll views, in frame order. `frame` is the one this builder produced.
@@ -883,6 +911,7 @@ class FrameBuilder {
                                .ty = pivot.y - motionScale * pivot.y + authored->hiddenOffset.y * (1.0F - shown)};
             }
         }
+        ResolveDrivenBy(entity);
         if (const auto graphic = toggleGraphics_.find(entity.Id()); graphic != toggleGraphics_.end() && !graphic->second)
             group.opacity = 0.0F;
 
@@ -1014,7 +1043,7 @@ class FrameBuilder {
                 element.hitAlpha = alpha->second;
         }
         if (selectable != nullptr && selectable->targetGraphic != 0U && selectable->targetGraphic != entity.Id())
-            crossTargets_ = true;
+            tintLinks_.push_back({selectable->targetGraphic, entity.Id()});
         element.interactionEnabled = selectable != nullptr && selectable->interactable && group.interactable;
         element.hitTestable =
             element.interactionEnabled && selectable->raycastTarget && group.blocksRaycasts && element.effectiveOpacity > 0.0F;
@@ -1041,10 +1070,36 @@ class FrameBuilder {
         clipSoftness_ = outerSoftness;
     }
 
+    // The rows of a virtualized list stand where their items do: the item's place in the list less the scroll, below the
+    // top of the view. A row with no item and the template, which is the first child, take no part.
+    void ArrangeVirtualRows(SceneEntity list, const UIScrollView& view, Rect rect, Rect clip, SceneEntity canvas, float scale,
+                            std::int32_t sortingOrder, bool pixelPerfect, GroupState group,
+                            const Affine2D& inheritedTransform,
+                            const std::vector<std::array<Vec2, 4U>>& inheritedClipQuads) {
+        const auto found = state_.uiVirtualLists.find(list.Id());
+        if (found == state_.uiVirtualLists.end())
+            return;
+        const std::size_t count = scene_.Hierarchy().ChildCount(list);
+        for (std::size_t index = 1U; index < count; ++index) {
+            const SceneEntity row = scene_.Hierarchy().ChildAt(list, index);
+            const auto bound = std::ranges::find(found->second.rows, row.Id(), &SceneState::UIVirtualRow::entity);
+            if (bound == found->second.rows.end() || bound->item == SceneState::kNoUIItem || !ui_.Has<UIRectTransform>(row))
+                continue;
+            const auto top = static_cast<float>(static_cast<double>(bound->item) * view.listItemHeight - view.scrollY);
+            Arrange(row, {rect.x, rect.y + top, rect.width, view.listItemHeight}, clip, canvas, scale, sortingOrder,
+                    pixelPerfect, group, inheritedTransform, inheritedClipQuads);
+        }
+    }
+
     void ArrangeChildren(SceneEntity parent, Rect rect, Rect clip, SceneEntity canvas, float scale,
                          std::int32_t sortingOrder, bool pixelPerfect, GroupState group,
                          const Affine2D& inheritedTransform,
                          const std::vector<std::array<Vec2, 4U>>& inheritedClipQuads) {
+        if (const UIScrollView* list = ui_.TryGet<UIScrollView>(parent); list != nullptr && list->virtualizeList) {
+            ArrangeVirtualRows(parent, *list, rect, clip, canvas, scale, sortingOrder, pixelPerfect, group, inheritedTransform,
+                               inheritedClipQuads);
+            return;
+        }
         const std::size_t count = scene_.Hierarchy().ChildCount(parent);
         std::vector<SceneEntity> managed;
         managed.reserve(count);
@@ -1248,9 +1303,47 @@ class FrameBuilder {
     }
 
 
+    // A laid-out-again element does not know the widgets of the frame, only the links the frame was laid out with: what
+    // moves it is read from the widgets that link names, as they are now.
+    void ResolveDrivenBy(SceneEntity target) const {
+        if (links_ == nullptr)
+            return;
+        const auto range = std::ranges::equal_range(*links_, target.Id(), {}, &SceneState::UIDriverLink::target);
+        for (const SceneState::UIDriverLink& link : range) {
+            const SceneEntity driver{link.driver};
+            switch (link.kind) {
+            case SceneState::UIDriverKind::SliderFill:
+            case SceneState::UIDriverKind::SliderHandle:
+                if (const UISlider* slider = ui_.TryGet<UISlider>(driver))
+                    rangeParts_[link.target] =
+                        RangePart{NormalizedRange(slider->minimum, slider->maximum, slider->value), slider->direction,
+                                  link.kind == SceneState::UIDriverKind::SliderHandle};
+                break;
+            case SceneState::UIDriverKind::ProgressFill:
+                if (const UIProgressBar* progress = ui_.TryGet<UIProgressBar>(driver))
+                    rangeParts_[link.target] = RangePart{
+                        NormalizedRange(progress->minimum, progress->maximum, progress->value), progress->direction, false};
+                break;
+            case SceneState::UIDriverKind::ToggleGraphic:
+                if (const UIToggle* toggle = ui_.TryGet<UIToggle>(driver))
+                    toggleGraphics_[link.target] = toggle->toggled;
+                break;
+            case SceneState::UIDriverKind::CaptionText:
+                if (const UIDropdown* dropdown = ui_.TryGet<UIDropdown>(driver))
+                    captionTexts_[link.target] = dropdown;
+                break;
+            case SceneState::UIDriverKind::CaptionImage:
+                if (const UIDropdown* dropdown = ui_.TryGet<UIDropdown>(driver))
+                    captionImages_[link.target] = dropdown;
+                break;
+            }
+        }
+    }
+
     // A slider's or progress bar's fill spans the start of its parent up to the value along the control's
     // direction, and its handle is anchored at the value. Everything else keeps its authored anchors.
-    [[nodiscard]] UIRectTransform Driven(SceneEntity entity, UIRectTransform rect) const noexcept {
+    [[nodiscard]] UIRectTransform Driven(SceneEntity entity, UIRectTransform rect) const {
+        ResolveDrivenBy(entity);
         const auto part = rangeParts_.find(entity.Id());
         if (part == rangeParts_.end())
             return rect;
@@ -1440,20 +1533,22 @@ class FrameBuilder {
     std::int32_t player_ = -1;
     float clipSoftness_ = 0.0F;
     // Fill and handle widgets driven by a slider or progress bar, by entity id.
-    std::unordered_map<std::uint64_t, RangePart> rangeParts_;
+    mutable std::unordered_map<std::uint64_t, RangePart> rangeParts_;
     // Widgets whose presentation another component drives: a dropdown's caption text and image show its
     // chosen option, and a toggle's on-state graphic is drawn only while the toggle is on.
-    std::unordered_map<std::uint64_t, const UIDropdown*> captionTexts_;
-    std::unordered_map<std::uint64_t, const UIDropdown*> captionImages_;
-    std::unordered_map<std::uint64_t, bool> toggleGraphics_;
+    mutable std::unordered_map<std::uint64_t, const UIDropdown*> captionTexts_;
+    mutable std::unordered_map<std::uint64_t, const UIDropdown*> captionImages_;
+    mutable std::unordered_map<std::uint64_t, bool> toggleGraphics_;
+    std::vector<SceneState::UIDriverLink> driverLinks_;
+    const std::vector<SceneState::UIDriverLink>* links_ = nullptr;
+    std::vector<SceneState::UITintLink> tintLinks_;
     // Sizes of the containers measured so far, for the natural and the minimum request.
     std::array<std::unordered_map<std::uint64_t, DesiredSize>, 2U> measured_;
     SceneUIFrame frame_;
     SceneUIFrameRefusal refusal_{};
     std::vector<SceneState::UIElementContext>* contexts_ = nullptr;
     bool sawModal_ = false;
-    bool drivers_ = false;
-    bool crossTargets_ = false;
+    bool driverConflict_ = false;
     std::uint32_t traversal_ = 0U;
     std::size_t scrollViewCount_ = 0U;
     bool volatile_ = false;
@@ -1504,6 +1599,11 @@ void KeepSpareStorage(SceneState& state, std::vector<SceneUIFrameElement>&& elem
     if (viewport == nullptr)
         return {};
     const float scale = std::max(viewport->canvasScale, 0.0001F);
+    if (scrollView.virtualizeList) {
+        // The rows that exist stand for a few of the items; the list is as long as all of them.
+        const double listHeight = static_cast<double>(scrollView.listItemCount) * scrollView.listItemHeight;
+        return {0.0F, std::max(0.0F, static_cast<float>(listHeight - static_cast<double>(viewport->rect.height / scale)))};
+    }
     const float framedScrollX = viewport->scrollView.has_value() ? viewport->scrollView->scrollX : scrollView.scrollX;
     const float framedScrollY = viewport->scrollView.has_value() ? viewport->scrollView->scrollY : scrollView.scrollY;
     float contentRight = viewport->rect.x;
@@ -1605,6 +1705,9 @@ void KeepSpareStorage(SceneState& state, std::vector<SceneUIFrameElement>&& elem
     };
 }
 
+constexpr std::size_t kNoPosition = std::numeric_limits<std::size_t>::max();
+[[nodiscard]] std::size_t FindPosition(const SceneState::UILayoutCache& cache, std::uint64_t entity) noexcept;
+
 // Returns whether every selectable's colour has reached the colour its state asks for, so a later pass with the same
 // state would change nothing.
 // With `only`, just those positions of `current` are resolved, which is right for a frame whose other elements were
@@ -1679,13 +1782,20 @@ bool ResolveInteractionPresentation(const Scene& scene, const SceneState& state,
             continue;
         std::size_t target = index;
         if (selectable->targetGraphic != 0U && selectable->targetGraphic != current.elements[index].entity.Id()) {
-            if (indexByEntity.empty())
-                for (std::size_t other = 0U; other < current.elements.size(); ++other)
-                    indexByEntity.emplace(current.elements[other].entity.Id(), other);
-            const auto found = indexByEntity.find(selectable->targetGraphic);
-            if (found == indexByEntity.end())
-                continue;
-            target = found->second;
+            if (only != nullptr) {
+                // The patch that chose the positions also built the table of where elements are.
+                target = FindPosition(state.uiLayoutCache, selectable->targetGraphic);
+                if (target == kNoPosition)
+                    continue;
+            } else {
+                if (indexByEntity.empty())
+                    for (std::size_t other = 0U; other < current.elements.size(); ++other)
+                        indexByEntity.emplace(current.elements[other].entity.Id(), other);
+                const auto found = indexByEntity.find(selectable->targetGraphic);
+                if (found == indexByEntity.end())
+                    continue;
+                target = found->second;
+            }
         }
         SceneUIFrameElement& graphic = current.elements[target];
         const UIInteractionState shownState = current.elements[index].interactionState;
@@ -2416,6 +2526,7 @@ void DestroyEntity(Scene& scene, SceneEntity entity) noexcept {
     if (!list.IsValid())
         return false;
     scene.Entities().SetName(list, "Dropdown List");
+    scene.Entities().SetTransient(list, true);
     UICanvas listCanvas{};
     listCanvas.sortingOrder = sortingOrder;
     ui.Set(list, listCanvas);
@@ -2507,6 +2618,7 @@ void DestroyEntity(Scene& scene, SceneEntity entity) noexcept {
     blockerDesc.name = "Blocker";
     blockerDesc.parent = scene.Entities().Object(rootCanvas);
     const SceneEntity blocker = scene.Entities().CreateObject(std::move(blockerDesc)).Entity();
+    scene.Entities().SetTransient(blocker, true);
     UIRectTransform blockerRect{};
     blockerRect.anchorMax = {1.0F, 1.0F};
     blockerRect.offsetMax = {};
@@ -2630,6 +2742,102 @@ void DestroyEntity(Scene& scene, SceneEntity entity) noexcept {
             changed = true;
         }
       }
+    }
+    return changed;
+}
+
+// Rows kept ready beyond the edges of a virtualized list, so a row that scrolls into view was filled in a frame before,
+// and the most rows a list may keep.
+constexpr std::uint32_t kVirtualListOverscanRows = 2U;
+constexpr std::size_t kMaxVirtualListRows = 512U;
+
+// Keeps the rows of a virtualized list on the items in view and a few either side. A row that scrolled out of the
+// window takes an item that scrolled in, and each such row is announced so the item's data can be put in it.
+[[nodiscard]] bool SyncVirtualList(Scene& scene, SceneState& state, SceneUIComponents& ui, const SceneUIFrameElement& element,
+                                   const UIScrollView& view) {
+    const SceneEntity list = element.entity;
+    const std::size_t childCount = scene.Hierarchy().ChildCount(list);
+    if (childCount == 0U)
+        return false;
+    SceneState::UIVirtualList& rows = state.uiVirtualLists[list.Id()];
+    // The rows are the children after the template, each keeping the item it had.
+    rows.spare.clear();
+    for (std::size_t index = 1U; index < childCount; ++index) {
+        const std::uint64_t id = scene.Hierarchy().ChildAt(list, index).Id();
+        const auto known = std::ranges::find(rows.rows, id, &SceneState::UIVirtualRow::entity);
+        rows.spare.push_back({id, known != rows.rows.end() ? known->item : SceneState::kNoUIItem});
+    }
+    rows.rows.swap(rows.spare);
+
+    const double itemHeight = view.listItemHeight;
+    const double itemCount = view.listItemCount;
+    const double scrollTop = std::max(0.0F, view.scrollY);
+    const double viewHeight = element.rect.height / std::max(element.canvasScale, 0.0001F);
+    auto first = static_cast<std::uint32_t>(std::min(std::floor(scrollTop / itemHeight), itemCount));
+    auto last = static_cast<std::uint32_t>(std::min(std::ceil((scrollTop + viewHeight) / itemHeight), itemCount));
+    first = first > kVirtualListOverscanRows ? first - kVirtualListOverscanRows : 0U;
+    last = std::min(view.listItemCount, last + kVirtualListOverscanRows);
+    std::size_t needed = first < last ? std::min<std::size_t>(last - first, kMaxVirtualListRows) : 0U;
+
+    bool changed = false;
+    while (rows.rows.size() < needed) {
+        std::unordered_map<std::uint64_t, SceneEntity> copy;
+        const SceneEntity row = CloneSubtree(scene, scene.Hierarchy().ChildAt(list, 0U), list, copy);
+        if (!row.IsValid())
+            break;
+        scene.Entities().SetTransient(row, true);
+        rows.rows.push_back({row.Id(), SceneState::kNoUIItem});
+        changed = true;
+    }
+    // Every row the list keeps is put to use, so the frame holds the same rows however the window sits.
+    const std::size_t span = std::min<std::size_t>(rows.rows.size(), view.listItemCount);
+    if (needed != 0U && span > needed) {
+        last = std::min(view.listItemCount, first + static_cast<std::uint32_t>(span));
+        first = last - static_cast<std::uint32_t>(span);
+        needed = span;
+    }
+    // Rows whose item is still in the window stay as they are; the others let go of theirs.
+    rows.held.assign(needed, 0U);
+    for (SceneState::UIVirtualRow& row : rows.rows) {
+        if (row.item == SceneState::kNoUIItem)
+            continue;
+        if (row.item >= first && row.item - first < needed && rows.held[row.item - first] == 0U) {
+            rows.held[row.item - first] = 1U;
+            continue;
+        }
+        row.item = SceneState::kNoUIItem;
+        changed = true;
+    }
+    std::size_t spare = 0U;
+    for (std::size_t offset = 0U; offset < needed; ++offset) {
+        if (rows.held[offset] != 0U)
+            continue;
+        while (spare < rows.rows.size() && rows.rows[spare].item != SceneState::kNoUIItem)
+            ++spare;
+        if (spare == rows.rows.size())
+            break;
+        SceneState::UIVirtualRow& row = rows.rows[spare];
+        row.item = first + static_cast<std::uint32_t>(offset);
+        Queue(state, scene, SceneUIEventType::ItemBound, list, nullptr, static_cast<float>(row.item));
+        state.uiEvents.back().other = SceneEntity{row.entity};
+        changed = true;
+    }
+    if (changed)
+        ui.MarkModified<UIScrollView>(list);
+    return changed;
+}
+
+[[nodiscard]] bool SyncVirtualLists(Scene& scene, SceneState& state) {
+    std::erase_if(state.uiVirtualLists,
+                  [&](const auto& list) { return !scene.Entities().IsAlive(SceneEntity{list.first}); });
+    bool changed = false;
+    const SceneUIComponentQueries reader = std::as_const(scene).Components().UI();
+    SceneUIComponents ui = scene.Components().UI();
+    for (const std::size_t position : state.uiLayoutCache.scrollViews) {
+        const SceneUIFrameElement& element = state.uiFrame.elements[position];
+        const UIScrollView* view = reader.TryGet<UIScrollView>(element.entity);
+        if (view != nullptr && view->virtualizeList)
+            changed = SyncVirtualList(scene, state, ui, element, *view) || changed;
     }
     return changed;
 }
@@ -2939,6 +3147,9 @@ bool SceneUIQueries::HasFocusedTextInput() const noexcept {
 std::span<const SceneUIEvent> SceneUIQueries::Events() const noexcept {
     return SceneAccess::State(scene_).uiEvents;
 }
+std::uint64_t SceneUIQueries::LaidOutElementCount() const noexcept {
+    return SceneAccess::State(scene_).uiLaidOutElements;
+}
 
 SceneUIAccess::SceneUIAccess(Scene& scene) noexcept : scene_(scene) {}
 bool SceneUIAccess::SetViewport(float width, float height) noexcept {
@@ -3239,8 +3450,6 @@ namespace {
 
 // The table that finds an element's position in the frame from its entity, built when a changed element is first
 // looked for and kept until the frame is laid out again.
-constexpr std::size_t kNoPosition = std::numeric_limits<std::size_t>::max();
-
 [[nodiscard]] std::size_t PositionSlotOf(std::uint64_t entity, std::size_t mask) noexcept {
     return static_cast<std::size_t>((entity * 0x9E3779B97F4A7C15ULL) >> 32U) & mask;
 }
@@ -3315,28 +3524,51 @@ enum class PatchScope : std::uint8_t {
            ui.Has<UIWrapLayout>(entity) || ui.Has<UIOverlayLayout>(entity);
 }
 
-// A widget whose value moves another widget: the other one would have to be laid out again too.
-[[nodiscard]] bool DrivesOthers(const SceneUIComponentQueries& ui, SceneEntity entity, UIComponentType type) noexcept {
+// Whether the children of `parent` are placed by something other than their own anchors, so a child cannot be placed
+// again without its parent.
+[[nodiscard]] bool PlacesChildren(const SceneUIComponentQueries& ui, SceneEntity parent) noexcept {
+    const UIScrollView* view = ui.TryGet<UIScrollView>(parent);
+    return HasLayoutComponent(ui, parent) || ui.Has<UIProgressBar>(parent) || (view != nullptr && view->virtualizeList);
+}
+
+// The elements a widget's component moves, as the component names them now.
+struct DrivenElements {
+    std::array<SceneState::UIDriverLink, 2U> links{};
+    std::size_t count = 0U;
+};
+
+[[nodiscard]] DrivenElements DrivenBy(const SceneUIComponentQueries& ui, SceneEntity entity, UIComponentType type) noexcept {
+    DrivenElements driven;
+    const auto add = [&](std::uint64_t target, SceneState::UIDriverKind kind) {
+        if (target != 0U)
+            driven.links[driven.count++] = {target, entity.Id(), kind};
+    };
+    using Kind = SceneState::UIDriverKind;
     switch (type) {
-    case UIComponentType::Toggle: {
-        const UIToggle* toggle = ui.TryGet<UIToggle>(entity);
-        return toggle == nullptr || toggle->graphic != 0U;
-    }
-    case UIComponentType::Slider: {
-        const UISlider* slider = ui.TryGet<UISlider>(entity);
-        return slider == nullptr || slider->fillRect != 0U || slider->handleRect != 0U;
-    }
-    case UIComponentType::ProgressBar: {
-        const UIProgressBar* progress = ui.TryGet<UIProgressBar>(entity);
-        return progress == nullptr || progress->fillRect != 0U;
-    }
-    case UIComponentType::Dropdown: {
-        const UIDropdown* dropdown = ui.TryGet<UIDropdown>(entity);
-        return dropdown == nullptr || dropdown->captionText != 0U || dropdown->captionImage != 0U;
-    }
+    case UIComponentType::Toggle:
+        if (const UIToggle* toggle = ui.TryGet<UIToggle>(entity))
+            add(toggle->graphic, Kind::ToggleGraphic);
+        break;
+    case UIComponentType::Slider:
+        if (const UISlider* slider = ui.TryGet<UISlider>(entity)) {
+            add(slider->fillRect, Kind::SliderFill);
+            add(slider->handleRect, Kind::SliderHandle);
+        }
+        break;
+    case UIComponentType::ProgressBar:
+        if (const UIProgressBar* progress = ui.TryGet<UIProgressBar>(entity))
+            add(progress->fillRect, Kind::ProgressFill);
+        break;
+    case UIComponentType::Dropdown:
+        if (const UIDropdown* dropdown = ui.TryGet<UIDropdown>(entity)) {
+            add(dropdown->captionText, Kind::CaptionText);
+            add(dropdown->captionImage, Kind::CaptionImage);
+        }
+        break;
     default:
-        return false;
+        break;
     }
+    return driven;
 }
 
 struct LayoutPatch {
@@ -3346,13 +3578,22 @@ struct LayoutPatch {
     bool focusMoved = false;
 };
 
+// Gives the storage lent to a partial layout back to the scene when it ends, however it ends.
+struct SpareElementsLease {
+    SceneState& state;
+    std::vector<SceneUIFrameElement>& elements;
+    ~SpareElementsLease() {
+        KeepSpareStorage(state, std::move(elements));
+    }
+};
+
 // Lays out again only what the writes since the frame was laid out can have changed, in place. Returns false, leaving the
 // frame as it was, whenever that cannot be shown to give what a full layout would.
 [[nodiscard]] bool PatchLayout(const Scene& scene, SceneState& state, Vec2 viewport, LayoutPatch& patch) {
     SceneState::UILayoutCache& cache = state.uiLayoutCache;
     SceneUIFrame& frame = state.uiFrame;
     if (!cache.valid || cache.volatileFrame || !cache.patchable || cache.tooltipDue || state.uiPendingFocus.IsValid() ||
-        state.uiDropdownList.has_value() || frame.modalActive || frame.refusal.HasValue() ||
+        state.uiDropdownList.has_value() || frame.refusal.HasValue() ||
         (state.uiMedia != nullptr && !state.uiMedia->videos.empty()))
         return false;
     if (state.uiWritesOverflow || state.uiWrites.empty() || state.uiWritesBase != cache.writeRevision)
@@ -3373,14 +3614,8 @@ struct LayoutPatch {
         bool allocation = false;
     };
     std::vector<Root> roots;
-    for (const SceneState::UIWrite& write : state.uiWrites) {
-        const SceneEntity entity{write.entity};
-        const auto type = static_cast<UIComponentType>(write.type);
-        const PatchScope scope = ScopeOf(type);
-        if (write.structural || scope == PatchScope::Full || FindPosition(cache, entity.Id()) == kNoPosition ||
-            DrivesOthers(ui, entity, type))
-            return false;
-        SceneEntity root = scope == PatchScope::Siblings ? scene.Hierarchy().Parent(entity) : entity;
+    const auto addRoot = [&](SceneEntity start, PatchScope scope, bool allocation) {
+        SceneEntity root = scope == PatchScope::Siblings ? scene.Hierarchy().Parent(start) : start;
         if (!root.IsValid())
             return false;
         if (scope != PatchScope::Own) {
@@ -3389,12 +3624,43 @@ struct LayoutPatch {
                 const SceneEntity parent = scene.Hierarchy().Parent(root);
                 if (!parent.IsValid())
                     return false;
-                if (!HasLayoutComponent(ui, parent) && !ui.Has<UIProgressBar>(parent))
+                if (!PlacesChildren(ui, parent))
                     break;
                 root = parent;
             }
         }
-        roots.push_back({root, type == UIComponentType::RectTransform && root == entity});
+        roots.push_back({root, allocation && root == start});
+        return true;
+    };
+    for (const SceneState::UIWrite& write : state.uiWrites) {
+        const SceneEntity entity{write.entity};
+        const auto type = static_cast<UIComponentType>(write.type);
+        const PatchScope scope = ScopeOf(type);
+        if (write.structural || scope == PatchScope::Full || FindPosition(cache, entity.Id()) == kNoPosition ||
+            !addRoot(entity, scope, type == UIComponentType::RectTransform))
+            return false;
+        // The elements a widget moves are laid out again with it, and the links the frame was laid out with must still
+        // be the ones the widget names, or a full layout has to find them.
+        const DrivenElements driven = DrivenBy(ui, entity, type);
+        const auto cached = std::ranges::equal_range(cache.widgetDrivers, entity.Id(), {}, &SceneState::UIDriverLink::driver);
+        if (static_cast<std::size_t>(cached.size()) != driven.count)
+            return false;
+        for (std::size_t index = 0U; index < driven.count; ++index) {
+            const SceneState::UIDriverLink& link = driven.links[index];
+            if (std::ranges::none_of(cached, [&](const SceneState::UIDriverLink& known) {
+                    return known.target == link.target && known.kind == link.kind;
+                }) ||
+                FindPosition(cache, link.target) == kNoPosition || !addRoot(SceneEntity{link.target}, PatchScope::Measured, true))
+                return false;
+        }
+        if (type == UIComponentType::Selectable) {
+            // A selectable that now tints another element, or no longer does, is found by a full layout.
+            const UISelectable* selectable = ui.TryGet<UISelectable>(entity);
+            const std::uint64_t now = selectable != nullptr && selectable->targetGraphic != entity.Id() ? selectable->targetGraphic : 0U;
+            const auto known = std::ranges::equal_range(cache.selectableTints, entity.Id(), {}, &SceneState::UITintLink::selectable);
+            if ((known.empty() ? 0U : known.front().target) != now)
+                return false;
+        }
     }
     std::ranges::sort(roots, {}, [](const Root& root) { return root.entity.Id(); });
     std::size_t kept = 0U;
@@ -3431,7 +3697,11 @@ struct LayoutPatch {
     if (work * 2U > frame.elements.size())
         return false;
 
-    FrameBuilder builder{scene, viewport, &cache.contexts};
+    FrameBuilder builder{scene, viewport, &cache.contexts, &cache.drivers};
+    // The records of the elements laid out again are built in storage left over from an earlier frame.
+    builder.Records() = std::move(state.uiSpareElements);
+    builder.Records().clear();
+    const SpareElementsLease lease{state, builder.Records()};
     for (const Root& root : roots) {
         const std::size_t position = FindPosition(cache, root.entity.Id());
         if (position == kNoPosition)
@@ -3440,8 +3710,9 @@ struct LayoutPatch {
         if (ui.Has<UICanvas>(root.entity) || previous.traversalOrder >= cache.contexts.size())
             return false;
         const SceneState::UIElementContext context = cache.contexts[previous.traversalOrder];
+        // Whether a modal canvas is shown follows from what its elements show, so they are laid out with the frame.
         const UICanvas* canvas = ui.TryGet<UICanvas>(previous.canvas);
-        if (canvas == nullptr)
+        if (canvas == nullptr || canvas->modal)
             return false;
         Rect allocated = context.allocated;
         if (root.allocation) {
@@ -3458,7 +3729,7 @@ struct LayoutPatch {
                 if (scroll->vertical)
                     content.y -= scroll->scrollY;
             }
-            allocated = AnchoredRect(*transform, content);
+            allocated = builder.AnchoredAllocation(root.entity, *transform, content);
         }
         const std::size_t before = builder.Records().size();
         if (!builder.Rearrange(root.entity, previous, allocated, canvas->pixelPerfect, context) ||
@@ -3489,13 +3760,43 @@ struct LayoutPatch {
             (record.clipRect.x != slot.clipRect.x || record.clipRect.y != slot.clipRect.y ||
              record.clipRect.width != slot.clipRect.width || record.clipRect.height != slot.clipRect.height))
             patch.focusMoved = true;
+        // The canvases below a shown modal canvas take no input, and these records were laid out without that.
+        if (frame.modalActive && record.canvasSortingOrder < frame.modalSortingOrder) {
+            record.interactionEnabled = false;
+            record.hitTestable = false;
+        }
         slot = std::move(record);
     }
+    state.uiLaidOutElements += records.size();
     cache.writeRevision = state.uiWriteRevision;
-    cache.crossTargets = cache.crossTargets || builder.CrossTargets();
     state.uiWrites.clear();
     state.uiWritesBase = state.uiWriteRevision;
     return true;
+}
+
+// A laid-out-again record starts without the tint another element's selectable gave it, and a selectable that tints
+// another element paints it again: both ends of every such link join `positions`, in frame order.
+void AddTintPartners(const SceneState& state, std::vector<std::size_t>& positions) {
+    const SceneState::UILayoutCache& cache = state.uiLayoutCache;
+    const SceneUIFrame& frame = state.uiFrame;
+    const std::size_t patched = positions.size();
+    for (std::size_t visit = 0U; visit < patched; ++visit) {
+        const SceneUIFrameElement& element = frame.elements[positions[visit]];
+        if (element.selectable && element.selectable->targetGraphic != 0U &&
+            element.selectable->targetGraphic != element.entity.Id()) {
+            const std::size_t target = FindPosition(cache, element.selectable->targetGraphic);
+            if (target != kNoPosition && frame.elements[target].selectable)
+                positions.push_back(target);
+        }
+        for (const SceneState::UITintLink& link :
+             std::ranges::equal_range(cache.tints, element.entity.Id(), {}, &SceneState::UITintLink::target)) {
+            const std::size_t source = FindPosition(cache, link.selectable);
+            if (source != kNoPosition)
+                positions.push_back(source);
+        }
+    }
+    std::ranges::sort(positions);
+    positions.erase(std::unique(positions.begin(), positions.end()), positions.end());
 }
 
 // Lays the frame out and remembers what it was laid out from.
@@ -3511,9 +3812,16 @@ struct LayoutPatch {
     cache.valid = true;
     cache.volatileFrame = builder.Volatile();
     cache.patchable = builder.Patchable();
-    cache.crossTargets = builder.CrossTargets();
+    cache.drivers = builder.TakeDriverLinks();
+    cache.widgetDrivers = cache.drivers;
+    std::ranges::sort(cache.widgetDrivers, {}, &SceneState::UIDriverLink::driver);
+    cache.tints = builder.TakeTintLinks();
+    std::ranges::sort(cache.tints, {}, &SceneState::UITintLink::target);
+    cache.selectableTints = cache.tints;
+    std::ranges::sort(cache.selectableTints, {}, &SceneState::UITintLink::selectable);
     cache.scrollViews = builder.ScrollViewPositions(frame);
     cache.contexts = std::move(contexts);
+    state.uiLaidOutElements += frame.elements.size();
     state.uiLayoutCache = std::move(cache);
     state.uiWrites.clear();
     state.uiWritesOverflow = false;
@@ -3542,12 +3850,15 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
     UpdateUIMedia(scene_);
     SceneState& state = SceneAccess::State(scene_);
     const Vec2 viewport{viewportWidth, viewportHeight};
+    // The rows of a list move to the items the scroll offsets of the last frame, and writes since, put in view, so the
+    // layout below places them in one pass.
+    static_cast<void>(SyncVirtualLists(scene_, state));
     // A frame whose layout inputs are all as they were is kept as it is. `keptFrame` stays true until some step below
     // lays the frame out again, which is also when the frame it replaces becomes the previous one.
     bool keptFrame = CanKeepLayout(scene_, state, viewport);
     // A frame some of whose elements were written is kept too, with just those laid out again where they stand.
     LayoutPatch patch;
-    const bool patched = !keptFrame && PatchLayout(scene_, state, viewport, patch);
+    bool patched = !keptFrame && PatchLayout(scene_, state, viewport, patch);
     keptFrame = keptFrame || patched;
     SceneUIFrame previousFrame;
     if (!keptFrame) {
@@ -3574,15 +3885,35 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
         }
         state.uiFrame = std::move(next);
     };
-    bool presentationDirty = SceneUIGroupTransitions::Update(scene_, deltaSeconds);
-    presentationDirty = ClampAllScrollOffsets(scene_, state, input, deltaSeconds) || presentationDirty;
-    if (presentationDirty) {
-        SceneUIFrame clampedFrame;
-        if (!BuildLayout(scene_, state, viewport, clampedFrame)) {
-            state.uiFrame.refusal = clampedFrame.refusal;
+    // A fade moves what no write names, so the first layout after one takes the whole frame.
+    bool groupsMoved = SceneUIGroupTransitions::Update(scene_, deltaSeconds);
+    bool presentationDirty = groupsMoved;
+    // Brings the frame up to date with what was written since it was laid out: those elements alone where that is
+    // enough, else all of it.
+    const auto relayout = [&]() {
+        if (!groupsMoved) {
+            LayoutPatch later;
+            if (PatchLayout(scene_, state, viewport, later)) {
+                patched = true;
+                patch.positions.insert(patch.positions.end(), later.positions.begin(), later.positions.end());
+                patch.focusMoved = patch.focusMoved || later.focusMoved;
+                return true;
+            }
+        }
+        SceneUIFrame next;
+        next.elements = std::move(state.uiSpareElements);
+        if (!BuildLayout(scene_, state, viewport, next)) {
+            state.uiFrame.refusal = next.refusal;
             return false;
         }
-        replaceFrame(std::move(clampedFrame));
+        replaceFrame(std::move(next));
+        groupsMoved = false;
+        return true;
+    };
+    presentationDirty = ClampAllScrollOffsets(scene_, state, input, deltaSeconds) || presentationDirty;
+    if (presentationDirty) {
+        if (!relayout())
+            return false;
         presentationDirty = false;
     }
     std::array<SceneEntity, 4U> focusBeforeModal{state.uiFocused,
@@ -3896,13 +4227,10 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
     state.previousUIInput.touchPoints = {};
     state.previousUIInput.scrollDelta = 0.0F;
     presentationDirty = UpdateDropdownList(scene_, state, deltaSeconds) || presentationDirty;
+    presentationDirty = SyncVirtualLists(scene_, state) || presentationDirty;
     presentationDirty = SyncScrollbars(scene_, state) || presentationDirty;
-    if (presentationDirty || state.uiPendingFocus.IsValid()) {
-        SceneUIFrame refreshed;
-        if (!BuildLayout(scene_, state, viewport, refreshed))
-            return false;
-        replaceFrame(std::move(refreshed));
-    }
+    if ((presentationDirty || state.uiPendingFocus.IsValid()) && !relayout())
+        return false;
     bool revealFocus = keptFrame && patched && patch.focusMoved;
     if (!keptFrame) {
         revealFocus = previousFrame.viewportSize.x != viewportWidth || previousFrame.viewportSize.y != viewportHeight;
@@ -3922,12 +4250,8 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
         revealFocus = SetFocus(pending) || revealFocus;
     }
     // Viewport and safe-area changes must keep the active field inside its scroll view's clip.
-    if (revealFocus && ScrollFocusedIntoView(scene_, state, input)) {
-        SceneUIFrame scrolled;
-        if (!BuildLayout(scene_, state, viewport, scrolled))
-            return false;
-        replaceFrame(std::move(scrolled));
-    }
+    if (revealFocus && ScrollFocusedIntoView(scene_, state, input) && !relayout())
+        return false;
     // The widgets are tinted for the selection state; a kept frame whose state and colours have not moved needs no pass.
     SceneState::UILayoutCache& cache = state.uiLayoutCache;
     const std::array<SceneEntity, 3U> playerFocus{state.uiPlayers[0].focused, state.uiPlayers[1].focused,
@@ -3938,9 +4262,11 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
                                   cache.interactionPrimaryDown == input.primaryDown;
     const bool tintsCurrent = keptFrame && !patched && selectionCurrent;
     if (!tintsCurrent) {
-        // Elements laid out again in place are tinted alone when everything else already shows its colour and none of
-        // them tints another element.
-        const bool tintPatchedOnly = keptFrame && patched && selectionCurrent && !cache.crossTargets;
+        // Elements laid out again in place are tinted alone when everything else already shows its colour, with the
+        // selectables that tint them and the elements they tint.
+        const bool tintPatchedOnly = keptFrame && patched && selectionCurrent;
+        if (tintPatchedOnly)
+            AddTintPartners(state, patch.positions);
         cache.interactionSettled = ResolveInteractionPresentation(
             scene_, state, input.primaryDown, deltaSeconds, keptFrame ? state.uiFrame : previousFrame, state.uiFrame, true,
             tintPatchedOnly ? &patch.positions : nullptr);
