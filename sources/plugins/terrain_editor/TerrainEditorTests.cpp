@@ -9,6 +9,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <optional>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -299,6 +301,40 @@ void RunBrushTest() {
     Require(kb::terrain_editor::ApplyTerrainBrush(terrain, brush, {}).Changed(), "Fill Hole brush did not restore the hole mask");
 }
 
+// The editor undoes a terrain edit by writing the terrain it captured before the edit back to the asset: after strokes
+// that raise, roughen and cut it, the heights and holes read back exactly as they were.
+void RunHeightEditUndoTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "kb_terrain_editor_undo";
+    std::error_code filesystemError;
+    std::filesystem::remove_all(root, filesystemError);
+    std::filesystem::create_directories(root, filesystemError);
+    Require(!filesystemError, "Terrain undo test could not create its temporary asset root");
+    kb::assets::TerrainAsset terrain = kb::assets::MakeFlatTerrainAsset(65U, 64.0F, 64.0F);
+    for (std::size_t index = 0U; index < terrain.heights.size(); ++index) {
+        terrain.heights[index] = 2.0F * std::sin(0.31F * static_cast<float>(index)) + 0.0001F * static_cast<float>(index);
+    }
+    const kb::assets::TerrainAsset before = terrain;
+    kb::terrain_editor::TerrainBrushSettings brush{ .mode = kb::terrain_editor::TerrainBrushMode::Raise, .radius = 6.0F, .strength = 2.0F, .falloff = 0.5F };
+    Require(kb::terrain_editor::ApplyTerrainBrush(terrain, brush, {}).Changed(), "Raise brush did not change the terrain");
+    brush.mode = kb::terrain_editor::TerrainBrushMode::Noise;
+    brush.noiseSeed = 7U;
+    Require(kb::terrain_editor::ApplyTerrainBrush(terrain, brush, {}).Changed(), "Noise brush did not change the terrain");
+    brush.mode = kb::terrain_editor::TerrainBrushMode::CutHole;
+    Require(kb::terrain_editor::ApplyTerrainBrush(terrain, brush, {}).Changed(), "Cut Hole brush did not change the terrain");
+    Require(terrain.heights != before.heights && terrain.holes != before.holes, "The strokes left the terrain as it was");
+
+    const std::filesystem::path path = root / "Terrain.kbterrain";
+    std::string error;
+    Require(kb::assets::TerrainAssetIO::Save(path, terrain, &error), error.c_str());
+    Require(kb::assets::TerrainAssetIO::Save(path, before, &error), error.c_str());
+    const std::optional<kb::assets::TerrainAsset> restored = kb::assets::TerrainAssetIO::Load(path, &error);
+    Require(restored.has_value(), error.c_str());
+    Require(restored->holes == before.holes && restored->heights.size() == before.heights.size() &&
+            std::memcmp(restored->heights.data(), before.heights.data(), before.heights.size() * sizeof(float)) == 0,
+        "Undo did not bring the terrain back bit for bit");
+    std::filesystem::remove_all(root, filesystemError);
+}
+
 void RunBrushShapeTest() {
     kb::terrain_editor::TerrainBrushSettings brush{
         .mode = kb::terrain_editor::TerrainBrushMode::Raise,
@@ -570,6 +606,7 @@ int main() {
     try {
         RunAssetRoundTripTest();
         RunBrushTest();
+        RunHeightEditUndoTest();
         RunBrushShapeTest();
         RunMaterialLayerPaintTest();
         RunMaterialLayerMeshTest();

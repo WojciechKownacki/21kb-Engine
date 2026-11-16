@@ -53,6 +53,7 @@ void RunPortalVisibilityTests();
 void RunMotionSkeletonRuleTests();
 void RunWorldPartitionTests();
 void RunWorldPartitionJourneyTests();
+void RunTerrainCollisionTests();
 void RunLargeWorldTests();
 void RunSceneBehaviourVariableTests();
 

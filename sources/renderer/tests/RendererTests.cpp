@@ -84,6 +84,7 @@ void RunRendererDefaultSubmissionResultTest();
 void RunRendererPostProcessProfileDiagnosticTest();
 void RunRendererPostProcessProfileAuthoringTests();
 void RunRendererObjectMotionBlurTest();
+void RunRendererTerrainSeamTests();
 void RunRendererResourceGroupEnsureTests();
 void RunRendererSceneSubmitScaleBenchmark(bool spiralLayout);
 void RunRendererPacedSceneSubmitStressBenchmark(bool staticMillionSnapshot,
@@ -526,6 +527,10 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "%s\n", error.what());
             return EXIT_FAILURE;
         }
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "terrain-seams") {
+        kb::render::tests::RunRendererTerrainSeamTests();
+        return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "object-motion-blur") {
         kb::render::tests::RunRendererObjectMotionBlurTest();

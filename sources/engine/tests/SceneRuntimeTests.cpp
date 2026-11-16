@@ -213,6 +213,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunMotionSkeletonRuleTests();
     } else if (suite == "world-partition") {
         kb::tests::RunWorldPartitionTests();
+    } else if (suite == "terrain-collision") {
+        kb::tests::RunTerrainCollisionTests();
     } else if (suite == "world-partition-journey") {
         kb::tests::RunWorldPartitionJourneyTests();
     } else if (suite == "large-world") {

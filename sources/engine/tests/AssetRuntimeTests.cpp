@@ -17,6 +17,16 @@
 #include "engine/assets/TerrainAsset.hpp"
 #include "engine/assets/TerrainAssetIO.hpp"
 #include "engine/assets/TerrainFoliage.hpp"
+#include "engine/library/EngineLibraryCollections.hpp"
+#include "engine/project/ProjectDescriptor.hpp"
+#include "engine/scene/ColliderComponent.hpp"
+#include "engine/scene/PhysicsBackend.hpp"
+#include "engine/scene/RigidbodyComponent.hpp"
+#include "engine/scene/SceneRuntime.hpp"
+
+#if !defined(KB_PHYSICS_JOLT_PLUGIN_PATH)
+#define KB_PHYSICS_JOLT_PLUGIN_PATH ""
+#endif
 #include "engine/assets/ImportedAsset.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
@@ -459,6 +469,58 @@ void RunCollisionMeshAssetTest() {
     std::size_t total = 0;
     for (const auto& chunk : chunks) total += chunk.instances.size();
     return total;
+}
+
+// The collision mesh of a terrain in a static body answers a downward ray at sixteen control points of the heightmap
+// with the height there to within a centimetre, and lets a ray through the hole.
+void RunTerrainPhysicsRaycastTest() {
+    if (std::filesystem::path{ KB_PHYSICS_JOLT_PLUGIN_PATH }.empty()) return;
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "kb_terrain_physics_raycast";
+    std::error_code ignored;
+    std::filesystem::remove_all(root, ignored);
+    std::filesystem::create_directories(root);
+    auto terrain = kb::assets::MakeFlatTerrainAsset(33U, 32.0F, 32.0F);
+    for (std::uint32_t z = 0U; z < 33U; ++z) {
+        for (std::uint32_t x = 0U; x < 33U; ++x) {
+            terrain.heights[z * 33U + x] = 3.0F * std::sin(0.7F * static_cast<float>(x)) * std::cos(0.9F * static_cast<float>(z)) +
+                0.01F * static_cast<float>((x * 7U + z * 13U) % 11U);
+        }
+    }
+    terrain.holes[10U * 32U + 10U] = 1U;
+    std::string error;
+    const auto collision = kb::assets::BuildTerrainCollisionMesh(terrain, error);
+    kb::tests::Require(collision && kb::assets::WriteCollisionMesh(root / "Terrain.kbcollision", *collision, error), "Terrain collision geometry was not written");
+
+    kb::project::ProjectDescriptor descriptor;
+    descriptor.disableEnginePluginsByDefault = true;
+    descriptor.plugins.push_back(kb::project::ProjectPluginReference{ .name = "Physics.Jolt", .binaryPath = KB_PHYSICS_JOLT_PLUGIN_PATH, .enabled = true });
+    kb::scene::Scene scene{ std::move(descriptor) };
+    kb::scene::PhysicsBackend::SetStepPipelining(scene, false);
+    kb::tests::Require(scene.Assets().Manager().Mounts().Mount("Game", root) && scene.Assets().Manager().DiscoverMountedAssets() >= 1U,
+        "The terrain collision asset could not be mounted");
+    const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().FindByPath("/Game/Terrain.kbcollision");
+    kb::tests::Require(metadata != nullptr, "The terrain collision asset was not discovered");
+    const kb::scene::SceneObject ground = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Terrain" });
+    scene.Components().Rigidbodies().Set(ground.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Static });
+    scene.Components().Colliders().Set(ground.Entity(), kb::scene::ColliderComponent{
+        .shape = kb::scene::ColliderShape::Mesh, .layer = 0x1U, .meshAssetId = metadata->id.value });
+    for (int step = 0; step < 3; ++step) static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+
+    std::array<kb::scene::PhysicsCastResult, 4U> storage{};
+    kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult> hits{ std::span<kb::scene::PhysicsCastResult>(storage) };
+    for (std::uint32_t row = 0U; row < 4U; ++row) {
+        for (std::uint32_t column = 0U; column < 4U; ++column) {
+            const std::uint32_t x = 4U + 8U * column;
+            const std::uint32_t z = 4U + 8U * row;
+            kb::scene::RaycastAllNonAllocPrecise(scene, kb::math::DVec3{ static_cast<double>(x) - 16.0, 50.0, static_cast<double>(z) - 16.0 },
+                kb::scene::Vec3{ 0.0F, -1.0F, 0.0F }, 100.0F, 0x1U, hits);
+            kb::tests::Require(hits.Count() == 1U && std::abs(hits.GetAt(0U)->worldPoint.y - terrain.heights[z * 33U + x]) < 0.01,
+                "A ray at a control point of the terrain did not hit its height");
+        }
+    }
+    kb::scene::RaycastAllNonAllocPrecise(scene, kb::math::DVec3{ 10.5 - 16.0, 50.0, 10.5 - 16.0 }, kb::scene::Vec3{ 0.0F, -1.0F, 0.0F }, 100.0F, 0x1U, hits);
+    kb::tests::Require(hits.Count() == 0U, "A ray through a hole of the terrain hit it");
+    std::filesystem::remove_all(root, ignored);
 }
 
 void RunTerrainFoliageTest() {
@@ -3239,8 +3301,13 @@ void RunSceneAssetDiscoveryStaysLinearInNestedPrefabsTest() {
 
 namespace kb::tests {
 
+void RunTerrainCollisionTests() {
+    RunTerrainPhysicsRaycastTest();
+}
+
 void RunAssetRuntimeTests() {
     RunCollisionMeshAssetTest();
+    RunTerrainCollisionTests();
     RunTerrainFoliageTest();
     RunAssetDiscoveryHashCompatibilityTest();
     RunAssetDiscoveryRemembersUnchangedFilesTest();

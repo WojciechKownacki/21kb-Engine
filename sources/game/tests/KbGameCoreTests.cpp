@@ -43,6 +43,8 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneUI.hpp"
 #include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
+#include "engine/assets/TerrainAsset.hpp"
+#include "engine/assets/TerrainAssetIO.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
@@ -86,6 +88,7 @@
 #include <chrono>
 #include <thread>
 #include <cmath>
+#include <cstring>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -575,6 +578,61 @@ void RunSkeletalMeshLodPackTest() {
     }
     std::printf("skeletal_mesh_lod_pack levels=%zu triangles=%zu,%zu,%zu\n", loaded->lods.size(), loaded->lods[0].indices.size() / 3U,
         loaded->lods[1].indices.size() / 3U, loaded->lods[2].indices.size() / 3U);
+}
+
+// A terrain cooked into a package comes back with exactly the heights, holes and chunk layout it was authored with.
+void RunTerrainCookTest() {
+    namespace bake = kb::assets::bake;
+    const Fixture fixture = BuildFixture(TestRoot() / "terrain_cook", "Project");
+    kb::project::ProjectSettings settings;
+    settings.defaultMap = fixture.sceneVirtualPath;
+    settings.physicsLayersAsset.clear();
+    settings.inputEnabled = false;
+    WriteSettings(fixture.root, settings);
+
+    kb::assets::TerrainAsset terrain = kb::assets::MakeFlatTerrainAsset(65U, 64.0F, 64.0F);
+    terrain.chunkQuads = 16U;
+    terrain.lodCount = 3U;
+    for (std::size_t index = 0U; index < terrain.heights.size(); ++index) {
+        terrain.heights[index] = 5.0F * std::sin(0.37F * static_cast<float>(index)) + 0.001F * static_cast<float>(index % 97U);
+    }
+    terrain.holes[20U * 64U + 20U] = 1U;
+    std::filesystem::create_directories(fixture.root / "Assets" / "Terrain");
+    std::string error;
+    Require(kb::assets::TerrainAssetIO::Save(fixture.root / "Assets" / "Terrain" / "Hill.kbterrain", terrain, &error), error.c_str());
+
+    kb::scene::Scene authored;
+    Require(authored.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMeshAssetLoader>()),
+        "The terrain cook fixture could not register the terrain loader");
+    Require(authored.Assets().MountProject(fixture.root), "The terrain cook fixture could not be mounted");
+    static_cast<void>(authored.Assets().Discover());
+    const auto* metadata = authored.Assets().Manager().Registry().FindByPath("/Game/Terrain/Hill.kbterrain");
+    Require(metadata != nullptr, "The terrain cook fixture terrain was not discovered");
+    const kb::scene::SceneEntity hill = authored.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Hill" });
+    authored.Components().MeshRenderers().Set(hill, kb::scene::MeshRendererComponent{ .meshAssetId = metadata->id.value });
+    Require(kb::scene::SceneDocumentService::Save(authored, fixture.root / "Assets" / "Scenes" / "Main.21kbscene", "Main"),
+        "The terrain cook fixture scene could not be saved");
+
+    const auto packPath = fixture.root / "Game.kbpack";
+    std::ostringstream diagnostics;
+    const auto cooked = kb::game::CookProject(kb::game::ProjectCookRequest{
+        .projectPath = fixture.root, .targetProfileId = "Windows.x64", .outputPackPath = packPath }, diagnostics);
+    Require(cooked.succeeded, cooked.error.c_str());
+    bake::RuntimeAssetPack pack;
+    Require(pack.Mount(packPath, bake::WindowsX64BakeTargetProfile()) == bake::RuntimeAssetPackStatus::Success,
+        "The terrain package could not be mounted");
+    const bake::RuntimeAssetManifestEntry* entry = pack.FindAsset("/Game/Terrain/Hill.kbterrain");
+    Require(entry != nullptr && entry->artifacts.size() == 1U, "The terrain is not in the package");
+    std::vector<std::uint8_t> bytes;
+    Require(pack.ReadSourceFile(entry->artifacts.front().digest, bytes) == bake::RuntimeAssetPackStatus::Success,
+        "The packaged terrain could not be read");
+    const std::optional<kb::assets::TerrainAsset> packaged = kb::assets::TerrainAssetIO::Load(bytes, &error);
+    Require(packaged.has_value(), error.c_str());
+    Require(packaged->width == terrain.width && packaged->height == terrain.height && packaged->chunkQuads == terrain.chunkQuads &&
+            packaged->lodCount == terrain.lodCount && packaged->worldSizeX == terrain.worldSizeX && packaged->worldSizeZ == terrain.worldSizeZ &&
+            packaged->holes == terrain.holes && packaged->heights.size() == terrain.heights.size() &&
+            std::memcmp(packaged->heights.data(), terrain.heights.data(), terrain.heights.size() * sizeof(float)) == 0,
+        "A packaged terrain differs from the terrain that was cooked");
 }
 
 void RunTextureReuseCookTests() {
@@ -3191,6 +3249,12 @@ int main(int argc, char** argv) {
         return EXIT_SUCCESS;
     }
 
+    if (argc == 2 && std::string_view{ argv[1] } == "--terrain-cook") {
+        RunTerrainCookTest();
+        std::fputs("kb_game_core terrain cook test passed\n", stdout);
+        return EXIT_SUCCESS;
+    }
+
     if (argc == 2 && std::string_view{ argv[1] } == "--skeletal-lod") {
         RunSkeletalMeshLodPackTest();
         std::fputs("kb_game_core skeletal mesh level tests passed\n", stdout);
@@ -3235,6 +3299,7 @@ int main(int argc, char** argv) {
     RunCookOutputLockTest();
     RunTextureReuseCookTests();
     RunSkeletalMeshLodPackTest();
+    RunTerrainCookTest();
     RunBuildSceneListCookTest();
     RunDeepOutputPathCookTest();
     RunWindowsRuntimeModulePackagingTests();
