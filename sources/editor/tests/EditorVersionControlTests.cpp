@@ -8,15 +8,20 @@
 #include "engine/scene/ScenePrefabInstance.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "project/EditorProjectRepository.hpp"
+#include "project/EditorVersionControl.hpp"
 #include "scene/EditorSceneComparison.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <string>
 #include <system_error>
+#include <thread>
 
 #if !defined(KB_EDITOR_VERSION_CONTROL_TEST_ROOT)
 #error "KB_EDITOR_VERSION_CONTROL_TEST_ROOT must name the scratch folder of the version control tests."
@@ -140,24 +145,100 @@ void RunSceneComparisonTest() {
     }
 }
 
-void RunLargeSceneComparisonTest() {
-    constexpr std::uint32_t kObjects = 100000U;
+constexpr std::uint32_t kLargeObjects = 100000U;
+
+// A world of a hundred thousand objects, ten of them moved when `changed`.
+[[nodiscard]] kb::scene::SceneDocument LargeScene(bool changed) {
     constexpr std::uint32_t kStep = 10000U;
-    const auto build = [&](bool changed) {
-        kb::scene::SceneDocument document;
-        document.name = "Large";
-        document.worldPrefab.Reserve(kObjects + 1U);
-        const std::uint32_t world = AddNode(document, "World", kRoot);
-        for (std::uint32_t index = 0U; index < kObjects; ++index) {
-            static_cast<void>(AddNode(document, "E" + std::to_string(index), world, changed && index % kStep == 0U ? 1.0F : 0.0F));
-        }
-        return document;
+    kb::scene::SceneDocument document;
+    document.name = "Large";
+    document.worldPrefab.Reserve(kLargeObjects + 1U);
+    const std::uint32_t world = AddNode(document, "World", kRoot);
+    for (std::uint32_t index = 0U; index < kLargeObjects; ++index) {
+        static_cast<void>(AddNode(document, "E" + std::to_string(index), world, changed && index % kStep == 0U ? 1.0F : 0.0F));
+    }
+    return document;
+}
+
+[[nodiscard]] bool SameComparison(const EditorSceneComparison& left, const EditorSceneComparison& right) {
+    const auto sameField = [](const kb::editor::EditorSceneFieldChange& a, const kb::editor::EditorSceneFieldChange& b) {
+        return a.component == b.component && a.property == b.property && a.before == b.before && a.after == b.after;
     };
-    const EditorSceneComparison comparison = EditorSceneComparer::Compare(build(false), build(true));
+    return left.succeeded == right.succeeded && left.error == right.error &&
+        std::ranges::equal(left.objects, right.objects, [&](const kb::editor::EditorSceneObjectChange& a, const kb::editor::EditorSceneObjectChange& b) {
+            return a.kind == b.kind && a.path == b.path && a.address == b.address && std::ranges::equal(a.fields, b.fields, sameField);
+        });
+}
+
+void RunLargeSceneComparisonTest() {
+    const EditorSceneComparison comparison = EditorSceneComparer::Compare(LargeScene(false), LargeScene(true));
     Require(comparison.succeeded && comparison.objects.size() == 10U, "A hundred thousand objects with ten moved must give ten changes");
     Require(std::ranges::all_of(comparison.objects, [](const kb::editor::EditorSceneObjectChange& object) {
         return object.kind == EditorSceneChangeKind::Changed && object.fields.size() == 1U && object.fields.front().component == "Transform";
     }), "Every change must be a moved object");
+}
+
+// What the first of two comparisons saw from its own thread, shared with the test by the thread that runs it.
+struct ObservedComparison {
+    std::atomic<bool> started{ false };
+    std::atomic<bool> onCallerThread{ true };
+    std::atomic<bool> cancelled{ false };
+    std::atomic<bool> finished{ false };
+};
+
+template <typename Condition>
+[[nodiscard]] bool WaitFor(Condition condition) {
+    for (int attempt = 0; attempt < 6000 && !condition(); ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{ 10 });
+    }
+    return condition();
+}
+
+// The comparison of a hundred thousand objects runs on a thread of its own, comes back unchanged, and asking again
+// cancels the comparison still running.
+void RunBackgroundComparisonTest() {
+    kb::editor::EditorVersionControl& control = kb::editor::EditorVersionControl::Instance();
+    const std::thread::id caller = std::this_thread::get_id();
+    const auto observed = std::make_shared<ObservedComparison>();
+    // The first comparison only ends when it is cancelled: the call that starts it can return only if it runs elsewhere.
+    control.StartComparison([observed, caller](const std::atomic<bool>& cancelled) {
+        observed->onCallerThread = std::this_thread::get_id() == caller;
+        observed->started = true;
+        while (!cancelled.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{ 1 });
+        }
+        observed->cancelled = true;
+        observed->finished = true;
+        return EditorSceneComparison{ .error = "cancelled" };
+    });
+    Require(control.Comparing() && !control.HasComparison(), "A started comparison must be running, with no result yet");
+    Require(WaitFor([&] { return observed->started.load(); }) && !observed->onCallerThread, "A comparison must run on a thread of its own");
+
+    control.StartComparison([](const std::atomic<bool>& cancelled) {
+        return EditorSceneComparer::Compare(LargeScene(false), LargeScene(true), &cancelled);
+    });
+    Require(WaitFor([&] { return observed->finished.load(); }) && observed->cancelled, "Asking again must cancel the comparison that was running");
+    Require(WaitFor([&] {
+        static_cast<void>(control.Pump({}, std::chrono::steady_clock::now()));
+        return !control.Comparing();
+    }), "The second comparison must finish");
+    const EditorSceneComparison& large = control.Comparison();
+    Require(control.HasComparison() && large.succeeded && large.objects.size() == 10U &&
+            std::ranges::all_of(large.objects, [](const kb::editor::EditorSceneObjectChange& object) {
+                return object.kind == EditorSceneChangeKind::Changed && object.fields.size() == 1U && object.fields.front().component == "Transform";
+            }),
+        "A hundred thousand objects with ten moved must give ten changes in the background too");
+
+    // A small scene gives in the background what it gives directly.
+    control.StartComparison([](const std::atomic<bool>& cancelled) {
+        return EditorSceneComparer::Compare(LevelScene(false), LevelScene(true), &cancelled);
+    });
+    Require(WaitFor([&] {
+        static_cast<void>(control.Pump({}, std::chrono::steady_clock::now()));
+        return !control.Comparing();
+    }) && SameComparison(control.Comparison(), EditorSceneComparer::Compare(LevelScene(false), LevelScene(true))),
+        "The comparison in the background must give the result of the direct one");
+    control.ClearComparison();
 }
 
 void RunChangesAndRestoreTest() {
@@ -260,6 +341,7 @@ namespace kb::editor::tests {
 void RunEditorVersionControlTests() {
     RunSceneComparisonTest();
     RunLargeSceneComparisonTest();
+    RunBackgroundComparisonTest();
     RunChangesAndRestoreTest();
 }
 

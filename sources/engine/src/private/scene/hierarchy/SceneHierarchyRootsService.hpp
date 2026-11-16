@@ -20,6 +20,7 @@ public:
     [[nodiscard]] static std::size_t RootCount(const Scene& scene) noexcept;
     [[nodiscard]] static SceneEntity RootAt(const Scene& scene, std::size_t index) noexcept;
     [[nodiscard]] static std::uint64_t RootAppendEpoch(const Scene& scene) noexcept;
+    [[nodiscard]] static std::uint64_t StructureEpoch(const Scene& scene) noexcept;
 };
 
 } // namespace kb::scene

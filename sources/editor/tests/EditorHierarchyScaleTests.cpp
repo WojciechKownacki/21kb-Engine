@@ -8,6 +8,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "scene/EditorHierarchyObjectFactory.hpp"
 #include "scene/EditorHierarchyRowBuilder.hpp"
 #include "scene/EditorHierarchyRowModel.hpp"
 #include "scene/EditorHierarchySelectionState.hpp"
@@ -18,6 +19,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #define WIN32_LEAN_AND_MEAN
@@ -241,6 +243,142 @@ void RunTransientRowsOverModelTest() {
     ExpectSameRows(model, scene, collapsed, "", "Rows differ from the builder with transient entities");
 }
 
+// A model that takes up the scene's own reports after each change lists the rows the full builder does, with rows far
+// from the cursor found by the subtree sizes.
+void RunIncrementalRefreshMatchesBuilderTest() {
+    kb::scene::Scene scene;
+    Population population = Populate(scene, 20000U, true);
+    EditorHierarchyRowBuilder::CollapsedEntitySet collapsed;
+    EditorHierarchyRowModel model;
+    const auto check = [&](const char* message) {
+        model.Sync(scene, collapsed, "", false);
+        const std::vector<EditorHierarchyRow> expected = EditorHierarchyRowBuilder::Build(scene, collapsed, "");
+        bool same = model.Count() == expected.size() && expected.size() > 10000U;
+        for (const std::size_t first : { std::size_t{ 0U }, std::size_t{ 10000U }, std::size_t{ 5000U }, std::size_t{ 15000U }, expected.size() - 50U }) {
+            const std::vector<EditorHierarchyRow>& window = model.Window(first, 50U);
+            same = same && window.size() == 50U;
+            for (std::size_t index = 0U; index < window.size() && same; ++index) {
+                const EditorHierarchyRow& want = expected[first + index];
+                same = window[index].entity == want.entity && window[index].depth == want.depth && window[index].name == want.name &&
+                    window[index].hasChildren == want.hasChildren && window[index].expanded == want.expanded;
+            }
+        }
+        kb::editor::tests::Require(same, message);
+    };
+    check("The first rows differ from the builder");
+    scene.Entities().SetName(population.objects[10000], "Renamed");
+    check("A rename is not listed");
+    static_cast<void>(scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Appended Root" }));
+    check("A root appended at the end is not listed");
+    static_cast<void>(scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Added", .parent = population.objects[3] }));
+    check("A child added to a group is not listed");
+    kb::editor::tests::Require(scene.Hierarchy().SetParent(population.objects[12000], population.objects[9]), "Reparenting failed");
+    check("A reparented entity is not listed under its new group");
+    scene.Entities().Destroy(population.objects[7000]);
+    check("A destroyed entity is still listed");
+    collapsed.insert(population.objects[2].Entity().Id());
+    check("A collapsed group is not hidden");
+    collapsed.insert(population.objects[30].Entity().Id());
+    collapsed.erase(population.objects[2].Entity().Id());
+    check("The collapsed groups did not change");
+    scene.Entities().Destroy(population.objects[1]);
+    check("A destroyed group still lists its children");
+}
+
+// Rows of a scene of a million entities with the cursor in the middle: a rename walks nothing, a root appended at the
+// end adds a row, and after a structure change the row is found by the subtree sizes, visiting only the rows shown
+// and the entities on the way down.
+void RunRefreshWorkTest(kb::scene::Scene& scene, Population& population, bool nested) {
+    const std::size_t count = population.objects.size();
+    const std::size_t middle = count / 2U;
+    const std::size_t budget = 64U * (nested ? 3U : 1U);
+    const EditorHierarchyRowBuilder::CollapsedEntitySet collapsed;
+    EditorHierarchyRowModel model;
+    const auto show = [&]() {
+        model.Sync(scene, collapsed, "", false);
+        return model.Window(middle, kViewRows).size();
+    };
+    kb::editor::tests::Require(show() == kViewRows && model.Count() == count, "The rows of a million entities are not counted");
+    static_cast<void>(model.TakeWork());
+
+    const SceneEntity target = model.Window(middle, kViewRows)[5U].entity;
+    static_cast<void>(model.TakeWork());
+    scene.Entities().SetName(target, "Renamed");
+    model.Sync(scene, collapsed, "", false);
+    EditorHierarchyRowModel::Work work = model.TakeWork();
+    kb::editor::tests::Require(work.visited == 0U && work.skipped == 0U, "A rename must not walk the rows");
+    const EditorHierarchyRow* renamed = model.RowAt(middle + 5U);
+    kb::editor::tests::Require(renamed != nullptr && renamed->entity == target && renamed->name == "Renamed",
+        "A renamed row is not shown with its new name");
+    static_cast<void>(model.TakeWork());
+
+    const SceneEntity root = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Appended Root" });
+    model.Sync(scene, collapsed, "", false);
+    work = model.TakeWork();
+    kb::editor::tests::Require(work.visited == 0U && work.skipped == 0U && model.Count() == count + 1U &&
+            model.RowAt(count) != nullptr && model.RowAt(count)->entity == root,
+        "A root appended at the end must add one row without a walk");
+
+    static_cast<void>(model.TakeWork());
+    static_cast<void>(scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Added Child", .parent = population.objects[nested ? 2U : 0U] }));
+    static_cast<void>(show());
+    work = model.TakeWork();
+    kb::editor::tests::Require(work.visited <= budget && model.Count() == count + 2U, "A child added in the middle must refresh within the budget");
+
+    scene.Entities().Destroy(population.objects[count - 1U]);
+    static_cast<void>(show());
+    work = model.TakeWork();
+    kb::editor::tests::Require(work.visited <= budget && model.Count() == count + 1U, "An entity destroyed must refresh within the budget");
+
+    kb::editor::tests::Require(scene.Hierarchy().SetParent(population.objects[middle + 3U], population.objects[7]), "Reparenting failed");
+    static_cast<void>(show());
+    work = model.TakeWork();
+    kb::editor::tests::Require(work.visited <= budget && work.skipped <= count, "A reparented entity must refresh within the budget");
+
+    // What the model lists is what the full builder lists.
+    const std::vector<EditorHierarchyRow> expected = EditorHierarchyRowBuilder::Build(scene, collapsed, "");
+    bool same = model.Count() == expected.size();
+    for (const std::size_t first : { std::size_t{ 0U }, middle - 100U, middle, middle + 4321U, expected.size() - kViewRows }) {
+        const std::vector<EditorHierarchyRow>& window = model.Window(first, kViewRows);
+        same = same && window.size() == kViewRows;
+        for (std::size_t index = 0U; index < window.size() && same; ++index) {
+            same = window[index].entity == expected[first + index].entity && window[index].depth == expected[first + index].depth &&
+                window[index].name == expected[first + index].name;
+        }
+    }
+    kb::editor::tests::Require(same, "The rows of a million entities differ from the builder after the changes");
+}
+
+// A thousand objects of one name under one parent of a scene of a million entities: each name is checked against the
+// siblings only, and the names stay distinct.
+void RunUniqueNameBySiblingsTest(kb::scene::Scene& scene, const Population& population) {
+    const kb::scene::SceneObject parent = population.objects[population.objects.size() / 2U];
+    std::unordered_set<std::string> names;
+    bool withinSiblings = true;
+    for (std::size_t index = 0U; index < 1000U; ++index) {
+        const std::size_t siblings = scene.Hierarchy().ChildCount(parent.Entity());
+        std::size_t visited = 0U;
+        const std::string name = kb::editor::EditorHierarchyObjectFactory::MakeUniqueName(scene, "Cube", parent.Entity(), &visited);
+        withinSiblings = withinSiblings && visited <= siblings;
+        names.insert(name);
+        static_cast<void>(scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = name, .parent = parent }));
+    }
+    kb::editor::tests::Require(names.size() == 1000U && names.contains("Cube") && names.contains("Cube 999"), "A thousand objects of one name must get distinct names");
+    kb::editor::tests::Require(withinSiblings, "A unique name must be found by reading the siblings, not the scene");
+}
+
+void RunMillionEntityTests() {
+    {
+        kb::scene::Scene scene;
+        Population population = Populate(scene, 1000000U, false);
+        RunRefreshWorkTest(scene, population, false);
+        RunUniqueNameBySiblingsTest(scene, population);
+    }
+    kb::scene::Scene scene;
+    Population population = Populate(scene, 1000000U, true);
+    RunRefreshWorkTest(scene, population, true);
+}
+
 // Time to know the rows for a first show, after one change at the top or in the middle, and for a page scroll.
 void RunBench(std::size_t count, bool nested, bool full) {
     kb::scene::Scene scene;
@@ -342,6 +480,8 @@ void RunEditorHierarchyScaleTests() {
     RunRefreshAfterChangeTest();
     RunReparentOverModelTest();
     RunTransientRowsOverModelTest();
+    RunIncrementalRefreshMatchesBuilderTest();
+    RunMillionEntityTests();
     RunBenchSizes();
 }
 

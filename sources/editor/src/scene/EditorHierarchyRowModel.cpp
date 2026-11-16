@@ -12,35 +12,53 @@
 namespace kb::editor {
 namespace {
 
-// Entities a subtraction may visit before the visible rows are counted instead.
-constexpr std::size_t kHiddenWorkBudget = 65536U;
+// Rows the cursor walks to reach a row; farther rows are looked up by the subtree sizes.
+constexpr std::size_t kWalkRows = 4096U;
 
 } // namespace
 
+EditorHierarchyRowModel::Work EditorHierarchyRowModel::TakeWork() noexcept {
+    return std::exchange(work_, Work{});
+}
+
 void EditorHierarchyRowModel::Sync(const kb::scene::Scene& scene,
     const EditorHierarchyRowBuilder::CollapsedEntitySet& collapsed, std::string_view query, bool dirty) {
+    const kb::scene::SceneHierarchyQueries hierarchy = scene.Hierarchy();
+    const bool sameScene = synced_ && scene.Id() == sceneId_;
     scene_ = &scene;
     collapsed_ = &collapsed;
-    if (dirty || !synced_ || query != query_ || scene.Hierarchy().RootAppendEpoch() != epoch_) {
+    // Search rows carry names, so a rename or a root appended at the end changes them too.
+    const bool searchChanged = !query_.empty() &&
+        (hierarchy.RootAppendEpoch() != epoch_ || hierarchy.RootCount() != roots_.size());
+    if (dirty || !sameScene || query != query_ || collapsed != collapsedSeen_ ||
+        hierarchy.StructureEpoch() != structureEpoch_ || searchChanged) {
         Rebuild(query);
+        return;
+    }
+    for (std::size_t index = roots_.size(); index < hierarchy.RootCount(); ++index) {
+        AppendRoot(hierarchy.RootAt(index));
     }
 }
 
 void EditorHierarchyRowModel::Rebuild(std::string_view query) {
+    const kb::scene::SceneHierarchyQueries hierarchy = scene_->Hierarchy();
+    sceneId_ = scene_->Id();
     query_ = query;
-    epoch_ = scene_->Hierarchy().RootAppendEpoch();
+    collapsedSeen_ = *collapsed_;
+    epoch_ = hierarchy.RootAppendEpoch();
+    structureEpoch_ = hierarchy.StructureEpoch();
     synced_ = true;
     cursorValid_ = false;
     transient_.clear();
+    hidden_.clear();
     window_.clear();
     searchRows_.clear();
-    roots_.clear();
+    roots_ = hierarchy.RootEntities();
     if (!query_.empty()) {
         searchRows_ = EditorHierarchyRowBuilder::Build(*scene_, *collapsed_, query_);
         count_ = searchRows_.size();
         return;
     }
-    roots_ = scene_->Hierarchy().RootEntities();
     count_ = CountRows();
 }
 
@@ -76,69 +94,49 @@ bool EditorHierarchyRowModel::IsTransient(kb::scene::SceneEntity entity) const {
 
 // A transient subtree is not listed; the first walk that meets it takes its rows out of the count.
 bool EditorHierarchyRowModel::Listed(kb::scene::SceneEntity entity) {
-    if (transient_.contains(entity.Id())) {
+    ++work_.visited;
+    if (!transient_.empty() && transient_.contains(entity.Id())) {
         return false;
     }
     if (!IsTransient(entity)) {
         return true;
     }
     transient_.insert(entity.Id());
-    if (!counting_) {
-        count_ -= std::min(count_, SubtreeRows(entity));
-        discovered_ = true;
-    }
+    const std::size_t rows = SubtreeRows(entity);
+    count_ -= std::min(count_, rows);
+    Hide(entity, rows);
+    discovered_ = true;
     return false;
 }
 
-std::size_t EditorHierarchyRowModel::SubtreeSize(kb::scene::SceneEntity entity, std::size_t& work) const {
-    const kb::scene::SceneHierarchyQueries hierarchy = scene_->Hierarchy();
-    std::size_t size = 1U;
-    Path path{ Frame{ entity, 0U } };
-    while (!path.empty()) {
-        Frame& frame = path.back();
-        if (frame.index >= hierarchy.ChildCount(frame.entity)) {
-            path.pop_back();
-            continue;
-        }
-        const kb::scene::SceneEntity child = hierarchy.ChildAt(frame.entity, frame.index++);
-        ++size;
-        ++work;
-        if (hierarchy.ChildCount(child) != 0U) {
-            path.push_back(Frame{ child, 0U });
-        }
-    }
-    return size;
-}
-
-// The rows the entity and its expanded descendants take, whatever their transient state.
+// The rows the entity and its expanded descendants take, whatever their transient state: the descendants the scene
+// counts, less the rows hidden inside.
 std::size_t EditorHierarchyRowModel::SubtreeRows(kb::scene::SceneEntity entity) const {
-    const kb::scene::SceneHierarchyQueries hierarchy = scene_->Hierarchy();
-    std::size_t rows = 1U;
     if (!Expanded(entity)) {
-        return rows;
+        return 1U;
     }
-    Path path{ Frame{ entity, 0U } };
-    while (!path.empty()) {
-        Frame& frame = path.back();
-        if (frame.index >= hierarchy.ChildCount(frame.entity)) {
-            path.pop_back();
-            continue;
-        }
-        const kb::scene::SceneEntity child = hierarchy.ChildAt(frame.entity, frame.index++);
-        ++rows;
-        if (Expanded(child)) {
-            path.push_back(Frame{ child, 0U });
-        }
-    }
-    return rows;
+    const std::size_t below = scene_->Hierarchy().DescendantCount(entity);
+    const auto hidden = hidden_.empty() ? hidden_.end() : hidden_.find(entity.Id());
+    return 1U + below - (hidden == hidden_.end() ? 0U : std::min(below, hidden->second));
 }
 
-// Every entity is a row but those under a collapsed entity, so the rows are the entities less the hidden ones. When
-// the collapsed subtrees are large, walking the few visible rows is cheaper.
+std::size_t EditorHierarchyRowModel::SkipRows(kb::scene::SceneEntity entity) const {
+    return !transient_.empty() && transient_.contains(entity.Id()) ? 0U : SubtreeRows(entity);
+}
+
+// Takes rows out of the subtree of every entity above `entity`.
+void EditorHierarchyRowModel::Hide(kb::scene::SceneEntity entity, std::size_t rows) {
+    const kb::scene::SceneHierarchyQueries hierarchy = scene_->Hierarchy();
+    for (kb::scene::SceneEntity parent = hierarchy.Parent(entity); parent.IsValid(); parent = hierarchy.Parent(parent)) {
+        hidden_[parent.Id()] += rows;
+    }
+}
+
+// Every entity is a row but those under a collapsed entity: the entities less the descendants of the collapsed ones
+// that no other collapsed entity above hides.
 std::size_t EditorHierarchyRowModel::CountRows() {
     const kb::scene::SceneHierarchyQueries hierarchy = scene_->Hierarchy();
     std::size_t hidden = 0U;
-    std::size_t work = 0U;
     for (const kb::scene::SceneEntity::IdType id : *collapsed_) {
         const kb::scene::SceneEntity entity{ id };
         if (!scene_->Entities().IsAlive(entity) || hierarchy.ChildCount(entity) == 0U) {
@@ -149,28 +147,13 @@ std::size_t EditorHierarchyRowModel::CountRows() {
             covered = collapsed_->contains(parent.Id());
         }
         if (!covered) {
-            hidden += SubtreeSize(entity, work) - 1U;
-        }
-        if (work > kHiddenWorkBudget) {
-            break;
-        }
-    }
-    if (work <= kHiddenWorkBudget) {
-        const std::size_t total = scene_->Entities().Count();
-        return total - std::min(total, hidden);
-    }
-
-    counting_ = true;
-    std::size_t rows = 0U;
-    Path path;
-    if (First(path)) {
-        rows = 1U;
-        while (Next(path)) {
-            ++rows;
+            const std::size_t below = hierarchy.DescendantCount(entity);
+            hidden += below;
+            Hide(entity, below);
         }
     }
-    counting_ = false;
-    return rows;
+    const std::size_t total = scene_->Entities().Count();
+    return total - std::min(total, hidden);
 }
 
 // Pushes the first listed child of the row the path ends at.
@@ -264,7 +247,49 @@ bool EditorHierarchyRowModel::Previous(Path& path) {
     return true;
 }
 
-// Puts the cursor on a row, walking from the nearest of the first row, the last row and where it stood.
+// Puts the path on a row by stepping over the subtrees before it by their sizes: only the entities on the way down
+// are visited. When every entity of a list is a row of its own, the row is the place in the list.
+bool EditorHierarchyRowModel::FindRow(Path& path, std::size_t row) {
+    path.clear();
+    kb::scene::SceneEntity parent{};
+    std::size_t listRows = count_;
+    for (;;) {
+        const std::size_t count = SiblingCount(parent);
+        std::size_t index = 0U;
+        if (listRows == count && transient_.empty()) {
+            index = row;
+            row = 0U;
+        }
+        for (; index < count; ++index) {
+            const std::size_t rows = SkipRows(SiblingAt(parent, index));
+            if (row < rows) {
+                break;
+            }
+            row -= rows;
+            ++work_.skipped;
+        }
+        if (index >= count) {
+            return false;
+        }
+        const kb::scene::SceneEntity sibling = SiblingAt(parent, index);
+        if (!Listed(sibling)) {
+            return false;
+        }
+        path.push_back(Frame{ sibling, index });
+        if (row == 0U) {
+            return true;
+        }
+        --row;
+        if (!Expanded(sibling)) {
+            return false;
+        }
+        parent = sibling;
+        listRows = SubtreeRows(sibling) - 1U;
+    }
+}
+
+// Puts the cursor on a row: by walking from the nearest of the first row, the last row and where it stood, or, when
+// those are far, by looking the row up.
 bool EditorHierarchyRowModel::MoveCursorTo(std::size_t row) {
     for (;;) {
         if (row >= count_) {
@@ -281,22 +306,28 @@ bool EditorHierarchyRowModel::MoveCursorTo(std::size_t row) {
         }
         const std::size_t fromCursor = row > cursorRow_ ? row - cursorRow_ : cursorRow_ - row;
         const std::size_t fromEnd = count_ - 1U - row;
-        Path jump;
-        if (fromEnd < fromCursor && fromEnd < row && Last(jump)) {
-            cursor_ = std::move(jump);
-            cursorRow_ = count_ - 1U;
-        } else if (row < fromCursor && First(jump)) {
-            cursor_ = std::move(jump);
-            cursorRow_ = 0U;
-        }
         bool reached = true;
-        while (reached && cursorRow_ < row) {
-            reached = Next(cursor_);
-            cursorRow_ += reached ? 1U : 0U;
-        }
-        while (reached && cursorRow_ > row) {
-            reached = Previous(cursor_);
-            cursorRow_ -= reached ? 1U : 0U;
+        Path found;
+        if (std::min({ row, fromCursor, fromEnd }) > kWalkRows && FindRow(found, row)) {
+            cursor_ = std::move(found);
+            cursorRow_ = row;
+        } else if (!discovered_) {
+            Path jump;
+            if (fromEnd < fromCursor && fromEnd < row && Last(jump)) {
+                cursor_ = std::move(jump);
+                cursorRow_ = count_ - 1U;
+            } else if (row < fromCursor && First(jump)) {
+                cursor_ = std::move(jump);
+                cursorRow_ = 0U;
+            }
+            while (reached && cursorRow_ < row) {
+                reached = Next(cursor_);
+                cursorRow_ += reached ? 1U : 0U;
+            }
+            while (reached && cursorRow_ > row) {
+                reached = Previous(cursor_);
+                cursorRow_ -= reached ? 1U : 0U;
+            }
         }
         if (discovered_) {
             cursorValid_ = false;

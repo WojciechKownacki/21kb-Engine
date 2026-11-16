@@ -4,6 +4,7 @@
 #include "engine/scene/SceneDocument.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <span>
@@ -52,13 +53,15 @@ class EditorSceneComparer final {
 public:
     EditorSceneComparer() = delete;
 
-    [[nodiscard]] static EditorSceneComparison Compare(const kb::scene::SceneDocument& before, const kb::scene::SceneDocument& after);
+    // When `cancel` is set while the comparison runs, it stops and reports that it was cancelled.
+    [[nodiscard]] static EditorSceneComparison Compare(const kb::scene::SceneDocument& before, const kb::scene::SceneDocument& after,
+        const std::atomic<bool>* cancel = nullptr);
 #if defined(_WIN32)
     // The scene file as the last saved version holds it.
     [[nodiscard]] static kb::scene::SceneDocumentLoadResult LoadSaved(const std::filesystem::path& projectRoot, const std::string& repositoryPath);
     // The scene file as the last saved version holds it against `current`.
     [[nodiscard]] static EditorSceneComparison CompareWithSaved(const std::filesystem::path& projectRoot,
-        const std::string& repositoryPath, const kb::scene::SceneDocument& current);
+        const std::string& repositoryPath, const kb::scene::SceneDocument& current, const std::atomic<bool>* cancel = nullptr);
 #endif
     // The object of `scene` at an address of a change; invalid when the scene has no such object.
     [[nodiscard]] static kb::scene::SceneEntity Find(const kb::scene::Scene& scene, std::span<const std::uint32_t> address);

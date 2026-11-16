@@ -22,6 +22,7 @@ public:
         state.hierarchyParents[entity.Id()] = parent;
         SetDenseParent(state, entity, parent);
         AddToParentList(state, parent, entity);
+        AdjustDescendants(state, parent, 1 + static_cast<std::int64_t>(StoredDescendants(state, entity)));
         RefreshTransformLink(state, entity);
         RefreshTransformLink(state, parent);
         MarkTopologyDirty(state);
@@ -79,6 +80,7 @@ public:
         if (entities.size() != parents.size()) {
             throw std::invalid_argument("Scene hierarchy cache bulk add requires matching entity and parent counts");
         }
+        state.hierarchyDescendantsStale = true;
 
         state.hierarchyParents.reserve(state.hierarchyParents.size() + entities.size());
         state.hierarchyChildren.reserve(state.hierarchyChildren.size() + entities.size());
@@ -109,6 +111,7 @@ public:
         if (entities.empty()) {
             return;
         }
+        state.hierarchyDescendantsStale = true;
 
         std::uint32_t maxEntityIndex = 0;
         std::uint32_t maxParentIndex = 0;
@@ -216,6 +219,9 @@ public:
         state.hierarchyParents[child.Id()] = newParent;
         SetDenseParent(state, child, newParent);
         AddToParentList(state, newParent, child);
+        const std::int64_t moved = 1 + static_cast<std::int64_t>(StoredDescendants(state, child));
+        AdjustDescendants(state, oldParent, -moved);
+        AdjustDescendants(state, newParent, moved);
         RefreshTransformLink(state, child);
         RefreshTransformLink(state, oldParent);
         RefreshTransformLink(state, newParent);
@@ -226,10 +232,12 @@ public:
     static void Remove(SceneState& state, SceneEntity entity, SceneEntity parent) {
         const auto previousVersion = state.hierarchyTopologyVersion;
         RemoveFromParentList(state, parent, entity);
+        AdjustDescendants(state, parent, -(1 + static_cast<std::int64_t>(StoredDescendants(state, entity))));
         state.hierarchyParents.erase(entity.Id());
         state.hierarchyChildren.erase(entity.Id());
         state.hierarchyOrder.erase(entity.Id());
         state.hierarchyRootSlot.erase(entity.Id());
+        state.hierarchyDescendants.erase(entity.Id());
         ClearDenseEntry(state, entity);
         RefreshTransformLink(state, entity);
         RefreshTransformLink(state, parent);
@@ -287,6 +295,26 @@ public:
         if (state.hierarchyRootAppendEpoch == 0U) {
             state.hierarchyRootAppendEpoch = 1U;
         }
+    }
+
+    // For a writer that fills the tables itself: the rows moved, and the descendants are counted again on the next read.
+    static void MarkBulkStructureDirty(SceneState& state) noexcept {
+        state.hierarchyDescendantsStale = true;
+        MarkRowContentDirty(state);
+        MarkStructureDirty(state);
+    }
+
+    // Changes when an edit moves or reorders rows, not when one only renames or hides them.
+    [[nodiscard]] static std::uint64_t StructureEpoch(const SceneState& state) noexcept {
+        return state.hierarchyStructureEpoch;
+    }
+
+    // The entities below this one, at any depth.
+    [[nodiscard]] static std::size_t DescendantCount(const SceneState& state, SceneEntity entity) {
+        if (state.hierarchyDescendantsStale) {
+            CountDescendants(state);
+        }
+        return StoredDescendants(state, entity);
     }
 
     [[nodiscard]] static std::vector<SceneEntity> Children(const SceneState& state, SceneEntity entity) {
@@ -427,11 +455,76 @@ private:
         }
         if (!rootAppendOnly) {
             MarkRowContentDirty(state);
+            MarkStructureDirty(state);
         }
         ++state.renderTopologyVersion;
         if (state.renderTopologyVersion == 0U) {
             state.renderTopologyVersion = 1U;
         }
+    }
+
+    static void MarkStructureDirty(SceneState& state) noexcept {
+        ++state.hierarchyStructureEpoch;
+        if (state.hierarchyStructureEpoch == 0U) {
+            state.hierarchyStructureEpoch = 1U;
+        }
+    }
+
+    [[nodiscard]] static std::uint32_t& DescendantSlot(const SceneState& state, SceneEntity entity) {
+        const std::uint32_t index = DenseIndex(entity);
+        if (index == kb::ecs::kInvalidGeneratedEntityIndex) {
+            return state.hierarchyDescendants[entity.Id()];
+        }
+        if (state.denseHierarchyDescendants.size() <= index) {
+            state.denseHierarchyDescendants.resize(static_cast<std::size_t>(index) + 1U);
+        }
+        return state.denseHierarchyDescendants[index];
+    }
+
+    [[nodiscard]] static std::uint32_t StoredDescendants(const SceneState& state, SceneEntity entity) noexcept {
+        const std::uint32_t index = DenseIndex(entity);
+        if (index != kb::ecs::kInvalidGeneratedEntityIndex) {
+            return index < state.denseHierarchyDescendants.size() ? state.denseHierarchyDescendants[index] : 0U;
+        }
+        const auto found = state.hierarchyDescendants.find(entity.Id());
+        return found == state.hierarchyDescendants.end() ? 0U : found->second;
+    }
+
+    // Adds `delta` to the descendants of `from` and of each entity above it; a stale count is not worth keeping.
+    static void AdjustDescendants(SceneState& state, SceneEntity from, std::int64_t delta) {
+        if (state.hierarchyDescendantsStale) {
+            return;
+        }
+        for (SceneEntity ancestor = from; ancestor.IsValid(); ancestor = Parent(state, ancestor)) {
+            std::uint32_t& count = DescendantSlot(state, ancestor);
+            count = static_cast<std::uint32_t>(static_cast<std::int64_t>(count) + delta);
+        }
+    }
+
+    // Breadth first from the roots, then each entity into its parent from the last: every count in one pass.
+    static void CountDescendants(const SceneState& state) {
+        state.denseHierarchyDescendants.assign(state.denseHierarchyParents.size(), 0U);
+        state.hierarchyDescendants.clear();
+        std::vector<SceneEntity> order;
+        order.reserve(state.denseHierarchyParents.size());
+        for (const SceneEntity root : state.hierarchyRoots) {
+            if (root.IsValid()) {
+                order.push_back(root);
+            }
+        }
+        for (std::size_t next = 0U; next < order.size(); ++next) {
+            const SceneEntity entity = order[next];
+            for (std::size_t child = 0U, count = ChildCount(state, entity); child < count; ++child) {
+                order.push_back(ChildAt(state, entity, child));
+            }
+        }
+        for (std::size_t index = order.size(); index-- > 0U;) {
+            const SceneEntity parent = Parent(state, order[index]);
+            if (parent.IsValid()) {
+                DescendantSlot(state, parent) += StoredDescendants(state, order[index]) + 1U;
+            }
+        }
+        state.hierarchyDescendantsStale = false;
     }
 
     [[nodiscard]] static std::uint32_t DenseIndex(SceneEntity entity) noexcept {
@@ -531,6 +624,9 @@ private:
         }
         if (index < state.denseHierarchyRootSlot.size()) {
             state.denseHierarchyRootSlot[index] = 0U;
+        }
+        if (index < state.denseHierarchyDescendants.size()) {
+            state.denseHierarchyDescendants[index] = 0U;
         }
     }
 

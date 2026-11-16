@@ -2222,6 +2222,92 @@ void RunSceneLifecycleScale(std::size_t size, std::size_t rounds, double budgetS
               << '\n' << std::flush;
 }
 
+[[nodiscard]] std::size_t CountBelow(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+    std::size_t below = 0U;
+    for (const kb::scene::SceneEntity child : scene.Hierarchy().ChildEntities(entity)) {
+        below += 1U + CountBelow(scene, child);
+    }
+    return below;
+}
+
+[[nodiscard]] std::vector<kb::scene::SceneEntity> AllEntities(const kb::scene::Scene& scene) {
+    std::vector<kb::scene::SceneEntity> all = scene.Hierarchy().RootEntities();
+    for (std::size_t index = 0U; index < all.size(); ++index) {
+        const std::vector<kb::scene::SceneEntity> children = scene.Hierarchy().ChildEntities(all[index]);
+        all.insert(all.end(), children.begin(), children.end());
+    }
+    return all;
+}
+
+// The descendants the hierarchy keeps while entities come, go and move equal a count from scratch.
+void RunHierarchyDescendantCountTest() {
+    kb::scene::Scene scene;
+    const kb::scene::Scene& view = scene;
+    kb::scene::ScenePrefab prefab;
+    const auto group = prefab.AddNode({ .name = "Group" });
+    const auto part = prefab.AddNode({ .name = "Part", .parentNode = group });
+    static_cast<void>(prefab.AddNode({ .name = "Detail", .parentNode = part }));
+    std::uint32_t seed = 12345U;
+    const auto random = [&seed](std::size_t bound) {
+        seed = seed * 1664525U + 1013904223U;
+        return static_cast<std::size_t>(seed >> 8U) % bound;
+    };
+    std::vector<kb::scene::SceneEntity> entities;
+    bool same = true;
+    const auto verify = [&]() {
+        for (const kb::scene::SceneEntity entity : entities) {
+            same = same && view.Hierarchy().DescendantCount(entity) == CountBelow(view, entity);
+        }
+    };
+    for (std::size_t step = 0U; step < 10000U; ++step) {
+        const std::size_t kind = entities.empty() ? 0U : random(20U);
+        const kb::scene::SceneObject parent = entities.empty() || random(4U) == 0U
+            ? kb::scene::SceneObject{} : scene.Entities().Object(entities[random(entities.size())]);
+        if (kind < 8U) {
+            entities.push_back(scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .parent = parent }));
+        } else if (kind < 14U) {
+            // A move under a descendant is a cycle and is refused.
+            static_cast<void>(scene.Hierarchy().SetParent(entities[random(entities.size())], parent.Entity()));
+        } else if (kind < 18U) {
+            scene.Entities().Destroy(entities[random(entities.size())]);
+            std::erase_if(entities, [&](kb::scene::SceneEntity entity) { return !scene.Entities().IsAlive(entity); });
+        } else if (kind == 18U) {
+            std::vector<kb::scene::SceneObjectDesc> descs(3U);
+            for (kb::scene::SceneObjectDesc& desc : descs) {
+                desc.parent = parent;
+            }
+            for (const kb::scene::SceneObject created : scene.Entities().CreateObjects(descs)) {
+                entities.push_back(created.Entity());
+            }
+        } else {
+            static_cast<void>(scene.Prefabs().InstantiateMany(prefab, 2U, kb::scene::ScenePrefabInstantiationSettings{ .parent = parent }));
+            entities = AllEntities(view);
+        }
+        if (step % 250U == 249U) {
+            verify();
+        }
+    }
+    verify();
+    kb::tests::Require(same && entities.size() > 100U, "Descendant counts must equal a count from scratch after random edits");
+}
+
+// A rename or a root appended at the end leave the epoch; a move and a removal change it.
+void RunHierarchyStructureEpochTest() {
+    kb::scene::Scene scene;
+    const kb::scene::Scene& view = scene;
+    const kb::scene::SceneEntity first = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "First" });
+    const kb::scene::SceneEntity second = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Second" });
+    const std::uint64_t epoch = view.Hierarchy().StructureEpoch();
+    scene.Entities().SetName(first, "Renamed");
+    static_cast<void>(scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Third" }));
+    kb::tests::Require(view.Hierarchy().StructureEpoch() == epoch, "A rename or a root appended at the end must not change the structure epoch");
+    kb::tests::Require(scene.Hierarchy().SetParent(second, first) && view.Hierarchy().StructureEpoch() != epoch,
+        "Moving an entity must change the structure epoch");
+    const std::uint64_t moved = view.Hierarchy().StructureEpoch();
+    scene.Entities().Destroy(second);
+    kb::tests::Require(view.Hierarchy().StructureEpoch() != moved, "Removing an entity must change the structure epoch");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -2434,6 +2520,8 @@ void RunSceneHierarchyTests() {
     RunDestroyedEntityHandleDoesNotAffectNewEntityTest();
     RunSceneCameraLightVisitorBatchPathTest();
     RunTransformLinkBitsFollowHierarchyTest();
+    RunHierarchyDescendantCountTest();
+    RunHierarchyStructureEpochTest();
 }
 
 void RunSceneHierarchyParentingTests() {

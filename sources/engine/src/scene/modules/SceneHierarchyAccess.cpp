@@ -39,6 +39,14 @@ std::uint64_t SceneHierarchyQueries::RootAppendEpoch() const noexcept {
     return SceneHierarchyService::RootAppendEpoch(scene_);
 }
 
+std::uint64_t SceneHierarchyQueries::StructureEpoch() const noexcept {
+    return SceneHierarchyService::StructureEpoch(scene_);
+}
+
+std::size_t SceneHierarchyQueries::DescendantCount(SceneEntity entity) const {
+    return SceneHierarchyService::DescendantCount(scene_, entity);
+}
+
 SceneHierarchyAccess::SceneHierarchyAccess(Scene& scene) noexcept
     : scene_(scene) {}
 

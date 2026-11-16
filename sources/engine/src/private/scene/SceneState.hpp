@@ -751,6 +751,13 @@ public:
     SceneTransformTopologyCache transformTopology;
     std::uint64_t hierarchyTopologyVersion = 1;
     std::uint64_t hierarchyRootAppendEpoch = 1U;
+    // Changes with every edit that moves or reorders rows (not with a rename or a visibility change).
+    std::uint64_t hierarchyStructureEpoch = 1U;
+    // The descendants (not the entity itself) of every entity, kept by SceneHierarchyCache; an entity without a dense
+    // index is in the map. A bulk writer marks them stale and the next read counts them again, hence mutable.
+    mutable std::vector<std::uint32_t> denseHierarchyDescendants;
+    mutable std::unordered_map<SceneEntity::IdType, std::uint32_t> hierarchyDescendants;
+    mutable bool hierarchyDescendantsStale = false;
     std::uint64_t nextAnimatorRuntimeBindingGeneration = 1U;
     std::unique_ptr<SceneTransformRootQueryCache> transformRootQueryCache;
     std::uint64_t transformPropagationCursorVersion = 0;

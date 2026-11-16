@@ -50,6 +50,14 @@ std::uint64_t SceneHierarchyService::RootAppendEpoch(const Scene& scene) noexcep
     return SceneHierarchyRootsService::RootAppendEpoch(scene);
 }
 
+std::uint64_t SceneHierarchyService::StructureEpoch(const Scene& scene) noexcept {
+    return SceneHierarchyRootsService::StructureEpoch(scene);
+}
+
+std::size_t SceneHierarchyService::DescendantCount(const Scene& scene, SceneEntity entity) {
+    return SceneHierarchyChildrenService::DescendantCount(scene, entity);
+}
+
 bool SceneHierarchyService::SetParent(Scene& scene, SceneObject child, SceneObject parent) noexcept {
     return SceneHierarchyParentAssignmentService::SetParent(scene, child, parent);
 }

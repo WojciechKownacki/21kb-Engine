@@ -62,15 +62,14 @@ bool EditorVersionControl::Pump(const std::filesystem::path& projectRoot, std::c
         }
         known_ = true;
     }
-    if (Finished(comparison_)) {
-        const SavedScene pair = comparison_.get();
-        result_ = pair.saved.succeeded ? EditorSceneComparer::Compare(pair.saved.document, pair.current)
-                                       : EditorSceneComparison{ .error = pair.saved.error };
+    if (Finished(comparison_.result)) {
+        result_ = comparison_.result.get();
         hasComparison_ = true;
         selectedObject_ = kNone;
         sceneScroll = 0;
         changed = true;
     }
+    std::erase_if(cancelled_, [](std::future<EditorSceneComparison>& job) { return Finished(job); });
     if (!reading_.valid() && !root_.empty() && (refreshRequested_ || now - lastRefresh_ >= kRefreshInterval)) {
         refreshRequested_ = false;
         lastRefresh_ = now;
@@ -111,19 +110,32 @@ bool EditorVersionControl::FolderHasChanges(const std::filesystem::path& path) c
 }
 
 void EditorVersionControl::CompareScene(const std::filesystem::path& projectRoot, std::string repositoryPath, kb::scene::SceneDocument current) {
-    if (comparison_.valid()) {
-        return;
-    }
+    const auto document = std::make_shared<const kb::scene::SceneDocument>(std::move(current));
+    StartComparison([projectRoot, repositoryPath = std::move(repositoryPath), document](const std::atomic<bool>& cancelled) {
+        return EditorSceneComparer::CompareWithSaved(projectRoot, repositoryPath, *document, &cancelled);
+    });
+}
+
+void EditorVersionControl::StartComparison(ComparisonWork work) {
+    CancelComparison();
     hasComparison_ = false;
     result_ = {};
     selectedObject_ = kNone;
-    comparison_ = std::async(std::launch::async,
-        [projectRoot, repositoryPath = std::move(repositoryPath), current = std::move(current)]() mutable {
-            return SavedScene{ EditorSceneComparer::LoadSaved(projectRoot, repositoryPath), std::move(current) };
-        });
+    comparison_.cancel = std::make_shared<std::atomic<bool>>(false);
+    comparison_.result = std::async(std::launch::async,
+        [cancel = comparison_.cancel, work = std::move(work)]() { return work(*cancel); });
 }
 
-void EditorVersionControl::ClearComparison() noexcept {
+void EditorVersionControl::CancelComparison() {
+    if (!comparison_.result.valid()) {
+        return;
+    }
+    comparison_.cancel->store(true, std::memory_order_relaxed);
+    cancelled_.push_back(std::move(comparison_.result));
+}
+
+void EditorVersionControl::ClearComparison() {
+    CancelComparison();
     hasComparison_ = false;
     result_ = {};
     selectedObject_ = kNone;

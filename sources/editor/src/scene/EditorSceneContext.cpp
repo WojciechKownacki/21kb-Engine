@@ -3069,7 +3069,7 @@ kb::scene::SceneEntity EditorSceneContext::CreateMenuObject(std::string_view id,
     kb::scene::SceneEntity created{};
     std::string error;
     if (ExecuteSceneCommand("Create " + std::string{ item->name }, [this, item, parent, &created, &error]() {
-            const auto name = EditorHierarchyObjectFactory::MakeUniqueName(*scene_, item->name);
+            const auto name = EditorHierarchyObjectFactory::MakeUniqueName(*scene_, item->name, parent);
             kb::scene::SceneCreateResult result;
             if (kb::scene::IsPlayerPreset(item->id)) {
                 std::ostringstream notes, errors;
@@ -6385,7 +6385,7 @@ void EditorSceneContext::RebuildHierarchyRowsIfNeeded() const {
     }
 
     const auto rebuildStart = std::chrono::steady_clock::now();
-    hierarchyRows_.Sync(*scene_, hierarchyExpansion_.CollapsedEntities(), hierarchySearch_.Query(), true);
+    hierarchyRows_.Sync(*scene_, hierarchyExpansion_.CollapsedEntities(), hierarchySearch_.Query(), false);
     hierarchyAllRowsValid_ = false;
     hierarchyRowsDirty_ = false;
     const kb::scene::SceneHierarchyQueries hierarchy =

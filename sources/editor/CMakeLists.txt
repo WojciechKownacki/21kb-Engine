@@ -1492,6 +1492,7 @@ if(BUILD_TESTING)
         tests/EditorPackagesTests.cpp
         src/project/EditorPackages.cpp
         src/project/EditorProjectRepository.cpp
+        src/project/EditorVersionControl.cpp
         src/rendering/script_editor/ScriptEditorTextEncoding.cpp
         src/scene/EditorSceneComparison.cpp
         tests/EditorRuntimeTests.cpp

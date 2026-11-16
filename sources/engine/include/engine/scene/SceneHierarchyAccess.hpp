@@ -29,6 +29,10 @@ public:
     [[nodiscard]] std::size_t RootCount() const noexcept;
     [[nodiscard]] SceneEntity RootAt(std::size_t index) const noexcept;
     [[nodiscard]] std::uint64_t RootAppendEpoch() const noexcept;
+    // Changes when an edit moves or reorders rows; a rename or a visibility change leaves it as it was.
+    [[nodiscard]] std::uint64_t StructureEpoch() const noexcept;
+    // The entities below `entity` at any depth, kept as edits happen rather than found by a walk.
+    [[nodiscard]] std::size_t DescendantCount(SceneEntity entity) const;
 
 private:
     const Scene& scene_;

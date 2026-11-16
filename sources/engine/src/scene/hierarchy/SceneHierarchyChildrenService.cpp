@@ -35,4 +35,8 @@ SceneEntity SceneHierarchyChildrenService::ChildAt(const Scene& scene, SceneEnti
     return SceneHierarchyCache::ChildAt(state, entity, index);
 }
 
+std::size_t SceneHierarchyChildrenService::DescendantCount(const Scene& scene, SceneEntity entity) {
+    return SceneHierarchyCache::DescendantCount(SceneAccess::State(scene), entity);
+}
+
 } // namespace kb::scene

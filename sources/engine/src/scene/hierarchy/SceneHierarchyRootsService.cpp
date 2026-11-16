@@ -32,4 +32,8 @@ std::uint64_t SceneHierarchyRootsService::RootAppendEpoch(const Scene& scene) no
     return SceneHierarchyCache::RootAppendEpoch(SceneAccess::State(scene));
 }
 
+std::uint64_t SceneHierarchyRootsService::StructureEpoch(const Scene& scene) noexcept {
+    return SceneHierarchyCache::StructureEpoch(SceneAccess::State(scene));
+}
+
 } // namespace kb::scene

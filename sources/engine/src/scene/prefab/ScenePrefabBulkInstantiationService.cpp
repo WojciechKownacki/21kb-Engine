@@ -769,7 +769,7 @@ void AssignPrefabHierarchyOrderRange(SceneState& state, std::span<const SceneEnt
     const auto previousTopologyVersion = state.hierarchyTopologyVersion;
     ++state.hierarchyTopologyVersion;
     ++state.renderTopologyVersion;
-    SceneHierarchyCache::MarkRowContentDirty(state);
+    SceneHierarchyCache::MarkBulkStructureDirty(state);
     if (state.hierarchyTopologyVersion == 0U) state.hierarchyTopologyVersion = 1U;
     if (state.renderTopologyVersion == 0U) state.renderTopologyVersion = 1U;
     state.transformTopology.Added(state, entities, previousTopologyVersion);
@@ -878,7 +878,7 @@ void AssignPrefabHierarchyOrderRange(SceneState& state, std::span<const SceneEnt
     const auto previousTopologyVersion = state.hierarchyTopologyVersion;
     ++state.hierarchyTopologyVersion;
     ++state.renderTopologyVersion;
-    SceneHierarchyCache::MarkRowContentDirty(state);
+    SceneHierarchyCache::MarkBulkStructureDirty(state);
     if (state.hierarchyTopologyVersion == 0U) state.hierarchyTopologyVersion = 1U;
     if (state.renderTopologyVersion == 0U) state.renderTopologyVersion = 1U;
     state.transformTopology.Added(state, entities, previousTopologyVersion);

@@ -6,6 +6,7 @@
 #include "scene/SceneState.hpp"
 #include "scene/SceneUIMedia.hpp"
 #include "scene/transform/SceneTransformRootQueryCache.hpp"
+#include "scene/hierarchy/SceneHierarchyCache.hpp"
 
 #include <flecs.h>
 #include <algorithm>
@@ -230,7 +231,7 @@ struct SceneRuntime::RuntimeSnapshot final : kb::core::RuntimeStateSnapshot {
         AnimatorDebugSnapshot debug;
         debug.revision = ++state.animatorDebugSnapshotRevision;
         state.animatorDebugSnapshots.Publish(std::move(debug));
-        ++state.hierarchyRootAppendEpoch;
+        SceneHierarchyCache::MarkBulkStructureDirty(state);
         state.transformTopology = {};
         state.transformRootQueryCache.reset();
         state.transformPassRecords.clear();

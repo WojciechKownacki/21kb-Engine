@@ -121,7 +121,7 @@ void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, int weight =
 }
 
 [[nodiscard]] bool CanCompare(const EditorVersionControl& control, const EditorSceneContext& sceneContext) {
-    return !control.Comparing() && SceneRepositoryPath(sceneContext, control.Changes()).has_value();
+    return SceneRepositoryPath(sceneContext, control.Changes()).has_value();
 }
 
 // One line of the scene comparison: an object, or one value of the chosen object.

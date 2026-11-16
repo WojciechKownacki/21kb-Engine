@@ -124,9 +124,14 @@ void CompareObjects(const std::vector<ComponentFields>& components, kb::scene::S
     }
 }
 
+[[nodiscard]] bool Cancelled(const std::atomic<bool>* cancel) noexcept {
+    return cancel != nullptr && cancel->load(std::memory_order_relaxed);
+}
+
 } // namespace
 
-EditorSceneComparison EditorSceneComparer::Compare(const kb::scene::SceneDocument& before, const kb::scene::SceneDocument& after) {
+EditorSceneComparison EditorSceneComparer::Compare(const kb::scene::SceneDocument& before, const kb::scene::SceneDocument& after,
+    const std::atomic<bool>* cancel) {
     EditorSceneComparison result;
     const IndexedScene old = Index(before.worldPrefab);
     const IndexedScene now = Index(after.worldPrefab);
@@ -162,6 +167,10 @@ EditorSceneComparison EditorSceneComparer::Compare(const kb::scene::SceneDocumen
     const bool anyPair = std::ranges::any_of(oldPair, [](std::uint32_t pair) { return pair != kNoNode; });
     if (anyPair) {
         try {
+            if (Cancelled(cancel)) {
+                result.error = "The comparison was cancelled.";
+                return result;
+            }
             kb::scene::Scene oldScene{ kb::scene::SceneMode::PrefabPrivate };
             kb::scene::Scene nowScene{ kb::scene::SceneMode::PrefabPrivate };
             const kb::scene::ScenePrefabInstance oldInstance = oldScene.Prefabs().Instantiate(before.worldPrefab);
@@ -174,6 +183,11 @@ EditorSceneComparison EditorSceneComparer::Compare(const kb::scene::SceneDocumen
             for (std::uint32_t index = 0U; index < old.keys.size(); ++index) {
                 if (oldPair[index] == kNoNode) {
                     continue;
+                }
+                if (Cancelled(cancel)) {
+                    result.objects.clear();
+                    result.error = "The comparison was cancelled.";
+                    return result;
                 }
                 std::vector<EditorSceneFieldChange> fields;
                 CompareObjects(components, oldScene, oldInstance.ObjectAt(index).Entity(),
@@ -216,12 +230,12 @@ kb::scene::SceneDocumentLoadResult EditorSceneComparer::LoadSaved(const std::fil
 }
 
 EditorSceneComparison EditorSceneComparer::CompareWithSaved(const std::filesystem::path& projectRoot,
-    const std::string& repositoryPath, const kb::scene::SceneDocument& current) {
+    const std::string& repositoryPath, const kb::scene::SceneDocument& current, const std::atomic<bool>* cancel) {
     const kb::scene::SceneDocumentLoadResult saved = LoadSaved(projectRoot, repositoryPath);
     if (!saved.succeeded) {
         return EditorSceneComparison{ .error = saved.error };
     }
-    return Compare(saved.document, current);
+    return Compare(saved.document, current, cancel);
 }
 #endif
 

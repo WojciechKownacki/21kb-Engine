@@ -5,13 +5,17 @@
 
 #if defined(_WIN32)
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
+#include <functional>
 #include <future>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace kb::editor {
 
@@ -43,18 +47,24 @@ public:
     int changeScroll = 0;
     int sceneScroll = 0;
 
-    // The open scene, as it is now, against its last saved version; runs in the background.
+    // The open scene, as it is now, against its last saved version: both reading the saved file and comparing run in
+    // the background, and asking again cancels the comparison that is still running.
     void CompareScene(const std::filesystem::path& projectRoot, std::string repositoryPath, kb::scene::SceneDocument current);
-    [[nodiscard]] bool Comparing() const noexcept { return comparison_.valid(); }
+    // Runs `work` in the background as the scene comparison. `cancelled` is set when another comparison replaces it.
+    using ComparisonWork = std::function<EditorSceneComparison(const std::atomic<bool>& cancelled)>;
+    void StartComparison(ComparisonWork work);
+    [[nodiscard]] bool Comparing() const noexcept { return comparison_.result.valid(); }
     [[nodiscard]] bool HasComparison() const noexcept { return hasComparison_; }
     [[nodiscard]] const EditorSceneComparison& Comparison() const noexcept { return result_; }
     // The changed object the user chose in the comparison.
     [[nodiscard]] std::size_t SelectedObject() const noexcept { return selectedObject_; }
     void SelectObject(std::size_t index) noexcept { selectedObject_ = index; }
-    void ClearComparison() noexcept;
+    void ClearComparison();
 
 private:
     void Adopt(EditorChangeList list);
+    // Tells the running comparison to stop, and keeps it until it has: its result is not wanted.
+    void CancelComparison();
 
     EditorChangeList changes_;
     bool known_ = false;
@@ -67,12 +77,13 @@ private:
     std::unordered_map<std::string, EditorChangeState> byPath_;
     std::unordered_set<std::string> folders_;
 
-    // The saved version of the scene, read in the background, with the scene as it was when the user asked.
-    struct SavedScene {
-        kb::scene::SceneDocumentLoadResult saved;
-        kb::scene::SceneDocument current;
+    // The comparison running in the background, and the ones told to stop that have not yet.
+    struct ComparisonJob {
+        std::shared_ptr<std::atomic<bool>> cancel;
+        std::future<EditorSceneComparison> result;
     };
-    std::future<SavedScene> comparison_;
+    ComparisonJob comparison_;
+    std::vector<std::future<EditorSceneComparison>> cancelled_;
     bool hasComparison_ = false;
     EditorSceneComparison result_;
     std::size_t selectedObject_ = kNone;
