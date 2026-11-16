@@ -1,7 +1,9 @@
 #include "rendering/FloatingEditorWindowRenderer.hpp"
 
 #if defined(_WIN32)
-#include "rendering/DockPanelChromeRenderer.hpp"
+#include "docking/DockWindowLayoutResolver.hpp"
+#include "rendering/DockWorkspaceChromeRenderer.hpp"
+#include "rendering/DockWorkspaceTabStripRenderer.hpp"
 #include "rendering/EditorSurfacePainter.hpp"
 #include "rendering/FloatingPanelGeometry.hpp"
 #include "rendering/FloatingWindowControlRenderer.hpp"
@@ -11,17 +13,16 @@
 
 namespace kb::editor {
 
-void FloatingEditorWindowRenderer::Paint(HDC dc, HWND window, const RECT& client, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, EditorSceneContext& sceneContext, const EditorRenderBackendSettings& renderBackendSettings, EditorSceneBgfxViewport* sceneViewport) const {
-    ScopedFont titleFont(16, FW_SEMIBOLD);
+void FloatingEditorWindowRenderer::Paint(HDC dc, HWND window, const RECT& client, const DockPanel& panel, const EditorDockModel& dockModel, const DockPointerDrag* dockDrag, const EditorTheme& theme, const EditorMetrics& metrics, EditorSceneContext& sceneContext, const EditorRenderBackendSettings& renderBackendSettings, EditorSceneBgfxViewport* sceneViewport) const {
     ScopedFont bodyFont(14, FW_NORMAL);
 
     EditorSurfacePainter::Frame(dc, client, theme, EditorSurfaceKind::AppBackground, GdiDrawing::ToColorRef(theme.borderChrome));
 
     RECT panelRect = GdiDrawing::Inset(client, 1);
-    {
-        const ScopedGdiObject selectedTitleFont(dc, titleFont.handle);
-        DockPanelChromeRenderer{}.Paint(dc, panelRect, panel, theme, metrics, true);
-    }
+    // The tabs of the window are drawn as the tabs of a docked group are.
+    const DockLayout layout = DockWindowLayoutResolver::ResolveFloating(client, dockModel.Queries().FloatingGroupOfPanel(panel.id), dockModel, metrics);
+    DockWorkspaceChromeRenderer{}.Paint(dc, layout, dockModel, theme);
+    DockWorkspaceTabStripRenderer{}.Paint(window, dc, layout, dockModel, dockDrag, theme);
 
     FloatingWindowControlRenderer{}.Paint(dc, client, theme, metrics);
 

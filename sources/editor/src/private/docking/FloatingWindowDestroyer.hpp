@@ -9,13 +9,15 @@
 #endif
 
 #include <cstdint>
+#include <vector>
 
 namespace kb::editor {
 
 class FloatingWindowDestroyer {
 public:
 #if defined(_WIN32)
-    static void DestroyPanel(FloatingWindowRegistry& registry, std::uint32_t panelId);
+    // Destroys the windows of the groups that are no longer in `liveGroups`.
+    static void DestroyOrphaned(FloatingWindowRegistry& registry, const std::vector<std::uint32_t>& liveGroups);
     static void DestroyAll(FloatingWindowRegistry& registry);
 #endif
 };

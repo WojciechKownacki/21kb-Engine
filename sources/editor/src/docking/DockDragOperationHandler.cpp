@@ -46,7 +46,7 @@ bool DockDragOperationHandler::Move(
     POINT screen{ x, y };
     ClientToScreen(eventWindow, &screen);
 
-    if (DockDockedTabDragHandler::Reorder(drag, x, y, mainWindow, dockModel, metrics)) {
+    if (DockDockedTabDragHandler::Reorder(drag, x, y, mainWindow, dockModel, floatingWindows, metrics)) {
         return true;
     }
 
@@ -56,7 +56,9 @@ bool DockDragOperationHandler::Move(
     }
 
     DockFloatingDragOperation::MoveWindow(drag, screen, dockModel, floatingWindows);
-    DockDropPreviewState::Update(screen, mainWindow, dockModel, metrics, dropPreview);
+    if (!drag.moveWindowOnly) {
+        DockDropPreviewState::Update(screen, mainWindow, drag.panelId, dockModel, floatingWindows, metrics, dropPreview);
+    }
     return true;
 }
 

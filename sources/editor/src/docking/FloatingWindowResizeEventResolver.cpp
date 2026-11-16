@@ -4,8 +4,7 @@
 
 namespace kb::editor {
 
-std::optional<FloatingWindowResizeEvent> FloatingWindowResizeEventResolver::Resolve(const FloatingWindowRegistry& registry, HWND window, int width, int height) noexcept {
-    const std::uint32_t panelId = registry.PanelId(window);
+std::optional<FloatingWindowResizeEvent> FloatingWindowResizeEventResolver::Resolve(std::uint32_t panelId, int width, int height) noexcept {
     if (panelId == 0) {
         return std::nullopt;
     }

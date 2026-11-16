@@ -2,6 +2,7 @@
 
 #include "docking/DockPointerDrag.hpp"
 #include "docking/EditorDockModel.hpp"
+#include "docking/EditorFloatingWindowManager.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
 
 #if defined(_WIN32)
@@ -17,7 +18,7 @@ public:
     DockDockedTabDragHandler() = delete;
 
 #if defined(_WIN32)
-    [[nodiscard]] static bool Reorder(DockPointerDrag& drag, int x, int y, HWND mainWindow, EditorDockModel& dockModel, const EditorMetrics& metrics);
+    [[nodiscard]] static bool Reorder(DockPointerDrag& drag, int x, int y, HWND mainWindow, EditorDockModel& dockModel, const EditorFloatingWindowManager& floatingWindows, const EditorMetrics& metrics);
 #endif
 };
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "docking/DockPointerDrag.hpp"
 #include "docking/EditorDockModel.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
 #include "rendering/EditorRenderBackendSettings.hpp"
@@ -17,7 +18,7 @@ namespace kb::editor {
 class FloatingWindowBackBufferPainter {
 public:
 #if defined(_WIN32)
-    static void Paint(HWND window, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, EditorSceneContext& sceneContext, const EditorRenderBackendSettings& renderBackendSettings, EditorSceneBgfxViewport& sceneViewport);
+    static void Paint(HWND window, const DockPanel& panel, const EditorDockModel& dockModel, const DockPointerDrag* dockDrag, std::uint32_t hoveredTab, const EditorTheme& theme, const EditorMetrics& metrics, EditorSceneContext& sceneContext, const EditorRenderBackendSettings& renderBackendSettings, EditorSceneBgfxViewport& sceneViewport);
     // Hides every overlay popup this painter owns. Called on WM_ACTIVATEAPP
     // deactivation so no owned popup stays visible above another application;
     // the next Paint after reactivation re-shows whatever the UI state needs.

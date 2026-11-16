@@ -15,6 +15,10 @@
 
 namespace kb::editor {
 
+class EditorDockModel;
+
+// The native windows of the floating tab groups. The dock model owns the groups; a window
+// only shows the group it is registered for, so what it shows is always what the model holds.
 class EditorFloatingWindowManager {
 public:
     static constexpr const wchar_t* WindowClassName = L"KBEditorFloatingWindow";
@@ -32,6 +36,7 @@ private:
     HINSTANCE instance_ = nullptr;
     HWND owner_ = nullptr;
     const EditorMetrics* metrics_ = nullptr;
+    const EditorDockModel* dockModel_ = nullptr;
     FloatingWindowRegistry registry_;
 #endif
 };

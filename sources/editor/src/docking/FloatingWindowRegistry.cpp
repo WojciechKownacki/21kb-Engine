@@ -5,27 +5,27 @@
 namespace kb::editor {
 
 bool FloatingWindowRegistry::ContainsWindow(HWND window) const noexcept {
-    return windowToPanel_.contains(window);
+    return windowToGroup_.contains(window);
 }
 
-bool FloatingWindowRegistry::ContainsPanel(std::uint32_t panelId) const noexcept {
-    return panelToWindow_.contains(panelId);
+bool FloatingWindowRegistry::ContainsGroup(std::uint32_t groupId) const noexcept {
+    return groupToWindow_.contains(groupId);
 }
 
-std::uint32_t FloatingWindowRegistry::PanelId(HWND window) const noexcept {
-    const auto it = windowToPanel_.find(window);
-    return it == windowToPanel_.end() ? 0U : it->second;
+std::uint32_t FloatingWindowRegistry::GroupId(HWND window) const noexcept {
+    const auto it = windowToGroup_.find(window);
+    return it == windowToGroup_.end() ? 0U : it->second;
 }
 
-HWND FloatingWindowRegistry::WindowForPanel(std::uint32_t panelId) const noexcept {
-    const auto it = panelToWindow_.find(panelId);
-    return it == panelToWindow_.end() ? nullptr : it->second;
+HWND FloatingWindowRegistry::WindowForGroup(std::uint32_t groupId) const noexcept {
+    const auto it = groupToWindow_.find(groupId);
+    return it == groupToWindow_.end() ? nullptr : it->second;
 }
 
 std::vector<HWND> FloatingWindowRegistry::Windows() const {
     std::vector<HWND> windows;
-    windows.reserve(panelToWindow_.size());
-    for (const auto& entry : panelToWindow_) {
+    windows.reserve(groupToWindow_.size());
+    for (const auto& entry : groupToWindow_) {
         if (entry.second != nullptr) {
             windows.push_back(entry.second);
         }
@@ -33,34 +33,43 @@ std::vector<HWND> FloatingWindowRegistry::Windows() const {
     return windows;
 }
 
-void FloatingWindowRegistry::Add(std::uint32_t panelId, HWND window) {
-    panelToWindow_[panelId] = window;
-    windowToPanel_[window] = panelId;
+std::vector<std::uint32_t> FloatingWindowRegistry::Groups() const {
+    std::vector<std::uint32_t> groups;
+    groups.reserve(groupToWindow_.size());
+    for (const auto& entry : groupToWindow_) {
+        groups.push_back(entry.first);
+    }
+    return groups;
+}
+
+void FloatingWindowRegistry::Add(std::uint32_t groupId, HWND window) {
+    groupToWindow_[groupId] = window;
+    windowToGroup_[window] = groupId;
 }
 
 void FloatingWindowRegistry::RemoveWindow(HWND window) noexcept {
-    const std::uint32_t panelId = PanelId(window);
-    if (panelId == 0) {
+    const std::uint32_t groupId = GroupId(window);
+    if (groupId == 0) {
         return;
     }
 
-    windowToPanel_.erase(window);
-    panelToWindow_.erase(panelId);
+    windowToGroup_.erase(window);
+    groupToWindow_.erase(groupId);
 }
 
-void FloatingWindowRegistry::RemovePanel(std::uint32_t panelId) noexcept {
-    const HWND window = WindowForPanel(panelId);
+void FloatingWindowRegistry::RemoveGroup(std::uint32_t groupId) noexcept {
+    const HWND window = WindowForGroup(groupId);
     if (window == nullptr) {
         return;
     }
 
-    panelToWindow_.erase(panelId);
-    windowToPanel_.erase(window);
+    groupToWindow_.erase(groupId);
+    windowToGroup_.erase(window);
 }
 
 void FloatingWindowRegistry::Clear() noexcept {
-    panelToWindow_.clear();
-    windowToPanel_.clear();
+    groupToWindow_.clear();
+    windowToGroup_.clear();
 }
 
 } // namespace kb::editor

@@ -244,7 +244,7 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
 
     const EditorInternalSplitterCursorController splitterCursor(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_);
     splitterCursor.UpdateCursor(x, y);
-    static_cast<void>(EditorWindowToolbarPointerHandler::HandleMouseMove(mainWindow_, messageWindow, x, y, dockModel_, shellInteraction_, metrics_, leftButtonDown || rightButtonDown));
+    static_cast<void>(EditorWindowToolbarPointerHandler::HandleMouseMove(mainWindow_, messageWindow, x, y, dockModel_, floatingWindows_, shellInteraction_, metrics_, leftButtonDown || rightButtonDown));
     EditorInspectorPointerController inspectorPointer(sceneContext_);
     const std::optional<RECT> inspectorContent = EditorPanelContentResolver::Resolve(DockPanelKind::Inspector, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
 

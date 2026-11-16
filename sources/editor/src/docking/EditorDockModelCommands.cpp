@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "docking/DefaultDockWorkspace.hpp"
+#include "docking/DockFloatingGroups.hpp"
 #include "docking/DockLayoutSerializer.hpp"
 #include "docking/DockLeafPanelOrder.hpp"
 #include "docking/DockNodeFactory.hpp"
@@ -63,9 +64,10 @@ namespace {
 
 } // namespace
 
-EditorDockModelCommands::EditorDockModelCommands(DockPanelCollection& panels, std::unique_ptr<DockNode>& root, std::uint32_t& nextNodeId, std::uint32_t& maximizedLeafId, bool& drawerCollapsed) noexcept
+EditorDockModelCommands::EditorDockModelCommands(DockPanelCollection& panels, std::unique_ptr<DockNode>& root, std::vector<DockNode>& floating, std::uint32_t& nextNodeId, std::uint32_t& maximizedLeafId, bool& drawerCollapsed) noexcept
     : panels_(panels)
     , root_(root)
+    , floating_(floating)
     , nextNodeId_(nextNodeId)
     , maximizedLeafId_(maximizedLeafId)
     , drawerCollapsed_(drawerCollapsed) {}
@@ -83,6 +85,7 @@ void EditorDockModelCommands::ResetWorkspace() {
     panels_.Reset(DefaultDockWorkspace{}.CreatePanels());
     nextNodeId_ = 1U;
     root_ = DefaultDockWorkspace{}.CreateRoot(nextNodeId_);
+    floating_.clear();
     for (DockPanel& tool : tools) {
         static_cast<void>(RegisterToolPanel(std::move(tool)));
     }
@@ -99,24 +102,36 @@ bool EditorDockModelCommands::RestoreWorkspace(std::string_view tree) {
     }
 
     std::uint32_t nextNodeId = 1U;
-    std::unique_ptr<DockNode> restored = DockLayoutSerializer::Parse(tree, knownPanels, nextNodeId);
-    if (restored == nullptr) {
+    std::unique_ptr<DockNode> restored;
+    std::vector<DockNode> restoredFloating;
+    if (!DockLayoutSerializer::Parse(tree, knownPanels, nextNodeId, restored, restoredFloating)) {
         return false;
     }
     std::vector<DockPanel> tools = ToolPanels(panels_);
     root_ = std::move(restored);
+    floating_ = std::move(restoredFloating);
     nextNodeId_ = nextNodeId;
     maximizedLeafId_ = 0U;
     // The saved tree decides what is open: a panel it places is visible even when the
     // default workspace starts it closed, and one it does not place - closed when it was
     // written, or added by a later build - stays hidden, so the caller can reopen or close
-    // it from the saved session.
+    // it from the saved session. A window with several tabs is part of the text; a window
+    // with one is left to the session of its panel.
     for (const DockPanel& panel : panels_.All()) {
         if (DockPanel* restoredPanel = panels_.Find(panel.id); restoredPanel != nullptr) {
-            restoredPanel->visible = DockNodeQuery::FindLeafContaining(root_.get(), panel.id) != nullptr;
-            if (restoredPanel->visible && restoredPanel->area == DockArea::Floating) {
+            const bool floating = DockFloatingGroups::FindContaining(floating_, panel.id) != nullptr;
+            restoredPanel->visible = floating || DockNodeQuery::FindLeafContaining(root_.get(), panel.id) != nullptr;
+            if (floating) {
+                restoredPanel->area = DockArea::Floating;
+            } else if (restoredPanel->visible && restoredPanel->area == DockArea::Floating) {
                 restoredPanel->area = DockArea::Center;
             }
+        }
+    }
+    for (const DockNode& group : floating_) {
+        const DockRect rect = panels_.Find(group.panels.front())->floatingRect;
+        for (const std::uint32_t panelId : group.panels) {
+            panels_.Find(panelId)->floatingRect = rect;
         }
     }
     for (DockPanel& tool : tools) {
@@ -133,7 +148,7 @@ std::string EditorDockModelCommands::SerializeWorkspace() const {
         }
     }
     DockTreeMutation::PruneEmptyBranches(saved);
-    return DockLayoutSerializer::Serialize(saved.get());
+    return DockLayoutSerializer::Serialize(saved.get(), floating_);
 }
 
 bool EditorDockModelCommands::RegisterToolPanel(DockPanel panel) {
@@ -194,6 +209,9 @@ bool EditorDockModelCommands::UnregisterToolPanel(std::uint32_t id) {
 
 void EditorDockModelCommands::ActivatePanel(std::uint32_t panelId) {
     DockLeafPanelOrder::Activate(root_.get(), panelId);
+    if (DockNode* group = DockFloatingGroups::FindContaining(floating_, panelId); group != nullptr) {
+        group->activePanelId = panelId;
+    }
     // Choosing a tab of the collapsed drawer opens it.
     const DockNode* leaf = DockNodeQuery::FindLeafContaining(root_.get(), panelId);
     if (drawerCollapsed_ && leaf != nullptr && leaf->id == EditorDockModelQueries::DrawerLeafId(panels_, root_.get())) {
@@ -207,6 +225,7 @@ bool EditorDockModelCommands::ClosePanel(std::uint32_t panelId) {
     if (panel == nullptr) return false;
     if (leaf == nullptr) {
         if (panel->area != DockArea::Floating || !panel->visible) return false;
+        DockFloatingGroups::RemovePanel(floating_, panelId);
         panel->visible = false;
         return true;
     }
@@ -227,21 +246,68 @@ void EditorDockModelCommands::ResizeSplitter(std::uint32_t nodeId, int mouseX, i
 
 void EditorDockModelCommands::ReorderPanelInLeaf(std::uint32_t panelId, std::uint32_t leafId, std::uint32_t newIndex) {
     DockLeafPanelOrder::Reorder(root_.get(), panelId, leafId, newIndex);
+    if (DockNode* group = DockFloatingGroups::Find(floating_, leafId); group != nullptr) {
+        DockLeafPanelOrder::Reorder(group, panelId, leafId, newIndex);
+    }
 }
 
 void EditorDockModelCommands::UndockPanel(std::uint32_t panelId, DockRect floatingRect) {
     maximizedLeafId_ = 0;
-    DockPanelDocking::Undock(panels_, root_, panelId, floatingRect);
-    if (DockPanel* panel = panels_.Find(panelId); panel != nullptr && panel->area == DockArea::Floating) {
-        panel->visible = true;
+    DockPanel* panel = panels_.Find(panelId);
+    if (panel == nullptr || !panel->detachable) {
+        return;
     }
+    const DockNode* group = DockFloatingGroups::FindContaining(floating_, panelId);
+    if (group != nullptr && group->panels.size() == 1U) {
+        // Alone in its window already: the window only goes to the new place.
+        panel->floatingRect = floatingRect;
+        panel->visible = true;
+        return;
+    }
+    DockPanelDocking::Undock(panels_, root_, panelId, floatingRect);
+    DockFloatingGroups::RemovePanel(floating_, panelId);
+    panel->visible = true;
+    DockNode window;
+    window.id = NextNodeId();
+    window.panels = { panelId };
+    window.activePanelId = panelId;
+    floating_.push_back(std::move(window));
 }
 
 void EditorDockModelCommands::DockPanelTo(std::uint32_t panelId, const DockDropPreview& target) {
     maximizedLeafId_ = 0;
-    if (DockPanel* panel = panels_.Find(panelId); panel != nullptr) {
+    DockPanel* panel = panels_.Find(panelId);
+    if (DockNode* group = DockFloatingGroups::Find(floating_, target.leafId); group != nullptr) {
+        if (panel == nullptr || !panel->detachable) {
+            return;
+        }
+        if (std::ranges::find(group->panels, panelId) != group->panels.end()) {
+            if (target.kind == DockDropPreviewKind::StripMarker) {
+                ReorderPanelInLeaf(panelId, group->id, target.tabInsertionIndex);
+            }
+            return;
+        }
+        const std::uint32_t groupId = group->id;
+        const DockRect rect = panels_.Find(group->panels.front())->floatingRect;
+        DockTreeMutation::RemovePanel(root_, panelId);
+        DockTreeMutation::PruneEmptyBranches(root_);
+        DockFloatingGroups::RemovePanel(floating_, panelId);
+        // Taking the panel out may have removed its own window; this group is another one, so it stays.
+        group = DockFloatingGroups::Find(floating_, groupId);
+        const std::size_t index = target.kind == DockDropPreviewKind::StripMarker
+            ? std::min<std::size_t>(target.tabInsertionIndex, group->panels.size())
+            : group->panels.size();
+        group->panels.insert(group->panels.begin() + static_cast<std::ptrdiff_t>(index), panelId);
+        group->activePanelId = panelId;
+        panel->area = DockArea::Floating;
+        panel->visible = true;
+        panel->floatingRect = rect;
+        return;
+    }
+    if (panel != nullptr) {
         panel->visible = true;
     }
+    DockFloatingGroups::RemovePanel(floating_, panelId);
     DockPanelDocking::Dock(panels_, root_, panelId, target, &EditorDockModelCommands::NextNodeIdCallback, this);
 }
 
@@ -255,6 +321,10 @@ bool EditorDockModelCommands::ActivatePanelKind(DockPanelKind kind, DockArea fal
     }
     if (panel == nullptr) {
         return false;
+    }
+    if (DockNode* group = DockFloatingGroups::FindContaining(floating_, panel->id); group != nullptr) {
+        group->activePanelId = panel->id;
+        return true;
     }
 
     DockNode* leaf = DockNodeQuery::FindLeafContaining(root_.get(), panel->id);
@@ -311,11 +381,17 @@ bool EditorDockModelCommands::SetPanelTitle(DockPanelKind kind, std::string titl
 }
 
 void EditorDockModelCommands::MoveFloatingPanel(std::uint32_t panelId, int x, int y) {
-    panels_.MoveFloatingPanel(panelId, x, y);
+    const DockNode* group = DockFloatingGroups::FindContaining(floating_, panelId);
+    for (const std::uint32_t member : group != nullptr ? group->panels : std::vector<std::uint32_t>{ panelId }) {
+        panels_.MoveFloatingPanel(member, x, y);
+    }
 }
 
 void EditorDockModelCommands::ResizeFloatingPanel(std::uint32_t panelId, int width, int height) {
-    panels_.ResizeFloatingPanel(panelId, width, height);
+    const DockNode* group = DockFloatingGroups::FindContaining(floating_, panelId);
+    for (const std::uint32_t member : group != nullptr ? group->panels : std::vector<std::uint32_t>{ panelId }) {
+        panels_.ResizeFloatingPanel(member, width, height);
+    }
 }
 
 bool EditorDockModelCommands::ToggleMaximizedLeaf(std::uint32_t leafId) noexcept {

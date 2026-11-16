@@ -1,15 +1,20 @@
 #include "docking/FloatingWindowDestroyer.hpp"
 
 #if defined(_WIN32)
-#include <vector>
+#include <algorithm>
 
 namespace kb::editor {
 
-void FloatingWindowDestroyer::DestroyPanel(FloatingWindowRegistry& registry, std::uint32_t panelId) {
-    HWND floating = registry.WindowForPanel(panelId);
-    registry.RemovePanel(panelId);
-    if (floating != nullptr) {
-        DestroyWindow(floating);
+void FloatingWindowDestroyer::DestroyOrphaned(FloatingWindowRegistry& registry, const std::vector<std::uint32_t>& liveGroups) {
+    for (const std::uint32_t groupId : registry.Groups()) {
+        if (std::ranges::find(liveGroups, groupId) != liveGroups.end()) {
+            continue;
+        }
+        HWND floating = registry.WindowForGroup(groupId);
+        registry.RemoveGroup(groupId);
+        if (floating != nullptr) {
+            DestroyWindow(floating);
+        }
     }
 }
 

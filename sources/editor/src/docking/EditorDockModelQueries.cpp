@@ -1,6 +1,9 @@
 #include "docking/EditorDockModelQueries.hpp"
 
+#include "docking/DockFloatingGroups.hpp"
 #include "docking/DockGeometry.hpp"
+#include "docking/DockLayoutBuildSettings.hpp"
+#include "docking/DockLeafLayoutBuilder.hpp"
 #include "docking/DockLeafPanelOrder.hpp"
 #include "docking/DockModelQueries.hpp"
 #include "docking/DockNodeFinder.hpp"
@@ -79,9 +82,10 @@ namespace {
 
 } // namespace
 
-EditorDockModelQueries::EditorDockModelQueries(const DockPanelCollection& panels, const DockNode* root, std::uint32_t maximizedLeafId, bool drawerCollapsed) noexcept
+EditorDockModelQueries::EditorDockModelQueries(const DockPanelCollection& panels, const DockNode* root, const std::vector<DockNode>& floating, std::uint32_t maximizedLeafId, bool drawerCollapsed) noexcept
     : panels_(panels)
     , root_(root)
+    , floating_(floating)
     , maximizedLeafId_(maximizedLeafId)
     , drawerCollapsed_(drawerCollapsed) {}
 
@@ -143,7 +147,42 @@ std::uint32_t EditorDockModelQueries::LeafOfPanel(std::uint32_t panelId) const n
 
 std::vector<std::uint32_t> EditorDockModelQueries::PanelsSharingLeaf(std::uint32_t panelId) const {
     const DockNode* leaf = DockNodeFinder::FindLeafContaining(root_, panelId);
+    if (leaf == nullptr) {
+        leaf = DockFloatingGroups::FindContaining(floating_, panelId);
+    }
     return leaf != nullptr ? leaf->panels : std::vector<std::uint32_t>{};
+}
+
+const std::vector<DockNode>& EditorDockModelQueries::FloatingGroups() const noexcept {
+    return floating_;
+}
+
+const DockNode* EditorDockModelQueries::FloatingGroup(std::uint32_t groupId) const noexcept {
+    return DockFloatingGroups::Find(floating_, groupId);
+}
+
+std::uint32_t EditorDockModelQueries::FloatingGroupOfPanel(std::uint32_t panelId) const noexcept {
+    const DockNode* group = DockFloatingGroups::FindContaining(floating_, panelId);
+    return group != nullptr ? group->id : 0U;
+}
+
+DockRect EditorDockModelQueries::FloatingGroupRect(std::uint32_t groupId) const noexcept {
+    const DockNode* group = FloatingGroup(groupId);
+    const DockPanel* panel = group != nullptr ? panels_.Find(group->panels.front()) : nullptr;
+    return panel != nullptr ? panel->floatingRect : DockRect{};
+}
+
+DockLayout EditorDockModelQueries::BuildFloatingLayout(std::uint32_t groupId, int clientWidth, int clientHeight, int tabStripHeight, int tabMinWidth, int tabWidth, int controlsWidth) const {
+    DockLayout layout{};
+    if (const DockNode* group = FloatingGroup(groupId); group != nullptr) {
+        DockLeafLayoutBuilder{}.Build(*group, DockGeometry::MakeRect(0, 0, clientWidth, clientHeight), layout, DockLayoutBuildSettings{
+            .tabStripHeight = tabStripHeight,
+            .tabMinWidth = tabMinWidth,
+            .tabWidth = tabWidth,
+            .tabStripTrailingInset = controlsWidth,
+        });
+    }
+    return layout;
 }
 
 std::uint32_t EditorDockModelQueries::MaximizedLeafId() const noexcept {

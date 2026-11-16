@@ -22,8 +22,9 @@ void DockLeafLayoutBuilder::Build(const DockNode& node, const DockRect& rect, Do
             activeIndex = static_cast<int>(index);
         }
     }
+    const int tabsRight = leaf.tabStrip.x + std::max(0, leaf.tabStrip.width - settings.tabStripTrailingInset);
     const std::vector<int> tabWidths = DockGeometry::TabWidths(
-        leaf.tabStrip.width, static_cast<int>(node.panels.size()), activeIndex, settings.tabMinWidth, settings.tabWidth);
+        tabsRight - leaf.tabStrip.x, static_cast<int>(node.panels.size()), activeIndex, settings.tabMinWidth, settings.tabWidth);
     int tabX = leaf.tabStrip.x;
 
     for (std::size_t index = 0; index < node.panels.size(); ++index) {
@@ -34,7 +35,7 @@ void DockLeafLayoutBuilder::Build(const DockNode& node, const DockRect& rect, Do
             .leafId = node.id,
             .frame = leaf.frame,
             .tabStrip = leaf.tabStrip,
-            .tab = DockGeometry::MakeRect(tabX, leaf.tabStrip.y, std::min(resolvedTabWidth, leaf.tabStrip.x + leaf.tabStrip.width - tabX), settings.tabStripHeight),
+            .tab = DockGeometry::MakeRect(tabX, leaf.tabStrip.y, std::min(resolvedTabWidth, tabsRight - tabX), settings.tabStripHeight),
             .content = leaf.content,
             .contentClip = leaf.content,
             .active = panelId == node.activePanelId,

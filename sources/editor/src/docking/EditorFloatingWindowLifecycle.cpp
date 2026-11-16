@@ -5,16 +5,18 @@
 
 namespace kb::editor {
 
-EditorFloatingWindowLifecycle::EditorFloatingWindowLifecycle(FloatingWindowRegistry& registry, HINSTANCE& instance, HWND& owner, const EditorMetrics*& metrics) noexcept
+EditorFloatingWindowLifecycle::EditorFloatingWindowLifecycle(FloatingWindowRegistry& registry, HINSTANCE& instance, HWND& owner, const EditorMetrics*& metrics, const EditorDockModel*& dockModel) noexcept
     : registry_(registry)
     , instance_(instance)
     , owner_(owner)
-    , metrics_(metrics) {}
+    , metrics_(metrics)
+    , dockModel_(dockModel) {}
 
-void EditorFloatingWindowLifecycle::Configure(HINSTANCE instance, HWND owner, const EditorMetrics& metrics) noexcept {
+void EditorFloatingWindowLifecycle::Configure(HINSTANCE instance, HWND owner, const EditorMetrics& metrics, const EditorDockModel& dockModel) noexcept {
     instance_ = instance;
     owner_ = owner;
     metrics_ = &metrics;
+    dockModel_ = &dockModel;
 }
 
 void EditorFloatingWindowLifecycle::Shutdown() {
@@ -22,11 +24,6 @@ void EditorFloatingWindowLifecycle::Shutdown() {
 }
 
 void EditorFloatingWindowLifecycle::OnDestroyed(HWND window) {
-    const std::uint32_t panelId = registry_.PanelId(window);
-    if (panelId == 0) {
-        return;
-    }
-
     registry_.RemoveWindow(window);
 }
 

@@ -394,7 +394,7 @@ void EditorPaintDispatcher::Paint(HWND paintWindow) const {
 
     if (const DockPanel* panel = dockModel_.Queries().FindPanel(floatingWindows_.Queries().PanelId(paintWindow)); panel != nullptr) {
         const auto gdiStart = std::chrono::steady_clock::now();
-        renderer_.PaintFloating(paintWindow, *panel, theme_, metrics_, sceneContext_, renderBackendSettings_, sceneViewport_);
+        renderer_.PaintFloating(paintWindow, *panel, dockModel_, dockController_.ActiveDrag(), shellInteraction_.HoveredTab(), theme_, metrics_, sceneContext_, renderBackendSettings_, sceneViewport_);
         const double gdiMs = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - gdiStart).count();
         std::ostringstream paintDetail;

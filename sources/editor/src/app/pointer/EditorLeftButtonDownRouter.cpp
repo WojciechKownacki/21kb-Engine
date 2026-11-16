@@ -69,6 +69,7 @@
 #include "scene/GameplayGraphEditorState.hpp"
 #include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
 #include "rendering/SkeletalMeshEditorPanelLayout.hpp"
+#include "docking/DockWindowLayoutResolver.hpp"
 #include "rendering/DockTabControlGeometry.hpp"
 #include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
 #include "platform/win32/EditorTextEntryDialog.hpp"
@@ -2028,6 +2029,17 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
         }
         playMode_.SetGameHasInput(pressInGameView);
         if (const DockPanelLayout* closeTab = TabCloseHit(layout, x, y); closeTab != nullptr) {
+            if (EditorPanelCloser::Close(messageWindow, closeTab->panelId, dockModel_, floatingWindows_, sceneContext_)) {
+                sceneViewport_.RequestPresent();
+                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            }
+            return;
+        }
+    }
+    if (floatingWindows_.Queries().IsFloatingWindow(messageWindow)) {
+        const DockLayout layout = DockWindowLayoutResolver::Resolve(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+        if (const DockPanelLayout* closeTab = TabCloseHit(layout, x, y); closeTab != nullptr) {
+            // The window goes with its last tab.
             if (EditorPanelCloser::Close(messageWindow, closeTab->panelId, dockModel_, floatingWindows_, sceneContext_)) {
                 sceneViewport_.RequestPresent();
                 EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);

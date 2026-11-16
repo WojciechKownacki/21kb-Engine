@@ -2,7 +2,10 @@
 
 #if defined(_WIN32)
 #include "app/EditorWindowResizeInteraction.hpp"
+#include "docking/DockWindowLayoutResolver.hpp"
 #include "rendering/ConsoleDetailTextOverlay.hpp"
+#include "rendering/DockTabTooltipOverlayWindow.hpp"
+#include "rendering/DockWorkspaceTabStripRenderer.hpp"
 #include "rendering/EditorSurfacePainter.hpp"
 #include "rendering/FloatingEditorWindowRenderer.hpp"
 #include "rendering/FloatingPanelGeometry.hpp"
@@ -17,6 +20,7 @@
 #include "rendering/SkeletalMeshEditorPanelLayout.hpp"
 #include "scene/EditorTerrainService.hpp"
 
+#include <string>
 #include <vector>
 
 namespace kb::editor {
@@ -25,6 +29,8 @@ namespace {
 struct FloatingWindowPaintContext {
     HWND window = nullptr;
     const DockPanel* panel = nullptr;
+    const EditorDockModel* dockModel = nullptr;
+    const DockPointerDrag* dockDrag = nullptr;
     const EditorTheme* theme = nullptr;
     const EditorMetrics* metrics = nullptr;
     EditorSceneContext* sceneContext = nullptr;
@@ -83,7 +89,7 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
 
     EditorSurfacePainter::Fill(paint.dc, paint.client, *paintContext->theme, EditorSurfaceKind::AppBackground);
     SetBkMode(paint.dc, TRANSPARENT);
-    FloatingEditorWindowRenderer{}.Paint(paint.dc, paintContext->window, paint.client, *paintContext->panel, *paintContext->theme, *paintContext->metrics, *paintContext->sceneContext, *paintContext->renderBackendSettings, nullptr);
+    FloatingEditorWindowRenderer{}.Paint(paint.dc, paintContext->window, paint.client, *paintContext->panel, *paintContext->dockModel, paintContext->dockDrag, *paintContext->theme, *paintContext->metrics, *paintContext->sceneContext, *paintContext->renderBackendSettings, nullptr);
 }
 
 [[nodiscard]] SceneViewportToolbarDropdownOverlayWindow& FloatingSceneToolbarDropdownOverlay() {
@@ -96,17 +102,56 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
     return overlay;
 }
 
+[[nodiscard]] DockTabTooltipOverlayWindow& FloatingTabTooltipOverlay() {
+    static DockTabTooltipOverlayWindow overlay;
+    return overlay;
+}
+
+// The window the tooltip is shown for, so that a window with no tab to explain does not put away another one's.
+HWND g_tabTooltipWindow = nullptr;
+
+// The pointer rests on a tab of this window whose title is cut short: its whole title.
+void UpdateTabTooltip(HWND window, const DockPanel& panel, const EditorDockModel& dockModel, std::uint32_t hoveredTab, const EditorTheme& theme, const EditorMetrics& metrics) {
+    bool shown = false;
+    if (hoveredTab != 0U) {
+        RECT client{};
+        GetClientRect(window, &client);
+        const DockLayout layout = DockWindowLayoutResolver::ResolveFloating(client, dockModel.Queries().FloatingGroupOfPanel(panel.id), dockModel, metrics);
+        for (const DockPanelLayout& panelLayout : layout.panels) {
+            if (panelLayout.panelId != hoveredTab) {
+                continue;
+            }
+            const DockPanel* tabPanel = dockModel.Queries().FindPanel(panelLayout.panelId);
+            const std::string title = tabPanel != nullptr ? DockWorkspaceTabStripRenderer::CutShortTitle(panelLayout, *tabPanel) : std::string{};
+            if (!title.empty()) {
+                FloatingTabTooltipOverlay().Show(window, GdiDrawing::ToRect(panelLayout.tab), title, theme);
+                g_tabTooltipWindow = window;
+                shown = true;
+            }
+            break;
+        }
+    }
+    if (!shown && g_tabTooltipWindow == window) {
+        FloatingTabTooltipOverlay().Hide();
+        g_tabTooltipWindow = nullptr;
+    }
+}
+
 } // namespace
 
 void FloatingWindowBackBufferPainter::HideAllOverlays() noexcept {
     FloatingSceneToolbarDropdownOverlay().Hide();
     FloatingAddComponentOverlay().Hide();
+    FloatingTabTooltipOverlay().Hide();
+    g_tabTooltipWindow = nullptr;
 }
 
-void FloatingWindowBackBufferPainter::Paint(HWND window, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, EditorSceneContext& sceneContext, const EditorRenderBackendSettings& renderBackendSettings, EditorSceneBgfxViewport& sceneViewport) {
+void FloatingWindowBackBufferPainter::Paint(HWND window, const DockPanel& panel, const EditorDockModel& dockModel, const DockPointerDrag* dockDrag, std::uint32_t hoveredTab, const EditorTheme& theme, const EditorMetrics& metrics, EditorSceneContext& sceneContext, const EditorRenderBackendSettings& renderBackendSettings, EditorSceneBgfxViewport& sceneViewport) {
     FloatingWindowPaintContext context{
         .window = window,
         .panel = &panel,
+        .dockModel = &dockModel,
+        .dockDrag = dockDrag,
         .theme = &theme,
         .metrics = &metrics,
         .sceneContext = &sceneContext,
@@ -114,6 +159,7 @@ void FloatingWindowBackBufferPainter::Paint(HWND window, const DockPanel& panel,
         .sceneViewport = &sceneViewport,
     };
     GdiBackBufferRenderer::Paint(window, &PaintBackBuffer, &context);
+    UpdateTabTooltip(window, panel, dockModel, hoveredTab, theme, metrics);
     const EditorTerrainToolState& terrainTool = EditorTerrainService::ToolState();
     if (panel.kind == DockPanelKind::Scene &&
         (sceneContext.ViewportPreview(panel.id).ToolbarDropdown() != EditorViewportToolbarDropdown::None ||

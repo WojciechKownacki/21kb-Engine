@@ -44,6 +44,7 @@ public:
         int x,
         int y,
         EditorDockModel& dockModel,
+        const EditorFloatingWindowManager& floatingWindows,
         EditorShellInteractionState& shellInteraction,
         const EditorMetrics& metrics,
         bool pointerDown = false);

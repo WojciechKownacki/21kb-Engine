@@ -28,6 +28,9 @@ struct DockPointerDrag {
 #endif
     bool detached = false;
     bool manualTabDrag = false;
+    // The press was on the free part of the strip of a window with several tabs: the whole window
+    // moves, and it is not offered to the dock.
+    bool moveWindowOnly = false;
 };
 
 } // namespace kb::editor

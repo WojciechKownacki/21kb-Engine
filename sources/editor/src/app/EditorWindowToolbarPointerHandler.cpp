@@ -18,6 +18,7 @@
 #if defined(_WIN32)
 #include "app/EditorSceneLifecycleGuard.hpp"
 #include "app/EditorWorkspaceSession.hpp"
+#include "docking/DockWindowLayoutResolver.hpp"
 #include "docking/EditorWorkspaceArrangement.hpp"
 #include "docking/EditorFloatingWindowSync.hpp"
 #include "localization/EditorLocalization.hpp"
@@ -279,6 +280,30 @@ void InvalidateToolbar(HWND mainWindow, const DockLayout& layout) noexcept {
     InvalidateMainRect(mainWindow, ToRect(layout.toolbar));
 }
 
+// The tab under the point when its title is drawn cut short, 0 otherwise.
+[[nodiscard]] std::uint32_t CutShortTabAt(const DockLayout& layout, const EditorDockModel& dockModel, int x, int y) {
+    for (const DockPanelLayout& panelLayout : layout.panels) {
+        if (!panelLayout.tab.Contains(x, y)) {
+            continue;
+        }
+        const DockPanel* panel = dockModel.Queries().FindPanel(panelLayout.panelId);
+        return panel != nullptr && !DockWorkspaceTabStripRenderer::CutShortTitle(panelLayout, *panel).empty() ? panelLayout.panelId : 0U;
+    }
+    return 0U;
+}
+
+// Repaints the floating windows of two tabs, and the main window when one of them is not in a floating window.
+void InvalidateTabWindows(HWND mainWindow, const EditorFloatingWindowManager& floatingWindows, std::uint32_t firstTab, std::uint32_t secondTab) {
+    for (const std::uint32_t tab : { firstTab, secondTab }) {
+        const HWND floating = tab != 0U ? floatingWindows.Queries().WindowForPanel(tab) : nullptr;
+        if (floating != nullptr) {
+            InvalidateRect(floating, nullptr, FALSE);
+        } else if (tab != 0U && mainWindow != nullptr) {
+            InvalidateRect(mainWindow, nullptr, FALSE);
+        }
+    }
+}
+
 [[nodiscard]] std::optional<DockLayout> ResolveMainLayout(HWND mainWindow, EditorDockModel& dockModel, const EditorMetrics& metrics) {
     RECT client{};
     if (GetClientRect(mainWindow, &client) == 0) {
@@ -301,6 +326,7 @@ void InvalidateToolbar(HWND mainWindow, const DockLayout& layout) noexcept {
 void ActivatePanel(
     HWND mainWindow,
     EditorDockModel& dockModel,
+    const EditorFloatingWindowManager& floatingWindows,
     EditorSceneBgfxViewport& sceneViewport,
     DockPanelKind kind,
     DockArea fallbackArea) {
@@ -308,6 +334,10 @@ void ActivatePanel(
         return;
     }
     InvalidateRect(mainWindow, nullptr, FALSE);
+    // A panel that is a tab of a floating window comes to the front there.
+    for (const HWND window : floatingWindows.Queries().Windows()) {
+        InvalidateRect(window, nullptr, FALSE);
+    }
     // The panel this one replaces may own a child render surface, and that surface is only
     // taken down inside a present - EndPaintLayout hides every host surface the frame did
     // not lay out. Repainting alone leaves the outgoing viewport's window sitting on top of
@@ -339,10 +369,12 @@ void OpenSettingsPanel(
             if (IsIconic(window) != FALSE) {
                 ShowWindow(window, SW_RESTORE);
             }
+            dockModel.Commands().ActivatePanel(panel->id);
+            InvalidateRect(window, nullptr, FALSE);
             SetForegroundWindow(window);
             return;
         }
-        ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::ProjectSettings, DockArea::Right);
+        ActivatePanel(mainWindow, dockModel, floatingWindows, sceneViewport, DockPanelKind::ProjectSettings, DockArea::Right);
         return;
     }
     DockRect rect = panel->floatingRect;
@@ -361,7 +393,7 @@ void OpenSettingsPanel(
     dockModel.Commands().UndockPanel(panelId, rect);
     if (!floatingWindows.Commands().Create(panelId, title, rect)) {
         // No window could be made for it: the panel still has to be reachable.
-        ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::ProjectSettings, DockArea::Right);
+        ActivatePanel(mainWindow, dockModel, floatingWindows, sceneViewport, DockPanelKind::ProjectSettings, DockArea::Right);
         return;
     }
     InvalidateRect(mainWindow, nullptr, FALSE);
@@ -413,7 +445,7 @@ void OpenPublish(const MenuActionContext& context, int platform) {
         static_cast<void>(context.sceneContext.SetBuildGameSelectedTarget(platform));
     }
     static_cast<void>(context.sceneContext.SetBuildGameSelectedProfile(1));
-    ActivatePanel(context.mainWindow, context.dockModel, context.sceneViewport, DockPanelKind::BuildGame, DockArea::Center);
+    ActivatePanel(context.mainWindow, context.dockModel, context.floatingWindows, context.sceneViewport, DockPanelKind::BuildGame, DockArea::Center);
     if (!ready) {
         return;
     }
@@ -437,7 +469,7 @@ void TogglePanelRow(const MenuActionContext& context, const EditorMenuRowView& c
     }
     for (const EverydayPanel& everyday : kEverydayPanels) {
         if (everyday.kind == kind) {
-            ActivatePanel(context.mainWindow, context.dockModel, context.sceneViewport, everyday.kind, everyday.area);
+            ActivatePanel(context.mainWindow, context.dockModel, context.floatingWindows, context.sceneViewport, everyday.kind, everyday.area);
         }
     }
 }
@@ -455,7 +487,7 @@ bool SavePlayPreference(EditorSceneContext& sceneContext, Change change) {
     EditorSceneContext& sceneContext = context.sceneContext;
     const HWND mainWindow = context.mainWindow;
     const auto activate = [&](DockPanelKind kind, DockArea area) {
-        ActivatePanel(mainWindow, context.dockModel, context.sceneViewport, kind, area);
+        ActivatePanel(mainWindow, context.dockModel, context.floatingWindows, context.sceneViewport, kind, area);
         return false;
     };
     // Through the policy's pointer route: these rows used to call the context directly and so did not
@@ -910,7 +942,7 @@ bool EditorWindowToolbarPointerHandler::HandleLeftButtonDown(
 
     switch (EditorToolbarRenderer::HitTestTopBarItem(EditorToolbarRenderer::ResolveToolbar(ToRect(layout->toolbar)), x, y)) {
     case EditorTopBarItem::Build:
-        ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::BuildGame, DockArea::Center);
+        ActivatePanel(mainWindow, dockModel, floatingWindows, sceneViewport, DockPanelKind::BuildGame, DockArea::Center);
         return true;
     case EditorTopBarItem::Minimize:
         ShowWindow(mainWindow, SW_MINIMIZE);
@@ -942,12 +974,12 @@ bool EditorWindowToolbarPointerHandler::HandleLeftButtonDown(
     }
 
     if (EditorToolbarRenderer::HitTestStatusBarConsole(EditorToolbarRenderer::ResolveStatusBar(ToRect(layout->statusBar)), x, y)) {
-        ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::Console, DockArea::Bottom);
+        ActivatePanel(mainWindow, dockModel, floatingWindows, sceneViewport, DockPanelKind::Console, DockArea::Bottom);
         return true;
     }
 
     if (EditorToolbarRenderer::HitTestStatusBarAgent(EditorToolbarRenderer::ResolveStatusBar(ToRect(layout->statusBar)), x, y)) {
-        ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::Agent, DockArea::Right);
+        ActivatePanel(mainWindow, dockModel, floatingWindows, sceneViewport, DockPanelKind::Agent, DockArea::Right);
         sceneContext.AgentPanel().Prepare();
         sceneContext.AgentPanel().FocusInput(true);
         return true;
@@ -962,15 +994,21 @@ bool EditorWindowToolbarPointerHandler::HandleMouseMove(
     int x,
     int y,
     EditorDockModel& dockModel,
+    const EditorFloatingWindowManager& floatingWindows,
     EditorShellInteractionState& shellInteraction,
     const EditorMetrics& metrics,
     bool pointerDown) {
+    const std::uint32_t previousTab = shellInteraction.HoveredTab();
     if (messageWindow != mainWindow) {
-        const bool hadTabTooltip = shellInteraction.HoveredTab() != 0U;
         ClearHover(shellInteraction);
-        if (hadTabTooltip && mainWindow != nullptr) {
-            // The tooltip is a window of its own: the main window repaints to put it away.
-            InvalidateRect(mainWindow, nullptr, FALSE);
+        std::uint32_t hoveredTab = 0;
+        if (!pointerDown && floatingWindows.Queries().IsFloatingWindow(messageWindow)) {
+            hoveredTab = CutShortTabAt(DockWindowLayoutResolver::Resolve(messageWindow, mainWindow, dockModel, floatingWindows, metrics), dockModel, x, y);
+            static_cast<void>(shellInteraction.SetHoveredTab(hoveredTab));
+        }
+        if (hoveredTab != previousTab) {
+            // The tooltip is a window of its own: the window of the tab repaints to show or put it away.
+            InvalidateTabWindows(mainWindow, floatingWindows, previousTab, hoveredTab);
         }
         return false;
     }
@@ -1000,22 +1038,12 @@ bool EditorWindowToolbarPointerHandler::HandleMouseMove(
 
     // A tab whose title is cut short shows it in full while the pointer rests on the tab: not during a
     // drag, and not while a menu is open over it.
-    std::uint32_t hoveredTab = 0;
-    if (!pointerDown && shellInteraction.OpenMenu() == EditorMenuCommand::None) {
-        for (const DockPanelLayout& panelLayout : layout->panels) {
-            if (!panelLayout.tab.Contains(x, y)) {
-                continue;
-            }
-            const DockPanel* panel = dockModel.Queries().FindPanel(panelLayout.panelId);
-            if (panel != nullptr && !DockWorkspaceTabStripRenderer::CutShortTitle(panelLayout, *panel).empty()) {
-                hoveredTab = panelLayout.panelId;
-            }
-            break;
-        }
-    }
-    const std::uint32_t previousTab = shellInteraction.HoveredTab();
+    const std::uint32_t hoveredTab = !pointerDown && shellInteraction.OpenMenu() == EditorMenuCommand::None
+        ? CutShortTabAt(*layout, dockModel, x, y)
+        : 0U;
     if (shellInteraction.SetHoveredTab(hoveredTab)) {
         // The tooltip follows the main window's paint, so the tab is repainted for it to be shown or put away.
+        InvalidateTabWindows(nullptr, floatingWindows, previousTab, hoveredTab);
         for (const DockPanelLayout& panelLayout : layout->panels) {
             if (panelLayout.panelId == (hoveredTab != 0U ? hoveredTab : previousTab)) {
                 InvalidateMainRect(mainWindow, ToRect(panelLayout.tab));

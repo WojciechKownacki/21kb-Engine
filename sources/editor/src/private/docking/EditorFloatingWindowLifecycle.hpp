@@ -11,12 +11,14 @@
 
 namespace kb::editor {
 
+class EditorDockModel;
+
 class EditorFloatingWindowLifecycle {
 public:
 #if defined(_WIN32)
-    EditorFloatingWindowLifecycle(FloatingWindowRegistry& registry, HINSTANCE& instance, HWND& owner, const EditorMetrics*& metrics) noexcept;
+    EditorFloatingWindowLifecycle(FloatingWindowRegistry& registry, HINSTANCE& instance, HWND& owner, const EditorMetrics*& metrics, const EditorDockModel*& dockModel) noexcept;
 
-    void Configure(HINSTANCE instance, HWND owner, const EditorMetrics& metrics) noexcept;
+    void Configure(HINSTANCE instance, HWND owner, const EditorMetrics& metrics, const EditorDockModel& dockModel) noexcept;
     void Shutdown();
     void OnDestroyed(HWND window);
 #endif
@@ -27,6 +29,7 @@ private:
     HINSTANCE& instance_;
     HWND& owner_;
     const EditorMetrics*& metrics_;
+    const EditorDockModel*& dockModel_;
 #endif
 };
 

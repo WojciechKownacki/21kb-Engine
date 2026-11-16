@@ -4,6 +4,7 @@
 #include "app/panels/EditorPanelCloser.hpp"
 #include "docking/DefaultDockWorkspace.hpp"
 #include "docking/DockMainLayoutResolver.hpp"
+#include "docking/DockWindowLayoutResolver.hpp"
 #include "docking/EditorDockModel.hpp"
 #include "docking/EditorFloatingWindowManager.hpp"
 #include "localization/EditorLocalization.hpp"
@@ -112,7 +113,7 @@ bool EditorDockTabMenu::Execute(
             return false;
         }
         dockModel.Commands().DockPanelTo(panelId, DockBackTarget(dockModel, panelId));
-        floatingWindows.Commands().Destroy(panelId);
+        floatingWindows.Commands().DestroyOrphaned();
         return true;
     case EditorDockTabCommand::None:
     default:
@@ -132,6 +133,11 @@ std::uint32_t EditorDockTabMenu::PanelAt(
     if (panelId == 0U) {
         return 0U;
     }
+    const DockLayout layout = DockWindowLayoutResolver::Resolve(messageWindow, mainWindow, dockModel, floatingWindows, metrics);
+    if (const DockHit hit = dockModel.Queries().HitTest(layout, x, y); hit.kind == DockHitKind::Tab) {
+        return hit.panelId;
+    }
+    // The free part of the strip belongs to the tab in front.
     RECT client{};
     GetClientRect(messageWindow, &client);
     return FloatingWindowControlLayout::StripDragRect(metrics, client.right - client.left).Contains(x, y) ? panelId : 0U;

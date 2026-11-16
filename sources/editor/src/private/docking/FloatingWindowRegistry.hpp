@@ -12,25 +12,27 @@
 
 namespace kb::editor {
 
+// The native window of each floating tab group, by the id of the group in the dock model.
 class FloatingWindowRegistry {
 public:
 #if defined(_WIN32)
     [[nodiscard]] bool ContainsWindow(HWND window) const noexcept;
-    [[nodiscard]] bool ContainsPanel(std::uint32_t panelId) const noexcept;
-    [[nodiscard]] std::uint32_t PanelId(HWND window) const noexcept;
-    [[nodiscard]] HWND WindowForPanel(std::uint32_t panelId) const noexcept;
+    [[nodiscard]] bool ContainsGroup(std::uint32_t groupId) const noexcept;
+    [[nodiscard]] std::uint32_t GroupId(HWND window) const noexcept;
+    [[nodiscard]] HWND WindowForGroup(std::uint32_t groupId) const noexcept;
     [[nodiscard]] std::vector<HWND> Windows() const;
+    [[nodiscard]] std::vector<std::uint32_t> Groups() const;
 
-    void Add(std::uint32_t panelId, HWND window);
+    void Add(std::uint32_t groupId, HWND window);
     void RemoveWindow(HWND window) noexcept;
-    void RemovePanel(std::uint32_t panelId) noexcept;
+    void RemoveGroup(std::uint32_t groupId) noexcept;
     void Clear() noexcept;
 #endif
 
 private:
 #if defined(_WIN32)
-    std::unordered_map<std::uint32_t, HWND> panelToWindow_;
-    std::unordered_map<HWND, std::uint32_t> windowToPanel_;
+    std::unordered_map<std::uint32_t, HWND> groupToWindow_;
+    std::unordered_map<HWND, std::uint32_t> windowToGroup_;
 #endif
 };
 

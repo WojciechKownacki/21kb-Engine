@@ -22,7 +22,7 @@ public:
         HINSTANCE instance,
         HWND owner,
         const wchar_t* windowClassName,
-        std::uint32_t panelId,
+        std::uint32_t groupId,
         const std::string& titleText,
         const DockRect& rect);
 #endif

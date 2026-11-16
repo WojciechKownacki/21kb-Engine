@@ -193,6 +193,7 @@ add_executable(kb_editor WIN32
     src/docking/DockDragOperationHandler.cpp
     src/docking/DockDragCompletionHandler.cpp
     src/docking/DockFloatingDragOperation.cpp
+    src/docking/DockFloatingGroups.cpp
     src/docking/DockGeometry.cpp
     src/docking/DockHitTester.cpp
     src/docking/DockHoverCursorUpdater.cpp
@@ -236,6 +237,7 @@ add_executable(kb_editor WIN32
     src/docking/FloatingWindowCreator.cpp
     src/docking/FloatingWindowDestroyer.cpp
     src/docking/FloatingWindowRectReader.cpp
+    src/docking/DockWindowLayoutResolver.cpp
     src/docking/FloatingWindowRegistry.cpp
     src/docking/FloatingWindowResizeEventResolver.cpp
     src/private/docking/DefaultDockWorkspace.hpp
@@ -252,6 +254,7 @@ add_executable(kb_editor WIN32
     src/private/docking/DockDragCompletionHandler.hpp
     src/private/docking/DockDockedTabDragHandler.hpp
     src/private/docking/DockFloatingDragOperation.hpp
+    src/private/docking/DockFloatingGroups.hpp
     src/private/docking/DockGeometry.hpp
     src/private/docking/DockHitTester.hpp
     src/private/docking/DockHoverCursorUpdater.hpp
@@ -295,6 +298,7 @@ add_executable(kb_editor WIN32
     src/private/docking/FloatingWindowCreator.hpp
     src/private/docking/FloatingWindowDestroyer.hpp
     src/private/docking/FloatingWindowRectReader.hpp
+    src/private/docking/DockWindowLayoutResolver.hpp
     src/private/docking/FloatingWindowRegistry.hpp
     src/private/docking/FloatingWindowResizeEventResolver.hpp
     src/private/assets/EditorAssetBrowserAssetRows.hpp
@@ -532,7 +536,6 @@ add_executable(kb_editor WIN32
     src/private/project/EditorProjectPaths.hpp
     src/private/rendering/DockDropPreviewRenderer.hpp
     src/private/rendering/DockDropPreviewOverlayWindow.hpp
-    src/private/rendering/DockPanelChromeRenderer.hpp
     src/private/rendering/DockPanelFramePainter.hpp
     src/private/rendering/DockWorkspaceChromeRenderer.hpp
     src/private/rendering/DockWorkspaceContentRenderer.hpp
@@ -790,7 +793,6 @@ add_executable(kb_editor WIN32
     src/platform/win32/Win32InputDebugLogger.cpp
     src/rendering/DockDropPreviewRenderer.cpp
     src/rendering/DockDropPreviewOverlayWindow.cpp
-    src/rendering/DockPanelChromeRenderer.cpp
     src/rendering/DockPanelFramePainter.cpp
     src/rendering/DockWorkspaceChromeRenderer.cpp
     src/rendering/DockWorkspaceContentRenderer.cpp
@@ -1500,6 +1502,7 @@ if(BUILD_TESTING)
         src/docking/DockGeometry.cpp
         src/docking/DockHitTester.cpp
         src/docking/DockLayoutBuilder.cpp
+        src/docking/DockFloatingGroups.cpp
         src/docking/DockLeafLayoutBuilder.cpp
         src/docking/DockLayoutSerializer.cpp
     src/docking/DockLeafPanelOrder.cpp

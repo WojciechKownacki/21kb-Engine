@@ -11,10 +11,10 @@ bool FloatingWindowCreator::Create(
     HINSTANCE instance,
     HWND owner,
     const wchar_t* windowClassName,
-    std::uint32_t panelId,
+    std::uint32_t groupId,
     const std::string& titleText,
     const DockRect& rect) {
-    if (registry.ContainsPanel(panelId)) {
+    if (registry.ContainsGroup(groupId)) {
         return false;
     }
 
@@ -23,7 +23,7 @@ bool FloatingWindowCreator::Create(
         return false;
     }
 
-    registry.Add(panelId, floating);
+    registry.Add(groupId, floating);
     // Only now is the window known to be a floating one, so ask Windows to work out
     // the frame again: the first pass during creation still used the default one.
     SetWindowPos(

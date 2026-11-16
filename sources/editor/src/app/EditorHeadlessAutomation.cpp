@@ -4452,8 +4452,8 @@ bool EditorHeadlessAutomation::CapturePanelScreenshotMatrix(
                             profile.dimensions.logicalWidth,
                             profile.dimensions.logicalHeight,
                         },
-                        *panelToRender, theme, metrics, context_, settings,
-                        nullptr);
+                        *panelToRender, dockModel, nullptr, theme, metrics,
+                        context_, settings, nullptr);
                 });
             const bool captureSucceeded = saved && rendered;
             succeeded = captureSucceeded && succeeded;

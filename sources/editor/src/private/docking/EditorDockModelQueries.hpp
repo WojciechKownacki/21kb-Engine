@@ -12,7 +12,7 @@ namespace kb::editor {
 
 class EditorDockModelQueries {
 public:
-    EditorDockModelQueries(const DockPanelCollection& panels, const DockNode* root, std::uint32_t maximizedLeafId, bool drawerCollapsed) noexcept;
+    EditorDockModelQueries(const DockPanelCollection& panels, const DockNode* root, const std::vector<DockNode>& floating, std::uint32_t maximizedLeafId, bool drawerCollapsed) noexcept;
 
     // The drawer is the leaf holding Project Files (with the Console beside it by default); 0
     // when Project Files is floating or closed.
@@ -27,15 +27,26 @@ public:
     [[nodiscard]] std::optional<DockDropPreview> ResolveDropPreview(const DockLayout& layout, int x, int y) const;
     [[nodiscard]] std::uint32_t PanelCountInLeaf(std::uint32_t leafId) const noexcept;
     // The tab group a docked panel sits in: its leaf (0 when floating or closed) and the
-    // panels of that leaf in tab order.
+    // panels of the group it sits in, docked or floating, in tab order.
     [[nodiscard]] std::uint32_t LeafOfPanel(std::uint32_t panelId) const noexcept;
     [[nodiscard]] std::vector<std::uint32_t> PanelsSharingLeaf(std::uint32_t panelId) const;
+    // The tab groups of the floating windows. A group is a leaf: its id, its panels in tab
+    // order and the active one. FloatingGroupOfPanel is 0 for a panel that is docked or closed.
+    [[nodiscard]] const std::vector<DockNode>& FloatingGroups() const noexcept;
+    [[nodiscard]] const DockNode* FloatingGroup(std::uint32_t groupId) const noexcept;
+    [[nodiscard]] std::uint32_t FloatingGroupOfPanel(std::uint32_t panelId) const noexcept;
+    // Where the window of a group sits: the place its panels remember.
+    [[nodiscard]] DockRect FloatingGroupRect(std::uint32_t groupId) const noexcept;
+    // The tab strip and content of a floating window of the given client size, laid out as a
+    // docked group is; the strip leaves `controlsWidth` free at its right end.
+    [[nodiscard]] DockLayout BuildFloatingLayout(std::uint32_t groupId, int clientWidth, int clientHeight, int tabStripHeight, int tabMinWidth, int tabWidth, int controlsWidth) const;
     // The leaf currently filling the workspace, 0 when none is maximized.
     [[nodiscard]] std::uint32_t MaximizedLeafId() const noexcept;
 
 private:
     const DockPanelCollection& panels_;
     const DockNode* root_ = nullptr;
+    const std::vector<DockNode>& floating_;
     std::uint32_t maximizedLeafId_ = 0;
     bool drawerCollapsed_ = false;
 };

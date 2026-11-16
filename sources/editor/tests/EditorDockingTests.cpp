@@ -1899,6 +1899,234 @@ void RunTabClickIsDockInteractionTest() {
         "Clicking an inactive tab must register as a dock Tab hit");
 }
 
+// A floating window of the Inspector with the Hierarchy and the Console docked into it, in the tab order 4, 1, 6.
+[[nodiscard]] std::uint32_t MakeThreeTabWindow(kb::editor::EditorDockModel& model) {
+    model.Commands().UndockPanel(4U, kb::editor::DockRect{ 200, 160, 640, 420 });
+    const std::uint32_t group = model.Queries().FloatingGroupOfPanel(4U);
+    kb::editor::tests::Require(group != 0U, "an undocked panel should get a floating window of its own");
+    model.Commands().DockPanelTo(6U, kb::editor::DockDropPreview{
+        .zone = kb::editor::DockDropZone::Center, .kind = kb::editor::DockDropPreviewKind::Glow, .leafId = group });
+    model.Commands().DockPanelTo(1U, kb::editor::DockDropPreview{
+        .zone = kb::editor::DockDropZone::Center, .kind = kb::editor::DockDropPreviewKind::StripMarker, .leafId = group, .tabInsertionIndex = 1U });
+    return group;
+}
+
+[[nodiscard]] std::vector<std::uint32_t> FloatingTabs(const kb::editor::EditorDockModel& model, std::uint32_t group) {
+    const kb::editor::DockNode* node = model.Queries().FloatingGroup(group);
+    return node != nullptr ? node->panels : std::vector<std::uint32_t>{};
+}
+
+void RunFloatingWindowTakesSeveralDockedPanelsTest() {
+    kb::editor::EditorDockModel model;
+    const std::uint32_t group = MakeThreeTabWindow(model);
+    kb::editor::tests::Require(FloatingTabs(model, group) == std::vector<std::uint32_t>({ 4U, 1U, 6U }),
+        "a floating window should take the second and third panel as tabs, a strip drop at its insertion index");
+    kb::editor::tests::Require(model.Queries().FloatingGroup(group)->activePanelId == 1U,
+        "the panel docked last should be the one in front");
+    kb::editor::tests::Require(model.Queries().FloatingGroups().size() == 1U,
+        "docking into a window should not open another one");
+    const kb::editor::DockRect rect = model.Queries().FloatingGroupRect(group);
+    for (const std::uint32_t panelId : { 4U, 1U, 6U }) {
+        const kb::editor::DockPanel* panel = RequirePanel(model, panelId);
+        kb::editor::tests::Require(panel->area == kb::editor::DockArea::Floating && panel->visible &&
+                panel->floatingRect.x == rect.x && panel->floatingRect.width == rect.width,
+            "every tab of a floating window should be floating, open and share the window's place");
+        kb::editor::tests::Require(model.Queries().LeafOfPanel(panelId) == 0U && FindPanelLayout(BuildDefaultLayout(model), panelId) == nullptr,
+            "a tab of a floating window should have left the docked tree");
+    }
+    kb::editor::tests::Require(model.Queries().PanelsSharingLeaf(6U) == std::vector<std::uint32_t>({ 4U, 1U, 6U }),
+        "the tabs of a floating window should be one group");
+
+    // A panel that cannot be torn off cannot be docked into a window either.
+    model.Commands().DockPanelTo(25U, kb::editor::DockDropPreview{ .zone = kb::editor::DockDropZone::Center, .leafId = group });
+    kb::editor::tests::Require(FloatingTabs(model, group).size() == 3U, "a panel that cannot float should stay out of a floating window");
+}
+
+void RunFloatingWindowSwitchesActiveTabTest() {
+    const kb::editor::EditorMetrics metrics{};
+    const int controls = kb::editor::FloatingWindowControlLayout::TotalWidth(metrics);
+    kb::editor::EditorDockModel model;
+    const std::uint32_t group = MakeThreeTabWindow(model);
+
+    model.Commands().ActivatePanel(4U);
+    kb::editor::tests::Require(model.Queries().FloatingGroup(group)->activePanelId == 4U, "choosing a tab should bring it to the front");
+    kb::editor::DockLayout layout = model.Queries().BuildFloatingLayout(group, 640, 420, metrics.tabStripHeight, metrics.tabMinWidth, metrics.tabWidth, controls);
+    kb::editor::tests::Require(layout.leaves.size() == 1U && layout.panels.size() == 3U && layout.leaves.front().activePanelId == 4U,
+        "the window should lay out one group with a tab for each panel");
+    for (const kb::editor::DockPanelLayout& tab : layout.panels) {
+        kb::editor::tests::Require(tab.active == (tab.panelId == 4U), "only the tab in front should be drawn as active");
+        kb::editor::tests::Require(tab.tab.x + tab.tab.width <= 640 - 1 - controls,
+            "tabs should stay clear of the window controls");
+    }
+    const kb::editor::DockHit hit = model.Queries().HitTest(layout, layout.panels[2].tab.x + 4, layout.panels[2].tab.y + 4);
+    kb::editor::tests::Require(hit.kind == kb::editor::DockHitKind::Tab && hit.panelId == 6U && hit.leafId == group,
+        "a point on a tab of the window should hit that tab");
+
+    model.Commands().ReorderPanelInLeaf(6U, group, 0U);
+    kb::editor::tests::Require(FloatingTabs(model, group) == std::vector<std::uint32_t>({ 6U, 4U, 1U }) &&
+            model.Queries().FloatingGroup(group)->activePanelId == 6U,
+        "dragging a tab along the strip should reorder the window's tabs");
+
+    // Many tabs in a narrow window: every tab stays inside the strip and the tab in front keeps its title.
+    layout = model.Queries().BuildFloatingLayout(group, 330, 300, metrics.tabStripHeight, metrics.tabMinWidth, metrics.tabWidth, controls);
+    for (const kb::editor::DockPanelLayout& tab : layout.panels) {
+        kb::editor::tests::Require(tab.tab.width > 0 && tab.tab.x + tab.tab.width <= 330 - 1 - controls,
+            "tabs of a narrow window should shrink to stay clear of the controls");
+    }
+}
+
+void RunFloatingTabTearsOffToNewWindowTest() {
+    kb::editor::EditorDockModel model;
+    const std::uint32_t group = MakeThreeTabWindow(model);
+
+    model.Commands().UndockPanel(1U, kb::editor::DockRect{ 500, 300, 520, 360 });
+    const std::uint32_t torn = model.Queries().FloatingGroupOfPanel(1U);
+    kb::editor::tests::Require(torn != 0U && torn != group && FloatingTabs(model, torn) == std::vector<std::uint32_t>({ 1U }),
+        "a tab torn off a window should get a window of its own");
+    kb::editor::tests::Require(FloatingTabs(model, group) == std::vector<std::uint32_t>({ 4U, 6U }) &&
+            model.Queries().FloatingGroup(group)->activePanelId == 4U,
+        "the window left behind should keep its other tabs, with one of them in front");
+    kb::editor::tests::Require(model.Queries().FloatingGroups().size() == 2U && RequirePanel(model, 1U)->floatingRect.x == 500,
+        "the new window should open where it was released");
+
+    model.Commands().MoveFloatingPanel(4U, 30, 40);
+    kb::editor::tests::Require(RequirePanel(model, 6U)->floatingRect.x == 30 && RequirePanel(model, 6U)->floatingRect.y == 40 &&
+            RequirePanel(model, 1U)->floatingRect.x == 500,
+        "moving a window should move all of its tabs and nothing else");
+    model.Commands().ResizeFloatingPanel(6U, 700, 500);
+    kb::editor::tests::Require(RequirePanel(model, 4U)->floatingRect.width == 700 && RequirePanel(model, 1U)->floatingRect.width == 520,
+        "resizing a window should resize all of its tabs and nothing else");
+
+    // A panel alone in its window that is undocked again only moves the window.
+    model.Commands().UndockPanel(1U, kb::editor::DockRect{ 10, 20, 400, 300 });
+    kb::editor::tests::Require(model.Queries().FloatingGroupOfPanel(1U) == torn && model.Queries().FloatingGroups().size() == 2U &&
+            RequirePanel(model, 1U)->floatingRect.x == 10,
+        "undocking a panel that is alone in its window should not open a second one");
+}
+
+void RunFloatingTabDocksBackToMainWindowTest() {
+    kb::editor::EditorDockModel model;
+    const std::uint32_t group = MakeThreeTabWindow(model);
+    const kb::editor::DockLayout layout = BuildDefaultLayout(model);
+    const kb::editor::DockPanelLayout* scene = FindPanelLayout(layout, 2U);
+    kb::editor::tests::Require(scene != nullptr, "the Scene View should be docked");
+
+    model.Commands().DockPanelTo(1U, kb::editor::DockDropPreview{
+        .zone = kb::editor::DockDropZone::Center, .kind = kb::editor::DockDropPreviewKind::Glow, .leafId = scene->leafId });
+    const kb::editor::DockPanelLayout* back = FindPanelLayout(BuildDefaultLayout(model), 1U);
+    kb::editor::tests::Require(back != nullptr && back->leafId == scene->leafId && RequirePanel(model, 1U)->area == kb::editor::DockArea::Center,
+        "a tab dropped on a docked group should become a tab of the main window");
+    kb::editor::tests::Require(model.Queries().FloatingGroupOfPanel(1U) == 0U && FloatingTabs(model, group) == std::vector<std::uint32_t>({ 4U, 6U }),
+        "the window should keep the tabs that stayed");
+
+    // Dropped at the edge of the workspace, a tab becomes a panel of its own again, and a window left empty goes.
+    model.Commands().DockPanelTo(4U, kb::editor::DockDropPreview{ .zone = kb::editor::DockDropZone::Right });
+    model.Commands().DockPanelTo(6U, kb::editor::DockDropPreview{ .zone = kb::editor::DockDropZone::Bottom });
+    kb::editor::tests::Require(model.Queries().FloatingGroups().empty() && model.Queries().FloatingGroup(group) == nullptr,
+        "a window whose last tab was docked should be gone");
+    kb::editor::tests::Require(FindPanelLayout(BuildDefaultLayout(model), 4U) != nullptr && FindPanelLayout(BuildDefaultLayout(model), 6U) != nullptr,
+        "every tab docked back should be in the docked layout");
+}
+
+void RunClosingLastFloatingTabClosesWindowTest() {
+    kb::editor::EditorDockModel model;
+    const std::uint32_t group = MakeThreeTabWindow(model);
+
+    kb::editor::tests::Require(model.Commands().ClosePanel(1U) && model.Queries().FloatingGroup(group)->activePanelId == 4U,
+        "closing the tab in front should bring another tab of the window forward");
+    kb::editor::tests::Require(model.Commands().ClosePanel(6U) && FloatingTabs(model, group) == std::vector<std::uint32_t>({ 4U }),
+        "closing a tab should leave the window with the others");
+    kb::editor::tests::Require(model.Queries().FloatingGroup(group) != nullptr, "the window should stay while it has a tab");
+    kb::editor::tests::Require(model.Commands().ClosePanel(4U), "the last tab of a window should close");
+    kb::editor::tests::Require(model.Queries().FloatingGroup(group) == nullptr && model.Queries().FloatingGroups().empty(),
+        "closing the last tab should close the window");
+    kb::editor::tests::Require(!RequirePanel(model, 4U)->visible && !RequirePanel(model, 1U)->visible && !RequirePanel(model, 6U)->visible,
+        "closed tabs should be closed panels");
+}
+
+void RunFloatingWindowLayoutPersistenceTest() {
+    kb::editor::EditorDockModel model;
+    static_cast<void>(MakeThreeTabWindow(model));
+    model.Commands().ActivatePanel(6U);
+    model.Commands().MoveFloatingPanel(4U, 260, 190);
+    model.Commands().ResizeFloatingPanel(4U, 800, 520);
+    model.Commands().UndockPanel(5U, kb::editor::DockRect{ 90, 70, 480, 360 });
+    const std::string arranged = model.Commands().SerializeWorkspace();
+    kb::editor::tests::Require(arranged.find(" F ") != std::string::npos,
+        "a window with several tabs should be part of the layout text");
+
+    const kb::editor::EditorLayoutPreset captured = kb::editor::EditorWorkspaceArrangement::Capture(model);
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_floating_tabs_layout";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    kb::editor::EditorConfiguration configuration;
+    configuration.layout = captured.tree;
+    configuration.panels = captured.panels;
+    std::string saveError;
+    const std::filesystem::path statePath = kb::editor::EditorConfigurationStore::FilePath(root);
+    kb::editor::tests::Require(kb::editor::EditorConfigurationStore::Save(statePath, root, configuration, saveError),
+        "a configuration with a tabbed floating window could not be saved");
+    const auto loaded = kb::editor::EditorConfigurationStore::Load(statePath, root);
+    kb::editor::tests::Require(loaded.Succeeded() && loaded.found && loaded.configuration.layout == arranged,
+        "the layout text of a tabbed floating window did not survive the settings file");
+
+    kb::editor::EditorDockModel restored;
+    kb::editor::tests::Require(kb::editor::EditorWorkspaceArrangement::Apply(restored,
+            kb::editor::EditorLayoutPreset{ .tree = loaded.configuration.layout, .panels = loaded.configuration.panels }),
+        "a layout written with a tabbed floating window should be accepted");
+    kb::editor::tests::Require(restored.Commands().SerializeWorkspace() == arranged,
+        "loading a layout should give the same arrangement it was saved with");
+    const std::uint32_t restoredGroup = restored.Queries().FloatingGroupOfPanel(4U);
+    kb::editor::tests::Require(restoredGroup != 0U && FloatingTabs(restored, restoredGroup) == std::vector<std::uint32_t>({ 4U, 1U, 6U }) &&
+            restored.Queries().FloatingGroup(restoredGroup)->activePanelId == 6U,
+        "the tabs of the window should come back in order, with the same one in front");
+    const kb::editor::DockRect rect = restored.Queries().FloatingGroupRect(restoredGroup);
+    kb::editor::tests::Require(rect.x == 260 && rect.y == 190 && rect.width == 800 && rect.height == 520,
+        "the window should come back where it was");
+    kb::editor::tests::Require(restored.Queries().FloatingGroups().size() == 2U && restored.Queries().FloatingGroupOfPanel(5U) != 0U &&
+            restored.Queries().FloatingGroupOfPanel(5U) != restoredGroup && RequirePanel(restored, 5U)->floatingRect.x == 90,
+        "a window with one panel should come back with the tabbed one");
+
+    // A layout that names a floating tab twice, or cuts a window short, is refused whole.
+    const std::string cut = arranged.substr(0U, arranged.size() - 2U);
+    kb::editor::tests::Require(!restored.Commands().RestoreWorkspace(cut), "a window record cut short should be refused");
+    kb::editor::tests::Require(!restored.Commands().RestoreWorkspace(arranged + " F 4 1 4"), "a panel in two windows should be refused");
+    kb::editor::tests::Require(restored.Commands().SerializeWorkspace() == arranged, "a refused layout should leave the workspace untouched");
+    std::filesystem::remove_all(root, error);
+}
+
+void RunLayoutWithSingleFloatingPanelStillLoadsTest() {
+    // A layout written before windows had tabs: the docked tree alone, and the session of the one floated panel.
+    kb::editor::EditorDockModel reference;
+    const std::string oldTree = reference.Commands().SerializeWorkspace();
+    kb::editor::tests::Require(oldTree.find('F') == std::string::npos, "a workspace without a tabbed window should read as it always did");
+    kb::editor::EditorDockModel docked;
+    docked.Commands().UndockPanel(4U, kb::editor::DockRect{ 220, 180, 900, 640 });
+    kb::editor::tests::Require(docked.Commands().SerializeWorkspace().find('F') == std::string::npos,
+        "a window with a single panel should leave the layout text as it was");
+
+    // The Inspector is not in the old tree text, which is how a floated panel was always written.
+    std::string treeWithoutInspector = docked.Commands().SerializeWorkspace();
+    const std::vector<kb::editor::EditorPanelSession> sessions{
+        kb::editor::EditorPanelSession{ .panelId = 4U, .visible = true, .area = kb::editor::DockArea::Floating,
+            .floatingRect = kb::editor::DockRect{ 220, 180, 900, 640 } },
+    };
+    kb::editor::EditorDockModel restored;
+    kb::editor::tests::Require(kb::editor::EditorWorkspaceArrangement::Apply(restored,
+            kb::editor::EditorLayoutPreset{ .tree = treeWithoutInspector, .panels = sessions }),
+        "a layout with a single floated panel should load");
+    const std::uint32_t group = restored.Queries().FloatingGroupOfPanel(4U);
+    kb::editor::tests::Require(group != 0U && FloatingTabs(restored, group) == std::vector<std::uint32_t>({ 4U }) &&
+            RequirePanel(restored, 4U)->visible && RequirePanel(restored, 4U)->floatingRect.width == 900,
+        "the floated panel should come back in a window of its own");
+    kb::editor::tests::Require(restored.Commands().SerializeWorkspace() == treeWithoutInspector,
+        "the layout of a single floated panel should read back unchanged");
+
+    kb::editor::tests::Require(restored.Commands().RestoreWorkspace(oldTree) && restored.Queries().FloatingGroups().empty(),
+        "restoring a layout with no windows should close the windows of the arrangement it replaces");
+}
+
 void RunEditorDockingTests() {
     RunTabActivationPreservesOrderTest();
     RunClosePanelRemovesTabFromLayoutTest();
@@ -1928,6 +2156,13 @@ void RunEditorDockingTests() {
     RunAnimatorEditorWorkspaceActivationTest();
     RunParticleEditorWorkspaceAndSessionPersistenceTest();
     RunWorkspaceLayoutPersistenceTest();
+    RunFloatingWindowTakesSeveralDockedPanelsTest();
+    RunFloatingWindowSwitchesActiveTabTest();
+    RunFloatingTabTearsOffToNewWindowTest();
+    RunFloatingTabDocksBackToMainWindowTest();
+    RunClosingLastFloatingTabClosesWindowTest();
+    RunFloatingWindowLayoutPersistenceTest();
+    RunLayoutWithSingleFloatingPanelStillLoadsTest();
     RunSavedLayoutLibraryTest();
     RunFloatingPanelContentMatchesDockedTest();
     RunLayoutMenuModelTest();

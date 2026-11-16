@@ -148,7 +148,7 @@ bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
         [&state](const kb::scene::Scene& scene) {
             state.sceneViewport.ReleaseScene(scene);
         });
-    state.floatingWindows.Lifecycle().Configure(state.instance, state.window, state.metrics);
+    state.floatingWindows.Lifecycle().Configure(state.instance, state.window, state.metrics, state.dockModel);
     state.dockController.Configure(state.window, state.dockModel, state.floatingWindows, state.metrics);
     EditorWorkspaceSession::Restore(state.dockModel, state.sceneContext);
     // The Agent lives beside the Inspector; a layout saved with it in the bottom drawer gives way.

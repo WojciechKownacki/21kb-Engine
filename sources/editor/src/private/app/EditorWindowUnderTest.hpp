@@ -74,7 +74,7 @@ public:
         if (window_ == nullptr) {
             return false;
         }
-        floatingWindows_.Lifecycle().Configure(instance, window_, metrics_);
+        floatingWindows_.Lifecycle().Configure(instance, window_, metrics_, dockModel_);
         dockController_.Configure(window_, dockModel_, floatingWindows_, metrics_);
         running_ = true;
         routing_ = true;

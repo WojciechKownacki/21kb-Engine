@@ -16,13 +16,19 @@
 
 namespace kb::editor {
 
+class EditorDockModel;
+
 class EditorFloatingWindowQueries {
 public:
 #if defined(_WIN32)
-    EditorFloatingWindowQueries(const FloatingWindowRegistry& registry, const EditorMetrics* metrics) noexcept;
+    EditorFloatingWindowQueries(const FloatingWindowRegistry& registry, const EditorMetrics* metrics, const EditorDockModel* dockModel) noexcept;
 
     [[nodiscard]] bool IsFloatingWindow(HWND window) const noexcept;
+    // The tab group a window shows, and the tab of it that is in front. A window shows the
+    // active panel of its group, so a tab switch needs nothing from the window.
+    [[nodiscard]] std::uint32_t GroupId(HWND window) const noexcept;
     [[nodiscard]] std::uint32_t PanelId(HWND window) const noexcept;
+    // The window of the group the panel is a tab of: any tab, not only the one in front.
     [[nodiscard]] HWND WindowForPanel(std::uint32_t panelId) const noexcept;
     [[nodiscard]] std::vector<HWND> Windows() const;
     [[nodiscard]] LRESULT HitTest(HWND window, LPARAM lparam) const;
@@ -34,6 +40,7 @@ private:
 #if defined(_WIN32)
     const FloatingWindowRegistry& registry_;
     const EditorMetrics* metrics_ = nullptr;
+    const EditorDockModel* dockModel_ = nullptr;
 #endif
 };
 

@@ -7,18 +7,18 @@ namespace kb::editor {
 
 void EditorFloatingWindowSync::Reconcile(
     const EditorDockModel& dockModel, EditorFloatingWindowManager& floatingWindows) {
-    for (const DockPanel& panel : dockModel.Queries().Panels()) {
-        if (panel.area == DockArea::Floating && panel.visible) {
-            // Reuse the window, but apply the newly selected layout's placement.
-            static_cast<void>(floatingWindows.Commands().Create(
-                panel.id, panel.title, panel.floatingRect));
-            if (const HWND window = floatingWindows.Queries().WindowForPanel(panel.id)) {
-                const auto rect = RecoverOwnedDisplayRect(GetWindow(window, GW_OWNER), panel.floatingRect);
-                SetWindowPos(window, nullptr, rect.x, rect.y, rect.width, rect.height, SWP_NOZORDER | SWP_NOACTIVATE);
-            }
+    floatingWindows.Commands().DestroyOrphaned();
+    for (const DockNode& group : dockModel.Queries().FloatingGroups()) {
+        const DockPanel* active = dockModel.Queries().FindPanel(group.activePanelId);
+        if (active == nullptr) {
             continue;
         }
-        floatingWindows.Commands().Destroy(panel.id);
+        // Reuse the window, but apply the newly selected layout's placement.
+        static_cast<void>(floatingWindows.Commands().Create(active->id, active->title, active->floatingRect));
+        if (const HWND window = floatingWindows.Queries().WindowForPanel(active->id)) {
+            const auto rect = RecoverOwnedDisplayRect(GetWindow(window, GW_OWNER), active->floatingRect);
+            SetWindowPos(window, nullptr, rect.x, rect.y, rect.width, rect.height, SWP_NOZORDER | SWP_NOACTIVATE);
+        }
     }
 }
 

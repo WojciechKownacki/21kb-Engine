@@ -151,7 +151,7 @@ bool EditorPanelCloser::Close(HWND owner, std::uint32_t panelId, EditorDockModel
     if (!dockModel.Commands().ClosePanel(panelId)) {
         return false;
     }
-    floatingWindows.Commands().Destroy(panelId);
+    floatingWindows.Commands().DestroyOrphaned();
     switch (kind) {
     case DockPanelKind::MaterialEditor:
         sceneContext.CloseMaterialEditorAsset();

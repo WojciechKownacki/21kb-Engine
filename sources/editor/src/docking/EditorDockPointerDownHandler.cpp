@@ -4,6 +4,7 @@
 
 #include "docking/DockMainLayoutResolver.hpp"
 #include "docking/DockPointerDragFactory.hpp"
+#include "docking/DockWindowLayoutResolver.hpp"
 #include "windowing/FloatingWindowControlInteractor.hpp"
 #include "windowing/FloatingWindowControlLayout.hpp"
 
@@ -34,7 +35,7 @@ bool EditorDockPointerDownHandler::Handle(
         return HandleMainWindowDown(window, x, y, dockModel, metrics, drag);
     }
 
-    return HandleFloatingWindowDown(window, x, y, floatingWindows, metrics, drag);
+    return HandleFloatingWindowDown(window, x, y, mainWindow, dockModel, floatingWindows, metrics, drag);
 }
 
 bool EditorDockPointerDownHandler::IsMainWindow(HWND window, HWND mainWindow) noexcept {
@@ -65,16 +66,32 @@ bool EditorDockPointerDownHandler::HandleMainWindowDown(HWND window, int x, int 
 
 // True when the window's own chrome took the press: one of its controls, or the title it is dragged by.
 // The caller then leaves the scene selection alone, as it does for a tab or a splitter.
-bool EditorDockPointerDownHandler::HandleFloatingWindowDown(HWND window, int x, int y, EditorFloatingWindowManager& floatingWindows, const EditorMetrics& metrics, std::optional<DockPointerDrag>& drag) {
+bool EditorDockPointerDownHandler::HandleFloatingWindowDown(HWND window, int x, int y, HWND mainWindow, EditorDockModel& dockModel, EditorFloatingWindowManager& floatingWindows, const EditorMetrics& metrics, std::optional<DockPointerDrag>& drag) {
     const std::uint32_t panelId = floatingWindows.Queries().PanelId(window);
+    if (panelId == 0) {
+        return false;
+    }
     RECT client{};
     GetClientRect(window, &client);
-    if (panelId != 0 && FloatingWindowControlInteractor{}.HandlePointerDown(window, metrics, x, y)) {
+    if (FloatingWindowControlInteractor{}.HandlePointerDown(window, metrics, x, y)) {
         return true;
     }
 
-    if (panelId != 0 && y <= metrics.tabStripHeight + 2 && x < client.right - FloatingWindowControlLayout::TotalWidth(metrics)) {
+    const DockLayout layout = DockWindowLayoutResolver::Resolve(window, mainWindow, dockModel, floatingWindows, metrics);
+    const bool severalTabs = layout.panels.size() > 1U;
+    if (const DockHit hit = dockModel.Queries().HitTest(layout, x, y); hit.kind == DockHitKind::Tab) {
+        dockModel.Commands().ActivatePanel(hit.panelId);
+        InvalidateRect(window, nullptr, FALSE);
+        // A window of one tab is dragged by it; a tab of several reorders along the strip and tears off beyond it.
+        drag = severalTabs
+            ? DockPointerDragFactory::FromDockHit(window, layout, hit, x, y)
+            : DockPointerDragFactory::FromFloatingWindow(window, hit.panelId, x, y, metrics);
+        return true;
+    }
+
+    if (y <= metrics.tabStripHeight + 2 && x < client.right - FloatingWindowControlLayout::TotalWidth(metrics)) {
         drag = DockPointerDragFactory::FromFloatingWindow(window, panelId, x, y, metrics);
+        drag->moveWindowOnly = severalTabs;
         return true;
     }
     return false;

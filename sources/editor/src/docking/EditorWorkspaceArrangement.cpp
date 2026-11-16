@@ -49,7 +49,13 @@ bool EditorWorkspaceArrangement::Apply(EditorDockModel& dockModel, const EditorL
             continue;
         }
         if (session.area == DockArea::Floating) {
-            dockModel.Commands().UndockPanel(session.panelId, session.floatingRect);
+            if (dockModel.Queries().FloatingGroupOfPanel(session.panelId) != 0U) {
+                // A tab of a window the tree placed: the window only takes the place the session remembers.
+                dockModel.Commands().MoveFloatingPanel(session.panelId, session.floatingRect.x, session.floatingRect.y);
+                dockModel.Commands().ResizeFloatingPanel(session.panelId, session.floatingRect.width, session.floatingRect.height);
+            } else {
+                dockModel.Commands().UndockPanel(session.panelId, session.floatingRect);
+            }
         } else if (auto* restored = dockModel.panels_.Find(session.panelId)) {
             restored->area = session.area;
             restored->floatingRect = session.floatingRect;

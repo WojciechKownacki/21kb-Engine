@@ -15,11 +15,11 @@ void DockDragCompletionHandler::Complete(
     const EditorMetrics& metrics,
     std::optional<DockDropPreview>& dropPreview) {
     if (drag.detached && drag.panelId != 0) {
-        const std::optional<DockDropPreview> target =
-            dropPreview.has_value() ? dropPreview : ResolvePreviewAtCursor(mainWindow, dockModel, metrics);
+        const std::optional<DockDropPreview> target = drag.moveWindowOnly ? std::nullopt
+            : dropPreview.has_value() ? dropPreview : ResolvePreviewAtCursor(mainWindow, dockModel, metrics);
         if (target.has_value()) {
             dockModel.Commands().DockPanelTo(drag.panelId, *target);
-            floatingWindows.Commands().Destroy(drag.panelId);
+            floatingWindows.Commands().DestroyOrphaned();
         } else if (const std::optional<DockRect> rect = floatingWindows.Queries().RectForPanel(drag.panelId); rect.has_value()) {
             dockModel.Commands().MoveFloatingPanel(drag.panelId, rect->x, rect->y);
             dockModel.Commands().ResizeFloatingPanel(drag.panelId, rect->width, rect->height);

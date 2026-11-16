@@ -16,6 +16,9 @@ namespace kb::editor {
 // Preorder token stream, space separated:
 //   split : 'S' <'H'|'V'> <ratio> <first subtree> <second subtree>
 //   leaf  : 'L' <activePanelId> <panelCount> <panelId>...
+// A floating window that holds several panels follows the tree, as one more leaf:
+//   window: 'F' <activePanelId> <panelCount> <panelId>...
+// A window with a single panel is left out; the session of that panel places it.
 // Nothing nests in brackets, so parsing is a single left-to-right pass and a
 // truncated or reordered stream is rejected rather than half-applied.
 class DockLayoutSerializer {
@@ -23,6 +26,7 @@ public:
     DockLayoutSerializer() = delete;
 
     [[nodiscard]] static std::string Serialize(const DockNode* root);
+    [[nodiscard]] static std::string Serialize(const DockNode* root, const std::vector<DockNode>& floating);
 
     // Rebuilds the tree. Returns nullptr when the text is malformed, when a leaf
     // would end up empty, or when it names a panel outside knownPanels or names one
@@ -33,6 +37,14 @@ public:
         std::string_view text,
         const std::vector<std::uint32_t>& knownPanels,
         std::uint32_t& nextNodeId);
+    // The same, with the floating windows the text holds. The tree is null when the text
+    // has windows only; false means the text was refused.
+    [[nodiscard]] static bool Parse(
+        std::string_view text,
+        const std::vector<std::uint32_t>& knownPanels,
+        std::uint32_t& nextNodeId,
+        std::unique_ptr<DockNode>& root,
+        std::vector<DockNode>& floating);
 };
 
 } // namespace kb::editor
