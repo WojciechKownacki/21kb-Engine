@@ -117,6 +117,7 @@ struct RenderMeshAssetData {
     std::vector<std::string> materialNames;
     std::vector<RenderMeshEmbeddedMaterial> embeddedMaterials;
     std::vector<std::uint32_t> terrainSectionIndices;
+    std::vector<RenderTerrainEdgeVariants> terrainEdgeVariants;
     RenderBoundsSphere bounds{};
     RenderBoundsBox boundsBox{};
     RenderMeshDesc desc{};
@@ -137,6 +138,7 @@ struct RenderMeshAssetData {
     std::uint32_t terrainChunkCountX = 0U;
     std::uint32_t terrainChunkCountZ = 0U;
     std::uint32_t terrainLodCount = 0U;
+    float terrainChunkSize = 0.0F;
     std::uint16_t terrainLayerWeightWidth = 0U;
     std::uint16_t terrainLayerWeightHeight = 0U;
     std::uint8_t terrainLayerCount = 0U;

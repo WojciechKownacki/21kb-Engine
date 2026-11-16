@@ -118,6 +118,8 @@ struct MeshCommandLookupKey {
     RenderSkinningPaletteHandle currentSkinningPalette{};
     RenderSkinningPaletteHandle previousSkinningPalette{};
     bool reversedWinding = false;
+    // For a terrain chunk: the edges that join a coarser neighbour, which pick the chunk's index range.
+    std::uint8_t terrainEdges = 0U;
 
     [[nodiscard]] friend constexpr bool operator==(MeshCommandLookupKey lhs, MeshCommandLookupKey rhs) noexcept = default;
 };
@@ -231,6 +233,10 @@ struct MeshPipelineBuildResult {
     // component data; caller reuse preserves hysteresis across submissions.
     std::unordered_map<std::uint64_t, std::uint8_t> detailSwitchLevels;
     std::unordered_map<std::uint64_t, std::uint8_t> detailSwitchPreviousLevels;
+    // The level and joined edges of every chunk of each terrain instance (MeshPipelineTerrainLod): what this pass
+    // draws, and what the viewer's pass drew last, which the next choice keeps while it holds.
+    std::unordered_map<std::uint64_t, std::vector<std::uint8_t>> terrainChoices;
+    std::unordered_map<std::uint64_t, std::vector<std::uint8_t>> terrainPreviousChoices;
     std::uint64_t detailSwitchHistoryRevision = 1U;
     // A deque, so that the chunks, which a worker is scanning, never move.
     std::deque<MeshPipelineScanChunk> scanChunks;

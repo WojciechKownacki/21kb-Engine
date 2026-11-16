@@ -419,10 +419,18 @@ void RunMeshBuildTest() {
             mesh->embeddedMaterials.front().desc.baseColor[1] == 1.0F &&
             mesh->embeddedMaterials.front().desc.baseColor[2] == 1.0F,
         "Terrain mesh does not provide a neutral white default surface material");
-    const std::size_t beforeIndices = mesh->desc.indexCount;
+    // Chunks share index ranges, so the triangles drawn are those of the chunks at level 0.
+    const auto finestIndices = [](const kb::render::RenderMeshAssetData& data) {
+        std::size_t count = 0U;
+        for (const kb::render::RenderMeshSectionDesc& section : data.sections) {
+            if (section.lodLevel == 0U) count += section.indexCount;
+        }
+        return count;
+    };
+    const std::size_t beforeIndices = finestIndices(*mesh);
     terrain.holes[32U * 64U + 32U] = 1U;
     const std::optional<kb::render::RenderMeshAssetData> withHole = kb::render::RenderTerrainMeshBuilder::Build(terrain);
-    Require(withHole.has_value() && withHole->desc.indexCount < beforeIndices, "Terrain hole did not remove rendered triangles");
+    Require(withHole.has_value() && finestIndices(*withHole) < beforeIndices, "Terrain hole did not remove rendered triangles");
     Require(withHole->dynamicTopologyKey != mesh->dynamicTopologyKey,
         "Terrain hole did not invalidate dynamic mesh topology identity");
 }

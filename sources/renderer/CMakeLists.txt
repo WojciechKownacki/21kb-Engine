@@ -366,6 +366,8 @@ add_library(kb_renderer STATIC
     src/scene/pipeline/MeshPipelinePassPolicy.hpp
     src/scene/pipeline/MeshPipelineResourceResolver.cpp
     src/scene/pipeline/MeshPipelineResourceResolver.hpp
+    src/scene/pipeline/MeshPipelineTerrainLod.cpp
+    src/scene/pipeline/MeshPipelineTerrainLod.hpp
     src/scene/pipeline/MeshPipelineVisibility.cpp
     src/scene/pipeline/MeshPipelineVisibility.hpp
     src/scene/pass/MeshPassProcessor.cpp
@@ -1151,6 +1153,9 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         add_test(NAME kb_renderer_terrain_seams COMMAND $<TARGET_FILE:kb_renderer_tests> terrain-seams)
         set_tests_properties(kb_renderer_terrain_seams PROPERTIES
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;terrain;headless" TIMEOUT 180)
+        add_test(NAME kb_renderer_terrain_chunk_levels COMMAND $<TARGET_FILE:kb_renderer_tests> terrain-chunk-levels)
+        set_tests_properties(kb_renderer_terrain_chunk_levels PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;terrain;headless" TIMEOUT 300)
         add_test(NAME kb_renderer_object_motion_blur COMMAND $<TARGET_FILE:kb_renderer_tests> object-motion-blur)
         set_tests_properties(kb_renderer_object_motion_blur PROPERTIES
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;post-process;headless" TIMEOUT 180)

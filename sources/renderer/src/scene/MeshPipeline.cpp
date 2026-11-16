@@ -221,6 +221,7 @@ std::size_t MeshCommandLookupKeyHash::operator()(MeshCommandLookupKey key) const
     mixed ^= key.reversedWinding ? 0x85ebca77c2b2ae63ULL : 0ULL;
     mixed ^= key.meshAssetId * 0x85ebca77c2b2ae63ULL;
     mixed ^= static_cast<std::uint64_t>(key.sectionIndex) * 0xc2b2ae3d27d4eb4fULL;
+    mixed ^= static_cast<std::uint64_t>(key.terrainEdges) * 0x165667b19e3779f9ULL;
     return static_cast<std::size_t>(mixed);
 }
 

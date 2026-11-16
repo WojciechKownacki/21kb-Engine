@@ -85,6 +85,7 @@ void RunRendererPostProcessProfileDiagnosticTest();
 void RunRendererPostProcessProfileAuthoringTests();
 void RunRendererObjectMotionBlurTest();
 void RunRendererTerrainSeamTests();
+void RunRendererTerrainChunkLevelTests();
 void RunRendererResourceGroupEnsureTests();
 void RunRendererSceneSubmitScaleBenchmark(bool spiralLayout);
 void RunRendererPacedSceneSubmitStressBenchmark(bool staticMillionSnapshot,
@@ -530,6 +531,10 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "terrain-seams") {
         kb::render::tests::RunRendererTerrainSeamTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "terrain-chunk-levels") {
+        kb::render::tests::RunRendererTerrainChunkLevelTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "object-motion-blur") {

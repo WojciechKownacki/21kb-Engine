@@ -45,7 +45,7 @@ using kb::assets::StringBufferBytes;
     };
     std::uint64_t bytes = sizeof(mesh) + buffers(mesh.vertices, mesh.tangentVertices, mesh.indices16, mesh.indices32,
         mesh.sections, mesh.meshlets, mesh.lods, mesh.materialSlots, mesh.materialNames, mesh.embeddedMaterials,
-        mesh.terrainSectionIndices, mesh.dynamicVertexUpdateRanges, mesh.dynamicSectionUpdateIndices,
+        mesh.terrainSectionIndices, mesh.terrainEdgeVariants, mesh.dynamicVertexUpdateRanges, mesh.dynamicSectionUpdateIndices,
         mesh.terrainLayerWeights, mesh.dynamicTerrainLayerWeightUpdates);
     for (const auto& name : mesh.materialNames) bytes += StringBufferBytes(name);
     for (const auto& material : mesh.embeddedMaterials) {

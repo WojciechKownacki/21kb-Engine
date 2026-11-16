@@ -11,6 +11,7 @@
 #include "scene/pipeline/MeshPipelineGpuDrivenRecorder.hpp"
 #include "scene/pipeline/MeshPipelinePassPolicy.hpp"
 #include "scene/pipeline/MeshPipelineResourceResolver.hpp"
+#include "scene/pipeline/MeshPipelineTerrainLod.hpp"
 #include "scene/pipeline/MeshPipelineVisibility.hpp"
 
 #include <algorithm>
@@ -215,6 +216,60 @@ void ResolveDetailSwitchLevels(const MeshPassProcessorDesc& desc, MeshPipelineBu
     }
 }
 
+// Whether the chunks of a terrain mesh each choose a level of their own, rather than the mesh one level for all.
+[[nodiscard]] bool ChoosesChunkLevels(const RenderMeshResource* mesh) noexcept {
+    return mesh != nullptr && mesh->terrainGrid.IsValid() && mesh->lods.size() > 1U;
+}
+
+[[nodiscard]] std::uint64_t TerrainChoiceKey(const SceneMeshBatch& batch, const SceneRenderMeshInstance& instance) noexcept {
+    return instance.entityId ^ (batch.meshAssetId * 0x9e3779b97f4a7c15ULL);
+}
+
+// Chooses the level of every chunk of every terrain instance of the pass. The pass that draws the scene moves the history
+// on; the others choose from what it left, so a shadow pass draws the chunks at the levels the viewer's pass does.
+void ResolveTerrainChoices(const MeshPassProcessorDesc& desc, MeshPipelineBuildResult& result) {
+    result.terrainChoices.clear();
+    const bool advancesHistory = desc.pass == MeshPassType::BaseOpaque || desc.pass == MeshPassType::GBuffer;
+    std::array<float, 3> viewer{};
+    const bool hasViewer = desc.camera != nullptr && MeshPipelineTerrainLod::Viewer(*desc.camera, desc.pass, viewer);
+    const bool noChains = desc.resourceValidation != MeshPipelineResourceValidation::ResolveAndValidate &&
+        !ChoosesChunkLevels(desc.resolvedMeshResource);
+    for (const SceneMeshBatch& batch : noChains ? std::span<const SceneMeshBatch>{} : desc.meshBatches) {
+        const RenderMeshResource* mesh = desc.resourceValidation == MeshPipelineResourceValidation::ResolveAndValidate
+            ? desc.resources->FindMesh(desc.resourceMap->ResolveMesh(batch.meshAssetId))
+            : desc.resolvedMeshResource;
+        if (!ChoosesChunkLevels(mesh)) continue;
+        for (const SceneRenderMeshInstance& instance : batch.instances) {
+            const std::uint64_t key = TerrainChoiceKey(batch, instance);
+            std::vector<std::uint8_t>& choices = result.terrainChoices[key];
+            if (!hasViewer) {
+                MeshPipelineTerrainLod::ChooseFinest(*mesh, choices);
+                continue;
+            }
+            const auto previous = result.terrainPreviousChoices.find(key);
+            MeshPipelineTerrainLod::Choose(*mesh, instance, viewer,
+                previous == result.terrainPreviousChoices.end() ? std::span<const std::uint8_t>{} : std::span<const std::uint8_t>{ previous->second },
+                choices);
+        }
+    }
+    if (!advancesHistory) return;
+    for (auto previous = result.terrainPreviousChoices.begin(); previous != result.terrainPreviousChoices.end();) {
+        if (!result.terrainChoices.contains(previous->first)) {
+            previous = result.terrainPreviousChoices.erase(previous);
+            ++result.detailSwitchHistoryRevision;
+        } else {
+            ++previous;
+        }
+    }
+    for (const auto& [key, choices] : result.terrainChoices) {
+        std::vector<std::uint8_t>& remembered = result.terrainPreviousChoices[key];
+        if (remembered != choices) {
+            remembered = choices;
+            ++result.detailSwitchHistoryRevision;
+        }
+    }
+}
+
 constexpr std::uint8_t kLevelNotChosen = UINT8_MAX;
 
 // A pass is split into at most this many chunks, none of fewer instances than the minimum: chunks small enough that the
@@ -246,6 +301,7 @@ struct MeshScanContext {
     const MeshPipelineFrustum& frustum;
     std::uint32_t cullingMask;
     const std::unordered_map<std::uint64_t, std::uint8_t>& detailSwitchLevels;
+    const std::unordered_map<std::uint64_t, std::vector<std::uint8_t>>& terrainChoices;
 };
 
 // What one thread scanning batches writes. Threads own their state, so no two of them share any.
@@ -649,6 +705,7 @@ void ScanSection(const MeshScanContext& context, MeshScanState& state, const Sce
     const bool validateResources = desc.resourceValidation == MeshPipelineResourceValidation::ResolveAndValidate;
     const RenderMeshResource* meshResource = scope.meshResource;
     const RenderMeshSection& section = scope.section;
+    const bool chunkLevels = ChoosesChunkLevels(meshResource);
     std::uint64_t lastMaterialAssetId = 0U;
     MeshPipelineMaterialResolution lastMaterialResolution{};
     std::size_t clusterIndex = 0U;
@@ -694,9 +751,16 @@ void ScanSection(const MeshScanContext& context, MeshScanState& state, const Sce
             continue;
         }
         // A mesh with a chain of levels is scanned once per section of every level; the level an instance
-        // draws does not depend on the section, so it is chosen the first time and kept for the batch.
+        // draws does not depend on the section, so it is chosen the first time and kept for the batch. The chunks of a
+        // terrain each choose their own level, and the edges that join a coarser neighbour.
         std::uint8_t selectedLod = state.chainLevels.empty() ? std::uint8_t{ 0U } : state.chainLevels[instanceIndex];
-        if (selectedLod == kLevelNotChosen || state.chainLevels.empty()) {
+        std::uint8_t terrainEdges = 0U;
+        if (chunkLevels && section.terrainChunk != UINT32_MAX) {
+            const auto choices = context.terrainChoices.find(TerrainChoiceKey(batch, instance));
+            const std::uint8_t choice = choices == context.terrainChoices.end() ? std::uint8_t{ 0U } : choices->second[section.terrainChunk];
+            selectedLod = choice & MeshPipelineTerrainLod::kLevelMask;
+            terrainEdges = static_cast<std::uint8_t>(choice >> MeshPipelineTerrainLod::kEdgeShift);
+        } else if (selectedLod == kLevelNotChosen || state.chainLevels.empty()) {
             selectedLod = MeshPipelineVisibility::SelectLodLevel(meshResource, instance, desc.camera);
             if (KeepsLevelHistory(instance)) {
                 if (const auto selected = context.detailSwitchLevels.find(DetailSwitchKey(instance)); selected != context.detailSwitchLevels.end()) {
@@ -816,6 +880,7 @@ void ScanSection(const MeshScanContext& context, MeshScanState& state, const Sce
                      .previousSkinningPalette = instance.previousSkinningPalette,
                      .reversedWinding = !(meshResource != nullptr && meshResource->doubleSided) &&
                          !(materialResource != nullptr && materialResource->doubleSided) && ReversesWinding(instance.model),
+                     .terrainEdges = terrainEdges,
                  },
                  .material = materialHandle,
                  .materialResource = materialResource,
@@ -840,7 +905,8 @@ void ScanBatch(const MeshScanContext& context, MeshScanState& state, const Scene
     else state.chainLevels.clear();
     const std::uint32_t sectionCount = SectionCountOf(resolved.meshResource);
     for (std::uint32_t sectionIndex = 0U; sectionIndex < sectionCount; ++sectionIndex) {
-        const MeshSectionScope scope = MakeSectionScope(context.desc, resolved, sectionIndex, batch.cullDistance > 0.0F);
+        const MeshSectionScope scope = MakeSectionScope(context.desc, resolved, sectionIndex,
+            batch.cullDistance > 0.0F || ChoosesChunkLevels(resolved.meshResource));
         if (!SectionIsDrawn(context.desc, scope.section)) {
             continue;
         }
@@ -879,6 +945,11 @@ struct MeshCommandWriter {
                   .resourceMap = desc.resourceMap,
               })
             : 0U;
+        std::pair<std::uint32_t, std::uint32_t> indexRange{ scope.section.indexStart, scope.section.indexCount };
+        if (commandKey.terrainEdges != 0U) {
+            indexRange = MeshPipelineTerrainLod::IndexRange(*scope.meshResource, scope.section,
+                static_cast<std::uint8_t>(commandKey.terrainEdges << MeshPipelineTerrainLod::kEdgeShift));
+        }
         const SceneCachedDrawCommandDesc cachedCommandDesc{
             .pass = desc.pass,
             .meshAssetId = commandKey.meshAssetId,
@@ -887,8 +958,8 @@ struct MeshCommandWriter {
             .materialSlot = scope.section.materialSlot,
             .firstMeshlet = scope.meshletRange.first,
             .meshletCount = scope.meshletRange.second,
-            .indexStart = scope.section.indexStart,
-            .indexCount = scope.section.indexCount,
+            .indexStart = indexRange.first,
+            .indexCount = indexRange.second,
             .vertexStart = scope.section.vertexStart,
             .vertexCount = scope.sectionVertexCount,
             .lodLevel = scope.section.lodLevel,
@@ -1063,8 +1134,9 @@ void MergeChunk(const MeshScanContext& context, const MeshPipelineScanChunk& chu
     const bool budgeted = context.desc.maxDrawCommands != 0U || context.desc.maxVisibleInstances != 0U;
     for (const MeshPipelineScanRun& run : chunk.runs) {
         if (run.batchIndex != scopeBatch || run.target.key.sectionIndex != scopeSection) {
-            scope = MakeSectionScope(context.desc, chunk.batches[run.batchIndex - chunk.firstBatch], run.target.key.sectionIndex,
-                context.desc.meshBatches[run.batchIndex].cullDistance > 0.0F);
+            const MeshPipelineScanBatch& resolved = chunk.batches[run.batchIndex - chunk.firstBatch];
+            scope = MakeSectionScope(context.desc, resolved, run.target.key.sectionIndex,
+                context.desc.meshBatches[run.batchIndex].cullDistance > 0.0F || ChoosesChunkLevels(resolved.meshResource));
             scopeBatch = run.batchIndex;
             scopeSection = run.target.key.sectionIndex;
         }
@@ -1151,9 +1223,11 @@ public:
               .frustum = frustum_,
               .cullingMask = desc.camera != nullptr ? desc.camera->cullingMask : 0xFFFFFFFFU,
               .detailSwitchLevels = result.detailSwitchLevels,
+              .terrainChoices = result.terrainChoices,
           },
           result_(result) {
         ResolveDetailSwitchLevels(desc, result);
+        ResolveTerrainChoices(desc, result);
         result.commands.reserve(desc.meshBatches.size());
         for (const SceneMeshBatch& batch : desc.meshBatches) {
             instanceCount_ += batch.instances.size();

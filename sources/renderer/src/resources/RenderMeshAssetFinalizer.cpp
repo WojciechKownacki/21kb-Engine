@@ -9,6 +9,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <unordered_set>
 #include <vector>
 
 namespace kb::render {
@@ -363,7 +364,12 @@ void OptimizeMeshAssetVertexCache(RenderMeshAssetData& asset) {
     }
 
     std::vector<std::uint32_t> optimizedSection;
+    // Sections that share one range of indices (the chunks of a terrain) have it optimized once.
+    std::unordered_set<std::uint64_t> optimizedRanges;
     for (const RenderMeshSectionDesc& section : asset.sections) {
+        if (!optimizedRanges.insert((static_cast<std::uint64_t>(section.indexStart) << 32U) | section.indexCount).second) {
+            continue;
+        }
         optimizedSection.resize(section.indexCount);
         meshopt_optimizeVertexCache(
             optimizedSection.data(),

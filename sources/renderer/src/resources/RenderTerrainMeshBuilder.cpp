@@ -37,6 +37,71 @@ namespace {
     return false;
 }
 
+[[nodiscard]] bool ChunkHasHole(
+    const kb::assets::TerrainAsset& terrain,
+    std::uint32_t originX,
+    std::uint32_t originZ,
+    std::uint32_t quadsX,
+    std::uint32_t quadsZ) noexcept {
+    for (std::uint32_t z = originZ; z < originZ + quadsZ; ++z) {
+        for (std::uint32_t x = originX; x < originX + quadsX; ++x) {
+            if (terrain.holes[CellIndex(terrain, x, z)] != 0U) return true;
+        }
+    }
+    return false;
+}
+
+// Moves a vertex on a chunk edge that joins a coarser neighbour onto the neighbour's vertices: the vertices between
+// them (odd steps along the edge) fold into the previous even one, so the edge keeps only the neighbour's vertices.
+void FoldEdgeVertex(
+    std::uint32_t& x,
+    std::uint32_t& z,
+    std::uint32_t step,
+    std::uint32_t quadsX,
+    std::uint32_t quadsZ,
+    std::uint32_t edges) noexcept {
+    if ((((edges & 1U) != 0U && x == 0U) || ((edges & 2U) != 0U && x == quadsX)) && ((z / step) & 1U) != 0U) z -= step;
+    if ((((edges & 4U) != 0U && z == 0U) || ((edges & 8U) != 0U && z == quadsZ)) && ((x / step) & 1U) != 0U) x -= step;
+}
+
+// Where a chunk with holes starts in the terrain's cells.
+struct ChunkOrigin {
+    std::uint32_t x = 0U;
+    std::uint32_t z = 0U;
+};
+
+// Appends the triangles of one chunk at one level as indices local to its first vertex (a row of the terrain is
+// `terrain.width` apart), with the edges in `edges` (bits as RenderTerrainEdgeVariants) joined to a coarser
+// neighbour. `holes` is null for a chunk without holes.
+void AppendChunkIndices(
+    std::vector<std::uint32_t>& indices,
+    const kb::assets::TerrainAsset& terrain,
+    const ChunkOrigin* holes,
+    std::uint32_t quadsX,
+    std::uint32_t quadsZ,
+    std::uint32_t step,
+    std::uint32_t edges) {
+    for (std::uint32_t z = 0U; z + step <= quadsZ; z += step) {
+        for (std::uint32_t x = 0U; x + step <= quadsX; x += step) {
+            if (holes != nullptr && CoarseCellHasHole(terrain, holes->x + x, holes->z + z, step)) continue;
+            std::array<std::uint32_t, 4U> corner{};
+            for (std::uint32_t index = 0U; index < 4U; ++index) {
+                std::uint32_t cornerX = x + (index & 1U) * step;
+                std::uint32_t cornerZ = z + (index >> 1U) * step;
+                FoldEdgeVertex(cornerX, cornerZ, step, quadsX, quadsZ, edges);
+                corner[index] = cornerZ * terrain.width + cornerX;
+            }
+            const auto emit = [&](std::uint32_t first, std::uint32_t second, std::uint32_t third) {
+                if (corner[first] != corner[second] && corner[second] != corner[third] && corner[first] != corner[third]) {
+                    indices.insert(indices.end(), { corner[first], corner[second], corner[third] });
+                }
+            };
+            emit(0U, 2U, 1U);
+            emit(1U, 2U, 3U);
+        }
+    }
+}
+
 [[nodiscard]] bool TerrainChunkLayerHasWeight(
     const kb::assets::TerrainAsset& terrain,
     std::uint32_t chunkIndexX,
@@ -196,10 +261,15 @@ std::optional<RenderMeshAssetData> RenderTerrainMeshBuilder::Build(const kb::ass
 
     const std::uint32_t quadsX = terrain.width - 1U;
     const std::uint32_t quadsZ = terrain.height - 1U;
-    const std::uint32_t maxLodsFromChunk = 1U + static_cast<std::uint32_t>(std::log2(static_cast<float>(terrain.chunkQuads)));
+    // Sizes are powers of two, so chunks tile the terrain exactly, or one chunk is the whole of a short axis.
+    const std::uint32_t chunkQuadsX = std::min(terrain.chunkQuads, quadsX);
+    const std::uint32_t chunkQuadsZ = std::min(terrain.chunkQuads, quadsZ);
+    const std::uint32_t maxLodsFromChunk = 1U + static_cast<std::uint32_t>(
+        std::countr_zero(std::min(chunkQuadsX, chunkQuadsZ)));
     const std::uint32_t lodCount = std::min(terrain.lodCount, maxLodsFromChunk);
-    const std::uint32_t chunkCountX = (quadsX + terrain.chunkQuads - 1U) / terrain.chunkQuads;
-    const std::uint32_t chunkCountZ = (quadsZ + terrain.chunkQuads - 1U) / terrain.chunkQuads;
+    const std::uint32_t chunkCountX = quadsX / chunkQuadsX;
+    const std::uint32_t chunkCountZ = quadsZ / chunkQuadsZ;
+    const std::uint32_t chunkVertexCount = chunkQuadsZ * terrain.width + chunkQuadsX + 1U;
     const std::uint32_t materialLayerCount = std::max<std::uint32_t>(
         1U, static_cast<std::uint32_t>(terrain.materialLayers.size()));
     std::vector<std::uint8_t> chunkLayerActive(
@@ -218,48 +288,63 @@ std::optional<RenderMeshAssetData> RenderTerrainMeshBuilder::Build(const kb::ass
     mesh.terrainChunkCountX = chunkCountX;
     mesh.terrainChunkCountZ = chunkCountZ;
     mesh.terrainLodCount = lodCount;
+    mesh.terrainChunkSize = std::max(
+        static_cast<float>(chunkQuadsX) * terrain.worldSizeX / static_cast<float>(quadsX),
+        static_cast<float>(chunkQuadsZ) * terrain.worldSizeZ / static_cast<float>(quadsZ));
     mesh.terrainSectionIndices.assign(
         static_cast<std::size_t>(lodCount) * chunkCountX * chunkCountZ,
         UINT32_MAX);
+    // Chunks have the same shape, so the chunks without holes draw from one set of index ranges per level, local to
+    // each chunk's first vertex; a chunk with holes has ranges of its own.
+    const auto appendVariants = [&](std::uint32_t lod, const ChunkOrigin* holes) {
+        RenderTerrainEdgeVariants variants;
+        const std::uint32_t variantCount = lod + 1U < lodCount ? RenderTerrainEdgeVariants::kCount : 1U;
+        for (std::uint32_t edges = 0U; edges < variantCount; ++edges) {
+            variants.indexStart[edges] = static_cast<std::uint32_t>(mesh.indices32.size());
+            AppendChunkIndices(mesh.indices32, terrain, holes, chunkQuadsX, chunkQuadsZ, 1U << lod, edges);
+            variants.indexCount[edges] = static_cast<std::uint32_t>(mesh.indices32.size()) - variants.indexStart[edges];
+        }
+        return variants;
+    };
     for (std::uint32_t lod = 0U; lod < lodCount; ++lod) {
-        const std::uint32_t step = 1U << lod;
-        for (std::uint32_t chunkZ = 0U; chunkZ < quadsZ; chunkZ += terrain.chunkQuads) {
-            const std::uint32_t chunkEndZ = std::min(chunkZ + terrain.chunkQuads, quadsZ);
-            for (std::uint32_t chunkX = 0U; chunkX < quadsX; chunkX += terrain.chunkQuads) {
-                const std::uint32_t chunkEndX = std::min(chunkX + terrain.chunkQuads, quadsX);
-                const std::uint32_t firstIndex = static_cast<std::uint32_t>(mesh.indices32.size());
-                for (std::uint32_t z = chunkZ; z + step <= chunkEndZ; z += step) {
-                    for (std::uint32_t x = chunkX; x + step <= chunkEndX; x += step) {
-                        if (CoarseCellHasHole(terrain, x, z, step)) continue;
-                        const std::uint32_t a = static_cast<std::uint32_t>(VertexIndex(terrain, x, z));
-                        const std::uint32_t b = static_cast<std::uint32_t>(VertexIndex(terrain, x + step, z));
-                        const std::uint32_t c = static_cast<std::uint32_t>(VertexIndex(terrain, x, z + step));
-                        const std::uint32_t d = static_cast<std::uint32_t>(VertexIndex(terrain, x + step, z + step));
-                        mesh.indices32.insert(mesh.indices32.end(), { a, c, b, b, c, d });
+        std::uint32_t sharedVariants = UINT32_MAX;
+        for (std::uint32_t chunkZ = 0U; chunkZ < chunkCountZ; ++chunkZ) {
+            for (std::uint32_t chunkX = 0U; chunkX < chunkCountX; ++chunkX) {
+                const ChunkOrigin origin{ chunkX * chunkQuadsX, chunkZ * chunkQuadsZ };
+                const std::uint32_t chunk = chunkZ * chunkCountX + chunkX;
+                std::uint32_t variantsIndex = sharedVariants;
+                if (ChunkHasHole(terrain, origin.x, origin.z, chunkQuadsX, chunkQuadsZ)) {
+                    const std::size_t indexMark = mesh.indices32.size();
+                    const RenderTerrainEdgeVariants own = appendVariants(lod, &origin);
+                    if (own.indexCount[0] == 0U) {
+                        mesh.indices32.resize(indexMark);
+                        continue;
                     }
+                    variantsIndex = static_cast<std::uint32_t>(mesh.terrainEdgeVariants.size());
+                    mesh.terrainEdgeVariants.push_back(own);
+                } else if (sharedVariants == UINT32_MAX) {
+                    sharedVariants = static_cast<std::uint32_t>(mesh.terrainEdgeVariants.size());
+                    variantsIndex = sharedVariants;
+                    mesh.terrainEdgeVariants.push_back(appendVariants(lod, nullptr));
                 }
-                const std::uint32_t indexCount = static_cast<std::uint32_t>(mesh.indices32.size()) - firstIndex;
-                if (indexCount != 0U) {
-                    const std::size_t terrainSectionIndex =
-                        static_cast<std::size_t>(lod) * chunkCountX * chunkCountZ +
-                        static_cast<std::size_t>(chunkZ / terrain.chunkQuads) * chunkCountX +
-                        chunkX / terrain.chunkQuads;
-                    mesh.terrainSectionIndices[terrainSectionIndex] = static_cast<std::uint32_t>(mesh.sections.size());
-                    for (std::uint32_t layer = 0U; layer < materialLayerCount; ++layer) {
-                        const std::size_t activeIndex =
-                            (static_cast<std::size_t>(chunkZ / terrain.chunkQuads) * chunkCountX +
-                             chunkX / terrain.chunkQuads) * materialLayerCount + layer;
-                        mesh.sections.push_back(RenderMeshSectionDesc{
-                            .indexStart = firstIndex,
-                            .indexCount = indexCount,
-                            .materialSlot = layer,
-                            .lodLevel = static_cast<std::uint8_t>(lod),
-                            .terrainLayerIndex = terrain.materialLayers.empty()
-                                ? static_cast<std::uint8_t>(UINT8_MAX)
-                                : static_cast<std::uint8_t>(layer),
-                            .terrainLayerActive = chunkLayerActive[activeIndex] != 0U,
-                        });
-                    }
+                const RenderTerrainEdgeVariants& variants = mesh.terrainEdgeVariants[variantsIndex];
+                mesh.terrainSectionIndices[static_cast<std::size_t>(lod) * chunkCountX * chunkCountZ + chunk] =
+                    static_cast<std::uint32_t>(mesh.sections.size());
+                for (std::uint32_t layer = 0U; layer < materialLayerCount; ++layer) {
+                    mesh.sections.push_back(RenderMeshSectionDesc{
+                        .indexStart = variants.indexStart[0],
+                        .indexCount = variants.indexCount[0],
+                        .vertexStart = origin.z * terrain.width + origin.x,
+                        .vertexCount = chunkVertexCount,
+                        .materialSlot = layer,
+                        .lodLevel = static_cast<std::uint8_t>(lod),
+                        .terrainLayerIndex = terrain.materialLayers.empty()
+                            ? static_cast<std::uint8_t>(UINT8_MAX)
+                            : static_cast<std::uint8_t>(layer),
+                        .terrainLayerActive = chunkLayerActive[static_cast<std::size_t>(chunk) * materialLayerCount + layer] != 0U,
+                        .terrainChunk = chunk,
+                        .terrainVariants = variantsIndex,
+                    });
                 }
             }
         }

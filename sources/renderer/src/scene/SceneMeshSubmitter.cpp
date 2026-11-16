@@ -120,6 +120,7 @@ void SceneMeshSubmitter::BindDetailSwitchScene(const RenderScene& renderScene) c
     if (detailSwitchScene_ != &renderScene) {
         pipelineScratch_.detailSwitchLevels.clear();
         pipelineScratch_.detailSwitchPreviousLevels.clear();
+        pipelineScratch_.terrainPreviousChoices.clear();
         ++pipelineScratch_.detailSwitchHistoryRevision;
         detailSwitchScene_ = &renderScene;
     }
@@ -173,6 +174,7 @@ void SceneMeshSubmitter::PrebuildPasses(
         prebuilt.diagnostics.Clear();
         // A pass that does not move the history reads the levels the passes before it left.
         prebuilt.result.detailSwitchPreviousLevels = pipelineScratch_.detailSwitchPreviousLevels;
+        prebuilt.result.terrainPreviousChoices = pipelineScratch_.terrainPreviousChoices;
         builds.push_back(MeshPipelinePassBuild{
             .desc = MeshPipelineBuildDesc{
                 .pass = pass,
@@ -226,6 +228,7 @@ void SceneMeshSubmitter::Shutdown() {
     for (auto& reuse : passBatchCommandReuse_) reuse.Reset();
     pipelineScratch_.detailSwitchLevels.clear();
     pipelineScratch_.detailSwitchPreviousLevels.clear();
+    pipelineScratch_.terrainPreviousChoices.clear();
     detailSwitchScene_ = nullptr;
 }
 

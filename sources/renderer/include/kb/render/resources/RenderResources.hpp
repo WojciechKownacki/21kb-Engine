@@ -172,6 +172,19 @@ struct RenderMeshSectionDesc {
     // UINT8_MAX for ordinary meshes; 0..3 for a terrain material pass.
     std::uint8_t terrainLayerIndex = UINT8_MAX;
     bool terrainLayerActive = true;
+    // A terrain chunk section: the chunk it covers and the index ranges it is drawn with (RenderTerrainEdgeVariants);
+    // UINT32_MAX for every other section.
+    std::uint32_t terrainChunk = UINT32_MAX;
+    std::uint32_t terrainVariants = UINT32_MAX;
+};
+
+// The index ranges one terrain chunk is drawn with at one level of detail, by the edges whose neighbour is a level
+// coarser (bit 0: the neighbour at lower x, 1: higher x, 2: lower z, 3: higher z): the edge then joins the neighbour's
+// vertices. Range 0 is the chunk with no coarser neighbour, which is also the section's own range.
+struct RenderTerrainEdgeVariants {
+    static constexpr std::uint32_t kCount = 16U;
+    std::array<std::uint32_t, kCount> indexStart{};
+    std::array<std::uint32_t, kCount> indexCount{};
 };
 
 struct RenderMeshSection {
@@ -184,6 +197,8 @@ struct RenderMeshSection {
     std::uint8_t lodLevel = 0;
     std::uint8_t terrainLayerIndex = UINT8_MAX;
     bool terrainLayerActive = true;
+    std::uint32_t terrainChunk = UINT32_MAX;
+    std::uint32_t terrainVariants = UINT32_MAX;
 };
 
 struct RenderMeshletDesc {
@@ -262,6 +277,12 @@ struct RenderMeshDesc {
     std::uint16_t terrainLayerWeightWidth = 0U;
     std::uint16_t terrainLayerWeightHeight = 0U;
     std::uint8_t terrainLayerCount = 0U;
+    // The chunk grid of a terrain whose chunks draw at levels of their own.
+    const RenderTerrainEdgeVariants* terrainVariants = nullptr;
+    std::uint32_t terrainVariantCount = 0U;
+    std::uint32_t terrainChunkCountX = 0U;
+    std::uint32_t terrainChunkCountZ = 0U;
+    float terrainChunkSize = 0.0F;
 };
 
 // A CPU copy of the triangles of a mesh small enough to voxelise (positions xyz, triangle-list indices); the
@@ -269,6 +290,19 @@ struct RenderMeshDesc {
 struct RenderMeshProxyGeometry {
     std::vector<float> positions;
     std::vector<std::uint32_t> indices;
+};
+
+// A terrain mesh whose chunks each draw at a level of detail of their own.
+struct RenderTerrainChunkGrid {
+    std::uint32_t chunkCountX = 0U;
+    std::uint32_t chunkCountZ = 0U;
+    // The side of a chunk in the mesh's units.
+    float chunkSize = 0.0F;
+    // The section of every chunk at level 0 and in its first material layer, which gives the chunk's bounds.
+    std::vector<std::uint32_t> chunkSections;
+    std::vector<RenderTerrainEdgeVariants> variants;
+
+    [[nodiscard]] bool IsValid() const noexcept { return !chunkSections.empty(); }
 };
 
 struct RenderMeshResource {
@@ -296,6 +330,7 @@ struct RenderMeshResource {
     std::uint16_t terrainLayerWeightWidth = 0U;
     std::uint16_t terrainLayerWeightHeight = 0U;
     std::uint8_t terrainLayerCount = 0U;
+    RenderTerrainChunkGrid terrainGrid;
     std::shared_ptr<const RenderMeshProxyGeometry> proxyGeometry;
     std::uint64_t version = 0;
 };

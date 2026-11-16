@@ -88,6 +88,8 @@
 #include "renderer/RendererFinalCompositeSubmitter.hpp"
 #include "renderer/RendererSceneLightingConfigResolver.hpp"
 #include "../src/scene/pipeline/MeshPipelineVisibility.hpp"
+#include "../src/scene/pipeline/MeshPipelineTerrainLod.hpp"
+#include "../src/resources/RenderMeshResourceBuilder.hpp"
 #include "../src/shadow/ShadowCasterBoundsCollector.hpp"
 
 #include <bgfx/bgfx.h>
@@ -101,6 +103,7 @@
 #include <array>
 #include <cmath>
 #include <map>
+#include <set>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -13380,9 +13383,9 @@ void RunRendererObjectMotionBlurTest() {
 #endif
 }
 
-// A rough terrain of 4 x 4 chunks of 16 quads, built from a smooth wave and a per-sample hash.
+// A rough terrain of 16 x 16 chunks of 16 quads over 256 m, built from a smooth wave and a per-sample hash.
 [[nodiscard]] kb::assets::TerrainAsset MakeRoughTerrain() {
-    kb::assets::TerrainAsset terrain = kb::assets::MakeFlatTerrainAsset(65U, 64.0F, 64.0F);
+    kb::assets::TerrainAsset terrain = kb::assets::MakeFlatTerrainAsset(257U, 256.0F, 256.0F);
     terrain.chunkQuads = 16U;
     terrain.lodCount = 4U;
     for (std::uint32_t z = 0U; z < terrain.height; ++z) {
@@ -13396,8 +13399,28 @@ void RunRendererObjectMotionBlurTest() {
     return terrain;
 }
 
+[[nodiscard]] std::uint32_t TerrainIndexAt(const RenderMeshAssetData& mesh, std::uint32_t index) {
+    return mesh.indices16.empty() ? mesh.indices32[index] : mesh.indices16[index];
+}
+
+// The vertices (global indices) of the index range that lie on one edge of a chunk (bits as RenderTerrainEdgeVariants).
+[[nodiscard]] std::set<std::uint32_t> TerrainEdgeVertices(
+    const RenderMeshAssetData& mesh, const kb::assets::TerrainAsset& terrain, const RenderMeshSectionDesc& section,
+    std::uint32_t indexStart, std::uint32_t indexCount, std::uint32_t edge) {
+    const std::uint32_t quads = std::min(terrain.chunkQuads, terrain.width - 1U);
+    std::set<std::uint32_t> vertices;
+    for (std::uint32_t index = indexStart; index < indexStart + indexCount; ++index) {
+        const std::uint32_t local = TerrainIndexAt(mesh, index);
+        const std::uint32_t x = local % terrain.width, z = local / terrain.width;
+        const bool onEdge = edge == 1U ? x == 0U : edge == 2U ? x == quads : edge == 4U ? z == 0U : z == quads;
+        if (onEdge) vertices.insert(section.vertexStart + local);
+    }
+    return vertices;
+}
+
 // Every level of detail is closed along the borders between chunks: an edge that only one triangle uses lies on the
-// outer border of the terrain, and the vertices on a chunk border carry the heights of the terrain.
+// outer border of the terrain, and the vertices on a chunk border carry the heights of the terrain. A chunk whose neighbour
+// is a level coarser joins it: the vertices its edge uses are those of the neighbour's edge, at the neighbour's heights.
 void RunTerrainChunkBordersAreClosedTest() {
     const kb::assets::TerrainAsset terrain = MakeRoughTerrain();
     const std::optional<RenderMeshAssetData> mesh = RenderTerrainMeshBuilder::Build(terrain);
@@ -13408,8 +13431,8 @@ void RunTerrainChunkBordersAreClosedTest() {
             if (section.lodLevel != level) continue;
             for (std::uint32_t index = section.indexStart; index + 2U < section.indexStart + section.indexCount; index += 3U) {
                 for (std::uint32_t corner = 0U; corner < 3U; ++corner) {
-                    const std::uint32_t from = mesh->indices32[index + corner];
-                    const std::uint32_t to = mesh->indices32[index + (corner + 1U) % 3U];
+                    const std::uint32_t from = section.vertexStart + TerrainIndexAt(*mesh, index + corner);
+                    const std::uint32_t to = section.vertexStart + TerrainIndexAt(*mesh, index + (corner + 1U) % 3U);
                     ++uses[{ std::min(from, to), std::max(from, to) }];
                 }
             }
@@ -13423,16 +13446,79 @@ void RunTerrainChunkBordersAreClosedTest() {
             Require(count == 2 || (count == 1 && outer), "A chunk border of the terrain is open: a crack between two chunks");
         }
     }
-    for (const std::uint32_t index : mesh->indices32) {
-        const std::uint32_t x = index % terrain.width, z = index / terrain.width;
-        if (x % terrain.chunkQuads != 0U && z % terrain.chunkQuads != 0U) continue;
-        Require(std::abs(mesh->vertices[index].y - terrain.heights[index]) < 1.0e-4F,
-            "A vertex on a chunk border does not carry the height of the terrain");
+    for (const RenderMeshSectionDesc& section : mesh->sections) {
+        Require(section.vertexCount != 0U && section.terrainChunk != UINT32_MAX &&
+                section.terrainVariants < mesh->terrainEdgeVariants.size(),
+            "A terrain chunk section has no chunk or index ranges");
+        for (std::uint32_t index = section.indexStart; index < section.indexStart + section.indexCount; ++index) {
+            const std::uint32_t global = section.vertexStart + TerrainIndexAt(*mesh, index);
+            const std::uint32_t x = global % terrain.width, z = global / terrain.width;
+            if (x % terrain.chunkQuads != 0U && z % terrain.chunkQuads != 0U) continue;
+            Require(std::abs(mesh->tangentVertices[global].y - terrain.heights[global]) < 1.0e-4F,
+                "A vertex on a chunk border does not carry the height of the terrain");
+        }
+    }
+    // The chunk at (3, 5) joined to a coarser neighbour on each edge: the neighbours are (2, 5), (4, 5), (3, 4), (3, 6).
+    const std::uint32_t chunkCountX = mesh->terrainChunkCountX, chunkCountZ = mesh->terrainChunkCountZ;
+    const auto sectionOf = [&](std::uint32_t level, std::uint32_t chunkX, std::uint32_t chunkZ) -> const RenderMeshSectionDesc& {
+        return mesh->sections[mesh->terrainSectionIndices[(static_cast<std::size_t>(level) * chunkCountZ + chunkZ) * chunkCountX + chunkX]];
+    };
+    constexpr std::array<std::array<int, 3>, 4> kNeighbours{ { { 1, -1, 0 }, { 2, 1, 0 }, { 4, 0, -1 }, { 8, 0, 1 } } };
+    constexpr std::array<std::uint32_t, 4> kFacing{ 2U, 1U, 8U, 4U };
+    for (std::uint32_t level = 0U; level + 1U < mesh->terrainLodCount; ++level) {
+        const RenderMeshSectionDesc& fine = sectionOf(level, 3U, 5U);
+        const RenderTerrainEdgeVariants& variants = mesh->terrainEdgeVariants[fine.terrainVariants];
+        for (std::size_t side = 0U; side < kNeighbours.size(); ++side) {
+            const std::uint32_t edge = static_cast<std::uint32_t>(kNeighbours[side][0]);
+            const RenderMeshSectionDesc& coarse = sectionOf(level + 1U,
+                static_cast<std::uint32_t>(3 + kNeighbours[side][1]), static_cast<std::uint32_t>(5 + kNeighbours[side][2]));
+            Require(variants.indexCount[edge] != 0U && variants.indexCount[edge] < variants.indexCount[0],
+                "A chunk joined to a coarser neighbour kept all its triangles");
+            const std::set<std::uint32_t> joined =
+                TerrainEdgeVertices(*mesh, terrain, fine, variants.indexStart[edge], variants.indexCount[edge], edge);
+            const std::set<std::uint32_t> neighbour =
+                TerrainEdgeVertices(*mesh, terrain, coarse, coarse.indexStart, coarse.indexCount, kFacing[side]);
+            Require(!joined.empty() && joined == neighbour, "A joined edge does not use the vertices of the coarser neighbour's edge");
+            for (const std::uint32_t vertex : joined) {
+                Require(std::abs(mesh->tangentVertices[vertex].y - terrain.heights[vertex]) < 1.0e-4F,
+                    "A joined edge vertex is off the neighbour's edge by more than 1e-4");
+            }
+        }
     }
 }
 
-// The level of detail is chosen for the whole terrain, so every chunk of a frame is drawn at one level. Looking down
-// at the corner where four chunks meet, at each level, no background shows through the terrain.
+// Where the chunks of the terrain, of a mesh built from `asset`, are at levels n and n + 1 either side of a seam, a viewer
+// that sees the seam; the chunks' own levels come from the same choice the renderer makes.
+struct TerrainSeamView {
+    std::array<float, 3> eye{};
+    std::uint32_t joinedChunks = 0U;
+};
+
+[[nodiscard]] RenderMeshResource MakeTerrainResource(const RenderMeshAssetData& asset) {
+    return RenderMeshResourceBuilder::Build(asset.desc, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE);
+}
+
+[[nodiscard]] SceneRenderCamera TerrainCamera(const std::array<float, 3>& eye, const std::array<float, 3>& target, float farPlane) {
+    SceneRenderCamera camera{};
+    bx::mtxLookAt(camera.view.data(), bx::Vec3{ eye[0], eye[1], eye[2] }, bx::Vec3{ target[0], target[1], target[2] },
+        bx::Vec3{ 0.0F, 0.0F, 1.0F });
+    SceneDepthPolicy::MakePerspective(camera.projection.data(), 60.0F, 1.0F, 0.1F, farPlane, SceneDepthPolicy::HomogeneousDepth());
+    // The scene behind the terrain is a colour no lit terrain has.
+    camera.clearColor = { 1.0F, 0.0F, 1.0F };
+    return camera;
+}
+
+[[nodiscard]] SceneRenderMeshInstance TerrainInstance(std::int32_t lodBias = 0, bool lodEnabled = true) {
+    SceneRenderMeshInstance instance{};
+    instance.entityId = 1U;
+    instance.model = { 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F };
+    instance.lodBias = lodBias;
+    instance.lodEnabled = lodEnabled;
+    return instance;
+}
+
+// Looking down at the corner where four chunks meet, with the seam between levels n and n + 1 in view, no background shows
+// through the terrain.
 void RunTerrainSeamPixelsTest() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_terrain_seam_pixels";
     std::error_code error;
@@ -13442,6 +13528,34 @@ void RunTerrainSeamPixelsTest() {
     const kb::assets::TerrainAsset terrain = MakeRoughTerrain();
     std::string saveError;
     Require(kb::assets::TerrainAssetIO::Save(root / "Seam.kbterrain", terrain, &saveError), saveError.c_str());
+    const std::optional<RenderMeshAssetData> asset = RenderTerrainMeshBuilder::Build(terrain);
+    Require(asset.has_value(), "Terrain seam test could not build its terrain");
+    const RenderMeshResource resource = MakeTerrainResource(*asset);
+    const SceneRenderMeshInstance instance = TerrainInstance();
+
+    // A viewer 70 m up whose view reaches 40 m around it, which sees chunks at two levels that touch along an edge joined
+    // to the coarser one.
+    std::optional<std::array<float, 3>> eye;
+    std::vector<std::uint8_t> chosen;
+    for (float x = -64.0F; x <= 64.0F && !eye; x += 4.0F) {
+        for (float z = -64.0F; z <= 64.0F && !eye; z += 4.0F) {
+            const std::array<float, 3> candidate{ x, 70.0F, z };
+            MeshPipelineTerrainLod::Choose(resource, instance, candidate, {}, chosen);
+            const std::uint32_t countX = resource.terrainGrid.chunkCountX;
+            for (std::uint32_t chunkZ = 0U; chunkZ < resource.terrainGrid.chunkCountZ && !eye; ++chunkZ) {
+                for (std::uint32_t chunkX = 0U; chunkX < countX && !eye; ++chunkX) {
+                    const float centerX = (static_cast<float>(chunkX) + 0.5F) * 16.0F - 128.0F;
+                    const float centerZ = (static_cast<float>(chunkZ) + 0.5F) * 16.0F - 128.0F;
+                    if (std::abs(centerX - x) < 24.0F && std::abs(centerZ - z) < 24.0F &&
+                        (chosen[chunkZ * countX + chunkX] >> MeshPipelineTerrainLod::kEdgeShift) != 0U) {
+                        eye = candidate;
+                    }
+                }
+            }
+        }
+    }
+    Require(eye.has_value(), "Terrain seam test found no view with chunks of two levels side by side");
+
     kb::scene::Scene scene;
     kb::assets::AssetManager& manager = scene.Assets().Manager();
     Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()) && manager.Mounts().Mount("Game", root) &&
@@ -13462,42 +13576,189 @@ void RunTerrainSeamPixelsTest() {
     {
         ParticleMeshReadbackTarget target;
         Require(target.Initialize(), "Terrain seam test could not create its readback target");
-        // The camera hangs 40 m above the corner of the four middle chunks and sees about 46 m of the 64 m terrain.
-        SceneRenderCamera camera{};
-        bx::mtxLookAt(camera.view.data(), bx::Vec3{ 0.0F, 40.0F, 0.0F }, bx::Vec3{ 0.0F, 0.0F, 0.0F }, bx::Vec3{ 0.0F, 0.0F, 1.0F });
-        SceneDepthPolicy::MakePerspective(camera.projection.data(), 60.0F, 1.0F, 0.1F, 500.0F, SceneDepthPolicy::HomogeneousDepth());
+        const SceneRenderCamera camera = TerrainCamera(*eye, { (*eye)[0], 0.0F, (*eye)[2] }, 500.0F);
         const RenderSceneSubmitDesc desc{
             .target = target.Binding(), .cameraOverride = camera, .clearRgba = 0x000000FFU,
             .editorSceneOverlaysEnabled = false, .shadowPassEnabled = false, .postProcessEnabled = false,
             .selectionMaskEnabled = false, .selectionOutlineEnabled = false,
         };
-        const auto background = [&](bool showTerrain, std::int32_t level) {
-            scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{ .meshAssetId = metadata->id.value, .lodBias = level });
+        const auto frame = [&](bool showTerrain) {
+            scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{ .meshAssetId = metadata->id.value });
             scene.Components().Visibility().Set(entity, kb::scene::VisibilityComponent{ .visible = showTerrain });
-            for (int frame = 0; frame < 4; ++frame) SubmitLifecycleFrame(renderer, scene, desc, "Terrain seam test did not submit a frame");
+            for (int index = 0; index < 4; ++index) SubmitLifecycleFrame(renderer, scene, desc, "Terrain seam test did not submit a frame");
             Require(!renderer.LastSceneDiagnostics().HasErrors(), "Terrain seam test reported rendering errors");
-            const std::vector<std::uint8_t> pixels = target.ReadPixels();
-            std::size_t count = 0U;
-            for (std::size_t offset = 0U; offset + 3U < pixels.size(); offset += 4U) {
-                if (pixels[offset] == 0U && pixels[offset + 1U] == 0U && pixels[offset + 2U] == 0U) ++count;
-            }
-            return count;
+            return target.ReadPixels();
         };
-        constexpr std::size_t kPixels = static_cast<std::size_t>(NativeTestSurface::kExtent) * NativeTestSurface::kExtent;
-        Require(background(false, 0) == kPixels, "Terrain seam test: without the terrain the whole frame must be black");
-        // The triangles sent per pass are those of the level: 2 * (64 >> level)^2, however many passes draw the terrain.
-        std::uint64_t perPass = 0U;
-        for (std::int32_t level = 0; level < 4; ++level) {
-            Require(background(true, level) == 0U, "Terrain seam test: black background or an unlit terrain shows in the frame");
-            const std::uint64_t triangles = renderer.LastSceneSubmitStats().submittedTriangleCount;
-            const std::uint64_t levelTriangles = 2U * (64U >> level) * (64U >> level);
-            if (level == 0) perPass = triangles / levelTriangles;
-            Require(perPass >= 1U && triangles == perPass * levelTriangles,
-                "Terrain seam test: the level of detail drawn is not the one asked for");
+        // Without the terrain the whole frame is the colour the target is cleared to.
+        const std::vector<std::uint8_t> empty = frame(false);
+        const std::array<std::uint8_t, 4> background{ empty[0], empty[1], empty[2], empty[3] };
+        Require(background[0] != 0U && background[2] != 0U && background[1] == 0U,
+            "Terrain seam test: the control colour of the target did not reach the frame");
+        for (std::size_t offset = 0U; offset + 3U < empty.size(); offset += 4U) {
+            Require(std::equal(background.begin(), background.end(), empty.begin() + static_cast<std::ptrdiff_t>(offset)),
+                "Terrain seam test: the empty frame is not one colour");
         }
+        const std::vector<std::uint8_t> pixels = frame(true);
+        std::size_t backgroundPixels = 0U;
+        for (std::size_t offset = 0U; offset + 3U < pixels.size(); offset += 4U) {
+            if (std::equal(background.begin(), background.end(), pixels.begin() + static_cast<std::ptrdiff_t>(offset))) ++backgroundPixels;
+        }
+        Require(backgroundPixels == 0U, "Terrain seam test: the background shows through the seam between two levels");
     }
     renderer.Shutdown();
     std::filesystem::remove_all(root, error);
+}
+
+// The largest terrain: 2049 x 2049 samples over 4096 m, in 64 x 64 chunks of 32 quads, with a swell and a few holes.
+[[nodiscard]] kb::assets::TerrainAsset MakeLargeTerrain() {
+    kb::assets::TerrainAsset terrain = kb::assets::MakeFlatTerrainAsset(kb::assets::TerrainAsset::MaximumResolution, 4096.0F, 4096.0F);
+    terrain.chunkQuads = 32U;
+    terrain.lodCount = 4U;
+    for (std::uint32_t z = 0U; z < terrain.height; ++z) {
+        for (std::uint32_t x = 0U; x < terrain.width; ++x) {
+            terrain.heights[static_cast<std::size_t>(z) * terrain.width + x] =
+                2.0F * std::sin(0.05F * static_cast<float>(x)) * std::cos(0.04F * static_cast<float>(z));
+        }
+    }
+    // A hole in two chunks: they keep index ranges of their own.
+    terrain.holes[static_cast<std::size_t>(1040U) * (terrain.width - 1U) + 1040U] = 1U;
+    terrain.holes[static_cast<std::size_t>(100U) * (terrain.width - 1U) + 70U] = 1U;
+    return terrain;
+}
+
+[[nodiscard]] std::uint64_t TerrainCommandTriangles(const MeshPipelineBuildResult& result) {
+    std::uint64_t triangles = 0U;
+    for (const MeshDrawCommand& command : result.commands) triangles += static_cast<std::uint64_t>(command.indexCount / 3U) * command.instances.size();
+    return triangles;
+}
+
+// The terrain of 4096 m with the camera on the ground: chunks near it draw at level 0 and the rest coarser, neighbours differ by
+// one level at most, a viewer that sways around a border does not switch a chunk, and the shadow passes draw the chunks at
+// the levels of the camera.
+void RunTerrainChunkLevelsOnLargeTerrainTest() {
+    const kb::assets::TerrainAsset terrain = MakeLargeTerrain();
+    const std::optional<RenderMeshAssetData> asset = RenderTerrainMeshBuilder::Build(terrain);
+    Require(asset.has_value() && asset->terrainChunkCountX == 64U && asset->terrainChunkCountZ == 64U,
+        "The large terrain did not build 64 x 64 chunks");
+    // The terrain is shared by its chunks: ranges are few and the section of every chunk is its own.
+    Require(asset->terrainEdgeVariants.size() == 4U + 2U * 4U, "The chunks of the large terrain do not share index ranges");
+    const RenderMeshResource resource = MakeTerrainResource(*asset);
+    const RenderMaterialResource material{};
+    const std::uint32_t chunkCount = 64U * 64U;
+
+    const auto build = [&](MeshPipelineBuildResult& result, MeshPassType pass, const SceneRenderCamera& camera,
+                           std::int32_t lodBias = 0, bool lodEnabled = true) {
+        RenderScene scene;
+        const SceneRenderMeshInstance instance = TerrainInstance(lodBias, lodEnabled);
+        static_cast<void>(scene.UpsertMesh(MeshRenderProxyDesc{
+            .entityId = instance.entityId, .meshAssetId = 42U, .materialAssetId = 7U, .model = instance.model,
+            .lodBias = lodBias, .lodEnabled = lodEnabled }));
+        MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{ .pass = pass, .drawGroups = &scene.DrawGroups(),
+            .resolvedMeshResource = &resource, .resolvedMaterialResource = &material, .camera = &camera,
+            .resourceValidation = MeshPipelineResourceValidation::Skip }, result);
+    };
+    const auto choices = [](const MeshPipelineBuildResult& result) -> const std::vector<std::uint8_t>& {
+        Require(result.terrainChoices.size() == 1U, "The terrain was not given levels for its chunks");
+        return result.terrainChoices.begin()->second;
+    };
+
+    // The camera stands near the middle of the terrain, 2 m above it, and looks along it.
+    const std::array<float, 3> eye{ 10.0F, 3.0F, 10.0F };
+    const SceneRenderCamera camera = TerrainCamera(eye, { 600.0F, 0.0F, 10.0F }, 1200.0F);
+    MeshPipelineBuildResult levelled;
+    build(levelled, MeshPassType::BaseOpaque, camera);
+    const std::vector<std::uint8_t> frameChoices = choices(levelled);
+    Require(frameChoices.size() == chunkCount, "The terrain was not given a level for every chunk");
+    const std::uint64_t levelledTriangles = TerrainCommandTriangles(levelled);
+    MeshPipelineBuildResult finest;
+    build(finest, MeshPassType::BaseOpaque, camera, 0, false);
+    const std::uint64_t finestTriangles = TerrainCommandTriangles(finest);
+    Require(finestTriangles != 0U && levelledTriangles * 4U <= finestTriangles,
+        "The levelled terrain sends more than a quarter of the triangles of the terrain at level 0");
+    const std::uint32_t cameraChunk = static_cast<std::uint32_t>((10.0F + 2048.0F) / 64.0F) * 64U + static_cast<std::uint32_t>((10.0F + 2048.0F) / 64.0F);
+    Require((frameChoices[cameraChunk] & MeshPipelineTerrainLod::kLevelMask) == 0U, "The chunk under the camera is not at level 0");
+    std::uint32_t nearFinest = 0U, farCoarse = 0U;
+    for (const MeshDrawCommand& command : levelled.commands) {
+        const RenderMeshSection& section = resource.sections[command.sectionIndex];
+        Require(section.lodLevel == command.lodLevel && section.terrainChunk != UINT32_MAX, "A terrain command is not a chunk at its level");
+        nearFinest += command.lodLevel == 0U ? 1U : 0U;
+        farCoarse += command.lodLevel >= 2U ? 1U : 0U;
+    }
+    Require(nearFinest != 0U && farCoarse != 0U, "The terrain did not draw chunks near the camera finer than those far from it");
+
+    // Neighbours of the whole grid differ by one level at most, and a chunk joins exactly the neighbours that are coarser.
+    for (std::uint32_t z = 0U; z < 64U; ++z) {
+        for (std::uint32_t x = 0U; x < 64U; ++x) {
+            const int level = frameChoices[z * 64U + x] & MeshPipelineTerrainLod::kLevelMask;
+            unsigned joined = 0U;
+            const int neighbours[4][2]{ { -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 } };
+            for (unsigned side = 0U; side < 4U; ++side) {
+                const int nx = static_cast<int>(x) + neighbours[side][0], nz = static_cast<int>(z) + neighbours[side][1];
+                if (nx < 0 || nz < 0 || nx >= 64 || nz >= 64) continue;
+                const int other = frameChoices[static_cast<std::uint32_t>(nz) * 64U + static_cast<std::uint32_t>(nx)] & MeshPipelineTerrainLod::kLevelMask;
+                Require(std::abs(other - level) <= 1, "Neighbouring chunks differ by more than one level");
+                joined |= other == level + 1 ? 1U << side : 0U;
+            }
+            Require(static_cast<unsigned>(frameChoices[z * 64U + x] >> MeshPipelineTerrainLod::kEdgeShift) == joined,
+                "A chunk does not join exactly the neighbours that are coarser");
+        }
+    }
+
+    // A viewer that sways 2% around the distance where a chunk changes level keeps it. Find that distance first.
+    const std::uint32_t swayChunk = cameraChunk + 12U;
+    const float swayX = 44.5F * 64.0F - 2048.0F, swayZ = 32.5F * 64.0F - 2048.0F;
+    const SceneRenderMeshInstance instance = TerrainInstance();
+    std::vector<std::uint8_t> scratch;
+    const auto levelAt = [&](float distance, std::span<const std::uint8_t> previous) {
+        MeshPipelineTerrainLod::Choose(resource, instance, { swayX - distance, 3.0F, swayZ }, previous, scratch);
+        return static_cast<int>(scratch[swayChunk] & MeshPipelineTerrainLod::kLevelMask);
+    };
+    float low = 0.0F, high = 1500.0F;
+    for (int step = 0; step < 40; ++step) {
+        const float middle = 0.5F * (low + high);
+        (levelAt(middle, {}) >= 1 ? high : low) = middle;
+    }
+    const float border = high;
+    Require(levelAt(border * 0.9F, {}) == 0 && levelAt(border * 1.1F, {}) >= 1, "A chunk has no border between level 0 and level 1");
+    MeshPipelineBuildResult swaying;
+    int changes = 0, previousLevel = -1;
+    for (int frame = 0; frame < 240; ++frame) {
+        const float distance = border * (1.0F + 0.02F * std::sin(0.4F * static_cast<float>(frame)));
+        const SceneRenderCamera swayCamera = TerrainCamera({ swayX - distance, 3.0F, swayZ }, { swayX, 0.0F, swayZ }, 1200.0F);
+        build(swaying, MeshPassType::BaseOpaque, swayCamera);
+        const int level = choices(swaying)[swayChunk] & MeshPipelineTerrainLod::kLevelMask;
+        changes += previousLevel >= 0 && level != previousLevel ? 1 : 0;
+        previousLevel = level;
+    }
+    Require(changes == 0, "A viewer swaying 2% around a border switched the level of a chunk");
+
+    // The shadow cascade of the frame chooses what the camera does: every chunk it draws, that the camera draws too, is at the
+    // camera's level and takes the camera's triangles.
+    SceneRenderCamera light = TerrainCamera({ 10.0F, 400.0F, 10.0F }, { 10.0F, 0.0F, 10.0F }, 800.0F);
+    SceneDepthPolicy::MakeOrthographic(light.projection.data(), 300.0F, 1.0F, 0.1F, 800.0F, SceneDepthPolicy::HomogeneousDepth());
+    light.distanceOrigin = eye;
+    light.distanceLimit = 300.0F;
+    MeshPipelineBuildResult shadow;
+    shadow.terrainPreviousChoices = levelled.terrainPreviousChoices;
+    build(shadow, MeshPassType::ShadowDepth, light);
+    Require(choices(shadow) == frameChoices, "The shadow pass chooses other levels for the chunks than the camera");
+    std::map<std::uint32_t, std::uint32_t> cameraTriangles;
+    for (const MeshDrawCommand& command : levelled.commands) {
+        cameraTriangles[resource.sections[command.sectionIndex].terrainChunk] = command.indexCount;
+    }
+    std::uint32_t sharedChunks = 0U;
+    for (const MeshDrawCommand& command : shadow.commands) {
+        const auto found = cameraTriangles.find(resource.sections[command.sectionIndex].terrainChunk);
+        if (found == cameraTriangles.end()) continue;
+        Require(found->second == command.indexCount, "The shadow pass draws a chunk with more triangles than the camera does");
+        ++sharedChunks;
+    }
+    MeshPipelineBuildResult shadowFinest;
+    shadowFinest.terrainPreviousChoices = levelled.terrainPreviousChoices;
+    build(shadowFinest, MeshPassType::ShadowDepth, light, 0, false);
+    Require(sharedChunks != 0U && TerrainCommandTriangles(shadow) != 0U &&
+            TerrainCommandTriangles(shadow) < TerrainCommandTriangles(shadowFinest),
+        "The shadow pass draws the terrain as finely as the terrain at level 0");
 }
 
 void RunRendererTerrainSeamTests() {
@@ -13506,6 +13767,67 @@ void RunRendererTerrainSeamTests() {
     RunTerrainSeamPixelsTest();
 #else
     throw std::runtime_error("The terrain seam test requires a supported native GPU test surface");
+#endif
+}
+
+// The terrain of 4096 m sent to the GPU: with the camera on the ground it takes a quarter of the triangles of the terrain at
+// level 0 or fewer.
+void RunTerrainChunkLevelsSubmitTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_terrain_chunk_levels";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Terrain level test could not create its asset root");
+    std::string saveError;
+    Require(kb::assets::TerrainAssetIO::Save(root / "Large.kbterrain", MakeLargeTerrain(), &saveError), saveError.c_str());
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()) && manager.Mounts().Mount("Game", root) &&
+            manager.DiscoverMountedAssets() == 1U,
+        "Terrain level test could not load its terrain");
+    const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath("/Game/Large.kbterrain");
+    Require(metadata != nullptr, "Terrain level test could not resolve its terrain");
+    kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Terrain" });
+
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "Terrain level test could not create a native surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Terrain level test renderer did not initialize");
+    {
+        ParticleMeshReadbackTarget target;
+        Require(target.Initialize(), "Terrain level test could not create its readback target");
+        const SceneRenderCamera camera = TerrainCamera({ 10.0F, 3.0F, 10.0F }, { 600.0F, 0.0F, 10.0F }, 1200.0F);
+        const RenderSceneSubmitDesc desc{
+            .target = target.Binding(), .cameraOverride = camera, .clearRgba = 0x000000FFU,
+            .editorSceneOverlaysEnabled = false, .shadowPassEnabled = false, .postProcessEnabled = false,
+            .selectionMaskEnabled = false, .selectionOutlineEnabled = false,
+        };
+        const auto triangles = [&](bool levelled) {
+            scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+                .meshAssetId = metadata->id.value, .lodEnabled = levelled });
+            for (int frame = 0; frame < 4; ++frame) SubmitLifecycleFrame(renderer, scene, desc, "Terrain level test did not submit a frame");
+            Require(!renderer.LastSceneDiagnostics().HasErrors(), "Terrain level test reported rendering errors");
+            return renderer.LastSceneSubmitStats().submittedTriangleCount;
+        };
+        const std::uint64_t levelled = triangles(true);
+        const std::uint64_t finest = triangles(false);
+        Require(finest != 0U && levelled != 0U && levelled * 4U <= finest,
+            "The terrain sent to the GPU takes more than a quarter of the triangles of the terrain at level 0");
+    }
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+}
+
+void RunRendererTerrainChunkLevelTests() {
+    RunTerrainChunkLevelsOnLargeTerrainTest();
+#if defined(_WIN32)
+    RunTerrainChunkLevelsSubmitTest();
+#else
+    throw std::runtime_error("The terrain chunk level test requires a supported native GPU test surface");
 #endif
 }
 

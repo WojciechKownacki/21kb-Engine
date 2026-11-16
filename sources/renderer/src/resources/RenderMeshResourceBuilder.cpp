@@ -40,9 +40,32 @@ namespace {
             .lodLevel = section.lodLevel,
             .terrainLayerIndex = section.terrainLayerIndex,
             .terrainLayerActive = section.terrainLayerActive,
+            .terrainChunk = section.terrainChunk,
+            .terrainVariants = section.terrainVariants,
         });
     }
     return sections;
+}
+
+[[nodiscard]] RenderTerrainChunkGrid BuildTerrainChunkGrid(const RenderMeshDesc& desc, const std::vector<RenderMeshSection>& sections) {
+    RenderTerrainChunkGrid grid;
+    const std::size_t chunkCount = static_cast<std::size_t>(desc.terrainChunkCountX) * desc.terrainChunkCountZ;
+    if (chunkCount == 0U || desc.terrainVariantCount == 0U) {
+        return grid;
+    }
+    grid.chunkCountX = desc.terrainChunkCountX;
+    grid.chunkCountZ = desc.terrainChunkCountZ;
+    grid.chunkSize = desc.terrainChunkSize;
+    grid.chunkSections.assign(chunkCount, UINT32_MAX);
+    for (std::uint32_t index = 0U; index < sections.size(); ++index) {
+        const RenderMeshSection& section = sections[index];
+        if (section.lodLevel == 0U && section.terrainChunk < chunkCount &&
+            (section.terrainLayerIndex == UINT8_MAX || section.terrainLayerIndex == 0U)) {
+            grid.chunkSections[section.terrainChunk] = index;
+        }
+    }
+    grid.variants.assign(desc.terrainVariants, desc.terrainVariants + desc.terrainVariantCount);
+    return grid;
 }
 
 [[nodiscard]] RenderBoundsSphere MergeBounds(RenderBoundsSphere lhs, RenderBoundsSphere rhs) noexcept {
@@ -123,9 +146,24 @@ namespace {
 // Meshes up to this many triangles keep a CPU copy for voxelisation (about 2.5 MB at the limit).
 constexpr std::uint32_t kMaxProxyGeometryTriangles = 200'000U;
 
+// The sections of a terrain that hold its surface once: the first material layer at level 0, whose indices are local
+// to the chunk's own vertices.
+[[nodiscard]] bool IsTerrainSurfaceSection(const RenderMeshSectionDesc& section) noexcept {
+    return section.terrainChunk != UINT32_MAX && section.lodLevel == 0U &&
+        (section.terrainLayerIndex == UINT8_MAX || section.terrainLayerIndex == 0U);
+}
+
 [[nodiscard]] std::shared_ptr<const RenderMeshProxyGeometry> CopyProxyGeometry(const RenderMeshDesc& desc) {
+    const bool terrain = desc.terrainVariantCount != 0U;
+    std::uint64_t surfaceIndexCount = desc.indexCount;
+    if (terrain) {
+        surfaceIndexCount = 0U;
+        for (std::uint32_t sectionIndex = 0U; sectionIndex < desc.sectionCount; ++sectionIndex) {
+            if (IsTerrainSurfaceSection(desc.sections[sectionIndex])) surfaceIndexCount += desc.sections[sectionIndex].indexCount;
+        }
+    }
     const bool unusable = desc.dynamicVertexBuffer || desc.vertexFormat == RenderVertexFormat::SkinnedP3N3T4UV2J4W4 ||
-        desc.vertexCount == 0U || desc.indexCount < 3U || desc.indexCount / 3U > kMaxProxyGeometryTriangles;
+        desc.vertexCount == 0U || surfaceIndexCount < 3U || surfaceIndexCount / 3U > kMaxProxyGeometryTriangles;
     const auto* vertexBytes = static_cast<const std::byte*>(RenderMeshDescGeometry::VertexData(desc));
     const bool wide = desc.indexFormat != RenderIndexFormat::Uint16;
     if (unusable || vertexBytes == nullptr || (wide ? desc.indices32 == nullptr : desc.indices == nullptr)) {
@@ -137,10 +175,25 @@ constexpr std::uint32_t kMaxProxyGeometryTriangles = 200'000U;
     for (std::uint32_t vertex = 0U; vertex < desc.vertexCount; ++vertex) {
         std::memcpy(&geometry->positions[static_cast<std::size_t>(vertex) * 3U], vertexBytes + vertex * stride, 3U * sizeof(float));
     }
+    const auto indexAt = [&](std::uint32_t index) { return wide ? desc.indices32[index] : desc.indices[index]; };
+    if (terrain) {
+        for (std::uint32_t sectionIndex = 0U; sectionIndex < desc.sectionCount; ++sectionIndex) {
+            const RenderMeshSectionDesc& section = desc.sections[sectionIndex];
+            if (!IsTerrainSurfaceSection(section)) continue;
+            for (std::uint32_t offset = 0U; offset < section.indexCount; ++offset) {
+                const std::uint32_t value = section.vertexStart + indexAt(section.indexStart + offset);
+                if (value >= desc.vertexCount) {
+                    return nullptr;
+                }
+                geometry->indices.push_back(value);
+            }
+        }
+        return geometry;
+    }
     const std::uint32_t usable = desc.indexCount - desc.indexCount % 3U;
     geometry->indices.resize(usable);
     for (std::uint32_t index = 0U; index < usable; ++index) {
-        const std::uint32_t value = wide ? desc.indices32[index] : desc.indices[index];
+        const std::uint32_t value = indexAt(index);
         if (value >= desc.vertexCount) {
             return nullptr;
         }
@@ -175,6 +228,7 @@ RenderMeshResource RenderMeshResourceBuilder::Build(
     const RenderBoundsSphere meshBounds = ComputeMeshBounds(desc);
     std::vector<RenderMeshSection> sections = BuildSections(desc, meshBounds);
     std::vector<RenderMaterialSlot> materialSlots = BuildMaterialSlots(desc, sections);
+    RenderTerrainChunkGrid terrainGrid = BuildTerrainChunkGrid(desc, sections);
 
     return RenderMeshResource{
         .vertexBuffer = vertexBuffer,
@@ -199,6 +253,7 @@ RenderMeshResource RenderMeshResourceBuilder::Build(
         .terrainLayerWeightWidth = desc.terrainLayerWeightWidth,
         .terrainLayerWeightHeight = desc.terrainLayerWeightHeight,
         .terrainLayerCount = desc.terrainLayerCount,
+        .terrainGrid = std::move(terrainGrid),
         .proxyGeometry = CopyProxyGeometry(desc),
     };
 }

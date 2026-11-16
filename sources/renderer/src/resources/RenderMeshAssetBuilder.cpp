@@ -38,6 +38,11 @@ RenderMeshDesc& RenderMeshAssetData::RefreshDesc() noexcept {
         .terrainLayerWeightWidth = terrainLayerWeightWidth,
         .terrainLayerWeightHeight = terrainLayerWeightHeight,
         .terrainLayerCount = terrainLayerCount,
+        .terrainVariants = terrainEdgeVariants.empty() ? nullptr : terrainEdgeVariants.data(),
+        .terrainVariantCount = static_cast<std::uint32_t>(terrainEdgeVariants.size()),
+        .terrainChunkCountX = terrainChunkCountX,
+        .terrainChunkCountZ = terrainChunkCountZ,
+        .terrainChunkSize = terrainChunkSize,
     };
     return desc;
 }
