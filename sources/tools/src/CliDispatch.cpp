@@ -556,6 +556,11 @@ R"(  run          Run a scene headless and report logs, events, and errors (the
   mcp          Serve the commands above as MCP tools over stdio (newline-
                delimited JSON-RPC), for use from MCP-compatible clients.
                  [--project <dir>]
+  lsp          Serve the Language Server Protocol over stdio for the Lua scripts of a
+               project, so any code editor that speaks it gets diagnostics (syntax and
+               constructs outside the language every platform runs), completion and hover
+               from the script API, go to definition across Import/require, and the outline.
+                 [--project <dir>]
   keys         Manage release signing keys. Private keys are refused inside a
                project or a repository; keep them out of version control.
                  generate --out <key file>
@@ -656,7 +661,7 @@ Global options:
                   "command":"entity","output":"<stdout>","errors":["<stderr line>",...]}
                "ok" is true when the exit code is 0; "errors" lists what the command
                wrote to stderr. A command that prints its own JSON (audio-mixer,
-               run --report, api --print json, batch) keeps it unchanged. mcp ignores --json.
+               run --report, api --print json, batch) keeps it unchanged. mcp and lsp ignore --json.
                Native compiler logs go to process stderr and never precede the JSON object.
   --dry-run    Only for the commands that name it (audio-mixer new/set).
   --command-timeout-ms <1..86400000>  Bound the entire command on Windows.
@@ -847,6 +852,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"vfx-module-remove", nullptr, CliCommandKind::Particle, kRendererAvailable, {}, CliJsonOutput::Structured, true},
     {"batch", nullptr, CliCommandKind::Batch, true, {}, CliJsonOutput::Native},
     {"mcp", nullptr, CliCommandKind::Mcp, true, {}, CliJsonOutput::Protocol},
+    {"lsp", nullptr, CliCommandKind::Lsp, true, {}, CliJsonOutput::Protocol},
     {"help", nullptr, CliCommandKind::Help, true, {}},
     {"commands", nullptr, CliCommandKind::Catalog, true, {}, CliJsonOutput::Native},
 };
@@ -874,6 +880,7 @@ std::optional<int> RunNamedCommand(
             return RunCli(words, in, target);
         });
     case CliCommandKind::Mcp: return RunMcpCommand(arguments, in, io);
+    case CliCommandKind::Lsp: return RunLspCommand(arguments, in, io);
     case CliCommandKind::Help:
         if (!arguments.Positionals().empty()) PrintCommandUsage(io.out, arguments.Positionals().front());
         else PrintUsage(io.out);
@@ -899,6 +906,11 @@ const CliCommandDescriptor* FindCliCommand(std::string_view name) noexcept {
     for (const auto& command : CliCommandCatalog())
         if (command.name == name) return &command;
     return nullptr;
+}
+
+bool IsProtocolCommand(std::string_view name) noexcept {
+    const CliCommandDescriptor* command = FindCliCommand(name);
+    return command != nullptr && command->json == CliJsonOutput::Protocol;
 }
 
 std::string ToValidUtf8(std::string_view text) {
@@ -1011,7 +1023,7 @@ int RunCli(std::span<const std::string> args, std::istream& in, CommandIo io) {
     std::vector<std::string_view> flagNames{kFlagNames.begin(), kFlagNames.end()};
     flagNames.insert(flagNames.end(), {"--json", "--dry-run"});
     ArgumentList arguments{ rest, flagNames };
-    const bool json = arguments.Flag("--json") && command != "mcp";
+    const bool json = arguments.Flag("--json") && !IsProtocolCommand(command);
 
     // Only audio-mixer and run --report act on --json themselves; for the rest it asks for the
     // result object, and the command must not see it.

@@ -286,7 +286,7 @@ std::optional<int> SuperviseCliCommand(const std::filesystem::path& executable,
         child.push_back(token);
     }
     if (!requested) return std::nullopt;
-    if (command == "mcp") json = false;
+    if (IsProtocolCommand(command)) json = false;
     if (command.empty() && error.empty()) error = "command limits require a command";
     Output output;
     try {

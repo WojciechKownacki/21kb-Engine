@@ -375,7 +375,7 @@ struct ToolCallOutcome {
         if (words.empty()) return {.isError = true, .text = "args must name a command"};
         const CliCommandDescriptor* target = FindCliCommand(words.front());
         if (target == nullptr) return {.isError = true, .text = "unknown kb_cli command: " + words.front()};
-        if (target->kind == CliCommandKind::Mcp) return {.isError = true, .text = "the mcp command cannot run inside the MCP server"};
+        if (target->json == CliJsonOutput::Protocol) return {.isError = true, .text = "a protocol server (mcp, lsp) cannot run inside the MCP server"};
         // Commands about the project get it (a batch works on the bound project too); the ones that make a project or
         // describe kb_cli do not take it.
         const bool takesProject = !projectRoot.empty() &&

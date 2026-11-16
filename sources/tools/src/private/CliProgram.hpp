@@ -12,7 +12,7 @@
 
 namespace kb::cli {
 
-enum class CliCommandKind { Normal, Particle, Batch, Mcp, Help, Catalog };
+enum class CliCommandKind { Normal, Particle, Batch, Mcp, Lsp, Help, Catalog };
 
 // What --json gives for a command: Envelope wraps its text in the common result object, Native is its own
 // versioned JSON, Partial is native for some forms only, Protocol is a JSON protocol on stdin and stdout,
@@ -33,6 +33,9 @@ struct CliCommandDescriptor {
 
 [[nodiscard]] std::span<const CliCommandDescriptor> CliCommandCatalog() noexcept;
 [[nodiscard]] const CliCommandDescriptor* FindCliCommand(std::string_view name) noexcept;
+// Whether the command serves a protocol on stdin and stdout (mcp, lsp): it takes no --json, is not run in a batch
+// and is not offered as a tool.
+[[nodiscard]] bool IsProtocolCommand(std::string_view name) noexcept;
 
 // The usage text `kb_cli help` prints: the one description of every command. The machine-readable catalog
 // (`kb_cli commands`) is read from it, so a command is described once, for people and for agents.

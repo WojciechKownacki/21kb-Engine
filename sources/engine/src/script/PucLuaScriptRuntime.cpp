@@ -1,5 +1,6 @@
 #include "script/lua/LuaVm.hpp"
 #include "engine/script/PucLuaScriptRuntime.hpp"
+#include "engine/script/ScriptLanguageSubset.hpp"
 
 #include "script/lua/PucLuaDebugHook.hpp"
 #include "script/lua/PucLuaRunaway.hpp"
@@ -13,6 +14,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <ranges>
@@ -1488,6 +1490,32 @@ void PucLuaScriptRuntime::ClearEventSubscriptionsForAsset(kb::assets::AssetId as
 
 void PucLuaScriptRuntime::ResetAssetForHotReload(kb::assets::AssetId assetId, ScriptEventBus& events) noexcept {
     ClearEventSubscriptionsForAsset(assetId, events);
+}
+
+// Declared with the language checks in ScriptLanguageSubset.hpp; it is defined here because this file has the script VM's headers.
+std::optional<ScriptSyntaxError> FindSyntaxError(std::string_view luaSource) {
+    lua_State* state = luaL_newstate();
+    if (state == nullptr) return std::nullopt;
+    std::optional<ScriptSyntaxError> error;
+    if (luaL_loadbufferx(state, luaSource.data(), luaSource.size(), "=script", "t") != LUA_OK) {
+        // "script:12: unexpected symbol near '/'"
+        const char* text = lua_tostring(state, -1);
+        std::string_view message = text != nullptr ? std::string_view{ text } : std::string_view{ "syntax error" };
+        ScriptSyntaxError found;
+        constexpr std::string_view kChunk = "script:";
+        if (message.starts_with(kChunk)) {
+            std::size_t digits = kChunk.size();
+            while (digits < message.size() && message[digits] >= '0' && message[digits] <= '9') ++digits;
+            if (digits > kChunk.size() && message.substr(digits, 2U) == ": ") {
+                found.line = static_cast<std::uint32_t>(std::strtoul(std::string{ message.substr(kChunk.size(), digits - kChunk.size()) }.c_str(), nullptr, 10));
+                message.remove_prefix(digits + 2U);
+            }
+        }
+        found.message = std::string{ message };
+        error = std::move(found);
+    }
+    lua_close(state);
+    return error;
 }
 
 } // namespace kb::script

@@ -467,8 +467,8 @@ int RunBatchCommand(const ArgumentList& arguments, CommandIo io, const CommandRu
         std::vector<std::string>& words = operations[index];
         if (words.front() == "kb_cli") words.erase(words.begin());
         const std::string where = "operation " + std::to_string(index + 1U) + ": ";
-        if (words.empty() || words.front() == "batch" || words.front() == "mcp" || words.front().starts_with("-")) {
-            io.err << "error: " << where << "expects a kb_cli command other than batch and mcp\n";
+        if (words.empty() || words.front() == "batch" || IsProtocolCommand(words.front()) || words.front().starts_with("-")) {
+            io.err << "error: " << where << "expects a kb_cli command other than batch, mcp and lsp\n";
             return 1;
         }
         if (std::ranges::count(words, "--project") > 1) {

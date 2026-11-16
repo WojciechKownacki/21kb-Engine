@@ -8,6 +8,9 @@ add_library(kb_cli_core STATIC
     src/CliCodeCommands.cpp
     src/CliCodeModules.cpp
     src/CliLuaDebugCommand.cpp
+    src/CliLspCommand.cpp
+    src/CliLuaSourceIndex.cpp
+    src/CliProtocolStream.cpp
     src/CliAudioCommands.cpp
     src/CliBatchCommand.cpp
     src/CliBuildCommands.cpp
@@ -35,6 +38,8 @@ add_library(kb_cli_core STATIC
     src/CliWorldCommands.cpp
     src/private/CliCommands.hpp
     src/private/CliCommon.hpp
+    src/private/CliLuaSourceIndex.hpp
+    src/private/CliProtocolStream.hpp
     src/private/CliPlayerPreset.hpp
     src/private/CliProgram.hpp
 )
@@ -178,6 +183,7 @@ if(BUILD_TESTING)
     endif()
     add_executable(kb_cli_tests
         tests/KbCliTests.cpp
+        tests/KbCliLanguageServerTests.cpp
     )
 
     target_link_libraries(kb_cli_tests PRIVATE kb_cli_core)

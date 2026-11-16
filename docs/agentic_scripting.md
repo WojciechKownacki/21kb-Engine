@@ -675,3 +675,33 @@ The editor also polls when its Play transport is paused. Lua steps run when Play
 running. `kb_editor_lua_debugger_package` verifies CLI commands in the headless editor,
 source player and isolated cooked package, GUI tab/splitter interaction at a breakpoint,
 and recovery after the client stops sending requests.
+
+## Connecting a code editor
+
+Any code editor that can run a language server over standard input and output works with the scripts of a project.
+Register `kb_cli lsp --project <project folder>` as the language server for `.lua` files; the editor starts it and
+talks the Language Server Protocol to it (no network port opens, nothing is written to disk).
+
+```
+kb_cli lsp --project .
+```
+
+What the server gives the editor, all from the engine itself:
+
+- **Diagnostics** while you type: the syntax error of the script (as an error on its line) and every construct
+  outside [the language every platform runs](#the-language-every-platform-runs) (as a warning that covers the
+  construct), the same findings `kb_cli validate` and the editor's script editor report. A line that the VM refuses
+  only because of such a construct shows the warning alone.
+- **Completion** for the script API: after `Transform.` the functions of that table, elsewhere the tables and the global
+  functions, each with its call, inputs and description from the script API of the engine (`kb_cli api`). With
+  `--project`, the names of the project are part of that API.
+- **Hover** on an API function or table (its call, inputs, outputs and description) and on a function of the script.
+- **Go to definition** of a function or variable of the script, of `Module.function` in the module that `Import("Module")`
+  or `require("Module")` names (the file next to the script, with dots as folders, or `/Game/...` for the project's
+  Assets folder), and of the module name itself, which opens the module's file. The sandbox has `Import`; `require` is
+  resolved the same way for editors that expect it.
+- **Document symbols**: the outline of the functions and variables a script defines at its top level.
+
+The server keeps the whole text of each open document (the editor sends it on every change) and reads other files of the
+project from disk, or from the editor when it has them open. Columns are counted in UTF-16 code units, as the protocol
+asks.

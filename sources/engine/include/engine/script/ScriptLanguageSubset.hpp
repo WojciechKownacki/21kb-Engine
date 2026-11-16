@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -24,5 +25,14 @@ struct ScriptSubsetFinding {
 // the `<const>` and `<close>` attributes, integer literals above 2^53, and the library functions only one VM has
 // (math.type, string.pack, table.unpack, utf8, math.pow, ...). Strings and comments are not looked into.
 [[nodiscard]] std::vector<ScriptSubsetFinding> FindOutOfSubsetConstructs(std::string_view luaSource);
+
+// The first syntax error of a script, found by compiling it with the script VM of this build, not by running it.
+struct ScriptSyntaxError {
+    std::uint32_t line = 1U;
+    std::string message;
+};
+
+// Empty when `luaSource` compiles. A script that compiles here may still fail on the other VM: see the findings above.
+[[nodiscard]] std::optional<ScriptSyntaxError> FindSyntaxError(std::string_view luaSource);
 
 } // namespace kb::script

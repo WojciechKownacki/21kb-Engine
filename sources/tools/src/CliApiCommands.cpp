@@ -222,6 +222,13 @@ struct CatalogBuildResult {
 
 } // namespace
 
+bool BuildScriptApiCatalog(const std::optional<std::string>& project, kb::script::ScriptApiCatalog& catalog, std::string& error) {
+    CatalogBuildResult built = BuildCatalog(project);
+    catalog = std::move(built.catalog);
+    error = std::move(built.error);
+    return built.succeeded;
+}
+
 int RunApiCommand(const ArgumentList& arguments, CommandIo io) {
     const std::optional<std::string> project = arguments.Option("--project");
     const std::optional<std::string> printFormat = arguments.Option("--print");

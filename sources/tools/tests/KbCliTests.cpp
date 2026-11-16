@@ -6496,6 +6496,8 @@ void RunSprite2DAssetRefusalTests() {
 }
 #endif
 
+void RunLanguageServerTests();
+
 int main(int argc, char** argv) {
 #if KB_CLI_RENDERER
     kb::render::tests::InstallRendererAssertionPolicy();
@@ -6578,6 +6580,10 @@ int main(int argc, char** argv) {
         RunWorldMemoryCliTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{argv[1]} == "lsp") {
+        RunLanguageServerTests();
+        return EXIT_SUCCESS;
+    }
     if (argc != 1) return EXIT_FAILURE;
     RunAudioMixerCommandTests();
     RunCliJsonTests();
@@ -6631,6 +6637,7 @@ int main(int argc, char** argv) {
     RunApiCheckCommandTests();
     RunMcpCommandTests();
     RunMcpCommandRefusalTests();
+    RunLanguageServerTests();
     RunKeyAndPackCommandTests();
     RunWorldCommandTests();
     RunNavMeshCommandTests();
