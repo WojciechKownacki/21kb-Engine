@@ -382,6 +382,7 @@ public:
             workerBatchQueues_.clear();
             workerBatchQueueCursors_.clear();
             staticStridedWorkerDone_.clear();
+            staticRunners_ = 0;
             remainingWork_ = 0;
             workMode_ = WorkMode::None;
             batchActive_ = false;
@@ -1145,6 +1146,7 @@ private:
             item.batchCallback = batchCallback_;
             item.batchCallbackContext = batchCallbackContext_;
         } else if (item.mode == WorkMode::BatchesStaticStrided) {
+            ++staticRunners_;
             item.staticBatches = batches_;
             item.staticBatchCount = batchCount_;
             item.batchCallback = batchCallback_;
@@ -1155,6 +1157,7 @@ private:
             item.chunkCallback = chunkCallback_;
             item.chunkCallbackContext = chunkCallbackContext_;
         } else if (item.mode == WorkMode::ChunksStaticStrided) {
+            ++staticRunners_;
             item.staticChunks = chunks_;
             item.staticChunkCount = chunkCount_;
             item.chunkCallback = chunkCallback_;
@@ -1196,6 +1199,8 @@ private:
                 firstJobException_ = std::current_exception();
                 if (item.mode != WorkMode::BatchesStaticStrided && item.mode != WorkMode::ChunksStaticStrided) {
                     CancelPendingWorkLocked();
+                } else if (staticWorkShared_) {
+                    nextStaticWork_.store(std::numeric_limits<std::size_t>::max() / 2U, std::memory_order_relaxed);
                 }
             }
         }
@@ -1203,10 +1208,20 @@ private:
 
         std::lock_guard lock{ mutex_ };
         RecordWorkerActiveTimeLocked(activeNanoseconds);
-        if ((item.mode == WorkMode::BatchesStaticStrided || item.mode == WorkMode::ChunksStaticStrided) && slot < staticStridedWorkerDone_.size()) {
+        const bool isStatic = item.mode == WorkMode::BatchesStaticStrided || item.mode == WorkMode::ChunksStaticStrided;
+        if (isStatic && slot < staticStridedWorkerDone_.size()) {
             staticStridedWorkerDone_[slot] = 1U;
         }
-        --remainingWork_;
+        if (isStatic) {
+            --staticRunners_;
+        }
+        if (isStatic && staticWorkShared_) {
+            // A runner leaves only after every piece is claimed, so the dispatch ends with the last runner inside it;
+            // workers that did not get to start have nothing left to do and are not waited for.
+            remainingWork_ = staticRunners_ == 0U ? 0U : 1U;
+        } else {
+            --remainingWork_;
+        }
         if (byDispatcher) {
             dispatcherRunning_ = false;
         }
@@ -1217,7 +1232,6 @@ private:
             finishEpoch_.fetch_add(1U, std::memory_order_release);
             batchFinished_.notify_all();
         } else if (HasAnyPendingWorkLocked()) {
-            NoteWorkPublished();
             batchAvailable_.notify_one();
         }
         if (byDispatcher && stopping_) {
@@ -1297,6 +1311,9 @@ private:
             return nextJob_ < jobCount_;
         }
         if (workMode_ == WorkMode::BatchesStaticStrided || workMode_ == WorkMode::ChunksStaticStrided) {
+            if (staticWorkShared_) {
+                return StaticWorkUnclaimedLocked();
+            }
             return workerIndex < activeWorkerLimit_
                 && workerIndex < staticStridedWorkerDone_.size()
                 && staticStridedWorkerDone_[workerIndex] == 0U;
@@ -1315,6 +1332,11 @@ private:
         return false;
     }
 
+    // Whether pieces of the shared-counter static dispatch are still to be claimed.
+    [[nodiscard]] bool StaticWorkUnclaimedLocked() const noexcept {
+        return nextStaticWork_.load(std::memory_order_relaxed) < (workMode_ == WorkMode::BatchesStaticStrided ? batchCount_ : chunkCount_);
+    }
+
     [[nodiscard]] bool HasAnyPendingWorkLocked() const {
         if (!batchActive_) {
             return false;
@@ -1323,6 +1345,9 @@ private:
             return nextJob_ < jobCount_;
         }
         if (workMode_ == WorkMode::BatchesStaticStrided || workMode_ == WorkMode::ChunksStaticStrided) {
+            if (staticWorkShared_) {
+                return StaticWorkUnclaimedLocked();
+            }
             for (std::size_t index = 0; index < activeWorkerLimit_ && index < staticStridedWorkerDone_.size(); ++index) {
                 if (staticStridedWorkerDone_[index] == 0U) {
                     return true;
@@ -1542,6 +1567,8 @@ private:
     // run on it (stride by the worker count).
     std::atomic<std::size_t> nextStaticWork_{ 0U };
     bool staticWorkShared_ = false;
+    // Threads inside the active static dispatch, counted under the lock from taking it to leaving it.
+    std::size_t staticRunners_ = 0;
 
     [[nodiscard]] std::size_t FirstStaticWork(std::size_t workerIndex) noexcept {
         return staticWorkShared_ ? nextStaticWork_.fetch_add(1U, std::memory_order_relaxed) : workerIndex;

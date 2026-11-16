@@ -18,15 +18,32 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
-#if defined(_WIN32) && defined(KB_ECS_GRAPH_MODULE_PATH)
+#if defined(_WIN32)
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
 #include <windows.h>
 #undef AddJob
+#else
+#include <sys/resource.h>
 #endif
 
 namespace {
+
+// CPU time this process has used so far.
+[[nodiscard]] std::chrono::milliseconds ProcessCpuTime() {
+#if defined(_WIN32)
+    FILETIME created, exited, kernel, user;
+    GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user);
+    const auto ticks = [](const FILETIME& time) { return (static_cast<std::uint64_t>(time.dwHighDateTime) << 32) | time.dwLowDateTime; };
+    return std::chrono::milliseconds{ static_cast<std::int64_t>((ticks(kernel) + ticks(user)) / 10'000U) };
+#else
+    rusage usage{};
+    getrusage(RUSAGE_SELF, &usage);
+    const auto millis = [](const timeval& time) { return static_cast<std::int64_t>(time.tv_sec) * 1000 + time.tv_usec / 1000; };
+    return std::chrono::milliseconds{ millis(usage.ru_utime) + millis(usage.ru_stime) };
+#endif
+}
 
 void RunWorkerPoolDefaultConstructionTest() {
     static_assert(std::is_nothrow_default_constructible_v<kb::ecs::WorkerPool>);
@@ -1164,6 +1181,38 @@ void RunWorkerPoolNestedDispatchRunsInPlaceTest() {
     }
 }
 
+// Back-to-back dispatches of any size visit every item exactly once: a worker that starts late must never touch the
+// next dispatch with the pieces of the last.
+void RunWorkerPoolRepeatedSharedDispatchesVisitOnceTest() {
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 6U } };
+    std::vector<std::atomic<std::uint8_t>> visits(512U);
+    for (std::size_t round = 0; round < 3000U; ++round) {
+        const std::size_t items = 1U + (round * 37U) % 480U;
+        const std::size_t chunk = 1U + round % 9U;
+        for (auto& visit : visits) visit.store(0U, std::memory_order_relaxed);
+        pool.ParallelForChunks(items, chunk, [&](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& piece) {
+            for (std::size_t index = piece.begin; index < piece.begin + piece.count; ++index) {
+                visits[index].fetch_add(1U, std::memory_order_relaxed);
+            }
+        });
+        for (std::size_t index = 0; index < visits.size(); ++index) {
+            kb::tests::Require(visits[index].load(std::memory_order_relaxed) == (index < items ? 1U : 0U),
+                "ECS worker pool did not visit every item of a repeated dispatch exactly once");
+        }
+    }
+}
+
+// The workers watch for the next dispatch only for a moment: an idle pool uses no CPU.
+void RunWorkerPoolSleepsWhenIdleTest() {
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 8U } };
+    for (int pass = 0; pass < 50; ++pass) {
+        pool.ParallelForChunks(256U, 8U, [](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk&) {});
+    }
+    const std::chrono::milliseconds before = ProcessCpuTime();
+    std::this_thread::sleep_for(std::chrono::milliseconds{ 300 });
+    kb::tests::Require(ProcessCpuTime() - before < std::chrono::milliseconds{ 150 }, "ECS worker pool kept spinning without work");
+}
+
 #if defined(_WIN32) && defined(KB_ECS_GRAPH_MODULE_PATH)
 void RunWorkerGraphDynamicModuleTest() {
     HMODULE module = LoadLibraryA(KB_ECS_GRAPH_MODULE_PATH);
@@ -1232,6 +1281,8 @@ void RunEcsWorkerPoolTests() {
     RunWorkerPoolReusesBatchQueuesAcrossDispatchesTest();
     RunWorkerPoolDispatcherRunsPendingPiecesTest();
     RunWorkerPoolNestedDispatchRunsInPlaceTest();
+    RunWorkerPoolRepeatedSharedDispatchesVisitOnceTest();
+    RunWorkerPoolSleepsWhenIdleTest();
 }
 
 } // namespace kb::tests
