@@ -2,6 +2,7 @@
 #include "app/EditorKeyState.hpp"
 #include "app/EditorMouseWheelRouter.hpp"
 #include "profiler/ProfilerPanel.hpp"
+#include "rendering/PackagesPanel.hpp"
 #include "rendering/VersionControlPanel.hpp"
 
 #if defined(_WIN32)
@@ -285,6 +286,12 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
     if (const std::optional<RECT> versionControlContent = EditorPanelContentResolver::Resolve(DockPanelKind::VersionControl, messageWindow_, mainWindow_, dockModel_, floatingWindows_, metrics_);
         versionControlContent.has_value() && VersionControlPanel::Wheel(*versionControlContent, x, y, wheelDelta)) {
         EditorWindowInvalidator::InvalidatePanel(messageWindow_, *versionControlContent);
+        return true;
+    }
+
+    if (const std::optional<RECT> packagesContent = EditorPanelContentResolver::Resolve(DockPanelKind::Packages, messageWindow_, mainWindow_, dockModel_, floatingWindows_, metrics_);
+        packagesContent.has_value() && PackagesPanel::Wheel(*packagesContent, x, y, wheelDelta)) {
+        EditorWindowInvalidator::InvalidatePanel(messageWindow_, *packagesContent);
         return true;
     }
 

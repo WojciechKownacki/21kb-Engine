@@ -8,7 +8,9 @@
 #include "app/EditorEditCommandPolicy.hpp"
 #include "rendering/EditorMenuTable.hpp"
 #include "profiler/ProfilerPanel.hpp"
+#include "project/EditorPackages.hpp"
 #include "project/EditorVersionControl.hpp"
+#include "rendering/PackagesPanel.hpp"
 #include "rendering/VersionControlPanel.hpp"
 #include "app/EditorSceneFileCommands.hpp"
 #include "app/EditorProjectCommands.hpp"
@@ -592,6 +594,9 @@ bool SavePlayPreference(EditorSceneContext& sceneContext, Change change) {
     case EditorMenuAction::OpenVersionControl:
         EditorVersionControl::Instance().RequestRefresh();
         return activate(DockPanelKind::VersionControl, VersionControlPanel::kOpenArea);
+    case EditorMenuAction::OpenPackages:
+        EditorPackages::Instance().Refresh();
+        return activate(DockPanelKind::Packages, PackagesPanel::kOpenArea);
     case EditorMenuAction::OpenAudioMixer:
         return activate(DockPanelKind::AudioMixer, DockArea::Center);
     case EditorMenuAction::OpenAgent:

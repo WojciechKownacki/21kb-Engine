@@ -611,13 +611,14 @@ R"(  run          Run a scene headless and report logs, events, and errors (the
                        [--remove <public key>] [--allow-unsigned|--deny-unsigned]
                  info [--game <Game pack>] <mod folder>
   package      Packages of a project: folders of assets and scripts taken from a registry
-               folder and installed under Assets/Packages (docs/packages.md).
+               (a folder or an https address) and installed under Assets/Packages (docs/packages.md).
                  list|verify --project <dir>
-                 search --project <dir> [--registry <dir>] [<text>]
-                 info --project <dir> [--registry <dir>] <name>[@<range>]
-                 add --project <dir> [--registry <dir>] <name>[@<range>]
-                 update --project <dir> [--registry <dir>] [<name>]
+                 search --project <dir> [--registry <folder|url>] [--cache <dir>] [<text>]
+                 info --project <dir> [--registry <folder|url>] [--cache <dir>] <name>[@<range>]
+                 add --project <dir> [--registry <folder|url>] [--cache <dir>] <name>[@<range>]
+                 update --project <dir> [--registry <folder|url>] [--cache <dir>] [<name>]
                  remove --project <dir> <name>
+                 publish --registry <dir> <package folder>
   release      Sign the manifest of a finished release directory, or verify one
                against the trust anchor of the player it ships.
                  sign --key <key file> --dir <dir> --product <id>

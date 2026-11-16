@@ -288,8 +288,9 @@ ChangeWatch::ChangeWatch(std::string_view command, const ArgumentList& arguments
         if (path.is_relative() && !project_.empty()) roots_.push_back((project_ / path).lexically_normal());
         roots_.push_back(absolute(path));
     };
-    for (const char* option : { "--out", "--output", "--index", "--mods", "--dir", "--cache", "--baseline" }) {
-        if (const auto value = arguments.Option(option); value.has_value()) watch(*value);
+    for (const char* option : { "--out", "--output", "--index", "--mods", "--dir", "--cache", "--baseline", "--registry" }) {
+        // A registry may be an address, which is not a path.
+        if (const auto value = arguments.Option(option); value.has_value() && value->find("://") == std::string::npos) watch(*value);
     }
     if (command_ == "new") {
         const auto parent = arguments.Option("--parent");

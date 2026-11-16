@@ -32,6 +32,7 @@ std::string DefaultDockWorkspace::PanelTitle(DockPanelKind kind) {
     case DockPanelKind::Agent: return std::string{ EditorText("panel.agent", "Agent") };
     case DockPanelKind::StaticMeshEditor: return std::string{ EditorText("panel.staticMeshEditor", "Static Mesh Editor") };
     case DockPanelKind::VersionControl: return std::string{ EditorText("panel.versionControl", "Version Control") };
+    case DockPanelKind::Packages: return std::string{ EditorText("panel.packages", "Packages") };
     case DockPanelKind::Generic: break;
     }
     return {};
@@ -40,6 +41,7 @@ std::string DefaultDockWorkspace::PanelTitle(DockPanelKind kind) {
 // Each panel starts with its own title; Editor Settings gives them the new one when the language changes.
 std::vector<DockPanel> DefaultDockWorkspace::CreatePanels() const {
     return {
+        DockPanel{ .id = 27, .kind = DockPanelKind::Packages, .title = PanelTitle(DockPanelKind::Packages), .area = DockArea::Bottom, .visible = false, .floatingRect = DockRect{ 152, 144, 900, 640 } },
         DockPanel{ .id = 26, .kind = DockPanelKind::VersionControl, .title = PanelTitle(DockPanelKind::VersionControl), .area = DockArea::Bottom, .visible = false, .floatingRect = DockRect{ 152, 144, 900, 640 } },
         // Closed until Play opens it, then docked as a tab beside the Scene View.
         DockPanel{ .id = 25, .kind = DockPanelKind::Game, .title = PanelTitle(DockPanelKind::Game), .area = DockArea::Center, .visible = false, .detachable = false, .floatingRect = DockRect{ 128, 128, 720, 520 } },

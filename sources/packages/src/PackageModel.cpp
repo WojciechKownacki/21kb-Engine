@@ -1,4 +1,6 @@
-#include "CliPackages.hpp"
+#include "PackagesInternal.hpp"
+
+#include "kb/packages/Packages.hpp"
 
 #include "engine/assets/AssetFileName.hpp"
 #include "engine/core/JsonValue.hpp"
@@ -12,18 +14,9 @@
 #include <sstream>
 #include <system_error>
 
-namespace kb::cli::packages {
-namespace {
+namespace kb::packages {
+namespace detail {
 
-namespace fs = std::filesystem;
-using kb::core::JsonValue;
-using kb::mods::ModVersion;
-
-constexpr std::uintmax_t kMaxManifestBytes = 256U * 1024U;
-constexpr std::uintmax_t kMaxLockBytes = 64U * 1024U * 1024U;
-// Rounds the resolver may take to settle; a project's packages settle within a few.
-constexpr std::size_t kMaxRounds = 100U;
-constexpr std::string_view kPackagesFolder = "Assets/Packages";
 
 [[nodiscard]] std::string Utf8Text(const fs::path& path) {
     const std::u8string text = path.generic_u8string();
@@ -124,14 +117,9 @@ void Pretty(const JsonValue& value, std::size_t depth, std::string& out) {
     return object;
 }
 
-[[nodiscard]] bool ParseManifest(std::string_view text, Manifest& out, std::string& error) {
-    JsonValue json;
-    if (!JsonValue::Parse(text, json, error)) {
-        error = "package.json is not valid JSON: " + error;
-        return false;
-    }
+[[nodiscard]] bool ManifestFromJson(const JsonValue& json, Manifest& out, std::string& error) {
     if (json.GetKind() != JsonValue::Kind::Object) {
-        error = "package.json must be a JSON object";
+        error = "it must be a JSON object";
         return false;
     }
     Manifest manifest;
@@ -157,6 +145,19 @@ void Pretty(const JsonValue& value, std::size_t depth, std::string& out) {
         return false;
     }
     out = std::move(manifest);
+    return true;
+}
+
+[[nodiscard]] bool ParseManifest(std::string_view text, Manifest& out, std::string& error) {
+    JsonValue json;
+    if (!JsonValue::Parse(text, json, error)) {
+        error = "package.json is not valid JSON: " + error;
+        return false;
+    }
+    if (!ManifestFromJson(json, out, error)) {
+        error = "package.json: " + error;
+        return false;
+    }
     return true;
 }
 
@@ -237,81 +238,13 @@ void Pretty(const JsonValue& value, std::size_t depth, std::string& out) {
     return kb::security::ToHex(hasher.Finish());
 }
 
-struct Need {
-    // Who asks: "the project" or "<package> <version>".
-    std::string by;
-    Dependency dependency;
-};
-
-[[nodiscard]] std::string JoinVersions(const std::vector<ModVersion>& versions) {
-    std::string text;
-    for (const ModVersion& version : versions) {
-        text += (text.empty() ? "" : ", ") + kb::mods::ToString(version);
-    }
-    return text;
+std::string Sha512Hex(std::string_view bytes) {
+    return kb::security::ToHex(kb::security::Sha512({ reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size() }));
 }
 
-[[nodiscard]] bool Pick(
-    const Registry& registry,
-    const std::string& name,
-    const std::vector<Need>& needs,
-    const std::map<std::string, ModVersion>& preferred,
-    ModVersion& picked,
-    std::string& error) {
-    const std::vector<ModVersion> versions = registry.Versions(name);
-    if (versions.empty()) {
-        error = "The package '" + name + "' is not in the registry (" + Utf8Text(registry.Root()) + "), but " + needs.front().by +
-            " needs it. kb_cli package search lists what the registry has.";
-        return false;
-    }
-    const auto fits = [&needs](const ModVersion& version) {
-        return std::ranges::all_of(needs, [&version](const Need& need) { return kb::mods::Satisfies(need.dependency.range, version); });
-    };
-    if (const auto locked = preferred.find(name); locked != preferred.end() && std::ranges::find(versions, locked->second) != versions.end() && fits(locked->second)) {
-        picked = locked->second;
-        return true;
-    }
-    for (auto version = versions.rbegin(); version != versions.rend(); ++version) {
-        if (fits(*version)) {
-            picked = *version;
-            return true;
-        }
-    }
-    std::string asked;
-    for (const Need& need : needs) {
-        asked += (asked.empty() ? "" : "; ") + need.by + " needs " + name + ' ' + need.dependency.text;
-    }
-    error = "Cannot install '" + name + "': no version fits all that is asked of it (" + asked + "). Available versions: " + JoinVersions(versions) + ".";
-    return false;
-}
+} // namespace detail
 
-// Appends to `cycle` the packages from the first visit of the one that closes a circle.
-[[nodiscard]] bool VisitCycle(
-    const std::string& name,
-    const std::map<std::string, Manifest>& manifests,
-    std::map<std::string, int>& state,
-    std::vector<std::string>& path,
-    std::string& cycle) {
-    state[name] = 1;
-    path.push_back(name);
-    for (const auto& [next, dependency] : manifests.at(name).dependencies) {
-        if (state[next] == 1) {
-            for (auto step = std::ranges::find(path, next); step != path.end(); ++step) {
-                cycle += Show(*step, manifests.at(*step).version) + " -> ";
-            }
-            cycle += Show(next, manifests.at(next).version);
-            return true;
-        }
-        if (state[next] == 0 && VisitCycle(next, manifests, state, path, cycle)) {
-            return true;
-        }
-    }
-    path.pop_back();
-    state[name] = 2;
-    return false;
-}
-
-} // namespace
+using namespace detail;
 
 bool ParseRange(std::string_view text, Dependency& out) {
     std::string spaced{ text };
@@ -334,55 +267,6 @@ bool ParseRange(std::string_view text, Dependency& out) {
     }
     out.text = std::move(shown);
     return kb::mods::ParseModVersionRange(padded, out.range);
-}
-
-std::vector<std::string> Registry::Names() const {
-    std::vector<std::string> names;
-    std::error_code ec;
-    for (fs::directory_iterator entry{ root_, ec }; !ec && entry != fs::directory_iterator{}; entry.increment(ec)) {
-        std::error_code entryError;
-        const std::string name = Utf8Text(entry->path().filename());
-        if (entry->is_directory(entryError) && kb::mods::IsValidModId(name) && !Versions(name).empty()) {
-            names.push_back(name);
-        }
-    }
-    std::ranges::sort(names);
-    return names;
-}
-
-std::vector<ModVersion> Registry::Versions(const std::string& name) const {
-    std::vector<ModVersion> versions;
-    std::error_code ec;
-    for (fs::directory_iterator entry{ root_ / name, ec }; !ec && entry != fs::directory_iterator{}; entry.increment(ec)) {
-        std::error_code entryError;
-        const std::string folder = Utf8Text(entry->path().filename());
-        ModVersion version;
-        if (entry->is_directory(entryError) && kb::mods::ParseModVersion(folder, version) && kb::mods::ToString(version) == folder) {
-            versions.push_back(version);
-        }
-    }
-    std::ranges::sort(versions);
-    return versions;
-}
-
-fs::path Registry::Folder(const std::string& name, const ModVersion& version) const {
-    return root_ / name / kb::mods::ToString(version);
-}
-
-bool Registry::Read(const std::string& name, const ModVersion& version, Manifest& out, std::string& error) const {
-    std::string text;
-    std::string problem;
-    Manifest manifest;
-    if (!ReadText(Folder(name, version) / std::string{ kManifestFile }, kMaxManifestBytes, text, problem) || !ParseManifest(text, manifest, problem)) {
-        error = "The registry's " + Show(name, version) + " cannot be used: " + problem;
-        return false;
-    }
-    if (manifest.name != name || manifest.version != version) {
-        error = "The registry's " + Show(name, version) + " cannot be used: its package.json says " + Show(manifest.name, manifest.version);
-        return false;
-    }
-    out = std::move(manifest);
-    return true;
 }
 
 bool ReadProjectPackages(const fs::path& projectRoot, ProjectPackages& out, std::string& error) {
@@ -482,69 +366,6 @@ bool WriteLock(const fs::path& projectRoot, const Lock& value, std::string& erro
     return WriteText(projectRoot / std::string{ kLockFile }, Document(json), error);
 }
 
-bool Resolve(
-    const Registry& registry,
-    const Dependencies& requested,
-    const std::map<std::string, ModVersion>& preferred,
-    std::map<std::string, ModVersion>& resolved,
-    std::string& error) {
-    std::map<std::string, ModVersion> chosen;
-    std::map<std::string, Manifest> manifests;
-    for (std::size_t round = 0U; round < kMaxRounds; ++round) {
-        // What is asked of each package by the project and by the packages chosen so far.
-        std::map<std::string, std::vector<Need>> needs;
-        std::vector<std::string> queue;
-        const auto ask = [&](const std::string& name, Need need) {
-            const auto [slot, added] = needs.try_emplace(name);
-            if (added) {
-                queue.push_back(name);
-            }
-            slot->second.push_back(std::move(need));
-        };
-        for (const auto& [name, dependency] : requested) {
-            ask(name, Need{ "the project", dependency });
-        }
-        for (std::size_t next = 0U; next < queue.size(); ++next) {
-            const auto picked = chosen.find(queue[next]);
-            if (picked == chosen.end()) {
-                continue;
-            }
-            Manifest& manifest = manifests[queue[next]];
-            if (!registry.Read(queue[next], picked->second, manifest, error)) {
-                return false;
-            }
-            for (const auto& [name, dependency] : manifest.dependencies) {
-                ask(name, Need{ Show(queue[next], picked->second), dependency });
-            }
-        }
-        std::map<std::string, ModVersion> settled;
-        for (const auto& [name, list] : needs) {
-            ModVersion version;
-            if (!Pick(registry, name, list, preferred, version, error)) {
-                return false;
-            }
-            settled.emplace(name, version);
-        }
-        if (settled != chosen) {
-            chosen = std::move(settled);
-            continue;
-        }
-        std::map<std::string, int> state;
-        for (const auto& [name, dependency] : requested) {
-            std::vector<std::string> path;
-            std::string cycle;
-            if (state[name] == 0 && VisitCycle(name, manifests, state, path, cycle)) {
-                error = "These packages need each other in a circle: " + cycle + ". Remove one of those dependencies.";
-                return false;
-            }
-        }
-        resolved = std::move(chosen);
-        return true;
-    }
-    error = "The requirements of the packages keep changing the versions chosen; loosen a version range in " + std::string{ kProjectFile } + " or in a package.";
-    return false;
-}
-
 fs::path InstallFolder(const fs::path& projectRoot, const std::string& name) {
     return projectRoot / kPackagesFolder / name;
 }
@@ -598,70 +419,6 @@ bool Prune(const fs::path& projectRoot, const std::map<std::string, ModVersion>&
     return true;
 }
 
-bool Install(const fs::path& projectRoot, const Registry& registry, const std::map<std::string, ModVersion>& resolved, Lock& lock, std::string& error) {
-    struct Copy {
-        std::string name;
-        ModVersion version;
-        Manifest manifest;
-        std::map<std::string, std::uintmax_t> sizes;
-        std::map<std::string, std::string> hashes;
-    };
-    std::vector<Copy> copies;
-    for (const auto& [name, version] : resolved) {
-        const auto locked = lock.find(name);
-        std::error_code ec;
-        if (locked != lock.end() && locked->second.version == version && fs::is_directory(InstallFolder(projectRoot, name), ec)) {
-            continue;
-        }
-        Copy copy{ .name = name, .version = version };
-        const fs::path source = registry.Folder(name, version);
-        if (!registry.Read(name, version, copy.manifest, error) || !ListFiles(source, copy.sizes, error) || !HashFiles(source, copy.sizes, copy.hashes, error)) {
-            return false;
-        }
-        if (locked != lock.end() && locked->second.version == version && locked->second.checksum != Checksum(copy.hashes)) {
-            error = "The registry's copy of " + Show(name, version) + " is not the one installed before (the sums differ); " +
-                "the registry may have been changed after that version was published.";
-            return false;
-        }
-        copies.push_back(std::move(copy));
-    }
-    if (!Prune(projectRoot, resolved, lock, error)) {
-        return false;
-    }
-    for (Copy& copy : copies) {
-        const fs::path source = registry.Folder(copy.name, copy.version);
-        const fs::path folder = InstallFolder(projectRoot, copy.name);
-        std::error_code ec;
-        fs::remove_all(folder, ec);
-        for (const auto& entry : copy.sizes) {
-            const fs::path target = folder / kb::assets::Utf8Path(entry.first);
-            fs::create_directories(target.parent_path(), ec);
-            if (!ec) {
-                fs::copy_file(source / kb::assets::Utf8Path(entry.first), target, fs::copy_options::overwrite_existing, ec);
-            }
-            if (ec) {
-                error = "cannot copy " + entry.first + " of " + Show(copy.name, copy.version) + ": " + ec.message() + ". Run kb_cli package verify.";
-                return false;
-            }
-        }
-        std::map<std::string, std::uintmax_t> sizes;
-        std::map<std::string, std::string> hashes;
-        if (!ListFiles(folder, sizes, error) || !HashFiles(folder, sizes, hashes, error)) {
-            return false;
-        }
-        if (hashes != copy.hashes) {
-            error = "The copy of " + Show(copy.name, copy.version) + " does not match the registry's files. Run kb_cli package verify.";
-            return false;
-        }
-        LockedPackage locked{ .version = copy.version, .checksum = Checksum(hashes), .files = std::move(hashes) };
-        for (const auto& [name, dependency] : copy.manifest.dependencies) {
-            locked.dependencies.emplace(name, dependency.text);
-        }
-        lock[copy.name] = std::move(locked);
-    }
-    return true;
-}
-
 bool Verify(const fs::path& projectRoot, const Lock& lock, const Dependencies& requested, std::vector<Problem>& problems, std::string& error) {
     for (const auto& [name, dependency] : requested) {
         if (!lock.contains(name)) {
@@ -704,4 +461,4 @@ bool Verify(const fs::path& projectRoot, const Lock& lock, const Dependencies& r
     return true;
 }
 
-} // namespace kb::cli::packages
+} // namespace kb::packages

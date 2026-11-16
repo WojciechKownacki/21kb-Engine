@@ -496,6 +496,8 @@ add_executable(kb_editor WIN32
     src/private/project/EditorVersionControl.hpp
     src/private/scene/EditorSceneComparison.hpp
     src/private/rendering/VersionControlPanel.hpp
+    src/private/project/EditorPackages.hpp
+    src/private/rendering/PackagesPanel.hpp
     src/private/app/EditorProjectCommands.hpp
     src/private/app/EditorPlayCommands.hpp
     src/private/app/EditorPlayPreferences.hpp
@@ -789,6 +791,8 @@ add_executable(kb_editor WIN32
     src/project/EditorVersionControl.cpp
     src/scene/EditorSceneComparison.cpp
     src/rendering/VersionControlPanel.cpp
+    src/project/EditorPackages.cpp
+    src/rendering/PackagesPanel.cpp
     src/app/EditorProjectCommands.cpp
     src/app/EditorPlayCommands.cpp
     src/platform/win32/EditorMap2DForm.cpp
@@ -1250,6 +1254,7 @@ include("${CMAKE_SOURCE_DIR}/CMake/EnableEditorPython.cmake")
 target_link_libraries(kb_editor
     PRIVATE
         kb_engine
+        kb_packages
         kb_renderer
         kb_terrain_editor_core
         kb_world2d_core
@@ -1484,6 +1489,8 @@ if(BUILD_TESTING)
         tests/EditorMaterialGraphCanvasTests.cpp
         tests/EditorTerrainFoliageTests.cpp
         tests/EditorVersionControlTests.cpp
+        tests/EditorPackagesTests.cpp
+        src/project/EditorPackages.cpp
         src/project/EditorProjectRepository.cpp
         src/rendering/script_editor/ScriptEditorTextEncoding.cpp
         src/scene/EditorSceneComparison.cpp
@@ -1736,6 +1743,7 @@ if(BUILD_TESTING)
     target_link_libraries(kb_editor_tests
         PRIVATE
             kb_engine
+            kb_packages
             kb_renderer
             kb_21kb_particle_editor_core
             kb_terrain_editor_core

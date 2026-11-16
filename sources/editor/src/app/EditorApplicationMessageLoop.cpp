@@ -26,6 +26,7 @@
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #include "scene/material_preview/EditorMaterialPreviewMeshFactory.hpp"
 #include "project/EditorProjectPaths.hpp"
+#include "project/EditorPackages.hpp"
 #include "project/EditorVersionControl.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "app/EditorPlayCommands.hpp"
@@ -717,6 +718,13 @@ void PumpVersionControl(EditorApplicationState& state) {
     if (control.Pump(EditorProjectPaths::ProjectRoot(), std::chrono::steady_clock::now())) {
         InvalidatePanelKind(state, DockPanelKind::VersionControl);
         InvalidatePanelKind(state, DockPanelKind::Assets);
+    }
+}
+
+// The Packages panel takes the result of an operation that ran in the background.
+void PumpPackages(EditorApplicationState& state) {
+    if (EditorPackages::Instance().Pump(EditorProjectPaths::ProjectRoot())) {
+        InvalidatePanelKind(state, DockPanelKind::Packages);
     }
 }
 
@@ -1513,6 +1521,7 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
 [[nodiscard]] bool TickEditorFrame(EditorApplicationState& state, float deltaSeconds) {
     state.sceneContext.TickEditModeScripts();
     PumpVersionControl(state);
+    PumpPackages(state);
     const bool asyncAssetsPending = state.sceneContext.HasPendingSkeletalMeshEditorOpen() ||
         EditorMeshPreviewCache().HasPendingPreviewWork();
     if (asyncAssetsPending) {

@@ -2,7 +2,8 @@
 
 `kb_http` (`sources/http`, header `kb/http/HttpClient.hpp`) is a small HTTP and HTTPS client for web APIs,
 leaderboards and account services. It does not depend on the engine and nothing in the engine links it; a
-game that wants it links `kb_http`.
+game that wants it links `kb_http`. The package library (`kb_packages`, used by `kb_cli package` and the editor) links it to
+download package registries; see [Packages](packages.md).
 
 ```cpp
 kb::http::Client client;                       // two worker threads, a bounded queue

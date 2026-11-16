@@ -43,6 +43,8 @@ enum class DockPanelKind : std::uint8_t {
     Game,
     // The files of the project that differ from the last saved version, and what changed in the open scene.
     VersionControl,
+    // The packages of the registry and of the project: add, update, remove, verify.
+    Packages,
 };
 
 enum class DockSplitAxis : std::uint8_t {

@@ -5534,7 +5534,9 @@ void RunChangeReportTests() {
     std::filesystem::create_directories(outsidePath, error);
     const std::string outside = outsidePath.generic_string();
     WriteTextFile(outsidePath / "Wedge.obj", "v 0 0 0\nv 2 0 0\nv 0 3 0\nv 0 0 4\nf 1 2 3\nf 1 2 4\n");
-    WriteTextFile(outsidePath / "Registry" / "demo" / "1.0.0" / "package.json", R"({"name":"demo","version":"1.0.0"})");
+    WriteTextFile(outsidePath / "DemoSource" / "package.json", R"({"name":"demo","version":"1.0.0"})");
+    Require(RunCliProgram({ "package", "publish", "--registry", (outsidePath / "Registry").generic_string(), (outsidePath / "DemoSource").generic_string() }).exitCode == 0,
+        "the demo package could not be published");
     std::filesystem::copy_file(rootPath / "Probe.kbpack", outsidePath / "Probe.kbpack", error);
 
     for (const ChangeProbe& probe : ChangeProbeTable(root, outside)) {

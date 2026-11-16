@@ -27,7 +27,6 @@ add_library(kb_cli_core STATIC
     src/CliNavMeshCommands.cpp
     src/CliModCommands.cpp
     src/CliPackageCommands.cpp
-    src/CliPackages.cpp
     src/CliPackSetCommands.cpp
     src/CliInputCommands.cpp
     src/CliPlayerPreset.cpp
@@ -43,14 +42,13 @@ add_library(kb_cli_core STATIC
     src/private/CliCommon.hpp
     src/private/CliLuaSourceIndex.hpp
     src/private/CliProtocolStream.hpp
-    src/private/CliPackages.hpp
     src/private/CliPlayerPreset.hpp
     src/private/CliProgram.hpp
 )
 
 target_include_directories(kb_cli_core PUBLIC src/private)
 
-target_link_libraries(kb_cli_core PUBLIC kb_engine)
+target_link_libraries(kb_cli_core PUBLIC kb_engine kb_packages)
 # Workspace files use the editor's existing portable layout and settings code.
 target_include_directories(kb_cli_core PRIVATE ../editor/src/private ../editor/include)
 # build stages the engine module libraries a project enables, named by the contract the cooker validates against.

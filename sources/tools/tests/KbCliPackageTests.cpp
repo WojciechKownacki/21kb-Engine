@@ -6,7 +6,11 @@
 #include "engine/core/JsonValue.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/security/Crypto.hpp"
 
+#include "kb/packages/PackageArchive.hpp"
+
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -17,6 +21,16 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <winsock2.h>
+#include <ws2tcpip.h>
+
+#include <mutex>
+#include <thread>
+#endif
 
 // kb_cli package against a registry folder: resolution, conflicts, cycles, update, remove, verify, project assets.
 namespace {
@@ -66,7 +80,7 @@ void WriteText(const fs::path& path, const std::string& text) {
     return json;
 }
 
-// A package in the registry: <registry>/<name>/<version>/package.json and its files.
+// A package published into the registry folder with kb_cli package publish; its sources are written beside the registry.
 void Publish(
     const fs::path& registry,
     const std::string& name,
@@ -81,9 +95,11 @@ void Publish(
         manifest += (index == 0U ? "" : ",") + std::string{ "\"" } + dependencies[index].first + "\":\"" + dependencies[index].second + "\"";
     }
     manifest += "}}";
-    const fs::path folder = registry / name / version;
+    const fs::path folder = registry.parent_path() / "Sources" / name / version;
     WriteText(folder / "package.json", manifest);
     for (const auto& [path, text] : files) WriteText(folder / path, text);
+    const Run published = RunLine({ "package", "publish", "--registry", registry.string(), folder.string() });
+    Require(published.exitCode == 0, "publishing " + name + " " + version + " failed: " + published.out + published.err);
 }
 
 // Every file of the project by path and content.
@@ -109,6 +125,174 @@ void Publish(
     Require(entry != nullptr, "the lock has no entry for " + name);
     return *entry;
 }
+
+
+#ifdef _WIN32
+// Serves the files of a folder over http on the local machine and counts the requests by path.
+class FileServer {
+public:
+    explicit FileServer(fs::path root) : root_{ std::move(root) } {
+        WSADATA data{};
+        Require(WSAStartup(MAKEWORD(2, 2), &data) == 0, "winsock could not start");
+        listener_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        sockaddr_in address{};
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        address.sin_port = 0;
+        int length = static_cast<int>(sizeof(address));
+        Require(listener_ != INVALID_SOCKET && bind(listener_, reinterpret_cast<sockaddr*>(&address), length) == 0 && listen(listener_, 8) == 0 &&
+                getsockname(listener_, reinterpret_cast<sockaddr*>(&address), &length) == 0,
+            "the test server could not listen");
+        port_ = ntohs(address.sin_port);
+        thread_ = std::thread{ [this] { Serve(); } };
+    }
+    FileServer(const FileServer&) = delete;
+    FileServer& operator=(const FileServer&) = delete;
+    ~FileServer() {
+        closesocket(listener_);
+        thread_.join();
+        WSACleanup();
+    }
+
+    [[nodiscard]] std::string Url(const std::string& path) const { return "http://127.0.0.1:" + std::to_string(port_) + "/" + path; }
+    // Requests whose path ends with `suffix`.
+    [[nodiscard]] int Hits(const std::string& suffix) {
+        const std::lock_guard lock{ mutex_ };
+        int count = 0;
+        for (const auto& [path, hits] : hits_) {
+            if (path.ends_with(suffix)) count += hits;
+        }
+        return count;
+    }
+
+private:
+    void Serve() {
+        for (;;) {
+            const SOCKET client = accept(listener_, nullptr, nullptr);
+            if (client == INVALID_SOCKET) return;
+            std::string request;
+            std::array<char, 4096> buffer{};
+            while (request.find("\r\n\r\n") == std::string::npos) {
+                const int got = recv(client, buffer.data(), static_cast<int>(buffer.size()), 0);
+                if (got <= 0) break;
+                request.append(buffer.data(), static_cast<std::size_t>(got));
+            }
+            const std::size_t end = request.find(' ', 4U);
+            const std::string path = request.rfind("GET ", 0U) == 0U && end != std::string::npos ? request.substr(4U, end - 4U) : std::string{};
+            {
+                const std::lock_guard lock{ mutex_ };
+                ++hits_[path];
+            }
+            std::string body;
+            const bool found = path.size() > 1U && path.find("..") == std::string::npos && fs::is_regular_file(root_ / path.substr(1U));
+            if (found) body = ReadText(root_ / path.substr(1U));
+            const std::string answer = std::string{ found ? "HTTP/1.1 200 OK" : "HTTP/1.1 404 Not Found" } + "\r\nContent-Length: " + std::to_string(body.size()) +
+                "\r\nConnection: close\r\n\r\n" + body;
+            for (std::size_t sent = 0U; sent < answer.size();) {
+                const int wrote = send(client, answer.data() + sent, static_cast<int>(answer.size() - sent), 0);
+                if (wrote <= 0) break;
+                sent += static_cast<std::size_t>(wrote);
+            }
+            shutdown(client, SD_SEND);
+            closesocket(client);
+        }
+    }
+
+    fs::path root_;
+    SOCKET listener_ = INVALID_SOCKET;
+    unsigned short port_ = 0U;
+    std::thread thread_;
+    std::mutex mutex_;
+    std::map<std::string, int> hits_;
+};
+
+// Packages from a registry served over http: the archive sum is checked, downloads are cached, unsafe archives are refused.
+void RunRemoteRegistryTests(const fs::path& base) {
+    const fs::path served = base / "Served";
+    Publish(served, "net.dep", "2.0.0", {}, { { "Data/dep.txt", "dep\n" } });
+    Publish(served, "net.pkg", "1.0.0", { { "net.dep", "^2" } }, { { "Scripts/Run.lua", "-- run\n" }, { "readme.txt", "r" } }, "Over the wire");
+    Publish(served, "net.bad", "1.0.0", {}, { { "x.txt", "x" } });
+    FileServer server{ served };
+    const std::string url = server.Url("index.json");
+    const fs::path cache = base / "Cache";
+    for (const char* name : { "R1", "R2" }) Require(RunLine({ "new", "--parent", base.string(), "--name", name, "--template", "Empty" }).exitCode == 0, "creating a project failed");
+    const fs::path first = base / "R1";
+    const fs::path second = base / "R2";
+    const auto remote = [&](const fs::path& root, std::vector<std::string> words) {
+        words.insert(words.begin(), "package");
+        words.insert(words.end(), { "--project", root.string(), "--cache", cache.string() });
+        return RunLine(words);
+    };
+
+    const Run added = remote(first, { "add", "--registry", url, "net.pkg" });
+    Require(added.exitCode == 0, "add through http failed: " + added.out + added.err);
+    Require(fs::exists(first / "Assets" / "Packages" / "net.pkg" / "Scripts" / "Run.lua") && fs::exists(first / "Assets" / "Packages" / "net.dep" / "Data" / "dep.txt") &&
+            remote(first, { "verify" }).exitCode == 0 && Parse(ReadText(first / "packages.json")).Find("registry")->AsString() == url,
+        "packages from an http registry must be installed, verified and the address kept");
+    Require(server.Hits(".kbpackage") == 2, "each archive must be downloaded once");
+
+    // The cache serves the next project: the index is read again, the archives are not downloaded.
+    const int indexReads = server.Hits("index.json");
+    Require(remote(second, { "add", "--registry", url, "net.pkg" }).exitCode == 0 && server.Hits(".kbpackage") == 2 && server.Hits("index.json") > indexReads,
+        "a second install must come from the cache, not from the network");
+    Require(remote(second, { "search" }).out.find("net.pkg") != std::string::npos, "the registry of packages.json serves later commands");
+
+    // A changed checksum: refused, the project is as it was.
+    std::string index = ReadText(served / "index.json");
+    const std::size_t sum = index.find("\"sha512\": \"", index.find("\"net.bad\"")) + 11U;
+    index[sum] = index[sum] == '0' ? '1' : '0';
+    WriteText(served / "index.json", index);
+    const auto before = Snapshot(second);
+    const Run tampered = remote(second, { "add", "net.bad" });
+    Require(tampered.exitCode != 0 && tampered.err.find("does not match the checksum") != std::string::npos && Snapshot(second) == before,
+        "an archive that does not match the listed sum must be refused: " + tampered.err);
+
+    // Archives that would write outside the package folder, or are not plain files, are refused before anything is written.
+    const std::string manifest = R"({"name":"NAME","version":"1.0.0"})";
+    const std::vector<std::pair<std::string, kb::packages::ArchiveEntry>> hostile{
+        { "net.up", { "../../../../../escaped.txt", "x" } },
+        { "net.abs", { "/escaped.txt", "x" } },
+        { "net.drive", { "C:/escaped.txt", "x" } },
+        { "net.link", { "link", "", '2' } },
+    };
+    JsonValue listed = *Parse(ReadText(served / "index.json")).Find("packages");
+    for (const auto& [name, entry] : hostile) {
+        std::string text = manifest;
+        text.replace(text.find("NAME"), 4U, name);
+        std::vector<std::uint8_t> archive;
+        std::string error;
+        Require(kb::packages::PackEntries({ { "package.json", text }, entry }, archive, error), "the hostile test archive could not be made: " + error);
+        const std::string relative = name + "/1.0.0/" + name + "-1.0.0.kbpackage";
+        std::error_code ec;
+        fs::create_directories((served / relative).parent_path(), ec);
+        std::ofstream output{ served / relative, std::ios::binary | std::ios::trunc };
+        output.write(reinterpret_cast<const char*>(archive.data()), static_cast<std::streamsize>(archive.size()));
+        output.close();
+        JsonValue row = JsonValue::MakeObject();
+        row.Set("name", JsonValue::MakeString(name));
+        row.Set("version", JsonValue::MakeString("1.0.0"));
+        row.Set("archive", JsonValue::MakeString(relative));
+        row.Set("sha512", JsonValue::MakeString(kb::security::ToHex(kb::security::Sha512(archive))));
+        row.Set("size", JsonValue::MakeNumber(static_cast<double>(archive.size())));
+        listed.Append(std::move(row));
+    }
+    JsonValue rewritten = JsonValue::MakeObject();
+    rewritten.Set("indexVersion", JsonValue::MakeNumber(1.0));
+    rewritten.Set("packages", std::move(listed));
+    WriteText(served / "index.json", rewritten.Dump());
+    for (const auto& [name, entry] : hostile) {
+        const auto unchanged = Snapshot(second);
+        const Run refused = remote(second, { "add", name });
+        Require(refused.exitCode != 0 && refused.err.find("archive is refused") != std::string::npos && Snapshot(second) == unchanged,
+            "an unsafe archive (" + name + ") must be refused: " + refused.err);
+    }
+    Require(!fs::exists(base / "escaped.txt") && !fs::exists(second / "escaped.txt"), "no file may be written outside the package folder");
+
+    // Plain http to another computer is refused before any request is made.
+    const Run insecure = remote(second, { "search", "--registry", "http://example.invalid/index.json" });
+    Require(insecure.exitCode != 0 && insecure.err.find("https://") != std::string::npos, "plain http to another host must be refused: " + insecure.err);
+}
+#endif
 
 } // namespace
 
@@ -190,7 +374,7 @@ void RunPackageCommandTests() {
     Require(found.Find("results")->Size() == 1U && found.Find("results")->At(0)->Find("latest")->AsString() == "2.0.0" && found.Find("results")->At(0)->Find("installed")->AsString() == "1.4.0",
         "search must find a package by its description: " + found.Dump());
     const JsonValue info = *Parse(package({ "info", "acme.a@^1", "--json" }).out).Find("data");
-    Require(info.Find("version")->AsString() == "1.4.0" && info.Find("versions")->Size() == 4U && info.Find("files")->AsNumber() == 3.0, "info must describe the newest version in range: " + info.Dump());
+    Require(info.Find("version")->AsString() == "1.4.0" && info.Find("versions")->Size() == 4U && info.Find("size")->AsNumber() > 0.0, "info must describe the newest version in range: " + info.Dump());
 
     // 2. A conflict names both requirements and leaves the project as it was.
     const auto before = Snapshot(root);
@@ -258,12 +442,17 @@ void RunPackageCommandTests() {
     // A package of very many files: the lock lists them one per line and verify still covers each.
     std::vector<std::pair<std::string, std::string>> many;
     for (int index = 0; index < 1500; ++index) many.push_back({ "Data/Part" + std::to_string(index % 10) + "/File" + std::to_string(index) + ".txt", std::to_string(index) });
+    // A path longer than a tar name field is split into its prefix and name.
+    many.push_back({ "Deep/" + std::string(40U, 'a') + "/" + std::string(40U, 'b') + "/" + std::string(40U, 'c') + ".txt", "deep" });
     Publish(registry, "acme.big", "1.0.0", {}, many);
-    Require(package({ "add", "acme.big" }).exitCode == 0 && Parse(ReadText(root / "packages.lock.json")).Find("packages")->Find("acme.big")->Find("files")->Size() == 1501U,
+    Require(package({ "add", "acme.big" }).exitCode == 0 && Parse(ReadText(root / "packages.lock.json")).Find("packages")->Find("acme.big")->Find("files")->Size() == 1502U,
         "a package of many files must be installed and listed in the lock");
     WriteText(root / "Assets" / "Packages" / "acme.big" / "Data" / "Part3" / "File1003.txt", "changed");
     const Run bigBroken = package({ "verify" });
     Require(bigBroken.exitCode != 0 && bigBroken.out.find("modified acme.big/Data/Part3/File1003.txt") != std::string::npos && bigBroken.out.find("1 problem") != std::string::npos,
         "verify must find the one changed file among many: " + bigBroken.out);
+#ifdef _WIN32
+    RunRemoteRegistryTests(base);
+#endif
     fs::remove_all(base, ec);
 }

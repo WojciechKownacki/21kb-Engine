@@ -74,11 +74,16 @@ int main(int argumentCount, char** arguments) {
         kb::editor::tests::RunEditorVersionControlTests();
         return 0;
     }
+    if (argumentCount == 2 && std::string_view{ arguments[1] } == "packages") {
+        kb::editor::tests::RunEditorPackagesTests();
+        return 0;
+    }
     if (argumentCount == 2 && std::string_view{ arguments[1] } == "terrain-foliage") {
         kb::editor::tests::RunEditorTerrainFoliageTests();
         return 0;
     }
     kb::editor::tests::RunEditorVersionControlTests();
+    kb::editor::tests::RunEditorPackagesTests();
     kb::editor::tests::RunEditorTimelineTests();
     kb::editor::tests::RunEditorBlendSpace2DTests();
     kb::editor::tests::RunEditorStaticMeshTests();

@@ -1,11 +1,11 @@
 #include "CliCommands.hpp"
-#include "CliPackages.hpp"
 #include "CliProgram.hpp"
 
 #include "engine/assets/AssetFileName.hpp"
 #include "engine/core/JsonValue.hpp"
-#include "engine/mods/ModManifest.hpp"
 #include "engine/project/ProjectManager.hpp"
+
+#include "kb/packages/Packages.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -20,7 +20,7 @@ namespace kb::cli {
 namespace {
 
 namespace fs = std::filesystem;
-namespace pkg = packages;
+namespace pkg = kb::packages;
 using kb::core::JsonValue;
 using kb::mods::ModVersion;
 
@@ -51,6 +51,8 @@ struct Session {
     fs::path root;
     pkg::ProjectPackages config;
     pkg::Lock lock;
+
+    [[nodiscard]] pkg::ProjectState State() const { return { config, lock }; }
 };
 
 [[nodiscard]] std::optional<Session> OpenSession(const ArgumentList& arguments, CommandIo io) {
@@ -73,61 +75,46 @@ struct Session {
     return session;
 }
 
-// --registry <folder>, else the folder packages.json names.
+[[nodiscard]] bool IsAddress(const std::string& location) {
+    return location.starts_with("http://") || location.starts_with("https://");
+}
+
+// --registry <folder | index.json | address>, else what packages.json names; --cache <folder> keeps the downloads.
 [[nodiscard]] std::optional<pkg::Registry> OpenRegistry(const ArgumentList& arguments, const Session& session, CommandIo io) {
-    fs::path folder;
-    if (const std::optional<std::string> option = arguments.Option("--registry"); option.has_value()) {
-        folder = fs::absolute(kb::assets::Utf8Path(*option));
-    } else if (!session.config.registry.empty()) {
-        folder = kb::assets::Utf8Path(session.config.registry);
-        if (folder.is_relative()) {
-            folder = session.root / folder;
-        }
-    } else {
-        io.err << "error: the project has no package registry; pass --registry <folder> (package add keeps it in packages.json)\n";
+    const std::optional<std::string> option = arguments.Option("--registry");
+    std::string location = option.value_or(session.config.registry);
+    if (location.empty()) {
+        io.err << "error: the project has no package registry; pass --registry <folder or address> (package add keeps it in packages.json)\n";
         return std::nullopt;
     }
-    folder = folder.lexically_normal();
-    std::error_code ec;
-    if (!fs::is_directory(folder, ec)) {
-        io.err << "error: the package registry " << Utf8Text(folder) << " is not a folder\n";
-        return std::nullopt;
+    // A path typed on the command line is the working folder's; one in packages.json is the project's.
+    if (option.has_value() && !IsAddress(location)) {
+        location = Utf8Text(fs::absolute(kb::assets::Utf8Path(location)));
     }
-    return pkg::Registry{ folder };
-}
-
-// How packages.json names the registry: relative to the project when it can be.
-[[nodiscard]] std::string StoredRegistry(const Session& session, const pkg::Registry& registry) {
-    std::error_code ec;
-    const fs::path relative = fs::weakly_canonical(registry.Root(), ec).lexically_relative(fs::weakly_canonical(session.root, ec));
-    return Utf8Text(relative.empty() ? registry.Root() : relative);
-}
-
-[[nodiscard]] std::map<std::string, ModVersion> LockedVersions(const pkg::Lock& lock) {
-    std::map<std::string, ModVersion> versions;
-    for (const auto& [name, locked] : lock) {
-        versions.emplace(name, locked.version);
+    pkg::RegistryOptions options{ .projectRoot = session.root };
+    if (const std::optional<std::string> cache = arguments.Option("--cache"); cache.has_value()) {
+        options.cacheFolder = fs::absolute(kb::assets::Utf8Path(*cache));
     }
-    return versions;
+    std::string error;
+    std::optional<pkg::Registry> registry = pkg::Registry::Open(location, options, error);
+    if (!registry.has_value()) {
+        io.err << "error: " << error << '\n';
+    }
+    return registry;
 }
 
 // "name" or "name@range".
 struct Spec {
     std::string name;
-    std::optional<std::string> range;
+    std::string range;
 };
 
-[[nodiscard]] std::optional<Spec> ParseSpec(const std::string& text, std::string& error) {
+[[nodiscard]] std::optional<Spec> ParseSpec(const std::string& text) {
     const std::size_t at = text.find('@');
-    Spec spec{ .name = text.substr(0U, at) };
-    if (at != std::string::npos) {
-        spec.range = text.substr(at + 1U);
-    }
-    if (!kb::mods::IsValidModId(spec.name)) {
-        error = "'" + spec.name + "' is not a package name (lower case letters, digits, '.', '_' and '-')";
+    if (text.empty() || at == 0U) {
         return std::nullopt;
     }
-    return spec;
+    return Spec{ .name = text.substr(0U, at), .range = at == std::string::npos ? std::string{} : text.substr(at + 1U) };
 }
 
 [[nodiscard]] std::string JoinNames(const std::vector<std::string>& names) {
@@ -138,45 +125,33 @@ struct Spec {
     return text;
 }
 
-// The packages of the project, with what asked for each: the project itself or the packages that need it.
-[[nodiscard]] std::vector<std::string> NeededBy(const Session& session, const std::string& name) {
-    std::vector<std::string> by;
-    for (const auto& [other, locked] : session.lock) {
-        if (locked.dependencies.contains(name)) {
-            by.push_back(other);
-        }
-    }
-    return by;
-}
-
 // What a command that changes packages did: the packages it installed, updated and removed.
 void ReportChanges(CommandIo io, std::string_view schema, const pkg::Lock& before, const pkg::Lock& after) {
+    const pkg::LockChanges changes = pkg::Diff(before, after);
     JsonValue installed = JsonValue::MakeArray();
     JsonValue updated = JsonValue::MakeArray();
     JsonValue removed = JsonValue::MakeArray();
-    for (const auto& [name, now] : after) {
-        const auto old = before.find(name);
+    for (const auto& [name, version] : changes.installed) {
+        io.out << "installed " << Show(name, version) << '\n';
         JsonValue row = JsonValue::MakeObject();
         row.Set("name", Text(name));
-        if (old == before.end()) {
-            io.out << "installed " << Show(name, now.version) << '\n';
-            row.Set("version", Text(kb::mods::ToString(now.version)));
-            installed.Append(std::move(row));
-        } else if (old->second.version != now.version) {
-            io.out << "updated " << name << ' ' << kb::mods::ToString(old->second.version) << " -> " << kb::mods::ToString(now.version) << '\n';
-            row.Set("from", Text(kb::mods::ToString(old->second.version)));
-            row.Set("to", Text(kb::mods::ToString(now.version)));
-            updated.Append(std::move(row));
-        }
+        row.Set("version", Text(kb::mods::ToString(version)));
+        installed.Append(std::move(row));
     }
-    for (const auto& [name, old] : before) {
-        if (!after.contains(name)) {
-            io.out << "removed " << Show(name, old.version) << '\n';
-            JsonValue row = JsonValue::MakeObject();
-            row.Set("name", Text(name));
-            row.Set("version", Text(kb::mods::ToString(old.version)));
-            removed.Append(std::move(row));
-        }
+    for (const pkg::LockChange& change : changes.updated) {
+        io.out << "updated " << change.name << ' ' << kb::mods::ToString(change.from) << " -> " << kb::mods::ToString(change.to) << '\n';
+        JsonValue row = JsonValue::MakeObject();
+        row.Set("name", Text(change.name));
+        row.Set("from", Text(kb::mods::ToString(change.from)));
+        row.Set("to", Text(kb::mods::ToString(change.to)));
+        updated.Append(std::move(row));
+    }
+    for (const auto& [name, version] : changes.removed) {
+        io.out << "removed " << Show(name, version) << '\n';
+        JsonValue row = JsonValue::MakeObject();
+        row.Set("name", Text(name));
+        row.Set("version", Text(kb::mods::ToString(version)));
+        removed.Append(std::move(row));
     }
     if (installed.Size() + updated.Size() + removed.Size() == 0U) {
         io.out << "nothing to change\n";
@@ -189,12 +164,6 @@ void ReportChanges(CommandIo io, std::string_view schema, const pkg::Lock& befor
     PublishData(io, std::move(data));
 }
 
-// Writes the lock and packages.json when they differ from what was read.
-[[nodiscard]] bool Save(const Session& session, const pkg::Lock& lock, const pkg::ProjectPackages& config, std::string& error) {
-    return (lock == session.lock || pkg::WriteLock(session.root, lock, error)) &&
-        (config == session.config || pkg::WriteProjectPackages(session.root, config, error));
-}
-
 int RunList(const ArgumentList& arguments, CommandIo io) {
     const std::optional<Session> session = OpenSession(arguments, io);
     if (!session.has_value()) {
@@ -203,7 +172,7 @@ int RunList(const ArgumentList& arguments, CommandIo io) {
     JsonValue rows = JsonValue::MakeArray();
     for (const auto& [name, locked] : session->lock) {
         const auto requested = session->config.requested.find(name);
-        const std::vector<std::string> by = NeededBy(*session, name);
+        const std::vector<std::string> by = pkg::NeededBy(session->lock, name);
         io.out << Show(name, locked.version) << "  "
                << (requested != session->config.requested.end() ? "asked for " + requested->second.text : "needed by " + JoinNames(by)) << '\n';
         JsonValue row = JsonValue::MakeObject();
@@ -277,7 +246,7 @@ int RunSearch(const ArgumentList& arguments, CommandIo io) {
         io.out << "no package matches\n";
     }
     JsonValue data = DataObject("21kb.cli.package-search/v1");
-    data.Set("registry", Text(Utf8Text(registry->Root())));
+    data.Set("registry", Text(registry->Location()));
     data.Set("results", std::move(rows));
     PublishData(io, std::move(data));
     return 0;
@@ -285,13 +254,13 @@ int RunSearch(const ArgumentList& arguments, CommandIo io) {
 
 int RunInfo(const ArgumentList& arguments, CommandIo io) {
     std::string error;
-    const std::optional<Spec> spec = arguments.Positionals().size() == 2U ? ParseSpec(arguments.Positionals()[1], error) : std::nullopt;
+    const std::optional<Spec> spec = arguments.Positionals().size() == 2U ? ParseSpec(arguments.Positionals()[1]) : std::nullopt;
     if (!spec.has_value()) {
-        return Fail(io, error.empty() ? "package info expects <name>[@<range>]" : error);
+        return Fail(io, "package info expects <name>[@<range>]");
     }
     pkg::Dependency range;
-    if (!pkg::ParseRange(spec->range.value_or("*"), range)) {
-        return Fail(io, "'" + *spec->range + "' is not a version range (write ^1.2, ~1.2.3, >=1.0 <2.0 or *)");
+    if (!pkg::ParseRange(spec->range.empty() ? "*" : spec->range, range)) {
+        return Fail(io, "'" + spec->range + "' is not a version range (write ^1.2, ~1.2.3, >=1.0 <2.0 or *)");
     }
     const std::optional<Session> session = OpenSession(arguments, io);
     const std::optional<pkg::Registry> registry = session.has_value() ? OpenRegistry(arguments, *session, io) : std::nullopt;
@@ -311,14 +280,10 @@ int RunInfo(const ArgumentList& arguments, CommandIo io) {
         return Fail(io, "no version of '" + spec->name + "' fits " + range.text + " (available: " + available + ")");
     }
     pkg::Manifest manifest;
-    std::map<std::string, std::uintmax_t> sizes;
-    if (!registry->Read(spec->name, *chosen, manifest, error) || !pkg::ListFiles(registry->Folder(spec->name, *chosen), sizes, error)) {
+    if (!registry->Read(spec->name, *chosen, manifest, error)) {
         return Fail(io, error);
     }
-    std::uintmax_t bytes = 0U;
-    for (const auto& entry : sizes) {
-        bytes += entry.second;
-    }
+    const std::uint64_t archiveBytes = registry->Find(spec->name, *chosen)->size;
     const auto installed = session->lock.find(spec->name);
     io.out << Show(spec->name, *chosen) << '\n';
     if (!manifest.description.empty()) {
@@ -330,7 +295,7 @@ int RunInfo(const ArgumentList& arguments, CommandIo io) {
         needed += (needed.empty() ? "" : ", ") + name + ' ' + dependency.text;
         needs.Set(name, Text(dependency.text));
     }
-    io.out << "  versions: " << available << "\n  needs: " << (needed.empty() ? "nothing" : needed) << "\n  files: " << sizes.size() << " (" << bytes << " bytes)\n  installed: "
+    io.out << "  versions: " << available << "\n  needs: " << (needed.empty() ? "nothing" : needed) << "\n  download: " << archiveBytes << " bytes\n  installed: "
            << (installed != session->lock.end() ? kb::mods::ToString(installed->second.version) : std::string{ "no" }) << '\n';
     JsonValue data = DataObject("21kb.cli.package-info/v1");
     data.Set("name", Text(spec->name));
@@ -342,62 +307,34 @@ int RunInfo(const ArgumentList& arguments, CommandIo io) {
     }
     data.Set("versions", std::move(all));
     data.Set("dependencies", std::move(needs));
-    data.Set("files", JsonValue::MakeNumber(static_cast<double>(sizes.size())));
-    data.Set("bytes", JsonValue::MakeNumber(static_cast<double>(bytes)));
+    data.Set("size", JsonValue::MakeNumber(static_cast<double>(archiveBytes)));
     data.Set("installed", installed != session->lock.end() ? Text(kb::mods::ToString(installed->second.version)) : JsonValue{});
     PublishData(io, std::move(data));
     return 0;
 }
 
-// Resolves, installs and saves: the project changes only when every package could be chosen and checked. `pin` names
-// a package whose range becomes ^<the version chosen> (what `add` without a range asks for).
-[[nodiscard]] int Apply(
-    const Session& session,
-    const pkg::Registry& registry,
-    pkg::ProjectPackages wanted,
-    const std::map<std::string, ModVersion>& preferred,
-    const std::string& pin,
-    std::string_view schema,
-    CommandIo io) {
-    std::map<std::string, ModVersion> resolved;
-    std::string error;
-    if (!pkg::Resolve(registry, wanted.requested, preferred, resolved, error)) {
-        return Fail(io, error + " Nothing was changed.");
-    }
-    if (!pin.empty()) {
-        // The text is always a valid range.
-        static_cast<void>(pkg::ParseRange('^' + kb::mods::ToString(resolved.at(pin)), wanted.requested[pin]));
-    }
-    pkg::Lock lock = session.lock;
-    if (!pkg::Install(session.root, registry, resolved, lock, error) || !Save(session, lock, wanted, error)) {
+// The result of an operation of the library: the report of what changed, or the reason it was refused.
+[[nodiscard]] int Finish(const Session& session, bool done, const pkg::ProjectState& state, const std::string& error, std::string_view schema, CommandIo io) {
+    if (!done) {
         return Fail(io, error);
     }
-    ReportChanges(io, schema, session.lock, lock);
+    ReportChanges(io, schema, session.lock, state.lock);
     return 0;
 }
 
 int RunAdd(const ArgumentList& arguments, CommandIo io) {
-    std::string error;
-    const std::optional<Spec> spec = arguments.Positionals().size() == 2U ? ParseSpec(arguments.Positionals()[1], error) : std::nullopt;
+    const std::optional<Spec> spec = arguments.Positionals().size() == 2U ? ParseSpec(arguments.Positionals()[1]) : std::nullopt;
     if (!spec.has_value()) {
-        return Fail(io, error.empty() ? "package add expects <name>[@<range>]" : error);
+        return Fail(io, "package add expects <name>[@<range>]");
     }
     const std::optional<Session> session = OpenSession(arguments, io);
     const std::optional<pkg::Registry> registry = session.has_value() ? OpenRegistry(arguments, *session, io) : std::nullopt;
     if (!registry.has_value()) {
         return 1;
     }
-    pkg::Dependency range;
-    if (!pkg::ParseRange(spec->range.value_or("*"), range)) {
-        return Fail(io, "'" + *spec->range + "' is not a version range (write ^1.2, ~1.2.3, >=1.0 <2.0 or *)");
-    }
-    pkg::ProjectPackages wanted = session->config;
-    wanted.requested[spec->name] = range;
-    if (arguments.Option("--registry").has_value()) {
-        wanted.registry = StoredRegistry(*session, *registry);
-    }
-    // Packages already installed keep their version while it fits.
-    return Apply(*session, *registry, std::move(wanted), LockedVersions(session->lock), spec->range.has_value() ? std::string{} : spec->name,
+    pkg::ProjectState state = session->State();
+    std::string error;
+    return Finish(*session, pkg::AddPackage(session->root, *registry, spec->name, spec->range, arguments.Option("--registry").has_value(), state, error), state, error,
         "21kb.cli.package-add/v1", io);
 }
 
@@ -410,58 +347,44 @@ int RunUpdate(const ArgumentList& arguments, CommandIo io) {
     if (!registry.has_value()) {
         return 1;
     }
-    // One name moves to the newest version it allows while the rest stay; no name moves them all.
-    std::map<std::string, ModVersion> preferred;
-    if (arguments.Positionals().size() == 2U) {
-        const std::string& name = arguments.Positionals()[1];
-        if (!session->lock.contains(name)) {
-            return Fail(io, "'" + name + "' is not installed; kb_cli package list shows what is");
-        }
-        preferred = LockedVersions(session->lock);
-        preferred.erase(name);
-    }
-    return Apply(*session, *registry, session->config, preferred, {}, "21kb.cli.package-update/v1", io);
+    pkg::ProjectState state = session->State();
+    std::string error;
+    const std::string name = arguments.Positionals().size() == 2U ? arguments.Positionals()[1] : std::string{};
+    return Finish(*session, pkg::UpdatePackages(session->root, *registry, name, state, error), state, error, "21kb.cli.package-update/v1", io);
 }
 
 int RunRemove(const ArgumentList& arguments, CommandIo io) {
     if (arguments.Positionals().size() != 2U) {
         return Fail(io, "package remove expects <name>");
     }
-    const std::string& name = arguments.Positionals()[1];
     const std::optional<Session> session = OpenSession(arguments, io);
     if (!session.has_value()) {
         return 1;
     }
-    if (!session->config.requested.contains(name)) {
-        const std::vector<std::string> by = NeededBy(*session, name);
-        if (by.empty()) {
-            return Fail(io, "'" + name + "' is not installed; kb_cli package list shows what is");
-        }
-        return Fail(io, "'" + name + "' was not added by the project; it is needed by " + JoinNames(by) + ". Remove those instead.");
-    }
-    pkg::ProjectPackages wanted = session->config;
-    wanted.requested.erase(name);
-    // What stays: the packages still asked for and everything they need, by the lock.
-    std::map<std::string, ModVersion> keep;
-    std::vector<std::string> queue;
-    for (const auto& [asked, range] : wanted.requested) {
-        queue.push_back(asked);
-    }
-    for (std::size_t next = 0U; next < queue.size(); ++next) {
-        const auto locked = session->lock.find(queue[next]);
-        if (locked == session->lock.end() || !keep.emplace(queue[next], locked->second.version).second) {
-            continue;
-        }
-        for (const auto& [dependency, range] : locked->second.dependencies) {
-            queue.push_back(dependency);
-        }
-    }
-    pkg::Lock lock = session->lock;
+    pkg::ProjectState state = session->State();
     std::string error;
-    if (!pkg::Prune(session->root, keep, lock, error) || !Save(*session, lock, wanted, error)) {
+    return Finish(*session, pkg::RemovePackage(session->root, arguments.Positionals()[1], state, error), state, error, "21kb.cli.package-remove/v1", io);
+}
+
+int RunPublish(const ArgumentList& arguments, CommandIo io) {
+    const std::optional<std::string> registry = arguments.Option("--registry");
+    if (arguments.Positionals().size() != 2U || !registry.has_value() || IsAddress(*registry)) {
+        return Fail(io, "package publish expects --registry <folder> <package folder> (it writes a registry folder, not an address)");
+    }
+    pkg::IndexEntry entry;
+    std::string error;
+    if (!pkg::Publish(fs::absolute(kb::assets::Utf8Path(*registry)), fs::absolute(kb::assets::Utf8Path(arguments.Positionals()[1])), entry, error)) {
         return Fail(io, error);
     }
-    ReportChanges(io, "21kb.cli.package-remove/v1", session->lock, lock);
+    const std::string version = kb::mods::ToString(entry.manifest.version);
+    io.out << "published " << Show(entry.manifest.name, entry.manifest.version) << ": " << entry.archive << ", " << entry.size << " bytes\n";
+    JsonValue data = DataObject("21kb.cli.package-publish/v1");
+    data.Set("name", Text(entry.manifest.name));
+    data.Set("version", Text(version));
+    data.Set("archive", Text(entry.archive));
+    data.Set("sha512", Text(entry.sha512));
+    data.Set("size", JsonValue::MakeNumber(static_cast<double>(entry.size)));
+    PublishData(io, std::move(data));
     return 0;
 }
 
@@ -518,7 +441,10 @@ int RunPackageCommand(const ArgumentList& arguments, CommandIo io) {
     if (action == "verify") {
         return RunVerify(arguments, io);
     }
-    return Fail(io, "package expects list, search, info, add, update, remove or verify");
+    if (action == "publish") {
+        return RunPublish(arguments, io);
+    }
+    return Fail(io, "package expects list, search, info, add, update, remove, verify or publish");
 }
 
 } // namespace kb::cli
