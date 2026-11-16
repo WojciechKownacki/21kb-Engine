@@ -862,7 +862,12 @@ void RestoreCompatibleRuntimeState(
     }
 }
 
-// Collects the bones from a ChainIK constraint's tip up to its root (root first) and sizes the solver scratch.
+// The constraint types that act on the chain of bones from constrainedBoneId down to tipBoneId.
+[[nodiscard]] bool UsesBoneChain(AnimatorRigConstraintType type) noexcept {
+    return type == AnimatorRigConstraintType::ChainIK || type == AnimatorRigConstraintType::SpringBones;
+}
+
+// Collects the bones from a chain constraint's tip up to its root (root first) and sizes the joint scratch.
 // False when the tip is not below the root.
 [[nodiscard]] bool BindChainBones(const SkeletonAsset& skeleton, AnimatorRuntimeConstraint& constraint) {
     constraint.chainBoneIndices.clear();
@@ -873,7 +878,6 @@ void RestoreCompatibleRuntimeState(
         if (constraint.chainBoneIndices.size() < 2U) return false;
         std::ranges::reverse(constraint.chainBoneIndices);
         constraint.chainJoints.resize(constraint.chainBoneIndices.size());
-        constraint.chainSegmentLengths.resize(constraint.chainBoneIndices.size() - 1U);
         return true;
     }
     return false;
@@ -965,11 +969,21 @@ void RestoreCompatibleRuntimeState(
                     return false;
                 }
             }
-            if (definition.type == AnimatorRigConstraintType::ChainIK) {
+            if (UsesBoneChain(definition.type)) {
                 const auto tip = skeleton.boneIndices.find(definition.tipBoneId);
                 if (tip == skeleton.boneIndices.end() || tip->second != constraint.tipBoneIndex ||
                     !ChainFollowsHierarchy(*skeleton.asset, constraint)) {
                     return false;
+                }
+            }
+            if (definition.type == AnimatorRigConstraintType::SpringBones) {
+                const std::vector<SpringBoneCollider>& colliders = definition.spring.colliders;
+                if (constraint.springColliderBones.size() != colliders.size()) return false;
+                for (std::size_t index = 0U; index < colliders.size(); ++index) {
+                    const auto bone = skeleton.boneIndices.find(colliders[index].boneId);
+                    if (bone == skeleton.boneIndices.end() || bone->second != constraint.springColliderBones[index]) {
+                        return false;
+                    }
                 }
             }
             continue;
@@ -1740,6 +1754,7 @@ void EvaluateIndexedSkeletalPose(
     SolveComponentPose(*skeleton.asset, current);
     ApplySkeletalRigConstraints(
         scene, instance, current, extractedRootMotionBone);
+    instance.springElapsedSeconds = 0.0;
     ApplyMotionSkeletonRule(
         scene, instance, current, extractedRootMotionBone);
     ApplyPhysicsPose(scene,instance,current);
@@ -2205,10 +2220,32 @@ void SolveSkeletalTwoBoneIk(
     }
 }
 
-// Chain IK in animator space: the solver moves the chain's joints, then every chain bone swings from its animated
-// direction to its solved one, so segment lengths hold and children off the chain follow. The position weight
-// blends each bone's local rotation between the animated and the solved pose; the tip then turns toward the
-// target rotation by the rotation weight.
+// Turns every chain bone (root first) from its animated direction to the direction between the `joints` that
+// follow it, in animator space, so segment lengths hold and children off the chain follow. The weight blends each
+// bone's local rotation between the animated and the turned pose.
+void SwingChainToJoints(
+    const SkeletonAsset& skeleton, AnimatorInstanceSkeleton::PoseBuffer& pose, std::span<const std::uint32_t> bones,
+    std::span<const Vec3> joints, float weight) {
+    const std::size_t last = bones.size() - 1U;
+    const std::int32_t rootParent = skeleton.bones[bones[0]].parentIndex;
+    Quat solvedParent = rootParent < 0 ? Quat{} : pose.component.rotations[static_cast<std::size_t>(rootParent)];
+    for (std::size_t index = 0U; index < last; ++index) {
+        const std::size_t bone = bones[index];
+        const Quat solved = kb::math::Normalize(
+            ShortestArc(
+                pose.component.positions[bones[index + 1U]] - pose.component.positions[bone],
+                joints[index + 1U] - joints[index]) *
+            pose.component.rotations[bone]);
+        pose.local.rotations[bone] = kb::math::Slerp(
+            pose.local.rotations[bone], kb::math::Normalize(kb::math::Inverse(solvedParent) * solved), weight);
+        solvedParent = solved;
+    }
+    UpdateComponentSubtree(skeleton, pose, bones[0]);
+}
+
+// Chain IK in animator space: the solver moves the chain's joints, then every chain bone swings to its solved
+// direction. The position weight blends the swing; the tip then turns toward the target rotation by the rotation
+// weight.
 void SolveSkeletalChainIk(
     const SkeletonAsset& skeleton, AnimatorInstanceSkeleton::PoseBuffer& pose, AnimatorRuntimeConstraint& chain,
     const ChainIkSettings& settings, Vec3 targetPosition, Quat targetRotation, std::optional<Vec3> polePosition,
@@ -2220,27 +2257,68 @@ void SolveSkeletalChainIk(
             chain.chainJoints[index] = pose.component.positions[bones[index]];
         }
         SolveChainIk(chain.chainJoints, chain.chainSegmentLengths, targetPosition, polePosition, settings);
-        const std::int32_t rootParent = skeleton.bones[bones[0]].parentIndex;
-        Quat solvedParent = rootParent < 0 ? Quat{} : pose.component.rotations[static_cast<std::size_t>(rootParent)];
-        for (std::size_t index = 0U; index < last; ++index) {
-            const std::size_t bone = bones[index];
-            const Quat solved = kb::math::Normalize(
-                ShortestArc(
-                    pose.component.positions[bones[index + 1U]] - pose.component.positions[bone],
-                    chain.chainJoints[index + 1U] - chain.chainJoints[index]) *
-                pose.component.rotations[bone]);
-            pose.local.rotations[bone] = kb::math::Slerp(
-                pose.local.rotations[bone], kb::math::Normalize(kb::math::Inverse(solvedParent) * solved),
-                positionWeight);
-            solvedParent = solved;
-        }
-        UpdateComponentSubtree(skeleton, pose, bones[0]);
+        SwingChainToJoints(skeleton, pose, bones, chain.chainJoints, positionWeight);
     }
     if (rotationWeight > 0.0F) {
         SetBoneComponentPose(
             skeleton, pose, bones[last], pose.component.positions[bones[last]],
             kb::math::Slerp(pose.component.rotations[bones[last]], targetRotation, rotationWeight), false);
     }
+}
+
+// Spring bones: the chain's animated joints and the colliders go into the simulation's frame (the character's place,
+// along world axes), the simulation advances by the time since the last evaluation, and every chain bone swings
+// from its animated direction to the simulated one.
+void SolveSkeletalSpringBones(
+    const Scene& scene, SceneEntity ownerEntity, const TransformComponent& owner, const SkeletonAsset& skeleton,
+    AnimatorInstanceSkeleton::PoseBuffer& pose, AnimatorRuntimeConstraint& chain, const SpringBoneSettings& settings,
+    double deltaSeconds, float weight) {
+    const Vec3 scale = owner.worldScale;
+    const auto toFrame = [&owner, scale](Vec3 animatorPosition) {
+        return kb::math::Rotate(
+            owner.worldRotation,
+            Vec3{ animatorPosition.x * scale.x, animatorPosition.y * scale.y, animatorPosition.z * scale.z });
+    };
+    const std::vector<std::uint32_t>& bones = chain.chainBoneIndices;
+    for (std::size_t index = 0U; index < bones.size(); ++index) {
+        chain.chainJoints[index] = toFrame(pose.component.positions[bones[index]]);
+    }
+    const float size = (scale.x + scale.y + scale.z) / 3.0F;
+    for (std::size_t index = 0U; index < settings.colliders.size(); ++index) {
+        const SpringBoneCollider& collider = settings.colliders[index];
+        const std::size_t bone = chain.springColliderBones[index];
+        const Vec3 boneScale = pose.component.scales[bone];
+        const auto place = [&](Vec3 offset) {
+            return toFrame(
+                pose.component.positions[bone] +
+                kb::math::Rotate(
+                    pose.component.rotations[bone],
+                    Vec3{ offset.x * boneScale.x, offset.y * boneScale.y, offset.z * boneScale.z }));
+        };
+        const Vec3 start = place(collider.offset);
+        chain.springColliders[index] = {
+            .a = start,
+            .b = collider.shape == SpringColliderShape::Capsule ? place(collider.tailOffset) : start,
+            .radius = (collider.radius + settings.collisionRadius) * size,
+        };
+    }
+    StepSpringChain(
+        chain.spring, chain.chainJoints, scene.Transforms().WorldTranslation(ownerEntity, owner), owner.worldRotation,
+        deltaSeconds, settings, chain.springColliders);
+    const Quat toAnimator = kb::math::Inverse(owner.worldRotation);
+    for (std::size_t index = 0U; index < bones.size(); ++index) {
+        const Vec3 unrotated = kb::math::Rotate(toAnimator, chain.spring.position[index]);
+        chain.chainJoints[index] = {
+            SafeDivide(unrotated.x, scale.x), SafeDivide(unrotated.y, scale.y), SafeDivide(unrotated.z, scale.z) };
+    }
+    SwingChainToJoints(skeleton, pose, bones, chain.chainJoints, weight);
+}
+
+[[noreturn]] void ThrowRigConstraintError(const AnimatorRigConstraint& definition, const std::exception& error) {
+    throw std::runtime_error("Rig constraint '" + definition.name + "' [bone " +
+        std::to_string(definition.constrainedBoneId) + ", path '" + definition.constrainedPath +
+        "', mid " + std::to_string(definition.midBoneId) + ", tip " +
+        std::to_string(definition.tipBoneId) + "]: " + error.what());
 }
 
 void ApplySkeletalRigConstraints(
@@ -2264,6 +2342,16 @@ void ApplySkeletalRigConstraints(
                  constraint.chainBoneIndices.end())) {
             throw std::runtime_error(
                 "Rig constraint cannot drive the root-motion source bone");
+        }
+        if (definition.type == AnimatorRigConstraintType::SpringBones) {
+            try {
+                SolveSkeletalSpringBones(
+                    scene, record.entity, *owner, skeleton, pose, constraint, definition.spring,
+                    record.springElapsedSeconds, definition.weight);
+            } catch (const std::exception& error) {
+                ThrowRigConstraintError(definition, error);
+            }
+            continue;
         }
         const auto targetIt = record.ikTargets.find(definition.target);
         if (targetIt == record.ikTargets.end()) continue;
@@ -2342,10 +2430,7 @@ void ApplySkeletalRigConstraints(
             }
             }
         } catch (const std::exception& error) {
-            throw std::runtime_error("Rig constraint '" + definition.name + "' [bone " +
-                std::to_string(definition.constrainedBoneId) + ", path '" + definition.constrainedPath +
-                "', mid " + std::to_string(definition.midBoneId) + ", tip " +
-                std::to_string(definition.tipBoneId) + "]: " + error.what());
+            ThrowRigConstraintError(definition, error);
         }
     }
 }
@@ -2573,7 +2658,8 @@ void ApplyRigConstraints(Scene& scene, AnimatorRuntimeRecord& record) {
                 break;
             }
             case AnimatorRigConstraintType::ChainIK:
-                throw std::logic_error("ChainIK constraints bind only to skeletal animators");
+            case AnimatorRigConstraintType::SpringBones:
+                throw std::logic_error("Bone chain constraints bind only to skeletal animators");
             case AnimatorRigConstraintType::Aim: {
                 const float aimWeight =
                     definition.weight * target.positionWeight;
@@ -2916,22 +3002,34 @@ static bool AttachController(Scene& scene, SceneEntity entity, kb::assets::Asset
                 constraint.midBoneIndex = mid->second;
                 constraint.tipBoneIndex = tip->second;
             }
-            if (definition.type == AnimatorRigConstraintType::ChainIK) {
+            if (UsesBoneChain(definition.type)) {
                 const auto tip = candidate.skeleton->boneIndices.find(definition.tipBoneId);
                 if (tip == candidate.skeleton->boneIndices.end()) return invalidBinding();
                 constraint.tipBoneIndex = tip->second;
                 if (!BindChainBones(*candidate.skeleton->asset, constraint)) return invalidBinding();
             }
+            if (definition.type == AnimatorRigConstraintType::ChainIK) {
+                constraint.chainSegmentLengths.resize(constraint.chainBoneIndices.size() - 1U);
+            }
+            if (definition.type == AnimatorRigConstraintType::SpringBones) {
+                PrepareSpringChain(constraint.spring, constraint.chainBoneIndices.size());
+                for (const SpringBoneCollider& collider : definition.spring.colliders) {
+                    const auto bone = candidate.skeleton->boneIndices.find(collider.boneId);
+                    if (bone == candidate.skeleton->boneIndices.end()) return invalidBinding();
+                    constraint.springColliderBones.push_back(bone->second);
+                }
+                constraint.springColliders.resize(definition.spring.colliders.size());
+            }
             // Every driven bone belongs to one constraint; a chain's inner bones are known only here.
             const auto claim = [&drivenBones](std::uint32_t bone) { return drivenBones.insert(bone).second; };
-            const bool distinct = definition.type == AnimatorRigConstraintType::ChainIK
+            const bool distinct = UsesBoneChain(definition.type)
                 ? std::ranges::all_of(constraint.chainBoneIndices, claim)
                 : claim(constraint.constrainedBoneIndex) &&
                     (definition.type != AnimatorRigConstraintType::TwoBoneIK ||
                      (claim(constraint.midBoneIndex) && claim(constraint.tipBoneIndex)));
             if (!distinct) return invalidBinding();
         } else {
-            if (definition.type == AnimatorRigConstraintType::ChainIK) return invalidBinding();
+            if (UsesBoneChain(definition.type)) return invalidBinding();
             constraint.constrained = ResolveTarget(
                 scene, entity, definition.constrainedPath);
             if (!constraint.constrained.IsValid()) return invalidBinding();
@@ -4105,6 +4203,7 @@ void SceneAnimatorService::Advance(Scene& scene, float deltaSeconds) {
         }
         record.motionSkeletonRuleDeltaSeconds = deltaSeconds;
         if (record.skeleton.has_value()) {
+            record.springElapsedSeconds += static_cast<double>(deltaSeconds);
             std::optional<std::uint32_t> extractedRootMotionBone;
             if (record.hasExtractedRootMotion) {
                 const AnimatorRuntimeLayer& rootLayer =

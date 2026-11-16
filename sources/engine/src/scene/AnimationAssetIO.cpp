@@ -86,6 +86,7 @@ const char* RigConstraintTypeName(AnimatorRigConstraintType type) {
     case AnimatorRigConstraintType::Aim: return "Aim";
     case AnimatorRigConstraintType::CopyTransform: return "CopyTransform";
     case AnimatorRigConstraintType::ChainIK: return "ChainIK";
+    case AnimatorRigConstraintType::SpringBones: return "SpringBones";
     }
     return "";
 }
@@ -105,6 +106,17 @@ const char* ChainIkSolverName(ChainIkSolver solver) {
 bool ParseChainIkSolver(std::string_view text, ChainIkSolver& solver) {
     if (text == "FABRIK") solver = ChainIkSolver::Fabrik;
     else if (text == "CCD") solver = ChainIkSolver::Ccd;
+    else return false;
+    return true;
+}
+
+const char* SpringColliderShapeName(SpringColliderShape shape) {
+    return shape == SpringColliderShape::Capsule ? "Capsule" : "Sphere";
+}
+
+bool ParseSpringColliderShape(std::string_view text, SpringColliderShape& shape) {
+    if (text == "Sphere") shape = SpringColliderShape::Sphere;
+    else if (text == "Capsule") shape = SpringColliderShape::Capsule;
     else return false;
     return true;
 }
@@ -384,8 +396,11 @@ bool ValidateAnimatorController(const AnimatorController& controller, std::strin
     std::unordered_set<SkeletonBoneId> drivenBones;
     setError("Animator controller has invalid rig constraints.");
     for (const AnimatorRigConstraint& constraint : controller.rigConstraints) {
+        // Spring bones follow the animation and take no target; every other constraint needs one.
+        const bool springBones = constraint.type == AnimatorRigConstraintType::SpringBones;
         if (constraint.name.empty() || !constraintNames.insert(constraint.name).second ||
-            constraint.target.empty() || !std::isfinite(constraint.weight) ||
+            (springBones ? !constraint.target.empty() || !constraint.poleTarget.empty() : constraint.target.empty()) ||
+            !std::isfinite(constraint.weight) ||
             constraint.weight <= 0.0F || constraint.weight > 1.0F) return false;
         const bool skeletal = constraint.constrainedBoneId != 0U ||
             constraint.midBoneId != 0U || constraint.tipBoneId != 0U;
@@ -420,6 +435,14 @@ bool ValidateAnimatorController(const AnimatorController& controller, std::strin
                 constraint.midBoneId != 0U ||
                 constraint.constrainedBoneId == constraint.tipBoneId ||
                 !IsChainIkSettingsValid(constraint.chainIk) ||
+                !drivenBones.insert(constraint.constrainedBoneId).second ||
+                !drivenBones.insert(constraint.tipBoneId).second) return false;
+            break;
+        case AnimatorRigConstraintType::SpringBones:
+            if (constraint.constrainedBoneId == 0U || constraint.tipBoneId == 0U ||
+                constraint.midBoneId != 0U ||
+                constraint.constrainedBoneId == constraint.tipBoneId ||
+                !IsSpringBoneSettingsValid(constraint.spring) ||
                 !drivenBones.insert(constraint.constrainedBoneId).second ||
                 !drivenBones.insert(constraint.tipBoneId).second) return false;
             break;
@@ -852,6 +875,25 @@ std::optional<AnimatorController> AnimationAssetIO::LoadController(
                     constraint.chainIk.maxIterations >> constraint.chainIk.tolerance) ||
                 !ParseChainIkSolver(solver, constraint.chainIk.solver) || !EndOfRecord(input)) return std::nullopt;
             controller.rigConstraints.push_back(std::move(constraint));
+        } else if (command == "springConstraint") {
+            if (schemaVersion != 0U && schemaVersion < 6U) return std::nullopt;
+            AnimatorRigConstraint constraint{ .type = AnimatorRigConstraintType::SpringBones };
+            SpringBoneSettings& spring = constraint.spring;
+            std::size_t colliderCount = 0U;
+            if (!(input >> std::quoted(constraint.name) >> constraint.constrainedBoneId >> constraint.tipBoneId >>
+                    constraint.weight >> spring.stiffness >> spring.damping >> spring.gravity >>
+                    spring.movementInfluence >> spring.collisionRadius >> spring.maxAngleDegrees >>
+                    spring.teleportDistance >> colliderCount) ||
+                colliderCount > kSpringBoneMaxColliders) return std::nullopt;
+            spring.colliders.resize(colliderCount);
+            for (SpringBoneCollider& collider : spring.colliders) {
+                std::string shape;
+                if (!(input >> shape >> collider.boneId >> collider.offset.x >> collider.offset.y >> collider.offset.z >>
+                        collider.tailOffset.x >> collider.tailOffset.y >> collider.tailOffset.z >> collider.radius) ||
+                    !ParseSpringColliderShape(shape, collider.shape)) return std::nullopt;
+            }
+            if (!EndOfRecord(input)) return std::nullopt;
+            controller.rigConstraints.push_back(std::move(constraint));
         } else {
             return std::nullopt;
         }
@@ -990,6 +1032,29 @@ bool AnimationAssetIO::SaveController(
         }
     }
     for (const AnimatorRigConstraint& constraint : normalized.rigConstraints) {
+        if (constraint.type == AnimatorRigConstraintType::SpringBones) {
+            const SpringBoneSettings& spring = constraint.spring;
+            output << "springConstraint " << std::quoted(constraint.name) << ' '
+                   << constraint.constrainedBoneId << ' '
+                   << constraint.tipBoneId << ' '
+                   << constraint.weight << ' '
+                   << spring.stiffness << ' '
+                   << spring.damping << ' '
+                   << spring.gravity << ' '
+                   << spring.movementInfluence << ' '
+                   << spring.collisionRadius << ' '
+                   << spring.maxAngleDegrees << ' '
+                   << spring.teleportDistance << ' '
+                   << spring.colliders.size();
+            for (const SpringBoneCollider& collider : spring.colliders) {
+                output << ' ' << SpringColliderShapeName(collider.shape) << ' ' << collider.boneId << ' '
+                       << collider.offset.x << ' ' << collider.offset.y << ' ' << collider.offset.z << ' '
+                       << collider.tailOffset.x << ' ' << collider.tailOffset.y << ' ' << collider.tailOffset.z << ' '
+                       << collider.radius;
+            }
+            output << '\n';
+            continue;
+        }
         if (constraint.type == AnimatorRigConstraintType::ChainIK) {
             output << "chainConstraint " << std::quoted(constraint.name) << ' '
                    << constraint.constrainedBoneId << ' '

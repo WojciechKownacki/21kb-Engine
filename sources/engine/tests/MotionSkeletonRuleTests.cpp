@@ -3,6 +3,7 @@
 
 #include "engine/scene/AnimationAssetIO.hpp"
 #include "engine/scene/AnimationChainIk.hpp"
+#include "engine/scene/AnimationSpringBones.hpp"
 #include "engine/scene/MotionSkeletonRuleComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAnimators.hpp"
@@ -12,6 +13,7 @@
 #include "engine/scene/SceneMotionSkeletonRuleComponents.hpp"
 #include "engine/scene/SceneObject.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/SkeletonBindingComponent.hpp"
 
@@ -19,6 +21,8 @@
 #include <array>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -127,6 +131,19 @@ struct RuleFixture {
         scene.Components().Animators().Set(object.Entity(), kb::scene::Animator{ .controllerAssetId = controllerId, .speed = 1.0F, .enabled = true });
         Require(scene.Components().MotionSkeletonRules().Set(object.Entity(), rule), "The motion skeleton rule was refused");
         return object.Entity();
+    }
+
+    // Saves `controller` under Assets/Rig and returns its asset id.
+    [[nodiscard]] std::uint64_t Register(std::string_view name, const kb::scene::AnimatorController& controller) {
+        const std::string file = std::string{ name } + ".kbanimcontroller";
+        Require(kb::scene::AnimationAssetIO::SaveController(root / "Assets" / "Rig" / file, controller),
+            "A test controller must save");
+        static_cast<void>(scene.Assets().Discover());
+        return scene.Assets().Manager().Registry().FindByPath("/Game/Rig/" + file)->id.value;
+    }
+
+    void Move(kb::scene::SceneEntity entity, Vec3 position) {
+        scene.Transforms().Set(entity, kb::scene::TransformComponent{ .localPosition = position });
     }
 
     [[nodiscard]] kb::scene::AnimatorInstanceSkeletonView Pose(kb::scene::SceneEntity owner) {
@@ -367,10 +384,7 @@ void TestChainIkConstraint() {
         return value;
     };
     const auto discover = [&fixture](std::string_view name, const kb::scene::AnimatorController& controller) {
-        const std::string file = std::string{ name } + ".kbanimcontroller";
-        Require(kb::scene::AnimationAssetIO::SaveController(fixture.root / "Assets" / "Rig" / file, controller), "A ChainIK controller must save");
-        static_cast<void>(fixture.scene.Assets().Discover());
-        return fixture.scene.Assets().Manager().Registry().FindByPath("/Game/Rig/" + file)->id.value;
+        return fixture.Register(name, controller);
     };
 
     // Settings survive a save and a load; invalid ones are refused.
@@ -466,6 +480,346 @@ void TestChainIkConstraint() {
     }
 }
 
+
+using kb::scene::SpringBoneCollider;
+using kb::scene::SpringBoneSettings;
+using kb::scene::SpringColliderShape;
+
+constexpr float kFrame = 1.0F / 60.0F;
+
+// Upper -> Lower -> Hand driven by SpringBones; the Root bone stays out of the chain and can carry colliders.
+[[nodiscard]] kb::scene::AnimatorController SpringController(SpringBoneSettings settings, float weight = 1.0F) {
+    kb::scene::AnimatorController value{};
+    value.layers = { { .name = "Base", .defaultState = "Pose", .states = { { .name = "Pose", .clipReference = "/Game/Rig/Static.kbanim" } } } };
+    value.rigConstraints.push_back({ .name = "Hair", .type = kb::scene::AnimatorRigConstraintType::SpringBones, .weight = weight,
+        .constrainedBoneId = kUpper, .tipBoneId = kHand, .spring = std::move(settings) });
+    return value;
+}
+
+// How far the chain's tip is from where the animation puts it, in the character's space.
+[[nodiscard]] float TipLag(const kb::scene::AnimatorInstanceSkeletonView& pose) {
+    return kb::math::Length(pose.currentComponentPose.positions[kHandIndex] - Vec3{ 0.0F, 3.0F, 0.0F });
+}
+
+[[nodiscard]] float BoneLengthError(const kb::scene::AnimatorInstanceSkeletonView& pose) {
+    const std::span<const Vec3> positions = pose.currentComponentPose.positions;
+    return std::max(std::fabs(kb::math::Length(positions[kLowerIndex] - positions[kUpperIndex]) - 1.0F),
+        std::fabs(kb::math::Length(positions[kHandIndex] - positions[kLowerIndex]) - 1.0F));
+}
+
+void TestSpringBonesReturnToPose() {
+    RuleFixture fixture;
+    float previousReturnSeconds = 1.0e9F;
+    for (const float stiffness : { 25.0F, 100.0F, 400.0F }) {
+        // Damping grows with stiffness so every chain settles the same way, only faster.
+        const kb::scene::SceneEntity owner = fixture.Owner(
+            fixture.Register("Return" + std::to_string(static_cast<int>(stiffness)),
+                SpringController(SpringBoneSettings{ .stiffness = stiffness, .damping = 2.0F * std::sqrt(stiffness) })),
+            kb::scene::MotionSkeletonRuleComponent{});
+        fixture.Update(0.0F);
+        Require(TipLag(fixture.Pose(owner)) < 1.0e-4F, "A spring chain must start on the animated pose");
+
+        // A shove of one metre leaves the tip behind; it comes back sooner the stiffer the chain is.
+        fixture.Move(owner, Vec3{ 1.0F, 0.0F, 0.0F });
+        fixture.Update(kFrame);
+        Require(TipLag(fixture.Pose(owner)) > 0.05F, "A shove of the character must leave the tip of a spring chain behind");
+        float returnSeconds = 0.0F;
+        float worstLength = BoneLengthError(fixture.Pose(owner));
+        for (int frame = 1; frame <= 120; ++frame) {
+            fixture.Update(kFrame);
+            const kb::scene::AnimatorInstanceSkeletonView pose = fixture.Pose(owner);
+            worstLength = std::max(worstLength, BoneLengthError(pose));
+            if (returnSeconds == 0.0F && TipLag(pose) < 0.02F) returnSeconds = static_cast<float>(frame) * kFrame;
+        }
+        Require(returnSeconds > 0.0F && returnSeconds < previousReturnSeconds, "A stiffer spring chain must come back sooner");
+        previousReturnSeconds = returnSeconds;
+        Require(TipLag(fixture.Pose(owner)) < 1.0e-3F, "A spring chain of a motionless character must return to the animated pose within 2 seconds");
+        Require(worstLength < 1.0e-4F, "A spring chain must keep its bone lengths");
+    }
+}
+
+void TestSpringBonesFrameRate() {
+    std::array<Vec3, 3> tips{};
+    std::size_t slot = 0U;
+    for (const int rate : { 30, 60, 144 }) {
+        RuleFixture fixture;
+        const kb::scene::SceneEntity owner = fixture.Owner(
+            fixture.Register("Rate", SpringController(SpringBoneSettings{ .stiffness = 60.0F, .damping = 6.0F })),
+            kb::scene::MotionSkeletonRuleComponent{});
+        fixture.Update(0.0F);
+        // The character walks along +X at 1 m/s for a second.
+        for (int frame = 1; frame <= rate; ++frame) {
+            fixture.Move(owner, Vec3{ static_cast<float>(frame) / static_cast<float>(rate), 0.0F, 0.0F });
+            fixture.Update(1.0F / static_cast<float>(rate));
+        }
+        tips[slot++] = fixture.Pose(owner).currentComponentPose.positions[kHandIndex];
+    }
+    Require(kb::math::Length(tips[0] - Vec3{ 0.0F, 3.0F, 0.0F }) > 0.02F, "The tip of a walking character's spring chain must trail behind");
+    Require(kb::math::Length(tips[0] - tips[1]) < 0.01F && kb::math::Length(tips[0] - tips[2]) < 0.01F &&
+            kb::math::Length(tips[1] - tips[2]) < 0.01F,
+        "A spring chain must end the same place at 30, 60 and 144 frames per second");
+}
+
+void TestSpringBonesColliders() {
+    RuleFixture fixture;
+    const SpringBoneSettings loose{ .stiffness = 20.0F, .damping = 5.0F, .collisionRadius = 0.05F };
+    SpringBoneSettings guarded = loose;
+    const Vec3 centre{ -0.2F, 3.0F, 0.0F };
+    guarded.colliders = { SpringBoneCollider{ .boneId = kRoot, .shape = SpringColliderShape::Sphere, .offset = centre, .radius = 0.1F } };
+    const kb::scene::SceneEntity free = fixture.Owner(fixture.Register("Loose", SpringController(loose)), kb::scene::MotionSkeletonRuleComponent{});
+    const kb::scene::SceneEntity blocked = fixture.Owner(fixture.Register("Guarded", SpringController(guarded)), kb::scene::MotionSkeletonRuleComponent{});
+    fixture.Update(0.0F);
+
+    // The sphere sits where the chain trails to while the character walks along +X.
+    const float reach = 0.1F + 0.05F;
+    float freeDepth = 0.0F;
+    float blockedDepth = 0.0F;
+    float worstLength = 0.0F;
+    for (int frame = 1; frame <= 120; ++frame) {
+        for (const kb::scene::SceneEntity owner : { free, blocked }) {
+            fixture.Move(owner, Vec3{ static_cast<float>(frame) * kFrame, 0.0F, 0.0F });
+        }
+        fixture.Update(kFrame);
+        for (const std::size_t joint : { kLowerIndex, kHandIndex }) {
+            freeDepth = std::max(freeDepth, reach - kb::math::Length(fixture.Pose(free).currentComponentPose.positions[joint] - centre));
+            blockedDepth = std::max(blockedDepth, reach - kb::math::Length(fixture.Pose(blocked).currentComponentPose.positions[joint] - centre));
+        }
+        worstLength = std::max(worstLength, BoneLengthError(fixture.Pose(blocked)));
+    }
+    Require(freeDepth > 0.05F, "The unguarded chain must run into the sphere, or the test proves nothing");
+    Require(blockedDepth < 1.0e-3F, "No joint of a spring chain may enter a collider deeper than a millimetre");
+    Require(worstLength < 1.0e-4F, "Colliding must not change a spring chain's bone lengths");
+}
+
+void TestSpringBonesTeleport() {
+    RuleFixture fixture;
+    const kb::scene::SceneEntity owner = fixture.Owner(
+        fixture.Register("Teleport", SpringController(SpringBoneSettings{})), kb::scene::MotionSkeletonRuleComponent{});
+    fixture.Update(0.0F);
+    fixture.Move(owner, Vec3{ 1.0F, 0.0F, 0.0F });
+    fixture.Update(kFrame);
+    Require(TipLag(fixture.Pose(owner)) > 0.05F, "A shove below the teleport distance must swing the chain");
+
+    // A jump past the distance puts the chain straight back on the animation, with no swing to follow.
+    fixture.Move(owner, Vec3{ 101.0F, 0.0F, 0.0F });
+    fixture.Update(kFrame);
+    Require(TipLag(fixture.Pose(owner)) < 1.0e-4F, "A teleport must reset the spring chain onto the animated pose");
+    fixture.Update(kFrame);
+    Require(TipLag(fixture.Pose(owner)) < 1.0e-4F, "A reset spring chain must stay at rest");
+}
+
+void TestSpringBonesLimitAndWeight() {
+    RuleFixture fixture;
+    const auto spawn = [&fixture](std::string_view name, SpringBoneSettings settings, float weight) {
+        return fixture.Owner(fixture.Register(name, SpringController(std::move(settings), weight)), kb::scene::MotionSkeletonRuleComponent{});
+    };
+    const kb::scene::SceneEntity limited = spawn("Limited", SpringBoneSettings{ .stiffness = 20.0F, .damping = 5.0F, .maxAngleDegrees = 10.0F }, 1.0F);
+    const kb::scene::SceneEntity half = spawn("Half", SpringBoneSettings{ .stiffness = 20.0F, .damping = 5.0F }, 0.5F);
+    const kb::scene::SceneEntity full = spawn("Full", SpringBoneSettings{ .stiffness = 20.0F, .damping = 5.0F }, 1.0F);
+    fixture.Update(0.0F);
+    float limitedAngle = 0.0F;
+    for (int frame = 1; frame <= 30; ++frame) {
+        for (const kb::scene::SceneEntity owner : { limited, half, full }) {
+            fixture.Move(owner, Vec3{ static_cast<float>(frame) * kFrame * 2.0F, 0.0F, 0.0F });
+        }
+        fixture.Update(kFrame);
+        // Both bones of the chain keep their segments within the limit of the animated direction (+Y).
+        const std::span<const Vec3> positions = fixture.Pose(limited).currentComponentPose.positions;
+        const Vec3 upper = kb::math::Normalize(positions[kLowerIndex] - positions[kUpperIndex]);
+        const Vec3 lower = kb::math::Normalize(positions[kHandIndex] - positions[kLowerIndex]);
+        limitedAngle = std::max({ limitedAngle, std::acos(std::min(upper.y, 1.0F)), std::acos(std::min(lower.y, 1.0F)) });
+    }
+    Require(limitedAngle <= 10.0F * kb::math::kPi / 180.0F + 1.0e-3F && limitedAngle > 0.1F,
+        "A spring chain's bones must stay within the angle limit and use it");
+    const float fullLag = TipLag(fixture.Pose(full));
+    const float halfLag = TipLag(fixture.Pose(half));
+    Require(fullLag > 0.05F && halfLag > 0.2F * fullLag && halfLag < 0.8F * fullLag,
+        "A half weight must leave a spring chain about half way between the animation and the simulation");
+}
+
+void TestSpringBonesController() {
+    RuleFixture fixture;
+    SpringBoneSettings settings{ .stiffness = 80.5F, .damping = 3.25F, .gravity = 9.81F, .movementInfluence = 0.5F,
+        .collisionRadius = 0.02F, .maxAngleDegrees = 40.0F, .teleportDistance = 2.5F };
+    settings.colliders = {
+        SpringBoneCollider{ .boneId = kRoot, .shape = SpringColliderShape::Sphere, .offset = { 0.1F, 0.2F, 0.3F }, .radius = 0.25F },
+        SpringBoneCollider{ .boneId = kTwist, .shape = SpringColliderShape::Capsule, .offset = { 0.0F, 0.1F, 0.0F },
+            .tailOffset = { 0.0F, 0.6F, 0.0F }, .radius = 0.05F },
+    };
+    const std::filesystem::path saved = fixture.root / "Assets" / "Rig" / "SpringSaved.kbanimcontroller";
+    Require(kb::scene::AnimationAssetIO::SaveController(saved, SpringController(settings, 0.75F)), "A spring bones controller must save");
+    const auto loaded = kb::scene::AnimationAssetIO::LoadController(saved);
+    Require(loaded.has_value() && loaded->rigConstraints.size() == 1U, "A spring bones controller must load");
+    const kb::scene::AnimatorRigConstraint& constraint = loaded->rigConstraints[0];
+    const SpringBoneSettings& back = constraint.spring;
+    Require(constraint.type == kb::scene::AnimatorRigConstraintType::SpringBones && constraint.name == "Hair" &&
+            constraint.constrainedBoneId == kUpper && constraint.tipBoneId == kHand && constraint.midBoneId == 0U &&
+            constraint.target.empty() && constraint.poleTarget.empty() && constraint.weight == 0.75F,
+        "The spring bones chain and weight must survive a save and a load");
+    Require(back.stiffness == 80.5F && back.damping == 3.25F && back.gravity == 9.81F && back.movementInfluence == 0.5F &&
+            back.collisionRadius == 0.02F && back.maxAngleDegrees == 40.0F && back.teleportDistance == 2.5F,
+        "The spring bones settings must survive a save and a load");
+    Require(back.colliders.size() == 2U && back.colliders[0].boneId == kRoot && back.colliders[0].shape == SpringColliderShape::Sphere &&
+            back.colliders[0].offset.x == 0.1F && back.colliders[0].offset.y == 0.2F && back.colliders[0].offset.z == 0.3F &&
+            back.colliders[0].radius == 0.25F && back.colliders[1].boneId == kTwist &&
+            back.colliders[1].shape == SpringColliderShape::Capsule && back.colliders[1].offset.y == 0.1F &&
+            back.colliders[1].tailOffset.y == 0.6F && back.colliders[1].radius == 0.05F,
+        "The spring bones colliders must survive a save and a load");
+
+    // Invalid settings are refused.
+    const auto refused = [&fixture](SpringBoneSettings bad) {
+        return !kb::scene::AnimationAssetIO::SaveController(fixture.root / "Assets" / "Rig" / "Bad.kbanimcontroller", SpringController(std::move(bad)));
+    };
+    SpringBoneSettings negative;
+    negative.stiffness = -1.0F;
+    SpringBoneSettings influence;
+    influence.movementInfluence = 1.5F;
+    SpringBoneSettings angle;
+    angle.maxAngleDegrees = 200.0F;
+    SpringBoneSettings flat;
+    flat.colliders = { SpringBoneCollider{ .boneId = kRoot, .radius = 0.0F } };
+    SpringBoneSettings loose;
+    loose.colliders = { SpringBoneCollider{ .boneId = 0U } };
+    Require(refused(negative) && refused(influence) && refused(angle) && refused(flat) && refused(loose),
+        "Out-of-range spring bones settings must be refused");
+    kb::scene::AnimatorController targeted = SpringController(SpringBoneSettings{});
+    targeted.rigConstraints[0].target = "Reach";
+    Require(!kb::scene::AnimationAssetIO::SaveController(fixture.root / "Assets" / "Rig" / "Bad.kbanimcontroller", targeted),
+        "Spring bones take no target");
+
+    // The controller records schema 6; a file of schema 5 still loads, but cannot hold a spring record.
+    const auto rewritten = [](const std::filesystem::path& from, const std::filesystem::path& to, int schema) {
+        std::ifstream input(from, std::ios::binary);
+        const std::string text{ std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>() };
+        const std::size_t headerEnd = text.find('\n');
+        Require(headerEnd != std::string::npos && text.starts_with("21kb AnimatorController 6"), "A controller must open with its schema header");
+        std::ofstream output(to, std::ios::binary);
+        output << "21kb AnimatorController " << schema << text.substr(headerEnd);
+    };
+    kb::scene::AnimatorController chained{};
+    chained.layers = { { .name = "Base", .defaultState = "Pose", .states = { { .name = "Pose", .clipReference = "/Game/Rig/Static.kbanim" } } } };
+    chained.rigConstraints.push_back({ .name = "Reach", .type = kb::scene::AnimatorRigConstraintType::ChainIK, .target = "Reach",
+        .constrainedBoneId = kRoot, .tipBoneId = kHand });
+    const std::filesystem::path chainedPath = fixture.root / "Assets" / "Rig" / "Chained.kbanimcontroller";
+    const std::filesystem::path oldChained = fixture.root / "Assets" / "Rig" / "OldChained.kbanimcontroller";
+    const std::filesystem::path oldSpring = fixture.root / "Assets" / "Rig" / "OldSpring.kbanimcontroller";
+    Require(kb::scene::AnimationAssetIO::SaveController(chainedPath, chained), "A ChainIK controller must save");
+    rewritten(chainedPath, oldChained, 5);
+    rewritten(saved, oldSpring, 5);
+    const auto old = kb::scene::AnimationAssetIO::LoadController(oldChained);
+    Require(old.has_value() && old->rigConstraints.size() == 1U &&
+            old->rigConstraints[0].type == kb::scene::AnimatorRigConstraintType::ChainIK,
+        "A controller saved before spring bones existed must still load");
+    Require(!kb::scene::AnimationAssetIO::LoadController(oldSpring).has_value(),
+        "A spring bones record must not load from a file of an older schema");
+}
+
+// The chain simulation steps a thousand chains of four joints without touching the heap, and an animator
+// holding a thousand such chains does not allocate when it updates.
+void TestSpringBonesDoNotAllocate() {
+    using kb::scene::SpringCapsule;
+    constexpr std::size_t kChains = 1000U;
+    std::vector<kb::scene::SpringChainState> chains(kChains);
+    for (kb::scene::SpringChainState& chain : chains) kb::scene::PrepareSpringChain(chain, 4U);
+    const std::array<Vec3, 4> targets{ Vec3{ 0.0F, 0.0F, 0.0F }, Vec3{ 0.0F, 1.0F, 0.0F }, Vec3{ 0.0F, 2.0F, 0.0F }, Vec3{ 0.0F, 3.0F, 0.0F } };
+    SpringBoneSettings settings{ .stiffness = 30.0F, .damping = 4.0F, .gravity = 9.81F, .maxAngleDegrees = 60.0F };
+    const std::array<SpringCapsule, 1> colliders{ SpringCapsule{ Vec3{ -0.4F, 1.5F, 0.0F }, Vec3{ -0.4F, 3.0F, 0.0F }, 0.3F } };
+    kb::math::DVec3 origin{};
+    for (kb::scene::SpringChainState& chain : chains) kb::scene::StepSpringChain(chain, targets, origin, Quat{}, 0.0, settings, colliders);
+    BeginAllocationTally();
+    for (int frame = 0; frame < 10; ++frame) {
+        origin.x += 0.05;
+        for (kb::scene::SpringChainState& chain : chains) {
+            kb::scene::StepSpringChain(chain, targets, origin, Quat{}, 1.0 / 60.0, settings, colliders);
+        }
+    }
+    const AllocationTally stepped = EndAllocationTally();
+    Require(stepped.count == 0U, "Stepping spring chains must not allocate");
+    float worst = 0.0F;
+    float swing = 0.0F;
+    for (const kb::scene::SpringChainState& chain : chains) {
+        for (std::size_t joint = 0U; joint + 1U < 4U; ++joint) {
+            worst = std::max(worst, std::fabs(kb::math::Length(chain.position[joint + 1U] - chain.position[joint]) - 1.0F));
+        }
+        swing = std::max(swing, kb::math::Length(chain.position[3] - targets[3]));
+    }
+    Require(worst < 1.0e-4F && swing > 0.1F, "Every chain of the batch must swing and keep its bone lengths");
+
+    // The same chains on one skeleton, updated by the scene.
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb-spring-bones-allocation-tests";
+    std::filesystem::remove_all(root);
+    kb::scene::SkeletonAsset skeleton{};
+    skeleton.bones.push_back({ .id = 1U, .parentIndex = -1, .name = "Root", .referencePose = {}, .inverseBind = {} });
+    for (std::size_t chain = 0U; chain < kChains; ++chain) {
+        for (std::size_t joint = 0U; joint < 4U; ++joint) {
+            const std::size_t index = skeleton.bones.size();
+            skeleton.bones.push_back({ .id = 10U + index, .parentIndex = joint == 0U ? 0 : static_cast<std::int32_t>(index - 1U),
+                .name = "Bone" + std::to_string(index), .referencePose = { .position = { joint == 0U ? 0.01F * static_cast<float>(chain) : 0.0F, 1.0F, 0.0F } },
+                .inverseBind = {} });
+        }
+    }
+    kb::scene::Scene scene;
+    Require(kb::scene::SkeletonAssetIO::Save(root / "Assets" / "Rig" / "Hair.kbskeleton", skeleton) &&
+            scene.Assets().MountProject(root) && scene.Assets().Discover() == 1U,
+        "The spring bones allocation test could not save its skeleton");
+    const std::uint64_t skeletonId = scene.Assets().Manager().Registry().FindByPath("/Game/Rig/Hair.kbskeleton")->id.value;
+    const std::uint64_t signature = kb::scene::SkeletonCompatibilitySignature(skeleton);
+    kb::scene::AnimationClip clip{ .durationSeconds = 1.0F, .looping = true };
+    clip.targetSkeletonAssetId = skeletonId;
+    clip.targetSkeletonCompatibilitySignature = signature;
+    const kb::scene::AnimationBoneKeyframe key{ .timeSeconds = 0.0F, .transform = {} };
+    clip.skeletalTracks = { { .boneId = 1U, .keyframes = { key, kb::scene::AnimationBoneKeyframe{ .timeSeconds = 1.0F, .transform = {} } } } };
+    kb::scene::AnimatorController plain{};
+    plain.layers = { { .name = "Base", .defaultState = "Pose", .states = { { .name = "Pose", .clipReference = "/Game/Rig/Hair.kbanim" } } } };
+    kb::scene::AnimatorController sprung = plain;
+    for (std::size_t chain = 0U; chain < kChains; ++chain) {
+        sprung.rigConstraints.push_back({ .name = "Chain" + std::to_string(chain), .type = kb::scene::AnimatorRigConstraintType::SpringBones,
+            .constrainedBoneId = skeleton.bones[1U + chain * 4U].id, .tipBoneId = skeleton.bones[4U + chain * 4U].id,
+            .spring = SpringBoneSettings{ .stiffness = 30.0F, .damping = 4.0F, .gravity = 9.81F } });
+    }
+    Require(kb::scene::AnimationAssetIO::SaveClip(root / "Assets" / "Rig" / "Hair.kbanim", clip) &&
+            kb::scene::AnimationAssetIO::SaveController(root / "Assets" / "Rig" / "Plain.kbanimcontroller", plain) &&
+            kb::scene::AnimationAssetIO::SaveController(root / "Assets" / "Rig" / "Sprung.kbanimcontroller", sprung),
+        "The spring bones allocation test could not save its animation");
+    static_cast<void>(scene.Assets().Discover());
+    const auto update = [&scene](float seconds) {
+        static_cast<void>(scene.Runtime().Update(seconds));
+        const std::vector<std::string> errors = scene.Runtime().DrainSceneSystemErrors();
+        Require(errors.empty(), errors.empty() ? "" : errors.front().c_str());
+    };
+    // Heap allocations of ten updates of a walking character, and how far the last chain's tip trails.
+    const auto measure = [&](std::string_view controllerPath) {
+        const std::uint64_t controllerId = scene.Assets().Manager().Registry().FindByPath(controllerPath)->id.value;
+        const kb::scene::SceneObject object = scene.Entities().CreateObject({ .name = "Hair" });
+        Require(scene.Components().SkeletonBindings().Set(object.Entity(), kb::scene::SkeletonBindingComponent{
+                    .skeletonAssetId = skeletonId, .skeletonCompatibilitySignature = signature, .enabled = true }),
+            "The spring bones allocation test could not bind its skeleton");
+        scene.Components().Animators().Set(object.Entity(), kb::scene::Animator{ .controllerAssetId = controllerId, .speed = 1.0F, .enabled = true });
+        update(0.0F);
+        Require(scene.Animators().Exists(object.Entity()), "The spring bones animator must bind its chains");
+        std::size_t allocations = 0U;
+        for (int frame = 1; frame <= 13; ++frame) {
+            scene.Transforms().Set(object.Entity(), kb::scene::TransformComponent{ .localPosition = { 0.05F * static_cast<float>(frame), 0.0F, 0.0F } });
+            BeginAllocationTally();
+            static_cast<void>(scene.Runtime().Update(kFrame));
+            const AllocationTally tally = EndAllocationTally();
+            if (frame > 3) allocations += tally.count;
+        }
+        const std::optional<kb::scene::AnimatorInstanceSkeletonView> pose = scene.Animators().InstanceSkeleton(object.Entity());
+        Require(pose.has_value(), "The spring bones animator has no pose");
+        const float lag = kb::math::Length(pose->currentComponentPose.positions[skeleton.bones.size() - 1U] -
+            Vec3{ 0.0F, 4.0F, 0.0F } - Vec3{ 0.01F * static_cast<float>(kChains - 1U), 0.0F, 0.0F });
+        scene.Entities().Destroy(object.Entity());
+        return std::pair{ allocations, lag };
+    };
+    const auto [plainAllocations, plainLag] = measure("/Game/Rig/Plain.kbanimcontroller");
+    const auto [springAllocations, springLag] = measure("/Game/Rig/Sprung.kbanimcontroller");
+    Require(plainLag < 1.0e-4F && springLag > 0.05F, "The thousand spring chains must trail behind the moving character");
+    Require(springAllocations <= plainAllocations, "A thousand spring chains must not make an animator allocate when it updates");
+    std::error_code ignored;
+    std::filesystem::remove_all(root, ignored);
+}
+
 } // namespace
 
 void RunMotionSkeletonRuleTests() {
@@ -474,6 +828,13 @@ void RunMotionSkeletonRuleTests() {
     TestSpringRule();
     TestChainIkSolver();
     TestChainIkConstraint();
+    TestSpringBonesReturnToPose();
+    TestSpringBonesFrameRate();
+    TestSpringBonesColliders();
+    TestSpringBonesTeleport();
+    TestSpringBonesLimitAndWeight();
+    TestSpringBonesController();
+    TestSpringBonesDoNotAllocate();
 }
 
 } // namespace kb::tests

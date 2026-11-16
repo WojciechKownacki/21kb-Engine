@@ -163,6 +163,11 @@ struct AnimatorRuntimeConstraint {
     std::vector<std::uint32_t> chainBoneIndices;
     std::vector<Vec3> chainJoints;
     std::vector<float> chainSegmentLengths;
+    // SpringBones: the chain's simulation, its colliders' bones and their shapes at the last evaluation, sized once
+    // when the constraint binds. chainBoneIndices and chainJoints serve it too.
+    SpringChainState spring;
+    std::vector<std::uint32_t> springColliderBones;
+    std::vector<SpringCapsule> springColliders;
 };
 
 struct AnimatorInstanceSkeleton {
@@ -225,6 +230,8 @@ struct AnimatorInstance {
     std::optional<AnimatorInstanceSkeleton> skeleton;
     std::vector<AnimatorParameterValue> parameters;
     std::vector<AnimatorRuntimeConstraint> rigConstraints;
+    // Seconds that passed since the last skeletal pose evaluation, which the spring bones then simulate.
+    double springElapsedSeconds = 0.0;
     std::map<std::string, AnimatorIkTarget, std::less<>> ikTargets;
     Vec3 extractedRootMotionTranslation{};
     Quat extractedRootMotionRotation{};

@@ -284,6 +284,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneMaterialInstances.hpp
     include/engine/scene/AnimationChainIk.hpp
     include/engine/scene/AnimationAssets.hpp
+    include/engine/scene/AnimationSpringBones.hpp
     include/engine/scene/SkeletonBindingComponent.hpp
     include/engine/scene/AnimationRetargeting.hpp
     include/engine/scene/SceneGameplay.hpp
@@ -857,6 +858,7 @@ add_library(kb_engine STATIC
     src/scene/AnimationChainIk.cpp
     src/scene/AnimationAssetLoaders.cpp
     src/scene/SkeletonAsset.cpp
+    src/scene/AnimationSpringBones.cpp
     src/scene/SkeletonAssetIO.cpp
     src/scene/SkeletonAssetLoader.cpp
     src/scene/SkeletalMeshAsset.cpp

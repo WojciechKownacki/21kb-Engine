@@ -26,11 +26,6 @@ constexpr float kMinSegmentLength = 1.0e-5F;
     return value - axis * kb::math::Dot(value, axis);
 }
 
-[[nodiscard]] Vec3 AnyPerpendicular(Vec3 axis) noexcept {
-    const Vec3 helper = std::abs(axis.y) < 0.9F ? Vec3{ 0.0F, 1.0F, 0.0F } : Vec3{ 1.0F, 0.0F, 0.0F };
-    return kb::math::Normalize(kb::math::Cross(axis, helper));
-}
-
 // Walks from the fixed root and puts every joint back at its segment length along the direction it has now.
 void ImposeLengths(std::span<Vec3> joints, std::span<const float> lengths, Vec3 fallback) {
     for (std::size_t index = 0U; index + 1U < joints.size(); ++index) {
@@ -116,6 +111,11 @@ void BendTowardPole(std::span<Vec3> joints, Vec3 pole, float total) {
 }
 
 } // namespace
+
+Vec3 AnyPerpendicular(Vec3 axis) noexcept {
+    const Vec3 helper = std::abs(axis.y) < 0.9F ? Vec3{ 0.0F, 1.0F, 0.0F } : Vec3{ 1.0F, 0.0F, 0.0F };
+    return kb::math::Normalize(kb::math::Cross(axis, helper));
+}
 
 Quat ShortestArc(Vec3 from, Vec3 to) noexcept {
     const Vec3 a = kb::math::Normalize(from);

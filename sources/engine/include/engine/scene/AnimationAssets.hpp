@@ -2,6 +2,7 @@
 
 #include "engine/core/ReadSnapshotQueue.hpp"
 #include "engine/scene/AnimationChainIk.hpp"
+#include "engine/scene/AnimationSpringBones.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/SkeletonAsset.hpp"
 #include "engine/scene/TransformComponent.hpp"
@@ -175,6 +176,9 @@ enum class AnimatorRigConstraintType : std::uint8_t {
     // Any number of bones from constrainedBoneId (the chain root) down to tipBoneId (the effector), found through
     // their parent links. Skeletal controllers only; midBoneId stays unset.
     ChainIK,
+    // The same bone chain, swung by a spring simulation instead of a solver: it follows the animation with
+    // inertia, gravity and colliders. Skeletal controllers only; it needs no target, and midBoneId stays unset.
+    SpringBones,
 };
 
 // Constraints are evaluated in authored order after all controller layers.
@@ -197,6 +201,8 @@ struct AnimatorRigConstraint {
     SkeletonBoneId tipBoneId = 0U;
     // ChainIK only: solver, pass limit and reach tolerance.
     ChainIkSettings chainIk{};
+    // SpringBones only.
+    SpringBoneSettings spring{};
 };
 
 struct AnimatorGraphNodeLayout {
