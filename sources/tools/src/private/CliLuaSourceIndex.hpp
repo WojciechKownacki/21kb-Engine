@@ -45,6 +45,7 @@ struct LuaImport {
 struct LuaSourceIndex {
     std::vector<LuaDeclaration> declarations;
     std::vector<LuaImport> imports;
+    std::vector<std::uint32_t> codeLines; // the zero-based lines a token starts on, in order: where the script has code
 };
 
 // What a script defines and imports, read from its tokens (comments and strings are skipped). It does not check the

@@ -120,6 +120,9 @@ struct Block {
 LuaSourceIndex IndexLuaSource(std::string_view source) {
     const std::vector<Token> t = Tokenize(source);
     LuaSourceIndex index;
+    for (const Token& token : t) {
+        if (index.codeLines.empty() || index.codeLines.back() != token.range.begin.line) index.codeLines.push_back(token.range.begin.line);
+    }
     std::vector<Block> open;
     int brackets = 0;
 

@@ -80,6 +80,8 @@ namespace kb::cli {
 [[nodiscard]] int RunMcpCommand(const ArgumentList& arguments, std::istream& in, CommandIo io);
 // lsp: the Language Server Protocol for a project's Lua scripts, over `in` and io.out (CliLspCommand.cpp).
 [[nodiscard]] int RunLspCommand(const ArgumentList& arguments, std::istream& in, CommandIo io);
+// dap: the Debug Adapter Protocol for the live Lua debugger of a running game (CliDapCommand.cpp).
+[[nodiscard]] int RunDapCommand(const ArgumentList& arguments, std::istream& in, CommandIo io);
 // The script API of the engine, with the names of the project in `project` when one is given (what `api` prints).
 [[nodiscard]] bool BuildScriptApiCatalog(const std::optional<std::string>& project, kb::script::ScriptApiCatalog& catalog, std::string& error);
 [[nodiscard]] int RunKeysCommand(const ArgumentList& arguments, CommandIo io);

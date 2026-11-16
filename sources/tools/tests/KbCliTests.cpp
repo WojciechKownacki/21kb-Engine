@@ -6497,6 +6497,7 @@ void RunSprite2DAssetRefusalTests() {
 #endif
 
 void RunLanguageServerTests();
+void RunDebugAdapterTests();
 
 int main(int argc, char** argv) {
 #if KB_CLI_RENDERER
@@ -6584,6 +6585,10 @@ int main(int argc, char** argv) {
         RunLanguageServerTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{argv[1]} == "dap") {
+        RunDebugAdapterTests();
+        return EXIT_SUCCESS;
+    }
     if (argc != 1) return EXIT_FAILURE;
     RunAudioMixerCommandTests();
     RunCliJsonTests();
@@ -6638,6 +6643,7 @@ int main(int argc, char** argv) {
     RunMcpCommandTests();
     RunMcpCommandRefusalTests();
     RunLanguageServerTests();
+    RunDebugAdapterTests();
     RunKeyAndPackCommandTests();
     RunWorldCommandTests();
     RunNavMeshCommandTests();

@@ -12,7 +12,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
-#include <initializer_list>
 #include <iterator>
 #include <map>
 #include <optional>
@@ -45,22 +44,6 @@ constexpr int kModuleCompletion = 9;
 constexpr int kFunctionSymbol = 12;
 constexpr int kVariableSymbol = 13;
 
-[[nodiscard]] JsonValue Str(std::string value) { return JsonValue::MakeString(std::move(value)); }
-[[nodiscard]] JsonValue Num(double value) { return JsonValue::MakeNumber(value); }
-[[nodiscard]] JsonValue Bool(bool value) { return JsonValue::MakeBool(value); }
-
-[[nodiscard]] JsonValue Object(std::initializer_list<std::pair<const char*, JsonValue>> members) {
-    JsonValue object = JsonValue::MakeObject();
-    for (const auto& [name, value] : members) object.Set(name, value);
-    return object;
-}
-
-[[nodiscard]] const JsonValue* Member(const JsonValue* value, std::string_view name) {
-    return value != nullptr && value->GetKind() == JsonValue::Kind::Object ? value->Find(name) : nullptr;
-}
-
-[[nodiscard]] bool IsString(const JsonValue* value) { return value != nullptr && value->GetKind() == JsonValue::Kind::String; }
-[[nodiscard]] bool IsNumber(const JsonValue* value) { return value != nullptr && value->GetKind() == JsonValue::Kind::Number; }
 [[nodiscard]] bool IsNameChar(char c) noexcept { return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_'; }
 [[nodiscard]] bool IsMemberOperator(char c) noexcept { return c == '.' || c == ':'; }
 

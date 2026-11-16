@@ -705,3 +705,25 @@ What the server gives the editor, all from the engine itself:
 The server keeps the whole text of each open document (the editor sends it on every change) and reads other files of the
 project from disk, or from the editor when it has them open. Columns are counted in UTF-16 code units, as the protocol
 asks.
+
+### Debugging from the editor
+
+`kb_cli dap --project <project folder>` is the matching Debug Adapter Protocol server: it translates the debugger
+of a code editor to the [live Lua debugger](#live-lua-debugger) of a running game, so breakpoints and steps in the
+editor stop the scripts of the game.
+
+1. Start the game with `--lua-debug-dir=<new folder>` (or the editor with `--lua-debug-dir`, then Play).
+2. Register `kb_cli dap --project <project folder>` as the debug adapter of Lua files, with an `attach` configuration
+   whose `endpoint` is that folder. `launch` is refused with a message that says so: the adapter does not start the game.
+
+The adapter serves `setBreakpoints`, `continue`, `next`, `stepIn`, `stepOut`, `pause`, `threads`, `stackTrace`, `scopes`
+(one scope per frame, its locals), `variables`, `evaluate` and `disconnect`. A breakpoint is verified when the script has
+code on its line (a breakpoint on an empty or comment-only line stays unverified and never stops anything). Scripts are
+known to the debugger by their path in the project's `Assets` folder, which is how the adapter names the file of a
+breakpoint and finds the file of a frame. The `stopped` event says `breakpoint`, `step` or `pause`; `terminated` follows
+when the game ends and removes its debugger folder. `evaluate` has the limits of the live debugger: scalar locals and
+upvalues of the frame, in an isolated state. `disconnect`, or the editor closing the adapter, clears the breakpoints and
+lets a stopped script run on.
+
+The adapter asks the game for its state about five times a second, which also keeps the debug session alive (the game
+drops a session that is silent for thirty seconds). Like the live debugger, it supports one client per game.

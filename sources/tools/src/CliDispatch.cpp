@@ -561,6 +561,11 @@ R"(  run          Run a scene headless and report logs, events, and errors (the
                constructs outside the language every platform runs), completion and hover
                from the script API, go to definition across Import/require, and the outline.
                  [--project <dir>]
+  dap          Serve the Debug Adapter Protocol over stdio, so a code editor can debug the Lua
+               scripts of a game started with --lua-debug-dir <new folder>: attach to that folder
+               (arguments.endpoint), then breakpoints, continue and steps, stack, locals and
+               expressions, as the live Lua debugger offers them.
+                 [--project <dir>]
   keys         Manage release signing keys. Private keys are refused inside a
                project or a repository; keep them out of version control.
                  generate --out <key file>
@@ -661,7 +666,7 @@ Global options:
                   "command":"entity","output":"<stdout>","errors":["<stderr line>",...]}
                "ok" is true when the exit code is 0; "errors" lists what the command
                wrote to stderr. A command that prints its own JSON (audio-mixer,
-               run --report, api --print json, batch) keeps it unchanged. mcp and lsp ignore --json.
+               run --report, api --print json, batch) keeps it unchanged. mcp, lsp and dap ignore --json.
                Native compiler logs go to process stderr and never precede the JSON object.
   --dry-run    Only for the commands that name it (audio-mixer new/set).
   --command-timeout-ms <1..86400000>  Bound the entire command on Windows.
@@ -853,6 +858,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"batch", nullptr, CliCommandKind::Batch, true, {}, CliJsonOutput::Native},
     {"mcp", nullptr, CliCommandKind::Mcp, true, {}, CliJsonOutput::Protocol},
     {"lsp", nullptr, CliCommandKind::Lsp, true, {}, CliJsonOutput::Protocol},
+    {"dap", nullptr, CliCommandKind::Dap, true, {}, CliJsonOutput::Protocol},
     {"help", nullptr, CliCommandKind::Help, true, {}},
     {"commands", nullptr, CliCommandKind::Catalog, true, {}, CliJsonOutput::Native},
 };
@@ -881,6 +887,7 @@ std::optional<int> RunNamedCommand(
         });
     case CliCommandKind::Mcp: return RunMcpCommand(arguments, in, io);
     case CliCommandKind::Lsp: return RunLspCommand(arguments, in, io);
+    case CliCommandKind::Dap: return RunDapCommand(arguments, in, io);
     case CliCommandKind::Help:
         if (!arguments.Positionals().empty()) PrintCommandUsage(io.out, arguments.Positionals().front());
         else PrintUsage(io.out);

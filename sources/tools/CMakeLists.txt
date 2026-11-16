@@ -9,6 +9,7 @@ add_library(kb_cli_core STATIC
     src/CliCodeModules.cpp
     src/CliLuaDebugCommand.cpp
     src/CliLspCommand.cpp
+    src/CliDapCommand.cpp
     src/CliLuaSourceIndex.cpp
     src/CliProtocolStream.cpp
     src/CliAudioCommands.cpp
@@ -184,6 +185,7 @@ if(BUILD_TESTING)
     add_executable(kb_cli_tests
         tests/KbCliTests.cpp
         tests/KbCliLanguageServerTests.cpp
+        tests/KbCliDebugAdapterTests.cpp
     )
 
     target_link_libraries(kb_cli_tests PRIVATE kb_cli_core)
