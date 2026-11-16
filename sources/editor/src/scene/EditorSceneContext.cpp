@@ -930,9 +930,9 @@ bool EditorSceneContext::TickPlayModeSceneSession(float deltaSeconds) {
                 hierarchyRowsRootAppendEpoch_ == rootAppendEpoch &&
                 hierarchyRowsRootCount_ == playModeRootCount_) {
                 for (const kb::scene::SceneEntity root : appendedRoots) {
-                    EditorHierarchyRowBuilder::AppendRoot(*scene_, hierarchyExpansion_.CollapsedEntities(),
-                        root, hierarchyRowsCache_);
+                    hierarchyRows_.AppendRoot(root);
                 }
+                hierarchyAllRowsValid_ = false;
                 hierarchyRowsRootCount_ = rootCount;
             } else {
                 InvalidateHierarchyRows();
@@ -1936,11 +1936,22 @@ bool EditorSceneContext::SelectHierarchyRow(std::size_t rowIndex) noexcept {
 }
 
 bool EditorSceneContext::SelectHierarchyRow(std::size_t rowIndex, bool additive, bool range) noexcept {
-    const std::vector<EditorHierarchyRow>& rows = HierarchyRows();
     if (IsHierarchyRenaming()) {
         static_cast<void>(CommitHierarchyRename());
     }
-    const bool selected = hierarchySelection_.SelectRow(rows, rowIndex, additive, range);
+    // Only the rows between the range anchor and the clicked row are built.
+    const EditorHierarchyRow* clicked = HierarchyRowAt(rowIndex);
+    std::size_t first = rowIndex;
+    std::size_t last = rowIndex;
+    if (range && clicked != nullptr && hierarchySelection_.Anchor().IsValid()) {
+        const std::size_t anchorRow = hierarchyRows_.IndexOfNear(hierarchySelection_.Anchor(), rowIndex);
+        if (anchorRow != EditorHierarchyRowModel::kNotListed) {
+            first = std::min(anchorRow, rowIndex);
+            last = std::max(anchorRow, rowIndex);
+        }
+    }
+    const std::vector<EditorHierarchyRow> rows = clicked != nullptr ? HierarchyRowWindow(first, last - first + 1U) : std::vector<EditorHierarchyRow>{};
+    const bool selected = hierarchySelection_.SelectRow(rows, rowIndex - first, additive, range);
     if (selected) {
         assetBrowser_.ClearSelection();
     }
@@ -1964,18 +1975,29 @@ void EditorSceneContext::ClearViewportBoxSelection() noexcept {
     viewportBoxSelection_ = {};
 }
 
+// Every row at once; for small scenes, automation and tests. The panel asks for the rows it shows.
 const std::vector<EditorHierarchyRow>& EditorSceneContext::HierarchyRows() const {
     RebuildHierarchyRowsIfNeeded();
-    return hierarchyRowsCache_;
+    if (!hierarchyAllRowsValid_) {
+        hierarchyAllRows_ = EditorHierarchyRowBuilder::Build(*scene_, hierarchyExpansion_.CollapsedEntities(), hierarchySearch_.Query());
+        hierarchyAllRowsValid_ = true;
+    }
+    return hierarchyAllRows_;
 }
 
 std::size_t EditorSceneContext::HierarchyRowCount() const {
-    return HierarchyRows().size();
+    RebuildHierarchyRowsIfNeeded();
+    return hierarchyRows_.Count();
 }
 
 const EditorHierarchyRow* EditorSceneContext::HierarchyRowAt(std::size_t rowIndex) const {
-    const std::vector<EditorHierarchyRow>& rows = HierarchyRows();
-    return rowIndex < rows.size() ? &rows[rowIndex] : nullptr;
+    RebuildHierarchyRowsIfNeeded();
+    return hierarchyRows_.RowAt(rowIndex);
+}
+
+const std::vector<EditorHierarchyRow>& EditorSceneContext::HierarchyRowWindow(std::size_t first, std::size_t count) const {
+    RebuildHierarchyRowsIfNeeded();
+    return hierarchyRows_.Window(first, count);
 }
 
 int EditorSceneContext::HierarchyScrollOffset() const noexcept {
@@ -2814,12 +2836,12 @@ bool EditorSceneContext::AssetImportInProgress() const noexcept {
 }
 
 bool EditorSceneContext::ToggleHierarchyRowExpanded(std::size_t rowIndex) {
-    const std::vector<EditorHierarchyRow>& rows = HierarchyRows();
-    if (rowIndex >= rows.size() || !rows[rowIndex].hasChildren) {
+    const EditorHierarchyRow* row = HierarchyRowAt(rowIndex);
+    if (row == nullptr || !row->hasChildren) {
         return false;
     }
 
-    hierarchyExpansion_.SetExpanded(rows[rowIndex].entity, !rows[rowIndex].expanded);
+    hierarchyExpansion_.SetExpanded(row->entity, !row->expanded);
     InvalidateHierarchyRows();
     return true;
 }
@@ -3019,22 +3041,14 @@ bool EditorSceneContext::ReparentEntities(std::span<const kb::scene::SceneEntity
         return anyMoved;
     });
     if (moved) {
-        const std::vector<EditorHierarchyRow>& rows = HierarchyRows();
-        hierarchySelection_.Clear();
-        bool first = true;
+        RebuildHierarchyRowsIfNeeded();
+        std::vector<kb::scene::SceneEntity> listed;
         for (const kb::scene::SceneEntity entity : children) {
-            if (!scene_->Entities().IsAlive(entity)) {
-                continue;
-            }
-            for (std::size_t rowIndex = 0; rowIndex < rows.size(); ++rowIndex) {
-                if (rows[rowIndex].entity != entity) {
-                    continue;
-                }
-                static_cast<void>(hierarchySelection_.SelectRow(rows, rowIndex, !first, false));
-                first = false;
-                break;
+            if (hierarchyRows_.IsListed(entity)) {
+                listed.push_back(entity);
             }
         }
+        hierarchySelection_.SelectEntities(listed);
         if (hierarchySelection_.SelectedEntities().empty() && !moving.empty()) {
             SelectEntity(moving.front());
         }
@@ -4670,10 +4684,11 @@ void EditorSceneContext::UpgradePrefabLinksOnSave(const kb::scene::SceneDocument
 
 void EditorSceneContext::CompleteLoadedUIComponents() {
     std::vector<kb::scene::SceneEntity> incomplete;
-    for (const auto& row : HierarchyRows()) {
-        const auto values = kb::scene::CaptureSceneUIComponents(scene_->Components().UI(), row.entity);
-        if (!values.Empty() && !values.rectTransform) incomplete.push_back(row.entity);
-    }
+    RebuildHierarchyRowsIfNeeded();
+    hierarchyRows_.ForEachEntity([this, &incomplete](kb::scene::SceneEntity entity) {
+        const auto values = kb::scene::CaptureSceneUIComponents(scene_->Components().UI(), entity);
+        if (!values.Empty() && !values.rectTransform) incomplete.push_back(entity);
+    });
     if (incomplete.empty()) return;
     const bool completed = ExecuteSceneCommand("Complete UI components", [this, &incomplete]() {
         for (const auto entity : incomplete) {
@@ -6241,7 +6256,8 @@ void EditorSceneContext::RebuildHierarchyRowsIfNeeded() const {
     }
 
     const auto rebuildStart = std::chrono::steady_clock::now();
-    hierarchyRowsCache_ = EditorHierarchyRowBuilder::Build(*scene_, hierarchyExpansion_.CollapsedEntities(), hierarchySearch_.Query());
+    hierarchyRows_.Sync(*scene_, hierarchyExpansion_.CollapsedEntities(), hierarchySearch_.Query(), true);
+    hierarchyAllRowsValid_ = false;
     hierarchyRowsDirty_ = false;
     const kb::scene::SceneHierarchyQueries hierarchy =
         static_cast<const kb::scene::Scene&>(*scene_).Hierarchy();
@@ -6252,7 +6268,7 @@ void EditorSceneContext::RebuildHierarchyRowsIfNeeded() const {
     if (rebuildMs >= 4.0) {
         diagnostics::EditorLagTrace::Slow(
             "hierarchy-rebuild", diagnostics::EditorLagTrace::NextEventId(), rebuildMs,
-            "rows=" + std::to_string(hierarchyRowsCache_.size()), 4.0);
+            "rows=" + std::to_string(hierarchyRows_.Count()), 4.0);
     }
 }
 

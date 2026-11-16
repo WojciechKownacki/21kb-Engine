@@ -12,6 +12,7 @@ namespace kb::editor {
 class EditorHierarchySelectionState {
 public:
     [[nodiscard]] kb::scene::SceneEntity Primary() const noexcept;
+    [[nodiscard]] kb::scene::SceneEntity Anchor() const noexcept;
     [[nodiscard]] const std::vector<kb::scene::SceneEntity>& SelectedEntities() const noexcept;
     [[nodiscard]] bool IsSelected(kb::scene::SceneEntity entity) const noexcept;
 

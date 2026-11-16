@@ -8,6 +8,10 @@ kb::scene::SceneEntity EditorHierarchySelectionState::Primary() const noexcept {
     return primary_;
 }
 
+kb::scene::SceneEntity EditorHierarchySelectionState::Anchor() const noexcept {
+    return anchor_;
+}
+
 const std::vector<kb::scene::SceneEntity>& EditorHierarchySelectionState::SelectedEntities() const noexcept {
     return selected_;
 }

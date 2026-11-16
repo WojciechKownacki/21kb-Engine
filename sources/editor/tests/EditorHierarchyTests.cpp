@@ -530,6 +530,7 @@ void RunEditorHierarchyTests() {
     RunDroppedPrefabAssetBuildsPrefabHierarchyRowsTest();
     RunMeshAssetActionCreatesRenderableSceneEntityTest();
     RunSkeletalMeshAssetActionCreatesDeformedSceneEntityTest();
+    RunEditorHierarchyScaleTests();
 }
 
 } // namespace kb::editor::tests

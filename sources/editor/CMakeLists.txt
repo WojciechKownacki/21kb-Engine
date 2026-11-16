@@ -681,6 +681,7 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorHierarchyObjectFactory.hpp
     src/private/scene/EditorHierarchyRow.hpp
     src/private/scene/EditorHierarchyRowBuilder.hpp
+    src/private/scene/EditorHierarchyRowModel.hpp
     src/private/scene/EditorHierarchyRowFactory.hpp
     src/private/scene/EditorHierarchySearchState.hpp
     src/private/scene/EditorHierarchySearchMatcher.hpp
@@ -1002,6 +1003,7 @@ add_executable(kb_editor WIN32
     src/scene/EditorHierarchyExpansionState.cpp
     src/scene/EditorHierarchyObjectFactory.cpp
     src/scene/EditorHierarchyRowBuilder.cpp
+    src/scene/EditorHierarchyRowModel.cpp
     src/scene/EditorHierarchyRowFactory.cpp
     src/scene/EditorHierarchySearchState.cpp
     src/scene/EditorHierarchySearchMatcher.cpp
@@ -1451,6 +1453,7 @@ if(BUILD_TESTING)
 
     add_executable(kb_editor_tests
         tests/EditorHierarchyTests.cpp
+        tests/EditorHierarchyScaleTests.cpp
         tests/EditorAssetBrowserTests.cpp
         tests/EditorAudioMixerAuthoringTests.cpp
         tests/EditorAudioMixerInspectorTests.cpp
@@ -1582,6 +1585,7 @@ if(BUILD_TESTING)
         src/commands/EditorSceneHistoryCommand.cpp
             src/scene/EditorHierarchyExpansionState.cpp
         src/scene/EditorHierarchyRowBuilder.cpp
+        src/scene/EditorHierarchyRowModel.cpp
         src/scene/EditorHierarchyRowFactory.cpp
         src/scene/EditorHierarchySearchMatcher.cpp
         src/scene/EditorHierarchySearchState.cpp

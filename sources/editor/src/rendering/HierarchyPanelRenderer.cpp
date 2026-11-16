@@ -64,25 +64,23 @@ void DrawScrollbar(HDC dc, const RECT& listContent, const EditorTheme& theme, co
 
 void HierarchyPanelRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorSceneContext& sceneContext) const {
     const auto paintStart = std::chrono::steady_clock::now();
-    const std::vector<EditorHierarchyRow>& rows = sceneContext.HierarchyRows();
+    const std::size_t rowCount = sceneContext.HierarchyRowCount();
 
     GdiDrawing::FillRectColor(dc, content, GdiDrawing::ToColorRef(theme.panel));
     const RECT listContent = HierarchyPanelToolbarRenderer{}.Paint(dc, content, theme, sceneContext);
-    const int contentHeight = static_cast<int>(rows.size()) * kHierarchyRowHeight;
+    const int contentHeight = static_cast<int>(rowCount) * kHierarchyRowHeight;
     const int viewportHeight = RectHeight(listContent);
     const int maxOffset = std::max(0, contentHeight - viewportHeight);
     const int scroll = std::clamp(sceneContext.HierarchyScrollOffset(), 0, maxOffset);
     const bool hasScrollbar = contentHeight > viewportHeight;
     const int rowsRight = hasScrollbar ? listContent.right - kHierarchyScrollbarWidth : listContent.right;
 
-    if (viewportHeight > 0 && !rows.empty()) {
+    if (viewportHeight > 0 && rowCount != 0U) {
         const std::size_t firstRow = static_cast<std::size_t>(scroll / kHierarchyRowHeight);
         const int firstRowOffset = scroll % kHierarchyRowHeight;
         const std::size_t visibleRows = static_cast<std::size_t>((viewportHeight + firstRowOffset + kHierarchyRowHeight - 1) / kHierarchyRowHeight);
-        const std::size_t lastRow = std::min(rows.size(), firstRow + visibleRows);
         int y = listContent.top - firstRowOffset;
-        for (std::size_t rowIndex = firstRow; rowIndex < lastRow; ++rowIndex) {
-            const EditorHierarchyRow& row = rows[rowIndex];
+        for (const EditorHierarchyRow& row : sceneContext.HierarchyRowWindow(firstRow, visibleRows)) {
             RECT rowRect{ listContent.left, y, rowsRight, y + kHierarchyRowHeight };
             HierarchyRowRenderer{}.Paint(dc, rowRect, theme, row, sceneContext);
             y += kHierarchyRowHeight;
@@ -94,7 +92,7 @@ void HierarchyPanelRenderer::Paint(HDC dc, const RECT& content, const EditorThem
     if (paintMs >= 4.0) {
         diagnostics::EditorLagTrace::Slow("hierarchy-paint",
             diagnostics::EditorLagTrace::NextEventId(), paintMs,
-            "rows=" + std::to_string(rows.size()), 4.0);
+            "rows=" + std::to_string(rowCount), 4.0);
     }
 }
 

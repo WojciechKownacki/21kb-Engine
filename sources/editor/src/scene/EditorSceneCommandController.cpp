@@ -149,7 +149,7 @@ bool EditorSceneCommandController::Execute(std::unique_ptr<IEditorCommand> comma
 }
 
 void EditorSceneCommandController::NormalizeHierarchySelectionAfterSceneRestore() {
-    const std::vector<EditorHierarchyRow> rows = HierarchyRows();
+    const std::vector<EditorHierarchyRow> rows = EditorHierarchyRowBuilder::BuildLeading(scene_, hierarchyExpansion_.CollapsedEntities(), hierarchySearch_.Query(), 1U);
     EditorHierarchySelectionNormalizer::NormalizeAfterSceneRestore(scene_, hierarchySelection_, rows);
     assetBrowser_.ClearSelection();
 }

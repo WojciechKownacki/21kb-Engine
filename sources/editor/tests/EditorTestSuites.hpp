@@ -9,6 +9,7 @@ namespace kb::editor::tests {
 void RunEditorAudioMixerRuntimeTests();
 
 void RunEditorHierarchyTests();
+void RunEditorHierarchyScaleTests();
 void RunEditorAssetBrowserTests();
 void RunEditorAudioMixerAuthoringTests();
 void RunEditorAudioMixerInspectorTests();

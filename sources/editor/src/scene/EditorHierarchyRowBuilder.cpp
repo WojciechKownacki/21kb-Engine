@@ -7,6 +7,7 @@
 #include "scene/EditorHierarchyRowFactory.hpp"
 #include "scene/EditorHierarchySearchMatcher.hpp"
 
+#include <algorithm>
 #include <string>
 
 namespace kb::editor {
@@ -25,13 +26,27 @@ std::vector<EditorHierarchyRow> EditorHierarchyRowBuilder::Build(const kb::scene
     return rows;
 }
 
+std::vector<EditorHierarchyRow> EditorHierarchyRowBuilder::BuildLeading(const kb::scene::Scene& scene, const CollapsedEntitySet& collapsedEntities, std::string_view searchQuery, std::size_t limit) {
+    if (!searchQuery.empty()) {
+        std::vector<EditorHierarchyRow> rows = Build(scene, collapsedEntities, searchQuery);
+        rows.resize(std::min(rows.size(), limit));
+        return rows;
+    }
+    std::vector<EditorHierarchyRow> rows;
+    const kb::scene::SceneHierarchyQueries hierarchy = scene.Hierarchy();
+    for (std::size_t index = 0U; index < hierarchy.RootCount() && rows.size() < limit; ++index) {
+        Append(scene, collapsedEntities, hierarchy.RootAt(index), 0U, rows, limit);
+    }
+    return rows;
+}
+
 void EditorHierarchyRowBuilder::AppendRoot(const kb::scene::Scene& scene,
     const CollapsedEntitySet& collapsedEntities, kb::scene::SceneEntity root,
     std::vector<EditorHierarchyRow>& rows) {
     Append(scene, collapsedEntities, root, 0U, rows);
 }
 
-void EditorHierarchyRowBuilder::Append(const kb::scene::Scene& scene, const CollapsedEntitySet& collapsedEntities, kb::scene::SceneEntity entity, std::uint32_t depth, std::vector<EditorHierarchyRow>& rows) {
+void EditorHierarchyRowBuilder::Append(const kb::scene::Scene& scene, const CollapsedEntitySet& collapsedEntities, kb::scene::SceneEntity entity, std::uint32_t depth, std::vector<EditorHierarchyRow>& rows, std::size_t limit) {
     if (const auto* renderer = scene.Components().MeshRenderers().TryGet(entity); renderer && renderer->transient) return;
     const EditorHierarchyRow row = EditorHierarchyRowFactory::Make(scene, collapsedEntities, entity, depth);
     rows.push_back(row);
@@ -39,8 +54,9 @@ void EditorHierarchyRowBuilder::Append(const kb::scene::Scene& scene, const Coll
         return;
     }
 
-    for (const kb::scene::SceneEntity child : scene.Hierarchy().ChildEntities(entity)) {
-        Append(scene, collapsedEntities, child, depth + 1U, rows);
+    const kb::scene::SceneHierarchyQueries hierarchy = scene.Hierarchy();
+    for (std::size_t index = 0U; index < hierarchy.ChildCount(entity) && rows.size() < limit; ++index) {
+        Append(scene, collapsedEntities, hierarchy.ChildAt(entity, index), depth + 1U, rows, limit);
     }
 }
 

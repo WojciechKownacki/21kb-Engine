@@ -35,6 +35,7 @@
 #include "scene/EditorSceneAssetBrowserCommands.hpp"
 #include "scene/EditorHierarchyExpansionState.hpp"
 #include "scene/EditorHierarchyRow.hpp"
+#include "scene/EditorHierarchyRowModel.hpp"
 #include "scene/EditorHierarchySearchState.hpp"
 #include "scene/EditorHierarchySelectionState.hpp"
 #include "scene/EditorPluginsState.hpp"
@@ -508,6 +509,8 @@ public:
     [[nodiscard]] const std::vector<EditorHierarchyRow>& HierarchyRows() const;
     [[nodiscard]] std::size_t HierarchyRowCount() const;
     [[nodiscard]] const EditorHierarchyRow* HierarchyRowAt(std::size_t rowIndex) const;
+    // Only the rows [first, first + count) are built; the list is valid until the next row query.
+    [[nodiscard]] const std::vector<EditorHierarchyRow>& HierarchyRowWindow(std::size_t first, std::size_t count) const;
     [[nodiscard]] int HierarchyScrollOffset() const noexcept;
     // Build Game settings column: the panel is taller than any dock leaf it fits in.
     [[nodiscard]] int BuildGameScrollOffset() const noexcept;
@@ -1805,7 +1808,9 @@ private:
     EditorHierarchyExpansionState hierarchyExpansion_;
     std::vector<EditorSceneObjectPrefabPayload> hierarchyClipboard_;
     EditorHierarchySearchState hierarchySearch_;
-    mutable std::vector<EditorHierarchyRow> hierarchyRowsCache_;
+    mutable EditorHierarchyRowModel hierarchyRows_;
+    mutable std::vector<EditorHierarchyRow> hierarchyAllRows_;
+    mutable bool hierarchyAllRowsValid_ = false;
     mutable bool hierarchyRowsDirty_ = true;
     mutable std::size_t hierarchyRowsRootCount_ = 0U;
     mutable std::uint64_t hierarchyRowsRootAppendEpoch_ = 0U;
