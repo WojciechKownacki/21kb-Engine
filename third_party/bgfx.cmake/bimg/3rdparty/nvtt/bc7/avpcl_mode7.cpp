@@ -1052,11 +1052,11 @@ static void swap(float *list1, int *list2, int i, int j)
 	int t1 = list2[i]; list2[i] = list2[j]; list2[j] = t1;
 }
 
-float AVPCL::compress_mode7(const Tile &t, char *block)
+float AVPCL::compress_mode7(const Tile &t, char *block, int shapeDivisor)
 {
 	// number of rough cases to look at. reasonable values of this are 1, NSHAPES/4, and NSHAPES
 	// NSHAPES/4 gets nearly all the cases; you can increase that a bit (say by 3 or 4) if you really want to squeeze the last bit out
-	const int NITEMS=NSHAPES/4;
+	const int NITEMS = NSHAPES >= shapeDivisor ? NSHAPES/shapeDivisor : 1;
 
 	// pick the best NITEMS shapes and refine these.
 	struct {

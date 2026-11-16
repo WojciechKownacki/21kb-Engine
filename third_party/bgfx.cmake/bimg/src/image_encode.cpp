@@ -41,6 +41,22 @@ namespace bimg
 	};
 	static_assert(Quality::Count == BX_COUNTOF(s_squishQuality) );
 
+	// Of the shapes a BC7 partitioned mode rates, 1/divisor are refined (at least one). The encoder's
+	// own reasonable setting is 4; refining only the best-rated shape costs a fraction of the time for
+	// a change in PSNR that stays well below 0.1 dB on typical content.
+	static const uint32_t s_bc7ShapeDivisor[] =
+	{
+		// Standard
+		64, // Default
+		4,  // Highest
+		64, // Fastest
+		// Normal map
+		64, // Default
+		4,  // Highest
+		64, // Fastest
+	};
+	static_assert(Quality::Count == BX_COUNTOF(s_bc7ShapeDivisor) );
+
 	static const float s_astcQuality[] =
 	{
 		// Standard
@@ -331,7 +347,7 @@ namespace bimg
 			break;
 
 		case TextureFormat::BC7:
-			nvtt::compressBC7(src, _width, _height, _width*16, _dst);
+			nvtt::compressBC7(src, _width, _height, _width*16, _dst, s_bc7ShapeDivisor[_quality]);
 			break;
 
 		default:

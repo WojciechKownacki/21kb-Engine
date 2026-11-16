@@ -24,6 +24,7 @@
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
+#include "runtime/RuntimeTextureMipChain.hpp"
 
 #include <bgfx/bgfx.h>
 #include <bimg/bimg.h>
@@ -669,6 +670,99 @@ void RunBakedTextureBakeKeyTest() {
     Require(bumped.bakerVersion != kb::render::bake::kTextureBakerVersion,
         "The bumped baker version under test is the version the baker ships");
     Require(bumped.Digest() != reference, "Bumping the baker version did not move the bake key");
+
+    TextureBakeSettings highest = baseSettings;
+    highest.quality = kb::render::bake::TextureBakeQuality::Highest;
+    Require(reference != kb::render::bake::MakeTextureBakeKey(
+                             pngA, desktop, TextureCompressionFamily::BlockCompressedBaseline, highest)
+                             .Digest(),
+        "Changing the encoder quality did not move the bake key");
+}
+
+// ---------------------------------------------------------------------------------------
+// The blocks of a baked chain are the ones a whole-level encode writes: encoding a level in tasks
+// on several workers changes nothing, and a stored texture handed on again keeps every block.
+void RunBakedTextureParallelEncodeTest() {
+    const std::uint16_t edge = 64U;
+    std::vector<std::uint8_t> pixels = MakeRgba8Gradient(edge, edge, 0xFFU);
+    std::uint32_t seed = 12345U;
+    for (std::size_t index = 0U; index < pixels.size(); index += 4U) {
+        seed = seed * 1664525U + 1013904223U;
+        pixels[index] = static_cast<std::uint8_t>(pixels[index] ^ ((seed >> 24U) & 0x1FU));
+    }
+    const std::vector<std::uint8_t> png = MakePngSource(pixels, edge, edge);
+
+    struct Case {
+        BakeTargetProfile profile;
+        TextureCompressionFamily family;
+    };
+    const std::array cases{
+        Case{ DesktopTestProfile(), TextureCompressionFamily::BlockCompressedExtended },
+        Case{ DesktopTestProfile(), TextureCompressionFamily::BlockCompressedBaseline },
+        Case{ MobileTestProfile(), TextureCompressionFamily::AdaptiveScalable },
+        Case{ MobileTestProfile(), TextureCompressionFamily::Ericsson2 },
+    };
+    for (const Case& testCase : cases) {
+        TempStore store{ "21kb_texture_bake_parallel" };
+        LooseBakedAssetSink sink{ store.Root() };
+        const TextureBakeOutput baked = BakeTextureBytes(
+            png,
+            TextureBakeSettings{ RenderTextureAssetSemantic::BaseColor, RenderTextureAssetColorSpace::Linear },
+            testCase.profile,
+            testCase.family,
+            sink);
+        Require(baked.status == TextureBakeStatus::Success, "Parallel encode test could not bake the source");
+        RenderTextureAssetData asset{};
+        Require(kb::render::bake::ReadBakedTexture(baked.primaryBlock, asset) && asset.gpuBlocks.has_value(),
+            "Parallel encode test could not read the baked texture back");
+
+        const std::optional<kb::render::RuntimeTextureMipChain> chain = kb::render::BuildRuntimeTexture2DMipChain(
+            pixels, edge, edge, kb::render::RenderTextureColorSpace::Linear);
+        Require(chain.has_value() && chain->mipCount == baked.mipCount, "Parallel encode test has no reference chain");
+        const auto format = static_cast<bimg::TextureFormat::Enum>(baked.format);
+        bx::DefaultAllocator allocator;
+        std::vector<std::uint8_t> expected;
+        std::size_t levelOffset = 0U;
+        std::uint32_t levelWidth = edge;
+        std::uint32_t levelHeight = edge;
+        for (std::uint8_t lod = 0U; lod < chain->mipCount; ++lod) {
+            const std::uint32_t paddedWidth = ((levelWidth + 3U) / 4U) * 4U;
+            const std::uint32_t paddedHeight = ((levelHeight + 3U) / 4U) * 4U;
+            std::vector<std::uint8_t> padded(static_cast<std::size_t>(paddedWidth) * paddedHeight * 4U, 0U);
+            for (std::uint32_t y = 0U; y < paddedHeight; ++y) {
+                for (std::uint32_t x = 0U; x < paddedWidth; ++x) {
+                    const std::size_t source =
+                        levelOffset + (static_cast<std::size_t>(std::min(y, levelHeight - 1U)) * levelWidth +
+                                          std::min(x, levelWidth - 1U)) * 4U;
+                    std::copy_n(chain->rgba8.data() + source, 4U, padded.data() + (static_cast<std::size_t>(y) * paddedWidth + x) * 4U);
+                }
+            }
+            const std::size_t levelBytes = static_cast<std::size_t>(paddedWidth / 4U) * (paddedHeight / 4U) *
+                bimg::getBlockInfo(format).blockSize;
+            expected.resize(expected.size() + levelBytes);
+            bx::Error error;
+            bimg::imageEncode(&allocator, expected.data() + expected.size() - levelBytes, padded.data(),
+                bimg::TextureFormat::RGBA8, paddedWidth, paddedHeight, 1U, format, bimg::Quality::Default, &error);
+            Require(error.isOk(), "Parallel encode test could not encode its reference level");
+            levelOffset += static_cast<std::size_t>(levelWidth) * levelHeight * 4U;
+            levelWidth = levelWidth > 1U ? levelWidth / 2U : 1U;
+            levelHeight = levelHeight > 1U ? levelHeight / 2U : 1U;
+        }
+        Require(asset.gpuBlocks->blocks == expected, "A chain encoded in parallel differs from a whole-level encode");
+
+        // The same artifact handed to another store keeps every byte and block.
+        TempStore other{ "21kb_texture_bake_parallel_restore" };
+        LooseBakedAssetSink otherSink{ other.Root() };
+        Require(kb::render::bake::StoreBakedTexture(baked.key, testCase.profile, baked.primaryBlock, baked.streamedMips,
+                    otherSink) == kb::assets::bake::BakedAssetSinkStatus::Success,
+            "A baked texture could not be handed to another store");
+        BakedAssetDescriptor descriptor{};
+        descriptor.key = baked.key;
+        descriptor.assetTypeId = std::string{ kb::render::bake::kTextureBakedAssetTypeId };
+        Require(ReadAllBytes(otherSink.BlockPath(descriptor, kb::assets::bake::kBakedAssetPrimaryBlockName)) ==
+                    baked.primaryBlock,
+            "A texture handed to another store changed its primary block");
+    }
 }
 
 // ---------------------------------------------------------------------------------------
@@ -2518,6 +2612,7 @@ void RunTextureBakeTests() {
     RunBakedTextureAlphaResidueTest();
     RunBakedTextureDeterminismTest();
     RunBakedTextureBakeKeyTest();
+    RunBakedTextureParallelEncodeTest();
     RunBakedTextureMipChainTest();
     RunBakedTextureColorSpaceTest();
     RunBakedTextureDimensionRuleTest();

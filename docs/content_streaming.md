@@ -365,6 +365,11 @@ Split and patch output is unsealed; sign each pack with `kb_cli pack sign` after
   defaults to one above the release's highest patch. The release number must be higher than the
   previous release's.
 
+The cooker keeps every texture it baked in the cook cache (`baked-textures`) and takes it from
+there again while its source, target, settings and baker version are unchanged. It encodes the
+blocks of every mip level in parallel; `kb_cooker --texture-quality highest` spends the longest
+encoder effort on each texture, as a release build can afford (the default is `balanced`).
+
 Every pack the job creates is sealed and verified against the trust anchor, the staged set is
 verified with `kb_cli pack set-verify`, and then the release manifest is signed over the finished
 stage, index and packs included.

@@ -1148,6 +1148,86 @@ struct CookerToolInputSnapshot {
         error);
 }
 
+// A texture as the bake store and a reused package keep it: the primary block and the streamed
+// levels, level 0 first.
+struct CookedTexture {
+    std::vector<std::uint8_t> primary;
+    std::vector<std::vector<std::uint8_t>> streamedMips;
+};
+
+// Hands an artifact to the package and, best effort, to the bake store, so the next cook of the
+// same inputs finds it there. A store that cannot take it only means a later cook bakes it again.
+class StoringSink final : public asset_bake::IBakedAssetSink {
+public:
+    StoringSink(asset_bake::IBakedAssetSink& package, asset_bake::IBakedAssetSink& store) noexcept
+        : package_{ package }, store_{ store } {}
+
+    [[nodiscard]] asset_bake::BakedAssetSinkStatus BeginAsset(const asset_bake::BakedAssetDescriptor& descriptor) override {
+        const asset_bake::BakedAssetSinkStatus status = package_.BeginAsset(descriptor);
+        storing_ = status == asset_bake::BakedAssetSinkStatus::Success &&
+            store_.BeginAsset(descriptor) == asset_bake::BakedAssetSinkStatus::Success;
+        return status;
+    }
+    [[nodiscard]] asset_bake::BakedAssetSinkStatus WritePrimaryBlock(
+        std::span<const std::uint8_t> bytes, std::uint32_t alignmentBytes) override {
+        const asset_bake::BakedAssetSinkStatus status = package_.WritePrimaryBlock(bytes, alignmentBytes);
+        Keep(storing_ && store_.WritePrimaryBlock(bytes, alignmentBytes) == asset_bake::BakedAssetSinkStatus::Success);
+        return status;
+    }
+    [[nodiscard]] asset_bake::BakedAssetSinkStatus WriteAuxiliaryBlock(
+        const asset_bake::BakedAssetBlock& block, std::span<const std::uint8_t> bytes) override {
+        const asset_bake::BakedAssetSinkStatus status = package_.WriteAuxiliaryBlock(block, bytes);
+        Keep(storing_ && store_.WriteAuxiliaryBlock(block, bytes) == asset_bake::BakedAssetSinkStatus::Success);
+        return status;
+    }
+    [[nodiscard]] asset_bake::BakedAssetSinkStatus CommitAsset() override {
+        const asset_bake::BakedAssetSinkStatus status = package_.CommitAsset();
+        Keep(storing_ && store_.CommitAsset() == asset_bake::BakedAssetSinkStatus::Success);
+        storing_ = false;
+        return status;
+    }
+    void AbortAsset() noexcept override {
+        package_.AbortAsset();
+        store_.AbortAsset();
+        storing_ = false;
+    }
+
+private:
+    // The store drops what it was given the moment one step of it fails.
+    void Keep(bool stored) noexcept {
+        if (storing_ && !stored) {
+            store_.AbortAsset();
+            storing_ = false;
+        }
+    }
+
+    asset_bake::IBakedAssetSink& package_;
+    asset_bake::IBakedAssetSink& store_;
+    bool storing_ = false;
+};
+
+[[nodiscard]] bool ReadStoredTexture(
+    const asset_bake::LooseBakedAssetSink& store,
+    const asset_bake::BakedAssetDescriptor& descriptor,
+    CookedTexture& texture) {
+    std::string ignored;
+    std::error_code status;
+    const std::filesystem::path primary = store.BlockPath(descriptor, asset_bake::kBakedAssetPrimaryBlockName);
+    if (primary.empty() || !std::filesystem::is_regular_file(primary, status) ||
+        !ReadFileBytes(primary, texture.primary, ignored)) {
+        return false;
+    }
+    for (std::uint32_t level = 0U;; ++level) {
+        const std::filesystem::path path = store.BlockPath(descriptor, render_bake::BakedTextureMipBlockName(level));
+        if (path.empty() || !std::filesystem::is_regular_file(path, status)) {
+            return true;
+        }
+        if (!ReadFileBytes(path, texture.streamedMips.emplace_back(), ignored)) {
+            return false;
+        }
+    }
+}
+
 [[nodiscard]] std::filesystem::path ResolveProjectFile(
     const std::filesystem::path& requested,
     std::string& error) {
@@ -2835,6 +2915,9 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
     }
     std::set<std::string> packagedPaths;
     std::set<asset_bake::AssetBakeDigest> bakedTextures;
+    // Textures that were baked before and have not changed since are taken from here, whichever
+    // package the earlier cook wrote.
+    asset_bake::LooseBakedAssetSink textureStore{ request.cacheRoot / "baked-textures" };
     ProjectCookResult result{};
 
     if (!AddFixedShaders(request, cookerToolInputs, profile, writer, manifest, packagedPaths, diagnostics, error)) {
@@ -2899,6 +2982,8 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
                 .semantic = texture->semantic,
                 .colorSpace = texture->colorSpace,
                 .preserveAtlas = atlasTextures.contains(virtualPath) || pointTextures.contains(metadata.id.value),
+                .quality = request.highestTextureQuality ? render_bake::TextureBakeQuality::Highest
+                                                         : render_bake::TextureBakeQuality::Balanced,
             };
             for (std::uint32_t familyIndex = 0U;
                  familyIndex < asset_bake::kTextureCompressionFamilyCount;
@@ -2910,22 +2995,31 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
                 const auto textureKey = render_bake::MakeTextureBakeKey(textureSource, profile, family, textureSettings);
                 const auto digest = textureKey.Digest();
                 if (!bakedTextures.contains(digest)) {
-                    if (const auto* cached = reusePack.FindArtifact(digest); cached != nullptr) {
-                        std::vector<std::uint8_t> bytes;
-                        if (cached->assetTypeId != render_bake::kTextureBakedAssetTypeId ||
-                            cached->blocks.size() != 1U ||
-                            cached->blocks[0].name != asset_bake::kBakedAssetPrimaryBlockName ||
-                            reusePack.ReadBlock(*cached, asset_bake::kBakedAssetPrimaryBlockName, bytes) !=
-                                asset_bake::AssetPackReadStatus::Success) {
+                    const asset_bake::BakedAssetDescriptor textureDescriptor{
+                        .key = textureKey, .assetTypeId = std::string{ render_bake::kTextureBakedAssetTypeId },
+                    };
+                    CookedTexture cached;
+                    bool reused = false;
+                    if (const auto* artifact = reusePack.FindArtifact(digest); artifact != nullptr) {
+                        // The primary block, then the streamed levels in order.
+                        reused = artifact->assetTypeId == render_bake::kTextureBakedAssetTypeId && !artifact->blocks.empty() &&
+                            artifact->blocks[0].name == asset_bake::kBakedAssetPrimaryBlockName &&
+                            reusePack.ReadBlock(*artifact, asset_bake::kBakedAssetPrimaryBlockName, cached.primary) ==
+                                asset_bake::AssetPackReadStatus::Success;
+                        for (std::size_t block = 1U; reused && block < artifact->blocks.size(); ++block) {
+                            reused = artifact->blocks[block].name == render_bake::BakedTextureMipBlockName(static_cast<std::uint32_t>(block - 1U)) &&
+                                reusePack.ReadBlock(*artifact, artifact->blocks[block].name, cached.streamedMips.emplace_back()) ==
+                                    asset_bake::AssetPackReadStatus::Success;
+                        }
+                        if (!reused) {
                             return Failure("cached texture artifact is invalid: " + virtualPath);
                         }
-                        const asset_bake::BakedAssetDescriptor cachedDescriptor{
-                            .key = textureKey, .assetTypeId = cached->assetTypeId,
-                        };
-                        if (writer.BeginAsset(cachedDescriptor) != asset_bake::BakedAssetSinkStatus::Success ||
-                            writer.WritePrimaryBlock(bytes, profile.packageBlockAlignmentBytes) != asset_bake::BakedAssetSinkStatus::Success ||
-                            writer.CommitAsset() != asset_bake::BakedAssetSinkStatus::Success) {
-                            writer.AbortAsset();
+                    } else {
+                        reused = ReadStoredTexture(textureStore, textureDescriptor, cached);
+                    }
+                    if (reused) {
+                        if (render_bake::StoreBakedTexture(textureKey, profile, cached.primary, cached.streamedMips, writer) !=
+                            asset_bake::BakedAssetSinkStatus::Success) {
                             return Failure("cached texture could not be stored: " + virtualPath);
                         }
                         diagnostics << "reusing texture: " << virtualPath << " family="
@@ -2934,8 +3028,9 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
                         diagnostics << "cooking texture: " << virtualPath << " family="
                                     << asset_bake::TextureCompressionFamilyName(family) << '\n';
                         diagnostics.flush();
+                        StoringSink sink{ writer, textureStore };
                         const render_bake::TextureBakeOutput baked =
-                            render_bake::BakeTextureBytes(textureSource, textureSettings, profile, family, writer);
+                            render_bake::BakeTextureBytes(textureSource, textureSettings, profile, family, sink);
                         if (baked.status != render_bake::TextureBakeStatus::Success) {
                             return Failure("texture cook failed for " + virtualPath + " family=" +
                                 std::string{ asset_bake::TextureCompressionFamilyName(family) } + " status=" +

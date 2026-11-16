@@ -1,5 +1,6 @@
 #include "kb/render/bake/TextureBaker.hpp"
 
+#include "bake/BakeWorkerPool.hpp"
 #include "runtime/RuntimeTextureMipChain.hpp"
 
 #include <bimg/bimg.h>
@@ -11,7 +12,9 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstddef>
+#include <cstring>
 #include <fstream>
 #include <limits>
 #include <memory>
@@ -78,40 +81,11 @@ private:
 [[nodiscard]] bool StoreTextureArtifact(TextureBakeOutput& output, const BakeTargetProfile& profile,
     kb::assets::bake::IBakedAssetSink& sink, const std::vector<std::uint8_t>& primaryBlock,
     const std::vector<std::vector<std::uint8_t>>& streamedMips) {
-    BakedAssetDescriptor descriptor{};
-    descriptor.key = output.key;
-    descriptor.assetTypeId = std::string{ kTextureBakedAssetTypeId };
-    output.sinkStatus = sink.BeginAsset(descriptor);
+    output.sinkStatus = StoreBakedTexture(output.key, profile, primaryBlock, streamedMips, sink);
     if (output.sinkStatus != BakedAssetSinkStatus::Success) {
         output.status = TextureBakeStatus::SinkRejected;
         return false;
     }
-    output.sinkStatus = sink.WritePrimaryBlock(primaryBlock, profile.packageBlockAlignmentBytes);
-    if (output.sinkStatus != BakedAssetSinkStatus::Success) {
-        sink.AbortAsset();
-        output.status = TextureBakeStatus::SinkRejected;
-        return false;
-    }
-    for (std::uint32_t level = 0U; level < streamedMips.size(); ++level) {
-        const std::string blockName = BakedTextureMipBlockName(level);
-        kb::assets::bake::BakedAssetBlock block{};
-        block.name = blockName;
-        block.residency = kb::assets::bake::BakedAssetBlockResidency::Streaming;
-        block.alignmentBytes = profile.packageBlockAlignmentBytes;
-        output.sinkStatus = sink.WriteAuxiliaryBlock(block, streamedMips[level]);
-        if (output.sinkStatus != BakedAssetSinkStatus::Success) {
-            sink.AbortAsset();
-            output.status = TextureBakeStatus::SinkRejected;
-            return false;
-        }
-    }
-    output.sinkStatus = sink.CommitAsset();
-    if (output.sinkStatus != BakedAssetSinkStatus::Success) {
-        sink.AbortAsset();
-        output.status = TextureBakeStatus::SinkRejected;
-        return false;
-    }
-
     return true;
 }
 
@@ -137,13 +111,14 @@ private:
 // Fixed field order, one byte each, little-endian by construction: the settings that are not
 // already covered by the profile id or the source content. Positional, so no two different
 // settings can serialize to the same bytes by swapping values between fields.
-[[nodiscard]] std::array<std::uint8_t, 3U> SerializeTextureBakeSettings(
+[[nodiscard]] std::array<std::uint8_t, 4U> SerializeTextureBakeSettings(
     TextureCompressionFamily family,
     const TextureBakeSettings& settings) noexcept {
     return {
         static_cast<std::uint8_t>(static_cast<unsigned>(family) | (settings.preserveAtlas ? 0x80U : 0U)),
         static_cast<std::uint8_t>(settings.semantic),
         static_cast<std::uint8_t>(settings.colorSpace),
+        static_cast<std::uint8_t>(settings.quality),
     };
 }
 
@@ -176,6 +151,87 @@ void CopyLevelIntoBlockAlignedBuffer(
             padded[destination + 3U] = level[source + 3U];
         }
     }
+}
+
+// One mip level as the encoder reads it: RGBA8 texels of whole blocks, and where its blocks go.
+struct EncodeLevel {
+    const std::uint8_t* pixels = nullptr;
+    std::uint32_t width = 0U;
+    std::uint32_t height = 0U;
+    std::size_t offset = 0U;
+};
+
+// A rectangle of one level, in blocks. Either whole rows of it or a run inside a single row.
+struct EncodeTask {
+    std::uint32_t level = 0U;
+    std::uint32_t row = 0U;
+    std::uint32_t column = 0U;
+    std::uint32_t rows = 0U;
+    std::uint32_t columns = 0U;
+};
+
+// Blocks per task: enough that a task outweighs a pool dispatch and the encoder's own set-up
+// (every call of the ASTC encoder builds a context), few enough that one level still spreads
+// over every worker. The slow encoders spend milliseconds (BC7) or a fifth of one (ASTC) on a block.
+[[nodiscard]] constexpr std::uint32_t EncodeTaskBlocks(bimg::TextureFormat::Enum format) noexcept {
+    switch (format) {
+    case bimg::TextureFormat::BC7:
+        return 16U;
+    case bimg::TextureFormat::ASTC4x4:
+        return 128U;
+    default:
+        return 4096U;
+    }
+}
+
+// What every task of one texture shares.
+struct EncodeJob {
+    std::vector<EncodeLevel> levels;
+    bimg::TextureFormat::Enum format = bimg::TextureFormat::Count;
+    bimg::Quality::Enum quality = bimg::Quality::Default;
+    std::uint32_t blockWidth = 0U;
+    std::uint32_t blockHeight = 0U;
+    std::uint32_t blockBytes = 0U;
+    std::uint8_t* blocks = nullptr;
+};
+
+// Every encoder here turns a block into bytes from that block's own texels, so a task's bytes are
+// the ones a walk over the whole level would write, whichever worker runs it and when.
+[[nodiscard]] bool EncodeTaskBlocksInto(const EncodeJob& job, const EncodeTask& task) {
+    const EncodeLevel& level = job.levels[task.level];
+    const std::uint32_t blockWidth = job.blockWidth;
+    const std::uint32_t blockHeight = job.blockHeight;
+    const std::uint32_t blocksPerRow = level.width / blockWidth;
+    const std::uint32_t width = task.columns * blockWidth;
+    const std::uint32_t height = task.rows * blockHeight;
+    const std::size_t firstBlock = static_cast<std::size_t>(task.row) * blocksPerRow + task.column;
+    std::vector<std::uint8_t> run;
+    const std::uint8_t* source = level.pixels + static_cast<std::size_t>(task.row) * blockHeight * level.width * 4U;
+    if (task.columns != blocksPerRow) {
+        run.resize(static_cast<std::size_t>(width) * height * 4U);
+        for (std::uint32_t y = 0U; y < height; ++y) {
+            std::memcpy(
+                run.data() + static_cast<std::size_t>(y) * width * 4U,
+                level.pixels + ((static_cast<std::size_t>(task.row) * blockHeight + y) * level.width +
+                    static_cast<std::size_t>(task.column) * blockWidth) * 4U,
+                static_cast<std::size_t>(width) * 4U);
+        }
+        source = run.data();
+    }
+    bx::DefaultAllocator allocator;
+    bx::Error error;
+    bimg::imageEncode(
+        &allocator,
+        job.blocks + level.offset + firstBlock * job.blockBytes,
+        source,
+        bimg::TextureFormat::RGBA8,
+        width,
+        height,
+        1U,
+        job.format,
+        job.quality,
+        &error);
+    return error.isOk();
 }
 
 [[nodiscard]] bool ReadFileBytes(const std::filesystem::path& path, std::vector<std::uint8_t>& bytes) {
@@ -274,12 +330,43 @@ bool BakedTextureBlockFootprint(
     return true;
 }
 
+BakedAssetSinkStatus StoreBakedTexture(
+    const AssetBakeKey& key,
+    const BakeTargetProfile& profile,
+    std::span<const std::uint8_t> primaryBlock,
+    std::span<const std::vector<std::uint8_t>> streamedMips,
+    kb::assets::bake::IBakedAssetSink& sink) {
+    BakedAssetDescriptor descriptor{};
+    descriptor.key = key;
+    descriptor.assetTypeId = std::string{ kTextureBakedAssetTypeId };
+    BakedAssetSinkStatus status = sink.BeginAsset(descriptor);
+    if (status != BakedAssetSinkStatus::Success) {
+        return status;
+    }
+    status = sink.WritePrimaryBlock(primaryBlock, profile.packageBlockAlignmentBytes);
+    for (std::uint32_t level = 0U; status == BakedAssetSinkStatus::Success && level < streamedMips.size(); ++level) {
+        const std::string blockName = BakedTextureMipBlockName(level);
+        kb::assets::bake::BakedAssetBlock block{};
+        block.name = blockName;
+        block.residency = kb::assets::bake::BakedAssetBlockResidency::Streaming;
+        block.alignmentBytes = profile.packageBlockAlignmentBytes;
+        status = sink.WriteAuxiliaryBlock(block, streamedMips[level]);
+    }
+    if (status == BakedAssetSinkStatus::Success) {
+        status = sink.CommitAsset();
+    }
+    if (status != BakedAssetSinkStatus::Success) {
+        sink.AbortAsset();
+    }
+    return status;
+}
+
 AssetBakeKey MakeTextureBakeKey(
     std::span<const std::uint8_t> sourceBytes,
     const BakeTargetProfile& profile,
     TextureCompressionFamily family,
     const TextureBakeSettings& settings) {
-    const std::array<std::uint8_t, 3U> serialized = SerializeTextureBakeSettings(family, settings);
+    const std::array<std::uint8_t, 4U> serialized = SerializeTextureBakeSettings(family, settings);
     AssetBakeKey key{};
     key.sourceContentHash = kb::assets::bake::HashBakeBytes(sourceBytes);
     key.bakerId = std::string{ kTextureBakerId };
@@ -470,21 +557,28 @@ TextureBakeOutput BakeTextureBytes(
         return output;
     }
 
-    // Encoded level by level into a buffer this baker owns. bimg's whole-container encode would
-    // do the same walk, but it allocates its destination uninitialised and hands every level's
-    // true size straight to the codec, and nvtt's BC7 tile loop reads a full 4x4 tile whatever
-    // that size is - so a chain whose tail levels are smaller than one block reads past the
-    // level it was given. Padding here is what makes the tail levels defined, and a buffer that
-    // is written level by level in full is what makes two runs byte-identical.
+    // Encoded into a buffer this baker owns, in tasks that run side by side on the bake workers.
+    // bimg's whole-container encode would walk the levels itself, but it allocates its destination
+    // uninitialised and hands every level's true size straight to the codec, and nvtt's BC7 tile
+    // loop reads a full 4x4 tile whatever that size is - so a chain whose tail levels are smaller
+    // than one block reads past the level it was given. Padding is what makes the tail levels
+    // defined, and a buffer that is written in full is what makes two runs byte-identical.
     std::vector<std::uint8_t> blocks(encodedSize, 0U);
     std::vector<std::size_t> levelOffsets;
     levelOffsets.reserve(chain->mipCount + 1U);
-    std::vector<std::uint8_t> paddedLevel;
+    EncodeJob job;
+    job.levels.reserve(chain->mipCount);
+    job.format = bimgFormat;
+    job.quality = settings.quality == TextureBakeQuality::Highest ? bimg::Quality::Highest : bimg::Quality::Default;
+    job.blockWidth = blockWidth;
+    job.blockHeight = blockHeight;
+    job.blockBytes = bimg::getBlockInfo(bimgFormat).blockSize;
+    job.blocks = blocks.data();
+    std::vector<std::vector<std::uint8_t>> paddedLevels(chain->mipCount);
     std::size_t levelSourceOffset = 0U;
     std::size_t levelDestinationOffset = 0U;
     std::uint32_t levelWidth = width;
     std::uint32_t levelHeight = height;
-    bx::Error encodeError;
     for (std::uint8_t lod = 0U; lod < chain->mipCount; ++lod) {
         const std::size_t levelBytes = static_cast<std::size_t>(levelWidth) * levelHeight * 4U;
         if (levelSourceOffset + levelBytes > chain->rgba8.size()) {
@@ -494,31 +588,19 @@ TextureBakeOutput BakeTextureBytes(
         const std::uint32_t paddedWidth = RoundUpToBlock(levelWidth, blockWidth);
         const std::uint32_t paddedHeight = RoundUpToBlock(levelHeight, blockHeight);
         const std::size_t encodedLevelBytes = static_cast<std::size_t>(paddedWidth / blockWidth) *
-            (paddedHeight / blockHeight) * bimg::getBlockInfo(bimgFormat).blockSize;
+            (paddedHeight / blockHeight) * job.blockBytes;
         if (levelDestinationOffset + encodedLevelBytes > blocks.size()) {
             output.status = TextureBakeStatus::EncodeFailed;
             return output;
         }
         levelOffsets.push_back(levelDestinationOffset);
 
-        CopyLevelIntoBlockAlignedBuffer(
-            chain->rgba8.data() + levelSourceOffset, levelWidth, levelHeight, paddedWidth, paddedHeight, paddedLevel);
-        if (settings.preserveAtlas) std::copy(paddedLevel.begin(), paddedLevel.end(), blocks.begin() + static_cast<std::ptrdiff_t>(levelDestinationOffset));
-        else bimg::imageEncode(
-            &allocator,
-            blocks.data() + levelDestinationOffset,
-            paddedLevel.data(),
-            bimg::TextureFormat::RGBA8,
-            paddedWidth,
-            paddedHeight,
-            1U,
-            bimgFormat,
-            bimg::Quality::Default,
-            &encodeError);
-        if (!encodeError.isOk()) {
-            output.status = TextureBakeStatus::EncodeFailed;
-            return output;
+        const std::uint8_t* pixels = chain->rgba8.data() + levelSourceOffset;
+        if (paddedWidth != levelWidth || paddedHeight != levelHeight) {
+            CopyLevelIntoBlockAlignedBuffer(pixels, levelWidth, levelHeight, paddedWidth, paddedHeight, paddedLevels[lod]);
+            pixels = paddedLevels[lod].data();
         }
+        job.levels.push_back(EncodeLevel{ pixels, paddedWidth, paddedHeight, levelDestinationOffset });
 
         levelSourceOffset += levelBytes;
         levelDestinationOffset += encodedLevelBytes;
@@ -530,6 +612,43 @@ TextureBakeOutput BakeTextureBytes(
         return output;
     }
     levelOffsets.push_back(blocks.size());
+
+    if (settings.preserveAtlas) {
+        std::memcpy(blocks.data(), job.levels[0].pixels, blocks.size());
+    } else {
+        std::vector<EncodeTask> tasks;
+        const std::uint32_t taskBlocks = EncodeTaskBlocks(bimgFormat);
+        for (std::uint32_t level = 0U; level < job.levels.size(); ++level) {
+            const std::uint32_t blocksPerRow = job.levels[level].width / blockWidth;
+            const std::uint32_t blockRows = job.levels[level].height / blockHeight;
+            if (taskBlocks >= blocksPerRow) {
+                const std::uint32_t rowsPerTask = std::max(1U, taskBlocks / blocksPerRow);
+                for (std::uint32_t row = 0U; row < blockRows; row += rowsPerTask) {
+                    tasks.push_back(EncodeTask{ level, row, 0U, std::min(rowsPerTask, blockRows - row), blocksPerRow });
+                }
+            } else {
+                for (std::uint32_t row = 0U; row < blockRows; ++row) {
+                    for (std::uint32_t column = 0U; column < blocksPerRow; column += taskBlocks) {
+                        tasks.push_back(EncodeTask{ level, row, column, 1U, std::min(taskBlocks, blocksPerRow - column) });
+                    }
+                }
+            }
+        }
+        std::atomic<bool> failed{ false };
+        BakeWorkerPool().ParallelForChunks(tasks.size(), 1U,
+            [&](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
+                for (std::size_t index = chunk.begin; index < chunk.begin + chunk.count; ++index) {
+                    if (failed.load(std::memory_order_relaxed) || !EncodeTaskBlocksInto(job, tasks[index])) {
+                        failed.store(true, std::memory_order_relaxed);
+                        return;
+                    }
+                }
+            });
+        if (failed.load()) {
+            output.status = TextureBakeStatus::EncodeFailed;
+            return output;
+        }
+    }
 
     // Every level whose larger edge is above the tail edge streams in a block of its own, so a
     // texture loads with its tail and sharpens as the larger levels arrive. The primary block

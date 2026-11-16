@@ -22,6 +22,8 @@ struct ProjectCookRequest {
     std::filesystem::path reusePackPath;
     // zstd level for the pack's blocks, 1..19; 0 stores every block as baked.
     int packCompressionLevel = 0;
+    // Spend the longest encoder effort on every texture, as a release build can afford.
+    bool highestTextureQuality = false;
 };
 
 struct ProjectCookResult {

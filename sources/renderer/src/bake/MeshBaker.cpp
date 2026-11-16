@@ -1,5 +1,6 @@
 #include "kb/render/bake/MeshBaker.hpp"
 
+#include "bake/BakeWorkerPool.hpp"
 #include "engine/assets/bake/AssetPack.hpp"
 #include "engine/ecs/WorkerPool.hpp"
 #include "engine/scene/SkeletalMeshAsset.hpp"
@@ -622,8 +623,7 @@ void ForEachParallel(std::size_t count, Job&& job) {
         for (std::size_t index = 0U; index < count; ++index) job(index);
         return;
     }
-    static kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{} };
-    pool.ParallelForChunks(count, 1U, [&job](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
+    BakeWorkerPool().ParallelForChunks(count, 1U, [&job](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
         for (std::size_t index = chunk.begin; index < chunk.begin + chunk.count; ++index) job(index);
     });
 }

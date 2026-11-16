@@ -30,19 +30,19 @@ bool AVPCL::flag_nonuniform_ati = false;
 // global mode
 bool AVPCL::mode_rgb = false;		// true if image had constant alpha = 255
 
-void AVPCL::compress(const Tile &t, char *block)
+void AVPCL::compress(const Tile &t, char *block, int shapeDivisor)
 {
 	char tempblock[AVPCL::BLOCKSIZE];
 	float msebest = FLT_MAX;
 
-	float mse_mode0 = AVPCL::compress_mode0(t, tempblock);		if(mse_mode0 < msebest) { msebest = mse_mode0; memcpy(block, tempblock, AVPCL::BLOCKSIZE); }
-	float mse_mode1 = AVPCL::compress_mode1(t, tempblock);		if(mse_mode1 < msebest) { msebest = mse_mode1; memcpy(block, tempblock, AVPCL::BLOCKSIZE); }
-	float mse_mode2 = AVPCL::compress_mode2(t, tempblock);		if(mse_mode2 < msebest) { msebest = mse_mode2; memcpy(block, tempblock, AVPCL::BLOCKSIZE); }
-	float mse_mode3 = AVPCL::compress_mode3(t, tempblock);		if(mse_mode3 < msebest) { msebest = mse_mode3; memcpy(block, tempblock, AVPCL::BLOCKSIZE); }
+	float mse_mode0 = AVPCL::compress_mode0(t, tempblock, shapeDivisor);		if(mse_mode0 < msebest) { msebest = mse_mode0; memcpy(block, tempblock, AVPCL::BLOCKSIZE); }
+	float mse_mode1 = AVPCL::compress_mode1(t, tempblock, shapeDivisor);		if(mse_mode1 < msebest) { msebest = mse_mode1; memcpy(block, tempblock, AVPCL::BLOCKSIZE); }
+	float mse_mode2 = AVPCL::compress_mode2(t, tempblock, shapeDivisor);		if(mse_mode2 < msebest) { msebest = mse_mode2; memcpy(block, tempblock, AVPCL::BLOCKSIZE); }
+	float mse_mode3 = AVPCL::compress_mode3(t, tempblock, shapeDivisor);		if(mse_mode3 < msebest) { msebest = mse_mode3; memcpy(block, tempblock, AVPCL::BLOCKSIZE); }
 	float mse_mode4 = AVPCL::compress_mode4(t, tempblock);		if(mse_mode4 < msebest) { msebest = mse_mode4; memcpy(block, tempblock, AVPCL::BLOCKSIZE); }
 	float mse_mode5 = AVPCL::compress_mode5(t, tempblock);		if(mse_mode5 < msebest) { msebest = mse_mode5; memcpy(block, tempblock, AVPCL::BLOCKSIZE); }
 	float mse_mode6 = AVPCL::compress_mode6(t, tempblock);		if(mse_mode6 < msebest) { msebest = mse_mode6; memcpy(block, tempblock, AVPCL::BLOCKSIZE); }
-	float mse_mode7 = AVPCL::compress_mode7(t, tempblock);		if(mse_mode7 < msebest) { msebest = mse_mode7; memcpy(block, tempblock, AVPCL::BLOCKSIZE); }
+	float mse_mode7 = AVPCL::compress_mode7(t, tempblock, shapeDivisor);		if(mse_mode7 < msebest) { msebest = mse_mode7; memcpy(block, tempblock, AVPCL::BLOCKSIZE); }
 		
 	/*if (errfile)
 	{

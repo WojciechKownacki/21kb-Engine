@@ -36,19 +36,20 @@ extern bool flag_nonuniform_ati;
 // global mode
 extern bool mode_rgb;		// true if image had constant alpha = 255
 
-void compress(const Tile &t, char *block);
+// shapeDivisor: of the shapes a partitioned mode rates, 1/shapeDivisor are refined (1 = all of them).
+void compress(const Tile &t, char *block, int shapeDivisor = 4);
 void decompress(const char *block, Tile &t);
 
-float compress_mode0(const Tile &t, char *block);
+float compress_mode0(const Tile &t, char *block, int shapeDivisor = 4);
 void decompress_mode0(const char *block, Tile &t);
 
-float compress_mode1(const Tile &t, char *block);
+float compress_mode1(const Tile &t, char *block, int shapeDivisor = 4);
 void decompress_mode1(const char *block, Tile &t);
 
-float compress_mode2(const Tile &t, char *block);
+float compress_mode2(const Tile &t, char *block, int shapeDivisor = 4);
 void decompress_mode2(const char *block, Tile &t);
 
-float compress_mode3(const Tile &t, char *block);
+float compress_mode3(const Tile &t, char *block, int shapeDivisor = 4);
 void decompress_mode3(const char *block, Tile &t);
 
 float compress_mode4(const Tile &t, char *block);
@@ -60,7 +61,7 @@ void decompress_mode5(const char *block, Tile &t);
 float compress_mode6(const Tile &t, char *block);
 void decompress_mode6(const char *block, Tile &t);
 
-float compress_mode7(const Tile &t, char *block);
+float compress_mode7(const Tile &t, char *block, int shapeDivisor = 4);
 void decompress_mode7(const char *block, Tile &t);
 
 inline int getmode(Bits &in)

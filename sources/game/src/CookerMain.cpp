@@ -16,7 +16,7 @@ void PrintUsage() {
                  "[--shaderc <executable>] "
                  "[--engine-root <directory>] [--cache <directory>] "
                  "[--runtime-modules-output <directory>] [--native-link-manifest <file.json>] [--reuse-pack <file.kbpack>] "
-                 "[--pack-compression-level <0-19>]\n";
+                 "[--pack-compression-level <0-19>] [--texture-quality <balanced|highest>]\n";
 }
 
 [[nodiscard]] bool ReadValue(int argc, char** argv, int& index, std::string& out) {
@@ -60,6 +60,9 @@ int main(int argc, char** argv) {
                 return 2;
             }
             request.packCompressionLevel = level;
+        } else if (option == "--texture-quality" && ReadValue(argc, argv, index, value) &&
+                   (value == "balanced" || value == "highest")) {
+            request.highestTextureQuality = value == "highest";
         } else {
             PrintUsage();
             return 2;

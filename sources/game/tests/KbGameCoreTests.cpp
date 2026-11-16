@@ -644,8 +644,8 @@ void RunTextureReuseCookTests() {
     settings.inputEnabled = false;
     WriteSettings(fixture.root, settings);
     const auto texturePath = fixture.root / "Assets/Textures/Reuse.tga";
-    std::string texture(18U + 4U * 4U * 3U, '\0');
-    texture[2] = 2; texture[12] = 4; texture[14] = 4; texture[16] = 24;
+    std::string texture(18U + 132U * 132U * 3U, '\0');
+    texture[2] = 2; texture[12] = static_cast<char>(132); texture[14] = static_cast<char>(132); texture[16] = 24;
     WriteTextFile(texturePath, texture);
     {
         kb::scene::Scene scene;
@@ -677,6 +677,10 @@ void RunTextureReuseCookTests() {
         "The cook must name a widget outside a Canvas");
     const auto original = fixture.root / "Original.kbpack";
     std::filesystem::copy_file(request.outputPackPath, original);
+    // With no reuse package named, the cook's own bake store supplies a texture that did not change.
+    const auto stored = cook();
+    Require(stored.first.succeeded && Mentions(stored.second, "reusing texture:") &&
+        !Mentions(stored.second, "cooking texture:"), "An unchanged texture was not taken from the bake store");
     request.reusePackPath = request.outputPackPath;
     const auto warm = cook();
     Require(warm.first.succeeded && Mentions(warm.second, "reusing texture:") &&

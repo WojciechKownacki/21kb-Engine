@@ -37,7 +37,9 @@ inline constexpr std::string_view kTextureBakerId = "Texture";
 // family; version 4 preserves that contract while invalidating bytes produced by its old path.
 // Version 5 stores every mip level whose larger edge is above kStreamedTextureTailEdge in a
 // streaming block of its own and keeps only the smaller levels, the tail, in the primary block.
-inline constexpr std::string_view kTextureBakerVersion = "5";
+// Version 6 adds the encoder quality to the key and refines fewer BC7 candidates by default;
+// the container is unchanged, so packages baked by version 5 still load.
+inline constexpr std::string_view kTextureBakerVersion = "6";
 
 // Mip levels whose larger edge is above this stream on demand; the levels at and below it are the
 // tail a texture is drawn with from the moment it loads.
@@ -81,10 +83,18 @@ enum class TextureBakeStatus : std::uint8_t {
 
 // Everything about a bake that is not already in the profile or the source bytes. Every field
 // here reaches the bake key, so changing one re-bakes.
+// How hard the encoders work. Balanced is what a day-to-day cook wants; Highest spends several
+// times longer per texture for the last fraction of a dB, which a release build can afford.
+enum class TextureBakeQuality : std::uint8_t {
+    Balanced,
+    Highest,
+};
+
 struct TextureBakeSettings {
     RenderTextureAssetSemantic semantic = RenderTextureAssetSemantic::Unknown;
     RenderTextureAssetColorSpace colorSpace = RenderTextureAssetColorSpace::Unknown;
     bool preserveAtlas = false; // Exact dimensions/texels, one RGBA8 level; avoids cross-cell mip bleeding.
+    TextureBakeQuality quality = TextureBakeQuality::Balanced;
 };
 
 struct TextureBakeOutput {
@@ -155,9 +165,20 @@ struct TextureBakeOutput {
     kb::assets::bake::TextureCompressionFamily family,
     const TextureBakeSettings& settings);
 
+// Hands a texture this baker produced earlier -- its primary block and streamed levels, level 0
+// first, as TextureBakeOutput holds them or a store keeps them -- to `sink` under `key`, exactly
+// as the bake itself would have.
+[[nodiscard]] kb::assets::bake::BakedAssetSinkStatus StoreBakedTexture(
+    const kb::assets::bake::AssetBakeKey& key,
+    const kb::assets::bake::BakeTargetProfile& profile,
+    std::span<const std::uint8_t> primaryBlock,
+    std::span<const std::vector<std::uint8_t>> streamedMips,
+    kb::assets::bake::IBakedAssetSink& sink);
+
 // Bakes `sourceBytes` for one compression family and hands the result to `sink` as the
-// artifact's primary block. Deterministic: the same source and the same arguments produce
-// byte-identical output on repeated supported x86-64 cooker runs. Cross-OS identity is a release
+// artifact's primary block. The blocks of every level are encoded in parallel on the bake workers.
+// Deterministic: the same source and the same arguments produce byte-identical output on repeated
+// supported x86-64 cooker runs, whatever the worker count. Cross-OS identity is a release
 // gate before Windows and Linux may share a remote bake cache.
 //
 // A profile may list several families (a WebGL2 browser guarantees BC or ETC2 and only says which at
