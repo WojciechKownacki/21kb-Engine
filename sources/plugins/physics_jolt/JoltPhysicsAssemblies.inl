@@ -153,7 +153,8 @@ public:
                 if(!record.vehicle) InitializeVehicle(record,body);
                 if(record.chassis!=body) throw std::runtime_error("vehicle chassis changed while its assembly was active");
                 auto* controller=static_cast<JPH::WheeledVehicleController*>(record.vehicle->GetController());
-                controller->SetDriverInput(record.throttle,record.steering,record.brake,0);
+                // Jolt steers positive toward its own right (-X when facing +Z); the engine's positive steering is toward +X.
+                controller->SetDriverInput(record.throttle,-record.steering,record.brake,0);
                 if(record.throttle!=0||record.steering!=0) physics_.GetBodyInterface().ActivateBody(body);
             } else if(record.asset.kind==Kind::Buoyancy) {
                 const auto body=lookup_(record.owner);

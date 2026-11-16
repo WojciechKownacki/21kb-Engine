@@ -42,6 +42,9 @@ constexpr int kHoverCancel = -4;
     case kb::scene::SceneTemplate::Basic2D: return EditorText("newProject.template.basic2d", "Basic 2D");
     case kb::scene::SceneTemplate::FirstPerson: return EditorText("newProject.template.firstPerson", "First Person");
     case kb::scene::SceneTemplate::ThirdPerson: return EditorText("newProject.template.thirdPerson", "Third Person");
+    case kb::scene::SceneTemplate::TopDown: return EditorText("newProject.template.topDown", "Top Down");
+    case kb::scene::SceneTemplate::Platformer2D: return EditorText("newProject.template.platformer2d", "2D Platformer");
+    case kb::scene::SceneTemplate::Vehicle: return EditorText("newProject.template.vehicle", "Vehicle");
     case kb::scene::SceneTemplate::Empty: return EditorText("newScene.template.empty", "Empty");
     }
     return {};
@@ -57,6 +60,12 @@ constexpr int kHoverCancel = -4;
         return EditorText("newProject.template.firstPersonDescription", "A walking character seen through its own eyes, with mouse look.");
     case kb::scene::SceneTemplate::ThirdPerson:
         return EditorText("newProject.template.thirdPersonDescription", "A walking character with a camera that follows behind it.");
+    case kb::scene::SceneTemplate::TopDown:
+        return EditorText("newProject.template.topDownDescription", "A view from above: click the ground and the character walks there around obstacles.");
+    case kb::scene::SceneTemplate::Platformer2D:
+        return EditorText("newProject.template.platformer2dDescription", "A side-view 2D game: run, jump between platforms, with a camera that follows.");
+    case kb::scene::SceneTemplate::Vehicle:
+        return EditorText("newProject.template.vehicleDescription", "A drivable four-wheeled car on a wide field, with a camera that follows.");
     case kb::scene::SceneTemplate::Empty:
         return EditorText("newScene.template.emptyDescription", "Nothing at all. Add objects from the Create menu.");
     }
@@ -69,6 +78,9 @@ constexpr int kHoverCancel = -4;
     case kb::scene::SceneTemplate::Basic2D: return HeroIconKind::Layers;
     case kb::scene::SceneTemplate::FirstPerson: return HeroIconKind::Eye;
     case kb::scene::SceneTemplate::ThirdPerson: return HeroIconKind::Gamepad2;
+    case kb::scene::SceneTemplate::TopDown: return HeroIconKind::Map;
+    case kb::scene::SceneTemplate::Platformer2D: return HeroIconKind::Layers;
+    case kb::scene::SceneTemplate::Vehicle: return HeroIconKind::Navigation;
     case kb::scene::SceneTemplate::Empty: return HeroIconKind::DocumentText;
     }
     return HeroIconKind::Cube;

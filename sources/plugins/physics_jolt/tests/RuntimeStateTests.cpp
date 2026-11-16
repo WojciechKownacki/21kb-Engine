@@ -9,6 +9,7 @@
 #include "engine/scene/SceneJointComponents.hpp"
 #include "engine/scene/JointComponent.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
+#include "engine/scene/PhysicsAssembly.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneTimers.hpp"
@@ -181,6 +182,35 @@ void RunDetachedLifetime() {
         "Snapshot from a destroyed provider was accepted");
     retired.reset();
     std::cout << "Detached physics snapshot lifetime passed\n";
+}
+
+// Positive steering turns a car that drives toward +Z to the right, toward +X, and negative steering to the left.
+float SteeredSideways(float steering) {
+    kb::scene::Scene scene{Descriptor()};
+    const auto ground = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{.name = "Ground", .transform = {.localPosition = {0.0F, -0.5F, 0.0F}}});
+    scene.Components().Colliders().Set(ground.Entity(), kb::scene::ColliderComponent{.shape = kb::scene::ColliderShape::Box, .boxSize = {200.0F, 1.0F, 200.0F}});
+    const auto car = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{.name = "Car", .transform = {.localPosition = {0.0F, 1.0F, 0.0F}}});
+    kb::scene::PhysicsAssemblyAsset asset;
+    asset.kind = kb::scene::PhysicsAssemblyKind::Vehicle;
+    asset.engineTorque = 300.0F;
+    const auto created = kb::scene::PhysicsAssemblies::Create(scene, car.Entity(), asset);
+    kb::tests::Require(created.Succeeded(), created.error.c_str());
+    std::string error;
+    kb::tests::Require(kb::scene::PhysicsAssemblies::Drive(scene, created.handle, 1.0F, 0.0F, 0.0F, error), error.c_str());
+    for (int step = 0; step < 120; ++step) kb::tests::Require(scene.Runtime().Update(1.0F / 60.0F), "Vehicle steering step failed");
+    const float startX = scene.Transforms().Get(car.Entity()).worldPosition.x;
+    kb::tests::Require(kb::scene::PhysicsAssemblies::Drive(scene, created.handle, 1.0F, steering, 0.0F, error), error.c_str());
+    for (int step = 0; step < 90; ++step) kb::tests::Require(scene.Runtime().Update(1.0F / 60.0F), "Vehicle steering step failed");
+    const auto pose = scene.Transforms().Get(car.Entity());
+    kb::tests::Require(pose.worldPosition.z > 2.0F, "Vehicle did not drive forward");
+    return pose.worldPosition.x - startX;
+}
+
+void RunVehicleSteering() {
+    const float right = SteeredSideways(0.5F);
+    const float left = SteeredSideways(-0.5F);
+    kb::tests::Require(right > 0.5F && left < -0.5F, "Vehicle steering is not positive toward +X while facing +Z");
+    std::cout << "Vehicle steering direction passed" << std::endl;
 }
 
 std::size_t PrivateBytes() {
@@ -467,6 +497,7 @@ int main() {
     RunContinuation(false);
     RunContinuation(true);
     RunDetachedLifetime();
+    RunVehicleSteering();
     RunSceneContinuation(false);
     RunSceneContinuation(true);
     RunSceneContinuation(false,true);

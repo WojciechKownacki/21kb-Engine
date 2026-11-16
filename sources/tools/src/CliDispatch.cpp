@@ -36,14 +36,16 @@ Commands:
                folder. Its startup scene Assets/Scenes/Main.21kbscene is made from
                a template: Basic3D (camera, sun, sky, floor; default; "Basic" works
                too), Basic2D (orthographic camera, sprite floor), FirstPerson or
-               ThirdPerson (a walking character with its script and input), or Empty.
+               ThirdPerson (a walking character with its script and input), TopDown
+               (click to walk over a navigation mesh), Platformer2D (side view, 2D
+               physics) or Vehicle (a drivable car), or Empty.
                  --parent <dir> --name <Name>
-                 [--template Basic3D|Basic2D|FirstPerson|ThirdPerson|Empty]
+                 [--template Basic3D|Basic2D|FirstPerson|ThirdPerson|TopDown|Platformer2D|Vehicle|Empty]
   layout       Save, restore or reset the editor workspace for the next session.
                  list|save|restore|reset --project <dir> [--name <name>]
   scene-new    Create a scene from a template, as File > New Scene does.
                  --project <dir> --name <Name> [--folder Assets/Scenes]
-                 [--template Basic3D|Basic2D|FirstPerson|ThirdPerson|Empty]
+                 [--template Basic3D|Basic2D|FirstPerson|ThirdPerson|TopDown|Platformer2D|Vehicle|Empty]
                  [--default yes|no]
                (--default yes makes it the scene the game starts in)
   scene-duplicate Copy a scene under a new name, with an identity of its own, as File >

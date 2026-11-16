@@ -401,6 +401,110 @@ function Tick(self, dt)
 end
 )lua";
 
+constexpr std::string_view kTopDownCharacterLuaTemplate = R"lua(-- TopDownCharacter.lua
+-- Click the ground and the character walks there around obstacles; Move (WASD, arrows, stick) walks directly. Requires:
+-- Character Controller and Nav Agent (starts off) on this object, a baked navigation mesh in the scene and an object
+-- named Camera, which this script keeps above and behind the character. Input: Move (Axis2D).
+-- @expose speed Float = 5.0
+-- @expose cameraHeight Float = 9.0
+-- @expose cameraDistance Float = 6.5
+
+local states = {}
+
+function Tick(self, dt)
+    local entity = self.entity
+    local vars = self.variables
+    local state = states[entity]
+    if state == nil then
+        state = { navigating = false, clicking = false }
+        states[entity] = state
+    end
+    local position = Transform.GetPosition(entity)
+
+    -- A new click on the ground picks the place to walk to.
+    local down = Pointer.Button(0)
+    if down and not state.clicking then
+        local ray = Pointer.Ray()
+        if ray.valid and ray.directionY < -0.001 then
+            local along = (position.y - 0.9 - ray.originY) / ray.directionY
+            local target = Navigation.NearestPoint(ray.originX + ray.directionX * along, position.y - 0.9, ray.originZ + ray.directionZ * along)
+            if target.found then
+                self:SetProperty("NavAgent", "destination.x", target.x)
+                self:SetProperty("NavAgent", "destination.y", target.y)
+                self:SetProperty("NavAgent", "destination.z", target.z)
+                self:SetProperty("NavAgent", "enabled", true)
+                state.navigating = true
+            end
+        end
+    end
+    state.clicking = down
+
+    -- Move takes the character back from the navigation mesh.
+    local move = Input.Vector2("Move")
+    local x = move.x or 0.0
+    local y = move.y or 0.0
+    local length = math.sqrt(x * x + y * y)
+    if length > 0.2 then
+        if state.navigating then
+            self:SetProperty("NavAgent", "enabled", false)
+            state.navigating = false
+        end
+        if length > 1.0 then
+            x = x / length
+            y = y / length
+        end
+        Physics.CharacterMove(entity, x * vars.speed, y * vars.speed)
+    elseif not state.navigating then
+        Physics.CharacterMove(entity, 0.0, 0.0)
+    end
+
+    local camera = World.FindByName("Camera")
+    if camera ~= nil and camera ~= 0 then
+        Transform.SetPosition(camera, position.x, position.y + vars.cameraHeight, position.z - vars.cameraDistance)
+    end
+end
+)lua";
+
+constexpr std::string_view kVehicleCarLuaTemplate = R"lua(-- VehicleCar.lua
+-- Drive the car: Move up and down is the throttle, left and right steers, Jump brakes. Requires: an object with no
+-- Rigidbody or Collider (the car is built on it from the asset below) and an object named CameraPivot that carries
+-- the camera; this script keeps the pivot on the car and turned the way the car faces. Input: Move (Axis2D), Jump (Bool).
+-- @asset /Game/Physics/Car.kbphysics
+
+local states = {}
+
+function Tick(self, dt)
+    local entity = self.entity
+    local state = states[entity]
+    if state == nil then
+        state = { handle = Physics.AssemblyLoad(entity, "/Game/Physics/Car.kbphysics"), yaw = 0.0 }
+        states[entity] = state
+    end
+    if state.handle ~= nil then
+        local move = Input.Vector2("Move")
+        local brake = 0.0
+        if Input.Held("Jump") then brake = 1.0 end
+        Physics.AssemblyDrive(state.handle, move.y or 0.0, move.x or 0.0, brake)
+    end
+
+    local pose = CallFunction("Transform.WorldPose", { entity = entity })
+    local pivot = World.FindByName("CameraPivot")
+    if pose ~= nil and pose.found and pivot ~= nil and pivot ~= 0 then
+        -- The direction the car faces on the ground; an upturned car keeps the last heading.
+        local ahead = 2.0 * (pose.rotX * pose.rotZ + pose.rotW * pose.rotY)
+        local side = 1.0 - 2.0 * (pose.rotX * pose.rotX + pose.rotY * pose.rotY)
+        local length = math.sqrt(ahead * ahead + side * side)
+        if length > 0.5 then
+            local yaw = math.deg(math.acos(math.max(-1.0, math.min(1.0, side / length))))
+            if ahead < 0.0 then yaw = -yaw end
+            state.yaw = yaw
+        end
+        Transform.SetPosition(pivot, pose.posX, pose.posY, pose.posZ)
+        Transform.SetRotation(pivot, 0.0, state.yaw, 0.0)
+    end
+end
+)lua";
+
 constexpr std::string_view kPlatformer2DNavigatorLuaTemplate = R"lua(-- Platformer2DNavigator.lua
 -- Drives the native 2D controller along live tilemap routes without changing transforms.
 -- @expose mapName String = "Map"
@@ -575,6 +679,8 @@ constexpr std::string_view kLuarcTemplate = R"json({
 std::string_view ScriptAgentProjectFiles::PresetScript(std::string_view fileName) noexcept {
     if (fileName == "FirstPersonCharacter.lua") return kFirstPersonCharacterLuaTemplate;
     if (fileName == "ThirdPersonCharacter.lua") return kThirdPersonCharacterLuaTemplate;
+    if (fileName == "TopDownCharacter.lua") return kTopDownCharacterLuaTemplate;
+    if (fileName == "VehicleCar.lua") return kVehicleCarLuaTemplate;
     if (fileName == "Platformer2DNavigator.lua") return kPlatformer2DNavigatorLuaTemplate;
     if (fileName == "Platformer2DPlayer.lua") return kPlatformer2DPlayerLuaTemplate;
     if (fileName == "TopDown2DPlayer.lua") return kTopDown2DPlayerLuaTemplate;

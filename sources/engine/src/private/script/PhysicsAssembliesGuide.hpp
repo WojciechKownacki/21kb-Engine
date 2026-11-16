@@ -36,7 +36,7 @@ validation with runtime Create. A failed validation does not overwrite a file.
 
 A Vehicle creates a chassis and four rendered wheels. Jolt's wheeled controller,
 engine, differential, tire contacts and suspension solve motion; Drive takes
-throttle/steering in [-1,1] and brake in [0,1]. The owner must not already have
+throttle/steering in [-1,1] (positive steering turns toward +X while the vehicle faces +Z, that is to the right) and brake in [0,1]. The owner must not already have
 Rigidbody/Collider. Physics can roll the vehicle; no artificial upright assist is
 applied. State.entities lists the chassis owner followed by four wheels.
 

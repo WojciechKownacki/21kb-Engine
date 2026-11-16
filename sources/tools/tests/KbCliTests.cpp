@@ -2274,16 +2274,21 @@ void RunProjectTemplateTests() {
         const char* option;    // what --template takes
         const char* canonical; // the name the command reports
         float gravityY;
-        bool character;
+        const char* script;    // the controller script the template writes; null for none
+        const char* press;     // a Move key that makes the controlled object travel; null for none
+        const char* mover;     // the object that travels
     };
-    const std::array<Case, 7> cases{ {
-        { "Empty", "Empty", -9.81F, false },
-        { "Basic", "Basic3D", -9.81F, false },
-        { "Basic3D", "Basic3D", -9.81F, false },
-        { "basic2d", "Basic2D", -20.0F, false },
-        { "FirstPerson", "FirstPerson", -15.0F, true },
-        { "ThirdPerson", "ThirdPerson", -15.0F, true },
-        { "firstperson", "FirstPerson", -15.0F, true },
+    const std::array<Case, 10> cases{ {
+        { "Empty", "Empty", -9.81F, nullptr, nullptr, nullptr },
+        { "Basic", "Basic3D", -9.81F, nullptr, nullptr, nullptr },
+        { "Basic3D", "Basic3D", -9.81F, nullptr, nullptr, nullptr },
+        { "basic2d", "Basic2D", -20.0F, nullptr, nullptr, nullptr },
+        { "FirstPerson", "FirstPerson", -15.0F, "FirstPersonCharacter.lua", "D", "Player" },
+        { "ThirdPerson", "ThirdPerson", -15.0F, "ThirdPersonCharacter.lua", "D", "Player" },
+        { "firstperson", "FirstPerson", -15.0F, "FirstPersonCharacter.lua", "D", "Player" },
+        { "TopDown", "TopDown", -15.0F, "TopDownCharacter.lua", "D", "Player" },
+        { "Platformer2D", "Platformer2D", -20.0F, "Platformer2DBox2DPlayer.lua", "D", "Player" },
+        { "Vehicle", "Vehicle", -9.81F, "VehicleCar.lua", "W", "Car" },
     } };
     std::size_t caseIndex = 0U;
     for (const Case& item : cases) {
@@ -2297,22 +2302,45 @@ void RunProjectTemplateTests() {
         const kb::project::ProjectSettingsLoadResult settings = kb::project::ProjectSettingsStore::Load(kb::project::ProjectSettingsStore::FilePath(root));
         Require(settings.Succeeded() && std::fabs(settings.settings.simulation.gravity[1] - item.gravityY) < 1.0e-4F,
             std::string{ item.option } + " project did not take the template's gravity");
-        Require(item.character == !settings.settings.inputMappingContext.empty(),
+        Require((item.script != nullptr) == !settings.settings.inputMappingContext.empty(),
             std::string{ item.option } + " project has the wrong input context");
         const CommandRun validated = Run(&kb::cli::RunValidateCommand, { "--project", root.string() });
-        Require(validated.exitCode == 0, std::string{ item.option } + " project did not validate: " + validated.output);
+        Require(validated.exitCode == 0 && !Contains(validated.output, "WARN") && !Contains(validated.output, "warning"),
+            std::string{ item.option } + " project did not validate cleanly: " + validated.output);
         const CommandRun ran = Run(&kb::cli::RunRunCommand,
             { "--project", root.string(), "--scene", "/Game/Scenes/Main.21kbscene", "--frames", "30" });
         Require(ran.exitCode == 0 && Contains(ran.output, "done: 30 frames") && Contains(ran.output, ", 0 diagnostics"),
             std::string{ item.option } + " project did not run without diagnostics: " + ran.output);
-        if (item.character) {
+        if (std::string_view{ item.canonical } == "TopDown") {
+            // The floor was baked into the navigation mesh the scene places.
+            std::error_code meshError;
+            Require(std::filesystem::file_size(root / "Assets" / "Scenes" / "Main.21kbnavmesh", meshError) > 64U && !meshError,
+                "TopDown project has no baked navigation mesh");
+        }
+        if (item.script != nullptr) {
             // The controller script is a project file the scene's behaviour finds and runs, and it compiles.
-            const std::string script = std::string{ item.canonical } + "Character.lua";
+            const std::string script = item.script;
             Require(std::filesystem::exists(root / "Assets" / "Scripts" / script), std::string{ item.option } + " project has no controller script");
             const CommandRun compiled = Run(&kb::cli::RunValidateCommand, { "--project", root.string(), "Assets/Scripts/" + script });
             Require(compiled.exitCode == 0 && Contains(compiled.output, "OK   Assets/Scripts/" + script),
                 script + " did not compile: " + compiled.output);
             Require(!Contains(ran.output, ", 0 behaviour executions"), std::string{ item.option } + " project never ran its controller script");
+            // Holding the Move key for 120 frames takes the controlled object somewhere else.
+            const CommandRun driven = Run(&kb::cli::RunRunCommand, { "--project", root.string(), "--scene", "/Game/Scenes/Main.21kbscene",
+                "--frames", "120", "--press", std::string{ item.press } + "@10+100" });
+            Require(driven.exitCode == 0 && Contains(driven.output, ", 0 diagnostics"),
+                std::string{ item.option } + " project did not run 120 frames with input: " + driven.output);
+            const std::string marker = std::string{ "moved: " } + item.mover + " ";
+            const std::size_t at = driven.output.find(marker);
+            std::string line = at == std::string::npos ? std::string{} : driven.output.substr(at + marker.size(), driven.output.find('\n', at) - at - marker.size());
+            std::replace(line.begin(), line.end(), ',', ' ');
+            const std::size_t arrow = line.find("->");
+            if (arrow != std::string::npos) line.replace(arrow, 2U, " ");
+            std::istringstream numbers{ line };
+            float v[6]{};
+            const bool parsed = static_cast<bool>(numbers >> v[0] >> v[1] >> v[2] >> v[3] >> v[4] >> v[5]);
+            Require(parsed && std::hypot(std::hypot(v[3] - v[0], v[4] - v[1]), v[5] - v[2]) > 1.0F,
+                std::string{ item.option } + " project's " + item.mover + " did not move with the Move key: " + driven.output);
         }
     }
     const CommandRun refused = Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "T_Unknown", "--template", "Nope" });
@@ -5673,7 +5701,7 @@ void RunCommandCatalogTests() {
     const JsonValue& newRow = findRow("new");
     const JsonValue* templateOption = findNamed(*newRow.Find("options"), "--template");
     Require(templateOption != nullptr && templateOption->Find("type")->AsString() == "enum" && !templateOption->Find("required")->AsBool() &&
-            templateOption->Find("choices")->Size() == 5U, "new --template must be an optional enum of the five templates");
+            templateOption->Find("choices")->Size() == 8U, "new --template must be an optional enum of the eight templates");
     const JsonValue* nameOption = findNamed(*newRow.Find("options"), "--name");
     Require(nameOption != nullptr && nameOption->Find("required")->AsBool(), "new --name must be required");
     const JsonValue* entityAdd = findNamed(*findRow("entity").Find("subcommands"), "add");

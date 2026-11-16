@@ -19,9 +19,10 @@ class Scene;
 // What a new scene (and a new project's startup scene) starts with. Empty has nothing; Basic (named Basic3D, "Basic"
 // still works) is a camera, a sun, the sky and a floor, ready to press Play; Basic2D is an orthographic camera and a
 // sprite floor with a collider; FirstPerson and ThirdPerson are a walking character with its camera, a controller script
-// and the Move and Jump input. The Hub, `kb_cli new`, `kb_cli scene-new` and the editor's File > New Scene all fill a
+// and the Move and Jump input; TopDown walks to a clicked point over a baked navigation mesh, Platformer2D is a side-view
+// game on the 2D physics and Vehicle is a drivable car. The Hub, `kb_cli new`, `kb_cli scene-new` and the editor's File > New Scene all fill a
 // scene through SceneTemplates::Fill; a new project also takes the template's settings and files.
-enum class SceneTemplate : std::uint8_t { Basic, Empty, Basic2D, FirstPerson, ThirdPerson };
+enum class SceneTemplate : std::uint8_t { Basic, Empty, Basic2D, FirstPerson, ThirdPerson, TopDown, Platformer2D, Vehicle };
 
 struct SceneTemplateInfo {
     SceneTemplate kind{};

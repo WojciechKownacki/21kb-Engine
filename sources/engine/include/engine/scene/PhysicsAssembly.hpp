@@ -80,6 +80,7 @@ public:
     [[nodiscard]] static PhysicsAssemblyResult Load(Scene& scene, SceneEntity owner, std::string_view assetPath);
     [[nodiscard]] static bool Destroy(Scene& scene, std::uint64_t handle, std::string& error);
     [[nodiscard]] static bool State(Scene& scene, std::uint64_t handle, PhysicsAssemblyState& out, std::string& error);
+    // Throttle and steering in [-1,1], brake in [0,1]. Positive steering turns right: toward +X while the vehicle faces +Z.
     [[nodiscard]] static bool Drive(Scene& scene, std::uint64_t handle, float throttle, float steering, float brake, std::string& error);
     [[nodiscard]] static bool SimulateRagdoll(Scene& scene, std::uint64_t handle, bool enabled, std::string& error);
     [[nodiscard]] static bool Fracture(Scene& scene, std::uint64_t handle, Vec3 impulse, std::string& error);

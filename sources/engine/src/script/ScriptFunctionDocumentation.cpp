@@ -198,7 +198,7 @@ constexpr auto kFunctionDocumentation = std::to_array<FunctionDocumentation>({
     { "Physics.AddImpulse", "Applies an instantaneous impulse to an entity rigid body." },
     { "Physics.AssemblyLoad", "Loads a validated physics assembly asset on an entity using the active provider; returns a scene-local handle." },
     { "Physics.AssemblyDestroy", "Destroys an assembly and its generated physics/render objects; expires its handle." },
-    { "Physics.AssemblyDrive", "Sets wheeled vehicle throttle/steering in [-1,1] and brake in [0,1]; rejects other assembly kinds." },
+    { "Physics.AssemblyDrive", "Sets wheeled vehicle throttle/steering in [-1,1] (positive steering turns right: toward +X while facing +Z) and brake in [0,1]; rejects other assembly kinds." },
     { "Physics.AssemblySimulateRagdoll", "Transfers skeletal pose authority between simulated ragdoll bodies and the existing animation controller." },
     { "Physics.AssemblyFracture", "Splits an authored box into independent physical cell meshes and applies the supplied total impulse." },
     { "Physics.AssemblyWaterLevel", "Changes the horizontal buoyancy water plane and wakes the attached dynamic body." },
