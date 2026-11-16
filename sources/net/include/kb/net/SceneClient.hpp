@@ -3,6 +3,8 @@
 #include "kb/net/Host.hpp"
 #include <functional>
 #include <iosfwd>
+#include <string>
+#include <vector>
 
 namespace kb::scene { class Scene; }
 namespace kb::net {
@@ -14,6 +16,10 @@ struct SceneClientOptions {
     std::string token;
     float worldExtent = 1000.0F;
     std::uint32_t reconnectAttempts = 3U;
+    // Web only: "transport": "webrtc" sends the datagrams over WebRTC data channels; `url` is then the
+    // signaling WebSocket and `iceServers` lists the STUN and TURN servers (see WebRtcTransport.hpp).
+    bool webRtc = false;
+    std::vector<std::string> iceServers;
 };
 
 // Runtime-only Web settings. IDs are decimal strings to preserve all 64 bits.

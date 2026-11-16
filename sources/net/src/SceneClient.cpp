@@ -58,6 +58,20 @@ bool ParseWebSceneClientSettings(std::string_view json, SceneClientOptions& opti
         address.find_first_of("\r\n") != std::string::npos || address.find('\0') != std::string::npos) return false;
     SceneClientOptions parsed;
     if (!ParseSessionIdentity(root, parsed)) return false;
+    if (const auto* transport = root.Find("transport")) {
+        if (transport->GetKind() != kb::core::JsonValue::Kind::String ||
+            (transport->AsString() != "websocket" && transport->AsString() != "webrtc")) return false;
+        parsed.webRtc = transport->AsString() == "webrtc";
+    }
+    if (const auto* servers = root.Find("iceServers")) {
+        if (!parsed.webRtc || servers->GetKind() != kb::core::JsonValue::Kind::Array || servers->Size() > 8U) return false;
+        for (std::size_t index = 0U; index < servers->Size(); ++index) {
+            const auto* server = servers->At(index);
+            if (server->GetKind() != kb::core::JsonValue::Kind::String || server->AsString().empty() || server->AsString().size() > 512U ||
+                server->AsString().find_first_of("\r\n") != std::string::npos || server->AsString().find('\0') != std::string::npos) return false;
+            parsed.iceServers.push_back(server->AsString());
+        }
+    }
     parsed.server = Endpoint::Loopback(1U);
     options = std::move(parsed);
     url = address;

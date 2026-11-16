@@ -500,6 +500,15 @@ void TestWebSessionSettings() {
         "oversized runtime token accepted");
     Require(!ParseWebSceneClientSettings(valid.substr(0, valid.size()-1) + ",\"worldExtent\":10000001}", options, url),
         "unsupported replication codec extent accepted");
+    const std::string base = valid.substr(0, valid.size()-1);
+    Require(ParseWebSceneClientSettings(valid, options, url) && !options.webRtc, "WebSocket is not the default transport");
+    Require(ParseWebSceneClientSettings(base + ",\"transport\":\"webrtc\",\"iceServers\":[\"stun:stun.example.com:3478\"]}", options, url) &&
+            options.webRtc && options.iceServers.size() == 1U, "WebRTC runtime settings were not read");
+    Require(!ParseWebSceneClientSettings(base + ",\"transport\":\"carrier\"}", options, url), "unknown transport accepted");
+    Require(!ParseWebSceneClientSettings(base + ",\"iceServers\":[\"stun:stun.example.com\"]}", options, url),
+        "ICE servers accepted without WebRTC");
+    Require(!ParseWebSceneClientSettings(base + ",\"transport\":\"webrtc\",\"iceServers\":[7]}", options, url),
+        "a non-string ICE server accepted");
 }
 
 void TestNativeSessionSettings() {

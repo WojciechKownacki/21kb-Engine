@@ -91,5 +91,14 @@ Internet only when the server's address is reachable, directly or through STUN
 or TURN; HTTPS pages must use `wss://` for signaling, which a reverse proxy can
 terminate as for WebSocket.
 
+In the packaged Web runtime, `kbNetwork` keeps using WebSocket unless the project sets
+`"transport": "webrtc"`. `url` is then the signaling WebSocket (`wss://host/21kb-rtc`) and the optional
+`iceServers` array (up to 8 strings, WebRTC only) lists the STUN and TURN servers. A reconnect starts a
+new signaling exchange and link.
+
 Native support uses the pinned libdatachannel dependency with Mbed TLS and can be
 disabled with `KB_NET_WEBRTC=OFF`; the archives are fetched once per build tree.
+
+`tests/BrowserWebRtcTests.py` drives headless Chrome against the native `kb_webrtc_transport_harness`:
+build `tests/BrowserWebRtcHarness.cpp` with the net sources into `Game.html`, and pass the browser
+`--disable-features=WebRtcHideLocalIpsWithMdns` and `--allow-loopback-in-peer-connection` so it offers host candidates.

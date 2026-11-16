@@ -7,6 +7,7 @@
 #include "WebDownloadBuffer.hpp"
 #include "DigitalInputFrame.hpp"
 #include "WebTextClipboard.hpp"
+#include "kb/net/WebRtcTransport.hpp"
 #include "kb/net/WebSocketTransport.hpp"
 
 #include "engine/assets/bake/BakeTargetProfile.hpp"
@@ -561,9 +562,14 @@ private:
             const bool valid = kb::net::ParseWebSceneClientSettings(settings, options, url);
             std::free(settings);
             const auto endpoint = options.server;
+            kb::net::WebRtcConfig rtc;
+            rtc.iceServers = options.iceServers;
+            const bool webRtc = options.webRtc;
             if (!valid || !runtime_.ConfigureNetwork(std::move(options),
-                    [url = std::move(url), endpoint](std::string& error) {
-                        return kb::net::CreateBrowserWebSocketTransport(url, endpoint, error);
+                    [url = std::move(url), endpoint, webRtc, rtc = std::move(rtc)](std::string& error) {
+                        if (!webRtc) return kb::net::CreateBrowserWebSocketTransport(url, endpoint, error);
+                        auto signaling = kb::net::CreateWebSocketSignalingClient(url, error);
+                        return signaling ? kb::net::CreateWebRtcClientTransport(std::move(signaling), rtc, endpoint, error) : nullptr;
                     })) {
                 Fail("network-init", "invalid runtime network settings");
                 return;

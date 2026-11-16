@@ -17,10 +17,21 @@ EM_JS(int, KbRtcOpen, (const char* servers), {
         const iceServers = [];
         for (const entry of UTF8ToString(servers).split('\n')) {
             if (!entry) continue;
-            const match = /^(stuns?|turns?):(?:([^:@\/]+):([^@\/]+)@)?(.+)$/.exec(entry);
-            if (!match) return 0;
-            const server = { urls: match[1] + ':' + match[4] };
-            if (match[2]) { server.username = decodeURIComponent(match[2]); server.credential = decodeURIComponent(match[3]); }
+            const colon = entry.indexOf(':');
+            const scheme = entry.slice(0, colon);
+            if (scheme !== 'stun' && scheme !== 'stuns' && scheme !== 'turn' && scheme !== 'turns') return 0;
+            let rest = entry.slice(colon + 1);
+            const server = {};
+            const at = rest.lastIndexOf('@');
+            if (at >= 0) {
+                const credentials = rest.slice(0, at);
+                const split = credentials.indexOf(':');
+                if (split < 0) return 0;
+                server.username = decodeURIComponent(credentials.slice(0, split));
+                server.credential = decodeURIComponent(credentials.slice(split + 1));
+                rest = rest.slice(at + 1);
+            }
+            server.urls = scheme + ':' + rest;
             iceServers.push(server);
         }
         const link = { pc: new RTCPeerConnection({ iceServers: iceServers }), channels: [], inbox: [[], []], signals: [], chain: Promise.resolve(), state: 0, last: performance.now() };
