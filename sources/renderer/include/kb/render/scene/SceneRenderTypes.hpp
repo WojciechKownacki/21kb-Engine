@@ -13,7 +13,9 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <optional>
+#include <span>
 #include <vector>
 
 namespace kb::render {
@@ -168,6 +170,11 @@ struct SceneRenderCamera {
     // conservative guard band containing every sample in the pixel sequence.
     std::array<float, 2> temporalProjectionOffset{};
     std::array<float, 2> cullingGuardBand{};
+    // Where a pass whose camera is not the viewer's (a shadow cascade) measures draw distances from, and how far from
+    // there it reaches: draw groups with a draw distance (foliage) are cut at the nearer of the two. A limit of 0 leaves
+    // the pass without a distance rule.
+    std::array<float, 3> distanceOrigin{};
+    float distanceLimit = 0.0F;
     [[nodiscard]] std::array<float, 16> CullingProjection() const noexcept {
         auto result = projection;
         result[8] -= temporalProjectionOffset[0];
@@ -355,7 +362,14 @@ struct SceneRenderDrawGroup {
     bool hasMaterialSlotOverrides = false;
     bool hasMorphDeformation = false;
     std::vector<SceneRenderMeshInstance> instances;
+    // Instances kept by the renderer between rebuilds of the draw groups (terrain foliage chunks); read instead of
+    // `instances` when set.
+    std::shared_ptr<const std::vector<SceneRenderMeshInstance>> sharedInstances;
     std::vector<SceneMeshVisibilityCluster> visibilityClusters;
+    // Distance from the camera where the instances fade away and where they are no longer drawn; 0 draws them at any
+    // distance. Instances shrink towards their origin between the two, so the fade needs no blending.
+    float fadeStartDistance = 0.0F;
+    float cullDistance = 0.0F;
     SceneMeshVisibilityIndex visibility;
     // Renderer-derived partition and validity. Authored data remains in the proxies.
     std::uint64_t cacheId = 0U;
@@ -364,6 +378,12 @@ struct SceneRenderDrawGroup {
     std::uint8_t partitionKind = 0U;
     // Set when an instance of the group was moved in place; the next refresh gives the group a new content revision.
     std::uint8_t instancesMoved = 0U;
+
+    [[nodiscard]] std::span<const SceneRenderMeshInstance> Instances() const noexcept {
+        return sharedInstances != nullptr
+            ? std::span<const SceneRenderMeshInstance>{ *sharedInstances }
+            : std::span<const SceneRenderMeshInstance>{ instances };
+    }
 };
 
 struct SceneRenderLight {

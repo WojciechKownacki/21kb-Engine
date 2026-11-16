@@ -39,7 +39,7 @@ struct RuntimeRenderResourceCacheStats {
 
 struct RuntimeRenderResourceEnsureContext {
     kb::scene::Scene& scene;
-    const RenderScene& renderScene;
+    RenderScene& renderScene;
     SceneRenderer& sceneRenderer;
     RuntimeRenderAssetDiscovery& assetDiscovery;
     RuntimeFrameResourceReferences& frameReferences;

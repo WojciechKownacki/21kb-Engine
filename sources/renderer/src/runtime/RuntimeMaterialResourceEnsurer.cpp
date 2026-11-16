@@ -424,6 +424,13 @@ void RuntimeMaterialResourceEnsurer::Ensure(
         ensureMaterial(proxy.desc.materialAssetId);
         ensureMeshMaterialSlots(proxy.desc.meshAssetId);
     }
+    for (const auto& [entityId, proxy] : context.renderScene.TerrainFoliageProxies()) {
+        static_cast<void>(entityId);
+        for (const kb::assets::TerrainFoliageLayer& layer : proxy.desc.terrain->foliageLayers) {
+            ensureMaterial(layer.materialAssetId);
+            ensureMeshMaterialSlots(layer.meshAssetId);
+        }
+    }
     for (const auto& [entityId, proxy] : context.renderScene.SpaceStrokeProxies()) {
         static_cast<void>(entityId);
         ensureMaterial(proxy.desc.materialAssetId);

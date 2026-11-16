@@ -161,6 +161,7 @@ std::optional<TerrainAsset> TerrainAssetIO::Load(
         }
         terrain.foliageLayers.resize(foliageCount);
         for (TerrainFoliageLayer& layer : terrain.foliageLayers) {
+            std::uint8_t castsShadow = 0U;
             if (!ReadLittleEndian(bytes, cursor, layer.meshAssetId) ||
                 !ReadLittleEndian(bytes, cursor, layer.materialAssetId) ||
                 !ReadLittleEndian(bytes, cursor, layer.density) ||
@@ -170,10 +171,11 @@ std::optional<TerrainAsset> TerrainAssetIO::Load(
                 !ReadLittleEndian(bytes, cursor, layer.alignToNormal) ||
                 !ReadLittleEndian(bytes, cursor, layer.fadeStartDistance) ||
                 !ReadLittleEndian(bytes, cursor, layer.cullDistance) ||
-                !ReadLittleEndian(bytes, cursor, layer.seed)) {
+                !ReadLittleEndian(bytes, cursor, layer.seed) || !ReadLittleEndian(bytes, cursor, castsShadow) || castsShadow > 1U) {
                 SetError(error, "Terrain foliage layer payload is truncated");
                 return std::nullopt;
             }
+            layer.castsShadow = castsShadow != 0U;
         }
         const std::uint64_t densityBytes = static_cast<std::uint64_t>(terrain.foliageMapWidth) *
             terrain.foliageMapHeight * foliageCount;
@@ -193,7 +195,7 @@ bool TerrainAssetIO::Save(const std::filesystem::path& path, const TerrainAsset&
     std::vector<std::uint8_t> bytes;
     bytes.reserve(static_cast<std::size_t>(kVersion1HeaderBytes) + terrain.heights.size() * sizeof(float) +
         terrain.holes.size() + 24U + terrain.materialLayers.size() * sizeof(std::uint64_t) + terrain.layerWeights.size() +
-        terrain.foliageLayers.size() * 48U + terrain.foliageDensity.size());
+        terrain.foliageLayers.size() * 49U + terrain.foliageDensity.size());
     bytes.insert(bytes.end(), kMagic.begin(), kMagic.end());
     AppendLittleEndian(bytes, TerrainAsset::CurrentVersion);
     AppendLittleEndian(bytes, terrain.width);
@@ -233,6 +235,7 @@ bool TerrainAssetIO::Save(const std::filesystem::path& path, const TerrainAsset&
         AppendLittleEndian(bytes, layer.fadeStartDistance);
         AppendLittleEndian(bytes, layer.cullDistance);
         AppendLittleEndian(bytes, layer.seed);
+        AppendLittleEndian(bytes, static_cast<std::uint8_t>(layer.castsShadow ? 1U : 0U));
     }
     bytes.insert(bytes.end(), terrain.foliageDensity.begin(), terrain.foliageDensity.end());
 

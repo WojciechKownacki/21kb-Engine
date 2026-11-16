@@ -167,6 +167,8 @@ struct MeshPipelineScanInstance {
     std::uint16_t depthBucket = 0U;
     float viewDepth = 0.0F;
     RenderBoundsSphere worldBounds{};
+    // 1 draws the instance whole; less shrinks it towards its origin (a draw group with a fade distance).
+    float fadeScale = 1.0F;
 };
 
 // The draw command admitted instances join: instances with equal keys share one command.

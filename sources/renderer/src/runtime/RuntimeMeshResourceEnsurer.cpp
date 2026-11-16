@@ -3,6 +3,7 @@
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
+#include "engine/assets/TerrainAsset.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneAnimators.hpp"
@@ -19,6 +20,9 @@
 #include "kb/render/scene/SceneRenderer.hpp"
 
 #include <algorithm>
+#include <array>
+#include <memory>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -548,15 +552,55 @@ void RuntimeMeshResourceEnsurer::Ensure(
     };
 
     std::unordered_set<std::uint64_t> ensuredMeshAssetIds;
+    // The terrain meshes of the scene with what their foliage is made from, found once per mesh.
+    struct TerrainFoliageSource {
+        std::shared_ptr<const kb::assets::TerrainAsset> terrain;
+        // A terrain whose mesh is not loaded, or is an editor preview without the foliage source, keeps the foliage it has.
+        bool keep = false;
+    };
+    std::unordered_map<std::uint64_t, TerrainFoliageSource> terrainSources;
+    const auto noteTerrainMesh = [&](std::uint64_t meshAssetId) {
+        const kb::assets::AssetId assetId{ meshAssetId };
+        const kb::assets::AssetMetadata* metadata = manager.Registry().Find(assetId);
+        if (metadata == nullptr || metadata->sourceExtension != kb::assets::kTerrainAssetExtension) return;
+        const MeshRef asset = manager.AcquireLoaded<RenderMeshAssetData>(assetId);
+        TerrainFoliageSource source;
+        if (!asset.IsLoaded()) {
+            source.keep = true;
+        } else {
+            source.terrain = asset->terrainFoliage;
+            source.keep = source.terrain == nullptr &&
+                (asset->dynamicVertexUpdates || !asset->dynamicTerrainLayerWeightUpdates.empty());
+        }
+        terrainSources.emplace(meshAssetId, std::move(source));
+    };
     const auto ensureMeshOnce = [&](std::uint64_t meshAssetId) {
         if (meshAssetId != 0U && ensuredMeshAssetIds.insert(meshAssetId).second) {
             ensureMesh(meshAssetId);
+            noteTerrainMesh(meshAssetId);
+        }
+    };
+    std::vector<TerrainFoliageRenderProxyDesc> foliageTerrains;
+    std::vector<std::uint64_t> foliageKept;
+    const auto collectTerrain = [&](std::uint64_t meshAssetId, std::uint64_t entityId, const std::array<float, 16>& model,
+                                    std::uint32_t layer) {
+        const auto found = terrainSources.find(meshAssetId);
+        if (found == terrainSources.end()) return;
+        if (found->second.terrain != nullptr) {
+            foliageTerrains.push_back(TerrainFoliageRenderProxyDesc{
+                .entityId = entityId, .model = model, .terrain = found->second.terrain, .layer = layer });
+        } else if (found->second.keep) {
+            foliageKept.push_back(entityId);
         }
     };
 
     if (context.renderScene.ResourceGroupsCoverMeshProxies().meshes) {
         for (const SceneRenderDrawGroup& group : context.renderScene.DrawGroups()) {
             ensureMeshOnce(group.meshAssetId);
+            if (!terrainSources.contains(group.meshAssetId)) continue;
+            for (const SceneRenderMeshInstance& instance : group.instances) {
+                collectTerrain(group.meshAssetId, instance.entityId, instance.model, instance.layer);
+            }
         }
     } else {
         for (const auto& [entityId, proxy] : context.renderScene.MeshProxies()) {
@@ -568,6 +612,16 @@ void RuntimeMeshResourceEnsurer::Ensure(
             } else {
                 ensureMeshOnce(proxy.desc.meshAssetId);
             }
+            if (proxy.desc.visible && !terrainSources.empty()) collectTerrain(proxy.desc.meshAssetId, proxy.desc.entityId, proxy.desc.model, proxy.desc.layer);
+        }
+    }
+    if (!terrainSources.empty() || !context.renderScene.TerrainFoliageProxies().empty()) {
+        context.renderScene.SyncTerrainFoliage(foliageTerrains, foliageKept);
+    }
+    for (const auto& [entityId, proxy] : context.renderScene.TerrainFoliageProxies()) {
+        static_cast<void>(entityId);
+        for (const kb::assets::TerrainFoliageLayer& layer : proxy.desc.terrain->foliageLayers) {
+            ensureMeshOnce(layer.meshAssetId);
         }
     }
     for (const auto& [entityId, proxy] : context.renderScene.GeometrySwarmProxies()) {

@@ -3,6 +3,7 @@
 #include "kb/render/resources/RenderResources.hpp"
 
 #include "engine/assets/ImportedAsset.hpp"
+#include "engine/assets/TerrainAsset.hpp"
 #include "engine/assets/bake/AssetBakeKey.hpp"
 
 #include <array>
@@ -126,6 +127,8 @@ struct RenderMeshAssetData {
     std::vector<RenderMeshVertexUpdateRange> dynamicVertexUpdateRanges;
     std::vector<std::uint32_t> dynamicSectionUpdateIndices;
     std::vector<std::uint8_t> terrainLayerWeights;
+    // The terrain a mesh was built from when it has foliage layers; the scene places the plants from it.
+    std::shared_ptr<const kb::assets::TerrainAsset> terrainFoliage;
     std::vector<RenderTerrainLayerWeightUpdateRegion> dynamicTerrainLayerWeightUpdates;
     std::uint32_t vertexUpdateFirst = 0U;
     std::uint32_t vertexUpdateCount = 0U;

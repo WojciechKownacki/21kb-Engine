@@ -14,6 +14,9 @@ struct SceneMeshBatch {
     bool hasMaterialSlotOverrides = false;
     std::span<const SceneRenderMeshInstance> instances{};
     std::span<const SceneMeshVisibilityCluster> visibilityClusters{};
+    // See SceneRenderDrawGroup: 0 draws the instances at any distance.
+    float fadeStartDistance = 0.0F;
+    float cullDistance = 0.0F;
     std::uint64_t cacheId = 0U;
     std::uint64_t contentRevision = 0U;
     // Where the instances are, when the draw group keeps that; null otherwise.

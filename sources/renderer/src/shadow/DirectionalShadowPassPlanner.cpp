@@ -206,7 +206,7 @@ DirectionalShadowSetup DirectionalShadowPassPlanner::Build(
     }
     const ShadowCasterBounds casterBounds = ShadowCasterBoundsCollector::Collect(
         renderScene, resources, resourceMap, cameraCullingMask,
-        cameraPosition != nullptr ? &focusView : nullptr, lightingConfig.shadowDistance);
+        cameraPosition != nullptr ? &focusView : nullptr, lightingConfig.shadowDistance, cameraPosition);
     setup.casterCount = casterBounds.casterCount;
     if (setup.casterCount == 0U || !casterBounds.bounds.IsValid()) {
         return setup;
@@ -264,6 +264,11 @@ DirectionalShadowSetup DirectionalShadowPassPlanner::Build(
             camera.view[14] = 1.0F - windowStart;
         }
         camera.cullingMask = cameraCullingMask;
+        if (focusCamera) {
+            // Foliage casts a shadow only within the shadow distance of the viewer, as it is drawn only within its own.
+            camera.distanceOrigin = *cameraPosition;
+            camera.distanceLimit = lightingConfig.shadowDistance;
+        }
         SceneDepthPolicy::MakeOrthographic(
             camera.projection.data(), orthoHeight, 1.0F, 0.1F, depthSpan + 2.0F, homogeneousDepth);
         const std::array<float, 16> lightViewProjection =

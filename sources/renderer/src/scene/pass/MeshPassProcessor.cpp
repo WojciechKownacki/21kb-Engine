@@ -351,8 +351,9 @@ void SetProbeKind(SceneRenderMeshInstance& probe, std::uint32_t kind) noexcept {
     return mesh == nullptr || mesh->sections.empty() ? 1U : static_cast<std::uint32_t>(mesh->sections.size());
 }
 
+// `cpuCullOnly` keeps the frustum test on the CPU, where a batch with a draw distance also tests the distance.
 [[nodiscard]] MeshSectionScope MakeSectionScope(const MeshPassProcessorDesc& desc, const MeshPipelineScanBatch& resolved,
-    std::uint32_t sectionIndex) noexcept {
+    std::uint32_t sectionIndex, bool cpuCullOnly) noexcept {
     const RenderMeshResource* mesh = resolved.meshResource;
     MeshSectionScope scope;
     scope.mesh = resolved.mesh;
@@ -372,7 +373,7 @@ void SetProbeKind(SceneRenderMeshInstance& probe, std::uint32_t kind) noexcept {
         ? scope.section.vertexCount
         : (mesh != nullptr && scope.section.vertexStart < mesh->vertexCount ? mesh->vertexCount - scope.section.vertexStart : 0U);
     scope.meshletRange = MeshPipelineVisibility::MeshletRangeForSection(mesh, sectionIndex);
-    scope.gpuFrustumCull = mesh != nullptr &&
+    scope.gpuFrustumCull = !cpuCullOnly && mesh != nullptr &&
         (mesh->gpuCullingEnabled || mesh->indirectDrawsEnabled) &&
         desc.gpuDrivenSupport.computeCullingSupported && desc.gpuDrivenSupport.indirectDrawSupported &&
         desc.gpuDrivenSupport.runtimeGpuDispatchSupported &&
@@ -630,6 +631,31 @@ void ScanSection(const MeshScanContext& context, MeshScanState& state, const Sce
     std::uint64_t lastMaterialAssetId = 0U;
     MeshPipelineMaterialResolution lastMaterialResolution{};
     std::size_t clusterIndex = 0U;
+    // A batch with a draw distance (foliage) measures it from the viewer. A shadow pass has the light's camera, so it
+    // takes the viewer and the shadow range the camera carries, cuts at the nearer of that range and the draw distance, and
+    // has no distance rule when the camera carries none. The fade is the viewer's own in every pass, so a shadow
+    // does not pop where the plant shrinks.
+    const bool shadowPass = desc.pass == MeshPassType::ShadowDepth;
+    const bool hasDrawDistance = batch.cullDistance > 0.0F && desc.camera != nullptr &&
+        (!shadowPass || desc.camera->distanceLimit > 0.0F);
+    float cutoff = batch.cullDistance;
+    std::array<float, 3> viewer{};
+    if (hasDrawDistance && shadowPass) {
+        viewer = desc.camera->distanceOrigin;
+        cutoff = std::min(cutoff, desc.camera->distanceLimit);
+    } else if (hasDrawDistance) {
+        // The view is a rigid transform, so the camera sits at -R^T t.
+        const std::array<float, 16>& view = desc.camera->view;
+        viewer = { -(view[0] * view[12] + view[1] * view[13] + view[2] * view[14]),
+                   -(view[4] * view[12] + view[5] * view[13] + view[6] * view[14]),
+                   -(view[8] * view[12] + view[9] * view[13] + view[10] * view[14]) };
+    }
+    const auto distanceTo = [&viewer](const std::array<float, 3>& point) noexcept {
+        const float x = point[0] - viewer[0];
+        const float y = point[1] - viewer[1];
+        const float z = point[2] - viewer[2];
+        return std::sqrt(x * x + y * y + z * z);
+    };
     InstanceSelection selection;
     if (batch.visibility != nullptr) {
         SelectInstances(context, state, batch, scope, selection);
@@ -724,7 +750,8 @@ void ScanSection(const MeshScanContext& context, MeshScanState& state, const Sce
             bounds.radius += cluster.maximumScale * (localBounds.radius +
                 std::sqrt(center[0]*center[0] + center[1]*center[1] + center[2]*center[2])) + boundsMargin;
             if (cluster.instanceCount != 0U && cluster.instanceCount <= batch.instances.size()-instanceIndex &&
-                !MeshPipelineVisibility::IsInsideFrustum(context.frustum, bounds)) {
+                ((hasDrawDistance && distanceTo(cluster.origins.center) - cluster.origins.radius >= cutoff) ||
+                 !MeshPipelineVisibility::IsInsideFrustum(context.frustum, bounds))) {
                 state.culledInstanceCount += cluster.instanceCount;
                 if (!meshResource->lods.empty()) state.stats.lodSelectionCount += cluster.instanceCount - 1U;
                 instanceIndex += cluster.instanceCount - 1U;
@@ -747,6 +774,17 @@ void ScanSection(const MeshScanContext& context, MeshScanState& state, const Sce
             ++state.culledInstanceCount;
             continue;
         }
+        float fadeScale = 1.0F;
+        if (hasDrawDistance) {
+            const float distance = distanceTo({ instance.model[12], instance.model[13], instance.model[14] });
+            if (distance >= cutoff) {
+                ++state.culledInstanceCount;
+                continue;
+            }
+            if (distance > batch.fadeStartDistance) {
+                fadeScale = (batch.cullDistance - distance) / (batch.cullDistance - batch.fadeStartDistance);
+            }
+        }
         const float viewDepth = MeshPipelineVisibility::ViewDepth(desc.camera, worldBounds);
         sink(MeshPipelineScanTarget{
                  .key = MeshCommandLookupKey{
@@ -767,6 +805,7 @@ void ScanSection(const MeshScanContext& context, MeshScanState& state, const Sce
                  .depthBucket = MeshPipelineVisibility::DepthBucket(viewDepth),
                  .viewDepth = viewDepth,
                  .worldBounds = worldBounds,
+                 .fadeScale = fadeScale,
              });
     }
 }
@@ -780,7 +819,7 @@ void ScanBatch(const MeshScanContext& context, MeshScanState& state, const Scene
     else state.chainLevels.clear();
     const std::uint32_t sectionCount = SectionCountOf(resolved.meshResource);
     for (std::uint32_t sectionIndex = 0U; sectionIndex < sectionCount; ++sectionIndex) {
-        const MeshSectionScope scope = MakeSectionScope(context.desc, resolved, sectionIndex);
+        const MeshSectionScope scope = MakeSectionScope(context.desc, resolved, sectionIndex, batch.cullDistance > 0.0F);
         if (!SectionIsDrawn(context.desc, scope.section)) {
             continue;
         }
@@ -900,6 +939,11 @@ struct MeshCommandWriter {
         }
         command.sortKey += admitted.depthBucket;
         command.instances.emplace_back(instance, admitted.worldBounds, admitted.depthBucket);
+        if (admitted.fadeScale != 1.0F) {
+            // Shrinks the instance about its origin; the translation stays where it is.
+            auto& model = command.instances.back().model;
+            for (const std::size_t axis : { 0U, 1U, 2U, 4U, 5U, 6U, 8U, 9U, 10U }) model[axis] *= admitted.fadeScale;
+        }
         if (desc.pass == MeshPassType::MotionVectors) {
             command.motion.push_back(SceneRenderCommandMotion{ .previousModelFrame = instance.previousModelFrame, .previousModel = instance.previousModel });
         }
@@ -998,7 +1042,8 @@ void MergeChunk(const MeshScanContext& context, const MeshPipelineScanChunk& chu
     const bool budgeted = context.desc.maxDrawCommands != 0U || context.desc.maxVisibleInstances != 0U;
     for (const MeshPipelineScanRun& run : chunk.runs) {
         if (run.batchIndex != scopeBatch || run.target.key.sectionIndex != scopeSection) {
-            scope = MakeSectionScope(context.desc, chunk.batches[run.batchIndex - chunk.firstBatch], run.target.key.sectionIndex);
+            scope = MakeSectionScope(context.desc, chunk.batches[run.batchIndex - chunk.firstBatch], run.target.key.sectionIndex,
+                context.desc.meshBatches[run.batchIndex].cullDistance > 0.0F);
             scopeBatch = run.batchIndex;
             scopeSection = run.target.key.sectionIndex;
         }

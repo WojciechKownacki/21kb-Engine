@@ -469,7 +469,7 @@ void RunTerrainFoliageTest() {
         terrain.heights[index] = static_cast<float>(index % 129) * 0.1F;
     }
     terrain.foliageLayers = { kb::assets::TerrainFoliageLayer{
-        .meshAssetId = 11, .materialAssetId = 12, .density = 1.0F, .alignToNormal = 0.5F, .seed = 7 } };
+        .meshAssetId = 11, .materialAssetId = 12, .density = 1.0F, .alignToNormal = 0.5F, .seed = 7, .castsShadow = false } };
     terrain.foliageMapWidth = terrain.foliageMapHeight = kMap;
     terrain.foliageDensity.assign(static_cast<std::size_t>(kMap) * kMap, 0);
     for (std::uint32_t z = 0; z < kMap; ++z) {
@@ -497,7 +497,8 @@ void RunTerrainFoliageTest() {
     kb::tests::Require(kb::assets::TerrainAssetIO::Save(path, terrain, &error), error.c_str());
     const auto loaded = kb::assets::TerrainAssetIO::Load(path, &error);
     kb::tests::Require(loaded.has_value() && loaded->foliageLayers.size() == 1 && loaded->foliageDensity == terrain.foliageDensity &&
-        loaded->foliageLayers[0].meshAssetId == 11 && loaded->foliageLayers[0].materialAssetId == 12,
+        loaded->foliageLayers[0].meshAssetId == 11 && loaded->foliageLayers[0].materialAssetId == 12 &&
+        !loaded->foliageLayers[0].castsShadow,
         "Foliage settings changed in the saved terrain");
     kb::tests::Require(SameFoliage(chunks, kb::assets::BuildTerrainFoliage(*loaded)), "Foliage changed after save and load");
     std::ifstream input(path, std::ios::binary);

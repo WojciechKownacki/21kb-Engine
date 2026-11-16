@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/assets/TerrainAsset.hpp"
 #include "engine/math/DVec3.hpp"
 #include "engine/particles/ParticleRenderSnapshot.hpp"
 #include "engine/scene/ScenePortalVisibility.hpp"
@@ -186,6 +187,16 @@ struct GeometrySwarmRenderProxyDesc {
     std::uint32_t layer = 1U;
 };
 
+// The foliage a terrain's density maps call for. The renderer places the plants (see kb::assets::BuildTerrainFoliage),
+// keeps them as one chunk of instances per layer and 32 m square, and draws each chunk as a draw group, so the plants
+// go through the same culling, batching and shadow passes as every other instance.
+struct TerrainFoliageRenderProxyDesc {
+    std::uint64_t entityId = 0U;
+    std::array<float, 16> model{};
+    std::shared_ptr<const kb::assets::TerrainAsset> terrain;
+    std::uint32_t layer = 1U;
+};
+
 enum class RenderSurfaceCastRegion : std::uint8_t { Circle2D, Rectangle2D, Sphere, Box, Capsule };
 
 // Renderer-derived projection descriptor. The canonical configuration remains
@@ -296,6 +307,23 @@ struct GeometrySwarmRenderProxy {
     std::uint64_t previousModelFrame = 0U;
     std::uint64_t spawnMotionFrame = 0U;
 };
+// The instances of one chunk, made when the data they come from changes and not before; `inputHash` tells it.
+struct TerrainFoliageChunkCache {
+    std::uint64_t inputHash = 0U;
+    // 0 for a chunk without plants.
+    std::uint64_t cacheId = 0U;
+    std::shared_ptr<const std::vector<SceneRenderMeshInstance>> instances;
+    std::vector<SceneMeshVisibilityCluster> clusters;
+};
+
+struct TerrainFoliageRenderProxy {
+    RenderProxyId id{};
+    TerrainFoliageRenderProxyDesc desc{};
+    std::uint32_t chunkCountX = 0U;
+    std::uint32_t chunkCountZ = 0U;
+    // Layer by layer, row by row.
+    std::vector<TerrainFoliageChunkCache> chunks;
+};
 struct SurfaceCastRenderProxy { RenderProxyId id{}; SurfaceCastRenderProxyDesc desc{}; RenderProxyDirtyFlag dirty = RenderProxyDirtyFlag::None; mutable std::uint64_t pulledWorldVersion = 0; };
 struct SpaceStrokeRenderProxy { RenderProxyId id{}; SpaceStrokeRenderProxyDesc desc{}; RenderProxyDirtyFlag dirty = RenderProxyDirtyFlag::None; mutable std::uint64_t pulledWorldVersion = 0; };
 
@@ -352,6 +380,7 @@ public:
     using LightProxyMap = std::unordered_map<std::uint64_t, LightRenderProxy>;
     using VisibilityBlockerProxyMap = std::unordered_map<std::uint64_t, VisibilityBlockerRenderProxy>;
     using GeometrySwarmProxyMap = std::unordered_map<std::uint64_t, GeometrySwarmRenderProxy>;
+    using TerrainFoliageProxyMap = std::unordered_map<std::uint64_t, TerrainFoliageRenderProxy>;
     using SurfaceCastProxyMap = std::unordered_map<std::uint64_t, SurfaceCastRenderProxy>;
     using SpaceStrokeProxyMap = std::unordered_map<std::uint64_t, SpaceStrokeRenderProxy>;
 
@@ -483,6 +512,12 @@ public:
     [[nodiscard]] std::size_t LightProxyCount() const noexcept;
     [[nodiscard]] std::size_t VisibilityBlockerProxyCount() const noexcept;
     [[nodiscard]] std::size_t GeometrySwarmProxyCount() const noexcept;
+    // Sets the foliage of `terrains` and drops that of every terrain neither in it nor in `keptEntityIds`. A terrain whose
+    // data did not change costs a comparison; one whose data changed makes again only the chunks whose own inputs changed.
+    void SyncTerrainFoliage(std::span<const TerrainFoliageRenderProxyDesc> terrains, std::span<const std::uint64_t> keptEntityIds);
+    [[nodiscard]] const TerrainFoliageProxyMap& TerrainFoliageProxies() const noexcept { return terrainFoliage_; }
+    // Chunks made since the scene was created.
+    [[nodiscard]] std::uint64_t TerrainFoliageChunkBuildCount() const noexcept { return terrainFoliageChunkBuilds_; }
     [[nodiscard]] std::size_t SurfaceCastProxyCount() const noexcept;
     [[nodiscard]] std::size_t SpaceStrokeProxyCount() const noexcept;
 
@@ -576,6 +611,8 @@ private:
     [[nodiscard]] SceneRenderMeshInstance BuildGeometrySwarmInstance(
         std::uint64_t entityId, const GeometrySwarmRenderProxy& proxy, std::uint32_t index) const;
     void RebuildDrawGroupsIfNeeded(kb::ecs::WorkerPool* workers) const;
+    // Adds the draw group of every chunk of every terrain foliage proxy that has plants.
+    void AppendTerrainFoliageGroups(std::size_t& writeGroupCount) const;
     // Brings the visibility index of every draw group up to date with the instances that moved or changed.
     void RefreshVisibility(kb::ecs::WorkerPool* workers) const;
     void ApplySurfaceCasts(SceneRenderMeshInstance& instance) const;
@@ -622,6 +659,8 @@ private:
     VisibilityBlockerProxyMap visibilityBlockers_;
     std::optional<kb::scene::ScenePortalVisibility> portalVisibility_;
     GeometrySwarmProxyMap geometrySwarms_;
+    TerrainFoliageProxyMap terrainFoliage_;
+    std::uint64_t terrainFoliageChunkBuilds_ = 0U;
     SurfaceCastProxyMap surfaceCasts_;
     SpaceStrokeProxyMap spaceStrokes_;
     std::optional<SceneRenderWorldBackdrop> worldBackdrop_;

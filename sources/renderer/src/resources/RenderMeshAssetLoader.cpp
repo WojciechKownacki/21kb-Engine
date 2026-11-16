@@ -678,8 +678,13 @@ void BuildRuntimeLods(RenderMeshAssetData& mesh, const kb::assets::AssetLoadRequ
     if (extension == kb::assets::kTerrainAssetExtension) {
         std::vector<std::uint8_t> bytes;
         if (!request.ReadSourceBytes(bytes, packagedError)) return { {}, std::move(packagedError) };
-        const auto terrain = kb::assets::TerrainAssetIO::Load(bytes, &packagedError);
-        if (terrain) mesh = RenderTerrainMeshBuilder::Build(*terrain);
+        auto terrain = kb::assets::TerrainAssetIO::Load(bytes, &packagedError);
+        if (terrain) {
+            mesh = RenderTerrainMeshBuilder::Build(*terrain);
+            if (mesh && !terrain->foliageLayers.empty()) {
+                mesh->terrainFoliage = std::make_shared<const kb::assets::TerrainAsset>(std::move(*terrain));
+            }
+        }
     } else if (extension == kb::assets::kMap2DAssetExtension) {
         std::vector<std::uint8_t> bytes;
         if (!request.ReadSourceBytes(bytes, packagedError)) return { {}, std::move(packagedError) };

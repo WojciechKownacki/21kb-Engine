@@ -31,6 +31,8 @@ struct TerrainFoliageLayer {
     float fadeStartDistance = 60.0F;
     float cullDistance = 80.0F;
     std::uint32_t seed = 1U;
+    // Whether the plants cast shadows (they always receive them).
+    bool castsShadow = true;
 };
 
 // Authoritative terrain source. Heights are stored in world units; holes are

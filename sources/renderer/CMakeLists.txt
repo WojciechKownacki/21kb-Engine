@@ -338,6 +338,7 @@ add_library(kb_renderer STATIC
     src/scene/cache/SceneMaterialTextureDependencySignature.hpp
     src/scene/RenderInstanceBuffer.cpp
     src/scene/RenderScene.cpp
+    src/scene/RenderSceneTerrainFoliage.cpp
     src/scene/SceneMeshVisibilityIndexBuilder.cpp
     src/scene/SceneMeshVisibilityIndexBuilder.hpp
     src/scene/RenderSceneProxyConverters.cpp
@@ -967,6 +968,7 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         tests/SceneLightGridTests.cpp
         tests/SceneLightGridGpuTests.cpp
         tests/GpuFrustumCullingTests.cpp
+        tests/TerrainFoliageRenderTests.cpp
         tests/RenderEffectPluginTests.cpp
         tests/RendererTestSupport.hpp
         tests/FinalCompositePassTests.cpp
@@ -1070,6 +1072,9 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
     add_test(NAME kb_renderer_hdr_output_cpu COMMAND $<TARGET_FILE:kb_renderer_tests> hdr-output-cpu)
     set_tests_properties(kb_renderer_hdr_output_cpu PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;hdr;cpu" TIMEOUT 60)
     if(WIN32)
+        add_test(NAME kb_renderer_terrain_foliage COMMAND $<TARGET_FILE:kb_renderer_tests> terrain-foliage)
+        set_tests_properties(kb_renderer_terrain_foliage PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;terrain;headless" TIMEOUT 300)
         add_test(NAME kb_renderer_ui_overdraw COMMAND $<TARGET_FILE:kb_renderer_tests> screen-ui-overdraw)
         set_tests_properties(kb_renderer_ui_overdraw PROPERTIES
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;ui;gpu;headless" TIMEOUT 60)

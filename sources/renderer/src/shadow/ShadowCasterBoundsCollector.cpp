@@ -60,7 +60,8 @@ ShadowCasterBounds ShadowCasterBoundsCollector::Collect(
     const SceneRenderResourceMap& resourceMap,
     std::uint32_t cameraCullingMask,
     const std::array<float, 16>* focusView,
-    float focusHalfExtent) noexcept {
+    float focusHalfExtent,
+    const std::array<float, 3>* viewer) noexcept {
     ShadowCasterBounds result{};
     const auto accumulate = [&](const RenderBoundsSphere& worldBounds, std::uint32_t casters, bool displaced) {
         result.bounds = MergeBounds(result.bounds, worldBounds);
@@ -94,8 +95,17 @@ ShadowCasterBounds ShadowCasterBoundsCollector::Collect(
         const float groupMargin = MeshPipelineVisibility::MaterialBoundsMargin(
             resources.FindMaterial(resourceMap.ResolveMaterial(group.materialAssetId)));
         std::size_t clusterIndex = 0U;
-        for (std::size_t index = 0U; index < group.instances.size(); ++index) {
-            const auto& instance = group.instances[index];
+        const std::span<const SceneRenderMeshInstance> instances = group.Instances();
+        const float reach = viewer != nullptr && focusView != nullptr && group.cullDistance > 0.0F
+            ? std::min(group.cullDistance, focusHalfExtent) : 0.0F;
+        const auto beyondReach = [&](const std::array<float, 3>& center, float radius) noexcept {
+            const float x = center[0] - (*viewer)[0];
+            const float y = center[1] - (*viewer)[1];
+            const float z = center[2] - (*viewer)[2];
+            return std::sqrt(x * x + y * y + z * z) - radius >= reach;
+        };
+        for (std::size_t index = 0U; index < instances.size(); ++index) {
+            const auto& instance = instances[index];
             while (clusterIndex < group.visibilityClusters.size() &&
                 group.visibilityClusters[clusterIndex].firstInstance < index) ++clusterIndex;
             if ((!instance.castsShadow && !instance.receivesShadow) || (instance.layer & cameraCullingMask) == 0U) continue;
@@ -107,7 +117,11 @@ ShadowCasterBounds ShadowCasterBoundsCollector::Collect(
             if (clusterIndex < group.visibilityClusters.size() &&
                 group.visibilityClusters[clusterIndex].firstInstance == index && localBounds.IsValid()) {
                 const auto& cluster = group.visibilityClusters[clusterIndex];
-                if (cluster.instanceCount != 0U && cluster.instanceCount <= group.instances.size()-index) {
+                if (cluster.instanceCount != 0U && cluster.instanceCount <= instances.size()-index) {
+                    if (reach > 0.0F && beyondReach(cluster.origins.center, cluster.origins.radius)) {
+                        index += cluster.instanceCount-1U;
+                        continue;
+                    }
                     auto bounds = cluster.origins;
                     const auto& center = localBounds.center;
                     bounds.radius += cluster.maximumScale * (localBounds.radius +
@@ -117,6 +131,7 @@ ShadowCasterBounds ShadowCasterBoundsCollector::Collect(
                     continue;
                 }
             }
+            if (reach > 0.0F && beyondReach({ instance.model[12], instance.model[13], instance.model[14] }, 0.0F)) continue;
             accumulate(MeshPipelineVisibility::GrowBounds(TransformBoundsForShadow(localBounds, instance.model), boundsMargin),
                 instance.castsShadow ? 1U : 0U, boundsMargin > 0.0F);
         }

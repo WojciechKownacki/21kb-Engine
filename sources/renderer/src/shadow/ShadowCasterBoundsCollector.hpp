@@ -32,7 +32,10 @@ public:
         const SceneRenderResourceMap& resourceMap,
         std::uint32_t cameraCullingMask = 0xFFFFFFFFU,
         const std::array<float, 16>* focusView = nullptr,
-        float focusHalfExtent = 0.0F) noexcept;
+        float focusHalfExtent = 0.0F,
+        // The viewer, when there is a focus: draw groups with a draw distance (foliage) count only within the nearer of
+        // that distance and `focusHalfExtent` of it.
+        const std::array<float, 3>* viewer = nullptr) noexcept;
 };
 
 } // namespace kb::render

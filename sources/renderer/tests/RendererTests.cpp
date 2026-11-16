@@ -46,6 +46,7 @@ void RunGraphShaderNodeCookTests(std::uint32_t shard, std::uint32_t shardCount);
 void RunSceneLightGridTests();
 void RunSceneLightGridGpuTests();
 void RunGpuFrustumCullingTests();
+void RunTerrainFoliageRenderTests();
 void RunGpuMeshletSubmissionTests();
 void RunParticleProcessTests(const std::filesystem::path& compiled);
 void RunRenderEffectPluginTests(const std::filesystem::path& manifest);
@@ -325,6 +326,10 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "gpu-meshlet-submission") {
         kb::render::tests::RunGpuMeshletSubmissionTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "terrain-foliage") {
+        kb::render::tests::RunTerrainFoliageRenderTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "gpu-frustum-culling") {

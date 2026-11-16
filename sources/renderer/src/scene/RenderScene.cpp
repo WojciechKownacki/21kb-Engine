@@ -826,9 +826,9 @@ void RenderScene::PrepareDrawGroups(kb::ecs::WorkerPool* workers) const {
 }
 
 RenderScene::ResourceGroupCoverage RenderScene::ResourceGroupsCoverMeshProxies() const {
-    // Geometry swarms and space strokes add generated instances that do not correspond
+    // Geometry swarms, space strokes and terrain foliage add generated instances that do not correspond
     // one-to-one with mesh proxies, so their presence makes the coverage count ambiguous.
-    if (!geometrySwarms_.empty() || !spaceStrokes_.empty()) {
+    if (!geometrySwarms_.empty() || !spaceStrokes_.empty() || !terrainFoliage_.empty()) {
         return {};
     }
     std::size_t represented = 0U;
@@ -1045,7 +1045,10 @@ void RenderScene::RebuildDrawGroupsIfNeeded(kb::ecs::WorkerPool* workers) const 
 
     for (SceneRenderDrawGroup& group : drawGroups_) {
         group.instances.clear();
+        group.sharedInstances.reset();
         group.visibilityClusters.clear();
+        group.fadeStartDistance = 0.0F;
+        group.cullDistance = 0.0F;
         group.instancesMoved = 0U;
     }
 
@@ -1140,6 +1143,8 @@ void RenderScene::RebuildDrawGroupsIfNeeded(kb::ecs::WorkerPool* workers) const 
             drawGroups_[lookupIt->second].instances.push_back(instance);
         }
     }
+
+    AppendTerrainFoliageGroups(writeGroupCount);
 
     drawGroups_.resize(writeGroupCount);
     const auto index = [this](std::size_t begin, std::size_t end) {

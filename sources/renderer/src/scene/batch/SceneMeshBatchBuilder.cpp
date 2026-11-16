@@ -16,7 +16,8 @@ void SceneMeshBatchBuilder::BuildInto(std::span<const SceneRenderDrawGroup> draw
 
     for (std::size_t index = 0U; index < drawGroups.size(); ++index) {
         const SceneRenderDrawGroup& group = drawGroups[index];
-        if (group.instances.empty()) {
+        const std::span<const SceneRenderMeshInstance> instances = group.Instances();
+        if (instances.empty()) {
             continue;
         }
 
@@ -25,8 +26,9 @@ void SceneMeshBatchBuilder::BuildInto(std::span<const SceneRenderDrawGroup> draw
             .materialAssetId = group.materialAssetId,
             .sourceDrawGroupIndex = static_cast<std::uint32_t>(index),
             .hasMaterialSlotOverrides = group.hasMaterialSlotOverrides,
-            .instances = std::span<const SceneRenderMeshInstance>(group.instances.data(), group.instances.size()),
+            .instances = instances,
             .visibilityClusters = group.visibilityClusters,
+            .fadeStartDistance = group.fadeStartDistance, .cullDistance = group.cullDistance,
             .cacheId = group.cacheId, .contentRevision = group.contentRevision,
             .visibility = group.visibility.Empty() ? nullptr : &group.visibility,
         });
