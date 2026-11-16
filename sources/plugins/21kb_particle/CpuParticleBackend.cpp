@@ -790,6 +790,7 @@ kb::particles::ParticleRuntimeResult CpuParticleBackend::Step(
     collisionScene_ = &scene;
     gpuSimTime_ = static_cast<double>(stepIndex) * static_cast<double>(fixedDeltaSeconds);
     ReleaseDueGpuEvents();
+    QueueGpuCollisionEvents();
     std::uint32_t remainingSpawnBudget = kb::scene::kParticleEffectMaxSpawnsPerStep;
     for (std::uint32_t denseIndex = 0U; denseIndex < denseInstanceCount_; ++denseIndex) {
         if (sharedLeaders_[denseIndex] != kInvalidDenseIndex) {
@@ -2335,6 +2336,11 @@ void CpuParticleBackend::BeginEventStep() noexcept {
 }
 
 void CpuParticleBackend::RemoveQueuedEvents(std::uint64_t instanceId) noexcept {
+    for (kb::particles::ParticleGpuCollisionBatch& batch : gpuCollisionBatches_) {
+        std::erase_if(batch.events, [instanceId](const kb::particles::ParticleGpuCollisionEvent& event) {
+            return event.key.instanceId == instanceId;
+        });
+    }
     std::erase_if(externalEffects_, [instanceId](const auto& event) { return event.sourceInstanceId == instanceId; });
     std::erase_if(currentEvents_, [&](const InternalEvent& event) { return event.instanceId == instanceId; });
     std::erase_if(nextEvents_, [&](const InternalEvent& event) { return event.instanceId == instanceId; });
@@ -2708,11 +2714,10 @@ kb::particles::ParticleGpuFallbackReason CpuParticleBackend::GpuFallbackReason(
             // A field the GPU kernel does not integrate: the CPU path follows it.
             return module.type == kb::scene::ParticleModuleType::TorusSwirl ? Reason::TorusSwirl : Reason::Separation;
         } else if (module.type == kb::scene::ParticleModuleType::SubEmitter) {
-            // Collision events would have to come back from the GPU.
-            if (std::get<kb::scene::ParticleSubEmitterModule>(module.payload).trigger == kb::scene::ParticleEventTrigger::Collision) {
-                return Reason::CollisionEvent;
+            // Collisions come back from the GPU kernel; the other triggers are predicted from the closed form.
+            if (std::get<kb::scene::ParticleSubEmitterModule>(module.payload).trigger != kb::scene::ParticleEventTrigger::Collision) {
+                eventActions = true;
             }
-            eventActions = true;
         }
     }
     if (emitter.beam.enabled) return Reason::Beam;
@@ -2720,9 +2725,8 @@ kb::particles::ParticleGpuFallbackReason CpuParticleBackend::GpuFallbackReason(
     if (emitter.shape.type == kb::scene::ParticleSpawnShape::Mesh) return Reason::MeshSpawn;
     for (std::uint8_t index = 0U; index < effect.eventBindingCount; ++index) {
         if (effect.eventBindings[index].sourceEmitterIndex != emitterIndex) continue;
-        if (effect.eventBindings[index].trigger == kb::scene::ParticleEventTrigger::Collision) return Reason::CollisionEvent;
         if (effect.eventBindings[index].trigger == kb::scene::ParticleEventTrigger::WhileAlive) return Reason::WhileAliveEvent;
-        eventActions = true;
+        if (effect.eventBindings[index].trigger != kb::scene::ParticleEventTrigger::Collision) eventActions = true;
     }
     // Death positions come from the closed form, which needs a free-flying world-space particle.
     return eventActions && (collisionPlane || forces || local || emitter.customProcessAssetId != 0U) ? Reason::EventMotion : Reason::None;
@@ -2752,6 +2756,7 @@ kb::particles::ParticleGpuEmitterParams CpuParticleBackend::BuildGpuParams(
     using Motion = kb::particles::ParticleGpuMotionType;
     static_assert(kb::particles::kParticleGpuMaxMotionModules >= kb::scene::kParticleEffectMaxModulesPerEmitter);
     bool alphaOverLife = false;
+    kb::scene::ParticleStableId planeModuleId = 0U;
     kb::math::Vec3 acceleration{};
     float drag = 0.0F;
     for (std::uint8_t index = 0U; index < emitter.moduleCount; ++index) {
@@ -2778,6 +2783,7 @@ kb::particles::ParticleGpuEmitterParams CpuParticleBackend::BuildGpuParams(
                 .normal = plane.normal, .distance = PlaneDistance(plane), .restitution = plane.restitution,
                 .friction = plane.friction, .killOnContact = plane.killOnContact };
             params.hasPlane = true;
+            planeModuleId = module.moduleId;
         } else if (module.type == kb::scene::ParticleModuleType::Noise) {
             const auto& noise = std::get<kb::scene::ParticleNoiseModule>(module.payload);
             params.motionModules[params.motionModuleCount++] = {.type = Motion::Noise, .strength = noise.strength,
@@ -2791,6 +2797,12 @@ kb::particles::ParticleGpuEmitterParams CpuParticleBackend::BuildGpuParams(
             params.motionModules[params.motionModuleCount++] = {.type = Motion::Attraction, .vector = attraction.point,
                 .strength = attraction.strength, .parameter = attraction.radius};
         }
+    }
+    if (params.hasPlane) {
+        // Only the hits of the plane are events; scene-depth bounces are a visual response.
+        InternalEvent collision{ .instanceId = MakeInstanceId(denseToSlot_[denseIndex], slotGenerations_[denseToSlot_[denseIndex]]),
+            .sourceEmitterIndex = emitterIndex, .sourceModuleId = planeModuleId, .trigger = kb::scene::ParticleEventTrigger::Collision };
+        params.collisionEvents = EventHasAction(collision);
     }
     // An authored plane has no screen-depth semantics. Depth collision is a separate,
     // explicit renderer capability and must not depend on the presence of a plane.
@@ -2858,6 +2870,7 @@ void CpuParticleBackend::SpawnGpu(std::uint32_t denseIndex, std::uint8_t emitter
     const kb::math::Vec3* eventPosition, std::uint8_t eventDepth, float initialAge) noexcept {
     InstanceRuntime& runtime = instanceRuntime_[denseIndex];
     eventDepth = std::max(eventDepth, runtime.externalDepth);
+    runtime.gpuEventDepths[emitterIndex] = std::max(runtime.gpuEventDepths[emitterIndex], eventDepth);
     const CompiledEmitter& emitter = compiledEffects_[runtime.compiledEffectIndex].effect->emitters[emitterIndex];
     const std::uint64_t instanceId = MakeInstanceId(denseToSlot_[denseIndex], slotGenerations_[denseToSlot_[denseIndex]]);
     GpuPending* pending = nullptr;
@@ -2932,6 +2945,56 @@ void CpuParticleBackend::ReleaseDueGpuEvents() noexcept {
         gpuScheduledEvents_.pop_back();
         static_cast<void>(QueueInternalEvent(event));
     }
+}
+
+void CpuParticleBackend::ReceiveGpuCollisionEvents(kb::scene::Scene& scene, kb::particles::ParticleGpuCollisionBatch batch) noexcept {
+    static_cast<void>(scene);
+    gpuCollisionBatches_.push_back(std::move(batch));
+}
+
+void CpuParticleBackend::QueueGpuCollisionEvents() noexcept {
+    for (const kb::particles::ParticleGpuCollisionBatch& batch : gpuCollisionBatches_) {
+        // The collisions beyond the capacity of the GPU event buffer were never delivered: count them as rejected.
+        stepTelemetry_.rejectedByEventBudget += batch.lost;
+        const kb::math::Vec3 shift = kb::math::RelativeTo(batch.origin, simulationOrigin_);
+        for (const kb::particles::ParticleGpuCollisionEvent& collision : batch.events) {
+            const std::uint32_t denseIndex = ResolveDenseIndex(collision.key.instanceId);
+            if (denseIndex == kInvalidDenseIndex) continue;
+            const InstanceRuntime& runtime = instanceRuntime_[denseIndex];
+            const CompiledEffect& effect = *compiledEffects_[runtime.compiledEffectIndex].effect;
+            const auto source = std::find_if(effect.emitters.begin(), effect.emitters.begin() + effect.emitterCount,
+                [&](const CompiledEmitter& emitter) { return emitter.emitterId == collision.key.emitterId; });
+            if (source == effect.emitters.begin() + effect.emitterCount) continue;
+            const auto emitterIndex = static_cast<std::uint8_t>(source - effect.emitters.begin());
+            // The GPU kernel responds to the last plane of the emitter (BuildGpuParams): its module owns the events.
+            std::uint8_t planeIndex = UINT8_MAX;
+            for (std::uint8_t moduleIndex = 0U; moduleIndex < source->moduleCount; ++moduleIndex) {
+                if (source->modules[moduleIndex].enabled && source->modules[moduleIndex].type == kb::scene::ParticleModuleType::CollisionPlane) {
+                    planeIndex = moduleIndex;
+                }
+            }
+            if (planeIndex == UINT8_MAX) continue;
+            const auto& plane = std::get<kb::scene::ParticleCollisionPlaneModule>(source->modules[planeIndex].payload);
+            const std::size_t budgetIndex = (static_cast<std::size_t>(denseIndex) * kb::scene::kParticleEffectMaxEmitters + emitterIndex) *
+                kb::scene::kParticleEffectMaxModulesPerEmitter + planeIndex;
+            if (collisionEventsThisStep_[budgetIndex] >= plane.maxEventsPerStep) {
+                ++stepTelemetry_.rejectedByEventBudget;
+                ++renderRejectedByEventBudget_[RenderGroupIndex(denseIndex, emitterIndex)];
+                eventActionBudgetExceeded_ = true;
+                continue;
+            }
+            ++collisionEventsThisStep_[budgetIndex];
+            static_cast<void>(QueueInternalEvent({
+                .instanceId = collision.key.instanceId,
+                .sourceEmitterIndex = emitterIndex,
+                .sourceModuleId = source->modules[planeIndex].moduleId,
+                .trigger = kb::scene::ParticleEventTrigger::Collision,
+                .depth = runtime.gpuEventDepths[emitterIndex],
+                .position = collision.position + shift,
+            }));
+        }
+    }
+    gpuCollisionBatches_.clear();
 }
 
 void CpuParticleBackend::FlushGpuSpawns() noexcept {

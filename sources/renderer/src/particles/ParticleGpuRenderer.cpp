@@ -399,8 +399,15 @@ void ParticleGpuRenderer::SyncGpuEmitters(
     const auto synced = gpuEmitterSyncedFrame_.find(sceneId);
     if (synced != gpuEmitterSyncedFrame_.end() && synced->second == frameIndex) return;
     gpuEmitterSyncedFrame_[sceneId] = frameIndex;
-    kb::particles::ParticlePlayback::DrainGpuEmitterCommands(scene, gpuEmitterCommandScratch_);
+    // The collisions of frames that bgfx has finished copying back go to the backend; the frame being built is
+    // frameIndex, so the last completed one is the frame before it.
     gpuEmitters_.SetRenderOrigin(sceneId, renderOrigin);
+    kb::particles::ParticleGpuCollisionBatch collisions;
+    gpuEmitters_.CollectCollisionEvents(sceneId, static_cast<std::uint32_t>(frameIndex - 1U), collisions);
+    if (!collisions.events.empty() || collisions.lost != 0U) {
+        kb::particles::ParticlePlayback::DeliverGpuCollisionEvents(scene, std::move(collisions));
+    }
+    kb::particles::ParticlePlayback::DrainGpuEmitterCommands(scene, gpuEmitterCommandScratch_);
     gpuEmitters_.Apply(sceneId, gpuEmitterCommandScratch_, &scene.Assets().Manager());
     gpuEmitters_.Advance(sceneId, frameDeltaSeconds);
     gpuEmitterDispatchPending_[sceneId] = true;

@@ -577,10 +577,13 @@ birth and lifetime events, verifies their event positions and subsequent motion,
 and checks that restarting clears both scheduled deaths and GPU instance buffers.
 An 8193-parent death burst verifies the bounded 8192-event queue and binding
 budget, including rejection counters visible in the editor snapshot. A plane
-collision uses the reported `collision-event` CPU fallback for the source emitter
-and dispatches its children to the GPU. Collision events are not read back from
-the GPU as part of normal simulation. Releasing the preview must free all emitter
-buffers. Other graphics backends require separate execution evidence.
+collision stays on the GPU: the kernel appends each hit (position, normal, incoming
+velocity, emitter) to a per-scene event buffer of fixed capacity, the renderer reads
+it back asynchronously (the copy completes two frames after the dispatch; nothing
+waits for it) and the backend turns the hits into the same collision events as the
+CPU path, with the same per-step budget. Hits beyond the buffer capacity are dropped
+and counted as rejected by the event budget. Releasing the preview must free all
+emitter buffers. Other graphics backends require separate execution evidence.
 
 
 Per-emitter host work profiling

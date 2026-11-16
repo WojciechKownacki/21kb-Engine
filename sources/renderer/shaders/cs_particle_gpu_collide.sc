@@ -9,6 +9,9 @@
 // position. Records of a local-space emitter are in the owner's frame, which u_gpuParticleWorld places.
 BUFFER_RO(spawnRecords, vec4, 0);
 BUFFER_RW(stateRecords, vec4, 2);
+// Collision events of the scene: word 0 counts every hit (also the ones beyond the capacity), the records follow the
+// four-word header: position, normal and velocity before the bounce (floats as bits), then the emitter's index.
+BUFFER_RW(collisionEvents, uint, 4);
 #include "particle_gpu_common.sh"
 
 SAMPLER2D(s_particleDepth, 3);
@@ -26,6 +29,33 @@ uniform vec4 u_gpuParticleLocal;      // x = 1 for a local-space emitter
 uniform vec4 u_gpuParticleForces[32];
 uniform vec4 u_gpuParticleField; // xyz = emitter origin in render space, w = motion module count
 uniform vec4 u_gpuParticleNoiseOrigin; // xyz = the world origin the noise position is relative to
+uniform vec4 u_gpuParticleEvent;       // x = index of this emitter in the event records, y = record capacity, z = 1 to record plane hits
+
+// Appends one plane hit to the scene's event buffer; hits beyond the capacity only raise the counter.
+void RecordCollision(vec3 position, vec3 normal, vec3 velocity)
+{
+    if (u_gpuParticleEvent.z < 0.5)
+    {
+        return;
+    }
+    uint index;
+    atomicFetchAndAdd(collisionEvents[0], 1u, index);
+    if (index >= uint(u_gpuParticleEvent.y))
+    {
+        return;
+    }
+    uint at = 4u + index * 10u;
+    collisionEvents[at] = floatBitsToUint(position.x);
+    collisionEvents[at + 1u] = floatBitsToUint(position.y);
+    collisionEvents[at + 2u] = floatBitsToUint(position.z);
+    collisionEvents[at + 3u] = floatBitsToUint(normal.x);
+    collisionEvents[at + 4u] = floatBitsToUint(normal.y);
+    collisionEvents[at + 5u] = floatBitsToUint(normal.z);
+    collisionEvents[at + 6u] = floatBitsToUint(velocity.x);
+    collisionEvents[at + 7u] = floatBitsToUint(velocity.y);
+    collisionEvents[at + 8u] = floatBitsToUint(velocity.z);
+    collisionEvents[at + 9u] = uint(u_gpuParticleEvent.x);
+}
 
 // Gradient noise with a quintic fade and its derivative, and its curl, as the CPU backend's Noise module.
 uint HashCorner(int x, int y, int z, uint seed)
@@ -273,6 +303,7 @@ void main()
             if (signedDistance < 0.0)
             {
                 position -= plane.xyz * signedDistance;
+                RecordCollision(position, plane.xyz, velocity);
                 if (response.z > 0.5)
                 {
                     stateRecords[slot * 2u] = vec4(position, now);

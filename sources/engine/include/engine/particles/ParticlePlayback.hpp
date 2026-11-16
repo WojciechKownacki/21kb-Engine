@@ -88,6 +88,8 @@ public:
     [[nodiscard]] static bool HasGpuEmitterConsumer(const kb::scene::Scene& scene) noexcept;
     static void QueueGpuEmitterCommand(kb::scene::Scene& scene, ParticleGpuEmitterCommand command);
     static void DrainGpuEmitterCommands(kb::scene::Scene& scene, std::vector<ParticleGpuEmitterCommand>& output);
+    // The way back: the renderer hands the collisions its GPU emitters recorded to the scene's backend.
+    static void DeliverGpuCollisionEvents(kb::scene::Scene& scene, ParticleGpuCollisionBatch batch) noexcept;
 
     [[nodiscard]] static ParticleRuntimeResult QueueEvent(kb::scene::Scene& scene, PendingParticleRuntimeEvent event);
     [[nodiscard]] static std::vector<PendingParticleRuntimeEvent> DrainEvents(kb::scene::Scene& scene);

@@ -88,6 +88,8 @@ void RunRendererVisibilityFeedbackTest();
 void RunEditorUIViewTransformValidationTests();
 void RunRendererParticleMeshSnapshotSubmitTest();
 void RunRendererParticleContactDeathTest();
+void RunRendererParticleCollisionEventChainTest();
+void RunParticleGpuCollisionEventTests(bgfx::RendererType::Enum backend);
 void RunParticleGpuMotionTests(bool kernelOnly, bgfx::RendererType::Enum backend);
 void RunParticleGpuStripTests(bgfx::RendererType::Enum backend);
 void RunRendererParticleMotionPixelsTest(bgfx::RendererType::Enum backend);
@@ -441,6 +443,16 @@ int main(int argc, char** argv) {
     if (argc == 2 && std::string_view{ argv[1] } == "particle-depth-collision") {
         try {
             kb::render::tests::RunRendererParticleDepthAuthoringTest();
+            return EXIT_SUCCESS;
+        } catch (const std::exception& error) {
+            std::fprintf(stderr, "%s\n", error.what());
+            return EXIT_FAILURE;
+        }
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "particle-gpu-collision-events") {
+        try {
+            kb::render::tests::RunParticleGpuCollisionEventTests(bgfx::RendererType::Direct3D11);
+            kb::render::tests::RunRendererParticleCollisionEventChainTest();
             return EXIT_SUCCESS;
         } catch (const std::exception& error) {
             std::fprintf(stderr, "%s\n", error.what());

@@ -3275,9 +3275,10 @@ void TestGpuFallbackReasonTable() {
               target.emitterId = 2U;
               target.authoringOrder = 1U;
               e.emitters.push_back(target);
-              AddModule(e.emitters[0], 1U, kb::scene::ParticleModuleType::SubEmitter,
+              AddModule(e.emitters[0], 1U, kb::scene::ParticleModuleType::CollisionPlane, kb::scene::ParticleCollisionPlaneModule{});
+              AddModule(e.emitters[0], 2U, kb::scene::ParticleModuleType::SubEmitter,
                   kb::scene::ParticleSubEmitterModule{ .targetEmitterId = 2U, .trigger = kb::scene::ParticleEventTrigger::Collision });
-          }, Reason::CollisionEvent },
+          }, Reason::None },
         { "while-alive binding", [](auto& e) {
               auto target = e.emitters[0];
               target.emitterId = 2U;
@@ -4012,7 +4013,7 @@ void TestGpuMeshAndTrailRouting() {
 // Birth and death events of a GPU particle are queued by the backend itself, so sub-emitters work on the
 // GPU: one parent born by a manual emit dies 2 s later at its closed-form position (no acceleration, so
 // start + velocity * lifetime), and its death sub-emitter spawns child records there; a collision-triggered sub-emitter
-// would need the GPU to report the collision, so that emitter stays on the CPU.
+// is fed by the collisions the GPU reports, so without a plane to hit it stays on the GPU and spawns nothing.
 void TestGpuSubEmitterEvents() {
     const auto run = [](kb::scene::ParticleEventTrigger trigger, int steps) {
         auto effect = Fixture::MakeEffect(0.0F, 1024U);
@@ -4069,10 +4070,13 @@ void TestGpuSubEmitterEvents() {
             birthChildren.front().birthTime < birthParents.front().birthTime + 0.1F,
         "A birth sub-emitter of a GPU emitter must spawn its children at the parent's birth");
     const auto [collisionCommands, collisionCpuLive] = run(kb::scene::ParticleEventTrigger::Collision, 30);
-    Require(std::all_of(collisionCommands.begin(), collisionCommands.end(), [](const auto& command) {
-            return command.key.emitterId != 1U && command.spawns.empty();
-        }) && collisionCpuLive > 0U,
-        "An emitter with a collision-triggered sub-emitter must stay on the CPU");
+    std::size_t collisionParents = 0U;
+    std::size_t collisionChildren = 0U;
+    for (const kb::particles::ParticleGpuEmitterCommand& command : collisionCommands) {
+        (command.key.emitterId == 1U ? collisionParents : collisionChildren) += command.spawns.size();
+    }
+    Require(collisionParents == 1U && collisionChildren == 0U && collisionCpuLive == 0U,
+        "An emitter with a collision-triggered sub-emitter must stay on the GPU");
 }
 
 void TestLazyParticleStorageAdmissionAndReload() {

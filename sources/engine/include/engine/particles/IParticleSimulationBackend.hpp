@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/particles/ParticleGpuEmitter.hpp"
 #include "engine/particles/ParticleRuntimeResult.hpp"
 #include "engine/scene/TransformComponent.hpp"
 
@@ -63,6 +64,11 @@ public:
         static_cast<void>(followTransform);
         static_cast<void>(ownerTransform);
         return {.status = ParticleRuntimeStatus::InvalidRequest};
+    }
+    // The collisions GPU emitters recorded (see ParticleGpuCollisionBatch); the backend acts on them in its next step.
+    virtual void ReceiveGpuCollisionEvents(kb::scene::Scene& scene, ParticleGpuCollisionBatch batch) noexcept {
+        static_cast<void>(scene);
+        static_cast<void>(batch);
     }
     [[nodiscard]] virtual ParticleRuntimeQueryResult Query(
         const kb::scene::Scene& scene,

@@ -290,6 +290,13 @@ void ParticlePlayback::DrainGpuEmitterCommands(kb::scene::Scene& scene, std::vec
     output.swap(kb::scene::SceneAccess::State(scene).pendingParticleGpuEmitterCommands);
 }
 
+void ParticlePlayback::DeliverGpuCollisionEvents(kb::scene::Scene& scene, ParticleGpuCollisionBatch batch) noexcept {
+    AssertOwnerThread(scene);
+    if (IParticleSimulationBackend* backend = kb::scene::SceneAccess::State(scene).particleSimulationBackend) {
+        backend->ReceiveGpuCollisionEvents(scene, std::move(batch));
+    }
+}
+
 ParticleRuntimeResult ParticlePlayback::QueueEvent(kb::scene::Scene& scene, PendingParticleRuntimeEvent event) {
     AssertOwnerThread(scene);
     kb::scene::SceneState& state = kb::scene::SceneAccess::State(scene);

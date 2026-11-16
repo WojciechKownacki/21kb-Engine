@@ -984,6 +984,7 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         tests/ParticleProcessTests.cpp
         tests/ParticleGpuMotionTests.cpp
         tests/ParticleGpuStripTests.cpp
+        tests/ParticleGpuCollisionEventTests.cpp
         tests/MeshPipelineTests.cpp
         tests/SceneDisplayCompositeTests.cpp
         tests/DisplayHdrOutputTests.cpp
@@ -1038,6 +1039,10 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
             add_test(NAME kb_renderer_particle_contact_death
                 COMMAND $<TARGET_FILE:kb_renderer_tests> particle-contact-death)
             set_tests_properties(kb_renderer_particle_contact_death PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;particle;headless" TIMEOUT 120)
+            add_test(NAME kb_renderer_particle_gpu_collision_events
+                COMMAND $<TARGET_FILE:kb_renderer_tests> particle-gpu-collision-events)
+            set_tests_properties(kb_renderer_particle_gpu_collision_events PROPERTIES
                 WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;particle;headless" TIMEOUT 120)
             add_test(NAME kb_renderer_particle_sort_modes
                 COMMAND $<TARGET_FILE:kb_renderer_tests> particle-sort-modes)

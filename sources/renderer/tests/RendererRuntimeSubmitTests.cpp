@@ -10664,6 +10664,155 @@ void RunRendererParticleContactDeathTest() {
 #endif
 }
 
+// A GPU emitter whose particles die on a plane, with a sub-emitter bound to the collision. The hits are recorded by the
+// kernel, read back by the renderer and turned into births by the backend: the sub-emitter (kept on the CPU by a
+// module the GPU does not integrate, so that its particles can be counted) gets two particles per hit.
+void RunRendererParticleCollisionEventChainTest() {
+#if defined(_WIN32) && defined(KB_21KB_PARTICLE_PLUGIN_PATH)
+    constexpr std::uint32_t kHits = 600U;
+    constexpr std::uint32_t kPerHit = 2U;
+    const std::filesystem::path root = std::filesystem::temp_directory_path() /
+        ("21kb_particle_collision_chain_" + std::to_string(GetCurrentProcessId()));
+    std::error_code error;
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Collision chain test could not create its asset directory");
+
+    kb::scene::ParticleEffectAsset effect;
+    effect.effectId = 9003U;
+    effect.displayName = "Collision Chain";
+    effect.recipeCategory = "Simple";
+    effect.determinismSeed = 0x5EEDC011ULL;
+    effect.durationSeconds = 5.0F;
+    effect.looping = false;
+    effect.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+    kb::scene::ParticleEmitterAsset rain;
+    rain.emitterId = 1U;
+    rain.name = "Rain";
+    rain.maxParticles = 1024U;
+    rain.spawn.mode = kb::scene::ParticleSpawnMode::Burst;
+    rain.spawn.bursts = { { .timeSeconds = 0.0F, .count = kHits } };
+    rain.spawn.rateOverTime.keyframes = { { .time = 0.0F, .value = 0.0F } };
+    rain.spawn.lifetimeMin = rain.spawn.lifetimeMax = 5.0F;
+    rain.spawn.speedMin = 1.0F;
+    rain.spawn.speedMax = 3.0F;
+    rain.spawn.direction = { 0.0F, -1.0F, 0.0F };
+    rain.spawn.spreadDegrees = 0.0F;
+    rain.spawn.randomization = 0.0F;
+    rain.output.material.virtualPath = "/Game/Materials/Spark.21kb";
+    rain.output.blend = kb::scene::ParticleBlendMode::Add;
+    rain.modules.push_back({ .moduleId = 1U, .type = kb::scene::ParticleModuleType::CollisionPlane,
+        .payload = kb::scene::ParticleCollisionPlaneModule{ .normal = { 0.0F, 1.0F, 0.0F }, .distance = 0.0F,
+            .maxEventsPerStep = 4096U, .killOnContact = true } });
+    rain.modules.push_back({ .moduleId = 2U, .authoringOrder = 1U, .type = kb::scene::ParticleModuleType::SubEmitter,
+        .payload = kb::scene::ParticleSubEmitterModule{ .targetEmitterId = 2U,
+            .trigger = kb::scene::ParticleEventTrigger::Collision, .count = kPerHit, .maxDepth = 1U } });
+    kb::scene::ParticleEmitterAsset splash;
+    splash.emitterId = 2U;
+    splash.authoringOrder = 1U;
+    splash.name = "Splash";
+    splash.maxParticles = 4096U;
+    splash.spawn.rateOverTime.keyframes = { { .time = 0.0F, .value = 0.0F } };
+    splash.spawn.lifetimeMin = splash.spawn.lifetimeMax = 10.0F;
+    splash.spawn.speedMin = splash.spawn.speedMax = 0.0F;
+    splash.output.material.virtualPath = "/Game/Materials/Spark.21kb";
+    splash.output.blend = kb::scene::ParticleBlendMode::Add;
+    splash.modules.push_back({ .moduleId = 1U, .type = kb::scene::ParticleModuleType::TorusSwirl,
+        .payload = kb::scene::ParticleTorusSwirlModule{} });
+    effect.emitters.push_back(std::move(rain));
+    effect.emitters.push_back(std::move(splash));
+    Require(kb::scene::ParticleEffectAssetIO::Save(root / "chain.kbvfx", effect), "Collision chain test could not write its effect file");
+
+    kb::project::ProjectDescriptor project;
+    project.disableEnginePluginsByDefault = true;
+    project.plugins.push_back({ .name = "Rendering.21kbParticle", .binaryPath = KB_21KB_PARTICLE_PLUGIN_PATH, .enabled = true });
+    kb::scene::Scene scene(project, kb::scene::SceneMode::Runtime);
+    Require(scene.IsModuleActive("Rendering.21kbParticle") && kb::particles::ParticlePlayback::HasBackend(scene),
+        "Collision chain test could not load the particle provider module");
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    static_cast<void>(manager.RegisterLoader(std::make_unique<kb::scene::ParticleEffectAssetLoader>()));
+    Require(manager.Mounts().Mount("Game", root) && manager.DiscoverMountedAssets() >= 1U,
+        "Collision chain test could not discover its effect file");
+    Require(manager.Registry().Upsert(kb::assets::AssetMetadata{
+                .id = kb::assets::AssetId{ 72U }, .type = "RenderMaterial", .name = "Spark",
+                .virtualPath = "/Game/Materials/Spark.21kb", .physicalPath = "Spark.21kb", .contentHash = 1U }),
+        "Collision chain test could not register the particle material");
+    const kb::assets::AssetMetadata* effectAsset = manager.Registry().FindByPath("/Game/chain.kbvfx");
+    Require(effectAsset != nullptr, "Collision chain test did not find its effect asset");
+    const kb::scene::SceneEntity owner = scene.Entities().CreateEntity();
+    scene.Transforms().Set(owner, {});
+    scene.Transforms().SetLocalTranslation(owner, { 0.0F, 2.0F, 0.0F });
+    scene.Components().ParticleEffects().Set(owner, {
+        .effectAssetId = effectAsset->id.value, .deterministicSeed = effect.determinismSeed, .enabled = true, .autoPlay = true,
+        .followTransform = true, .restartOnActivate = true });
+
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "Collision chain test could not create a hidden surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Collision chain test could not initialize the renderer");
+    renderer.SetRuntimeAssetDiscoveryEnabled(false);
+    SceneRenderCamera camera{};
+    bx::mtxLookAt(camera.view.data(), bx::Vec3{ 0.0F, 1.0F, -10.0F }, bx::Vec3{ 0.0F, 1.0F, 0.0F });
+    SceneDepthPolicy::MakePerspective(camera.projection.data(), 30.0F, 1.0F, 0.1F, 100.0F, SceneDepthPolicy::HomogeneousDepth());
+
+    bool rainOnGpu = false;
+    bool splashOnCpu = false;
+    std::uint32_t rainCpuParticles = 0U;
+    std::size_t children = 0U;
+    {
+        ParticleMeshReadbackTarget target;
+        Require(target.Initialize(), "Collision chain test could not create its target");
+        const RenderSceneSubmitDesc desc{
+            .target = target.Binding(),
+            .cameraOverride = camera,
+            .meshPassMode = SceneRenderMeshPassMode::OpaqueAndTransparent,
+            .clearRgba = 0x000000FFU,
+            .editorSceneOverlaysEnabled = false,
+            .shadowPassEnabled = false,
+            .postProcessEnabled = false,
+            .selectionMaskEnabled = false,
+            .selectionOutlineEnabled = false,
+        };
+        // The GPU consumer is attached before the first birth.
+        SubmitLifecycleFrame(renderer, scene, desc, "Collision chain test could not attach its GPU consumer");
+        for (int frame = 0; frame < 300; ++frame) {
+            Require(scene.Runtime().Update(1.0F / 60.0F), "Collision chain test scene update failed");
+            SubmitLifecycleFrame(renderer, scene, desc, "Collision chain test did not submit a frame");
+        }
+        const auto snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(scene);
+        Require(snapshot && snapshot->Emitters().size() == 2U, "Collision chain test did not publish its execution routes");
+        for (const auto& emitter : snapshot->Emitters()) {
+            if (emitter.emitterId == 1U) {
+                rainOnGpu = emitter.simulationPath == kb::particles::ParticleEmitterSimulationPath::Gpu &&
+                    emitter.gpuFallbackReason == kb::particles::ParticleGpuFallbackReason::None;
+                rainCpuParticles = emitter.particleCount;
+            } else {
+                splashOnCpu = emitter.simulationPath == kb::particles::ParticleEmitterSimulationPath::Cpu &&
+                    emitter.gpuFallbackReason == kb::particles::ParticleGpuFallbackReason::TorusSwirl;
+            }
+        }
+        for (const std::uint64_t instance : kb::particles::ParticlePlayback::LiveInstanceIds(scene)) {
+            children += kb::particles::ParticlePlayback::Query(scene, instance).liveParticleCount;
+        }
+    }
+    renderer.ReleaseScene(scene);
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+
+    const std::size_t expected = static_cast<std::size_t>(kHits) * kPerHit;
+    std::fprintf(stderr, "particle_gpu_collision_chain rain_on_gpu=%d rain_cpu_particles=%u splash_on_cpu=%d children=%zu expected=%zu%c",
+        rainOnGpu ? 1 : 0, rainCpuParticles, splashOnCpu ? 1 : 0, children, expected, 10);
+    Require(rainOnGpu && rainCpuParticles == 0U && splashOnCpu,
+        "An emitter with a collision sub-emitter was not simulated on the GPU, or its child was");
+    Require(children * 20U >= expected * 19U && children * 20U <= expected * 21U,
+        "The collisions of the GPU emitter did not reach its sub-emitter within 5 percent");
+#else
+    throw std::runtime_error("The collision chain test requires the Windows renderer and particle provider module");
+#endif
+}
+
 void RunVoxelGiDynamicScenePixelsTest() {
 #if defined(_WIN32)
     constexpr std::uint16_t size=64;

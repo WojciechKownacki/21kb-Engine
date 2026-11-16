@@ -19,6 +19,9 @@ inline constexpr std::size_t kParticleGpuCurveSamples = 8U;
 inline constexpr std::uint32_t kParticleGpuMaxCapacity = 1'048'576U;
 // A trail emitter draws one stretched quad per trail segment of every slot; this bounds capacity x segments.
 inline constexpr std::uint32_t kParticleGpuMaxTrailSegments = 1'048'576U;
+// Collisions of every emitter of a scene that asks for them are appended by the kernels to one buffer of this many
+// records per rendered frame; the ones beyond it are counted as lost.
+inline constexpr std::uint32_t kParticleGpuCollisionEventCapacity = 1'024U;
 
 struct ParticleGpuSpawn {
     kb::math::Vec3 position{};
@@ -83,6 +86,8 @@ struct ParticleGpuEmitterParams {
     ParticleGpuCollisionPlane plane{};
     bool hasPlane = false;
     bool sceneDepthCollision = false;
+    // The kernel records every hit of the plane as a collision event for the CPU (sub-emitters and event bindings).
+    bool collisionEvents = false;
     // Local-space emitters keep their birth records in the owner's frame; the world matrix sent with the
     // commands carries the particles along with the owner (acceleration is still a world-space vector).
     bool localSpace = false;
@@ -137,6 +142,22 @@ struct ParticleGpuEmitterKey {
     std::uint64_t emitterId = 0U;
 
     [[nodiscard]] friend constexpr bool operator==(const ParticleGpuEmitterKey&, const ParticleGpuEmitterKey&) noexcept = default;
+};
+
+struct ParticleGpuCollisionEvent {
+    ParticleGpuEmitterKey key{};
+    kb::math::Vec3 position{};
+    kb::math::Vec3 normal{};
+    kb::math::Vec3 velocity{}; // before the bounce
+};
+
+// The collisions the GPU recorded, read back one to two frames after the dispatch. Positions are relative to
+// `origin`, the render origin of the scene when the batch was collected. `lost` counts the collisions the
+// kernels recorded beyond the capacity of the event buffer.
+struct ParticleGpuCollisionBatch {
+    kb::math::DVec3 origin{};
+    std::vector<ParticleGpuCollisionEvent> events;
+    std::uint32_t lost = 0U;
 };
 
 // One fixed step of one GPU emitter. `simTime` is the scene simulation time (seconds) at the end of

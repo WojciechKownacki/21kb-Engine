@@ -9,6 +9,7 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <unordered_map>
 #include <vector>
@@ -52,8 +53,10 @@ public:
         std::uint32_t stripSegments = 0U;
     };
 
-    // Logical emitter buffer budget; zero uses the engine limit. Fixed until Shutdown.
-    [[nodiscard]] bool Initialize(std::uint64_t maxBufferBytes = 0U);
+    // Logical emitter buffer budget; zero uses the engine limit. Fixed until Shutdown. `collisionEventCapacity` is how
+    // many collisions of a scene the kernels can record per frame (see ParticleGpuCollisionBatch).
+    [[nodiscard]] bool Initialize(std::uint64_t maxBufferBytes = 0U,
+        std::uint32_t collisionEventCapacity = kb::particles::kParticleGpuCollisionEventCapacity);
     void Shutdown() noexcept;
     [[nodiscard]] bool IsReady() const noexcept;
 
@@ -93,6 +96,21 @@ public:
 
     // Rebuilds the instance buffers of the scene emitters; call once per rendered frame.
     void Dispatch(bgfx::ViewId viewId, std::uint64_t sceneId, const FrameContext& frame) noexcept;
+    // Collisions recorded by the kernels of emitters that report them (ParticleGpuEmitterParams::collisionEvents).
+    // Dispatch asks bgfx to copy the scene's event buffer back; the copy is complete two frames later. This moves the
+    // copies that bgfx has completed by `completedFrame` (what bgfx::frame returned) into `output`, oldest first, and
+    // never waits for the rest.
+    void CollectCollisionEvents(std::uint64_t sceneId, std::uint32_t completedFrame,
+        kb::particles::ParticleGpuCollisionBatch& output) noexcept;
+    struct CollisionEventStats {
+        std::uint64_t recorded = 0U;   // hits the kernels counted in the copies collected so far
+        std::uint64_t delivered = 0U;  // of them, the records that fitted the buffer
+        std::uint64_t lost = 0U;       // of them, the ones beyond its capacity
+        std::uint32_t submittedReads = 0U;
+        std::uint32_t pendingReads = 0U;
+        std::uint32_t skippedReads = 0U; // frames whose copy could not be issued because none had been collected
+    };
+    [[nodiscard]] CollisionEventStats CollisionStats(std::uint64_t sceneId) const noexcept;
     // Emitters of the scene that were dispatched this frame.
     [[nodiscard]] std::span<const Draw> Draws(std::uint64_t sceneId) const noexcept;
     [[nodiscard]] bool HasEmitters(std::uint64_t sceneId) const noexcept;
@@ -160,6 +178,15 @@ private:
         bool initializeState = false;
         std::uint64_t bytes = 0U;
     };
+    // The CPU side of one copy of the event buffer: bgfx writes into `words` when its frame completes.
+    struct EventReadback {
+        std::vector<std::uint32_t> words;
+        std::vector<kb::particles::ParticleGpuEmitterKey> emitters; // index in a record -> emitter
+        kb::math::DVec3 origin{};
+        std::uint32_t readyFrame = 0U;
+        bool pending = false;
+    };
+    static constexpr std::size_t kEventReadbackRing = 4U;
     struct SceneClock {
         double latest = 0.0;
         double now = 0.0;
@@ -169,6 +196,13 @@ private:
         kb::math::DVec3 recordOrigin{};
         std::vector<Draw> draws;
         std::vector<RejectedUpdate> rejections;
+        // Event buffer shared by the scene's colliding emitters: the kernels append to it, the counter is cleared by a
+        // copy from `eventZeros` before each dispatch, and the whole buffer is copied back after it.
+        bgfx::DynamicIndexBufferHandle eventRecords = BGFX_INVALID_HANDLE;
+        bgfx::IndexBufferHandle eventZeros = BGFX_INVALID_HANDLE;
+        std::array<std::shared_ptr<EventReadback>, kEventReadbackRing> eventReads;
+        std::vector<kb::particles::ParticleGpuEmitterKey> eventEmitters;
+        CollisionEventStats eventStats;
     };
 
     [[nodiscard]] bool Create(Emitter& emitter, const kb::particles::ParticleGpuEmitterParams& params) noexcept;
@@ -184,6 +218,11 @@ private:
     void SortInstances(bgfx::ViewId viewId, const Emitter& emitter, const FrameContext& frame, float simTime) noexcept;
     // Writes the strip vertices of a ribbon (from the instance records) or a beam (from its ends) in the view.
     void BuildStrip(bgfx::ViewId viewId, const Emitter& emitter, const FrameContext& frame, float simTime) noexcept;
+    // Creates the scene's event buffer; false when bgfx could not.
+    [[nodiscard]] bool EnsureCollisionEvents(SceneClock& clock) noexcept;
+    void ReadBackCollisionEvents(SceneClock& clock) noexcept;
+    // Releases the scene's event buffer; copies still in flight keep their CPU storage until bgfx has written them.
+    void DestroyCollisionEvents(SceneClock& clock) noexcept;
     // Moves the records of the scene's world-space emitters from the record origin to the render origin.
     void Rebase(bgfx::ViewId viewId, std::uint64_t sceneId, SceneClock& clock) noexcept;
     // Whether the draw order of this emitter's instances matters: alpha-blended billboards, and mesh particles
@@ -191,6 +230,8 @@ private:
     [[nodiscard]] static bool NeedsSort(const kb::particles::ParticleGpuEmitterParams& params, bool translucentMaterial) noexcept;
 
     std::vector<kb::particles::ParticleGpuSpawn> spawnScratch_;
+    std::vector<std::shared_ptr<EventReadback>> retiredReads_;
+    std::uint32_t collisionEventCapacity_ = 0U;
     std::uint64_t maxBufferBytes_ = 0U;
     bgfx::UniformHandle processFrameUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle processInverseUniform_ = BGFX_INVALID_HANDLE;
@@ -236,6 +277,7 @@ private:
     bgfx::UniformHandle fieldUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle forcesUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle noiseOriginUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle eventUniform_ = BGFX_INVALID_HANDLE;
     std::unordered_map<Key, Emitter, KeyHash> emitters_;
     std::unordered_map<std::uint64_t, SceneClock> scenes_;
     std::uint64_t allocatedBytes_ = 0U;

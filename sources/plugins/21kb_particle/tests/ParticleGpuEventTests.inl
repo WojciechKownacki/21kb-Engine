@@ -82,15 +82,16 @@ void TestGpuEventLifecycle() {
             renderTime = std::clamp(renderTime + step, lastTime - 1.0 / 60.0, lastTime + 1.0 / 60.0);
             simulation.Advance(1U, step);
             simulation.Dispatch(0U, 1U, {});
-            static_cast<void>(bgfx::frame());
+            // The collisions of the kernels come back two frames after their dispatch, as the renderer hands them over.
+            kb::particles::ParticleGpuCollisionBatch collisions;
+            simulation.CollectCollisionEvents(1U, bgfx::frame(), collisions);
+            Playback::DeliverGpuCollisionEvents(scene, std::move(collisions));
             const auto snapshot = Playback::ReadRenderSnapshot(scene);
             Require(snapshot && snapshot->Emitters().size() == 2U, "GPU event execution snapshot missing emitters");
             for (const auto& emitter : snapshot->Emitters()) {
                 rejected += emitter.rejectedByEventBudget;
                 if (emitter.emitterId != 11U) continue;
-                Require(collision ? emitter.simulationPath == kb::particles::ParticleEmitterSimulationPath::Cpu &&
-                    emitter.gpuFallbackReason == kb::particles::ParticleGpuFallbackReason::CollisionEvent :
-                    emitter.simulationPath == kb::particles::ParticleEmitterSimulationPath::Gpu &&
+                Require(emitter.simulationPath == kb::particles::ParticleEmitterSimulationPath::Gpu &&
                     emitter.gpuFallbackReason == kb::particles::ParticleGpuFallbackReason::None,
                     "GPU event route/fallback diagnostic disagrees with the authored trigger");
             }
@@ -121,7 +122,7 @@ void TestGpuEventLifecycle() {
             for (const auto& birth : childBirths) Require(std::abs(birth.position.x - expected.x) < 0.001F &&
                 std::abs(birth.position.y - expected.y) < 0.001F && std::abs(birth.position.z - expected.z) < 0.001F,
                 "GPU sub-emitter child did not start at the birth/death event position");
-        } else Require(std::abs(childBirths[0].position.y) < 0.001F, "collision fallback child missed the world plane");
+        } else Require(std::abs(childBirths[0].position.y) < 0.001F, "collision child missed the world plane");
         const auto draws = simulation.Draws(1U);
         const auto childDraw = std::find_if(draws.begin(), draws.end(), [](const auto& draw) { return draw.key.emitterId == 22U; });
         Require(childDraw != draws.end() && capture.Read(*childDraw, childDraw->capacity), "GPU sub-emitter child readback unavailable");

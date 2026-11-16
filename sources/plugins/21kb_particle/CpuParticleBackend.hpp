@@ -124,6 +124,8 @@ public:
     [[nodiscard]] kb::particles::ParticleRuntimeResult Simulate(
         kb::scene::Scene& scene,
         float fixedDeltaSeconds) override;
+    // Keeps the batch until the next step, which turns its collisions into events like the CPU path's own.
+    void ReceiveGpuCollisionEvents(kb::scene::Scene& scene, kb::particles::ParticleGpuCollisionBatch batch) noexcept override;
     [[nodiscard]] kb::particles::ParticleRuntimeQueryResult Query(
         const kb::scene::Scene& scene,
         std::uint64_t instanceId) const noexcept override;
@@ -187,6 +189,9 @@ private:
         std::array<std::uint64_t, kb::scene::kParticleEffectMaxEmitters> emissionNanoseconds{};
         std::array<std::uint64_t, kb::scene::kParticleEffectMaxEmitters> integrationNanoseconds{};
         std::array<std::uint32_t, kb::scene::kParticleEffectMaxEventBindings> bindingEventsThisStep{};
+        // The deepest event chain among the particles an emitter spawned on the GPU: a collision there does not say
+        // which particle was hit, so its events carry this depth.
+        std::array<std::uint8_t, kb::scene::kParticleEffectMaxEmitters> gpuEventDepths{};
         kb::math::Vec3 beamStart{};  // ends of the beam being born (SpawnExact)
         float beamLifetime = 0.0F;   // one lifetime for every point of that beam
         kb::math::Vec3 beamEnd{};
@@ -296,6 +301,8 @@ private:
     };
     void ScheduleGpuDeath(const InternalEvent& event, double due) noexcept;
     void ReleaseDueGpuEvents() noexcept;
+    // Collision events from the GPU kernels, subject to the same per-step budgets as the CPU path's collisions.
+    void QueueGpuCollisionEvents() noexcept;
     void FlushGpuSpawns() noexcept;
     void QueueGpuRelease(std::uint64_t instanceId, std::uint32_t denseIndex, bool release) noexcept;
     [[nodiscard]] kb::particles::ParticleGpuEmitterParams BuildGpuParams(
@@ -370,6 +377,7 @@ private:
     double gpuSimTime_ = 0.0;
     std::vector<GpuPending> gpuPending_;
     std::vector<ScheduledGpuEvent> gpuScheduledEvents_; // min-heap on due time
+    std::vector<kb::particles::ParticleGpuCollisionBatch> gpuCollisionBatches_; // received since the last step
 
     std::vector<std::uint64_t> particleInstanceIds_;
     std::vector<std::uint64_t> particleIds_;

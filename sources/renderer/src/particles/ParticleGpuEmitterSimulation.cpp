@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstring>
 #include <cmath>
 
@@ -28,6 +29,10 @@ constexpr std::uint32_t kStripIndicesPerSegment = 6U;
 // How far behind a visible surface (m) a particle still counts as having hit it.
 constexpr float kDepthCollisionThickness = 0.5F;
 constexpr float kDefaultDepthRestitution = 0.5F;
+// The event buffer of the collide kernel: a four-word header (word 0 counts the hits), then records of ten words:
+// position, normal and velocity before the bounce (float bits) and the index of the emitter.
+constexpr std::uint32_t kEventHeaderWords = 4U;
+constexpr std::uint32_t kEventRecordWords = 10U;
 constexpr double kFixedStepSeconds = 1.0 / static_cast<double>(kb::scene::kParticleEffectFixedStepsPerSecond);
 
 [[nodiscard]] bgfx::VertexLayout SpawnLayout() {
@@ -106,8 +111,9 @@ bool ParticleGpuEmitterSimulation::NeedsSort(const kb::particles::ParticleGpuEmi
     return billboard && params.blend != kb::particles::ParticleRenderBlendMode::Add;
 }
 
-bool ParticleGpuEmitterSimulation::Initialize(std::uint64_t maxBufferBytes) {
+bool ParticleGpuEmitterSimulation::Initialize(std::uint64_t maxBufferBytes, std::uint32_t collisionEventCapacity) {
     if (IsReady()) return true;
+    collisionEventCapacity_ = std::max(collisionEventCapacity, 1U);
     maxBufferBytes_ = maxBufferBytes == 0U ? kb::scene::kParticleEffectMaxGpuResourceBytes
         : std::min(maxBufferBytes, kb::scene::kParticleEffectMaxGpuResourceBytes);
     const bgfx::Caps* caps = bgfx::getCaps();
@@ -127,6 +133,7 @@ bool ParticleGpuEmitterSimulation::Initialize(std::uint64_t maxBufferBytes) {
     forcesUniform_ = bgfx::createUniform("u_gpuParticleForces", bgfx::UniformType::Vec4, static_cast<std::uint16_t>(2U * kb::particles::kParticleGpuMaxMotionModules));
     fieldUniform_ = bgfx::createUniform("u_gpuParticleField", bgfx::UniformType::Vec4);
     noiseOriginUniform_ = bgfx::createUniform("u_gpuParticleNoiseOrigin", bgfx::UniformType::Vec4);
+    eventUniform_ = bgfx::createUniform("u_gpuParticleEvent", bgfx::UniformType::Vec4);
     collideProgram_ = ShaderLoader::LoadComputeProgram("cs_particle_gpu_collide.sc");
     rebaseProgram_ = ShaderLoader::LoadComputeProgram("cs_particle_gpu_rebase.sc");
     rebaseUniform_ = bgfx::createUniform("u_gpuParticleRebase", bgfx::UniformType::Vec4);
@@ -165,17 +172,25 @@ bool ParticleGpuEmitterSimulation::IsReady() const noexcept {
     return bgfx::isValid(program_) && bgfx::isValid(motionUniform_) && bgfx::isValid(timeUniform_) &&
         bgfx::isValid(colorUniform_) && bgfx::isValid(sizeUniform_) && bgfx::isValid(collideProgram_) &&
         bgfx::isValid(forcesUniform_) && bgfx::isValid(fieldUniform_) && bgfx::isValid(noiseOriginUniform_) &&
+        bgfx::isValid(eventUniform_) &&
         bgfx::isValid(flipbookUniform_) && bgfx::isValid(stripProgram_) && bgfx::isValid(stripModeUniform_) &&
         bgfx::isValid(stripBeamUniform_) && bgfx::isValid(stripCameraUniform_);
 }
 
 void ParticleGpuEmitterSimulation::Shutdown() noexcept {
     ReleaseAllScenes();
+    // Teardown only: let bgfx finish the copies that still target the CPU storage before it is freed.
+    if (!retiredReads_.empty()) {
+        std::uint32_t lastReady = 0U;
+        for (const auto& read : retiredReads_) lastReady = std::max(lastReady, read->readyFrame);
+        for (std::uint32_t frame = bgfx::frame(); frame < lastReady; frame = bgfx::frame()) {}
+        retiredReads_.clear();
+    }
     for (bgfx::UniformHandle* handle : { &motionUniform_, &timeUniform_, &colorUniform_, &sizeUniform_, &worldUniform_, &worldInverseUniform_, &localUniform_, &planeUniform_,
              &collisionUniform_, &depthBounceUniform_, &texelUniform_, &viewProjectionUniform_, &depthSampler_,
              &inverseViewProjectionUniform_, &depthParamsUniform_, &cameraPositionUniform_, &sortCameraUniform_,
              &sortParamsUniform_, &sortDepthUniform_, &outputUniform_, &flipbookUniform_, &spinUniform_, &basisUniform_, &rebaseUniform_, &forcesUniform_,
-             &noiseOriginUniform_, &fieldUniform_, &stripModeUniform_, &stripBeamUniform_, &stripCameraUniform_ }) {
+             &noiseOriginUniform_, &eventUniform_, &fieldUniform_, &stripModeUniform_, &stripBeamUniform_, &stripCameraUniform_ }) {
         if (bgfx::isValid(*handle)) bgfx::destroy(*handle);
         *handle = BGFX_INVALID_HANDLE;
     }
@@ -692,6 +707,20 @@ void ParticleGpuEmitterSimulation::Dispatch(bgfx::ViewId viewId, std::uint64_t s
     for (auto& [key, emitter] : emitters_)
         if (key.sceneId == sceneId) FlushUploads(viewId, emitter);
     Rebase(viewId, sceneId, clock);
+    // The colliding emitters append to one event buffer, which starts every frame with a cleared counter.
+    clock.eventEmitters.clear();
+    bool recordsReady = false;
+    if (bgfx::isValid(collideProgram_)) {
+        for (const auto& [key, emitter] : emitters_) {
+            if (key.sceneId != sceneId || !bgfx::isValid(emitter.state)) continue;
+            recordsReady = EnsureCollisionEvents(clock);
+            break;
+        }
+    }
+    if (recordsReady) {
+        bgfx::blit(viewId, bgfx::BufferRegion{.handle = clock.eventRecords},
+            bgfx::BufferRegion{.handle = clock.eventZeros, .size = kEventHeaderWords * static_cast<std::uint32_t>(sizeof(std::uint32_t))});
+    }
     for (auto& [key, emitter] : emitters_) {
         if (key.sceneId != sceneId) continue;
         const kb::particles::ParticleGpuEmitterParams& params = emitter.params;
@@ -756,6 +785,12 @@ void ParticleGpuEmitterSimulation::Dispatch(bgfx::ViewId viewId, std::uint64_t s
             const std::array<float, 4> texel{ collision.texelSize[0], collision.texelSize[1], 0.0F, 0.0F };
             const std::array<float, 4> depthParams{ collision.homogeneousDepth ? 1.0F : 0.0F, 0.0F, 0.0F, 0.0F };
             bgfx::setBuffer(2U, emitter.state, bgfx::Access::ReadWrite);
+            const bool report = recordsReady && params.collisionEvents && params.hasPlane;
+            const std::array<float, 4> eventParams{ report ? static_cast<float>(clock.eventEmitters.size()) : 0.0F,
+                static_cast<float>(collisionEventCapacity_), report ? 1.0F : 0.0F, 0.0F };
+            if (report) clock.eventEmitters.push_back({ key.instanceId, key.emitterId });
+            if (recordsReady) bgfx::setBuffer(4U, clock.eventRecords, bgfx::Access::ReadWrite);
+            bgfx::setUniform(eventUniform_, eventParams.data());
             bgfx::setTexture(3U, depthSampler_, depth ? collision.depthTexture : fallbackDepth_);
             bgfx::setUniform(planeUniform_, planeData.data(), 2U);
             bgfx::setUniform(collisionUniform_, collisionParams.data());
@@ -817,6 +852,96 @@ void ParticleGpuEmitterSimulation::Dispatch(bgfx::ViewId viewId, std::uint64_t s
         clock.draws.push_back(Draw{ &emitter.params, drawn, emitter.capacity * emitter.perSlot, emitter.origin,
             {key.instanceId, key.emitterId}, emitter.bytes, emitter.stripVertices, emitter.stripIndices, emitter.stripSegments });
     }
+    if (!clock.eventEmitters.empty()) ReadBackCollisionEvents(clock);
+}
+
+bool ParticleGpuEmitterSimulation::EnsureCollisionEvents(SceneClock& clock) noexcept {
+    if (bgfx::isValid(clock.eventRecords) && bgfx::isValid(clock.eventZeros)) return true;
+    constexpr std::array<std::uint32_t, kEventHeaderWords> cleared{};
+    const bgfx::Memory* zeros = CopyMemory(cleared.data(), static_cast<std::uint32_t>(sizeof(cleared)));
+    if (zeros == nullptr) return false;
+    clock.eventRecords = bgfx::createDynamicIndexBuffer(
+        kEventHeaderWords + collisionEventCapacity_ * kEventRecordWords, BGFX_BUFFER_INDEX32 | BGFX_BUFFER_COMPUTE_READ_WRITE);
+    clock.eventZeros = bgfx::createIndexBuffer(zeros, BGFX_BUFFER_INDEX32 | BGFX_BUFFER_COMPUTE_READ);
+    if (bgfx::isValid(clock.eventRecords) && bgfx::isValid(clock.eventZeros)) return true;
+    DestroyCollisionEvents(clock);
+    return false;
+}
+
+void ParticleGpuEmitterSimulation::ReadBackCollisionEvents(SceneClock& clock) noexcept {
+    // bgfx fills the CPU storage when its frame completes, so a copy in flight keeps its slot until it is collected.
+    EventReadback* free = nullptr;
+    for (std::shared_ptr<EventReadback>& slot : clock.eventReads) {
+        if (!slot) slot = std::make_shared<EventReadback>();
+        if (!slot->pending) { free = slot.get(); break; }
+    }
+    if (free == nullptr) {
+        ++clock.eventStats.skippedReads;
+        return;
+    }
+    const std::uint32_t words = kEventHeaderWords + collisionEventCapacity_ * kEventRecordWords;
+    free->words.assign(words, 0U);
+    free->emitters = clock.eventEmitters;
+    free->origin = clock.renderOrigin;
+    free->readyFrame = bgfx::read(bgfx::BufferRegion{.handle = clock.eventRecords,
+        .size = words * static_cast<std::uint32_t>(sizeof(std::uint32_t))}, free->words.data());
+    free->pending = true;
+    ++clock.eventStats.submittedReads;
+}
+
+void ParticleGpuEmitterSimulation::DestroyCollisionEvents(SceneClock& clock) noexcept {
+    for (std::shared_ptr<EventReadback>& slot : clock.eventReads) {
+        if (slot && slot->pending) retiredReads_.push_back(std::move(slot));
+        slot.reset();
+    }
+    if (bgfx::isValid(clock.eventRecords)) bgfx::destroy(clock.eventRecords);
+    if (bgfx::isValid(clock.eventZeros)) bgfx::destroy(clock.eventZeros);
+    clock.eventRecords = BGFX_INVALID_HANDLE;
+    clock.eventZeros = BGFX_INVALID_HANDLE;
+}
+
+void ParticleGpuEmitterSimulation::CollectCollisionEvents(
+    std::uint64_t sceneId, std::uint32_t completedFrame, kb::particles::ParticleGpuCollisionBatch& output) noexcept {
+    std::erase_if(retiredReads_, [&](const std::shared_ptr<EventReadback>& read) { return read->readyFrame <= completedFrame; });
+    const auto found = scenes_.find(sceneId);
+    if (found == scenes_.end()) return;
+    SceneClock& clock = found->second;
+    std::array<EventReadback*, kEventReadbackRing> ready{};
+    std::size_t count = 0U;
+    for (const std::shared_ptr<EventReadback>& slot : clock.eventReads) {
+        if (slot && slot->pending && slot->readyFrame <= completedFrame) ready[count++] = slot.get();
+    }
+    std::sort(ready.begin(), ready.begin() + static_cast<std::ptrdiff_t>(count),
+        [](const EventReadback* lhs, const EventReadback* rhs) { return lhs->readyFrame < rhs->readyFrame; });
+    output.origin = clock.renderOrigin;
+    for (std::size_t index = 0U; index < count; ++index) {
+        EventReadback& read = *ready[index];
+        read.pending = false;
+        const std::uint32_t recorded = read.words[0];
+        const std::uint32_t stored = std::min(recorded, collisionEventCapacity_);
+        const kb::math::Vec3 shift = kb::math::RelativeTo(read.origin, clock.renderOrigin);
+        std::uint32_t appended = 0U;
+        for (std::uint32_t record = 0U; record < stored; ++record) {
+            const std::uint32_t* words = read.words.data() + kEventHeaderWords + record * kEventRecordWords;
+            if (words[9] >= read.emitters.size()) continue;
+            const auto at = [&](std::size_t lane) { return std::bit_cast<float>(words[lane]); };
+            output.events.push_back({ read.emitters[words[9]], kb::math::Vec3{ at(0), at(1), at(2) } + shift,
+                { at(3), at(4), at(5) }, { at(6), at(7), at(8) } });
+            ++appended;
+        }
+        clock.eventStats.recorded += recorded;
+        clock.eventStats.delivered += appended;
+        clock.eventStats.lost += recorded - appended;
+        output.lost += recorded - appended;
+    }
+}
+
+ParticleGpuEmitterSimulation::CollisionEventStats ParticleGpuEmitterSimulation::CollisionStats(std::uint64_t sceneId) const noexcept {
+    const auto found = scenes_.find(sceneId);
+    if (found == scenes_.end()) return {};
+    CollisionEventStats stats = found->second.eventStats;
+    for (const std::shared_ptr<EventReadback>& slot : found->second.eventReads) stats.pendingReads += slot && slot->pending ? 1U : 0U;
+    return stats;
 }
 
 std::span<const ParticleGpuEmitterSimulation::Draw> ParticleGpuEmitterSimulation::Draws(std::uint64_t sceneId) const noexcept {
@@ -838,6 +963,7 @@ bool ParticleGpuEmitterSimulation::HasEmitters(std::uint64_t sceneId) const noex
 }
 
 void ParticleGpuEmitterSimulation::ReleaseScene(std::uint64_t sceneId) noexcept {
+    if (const auto scene = scenes_.find(sceneId); scene != scenes_.end()) DestroyCollisionEvents(scene->second);
     for (auto it = emitters_.begin(); it != emitters_.end();) {
         if (it->first.sceneId == sceneId) {
             allocatedBytes_ -= it->second.bytes;
@@ -854,6 +980,10 @@ void ParticleGpuEmitterSimulation::ReleaseAllScenes() noexcept {
     for (auto& [key, emitter] : emitters_) {
         static_cast<void>(key);
         Destroy(emitter);
+    }
+    for (auto& [sceneId, clock] : scenes_) {
+        static_cast<void>(sceneId);
+        DestroyCollisionEvents(clock);
     }
     emitters_.clear();
     scenes_.clear();
