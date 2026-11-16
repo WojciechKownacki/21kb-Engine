@@ -723,8 +723,18 @@ void PumpVersionControl(EditorApplicationState& state) {
 
 // The Packages panel takes the result of an operation that ran in the background.
 void PumpPackages(EditorApplicationState& state) {
-    if (EditorPackages::Instance().Pump(EditorProjectPaths::ProjectRoot())) {
+    EditorPackages& packages = EditorPackages::Instance();
+    if (packages.Pump(EditorProjectPaths::ProjectRoot())) {
         InvalidatePanelKind(state, DockPanelKind::Packages);
+    }
+    // New or removed package modules need a scene built with them; during Play or prefab editing it waits.
+    static bool reloadPending = false;
+    reloadPending = packages.TakeModulesChanged() || reloadPending;
+    if (reloadPending && !state.playMode.IsPlaying() && !state.sceneContext.InPrefabEditMode()) {
+        reloadPending = false;
+        static_cast<void>(state.sceneContext.ReloadSceneAfterExternalChange());
+        state.sceneViewport.RequestPresent();
+        InvalidateRect(state.window, nullptr, FALSE);
     }
 }
 

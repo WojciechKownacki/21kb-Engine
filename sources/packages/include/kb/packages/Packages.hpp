@@ -14,7 +14,7 @@
 #include <vector>
 
 // Project packages (kb_cli package, the Packages panel of the editor, docs/packages.md): a package is a folder with a
-// package.json and content (assets, scripts). A registry is an index.json that lists package versions with the
+// package.json and content (assets, scripts, native modules). A registry is an index.json that lists package versions with the
 // archive of each (a local folder or an http(s) address); a project asks for some in packages.json, the resolver picks
 // exact versions, they are copied to Assets/Packages/<name> (the asset path /Game/Packages/<name>) and
 // packages.lock.json records the versions and the SHA-512 sums of every installed file.
@@ -43,12 +43,30 @@ using Dependencies = std::map<std::string, Dependency>;
 
 [[nodiscard]] bool ParseRange(std::string_view text, Dependency& out);
 
+// A native module a package carries for one platform: the engine module `name` in `file` (a path inside the package), built
+// for `platform` ("windows-x64", "linux-x64", ...) against module interface `abi`.
+struct ModuleEntry {
+    std::string name;
+    std::string platform;
+    std::string file;
+    std::uint32_t abi = 0U;
+
+    [[nodiscard]] bool operator==(const ModuleEntry&) const = default;
+};
+
 struct Manifest {
     std::string name;
     kb::mods::ModVersion version;
     std::string description;
     Dependencies dependencies;
+    std::vector<ModuleEntry> modules;
 };
+
+// The platform of this build as packages name it, such as "windows-x64".
+[[nodiscard]] std::string_view CurrentModulePlatform() noexcept;
+// Refuses, with a sentence for a person, a package whose modules cannot be used here: none is built for this platform or
+// one was built for another version of the engine's module interface. A package without modules always passes.
+[[nodiscard]] bool CheckModules(const Manifest& manifest, std::string& error);
 
 // One version of a package in a registry index.
 struct IndexEntry {
@@ -178,6 +196,12 @@ struct Problem {
 [[nodiscard]] bool Verify(
     const std::filesystem::path& projectRoot, const Lock& lock, const Dependencies& requested, std::vector<Problem>& problems, std::string& error);
 
+// Makes the plugin list of the project file name the modules of the installed packages that are built for this platform,
+// each as the project-relative path of its installed file, and drops those of packages no longer installed. Entries the
+// project owns are left alone; the enabled flag of a listed module is kept. `changed` tells whether the project file was
+// written.
+[[nodiscard]] bool SyncProjectModules(const std::filesystem::path& projectRoot, const Lock& lock, bool& changed, std::string& error);
+
 // The files of a package folder with their sizes, by path inside it. Links and other special files are refused.
 [[nodiscard]] bool ListFiles(const std::filesystem::path& folder, std::map<std::string, std::uintmax_t>& sizes, std::string& error);
 
@@ -187,6 +211,8 @@ struct Problem {
 struct ProjectState {
     ProjectPackages config;
     Lock lock;
+    // Set by an operation that changed which package modules the project lists; a running editor then reloads its modules.
+    bool modulesChanged = false;
 };
 [[nodiscard]] bool ReadProjectState(const std::filesystem::path& projectRoot, ProjectState& state, std::string& error);
 // How packages.json names a registry: an address as it is, a folder relative to the project when it can be.

@@ -130,7 +130,7 @@ struct Spec {
 }
 
 // What a command that changes packages did: the packages it installed, updated and removed.
-void ReportChanges(CommandIo io, std::string_view schema, const pkg::Lock& before, const pkg::Lock& after) {
+void ReportChanges(CommandIo io, std::string_view schema, const pkg::Lock& before, const pkg::Lock& after, bool modulesChanged) {
     const pkg::LockChanges changes = pkg::Diff(before, after);
     JsonValue installed = JsonValue::MakeArray();
     JsonValue updated = JsonValue::MakeArray();
@@ -160,11 +160,15 @@ void ReportChanges(CommandIo io, std::string_view schema, const pkg::Lock& befor
     if (installed.Size() + updated.Size() + removed.Size() == 0U) {
         io.out << "nothing to change\n";
     }
+    if (modulesChanged) {
+        io.out << "the project's native modules changed; an editor with the project open reloads them\n";
+    }
     JsonValue data = DataObject(schema);
     data.Set("installed", std::move(installed));
     data.Set("updated", std::move(updated));
     data.Set("removed", std::move(removed));
     data.Set("packages", JsonValue::MakeNumber(static_cast<double>(after.size())));
+    data.Set("modulesChanged", JsonValue::MakeBool(modulesChanged));
     PublishData(io, std::move(data));
 }
 
@@ -326,7 +330,7 @@ int RunInfo(const ArgumentList& arguments, CommandIo io) {
     if (!done) {
         return Fail(io, error);
     }
-    ReportChanges(io, schema, session.lock, state.lock);
+    ReportChanges(io, schema, session.lock, state.lock, state.modulesChanged);
     return 0;
 }
 

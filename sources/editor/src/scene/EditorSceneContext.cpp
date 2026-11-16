@@ -99,6 +99,7 @@
 #include "engine/library/EngineLibraryModule.hpp"
 #include "engine/modules/EngineModuleHost.hpp"
 #include "engine/project/ProjectDescriptorWriter.hpp"
+#include "engine/project/ProjectManager.hpp"
 #include "project/EditorProjectPaths.hpp"
 #include "packaging/EditorProjectPackageService.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
@@ -362,7 +363,7 @@ void LogAssetImportReport(EditorConsoleState& console, const kb::assets::AssetIm
         project.plugins.begin(), project.plugins.end(), [](const kb::project::ProjectPluginReference& plugin) {
             return plugin.enabled;
         }))));
-    return std::make_unique<kb::scene::Scene>(project);
+    return std::make_unique<kb::scene::Scene>(kb::project::ProjectManager::WithProjectPluginPaths(project, EditorProjectPaths::ProjectRoot()));
 }
 
 void ApplySavingPreferences(

@@ -50,11 +50,22 @@ constexpr std::string_view kRangeHint = "(write ^1.2, ~1.2.3, >=1.0 <2.0 or *)";
         // The text is always a valid range.
         static_cast<void>(ParseRange('^' + kb::mods::ToString(resolved.at(pin)), wanted.requested[pin]));
     }
+    // A package whose native modules cannot run here is refused before anything is downloaded.
+    for (const auto& [name, version] : resolved) {
+        const auto locked = state.lock.find(name);
+        Manifest manifest;
+        if ((locked == state.lock.end() || locked->second.version != version) && (!registry.Read(name, version, manifest, error) || !CheckModules(manifest, error))) {
+            error += " Nothing was changed.";
+            return false;
+        }
+    }
     Lock lock = state.lock;
-    if (!Install(projectRoot, registry, resolved, lock, error) || (lock != state.lock && !WriteLock(projectRoot, lock, error)) ||
-        (wanted != state.config && !WriteProjectPackages(projectRoot, wanted, error))) {
+    bool modulesChanged = false;
+    if (!Install(projectRoot, registry, resolved, lock, error) || !SyncProjectModules(projectRoot, lock, modulesChanged, error) ||
+        (lock != state.lock && !WriteLock(projectRoot, lock, error)) || (wanted != state.config && !WriteProjectPackages(projectRoot, wanted, error))) {
         return false;
     }
+    state.modulesChanged = modulesChanged;
     state.lock = std::move(lock);
     state.config = std::move(wanted);
     return true;
@@ -161,10 +172,12 @@ bool RemovePackage(const fs::path& projectRoot, const std::string& name, Project
         }
     }
     Lock lock = state.lock;
-    if (!Prune(projectRoot, keep, lock, error) || (lock != state.lock && !WriteLock(projectRoot, lock, error)) ||
-        (wanted != state.config && !WriteProjectPackages(projectRoot, wanted, error))) {
+    bool modulesChanged = false;
+    if (!Prune(projectRoot, keep, lock, error) || !SyncProjectModules(projectRoot, lock, modulesChanged, error) ||
+        (lock != state.lock && !WriteLock(projectRoot, lock, error)) || (wanted != state.config && !WriteProjectPackages(projectRoot, wanted, error))) {
         return false;
     }
+    state.modulesChanged = modulesChanged;
     state.lock = std::move(lock);
     state.config = std::move(wanted);
     return true;

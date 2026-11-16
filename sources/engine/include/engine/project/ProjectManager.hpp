@@ -37,6 +37,10 @@ public:
     [[nodiscard]] static bool IsProjectDirectory(const std::filesystem::path& directory);
     [[nodiscard]] static bool SaveProject(const std::filesystem::path& path, const ProjectDescriptor& descriptor);
     [[nodiscard]] static ProjectDescriptorReadResult LoadProject(const std::filesystem::path& path);
+    // A copy in which a plugin whose binary path is relative and names an existing file below `projectRoot` (a module a
+    // package installed, for one) gives the full path of that file, for a host that does not run from the project folder.
+    // Other plugins keep the portable name they have.
+    [[nodiscard]] static ProjectDescriptor WithProjectPluginPaths(ProjectDescriptor descriptor, const std::filesystem::path& projectRoot);
     [[nodiscard]] static bool CreateProject(const std::filesystem::path& path, const ProjectDescriptor& descriptor);
 };
 

@@ -382,7 +382,8 @@ bool EditorSceneContext::ReloadSceneFromProject() {
         scriptModule_ = nullptr;
     }
 
-    auto nextScene = std::make_unique<kb::scene::Scene>(project_);
+    auto nextScene = std::make_unique<kb::scene::Scene>(
+        kb::project::ProjectManager::WithProjectPluginPaths(project_, EditorProjectPaths::ProjectRoot()));
     if (nextScene->Assets().MountProject(EditorProjectPaths::ProjectRoot())) {
         console_.Info("Project", "Mounted project assets.");
     } else {

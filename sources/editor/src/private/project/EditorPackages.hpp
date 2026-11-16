@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <future>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace kb::editor {
@@ -52,6 +53,10 @@ public:
     // The files verify found changed, one line each, with the result of the last verify.
     [[nodiscard]] const std::vector<std::string>& Problems() const noexcept { return problems_; }
 
+    // True once after an operation changed the project's native modules: the scene is then rebuilt with them, which also
+    // lets go of a module that was removed.
+    [[nodiscard]] bool TakeModulesChanged() noexcept { return std::exchange(modulesChanged_, false); }
+
     // The operations; each is ignored while another runs.
     void Add(std::string name);
     // An empty name moves every installed package.
@@ -78,6 +83,7 @@ private:
         std::vector<std::string> problems;
         // An operation replaces what the panel said before; a plain reading only fills the lists.
         bool replacesMessage = false;
+        bool modulesChanged = false;
     };
 
     void Start(Operation operation, std::string argument);
@@ -91,6 +97,7 @@ private:
     bool messageIsError_ = false;
     std::vector<std::string> problems_;
     bool refreshRequested_ = true;
+    bool modulesChanged_ = false;
     std::size_t selected_ = kNone;
     std::future<Outcome> job_;
 };

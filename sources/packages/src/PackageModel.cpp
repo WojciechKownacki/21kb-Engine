@@ -9,6 +9,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
+#include <cmath>
 #include <fstream>
 #include <iterator>
 #include <sstream>
@@ -117,6 +119,86 @@ void Pretty(const JsonValue& value, std::size_t depth, std::string& out) {
     return object;
 }
 
+[[nodiscard]] bool IsModuleToken(std::string_view text, std::size_t limit, std::string_view extra) {
+    return !text.empty() && text.size() <= limit && std::ranges::all_of(text, [extra](unsigned char c) {
+        return std::isalnum(c) != 0 || extra.find(static_cast<char>(c)) != std::string_view::npos;
+    });
+}
+
+// A plain relative path with '/' separators that stays inside the package.
+[[nodiscard]] bool IsPackagePath(std::string_view path) {
+    if (path.empty() || path.size() > 200U || path.front() == '/' || path.back() == '/' || path.find_first_of("\\:") != std::string_view::npos) {
+        return false;
+    }
+    std::size_t start = 0U;
+    while (start <= path.size()) {
+        const std::size_t end = std::min(path.find('/', start), path.size());
+        const std::string_view part = path.substr(start, end - start);
+        if (part.empty() || part == "." || part == "..") {
+            return false;
+        }
+        start = end + 1U;
+    }
+    return true;
+}
+
+[[nodiscard]] bool ParseModules(const JsonValue* value, std::vector<ModuleEntry>& out, std::string& error) {
+    if (value == nullptr) {
+        return true;
+    }
+    const std::string hint = "\"modules\" must list { \"name\", \"platform\", \"file\", \"abi\" } for each native module";
+    if (value->GetKind() != JsonValue::Kind::Array) {
+        error = hint;
+        return false;
+    }
+    for (std::size_t index = 0U; index < value->Size(); ++index) {
+        const JsonValue& row = *value->At(index);
+        const auto text = [&row](const char* key) {
+            const JsonValue* member = row.GetKind() == JsonValue::Kind::Object ? row.Find(key) : nullptr;
+            return member != nullptr && member->GetKind() == JsonValue::Kind::String ? member->AsString() : std::string{};
+        };
+        const JsonValue* abi = row.GetKind() == JsonValue::Kind::Object ? row.Find("abi") : nullptr;
+        ModuleEntry module{ .name = text("name"), .platform = text("platform"), .file = text("file") };
+        if (abi == nullptr || abi->GetKind() != JsonValue::Kind::Number || abi->AsNumber() < 1.0 || abi->AsNumber() > 1.0e6 ||
+            abi->AsNumber() != std::floor(abi->AsNumber()) || !IsModuleToken(module.name, 64U, "._-") || !IsModuleToken(module.platform, 32U, "-") ||
+            !IsPackagePath(module.file)) {
+            error = hint + " (the name uses letters, digits, '.', '_' and '-'; the platform is such as windows-x64; the file is a path inside the package)";
+            return false;
+        }
+        module.abi = static_cast<std::uint32_t>(abi->AsNumber());
+        if (std::ranges::any_of(out, [&module](const ModuleEntry& other) { return other.name == module.name && other.platform == module.platform; })) {
+            error = "the module \"" + module.name + "\" is listed twice for " + module.platform;
+            return false;
+        }
+        out.push_back(std::move(module));
+    }
+    return true;
+}
+
+[[nodiscard]] JsonValue ModulesJson(const std::vector<ModuleEntry>& modules) {
+    JsonValue list = JsonValue::MakeArray();
+    for (const ModuleEntry& module : modules) {
+        JsonValue row = JsonValue::MakeObject();
+        row.Set("name", JsonValue::MakeString(module.name));
+        row.Set("platform", JsonValue::MakeString(module.platform));
+        row.Set("file", JsonValue::MakeString(module.file));
+        row.Set("abi", JsonValue::MakeNumber(static_cast<double>(module.abi)));
+        list.Append(std::move(row));
+    }
+    return list;
+}
+
+[[nodiscard]] bool ModuleFilesExist(const fs::path& folder, const Manifest& manifest, std::string& error) {
+    for (const ModuleEntry& module : manifest.modules) {
+        std::error_code ec;
+        if (!fs::is_regular_file(folder / kb::assets::Utf8Path(module.file), ec)) {
+            error = "the module file " + module.file + " that package.json lists is not in the package";
+            return false;
+        }
+    }
+    return true;
+}
+
 [[nodiscard]] bool ManifestFromJson(const JsonValue& json, Manifest& out, std::string& error) {
     if (json.GetKind() != JsonValue::Kind::Object) {
         error = "it must be a JSON object";
@@ -141,7 +223,7 @@ void Pretty(const JsonValue& value, std::size_t depth, std::string& out) {
         }
         manifest.description = description->AsString();
     }
-    if (!ParseDependencies(json.Find("dependencies"), manifest.dependencies, error)) {
+    if (!ParseDependencies(json.Find("dependencies"), manifest.dependencies, error) || !ParseModules(json.Find("modules"), manifest.modules, error)) {
         return false;
     }
     out = std::move(manifest);

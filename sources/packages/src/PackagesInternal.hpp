@@ -33,6 +33,9 @@ using kb::mods::ModVersion;
 [[nodiscard]] std::string Document(const JsonValue& value);
 [[nodiscard]] bool ParseDependencies(const JsonValue* value, Dependencies& out, std::string& error);
 [[nodiscard]] JsonValue DependenciesJson(const Dependencies& dependencies);
+[[nodiscard]] JsonValue ModulesJson(const std::vector<ModuleEntry>& modules);
+// Every module file a manifest lists is a file of the unpacked package folder.
+[[nodiscard]] bool ModuleFilesExist(const fs::path& folder, const Manifest& manifest, std::string& error);
 [[nodiscard]] bool ManifestFromJson(const JsonValue& json, Manifest& out, std::string& error);
 [[nodiscard]] bool ParseManifest(std::string_view text, Manifest& out, std::string& error);
 [[nodiscard]] bool HashFiles(

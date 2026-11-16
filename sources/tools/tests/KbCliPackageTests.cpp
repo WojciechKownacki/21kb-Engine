@@ -4,12 +4,19 @@
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/core/JsonValue.hpp"
+#include "engine/modules/EngineModuleExports.hpp"
+#include "engine/modules/EngineModuleHost.hpp"
+#include "engine/project/ProjectManager.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneModuleComponents.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/security/Crypto.hpp"
 
 #include "kb/packages/PackageArchive.hpp"
+#include "kb/packages/Packages.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -416,6 +423,123 @@ void RunRemoteRegistryTests(const fs::path& base) {
 
 } // namespace
 
+#if defined(KB_MODULE_EXTENSION_PLUGIN)
+constexpr const char* kModuleName = "Tests.ModuleExtensions";
+
+// A package with one native module (the extension fixture library) listed for `platform` with module interface `abi`.
+// Without the file the publish is refused.
+void PublishModulePackage(const fs::path& registry, const std::string& name, const std::string& platform, std::uint32_t abi, bool withFile = true) {
+    const fs::path folder = registry.parent_path() / "Sources" / name;
+    const std::string file = "Modules/" + platform + "/fixture.dll";
+    WriteText(folder / "package.json",
+        "{\"name\":\"" + name + "\",\"version\":\"1.0.0\",\"modules\":[{\"name\":\"" + kModuleName + "\",\"platform\":\"" + platform + "\",\"file\":\"" + file +
+            "\",\"abi\":" + std::to_string(abi) + "}]}");
+    if (withFile) {
+        fs::create_directories((folder / file).parent_path());
+        fs::copy_file(KB_MODULE_EXTENSION_PLUGIN, folder / file, fs::copy_options::overwrite_existing);
+    }
+    const Run published = RunLine({ "package", "publish", "--registry", registry.string(), folder.string() });
+    if (withFile) {
+        Require(published.exitCode == 0, "publishing " + name + " failed: " + published.out + published.err);
+    } else {
+        Require(published.exitCode != 0 && published.err.find("not in the package") != std::string::npos, "a listed module file that is missing must refuse the publish: " + published.err);
+    }
+}
+
+[[nodiscard]] std::vector<kb::project::ProjectPluginReference> ProjectPlugins(const fs::path& root) {
+    std::string error;
+    const kb::project::ProjectDescriptorReadResult read = kb::project::ProjectManager::LoadProject(kb::project::ProjectManager::FindProjectFile(root, error));
+    Require(read.succeeded, "the project file cannot be read: " + read.error);
+    return read.descriptor.plugins;
+}
+
+[[nodiscard]] const kb::project::ProjectPluginReference* FindPlugin(const std::vector<kb::project::ProjectPluginReference>& plugins, const std::string& name) {
+    const auto found = std::ranges::find_if(plugins, [&](const kb::project::ProjectPluginReference& plugin) { return plugin.name == name; });
+    return found == plugins.end() ? nullptr : &*found;
+}
+
+// Packages with native modules: install, load by the module host, refusals, verify, remove while loaded.
+void RunModulePackageTests(const fs::path& base) {
+    const fs::path registry = base / "ModuleRegistry";
+    const fs::path root = base / "ModulePkg";
+    const std::string project = root.string();
+    const std::string platform{ kb::packages::CurrentModulePlatform() };
+    Require(RunLine({ "new", "--parent", base.string(), "--name", "ModulePkg", "--template", "Empty" }).exitCode == 0, "the module package test project could not be created");
+    const auto package = [&](std::vector<std::string> words) {
+        words.insert(words.begin(), "package");
+        words.insert(words.end(), { "--project", project, "--registry", registry.string() });
+        return RunLine(words);
+    };
+
+    PublishModulePackage(registry, "acme.native", platform, kb::modules::kEngineModuleAbiVersion);
+    PublishModulePackage(registry, "acme.broken", platform, kb::modules::kEngineModuleAbiVersion, false);
+    PublishModulePackage(registry, "acme.oldabi", platform, kb::modules::kEngineModuleAbiVersion - 1U);
+    PublishModulePackage(registry, "acme.newabi", platform, kb::modules::kEngineModuleAbiVersion + 1U);
+    PublishModulePackage(registry, "acme.elsewhere", "plan9-x64", kb::modules::kEngineModuleAbiVersion);
+    Require(ReadText(registry / "index.json").find("\"modules\"") != std::string::npos, "the registry index must list the modules of a package");
+
+    // A module for another engine version or another platform is refused, and the project stays as it was.
+    const auto before = Snapshot(root);
+    const Run older = package({ "add", "acme.oldabi" });
+    Require(older.exitCode != 0 && older.err.find("older version of the engine") != std::string::npos && older.err.find("Nothing was changed") != std::string::npos,
+        "a module built for an older engine must be refused in plain words: " + older.err);
+    const Run newer = package({ "add", "acme.newabi" });
+    Require(newer.exitCode != 0 && newer.err.find("newer version of the engine") != std::string::npos, "a module built for a newer engine must be refused in plain words: " + newer.err);
+    const Run elsewhere = package({ "add", "acme.elsewhere" });
+    Require(elsewhere.exitCode != 0 && elsewhere.err.find("plan9-x64") != std::string::npos && elsewhere.err.find("not for this computer") != std::string::npos,
+        "a package without a module for this platform must be refused: " + elsewhere.err);
+    Require(Snapshot(root) == before, "a refused module package must leave the project as it was");
+
+    // Add: the file is installed with the package, the project lists the module and the module host loads it from there.
+    const Run added = package({ "add", "acme.native", "--json" });
+    Require(added.exitCode == 0, "adding a package with a module failed: " + added.out + added.err);
+    Require(Parse(added.out).Find("data")->Find("modulesChanged")->AsBool(), "add must say the modules changed: " + added.out);
+    const std::string installedFile = "Modules/" + platform + "/fixture.dll";
+    const fs::path library = root / "Assets" / "Packages" / "acme.native" / installedFile;
+    Require(fs::is_regular_file(library), "the module file must be installed with the package");
+    const std::string lockText = ReadText(root / "packages.lock.json");
+    Require(lockText.find(" " + installedFile) != std::string::npos, "the lock must hold the sum of the module file: " + lockText);
+    const std::vector<kb::project::ProjectPluginReference> plugins = ProjectPlugins(root);
+    const kb::project::ProjectPluginReference* listed = FindPlugin(plugins, kModuleName);
+    Require(listed != nullptr && listed->enabled && listed->binaryPath == "Assets/Packages/acme.native/" + installedFile,
+        "the project must list the package module as a plugin at its installed path");
+    Require(FindPlugin(plugins, "Physics.Jolt") != nullptr, "the plugins the project already had must stay");
+    {
+        // A game is packaged from the plugin's project-relative path: a plain relative library path below the project.
+        const fs::path relative{ listed->binaryPath };
+        Require(!relative.is_absolute() && relative.extension() == ".dll" && relative.begin()->string() == "Assets", "a package module must be a project-relative library path");
+    }
+
+    kb::project::ProjectDescriptor descriptor;
+    descriptor.disableEnginePluginsByDefault = true;
+    descriptor.plugins.push_back(*listed);
+    kb::scene::Scene scene;
+    kb::modules::EngineModuleHost host{ kb::project::ProjectManager::WithProjectPluginPaths(descriptor, root) };
+    host.Load(scene.Runtime().EcsWorld());
+    Require(host.IsActive(kModuleName) && host.Diagnostics().empty(), "the module host must load the package module");
+    host.AttachScene(scene);
+    Require(kb::scene::SceneModuleComponentCatalog::Find("ModuleExtension") != nullptr, "the package module must register its component");
+
+    // verify covers the module file.
+    Require(package({ "verify" }).exitCode == 0, "verify of the installed module package must pass");
+    const std::string original = ReadText(library);
+    WriteText(library, original + "x");
+    const Run changed = package({ "verify" });
+    Require(changed.exitCode != 0 && changed.out.find("modified acme.native/" + installedFile) != std::string::npos, "verify must find a changed module file: " + changed.out);
+    WriteText(library, original);
+    Require(package({ "verify" }).exitCode == 0, "verify must pass again once the module file is as installed");
+
+    // remove works while the module is loaded: the host runs a private copy, so the file is not held.
+    const Run removed = package({ "remove", "acme.native", "--json" });
+    Require(removed.exitCode == 0 && Parse(removed.out).Find("data")->Find("modulesChanged")->AsBool(), "removing a package with a loaded module failed: " + removed.out + removed.err);
+    Require(!fs::exists(library) && FindPlugin(ProjectPlugins(root), kModuleName) == nullptr && FindPlugin(ProjectPlugins(root), "Physics.Jolt") != nullptr,
+        "remove must delete the module and take it out of the project's plugins");
+    host.DetachScene(scene);
+    host.Unload();
+}
+#endif
+
+
 void RunPackageCommandTests() {
     const fs::path base = fs::temp_directory_path() / "21kb_kb_cli_package_tests";
     std::error_code ec;
@@ -575,5 +699,8 @@ void RunPackageCommandTests() {
     RunRemoteRegistryTests(base);
 #endif
     RunSignedRegistryTests(base);
+#if defined(KB_MODULE_EXTENSION_PLUGIN)
+    RunModulePackageTests(base);
+#endif
     fs::remove_all(base, ec);
 }

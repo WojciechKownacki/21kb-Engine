@@ -191,6 +191,12 @@ if(BUILD_TESTING)
     )
 
     target_link_libraries(kb_cli_tests PRIVATE kb_cli_core)
+    if(TARGET kb_module_extension_fixture)
+        # The package tests install a package that carries this native module and load it.
+        add_dependencies(kb_cli_tests kb_module_extension_fixture)
+        set_property(SOURCE tests/KbCliPackageTests.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+            "KB_MODULE_EXTENSION_PLUGIN=\"$<TARGET_FILE:kb_module_extension_fixture>\"")
+    endif()
     add_custom_target(kb_cli_tests_stage_ui_font
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:kb_cli_tests>/Content/EditorShell/Fonts"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different

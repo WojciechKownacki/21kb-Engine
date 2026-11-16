@@ -1,6 +1,6 @@
 # Packages
 
-A package is a folder of ready-made content (assets, scripts, scenes, materials) with a small `package.json`. A project asks
+A package is a folder of ready-made content (assets, scripts, scenes, materials, native modules) with a small `package.json`. A project asks
 for packages by name and version range; `kb_cli package` finds the versions that fit together, copies them into the project and
 records exactly what it installed, so every machine gets the same files.
 
@@ -41,6 +41,48 @@ acme.crates/
 | `*` | any version |
 
 A short version such as `1.2` means `1.2.0`.
+
+## Native modules
+
+A package can carry engine modules: libraries built against the engine's module interface that add components, asset types or
+systems (see [runtime modules](runtime_modules.md)). `package.json` lists them for each platform:
+
+```json
+{
+  "name": "acme.crates",
+  "version": "1.4.0",
+  "modules": [
+    { "name": "Acme.Crates", "platform": "windows-x64", "file": "Modules/windows-x64/acme_crates.dll", "abi": 27 },
+    { "name": "Acme.Crates", "platform": "linux-x64",   "file": "Modules/linux-x64/libacme_crates.so", "abi": 27 }
+  ]
+}
+```
+
+* `name`: the module's own name, as it registers itself with the engine.
+* `platform`: `windows-x64`, `linux-x64`, `macos-arm64` and so on; a package may list several, one per module and platform.
+* `file`: the library, a path inside the package. `publish` refuses a package whose listed file is not there.
+* `abi`: the module interface version the library was built for. This engine's is 27.
+
+The modules are part of the package entry in the registry index, so the signature of a signed index covers them, and the sum of
+every library is in `packages.lock.json` with the other files.
+
+**add** and **update** refuse, before anything is downloaded, a package that has modules but none for this computer's platform,
+or whose module was built for another interface version. The message says in plain words that the package needs a newer or an
+older version of the engine, and the project stays as it was.
+
+The library is installed with the other files, in `Assets/Packages/<name>/`. The project's plugin list (the `.21kbproject` file,
+the same list the Plugins panel edits) then names it by that project-relative path, so the editor, the game and the packaging of a
+game load it like any other project plugin; a game package carries it for Windows with the other plugins. `remove` and `update`
+take the entries of removed packages out again. The entries of other plugins are never touched, and a module you switched off
+in the Plugins panel stays off after an update. A module name that a plugin of the project already has is refused.
+
+`verify` compares the libraries with their locked sums like any other file. In the editor, the Packages panel rebuilds the scene
+after an operation changed the modules (when Play or a prefab is open, as soon as it ends); the module host runs a private copy of
+a library, so removing the package never fails on a loaded file. `kb_cli package` says "native modules changed" and has
+`modulesChanged` in `data`; an editor that has the project open reloads on its own.
+
+The plugin entry holds the path of the library of the platform that ran `add`. A project shared between platforms runs
+`kb_cli package update` once on each, which writes that platform's library into the list.
 
 ## The registry
 
@@ -190,5 +232,6 @@ The panel and `kb_cli package` use the same library, `kb_packages` (`sources/pac
 
 ## Not yet
 
-* Packages that carry native modules; a package holds content and scripts.
+* Libraries for platforms that cannot load them (the browser and Android hosts link their modules in); a package's modules for
+  those platforms are listed but not loaded.
 * Searching for another combination of versions when the newest ones conflict.

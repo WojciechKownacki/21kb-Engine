@@ -246,6 +246,9 @@ using Entries = std::map<std::string, std::map<ModVersion, IndexEntry>>;
                 row.Set("description", JsonValue::MakeString(entry.manifest.description));
             }
             row.Set("dependencies", DependenciesJson(entry.manifest.dependencies));
+            if (!entry.manifest.modules.empty()) {
+                row.Set("modules", ModulesJson(entry.manifest.modules));
+            }
             row.Set("archive", JsonValue::MakeString(entry.archive));
             row.Set("sha512", JsonValue::MakeString(entry.sha512));
             row.Set("size", JsonValue::MakeNumber(static_cast<double>(entry.size)));
@@ -472,7 +475,8 @@ bool Registry::Fetch(const std::string& name, const ModVersion& version, const f
     std::string problem;
     Manifest manifest;
     if (!ReadText(folder / std::string{ kManifestFile }, kMaxManifestBytes, text, problem) || !ParseManifest(text, manifest, problem) ||
-        manifest.name != name || manifest.version != version || manifest.dependencies != entry->manifest.dependencies) {
+        manifest.name != name || manifest.version != version || manifest.dependencies != entry->manifest.dependencies ||
+        manifest.modules != entry->manifest.modules || !ModuleFilesExist(folder, manifest, problem)) {
         error = "The archive of " + Show(name, version) + " does not match the registry's index entry for it" + (problem.empty() ? "" : " (" + problem + ")") + ".";
         return false;
     }
@@ -508,7 +512,8 @@ bool Publish(
     const fs::path& registryFolder, const fs::path& packageFolder, IndexEntry& published, std::string& error, std::span<const kb::security::ReleaseSigningKey> keys) {
     std::string text;
     IndexEntry entry;
-    if (!ReadText(packageFolder / std::string{ kManifestFile }, kMaxManifestBytes, text, error) || !ParseManifest(text, entry.manifest, error)) {
+    if (!ReadText(packageFolder / std::string{ kManifestFile }, kMaxManifestBytes, text, error) || !ParseManifest(text, entry.manifest, error) ||
+        !ModuleFilesExist(packageFolder, entry.manifest, error)) {
         error = Utf8Text(packageFolder) + ": " + error;
         return false;
     }

@@ -5,6 +5,7 @@ add_library(kb_packages STATIC
     include/kb/packages/PackageArchive.hpp
     src/PackagesInternal.hpp
     src/PackageModel.cpp
+    src/PackageModules.cpp
     src/PackageOperations.cpp
     src/PackageRegistry.cpp
     src/PackageArchive.cpp

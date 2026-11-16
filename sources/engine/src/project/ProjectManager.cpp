@@ -114,6 +114,23 @@ ProjectDescriptorReadResult ProjectManager::LoadProject(const std::filesystem::p
     return ProjectDescriptorReader::Read(path);
 }
 
+ProjectDescriptor ProjectManager::WithProjectPluginPaths(ProjectDescriptor descriptor, const std::filesystem::path& projectRoot) {
+    for (ProjectPluginReference& plugin : descriptor.plugins) {
+        const std::filesystem::path relative{ plugin.binaryPath };
+        const std::filesystem::path file = projectRoot / relative;
+        std::error_code error;
+        if (plugin.binaryPath.empty() || relative.is_absolute() || !std::filesystem::is_regular_file(file, error)) {
+            continue;
+        }
+        try {
+            // A path the process code page cannot spell keeps its portable name.
+            plugin.binaryPath = std::filesystem::absolute(file, error).lexically_normal().string();
+        } catch (const std::exception&) {
+        }
+    }
+    return descriptor;
+}
+
 bool ProjectManager::CreateProject(const std::filesystem::path& path, const ProjectDescriptor& descriptor) {
     if (!IsProjectFile(path)) {
         return false;

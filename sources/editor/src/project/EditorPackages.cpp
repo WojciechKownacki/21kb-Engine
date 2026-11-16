@@ -137,6 +137,7 @@ bool EditorPackages::Pump(const std::filesystem::path& projectRoot) {
         if (outcome.replacesMessage) {
             problems_ = std::move(outcome.problems);
         }
+        modulesChanged_ = modulesChanged_ || outcome.modulesChanged;
         selected_ = kNone;
         for (std::size_t index = 0U; index < rows_.size() && !chosen.empty(); ++index) {
             if (rows_[index].name == chosen) {
@@ -188,6 +189,13 @@ EditorPackages::Outcome EditorPackages::Run(const std::filesystem::path& project
         return registry.has_value();
     };
     const pk::Lock before = state.lock;
+    const auto done = [&]() {
+        outcome.message = Describe(before, state.lock);
+        outcome.modulesChanged = state.modulesChanged;
+        if (state.modulesChanged) {
+            outcome.message += ' ' + std::string{ EditorText("packages.modulesChanged", "The project's native modules changed, so the scene is reloaded to use them.") };
+        }
+    };
     switch (operation) {
     case Operation::SetRegistry:
         if (pk::SetRegistry(projectRoot, argument, state, error)) {
@@ -198,7 +206,7 @@ EditorPackages::Outcome EditorPackages::Run(const std::filesystem::path& project
         break;
     case Operation::Remove:
         if (pk::RemovePackage(projectRoot, argument, state, error)) {
-            outcome.message = Describe(before, state.lock);
+            done();
         } else {
             fail(error);
         }
@@ -209,7 +217,7 @@ EditorPackages::Outcome EditorPackages::Run(const std::filesystem::path& project
             fail(state.config.registry.empty() ? std::string{ EditorText("packages.noRegistry", "Set the package registry first.") } : registryError);
         } else if (operation == Operation::Add ? pk::AddPackage(projectRoot, *registry, argument, {}, false, state, error)
                                                : pk::UpdatePackages(projectRoot, *registry, argument, state, error)) {
-            outcome.message = Describe(before, state.lock);
+            done();
         } else {
             fail(error);
         }
