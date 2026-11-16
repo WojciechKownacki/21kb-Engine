@@ -50,7 +50,10 @@ class SceneComponentAuthoring {
 public:
     SceneComponentAuthoring() = delete;
 
+    // The built-in components. A component a module registers (SceneModuleComponents) is found by Find, Has, Add and
+    // Remove like these, but is not listed here: its description is in SceneModuleComponentCatalog.
     [[nodiscard]] static std::span<const SceneComponentKind> Kinds() noexcept;
+    [[nodiscard]] static bool IsBuiltIn(std::string_view id) noexcept;
     // The current name for an older one ("3D Radiance Emitter" -> "Light"); other names come
     // back as given. Scenes and scripts written with an older name keep working.
     [[nodiscard]] static std::string_view CanonicalName(std::string_view id) noexcept;

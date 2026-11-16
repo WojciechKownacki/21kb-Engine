@@ -15,6 +15,7 @@
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponentAuthoring.hpp"
+#include "engine/scene/SceneModuleComponents.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneHistory.hpp"
@@ -4293,6 +4294,57 @@ void RunUIThemeEditorModelTest() {
     std::filesystem::remove_all(root, error);
 }
 
+struct ModuleInspectorComponent {
+    float strength;
+    std::int32_t count;
+    bool armed;
+};
+
+// A component a module registers takes the same path as a built-in one: the Add Component catalog lists it, it gets an
+// Inspector section drawn from its registered fields, and an edit reaches its data and the history.
+void RunModuleComponentInspectorTest() {
+    constexpr kb::scene::SceneModuleComponentField fields[] = {
+        KB_SCENE_MODULE_FIELD(ModuleInspectorComponent, strength, kb::ecs::ComponentFieldType::Float32, "Strength", "How hard it hits."),
+        KB_SCENE_MODULE_FIELD(ModuleInspectorComponent, count, kb::ecs::ComponentFieldType::Int32, "Count", "How many times."),
+        KB_SCENE_MODULE_FIELD(ModuleInspectorComponent, armed, kb::ecs::ComponentFieldType::Bool, "Armed", "Whether it can fire."),
+    };
+    kb::scene::Scene scene;
+    kb::editor::tests::Require(kb::scene::SceneModuleComponents{ scene }.Register<ModuleInspectorComponent>(
+        { .name = "ModuleInspector", .label = "Module Inspector", .category = "Tests", .fields = fields }), "Register the module component");
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Probe" });
+
+    const kb::editor::InspectorComponentTile* tile = kb::editor::InspectorComponentCatalog::Find("ModuleInspector");
+    kb::editor::tests::Require(tile != nullptr && tile->category == "Tests" && tile->label == "Module Inspector",
+        "The Add Component catalog lists a module component with its label and category");
+    kb::editor::tests::Require(kb::scene::SceneComponentAuthoring::Add(scene, entity, tile->id, kb::project::ProjectDescriptor{}).status ==
+            kb::scene::SceneComponentAddStatus::Added && kb::scene::SceneComponentAuthoring::Has(scene, entity, "ModuleInspector") &&
+            kb::scene::SceneComponentAuthoring::Add(scene, entity, tile->id, kb::project::ProjectDescriptor{}).status ==
+                kb::scene::SceneComponentAddStatus::AlreadyPresent,
+        "A module component is added from the catalog like a built-in one, once");
+
+    const auto sections = kb::editor::InspectorGenericComponentModel::Sections();
+    const auto found = std::ranges::find(sections, std::string_view{ "ModuleInspector" }, &kb::editor::InspectorGenericComponentModel::Section::component);
+    kb::editor::tests::Require(found != sections.end() && found->title == "Module Inspector" && kb::editor::InspectorGenericComponentModel::Find(found->id) != nullptr,
+        "A module component has an Inspector section");
+    const kb::editor::InspectorGenericComponentModel::Section& section = *found;
+    const std::vector<kb::editor::InspectorGenericComponentModel::Row> rows = kb::editor::InspectorGenericComponentModel::Rows(scene, entity, section);
+    kb::editor::tests::Require(rows.size() == 3U && rows[0].label == "Strength" && rows[1].label == "Count" && rows[2].label == "Armed" &&
+            rows[2].isBool && kb::editor::InspectorGenericComponentModel::Tooltip(rows[0].editIndex) == "How hard it hits.",
+        "The section has one row per registered field, with its label and tooltip");
+
+    const auto count = [&] { return kb::script::ScriptSceneComponentApi::GetProperty(scene, entity, "ModuleInspector", "count").value.AsInt(); };
+    kb::editor::tests::Require(scene.History().Record("Edit Module Inspector") &&
+            kb::editor::InspectorGenericComponentModel::Apply(scene, entity, section, { { "count", kb::script::ScriptValue{ 5 } }, { "armed", kb::script::ScriptValue{ true } } }) &&
+            count() == 5 && scene.Runtime().EcsWorld().TryGet<ModuleInspectorComponent>(entity)->armed,
+        "An edit reaches the component's data");
+    kb::editor::tests::Require(scene.History().Undo() && count() == 0 && !scene.Runtime().EcsWorld().TryGet<ModuleInspectorComponent>(entity)->armed,
+        "An edit of a module component undoes");
+    kb::editor::tests::Require(scene.History().Redo() && count() == 5, "An edit of a module component redoes");
+    kb::editor::tests::Require(kb::scene::SceneComponentAuthoring::Remove(scene, entity, "ModuleInspector") &&
+            !kb::scene::SceneComponentAuthoring::Has(scene, entity, "ModuleInspector"),
+        "A module component is removed through the same call as a built-in one");
+}
+
 } // namespace
 
 namespace kb::editor::tests {
@@ -4354,6 +4406,7 @@ void RunEditorInspectorTests() {
     RunMaterialEditorGraphDiagnosticsRefreshTest();
     RunMaterialEditorGraphNodeRenameTest();
 #endif
+    RunModuleComponentInspectorTest(); // last: it registers a component for the rest of the process
 }
 
 } // namespace kb::editor::tests

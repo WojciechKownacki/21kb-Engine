@@ -1,11 +1,13 @@
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "engine/scene/SceneComponentAuthoring.hpp"
+#include "engine/scene/SceneModuleComponents.hpp"
 #include "inspection/ui/InspectorUIComponentModel.hpp"
 #include "localization/EditorLocalization.hpp"
 #include "scene/ui/EditorUIComponentAuthoring.hpp"
 
 #include <algorithm>
 #include <cctype>
+#include <memory>
 
 namespace kb::editor {
 namespace {
@@ -80,6 +82,11 @@ namespace {
             .label = std::string{ preset.name } + " Set",
             .icon = HeroIconKind::RectangleGroup,
         });
+    }
+    // A component a module registered is added like the built-in ones.
+    for (const kb::scene::SceneModuleComponentInfo* module : kb::scene::SceneModuleComponentCatalog::All()) {
+        tiles.push_back(InspectorComponentTile{ .id = module->name, .category = module->category.empty() ? "Custom" : module->category,
+            .label = module->label, .icon = HeroIconKind::Cube });
     }
     std::ranges::sort(tiles, [](const InspectorComponentTile& lhs, const InspectorComponentTile& rhs) {
         if (lhs.category != rhs.category) {
@@ -188,8 +195,15 @@ constexpr ComponentNames kComponentNames[] = {
 } // namespace
 
 std::span<const InspectorComponentTile> InspectorComponentCatalog::Tiles() {
-    static const std::vector<InspectorComponentTile> kCachedTiles = BuildTiles();
-    return kCachedTiles;
+    // Rebuilt when a module registers a component; an earlier list stays valid for whoever still points into it.
+    static std::vector<std::unique_ptr<std::vector<InspectorComponentTile>>> lists;
+    static std::size_t generation = 0U;
+    const std::size_t now = kb::scene::SceneModuleComponentCatalog::Generation();
+    if (lists.empty() || now != generation) {
+        lists.push_back(std::make_unique<std::vector<InspectorComponentTile>>(BuildTiles()));
+        generation = now;
+    }
+    return *lists.back();
 }
 
 std::vector<InspectorComponentCategory> InspectorComponentCatalog::Categories() {

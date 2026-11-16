@@ -20,6 +20,8 @@
 namespace kb::scene {
 namespace {
 
+constexpr std::uint32_t kMaxModuleComponents = 4096U;
+
 enum SceneNodeComponentBits : std::uint64_t {
       CameraBit = 1ULL << 0U,
     MeshRendererBit = 1U << 1U,
@@ -782,6 +784,17 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         if (!IsPlanarReflectionComponentValid(value)) return false;
         output.planarReflection = value;
     }
+    if (fileVersion >= SceneDocument::ModuleComponentsFileVersion) {
+        std::uint32_t count = 0U;
+        if (!input.ReadUInt32(count) || count > kMaxModuleComponents) return false;
+        output.moduleComponents.resize(count);
+        for (SceneModuleComponentData& component : output.moduleComponents) {
+            std::uint32_t size = 0U;
+            if (!input.ReadString(component.name) || !input.ReadUInt32(size) || size > SceneAssetFormat::MaxStringBytes) return false;
+            component.bytes.resize(size);
+            if (size != 0U && !input.ReadRaw(component.bytes.data(), size)) return false;
+        }
+    }
     return true;
 }
 
@@ -1251,7 +1264,12 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetBinaryIO::WriteBool(output, value.reflectShadows);
         SceneAssetBinaryIO::WriteBool(output, value.enabled);
     }
-
+    SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(components.moduleComponents.size()));
+    for (const SceneModuleComponentData& component : components.moduleComponents) {
+        SceneAssetBinaryIO::WriteString(output, component.name);
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(component.bytes.size()));
+        SceneAssetBinaryIO::WriteRaw(output, component.bytes.data(), component.bytes.size());
+    }
 }
 
 } // namespace kb::scene

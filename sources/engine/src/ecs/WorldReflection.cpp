@@ -10,6 +10,14 @@ const ComponentReflection* World::RegisterComponentReflection(
     std::string_view name,
     std::size_t size,
     std::initializer_list<ComponentFieldDesc> fields) {
+    return RegisterComponentReflection(componentId, name, size, std::span<const ComponentFieldDesc>{ fields.begin(), fields.size() });
+}
+
+const ComponentReflection* World::RegisterComponentReflection(
+    ComponentId componentId,
+    std::string_view name,
+    std::size_t size,
+    std::span<const ComponentFieldDesc> fields) {
     return registries_ == nullptr ? nullptr : registries_->ComponentReflections().Register(componentId, name, size, fields);
 }
 

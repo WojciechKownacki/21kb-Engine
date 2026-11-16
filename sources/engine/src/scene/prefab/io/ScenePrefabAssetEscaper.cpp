@@ -61,4 +61,37 @@ std::optional<std::string> ScenePrefabAssetEscaper::Unescape(std::string_view va
     return unescaped;
 }
 
+std::string ScenePrefabAssetEscaper::EncodeHex(std::span<const std::uint8_t> bytes) {
+    constexpr std::string_view digits = "0123456789abcdef";
+    std::string text;
+    text.reserve(bytes.size() * 2U);
+    for (const std::uint8_t byte : bytes) {
+        text.push_back(digits[byte >> 4U]);
+        text.push_back(digits[byte & 0x0FU]);
+    }
+    return text;
+}
+
+std::optional<std::vector<std::uint8_t>> ScenePrefabAssetEscaper::DecodeHex(std::string_view text) {
+    const auto digit = [](char character) -> int {
+        if (character >= '0' && character <= '9') return character - '0';
+        if (character >= 'a' && character <= 'f') return character - 'a' + 10;
+        return -1;
+    };
+    if (text.size() % 2U != 0U) {
+        return std::nullopt;
+    }
+    std::vector<std::uint8_t> bytes;
+    bytes.reserve(text.size() / 2U);
+    for (std::size_t index = 0U; index < text.size(); index += 2U) {
+        const int high = digit(text[index]);
+        const int low = digit(text[index + 1U]);
+        if (high < 0 || low < 0) {
+            return std::nullopt;
+        }
+        bytes.push_back(static_cast<std::uint8_t>(high << 4 | low));
+    }
+    return bytes;
+}
+
 } // namespace kb::scene

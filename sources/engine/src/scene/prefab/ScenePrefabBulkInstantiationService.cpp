@@ -4,6 +4,7 @@
 
 #include "engine/ecs/CommandBuffer.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneModuleComponents.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneHistoryService.hpp"
@@ -1085,6 +1086,17 @@ void ApplyBehaviourVariableOverrides(Scene& scene, std::span<const ScenePrefabNo
     }
 }
 
+void ApplyModuleComponents(Scene& scene, std::span<const ScenePrefabNodeDesc> nodes,
+    std::span<const SceneEntity> entities, std::size_t instanceCount) {
+    if (std::ranges::none_of(nodes, [](const ScenePrefabNodeDesc& node) { return !node.components.moduleComponents.empty(); })) return;
+    SceneModuleComponents moduleComponents{ scene };
+    for (std::size_t instance = 0U; instance < instanceCount; ++instance) {
+        for (std::size_t index = 0U; index < nodes.size(); ++index) {
+            moduleComponents.Restore(entities[EntityIndex(instance, index, nodes.size())], nodes[index].components.moduleComponents);
+        }
+    }
+}
+
 [[nodiscard]] std::vector<ScenePrefabInstance> BuildInstances(
     Scene& scene,
     std::span<const ScenePrefabNodeDesc> nodes,
@@ -1192,6 +1204,7 @@ void ApplyBehaviourVariableOverrides(Scene& scene, std::span<const ScenePrefabNo
         ResolvePrefabReferences(scene, nodes, std::span<const SceneEntity>{ entities }, count);
         ApplyTranslationResiduals(scene, nodes, std::span<const SceneEntity>{ entities }, count);
         ApplyBehaviourVariableOverrides(scene, nodes, std::span<const SceneEntity>{ entities }, count);
+        ApplyModuleComponents(scene, nodes, std::span<const SceneEntity>{ entities }, count);
 
         const kb::ecs::NativeEcsStorageStats afterStorage = state.world.NativeStorageStats();
         std::uint64_t instanceObjectSlabNanoseconds = 0;
@@ -1259,6 +1272,7 @@ void ApplyBehaviourVariableOverrides(Scene& scene, std::span<const ScenePrefabNo
     ResolvePrefabReferences(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
     ApplyTranslationResiduals(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
     ApplyBehaviourVariableOverrides(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
+    ApplyModuleComponents(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
 
     std::uint64_t instanceObjectSlabNanoseconds = 0;
     std::uint64_t hierarchyRecordNanoseconds = 0;

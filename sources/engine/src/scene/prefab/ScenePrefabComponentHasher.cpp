@@ -262,6 +262,11 @@ void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeC
     }
     ScenePrefabHashBuilder::Mix(hash, components.behaviourVariableOverrides.size());
     ScenePrefabHashBuilder::Mix(hash, overridesHash);
+    ScenePrefabHashBuilder::Mix(hash, components.moduleComponents.size());
+    for (const SceneModuleComponentData& entry : components.moduleComponents) {
+        ScenePrefabHashBuilder::MixString(hash, entry.name);
+        ScenePrefabHashBuilder::MixString(hash, std::string_view{ reinterpret_cast<const char*>(entry.bytes.data()), entry.bytes.size() });
+    }
 
     ScenePrefabHashBuilder::Mix(hash, components.audioSource.has_value() ? 1U : 0U);
     if (components.audioSource.has_value()) {

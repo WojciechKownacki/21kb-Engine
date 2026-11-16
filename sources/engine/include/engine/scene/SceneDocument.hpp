@@ -71,6 +71,8 @@ struct SceneDocument {
     //      size, picture scale, layers, range and shadows.
     // v67: a UI Scroll View persists whether it virtualizes its list, how many items the list holds and how tall each
     //      one is; older files load with the list off.
+    // v68: a node persists the components that modules register, each by name with its values encoded by field name;
+    //      older files load with none.
     static constexpr std::uint32_t TilemapFileVersion = 50U;
     static constexpr std::uint32_t OneWayColliderFileVersion = 51U;
     static constexpr std::uint32_t ModalCanvasFileVersion = 52U;
@@ -92,7 +94,8 @@ struct SceneDocument {
     static constexpr std::uint32_t PostProcessVolumeFileVersion = 66U;
     static constexpr std::uint32_t PlanarReflectionFileVersion = 66U;
     static constexpr std::uint32_t VirtualListFileVersion = 67U;
-    static constexpr std::uint32_t CurrentFileVersion = 67U;
+    static constexpr std::uint32_t ModuleComponentsFileVersion = 68U;
+    static constexpr std::uint32_t CurrentFileVersion = 68U;
     static constexpr std::uint32_t SocketAttachmentFileVersion = 49U;
     static constexpr std::uint32_t CombatantFileVersion = 49U;
     static constexpr std::uint32_t AIBrainFileVersion = 49U;

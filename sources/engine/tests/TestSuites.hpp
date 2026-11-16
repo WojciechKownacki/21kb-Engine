@@ -31,6 +31,7 @@ void RunScriptApiCatalogTests();
 void RunVisualGraphTests();
 void RunInputTests();
 void RunEngineModuleTests();
+void RunModuleExtensionTests();
 void RunEngineLibraryTests();
 void RunEngineMathTests();
 void RunStaticLightmapBakerTests();

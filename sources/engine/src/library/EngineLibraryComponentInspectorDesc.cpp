@@ -1,9 +1,12 @@
 #include "engine/library/EngineLibraryComponentInspectorDesc.hpp"
 #include "engine/scene/SceneComponentAuthoring.hpp"
+#include "engine/scene/SceneModuleComponents.hpp"
 #include "engine/ui/UIComponentCatalog.hpp"
 #include "engine/ui/UIComponentPropertyCatalog.hpp"
 
 #include <algorithm>
+#include <map>
+#include <mutex>
 #include <utility>
 
 namespace kb::library {
@@ -937,11 +940,35 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
     return kCatalog;
 }
 
+namespace {
+
+// A module component (kb::scene::SceneModuleComponents) is described from what its module registered; the text
+// points into that description, which lives as long as the process.
+const LibraryComponentInspectorDesc& ModuleComponentDesc(const kb::scene::SceneModuleComponentInfo& info) {
+    static std::mutex mutex;
+    static std::map<const kb::scene::SceneModuleComponentInfo*, LibraryComponentInspectorDesc> cache;
+    const std::lock_guard lock{ mutex };
+    const auto [entry, inserted] = cache.try_emplace(&info);
+    if (inserted) {
+        entry->second = LibraryComponentInspectorDesc{ .componentName = info.name, .displayName = info.label, .category = info.category };
+        for (const kb::scene::SceneModuleComponentProperty& property : info.properties) {
+            entry->second.fields.push_back({ property.name, property.label, property.tooltip });
+        }
+    }
+    return entry->second;
+}
+
+} // namespace
+
 const LibraryComponentInspectorDesc* EngineLibraryComponentInspectorRegistry::Find(std::string_view componentName) noexcept {
     componentName = kb::scene::SceneComponentAuthoring::CanonicalName(componentName);
     const std::vector<LibraryComponentInspectorDesc>& catalog = Catalog();
     const auto iterator = std::ranges::find_if(catalog, [componentName](const LibraryComponentInspectorDesc& desc) { return desc.componentName == componentName; });
-    return iterator == catalog.end() ? nullptr : &*iterator;
+    if (iterator != catalog.end()) {
+        return &*iterator;
+    }
+    const kb::scene::SceneModuleComponentInfo* module = kb::scene::SceneModuleComponentCatalog::Find(componentName);
+    return module == nullptr ? nullptr : &ModuleComponentDesc(*module);
 }
 
 const LibraryComponentInspectorFieldDesc* EngineLibraryComponentInspectorRegistry::FindField(std::string_view componentName, std::string_view fieldName) noexcept {

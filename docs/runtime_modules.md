@@ -79,8 +79,8 @@ before returning from detach. This is lifetime retention, not state migration.
 Stable host integrations can use `EngineModuleLibrary::Retain` and the explicit
 library-lifetime overload of `AssetManager::RegisterLoader`. Keep all ownership
 wrappers in the host; transferring a raw plugin-owned control block without its
-library lease is unsupported. The legacy module ABI is 14 for the extended
-context and loader interface; rebuild C++ providers. The public C SDK stays at 1.
+library lease is unsupported. The legacy module ABI is 27 for the extended
+context, loader and component interface; rebuild C++ providers. The public C SDK stays at 1.
 
 ## Public C module SDK
 
@@ -120,3 +120,80 @@ header. Its test build uses a separate static C runtime on Windows and verifies
 allocation cleanup, live scene updates, repeated reload, incompatible replacement,
 partial factory/attachment failure and retained callback invalidation. This SDK
 does not yet expose asset-loader or custom component-type registration.
+
+## Asset types and components from a module
+
+A C++ module can add its own asset types and its own component types. Both are registered when the module attaches
+to a scene and removed when it detaches, and neither needs a second registry: loaders go to the scene's
+`AssetManager`, component types to the scene's ECS world.
+
+### An asset type
+
+Register a loader whose `Extensions()` names the file extension. Discovery gives every file with that extension the
+loader's type, and the manager loads it like a built-in type, synchronously or asynchronously. The loader should read
+its input with `AssetLoadRequest::ReadSourceBytes`, which serves both a loose file and a cooked package. A package
+stores the source bytes unchanged, so the bytes a game loads are the bytes that were cooked. Override
+`DiscoverDependencies` to name the assets a file depends on; the dependency list travels in the package manifest.
+
+### A component type
+
+A component is a trivially copyable struct. Describe its fields once, in the order and with the labels the Inspector
+should show:
+
+```cpp
+struct Health { float current; std::int32_t maximum; bool regenerates; };
+
+constexpr kb::scene::SceneModuleComponentField kFields[] = {
+    KB_SCENE_MODULE_FIELD(Health, current, kb::ecs::ComponentFieldType::Float32, "Current", "Hit points left."),
+    KB_SCENE_MODULE_FIELD(Health, maximum, kb::ecs::ComponentFieldType::Int32, "Maximum", "Hit points when full."),
+    KB_SCENE_MODULE_FIELD(Health, regenerates, kb::ecs::ComponentFieldType::Bool, "Regenerates", "Heal over time."),
+};
+
+class HealthModule final : public kb::modules::IEngineModule {
+public:
+    void OnLoad(kb::modules::EngineModuleContext& context) override { context_ = context; }
+    void OnSceneAttach(kb::scene::Scene& scene) override {
+        if (!context_->RegisterSceneComponent<Health>(scene,
+                { .name = "Health", .label = "Health", .category = "Gameplay", .fields = kFields })) {
+            throw std::runtime_error("Health registration failed");
+        }
+    }
+    void OnSceneDetach(kb::scene::Scene& scene) override {
+        static_cast<void>(context_->UnregisterSceneComponent(scene, "Health"));
+    }
+    // Metadata() omitted
+private:
+    std::optional<kb::modules::EngineModuleContext> context_;
+};
+```
+
+Once registered, the component is an ordinary ECS component: `world.Set<Health>(entity, value)` adds it and queries
+such as `world.CreateQuery<Health>()` find it. In addition:
+
+- Scenes and prefabs save it. A scene file stores each module component by name with its values encoded by field name
+  and type (scene file version 68; older files load with none). A prefab asset stores the same bytes as hexadecimal
+  text, only on nodes that have module components.
+- Scripts read and write it by name through the existing component property calls, for example
+  `self:GetProperty("Health", "current")`. A vector field gives one property per lane, such as `offset.x`.
+- Tools describe it from the registration: `EngineLibraryComponentInspectorRegistry::Find("Health")` returns the label,
+  category, and a labelled, tooltipped row for every field, and `ScriptSceneComponentApi::ComponentProperties("Health")`
+  returns the script-visible fields. The descriptions stay valid until the process ends.
+- A name used by a built-in component is refused.
+
+### Data while no module provides the type
+
+Saved values are never dropped. A scene that holds a component whose module is not loaded loads normally; the
+values stay beside their object as opaque bytes and are written back unchanged when the scene is saved. The same
+happens when a module unloads or is replaced during development: `UnregisterSceneComponent` moves the live values of every object to
+opaque bytes and removes the component from the objects, and registering the type again (after the reload) turns the
+bytes back into live components by field name. So a hot reload keeps the data of module components.
+
+A value is applied only when it carries every registered field with the same type. A value that does not fit the
+reloaded type, for example after a field was added, stays opaque and unchanged, and
+`SceneModuleComponents::Diagnostics()` reports it. Changing the binary layout of a component that live data still
+uses is not migrated beyond this; restore the type to read the data again.
+
+### Limits
+
+Prefab overrides do not yet track module components, so an instance that edits one is not listed as overridden. The
+editor's Inspector panel does not yet draw a section for a module component; its description is ready for it.

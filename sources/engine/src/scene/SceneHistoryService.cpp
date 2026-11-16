@@ -152,7 +152,8 @@ template <typename T>
         && SameValue(lhs.navAgent, rhs.navAgent)
         && SameValue(lhs.navObstacle, rhs.navObstacle)
         && SameValue(lhs.navLink, rhs.navLink)
-        && SameValue(lhs.navBounds, rhs.navBounds);
+        && SameValue(lhs.navBounds, rhs.navBounds)
+        && lhs.moduleComponents == rhs.moduleComponents;
 }
 
 [[nodiscard]] bool SameVec3(const Vec3& lhs, const Vec3& rhs) noexcept {

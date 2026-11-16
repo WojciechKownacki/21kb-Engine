@@ -6,6 +6,7 @@
 #include "scene/prefab/io/ScenePrefabAssetMeshRendererParser.hpp"
 #include "scene/prefab/io/ScenePrefabAssetTagsParser.hpp"
 #include "scene/prefab/io/ScenePrefabAssetNodeFieldParser.hpp"
+#include "scene/prefab/io/ScenePrefabAssetEscaper.hpp"
 #include "engine/script/ScriptValue.hpp"
 #include "scene/asset/io/SceneAssetFormat.hpp"
 #include "scene/CombatantFields.hpp"
@@ -952,6 +953,24 @@ template <typename T>
     return true;
 }
 
+[[nodiscard]] bool ParseModuleComponents(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    constexpr std::uint32_t kMaxModuleComponents = 4096U;
+    std::uint32_t count = 0U;
+    if (!ParseOptionalField(fields, "moduleComponents", count) || count > kMaxModuleComponents) return false;
+    components.moduleComponents.resize(count);
+    for (std::uint32_t index = 0U; index < count; ++index) {
+        const std::string prefix = "moduleComponents." + std::to_string(index);
+        const auto name = fields.find(prefix + ".name");
+        const auto data = fields.find(prefix + ".data");
+        if (name == fields.end() || data == fields.end()) return false;
+        const std::optional<std::string> unescaped = ScenePrefabAssetEscaper::Unescape(name->second);
+        std::optional<std::vector<std::uint8_t>> bytes = ScenePrefabAssetEscaper::DecodeHex(data->second);
+        if (!unescaped.has_value() || !bytes.has_value()) return false;
+        components.moduleComponents[index] = { *unescaped, std::move(*bytes) };
+    }
+    return true;
+}
+
 } // namespace
 
 bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
@@ -1002,7 +1021,8 @@ bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fiel
         && ParseSocketAttachment(fields, components)
         && ParseCombatant(fields, components)
         && ParseAIBrain(fields, components)
-        && ParseDeformedGeometry(fields, components);
+        && ParseDeformedGeometry(fields, components)
+        && ParseModuleComponents(fields, components);
 }
 
 } // namespace kb::scene

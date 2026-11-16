@@ -14,6 +14,7 @@
 #include "engine/scene/SceneLightComponents.hpp"
 #include "engine/scene/SceneLensEchoComponents.hpp"
 #include "engine/scene/SceneMeshRendererComponents.hpp"
+#include "engine/scene/SceneModuleComponents.hpp"
 #include "engine/scene/SceneNavigationComponents.hpp"
 #include "engine/scene/ScenePrefabNode.hpp"
 #include "engine/scene/SceneRigidbodyComponents.hpp"
@@ -119,6 +120,7 @@ struct ScenePrefabNodeStateWriterContext {
     SceneNavLinkComponents navLinks;
     SceneNavBoundsComponents navBounds;
     SceneUIComponents ui;
+    SceneModuleComponents moduleComponents;
 };
 
 class ScenePrefabNodeStateWriter {

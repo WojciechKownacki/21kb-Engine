@@ -33,6 +33,7 @@
 #include "engine/scene/SceneMaterialInstances.hpp"
 #include "engine/save/SaveGame.hpp"
 #include "engine/scene/SceneMode.hpp"
+#include "engine/scene/SceneModuleComponents.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/SceneParticleSystems.hpp"
@@ -168,10 +169,10 @@ struct AnimatorRuntimeConstraint {
     SpringChainState spring;
     std::vector<std::uint32_t> springColliderBones;
     std::vector<SpringCapsule> springColliders;
-};
     // FullBodyIK: the limbs' chains and the spine's, as kFullBodyIkChainCount entries that use only the chain
     // fields above (an unused one has no bones). constrainedBoneIndex is the hips.
     std::vector<AnimatorRuntimeConstraint> fullBodyChains;
+};
 
 struct AnimatorInstanceSkeleton {
     struct PoseSoa {
@@ -235,10 +236,10 @@ struct AnimatorInstance {
     std::vector<AnimatorRuntimeConstraint> rigConstraints;
     // Seconds that passed since the last skeletal pose evaluation, which the spring bones then simulate.
     double springElapsedSeconds = 0.0;
-    std::map<std::string, AnimatorIkTarget, std::less<>> ikTargets;
     // A FullBodyIK constraint with foot placement casts rays through the scene, so this pose is evaluated on the
     // updating thread.
     bool probesGround = false;
+    std::map<std::string, AnimatorIkTarget, std::less<>> ikTargets;
     Vec3 extractedRootMotionTranslation{};
     Quat extractedRootMotionRotation{};
     bool hasExtractedRootMotion = false;
@@ -657,6 +658,15 @@ public:
     // data" shape as entityNames). Seeded into the script runtime before each
     // behaviour's Created lifecycle.
     std::unordered_map<SceneEntity::IdType, std::vector<BehaviourVariableOverride>> behaviourVariableOverrides;
+    // Module components (SceneModuleComponents): the types registered in this scene's world, and per object the
+    // saved components no registered type holds right now. The ECS stores the live ones.
+    struct ModuleComponentType {
+        const SceneModuleComponentInfo* info = nullptr;
+        kb::ecs::ComponentId id = 0;
+    };
+    std::unordered_map<std::string, ModuleComponentType> moduleComponentTypes;
+    std::unordered_map<SceneEntity::IdType, std::vector<SceneModuleComponentData>> opaqueModuleComponents;
+    std::vector<std::string> moduleComponentDiagnostics;
     // LIB-068: entities are active by default (absent from this set); an
     // entity is only ever added here by an explicit SetActive(false) —
     // same "presence means non-default" shape already used by

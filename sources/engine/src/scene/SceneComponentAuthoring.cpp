@@ -5,9 +5,12 @@
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/ScenePrefabNode.hpp"
+#include "engine/scene/SceneModuleComponents.hpp"
 
 #include <algorithm>
 #include <array>
+#include <map>
+#include <mutex>
 #include <string>
 
 namespace kb::scene {
@@ -162,10 +165,26 @@ const std::array<SceneComponentKind, kEntries.size()> kKinds = [] {
     return kinds;
 }();
 
+// A module component's kind, made from its description and kept for the process.
+[[nodiscard]] const SceneComponentKind* ModuleKind(std::string_view id) {
+    const SceneModuleComponentInfo* info = SceneModuleComponentCatalog::Find(id);
+    if (info == nullptr) {
+        return nullptr;
+    }
+    static std::mutex mutex;
+    static std::map<const SceneModuleComponentInfo*, SceneComponentKind> kinds;
+    const std::lock_guard lock{ mutex };
+    return &kinds.try_emplace(info, SceneComponentKind{ info->name, info->label, {} }).first->second;
+}
+
 } // namespace
 
 std::span<const SceneComponentKind> SceneComponentAuthoring::Kinds() noexcept {
     return kKinds;
+}
+
+bool SceneComponentAuthoring::IsBuiltIn(std::string_view id) noexcept {
+    return FindEntry(id) != nullptr;
 }
 
 std::string_view SceneComponentAuthoring::CanonicalName(std::string_view id) noexcept {
@@ -178,19 +197,25 @@ std::string_view SceneComponentAuthoring::CanonicalName(std::string_view id) noe
 const SceneComponentKind* SceneComponentAuthoring::Find(std::string_view id) noexcept {
     const Entry* entry = FindEntry(id);
     if (entry == nullptr) {
-        return nullptr;
+        return ModuleKind(id);
     }
     return &kKinds[static_cast<std::size_t>(entry - kEntries.data())];
 }
 
 bool SceneComponentAuthoring::Has(const Scene& scene, SceneEntity entity, std::string_view id) {
     const Entry* entry = FindEntry(id);
-    return entry != nullptr && entry->has(scene, entity);
+    if (entry == nullptr) {
+        return SceneModuleComponents{ const_cast<Scene&>(scene) }.Has(entity, id);
+    }
+    return entry->has(scene, entity);
 }
 
 bool SceneComponentAuthoring::InPrefabNode(const ScenePrefabNodeComponents& node, std::string_view id) {
     const Entry* entry = FindEntry(id);
-    return entry != nullptr && entry->inNode(node);
+    if (entry == nullptr) {
+        return std::ranges::any_of(node.moduleComponents, [id](const SceneModuleComponentData& data) { return data.name == id; });
+    }
+    return entry->inNode(node);
 }
 
 bool SceneComponentAuthoring::PluginEnabled(const kb::project::ProjectDescriptor& project, const SceneComponentKind& kind) {
@@ -206,7 +231,15 @@ SceneComponentAddResult SceneComponentAuthoring::Add(
     Scene& scene, SceneEntity entity, std::string_view id, const kb::project::ProjectDescriptor& project) {
     const Entry* entry = FindEntry(id);
     if (entry == nullptr) {
-        return {};
+        const SceneComponentKind* module = ModuleKind(id);
+        SceneModuleComponents components{ scene };
+        if (module == nullptr || !components.IsRegistered(id)) {
+            return {};
+        }
+        if (components.Has(entity, id)) {
+            return { SceneComponentAddStatus::AlreadyPresent, module };
+        }
+        return { components.Add(entity, id) ? SceneComponentAddStatus::Added : SceneComponentAddStatus::Rejected, module };
     }
     const SceneComponentKind* kind = Find(id);
     if (entry->has(scene, entity)) {
@@ -250,7 +283,10 @@ SceneComponentAddAdvice SceneComponentAuthoring::AddAdvice(
 
 bool SceneComponentAuthoring::Remove(Scene& scene, SceneEntity entity, std::string_view id) {
     const Entry* entry = FindEntry(id);
-    if (entry == nullptr || !entry->has(scene, entity)) {
+    if (entry == nullptr) {
+        return SceneModuleComponents{ scene }.Remove(entity, id);
+    }
+    if (!entry->has(scene, entity)) {
         return false;
     }
     entry->remove(scene, entity);

@@ -15,6 +15,7 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneComponentAuthoring.hpp"
+#include "engine/scene/SceneModuleComponents.hpp"
 #include "engine/script/ScriptSceneComponentApi.hpp"
 #include "engine/script/ScriptValue.hpp"
 
@@ -56,6 +57,35 @@ constexpr std::array<std::string_view, 12> kSprite2DBasicRows{ "imageAssetId", "
 // Navigation Bounds: the box and the size of the characters; how finely the mesh is cut waits behind Advanced.
 constexpr std::array<std::string_view, 10> kNavBoundsBasicRows{ "size.x", "size.y", "size.z", "center.x", "center.y", "center.z",
     "agentRadius", "agentHeight", "maxStepHeight", "maxSlopeDegrees" };
+
+constexpr std::size_t kModuleSectionCount = 8U;
+
+// The built-in sections, then one for each component a module registered, in name order. The list is rebuilt when the
+// registrations change; an earlier list stays valid, so a section found before a reload can still be read.
+[[nodiscard]] const std::vector<InspectorGenericComponentModel::Section>& CurrentSections() {
+    static std::vector<std::unique_ptr<std::vector<InspectorGenericComponentModel::Section>>> lists;
+    static std::size_t generation = 0U;
+    const std::size_t now = kb::scene::SceneModuleComponentCatalog::Generation();
+    if (lists.empty() || now != generation) {
+        auto list = std::make_unique<std::vector<InspectorGenericComponentModel::Section>>(kSections.begin(), kSections.end());
+        const std::vector<const kb::scene::SceneModuleComponentInfo*> modules = kb::scene::SceneModuleComponentCatalog::All();
+        for (std::size_t index = 0U; index < modules.size() && index < kModuleSectionCount; ++index) {
+            list->push_back({ modules[index]->name,
+                static_cast<InspectorSectionId>(static_cast<std::size_t>(InspectorSectionId::ModuleComponent0) + index),
+                HeroIconKind::Cube, modules[index]->label });
+        }
+        lists.push_back(std::move(list));
+        generation = now;
+    }
+    return *lists.back();
+}
+
+// The position of a section in the current list, which is what its rows' edit indexes count from.
+[[nodiscard]] int SectionIndexOf(const InspectorGenericComponentModel::Section& section) noexcept {
+    const std::vector<InspectorGenericComponentModel::Section>& sections = CurrentSections();
+    const auto found = std::ranges::find(sections, section.id, &InspectorGenericComponentModel::Section::id);
+    return static_cast<int>(found - sections.begin());
+}
 
 [[nodiscard]] std::span<const std::string_view> BasicRowsOf(std::string_view component) noexcept {
     if (component == "Sprite2D") return kSprite2DBasicRows;
@@ -174,6 +204,7 @@ struct DefaultComponent {
     switch (desc.type) {
     case ScriptValueType::Bool: return value.AsBool() ? "true" : "false";
     case ScriptValueType::Float: return Number(value.AsFloat());
+    case ScriptValueType::Double: return Number(static_cast<float>(value.AsDouble()));
     case ScriptValueType::Int: {
         const int number = value.AsInt();
         if (!desc.enumNames.empty() && number >= 0 && static_cast<std::size_t>(number) < desc.enumNames.size()) return std::string{ desc.enumNames[number] };
@@ -202,18 +233,19 @@ struct Field {
 [[nodiscard]] Field FieldAt(int editIndex) noexcept {
     const int sectionIndex = editIndex / InspectorGenericComponentModel::kFieldsPerSection;
     const int fieldIndex = editIndex % InspectorGenericComponentModel::kFieldsPerSection;
-    if (editIndex < 0 || sectionIndex >= static_cast<int>(kSections.size())) return {};
-    const auto properties = kb::script::ScriptSceneComponentApi::ComponentProperties(kSections[sectionIndex].component);
+    const std::vector<InspectorGenericComponentModel::Section>& sections = CurrentSections();
+    if (editIndex < 0 || sectionIndex >= static_cast<int>(sections.size())) return {};
+    const auto properties = kb::script::ScriptSceneComponentApi::ComponentProperties(sections[sectionIndex].component);
     if (fieldIndex >= static_cast<int>(properties.size())) return {};
-    return Field{ &kSections[sectionIndex], &properties[fieldIndex] };
+    return Field{ &sections[sectionIndex], &properties[fieldIndex] };
 }
 
 } // namespace
 
-std::span<const InspectorGenericComponentModel::Section> InspectorGenericComponentModel::Sections() noexcept { return kSections; }
+std::span<const InspectorGenericComponentModel::Section> InspectorGenericComponentModel::Sections() noexcept { return CurrentSections(); }
 
 const InspectorGenericComponentModel::Section* InspectorGenericComponentModel::Find(InspectorSectionId id) noexcept {
-    for (const Section& section : kSections) {
+    for (const Section& section : CurrentSections()) {
         if (section.id == id) return &section;
     }
     return nullptr;
@@ -222,9 +254,9 @@ const InspectorGenericComponentModel::Section* InspectorGenericComponentModel::F
 std::vector<InspectorGenericComponentModel::Row> InspectorGenericComponentModel::Rows(
     kb::scene::Scene& scene, kb::scene::SceneEntity entity, const Section& section) {
     std::vector<Row> rows;
-    const int sectionIndex = static_cast<int>(&section - kSections.data());
+    const int sectionIndex = SectionIndexOf(section);
     const auto properties = kb::script::ScriptSceneComponentApi::ComponentProperties(section.component);
-    for (std::size_t index = 0U; index < properties.size(); ++index) {
+    for (std::size_t index = 0U; index < properties.size() && index < static_cast<std::size_t>(kFieldsPerSection); ++index) {
         const kb::script::ScriptSceneComponentPropertyDesc& desc = properties[index];
         if (!Visible(scene, entity, section.component, desc.name)) continue;
         const kb::script::ScriptSceneComponentPropertyResult value =
@@ -268,9 +300,9 @@ std::vector<int> InspectorGenericComponentModel::ChangedRows(const kb::scene::Sc
     // Reading a property takes the scene by reference; nothing is written.
     kb::scene::Scene& readable = const_cast<kb::scene::Scene&>(scene);
     kb::scene::Scene& defaultScene = const_cast<kb::scene::Scene&>(defaults->scene);
-    const int sectionIndex = static_cast<int>(&section - kSections.data());
+    const int sectionIndex = SectionIndexOf(section);
     const auto properties = kb::script::ScriptSceneComponentApi::ComponentProperties(section.component);
-    for (std::size_t index = 0U; index < properties.size(); ++index) {
+    for (std::size_t index = 0U; index < properties.size() && index < static_cast<std::size_t>(kFieldsPerSection); ++index) {
         const kb::script::ScriptSceneComponentPropertyDesc& desc = properties[index];
         if (!desc.writable || !AssetTypeFor(section.component, desc.name).empty() || desc.type == ScriptValueType::Hash) continue;
         const kb::script::ScriptSceneComponentPropertyResult now =

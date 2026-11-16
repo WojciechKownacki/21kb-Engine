@@ -14,7 +14,7 @@ public:
         ComponentId componentId,
         std::string_view componentName,
         std::size_t componentSize,
-        std::initializer_list<ComponentFieldDesc> fields);
+        std::span<const ComponentFieldDesc> fields);
 
     [[nodiscard]] const ComponentReflection* Find(ComponentId componentId) const noexcept;
     [[nodiscard]] const ComponentReflection* Find(std::string_view componentName) const noexcept;

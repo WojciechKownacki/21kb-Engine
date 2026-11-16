@@ -44,6 +44,7 @@
 #include "engine/scene/ParticleEffectComponent.hpp"
 #include "engine/scene/LensEchoComponent.hpp"
 #include "engine/scene/ScenePrefabOverrides.hpp"
+#include "engine/scene/SceneModuleComponentData.hpp"
 #include "engine/scene/SkeletonBindingComponent.hpp"
 #include "engine/scene/SocketAttachmentComponent.hpp"
 #include "engine/scene/CombatantComponent.hpp"
@@ -165,6 +166,8 @@ struct ScenePrefabNodeComponents {
     std::optional<NavObstacle> navObstacle;
     std::optional<NavLink> navLink;
     std::optional<NavBounds> navBounds;
+    // Components that modules register (SceneModuleComponents), sorted by name.
+    std::vector<SceneModuleComponentData> moduleComponents;
 };
 
 struct ScenePrefabNodeDesc {

@@ -3,6 +3,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneModuleComponents.hpp"
 #include "engine/scene/SceneObject.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
 
@@ -202,6 +203,7 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
     if (const NavBounds* navBounds = sceneComponents.NavBounds().TryGet(entity)) {
         components.navBounds = *navBounds;
     }
+    components.moduleComponents = SceneModuleComponents{ scene }.Capture(entity);
 
     return components;
 }

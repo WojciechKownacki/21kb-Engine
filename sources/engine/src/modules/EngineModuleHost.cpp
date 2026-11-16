@@ -57,9 +57,14 @@ public:
     }
 
     void OnLoad(EngineModuleContext& context) override {
+        static constexpr EngineModuleContext::ComponentHostCalls kComponentHostCalls{
+            [](kb::scene::Scene& scene, const kb::scene::SceneModuleComponentDesc& desc, const std::type_info& type, std::size_t size, std::size_t alignment) {
+                return kb::scene::SceneModuleComponents{ scene }.Activate(desc, type, size, alignment); },
+            [](kb::scene::Scene& scene, std::string_view name) { return kb::scene::SceneModuleComponents{ scene }.Unregister(name); } };
         EngineModuleContext scoped{ context.EcsWorld(), context.Project(), library_.Retain(),
             +[](kb::assets::AssetManager& manager, std::unique_ptr<kb::assets::IAssetLoader> loader,
-                std::shared_ptr<void> library) { return manager.RegisterLoader(std::move(loader), std::move(library)); } };
+                std::shared_ptr<void> library) { return manager.RegisterLoader(std::move(loader), std::move(library)); },
+            &kComponentHostCalls };
         module_->OnLoad(scoped);
     }
 

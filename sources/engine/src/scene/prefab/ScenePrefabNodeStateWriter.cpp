@@ -378,7 +378,8 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , navObstacles(scene.Components().NavObstacles())
     , navLinks(scene.Components().NavLinks())
     , navBounds(scene.Components().NavBounds())
-    , ui(scene.Components().UI()) {
+    , ui(scene.Components().UI())
+    , moduleComponents(scene) {
     state.suppressPrefabDirtyTracking = true;
 }
 
@@ -508,6 +509,7 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     WriteOptionalComponent(context.navObstacles, entity, node.components.navObstacle);
     WriteOptionalComponent(context.navLinks, entity, node.components.navLink);
     WriteOptionalComponent(context.navBounds, entity, node.components.navBounds);
+    context.moduleComponents.Restore(entity, node.components.moduleComponents);
 }
 
 } // namespace kb::scene

@@ -133,7 +133,15 @@ enum class InspectorSectionId : std::uint8_t {
     TilemapCollider,
     UITheme,
     NavBounds,
-
+    // The components that modules register, one slot each in name order (InspectorGenericComponentModel::Sections).
+    ModuleComponent0,
+    ModuleComponent1,
+    ModuleComponent2,
+    ModuleComponent3,
+    ModuleComponent4,
+    ModuleComponent5,
+    ModuleComponent6,
+    ModuleComponent7,
 };
 
 // The list that opens under a section: the component menu behind the header button, or the Joint's presets.

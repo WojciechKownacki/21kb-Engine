@@ -107,6 +107,10 @@ bool InspectorGenericComponentModel::ApplyText(EditorSceneContext& sceneContext,
         float value = 0.0F;
         return parse(value) && std::isfinite(value) && Set(sceneContext, entity, field, ScriptValue{ value });
     }
+    case ScriptValueType::Double: {
+        double value = 0.0;
+        return parse(value) && std::isfinite(value) && Set(sceneContext, entity, field, ScriptValue{ value });
+    }
     case ScriptValueType::Int: {
         int value = 0;
         return parse(value) && Set(sceneContext, entity, field, ScriptValue{ value });

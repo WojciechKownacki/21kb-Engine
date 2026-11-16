@@ -10,6 +10,7 @@
 #include "engine/scene/SceneAudioSourceComponents.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/SceneComponentAuthoring.hpp"
+#include "engine/scene/SceneModuleComponents.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/CharacterControllerComponent.hpp"
 #include "engine/scene/ColliderComponent.hpp"
@@ -101,7 +102,11 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <map>
+#include <mutex>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -2317,6 +2322,84 @@ void MarkLensEchoModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity
     return {};
 }
 
+// Module components (kb::scene::SceneModuleComponents): their values are read and written by the offset and scalar
+// type recorded when the module registered the component.
+[[nodiscard]] ScriptValueType ModuleValueType(kb::ecs::ComponentFieldType type) noexcept {
+    switch (type) {
+    case kb::ecs::ComponentFieldType::Bool: return ScriptValueType::Bool;
+    case kb::ecs::ComponentFieldType::Float32: return ScriptValueType::Float;
+    case kb::ecs::ComponentFieldType::Float64: return ScriptValueType::Double;
+    default: return ScriptValueType::Int;
+    }
+}
+
+[[nodiscard]] std::span<const ScriptSceneComponentPropertyDesc> ModuleProperties(const kb::scene::SceneModuleComponentInfo& info) {
+    static std::mutex mutex;
+    static std::map<const kb::scene::SceneModuleComponentInfo*, std::vector<ScriptSceneComponentPropertyDesc>> cache;
+    const std::lock_guard lock{ mutex };
+    const auto [entry, inserted] = cache.try_emplace(&info);
+    if (inserted) {
+        for (const kb::scene::SceneModuleComponentProperty& property : info.properties) {
+            entry->second.push_back({ property.name, ModuleValueType(property.type), true });
+        }
+    }
+    return entry->second;
+}
+
+template <typename T>
+[[nodiscard]] T LoadModuleValue(const void* address) noexcept {
+    T value;
+    std::memcpy(&value, address, sizeof(T));
+    return value;
+}
+
+[[nodiscard]] ScriptValue ReadModuleValue(const void* address, kb::ecs::ComponentFieldType type) noexcept {
+    switch (type) {
+    case kb::ecs::ComponentFieldType::Bool: return ScriptValue{ LoadModuleValue<bool>(address) };
+    case kb::ecs::ComponentFieldType::Float32: return ScriptValue{ LoadModuleValue<float>(address) };
+    case kb::ecs::ComponentFieldType::Float64: return ScriptValue{ LoadModuleValue<double>(address) };
+    case kb::ecs::ComponentFieldType::UInt32: return ScriptValue{ static_cast<int>(LoadModuleValue<std::uint32_t>(address)) };
+    default: return ScriptValue{ LoadModuleValue<std::int32_t>(address) };
+    }
+}
+
+template <typename T>
+void StoreModuleValue(void* address, T value) noexcept {
+    std::memcpy(address, &value, sizeof(T));
+}
+
+[[nodiscard]] bool WriteModuleValue(void* address, kb::ecs::ComponentFieldType type, const ScriptValue& value) noexcept {
+    const bool integer = value.Type() == ScriptValueType::Int;
+    switch (type) {
+    case kb::ecs::ComponentFieldType::Bool:
+        if (value.Type() != ScriptValueType::Bool) return false;
+        StoreModuleValue(address, value.AsBool());
+        return true;
+    case kb::ecs::ComponentFieldType::Float32:
+        if (value.Type() != ScriptValueType::Float && !integer) return false;
+        StoreModuleValue(address, integer ? static_cast<float>(value.AsInt()) : value.AsFloat());
+        return true;
+    case kb::ecs::ComponentFieldType::Float64:
+        if (value.Type() != ScriptValueType::Double && value.Type() != ScriptValueType::Float && !integer) return false;
+        StoreModuleValue(address, integer ? static_cast<double>(value.AsInt()) : value.Type() == ScriptValueType::Float ? static_cast<double>(value.AsFloat()) : value.AsDouble());
+        return true;
+    case kb::ecs::ComponentFieldType::UInt32:
+        if (!integer || value.AsInt() < 0) return false;
+        StoreModuleValue(address, static_cast<std::uint32_t>(value.AsInt()));
+        return true;
+    default:
+        if (!integer) return false;
+        StoreModuleValue(address, value.AsInt());
+        return true;
+    }
+}
+
+[[nodiscard]] const kb::scene::SceneModuleComponentProperty* FindModuleProperty(
+    const kb::scene::SceneModuleComponentInfo& info, std::string_view name) noexcept {
+    const auto found = std::ranges::find(info.properties, name, &kb::scene::SceneModuleComponentProperty::name);
+    return found == info.properties.end() ? nullptr : &*found;
+}
+
 } // namespace
 
 std::span<const std::string_view> ScriptSceneComponentApi::ComponentNames() noexcept {
@@ -2406,6 +2489,9 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
     if (componentName == "NavLink") return kNavLinkPropertyDescs;
     if (componentName == "NavBounds") return kNavBoundsPropertyDescs;
     if (componentName == "Tags") return kTagsPropertyDescs;
+    if (const kb::scene::SceneModuleComponentInfo* info = kb::scene::SceneModuleComponentCatalog::Find(componentName)) {
+        return ModuleProperties(*info);
+    }
     return {};
 }
 
@@ -2413,6 +2499,9 @@ bool ScriptSceneComponentApi::HasComponent(kb::scene::Scene& scene, kb::scene::S
     componentName = kb::scene::SceneComponentAuthoring::CanonicalName(componentName);
     if (ScriptUIComponentApi::IsComponent(componentName)) {
         return ScriptUIComponentApi::HasComponent(scene, entity, componentName);
+    }
+    if (kb::scene::SceneModuleComponentCatalog::Find(componentName) != nullptr) {
+        return kb::scene::SceneModuleComponents{ scene }.Has(entity, componentName);
     }
     return AccessComponent(scene, entity, componentName).immutable != nullptr;
 }
@@ -2425,6 +2514,17 @@ ScriptSceneComponentPropertyResult ScriptSceneComponentApi::GetProperty(
     componentName = kb::scene::SceneComponentAuthoring::CanonicalName(componentName);
     if (ScriptUIComponentApi::IsComponent(componentName)) {
         return ScriptUIComponentApi::GetProperty(scene, entity, componentName, propertyName);
+    }
+    if (const kb::scene::SceneModuleComponentInfo* info = kb::scene::SceneModuleComponentCatalog::Find(componentName)) {
+        const auto* data = static_cast<const std::byte*>(kb::scene::SceneModuleComponents{ scene }.Data(entity, componentName));
+        if (data == nullptr) {
+            return ScriptSceneComponentPropertyResult{ .error = "component is not present on entity" };
+        }
+        const kb::scene::SceneModuleComponentProperty* property = FindModuleProperty(*info, propertyName);
+        if (property == nullptr) {
+            return ScriptSceneComponentPropertyResult{ .error = "component property is not registered for scripts" };
+        }
+        return ScriptSceneComponentPropertyResult{ .succeeded = true, .value = ReadModuleValue(data + property->offset, property->type) };
     }
     const ComponentAccess component = AccessComponent(scene, entity, componentName);
     if (component.immutable == nullptr) {
@@ -2452,6 +2552,22 @@ ScriptSceneComponentMutationResult ScriptSceneComponentApi::SetProperty(
     componentName = kb::scene::SceneComponentAuthoring::CanonicalName(componentName);
     if (ScriptUIComponentApi::IsComponent(componentName)) {
         return ScriptUIComponentApi::SetProperty(scene, entity, componentName, propertyName, value);
+    }
+    if (const kb::scene::SceneModuleComponentInfo* info = kb::scene::SceneModuleComponentCatalog::Find(componentName)) {
+        kb::scene::SceneModuleComponents components{ scene };
+        auto* data = static_cast<std::byte*>(components.MutableData(entity, componentName));
+        if (data == nullptr) {
+            return ScriptSceneComponentMutationResult{ .error = "component is not present on entity" };
+        }
+        const kb::scene::SceneModuleComponentProperty* property = FindModuleProperty(*info, propertyName);
+        if (property == nullptr) {
+            return ScriptSceneComponentMutationResult{ .error = "component property is not registered for scripts" };
+        }
+        if (!WriteModuleValue(data + property->offset, property->type, value)) {
+            return ScriptSceneComponentMutationResult{ .error = "script value type does not match component property" };
+        }
+        components.MarkModified(entity, componentName);
+        return ScriptSceneComponentMutationResult{ .succeeded = true };
     }
     const ComponentAccess component = AccessComponent(scene, entity, componentName);
     if (component.mutableComponent == nullptr) {

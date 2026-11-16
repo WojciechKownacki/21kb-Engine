@@ -3,6 +3,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneModuleComponents.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
 
 namespace kb::scene {
@@ -141,6 +142,7 @@ void ScenePrefabComponentApplier::Apply(Scene& scene, SceneObject object, const 
     if (components.navBounds.has_value()) {
         sceneComponents.NavBounds().Set(entity, *components.navBounds);
     }
+    SceneModuleComponents{ scene }.Restore(entity, components.moduleComponents);
 }
 
 } // namespace kb::scene

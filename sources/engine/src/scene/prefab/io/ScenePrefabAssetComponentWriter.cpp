@@ -597,6 +597,14 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "deformedGeometry.layer=" << geometry.layer << '\n';
         output << "deformedGeometry.enabled=" << (geometry.enabled ? 1 : 0) << '\n';
     }
+    if (!components.moduleComponents.empty()) {
+        output << "moduleComponents=" << components.moduleComponents.size() << '\n';
+        for (std::size_t index = 0U; index < components.moduleComponents.size(); ++index) {
+            const SceneModuleComponentData& component = components.moduleComponents[index];
+            output << "moduleComponents." << index << ".name=" << ScenePrefabAssetEscaper::Escape(component.name) << '\n';
+            output << "moduleComponents." << index << ".data=" << ScenePrefabAssetEscaper::EncodeHex(component.bytes) << '\n';
+        }
+    }
 }
 
 } // namespace kb::scene
