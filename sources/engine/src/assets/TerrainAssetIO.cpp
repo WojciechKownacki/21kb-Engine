@@ -85,7 +85,7 @@ std::optional<TerrainAsset> TerrainAssetIO::Load(
     std::size_t cursor = kMagic.size();
     std::uint32_t version = 0U;
     TerrainAsset terrain{};
-    if (!ReadLittleEndian(bytes, cursor, version) || (version != 1U && version != TerrainAsset::CurrentVersion) ||
+    if (!ReadLittleEndian(bytes, cursor, version) || version < 1U || version > TerrainAsset::CurrentVersion ||
         !ReadLittleEndian(bytes, cursor, terrain.width) || !ReadLittleEndian(bytes, cursor, terrain.height) ||
         !ReadLittleEndian(bytes, cursor, terrain.chunkQuads) || !ReadLittleEndian(bytes, cursor, terrain.lodCount) ||
         !ReadLittleEndian(bytes, cursor, terrain.worldSizeX) || !ReadLittleEndian(bytes, cursor, terrain.worldSizeZ) ||
@@ -139,11 +139,49 @@ std::optional<TerrainAsset> TerrainAssetIO::Load(
         }
         const std::uint64_t weightBytes = static_cast<std::uint64_t>(terrain.layerWeightWidth) *
             terrain.layerWeightHeight * TerrainAsset::MaximumMaterialLayers;
-        if (weightBytes > bytes.size() - cursor || cursor + weightBytes != bytes.size()) {
+        if (weightBytes > bytes.size() - cursor || (version == 2U && cursor + weightBytes != bytes.size())) {
             SetError(error, "Terrain layer weight payload size is invalid");
             return std::nullopt;
         }
         terrain.layerWeights.assign(
+            bytes.begin() + static_cast<std::ptrdiff_t>(cursor),
+            bytes.begin() + static_cast<std::ptrdiff_t>(cursor + weightBytes));
+        cursor += static_cast<std::size_t>(weightBytes);
+    }
+    if (version >= 3U) {
+        std::uint32_t foliageCount = 0U;
+        if (!ReadLittleEndian(bytes, cursor, foliageCount) ||
+            !ReadLittleEndian(bytes, cursor, terrain.foliageMapWidth) ||
+            !ReadLittleEndian(bytes, cursor, terrain.foliageMapHeight) ||
+            foliageCount > TerrainAsset::MaximumFoliageLayers ||
+            terrain.foliageMapWidth > TerrainAsset::MaximumResolution ||
+            terrain.foliageMapHeight > TerrainAsset::MaximumResolution) {
+            SetError(error, "Terrain foliage header is invalid");
+            return std::nullopt;
+        }
+        terrain.foliageLayers.resize(foliageCount);
+        for (TerrainFoliageLayer& layer : terrain.foliageLayers) {
+            if (!ReadLittleEndian(bytes, cursor, layer.meshAssetId) ||
+                !ReadLittleEndian(bytes, cursor, layer.materialAssetId) ||
+                !ReadLittleEndian(bytes, cursor, layer.density) ||
+                !ReadLittleEndian(bytes, cursor, layer.minScale) ||
+                !ReadLittleEndian(bytes, cursor, layer.maxScale) ||
+                !ReadLittleEndian(bytes, cursor, layer.rotationRangeDegrees) ||
+                !ReadLittleEndian(bytes, cursor, layer.alignToNormal) ||
+                !ReadLittleEndian(bytes, cursor, layer.fadeStartDistance) ||
+                !ReadLittleEndian(bytes, cursor, layer.cullDistance) ||
+                !ReadLittleEndian(bytes, cursor, layer.seed)) {
+                SetError(error, "Terrain foliage layer payload is truncated");
+                return std::nullopt;
+            }
+        }
+        const std::uint64_t densityBytes = static_cast<std::uint64_t>(terrain.foliageMapWidth) *
+            terrain.foliageMapHeight * foliageCount;
+        if (densityBytes > bytes.size() - cursor || cursor + densityBytes != bytes.size()) {
+            SetError(error, "Terrain foliage density payload size is invalid");
+            return std::nullopt;
+        }
+        terrain.foliageDensity.assign(
             bytes.begin() + static_cast<std::ptrdiff_t>(cursor), bytes.end());
     }
     if (!IsTerrainAssetValid(terrain, error)) return std::nullopt;
@@ -154,7 +192,8 @@ bool TerrainAssetIO::Save(const std::filesystem::path& path, const TerrainAsset&
     if (!IsTerrainAssetValid(terrain, error)) return false;
     std::vector<std::uint8_t> bytes;
     bytes.reserve(static_cast<std::size_t>(kVersion1HeaderBytes) + terrain.heights.size() * sizeof(float) +
-        terrain.holes.size() + 12U + terrain.materialLayers.size() * sizeof(std::uint64_t) + terrain.layerWeights.size());
+        terrain.holes.size() + 24U + terrain.materialLayers.size() * sizeof(std::uint64_t) + terrain.layerWeights.size() +
+        terrain.foliageLayers.size() * 48U + terrain.foliageDensity.size());
     bytes.insert(bytes.end(), kMagic.begin(), kMagic.end());
     AppendLittleEndian(bytes, TerrainAsset::CurrentVersion);
     AppendLittleEndian(bytes, terrain.width);
@@ -180,6 +219,22 @@ bool TerrainAssetIO::Save(const std::filesystem::path& path, const TerrainAsset&
         AppendLittleEndian(bytes, layer.materialAssetId);
     }
     bytes.insert(bytes.end(), terrain.layerWeights.begin(), terrain.layerWeights.end());
+    AppendLittleEndian(bytes, static_cast<std::uint32_t>(terrain.foliageLayers.size()));
+    AppendLittleEndian(bytes, terrain.foliageMapWidth);
+    AppendLittleEndian(bytes, terrain.foliageMapHeight);
+    for (const TerrainFoliageLayer& layer : terrain.foliageLayers) {
+        AppendLittleEndian(bytes, layer.meshAssetId);
+        AppendLittleEndian(bytes, layer.materialAssetId);
+        AppendLittleEndian(bytes, layer.density);
+        AppendLittleEndian(bytes, layer.minScale);
+        AppendLittleEndian(bytes, layer.maxScale);
+        AppendLittleEndian(bytes, layer.rotationRangeDegrees);
+        AppendLittleEndian(bytes, layer.alignToNormal);
+        AppendLittleEndian(bytes, layer.fadeStartDistance);
+        AppendLittleEndian(bytes, layer.cullDistance);
+        AppendLittleEndian(bytes, layer.seed);
+    }
+    bytes.insert(bytes.end(), terrain.foliageDensity.begin(), terrain.foliageDensity.end());
 
     if (!scene::SceneAssetBinaryIO::WriteBytesAtomically(path, bytes)) {
         SetError(error, "Terrain asset could not replace its previous version");

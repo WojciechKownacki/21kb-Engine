@@ -609,11 +609,14 @@ std::vector<kb::assets::AssetId> RenderMeshAssetLoader::DiscoverDependencies(
     if (!terrain) return {};
     std::vector<kb::assets::AssetId> dependencies;
     dependencies.reserve(terrain->materialLayers.size());
-    for (const auto& layer : terrain->materialLayers) {
-        const kb::assets::AssetId id{layer.materialAssetId};
-        if (id.IsValid() && std::ranges::find(dependencies, id) == dependencies.end()) {
-            dependencies.push_back(id);
-        }
+    const auto add = [&dependencies](std::uint64_t value) {
+        const kb::assets::AssetId id{value};
+        if (id.IsValid() && std::ranges::find(dependencies, id) == dependencies.end()) dependencies.push_back(id);
+    };
+    for (const auto& layer : terrain->materialLayers) add(layer.materialAssetId);
+    for (const auto& layer : terrain->foliageLayers) {
+        add(layer.meshAssetId);
+        add(layer.materialAssetId);
     }
     return dependencies;
 }

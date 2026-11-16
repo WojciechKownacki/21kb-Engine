@@ -46,6 +46,24 @@ struct TerrainAutoPaintSettings {
     float opacity = 1.0F;
 };
 
+// Foliage density is painted per layer, independent of the material weights. Add raises the density towards
+// full, Erase lowers it the same soft way, Remove clears everything the brush touches.
+enum class TerrainFoliagePaintMode : std::uint8_t {
+    Add,
+    Remove,
+    Erase,
+};
+
+struct TerrainFoliagePaintSettings {
+    TerrainBrushShape shape = TerrainBrushShape::SoftRound;
+    std::uint32_t layerIndex = 0U;
+    float radius = 8.0F;
+    float opacity = 1.0F;
+    float falloff = 0.65F;
+    std::uint32_t noiseSeed = 1U;
+    TerrainFoliagePaintMode mode = TerrainFoliagePaintMode::Add;
+};
+
 [[nodiscard]] bool AddTerrainMaterialLayer(
     kb::assets::TerrainAsset& terrain,
     std::uint64_t materialAssetId) noexcept;
@@ -66,6 +84,23 @@ struct TerrainAutoPaintSettings {
 [[nodiscard]] TerrainLayerPaintResult ApplyTerrainLayerPaintSegment(
     kb::assets::TerrainAsset& terrain,
     const TerrainLayerPaintSettings& settings,
+    const TerrainBrushStamp& start,
+    const TerrainBrushStamp& end) noexcept;
+
+// A new foliage layer starts unpainted; the first one creates the density map.
+[[nodiscard]] bool AddTerrainFoliageLayer(
+    kb::assets::TerrainAsset& terrain,
+    const kb::assets::TerrainFoliageLayer& layer) noexcept;
+[[nodiscard]] bool RemoveTerrainFoliageLayer(
+    kb::assets::TerrainAsset& terrain,
+    std::uint32_t layerIndex) noexcept;
+[[nodiscard]] TerrainLayerPaintResult ApplyTerrainFoliagePaint(
+    kb::assets::TerrainAsset& terrain,
+    const TerrainFoliagePaintSettings& settings,
+    const TerrainBrushStamp& stamp) noexcept;
+[[nodiscard]] TerrainLayerPaintResult ApplyTerrainFoliagePaintSegment(
+    kb::assets::TerrainAsset& terrain,
+    const TerrainFoliagePaintSettings& settings,
     const TerrainBrushStamp& start,
     const TerrainBrushStamp& end) noexcept;
 

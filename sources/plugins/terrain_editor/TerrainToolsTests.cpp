@@ -12,6 +12,8 @@
 #include "TerrainPresets.hpp"
 #include "TerrainTask.hpp"
 
+#include "engine/assets/TerrainAssetIO.hpp"
+#include "engine/assets/TerrainFoliage.hpp"
 #include "engine/core/JsonValue.hpp"
 
 #include <algorithm>
@@ -791,6 +793,78 @@ void RunAutoPaintBrushTest() {
     Require(!Op(terrain, Json(R"({"op":"paint","x":0,"z":0})"), summary, error) && error.find("auto") != std::string::npos, "painting without a layer or auto says what is needed");
 }
 
+void RunFoliageBrushTest() {
+    namespace te = kb::terrain_editor;
+    kb::assets::TerrainAsset terrain = kb::assets::MakeFlatTerrainAsset(65U, 64.0F, 64.0F);
+    Require(te::AddTerrainFoliageLayer(terrain, kb::assets::TerrainFoliageLayer{ .meshAssetId = 5U, .density = 2.0F }), "foliage layer added");
+    std::string error;
+    Require(kb::assets::IsTerrainAssetValid(terrain, &error), "a terrain with an unpainted foliage layer is valid");
+    Require(kb::assets::BuildTerrainFoliage(terrain).empty(), "an unpainted layer grows nothing");
+    const auto densityAt = [&terrain](float x, float z) {
+        const std::uint32_t width = terrain.foliageMapWidth;
+        const auto texelX = static_cast<std::uint32_t>(std::lround((x + 32.0F) / 64.0F * static_cast<float>(width - 1U)));
+        const auto texelZ = static_cast<std::uint32_t>(std::lround((z + 32.0F) / 64.0F * static_cast<float>(width - 1U)));
+        return terrain.foliageDensity[static_cast<std::size_t>(texelZ) * width + texelX];
+    };
+    // Each state is what the editor keeps for undo: the asset as the file holds it.
+    const auto persisted = [](const kb::assets::TerrainAsset& asset) {
+        const auto path = std::filesystem::temp_directory_path() / "21kb_foliage_brush_undo.kbterrain";
+        std::string saveError;
+        Require(kb::assets::TerrainAssetIO::Save(path, asset, &saveError), saveError.c_str());
+        auto loaded = kb::assets::TerrainAssetIO::Load(path, &saveError);
+        std::filesystem::remove(path);
+        Require(loaded.has_value(), saveError.c_str());
+        return *loaded;
+    };
+    const kb::assets::TerrainAsset initial = persisted(terrain);
+
+    te::TerrainFoliagePaintSettings settings{ .shape = te::TerrainBrushShape::HardRound, .radius = 10.0F, .mode = te::TerrainFoliagePaintMode::Add };
+    Require(te::ApplyTerrainFoliagePaint(terrain, settings, { 0.0F, 0.0F, 1.0F }).Changed(), "adding foliage changes the map");
+    Require(densityAt(0.0F, 0.0F) == 255U && densityAt(20.0F, 0.0F) == 0U, "added foliage stays inside the brush");
+    const kb::assets::TerrainAsset added = persisted(terrain);
+    const auto plants = kb::assets::BuildTerrainFoliage(terrain);
+    std::size_t plantCount = 0U;
+    for (const auto& chunk : plants) {
+        for (const auto& instance : chunk.instances) {
+            ++plantCount;
+            Require(std::hypot(instance.model[12], instance.model[14]) <= 10.5F, "a plant grew outside the brush");
+        }
+    }
+    // A full disc of radius 10 m at 2 per square metre: about 628 plants.
+    Require(plantCount > 500U && plantCount < 760U, "painted density gives the expected number of plants");
+
+    settings.mode = te::TerrainFoliagePaintMode::Erase;
+    settings.radius = 4.0F;
+    settings.opacity = 0.5F;
+    Require(te::ApplyTerrainFoliagePaint(terrain, settings, { 0.0F, 0.0F, 1.0F }).Changed(), "erasing lowers the density");
+    Require(densityAt(0.0F, 0.0F) > 100U && densityAt(0.0F, 0.0F) < 255U, "erase thins the density without clearing it");
+    settings.mode = te::TerrainFoliagePaintMode::Remove;
+    Require(te::ApplyTerrainFoliagePaintSegment(terrain, settings, { -4.0F, 0.0F, 1.0F }, { 4.0F, 0.0F, 1.0F }).Changed(), "removing clears the stroke");
+    Require(densityAt(0.0F, 0.0F) == 0U && densityAt(5.0F, 0.0F) == 0U && densityAt(9.0F, 0.0F) == 255U, "removed foliage is gone along the whole stroke");
+    const kb::assets::TerrainAsset removed = persisted(terrain);
+
+    // Undo puts back exactly the previous data, step by step.
+    terrain = added;
+    Require(terrain.foliageDensity == added.foliageDensity && densityAt(0.0F, 0.0F) == 255U, "undo of the removal restores the painted map");
+    terrain = initial;
+    Require(terrain.foliageDensity == initial.foliageDensity && kb::assets::BuildTerrainFoliage(terrain).empty(),
+        "undo of the addition restores the empty map");
+    terrain = removed;
+    terrain.foliageDensity = added.foliageDensity;
+    Require(persisted(terrain).foliageDensity == added.foliageDensity, "redo gives the painted map again");
+
+    // The same painting as an operation, the way kb_cli and automation scenarios drive it.
+    te::TerrainOpSummary summary{};
+    terrain = initial;
+    Require(Op(terrain, Json(R"({"op":"foliage","layer":0,"mode":"add","path":"-10,0;10,0","radius":3,"shape":"hard-round"})"), summary, error), error.c_str());
+    Require(summary.changedTexels > 0U && densityAt(0.0F, 0.0F) == 255U && densityAt(0.0F, 10.0F) == 0U, "the foliage operation paints along its path");
+    Require(!Op(terrain, Json(R"({"op":"foliage","layer":3,"mode":"add","x":0,"z":0})"), summary, error) && error.find("foliage layer") != std::string::npos,
+        "a foliage operation names a layer the terrain does not have");
+
+    Require(te::RemoveTerrainFoliageLayer(terrain, 0U) && terrain.foliageLayers.empty() && terrain.foliageDensity.empty() &&
+        terrain.foliageMapWidth == 0U && kb::assets::IsTerrainAssetValid(terrain, &error), "removing the last foliage layer clears its map");
+}
+
 } // namespace
 
 void RunTerrainToolsTests() {
@@ -813,4 +887,5 @@ void RunTerrainToolsTests() {
     RunPresetTest();
     RunCharacterTest();
     RunAutoPaintBrushTest();
+    RunFoliageBrushTest();
 }

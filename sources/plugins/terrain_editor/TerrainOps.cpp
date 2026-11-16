@@ -205,6 +205,7 @@ constexpr std::string_view kBrushKeys[]{ "op", "mode", "shape", "x", "z", "path"
     "rotation", "blend" };
 constexpr std::string_view kPaintKeys[]{ "op", "layer", "x", "z", "path", "radius", "opacity", "falloff", "shape", "erase", "seed", "auto" };
 constexpr std::string_view kAutoPaintKeys[]{ "op", "layer", "slope", "height", "slopeBlend", "heightBlend", "opacity" };
+constexpr std::string_view kFoliageKeys[]{ "op", "layer", "mode", "x", "z", "path", "radius", "opacity", "falloff", "shape", "seed" };
 
 // A stamp image by path: as written, or under the context's base directory when that is where it is.
 [[nodiscard]] std::shared_ptr<const TerrainStampImage> LoadImage(TerrainOpContext& context, const std::string& text, std::string& error) {
@@ -395,6 +396,46 @@ void ReadLayerPaintSettings(Reader& reader, TerrainLayerPaintSettings& settings)
     return true;
 }
 
+[[nodiscard]] bool ApplyFoliageOp(kb::assets::TerrainAsset& terrain, Reader& reader, TerrainOpSummary& summary, std::string& error) {
+    reader.OnlyKeys(kFoliageKeys);
+    TerrainFoliagePaintSettings settings{};
+    if (const auto layer = reader.Number("layer")) {
+        if (*layer < 0.0 || *layer >= static_cast<double>(terrain.foliageLayers.size()) || *layer != std::floor(*layer)) {
+            error = "'layer' must be the index of a foliage layer of the terrain (" + std::to_string(terrain.foliageLayers.size()) + " layers)";
+            return false;
+        }
+        settings.layerIndex = static_cast<std::uint32_t>(*layer);
+    } else if (!reader.Failed()) {
+        error = "foliage needs 'layer'";
+        return false;
+    }
+    if (const std::optional<std::string> mode = reader.Text("mode")) {
+        if (*mode == "add") settings.mode = TerrainFoliagePaintMode::Add;
+        else if (*mode == "remove") settings.mode = TerrainFoliagePaintMode::Remove;
+        else if (*mode == "erase") settings.mode = TerrainFoliagePaintMode::Erase;
+        else reader.Fail("mode", "must be add, remove or erase");
+    }
+    if (const auto value = reader.Number("radius")) settings.radius = static_cast<float>(*value);
+    if (const auto value = reader.Number("opacity")) settings.opacity = static_cast<float>(*value);
+    if (const auto value = reader.Number("falloff")) settings.falloff = static_cast<float>(*value);
+    if (const auto value = reader.Number("seed")) settings.noiseSeed = static_cast<std::uint32_t>(std::clamp(*value, 0.0, 4294967295.0));
+    if (const std::optional<std::string> shape = reader.Text("shape")) {
+        if (const std::optional<TerrainBrushShape> parsed = ParseTerrainBrushShape(*shape)) settings.shape = *parsed;
+        else reader.Fail("shape", "is not a brush shape (soft-round hard-round linear-round bell ring speckle)");
+    }
+    if (!reader.Failed() && (settings.opacity < 0.0F || settings.opacity > 1.0F)) reader.Fail("opacity", "must be from 0 to 1");
+    const std::vector<Point> points = reader.Points();
+    if (reader.Failed()) return false;
+    for (std::size_t index = 0U; index < points.size(); ++index) {
+        const Point from = points[index == 0U ? 0U : index - 1U];
+        const Point to = points[index];
+        const TerrainLayerPaintResult result = ApplyTerrainFoliagePaintSegment(terrain, settings,
+            TerrainBrushStamp{ .localX = from.x, .localZ = from.z }, TerrainBrushStamp{ .localX = to.x, .localZ = to.z });
+        summary.changedTexels += result.changedTexels;
+    }
+    return true;
+}
+
 [[nodiscard]] bool ApplyAutoPaintOp(kb::assets::TerrainAsset& terrain, Reader& reader, TerrainOpSummary& summary, std::string& error) {
     reader.OnlyKeys(kAutoPaintKeys);
     TerrainAutoPaintSettings settings{};
@@ -453,14 +494,15 @@ bool ApplyTerrainOp(
     const std::optional<std::string> kind = reader.Text("op");
     if (reader.Failed()) return false;
     if (!kind) {
-        error = "an operation needs an 'op' member (brush, paint or auto-paint)";
+        error = "an operation needs an 'op' member (brush, paint, auto-paint or foliage)";
         return false;
     }
     bool applied = false;
     if (*kind == "brush") applied = ApplyBrushOp(terrain, reader, context, summary, error);
     else if (*kind == "paint") applied = ApplyPaintOp(terrain, reader, summary, error);
     else if (*kind == "auto-paint") applied = ApplyAutoPaintOp(terrain, reader, summary, error);
-    else error = "unknown op '" + *kind + "' (brush, paint or auto-paint)";
+    else if (*kind == "foliage") applied = ApplyFoliageOp(terrain, reader, summary, error);
+    else error = "unknown op '" + *kind + "' (brush, paint, auto-paint or foliage)";
     if (applied) ++summary.operations;
     return applied;
 }

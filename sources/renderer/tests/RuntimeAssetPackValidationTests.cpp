@@ -409,6 +409,9 @@ void PackagedTerrainPreservesGeometryAndLayers() {
     terrain.heights[1] = 0.75F;
     terrain.holes[80] = 1;
     terrain.materialLayers = { {7U}, {8U} };
+    terrain.foliageLayers = { { .meshAssetId = 31U, .materialAssetId = 32U } };
+    terrain.foliageMapWidth = terrain.foliageMapHeight = 4;
+    terrain.foliageDensity.assign(16, 0);
     terrain.layerWeightWidth = terrain.layerWeightHeight = 17;
     terrain.layerWeights.resize(17 * 17 * 4);
     for (std::size_t i = 0; i < terrain.layerWeights.size(); i += 4) {
@@ -435,8 +438,8 @@ void PackagedTerrainPreservesGeometryAndLayers() {
     const kb::assets::AssetMetadata sourceMetadata{
         .id = id, .type = "RenderMesh", .physicalPath = terrainPath, .sourceExtension = ".kbterrain" };
     Require(loader.DiscoverDependencies(sourceMetadata, registry) ==
-            std::vector<kb::assets::AssetId>{{7U}, {8U}},
-        "Terrain material layers must enter the runtime dependency closure even when not yet registered");
+            std::vector<kb::assets::AssetId>{{7U}, {8U}, {31U}, {32U}},
+        "Terrain material and foliage layers must enter the runtime dependency closure even when not yet registered");
     const auto loaded = loader.Load({ .metadata = metadata, .runtimePack = pack });
     Require(loaded.Succeeded(), "Terrain must load from its package without a source path");
     const auto mesh = std::static_pointer_cast<RenderMeshAssetData>(loaded.asset);

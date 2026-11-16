@@ -16,6 +16,7 @@
 #include "engine/assets/CollisionMeshAsset.hpp"
 #include "engine/assets/TerrainAsset.hpp"
 #include "engine/assets/TerrainAssetIO.hpp"
+#include "engine/assets/TerrainFoliage.hpp"
 #include "engine/assets/ImportedAsset.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
@@ -48,6 +49,8 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -432,6 +435,102 @@ void RunCollisionMeshAssetTest() {
         terrainMesh->positions[0].y == 3 && terrainMesh->positions[0].x == -8 &&
         std::ranges::find(terrainMesh->indices, 0U) == terrainMesh->indices.end(),
         "Terrain collision geometry lost heights, origin or holes");
+}
+
+[[nodiscard]] bool SameFoliage(
+    const std::vector<kb::assets::TerrainFoliageChunk>& left,
+    const std::vector<kb::assets::TerrainFoliageChunk>& right) {
+    if (left.size() != right.size()) return false;
+    for (std::size_t index = 0; index < left.size(); ++index) {
+        const auto& a = left[index];
+        const auto& b = right[index];
+        if (a.layer != b.layer || a.coord.x != b.coord.x || a.coord.z != b.coord.z ||
+            a.instances.size() != b.instances.size() ||
+            std::memcmp(a.center.data(), b.center.data(), sizeof(a.center)) != 0 || a.radius != b.radius ||
+            (!a.instances.empty() && std::memcmp(a.instances.data(), b.instances.data(),
+                a.instances.size() * sizeof(kb::assets::TerrainFoliageInstance)) != 0)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] std::size_t FoliageInstanceCount(const std::vector<kb::assets::TerrainFoliageChunk>& chunks) {
+    std::size_t total = 0;
+    for (const auto& chunk : chunks) total += chunk.instances.size();
+    return total;
+}
+
+void RunTerrainFoliageTest() {
+    ResetTestRoot();
+    constexpr std::uint32_t kMap = 512;
+    auto terrain = kb::assets::MakeFlatTerrainAsset(129, 256.0F, 256.0F);
+    for (std::size_t index = 0; index < terrain.heights.size(); ++index) {
+        terrain.heights[index] = static_cast<float>(index % 129) * 0.1F;
+    }
+    terrain.foliageLayers = { kb::assets::TerrainFoliageLayer{
+        .meshAssetId = 11, .materialAssetId = 12, .density = 1.0F, .alignToNormal = 0.5F, .seed = 7 } };
+    terrain.foliageMapWidth = terrain.foliageMapHeight = kMap;
+    terrain.foliageDensity.assign(static_cast<std::size_t>(kMap) * kMap, 0);
+    for (std::uint32_t z = 0; z < kMap; ++z) {
+        for (std::uint32_t x = 0; x < kMap / 2; ++x) terrain.foliageDensity[static_cast<std::size_t>(z) * kMap + x] = 255;
+    }
+    std::string error;
+    kb::tests::Require(kb::assets::IsTerrainAssetValid(terrain, &error), error.c_str());
+
+    // Half of 256 x 256 m at one plant per square metre: 32 768 plants, none on the unpainted half.
+    const auto chunks = kb::assets::BuildTerrainFoliage(terrain);
+    const std::size_t total = FoliageInstanceCount(chunks);
+    kb::tests::Require(total >= 31130 && total <= 34406, "Foliage count is not 32768 within five percent");
+    for (const auto& chunk : chunks) {
+        for (const auto& instance : chunk.instances) {
+            kb::tests::Require(instance.model[12] < 0.0F && instance.model[12] >= -128.0F,
+                "Foliage grew outside the painted half");
+            kb::tests::Require(std::abs(instance.model[13] - (instance.model[12] + 128.0F) * 0.05F) < 0.01F,
+                "Foliage does not sit on the terrain surface");
+        }
+    }
+    kb::tests::Require(SameFoliage(chunks, kb::assets::BuildTerrainFoliage(terrain)), "Foliage placement is not repeatable");
+
+    // The same plants come back after saving, and from the bytes a cooked package carries.
+    const auto path = TestRoot() / "Foliage.kbterrain";
+    kb::tests::Require(kb::assets::TerrainAssetIO::Save(path, terrain, &error), error.c_str());
+    const auto loaded = kb::assets::TerrainAssetIO::Load(path, &error);
+    kb::tests::Require(loaded.has_value() && loaded->foliageLayers.size() == 1 && loaded->foliageDensity == terrain.foliageDensity &&
+        loaded->foliageLayers[0].meshAssetId == 11 && loaded->foliageLayers[0].materialAssetId == 12,
+        "Foliage settings changed in the saved terrain");
+    kb::tests::Require(SameFoliage(chunks, kb::assets::BuildTerrainFoliage(*loaded)), "Foliage changed after save and load");
+    std::ifstream input(path, std::ios::binary);
+    const std::vector<std::uint8_t> cooked{std::istreambuf_iterator<char>{input}, {}};
+    input.close();
+    const auto fromPackage = kb::assets::TerrainAssetIO::Load(cooked, &error);
+    kb::tests::Require(fromPackage.has_value() && SameFoliage(chunks, kb::assets::BuildTerrainFoliage(*fromPackage)),
+        "Foliage changed in the cooked terrain bytes");
+
+    // A terrain saved before foliage existed (version 2) still loads, without foliage.
+    auto plain = kb::assets::MakeFlatTerrainAsset(17, 16.0F, 16.0F);
+    const auto plainPath = TestRoot() / "Plain.kbterrain";
+    kb::tests::Require(kb::assets::TerrainAssetIO::Save(plainPath, plain, &error), "Plain terrain save failed");
+    std::ifstream plainInput(plainPath, std::ios::binary);
+    std::vector<std::uint8_t> legacy{std::istreambuf_iterator<char>{plainInput}, {}};
+    plainInput.close();
+    legacy.resize(legacy.size() - 12);
+    legacy[8] = 2;
+    const auto legacyLoaded = kb::assets::TerrainAssetIO::Load(legacy, &error);
+    kb::tests::Require(legacyLoaded.has_value() && legacyLoaded->foliageLayers.empty(), "Version 2 terrain no longer loads");
+    legacy.push_back(0);
+    kb::tests::Require(!kb::assets::TerrainAssetIO::Load(legacy, &error), "Version 2 terrain with trailing bytes was accepted");
+
+    // A million plants stay a few batches per chunk, not one batch per plant.
+    auto large = kb::assets::MakeFlatTerrainAsset(129, 1024.0F, 1024.0F);
+    large.foliageLayers = { kb::assets::TerrainFoliageLayer{ .meshAssetId = 11, .density = 1.0F, .seed = 3 } };
+    large.foliageMapWidth = large.foliageMapHeight = kMap;
+    large.foliageDensity.assign(static_cast<std::size_t>(kMap) * kMap, 255);
+    const auto largeChunks = kb::assets::BuildTerrainFoliage(large);
+    const std::size_t largeTotal = FoliageInstanceCount(largeChunks);
+    kb::tests::Require(largeTotal >= 1'000'000 && largeChunks.size() == 1024,
+        "A million plants did not split into one batch per 32 m chunk");
+    std::cout << "terrain_foliage instances=" << largeTotal << " chunk_batches=" << largeChunks.size() << std::endl;
 }
 
 [[nodiscard]] std::uint64_t Fnv1a64(std::string_view bytes) noexcept {
@@ -3141,6 +3240,7 @@ namespace kb::tests {
 
 void RunAssetRuntimeTests() {
     RunCollisionMeshAssetTest();
+    RunTerrainFoliageTest();
     RunAssetDiscoveryHashCompatibilityTest();
     RunAssetDiscoveryRemembersUnchangedFilesTest();
     RunAssetDiscoveryScanTimingTest();

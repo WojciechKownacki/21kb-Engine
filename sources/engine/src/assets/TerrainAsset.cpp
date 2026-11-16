@@ -97,6 +97,39 @@ bool IsTerrainAssetValid(const TerrainAsset& terrain, std::string* error) noexce
             }
         }
     }
+    if (terrain.foliageLayers.size() > TerrainAsset::MaximumFoliageLayers) {
+        SetError(error, "Terrain supports at most eight foliage layers");
+        return false;
+    }
+    if (terrain.foliageLayers.empty()) {
+        if (terrain.foliageMapWidth != 0U || terrain.foliageMapHeight != 0U || !terrain.foliageDensity.empty()) {
+            SetError(error, "Terrain without foliage layers must not contain a foliage density map");
+            return false;
+        }
+    } else {
+        if (terrain.foliageMapWidth < 2U || terrain.foliageMapHeight < 2U ||
+            terrain.foliageMapWidth > TerrainAsset::MaximumResolution ||
+            terrain.foliageMapHeight > TerrainAsset::MaximumResolution ||
+            static_cast<std::uint64_t>(terrain.foliageMapWidth) * terrain.foliageMapHeight *
+                terrain.foliageLayers.size() != terrain.foliageDensity.size()) {
+            SetError(error, "Terrain foliage density map does not match its dimensions");
+            return false;
+        }
+        for (const TerrainFoliageLayer& layer : terrain.foliageLayers) {
+            const bool finite = std::isfinite(layer.density) && std::isfinite(layer.minScale) &&
+                std::isfinite(layer.maxScale) && std::isfinite(layer.rotationRangeDegrees) &&
+                std::isfinite(layer.alignToNormal) && std::isfinite(layer.fadeStartDistance) &&
+                std::isfinite(layer.cullDistance);
+            if (!finite || layer.meshAssetId == 0U || layer.density < 0.01F || layer.density > 100.0F ||
+                layer.minScale <= 0.0F || layer.maxScale < layer.minScale ||
+                layer.rotationRangeDegrees < 0.0F || layer.rotationRangeDegrees > 360.0F ||
+                layer.alignToNormal < 0.0F || layer.alignToNormal > 1.0F ||
+                layer.fadeStartDistance < 0.0F || layer.cullDistance <= layer.fadeStartDistance) {
+                SetError(error, "Terrain foliage layer has an invalid setting");
+                return false;
+            }
+        }
+    }
     if (error != nullptr) error->clear();
     return true;
 }

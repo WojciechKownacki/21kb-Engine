@@ -502,6 +502,10 @@ std::optional<kb::assets::TerrainAsset> EditorTerrainService::BuildHeightmapImpo
     imported->layerWeightWidth = current.layerWeightWidth;
     imported->layerWeightHeight = current.layerWeightHeight;
     imported->layerWeights = current.layerWeights;
+    imported->foliageLayers = current.foliageLayers;
+    imported->foliageMapWidth = current.foliageMapWidth;
+    imported->foliageMapHeight = current.foliageMapHeight;
+    imported->foliageDensity = current.foliageDensity;
     return imported;
 }
 
@@ -540,6 +544,10 @@ std::optional<kb::assets::TerrainAsset> EditorTerrainService::BuildReconfigured(
     result.layerWeightWidth = current.layerWeightWidth;
     result.layerWeightHeight = current.layerWeightHeight;
     result.layerWeights = current.layerWeights;
+    result.foliageLayers = current.foliageLayers;
+    result.foliageMapWidth = current.foliageMapWidth;
+    result.foliageMapHeight = current.foliageMapHeight;
+    result.foliageDensity = current.foliageDensity;
     result.heights.resize(
         static_cast<std::size_t>(result.width) * result.height);
     result.holes.resize(

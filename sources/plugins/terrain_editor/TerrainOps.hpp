@@ -22,7 +22,9 @@ namespace kb::terrain_editor {
 //   {"op":"brush", "mode":"smooth", "path":[[0,0],[20,10]], "radius":6, "spacing":2}
 //   {"op":"paint", "layer":1, "path":"0,0;30,0", "radius":5, "opacity":1, "erase":false}
 //   {"op":"auto-paint", "layer":2, "slope":"35..90", "height":"-100..100"}
+//   {"op":"foliage", "layer":0, "mode":"add", "path":"0,0;30,0", "radius":5, "opacity":1}
 //
+// A foliage op paints the density of one foliage layer: mode (add remove erase), then the same brush words as paint.
 // A brush op reads: mode (raise lower smooth flatten noise terrace cut-hole fill-hole ramp stamp),
 // shape, radius, strength, falloff, spacing (along a path), and by mode: height (flatten: the
 // target; "sample" takes the terrain's own at the start), step and softness (terrace), seed,
@@ -33,7 +35,7 @@ namespace kb::terrain_editor {
 struct TerrainOpSummary {
     std::uint32_t operations = 0U;
     std::uint32_t changedSamples = 0U;  // height samples and hole cells changed
-    std::uint32_t changedTexels = 0U;   // material weight texels changed
+    std::uint32_t changedTexels = 0U;   // material weight and foliage density texels changed
 };
 
 // What operations share across a run: stamp images are read once, and a relative image path is
