@@ -417,8 +417,6 @@ if(BUILD_TESTING)
     add_test(NAME kb_game_partitioned_world
         COMMAND $<TARGET_FILE:kb_game_core_tests> --partitioned-world
     )
-    set_tests_properties(kb_game_core PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     add_test(NAME kb_game_terrain_cook
         COMMAND $<TARGET_FILE:kb_game_core_tests> --terrain-cook
     )
@@ -427,6 +425,8 @@ if(BUILD_TESTING)
         LABELS "game;runtime;packaging;terrain"
         TIMEOUT 300
     )
+    set_tests_properties(kb_game_core PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         LABELS "game;runtime"
         TIMEOUT 300
     )
@@ -504,8 +504,6 @@ if(BUILD_TESTING)
             "--plugin" "$<TARGET_FILE:kb_world2d_plugin>")
         set_tests_properties(kb_game_particle_gpu_package PROPERTIES
             LABELS "game;runtime;packaging;gpu" TIMEOUT 360)
-        add_test(NAME kb_game_touch_script_package COMMAND "${Python3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests/ScriptTouchPackagedTests.py"
         add_test(NAME kb_game_ssr_package COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/ScreenSpaceReflectionPackagedTests.py"
             "--cli" "$<TARGET_FILE:kb_cli>"
@@ -523,6 +521,8 @@ if(BUILD_TESTING)
             "--plugin" "$<TARGET_FILE:kb_world2d_plugin>")
         set_tests_properties(kb_game_ssr_package PROPERTIES
             LABELS "game;runtime;packaging;gpu;screen-space" TIMEOUT 600)
+        add_test(NAME kb_game_touch_script_package COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/ScriptTouchPackagedTests.py"
             "--cli" "$<TARGET_FILE:kb_cli>"
             "--cooker" "$<TARGET_FILE:kb_cooker>"
             "--player" "$<TARGET_FILE:kb_game>"
