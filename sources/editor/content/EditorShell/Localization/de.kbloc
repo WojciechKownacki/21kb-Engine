@@ -3387,7 +3387,6 @@ text "gameView.noCamera" "Keine Kamera rendert ein Bild. Eine Kamera der Szene a
 text "gameView.device.computer" "Computer"
 text "gameView.device.tablet" "Tablet"
 text "gameView.device.phone" "Smartphone"
-text "gameView.safeArea" "Sicherer Bereich"
 text "menu.play.gameView" "In der Spielansicht"
 text "menu.detail.playGameView" "Was der Spieler sieht, in einer frei gewählten Auflösung"
 text "inspector.affectsNavigation" "Beeinflusst Navigation"

@@ -3387,7 +3387,6 @@ text "gameView.noCamera" "Aucune caméra n'affiche d'image. Définissez une cam�
 text "gameView.device.computer" "Ordinateur"
 text "gameView.device.tablet" "Tablette"
 text "gameView.device.phone" "Téléphone"
-text "gameView.safeArea" "Zone sûre"
 text "menu.play.gameView" "Dans la vue du jeu"
 text "menu.detail.playGameView" "Ce que voit le joueur, à la résolution de votre choix"
 text "inspector.affectsNavigation" "Affecte la navigation"

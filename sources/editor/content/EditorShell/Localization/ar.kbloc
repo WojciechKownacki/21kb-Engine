@@ -3407,7 +3407,6 @@ text "gameView.noCamera" "لا توجد كاميرا تعرض الصورة. اج
 text "gameView.device.computer" "الحاسوب"
 text "gameView.device.tablet" "الجهاز اللوحي"
 text "gameView.device.phone" "الهاتف"
-text "gameView.safeArea" "المنطقة الآمنة"
 text "menu.play.gameView" "في عرض اللعبة"
 text "menu.detail.playGameView" "ما يراه اللاعب، بدقة تختارها"
 text "inspector.affectsNavigation" "يؤثر في التنقل"

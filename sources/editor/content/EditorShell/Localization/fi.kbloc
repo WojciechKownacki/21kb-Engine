@@ -3387,7 +3387,6 @@ text "gameView.noCamera" "Mikään kamera ei piirrä kuvaa. Merkitse jokin kohta
 text "gameView.device.computer" "Tietokone"
 text "gameView.device.tablet" "Tabletti"
 text "gameView.device.phone" "Puhelin"
-text "gameView.safeArea" "Turvallinen alue"
 text "menu.play.gameView" "Pelinäkymässä"
 text "menu.detail.playGameView" "Se, mitä pelaaja näkee, valitsemallasi tarkkuudella"
 text "inspector.affectsNavigation" "Vaikuttaa navigointiin"

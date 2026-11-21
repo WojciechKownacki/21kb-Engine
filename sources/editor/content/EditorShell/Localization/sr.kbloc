@@ -3392,7 +3392,6 @@ text "gameView.noCamera" "Ниједна камера не исцртава сл
 text "gameView.device.computer" "Рачунар"
 text "gameView.device.tablet" "Таблет"
 text "gameView.device.phone" "Телефон"
-text "gameView.safeArea" "Безбедна зона"
 text "menu.play.gameView" "У приказу игре"
 text "menu.detail.playGameView" "Оно што играч види, у резолуцији коју изаберете"
 text "inspector.affectsNavigation" "Утиче на навигацију"

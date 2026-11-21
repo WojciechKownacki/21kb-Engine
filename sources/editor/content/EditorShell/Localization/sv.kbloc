@@ -3387,7 +3387,6 @@ text "gameView.noCamera" "Ingen kamera ritar bilden. Markera en kamera i scenen 
 text "gameView.device.computer" "Dator"
 text "gameView.device.tablet" "Surfplatta"
 text "gameView.device.phone" "Telefon"
-text "gameView.safeArea" "Säkert område"
 text "menu.play.gameView" "I spelvyn"
 text "menu.detail.playGameView" "Det spelaren ser, i en upplösning du väljer"
 text "inspector.affectsNavigation" "Påverkar navigering"

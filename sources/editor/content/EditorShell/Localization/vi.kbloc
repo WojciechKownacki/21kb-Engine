@@ -3382,7 +3382,6 @@ text "gameView.noCamera" "Không có camera nào đang kết xuất hình ảnh.
 text "gameView.device.computer" "Máy tính"
 text "gameView.device.tablet" "Máy tính bảng"
 text "gameView.device.phone" "Điện thoại"
-text "gameView.safeArea" "Vùng an toàn"
 text "menu.play.gameView" "Trong chế độ xem Game"
 text "menu.detail.playGameView" "Những gì người chơi nhìn thấy, ở độ phân giải bạn chọn"
 text "inspector.affectsNavigation" "Ảnh hưởng điều hướng"

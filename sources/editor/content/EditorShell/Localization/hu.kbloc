@@ -3387,7 +3387,6 @@ text "gameView.noCamera" "Egyik kamera sem rajzol képet. Jelöljön ki egy kame
 text "gameView.device.computer" "Számítógép"
 text "gameView.device.tablet" "Táblagép"
 text "gameView.device.phone" "Telefon"
-text "gameView.safeArea" "Biztonságos terület"
 text "menu.play.gameView" "A játéknézetben"
 text "menu.detail.playGameView" "Amit a játékos lát, az Ön által választott felbontásban"
 text "inspector.affectsNavigation" "Hatással van a navigációra"

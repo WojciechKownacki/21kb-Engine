@@ -3387,7 +3387,6 @@ text "gameView.noCamera" "Ninguna cámara está generando imagen. Marca una cám
 text "gameView.device.computer" "Ordenador"
 text "gameView.device.tablet" "Tableta"
 text "gameView.device.phone" "Teléfono"
-text "gameView.safeArea" "Área segura"
 text "menu.play.gameView" "En la vista de juego"
 text "menu.detail.playGameView" "Lo que ve el jugador, con la resolución que elijas"
 text "inspector.affectsNavigation" "Afecta a la navegación"

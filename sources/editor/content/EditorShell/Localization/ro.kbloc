@@ -3392,7 +3392,6 @@ text "gameView.noCamera" "Nicio cameră nu redă imaginea. Marcați o cameră di
 text "gameView.device.computer" "Computer"
 text "gameView.device.tablet" "Tabletă"
 text "gameView.device.phone" "Telefon"
-text "gameView.safeArea" "Zonă sigură"
 text "menu.play.gameView" "În vizualizarea jocului"
 text "menu.detail.playGameView" "Ce vede jucătorul, la o rezoluție aleasă de dvs."
 text "inspector.affectsNavigation" "Afectează navigarea"

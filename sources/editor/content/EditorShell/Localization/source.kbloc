@@ -3366,7 +3366,6 @@ text "gameView.noCamera" "No camera is rendering. Mark a camera in the scene as 
 text "gameView.device.computer" "Computer"
 text "gameView.device.tablet" "Tablet"
 text "gameView.device.phone" "Phone"
-text "gameView.safeArea" "Safe area"
 text "menu.play.gameView" "In the Game View"
 text "menu.detail.playGameView" "What the player sees, at a resolution you choose"
 text "inspector.affectsNavigation" "Affects Navigation"

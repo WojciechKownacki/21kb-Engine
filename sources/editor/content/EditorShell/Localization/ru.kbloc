@@ -3397,7 +3397,6 @@ text "gameView.noCamera" "Ни одна камера не выводит изо�
 text "gameView.device.computer" "Компьютер"
 text "gameView.device.tablet" "Планшет"
 text "gameView.device.phone" "Телефон"
-text "gameView.safeArea" "Безопасная зона"
 text "menu.play.gameView" "В виде игры"
 text "menu.detail.playGameView" "То, что видит игрок, в выбранном вами разрешении"
 text "inspector.affectsNavigation" "Влияет на навигацию"

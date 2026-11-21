@@ -3387,7 +3387,6 @@ text "gameView.noCamera" "Görüntüyü çizen bir kamera yok. Sahnedeki bir kam
 text "gameView.device.computer" "Bilgisayar"
 text "gameView.device.tablet" "Tablet"
 text "gameView.device.phone" "Telefon"
-text "gameView.safeArea" "Güvenli alan"
 text "menu.play.gameView" "Oyun Görünümünde"
 text "menu.detail.playGameView" "Oyuncunun gördüğü görüntü, seçtiğiniz çözünürlükte"
 text "inspector.affectsNavigation" "Navigasyonu etkiler"

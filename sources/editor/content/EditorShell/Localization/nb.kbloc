@@ -3387,7 +3387,6 @@ text "gameView.noCamera" "Ingen kamera tegner bildet. Merk et kamera i scenen so
 text "gameView.device.computer" "Datamaskin"
 text "gameView.device.tablet" "Nettbrett"
 text "gameView.device.phone" "Telefon"
-text "gameView.safeArea" "Trygt område"
 text "menu.play.gameView" "I spillvisningen"
 text "menu.detail.playGameView" "Det spilleren ser, i en oppløsning du velger"
 text "inspector.affectsNavigation" "Påvirker navigasjon"

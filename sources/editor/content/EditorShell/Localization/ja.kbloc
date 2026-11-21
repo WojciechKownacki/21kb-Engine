@@ -3382,7 +3382,6 @@ text "gameView.noCamera" "描画しているカメラがありません。シー
 text "gameView.device.computer" "パソコン"
 text "gameView.device.tablet" "タブレット"
 text "gameView.device.phone" "スマートフォン"
-text "gameView.safeArea" "セーフエリア"
 text "menu.play.gameView" "ゲームビューで実行"
 text "menu.detail.playGameView" "プレイヤーに見える画面を、選んだ解像度で表示します"
 text "inspector.affectsNavigation" "ナビゲーションに影響"

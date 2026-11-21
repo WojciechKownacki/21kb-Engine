@@ -3382,7 +3382,6 @@ text "gameView.noCamera" "Tiada kamera yang memaparkan imej. Tandakan satu kamer
 text "gameView.device.computer" "Komputer"
 text "gameView.device.tablet" "Tablet"
 text "gameView.device.phone" "Telefon"
-text "gameView.safeArea" "Kawasan selamat"
 text "menu.play.gameView" "Dalam Paparan Game"
 text "menu.detail.playGameView" "Apa yang dilihat pemain, pada resolusi pilihan anda"
 text "inspector.affectsNavigation" "Mempengaruhi navigasi"

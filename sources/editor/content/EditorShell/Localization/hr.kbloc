@@ -3392,7 +3392,6 @@ text "gameView.noCamera" "Nijedna kamera ne iscrtava sliku. Označite kameru u s
 text "gameView.device.computer" "Računalo"
 text "gameView.device.tablet" "Tablet"
 text "gameView.device.phone" "Telefon"
-text "gameView.safeArea" "Sigurno područje"
 text "menu.play.gameView" "U prikazu igre"
 text "menu.detail.playGameView" "Ono što igrač vidi, u razlučivosti koju odaberete"
 text "inspector.affectsNavigation" "Utječe na navigaciju"

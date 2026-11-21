@@ -3387,7 +3387,6 @@ text "gameView.noCamera" "कोई कैमरा चित्र नहीं
 text "gameView.device.computer" "कंप्यूटर"
 text "gameView.device.tablet" "टैबलेट"
 text "gameView.device.phone" "फ़ोन"
-text "gameView.safeArea" "सुरक्षित क्षेत्र"
 text "menu.play.gameView" "गेम व्यू में"
 text "menu.detail.playGameView" "खिलाड़ी जो देखता है, आपके चुने रेज़ोल्यूशन पर"
 text "inspector.affectsNavigation" "नेविगेशन पर असर"

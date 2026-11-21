@@ -3387,7 +3387,6 @@ text "gameView.noCamera" "Nenhuma câmera está renderizando a imagem. Marque um
 text "gameView.device.computer" "Computador"
 text "gameView.device.tablet" "Tablet"
 text "gameView.device.phone" "Celular"
-text "gameView.safeArea" "Área segura"
 text "menu.play.gameView" "Na visualização do jogo"
 text "menu.detail.playGameView" "O que o jogador vê, na resolução que você escolher"
 text "inspector.affectsNavigation" "Afeta a navegação"

@@ -3382,7 +3382,6 @@ text "gameView.noCamera" "没有相机在渲染画面。请将场景中的一个
 text "gameView.device.computer" "电脑"
 text "gameView.device.tablet" "平板"
 text "gameView.device.phone" "手机"
-text "gameView.safeArea" "安全区域"
 text "menu.play.gameView" "在游戏视图中"
 text "menu.detail.playGameView" "显示玩家看到的画面，分辨率由您选择"
 text "inspector.affectsNavigation" "影响导航"

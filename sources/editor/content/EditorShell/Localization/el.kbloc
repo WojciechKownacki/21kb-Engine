@@ -3387,7 +3387,6 @@ text "gameView.noCamera" "Καμία κάμερα δεν αποδίδει εικ
 text "gameView.device.computer" "Υπολογιστής"
 text "gameView.device.tablet" "Tablet"
 text "gameView.device.phone" "Τηλέφωνο"
-text "gameView.safeArea" "Ασφαλής περιοχή"
 text "menu.play.gameView" "Στην προβολή παιχνιδιού"
 text "menu.detail.playGameView" "Ό,τι βλέπει ο παίκτης, σε ανάλυση της επιλογής σας"
 text "inspector.affectsNavigation" "Επηρεάζει την πλοήγηση"

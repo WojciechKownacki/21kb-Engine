@@ -3387,7 +3387,6 @@ text "gameView.noCamera" "Intet kamera tegner billedet. Markér et kamera i scen
 text "gameView.device.computer" "Computer"
 text "gameView.device.tablet" "Tablet"
 text "gameView.device.phone" "Telefon"
-text "gameView.safeArea" "Sikkert område"
 text "menu.play.gameView" "I spilvisningen"
 text "menu.detail.playGameView" "Det spilleren ser, i en opløsning du vælger"
 text "inspector.affectsNavigation" "Påvirker navigation"

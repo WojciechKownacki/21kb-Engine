@@ -3525,7 +3525,6 @@ text "gameView.noCamera" "Żadna kamera nie rysuje obrazu. Oznacz kamerę w scen
 text "gameView.device.computer" "Komputer"
 text "gameView.device.tablet" "Tablet"
 text "gameView.device.phone" "Telefon"
-text "gameView.safeArea" "Bezpieczny obszar"
 text "menu.play.gameView" "W widoku gry"
 text "menu.detail.playGameView" "To, co widzi gracz, w wybranej rozdzielczości"
 text "inspector.affectsNavigation" "Wpływa na nawigację"

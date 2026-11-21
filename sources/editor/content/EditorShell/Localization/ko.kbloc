@@ -3382,7 +3382,6 @@ text "gameView.noCamera" "화면을 그리는 카메라가 없습니다. 씬의 
 text "gameView.device.computer" "컴퓨터"
 text "gameView.device.tablet" "태블릿"
 text "gameView.device.phone" "휴대폰"
-text "gameView.safeArea" "안전 영역"
 text "menu.play.gameView" "게임 뷰에서"
 text "menu.detail.playGameView" "플레이어가 보는 화면을 선택한 해상도로 표시합니다"
 text "inspector.affectsNavigation" "내비게이션에 영향"

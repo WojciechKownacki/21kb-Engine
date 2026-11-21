@@ -3387,7 +3387,6 @@ text "gameView.noCamera" "Няма камера, която да изобраз�
 text "gameView.device.computer" "Компютър"
 text "gameView.device.tablet" "Таблет"
 text "gameView.device.phone" "Телефон"
-text "gameView.safeArea" "Безопасна зона"
 text "menu.play.gameView" "В изгледа на играта"
 text "menu.detail.playGameView" "Това, което вижда играчът, в избрана от вас резолюция"
 text "inspector.affectsNavigation" "Влияе на навигацията"

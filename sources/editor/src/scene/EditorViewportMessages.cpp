@@ -16,10 +16,11 @@ constexpr float kRadius = 6.0F;
 // Roboto's average advance, to size a plate without measuring text.
 constexpr float kAverageGlyph = 0.54F;
 
-constexpr std::array<std::uint8_t, 4> kPlateColor{ 22U, 24U, 28U, 255U };
-constexpr std::array<std::uint8_t, 4> kTextColor{ 236U, 239U, 243U, 255U };
-constexpr std::array<std::uint8_t, 4> kWarningBorder{ 224U, 168U, 56U, 255U };
-constexpr std::array<std::uint8_t, 4> kErrorBorder{ 224U, 72U, 72U, 255U };
+// The editor theme's panel and text colors and the status bar's warning and error colors.
+constexpr std::array<std::uint8_t, 4> kPlateColor{ 36U, 36U, 36U, 255U };
+constexpr std::array<std::uint8_t, 4> kTextColor{ 226U, 226U, 226U, 255U };
+constexpr std::array<std::uint8_t, 4> kWarningBorder{ 224U, 165U, 54U, 255U };
+constexpr std::array<std::uint8_t, 4> kErrorBorder{ 232U, 88U, 88U, 255U };
 
 [[nodiscard]] std::size_t Glyphs(std::string_view text) noexcept {
     return static_cast<std::size_t>(std::ranges::count_if(text, [](char c) { return (static_cast<unsigned char>(c) & 0xC0U) != 0x80U; }));

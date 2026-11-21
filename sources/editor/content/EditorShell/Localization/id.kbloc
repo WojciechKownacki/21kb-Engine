@@ -3382,7 +3382,6 @@ text "gameView.noCamera" "Tidak ada kamera yang merender gambar. Tandai satu kam
 text "gameView.device.computer" "Komputer"
 text "gameView.device.tablet" "Tablet"
 text "gameView.device.phone" "Ponsel"
-text "gameView.safeArea" "Area aman"
 text "menu.play.gameView" "Di Tampilan Game"
 text "menu.detail.playGameView" "Apa yang dilihat pemain, pada resolusi yang Anda pilih"
 text "inspector.affectsNavigation" "Memengaruhi navigasi"

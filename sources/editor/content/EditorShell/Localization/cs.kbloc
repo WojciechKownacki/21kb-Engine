@@ -3392,7 +3392,6 @@ text "gameView.noCamera" "Žádná kamera nevykresluje obraz. Označte ve scén�
 text "gameView.device.computer" "Počítač"
 text "gameView.device.tablet" "Tablet"
 text "gameView.device.phone" "Telefon"
-text "gameView.safeArea" "Bezpečná zóna"
 text "menu.play.gameView" "V zobrazení hry"
 text "menu.detail.playGameView" "To, co vidí hráč, v rozlišení podle vašeho výběru"
 text "inspector.affectsNavigation" "Ovlivňuje navigaci"

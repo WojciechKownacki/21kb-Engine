@@ -3387,7 +3387,6 @@ text "gameView.noCamera" "Geen camera geeft een beeld weer. Markeer een camera i
 text "gameView.device.computer" "Computer"
 text "gameView.device.tablet" "Tablet"
 text "gameView.device.phone" "Telefoon"
-text "gameView.safeArea" "Veilig gebied"
 text "menu.play.gameView" "In de spelweergave"
 text "menu.detail.playGameView" "Wat de speler ziet, in een resolutie naar keuze"
 text "inspector.affectsNavigation" "Beïnvloedt navigatie"

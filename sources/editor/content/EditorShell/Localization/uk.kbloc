@@ -3397,7 +3397,6 @@ text "gameView.noCamera" "Жодна камера не виводить зобр
 text "gameView.device.computer" "Комп’ютер"
 text "gameView.device.tablet" "Планшет"
 text "gameView.device.phone" "Телефон"
-text "gameView.safeArea" "Безпечна зона"
 text "menu.play.gameView" "У вигляді гри"
 text "menu.detail.playGameView" "Те, що бачить гравець, у вибраній вами роздільній здатності"
 text "inspector.affectsNavigation" "Впливає на навігацію"
