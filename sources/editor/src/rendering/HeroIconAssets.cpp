@@ -320,6 +320,23 @@ static constexpr std::array<HeroIconPath, 3> kMonitor{
     HeroIconPath{ "M8 21H16", false },
     HeroIconPath{ "M12 17V21", false },
 };
+// Lucide "tablet" (ISC).
+static constexpr std::array<HeroIconPath, 2> kTablet{
+    HeroIconPath{ "M6 2H18A2 2 0 0 1 20 4V20A2 2 0 0 1 18 22H6A2 2 0 0 1 4 20V4A2 2 0 0 1 6 2Z", false },
+    HeroIconPath{ "M12 18H12.01", false },
+};
+// Lucide "smartphone" (ISC).
+static constexpr std::array<HeroIconPath, 2> kSmartphone{
+    HeroIconPath{ "M7 2H17A2 2 0 0 1 19 4V20A2 2 0 0 1 17 22H7A2 2 0 0 1 5 20V4A2 2 0 0 1 7 2Z", false },
+    HeroIconPath{ "M12 18H12.01", false },
+};
+// Lucide "scan" (ISC).
+static constexpr std::array<HeroIconPath, 4> kScan{
+    HeroIconPath{ "M3 7V5A2 2 0 0 1 5 3H7", false },
+    HeroIconPath{ "M17 3H19A2 2 0 0 1 21 5V7", false },
+    HeroIconPath{ "M21 17V19A2 2 0 0 1 19 21H17", false },
+    HeroIconPath{ "M7 21H5A2 2 0 0 1 3 19V17", false },
+};
 // Lucide "circle-check" (ISC).
 static constexpr std::array<HeroIconPath, 2> kCheckCircle{
     HeroIconPath{ "M12 22A10 10 0 1 0 12 2A10 10 0 0 0 12 22Z", false },
@@ -686,6 +703,18 @@ HeroIconGlyph HeroIconAssets::ClipboardCopy() noexcept {
 
 HeroIconGlyph HeroIconAssets::ClipboardPaste() noexcept {
     return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kClipboardPaste }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::Tablet() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kTablet }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::Smartphone() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kSmartphone }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::Scan() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kScan }, .strokeWidth = 2.0F };
 }
 
 HeroIconGlyph HeroIconAssets::Monitor() noexcept {

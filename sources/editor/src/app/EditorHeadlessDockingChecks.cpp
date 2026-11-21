@@ -212,27 +212,30 @@ EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::VerifyDockingInteracti
         expect(editor.ActivePanel(DockPanelKind::Game).has_value(), "Play brings the Game View forward");
         expect(editor.GameHasInput(), "Play gives the keyboard and mouse to the game");
         if (game.has_value()) {
-            // The resolution list opens from the bar, and a choice in it is kept in the editor settings.
+            // The bar's buttons choose the device, turn it and outline the safe area; each choice is kept in the editor settings.
             const RECT gameContent = ToRect(game->content);
-            const GameViewRects closed = GamePanelContentRenderer::Resolve(gameContent, false);
-            editor.Click(main, Center(closed.resolutionButton));
-            expect(sceneContext.ViewportPreview(game->panelId).ToolbarDropdown() == EditorViewportToolbarDropdown::GameResolution,
-                "the resolution button opens the list");
-            const GameViewRects listed = GamePanelContentRenderer::Resolve(gameContent, true);
-            editor.Click(main, Center(listed.items[static_cast<std::size_t>(EditorGameViewResolution::Portrait9x16)]));
-            expect(sceneContext.EditorConfig().play.gameViewResolution == EditorGameViewResolution::Portrait9x16,
-                "a choice in the list sets the Game View resolution");
-            expect(sceneContext.ViewportPreview(game->panelId).ToolbarDropdown() == EditorViewportToolbarDropdown::None,
-                "a choice puts the list away");
+            const GameViewRects bar = GamePanelContentRenderer::Resolve(gameContent);
+            const auto play = [&sceneContext]() -> const EditorPlayPreferences& { return sceneContext.EditorConfig().play; };
+            editor.Click(main, Center(bar.devices[static_cast<std::size_t>(EditorGameViewDevice::Phone)]));
+            expect(play().gameViewDevice == EditorGameViewDevice::Phone, "a device button sets the Game View device");
+            editor.Click(main, Center(bar.rotateButton));
+            expect(play().gameViewPortrait, "the rotate button stands a phone");
+            editor.Click(main, Center(bar.safeAreaButton));
+            expect(play().gameViewSafeArea, "the safe area button outlines the safe area");
+            editor.Click(main, Center(bar.devices[static_cast<std::size_t>(EditorGameViewDevice::Computer)]));
+            editor.Click(main, Center(bar.rotateButton));
+            expect(play().gameViewDevice == EditorGameViewDevice::Computer && play().gameViewPortrait,
+                "turning does nothing on a computer and the phone's orientation is kept");
             EditorConfiguration restored = sceneContext.EditorConfig();
-            restored.play.gameViewResolution = EditorGameViewResolution::FreeAspect;
-            expect(sceneContext.SaveEditorConfig(std::move(restored)), "the Game View resolution is saved");
+            restored.play.gameViewPortrait = false;
+            restored.play.gameViewSafeArea = false;
+            expect(sceneContext.SaveEditorConfig(std::move(restored)), "the Game View settings are restored");
             // A press elsewhere in the editor takes the input back; a press on the picture gives it to the game again.
             if (const auto inspector = tabOf(DockPanelKind::Inspector); inspector.has_value()) {
                 editor.Click(main, Center(ToRect(inspector->content)));
                 expect(!editor.GameHasInput(), "a press outside the Game View takes the input back");
             }
-            editor.Click(main, Center(GamePanelContentRenderer::Resolve(gameContent, false).renderArea));
+            editor.Click(main, Center(GamePanelContentRenderer::Resolve(gameContent).renderArea));
             expect(editor.GameHasInput(), "a press on the Game View gives the input to the game");
         }
         editor.Click(main, Center(transport.stopButton));

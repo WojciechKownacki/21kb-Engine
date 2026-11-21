@@ -67,10 +67,11 @@ EditorConfigurationLoadResult EditorConfigurationStore::Load(
     }
     result.configuration.play.target = static_cast<EditorPlayTarget>(std::clamp<std::int64_t>(
         document.GetInt(kPlay, "Target").value_or(static_cast<std::int64_t>(defaults.play.target)), 0, static_cast<std::int64_t>(EditorPlayTarget::GameView)));
-    if (const std::optional<std::string_view> resolution = document.GetString(kPlay, "GameViewResolution")) {
-        result.configuration.play.gameViewResolution =
-            EditorGameView::FromName(*resolution).value_or(defaults.play.gameViewResolution);
+    if (const std::optional<std::string_view> device = document.GetString(kPlay, "GameViewDevice")) {
+        result.configuration.play.gameViewDevice = EditorGameView::FromName(*device).value_or(defaults.play.gameViewDevice);
     }
+    result.configuration.play.gameViewPortrait = document.GetBool(kPlay, "GameViewPortrait").value_or(defaults.play.gameViewPortrait);
+    result.configuration.play.gameViewSafeArea = document.GetBool(kPlay, "GameViewSafeArea").value_or(defaults.play.gameViewSafeArea);
     result.configuration.play.startPaused = document.GetBool(kPlay, "StartPaused").value_or(false);
     if (const std::optional<std::string_view> layout = document.GetString(kLayout, "Tree")) {
         result.configuration.layout = std::string{*layout};
@@ -105,7 +106,9 @@ bool EditorConfigurationStore::Save(
         static_cast<std::int64_t>(std::clamp<std::uint32_t>(configuration.saving.autosaveIntervalMinutes, 1U, 120U)));
     configuration.profiler.Write(document);
     document.SetInt(kPlay, "Target", static_cast<std::int64_t>(configuration.play.target));
-    document.SetString(kPlay, "GameViewResolution", std::string{ EditorGameView::Name(configuration.play.gameViewResolution) });
+    document.SetString(kPlay, "GameViewDevice", std::string{ EditorGameView::Name(configuration.play.gameViewDevice) });
+    document.SetBool(kPlay, "GameViewPortrait", configuration.play.gameViewPortrait);
+    document.SetBool(kPlay, "GameViewSafeArea", configuration.play.gameViewSafeArea);
     document.SetBool(kPlay, "StartPaused", configuration.play.startPaused);
     for (const EditorPanelSession& session : configuration.panels) {
         if (session.panelId == 0U) {

@@ -150,6 +150,12 @@ HeroIconGlyph HeroIconCatalog::Glyph(HeroIconKind icon) noexcept {
         return HeroIconAssets::ClipboardCopy();
     case HeroIconKind::ClipboardPaste:
         return HeroIconAssets::ClipboardPaste();
+    case HeroIconKind::Tablet:
+        return HeroIconAssets::Tablet();
+    case HeroIconKind::Smartphone:
+        return HeroIconAssets::Smartphone();
+    case HeroIconKind::Scan:
+        return HeroIconAssets::Scan();
     default:
         return {};
     }

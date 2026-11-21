@@ -152,8 +152,7 @@ void AppendMaterialPreviewLayout(
                 if (GamePanelContentRenderer::ShowsGame(sceneContext)) {
                     layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
                         .viewportKey = panelLayout.panelId,
-                        .bounds = GamePanelContentRenderer::Resolve(
-                            content, GamePanelContentRenderer::ListOpen(sceneContext, panelLayout.panelId)).renderArea,
+                        .bounds = GamePanelContentRenderer::ResolvePicture(GamePanelContentRenderer::Resolve(content).renderArea, sceneContext).frame.screen,
                     });
                 }
             } else if (panel->kind == DockPanelKind::SkeletalMeshEditor && sceneContext.HasSkeletalMeshEditorAsset()) {

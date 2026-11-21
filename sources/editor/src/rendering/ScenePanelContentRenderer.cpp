@@ -31,12 +31,14 @@
 #include "scene/EditorSceneSelectionPivot.hpp"
 #include "TerrainAnalysis.hpp"
 #include "scene/EditorTerrainService.hpp"
+#include "scene/EditorViewportMessages.hpp"
 #include "scene/EditorViewportCameraState.hpp"
 
 #include <bx/math.h>
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <optional>
 #include <vector>
@@ -890,8 +892,8 @@ void AppendNavigationMesh(
     const float unitsPerPixel = 20.0F / static_cast<float>(std::max(1U,renderHeight));
     const float centerX = static_cast<float>(renderWidth)*0.5F, centerY = static_cast<float>(renderHeight)*0.5F;
     const EditorViewportCameraAxes flatAxes{.position={((centerX-pan.x)/zoom-centerX)*unitsPerPixel,-((centerY-pan.y)/zoom-centerY)*unitsPerPixel,-100},.forward={0,0,1},.right={1,0,0},.up={0,1,0}};
-    // The profiler's counters and graph lie over the finished image, so they are placed in the
-    // size it is rendered at.
+    // The profiler's counters and graph and the messages lie over the finished image, so they are placed in the
+    // size it is shown at.
     const ProfilerOverlayOptions& profilerOptions = sceneContext.EditorConfig().profiler.overlay;
     ProfilerOverlayContent profilerOverlay;
     ProfilerOverlayMetrics profilerMetrics = ProfilerOverlayMetrics::ForTextSize(profilerOptions.textSize);
@@ -904,7 +906,11 @@ void AppendNavigationMesh(
         }
     }
     AppendProfilerOverlay(profilerOverlay, sceneContext.Profiler().Overlay(), profilerOptions, MakeEditorDarkTheme(),
-        profilerMetrics, static_cast<float>(renderWidth), static_cast<float>(renderHeight));
+        profilerMetrics, static_cast<float>(RectWidth(sceneRects.renderArea)), static_cast<float>(RectHeight(sceneRects.renderArea)));
+    const std::uint64_t nowMs = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count());
+    const std::vector<EditorViewportMessage> messages = EditorViewportMessages::Recent(sceneContext.Console(), nowMs);
+    EditorViewportMessages::Append(profilerOverlay.labels, profilerOverlay.shapes, messages, 0.0F, 0.0F);
     return EditorSceneBgfxViewport::PresentSettings{
         .renderWidth = renderWidth,
         .renderHeight = renderHeight,

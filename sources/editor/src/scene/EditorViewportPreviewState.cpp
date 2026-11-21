@@ -63,15 +63,6 @@ constexpr EditorViewportProfile kProfiles[] = {
     },
 };
 
-[[nodiscard]] const EditorViewportProfile& ProfileByKind(EditorViewportProfileKind kind) noexcept {
-    for (const EditorViewportProfile& profile : kProfiles) {
-        if (profile.kind == kind) {
-            return profile;
-        }
-    }
-    return kProfiles[0];
-}
-
 [[nodiscard]] EditorViewportProfileKind NextProfile(EditorViewportProfileKind kind) noexcept {
     switch (kind) {
     case EditorViewportProfileKind::Free:
@@ -140,8 +131,17 @@ constexpr EditorViewportProfile kProfiles[] = {
 
 } // namespace
 
+const EditorViewportProfile& EditorViewportProfileFor(EditorViewportProfileKind kind) noexcept {
+    for (const EditorViewportProfile& profile : kProfiles) {
+        if (profile.kind == kind) {
+            return profile;
+        }
+    }
+    return kProfiles[0];
+}
+
 EditorViewportProfile EditorViewportPreviewState::Profile() const noexcept {
-    EditorViewportProfile profile = ProfileByKind(profile_);
+    EditorViewportProfile profile = EditorViewportProfileFor(profile_);
     if (profile.kind == EditorViewportProfileKind::Custom) {
         profile.width = customWidth_;
         profile.height = customHeight_;

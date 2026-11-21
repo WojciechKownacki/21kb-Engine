@@ -2,70 +2,157 @@
 
 #if defined(_WIN32)
 #include "localization/EditorLocalization.hpp"
-#include "rendering/EditorSceneViewportGeometry.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/HeroIconKind.hpp"
+#include "rendering/HeroIconPainter.hpp"
 #include "rendering/ScenePanelContentRenderer.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarDrawing.hpp"
+#include "rendering/scene_viewport_toolbar/SceneViewportToolbarMetrics.hpp"
 
 #include <algorithm>
+#include <iterator>
 #include <string>
+#include <vector>
 
 namespace kb::editor {
 namespace {
 
 constexpr int kPadding = 8;
 constexpr int kButtonHeight = 24;
-constexpr int kResolutionButtonWidth = 340;
-constexpr int kScaleLabelWidth = 120;
-constexpr int kListItemHeight = 24;
-constexpr int kListWidth = 340;
+constexpr int kButtonGap = 4;
+constexpr int kDeviceButtonWidth = 100;
+constexpr int kRotateButtonWidth = 28;
+constexpr int kSafeAreaButtonWidth = 148;
+constexpr int kReadoutWidth = 150;
 constexpr COLORREF kLetterboxColor = RGB(10, 11, 13);
+constexpr COLORREF kBezelColor = RGB(24, 26, 31);
+constexpr COLORREF kScreenColor = RGB(0, 0, 0);
+constexpr COLORREF kRimColor = RGB(104, 112, 124);
+constexpr COLORREF kRimHighlight = RGB(178, 186, 198);
+constexpr COLORREF kComputerFrameColor = RGB(74, 80, 90);
+constexpr COLORREF kCameraRing = RGB(66, 72, 86);
+constexpr COLORREF kCameraLens = RGB(28, 46, 84);
 
 [[nodiscard]] bool PointInRect(const RECT& rect, int x, int y) noexcept {
     return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
 }
 
-[[nodiscard]] EditorGameViewSize ProjectSize(const EditorSceneContext& sceneContext) noexcept {
-    const kb::project::ProjectDisplaySettings& display = sceneContext.ProjectConfiguration().display;
-    return EditorGameViewSize{ display.windowWidth, display.windowHeight };
+[[nodiscard]] HeroIconKind DeviceIcon(EditorGameViewDevice device) noexcept {
+    switch (device) {
+    case EditorGameViewDevice::Computer:
+        return HeroIconKind::Monitor;
+    case EditorGameViewDevice::Tablet:
+        return HeroIconKind::Tablet;
+    case EditorGameViewDevice::Phone:
+        return HeroIconKind::Smartphone;
+    }
+    return HeroIconKind::Monitor;
+}
+
+// A rectangle of the bar, kept inside the panel when the panel is too narrow for the whole bar.
+[[nodiscard]] RECT BarRect(const RECT& content, int left, int width, int top) noexcept {
+    const int limit = std::max<int>(content.left, content.right - kPadding);
+    const int clippedLeft = std::min(left, limit);
+    return RECT{ clippedLeft, top, std::min(left + width, limit), top + kButtonHeight };
+}
+
+void FillEllipse(HDC dc, int centerX, int centerY, int radius, COLORREF fill, COLORREF line) {
+    HBRUSH brush = CreateSolidBrush(fill);
+    HPEN pen = CreatePen(PS_SOLID, 1, line);
+    HGDIOBJ oldBrush = SelectObject(dc, brush);
+    HGDIOBJ oldPen = SelectObject(dc, pen);
+    Ellipse(dc, centerX - radius, centerY - radius, centerX + radius + 1, centerY + radius + 1);
+    SelectObject(dc, oldPen);
+    SelectObject(dc, oldBrush);
+    DeleteObject(pen);
+    DeleteObject(brush);
+}
+
+// A rim of the given width drawn inside the rectangle; the outermost pixel is lit, as a polished edge is.
+void DrawRim(HDC dc, const RECT& body, int width, int radius) {
+    HBRUSH hollow = static_cast<HBRUSH>(GetStockObject(NULL_BRUSH));
+    HGDIOBJ oldBrush = SelectObject(dc, hollow);
+    const auto stroke = [&](int penWidth, COLORREF color, const RECT& rect) {
+        LOGBRUSH brush{ BS_SOLID, color, 0 };
+        HPEN pen = ExtCreatePen(PS_GEOMETRIC | PS_SOLID | PS_ENDCAP_FLAT | PS_JOIN_ROUND, penWidth, &brush, 0, nullptr);
+        HGDIOBJ oldPen = SelectObject(dc, pen);
+        const int half = penWidth / 2;
+        RoundRect(dc, rect.left + half, rect.top + half, rect.right - half, rect.bottom - half, radius, radius);
+        SelectObject(dc, oldPen);
+        DeleteObject(pen);
+    };
+    stroke(width, kRimColor, body);
+    stroke(1, kRimHighlight, body);
+    SelectObject(dc, oldBrush);
+}
+
+// The device around the screen: a thin frame for a computer, and for a tablet or a phone the metal rim, the dark
+// bezel and the camera dot.
+void DrawDevice(HDC dc, const EditorGameViewFrame& frame, EditorGameViewDevice device) {
+    if (device == EditorGameViewDevice::Computer) {
+        GdiDrawing::FillRectColor(dc, frame.body, kComputerFrameColor);
+        return;
+    }
+    const int bezel = static_cast<int>(frame.screen.left - frame.body.left) - frame.rim;
+    const int radius = std::max(6, bezel * 3);
+    HBRUSH brush = CreateSolidBrush(kBezelColor);
+    HPEN pen = CreatePen(PS_NULL, 0, 0);
+    HGDIOBJ oldBrush = SelectObject(dc, brush);
+    HGDIOBJ oldPen = SelectObject(dc, pen);
+    RoundRect(dc, frame.body.left, frame.body.top, frame.body.right + 1, frame.body.bottom + 1, radius, radius);
+    SelectObject(dc, oldPen);
+    SelectObject(dc, oldBrush);
+    DeleteObject(pen);
+    DeleteObject(brush);
+    DrawRim(dc, frame.body, frame.rim, radius);
+    if (frame.cameraRadius > 0) {
+        FillEllipse(dc, frame.camera.x, frame.camera.y, frame.cameraRadius, kBezelColor, kCameraRing);
+        FillEllipse(dc, frame.camera.x, frame.camera.y, std::max(1, frame.cameraRadius / 2), kCameraLens, kCameraLens);
+    }
+}
+
+// The rotate button of a device that cannot turn stays on the bar, dimmed.
+void DrawRotateButton(HDC dc, const RECT& rect, bool enabled, bool portrait, const EditorTheme& theme) {
+    if (enabled) {
+        SceneViewportToolbarDrawing::DrawIconButton(dc, rect, HeroIconKind::Rotate, theme, portrait);
+        return;
+    }
+    const COLORREF fill = SceneViewportToolbarDrawing::Blend(
+        GdiDrawing::ToColorRef(theme.toolbarButton), GdiDrawing::ToColorRef(theme.toolbar), 1, 2);
+    SceneViewportToolbarDrawing::FillRound(dc, rect, fill, fill, SceneViewportToolbarMetrics::ButtonRadius);
+    const int size = SceneViewportToolbarMetrics::IconSize;
+    const RECT icon{ rect.left + (rect.right - rect.left - size) / 2, rect.top + (rect.bottom - rect.top - size) / 2,
+        rect.left + (rect.right - rect.left - size) / 2 + size, rect.top + (rect.bottom - rect.top - size) / 2 + size };
+    HeroIconPainter::Draw(dc, icon, HeroIconKind::Rotate, GdiDrawing::ToColorRef(theme.textDisabled), 1);
 }
 
 } // namespace
 
-GameViewRects GamePanelContentRenderer::Resolve(const RECT& content, bool listOpen) noexcept {
+GameViewRects GamePanelContentRenderer::Resolve(const RECT& content) noexcept {
     GameViewRects rects{};
     rects.toolbar = content;
     rects.toolbar.bottom = std::min(content.bottom, content.top + ToolbarHeight);
     const int top = rects.toolbar.top + (ToolbarHeight - kButtonHeight) / 2;
-    rects.resolutionButton = RECT{ content.left + kPadding, top,
-        std::min(content.right - kPadding, content.left + kPadding + kResolutionButtonWidth), top + kButtonHeight };
-    rects.scaleLabel = RECT{ std::max(rects.resolutionButton.right + kPadding, content.right - kPadding - kScaleLabelWidth), top,
-        std::max(rects.resolutionButton.right + kPadding, content.right - kPadding), top + kButtonHeight };
-
+    int left = content.left + kPadding;
+    for (RECT& button : rects.devices) {
+        button = BarRect(content, left, kDeviceButtonWidth, top);
+        left += kDeviceButtonWidth + kButtonGap;
+    }
+    left += kPadding;
+    rects.rotateButton = BarRect(content, left, kRotateButtonWidth, top);
+    left += kRotateButtonWidth + kButtonGap;
+    rects.safeAreaButton = BarRect(content, left, kSafeAreaButtonWidth, top);
+    left += kSafeAreaButtonWidth + kPadding;
+    rects.readout = BarRect(content, std::max<int>(left, content.right - kPadding - kReadoutWidth), kReadoutWidth, top);
     rects.renderArea = content;
     rects.renderArea.top = rects.toolbar.bottom;
-    if (listOpen) {
-        const int count = static_cast<int>(rects.items.size());
-        rects.list = RECT{ content.left, rects.toolbar.bottom, std::min(content.right, content.left + kListWidth),
-            std::min(content.bottom, rects.toolbar.bottom + count * kListItemHeight + kPadding) };
-        for (int index = 0; index < count; ++index) {
-            const int itemTop = rects.list.top + kPadding / 2 + index * kListItemHeight;
-            rects.items[static_cast<std::size_t>(index)] = RECT{ rects.list.left + 4, itemTop, rects.list.right - 4, itemTop + kListItemHeight };
-        }
-        rects.renderArea.top = rects.list.bottom;
-    }
     return rects;
 }
 
-bool GamePanelContentRenderer::ListOpen(const EditorSceneContext& sceneContext, std::uint64_t panelId) noexcept {
-    return sceneContext.ViewportPreview(panelId).ToolbarDropdown() == EditorViewportToolbarDropdown::GameResolution;
-}
-
-std::optional<std::size_t> GamePanelContentRenderer::ItemAt(const GameViewRects& rects, int x, int y) noexcept {
-    for (std::size_t index = 0; index < rects.items.size(); ++index) {
-        if (PointInRect(rects.items[index], x, y)) {
-            return index;
+std::optional<EditorGameViewDevice> GamePanelContentRenderer::DeviceAt(const GameViewRects& rects, int x, int y) noexcept {
+    for (std::size_t index = 0; index < rects.devices.size(); ++index) {
+        if (PointInRect(rects.devices[index], x, y)) {
+            return EditorGameView::kDevices[index];
         }
     }
     return std::nullopt;
@@ -76,31 +163,38 @@ bool GamePanelContentRenderer::ShowsGame(const EditorSceneContext& sceneContext)
 }
 
 EditorViewportPreviewState GamePanelContentRenderer::PictureState(const EditorSceneContext& sceneContext) {
+    const EditorPlayPreferences& play = sceneContext.EditorConfig().play;
+    const EditorGameViewSize size = EditorGameView::Size(play.gameViewDevice, play.gameViewPortrait);
     EditorViewportPreviewState state;
-    const EditorGameViewSize size = EditorGameView::Size(sceneContext.EditorConfig().play.gameViewResolution, ProjectSize(sceneContext));
-    if (!size.FollowsPanel()) {
-        state.SetCustomResolution(size.width, size.height);
-        state.SetProfile(EditorViewportProfileKind::Custom);
-    }
+    state.SetCustomResolution(size.width, size.height);
+    state.SetProfile(EditorViewportProfileKind::Custom);
     state.SetFitMode(EditorViewportFitMode::Fit);
     return state;
 }
 
 GameViewPicture GamePanelContentRenderer::ResolvePicture(const RECT& renderArea, const EditorSceneContext& sceneContext) {
-    const EditorViewportPreviewState state = PictureState(sceneContext);
-    GameViewPicture picture;
-    picture.renderWidth = state.RenderWidthForPanel(EditorSceneViewportGeometry::RectWidth(renderArea));
-    picture.renderHeight = state.RenderHeightForPanel(EditorSceneViewportGeometry::RectHeight(renderArea));
-    picture.destination = EditorSceneViewportGeometry::CenteredRectFor(renderArea, picture.renderWidth, picture.renderHeight, state.FitMode());
-    return picture;
+    const EditorPlayPreferences& play = sceneContext.EditorConfig().play;
+    const EditorGameViewSize size = EditorGameView::Size(play.gameViewDevice, play.gameViewPortrait);
+    return GameViewPicture{ .renderWidth = size.width, .renderHeight = size.height,
+        .frame = EditorGameView::Fit(renderArea, play.gameViewDevice, play.gameViewPortrait) };
 }
 
 EditorSceneBgfxViewport::PresentSettings GamePanelContentRenderer::BuildSettings(
     const RECT& content, const DockPanel& panel, const EditorSceneContext& sceneContext,
     const EditorRenderBackendSettings& renderBackendSettings) {
-    const GameViewRects rects = Resolve(content, ListOpen(sceneContext, panel.id));
-    return ScenePanelContentRenderer::BuildGameSettings(
-        content, rects.renderArea, panel, PictureState(sceneContext), sceneContext, renderBackendSettings);
+    const RECT screen = ResolvePicture(Resolve(content).renderArea, sceneContext).frame.screen;
+    EditorSceneBgfxViewport::PresentSettings settings = ScenePanelContentRenderer::BuildGameSettings(
+        content, screen, panel, PictureState(sceneContext), sceneContext, renderBackendSettings);
+    const EditorPlayPreferences& play = sceneContext.EditorConfig().play;
+    if (play.gameViewSafeArea) {
+        // Under the messages, which are already in the list.
+        std::vector<EditorSceneViewportOverlayShape> outlines = EditorGameView::SafeFrameShapes(
+            play.gameViewDevice, play.gameViewPortrait, static_cast<std::uint32_t>(screen.right - screen.left),
+            static_cast<std::uint32_t>(screen.bottom - screen.top));
+        settings.viewportOverlayShapes.insert(settings.viewportOverlayShapes.begin(),
+            std::make_move_iterator(outlines.begin()), std::make_move_iterator(outlines.end()));
+    }
+    return settings;
 }
 
 bool GamePanelContentRenderer::PresentViewport(
@@ -113,8 +207,8 @@ bool GamePanelContentRenderer::PresentViewport(
     if (sceneViewportHost == nullptr || !ShowsGame(sceneContext)) {
         return false;
     }
-    const GameViewRects rects = Resolve(content, ListOpen(sceneContext, panel.id));
-    sceneViewport.Present(sceneViewportHost, rects.renderArea, sceneContext.Scene(),
+    const RECT screen = ResolvePicture(Resolve(content).renderArea, sceneContext).frame.screen;
+    sceneViewport.Present(sceneViewportHost, screen, sceneContext.Scene(),
         BuildSettings(content, panel, sceneContext, renderBackendSettings));
     return true;
 }
@@ -128,47 +222,46 @@ void GamePanelContentRenderer::Paint(
     const EditorRenderBackendSettings& renderBackendSettings,
     EditorSceneBgfxViewport* sceneViewport,
     HWND sceneViewportHost) const {
-    const bool listOpen = ListOpen(sceneContext, panel.id);
-    const GameViewRects rects = Resolve(content, listOpen);
+    const GameViewRects rects = Resolve(content);
     const EditorPlayPreferences& play = sceneContext.EditorConfig().play;
-    const EditorGameViewSize project = ProjectSize(sceneContext);
+    const GameViewPicture picture = ResolvePicture(rects.renderArea, sceneContext);
+    const RECT& screen = picture.frame.screen;
 
-    // The bars around the picture, then the bar with the resolution and the scale.
+    // The space around the device, then the device, then the bar with the choices.
     GdiDrawing::FillRectColor(dc, rects.renderArea, kLetterboxColor);
+    if (screen.right > screen.left) {
+        DrawDevice(dc, picture.frame, play.gameViewDevice);
+    }
     GdiDrawing::FillRectColor(dc, rects.toolbar, SceneViewportToolbarDrawing::ToolbarRowColor(theme));
-    SceneViewportToolbarDrawing::DrawValueButton(
-        dc, rects.resolutionButton, HeroIconKind::Gamepad2, EditorGameView::Label(play.gameViewResolution, project), theme, listOpen);
+    for (std::size_t index = 0; index < rects.devices.size(); ++index) {
+        const EditorGameViewDevice device = EditorGameView::kDevices[index];
+        SceneViewportToolbarDrawing::DrawToolButton(
+            dc, rects.devices[index], DeviceIcon(device), EditorGameView::Label(device), theme, device == play.gameViewDevice);
+    }
+    DrawRotateButton(dc, rects.rotateButton, EditorGameView::CanRotate(play.gameViewDevice), play.gameViewPortrait, theme);
+    SceneViewportToolbarDrawing::DrawToolButton(
+        dc, rects.safeAreaButton, HeroIconKind::Scan, EditorText("gameView.safeArea", "Safe area"), theme, play.gameViewSafeArea);
+    const std::string readout = EditorGameView::FormatResolution(EditorGameViewSize{ picture.renderWidth, picture.renderHeight }) + "  " +
+        EditorGameView::FormatScale(static_cast<std::uint32_t>(screen.right - screen.left), picture.renderWidth);
+    GdiDrawing::DrawTabText(dc, rects.readout, readout, GdiDrawing::ToColorRef(theme.textSecondary));
 
     const bool showsGame = ShowsGame(sceneContext);
-    if (showsGame) {
-        const GameViewPicture picture = ResolvePicture(rects.renderArea, sceneContext);
-        const std::string scale = std::string{ EditorText("gameView.scale", "Scale") } + " " +
-            EditorGameView::FormatScale(EditorSceneViewportGeometry::RectWidth(picture.destination), picture.renderWidth);
-        GdiDrawing::DrawTabText(dc, rects.scaleLabel, scale, GdiDrawing::ToColorRef(theme.textSecondary));
-    } else {
+    if (screen.right > screen.left) {
+        GdiDrawing::FillRectColor(dc, screen, kScreenColor);
+    }
+    if (!showsGame && screen.right > screen.left) {
         const std::string_view hint = sceneContext.HasPlayModeSceneSession()
             ? EditorText("gameView.noCamera", "No camera is rendering. Mark a camera in the scene as the primary camera.")
             : EditorText("gameView.pressPlay", "Press Play to see the game here.");
-        GdiDrawing::DrawTabText(dc, rects.renderArea, hint, GdiDrawing::ToColorRef(theme.textSecondary));
-    }
-
-    if (listOpen) {
-        GdiDrawing::FillRectColor(dc, rects.list, SceneViewportToolbarDrawing::ToolbarRowColor(theme));
-        for (std::size_t index = 0; index < rects.items.size(); ++index) {
-            const EditorGameViewResolution resolution = EditorGameView::kResolutions[index];
-            const bool selected = resolution == play.gameViewResolution;
-            SceneViewportToolbarDrawing::FillRound(dc, rects.items[index],
-                GdiDrawing::ToColorRef(selected ? theme.accent : theme.toolbarButton), GdiDrawing::ToColorRef(theme.borderPanel), 4);
-            GdiDrawing::DrawTabText(dc, rects.items[index], EditorGameView::Label(resolution, project), GdiDrawing::ToColorRef(theme.textPrimary));
-        }
+        GdiDrawing::DrawTabText(dc, screen, hint, GdiDrawing::ToColorRef(theme.textSecondary));
     }
 
     if (sceneViewport != nullptr && showsGame) {
         const EditorSceneBgfxViewport::PresentSettings settings = BuildSettings(content, panel, sceneContext, renderBackendSettings);
         if (sceneViewportHost != nullptr) {
-            sceneViewport->Present(dc, sceneViewportHost, rects.renderArea, sceneContext.Scene(), theme, settings);
+            sceneViewport->Present(dc, sceneViewportHost, screen, sceneContext.Scene(), theme, settings);
         } else {
-            sceneViewport->Present(dc, rects.renderArea, sceneContext.Scene(), theme, settings);
+            sceneViewport->Present(dc, screen, sceneContext.Scene(), theme, settings);
         }
     }
 }

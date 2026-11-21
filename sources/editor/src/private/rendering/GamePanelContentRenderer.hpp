@@ -25,36 +25,35 @@ namespace kb::editor {
 
 struct GameViewRects {
     RECT toolbar{};
-    RECT resolutionButton{};
-    RECT scaleLabel{};
-    // The list of resolutions, in the panel's flow between the bar and the picture while it is open.
-    RECT list{};
-    std::array<RECT, EditorGameView::kResolutions.size()> items{};
-    // Everything below the bar (and the list): the picture and the bars around it.
+    std::array<RECT, EditorGameView::kDevices.size()> devices{};
+    RECT rotateButton{};
+    RECT safeAreaButton{};
+    // The screen's resolution and the picture's scale, at the right end of the bar.
+    RECT readout{};
+    // Everything below the bar: the device and the space around it.
     RECT renderArea{};
 };
 
-// What the game renders at and where that appears inside the render area.
+// What the game renders at and where the device and its screen sit inside the render area.
 struct GameViewPicture {
     std::uint32_t renderWidth = 0U;
     std::uint32_t renderHeight = 0U;
-    RECT destination{};
+    EditorGameViewFrame frame{};
 };
 
-// The Game View: the game camera at the resolution the bar chooses, fitted inside the panel with bars
-// where the shapes differ. It shows no editor overlay and no gizmo.
+// The Game View: the game camera at the resolution of the device the bar chooses, shown on that device with
+// its outline of the safe area on request. It shows no editor overlay and no gizmo.
 class GamePanelContentRenderer {
 public:
     static constexpr int ToolbarHeight = 34;
 
-    [[nodiscard]] static GameViewRects Resolve(const RECT& content, bool listOpen) noexcept;
-    [[nodiscard]] static bool ListOpen(const EditorSceneContext& sceneContext, std::uint64_t panelId) noexcept;
-    // The index of the list entry under the point, when the list is open.
-    [[nodiscard]] static std::optional<std::size_t> ItemAt(const GameViewRects& rects, int x, int y) noexcept;
+    [[nodiscard]] static GameViewRects Resolve(const RECT& content) noexcept;
+    // The device whose button is under the point.
+    [[nodiscard]] static std::optional<EditorGameViewDevice> DeviceAt(const GameViewRects& rects, int x, int y) noexcept;
     // True while a game camera is there to be shown: the game is running and has a primary camera.
     [[nodiscard]] static bool ShowsGame(const EditorSceneContext& sceneContext) noexcept;
-    // The chosen resolution as the viewport state the renderer reads, so the Scene View and the Game View
-    // size their pictures with the same code.
+    // The chosen device as the viewport state the renderer reads, so the Scene View and the Game View size
+    // their pictures with the same code.
     [[nodiscard]] static EditorViewportPreviewState PictureState(const EditorSceneContext& sceneContext);
     [[nodiscard]] static GameViewPicture ResolvePicture(const RECT& renderArea, const EditorSceneContext& sceneContext);
 

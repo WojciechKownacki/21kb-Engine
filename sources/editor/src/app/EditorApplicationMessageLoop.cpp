@@ -950,15 +950,15 @@ void ConfigurePlayModePointerViewport(EditorApplicationState& state) {
     }
 
     if (viewKind == DockPanelKind::Game) {
-        // The picture sits inside the panel with bars around it, so the pointer is mapped through the picture.
-        const GameViewRects rects = GamePanelContentRenderer::Resolve(
-            scenePanel->content, GamePanelContentRenderer::ListOpen(state.sceneContext, scenePanel->panelId));
-        const GameViewPicture picture = GamePanelContentRenderer::ResolvePicture(rects.renderArea, state.sceneContext);
-        if (picture.destination.right <= picture.destination.left || picture.destination.bottom <= picture.destination.top) {
+        // The picture sits on the screen of a device inside the panel, so the pointer is mapped through the screen.
+        const GameViewPicture picture = GamePanelContentRenderer::ResolvePicture(
+            GamePanelContentRenderer::Resolve(scenePanel->content).renderArea, state.sceneContext);
+        const RECT& screen = picture.frame.screen;
+        if (screen.right <= screen.left || screen.bottom <= screen.top) {
             state.inputCollector.ClearPointerViewport();
             return;
         }
-        state.inputCollector.ConfigurePointerViewport(coordinateWindow, picture.destination, picture.renderWidth, picture.renderHeight);
+        state.inputCollector.ConfigurePointerViewport(coordinateWindow, screen, picture.renderWidth, picture.renderHeight);
         return;
     }
 

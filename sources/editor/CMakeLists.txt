@@ -437,6 +437,7 @@ add_executable(kb_editor WIN32
     src/private/app/game_view/EditorGameViewPointerController.hpp
     src/private/rendering/GamePanelContentRenderer.hpp
     src/private/scene/EditorGameView.hpp
+    src/private/scene/EditorViewportMessages.hpp
     src/private/app/scene_viewport/EditorSceneViewportTypes.hpp
     src/private/app/EditorWindowLifecycleHandler.hpp
     src/private/app/EditorWindowHitTestHandler.hpp
@@ -1086,6 +1087,7 @@ add_executable(kb_editor WIN32
     src/scene/EditorViewportCameraState.cpp
     src/scene/EditorViewportPreviewState.cpp
     src/scene/EditorGameView.cpp
+    src/scene/EditorViewportMessages.cpp
     src/scene/material/EditorMaterialAssetAuthoring.cpp
     src/scene/material/EditorMaterialAssetEditCommand.cpp
     src/scene/material/EditorMaterialAssetGateway.cpp
@@ -1635,6 +1637,7 @@ if(BUILD_TESTING)
           src/scene/EditorViewportCameraState.cpp
           src/scene/EditorViewportPreviewState.cpp
           src/scene/EditorGameView.cpp
+          src/scene/EditorViewportMessages.cpp
           src/rendering/EditorSceneViewportGeometry.cpp
           src/scene/EditorAnimationPreviewScene.cpp
           src/scene/EditorPreviewStudio.cpp
@@ -2362,8 +2365,8 @@ if(BUILD_TESTING)
             --selftest-task "SELFTEST-Navigation")
     set_tests_properties(kb_editor_navigation_headless PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;navigation" TIMEOUT 180)
-    # The Game View while Play runs: the game camera at each resolution choice, the letterboxed picture and its
-    # scale, no editor overlay, and the editor settings that keep the choice.
+    # The Game View while Play runs: the game camera on each device, its screen inside the panel and the scale,
+    # no editor overlay, the safe area outline, and the editor settings that keep the choices.
     add_test(NAME kb_editor_game_view_headless
         COMMAND $<TARGET_FILE:kb_editor>
             --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessGameViewScenario.json"

@@ -46,6 +46,7 @@
 #include "rendering/EditorParticleThumbnailService.hpp"
 #include "rendering/ParticleThumbnailTimeline.hpp"
 #include "scene/BlendSpace2DEditorState.hpp"
+#include "scene/EditorViewportMessages.hpp"
 #include "rendering/EditorSceneBgfxViewport.hpp"
 #include "app/inspector/EditorInspectorPointerController.hpp"
 #include "app/scene_viewport/EditorUIRectInteraction.hpp"
@@ -3949,6 +3950,37 @@ bool EditorHeadlessAutomation::CaptureGameView(std::string_view checkpoint, int 
     }, false);
 }
 
+bool EditorHeadlessAutomation::CaptureGameViewOverlay(
+    std::string_view checkpoint, std::string_view pictureCheckpoint, int areaWidth, int areaHeight) {
+    const std::filesystem::path source = artifactRoot_ / "screenshots" / (SafeCheckpoint(pictureCheckpoint) + ".png");
+    const std::filesystem::path path = artifactRoot_ / "screenshots" / (SafeCheckpoint(checkpoint) + ".bmp");
+    HeroIconGdiplusRuntime::EnsureStarted();
+    Gdiplus::Bitmap picture(source.c_str());
+    if (picture.GetLastStatus() != Gdiplus::Ok || !GamePanelContentRenderer::ShowsGame(context_)) {
+        Trace("capture_game_view_overlay", false, "picture-unreadable-or-no-game");
+        return false;
+    }
+    const DockPanel panel{ .id = static_cast<std::uint32_t>(kGameViewKey), .kind = DockPanelKind::Game };
+    const RECT content{ 0, -GamePanelContentRenderer::ToolbarHeight, areaWidth, areaHeight };
+    const auto settings = GamePanelContentRenderer::BuildSettings(content, panel, context_, impl_->backendSettings);
+    const RECT screen = GamePanelContentRenderer::ResolvePicture(GamePanelContentRenderer::Resolve(content).renderArea, context_).frame.screen;
+    const int width = screen.right - screen.left;
+    const int height = screen.bottom - screen.top;
+    if (width < 1 || height < 1) {
+        Trace("capture_game_view_overlay", false, "no-screen");
+        return false;
+    }
+    const bool saved = CaptureBitmap(path, ScreenshotDimensions{ width, height, 96 }, [&](HDC memory) {
+        Gdiplus::Graphics graphics(memory);
+        graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+        graphics.DrawImage(&picture, 0, 0, width, height);
+        EditorSceneViewportTextOverlay renderer;
+        static_cast<void>(renderer.Paint(memory, RECT{ 0, 0, width, height }, settings.viewportTextLabels, settings.viewportOverlayShapes));
+    });
+    Trace("capture_game_view_overlay", saved, path.filename().string());
+    return saved;
+}
+
 std::pair<bool, std::string> EditorHeadlessAutomation::VerifyGameViewSettings(int areaWidth, int areaHeight) {
     if (!GamePanelContentRenderer::ShowsGame(context_)) {
         return { false, "the game is not running with a primary camera" };
@@ -3971,6 +4003,17 @@ std::pair<bool, std::string> EditorHeadlessAutomation::VerifyGameViewSettings(in
     expect(settings.selectedEntityIds.empty() && !settings.selectionMaskEnabled && !settings.selectionOutlineEnabled, "a selection is shown");
     expect(settings.screenUIEnabled, "the game's UI is not drawn");
     expect(!settings.drawSafeArea, "a safe area is drawn");
+    // The safe area outlines are the lines two pixels thick; the bar's button decides whether they are there.
+    const EditorPlayPreferences& play = context_.EditorConfig().play;
+    const auto outlines = static_cast<std::size_t>(std::ranges::count_if(settings.viewportOverlayShapes, [](const auto& shape) {
+        return shape.kind == EditorSceneViewportOverlayShape::Kind::Polyline && shape.thickness == 2.0F;
+    }));
+    const auto now = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+    expect(EditorViewportMessages::Recent(context_.Console(), now).empty() == settings.viewportTextLabels.empty(),
+        "the messages of the console are not the plates over the picture");
+    expect(outlines == (play.gameViewSafeArea ? EditorGameView::SafeFrames(play.gameViewDevice, play.gameViewPortrait).count : 0U),
+        "the safe area outlines do not follow the button");
     expect(settings.viewportKey == panel.id, "the viewport session is not the Game View's own");
     expect(settings.renderScale == context_.ProjectConfiguration().display.renderScale, "the project's render scale is not applied");
     return { failures.empty(),

@@ -203,9 +203,12 @@ public:
     // The Scene panel's viewport exactly as the editor presents it: its own camera and the
     // production present settings, editor overlays included (grid lines, the world cell grid).
     [[nodiscard]] bool CaptureSceneViewport(std::string_view checkpoint);
-    // The Game View's picture while the game runs: the game camera at the chosen resolution, with the
+    // The Game View's picture while the game runs: the game camera at the chosen device's resolution, with the
     // panel's render area (below its bar) `areaWidth` x `areaHeight`, read back to a PNG.
     [[nodiscard]] bool CaptureGameView(std::string_view checkpoint, int areaWidth, int areaHeight);
+    // The picture of an earlier CaptureGameView as the window shows it: scaled to the device's screen with the safe
+    // area outline and the messages laid over it.
+    [[nodiscard]] bool CaptureGameViewOverlay(std::string_view checkpoint, std::string_view pictureCheckpoint, int areaWidth, int areaHeight);
     // Checks the settings the Game View hands the renderer for that area: the game camera, no editor overlay of
     // any kind, the project's render scale. The text says what was found.
     [[nodiscard]] std::pair<bool, std::string> VerifyGameViewSettings(int areaWidth, int areaHeight);

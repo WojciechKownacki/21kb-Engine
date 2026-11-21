@@ -6755,14 +6755,18 @@ ReadScriptValue(
         return { state.context.SaveEditorConfig(std::move(configuration)), "play target " + *target };
     }
 
-    if (*operation == "set_game_view_resolution") {
-        const auto name = StringMember(step, "resolution", error);
+    if (*operation == "set_game_view_device") {
+        // The device the Game View shows the game on, with its orientation and the safe area outline; the ones
+        // not given stay as they are. Kept in the editor settings like the buttons of the Game View's bar.
+        const auto name = StringMember(step, "device", error);
         if (!name) return { false, error };
-        const std::optional<EditorGameViewResolution> resolution = EditorGameView::FromName(*name);
-        if (!resolution.has_value()) return { false, "unknown Game View resolution " + *name };
+        const std::optional<EditorGameViewDevice> device = EditorGameView::FromName(*name);
+        if (!device.has_value()) return { false, "unknown Game View device " + *name };
         EditorConfiguration configuration = state.context.EditorConfig();
-        configuration.play.gameViewResolution = *resolution;
-        return { state.context.SaveEditorConfig(std::move(configuration)), "game view resolution " + *name };
+        configuration.play.gameViewDevice = *device;
+        if (const auto portrait = BoolMember(step, "portrait", error, false)) configuration.play.gameViewPortrait = *portrait;
+        if (const auto safeArea = BoolMember(step, "safe_area", error, false)) configuration.play.gameViewSafeArea = *safeArea;
+        return { error.empty() && state.context.SaveEditorConfig(std::move(configuration)), error.empty() ? "game view device " + *name : error };
     }
 
     if (*operation == "capture_game_view") {
@@ -6776,6 +6780,30 @@ ReadScriptValue(
             "game view:" + *checkpoint };
     }
 
+    if (*operation == "capture_game_view_overlay") {
+        // An earlier capture_game_view picture scaled to the device's screen, with what the window lays over it:
+        // the safe area outline and the messages.
+        const auto checkpoint = StringMember(step, "checkpoint", error);
+        const auto picture = StringMember(step, "picture", error);
+        const double areaWidth = NumberMember(step, "area_width", error, false).value_or(640.0);
+        const double areaHeight = NumberMember(step, "area_height", error, false).value_or(360.0);
+        if (!checkpoint || !picture || !error.empty()) return { false, error };
+        return { state.automation.CaptureGameViewOverlay(*checkpoint, *picture, static_cast<int>(areaWidth), static_cast<int>(areaHeight)),
+            "game view overlay:" + *checkpoint };
+    }
+
+    if (*operation == "console_message") {
+        // A line in the Console; warnings and errors also show as plates over the viewports for a few seconds.
+        const auto level = StringMember(step, "level", error);
+        const auto text = StringMember(step, "text", error);
+        if (!level || !text) return { false, error };
+        if (*level == "warning") state.context.Console().Warning("automation", *text);
+        else if (*level == "error") state.context.Console().Error("automation", *text);
+        else if (*level == "info") state.context.Console().Info("automation", *text);
+        else return { false, "level must be info, warning or error" };
+        return { true, *level + ": " + *text };
+    }
+
     if (*operation == "assert_game_view_settings") {
         const double areaWidth = NumberMember(step, "area_width", error, false).value_or(640.0);
         const double areaHeight = NumberMember(step, "area_height", error, false).value_or(360.0);
@@ -6785,19 +6813,19 @@ ReadScriptValue(
     }
 
     if (*operation == "assert_game_view_layout") {
-        // The picture the Game View shows in an area below its bar: the size it renders at, where it sits
-        // (relative to the area) and the scale the bar reads. Every expectation given must hold.
+        // The device the Game View shows in an area below its bar: the size the picture renders at, where its
+        // screen sits (relative to the area) and the scale the bar reads. Every expectation given must hold.
         const double areaWidth = NumberMember(step, "area_width", error).value_or(0.0);
         const double areaHeight = NumberMember(step, "area_height", error).value_or(0.0);
         if (!error.empty() || areaWidth < 1.0 || areaHeight < 1.0) return { false, error.empty() ? "the area must not be empty" : error };
         const RECT content{ 0, -GamePanelContentRenderer::ToolbarHeight, static_cast<LONG>(areaWidth), static_cast<LONG>(areaHeight) };
-        const GameViewRects rects = GamePanelContentRenderer::Resolve(content, false);
+        const GameViewRects rects = GamePanelContentRenderer::Resolve(content);
         const GameViewPicture picture = GamePanelContentRenderer::ResolvePicture(rects.renderArea, state.context);
-        const std::string scale = EditorGameView::FormatScale(
-            static_cast<std::uint32_t>(picture.destination.right - picture.destination.left), picture.renderWidth);
+        const RECT& screen = picture.frame.screen;
+        const std::string scale = EditorGameView::FormatScale(static_cast<std::uint32_t>(screen.right - screen.left), picture.renderWidth);
         std::ostringstream report;
-        report << "render " << picture.renderWidth << "x" << picture.renderHeight << ", picture (" << picture.destination.left << ","
-               << picture.destination.top << ")-(" << picture.destination.right << "," << picture.destination.bottom << "), scale " << scale;
+        report << "render " << picture.renderWidth << "x" << picture.renderHeight << ", screen (" << screen.left << ","
+               << screen.top << ")-(" << screen.right << "," << screen.bottom << "), scale " << scale;
         bool ok = true;
         const auto check = [&](const char* key, double actual) {
             if (const auto expected = NumberMember(step, key, error, false); expected.has_value() && std::abs(*expected - actual) > 1.0) {
@@ -6807,10 +6835,10 @@ ReadScriptValue(
         };
         check("render_width", picture.renderWidth);
         check("render_height", picture.renderHeight);
-        check("left", picture.destination.left);
-        check("top", picture.destination.top);
-        check("right", picture.destination.right);
-        check("bottom", picture.destination.bottom);
+        check("left", screen.left);
+        check("top", screen.top);
+        check("right", screen.right);
+        check("bottom", screen.bottom);
         if (const auto expectedScale = StringMember(step, "scale", error, false); expectedScale.has_value() && *expectedScale != scale) {
             report << "; scale expected " << *expectedScale;
             ok = false;

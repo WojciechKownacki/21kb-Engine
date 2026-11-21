@@ -80,6 +80,9 @@ public:
     [[nodiscard]] static HeroIconGlyph Scissors() noexcept;
     [[nodiscard]] static HeroIconGlyph ClipboardCopy() noexcept;
     [[nodiscard]] static HeroIconGlyph ClipboardPaste() noexcept;
+    [[nodiscard]] static HeroIconGlyph Tablet() noexcept;
+    [[nodiscard]] static HeroIconGlyph Smartphone() noexcept;
+    [[nodiscard]] static HeroIconGlyph Scan() noexcept;
 };
 
 } // namespace kb::editor

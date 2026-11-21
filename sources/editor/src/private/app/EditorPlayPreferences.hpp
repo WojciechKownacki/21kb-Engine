@@ -13,21 +13,21 @@ enum class EditorPlayTarget : std::uint8_t {
     GameView,
 };
 
-// The picture sizes the Game View offers. Free Aspect follows the panel; the others render at their own size
-// and are fitted inside the panel with bars at the sides. The names are written to the editor settings.
-enum class EditorGameViewResolution : std::uint8_t {
-    FreeAspect,
-    ProjectResolution,
-    Landscape16x9,
-    Portrait9x16,
-    PhoneLandscape,
-    Tablet4x3,
-    Tablet16x10,
+// The device the Game View shows the game on. Each has a screen of its own size and shape; a tablet and a
+// phone can also lie or stand. The names are written to the editor settings.
+enum class EditorGameViewDevice : std::uint8_t {
+    Computer,
+    Tablet,
+    Phone,
 };
 
 struct EditorPlayPreferences {
     EditorPlayTarget target = EditorPlayTarget::GameView;
-    EditorGameViewResolution gameViewResolution = EditorGameViewResolution::FreeAspect;
+    EditorGameViewDevice gameViewDevice = EditorGameViewDevice::Computer;
+    // A tablet or a phone stands instead of lying.
+    bool gameViewPortrait = false;
+    // The Game View outlines the part of the picture free of notches, rounded corners and overscan.
+    bool gameViewSafeArea = false;
     // Play mode begins paused, so the first frame can be looked at.
     bool startPaused = false;
 

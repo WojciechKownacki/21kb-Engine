@@ -98,10 +98,10 @@ std::vector<EditorSceneBgfxViewport::HostSurfaceLayout> EditorHostSurfaceLayoutR
         }
         if (panel->kind == DockPanelKind::Game) {
             if (GamePanelContentRenderer::ShowsGame(sceneContext)) {
+                // The picture's own window sits on the device's screen; the device around it is drawn by the panel.
                 layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
                     .viewportKey = panelLayout.panelId,
-                    .bounds = GamePanelContentRenderer::Resolve(
-                        content, GamePanelContentRenderer::ListOpen(sceneContext, panelLayout.panelId)).renderArea,
+                    .bounds = GamePanelContentRenderer::ResolvePicture(GamePanelContentRenderer::Resolve(content).renderArea, sceneContext).frame.screen,
                 });
             }
             continue;

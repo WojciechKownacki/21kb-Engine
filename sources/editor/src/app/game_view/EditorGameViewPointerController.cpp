@@ -18,32 +18,27 @@ EditorGameViewPointerController::EditorGameViewPointerController(EditorSceneCont
     : sceneContext_(sceneContext), sceneViewport_(sceneViewport) {}
 
 bool EditorGameViewPointerController::HandlePointerDown(const EditorResolvedPanelContent& panel, int x, int y) {
-    EditorViewportPreviewState& preview = sceneContext_.ViewportPreview(panel.panelId);
-    const bool listOpen = preview.ToolbarDropdown() == EditorViewportToolbarDropdown::GameResolution;
-    const GameViewRects rects = GamePanelContentRenderer::Resolve(panel.content, listOpen);
-
-    if (listOpen) {
-        if (const std::optional<std::size_t> item = GamePanelContentRenderer::ItemAt(rects, x, y)) {
-            EditorConfiguration configuration = sceneContext_.EditorConfig();
-            configuration.play.gameViewResolution = EditorGameView::kResolutions[*item];
-            preview.CloseToolbarDropdown();
-            static_cast<void>(sceneContext_.SaveEditorConfig(std::move(configuration)));
-            sceneViewport_.RequestPresent();
-            return true;
-        }
+    const GameViewRects rects = GamePanelContentRenderer::Resolve(panel.content);
+    if (!PointInRect(rects.toolbar, x, y)) {
+        return false;
     }
-    if (PointInRect(rects.resolutionButton, x, y)) {
-        preview.ToggleToolbarDropdown(EditorViewportToolbarDropdown::GameResolution);
-        sceneViewport_.RequestPresent();
+    EditorConfiguration configuration = sceneContext_.EditorConfig();
+    EditorPlayPreferences& play = configuration.play;
+    if (const std::optional<EditorGameViewDevice> device = GamePanelContentRenderer::DeviceAt(rects, x, y)) {
+        play.gameViewDevice = *device;
+    } else if (PointInRect(rects.rotateButton, x, y)) {
+        // A computer cannot be turned; its button stays on the bar without an effect.
+        if (EditorGameView::CanRotate(play.gameViewDevice)) {
+            play.gameViewPortrait = !play.gameViewPortrait;
+        }
+    } else if (PointInRect(rects.safeAreaButton, x, y)) {
+        play.gameViewSafeArea = !play.gameViewSafeArea;
+    } else {
         return true;
     }
-    const bool onBar = PointInRect(rects.toolbar, x, y) || (listOpen && PointInRect(rects.list, x, y));
-    if (listOpen && !onBar) {
-        // A press on the picture puts the list away and goes on to the game.
-        preview.CloseToolbarDropdown();
-        sceneViewport_.RequestPresent();
-    }
-    return onBar;
+    static_cast<void>(sceneContext_.SaveEditorConfig(std::move(configuration)));
+    sceneViewport_.RequestPresent();
+    return true;
 }
 
 } // namespace kb::editor

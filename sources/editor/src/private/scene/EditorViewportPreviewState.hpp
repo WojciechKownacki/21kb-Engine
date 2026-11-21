@@ -42,8 +42,6 @@ enum class EditorViewportToolbarDropdown : std::uint8_t {
     GridSpacing,
     SnapStep,
     RotationSnap,
-    // The Game View's list of resolutions.
-    GameResolution,
 };
 
 struct EditorViewportSafeArea {
@@ -148,6 +146,8 @@ private:
     EditorViewportToolbarDropdown toolbarDropdown_ = EditorViewportToolbarDropdown::None;
 };
 
+// The built-in profile of a kind: its screen size and the insets a notch or rounded corners take.
+[[nodiscard]] const EditorViewportProfile& EditorViewportProfileFor(EditorViewportProfileKind kind) noexcept;
 [[nodiscard]] const char* EditorViewportFitModeLabel(EditorViewportFitMode mode) noexcept;
 [[nodiscard]] const char* EditorViewportCameraModeLabel(EditorViewportCameraMode mode) noexcept;
 // Toolbar labels in the editor language.
