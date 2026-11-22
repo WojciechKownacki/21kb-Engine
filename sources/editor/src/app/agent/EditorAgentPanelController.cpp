@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "app/EditorTextInputShortcuts.hpp"
+#include "engine/platform/win32/Win32ClipboardText.hpp"
 #include "engine/script/ScriptAgentProjectFiles.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
@@ -11,15 +12,24 @@
 #include "project/EditorProjectPaths.hpp"
 #include "rendering/AgentBarRenderer.hpp"
 #include "rendering/AgentPanelRenderer.hpp"
+#include "rendering/HeroIconGdiplusRuntime.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #include <CommDlg.h>
+#include <objidl.h>
+#include <propidl.h>
+#include <gdiplus.h>
 #include <shellapi.h>
 
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
+#include <cstddef>
+#include <cstdio>
+#include <cstring>
 #include <cwctype>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -53,6 +63,90 @@ constexpr UINT kModelsPerAgent = 64U;
         character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
     }
     return lowered;
+}
+
+[[nodiscard]] bool ShiftDown() noexcept {
+    return (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+}
+
+[[nodiscard]] bool IsPicture(const std::filesystem::path& file) {
+    std::wstring extension = file.extension().wstring();
+    for (wchar_t& character : extension) character = static_cast<wchar_t>(towlower(character));
+    return extension == L".png" || extension == L".jpg" || extension == L".jpeg" || extension == L".bmp";
+}
+
+// Where pasted screenshots are kept: inside the project, where the agent may read them.
+[[nodiscard]] std::filesystem::path PicturesFolder() {
+    return EditorProjectPaths::ProjectRoot() / "Saved" / "Agent" / "Images";
+}
+
+[[nodiscard]] std::optional<CLSID> PngEncoder() {
+    UINT count = 0U;
+    UINT bytes = 0U;
+    if (Gdiplus::GetImageEncodersSize(&count, &bytes) != Gdiplus::Ok || bytes == 0U) return std::nullopt;
+    std::vector<std::byte> buffer(bytes);
+    auto* encoders = reinterpret_cast<Gdiplus::ImageCodecInfo*>(buffer.data());
+    if (Gdiplus::GetImageEncoders(count, bytes, encoders) != Gdiplus::Ok) return std::nullopt;
+    for (UINT index = 0; index < count; ++index) {
+        if (std::wstring_view{ encoders[index].MimeType } == L"image/png") return encoders[index].Clsid;
+    }
+    return std::nullopt;
+}
+
+// A bitmap on the clipboard (a screenshot, a copied picture) written as a PNG; nothing when the
+// clipboard holds none.
+[[nodiscard]] std::optional<std::filesystem::path> SaveClipboardPicture(HWND owner) {
+    if (IsClipboardFormatAvailable(CF_DIB) == FALSE || OpenClipboard(owner) == FALSE) return std::nullopt;
+    std::vector<std::byte> dib;
+    if (HANDLE handle = GetClipboardData(CF_DIB); handle != nullptr) {
+        if (const void* data = GlobalLock(handle); data != nullptr) {
+            dib.resize(GlobalSize(handle));
+            std::memcpy(dib.data(), data, dib.size());
+            GlobalUnlock(handle);
+        }
+    }
+    CloseClipboard();
+    if (dib.size() < sizeof(BITMAPINFOHEADER)) return std::nullopt;
+    const auto* info = reinterpret_cast<const BITMAPINFO*>(dib.data());
+    const BITMAPINFOHEADER& header = info->bmiHeader;
+    // The pixels follow the header, its colour masks and its palette.
+    std::size_t offset = header.biSize;
+    if (header.biSize == sizeof(BITMAPINFOHEADER) && header.biCompression == BI_BITFIELDS) offset += 3U * sizeof(DWORD);
+    const std::size_t colours = header.biClrUsed != 0U ? header.biClrUsed : header.biBitCount <= 8U ? (1U << header.biBitCount) : 0U;
+    offset += colours * sizeof(RGBQUAD);
+    if (offset >= dib.size() || header.biWidth <= 0 || header.biHeight == 0) return std::nullopt;
+    HeroIconGdiplusRuntime::EnsureStarted();
+    const std::optional<CLSID> png = PngEncoder();
+    if (!png.has_value()) return std::nullopt;
+    Gdiplus::Bitmap bitmap(info, dib.data() + offset);
+    if (bitmap.GetLastStatus() != Gdiplus::Ok) return std::nullopt;
+    std::error_code error;
+    std::filesystem::create_directories(PicturesFolder(), error);
+    SYSTEMTIME now{};
+    GetLocalTime(&now);
+    wchar_t name[64]{};
+    std::swprintf(name, 64, L"Screenshot-%04u%02u%02u-%02u%02u%02u-%03u.png", now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond,
+        now.wMilliseconds);
+    const std::filesystem::path file = PicturesFolder() / name;
+    if (bitmap.Save(file.c_str(), &*png, nullptr) != Gdiplus::Ok) return std::nullopt;
+    return file;
+}
+
+// Image files copied in Explorer.
+[[nodiscard]] std::vector<std::filesystem::path> ClipboardPictureFiles(HWND owner) {
+    std::vector<std::filesystem::path> files;
+    if (IsClipboardFormatAvailable(CF_HDROP) == FALSE || OpenClipboard(owner) == FALSE) return files;
+    if (HANDLE handle = GetClipboardData(CF_HDROP); handle != nullptr) {
+        const auto drop = static_cast<HDROP>(handle);
+        const UINT count = DragQueryFileW(drop, 0xFFFFFFFFU, nullptr, 0U);
+        for (UINT index = 0; index < count; ++index) {
+            std::wstring path(static_cast<std::size_t>(DragQueryFileW(drop, index, nullptr, 0U)) + 1U, L'\0');
+            path.resize(DragQueryFileW(drop, index, path.data(), static_cast<UINT>(path.size())));
+            if (IsPicture(path)) files.emplace_back(path);
+        }
+    }
+    CloseClipboard();
+    return files;
 }
 
 [[nodiscard]] std::string ConversationLabel(const EditorAgentConversation& conversation) {
@@ -156,27 +250,44 @@ void EditorAgentPanelController::AttachFile(HWND owner) {
     if (GetOpenFileNameW(&dialog) == FALSE) {
         return;
     }
-    // The agent works in the project folder, so a file inside it is named from there.
     std::filesystem::path file{ buffer.data() };
+    EditorAgentPanelState& agent = sceneContext_.AgentPanel();
+    if (IsPicture(file)) {
+        agent.Attach(file);
+        agent.FocusInput(true);
+        return;
+    }
+    // The agent works in the project folder, so a file inside it is named from there.
     std::error_code error;
     const std::filesystem::path relative = std::filesystem::relative(file, EditorProjectPaths::ProjectRoot(), error);
     if (!error && !relative.empty() && *relative.begin() != "..") {
         file = relative;
     }
     const std::u8string text = file.generic_u8string();
-    EditorAgentPanelState& agent = sceneContext_.AgentPanel();
     agent.InsertText("\"" + std::string{ reinterpret_cast<const char*>(text.data()), text.size() } + "\" ");
     agent.FocusInput(true);
 }
 
 void EditorAgentPanelController::ShowConversations(HWND owner, const RECT& anchor) {
+    // Every conversation of this project, newest first: the open ones are ticked, a closed one
+    // opens again as a tab.
     EditorAgentPanelState& agent = sceneContext_.AgentPanel();
+    agent.Prepare();
+    const std::vector<EditorAgentSavedConversation> saved = agent.SavedConversations();
     std::vector<std::string> rows;
-    for (int index = 0; index < agent.ConversationCount(); ++index) {
-        rows.push_back(ConversationLabel(agent.Conversation(index)));
+    int checked = -1;
+    const std::string& active = agent.Active().id;
+    for (std::size_t index = 0; index < saved.size(); ++index) {
+        rows.push_back((saved[index].open ? std::string{} : std::string{ "    " }) +
+            (saved[index].title.empty() ? std::string{ EditorText("agent.newConversation", "New conversation") } : saved[index].title));
+        if (saved[index].id == active) checked = static_cast<int>(index);
     }
-    if (const std::optional<std::size_t> chosen = PickFromMenu(owner, anchor, rows, agent.ActiveConversation())) {
-        agent.SelectConversation(static_cast<int>(*chosen));
+    if (rows.empty()) {
+        rows.push_back(ConversationLabel(agent.Active()));
+        checked = 0;
+    }
+    if (const std::optional<std::size_t> chosen = PickFromMenu(owner, anchor, rows, checked); chosen.has_value() && *chosen < saved.size()) {
+        agent.OpenSaved(saved[*chosen].id);
     }
 }
 
@@ -220,7 +331,7 @@ bool EditorAgentPanelController::HandlePointerDown(HWND owner, const RECT& conte
     agent.Prepare();
     const AgentPanelHit hit = AgentPanelRenderer::HitTest(content, agent, x, y);
     agent.FocusInput(hit.kind == AgentPanelHitKind::Input || hit.kind == AgentPanelHitKind::Suggestion ||
-        hit.kind == AgentPanelHitKind::NewTab);
+        hit.kind == AgentPanelHitKind::NewTab || hit.kind == AgentPanelHitKind::Attachment);
     const AgentPanelLayout layout = AgentPanelRenderer::Resolve(content, agent);
     switch (hit.kind) {
     case AgentPanelHitKind::Tab:
@@ -271,7 +382,19 @@ bool EditorAgentPanelController::HandlePointerDown(HWND owner, const RECT& conte
     case AgentPanelHitKind::Send:
         return SendOrStop();
     case AgentPanelHitKind::Input:
+        // The caret goes where you click; Shift+click selects up to there.
+        agent.PlaceCaret(AgentPanelRenderer::InputOffset(content, agent, x, y), ShiftDown());
         return true;
+    case AgentPanelHitKind::Attachment:
+        agent.RemoveAttachment(static_cast<std::size_t>(hit.index));
+        return true;
+    case AgentPanelHitKind::Picture: {
+        // A picture opens full size in the system's viewer.
+        const EditorAgentEntry& entry = agent.Active().entries[static_cast<std::size_t>(hit.index)];
+        const std::filesystem::path& file = hit.item >= 0 ? entry.images[static_cast<std::size_t>(hit.item)] : entry.image;
+        ShellExecuteW(owner, L"open", file.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        return true;
+    }
     case AgentPanelHitKind::None:
     default:
         return false;
@@ -402,7 +525,7 @@ bool EditorAgentPanelController::SendOrStop() {
         agent.Stop();
         return true;
     }
-    if (agent.Input().empty()) {
+    if (agent.Input().empty() && agent.Attachments().empty()) {
         return false;
     }
     // The agent works on the files: every unsaved edit (the scene and any open asset editor) goes to
@@ -437,39 +560,87 @@ bool EditorAgentPanelController::HandleChar(WPARAM character) {
     return true;
 }
 
+void EditorAgentPanelController::Paste(HWND owner) {
+    EditorAgentPanelState& agent = sceneContext_.AgentPanel();
+    if (std::vector<std::filesystem::path> files = ClipboardPictureFiles(owner); !files.empty()) {
+        for (std::filesystem::path& file : files) agent.Attach(std::move(file));
+        return;
+    }
+    if (std::optional<std::filesystem::path> picture = SaveClipboardPicture(owner); picture.has_value()) {
+        agent.Attach(std::move(*picture));
+        return;
+    }
+    // Text keeps its line breaks: a pasted list or log stays readable for the agent.
+    if (const std::optional<std::string> text = kb::platform::ReadWin32ClipboardText(owner); text.has_value()) {
+        agent.InsertText(*text);
+    }
+}
+
 bool EditorAgentPanelController::HandleKeyDown(HWND owner, WPARAM key) {
     EditorAgentPanelState& agent = sceneContext_.AgentPanel();
     if (!agent.InputFocused()) {
         return false;
     }
+    const bool control = ControlDown();
+    const bool shift = ShiftDown();
+    // The selection, or the whole request when nothing is selected.
+    const auto copied = [&agent] { return agent.SelectionStart() != agent.SelectionEnd() ? agent.SelectedText() : agent.Input(); };
     switch (EditorTextInputShortcuts::Resolve(key)) {
     case EditorTextInputShortcut::Paste:
-        if (const std::optional<std::string> text = EditorTextInputShortcuts::PasteFromClipboard(owner); text.has_value()) {
-            agent.InsertText(*text);
-        }
+        Paste(owner);
         return true;
     case EditorTextInputShortcut::Copy:
-        static_cast<void>(EditorTextInputShortcuts::CopyToClipboard(owner, agent.Input()));
+        static_cast<void>(EditorTextInputShortcuts::CopyToClipboard(owner, copied()));
         return true;
     case EditorTextInputShortcut::Cut:
-        static_cast<void>(EditorTextInputShortcuts::CopyToClipboard(owner, agent.Input()));
-        agent.SetInput({});
+        static_cast<void>(EditorTextInputShortcuts::CopyToClipboard(owner, copied()));
+        if (agent.SelectionStart() == agent.SelectionEnd()) agent.SelectAll();
+        agent.Delete();
         return true;
     case EditorTextInputShortcut::SelectAll:
+        agent.SelectAll();
+        return true;
     case EditorTextInputShortcut::None:
         break;
     }
+    if (control && (key == 'Z' || key == 'Y')) {
+        if (key == 'Y' || shift) agent.Redo();
+        else agent.Undo();
+        return true;
+    }
+    using Move = EditorAgentPanelState::CaretMove;
     switch (key) {
     case VK_RETURN:
         // Shift+Enter starts a new line; Enter sends.
-        if ((GetKeyState(VK_SHIFT) & 0x8000) != 0) {
+        if (shift) {
             agent.InsertText("\n");
         } else {
             static_cast<void>(SendOrStop());
         }
         return true;
     case VK_BACK:
-        agent.Backspace();
+        agent.Backspace(control);
+        return true;
+    case VK_DELETE:
+        agent.Delete(control);
+        return true;
+    case VK_LEFT:
+        agent.MoveCaret(control ? Move::WordLeft : Move::Left, shift);
+        return true;
+    case VK_RIGHT:
+        agent.MoveCaret(control ? Move::WordRight : Move::Right, shift);
+        return true;
+    case VK_HOME:
+        agent.MoveCaret(control ? Move::Start : Move::LineStart, shift);
+        return true;
+    case VK_END:
+        agent.MoveCaret(control ? Move::End : Move::LineEnd, shift);
+        return true;
+    case VK_UP:
+        agent.MoveCaret(Move::Up, shift);
+        return true;
+    case VK_DOWN:
+        agent.MoveCaret(Move::Down, shift);
         return true;
     case VK_ESCAPE:
         // Esc closes the bubble's picker first, then lets go of the keyboard.

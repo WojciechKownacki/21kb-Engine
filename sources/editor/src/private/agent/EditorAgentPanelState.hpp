@@ -3,10 +3,13 @@
 #include "agent/EditorAgentCatalog.hpp"
 #include "agent/EditorAgentProcess.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -19,6 +22,20 @@ enum class EditorAgentEntryKind : std::uint8_t {
     Tool,   // a tool the agent used (an engine command, a file edit)
     Info,   // the panel's own notes: finished, scene reloaded
     Error,
+    Image,  // a picture the agent made (a capture of the scene); `image` is its file
+};
+
+// Where a tool call stands: running until its result arrives.
+enum class EditorAgentStepState : std::uint8_t {
+    Running,
+    Done,
+    Failed,
+};
+
+// A file of the project the agent's request added or changed, for the marks in Project Files.
+enum class EditorAgentFileChange : std::uint8_t {
+    Added,
+    Changed,
 };
 
 // How much the agent may do with a request: change the project, only say how it would, or only answer.
@@ -31,6 +48,12 @@ enum class EditorAgentMode : std::uint8_t {
 struct EditorAgentEntry {
     EditorAgentEntryKind kind = EditorAgentEntryKind::Info;
     std::string text;
+    // A tool: the agent's id of the call and how it stands.
+    std::string toolId;
+    EditorAgentStepState step = EditorAgentStepState::Done;
+    // An image entry's file; a request's attached pictures.
+    std::filesystem::path image;
+    std::vector<std::filesystem::path> images;
 };
 
 // Where the agent works: the project folder and the kb_cli next to the editor, whose MCP server
@@ -53,9 +76,19 @@ struct EditorAgentUsage {
 // One conversation tab: its own history, draft, agent session and request in progress, so
 // several can run side by side.
 struct EditorAgentConversation {
+    // The name of its history file under Saved/Agent/Conversations.
+    std::string id;
     std::string title;
     std::vector<EditorAgentEntry> entries;
     std::string draft;
+    // The draft's caret and the other end of its selection, as byte offsets on character
+    // boundaries, and earlier drafts for Ctrl+Z / Ctrl+Y.
+    std::size_t caret = 0U;
+    std::size_t anchor = 0U;
+    std::vector<std::string> undo;
+    std::vector<std::string> redo;
+    // Pictures pasted or chosen for the next request.
+    std::vector<std::filesystem::path> attachments;
     // The agent's own conversation id, so the next request continues it, and whose it is.
     std::string session;
     std::string sessionAgent;
@@ -69,12 +102,22 @@ struct EditorAgentConversation {
     bool requestRun = false;
     bool sawError = false;
     std::chrono::steady_clock::time_point started{};
-    // The project's files when the request went out: how many, and the newest write.
+    // The project's files (and when each was written) as the last finished tool left them, so each
+    // step that changes something is shown at once.
     std::filesystem::path project;
-    std::uintmax_t projectFiles = 0U;
-    std::filesystem::file_time_type projectNewest{};
+    std::map<std::filesystem::path, std::filesystem::file_time_type> projectFiles;
+    std::filesystem::file_time_type requestStart{};
     EditorAgentUsage usage;
     int scrollFromBottom = 0;
+    bool saveDue = false;
+    std::chrono::steady_clock::time_point savedAt{};
+};
+
+// A conversation kept on disk, for the history menu.
+struct EditorAgentSavedConversation {
+    std::string id;
+    std::string title;
+    bool open = false;
 };
 
 // The Agent panel: which agent, model and reasoning level answer, whether that profile is
@@ -118,14 +161,41 @@ public:
     void SelectConversation(int index);
     void CloseConversation(int index);
 
-    // The active tab's draft, as UTF-8; WM_CHAR delivers UTF-16, surrogate pairs included.
+    // The active tab's draft, as UTF-8; WM_CHAR delivers UTF-16, surrogate pairs included. Typing
+    // and pasting replace the selection at the caret, as in any text box.
     [[nodiscard]] const std::string& Input() const noexcept { return Active().draft; }
     [[nodiscard]] bool InputFocused() const noexcept { return inputFocused_; }
     void FocusInput(bool focused) noexcept;
     void TypeCharacter(wchar_t character);
     void InsertText(std::string_view text);
     void SetInput(std::string text);
-    void Backspace();
+    void Backspace(bool word = false);
+    void Delete(bool word = false);
+    [[nodiscard]] std::size_t Caret() const noexcept { return Active().caret; }
+    [[nodiscard]] std::size_t SelectionStart() const noexcept { return std::min(Active().caret, Active().anchor); }
+    [[nodiscard]] std::size_t SelectionEnd() const noexcept { return std::max(Active().caret, Active().anchor); }
+    [[nodiscard]] std::string SelectedText() const;
+    enum class CaretMove : std::uint8_t { Left, Right, WordLeft, WordRight, LineStart, LineEnd, Up, Down, Start, End };
+    void MoveCaret(CaretMove move, bool extend);
+    // Puts the caret at a byte offset (from a click), keeping the selection's other end when extending.
+    void PlaceCaret(std::size_t offset, bool extend);
+    void SelectAll() noexcept;
+    void Undo();
+    void Redo();
+
+    // Pictures for the next request: pasted screenshots and chosen images. They go to the agent as
+    // files it opens itself, so every agent that reads images sees them.
+    [[nodiscard]] const std::vector<std::filesystem::path>& Attachments() const noexcept { return Active().attachments; }
+    void Attach(std::filesystem::path image);
+    void RemoveAttachment(std::size_t index);
+
+    // Conversations are kept in the project (Saved/Agent/Conversations) as they go, so nothing
+    // is lost when the editor closes; the open tabs come back with the project.
+    [[nodiscard]] std::vector<EditorAgentSavedConversation> SavedConversations() const;
+    void OpenSaved(const std::string& id);
+
+    // The files the latest request of any tab added or changed, by full path.
+    [[nodiscard]] const std::map<std::filesystem::path, EditorAgentFileChange>& ChangedFiles() const noexcept { return changedFiles_; }
 
     [[nodiscard]] bool Running() const noexcept { return Active().running; }
     [[nodiscard]] bool AnyRunning() const noexcept;
@@ -165,6 +235,17 @@ public:
 
 private:
     [[nodiscard]] EditorAgentConversation& ActiveMutable() noexcept { return *conversations_[static_cast<std::size_t>(active_)]; }
+    void Remember(EditorAgentConversation& conversation);
+    void ReplaceSelection(std::string_view text, bool typing = false);
+    void AddRequest(EditorAgentConversation& conversation, const std::string& request,
+        const std::vector<std::filesystem::path>& images, const std::filesystem::path& project);
+    void UseProject(const std::filesystem::path& project);
+    void Save(EditorAgentConversation& conversation);
+    [[nodiscard]] std::filesystem::path HistoryFolder() const;
+    // Compares the project's files with the conversation's last look, notes what was added or
+    // changed and returns whether anything was.
+    bool TakeProjectChanges(EditorAgentConversation& conversation);
+    void FinishStep(EditorAgentConversation& conversation, const std::string& toolId, bool failed);
     void ReadLine(EditorAgentConversation& conversation, const std::string& line);
     void ReadClaudeEvent(EditorAgentConversation& conversation, const std::string& line);
     void ReadCodexEvent(EditorAgentConversation& conversation, const std::string& line);
@@ -186,8 +267,14 @@ private:
 
     std::vector<std::unique_ptr<EditorAgentConversation>> conversations_;
     int active_ = 0;
+    std::filesystem::path historyProject_;
+    std::map<std::filesystem::path, EditorAgentFileChange> changedFiles_;
     bool inputFocused_ = false;
     wchar_t pendingHighSurrogate_ = 0;
+    bool typingRun_ = false;
+    bool projectChangedNow_ = false;
+    // The pictures a running tool call names, shown once it succeeds.
+    std::map<std::string, std::vector<std::filesystem::path>> pendingImages_;
     bool barExpanded_ = false;
     bool answerDismissed_ = false;
     bool modelMenuOpen_ = false;

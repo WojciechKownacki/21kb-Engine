@@ -11,6 +11,8 @@
 #include "kb/editor/assets/EditorAssetBrowserTypes.hpp"
 
 #include <filesystem>
+#include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -170,11 +172,17 @@ public:
     [[nodiscard]] std::vector<std::string> AssetTypes(const kb::assets::AssetManager& manager) const;
     [[nodiscard]] const kb::assets::AssetMetadata* SelectedMetadata(const kb::assets::AssetManager& manager) const noexcept;
 
+    // Files something outside the editor (the agent) just added (true) or changed (false), marked
+    // on their tiles until its next request.
+    void SetRecentChanges(std::map<std::filesystem::path, bool> changes) { recentChanges_ = std::move(changes); }
+    [[nodiscard]] std::optional<bool> RecentChange(const std::filesystem::path& file) const;
+
 private:
     [[nodiscard]] bool ContextMenuTargetFolderCanMutate(const kb::assets::AssetManager& manager) const;
     [[nodiscard]] bool ContextMenuTargetIsProjectContent(const kb::assets::AssetManager& manager) const;
 
     EditorAssetBrowserSelectionState selection_;
+    std::map<std::filesystem::path, bool> recentChanges_;
     EditorAssetBrowserViewState view_;
     EditorAssetBrowserTextEditState textEdit_;
     EditorAssetBrowserContextMenuState contextMenu_;

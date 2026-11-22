@@ -36,11 +36,14 @@ enum class AgentPanelHitKind : std::uint8_t {
     Suggestion,    // an example request on an empty conversation (index)
     Input,
     Send,          // Send, or Stop while the agent works
+    Attachment,    // a picture waiting for the next request (index): takes it off
+    Picture,       // a picture in the conversation (index: entry, item: which of a request's pictures)
 };
 
 struct AgentPanelHit {
     AgentPanelHitKind kind = AgentPanelHitKind::None;
     int index = -1;
+    int item = -1;
 };
 
 struct AgentPanelLayout {
@@ -67,6 +70,8 @@ struct AgentPanelLayout {
     RECT composer{};
     RECT input{};
     RECT sendButton{};
+    // The pictures for the next request, over the composer.
+    std::vector<RECT> attachments;
 };
 
 class AgentPanelRenderer final {
@@ -82,6 +87,8 @@ public:
     [[nodiscard]] static std::string SignInCommand(const EditorAgentPanelState& state);
     // The example requests an empty conversation offers.
     [[nodiscard]] static std::string_view Suggestion(int index);
+    // The draft's byte offset nearest a point in the request box, for a click.
+    [[nodiscard]] static std::size_t InputOffset(const RECT& content, const EditorAgentPanelState& state, int x, int y);
 
     // The active conversation alone, newest at the bottom of `area`, for the agent bar's
     // unfolded view; the same entries the panel shows.

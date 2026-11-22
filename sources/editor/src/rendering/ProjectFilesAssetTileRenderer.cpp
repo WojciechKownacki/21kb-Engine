@@ -626,6 +626,15 @@ void DrawAssetTile(
         Draw::DrawIconWithShadow(dc, LargeIconRect(tile, visual), icon.kind, icon.color, icon.strokeWidth);
     }
     Draw::DrawChangeMarker(dc, RECT{ tile.left, tile.top, tile.right - 4, tile.top + 18 }, asset.metadata.physicalPath);
+    // What the agent's latest request added or changed, in its top-left corner.
+    if (const std::optional<bool> added = state.RecentChange(asset.metadata.physicalPath); added.has_value()) {
+        const std::string_view label = *added ? EditorText("projectFiles.tile.new", "NEW") : EditorText("projectFiles.tile.changed", "CHANGED");
+        const COLORREF fill = *added ? RGB(28, 84, 52) : RGB(92, 66, 18);
+        const COLORREF ink = *added ? RGB(140, 236, 170) : RGB(250, 205, 120);
+        const RECT badge{ tile.left + 4, tile.top + 4, std::min(tile.right - 4, tile.left + 4 + 12 + static_cast<LONG>(label.size()) * 6), tile.top + 18 };
+        GdiDrawing::DrawSharpFrame(dc, badge, fill, ink);
+        Draw::DrawTextWithFont(dc, badge, label, ink, 8, FW_SEMIBOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
     if (EditorAudioAssetPreview::IsPlaying(asset.metadata.id)) {
         const int badgeHeight = 32;
         const int badgeTop = (visual.icon.top + visual.icon.bottom - badgeHeight) / 2;

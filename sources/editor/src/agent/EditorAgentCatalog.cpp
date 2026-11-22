@@ -117,7 +117,9 @@ struct Preset {
             "You work inside the 21kb editor on the open project. Keep the request small: AGENTS.md says where things are; "
             "read only the one guide (kb-engine guide tool) or API page (api_reference with a topic) the task needs. "
             "Change scenes, entities, components and assets with the kb-engine tools (kb_cli runs any command); "
-            "do not run shell commands or parse the project's binary files." };
+            "do not run shell commands or parse the project's binary files. "
+            "To show the user how the scene looks, render it with the kb_cli capture command (--out Saved/Agent/Images/<name>.png): "
+            "the editor shows that picture in the conversation. Pictures the user attaches are listed as paths; open them with Read." };
         agent.resumeArguments = { "--resume", "{session}" };
         agent.persistentArguments = { "--input-format", "stream-json" };
         agent.requestTemplate = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":{request}}}\n";

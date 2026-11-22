@@ -774,6 +774,13 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
             InvalidateRect(context_.mainWindow, nullptr, FALSE);
             return 0;
         }
+        // The agent's request box, when it has the keyboard, takes its editing keys before any panel
+        // shortcut (Ctrl+C, Ctrl+Z, Delete, the arrows); other Ctrl shortcuts still reach the editor.
+        if (EditorAgentPanelController{ context_.sceneContext }.HandleKeyDown(messageWindow, wparam)) {
+            InvalidateRect(messageWindow, nullptr, FALSE);
+            if (messageWindow != context_.mainWindow) InvalidateRect(context_.mainWindow, nullptr, FALSE);
+            return 0;
+        }
         if (EditorCurveEditorPointerHandler{ context_ }.HandleKey(messageWindow, wparam)) return 0;
         if (wparam == VK_ESCAPE && context_.dockController.CancelDragAndRestore()) {
             context_.sceneViewport.RequestPresent();
@@ -895,11 +902,6 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         }
         if (HandleMaterialGraphShortcut(messageWindow, context_, wparam)) {
             context_.sceneViewport.RequestPresent();
-            return 0;
-        }
-        if (EditorAgentPanelController{ context_.sceneContext }.HandleKeyDown(messageWindow, wparam)) {
-            InvalidateRect(messageWindow, nullptr, FALSE);
-            if (messageWindow != context_.mainWindow) InvalidateRect(context_.mainWindow, nullptr, FALSE);
             return 0;
         }
         if (HandleSearchFieldKeyDown(context_.sceneContext.Console().Filter(), messageWindow, wparam,

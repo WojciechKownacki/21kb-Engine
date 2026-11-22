@@ -220,7 +220,8 @@ struct Block {
         if (Blank(entry.text)) continue;
         switch (entry.kind) {
         case EditorAgentEntryKind::Tool:
-            tools += (tools.empty() ? L"" : L"  \x00B7  ") + Wide(entry.text.substr(0U, entry.text.find(' ')));
+            // The latest step says what the agent is doing; the earlier ones of the turn stay folded.
+            tools = Wide(entry.text);
             break;
         case EditorAgentEntryKind::User:
             flushTools();
@@ -235,6 +236,7 @@ struct Block {
             blocks.push_back(Block{ Block::Kind::Error, Wrap(Wide(entry.text), type.body, width, 1000), 8 });
             break;
         case EditorAgentEntryKind::Info:
+        case EditorAgentEntryKind::Image:
             break;
         }
     }
@@ -751,9 +753,12 @@ void AgentBarRenderer::Paint(void* pixels, const AgentBarLayout& layout, const E
         }
     }
     if (focused) {
-        const float caretX = inputLeft + (state.Input().empty() ? 0.0F : Width(lines.back(), type.body)) + 1.0F;
+        // The caret where the text before it ends, wrapped as the whole text is.
+        const std::vector<std::wstring> before = Wrap(Wide(state.Input().substr(0U, state.Caret())), type.body, inputWidth, kMaxInputLines);
+        const float caretX = inputLeft + (before.empty() ? 0.0F : Width(before.back(), type.body)) + 1.0F;
+        const float caretY = firstLine + static_cast<float>(before.empty() ? 0U : before.size() - 1U) * kTextLine;
         const Gdiplus::Pen caret(kAccent, 1.5F);
-        graphics.DrawLine(&caret, caretX, lastLine + 1.0F, caretX, lastLine + 17.0F);
+        graphics.DrawLine(&caret, caretX, caretY + 1.0F, caretX, caretY + 17.0F);
     }
 
     const EditorAgentUsage& usage = state.Active().usage;

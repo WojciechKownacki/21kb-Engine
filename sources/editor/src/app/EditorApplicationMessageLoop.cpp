@@ -68,6 +68,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <memory>
 #include <optional>
 #include <span>
@@ -645,8 +646,8 @@ void UpdateDrawerForWindowHeight(EditorApplicationState& state) noexcept {
 }
 
 // The Agent panel: finds the agents the first time it is shown, moves what the agent wrote into
-// the conversation, and when a request ends shows the agent's work - the scene and the project's
-// assets read back from disk, unless you edited the scene meanwhile.
+// the conversation, and after each of the agent's steps that changed the project shows its work -
+// the scene and the project's assets read back from disk, unless you edited the scene meanwhile.
 void PumpAgentPanel(EditorApplicationState& state) {
     EditorAgentPanelState& agent = state.sceneContext.AgentPanel();
     const bool docked = EditorPanelContentResolver::Resolve(DockPanelKind::Agent, state.window, state.window, state.dockModel, state.floatingWindows, state.metrics).has_value();
@@ -678,6 +679,9 @@ void PumpAgentPanel(EditorApplicationState& state) {
     }
     bool projectChanged = false;
     if (agent.Pump(projectChanged)) {
+        std::map<std::filesystem::path, bool> marks;
+        for (const auto& [file, change] : agent.ChangedFiles()) marks.emplace(file, change == EditorAgentFileChange::Added);
+        state.sceneContext.AssetBrowser().SetRecentChanges(std::move(marks));
         InvalidatePanelKind(state, DockPanelKind::Agent);
         if (!docked) {
             // The bar lives in an overlay the main window's paint places and repaints.
@@ -692,15 +696,24 @@ void PumpAgentPanel(EditorApplicationState& state) {
     }
     reloadPending = false;
     if (state.sceneContext.SceneDocumentDirty()) {
+        // Said once, when the request ends; until then the agent's next steps try again.
+        if (agent.AnyRunning()) {
+            reloadPending = true;
+            return;
+        }
         agent.Add(EditorAgentEntryKind::Info, "The scene has edits made while the agent worked, so it was not reloaded. Save or reopen it to see both.");
         InvalidatePanelKind(state, DockPanelKind::Agent);
         return;
     }
     // The scene from its file as one undoable step, with the selection and undo history kept, and
     // the materials, textures and scripts the agent changed or added picked up too.
-    if (state.sceneContext.ReloadSceneAfterExternalChange()) {
+    if (state.sceneContext.ReloadSceneAfterExternalChange() && !agent.AnyRunning()) {
         agent.Add(EditorAgentEntryKind::Info, "Reloaded the scene and assets with the agent's changes (Ctrl+Z undoes them).");
     }
+    // Project Files, the Hierarchy and the Inspector show the new and changed files and objects.
+    InvalidatePanelKind(state, DockPanelKind::Assets);
+    InvalidatePanelKind(state, DockPanelKind::Hierarchy);
+    InvalidatePanelKind(state, DockPanelKind::Inspector);
     state.sceneViewport.RequestPresent();
     InvalidateRect(state.window, nullptr, FALSE);
 }

@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <vector>
 
 namespace kb::editor {
@@ -35,6 +36,8 @@ public:
 
     [[nodiscard]] static bool IsTextureAsset(const kb::assets::AssetMetadata& metadata) noexcept;
     [[nodiscard]] static const EditorTexturePreviewImage* PreviewFor(const kb::assets::AssetMetadata& metadata);
+    // A plain image file (PNG, JPEG, BMP), read again when it is written anew.
+    [[nodiscard]] static const EditorTexturePreviewImage* PreviewForFile(const std::filesystem::path& file);
     static void DrawContain(HDC dc, RECT target, const EditorTexturePreviewImage& image, bool border = true);
     [[nodiscard]] static EditorTexturePreviewScaledCacheStats ScaledCacheStats();
 };

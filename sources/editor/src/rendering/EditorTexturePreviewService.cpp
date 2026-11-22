@@ -274,6 +274,17 @@ private:
     return cache;
 }
 
+struct FilePreview {
+    std::filesystem::file_time_type written{};
+    bool read = false;
+    std::optional<EditorTexturePreviewImage> image;
+};
+
+[[nodiscard]] std::unordered_map<std::wstring, FilePreview>& FilePreviews() {
+    static std::unordered_map<std::wstring, FilePreview> previews;
+    return previews;
+}
+
 // StretchDIBits in HALFTONE mode (a proper box-filtered resample, not a cheap nearest/bilinear
 // stretch) is expensive enough that re-running it every repaint for every texture-preview node
 // visibly dominated the node graph's frame time. The decoded source image is already cached by
@@ -484,6 +495,23 @@ const EditorTexturePreviewImage* EditorTexturePreviewService::PreviewFor(const k
     return TextureCache().PreviewFor(metadata);
 }
 
+
+const EditorTexturePreviewImage* EditorTexturePreviewService::PreviewForFile(const std::filesystem::path& file) {
+    std::error_code error;
+    const std::filesystem::file_time_type written = std::filesystem::last_write_time(file, error);
+    if (error) {
+        return nullptr;
+    }
+    FilePreview& preview = FilePreviews()[file.wstring()];
+    if (preview.written != written || !preview.read) {
+        preview.written = written;
+        preview.read = true;
+        std::ifstream input{ file, std::ios::binary };
+        const std::vector<std::uint8_t> data((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+        preview.image = DecodeGdiplus(data);
+    }
+    return preview.image.has_value() ? &*preview.image : nullptr;
+}
 
 void EditorTexturePreviewService::DrawContain(HDC dc, RECT target, const EditorTexturePreviewImage& image, bool border) {
     int width = target.right - target.left;

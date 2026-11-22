@@ -70,6 +70,12 @@ bool EditorAssetBrowserState::IsSortMenuOpen() const noexcept {
     return view_.IsSortMenuOpen();
 }
 
+std::optional<bool> EditorAssetBrowserState::RecentChange(const std::filesystem::path& file) const {
+    if (recentChanges_.empty()) return std::nullopt;
+    const auto found = recentChanges_.find(file.lexically_normal());
+    return found != recentChanges_.end() ? std::optional<bool>{ found->second } : std::nullopt;
+}
+
 float EditorAssetBrowserState::ThumbnailScale() const noexcept {
     return view_.ThumbnailScale();
 }

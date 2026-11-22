@@ -4,6 +4,7 @@
 #include "localization/EditorLocalization.hpp"
 #include "platform/win32/Utf8Gdi.hpp"
 #include "rendering/EditorPanelStyle.hpp"
+#include "rendering/EditorTexturePreviewService.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/HeroIconKind.hpp"
 #include "rendering/HeroIconPainter.hpp"
@@ -13,6 +14,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 
 namespace kb::editor {
@@ -27,6 +29,11 @@ constexpr int kHintHeight = 18;
 constexpr int kEntryGap = 12;
 constexpr int kHeaderLine = 18;
 constexpr int kCardPad = 12;
+constexpr int kInputPoint = 12;
+constexpr int kAttachmentSize = 52;
+constexpr int kRequestPicture = 64;
+constexpr int kPictureMaxWidth = 420;
+constexpr int kPictureMaxHeight = 260;
 constexpr COLORREF kTeal = RGB(0, 112, 224);
 constexpr COLORREF kGreen = RGB(63, 194, 123);
 constexpr COLORREF kAmber = RGB(224, 165, 54);
@@ -90,6 +97,127 @@ void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, int pointSiz
     return text;
 }
 
+// The size a picture is shown at in a column of `width`: its own aspect, within the limits.
+[[nodiscard]] SIZE PictureSize(const std::filesystem::path& file, int width) {
+    const EditorTexturePreviewImage* image = EditorTexturePreviewService::PreviewForFile(file);
+    const int maxWidth = std::max(40, std::min(width - 14, kPictureMaxWidth));
+    if (image == nullptr || image->width <= 0 || image->height <= 0) {
+        return SIZE{ maxWidth, 20 };
+    }
+    const double scale = std::min({ 1.0, static_cast<double>(maxWidth) / image->width, static_cast<double>(kPictureMaxHeight) / image->height });
+    return SIZE{ std::max(1, static_cast<int>(image->width * scale)), std::max(1, static_cast<int>(image->height * scale)) };
+}
+
+void PaintPicture(HDC dc, const RECT& rect, const std::filesystem::path& file, const EditorTheme& theme) {
+    if (const EditorTexturePreviewImage* image = EditorTexturePreviewService::PreviewForFile(file)) {
+        EditorTexturePreviewService::DrawContain(dc, rect, *image, true);
+        return;
+    }
+    Text(dc, rect, EditorText("agent.pictureMissing", "The picture is no longer there."), Color(theme.textDisabled), 11, FW_NORMAL,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+
+// The request box's text laid out in lines: each line's byte range in the draft (a line break
+// ends a line; long lines wrap at spaces, or anywhere in a word too long for the box).
+struct InputLine {
+    std::size_t start = 0U;
+    std::size_t end = 0U;
+};
+
+[[nodiscard]] std::size_t NextUtf8(std::string_view text, std::size_t at) noexcept {
+    if (at >= text.size()) return text.size();
+    ++at;
+    while (at < text.size() && (static_cast<unsigned char>(text[at]) & 0xC0U) == 0x80U) ++at;
+    return at;
+}
+
+[[nodiscard]] std::vector<InputLine> LayoutInput(HDC dc, std::string_view text, int width) {
+    std::vector<InputLine> lines;
+    std::size_t start = 0U;
+    while (true) {
+        const std::size_t end = std::min(text.find('\n', start), text.size());
+        // Greedy wrap of [start, end).
+        std::size_t lineStart = start;
+        while (true) {
+            if (TextWidth(dc, text.substr(lineStart, end - lineStart), kInputPoint) <= width) {
+                lines.push_back({ lineStart, end });
+                break;
+            }
+            std::size_t fit = lineStart;
+            std::size_t lastSpace = std::string_view::npos;
+            for (std::size_t at = lineStart; at < end;) {
+                const std::size_t next = NextUtf8(text, at);
+                if (TextWidth(dc, text.substr(lineStart, next - lineStart), kInputPoint) > width) break;
+                if (text[at] == ' ') lastSpace = next;
+                fit = next;
+                at = next;
+            }
+            std::size_t cut = lastSpace != std::string_view::npos && lastSpace > lineStart ? lastSpace : fit;
+            if (cut <= lineStart) cut = NextUtf8(text, lineStart);
+            lines.push_back({ lineStart, cut });
+            lineStart = cut;
+        }
+        if (end >= text.size()) break;
+        start = end + 1U;
+    }
+    return lines;
+}
+
+[[nodiscard]] int InputLineHeight(HDC dc) {
+    return std::max(14, static_cast<int>(Wrapped(dc, "Ag", 1000, kInputPoint).cy));
+}
+
+// The line the caret is on, and the first line shown so that it stays in the box.
+[[nodiscard]] std::size_t CaretLine(const std::vector<InputLine>& lines, std::size_t caret) noexcept {
+    for (std::size_t index = 0; index < lines.size(); ++index) {
+        const bool last = index + 1U == lines.size();
+        if (caret < lines[index].end || (caret == lines[index].end && (last || lines[index + 1U].start != caret))) return index;
+    }
+    return lines.empty() ? 0U : lines.size() - 1U;
+}
+
+[[nodiscard]] std::size_t FirstShownLine(const std::vector<InputLine>& lines, std::size_t caret, int visible) noexcept {
+    const std::size_t caretLine = CaretLine(lines, caret);
+    const std::size_t shown = static_cast<std::size_t>(std::max(1, visible));
+    return caretLine + 1U > shown ? caretLine + 1U - shown : 0U;
+}
+
+// The draft with its caret and selection, wrapped in `rect`.
+void PaintInput(HDC dc, const RECT& rect, const EditorTheme& theme, const EditorAgentPanelState& state) {
+    const std::string& text = state.Input();
+    const int width = static_cast<int>(rect.right - rect.left);
+    const std::vector<InputLine> lines = LayoutInput(dc, text, width);
+    const int lineHeight = InputLineHeight(dc);
+    const int visible = std::max(1, static_cast<int>(rect.bottom - rect.top) / lineHeight);
+    const std::size_t first = FirstShownLine(lines, state.Caret(), visible);
+    const std::size_t selectionStart = state.SelectionStart();
+    const std::size_t selectionEnd = state.SelectionEnd();
+    const int saved = SaveDC(dc);
+    IntersectClipRect(dc, rect.left, rect.top, rect.right, rect.bottom);
+    for (std::size_t index = first; index < lines.size() && static_cast<int>(index - first) < visible; ++index) {
+        const InputLine& line = lines[index];
+        const int top = static_cast<int>(rect.top) + static_cast<int>(index - first) * lineHeight;
+        const auto xAt = [&](std::size_t offset) {
+            return static_cast<int>(rect.left) + TextWidth(dc, std::string_view{ text }.substr(line.start, offset - line.start), kInputPoint);
+        };
+        if (state.InputFocused() && selectionStart != selectionEnd && selectionStart <= line.end && selectionEnd >= line.start) {
+            const std::size_t from = std::max(selectionStart, line.start);
+            const std::size_t to = std::min(selectionEnd, line.end);
+            const int extra = selectionEnd > line.end ? 4 : 0;
+            if (to > from || extra > 0) {
+                GdiDrawing::FillRectColor(dc, RECT{ xAt(from), top, xAt(to) + extra, top + lineHeight }, RGB(38, 79, 120));
+            }
+        }
+        Text(dc, RECT{ rect.left, top, rect.right + 4, top + lineHeight }, std::string_view{ text }.substr(line.start, line.end - line.start),
+            Color(theme.textPrimary), kInputPoint, FW_NORMAL, DT_LEFT | DT_TOP | DT_SINGLELINE);
+        if (state.InputFocused() && index == CaretLine(lines, state.Caret())) {
+            const int x = xAt(state.Caret());
+            GdiDrawing::FillRectColor(dc, RECT{ x, top + 1, x + 1, top + lineHeight - 1 }, Color(theme.textPrimary));
+        }
+    }
+    RestoreDC(dc, saved);
+}
+
 // Whether an entry opens with a header: "You" over every request, the agent's name over the
 // first answer or tool that follows it.
 [[nodiscard]] bool HasHeader(const std::vector<EditorAgentEntry>& entries, std::size_t index) {
@@ -97,7 +225,7 @@ void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, int pointSiz
     if (kind == EditorAgentEntryKind::User) {
         return true;
     }
-    if (kind != EditorAgentEntryKind::Agent && kind != EditorAgentEntryKind::Tool) {
+    if (kind != EditorAgentEntryKind::Agent && kind != EditorAgentEntryKind::Tool && kind != EditorAgentEntryKind::Image) {
         return false;
     }
     return index == 0U || entries[index - 1U].kind == EditorAgentEntryKind::User;
@@ -109,7 +237,10 @@ void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, int pointSiz
     const int header = HasHeader(entries, index) ? kHeaderLine + 4 : 0;
     switch (entry.kind) {
     case EditorAgentEntryKind::User:
-        return header + Wrapped(dc, entry.text, width - kCardPad * 2, 12).cy + kCardPad * 2;
+        return header + (entry.text.empty() ? 0 : static_cast<int>(Wrapped(dc, entry.text, width - kCardPad * 2, 12).cy) + kCardPad * 2) +
+            (entry.images.empty() ? 0 : kRequestPicture + (entry.text.empty() ? 0 : 6));
+    case EditorAgentEntryKind::Image:
+        return header + static_cast<int>(PictureSize(entry.image, width).cy) + 4;
     case EditorAgentEntryKind::Agent:
         return header + Wrapped(dc, entry.text, width - 14, 12).cy;
     case EditorAgentEntryKind::Tool:
@@ -139,12 +270,24 @@ void PaintEntry(HDC dc, const RECT& column, int top, const std::vector<EditorAge
     switch (entry.kind) {
     case EditorAgentEntryKind::User: {
         // Your request: a quiet card under "You", on the same left edge as the answer, so the
-        // eye never travels across a wide panel.
-        const SIZE text = Wrapped(dc, entry.text, width - kCardPad * 2, 12);
-        const RECT card{ left, top, std::min(right, left + static_cast<int>(text.cx) + kCardPad * 2 + 4), top + static_cast<int>(text.cy) + kCardPad * 2 };
-        FillRound(dc, card, Color(theme.toolbarButton), Color(theme.borderPanel), 14);
-        Text(dc, RECT{ card.left + kCardPad, card.top + kCardPad, right - kCardPad, card.bottom - kCardPad }, entry.text,
-            Color(theme.textPrimary), 12, FW_NORMAL, DT_LEFT | DT_WORDBREAK | DT_EDITCONTROL);
+        // eye never travels across a wide panel; its pictures under it.
+        if (!entry.text.empty()) {
+            const SIZE text = Wrapped(dc, entry.text, width - kCardPad * 2, 12);
+            const RECT card{ left, top, std::min(right, left + static_cast<int>(text.cx) + kCardPad * 2 + 4), top + static_cast<int>(text.cy) + kCardPad * 2 };
+            FillRound(dc, card, Color(theme.toolbarButton), Color(theme.borderPanel), 14);
+            Text(dc, RECT{ card.left + kCardPad, card.top + kCardPad, right - kCardPad, card.bottom - kCardPad }, entry.text,
+                Color(theme.textPrimary), 12, FW_NORMAL, DT_LEFT | DT_WORDBREAK | DT_EDITCONTROL);
+            top = static_cast<int>(card.bottom) + 6;
+        }
+        for (std::size_t item = 0; item < entry.images.size(); ++item) {
+            const int x = left + static_cast<int>(item) * (kRequestPicture + 6);
+            PaintPicture(dc, RECT{ x, top, x + kRequestPicture, top + kRequestPicture }, entry.images[item], theme);
+        }
+        break;
+    }
+    case EditorAgentEntryKind::Image: {
+        const SIZE size = PictureSize(entry.image, width);
+        PaintPicture(dc, RECT{ left + 14, top, left + 14 + static_cast<int>(size.cx), top + static_cast<int>(size.cy) }, entry.image, theme);
         break;
     }
     case EditorAgentEntryKind::Agent:
@@ -154,8 +297,14 @@ void PaintEntry(HDC dc, const RECT& column, int top, const std::vector<EditorAge
     case EditorAgentEntryKind::Tool: {
         const RECT chip{ left + 14, top + 1, std::min(right, left + 14 + TextWidth(dc, entry.text, 11) + 34), top + 19 };
         FillRound(dc, chip, Color(theme.chrome), Color(theme.borderChrome), 10);
-        HeroIconPainter::Draw(dc, RECT{ chip.left + 8, chip.top + 3, chip.left + 20, chip.top + 15 }, HeroIconKind::WrenchScrewdriver, Color(theme.textDisabled), 1);
-        Text(dc, RECT{ chip.left + 26, chip.top, chip.right - 8, chip.bottom }, entry.text, Color(theme.textSecondary), 11, FW_NORMAL,
+        // How the step stands: working, done, or failed (the agent then tries another way).
+        const HeroIconKind icon = entry.step == EditorAgentStepState::Running ? HeroIconKind::Clock
+            : entry.step == EditorAgentStepState::Failed ? HeroIconKind::XMark : HeroIconKind::Check;
+        const COLORREF iconColor = entry.step == EditorAgentStepState::Running ? kAmber
+            : entry.step == EditorAgentStepState::Failed ? kDanger : kGreen;
+        HeroIconPainter::Draw(dc, RECT{ chip.left + 8, chip.top + 3, chip.left + 20, chip.top + 15 }, icon, iconColor, 1);
+        Text(dc, RECT{ chip.left + 26, chip.top, chip.right - 8, chip.bottom }, entry.text,
+            entry.step == EditorAgentStepState::Running ? Color(theme.textPrimary) : Color(theme.textSecondary), 11, FW_NORMAL,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         break;
     }
@@ -272,6 +421,12 @@ AgentPanelLayout AgentPanelRenderer::Resolve(const RECT& content, const EditorAg
     const int composerBottom = static_cast<int>(content.bottom) - 6 - kHintHeight;
     const int composerTop = std::max(static_cast<int>(layout.toolbar.bottom), composerBottom - kComposerHeight);
     layout.composer = RECT{ columnLeft, composerTop, columnLeft + columnWidth, composerBottom };
+    // The pictures for the next request stand in a row just over the composer.
+    const int attachmentsTop = composerTop - (state.Attachments().empty() ? 0 : kAttachmentSize + 8);
+    for (std::size_t index = 0; index < state.Attachments().size(); ++index) {
+        const int slotLeft = columnLeft + static_cast<int>(index) * (kAttachmentSize + 6);
+        layout.attachments.push_back(RECT{ slotLeft, attachmentsTop, slotLeft + kAttachmentSize, attachmentsTop + kAttachmentSize });
+    }
     const int rowTop = static_cast<int>(layout.composer.bottom) - 6 - kComposerRowHeight;
     const int rowBottom = rowTop + kComposerRowHeight;
     int rowLeft = static_cast<int>(layout.composer.left) + 6;
@@ -298,7 +453,7 @@ AgentPanelLayout AgentPanelRenderer::Resolve(const RECT& content, const EditorAg
     layout.status = RECT{ layout.composer.left, footerTop, footerMiddle, footerBottom };
     layout.usage = RECT{ footerMiddle + 8, footerTop, footerRight, footerBottom };
 
-    layout.conversation = RECT{ content.left, layout.toolbar.bottom, content.right, std::max(static_cast<int>(layout.toolbar.bottom), composerTop - 8) };
+    layout.conversation = RECT{ content.left, layout.toolbar.bottom, content.right, std::max(static_cast<int>(layout.toolbar.bottom), attachmentsTop - 8) };
     layout.column = RECT{ columnLeft, layout.conversation.top + kPad, columnLeft + columnWidth, layout.conversation.bottom };
     // The example requests stand one above another, so they read in a narrow side panel too.
     constexpr int chipHeight = 32;
@@ -319,6 +474,30 @@ int AgentPanelRenderer::MaximumScroll(const RECT& content, const EditorAgentPane
     const AgentPanelLayout layout = Resolve(content, state);
     const int total = EntriesHeight(state.Active().entries, static_cast<int>(layout.column.right - layout.column.left));
     return std::max(0, total - static_cast<int>(layout.column.bottom - layout.column.top));
+}
+
+std::size_t AgentPanelRenderer::InputOffset(const RECT& content, const EditorAgentPanelState& state, int x, int y) {
+    const AgentPanelLayout layout = Resolve(content, state);
+    HDC dc = MeasuringDc();
+    const std::string& text = state.Input();
+    const std::vector<InputLine> lines = LayoutInput(dc, text, static_cast<int>(layout.input.right - layout.input.left));
+    const int lineHeight = InputLineHeight(dc);
+    const int visible = std::max(1, static_cast<int>(layout.input.bottom - layout.input.top) / lineHeight);
+    const std::size_t first = FirstShownLine(lines, state.Caret(), visible);
+    const std::size_t index = std::min(lines.size() - 1U, first + static_cast<std::size_t>(std::max(0, (y - static_cast<int>(layout.input.top)) / lineHeight)));
+    const InputLine& line = lines[index];
+    // The character boundary nearest the click.
+    std::size_t best = line.start;
+    int bestDistance = std::abs(x - static_cast<int>(layout.input.left));
+    for (std::size_t at = line.start; at < line.end;) {
+        at = NextUtf8(text, at);
+        const int distance = std::abs(x - static_cast<int>(layout.input.left) - TextWidth(dc, std::string_view{ text }.substr(line.start, at - line.start), kInputPoint));
+        if (distance < bestDistance) {
+            best = at;
+            bestDistance = distance;
+        }
+    }
+    return best;
 }
 
 std::string AgentPanelRenderer::SignInCommand(const EditorAgentPanelState& state) {
@@ -403,11 +582,19 @@ void AgentPanelRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& t
     const bool focused = state.InputFocused();
     FillRound(dc, layout.composer, Color(theme.chrome), focused ? Color(theme.accent) : Color(theme.borderPanel), 8);
     if (state.Input().empty() && !focused) {
-        Text(dc, layout.input, EditorText("agent.placeholder", "Describe what the agent should do..."), Color(theme.textDisabled), 12, FW_NORMAL,
-            DT_LEFT | DT_WORDBREAK);
+        Text(dc, layout.input, EditorText("agent.placeholder", "Describe what the agent should do... (Ctrl+V pastes a screenshot)"),
+            Color(theme.textDisabled), 12, FW_NORMAL, DT_LEFT | DT_WORDBREAK);
     } else {
-        Text(dc, layout.input, state.Input() + (focused ? "|" : ""), Color(theme.textPrimary), 12, FW_NORMAL,
-            DT_LEFT | DT_WORDBREAK | DT_EDITCONTROL);
+        PaintInput(dc, layout.input, theme, state);
+    }
+    for (std::size_t index = 0; index < layout.attachments.size(); ++index) {
+        const RECT& slot = layout.attachments[index];
+        FillRound(dc, slot, Color(theme.chrome), Color(theme.borderPanel), 6);
+        PaintPicture(dc, RECT{ slot.left + 2, slot.top + 2, slot.right - 2, slot.bottom - 2 }, state.Attachments()[index], theme);
+        // A click takes the picture off; its corner says so.
+        const RECT close{ slot.right - 16, slot.top + 2, slot.right - 2, slot.top + 16 };
+        FillRound(dc, close, RGB(30, 30, 30), RGB(30, 30, 30), 14);
+        HeroIconPainter::Draw(dc, RECT{ close.left + 3, close.top + 3, close.right - 3, close.bottom - 3 }, HeroIconKind::XMark, RGB(230, 230, 230), 1);
     }
     const auto iconButton = [&](const RECT& rect, HeroIconKind icon, bool enabled) {
         FillRound(dc, rect, Color(theme.panel), Color(theme.panel), 6);
@@ -423,7 +610,7 @@ void AgentPanelRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& t
         PaintPicker(dc, layout.agentMenu, theme, agent != nullptr ? agent->Label() : std::string{ EditorText("agent.none", "None found") }, agent != nullptr);
     }
     PaintPicker(dc, layout.modelMenu, theme, state.Model().empty() ? defaultValue : Capitalized(state.Model()), agent != nullptr && !agent->models.empty());
-    const bool canSend = state.Running() || (agent != nullptr && !state.Input().empty());
+    const bool canSend = state.Running() || (agent != nullptr && (!state.Input().empty() || !state.Attachments().empty()));
     const COLORREF sendFill = state.Running() ? kDanger : (canSend ? Color(theme.accent) : Color(theme.panel));
     FillRound(dc, layout.sendButton, sendFill, sendFill, 6);
     Text(dc, layout.sendButton, state.Running() ? std::string_view{ "\xE2\x96\xA0" } : std::string_view{ "\xE2\x86\x91" },
@@ -482,9 +669,47 @@ AgentPanelHit AgentPanelRenderer::HitTest(const RECT& content, const EditorAgent
     if (Inside(layout.status, x, y) && state.Current() != nullptr && !state.SignedIn() && !state.CheckingAccount()) {
         return { AgentPanelHitKind::SignInHint };
     }
+    for (std::size_t index = 0; index < layout.attachments.size(); ++index) {
+        if (Inside(layout.attachments[index], x, y)) return { AgentPanelHitKind::Attachment, static_cast<int>(index) };
+    }
     if (state.Active().entries.empty() && state.Current() != nullptr) {
         for (int index = 0; index < 3; ++index) {
             if (Inside(layout.suggestions[static_cast<std::size_t>(index)], x, y)) return { AgentPanelHitKind::Suggestion, index };
+        }
+    }
+    if (Inside(layout.conversation, x, y)) {
+        // The pictures in the conversation, placed as PaintEntries places them.
+        const std::vector<EditorAgentEntry>& entries = state.Active().entries;
+        const RECT& column = layout.column;
+        const int width = static_cast<int>(column.right - column.left);
+        HDC dc = MeasuringDc();
+        std::vector<int> heights;
+        int total = 0;
+        for (std::size_t index = 0; index < entries.size(); ++index) {
+            heights.push_back(EntryHeight(dc, entries, index, width));
+            total += heights.back() + kEntryGap;
+        }
+        const int visible = static_cast<int>(column.bottom - column.top);
+        const int scroll = std::clamp(state.Active().scrollFromBottom, 0, std::max(0, total - visible));
+        int top = total <= visible ? static_cast<int>(column.top) : static_cast<int>(column.bottom) - total + scroll;
+        for (std::size_t index = 0; index < entries.size(); ++index) {
+            const EditorAgentEntry& entry = entries[index];
+            int entryTop = top + (HasHeader(entries, index) ? kHeaderLine + 4 : 0);
+            if (entry.kind == EditorAgentEntryKind::Image) {
+                const SIZE size = PictureSize(entry.image, width);
+                if (Inside(RECT{ column.left + 14, entryTop, column.left + 14 + static_cast<int>(size.cx), entryTop + static_cast<int>(size.cy) }, x, y)) {
+                    return { AgentPanelHitKind::Picture, static_cast<int>(index), -1 };
+                }
+            } else if (entry.kind == EditorAgentEntryKind::User && !entry.images.empty()) {
+                if (!entry.text.empty()) entryTop += static_cast<int>(Wrapped(dc, entry.text, width - kCardPad * 2, 12).cy) + kCardPad * 2 + 6;
+                for (std::size_t item = 0; item < entry.images.size(); ++item) {
+                    const int left = static_cast<int>(column.left) + static_cast<int>(item) * (kRequestPicture + 6);
+                    if (Inside(RECT{ left, entryTop, left + kRequestPicture, entryTop + kRequestPicture }, x, y)) {
+                        return { AgentPanelHitKind::Picture, static_cast<int>(index), static_cast<int>(item) };
+                    }
+                }
+            }
+            top += heights[index] + kEntryGap;
         }
     }
     if (Inside(layout.sendButton, x, y)) return { AgentPanelHitKind::Send };
