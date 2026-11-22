@@ -256,6 +256,9 @@ private:
     void ReadCodexEvent(EditorAgentConversation& conversation, const std::string& line);
     void FinishAccountCheck();
     void StartAccountCheck();
+    // While the profile is not signed in, its status is asked again now and then, so signing in
+    // in the window the panel opened shows here by itself.
+    std::chrono::steady_clock::time_point accountCheckedAt_{};
     void RememberSelection() const;
 
     std::vector<EditorAgent> agents_;

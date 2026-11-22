@@ -33,6 +33,8 @@ struct EditorAgent {
     std::vector<std::string> runArguments;
     // Asks the CLI who is signed in; empty when it has no such command.
     std::vector<std::string> statusArguments;
+    // Signs the profile in, in a console window of its own; empty when the CLI signs in by itself.
+    std::vector<std::string> signInArguments;
     // Registers the engine's MCP server with the CLI once, for agents that cannot be handed it
     // on each run; empty when every run passes it.
     std::vector<std::string> connectArguments;

@@ -177,7 +177,6 @@ std::string FillBasic2D(Scene& scene, const kb::project::ProjectDescriptor& proj
 // A character with a controller script, and the camera it looks through (first person) or that follows behind it
 // (third person). The script finds the camera by the child's name, so the names here belong to the script files.
 std::string FillCharacter(Scene& scene, SceneTemplate kind, const kb::project::ProjectDescriptor& project) {
-    const bool third = kind == SceneTemplate::ThirdPerson;
     const std::string label = std::string{ SceneTemplates::Name(kind) } + " template: ";
     for (const auto& [item, name] : { std::pair{ "Directional Light", "Sun" }, std::pair{ "Environment", "Environment" },
              std::pair{ "Plane", "Plane" } }) {
@@ -186,11 +185,19 @@ std::string FillCharacter(Scene& scene, SceneTemplate kind, const kb::project::P
             return label + created.error;
         }
     }
+    SceneEntity player;
+    return SceneTemplates::AddCharacter(scene, kind, project, "Player", player);
+}
 
-    const SceneCreateResult player = SceneCreateMenu::Create(scene, "Empty", "Player", project);
+std::string AddCharacterTo(Scene& scene, SceneTemplate kind, const kb::project::ProjectDescriptor& project, std::string name,
+    SceneEntity& added) {
+    const bool third = kind == SceneTemplate::ThirdPerson;
+    const std::string label = std::string{ SceneTemplates::Name(kind) } + " character: ";
+    const SceneCreateResult player = SceneCreateMenu::Create(scene, "Empty", std::move(name), project);
     if (!player.entity.IsValid()) {
         return label + player.error;
     }
+    added = player.entity;
     Place(scene, player.entity, Vec3{ 0.0F, 1.0F, 0.0F });
     CharacterControllerComponent controller{};
     controller.radius = 0.4F;
@@ -231,6 +238,13 @@ std::string FillCharacter(Scene& scene, SceneTemplate kind, const kb::project::P
         return label + camera.error;
     }
     Place(scene, camera.entity, cameraPosition);
+    // The character's camera is what the game shows, over any camera the scene had before.
+    if (const CameraComponent* lens = scene.Components().Cameras().TryGet(camera.entity); lens != nullptr) {
+        CameraComponent shown = *lens;
+        shown.primary = true;
+        shown.priority = 50;
+        scene.Components().Cameras().Set(camera.entity, shown);
+    }
     AddListener(scene, camera.entity, project);
     return {};
 }
@@ -475,6 +489,14 @@ std::string SceneTemplates::WriteProjectFiles(const std::filesystem::path& proje
         }
     }
     return {};
+}
+
+std::string SceneTemplates::AddCharacter(Scene& scene, SceneTemplate kind, const kb::project::ProjectDescriptor& project,
+    std::string name, SceneEntity& player) {
+    if (kind != SceneTemplate::FirstPerson && kind != SceneTemplate::ThirdPerson) {
+        return "only the FirstPerson and ThirdPerson templates have a walking character";
+    }
+    return AddCharacterTo(scene, kind, project, std::move(name), player);
 }
 
 std::string SceneTemplates::Fill(Scene& scene, SceneTemplate kind, const kb::project::ProjectDescriptor& project) {

@@ -509,7 +509,8 @@ std::string AgentPanelRenderer::SignInCommand(const EditorAgentPanelState& state
     for (const auto& [name, value] : agent->environment) {
         command += "set \"" + std::filesystem::path{ name }.string() + "=" + std::filesystem::path{ value }.string() + "\" && ";
     }
-    command += agent->executable.stem().string() + (agent->output == EditorAgentOutputFormat::ClaudeStreamJson ? " auth login" : " login");
+    command += "\"" + agent->executable.string() + "\"";
+    for (const std::string& word : agent->signInArguments) command += " " + word;
     return command;
 }
 
@@ -628,7 +629,7 @@ void AgentPanelRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& t
             status = std::string{ EditorText("agent.checking", "Checking the account...") };
         } else if (!state.SignedIn()) {
             dot = kDanger;
-            status = std::string{ EditorText("agent.notSignedIn", "Not signed in - click to copy the sign-in command") };
+            status = std::string{ EditorText("agent.signInPrompt", "Not signed in - click here to sign in") };
         } else {
             status = std::string{ EditorText("agent.signedIn", "Signed in") } + (state.Plan().empty() ? std::string{} : " \xC2\xB7 " + state.Plan());
         }

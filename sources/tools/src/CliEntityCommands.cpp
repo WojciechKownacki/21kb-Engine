@@ -20,6 +20,7 @@
 #include "engine/scene/SkeletonNames.hpp"
 #include "engine/gameplay/AbilityAsset.hpp"
 #include "engine/project/ProjectCreator.hpp"
+#include "engine/scene/SceneTemplates.hpp"
 #include "engine/scene/AIBrainComponent.hpp"
 #if KB_CLI_RENDERER
 #include "engine/render/StaticLightmapBaker.hpp"
@@ -434,6 +435,8 @@ void ListProperties(std::string_view component, std::ostream& out) {
     if (withPlayers) {
         items.Append(JsonValue::MakeString("Platformer Player"));
         items.Append(JsonValue::MakeString("Top Down Player"));
+        items.Append(JsonValue::MakeString("Third Person Player"));
+        items.Append(JsonValue::MakeString("First Person Player"));
     }
     return items;
 }
@@ -854,6 +857,10 @@ void NoteEntity(CommandIo io, const SceneSession& session, kb::scene::SceneEntit
     const auto* screenTemplate = create.has_value() && createItem == nullptr && uiPreset == nullptr
         ? kb::scene::FindUIScreenTemplate(*create) : nullptr;
     const bool playerPreset = create.has_value() && IsPlayerPreset(*create);
+    // A walking 3D character with its camera and controls, as the ThirdPerson and FirstPerson templates make it.
+    const std::optional<kb::scene::SceneTemplate> character = !create.has_value() ? std::nullopt
+        : *create == "Third Person Player" ? std::optional{ kb::scene::SceneTemplate::ThirdPerson }
+        : *create == "First Person Player" ? std::optional{ kb::scene::SceneTemplate::FirstPerson } : std::nullopt;
     const std::optional<std::string> physics = arguments.Option("--physics");
     if (physics.has_value() && (!playerPreset || (*physics != "2d" && *physics != "3d"))) {
         io.err << "error: --physics 2d|3d chooses the physics of --create 'Platformer Player' or 'Top Down Player'\n";
@@ -861,7 +868,7 @@ void NoteEntity(CommandIo io, const SceneSession& session, kb::scene::SceneEntit
     }
     const std::optional<std::string> name = arguments.Option("--name").has_value() ? arguments.Option("--name")
         : createItem != nullptr ? std::optional<std::string>{ std::string{ createItem->name } }
-        : playerPreset ? std::optional<std::string>{ "Player" } : create;
+        : playerPreset || character.has_value() ? std::optional<std::string>{ "Player" } : create;
     if (!name.has_value() || name->empty()) {
         io.err << "error: entity add requires --name <Name> or --create <Item>\n";
         return 1;
@@ -909,7 +916,29 @@ void NoteEntity(CommandIo io, const SceneSession& session, kb::scene::SceneEntit
         return 1;
     }
     kb::scene::SceneEntity entity{};
-    if (playerPreset) {
+    if (character.has_value()) {
+        std::string findError;
+        const std::filesystem::path projectRoot =
+            kb::project::ProjectManager::FindProjectFile(Utf8Path(arguments.Option("--project").value_or("")), findError).parent_path();
+        std::string problem = kb::scene::SceneTemplates::WriteProjectFiles(projectRoot, *character, session->descriptor);
+        if (problem.empty()) {
+            static_cast<void>(scene.Assets().Discover());
+            problem = kb::scene::SceneTemplates::AddCharacter(scene, *character, session->descriptor, *name, entity);
+        }
+        if (!problem.empty() || !entity.IsValid()) {
+            io.err << "error: " << (problem.empty() ? std::string{ "the character could not be created" } : problem) << '\n';
+            return 1;
+        }
+        if (const std::optional<kb::math::Vec3> at = ParseVec3(arguments.Option("--position").value_or("")); at.has_value()) {
+            if (const kb::scene::TransformComponent* placed = scene.Transforms().TryGet(entity); placed != nullptr) {
+                kb::scene::TransformComponent transform = *placed;
+                transform.localPosition = *at;
+                scene.Transforms().Set(entity, transform);
+            }
+        }
+        io.out << "added a walking character '" << *name << "' with its camera; move with WASD or the arrows, jump with Space"
+               << (*character == kb::scene::SceneTemplate::FirstPerson ? ", look with the mouse" : "") << '\n';
+    } else if (playerPreset) {
         entity = AddPlayerPreset(scene, Utf8Path(arguments.Option("--project").value_or("")), *create, *name, io, !physics.has_value() || *physics == "2d");
         if (!entity.IsValid()) return 1;
         if (parent.has_value() && !scene.Hierarchy().SetParent(entity, *parent)) {
@@ -2481,7 +2510,7 @@ int RunSchemaCommand(const ArgumentList& arguments, CommandIo io) {
     io.out << "\nentity add --create items:";
     for (const kb::scene::SceneCreateItem& item : kb::scene::SceneCreateMenu::Items()) io.out << " '" << item.id << '\'';
     for (const auto& preset : kb::scene::UIComponentPresetCatalog()) io.out << " '" << preset.name << '\'';
-    io.out << " 'Platformer Player' 'Top Down Player'\n";
+    io.out << " 'Platformer Player' 'Top Down Player' 'Third Person Player' 'First Person Player'\n";
     for (const kb::scene::SceneComponentKind& kind : kb::scene::SceneComponentAuthoring::Kinds()) {
         io.out << kind.id;
         if (kind.displayName != kind.id) io.out << " (" << kind.displayName << ')';

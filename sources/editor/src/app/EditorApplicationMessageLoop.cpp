@@ -26,6 +26,9 @@
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #include "scene/material_preview/EditorMaterialPreviewMeshFactory.hpp"
 #include "project/EditorProjectPaths.hpp"
+#include "engine/core/JsonValue.hpp"
+#include "engine/packaging/PackagingTargetCatalog.hpp"
+#include "packaging/EditorProjectPackageService.hpp"
 #include "project/EditorPackages.hpp"
 #include "project/EditorVersionControl.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
@@ -68,6 +71,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <optional>
@@ -645,10 +649,74 @@ void UpdateDrawerForWindowHeight(EditorApplicationState& state) noexcept {
     }
 }
 
+// The result of a build the agent asked for, where it reads it: Running, then Succeeded or Failed.
+void WriteAgentBuildResult(const std::string& text) {
+    const std::filesystem::path file = EditorProjectPaths::ProjectRoot() / "Saved" / "Agent" / "BuildResult.txt";
+    std::error_code error;
+    std::filesystem::create_directories(file.parent_path(), error);
+    std::ofstream output{ file, std::ios::binary | std::ios::trunc };
+    output << text << '\n';
+}
+
+bool g_agentBuildRunning = false;
+
+// A build the agent asked for runs in the Build Game panel, brought forward so the person sees it.
+void StartAgentBuild(EditorApplicationState& state, const kb::core::JsonValue& request) {
+    const kb::core::JsonValue* target = request.Find("target");
+    const kb::core::JsonValue* release = request.Find("release");
+    const auto targets = kb::packaging::PackagingTargets();
+    int index = -1;
+    for (std::size_t at = 0; at < targets.size(); ++at) {
+        if (target != nullptr && targets[at].bakeId == target->AsString()) index = static_cast<int>(at);
+    }
+    if (index < 0) {
+        WriteAgentBuildResult("Failed: the editor does not know that platform.");
+        return;
+    }
+    static_cast<void>(state.dockModel.Commands().ActivatePanelKind(DockPanelKind::BuildGame, DockArea::Center));
+    static_cast<void>(state.sceneContext.SetBuildGameSelectedTarget(index));
+    static_cast<void>(state.sceneContext.SetBuildGameSelectedProfile(release != nullptr && release->AsBool() ? 1 : 0));
+    // A first build goes beside the project, in "<project> Builds" (packages never go inside the project); the
+    // person has never been asked to choose a folder.
+    if (state.sceneContext.BuildGameSettings().For(state.sceneContext.BuildGameTarget()).outputDirectory.empty()) {
+        const std::filesystem::path root = EditorProjectPaths::ProjectRoot();
+        static_cast<void>(state.sceneContext.SetBuildGameOutputDirectory(root.parent_path() / (root.filename().wstring() + L" Builds")));
+    }
+    const std::size_t before = state.sceneContext.Console().Entries().size();
+    if (state.sceneContext.StartBuildGamePackage(EditorDirtySceneResolution::Save)) {
+        g_agentBuildRunning = true;
+        WriteAgentBuildResult("Running");
+    } else {
+        // Why the panel would not start: what it told the console, or what its own fields say is missing.
+        const auto& entries = state.sceneContext.Console().Entries();
+        std::string reason = entries.size() > before ? entries.back().message : std::string{ "the Build Game panel could not start; it shows what is missing" };
+        WriteAgentBuildResult("Failed: " + reason);
+    }
+    InvalidateRect(state.window, nullptr, FALSE);
+}
+
+// Reports the end of the agent's build where it reads it.
+void PumpAgentBuild(EditorApplicationState& state) {
+    if (!g_agentBuildRunning) return;
+    const EditorPackageSnapshot snapshot = state.sceneContext.BuildGamePackageSnapshot();
+    if (snapshot.state == EditorPackageJobState::Running) return;
+    g_agentBuildRunning = false;
+    if (snapshot.state == EditorPackageJobState::Succeeded) {
+        WriteAgentBuildResult("Succeeded: " + snapshot.resultDirectory.string());
+        return;
+    }
+    std::string reason = snapshot.status;
+    for (const EditorPackageDiagnostic& diagnostic : snapshot.diagnostics) {
+        if (diagnostic.severity == EditorPackageDiagnosticSeverity::Error) reason += "\n" + diagnostic.message;
+    }
+    WriteAgentBuildResult("Failed: " + reason);
+}
+
 // The Agent panel: finds the agents the first time it is shown, moves what the agent wrote into
 // the conversation, and after each of the agent's steps that changed the project shows its work -
 // the scene and the project's assets read back from disk, unless you edited the scene meanwhile.
 void PumpAgentPanel(EditorApplicationState& state) {
+    PumpAgentBuild(state);
     // The project's settings as the agent or kb_cli left them, looked at once a second.
     static std::chrono::steady_clock::time_point settingsChecked{};
     if (const auto now = std::chrono::steady_clock::now(); now - settingsChecked >= std::chrono::seconds{ 1 }) {
@@ -656,6 +724,48 @@ void PumpAgentPanel(EditorApplicationState& state) {
         if (state.sceneContext.AdoptExternalProjectConfiguration()) {
             InvalidatePanelKind(state, DockPanelKind::ProjectSettings);
             InvalidatePanelKind(state, DockPanelKind::BuildGame);
+        }
+    }
+    // What the agent asks the editor to show (kb_cli editor): a scene to open, carried out here and
+    // removed; a request older than two minutes is from a session that is gone.
+    static std::chrono::steady_clock::time_point requestsChecked{};
+    if (const auto now = std::chrono::steady_clock::now(); now - requestsChecked >= std::chrono::milliseconds{ 300 } &&
+        !state.playMode.IsPlaying() && !state.sceneContext.InPrefabEditMode()) {
+        requestsChecked = now;
+        const std::filesystem::path folder = EditorProjectPaths::ProjectRoot() / "Saved" / "Agent" / "EditorRequests";
+        std::vector<std::filesystem::path> requests;
+        std::error_code error;
+        for (std::filesystem::directory_iterator it(folder, error), end; !error && it != end; it.increment(error)) {
+            if (it->path().extension() == ".json") requests.push_back(it->path());
+        }
+        std::ranges::sort(requests);
+        const auto epoch = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+        for (const std::filesystem::path& file : requests) {
+            std::ifstream input{ file, std::ios::binary };
+            const std::string text{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+            input.close();
+            std::filesystem::remove(file, error);
+            long long stamp = 0;
+            try { stamp = std::stoll(file.stem().string()); } catch (...) { continue; }
+            kb::core::JsonValue request;
+            std::string parseError;
+            if (epoch - stamp > 120000 || !kb::core::JsonValue::Parse(text, request, parseError)) continue;
+            const kb::core::JsonValue* action = request.Find("action");
+            if (action != nullptr && action->AsString() == "build") {
+                StartAgentBuild(state, request);
+                continue;
+            }
+            const kb::core::JsonValue* scene = request.Find("scene");
+            if (action == nullptr || scene == nullptr || action->AsString() != "open-scene" || !scene->AsString().starts_with("/Game/")) continue;
+            const std::string& virtualPath = scene->AsString();
+            const std::filesystem::path path = EditorProjectPaths::AssetsRoot() /
+                std::filesystem::path{ std::u8string{ reinterpret_cast<const char8_t*>(virtualPath.data() + 6), virtualPath.size() - 6U } };
+            if (state.sceneContext.OpenScene(path, EditorDirtySceneResolution::Save)) {
+                state.sceneViewport.RequestPresent();
+                InvalidatePanelKind(state, DockPanelKind::Hierarchy);
+                InvalidatePanelKind(state, DockPanelKind::Inspector);
+                InvalidateRect(state.window, nullptr, FALSE);
+            }
         }
     }
     EditorAgentPanelState& agent = state.sceneContext.AgentPanel();
@@ -710,14 +820,16 @@ void PumpAgentPanel(EditorApplicationState& state) {
             reloadPending = true;
             return;
         }
-        agent.Add(EditorAgentEntryKind::Info, "The scene has edits made while the agent worked, so it was not reloaded. Save or reopen it to see both.");
+        agent.Add(EditorAgentEntryKind::Info, std::string{ EditorText("agent.sceneNotReloaded",
+            "You changed the scene while the agent worked, so its changes are not shown yet. Save the scene, then send the request again.") });
         InvalidatePanelKind(state, DockPanelKind::Agent);
         return;
     }
     // The scene from its file as one undoable step, with the selection and undo history kept, and
     // the materials, textures and scripts the agent changed or added picked up too.
     if (state.sceneContext.ReloadSceneAfterExternalChange() && !agent.AnyRunning()) {
-        agent.Add(EditorAgentEntryKind::Info, "Reloaded the scene and assets with the agent's changes (Ctrl+Z undoes them).");
+        agent.Add(EditorAgentEntryKind::Info, std::string{ EditorText("agent.sceneReloaded",
+            "The scene shows the agent's changes. Ctrl+Z undoes them.") });
     }
     // Project Files, the Hierarchy and the Inspector show the new and changed files and objects.
     InvalidatePanelKind(state, DockPanelKind::Assets);

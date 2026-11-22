@@ -396,6 +396,9 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                  --name then defaults to the item. UI widgets (Canvas, Text, Button, Slider, ...) and the screens
                  'Main Menu', 'Pause', 'HUD' and 'Settings' go under a Canvas with the bundled font; a screen's
                  buttons carry event names (PlayClicked, ResumeClicked, BackClicked, ...) for a script to answer.
+                 --create 'Third Person Player' or 'First Person Player' adds a walking 3D
+                 character named Player with its controller script, controls (WASD or arrows, Space
+                 to jump) and the camera the game shows, behind it or through its eyes.
                  --create 'Platformer Player', 'Top Down Player' or 'Platformer Navigator'
                  makes a 2D player named Player with Sprite2D, CharacterController2D, a following
                  orthographic camera and Platformer2DBox2DPlayer.lua or TopDown2DBox2DPlayer.lua.
@@ -678,6 +681,13 @@ R"(  run          Run a scene headless and report logs, events, and errors (the
                Without --set it lists every setting as Section.Key=value, e.g.
                Maps.DefaultMap (the scene the game starts in), Identity.GameName,
                Display.WindowWidth, Physics.GravityY. A scene is /Game/<path>.21kbscene.
+  editor       Ask the editor that has the project open to open a scene, or to build the game
+               for a platform with its Build Game panel (its settings, keys and tools).
+                 open-scene --project <dir> --scene /Game/<path>.21kbscene
+                 build --project <dir> --target windows|android|web|webgpu|linux
+                       [--profile development|release]
+               A build reports in Saved/Agent/BuildResult.txt: Running, then Succeeded <folder> or
+               Failed <reason>.
   plugins      List the engine's plugins with whether the project has each on, or switch them,
                as the editor's Plugins window does.
                  --project <dir> [--enable <id>]... [--disable <id>]...
@@ -823,6 +833,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"lighting-quality", &RunLightingQualityCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
     {"project-settings", &RunProjectSettingsCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
     {"plugins", &RunPluginsCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
+    {"editor", &RunEditorCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
 #if KB_CLI_RENDERER
     {"csg", &RunCsgCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
     {"rig2d", &RunRig2DCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},

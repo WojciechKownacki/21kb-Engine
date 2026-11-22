@@ -123,7 +123,11 @@ struct Preset {
             "do not run shell commands or parse the project's binary files. "
             "Project settings (the startup scene, the game's name, window, physics, input, Android) are "
             "kb_cli project-settings: it lists them all, --set Section.Key=value changes one, and the editor takes the change in at once. "
-            "Plugins are kb_cli plugins (--enable / --disable <id>); a Windows build of the game is kb_cli build --out Build/<Name>. "
+            "Plugins are kb_cli plugins (--enable / --disable <id>); the game for a platform is kb_cli editor build --target "
+            "windows|android|web|webgpu|linux (the editor builds it where the user sees it); "
+            "kb_cli editor open-scene --scene <scene> shows a scene in the editor. "
+            "A character the player walks with, its camera and controls are one step: kb_cli entity add --create 'Third Person Player' "
+            "(or 'First Person Player'). "
             "Do the whole task yourself: the user does not run commands or change settings by hand. "
             "To show the user how the scene looks, render it with the kb_cli capture command (--out Saved/Agent/Images/<name>.png): "
             "the editor shows that picture in the conversation. Pictures the user attaches are listed as paths; open them with Read." };
@@ -131,6 +135,7 @@ struct Preset {
         agent.persistentArguments = { "--input-format", "stream-json" };
         agent.requestTemplate = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":{request}}}\n";
         agent.statusArguments = { "auth", "status", "--json" };
+        agent.signInArguments = { "auth", "login" };
         // Aliases always name the newest model of each line, so the list never goes stale.
         agent.models = { "fable", "opus", "sonnet", "haiku" };
         agent.modelArguments = { "--model", "{model}" };
@@ -156,6 +161,7 @@ struct Preset {
             "-c", "mcp_servers.kb-engine.args=[\"mcp\",\"--project\",\"{project}\"]",
             "-c", "mcp_servers.kb-engine.default_tools_approval_mode=\"approve\"", "-" };
         agent.statusArguments = { "login", "status" };
+        agent.signInArguments = { "login" };
         // The model stays the one in the user's Codex configuration; only the effort is offered.
         agent.efforts = { "minimal", "low", "medium", "high" };
         agent.effortArguments = { "-c", "model_reasoning_effort=\"{effort}\"" };

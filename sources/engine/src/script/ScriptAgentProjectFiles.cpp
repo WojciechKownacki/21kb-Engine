@@ -36,6 +36,10 @@ constexpr std::string_view kAgentsTemplate = R"md(# AGENTS.md - working in this 
 This is a 21kb Engine game project. Keep every request small: read this file, then only the one
 guide or API page your task needs. Never read whole folders or the machine files listed below.
 
+The person you work for is not technical. Do the whole task yourself with the tools below; never
+ask them to run a command, edit a file, open a setting or install anything by hand. Answer
+briefly, in plain words and in their language, and say what they will see in the editor.
+
 ## Where things are
 
 - How-to guides with the exact commands for one kind of task, through the kb-engine `guide`
@@ -47,7 +51,22 @@ guide or API page your task needs. Never read whole folders or the machine files
   `topic` (`Physics`, `Physics.Raycast`, `Rigidbody`) or a `search` text; files in `.kb/api/`.
 - The scene: `kb_cli scene-list --project .` lists every object with its position;
   `kb_cli entity show --project . --name <Name>` prints one object's transform and component values.
-- `Assets/` is the game, mounted as `/Game/`; `Assets/Scenes/Main.21kbscene` is the startup scene.
+- `Assets/` is the game, mounted as `/Game/`; `kb_cli project-settings --project .` names the
+  startup scene (`Maps.DefaultMap`).
+- Project settings (startup scene, game name, window and full screen, loading screen, physics,
+  input, Android): `kb_cli project-settings --project .` lists them, `--set Section.Key=value`
+  changes one. Plugins (physics, audio, particles, AI, 2D maps, the terrain editor):
+  `kb_cli plugins --project .`, `--enable <id>` / `--disable <id>`. The editor takes both in at once.
+- A character the person plays, with its camera and controls in one step: `kb_cli entity add --project .
+  --create 'Third Person Player'` (or `'First Person Player'`; in 2D `'Platformer Player'`, `'Top Down Player'`).
+- The game for a platform: `kb_cli editor build --project . --target windows|android|web|webgpu|linux`
+  (`--profile release` for a store build). The open editor builds it in its Build Game panel and writes
+  `Saved/Agent/BuildResult.txt`: `Running`, then `Succeeded <folder>` or `Failed <reason>`. Without
+  an open editor, `kb_cli build --project . --out Build/<Name>` makes a Windows build.
+- To show the person a scene in the editor (a new level, one they asked about): `kb_cli editor open-scene
+  --project . --scene /Game/<path>.21kbscene`.
+- To show the person how a scene looks: `kb_cli capture --project . --scene <scene> --out
+  Saved/Agent/Images/<name>.png` (a new file name each time); the editor shows the picture.
 - Machine files, not for reading: `.kb/api/script_api.json`, `authoring_hints.json`,
   `manifest.json`, `kb.lua`.
 
@@ -65,7 +84,8 @@ guide or API page your task needs. Never read whole folders or the machine files
 
 // The AGENTS.md files earlier versions of this engine wrote, recognised by their exact bytes
 // (FNV-1a 64), so an untouched copy is brought up to date while one a person edited is kept.
-constexpr std::array<std::string_view, 4> kPreviousAgentsTemplateHashes{ "6927ba90de51399a", "66098609d17a66fa", "17571d731424f80b", "60b10d36fecf3d23" };
+constexpr std::array<std::string_view, 5> kPreviousAgentsTemplateHashes{ "6927ba90de51399a", "66098609d17a66fa", "17571d731424f80b", "60b10d36fecf3d23",
+    "db0742a5e69a4b90" };
 
 // Claude Code reads CLAUDE.md, not AGENTS.md; this one line imports it.
 constexpr std::string_view kClaudeTemplate = "@AGENTS.md\n";

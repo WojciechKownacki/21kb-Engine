@@ -162,6 +162,11 @@ generated file shows `Ready`). A failed call returns `errors` (a missing input n
 constexpr std::string_view kCharacters = R"md(# Characters and animation
 
 ```
+# A character the player walks with (WASD or arrows, Space jumps) and the camera the game shows, in one
+# step: its controller script, input and camera come with it. Then give it a model or colour as below.
+kb_cli entity add --project . --create 'Third Person Player'     # camera behind it
+kb_cli entity add --project . --create 'First Person Player'     # through its eyes, mouse look
+
 # A character from Blender (glTF/GLB or FBX): Skeleton, Skeletal Mesh and one Animation Clip per
 # action, named <file>_<action>.
 kb_cli import --project . --destination /Game/Characters Hero.glb

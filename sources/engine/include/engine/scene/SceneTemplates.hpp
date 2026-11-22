@@ -1,5 +1,7 @@
 #pragma once
 
+#include "engine/scene/SceneEntity.hpp"
+
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -54,6 +56,12 @@ public:
     // an empty string; a template without files does nothing.
     [[nodiscard]] static std::string WriteProjectFiles(const std::filesystem::path& projectRoot, SceneTemplate kind,
         const kb::project::ProjectDescriptor& project);
+    // Adds the walking character of the FirstPerson or ThirdPerson template - `name` with its controller
+    // script and the camera it looks through or that follows it - to a scene that has its own ground and
+    // light. Its camera becomes the one the game shows. Call WriteProjectFiles for its script first.
+    // Returns why it could not, or an empty string; `player` receives the character.
+    [[nodiscard]] static std::string AddCharacter(Scene& scene, SceneTemplate kind, const kb::project::ProjectDescriptor& project,
+        std::string name, SceneEntity& player);
     // Adds the template's objects to `scene`. Returns why it could not, or an empty string.
     [[nodiscard]] static std::string Fill(Scene& scene, SceneTemplate kind, const kb::project::ProjectDescriptor& project);
     // The new scene `name` in `folder` of the project: `folder` is relative to the project root

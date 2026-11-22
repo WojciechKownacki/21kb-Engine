@@ -7,6 +7,7 @@
 #include "engine/project/ProjectSettings.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <array>
 #include <filesystem>
 #include <optional>
@@ -89,6 +90,21 @@ int RunLightingQualityCommand(const ArgumentList& arguments, CommandIo io) {
     return 0;
 }
 
+namespace {
+
+// The words a setting that is a choice takes, for the message that refuses another.
+[[nodiscard]] std::string_view SettingChoices(std::string_view key) noexcept {
+    if (key == "WindowMode") return "Windowed or BorderlessFullscreen (full screen)";
+    if (key.ends_with("Quality") || key.starts_with("GiQuality") || key.starts_with("ShadowQuality")) return "Auto, Low, Medium, High or Ultra";
+    if (key == "LightingPath") return "Auto, Forward, Deferred or ForwardPlus";
+    if (key == "HdrOutput") return "Off or Auto";
+    if (key == "AndroidGraphicsApi") return "Auto, Vulkan or OpenGLES";
+    if (key == "SplashScale") return "Fit, Fill or Center";
+    return {};
+}
+
+} // namespace
+
 // Every project setting as Section.Key=value, named as the settings file names them (Maps.DefaultMap,
 // Identity.GameName, Display.WindowWidth); --set Section.Key=value changes one, checked as the editor
 // checks it: an unknown name is refused, a number is brought into its range, a scene must exist.
@@ -146,6 +162,25 @@ int RunProjectSettingsCommand(const ArgumentList& arguments, CommandIo io) {
     kb::project::ProjectSettings settings = loaded.settings;
     if (!changed.empty()) {
         settings = kb::project::ProjectSettingsStore::Read(edited);
+        // A value the setting does not take is refused rather than quietly replaced by its default; a number
+        // only brought into its range is kept as brought in.
+        kb::config::IniDocument taken;
+        kb::project::ProjectSettingsStore::Write(settings, taken);
+        for (const auto& [section, key] : changed) {
+            const std::string wanted{ edited.GetString(section, key).value_or("") };
+            const std::string kept{ taken.GetString(section, key).value_or("") };
+            const auto lower = [](std::string text) {
+                std::ranges::transform(text, text.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                return text;
+            };
+            const bool number = !wanted.empty() && wanted.find_first_not_of("+-0123456789.eE") == std::string::npos;
+            if (lower(wanted) == lower(kept) || number) continue;
+            const std::string name = section.substr(kSectionPrefix.size()) + "." + key;
+            io.err << "error: " << name << " does not take '" << wanted << "' (it would stay '" << kept << "')";
+            if (const std::string_view choices = SettingChoices(key); !choices.empty()) io.err << "; it takes " << choices;
+            io.err << '\n';
+            return 1;
+        }
         if (!kb::project::ProjectSettingsStore::Save(settingsPath, settings, error)) {
             io.err << "error: " << error << '\n';
             return 1;

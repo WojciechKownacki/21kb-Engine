@@ -372,9 +372,12 @@ bool EditorAgentPanelController::HandlePointerDown(HWND owner, const RECT& conte
         ShowChoiceMenu(owner, layout.effortMenu, false);
         return true;
     case AgentPanelHitKind::SignInHint: {
-        const std::string command = AgentPanelRenderer::SignInCommand(agent);
-        if (EditorTextInputShortcuts::CopyToClipboard(owner, command)) {
-            agent.Add(EditorAgentEntryKind::Info, "Copied the sign-in command. Paste it into a terminal, sign in, then choose Refresh in the Agent menu.");
+        // Signing in opens the agent's own sign-in in a window of its own (it continues in the
+        // browser); the panel sees the account by itself once that is done.
+        const std::wstring command = L"/k " + Widen(AgentPanelRenderer::SignInCommand(agent));
+        if (reinterpret_cast<INT_PTR>(ShellExecuteW(owner, L"open", L"cmd.exe", command.c_str(), nullptr, SW_SHOWNORMAL)) > 32) {
+            agent.Add(EditorAgentEntryKind::Info, std::string{ EditorText("agent.signInOpened",
+                "A sign-in window opened. Sign in there (it continues in your browser); this panel notices by itself when you are done.") });
         }
         return true;
     }
@@ -535,20 +538,26 @@ bool EditorAgentPanelController::SendOrStop() {
     // The agent works on the files: every unsaved edit (the scene and any open asset editor) goes to
     // disk first, so it sees what you see and an editor never writes an older copy over its work.
     if (!sceneContext_.CurrentScenePath().empty() && !sceneContext_.SaveOpenDocuments()) {
-        agent.Add(EditorAgentEntryKind::Error, "Your unsaved changes could not be saved, so the request was not sent. Save them, then send again.");
+        agent.Add(EditorAgentEntryKind::Error, std::string{ EditorText("agent.unsavedNotSent",
+            "Your unsaved changes could not be saved, so the request was not sent. Save them, then send again.") });
         return false;
     }
     // The agent's map of the project (AGENTS.md and the script API) is what kb_cli init-agent
     // writes; a project that never had it gets it before its first request, so the agent does not
     // start by searching the folders.
     const EditorAgentWorkspace workspace = Workspace();
-    if (std::error_code missing; !workspace.project.empty() && !std::filesystem::exists(workspace.project / "AGENTS.md", missing)) {
+    // Written once per editor session, so a project made by an older engine gets the current guide
+    // too (a guide a person edited is kept as it is).
+    static std::filesystem::path guided;
+    if (!workspace.project.empty() && guided != workspace.project) {
+        guided = workspace.project;
         kb::script::ScriptRuntimeHost host{ sceneContext_.Scene() };
         const kb::script::ScriptAgentProjectFilesResult written = host.Succeeded()
             ? kb::script::ScriptAgentProjectFiles::Write(workspace.project, kb::script::ScriptApiCatalog::Build(host))
             : kb::script::ScriptAgentProjectFilesResult{ .succeeded = false, .error = "the script runtime could not start" };
         if (!written.succeeded) {
-            agent.Add(EditorAgentEntryKind::Error, "The agent's guide to this project (AGENTS.md) could not be written: " + written.error);
+            agent.Add(EditorAgentEntryKind::Error, EditorLocalization::Format("agent.guideNotWritten",
+                "The agent's guide to this project (AGENTS.md) could not be written: {error}", { { "error", written.error } }));
         }
     }
     return agent.Send(workspace);

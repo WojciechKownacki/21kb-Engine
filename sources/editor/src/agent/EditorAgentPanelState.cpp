@@ -231,6 +231,10 @@ struct EngineCall {
     if (command == "code") return WithTarget(std::string{ EditorText("agent.step.code", "Searching the engine's code") }, Option(call, { "topic", "text", "symbol", "path" }));
     if (command == "import") return WithTarget(std::string{ EditorText("agent.step.import", "Importing") }, Option(call, { "source" }) + (call.words.empty() ? "" : call.words.front()));
     if (command == "scene-lightmap" || command == "scene-bake-lighting") return WithTarget(std::string{ EditorText("agent.step.bakeLighting", "Baking the lighting") }, Option(call, { "scene" }));
+    if (command == "editor" && call.action == "build") {
+        return WithTarget(std::string{ EditorText("agent.step.buildGame", "Building the game") }, Option(call, { "target" }));
+    }
+    if (command == "editor") return WithTarget(std::string{ EditorText("agent.step.openScene", "Opening in the editor") }, Option(call, { "scene" }));
     if (command == "plugins") {
         const std::string on = Option(call, { "enable" });
         const std::string off = Option(call, { "disable" });
@@ -259,7 +263,7 @@ struct EngineCall {
     std::string text{ VerbText(action) };
     text += " ";
     text += NounText(noun);
-    std::string target = Option(call, { "entity", "name", "node", "material", "instance", "graph", "space", "controller", "scene", "path", "out" });
+    std::string target = Option(call, { "entity", "name", "create", "node", "material", "instance", "graph", "space", "controller", "scene", "path", "out" });
     if (command == "component") {
         const std::string type = Option(call, { "type" });
         const std::string entity = Option(call, { "entity" });
@@ -658,6 +662,7 @@ void EditorAgentPanelState::StartAccountCheck() {
     for (const std::string& word : agent->statusArguments) {
         arguments.push_back(Widen(word));
     }
+    accountCheckedAt_ = std::chrono::steady_clock::now();
     accountCheck_ = std::make_unique<EditorAgentProcess>();
     std::string error;
     checkingAccount_ = accountCheck_->Start(agent->executable, arguments, {}, agent->environment, {}, error);
@@ -1090,8 +1095,8 @@ bool EditorAgentPanelState::Send(const EditorAgentWorkspace& workspace) {
     const std::vector<std::filesystem::path> images = conversation.attachments;
     answerDismissed_ = false;
     if (agent == nullptr) {
-        Add(EditorAgentEntryKind::Error, "No agent is installed. Install Claude Code, Codex, Gemini CLI, Qwen Code or Grok, "
-            "or add your own from the agent menu, then choose Refresh.");
+        Add(EditorAgentEntryKind::Error, std::string{ EditorText("agent.noAgentInstalled",
+            "No agent is installed on this computer. Install one of those the Agent menu names, then choose Refresh there.") });
         return false;
     }
 
@@ -1240,7 +1245,7 @@ void EditorAgentPanelState::Stop() {
     EditorAgentConversation& conversation = ActiveMutable();
     if (conversation.run != nullptr && conversation.running) {
         conversation.run->Stop();
-        Add(EditorAgentEntryKind::Info, "Stopped.");
+        Add(EditorAgentEntryKind::Info, std::string{ EditorText("agent.stopped", "Stopped.") });
         conversation.sawError = true;
     }
 }
@@ -1307,6 +1312,9 @@ bool EditorAgentPanelState::Pump(bool& projectChanged) {
             FinishAccountCheck();
             changed = true;
         }
+    } else if (prepared_ && Current() != nullptr && !signedIn_ &&
+               std::chrono::steady_clock::now() - accountCheckedAt_ > std::chrono::seconds{ 5 }) {
+        StartAccountCheck();
     }
     for (const auto& owned : conversations_) {
         EditorAgentConversation& conversation = *owned;
@@ -1327,10 +1335,13 @@ bool EditorAgentPanelState::Pump(bool& projectChanged) {
         conversation.running = false;
         changed = true;
         if (*code != 0 && !conversation.sawError) {
-            conversation.entries.push_back({ EditorAgentEntryKind::Error, "The agent stopped with exit code " + std::to_string(*code) + "." });
+            conversation.entries.push_back({ EditorAgentEntryKind::Error, EditorLocalization::Format("agent.exitedWithCode",
+                "The agent stopped unexpectedly (code {code}). Send the request again; if it keeps happening, choose Refresh in the agent menu.",
+                { { "code", std::to_string(*code) } }) });
         }
         const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - conversation.started).count();
-        conversation.entries.push_back({ EditorAgentEntryKind::Info, "Finished in " + std::to_string(seconds) + " s." });
+        conversation.entries.push_back({ EditorAgentEntryKind::Info,
+            EditorLocalization::Format("agent.finished", "Done in {seconds} s.", { { "seconds", std::to_string(seconds) } }) });
         // Steps left without a result were cut short.
         for (EditorAgentEntry& entry : conversation.entries) {
             if (entry.kind == EditorAgentEntryKind::Tool && entry.step == EditorAgentStepState::Running) {
@@ -1417,16 +1428,8 @@ void EditorAgentPanelState::ReadStreamJsonEvent(EditorAgentConversation& convers
             } else if (type == "user" && kind == "tool_result") {
                 const JsonValue* failed = part->Find("is_error");
                 FinishStep(conversation, StringOf(part->Find("tool_use_id")), failed != nullptr && failed->AsBool());
-                if (failed != nullptr && failed->AsBool()) {
-                    const JsonValue* body = part->Find("content");
-                    std::string text = StringOf(body);
-                    if (text.empty() && body != nullptr && body->GetKind() == JsonValue::Kind::Array && body->Size() > 0U) {
-                        text = StringOf(body->At(0)->Find("text"));
-                    }
-                    // A refused or failed tool call is part of the agent's own work - it reads the
-                    // reason and tries another way - so it is a quiet note, not an error of the request.
-                    conversation.entries.push_back({ EditorAgentEntryKind::Info, Shorten(text.empty() ? std::string{ "A tool failed." } : text) });
-                }
+                // A refused or failed tool call is part of the agent's own work - it reads the reason and
+                // tries another way - so the step is marked failed and nothing technical is shown for it.
             }
         }
         return;
