@@ -126,11 +126,13 @@ EditorProjectBootstrapResult EditorProjectBootstrap::BootstrapDefaultProject() {
 
     kb::project::ProjectDescriptor descriptor = DefaultDescriptor();
     if (!kb::project::ProjectManager::CreateProject(projectFile, descriptor)) {
+        // A folder too deep for the project's files says so and what to do, as opening such a project does.
+        std::string budget = kb::project::ProjectManager::PathBudgetError(projectFile);
         return EditorProjectBootstrapResult{
             .succeeded = false,
             .descriptor = {},
             .projectFile = projectFile,
-            .error = "Project descriptor could not be created.",
+            .error = budget.empty() ? std::string{ "Project descriptor could not be created." } : std::move(budget),
             .created = false,
         };
     }
