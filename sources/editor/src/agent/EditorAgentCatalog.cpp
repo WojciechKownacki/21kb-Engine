@@ -123,6 +123,8 @@ struct Preset {
             "do not run shell commands or parse the project's binary files. "
             "Project settings (the startup scene, the game's name, window, physics, input, Android) are "
             "kb_cli project-settings: it lists them all, --set Section.Key=value changes one, and the editor takes the change in at once. "
+            "Plugins are kb_cli plugins (--enable / --disable <id>); a Windows build of the game is kb_cli build --out Build/<Name>. "
+            "Do the whole task yourself: the user does not run commands or change settings by hand. "
             "To show the user how the scene looks, render it with the kb_cli capture command (--out Saved/Agent/Images/<name>.png): "
             "the editor shows that picture in the conversation. Pictures the user attaches are listed as paths; open them with Read." };
         agent.resumeArguments = { "--resume", "{session}" };

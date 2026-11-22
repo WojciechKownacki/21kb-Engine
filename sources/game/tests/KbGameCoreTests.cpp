@@ -324,7 +324,8 @@ void RunPackagedRuntimeModuleContractTests() {
     }
 
     kb::project::ProjectDescriptor editorTools = supported;
-    editorTools.plugins.push_back({ .name = "Editor.Terrain", .binaryPath = "kb_terrain_editor_plugin.dll", .enabled = true });
+    editorTools.plugins.push_back({ .name = "Studio.TerrainTools", .binaryPath = "terrain_tools.dll", .enabled = true,
+        .kind = kb::project::ProjectPluginKind::Editor });
     Require(!kb::game::FirstUnsupportedPackagedRuntimeModule("Android.ASTC.arm64", editorTools).has_value(),
         "An editor extension stopped a package that leaves it out");
 

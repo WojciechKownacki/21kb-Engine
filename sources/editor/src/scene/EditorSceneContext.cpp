@@ -444,6 +444,8 @@ EditorSceneContext::EditorSceneContext()
         std::error_code error;
         projectConfigWritten_ = std::filesystem::last_write_time(
             kb::project::ProjectSettingsStore::FilePath(EditorProjectPaths::ProjectRoot()), error);
+        pluginsOnDisk_ = project_.plugins;
+        projectFileWritten_ = std::filesystem::last_write_time(projectFile_, error);
     }
     // The scene that was open when the editor was last closed, else the startup scene.
     std::error_code error;
@@ -3842,6 +3844,7 @@ bool EditorSceneContext::ToggleProjectPlugin(std::size_t catalogIndex) {
             .name = std::string{ descriptor->id },
             .binaryPath = EditorPluginCatalog::PersistentBinaryPath(descriptor->id),
             .enabled = true,
+            .kind = descriptor->kind,
         });
         console_.Info("Plugins", std::string{ descriptor->displayName } + " enabled. Reopen the scene or enter play mode after reload to apply.");
         const bool saved = SaveProjectDescriptor();
@@ -3981,8 +3984,30 @@ bool EditorSceneContext::SaveProjectDescriptor() {
     if (projectFile_.empty()) {
         return false;
     }
+    // Plugins another writer switched since the editor last read or wrote the file stay switched;
+    // the editor's own changes, plugin by plugin, go on top.
+    std::error_code timeError;
+    if (std::filesystem::last_write_time(projectFile_, timeError) != projectFileWritten_ && !timeError) {
+        const kb::project::ProjectDescriptorReadResult disk = kb::project::ProjectManager::LoadProject(projectFile_);
+        if (disk.succeeded) {
+            std::vector<kb::project::ProjectPluginReference> merged = disk.descriptor.plugins;
+            const auto same = [](const kb::project::ProjectPluginReference& left, const kb::project::ProjectPluginReference& right) {
+                return left.name == right.name && left.binaryPath == right.binaryPath && left.enabled == right.enabled && left.kind == right.kind;
+            };
+            for (const kb::project::ProjectPluginReference& mine : project_.plugins) {
+                const auto base = std::ranges::find(pluginsOnDisk_, mine.name, &kb::project::ProjectPluginReference::name);
+                if (base != pluginsOnDisk_.end() && same(*base, mine)) continue;
+                const auto theirs = std::ranges::find(merged, mine.name, &kb::project::ProjectPluginReference::name);
+                if (theirs == merged.end()) merged.push_back(mine);
+                else *theirs = mine;
+            }
+            project_.plugins = std::move(merged);
+        }
+    }
     const bool saved = kb::project::ProjectDescriptorWriter::Write(projectFile_, project_);
     if (saved) {
+        pluginsOnDisk_ = project_.plugins;
+        projectFileWritten_ = std::filesystem::last_write_time(projectFile_, timeError);
         console_.Info("Project", "Project settings saved.");
     } else {
         console_.Error("Project", "Project settings could not be saved.");
@@ -4938,10 +4963,12 @@ bool EditorSceneContext::SwitchOnDefaultPlugin(std::string_view pluginId, std::s
         return reference.name == pluginId;
     });
     if (plugin == project_.plugins.end()) {
+        const EditorPluginDescriptor* known = EditorPluginCatalog::FindById(pluginId);
         project_.plugins.push_back(kb::project::ProjectPluginReference{
             .name = std::string{ pluginId },
             .binaryPath = EditorPluginCatalog::PersistentBinaryPath(pluginId),
             .enabled = true,
+            .kind = known != nullptr ? known->kind : kb::project::ProjectPluginKind::Runtime,
         });
     } else {
         plugin->enabled = true;

@@ -1733,6 +1733,9 @@ private:
     // merges onto what someone else wrote meanwhile instead of writing over it.
     kb::project::ProjectSettings projectConfigOnDisk_;
     std::filesystem::file_time_type projectConfigWritten_{};
+    // The same for the project file's plugins, which the agent and kb_cli switch too.
+    std::vector<kb::project::ProjectPluginReference> pluginsOnDisk_;
+    std::filesystem::file_time_type projectFileWritten_{};
     std::filesystem::path projectFile_;
     // The open scene document, and the scene being edited: that document, or the private scene of
     // a prefab in prefab edit mode.

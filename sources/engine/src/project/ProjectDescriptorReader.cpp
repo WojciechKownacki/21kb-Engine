@@ -81,6 +81,13 @@ using ProjectDescriptorBinaryIO::ReadAllBytes;
         if (!input.ReadBool(plugin.enabled)) {
             return false;
         }
+        if (fileVersion >= 7U) {
+            std::uint32_t kind = 0U;
+            if (!input.ReadUInt32(kind) || kind > static_cast<std::uint32_t>(ProjectPluginKind::Editor)) {
+                return false;
+            }
+            plugin.kind = static_cast<ProjectPluginKind>(kind);
+        }
         descriptor.plugins.push_back(std::move(plugin));
     }
     return true;

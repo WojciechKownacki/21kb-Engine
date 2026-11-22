@@ -52,12 +52,6 @@ inline constexpr std::string_view kWindowsCustomRuntimeModuleDirectory = "Runtim
     return name == "Input" || name == "Script";
 }
 
-// Extensions of the editor itself (Editor.Terrain): a project enables them to author with, and a
-// packaged game leaves them out on every target.
-[[nodiscard]] constexpr bool IsEditorOnlyModule(std::string_view name) noexcept {
-    return name.starts_with("Editor.");
-}
-
 // Disabled entries participate too: module activation uses the first matching
 // descriptor entry, so conflicting duplicates must never reach a packaged host.
 [[nodiscard]] inline std::string ValidatePackagedRuntimeModuleReferences(
@@ -147,7 +141,7 @@ TryPackagedRuntimeModuleKind(std::string_view name) noexcept {
     std::string_view targetProfileId,
     std::string_view moduleName) noexcept {
     return !TargetRequiresPackagedRuntimeModules(targetProfileId) ||
-        IsPackagedHostModule(moduleName) || IsEditorOnlyModule(moduleName) ||
+        IsPackagedHostModule(moduleName) ||
         TryPackagedRuntimeModuleKind(moduleName).has_value();
 }
 
@@ -157,7 +151,8 @@ TryPackagedRuntimeModuleKind(std::string_view name) noexcept {
     std::string_view targetProfileId,
     const kb::project::ProjectDescriptor& descriptor) noexcept {
     for (const kb::project::ProjectPluginReference& plugin : descriptor.plugins) {
-        if (plugin.enabled &&
+        // An editor plugin is left out of every package, so no target needs to construct it.
+        if (plugin.enabled && plugin.kind == kb::project::ProjectPluginKind::Runtime &&
             !TargetSupportsPackagedRuntimeModule(targetProfileId, plugin.name)) {
             return plugin.name;
         }

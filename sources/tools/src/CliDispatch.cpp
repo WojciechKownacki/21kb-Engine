@@ -678,6 +678,11 @@ R"(  run          Run a scene headless and report logs, events, and errors (the
                Without --set it lists every setting as Section.Key=value, e.g.
                Maps.DefaultMap (the scene the game starts in), Identity.GameName,
                Display.WindowWidth, Physics.GravityY. A scene is /Game/<path>.21kbscene.
+  plugins      List the engine's plugins with whether the project has each on, or switch them,
+               as the editor's Plugins window does.
+                 --project <dir> [--enable <id>]... [--disable <id>]...
+               Each is a game plugin, part of the packaged game, or an editor plugin, an
+               authoring tool the packaged game leaves out.
 
 Global options:
   --json       Print one JSON object instead of text, for scripts and agents:
@@ -817,6 +822,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"physics-layers", &RunPhysicsLayersCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
     {"lighting-quality", &RunLightingQualityCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
     {"project-settings", &RunProjectSettingsCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
+    {"plugins", &RunPluginsCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
 #if KB_CLI_RENDERER
     {"csg", &RunCsgCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
     {"rig2d", &RunRig2DCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},

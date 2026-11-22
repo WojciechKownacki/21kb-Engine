@@ -32,6 +32,7 @@ add_library(kb_cli_core STATIC
     src/CliPlayerPreset.cpp
     src/CliPhysicsCommands.cpp
     src/CliQualityCommands.cpp
+    src/CliPluginCommands.cpp
     src/CliRunCommand.cpp
     src/CliSceneCommands.cpp
     src/CliScriptCommands.cpp
@@ -64,6 +65,7 @@ target_sources(kb_cli_core PRIVATE
     ../editor/src/docking/DockGeometry.cpp
     ../editor/src/localization/EditorLocalization.cpp
     ../editor/src/scene/EditorViewportPreviewState.cpp
+    ../editor/src/scene/EditorPluginCatalog.cpp
     ../editor/src/scene/EditorGameView.cpp)
 
 # world build resolves meshes for HLOD proxies with the same loaders kb_cooker uses.

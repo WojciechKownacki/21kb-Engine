@@ -231,6 +231,13 @@ struct EngineCall {
     if (command == "code") return WithTarget(std::string{ EditorText("agent.step.code", "Searching the engine's code") }, Option(call, { "topic", "text", "symbol", "path" }));
     if (command == "import") return WithTarget(std::string{ EditorText("agent.step.import", "Importing") }, Option(call, { "source" }) + (call.words.empty() ? "" : call.words.front()));
     if (command == "scene-lightmap" || command == "scene-bake-lighting") return WithTarget(std::string{ EditorText("agent.step.bakeLighting", "Baking the lighting") }, Option(call, { "scene" }));
+    if (command == "plugins") {
+        const std::string on = Option(call, { "enable" });
+        const std::string off = Option(call, { "disable" });
+        if (!on.empty()) return WithTarget(std::string{ EditorText("agent.step.pluginOn", "Turning on a plugin") }, on);
+        if (!off.empty()) return WithTarget(std::string{ EditorText("agent.step.pluginOff", "Turning off a plugin") }, off);
+        return WithTarget(std::string{ EditorText("agent.step.plugins", "Checking the plugins") }, {});
+    }
     if (command == "project-settings") {
         const std::string set = Option(call, { "set" });
         return set.empty() ? WithTarget(std::string{ EditorText("agent.step.readProjectSettings", "Checking the project settings") }, {})
@@ -337,6 +344,16 @@ struct EngineCall {
         if (it->is_regular_file(error)) {
             files.emplace(it->path().lexically_normal(), it->last_write_time(error));
         }
+    }
+    // The project file (its plugins) and its settings: a step that switches a plugin or a setting
+    // changed the project too.
+    error.clear();
+    for (std::filesystem::directory_iterator it(project, error), end; !error && it != end; it.increment(error)) {
+        if (it->path().extension() == ".21kbproject") files.emplace(it->path().lexically_normal(), it->last_write_time(error));
+    }
+    error.clear();
+    for (std::filesystem::directory_iterator it(project / "Config", error), end; !error && it != end; it.increment(error)) {
+        if (it->is_regular_file(error)) files.emplace(it->path().lexically_normal(), it->last_write_time(error));
     }
     return files;
 }

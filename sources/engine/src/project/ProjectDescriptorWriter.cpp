@@ -88,6 +88,7 @@ using ProjectDescriptorBinaryIO::WriteUInt32;
         WriteString(output, plugin.name);
         WriteString(output, plugin.binaryPath);
         WriteBool(output, plugin.enabled);
+        WriteUInt32(output, static_cast<std::uint32_t>(plugin.kind));
     }
 
     return output;

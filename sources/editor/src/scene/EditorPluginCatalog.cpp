@@ -118,6 +118,7 @@ constexpr std::array<EditorPluginDescriptor, 7> kPlugins{{
         .provider = "21kb",
         .description = "Terrain authoring extension for the 21kb Editor.",
         .binaryPath = KB_TERRAIN_EDITOR_PLUGIN_PATH,
+        .kind = kb::project::ProjectPluginKind::Editor,
     },
 }};
 
@@ -154,13 +155,15 @@ bool EditorPluginCatalog::NormalizeProjectPluginReference(kb::project::ProjectPl
         return false;
     }
 
+    // A project written before plugins had a kind gets the catalog's.
+    bool changed = plugin.kind != descriptor->kind;
+    plugin.kind = descriptor->kind;
     const std::string normalized = PersistentBinaryPath(plugin.name);
-    if (normalized.empty() || plugin.binaryPath == normalized) {
-        return false;
+    if (!normalized.empty() && plugin.binaryPath != normalized) {
+        plugin.binaryPath = normalized;
+        changed = true;
     }
-
-    plugin.binaryPath = normalized;
-    return true;
+    return changed;
 }
 
 } // namespace kb::editor

@@ -12,10 +12,18 @@ struct ProjectModuleDescriptor {
     std::string loadingPhase = "Default";
 };
 
+// Where a plugin runs: in the game (and the editor), or only in the editor, as an authoring tool.
+// A packaged game never carries an editor plugin. The numbers are stored in project files.
+enum class ProjectPluginKind : std::uint32_t {
+    Runtime = 0U,
+    Editor = 1U,
+};
+
 struct ProjectPluginReference {
     std::string name;
     std::string binaryPath;
     bool enabled = true;
+    ProjectPluginKind kind = ProjectPluginKind::Runtime;
 };
 
 // How a project's opaque surfaces are lit. Auto leaves the path to the platform: Deferred on computers, Forward
@@ -42,9 +50,10 @@ enum class ProjectSceneLightingPath : std::uint32_t {
 // working - identity, maps, rendering, input, physics - lives in the project's
 // settings file instead, where it can be read and edited. File version 6 is the
 // first without those; older files still open and their settings are handed back
-// once, so opening an old project carries them into the settings file.
+// once, so opening an old project carries them into the settings file. Version 7 adds each plugin's
+// kind; an older file's plugins read as runtime plugins.
 struct ProjectDescriptor {
-    static constexpr std::uint32_t CurrentFileVersion = 6U;
+    static constexpr std::uint32_t CurrentFileVersion = 7U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
     std::string engineAssociation = "21kb";

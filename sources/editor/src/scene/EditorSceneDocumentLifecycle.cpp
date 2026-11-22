@@ -471,7 +471,12 @@ bool EditorSceneContext::ReloadSceneAfterExternalChange() {
         return enabled;
     };
     if (worldPartition_.IsOpen() || currentScenePath_.empty() || (onDisk.succeeded && plugins(onDisk.descriptor) != plugins(project_))) {
-        if (onDisk.succeeded) project_ = onDisk.descriptor;
+        if (onDisk.succeeded) {
+            project_ = onDisk.descriptor;
+            pluginsOnDisk_ = project_.plugins;
+            std::error_code timeError;
+            projectFileWritten_ = std::filesystem::last_write_time(ProjectFile(), timeError);
+        }
         if (!ReloadSceneFromProject()) return false;
         paths.Restore(*scene_, hierarchySelection_);
         return true;

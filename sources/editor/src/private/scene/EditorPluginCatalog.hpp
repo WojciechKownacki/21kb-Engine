@@ -15,6 +15,7 @@ struct EditorPluginDescriptor {
     std::string_view provider;
     std::string_view description;
     std::string_view binaryPath;
+    kb::project::ProjectPluginKind kind = kb::project::ProjectPluginKind::Runtime;
 };
 
 class EditorPluginCatalog {
