@@ -4,6 +4,7 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneAssetCopy.hpp"
+#include "engine/assets/AssetChangeRules.hpp"
 #include "engine/assets/AssetImportService.hpp"
 #include "kb/render/resources/RenderMeshImportArtifacts.hpp"
 
@@ -34,60 +35,6 @@ namespace {
     return scene.Assets().Manager();
 }
 
-[[nodiscard]] const kb::assets::AssetMetadata* FirstExternalDependent(
-    const kb::assets::AssetManager& manager,
-    kb::assets::AssetId target,
-    const std::unordered_set<std::uint64_t>& sameOperationAssets = {},
-    bool relocation = false) {
-    const auto* targetMetadata = manager.Registry().Find(target);
-    if (!target.IsValid()) {
-        return nullptr;
-    }
-    for (const kb::assets::AssetMetadata& metadata : manager.Registry().All()) {
-        if (sameOperationAssets.contains(metadata.id.value)) {
-            continue;
-        }
-        for (const kb::assets::AssetId dependency : metadata.dependencies) {
-            if (dependency == target) {
-                if (relocation && targetMetadata != nullptr && targetMetadata->type == "ScenePrefab" &&
-                    (metadata.type == "Scene" || metadata.type == "ScenePrefab")) continue;
-                return &metadata;
-            }
-        }
-    }
-    return nullptr;
-}
-
-[[nodiscard]] bool CanMutateDependencyTarget(
-    kb::assets::AssetManager& manager,
-    kb::assets::AssetId target,
-    std::string_view operation,
-    const std::unordered_set<std::uint64_t>& sameOperationAssets = {}) {
-    if (const kb::assets::AssetMetadata* dependent = FirstExternalDependent(manager, target, sameOperationAssets, operation == "moved" || operation == "renamed"); dependent != nullptr) {
-        const kb::assets::AssetMetadata* targetMetadata = manager.Registry().Find(target);
-        const std::string name = targetMetadata != nullptr ? targetMetadata->virtualPath.generic_string() : kb::assets::ToString(target);
-        manager.SetError(
-            name + " can't be " + std::string{ operation } + ": " + dependent->virtualPath.generic_string() +
-            " uses it. Remove that reference first.");
-        return false;
-    }
-    return true;
-}
-
-// The assets inside `virtualFolder`, at any depth.
-[[nodiscard]] std::vector<kb::assets::AssetId> AssetsUnder(
-    const kb::assets::AssetManager& manager,
-    const std::filesystem::path& virtualFolder) {
-    std::vector<kb::assets::AssetId> assets;
-    const std::string folder = kb::assets::NormalizeAssetPath(virtualFolder) + "/";
-    for (const kb::assets::AssetMetadata& metadata : manager.Registry().All()) {
-        if (kb::assets::NormalizeAssetPath(metadata.virtualPath).starts_with(folder)) {
-            assets.push_back(metadata.id);
-        }
-    }
-    return assets;
-}
-
 void RelocateLoadedPrefabs(kb::scene::Scene& scene, const std::filesystem::path& previous,
     const std::filesystem::path& current, const std::vector<std::filesystem::path>& sources) {
     for (const auto& source : sources) {
@@ -98,65 +45,11 @@ void RelocateLoadedPrefabs(kb::scene::Scene& scene, const std::filesystem::path&
 [[nodiscard]] std::vector<std::filesystem::path> PrefabSourcesUnder(
     const kb::assets::AssetManager& manager, const std::filesystem::path& folder) {
     std::vector<std::filesystem::path> result;
-    for (const auto id : AssetsUnder(manager, folder)) {
+    for (const auto id : kb::assets::AssetChangeRules::AssetsUnder(manager, folder)) {
         const auto* metadata = manager.Registry().Find(id);
         if (metadata != nullptr && metadata->type == "ScenePrefab") result.push_back(metadata->physicalPath);
     }
     return result;
-}
-
-// Removing both ends of a reference is safe. Relocation changes paths even when
-// both files move together, so those references must still prevent relocation.
-[[nodiscard]] bool CanMutateFolderContents(
-    kb::assets::AssetManager& manager,
-    const std::filesystem::path& virtualFolder,
-    std::string_view operation) {
-    const std::vector<kb::assets::AssetId> contents = AssetsUnder(manager, virtualFolder);
-    std::unordered_set<std::uint64_t> moving;
-    if (operation == "deleted") {
-        for (const kb::assets::AssetId asset : contents) {
-            moving.insert(asset.value);
-        }
-    }
-    for (const kb::assets::AssetId asset : contents) {
-        if (!CanMutateDependencyTarget(manager, asset, operation, moving)) {
-            return false;
-        }
-    }
-    return true;
-}
-
-// Why `physical` - an asset file, or a folder - must not be deleted, renamed or moved: it is, or holds,
-// the scene open in the editor or the project's startup scene. Sets the manager's error and returns
-// false then.
-[[nodiscard]] bool LeavesProtectedScenes(
-    kb::assets::AssetManager& manager,
-    const EditorProtectedScenes& protectedScenes,
-    const std::filesystem::path& physical,
-    std::string_view operation) {
-    if (physical.empty()) {
-        return true;
-    }
-    const auto holds = [&physical](const std::filesystem::path& scene) {
-        if (scene.empty()) {
-            return false;
-        }
-        const std::filesystem::path relative = scene.lexically_normal().lexically_relative(physical.lexically_normal());
-        return !relative.empty() && *relative.begin() != "..";
-    };
-    const std::u8string name = physical.filename().u8string();
-    const std::string quoted = "'" + std::string{ reinterpret_cast<const char*>(name.data()), name.size() } + "'";
-    if (holds(protectedScenes.openScene)) {
-        manager.SetError("Can't " + std::string{ operation } + " " + quoted +
-            ": it holds the scene open in the editor. Open another scene first.");
-        return false;
-    }
-    if (holds(protectedScenes.startupScene)) {
-        manager.SetError("Can't " + std::string{ operation } + " " + quoted +
-            ": it holds the project's startup scene. Choose another startup scene in Build Game first.");
-        return false;
-    }
-    return true;
 }
 
 [[nodiscard]] std::filesystem::path AssetFile(const kb::assets::AssetManager& manager, kb::assets::AssetId id) {
@@ -235,8 +128,8 @@ bool EditorSceneAssetBrowserCommands::CommitTextEdit(kb::scene::Scene& scene, Ed
         if (metadata != nullptr) {
             const auto previousPhysicalPath = metadata->physicalPath;
             const std::filesystem::path renamedVirtualPath = metadata->virtualPath.parent_path() / (value + metadata->virtualPath.extension().string());
-            committed = LeavesProtectedScenes(manager, protectedScenes, metadata->physicalPath, "rename") &&
-                CanMutateDependencyTarget(manager, metadata->id, "renamed") && manager.RenameAsset(metadata->id, value);
+            committed = kb::assets::AssetChangeRules::LeavesProtectedScenes(manager, protectedScenes, metadata->physicalPath, "rename") &&
+                kb::assets::AssetChangeRules::CanChange(manager, metadata->id, "renamed") && manager.RenameAsset(metadata->id, value);
             if (committed) {
                 if (const auto destination = manager.Mounts().Resolve(renamedVirtualPath)) {
                     scene.Prefabs().RelocateSource(previousPhysicalPath, *destination);
@@ -255,8 +148,8 @@ bool EditorSceneAssetBrowserCommands::CommitTextEdit(kb::scene::Scene& scene, Ed
         const bool renamedOpenFolder = SameVirtualPath(oldFolder, assetBrowser.SelectedFolder());
         const auto previousPhysical = FolderFile(manager, oldFolder);
         const auto prefabSources = PrefabSourcesUnder(manager, oldFolder);
-        committed = LeavesProtectedScenes(manager, protectedScenes, FolderFile(manager, oldFolder), "rename") &&
-            CanMutateFolderContents(manager, oldFolder, "renamed") && manager.RenameFolder(oldFolder, value);
+        committed = kb::assets::AssetChangeRules::LeavesProtectedScenes(manager, protectedScenes, FolderFile(manager, oldFolder), "rename") &&
+            kb::assets::AssetChangeRules::CanChangeFolder(manager, oldFolder, "renamed") && manager.RenameFolder(oldFolder, value);
         if (committed) {
             RelocateLoadedPrefabs(scene, previousPhysical, FolderFile(manager, renamedFolder), prefabSources);
             if (renamedOpenFolder) {
@@ -303,21 +196,21 @@ bool EditorSceneAssetBrowserCommands::DeleteSelected(kb::scene::Scene& scene, Ed
         deletingAssetIds.insert(asset.value);
     }
     for (const std::filesystem::path& folder : foldersToDelete) {
-        if (!LeavesProtectedScenes(manager, protectedScenes, FolderFile(manager, folder), "delete")) {
+        if (!kb::assets::AssetChangeRules::LeavesProtectedScenes(manager, protectedScenes, FolderFile(manager, folder), "delete")) {
             return false;
         }
-        for (const kb::assets::AssetId asset : AssetsUnder(manager, folder)) {
+        for (const kb::assets::AssetId asset : kb::assets::AssetChangeRules::AssetsUnder(manager, folder)) {
             deletingAssetIds.insert(asset.value);
         }
     }
     for (const kb::assets::AssetId asset : assetsToDelete) {
-        if (!LeavesProtectedScenes(manager, protectedScenes, AssetFile(manager, asset), "delete")) {
+        if (!kb::assets::AssetChangeRules::LeavesProtectedScenes(manager, protectedScenes, AssetFile(manager, asset), "delete")) {
             return false;
         }
     }
     // Nothing outside what is deleted may use any of it - also an asset inside a deleted folder.
     for (const std::uint64_t asset : deletingAssetIds) {
-        if (!CanMutateDependencyTarget(manager, kb::assets::AssetId{ asset }, "deleted", deletingAssetIds)) {
+        if (!kb::assets::AssetChangeRules::CanChange(manager, kb::assets::AssetId{ asset }, "deleted", deletingAssetIds)) {
             return false;
         }
     }
@@ -347,8 +240,8 @@ bool EditorSceneAssetBrowserCommands::DeleteSelected(kb::scene::Scene& scene, Ed
 bool EditorSceneAssetBrowserCommands::DeleteAsset(kb::scene::Scene& scene, EditorAssetBrowserState& assetBrowser, kb::assets::AssetId id,
     const EditorProtectedScenes& protectedScenes) {
     kb::assets::AssetManager& manager = AssetManager(scene);
-    if (!LeavesProtectedScenes(manager, protectedScenes, AssetFile(manager, id), "delete") ||
-        !CanMutateDependencyTarget(manager, id, "deleted", { id.value })) {
+    if (!kb::assets::AssetChangeRules::LeavesProtectedScenes(manager, protectedScenes, AssetFile(manager, id), "delete") ||
+        !kb::assets::AssetChangeRules::CanChange(manager, id, "deleted", { id.value })) {
         return false;
     }
     const bool deleted = manager.DeleteAsset(id);
@@ -362,8 +255,8 @@ bool EditorSceneAssetBrowserCommands::DeleteAsset(kb::scene::Scene& scene, Edito
 bool EditorSceneAssetBrowserCommands::DeleteFolder(kb::scene::Scene& scene, EditorAssetBrowserState& assetBrowser, const std::filesystem::path& virtualFolder,
     const EditorProtectedScenes& protectedScenes) {
     kb::assets::AssetManager& manager = AssetManager(scene);
-    if (!LeavesProtectedScenes(manager, protectedScenes, FolderFile(manager, virtualFolder), "delete") ||
-        !CanMutateFolderContents(manager, virtualFolder, "deleted")) {
+    if (!kb::assets::AssetChangeRules::LeavesProtectedScenes(manager, protectedScenes, FolderFile(manager, virtualFolder), "delete") ||
+        !kb::assets::AssetChangeRules::CanChangeFolder(manager, virtualFolder, "deleted")) {
         return false;
     }
     const bool deleted = manager.DeleteFolder(virtualFolder);
@@ -386,8 +279,8 @@ bool EditorSceneAssetBrowserCommands::MoveAssetToFolder(
     const EditorProtectedScenes& protectedScenes) {
     kb::assets::AssetManager& manager = AssetManager(scene);
     // Scene and prefab links use GUIDs; other references still require their original path.
-    if (!LeavesProtectedScenes(manager, protectedScenes, AssetFile(manager, id), "move") ||
-        !CanMutateDependencyTarget(manager, id, "moved")) {
+    if (!kb::assets::AssetChangeRules::LeavesProtectedScenes(manager, protectedScenes, AssetFile(manager, id), "move") ||
+        !kb::assets::AssetChangeRules::CanChange(manager, id, "moved")) {
         return false;
     }
     const auto previousPhysicalPath = AssetFile(manager, id);
@@ -413,8 +306,8 @@ bool EditorSceneAssetBrowserCommands::MoveFolderToFolder(
     const std::filesystem::path& destinationVirtualFolder,
     const EditorProtectedScenes& protectedScenes) {
     kb::assets::AssetManager& manager = AssetManager(scene);
-    if (!LeavesProtectedScenes(manager, protectedScenes, FolderFile(manager, sourceVirtualFolder), "move") ||
-        !CanMutateFolderContents(manager, sourceVirtualFolder, "moved")) {
+    if (!kb::assets::AssetChangeRules::LeavesProtectedScenes(manager, protectedScenes, FolderFile(manager, sourceVirtualFolder), "move") ||
+        !kb::assets::AssetChangeRules::CanChangeFolder(manager, sourceVirtualFolder, "moved")) {
         return false;
     }
     const bool movedOpenFolder = SameVirtualPath(assetBrowser.SelectedFolder(), sourceVirtualFolder);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "assets/EditorAssetBrowserState.hpp"
+#include "engine/assets/AssetChangeRules.hpp"
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetImportTypes.hpp"
 
@@ -14,12 +15,9 @@ class Scene;
 
 namespace kb::editor {
 
-// The scene open in the editor and the project's startup scene (physical paths). Project Files does
-// not delete, rename or move either, nor a folder holding one, so the open level is protected.
-struct EditorProtectedScenes {
-    std::filesystem::path openScene;
-    std::filesystem::path startupScene;
-};
+// The scene open in the editor and the project's startup scene: Project Files does not delete, rename or
+// move either, nor a folder holding one, as kb_cli does not (AssetChangeRules).
+using EditorProtectedScenes = kb::assets::AssetProtectedScenes;
 
 class EditorSceneAssetBrowserCommands {
 public:

@@ -63,6 +63,9 @@ briefly, in plain words and in their language, and say what they will see in the
   (`--profile release` for a store build). The open editor builds it in its Build Game panel and writes
   `Saved/Agent/BuildResult.txt`: `Running`, then `Succeeded <folder>` or `Failed <reason>`. Without
   an open editor, `kb_cli build --project . --out Build/<Name>` makes a Windows build.
+- Tidying the project (a scene or asset no longer wanted, a better name, folders):
+  `kb_cli asset delete|rename|move|new-folder --project . --path /Game/<file or folder>` (`--to` a new
+  name or folder). Deleted files go to the Recycle Bin. Remove what you made only to help yourself.
 - To show the person a scene in the editor (a new level, one they asked about): `kb_cli editor open-scene
   --project . --scene /Game/<path>.21kbscene`.
 - To show the person how a scene looks: `kb_cli capture --project . --scene <scene> --out

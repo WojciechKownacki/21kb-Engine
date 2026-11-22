@@ -688,6 +688,7 @@ add_library(kb_engine STATIC
     src/assets/AssetImportTypes.cpp
     src/assets/AssetLoaderRegistry.cpp
     src/assets/AssetManager.cpp
+    src/assets/AssetChangeRules.cpp
     src/assets/AssetManifest.cpp
     src/assets/AssetMetadata.cpp
     src/assets/AssetMountTable.cpp

@@ -235,6 +235,13 @@ struct EngineCall {
         return WithTarget(std::string{ EditorText("agent.step.buildGame", "Building the game") }, Option(call, { "target" }));
     }
     if (command == "editor") return WithTarget(std::string{ EditorText("agent.step.openScene", "Opening in the editor") }, Option(call, { "scene" }));
+    if (command == "asset") {
+        const std::string what = Option(call, { "path" });
+        if (call.action == "delete") return WithTarget(std::string{ EditorText("agent.step.deleteFile", "Deleting") }, what);
+        if (call.action == "rename") return WithTarget(std::string{ EditorText("agent.step.renameFile", "Renaming") }, what);
+        if (call.action == "move") return WithTarget(std::string{ EditorText("agent.step.moveFile", "Moving") }, what);
+        return WithTarget(std::string{ EditorText("agent.step.newFolder", "Making a folder") }, what);
+    }
     if (command == "plugins") {
         const std::string on = Option(call, { "enable" });
         const std::string off = Option(call, { "disable" });

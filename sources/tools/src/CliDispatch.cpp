@@ -681,6 +681,14 @@ R"(  run          Run a scene headless and report logs, events, and errors (the
                Without --set it lists every setting as Section.Key=value, e.g.
                Maps.DefaultMap (the scene the game starts in), Identity.GameName,
                Display.WindowWidth, Physics.GravityY. A scene is /Game/<path>.21kbscene.
+  asset        Tidy the project's files as Project Files does: delete (to the Recycle Bin), rename
+               or move a file or folder with its .meta, or make a folder.
+                 delete --project <dir> --path /Game/<file or folder>
+                 rename --project <dir> --path /Game/<file or folder> --to <NewName>
+                 move --project <dir> --path /Game/<file or folder> --to /Game/<folder>
+                 new-folder --project <dir> --path /Game/<folder>
+               Refused for a file another asset uses, the startup scene and the scene open in
+               the editor (and the folders holding them).
   editor       Ask the editor that has the project open to open a scene, or to build the game
                for a platform with its Build Game panel (its settings, keys and tools).
                  open-scene --project <dir> --scene /Game/<path>.21kbscene
@@ -834,6 +842,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"project-settings", &RunProjectSettingsCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
     {"plugins", &RunPluginsCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
     {"editor", &RunEditorCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
+    {"asset", &RunAssetCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
 #if KB_CLI_RENDERER
     {"csg", &RunCsgCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
     {"rig2d", &RunRig2DCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},

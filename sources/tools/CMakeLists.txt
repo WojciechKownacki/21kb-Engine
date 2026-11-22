@@ -33,6 +33,7 @@ add_library(kb_cli_core STATIC
     src/CliPhysicsCommands.cpp
     src/CliQualityCommands.cpp
     src/CliPluginCommands.cpp
+    src/CliAssetCommands.cpp
     src/CliRunCommand.cpp
     src/CliSceneCommands.cpp
     src/CliScriptCommands.cpp

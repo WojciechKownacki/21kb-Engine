@@ -108,6 +108,7 @@ namespace kb::cli {
 [[nodiscard]] int RunProjectSettingsCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunPluginsCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunEditorCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunAssetCommand(const ArgumentList& arguments, CommandIo io);
 // The directory the cooker and the editor mount as /Game: the content root of the project in
 // `project`, else of the nearest folder above `path` that holds a project file.
 [[nodiscard]] std::optional<std::filesystem::path> FindProjectContentRoot(

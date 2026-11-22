@@ -126,6 +126,7 @@ struct Preset {
             "Plugins are kb_cli plugins (--enable / --disable <id>); the game for a platform is kb_cli editor build --target "
             "windows|android|web|webgpu|linux (the editor builds it where the user sees it); "
             "kb_cli editor open-scene --scene <scene> shows a scene in the editor. "
+            "Files and folders are deleted, renamed or moved with kb_cli asset (never by hand); remove helper files you made. "
             "A character the player walks with, its camera and controls are one step: kb_cli entity add --create 'Third Person Player' "
             "(or 'First Person Player'). "
             "Do the whole task yourself: the user does not run commands or change settings by hand. "
