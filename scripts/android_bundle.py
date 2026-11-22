@@ -17,9 +17,16 @@ DISTRIBUTION = "{http://schemas.android.com/apk/distribution}"
 RUNTIME_MODULE = "runtimeassets"
 
 
+def bundletool_command(java: Path, bundletool: Path) -> list[Path | str]:
+    """How to run the bundle tool: a runnable jar, or a folder of its libraries staged by the Android build."""
+    if bundletool.is_dir():
+        return [java, "-cp", str(bundletool / "*"), "com.android.tools.build.bundletool.BundleToolMain"]
+    return [java, "-jar", bundletool]
+
+
 def _manifest(java: Path, bundletool: Path, bundle: Path, module: str) -> ET.Element:
     result = run_checked(
-        [java, "-jar", bundletool, "dump", "manifest", f"--bundle={bundle}", f"--module={module}"],
+        [*bundletool_command(java, bundletool), "dump", "manifest", f"--bundle={bundle}", f"--module={module}"],
         cwd=bundle.parent, timeout_seconds=120,
     )
     try:
@@ -104,7 +111,7 @@ def validate_bundle(
     except (zipfile.BadZipFile, KeyError, OSError) as error:
         raise PackagingError(f"Android bundle payload cannot be read: {error}") from error
 
-    run_checked([java, "-jar", bundletool, "validate", f"--bundle={bundle}"],
+    run_checked([*bundletool_command(java, bundletool), "validate", f"--bundle={bundle}"],
                 cwd=bundle.parent, timeout_seconds=120)
     manifest = _manifest(java, bundletool, bundle, "base")
     sdk = manifest.find("uses-sdk")

@@ -11,36 +11,25 @@
 namespace kb::editor {
 namespace {
 
-constexpr std::array<BuildGameRowSpec, 3> kProjectRows{{
-    { BuildGameField::ProjectName, [] { return EditorText("buildGame.field.projectName", "Project name"); }, BuildGameRowKind::ReadOnly, true },
-    { BuildGameField::Publisher, [] { return EditorText("buildGame.field.publisher", "Publisher"); }, BuildGameRowKind::Text, true },
+// What players see: the name in the window title, the Start menu and the store, who made it, which version it is and
+// the line of rights it carries. Every one of these is plain text in any language.
+constexpr std::array<BuildGameRowSpec, 5> kGameRows{{
+    { BuildGameField::ProductName, [] { return EditorText("buildGame.field.gameName", "Game name"); }, BuildGameRowKind::Text, true },
+    { BuildGameField::Publisher, [] { return EditorText("buildGame.field.studio", "Studio or author"); }, BuildGameRowKind::Text, true },
     { BuildGameField::Version, [] { return EditorText("buildGame.field.version", "Version"); }, BuildGameRowKind::Text, true },
+    { BuildGameField::Description, [] { return EditorText("buildGame.field.description", "Description"); }, BuildGameRowKind::Text, false },
+    { BuildGameField::Copyright, [] { return EditorText("buildGame.field.copyright", "Copyright"); }, BuildGameRowKind::Text, false },
 }};
-constexpr std::array<BuildGameRowSpec, 3> kDesktopApplicationRows{{
-    { BuildGameField::ProductName, [] { return EditorText("buildGame.field.productName", "Product name"); }, BuildGameRowKind::Text, true },
-    { BuildGameField::ExecutableName, [] { return EditorText("buildGame.field.executableName", "Executable name"); }, BuildGameRowKind::Text, true },
+constexpr std::array<BuildGameRowSpec, 2> kAppearanceRows{{
     { BuildGameField::ApplicationIcon, [] { return EditorText("buildGame.field.applicationIcon", "Application icon"); }, BuildGameRowKind::IconPicker, false },
+    { BuildGameField::LoadingScreenImage, [] { return EditorText("buildGame.field.loadingScreen", "Loading screen image"); }, BuildGameRowKind::ImagePicker, false },
 }};
-// The Windows player is the one host with crash reports, so only it offers an endpoint.
-constexpr std::array<BuildGameRowSpec, 4> kWindowsApplicationRows{{
-    { BuildGameField::ProductName, [] { return EditorText("buildGame.field.productName", "Product name"); }, BuildGameRowKind::Text, true },
-    { BuildGameField::ExecutableName, [] { return EditorText("buildGame.field.executableName", "Executable name"); }, BuildGameRowKind::Text, true },
-    { BuildGameField::ApplicationIcon, [] { return EditorText("buildGame.field.applicationIcon", "Application icon"); }, BuildGameRowKind::IconPicker, false },
-    { BuildGameField::CrashReportUrl, [] { return EditorText("buildGame.field.crashReportURL", "Crash report URL"); }, BuildGameRowKind::Text, false },
-}};
-constexpr std::array<BuildGameRowSpec, 3> kWebApplicationRows{{
-    { BuildGameField::ProductName, [] { return EditorText("buildGame.field.productName", "Product name"); }, BuildGameRowKind::Text, true },
-    { BuildGameField::ExecutableName, [] { return EditorText("buildGame.field.bundleName", "Bundle name"); }, BuildGameRowKind::Text, true },
-    { BuildGameField::ApplicationIcon, [] { return EditorText("buildGame.field.applicationIcon", "Application icon"); }, BuildGameRowKind::IconPicker, false },
-}};
-constexpr std::array<BuildGameRowSpec, 7> kAndroidApplicationRows{{
-    { BuildGameField::AndroidFormat, [] { return EditorText("buildGame.field.androidFormat", "Package format (apk/aab)"); }, BuildGameRowKind::Text, true },
-    { BuildGameField::AndroidBundletool, [] { return EditorText("buildGame.field.androidBundletool", "Bundletool JAR (AAB)"); }, BuildGameRowKind::Text, false },
-    { BuildGameField::ProductName, [] { return EditorText("buildGame.field.productName", "Product name"); }, BuildGameRowKind::Text, true },
+// The store identity of an Android app; the name and icon are the game's own.
+constexpr std::array<BuildGameRowSpec, 4> kAndroidApplicationRows{{
+    { BuildGameField::AndroidFormat, [] { return EditorText("buildGame.field.androidFormat", "Package format (apk/aab)"); }, BuildGameRowKind::Choice, true },
     { BuildGameField::AndroidApplicationId, [] { return EditorText("buildGame.field.applicationId", "Application id"); }, BuildGameRowKind::Text, true },
     { BuildGameField::AndroidVersionCode, [] { return EditorText("buildGame.field.versionCode", "Version code"); }, BuildGameRowKind::Text, true },
     { BuildGameField::AndroidLabel, [] { return EditorText("buildGame.field.applicationLabel", "Application label"); }, BuildGameRowKind::Text, true },
-    { BuildGameField::ApplicationIcon, [] { return EditorText("buildGame.field.applicationIcon", "Application icon"); }, BuildGameRowKind::IconPicker, false },
 }};
 constexpr std::array<BuildGameRowSpec, 1> kContentRows{{
     { BuildGameField::StartupMap, [] { return EditorText("buildGame.field.startupMap", "Startup map"); }, BuildGameRowKind::ScenePicker, true },
@@ -59,9 +48,25 @@ constexpr std::array<BuildGameRowSpec, 4> kWindowsSigningRows{{
     { BuildGameField::WindowsCertificatePassword, [] { return EditorText("buildGame.field.certificatePassword", "Certificate password"); }, BuildGameRowKind::Password, false },
     { BuildGameField::WindowsTimestampUrl, [] { return EditorText("buildGame.field.timestampURL", "Timestamp URL"); }, BuildGameRowKind::Text, false },
 }};
-constexpr std::array<BuildGameRowSpec, 4> kOutputRows{{
+constexpr std::array<BuildGameRowSpec, 2> kOutputRows{{
     { BuildGameField::OutputDirectory, [] { return EditorText("buildGame.field.outputDirectory", "Output directory"); }, BuildGameRowKind::FolderPicker, true },
     { BuildGameField::LaunchAfterBuild, [] { return EditorText("buildGame.field.launchAfterBuild", "Launch after build"); }, BuildGameRowKind::Checkbox, false },
+}};
+// Filled in for the user: the file name comes from the game name and the engine build from the editor that runs.
+constexpr std::array<BuildGameRowSpec, 3> kAdvancedRows{{
+    { BuildGameField::ExecutableName, [] { return EditorText("buildGame.field.executableName", "Executable name"); }, BuildGameRowKind::Text, true },
+    { BuildGameField::BuilderExecutable, [] { return EditorText("buildGame.field.builderExecutable", "Builder executable"); }, BuildGameRowKind::Text, true },
+    { BuildGameField::BuildRoot, [] { return EditorText("buildGame.field.buildDirectory", "Build directory"); }, BuildGameRowKind::FolderPicker, true },
+}};
+// The Windows player is the one host with crash reports, so only it offers an endpoint.
+constexpr std::array<BuildGameRowSpec, 4> kWindowsAdvancedRows{{
+    { BuildGameField::ExecutableName, [] { return EditorText("buildGame.field.executableName", "Executable name"); }, BuildGameRowKind::Text, true },
+    { BuildGameField::CrashReportUrl, [] { return EditorText("buildGame.field.crashReportURL", "Crash report URL"); }, BuildGameRowKind::Text, false },
+    { BuildGameField::BuilderExecutable, [] { return EditorText("buildGame.field.builderExecutable", "Builder executable"); }, BuildGameRowKind::Text, true },
+    { BuildGameField::BuildRoot, [] { return EditorText("buildGame.field.buildDirectory", "Build directory"); }, BuildGameRowKind::FolderPicker, true },
+}};
+constexpr std::array<BuildGameRowSpec, 3> kWebAdvancedRows{{
+    { BuildGameField::ExecutableName, [] { return EditorText("buildGame.field.bundleName", "Bundle name"); }, BuildGameRowKind::Text, true },
     { BuildGameField::BuilderExecutable, [] { return EditorText("buildGame.field.builderExecutable", "Builder executable"); }, BuildGameRowKind::Text, true },
     { BuildGameField::BuildRoot, [] { return EditorText("buildGame.field.buildDirectory", "Build directory"); }, BuildGameRowKind::FolderPicker, true },
 }};
@@ -155,6 +160,56 @@ constexpr std::array<BuildGameRowSpec, 7> kLinuxToolchainRows{{
     return sawDot && !segmentStart;
 }
 
+// Latin letters with marks, as the plain letters a file name can carry; other characters are left out.
+[[nodiscard]] std::string_view PlainLetters(char32_t codePoint) noexcept {
+    switch (codePoint) {
+    case U'\u0105': case U'\u00E1': case U'\u00E0': case U'\u00E2': case U'\u00E4': case U'\u00E3': case U'\u00E5': case U'\u0103': return "a";
+    case U'\u0104': case U'\u00C1': case U'\u00C0': case U'\u00C2': case U'\u00C4': case U'\u00C3': case U'\u00C5': case U'\u0102': return "A";
+    case U'\u0107': case U'\u010D': case U'\u00E7': return "c";
+    case U'\u0106': case U'\u010C': case U'\u00C7': return "C";
+    case U'\u010F': return "d";
+    case U'\u010E': return "D";
+    case U'\u0119': case U'\u00E9': case U'\u00E8': case U'\u00EA': case U'\u00EB': case U'\u011B': return "e";
+    case U'\u0118': case U'\u00C9': case U'\u00C8': case U'\u00CA': case U'\u00CB': case U'\u011A': return "E";
+    case U'\u00ED': case U'\u00EC': case U'\u00EE': case U'\u00EF': return "i";
+    case U'\u00CD': case U'\u00CC': case U'\u00CE': case U'\u00CF': return "I";
+    case U'\u0142': return "l";
+    case U'\u0141': return "L";
+    case U'\u0144': case U'\u00F1': case U'\u0148': return "n";
+    case U'\u0143': case U'\u00D1': case U'\u0147': return "N";
+    case U'\u00F3': case U'\u00F2': case U'\u00F4': case U'\u00F6': case U'\u00F5': case U'\u00F8': case U'\u0151': return "o";
+    case U'\u00D3': case U'\u00D2': case U'\u00D4': case U'\u00D6': case U'\u00D5': case U'\u00D8': case U'\u0150': return "O";
+    case U'\u0159': return "r";
+    case U'\u0158': return "R";
+    case U'\u015B': case U'\u0161': case U'\u0219': case U'\u015F': return "s";
+    case U'\u015A': case U'\u0160': case U'\u0218': case U'\u015E': return "S";
+    case U'\u00DF': return "ss";
+    case U'\u0165': case U'\u021B': return "t";
+    case U'\u0164': case U'\u021A': return "T";
+    case U'\u00FA': case U'\u00F9': case U'\u00FB': case U'\u00FC': case U'\u016F': case U'\u0171': return "u";
+    case U'\u00DA': case U'\u00D9': case U'\u00DB': case U'\u00DC': case U'\u016E': case U'\u0170': return "U";
+    case U'\u00FD': case U'\u00FF': return "y";
+    case U'\u00DD': return "Y";
+    case U'\u017A': case U'\u017C': case U'\u017E': return "z";
+    case U'\u0179': case U'\u017B': case U'\u017D': return "Z";
+    default: return {};
+    }
+}
+
+// The next code point of UTF-8 text, or U+FFFD for a broken sequence; `index` moves past it.
+[[nodiscard]] char32_t NextCodePoint(std::string_view text, std::size_t& index) noexcept {
+    const unsigned char lead = static_cast<unsigned char>(text[index++]);
+    if (lead < 0x80U) return lead;
+    const int extra = lead >= 0xF0U ? 3 : lead >= 0xE0U ? 2 : lead >= 0xC0U ? 1 : -1;
+    if (extra < 0) return U'\uFFFD';
+    char32_t value = lead & (0x3FU >> extra);
+    for (int count = 0; count < extra; ++count) {
+        if (index >= text.size() || (static_cast<unsigned char>(text[index]) & 0xC0U) != 0x80U) return U'\uFFFD';
+        value = (value << 6U) | (static_cast<unsigned char>(text[index++]) & 0x3FU);
+    }
+    return value;
+}
+
 [[nodiscard]] std::string Missing(std::string_view label) {
     return EditorLocalization::Format("buildGame.required", "{field} is required.", { { "field", std::string{ label } } });
 }
@@ -195,29 +250,99 @@ std::string_view BuildGamePanelModel::TargetSummary(kb::packaging::PackagingTarg
 std::vector<BuildGameSectionSpec> BuildGamePanelModel::Sections(kb::packaging::PackagingTarget target, bool release) {
     const kb::packaging::PackagingTargetSpec* targetSpec = TargetSpec(target);
     if (targetSpec == nullptr) return {};
-    const std::span<const BuildGameRowSpec> application = targetSpec->needsAndroidMetadata
-        ? std::span<const BuildGameRowSpec>{ kAndroidApplicationRows }
-        : targetSpec->family == kb::packaging::PackagingTargetFamily::Web
-            ? std::span<const BuildGameRowSpec>{ kWebApplicationRows }
-            : target == kb::packaging::PackagingTarget::WindowsX64
-                ? std::span<const BuildGameRowSpec>{ kWindowsApplicationRows }
-                : std::span<const BuildGameRowSpec>{ kDesktopApplicationRows };
+    const bool web = targetSpec->family == kb::packaging::PackagingTargetFamily::Web;
     std::vector<BuildGameSectionSpec> sections{
-        { BuildGameSection::Project, EditorText("buildGame.section.project", "PROJECT"), kProjectRows },
-        { BuildGameSection::Application, targetSpec->needsAndroidMetadata ? EditorText("buildGame.section.androidApplication", "ANDROID APPLICATION") :
-            targetSpec->family == kb::packaging::PackagingTargetFamily::Web ? EditorText("buildGame.section.webApplication", "WEB APPLICATION") : EditorText("buildGame.section.desktopApplication", "DESKTOP APPLICATION"), application },
+        { BuildGameSection::Game, EditorText("buildGame.section.game", "GAME"), kGameRows },
+        { BuildGameSection::Appearance, EditorText("buildGame.section.appearance", "APPEARANCE"), kAppearanceRows },
         { BuildGameSection::Content, EditorText("buildGame.section.content", "CONTENT"), kContentRows },
     };
+    if (targetSpec->needsAndroidMetadata)
+        sections.push_back({ BuildGameSection::Application, EditorText("buildGame.section.androidApplication", "ANDROID APPLICATION"), kAndroidApplicationRows });
     if (targetSpec->needsAndroidMetadata && release)
         sections.push_back({ BuildGameSection::Signing, EditorText("buildGame.section.signing", "SIGNING"), kReleaseSigningRows });
     if (target == kb::packaging::PackagingTarget::WindowsX64 && release)
         sections.push_back({ BuildGameSection::Signing, EditorText("buildGame.section.signing", "SIGNING"), kWindowsSigningRows });
-    if (targetSpec->family == kb::packaging::PackagingTargetFamily::Web)
+    if (web)
         sections.push_back({ BuildGameSection::Toolchain, EditorText("buildGame.section.webToolchain", "WEB TOOLCHAIN"), kWebToolchainRows });
     if (targetSpec->target == kb::packaging::PackagingTarget::LinuxX64)
         sections.push_back({ BuildGameSection::Toolchain, EditorText("buildGame.section.linuxBuildHost", "LINUX BUILD HOST"), kLinuxToolchainRows });
     sections.push_back({ BuildGameSection::Output, EditorText("buildGame.section.output", "OUTPUT"), kOutputRows });
+    sections.push_back({ BuildGameSection::Advanced, EditorText("buildGame.section.advanced", "ADVANCED"),
+        target == kb::packaging::PackagingTarget::WindowsX64 ? std::span<const BuildGameRowSpec>{ kWindowsAdvancedRows }
+        : web ? std::span<const BuildGameRowSpec>{ kWebAdvancedRows } : std::span<const BuildGameRowSpec>{ kAdvancedRows } });
     return sections;
+}
+
+std::string BuildGamePanelModel::ShippedGameName(const kb::project::ProjectSettings& project) {
+    const std::string game = Trimmed(project.gameName);
+    return game.empty() ? Trimmed(project.name) : game;
+}
+
+std::string BuildGamePanelModel::ShippedAndroidApplicationId(const kb::project::ProjectSettings& project) {
+    const std::string chosen = Trimmed(project.androidApplicationId);
+    if (!chosen.empty()) return chosen;
+    // One segment from a name: its plain letters and digits, lower case, starting with a letter.
+    const auto segment = [](std::string_view name) {
+        std::string plain;
+        for (std::size_t index = 0U; index < name.size();) {
+            const char32_t codePoint = NextCodePoint(name, index);
+            if (codePoint < 0x80U) {
+                const char character = static_cast<char>(codePoint);
+                if (package_input::IsAsciiAlphaNumeric(character)) plain.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(character))));
+            } else {
+                for (const char character : PlainLetters(codePoint)) plain.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(character))));
+            }
+        }
+        std::size_t first = 0U;
+        while (first < plain.size() && std::isalpha(static_cast<unsigned char>(plain[first])) == 0) ++first;
+        plain.erase(0U, first);
+        if (plain.size() > 40U) plain.resize(40U);
+        return plain;
+    };
+    std::string studio = segment(project.publisher);
+    std::string game = segment(ShippedFileName(project));
+    if (studio.empty()) studio = "studio";
+    if (game.empty()) game = "game";
+    return "com." + studio + "." + game;
+}
+
+std::string BuildGamePanelModel::ShippedAndroidLabel(const kb::project::ProjectSettings& project) {
+    const std::string chosen = Trimmed(project.androidLabel);
+    return chosen.empty() ? ShippedGameName(project) : chosen;
+}
+
+std::string_view BuildGamePanelModel::ChoiceLabel(BuildGameField field, std::string_view value) {
+    if (field == BuildGameField::AndroidFormat) {
+        return value == "aab" ? EditorText("buildGame.value.formatAab", "AAB - for Google Play")
+                              : EditorText("buildGame.value.formatApk", "APK - install directly on a device");
+    }
+    return value;
+}
+
+std::string BuildGamePanelModel::ShippedFileName(const kb::project::ProjectSettings& project) {
+    const std::string chosen = Trimmed(project.executableName);
+    if (!chosen.empty()) return chosen;
+    const std::string game = ShippedGameName(project);
+    std::string name;
+    for (std::size_t index = 0U; index < game.size() && name.size() < 80U;) {
+        const char32_t codePoint = NextCodePoint(game, index);
+        if (codePoint < 0x80U) {
+            const char character = static_cast<char>(codePoint);
+            if (package_input::IsAsciiAlphaNumeric(character) || character == '_' || character == '-' ||
+                character == '.' || character == ' ') {
+                name.push_back(character);
+            }
+        } else {
+            name.append(PlainLetters(codePoint));
+        }
+    }
+    // A file name starts with a letter or digit and does not end in a dot or space.
+    std::size_t first = 0U;
+    while (first < name.size() && !package_input::IsAsciiAlphaNumeric(name[first])) ++first;
+    name.erase(0U, first);
+    if (name.size() > 80U) name.resize(80U);
+    while (!name.empty() && (name.back() == '.' || name.back() == ' ')) name.pop_back();
+    return name.empty() || !package_input::IsValidPackageName(name, true) ? std::string{ "Game" } : name;
 }
 
 std::string BuildGamePanelModel::Value(BuildGameField field, kb::packaging::PackagingTarget target,
@@ -225,58 +350,81 @@ std::string BuildGamePanelModel::Value(BuildGameField field, kb::packaging::Pack
     if (TargetSpec(target) == nullptr) return {};
     const EditorBuildGameTargetSettings& targetSettings = local.For(target);
     switch (field) {
-    case BuildGameField::ProjectName: return project.name;
     case BuildGameField::Publisher: return project.publisher;
     case BuildGameField::Version: return project.version;
-    case BuildGameField::ProductName: return project.gameName;
-    case BuildGameField::ExecutableName: return project.executableName;
-    case BuildGameField::ApplicationIcon: return project.applicationIcon.empty() ? std::string{ EditorText("buildGame.value.selectPng", "Optional - select PNG...") } : project.applicationIcon;
+    case BuildGameField::ProductName: return ShippedGameName(project);
+    case BuildGameField::ExecutableName: return ShippedFileName(project);
+    case BuildGameField::Description: return project.description;
+    case BuildGameField::Copyright: return project.copyright;
+    case BuildGameField::ApplicationIcon: return project.applicationIcon;
+    case BuildGameField::LoadingScreenImage: return project.display.splash.image;
     case BuildGameField::StartupMap: return project.defaultMap;
-    case BuildGameField::AndroidApplicationId: return project.androidApplicationId;
+    case BuildGameField::AndroidApplicationId: return ShippedAndroidApplicationId(project);
     case BuildGameField::AndroidVersionCode: return std::to_string(project.androidVersionCode);
-    case BuildGameField::AndroidLabel: return project.androidLabel;
-    case BuildGameField::AndroidKeystore: return targetSettings.androidKeystore.empty() ? std::string{ EditorText("buildGame.value.developmentOnly", "Development only") } : targetSettings.androidKeystore.generic_string();
-    case BuildGameField::AndroidKeyAlias: return targetSettings.androidKeyAlias.empty() ? std::string{ EditorText("buildGame.value.developmentOnly", "Development only") } : targetSettings.androidKeyAlias;
-    case BuildGameField::AndroidFormat: return targetSettings.androidFormat;
-    case BuildGameField::AndroidBundletool: return targetSettings.androidBundletool.generic_string();
+    case BuildGameField::AndroidLabel: return ShippedAndroidLabel(project);
+    case BuildGameField::AndroidKeystore: return targetSettings.androidKeystore.generic_string();
+    case BuildGameField::AndroidKeyAlias: return targetSettings.androidKeyAlias;
+    case BuildGameField::AndroidFormat: return std::string{ ChoiceLabel(field, targetSettings.androidFormat) };
     case BuildGameField::AndroidStorePassword:
-    case BuildGameField::AndroidKeyPassword: return std::string{ EditorText("buildGame.value.oneBuildOnly", "Entered for one build only") };
-    case BuildGameField::OutputDirectory: return targetSettings.outputDirectory.empty() ? std::string{ EditorText("buildGame.value.selectFolder", "Select folder...") } : targetSettings.outputDirectory.generic_string();
+    case BuildGameField::AndroidKeyPassword: return {};
+    case BuildGameField::OutputDirectory: return targetSettings.outputDirectory.generic_string();
     case BuildGameField::LaunchAfterBuild: return targetSettings.launchAfterBuild ? "true" : "false";
     case BuildGameField::BuilderExecutable: return local.builderExecutable.generic_string();
-    case BuildGameField::BuildRoot: return local.buildRoot.empty() ? std::string{ EditorText("buildGame.value.selectBuildDirectory", "Select build directory...") } : local.buildRoot.generic_string();
-    case BuildGameField::EmsdkRoot: return local.emsdkRoot.empty() ? std::string{ EditorText("buildGame.value.selectEmsdk", "Select emsdk...") } : local.emsdkRoot.generic_string();
+    case BuildGameField::BuildRoot: return local.buildRoot.generic_string();
+    case BuildGameField::EmsdkRoot: return local.emsdkRoot.generic_string();
     case BuildGameField::LinuxHost: return local.linuxHost;
     case BuildGameField::LinuxUser: return local.linuxUser;
     case BuildGameField::LinuxHostKey: return local.linuxHostKey;
     case BuildGameField::LinuxPort: return std::to_string(local.linuxPort);
     case BuildGameField::LinuxEngineRoot: return local.linuxEngineRoot;
     case BuildGameField::LinuxDisplay: return local.linuxDisplay;
-    case BuildGameField::LinuxIdentity: return local.linuxIdentity.empty() ? std::string{ EditorText("buildGame.value.selectPrivateKey", "Optional - select private key...") } : local.linuxIdentity.generic_string();
-    case BuildGameField::CrashReportUrl:
-        return project.crashReportUploadUrl.empty() ? std::string{ EditorText("buildGame.value.crashReportsLocal", "Optional - players' crash reports stay local") } : project.crashReportUploadUrl;
-    case BuildGameField::WindowsCertificateThumbprint:
-        return targetSettings.windowsCertificateThumbprint.empty() ? std::string{ EditorText("buildGame.value.thumbprintHint", "Optional - SHA-1 of a certificate in your store") } : targetSettings.windowsCertificateThumbprint;
-    case BuildGameField::WindowsCertificateFile:
-        return targetSettings.windowsCertificateFile.empty() ? std::string{ EditorText("buildGame.value.selectPfx", "Optional - select PFX...") } : targetSettings.windowsCertificateFile.generic_string();
-    case BuildGameField::WindowsCertificatePassword: return std::string{ EditorText("buildGame.value.oneBuildOnly", "Entered for one build only") };
-    case BuildGameField::WindowsTimestampUrl:
-        return targetSettings.windowsTimestampUrl.empty() ? std::string{ EditorText("buildGame.value.timestampHint", "Optional - RFC 3161 timestamp service") } : targetSettings.windowsTimestampUrl;
+    case BuildGameField::LinuxIdentity: return local.linuxIdentity.generic_string();
+    case BuildGameField::CrashReportUrl: return project.crashReportUploadUrl;
+    case BuildGameField::WindowsCertificateThumbprint: return targetSettings.windowsCertificateThumbprint;
+    case BuildGameField::WindowsCertificateFile: return targetSettings.windowsCertificateFile.generic_string();
+    case BuildGameField::WindowsCertificatePassword: return {};
+    case BuildGameField::WindowsTimestampUrl: return targetSettings.windowsTimestampUrl;
     case BuildGameField::None: break;
     }
     return {};
+}
+
+std::string_view BuildGamePanelModel::Hint(BuildGameField field) {
+    switch (field) {
+    case BuildGameField::Publisher: return EditorText("buildGame.hint.studio", "Your studio or your own name");
+    case BuildGameField::Description: return EditorText("buildGame.hint.description", "Optional - one sentence about the game");
+    case BuildGameField::Copyright: return EditorText("buildGame.hint.copyright", "Optional - e.g. (c) 2026 Your Studio");
+    case BuildGameField::ApplicationIcon: return EditorText("buildGame.value.selectPng", "Optional - select PNG...");
+    case BuildGameField::LoadingScreenImage: return EditorText("buildGame.hint.loadingScreen", "Engine logo - select PNG or JPG...");
+    case BuildGameField::AndroidKeystore:
+    case BuildGameField::AndroidKeyAlias: return EditorText("buildGame.value.developmentOnly", "Development only");
+    case BuildGameField::AndroidStorePassword:
+    case BuildGameField::AndroidKeyPassword:
+    case BuildGameField::WindowsCertificatePassword: return EditorText("buildGame.value.oneBuildOnly", "Entered for one build only");
+    case BuildGameField::OutputDirectory: return EditorText("buildGame.value.selectFolder", "Select folder...");
+    case BuildGameField::BuildRoot: return EditorText("buildGame.value.selectBuildDirectory", "Select build directory...");
+    case BuildGameField::EmsdkRoot: return EditorText("buildGame.value.selectEmsdk", "Select emsdk...");
+    case BuildGameField::LinuxIdentity: return EditorText("buildGame.value.selectPrivateKey", "Optional - select private key...");
+    case BuildGameField::CrashReportUrl: return EditorText("buildGame.value.crashReportsLocal", "Optional - players' crash reports stay local");
+    case BuildGameField::WindowsCertificateThumbprint: return EditorText("buildGame.value.thumbprintHint", "Optional - SHA-1 of a certificate in your store");
+    case BuildGameField::WindowsCertificateFile: return EditorText("buildGame.value.selectPfx", "Optional - select PFX...");
+    case BuildGameField::WindowsTimestampUrl: return EditorText("buildGame.value.timestampHint", "Optional - RFC 3161 timestamp service");
+    default: return {};
+    }
 }
 
 BuildGameValidation BuildGamePanelModel::Validate(kb::packaging::PackagingTarget target,
     const kb::project::ProjectSettings& project, const EditorBuildGameSettings& local,
     bool release, bool jobRunning, bool hasStorePassword, bool hasKeyPassword, bool hasCertificatePassword) {
     if (jobRunning) return { false, std::string{ EditorText("buildGame.invalid.jobRunning", "A package job is running.") } };
-    if (Trimmed(project.name).empty()) return { false, Missing(EditorText("buildGame.field.projectName", "Project name")) };
-    if (!ValidText(Trimmed(project.gameName), 128U)) {
-        return { false, std::string{ EditorText("buildGame.invalid.productName", "Product name must contain 1-128 printable characters.") } };
+    if (!ValidText(ShippedGameName(project), 128U)) {
+        return { false, std::string{ EditorText("buildGame.invalid.gameName", "Give the game a name (up to 128 characters) in Game name.") } };
     }
     if (!ValidText(Trimmed(project.publisher), 128U)) {
-        return { false, std::string{ EditorText("buildGame.invalid.publisher", "Publisher must contain 1-128 printable characters.") } };
+        return { false, std::string{ EditorText("buildGame.invalid.studio", "Type your studio or your own name in Studio or author.") } };
+    }
+    if (project.description.size() > 512U || project.copyright.size() > 256U) {
+        return { false, std::string{ EditorText("buildGame.invalid.longText", "Description and copyright must be shorter.") } };
     }
     const std::string version = Trimmed(project.version);
     if (!ValidVersion(version)) {
@@ -288,18 +436,17 @@ BuildGameValidation BuildGamePanelModel::Validate(kb::packaging::PackagingTarget
     if (spec->target == kb::packaging::PackagingTarget::WindowsX64 && !ValidWindowsVersion(version))
         return { false, std::string{ EditorText("buildGame.invalid.windowsVersion",
             "Windows version must contain 1-4 numeric components up to 65535 and an optional prerelease suffix.") } };
-    const std::string packageName = Trimmed(
-        spec->needsExecutableName ? project.executableName : project.gameName);
+    const std::string packageName = ShippedFileName(project);
     if (!package_input::IsValidPackageName(
             packageName, spec->target == kb::packaging::PackagingTarget::WindowsX64))
         return { false, std::string{ EditorText("buildGame.invalid.executableName",
             "Executable or package name must use 1-80 ASCII letters, digits, spaces, dots, dashes, or underscores.") } };
     if (spec->needsAndroidMetadata) {
-        if (!ValidAndroidApplicationId(Trimmed(project.androidApplicationId)))
+        if (!ValidAndroidApplicationId(ShippedAndroidApplicationId(project)))
             return { false, std::string{ EditorText("buildGame.invalid.androidApplicationId", "Android application id must be a lowercase dotted identifier.") } };
         if (project.androidVersionCode == 0U || project.androidVersionCode > 2'100'000'000U)
             return { false, std::string{ EditorText("buildGame.invalid.androidVersionCode", "Android version code must be between 1 and 2100000000.") } };
-        if (!ValidText(Trimmed(project.androidLabel), 128U))
+        if (!ValidText(ShippedAndroidLabel(project), 128U))
             return { false, std::string{ EditorText("buildGame.invalid.androidLabel", "Android application label must contain 1-128 printable characters.") } };
     }
     if (spec->target == kb::packaging::PackagingTarget::WindowsX64 && !Trimmed(project.crashReportUploadUrl).empty() &&
@@ -309,8 +456,6 @@ BuildGameValidation BuildGamePanelModel::Validate(kb::packaging::PackagingTarget
     if (spec->needsAndroidMetadata) {
         if (targetSettings.androidFormat != "apk" && targetSettings.androidFormat != "aab")
             return {false, "Android package format must be apk or aab."};
-        if (targetSettings.androidFormat == "aab" && targetSettings.androidBundletool.empty())
-            return {false, "Select the bundletool JAR for AAB export."};
     }
     if (release && spec->needsAndroidMetadata) {
         if (targetSettings.androidKeystore.empty()) return { false, Missing(EditorText("buildGame.required.androidKeystore", "Android keystore")) };
@@ -363,11 +508,34 @@ bool BuildGamePanelModel::ApplyText(BuildGameField field, std::string_view value
     const std::string text = Trimmed(value);
     switch (field) {
     case BuildGameField::Publisher: project.publisher = text; return true;
+    case BuildGameField::Description:
+        if (text.size() > 512U) { error = "Description must be at most 512 bytes."; return false; }
+        project.description = text; return true;
+    case BuildGameField::Copyright:
+        if (text.size() > 256U) { error = "Copyright must be at most 256 bytes."; return false; }
+        project.copyright = text; return true;
     case BuildGameField::Version:
         if (!ValidVersion(text)) { error = "Version must contain 1-64 printable characters."; return false; }
         project.version = text; return true;
-    case BuildGameField::ProductName: project.gameName = text; return true;
+    case BuildGameField::ProductName:
+        if (!ValidText(text, 128U)) { error = "Game name must contain 1-128 characters."; return false; }
+    {
+        // An executable name or Android label that was only the one made from the game name follows the new name;
+        // one the user chose stays.
+        kb::project::ProjectSettings automatic = project;
+        automatic.executableName.clear();
+        const bool followsGameName = Trimmed(project.executableName) == ShippedFileName(automatic);
+        // The Android label a new project starts with is its name; like the file name, it follows the game name.
+        const bool labelFollows = Trimmed(project.androidLabel) == ShippedGameName(project);
+        // The project's own name is the default, so typing it back leaves the game name unset.
+        project.gameName = text == Trimmed(project.name) ? std::string{} : text;
+        if (followsGameName) project.executableName.clear();
+        if (labelFollows) project.androidLabel.clear();
+        return true;
+    }
     case BuildGameField::ExecutableName:
+        // Cleared, the name is made from the game name again.
+        if (text.empty()) { project.executableName.clear(); return true; }
         if (!package_input::IsValidPackageName(
                 text, target == kb::packaging::PackagingTarget::WindowsX64)) {
             error = "Executable name is not valid for the selected target.";
@@ -384,6 +552,8 @@ bool BuildGamePanelModel::ApplyText(BuildGameField field, std::string_view value
         return true;
     }
     case BuildGameField::AndroidApplicationId:
+        // Cleared, the id is made from the studio and game names again.
+        if (text.empty()) { project.androidApplicationId.clear(); return true; }
         if (!ValidAndroidApplicationId(text)) { error = "Android application id must be a lowercase dotted identifier."; return false; }
         project.androidApplicationId = text; return true;
     case BuildGameField::AndroidVersionCode: {
@@ -396,7 +566,10 @@ bool BuildGamePanelModel::ApplyText(BuildGameField field, std::string_view value
         project.androidVersionCode = code;
         return true;
     }
-    case BuildGameField::AndroidLabel: project.androidLabel = text; return true;
+    case BuildGameField::AndroidLabel:
+        if (text.size() > 128U) { error = "Android application label must be at most 128 characters."; return false; }
+        project.androidLabel = text == ShippedGameName(project) ? std::string{} : text;
+        return true;
     case BuildGameField::AndroidKeyAlias: local.For(target).androidKeyAlias = text; return true;
     case BuildGameField::AndroidFormat:
         if (text != "apk" && text != "aab") {
@@ -405,7 +578,6 @@ bool BuildGamePanelModel::ApplyText(BuildGameField field, std::string_view value
         }
         local.For(target).androidFormat = text;
         return true;
-    case BuildGameField::AndroidBundletool: local.For(target).androidBundletool = text; return true;
     case BuildGameField::BuilderExecutable: local.builderExecutable = text; return true;
     case BuildGameField::BuildRoot: local.buildRoot = text; return true;
     case BuildGameField::EmsdkRoot: local.emsdkRoot = text; return true;
@@ -452,8 +624,8 @@ bool BuildGamePanelModel::ApplyText(BuildGameField field, std::string_view value
         project.crashReportUploadUrl = text;
         return true;
     case BuildGameField::None:
-    case BuildGameField::ProjectName:
     case BuildGameField::ApplicationIcon:
+    case BuildGameField::LoadingScreenImage:
     case BuildGameField::AndroidKeystore:
     case BuildGameField::AndroidStorePassword:
     case BuildGameField::AndroidKeyPassword:
@@ -469,11 +641,14 @@ bool BuildGamePanelModel::ApplyText(BuildGameField field, std::string_view value
 
 bool BuildGamePanelModel::InsertPrintableText(std::string& buffer, bool& selectAll,
     std::string_view text, std::size_t maximumLength) {
+    // Whole characters of any language; control characters and broken sequences are left out.
     std::string printable;
     printable.reserve(std::min(text.size(), maximumLength));
-    for (const char character : text) {
-        const unsigned char byte = static_cast<unsigned char>(character);
-        if (byte >= 32U && byte <= 126U) printable.push_back(character);
+    for (std::size_t index = 0U; index < text.size();) {
+        const std::size_t start = index;
+        const char32_t codePoint = NextCodePoint(text, index);
+        if (codePoint < 32U || codePoint == 0x7FU || codePoint == U'\uFFFD' || (codePoint >= 0x80U && codePoint < 0xA0U)) continue;
+        printable.append(text.substr(start, index - start));
     }
     if (printable.empty()) return false;
     if (selectAll) {
@@ -481,8 +656,10 @@ bool BuildGamePanelModel::InsertPrintableText(std::string& buffer, bool& selectA
         selectAll = false;
     }
     if (buffer.size() >= maximumLength) return false;
-    printable.resize(std::min(printable.size(), maximumLength - buffer.size()));
-    buffer.append(printable);
+    // Cut at a character boundary, never inside one.
+    std::size_t room = std::min(printable.size(), maximumLength - buffer.size());
+    while (room > 0U && room < printable.size() && (static_cast<unsigned char>(printable[room]) & 0xC0U) == 0x80U) --room;
+    buffer.append(printable, 0U, room);
     return true;
 }
 

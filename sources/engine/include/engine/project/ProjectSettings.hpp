@@ -159,6 +159,8 @@ struct ProjectSettings {
     // Shipping identity. These values are consumed by every platform packager and
     // deliberately live in one project file instead of per-platform editor state.
     std::string publisher;
+    // The copyright line the shipped game carries, such as "(c) 2026 Studio"; empty ships none.
+    std::string copyright;
     std::string version = "1.0.0";
     std::string executableName;
     // Project-relative path. Importing an icon copies it into the project before

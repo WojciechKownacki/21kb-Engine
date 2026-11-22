@@ -2302,5 +2302,26 @@ class SourceStateTests(unittest.TestCase):
             self.assertEqual(clean, package_game._source_state(root))
 
 
+class WindowsVersionResourceTests(unittest.TestCase):
+    def test_copyright_and_description_reach_the_version_resource(self) -> None:
+        import windows_pe_resources
+
+        def wide(text: str) -> bytes:
+            return text.encode("utf-16-le")
+
+        data = windows_pe_resources._version_resource(
+            product_name="Żółta Łódź", publisher="Studio", version="1.2.3",
+            executable_name="Zolta Lodz", development=False,
+            copyright="© 2026 Studio", description="A short game")
+        self.assertIn(wide("LegalCopyright"), data)
+        self.assertIn(wide("© 2026 Studio"), data)
+        self.assertIn(wide("Comments"), data)
+        self.assertIn(wide("Żółta Łódź"), data)
+        bare = windows_pe_resources._version_resource(
+            product_name="Game", publisher="Studio", version="1.2.3", executable_name="Game", development=False)
+        self.assertNotIn(wide("LegalCopyright"), bare)
+        self.assertNotIn(wide("Comments"), bare)
+
+
 if __name__ == "__main__":
     unittest.main()

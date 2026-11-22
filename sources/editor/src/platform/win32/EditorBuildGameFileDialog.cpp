@@ -104,9 +104,35 @@ std::optional<std::filesystem::path> EditorBuildGameFileDialog::SelectPng(HWND o
         EditorText("fileDialog.selectAppIconTitle", "Select application icon"));
 }
 
+std::optional<std::filesystem::path> EditorBuildGameFileDialog::SelectImage(HWND owner) {
+    return SelectFile(owner, EditorText("fileDialog.imageFilter", "Picture (*.png;*.jpg;*.jpeg)"), "*.png;*.jpg;*.jpeg",
+        EditorText("fileDialog.selectLoadingScreenTitle", "Select loading screen picture"));
+}
+
 std::optional<std::filesystem::path> EditorBuildGameFileDialog::SelectKeystore(HWND owner) {
     return SelectFile(owner, EditorText("fileDialog.keystoreFilter", "Java keystore (*.jks;*.keystore)"), "*.jks;*.keystore",
         EditorText("fileDialog.selectKeystoreTitle", "Select Android keystore"));
+}
+
+std::optional<std::filesystem::path> EditorBuildGameFileDialog::SaveKeystore(HWND owner, std::string_view suggestedName) {
+    const std::wstring filter = EditorFileDialogFilter({
+        { EditorText("fileDialog.keystoreFilter", "Java keystore (*.jks;*.keystore)"), "*.keystore;*.jks" },
+    });
+    const std::wstring title = ScriptEditorTextEncoding::Widen(EditorText("fileDialog.saveUploadKeyTitle", "Save the new upload key"));
+    std::array<wchar_t, 32768> buffer{};
+    const std::wstring suggested = ScriptEditorTextEncoding::Widen(suggestedName);
+    std::copy_n(suggested.c_str(), std::min<std::size_t>(suggested.size(), buffer.size() - 1U), buffer.data());
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = owner;
+    dialog.lpstrFilter = filter.c_str();
+    dialog.lpstrFile = buffer.data();
+    dialog.nMaxFile = static_cast<DWORD>(buffer.size());
+    dialog.lpstrTitle = title.c_str();
+    dialog.lpstrDefExt = L"keystore";
+    dialog.Flags = OFN_EXPLORER | OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
+    if (!GetSaveFileNameW(&dialog)) return std::nullopt;
+    return std::filesystem::path{ buffer.data() };
 }
 
 std::optional<std::filesystem::path> EditorBuildGameFileDialog::SelectCertificate(HWND owner) {

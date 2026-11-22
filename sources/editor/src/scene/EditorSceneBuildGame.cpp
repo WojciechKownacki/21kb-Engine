@@ -2,8 +2,10 @@
 #include "scene/EditorEngineInstallation.hpp"
 
 #include "engine/assets/AssetManager.hpp"
+#include "engine/assets/AssetMetadata.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "localization/EditorLocalization.hpp"
+#include "packaging/EditorAndroidSigningBroker.hpp"
 #include "packaging/EditorPackageInputValidation.hpp"
 #include "packaging/EditorProjectIconTransaction.hpp"
 #include "packaging/EditorProjectPackageService.hpp"
@@ -17,6 +19,7 @@
 #endif
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cctype>
 #include <string>
@@ -119,27 +122,43 @@ bool EditorSceneContext::BeginBuildGameTextEdit(BuildGameField field) {
     else if (field == BuildGameField::AndroidKeyPassword) buildGameEditBuffer_ = buildGameKeyPassword_;
     else if (field == BuildGameField::WindowsCertificatePassword) buildGameEditBuffer_ = buildGameCertificatePassword_;
     else buildGameEditBuffer_ = BuildGamePanelModel::Value(field, BuildGameTarget(), projectConfig_, buildGameSettings_);
-    const EditorBuildGameTargetSettings& targetSettings = buildGameSettings_.For(BuildGameTarget());
-    // An empty value shows a hint in its place; editing starts from the empty value, not the hint.
-    if (field == BuildGameField::AndroidKeyAlias && targetSettings.androidKeyAlias.empty()) {
-        buildGameEditBuffer_.clear();
-    }
-    if (field == BuildGameField::CrashReportUrl && projectConfig_.crashReportUploadUrl.empty()) {
-        buildGameEditBuffer_.clear();
-    }
-    if ((field == BuildGameField::WindowsCertificateThumbprint && targetSettings.windowsCertificateThumbprint.empty()) ||
-        (field == BuildGameField::WindowsTimestampUrl && targetSettings.windowsTimestampUrl.empty())) {
-        buildGameEditBuffer_.clear();
-    }
     buildGameEditOriginal_ = buildGameEditBuffer_;
+    buildGameEditHighSurrogate_ = 0;
     buildGameEditSelectAll_ = true;
     return true;
 }
 
 bool EditorSceneContext::AppendBuildGameText(wchar_t character) {
-    if (character < 32 || character > 126) return false;
-    const char byte = static_cast<char>(character);
-    return InsertBuildGameText(std::string_view{ &byte, 1U });
+    // Typed characters arrive as UTF-16 units: a character outside the first plane comes as two.
+    char32_t codePoint = static_cast<char32_t>(character);
+    if (character >= 0xD800 && character <= 0xDBFF) {
+        buildGameEditHighSurrogate_ = character;
+        return false;
+    }
+    if (character >= 0xDC00 && character <= 0xDFFF) {
+        if (buildGameEditHighSurrogate_ == 0) return false;
+        codePoint = 0x10000U + ((static_cast<char32_t>(buildGameEditHighSurrogate_) - 0xD800U) << 10U) +
+            (static_cast<char32_t>(character) - 0xDC00U);
+    }
+    buildGameEditHighSurrogate_ = 0;
+    if (codePoint < 32U) return false;
+    std::string utf8;
+    if (codePoint < 0x80U) {
+        utf8.push_back(static_cast<char>(codePoint));
+    } else if (codePoint < 0x800U) {
+        utf8.push_back(static_cast<char>(0xC0U | (codePoint >> 6U)));
+        utf8.push_back(static_cast<char>(0x80U | (codePoint & 0x3FU)));
+    } else if (codePoint < 0x10000U) {
+        utf8.push_back(static_cast<char>(0xE0U | (codePoint >> 12U)));
+        utf8.push_back(static_cast<char>(0x80U | ((codePoint >> 6U) & 0x3FU)));
+        utf8.push_back(static_cast<char>(0x80U | (codePoint & 0x3FU)));
+    } else {
+        utf8.push_back(static_cast<char>(0xF0U | (codePoint >> 18U)));
+        utf8.push_back(static_cast<char>(0x80U | ((codePoint >> 12U) & 0x3FU)));
+        utf8.push_back(static_cast<char>(0x80U | ((codePoint >> 6U) & 0x3FU)));
+        utf8.push_back(static_cast<char>(0x80U | (codePoint & 0x3FU)));
+    }
+    return InsertBuildGameText(utf8);
 }
 
 bool EditorSceneContext::InsertBuildGameText(std::string_view text) {
@@ -158,7 +177,11 @@ bool EditorSceneContext::BackspaceBuildGameText() {
         return changed;
     }
     if (buildGameEditBuffer_.empty()) return false;
-    buildGameEditBuffer_.pop_back();
+    // A whole character, never half of one.
+    while (!buildGameEditBuffer_.empty() && (static_cast<unsigned char>(buildGameEditBuffer_.back()) & 0xC0U) == 0x80U) {
+        buildGameEditBuffer_.pop_back();
+    }
+    if (!buildGameEditBuffer_.empty()) buildGameEditBuffer_.pop_back();
     return true;
 }
 
@@ -315,6 +338,87 @@ bool EditorSceneContext::SetBuildGameLocalFile(BuildGameField field, const std::
     return true;
 }
 
+bool EditorSceneContext::SetBuildGameAndroidFormat(std::string_view format) {
+    kb::project::ProjectSettings project = projectConfig_;
+    EditorBuildGameSettings candidate = buildGameSettings_;
+    std::string error;
+    if (!BuildGamePanelModel::ApplyText(BuildGameField::AndroidFormat, format, BuildGameTarget(), project, candidate, error)) {
+        console_.Error("Packaging", error);
+        return false;
+    }
+    if (candidate == buildGameSettings_) return false;
+    if (!EditorBuildGameSettingsStore::Save(EditorBuildGameSettingsStore::FilePath(EditorProjectPaths::ProjectRoot()), candidate, error)) {
+        console_.Error("Packaging", error.empty() ? "Packaging settings could not be saved." : error);
+        return false;
+    }
+    buildGameSettings_ = std::move(candidate);
+    return true;
+}
+
+bool EditorSceneContext::CreateBuildGameUploadKey(const std::filesystem::path& keystore) {
+    if (buildGameStorePassword_.empty()) {
+        console_.Error("Packaging", "Type the keystore password (at least 6 characters) in the Release profile first; "
+            "it becomes the new key's password.");
+        return false;
+    }
+    // A signing key never lives in the project: projects are shared and put under version control.
+    const std::filesystem::path target = AbsoluteNormalized(keystore);
+    if (package_input::IsPathInsideOrEqual(AbsoluteNormalized(EditorProjectPaths::ProjectRoot()), target)) {
+        console_.Error("Packaging", "Save the upload key outside the project folder, where it is not shared with the project.");
+        return false;
+    }
+    std::string error;
+    if (!EditorAndroidSigningBroker::CreateUploadKey(target, "upload", Trimmed(projectConfig_.publisher),
+            buildGameStorePassword_, error)) {
+        console_.Error("Packaging", error);
+        return false;
+    }
+    EditorBuildGameSettings candidate = buildGameSettings_;
+    candidate.For(BuildGameTarget()).androidKeystore = target;
+    candidate.For(BuildGameTarget()).androidKeyAlias = "upload";
+    if (!EditorBuildGameSettingsStore::Save(EditorBuildGameSettingsStore::FilePath(EditorProjectPaths::ProjectRoot()), candidate, error)) {
+        console_.Error("Packaging", error.empty() ? "Packaging settings could not be saved." : error);
+        return false;
+    }
+    buildGameSettings_ = std::move(candidate);
+    SecureClear(buildGameKeyPassword_);
+    buildGameKeyPassword_ = buildGameStorePassword_;
+    console_.Info("Packaging", "Upload key created at " + target.generic_string() +
+        ". Keep a copy of this file and its password: every update of the game on Google Play must be signed with it.");
+    return true;
+}
+
+bool EditorSceneContext::ImportBuildGameLoadingScreenImage(const std::filesystem::path& path) {
+    // The picture becomes a texture of the project, so every package carries it, and the loading screen of every
+    // target shows it (the same setting as Project Settings > Display > Loading screen).
+    const std::filesystem::path folder{ "/Game/Branding" };
+    const std::array<std::filesystem::path, 1U> files{ path };
+    if (!ImportAssetFiles(files, folder)) {
+        return false;
+    }
+    const std::string wanted = kb::assets::NormalizeAssetPath(folder / path.filename());
+    std::string imported;
+    for (const std::string& option : ProjectSplashImageOptions()) {
+        if (!option.empty() && kb::assets::NormalizeAssetPath(std::filesystem::path{ option }.replace_extension()) ==
+                kb::assets::NormalizeAssetPath(std::filesystem::path{ wanted }.replace_extension())) {
+            imported = option;
+        }
+    }
+    if (imported.empty()) {
+        console_.Error("Packaging", "The loading screen picture was imported but is not a texture: " + path.filename().string());
+        return false;
+    }
+    kb::project::ProjectSettings candidate = projectConfig_;
+    candidate.display.splash.image = imported;
+    const kb::project::ProjectSettings original = projectConfig_;
+    projectConfig_ = std::move(candidate);
+    if (!SaveProjectConfiguration()) {
+        projectConfig_ = original;
+        return false;
+    }
+    return true;
+}
+
 bool EditorSceneContext::ImportBuildGameApplicationIcon(const std::filesystem::path& path) {
     const std::filesystem::path projectRoot = EditorProjectPaths::ProjectRoot();
     EditorProjectIconTransaction iconTransaction;
@@ -444,8 +548,7 @@ bool EditorSceneContext::StartBuildGamePackage(EditorDirtySceneResolution dirtyR
         return false;
     }
     const std::string unitComponent = SafeUnitComponent(
-        Trimmed(targetSpec.needsExecutableName ? projectConfig_.executableName : projectConfig_.gameName),
-        targetSpec.target == kb::packaging::PackagingTarget::WindowsX64);
+        BuildGamePanelModel::ShippedFileName(projectConfig_), targetSpec.target == kb::packaging::PackagingTarget::WindowsX64);
     if (unitComponent.empty()) {
         console_.Error("Packaging", "Product or executable name cannot form a safe package directory name.");
         return false;
@@ -458,11 +561,12 @@ bool EditorSceneContext::StartBuildGamePackage(EditorDirtySceneResolution dirtyR
     }
     request.engineRoot = AbsoluteNormalized(engineRoot);
     request.buildRoot = buildRoot;
-    request.productName = Trimmed(projectConfig_.gameName);
+    request.productName = BuildGamePanelModel::ShippedGameName(projectConfig_);
     request.publisher = Trimmed(projectConfig_.publisher);
     request.version = Trimmed(projectConfig_.version);
-    request.executableName = targetSpec.needsExecutableName
-        ? Trimmed(projectConfig_.executableName) : Trimmed(projectConfig_.gameName);
+    request.description = Trimmed(projectConfig_.description);
+    request.copyright = Trimmed(projectConfig_.copyright);
+    request.executableName = BuildGamePanelModel::ShippedFileName(projectConfig_);
     if (!projectConfig_.applicationIcon.empty()) {
         const std::filesystem::path iconRelative{ projectConfig_.applicationIcon };
         if (!package_input::IsNormalProjectRelativePath(iconRelative)) {
@@ -488,9 +592,9 @@ bool EditorSceneContext::StartBuildGamePackage(EditorDirtySceneResolution dirtyR
         }
     }
     if (targetSpec.needsAndroidMetadata) {
-        request.androidApplicationId = Trimmed(projectConfig_.androidApplicationId);
+        request.androidApplicationId = BuildGamePanelModel::ShippedAndroidApplicationId(projectConfig_);
         request.androidVersionCode = projectConfig_.androidVersionCode;
-        request.androidLabel = Trimmed(projectConfig_.androidLabel);
+        request.androidLabel = BuildGamePanelModel::ShippedAndroidLabel(projectConfig_);
         request.androidMicrophone = projectConfig_.microphone;
         for (const float channel : projectConfig_.display.splash.backgroundColor) {
             static constexpr char kHex[] = "0123456789ABCDEF";
@@ -501,7 +605,6 @@ bool EditorSceneContext::StartBuildGamePackage(EditorDirtySceneResolution dirtyR
         request.androidKeystore = targetSettings.androidKeystore;
         request.androidKeyAlias = Trimmed(targetSettings.androidKeyAlias);
         request.androidFormat = targetSettings.androidFormat;
-        if (!targetSettings.androidBundletool.empty()) request.androidBundletool = AbsoluteNormalized(targetSettings.androidBundletool);
         request.androidStorePassword = buildGameStorePassword_;
         request.androidKeyPassword = buildGameKeyPassword_;
     }

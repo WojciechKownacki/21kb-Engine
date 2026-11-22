@@ -872,6 +872,7 @@ add_executable(kb_editor WIN32
     src/rendering/EditorOverlayPopupWindow.cpp
     src/app/EditorHeadlessPopupChecks.cpp
     src/app/EditorHeadlessDockingChecks.cpp
+    src/app/EditorHeadlessBuildGameChecks.cpp
     src/app/docking/EditorDockTabMenu.cpp
     src/app/panels/EditorPanelCloser.cpp
     src/rendering/EditorToolbarMenuOverlayWindow.cpp

@@ -120,6 +120,89 @@ void TargetCatalogTest() {
     Require(kb::packaging::FindPackagingTarget("missing") == nullptr, "Unknown target silently resolved");
 }
 
+void GameIdentityTest() {
+    using enum kb::packaging::PackagingTarget;
+    using kb::editor::BuildGameField;
+    using kb::editor::BuildGamePanelModel;
+    kb::project::ProjectSettings project;
+    project.name = "Project";
+    // Until a game name is given the game ships under the project's name, and its files are named after it.
+    Require(BuildGamePanelModel::ShippedGameName(project) == "Project" && BuildGamePanelModel::ShippedFileName(project) == "Project",
+        "An unnamed game does not ship under the project name");
+    kb::editor::EditorBuildGameSettings local;
+    std::string error;
+    // A name in any language: Polish letters stay in the name players see; the file name uses their plain letters.
+    const std::string polish = "\xC5\xBB\xC3\xB3\xC5\x82ta \xC5\x81\xC3\xB3" "d\xC5\xBA: Powr\xC3\xB3t";
+    Require(BuildGamePanelModel::ApplyText(BuildGameField::ProductName, polish, WindowsX64, project, local, error) &&
+            project.gameName == polish && BuildGamePanelModel::ShippedGameName(project) == polish,
+        "A game name with Polish letters was refused or changed");
+    Require(BuildGamePanelModel::ShippedFileName(project) == "Zolta Lodz Powrot",
+        "The file name made from a Polish game name is wrong");
+    project.gameName = "\xE5\xA4\xA9\xE4\xBD\xBF";
+    Require(BuildGamePanelModel::ShippedFileName(project) == "Game", "A name without Latin letters has no file name fallback");
+    // Typing the project's name back leaves the game name unset, so renaming the project still renames the game.
+    Require(BuildGamePanelModel::ApplyText(BuildGameField::ProductName, "Project", WindowsX64, project, local, error) &&
+            project.gameName.empty(), "Typing the project name stored a copy of it");
+    // A chosen executable name wins; cleared, it is made from the game name again.
+    Require(BuildGamePanelModel::ApplyText(BuildGameField::ExecutableName, "MyGame", WindowsX64, project, local, error) &&
+            BuildGamePanelModel::ShippedFileName(project) == "MyGame", "A chosen executable name was not used");
+    Require(BuildGamePanelModel::ApplyText(BuildGameField::ExecutableName, "", WindowsX64, project, local, error) &&
+            project.executableName.empty(), "Clearing the executable name was refused");
+    Require(!BuildGamePanelModel::ApplyText(BuildGameField::ExecutableName, "\xC5\x81\xC3\xB3""d\xC5\xBA", WindowsX64, project, local, error),
+        "An executable name outside the portable letters was accepted");
+    // A new project names its executable after itself; renaming the game renames that automatic file name too,
+    // while a name the user chose stays.
+    project.gameName.clear();
+    project.executableName = "Project";
+    project.androidLabel = "Project";
+    Require(BuildGamePanelModel::ApplyText(BuildGameField::ProductName, "Nowa Gra", WindowsX64, project, local, error) &&
+            BuildGamePanelModel::ShippedFileName(project) == "Nowa Gra", "The automatic executable name did not follow the game name");
+    Require(BuildGamePanelModel::ShippedAndroidLabel(project) == "Nowa Gra", "The automatic Android label did not follow the game name");
+    project.executableName = "Custom";
+    Require(BuildGamePanelModel::ApplyText(BuildGameField::ProductName, "Inna Gra", WindowsX64, project, local, error) &&
+            BuildGamePanelModel::ShippedFileName(project) == "Custom", "A chosen executable name was replaced by the game name");
+    project.executableName.clear();
+    // Description and copyright are optional text in any language, within the sizes the package carries.
+    Require(BuildGamePanelModel::ApplyText(BuildGameField::Copyright, "\xC2\xA9 2026 Studio", WindowsX64, project, local, error) &&
+            project.copyright == "\xC2\xA9 2026 Studio", "The copyright line was refused");
+    Require(!BuildGamePanelModel::ApplyText(BuildGameField::Description, std::string(513U, 'd'), WindowsX64, project, local, error),
+        "A description longer than the package carries was accepted");
+    // Text input keeps whole characters of any language and drops control characters.
+    std::string buffer;
+    bool selectAll = false;
+    Require(BuildGamePanelModel::InsertPrintableText(buffer, selectAll, "\xC5\x82\x01\xC4\x99", 64U) && buffer == "\xC5\x82\xC4\x99",
+        "Typed Polish letters were not kept whole");
+    buffer.clear();
+    Require(BuildGamePanelModel::InsertPrintableText(buffer, selectAll, "a\xC5\x82", 2U) && buffer == "a",
+        "A character was cut in half at the length limit");
+    // Android: the id and the home-screen label come from the studio and the game until the user picks their own.
+    project.publisher = "Ma\xC5\x82y Kot";
+    project.gameName = polish;
+    Require(BuildGamePanelModel::ShippedAndroidApplicationId(project) == "com.malykot.zoltalodzpowrot",
+        "The Android application id made from the studio and game names is wrong");
+    Require(BuildGamePanelModel::ShippedAndroidLabel(project) == polish, "The Android label is not the game name");
+    project.publisher = "2026";
+    Require(BuildGamePanelModel::ShippedAndroidApplicationId(project) == "com.studio.zoltalodzpowrot",
+        "A studio name without letters made an invalid Android id segment");
+    Require(BuildGamePanelModel::ApplyText(BuildGameField::AndroidApplicationId, "com.my.game", AndroidEtc2Arm64, project, local, error) &&
+            BuildGamePanelModel::ShippedAndroidApplicationId(project) == "com.my.game" &&
+            BuildGamePanelModel::ApplyText(BuildGameField::AndroidApplicationId, "", AndroidEtc2Arm64, project, local, error) &&
+            project.androidApplicationId.empty(), "A chosen Android id was not kept or could not be cleared");
+    Require(BuildGamePanelModel::Value(BuildGameField::AndroidFormat, AndroidEtc2Arm64, project, local) ==
+            BuildGamePanelModel::ChoiceLabel(BuildGameField::AndroidFormat, local.For(AndroidEtc2Arm64).androidFormat),
+        "The Android format row does not show its choice");
+    // The fields the engine fills in are folded away; what players see is first.
+    const auto sections = BuildGamePanelModel::Sections(WindowsX64, false);
+    Require(sections.front().section == kb::editor::BuildGameSection::Game &&
+            sections.back().section == kb::editor::BuildGameSection::Advanced &&
+            BuildGamePanelModel::CollapsedByDefault(kb::editor::BuildGameSection::Advanced) &&
+            !BuildGamePanelModel::CollapsedByDefault(kb::editor::BuildGameSection::Game),
+        "The game's identity is not first or the advanced fields are not folded");
+    Require(!BuildGamePanelModel::Hint(BuildGameField::LoadingScreenImage).empty() &&
+            BuildGamePanelModel::Value(BuildGameField::LoadingScreenImage, WindowsX64, project, local).empty(),
+        "An unset loading screen shows its hint as a value");
+}
+
 void SchemaAndValidationTest() {
     using enum kb::packaging::PackagingTarget;
     using kb::editor::BuildGameField;
@@ -192,10 +275,6 @@ void SchemaAndValidationTest() {
     std::string bundleError;
     Require(kb::editor::BuildGamePanelModel::ApplyText(BuildGameField::AndroidFormat, "aab",
         AndroidEtc2Arm64, project, local, bundleError), "AAB format could not be selected");
-    Require(!kb::editor::BuildGamePanelModel::Validate(AndroidEtc2Arm64, project, local, true, false, true, true).canBuild,
-        "AAB BUILD ignored a missing bundletool path");
-    Require(kb::editor::BuildGamePanelModel::ApplyText(BuildGameField::AndroidBundletool, "C:/Tools/bundletool.jar",
-        AndroidEtc2Arm64, project, local, bundleError), "Bundletool path could not be edited");
     Require(kb::editor::BuildGamePanelModel::Validate(AndroidEtc2Arm64, project, local, true, false, true, true).canBuild,
         "Configured AAB BUILD should be enabled");
     Require(local.For(AndroidAstcArm64).androidFormat == "apk",
@@ -462,7 +541,6 @@ void SettingsRoundTripTest() {
     local.For(kb::packaging::PackagingTarget::AndroidAstcArm64).androidKeystore = "C:/Keys/release.jks";
     local.For(kb::packaging::PackagingTarget::AndroidAstcArm64).androidKeyAlias = "release";
     local.For(kb::packaging::PackagingTarget::AndroidAstcArm64).androidFormat = "aab";
-    local.For(kb::packaging::PackagingTarget::AndroidAstcArm64).androidBundletool = root / "bundletool.jar";
     std::string formatError;
     Require(!kb::editor::BuildGamePanelModel::ApplyText(kb::editor::BuildGameField::AndroidFormat, "zip",
         kb::packaging::PackagingTarget::AndroidAstcArm64, project, local, formatError),
@@ -527,16 +605,13 @@ void ProtocolAndArgumentsTest() {
     Require(!has(L"--application-icon"), "Empty application icon emitted a dangling argv option");
     Require(!has(L"--signing-key"), "Empty release signing key emitted a dangling argv option");
     request.androidFormat = "aab";
-    request.androidBundletool = "C:/Tools/bundletool.jar";
     const auto bundleArguments = kb::editor::EditorProjectPackageService::BuildArguments(request);
     const auto format = std::ranges::find(bundleArguments, std::wstring_view{L"--android-format"});
-    const auto bundletool = std::ranges::find(bundleArguments, std::wstring_view{L"--android-bundletool"});
+    // The Android build stages the bundle tool itself, so the editor names none.
     Require(format != bundleArguments.end() && std::next(format) != bundleArguments.end() && *std::next(format) == L"aab" &&
-        bundletool != bundleArguments.end() && std::next(bundletool) != bundleArguments.end() &&
-        std::filesystem::path{*std::next(bundletool)} == request.androidBundletool,
-        "App bundle selection or tool path was lost in exporter arguments");
+        std::ranges::find(bundleArguments, std::wstring_view{L"--android-bundletool"}) == bundleArguments.end(),
+        "App bundle selection was lost in exporter arguments");
     request.androidFormat = "apk";
-    request.androidBundletool.clear();
     request.releaseSigningKey = "C:/Keys/game.kbkey";
     const auto signedArguments = kb::editor::EditorProjectPackageService::BuildArguments(request);
     const auto signingKey = std::ranges::find(signedArguments, std::wstring_view{ L"--signing-key" });
@@ -807,6 +882,7 @@ int main(int argc, char** argv) {
         }
         TargetCatalogTest();
         SchemaAndValidationTest();
+        GameIdentityTest();
         SettingsRoundTripTest();
         ProtocolAndArgumentsTest();
 #if defined(_WIN32)

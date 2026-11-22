@@ -249,6 +249,7 @@ ProjectSettingsLoadResult ProjectSettingsStore::Load(const std::filesystem::path
     result.settings.category = ReadString(document, kIdentity, "Category", defaults.category);
     result.settings.description = ReadString(document, kIdentity, "Description", defaults.description);
     result.settings.publisher = ReadString(document, kProduct, "Publisher", defaults.publisher);
+    result.settings.copyright = ReadString(document, kProduct, "Copyright", defaults.copyright);
     result.settings.version = ReadString(document, kProduct, "Version", defaults.version);
     result.settings.executableName = ReadString(document, kProduct, "ExecutableName", defaults.executableName);
     result.settings.applicationIcon = ReadString(document, kProduct, "ApplicationIcon", defaults.applicationIcon);
@@ -385,6 +386,7 @@ bool ProjectSettingsStore::Save(
     document.SetString(kIdentity, "Category", settings.category);
     document.SetString(kIdentity, "Description", settings.description);
     document.SetString(kProduct, "Publisher", settings.publisher);
+    document.SetString(kProduct, "Copyright", settings.copyright);
     document.SetString(kProduct, "Version", settings.version);
     document.SetString(kProduct, "ExecutableName", settings.executableName);
     document.SetString(kProduct, "ApplicationIcon", settings.applicationIcon);

@@ -236,12 +236,6 @@ bool EditorProjectPackageService::Start(EditorPackageRequest request, std::strin
             error = "Android package format must be apk or aab.";
             return false;
         }
-        if (targetSpec->needsAndroidMetadata && request.androidFormat == "aab" &&
-            (!request.androidBundletool.is_absolute() ||
-             !std::filesystem::is_regular_file(request.androidBundletool, filesystemError) || filesystemError)) {
-            error = "Android app bundles require an absolute existing bundletool JAR.";
-            return false;
-        }
         if (targetSpec->needsAndroidMetadata && request.configuration == "Release" &&
             (request.androidKeystore.empty() || request.androidKeyAlias.empty() ||
              request.androidStorePassword.empty() || request.androidKeyPassword.empty())) {
@@ -413,6 +407,8 @@ std::vector<std::wstring> EditorProjectPackageService::BuildArguments(const Edit
     appendText(L"--product-name", request.productName);
     appendText(L"--publisher", request.publisher);
     appendText(L"--version", request.version);
+    if (!request.description.empty()) appendText(L"--description", request.description);
+    if (!request.copyright.empty()) appendText(L"--copyright", request.copyright);
     appendText(L"--executable-name", request.executableName);
     if (!request.applicationIcon.empty()) {
         append(L"--application-icon", request.applicationIcon);
@@ -444,7 +440,6 @@ std::vector<std::wstring> EditorProjectPackageService::BuildArguments(const Edit
         if (request.androidMicrophone) arguments.emplace_back(L"--android-microphone");
         if (!request.androidSplashBackground.empty()) appendText(L"--android-splash-background", request.androidSplashBackground);
         appendText(L"--android-format", request.androidFormat);
-        if (request.androidFormat == "aab") append(L"--android-bundletool", request.androidBundletool);
         appendText(L"--android-min-sdk", "23");
         appendText(L"--android-target-sdk", "36");
         if (request.configuration == "Release") {

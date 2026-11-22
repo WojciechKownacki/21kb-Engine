@@ -578,6 +578,13 @@ public:
     [[nodiscard]] bool SetBuildGameToolchainDirectory(BuildGameField field, const std::filesystem::path& path);
     [[nodiscard]] bool SetBuildGameLocalFile(BuildGameField field, const std::filesystem::path& path);
     [[nodiscard]] bool ImportBuildGameApplicationIcon(const std::filesystem::path& path);
+    // "apk" or "aab" for the selected Android target.
+    [[nodiscard]] bool SetBuildGameAndroidFormat(std::string_view format);
+    // Makes a new upload key at `keystore` with the keystore password typed for this build and selects it, with
+    // the alias "upload" and that password as the key's.
+    [[nodiscard]] bool CreateBuildGameUploadKey(const std::filesystem::path& keystore);
+    // Imports a PNG or JPG into /Game/Branding and makes it the loading screen picture of the game.
+    [[nodiscard]] bool ImportBuildGameLoadingScreenImage(const std::filesystem::path& path);
     [[nodiscard]] bool ToggleBuildGameLaunchAfterBuild();
     // Save writes the open scene first; Discard ("Don't Save") packages the scene as saved on disk.
     [[nodiscard]] bool StartBuildGamePackage(EditorDirtySceneResolution dirtyResolution);
@@ -1912,6 +1919,8 @@ private:
     std::string buildGameEditBuffer_;
     std::string buildGameEditOriginal_;
     bool buildGameEditSelectAll_ = false;
+    // The first half of a character typed as two UTF-16 units, until the second arrives.
+    wchar_t buildGameEditHighSurrogate_ = 0;
     std::string buildGameStorePassword_;
     std::string buildGameKeyPassword_;
     std::string buildGameCertificatePassword_;

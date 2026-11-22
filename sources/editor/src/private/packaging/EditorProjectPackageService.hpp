@@ -66,6 +66,9 @@ struct EditorPackageRequest {
     std::string productName;
     std::string publisher;
     std::string version;
+    // Optional text the package carries: a sentence about the game and its copyright line.
+    std::string description;
+    std::string copyright;
     std::string executableName;
     std::filesystem::path applicationIcon;
     std::filesystem::path releaseSigningKey;
@@ -81,7 +84,6 @@ struct EditorPackageRequest {
     std::filesystem::path androidKeystore;
     std::string androidKeyAlias;
     std::string androidFormat = "apk";
-    std::filesystem::path androidBundletool;
     std::string androidStorePassword;
     std::string androidKeyPassword;
     // Windows Authenticode, Release only: a store certificate by thumbprint, or a PFX

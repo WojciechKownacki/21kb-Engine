@@ -58,6 +58,8 @@ def _version_resource(
     publisher: str,
     version: str,
     executable_name: str,
+    copyright: str = "",
+    description: str = "",
     development: bool,
 ) -> bytes:
     major, minor, patch, build = _version_tuple(version)
@@ -89,6 +91,8 @@ def _version_resource(
         string_value("FileDescription", product_name),
         string_value("FileVersion", version),
         string_value("InternalName", executable_name),
+        *((string_value("LegalCopyright", copyright),) if copyright else ()),
+        *((string_value("Comments", description),) if description else ()),
         string_value("OriginalFilename", executable_name + ".exe"),
         string_value("ProductName", product_name),
         string_value("ProductVersion", version),
@@ -148,6 +152,8 @@ def apply_windows_resources(
     development: bool,
     icon: Path | None,
     trust_anchor: bytes | None = None,
+    copyright: str = "",
+    description: str = "",
 ) -> None:
     if os.name != "nt":
         raise WindowsResourceError("Windows PE resources can only be written on Windows")
@@ -161,6 +167,8 @@ def apply_windows_resources(
         version=version,
         executable_name=executable_name,
         development=development,
+        copyright=copyright,
+        description=description,
     )
     icon_images: list[bytes] = []
     icon_group = b""

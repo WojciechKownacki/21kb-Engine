@@ -124,7 +124,6 @@ EditorBuildGameSettingsLoadResult EditorBuildGameSettingsStore::Load(const std::
         targetSettings.outputDirectory = ReadPath(document, section, "OutputDirectory");
         targetSettings.launchAfterBuild = document.GetBool(section, "LaunchAfterBuild").value_or(false);
         targetSettings.androidKeystore = ReadPath(document, section, "AndroidKeystore");
-        targetSettings.androidBundletool = ReadPath(document, section, "AndroidBundletool");
         if (const auto format = document.GetString(section, "AndroidFormat")) {
             targetSettings.androidFormat = std::string{*format};
         }
@@ -181,7 +180,6 @@ bool EditorBuildGameSettingsStore::Save(
         document.SetString(section, "AndroidKeystore", targetSettings.androidKeystore.generic_string());
         document.SetString(section, "AndroidKeyAlias", targetSettings.androidKeyAlias);
         document.SetString(section, "AndroidFormat", targetSettings.androidFormat);
-        document.SetString(section, "AndroidBundletool", targetSettings.androidBundletool.generic_string());
         if (target.target == kb::packaging::PackagingTarget::WindowsX64) {
             document.SetString(section, "WindowsCertificateThumbprint", targetSettings.windowsCertificateThumbprint);
             document.SetString(section, "WindowsCertificateFile", targetSettings.windowsCertificateFile.generic_string());

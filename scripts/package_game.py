@@ -53,7 +53,7 @@ from package_contract import (
     verify_unit,
 )
 from elf_trust_anchor import ElfTrustAnchorError, embed_trust_anchor, read_trust_anchor
-from android_bundle import validate_bundle
+from android_bundle import bundletool_command, validate_bundle
 import prebuilt_engine
 from third_party_notices import NoticeError, load_components, select_components, stage_notices, write_sbom
 from windows_authenticode import (
@@ -194,6 +194,13 @@ def _validate_text(value: str, label: str, maximum: int) -> str:
     return normalized
 
 
+def _validate_optional_text(value: str, label: str, maximum: int) -> str:
+    normalized = value.strip()
+    if len(normalized.encode("utf-8")) > maximum or any(ord(c) < 32 for c in normalized):
+        raise PackagingError(f"{label} must be at most {maximum} bytes of printable characters")
+    return normalized
+
+
 def _project_png_icon(project_file: Path, value: Path) -> Path:
     if ".." in value.parts:
         raise PackagingError("application icon must be a normal path inside the project")
@@ -258,6 +265,8 @@ def _validate_arguments(args: argparse.Namespace) -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.product_name = _validate_text(args.product_name, "product name", 128)
     args.publisher = _validate_text(args.publisher, "publisher", 128)
+    args.description = _validate_optional_text(args.description, "description", 512)
+    args.copyright = _validate_optional_text(args.copyright, "copyright", 256)
     args.version = _validate_text(args.version, "version", 64)
     if not _is_safe_executable_name(args.executable_name, args.target):
         raise PackagingError("executable name contains unsupported characters")
@@ -288,9 +297,9 @@ def _validate_arguments(args: argparse.Namespace) -> None:
         raise PackagingError("Android app bundles require an Android target")
     if args.target.startswith("Android."):
         if android_format == "aab":
-            if getattr(args, "android_bundletool", None) is None:
-                raise PackagingError("Android app bundles require --android-bundletool")
-            args.android_bundletool = _existing_file(args.android_bundletool, "Android bundletool")
+            # Without a jar of the user's own, the Android build stages the bundle tool it resolves itself.
+            if getattr(args, "android_bundletool", None) is not None:
+                args.android_bundletool = _existing_file(args.android_bundletool, "Android bundletool")
             if args.launch and not os.environ.get("ANDROID_SERIAL", "").strip():
                 raise PackagingError("Android bundle launch requires ANDROID_SERIAL to select the test device")
         if not _ANDROID_APPLICATION_ID.fullmatch(args.android_application_id):
@@ -1117,6 +1126,8 @@ def _stage_windows(args: argparse.Namespace, cmake: Path, pack: Path, stage: Pat
             development=args.configuration == "Development",
             icon=args.application_icon,
             trust_anchor=args.trust_anchor.read_bytes() if getattr(args, "trust_anchor", None) else None,
+            copyright=getattr(args, "copyright", ""),
+            description=getattr(args, "description", ""),
         )
     except WindowsResourceError as error:
         raise PackagingError(str(error)) from error
@@ -1284,7 +1295,8 @@ def _verify_android_apk(
         raise PackagingError("Android APK label differs from package settings")
     if "native-code: 'arm64-v8a'" not in badging:
         raise PackagingError("Android APK badging does not declare exactly arm64-v8a")
-    if expects_custom_icon and "kb_custom_launcher" not in badging:
+    # The project icon ships as an adaptive icon (Android 8+) over the picture itself (older Android).
+    if expects_custom_icon and "kb_app_icon" not in badging:
         raise PackagingError("Android APK does not reference the selected application icon")
     debuggable = " application-debuggable" in badging or "application-debuggable" in badging
     if debuggable != expected_debuggable:
@@ -1404,6 +1416,22 @@ def _verify_android_first_frame(args: argparse.Namespace, apk: Path, adb: Path, 
         raise
 
 
+def _store_android_native_symbols(args: argparse.Namespace, flavor: str) -> None:
+    """Files the release build's native-debug-symbols.zip with the package's other symbols.
+
+    The app bundle already carries the symbols for the store; the zip is what a store takes beside an APK and
+    what a crash reporter needs to symbolicate the native stack. Symbols never ship inside the game's folder.
+    """
+    source = (args.engine_root / "platform/android/app/build/outputs/native-debug-symbols"
+              / f"{flavor}Release" / "native-debug-symbols.zip")
+    if not source.is_file():
+        raise PackagingError(f"The Android release build produced no native debug symbols at {source}")
+    args.symbols_output.mkdir(parents=True, exist_ok=True)
+    destination = args.symbols_output / f"{args.executable_name}-{flavor}-{args.version}-native-debug-symbols.zip"
+    shutil.copy2(source, destination)
+    emit_diagnostic("Info", f"Filed Android native debug symbols as {destination}")
+
+
 def _finish_android_bundle(args: argparse.Namespace, pack: Path, stage: Path, job: Path,
                            flavor: str, build_type: str, legal_assets: Path,
                            build_tools: Path, gradle_wrapper: Path) -> StageResult:
@@ -1426,7 +1454,9 @@ def _finish_android_bundle(args: argparse.Namespace, pack: Path, stage: Path, jo
         application_id=args.android_application_id, version_code=args.android_version_code,
         version_name=args.version, min_sdk=args.android_min_sdk, target_sdk=args.android_target_sdk,
         debuggable=args.configuration == "Development", asset_delivery=True)
-    tools = (_java(), gradle_wrapper.resolve(strict=True), args.android_bundletool)
+    bundletool_file = (sorted(args.android_bundletool.glob("bundletool-*.jar"))[0] if args.android_bundletool.is_dir()
+                       else args.android_bundletool)
+    tools = (_java(), gradle_wrapper.resolve(strict=True), bundletool_file)
     if not args.launch:
         return StageResult(tools)
     serial = os.environ.get("ANDROID_SERIAL", "").strip()
@@ -1436,7 +1466,7 @@ def _finish_android_bundle(args: argparse.Namespace, pack: Path, stage: Path, jo
     apks = job / "android-local-test.apks"
     # Local testing uses bundletool's debug APK signing, independently of the
     # upload signature on the release AAB. The compiled payload stays unchanged.
-    tool = [_java(), "-jar", args.android_bundletool]
+    tool = bundletool_command(_java(), args.android_bundletool)
     run_checked([*tool, "build-apks", f"--bundle={destination}", f"--output={apks}",
         "--local-testing", "--connected-device", f"--device-id={serial}", f"--adb={adb}"],
         cwd=job, timeout_seconds=300)
@@ -1461,6 +1491,7 @@ def _stage_android(args: argparse.Namespace, pack: Path, stage: Path, job: Path)
     build_type = "Debug" if args.configuration == "Development" else "Release"
     bundle = getattr(args, "android_format", "apk") == "aab"
     task = f"{'bundle' if bundle else 'assemble'}{flavor.capitalize()}{build_type}"
+    staged_bundletool = gradle_root / "app/build/bundletool"
     validator = _build_tool_path(args.build_root, CONFIGURATIONS[args.configuration], "kb_runtime_asset_pack_validator")
     legal_assets = job / "android-legal-assets"
     legal_assets.mkdir()
@@ -1468,6 +1499,7 @@ def _stage_android(args: argparse.Namespace, pack: Path, stage: Path, job: Path)
     command: list[Path | str] = [
         _java(), "-classpath", gradle_wrapper, "org.gradle.wrapper.GradleWrapperMain",
         task,
+        *(["kbStageBundletool"] if bundle and getattr(args, "android_bundletool", None) is None else []),
         f"-PkbAssetPack={pack}",
         f"-PkbRuntimeAssetPackValidator={validator}",
         f"-PkbTargetProfile={args.target}",
@@ -1507,7 +1539,13 @@ def _stage_android(args: argparse.Namespace, pack: Path, stage: Path, job: Path)
         timeout_seconds=3600,
         on_line=lambda line: emit_diagnostic("Info", line),
     )
+    if build_type == "Release":
+        _store_android_native_symbols(args, flavor)
     if bundle:
+        if getattr(args, "android_bundletool", None) is None:
+            args.android_bundletool = staged_bundletool
+            if not any(staged_bundletool.glob("bundletool-*.jar")):
+                raise PackagingError(f"The Android build did not stage the bundle tool in {staged_bundletool}")
         return _finish_android_bundle(args, pack, stage, job, flavor, build_type,
             legal_assets, build_tools, gradle_wrapper)
     output_directory = args.engine_root / "platform/android/app/build/outputs/apk" / flavor / build_type.casefold()
@@ -1815,10 +1853,15 @@ def _stage_web(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path, j
         html_text = html_text.replace("</head>", f"<title>{title}</title></head>", 1)
     else:
         raise PackagingError("Web HTML shell has no head element for product metadata")
+    description = getattr(args, "description", "")
+    copyright_line = getattr(args, "copyright", "")
     html_text = html_text.replace(
         "</head>",
         f'<meta name="author" content="{html.escape(args.publisher, quote=True)}">'
-        f'<meta name="application-version" content="{html.escape(args.version, quote=True)}"></head>',
+        f'<meta name="application-version" content="{html.escape(args.version, quote=True)}">'
+        + (f'<meta name="description" content="{html.escape(description, quote=True)}">' if description else "")
+        + (f'<meta name="copyright" content="{html.escape(copyright_line, quote=True)}">' if copyright_line else "")
+        + "</head>",
         1,
     )
     runtime_error_hook = (
@@ -2486,6 +2529,8 @@ def _parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--build-root", type=Path, required=True)
     parser.add_argument("--product-name", required=True)
     parser.add_argument("--publisher", required=True)
+    parser.add_argument("--description", default="")
+    parser.add_argument("--copyright", default="")
     parser.add_argument("--version", required=True)
     parser.add_argument("--executable-name", required=True)
     parser.add_argument("--application-icon", type=Path)

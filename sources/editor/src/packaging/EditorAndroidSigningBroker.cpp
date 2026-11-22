@@ -221,6 +221,65 @@ bool EditorAndroidSigningBroker::IsTrustedJavaExecutable(const std::filesystem::
 #endif
 }
 
+bool EditorAndroidSigningBroker::CreateUploadKey(const std::filesystem::path& keystore, std::string_view alias,
+    std::string_view owner, const std::string& password, std::string& error) {
+#if defined(_WIN32)
+    if (password.size() < 6U) {
+        error = "The key password must have at least 6 characters.";
+        return false;
+    }
+    std::error_code filesystemError;
+    if (!keystore.is_absolute() || std::filesystem::exists(keystore, filesystemError) ||
+        !std::filesystem::is_directory(keystore.parent_path(), filesystemError)) {
+        error = "Choose a new file in an existing folder for the key.";
+        return false;
+    }
+    const std::vector<std::filesystem::path> javas = TrustedJavaExecutables();
+    if (javas.empty()) {
+        error = "Java was not found. Install Android Studio or a JDK, or set JAVA_HOME.";
+        return false;
+    }
+    // The certificate's name: characters with a meaning in a distinguished name become spaces.
+    std::string name;
+    for (const char character : owner) {
+        name.push_back(std::string_view{ ",+\"<>;=#" }.find(character) == std::string_view::npos ? character : ' ');
+    }
+    if (name.find_first_not_of(' ') == std::string::npos) name = "Game Studio";
+    const std::wstring distinguished = L"CN=" + std::filesystem::path{ std::u8string{ name.begin(), name.end() } }.wstring() +
+        L", O=" + std::filesystem::path{ std::u8string{ name.begin(), name.end() } }.wstring();
+    HANDLE job = CreateJobObjectW(nullptr, nullptr);
+    if (job == nullptr) {
+        error = "The key tool could not be isolated.";
+        return false;
+    }
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    static_cast<void>(SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits)));
+    // A new key file asks for its password twice; a third, empty line answers a key password prompt with the same.
+    std::string first = password;
+    std::string second = password;
+    std::string same;
+    const signing_process::SignerRun run = signing_process::RunSigner(javas.front(), {
+            L"-Dfile.encoding=UTF-8", L"--module", L"java.base/sun.security.tools.keytool.Main", L"-genkeypair",
+            L"-noprompt", L"-storetype", L"PKCS12", L"-keystore", keystore.wstring(),
+            L"-alias", std::filesystem::path{ std::u8string{ alias.begin(), alias.end() } }.wstring(),
+            L"-keyalg", L"RSA", L"-keysize", L"4096", L"-validity", L"10000", L"-dname", distinguished },
+        keystore.parent_path(), { &first, &second, &same }, job, std::chrono::seconds{ 120 }, kMaximumOutputBytes);
+    CloseHandle(job);
+    if (!run.started || !run.secretsWritten || run.timedOut || run.exitCode != 0U ||
+        !std::filesystem::is_regular_file(keystore, filesystemError)) {
+        error = run.error.empty() ? "The key tool failed: " + run.output.substr(0U, 400U) : run.error;
+        std::filesystem::remove(keystore, filesystemError);
+        return false;
+    }
+    return true;
+#else
+    static_cast<void>(keystore); static_cast<void>(alias); static_cast<void>(owner); static_cast<void>(password);
+    error = "Upload keys are made on Windows.";
+    return false;
+#endif
+}
+
 void EditorAndroidSigningBroker::SecureClear(std::string& value) noexcept {
     signing_process::SecureClear(value);
 }

@@ -164,12 +164,32 @@ if (microphoneEnabled) {
         "<uses-permission android:name=\"android.permission.RECORD_AUDIO\" />\n\n    " + applicationTag), "UTF-8")
 }
 String applicationIconResource = "@drawable/kb_launcher"
+// A project icon becomes an adaptive icon on Android 8 and later: the picture sits inside the safe zone the launcher
+// never crops (66 of 108 dp) on the launch screen's colour, so every launcher shape (circle, squircle, square) shows
+// it whole. Older Android shows the picture itself.
+File adaptiveIcon = new File(generatedRuntimeResources, "mipmap-anydpi-v26/kb_app_icon.xml")
+File legacyIcon = new File(generatedRuntimeResources, "mipmap/kb_app_icon.xml")
+adaptiveIcon.delete()
+legacyIcon.delete()
 if (requestedApplicationIcon.isPresent()) {
     File icon = new File(requestedApplicationIcon.get())
     if (!icon.isAbsolute() || !icon.isFile() || !icon.name.toLowerCase(Locale.ROOT).endsWith(".png")) {
         throw new GradleException("kbApplicationIcon must name an existing absolute PNG file")
     }
-    applicationIconResource = "@drawable/kb_custom_launcher"
+    adaptiveIcon.parentFile.mkdirs()
+    adaptiveIcon.setText("""<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/kb_splash_background" />
+    <foreground>
+        <inset android:drawable="@drawable/kb_custom_launcher" android:inset="19.5%" />
+    </foreground>
+</adaptive-icon>
+""", "UTF-8")
+    legacyIcon.parentFile.mkdirs()
+    legacyIcon.setText("""<?xml version="1.0" encoding="utf-8"?>
+<bitmap xmlns:android="http://schemas.android.com/apk/res/android" android:src="@drawable/kb_custom_launcher" />
+""", "UTF-8")
+    applicationIconResource = "@mipmap/kb_app_icon"
 }
 
 android {
@@ -246,6 +266,11 @@ android {
         release {
             debuggable = false
             minifyEnabled = false
+            // The native libraries ship stripped; their full symbols go into the bundle's metadata, where the
+            // store reads them to symbolicate crash reports, and into native-debug-symbols.zip for an APK.
+            ndk {
+                debugSymbolLevel = "FULL"
+            }
         }
     }
 
@@ -276,7 +301,14 @@ android {
     }
 }
 
+configurations {
+    // The bundle tool the packager validates app bundles with and installs them for testing, resolved from the
+    // same repositories as the Android build, so no separate download is needed.
+    kbBundletool
+}
+
 dependencies {
+    kbBundletool "com.android.tools.build:bundletool:1.18.3"
     implementation "androidx.appcompat:appcompat:1.8.0"
     implementation "androidx.games:games-activity:4.4.2"
     implementation "androidx.games:games-controller:2.0.2"
@@ -331,4 +363,11 @@ tasks.register("stageApplicationIcon", Sync) {
 tasks.named("preBuild").configure {
     dependsOn("stageRuntimeAssets")
     dependsOn("stageApplicationIcon")
+}
+
+// Copies the bundle tool and its libraries to build/bundletool, run as
+// java -cp "build/bundletool/*" com.android.tools.build.bundletool.BundleToolMain.
+tasks.register("kbStageBundletool", Sync) {
+    from(configurations.kbBundletool)
+    into(layout.buildDirectory.dir("bundletool"))
 }

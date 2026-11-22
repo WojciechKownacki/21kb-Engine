@@ -6207,6 +6207,52 @@ ReadScriptValue(
         return {state.automation.VerifyWorkspaceControls(), "real toolbar, keyboard, display and DPI routing"};
     }
 
+    // The Build Game panel driven through a real editor window: "target" (a package id such as "Android.ETC2.arm64"),
+    // "profile" (Development or Release), "typed" (row names to text, typed with key messages in a fixed order),
+    // "icon", "loading_screen", "upload_key", "output", "build_root", "emsdk" (paths the panel's dialogs would
+    // return), "android_format" (apk or aab), "build" and "timeout_minutes".
+    if (*operation == "assert_build_game_panel") {
+        EditorBuildGamePanelCheck check;
+        const auto target = StringMember(step, "target", error);
+        if (!target) return { false, error };
+        const kb::packaging::PackagingTargetSpec* spec = kb::packaging::FindPackagingTarget(*target);
+        if (spec == nullptr) return { false, "unknown package target " + *target };
+        check.target = spec->target;
+        check.release = StringMember(step, "profile", error, false).value_or("Development") == "Release";
+        static constexpr std::pair<std::string_view, BuildGameField> kRows[] = {
+            { "game_name", BuildGameField::ProductName }, { "studio", BuildGameField::Publisher },
+            { "version", BuildGameField::Version }, { "description", BuildGameField::Description },
+            { "copyright", BuildGameField::Copyright }, { "executable_name", BuildGameField::ExecutableName },
+            { "android_application_id", BuildGameField::AndroidApplicationId },
+            { "android_version_code", BuildGameField::AndroidVersionCode }, { "android_label", BuildGameField::AndroidLabel },
+            { "crash_report_url", BuildGameField::CrashReportUrl }, { "builder", BuildGameField::BuilderExecutable },
+            { "store_password", BuildGameField::AndroidStorePassword }, { "key_password", BuildGameField::AndroidKeyPassword },
+        };
+        if (const JsonValue* typed = step.Find("typed"); typed != nullptr) {
+            if (typed->GetKind() != JsonValue::Kind::Object) return { false, "'typed' must be an object" };
+            for (const auto& [name, field] : kRows) {
+                if (const JsonValue* value = typed->Find(name); value != nullptr) {
+                    if (value->GetKind() != JsonValue::Kind::String) return { false, "typed values must be text" };
+                    check.typed.emplace_back(field, value->AsString());
+                }
+            }
+        }
+        const auto path = [&](std::string_view name) {
+            return std::filesystem::path{ StringMember(step, name, error, false).value_or("") };
+        };
+        check.icon = path("icon");
+        check.loadingScreen = path("loading_screen");
+        check.uploadKey = path("upload_key");
+        check.outputDirectory = path("output");
+        check.buildRoot = path("build_root");
+        check.emsdk = path("emsdk");
+        check.androidFormat = StringMember(step, "android_format", error, false).value_or("");
+        check.build = BoolMember(step, "build", error, false).value_or(false);
+        check.timeoutMinutes = static_cast<int>(NumberMember(step, "timeout_minutes", error, false).value_or(30.0));
+        const bool succeeded = state.automation.VerifyBuildGamePanel(check);
+        return { succeeded, state.automation.LastCheckDetail() };
+    }
+
     if (*operation == "assert_docking_interactions") {
         const bool succeeded = state.automation.VerifyDockingInteractions();
         return {succeeded, state.automation.LastCheckDetail()};

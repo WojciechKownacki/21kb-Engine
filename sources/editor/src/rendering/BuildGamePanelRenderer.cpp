@@ -71,12 +71,14 @@ void DrawText(HDC dc, RECT rect, std::string_view text, COLORREF color, int poin
 
 [[nodiscard]] HeroIconKind SectionIcon(BuildGameSection section) noexcept {
     switch (section) {
-    case BuildGameSection::Project: return HeroIconKind::WrenchScrewdriver;
+    case BuildGameSection::Game: return HeroIconKind::Gamepad2;
+    case BuildGameSection::Appearance: return HeroIconKind::Monitor;
     case BuildGameSection::Application: return HeroIconKind::Cube;
     case BuildGameSection::Content: return HeroIconKind::DocumentText;
     case BuildGameSection::Signing: return HeroIconKind::LockClosed;
     case BuildGameSection::Toolchain: return HeroIconKind::CommandLine;
     case BuildGameSection::Output: return HeroIconKind::Save;
+    case BuildGameSection::Advanced: return HeroIconKind::WrenchScrewdriver;
     }
     return HeroIconKind::Cube;
 }
@@ -178,8 +180,11 @@ void DrawCheckbox(HDC dc, const RECT& box, bool checked, const EditorTheme& them
                     BuildGamePanelModel::Value(spec.field, sceneContext.BuildGameTarget(),
                         sceneContext.ProjectConfiguration(), sceneContext.BuildGameSettings());
             }
+            // An empty field shows what it is for, dimmed, so it is not mistaken for a value.
+            const bool hinted = value.empty() && !editing;
+            if (hinted) value = BuildGamePanelModel::Hint(spec.field);
             DrawText(dc, RECT{ valueBox.left + 8, valueBox.top, valueBox.right - 8, valueBox.bottom }, value,
-                spec.required && value.empty() ? RGB(220, 100, 85) : Color(theme.textPrimary), 12);
+                hinted ? (spec.required ? RGB(220, 100, 85) : Color(theme.textDisabled)) : Color(theme.textPrimary), 12);
         }
         if (rowIndex + 1 < visibleRows) DrawRowDivider(dc, row, theme);
         y = row.bottom;

@@ -24,6 +24,12 @@ public:
         std::string& keyPassword,
         void* processJob);
     [[nodiscard]] static bool IsTrustedJavaExecutable(const std::filesystem::path& path);
+    // Makes a new upload key for the store: a PKCS12 key file at `keystore` (which must not exist yet) holding an
+    // RSA 4096 key valid for 10000 days under `alias`, with `owner` as the certificate's name. The password reaches
+    // the key tool on its standard input only and is cleared from `password`'s copies; a PKCS12 key uses the file's
+    // password. Fails with a reason when Java is missing, the password is shorter than 6 characters, or the tool fails.
+    [[nodiscard]] static bool CreateUploadKey(const std::filesystem::path& keystore, std::string_view alias,
+        std::string_view owner, const std::string& password, std::string& error);
     static void SecureClear(std::string& value) noexcept;
 };
 

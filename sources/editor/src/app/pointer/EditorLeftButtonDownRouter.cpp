@@ -1965,11 +1965,52 @@ bool EditorLeftButtonDownRouter::HandleBuildGameDown(HWND messageWindow, int x, 
                 changed = sceneContext_.ImportBuildGameApplicationIcon(*selected);
             }
             break;
-        case BuildGameField::AndroidKeystore:
-            if (const auto selected = EditorBuildGameFileDialog::SelectKeystore(mainWindow_)) {
-                changed = sceneContext_.SetBuildGameLocalFile(field, *selected);
+        case BuildGameField::LoadingScreenImage:
+            if (const auto selected = EditorBuildGameFileDialog::SelectImage(mainWindow_)) {
+                changed = sceneContext_.ImportBuildGameLoadingScreenImage(*selected);
             }
             break;
+        case BuildGameField::AndroidKeystore: {
+            // An existing key, or a new upload key made here for a game going to the store for the first time.
+            HMENU menu = CreatePopupMenu();
+            if (menu != nullptr) {
+                kb::editor::AppendMenuUtf8(menu, MF_STRING, 1U, EditorText("buildGame.keystore.choose", "Choose an existing key file...").data());
+                kb::editor::AppendMenuUtf8(menu, MF_STRING, 2U, EditorText("buildGame.keystore.create", "Create a new upload key...").data());
+                POINT cursor{};
+                GetCursorPos(&cursor);
+                const int chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN | TPM_NONOTIFY,
+                    cursor.x, cursor.y, 0, mainWindow_, nullptr);
+                DestroyMenu(menu);
+                if (chosen == 1) {
+                    if (const auto selected = EditorBuildGameFileDialog::SelectKeystore(mainWindow_)) {
+                        changed = sceneContext_.SetBuildGameLocalFile(field, *selected);
+                    }
+                } else if (chosen == 2) {
+                    const std::string suggested = BuildGamePanelModel::ShippedFileName(sceneContext_.ProjectConfiguration()) + "-upload.keystore";
+                    if (const auto selected = EditorBuildGameFileDialog::SaveKeystore(mainWindow_, suggested)) {
+                        changed = sceneContext_.CreateBuildGameUploadKey(*selected);
+                    }
+                }
+            }
+            break;
+        }
+        case BuildGameField::AndroidFormat: {
+            HMENU menu = CreatePopupMenu();
+            if (menu != nullptr) {
+                const std::string current = sceneContext_.BuildGameSettings().For(sceneContext_.BuildGameTarget()).androidFormat;
+                kb::editor::AppendMenuUtf8(menu, MF_STRING | (current == "aab" ? MF_CHECKED : 0U), 1U,
+                    std::string{ BuildGamePanelModel::ChoiceLabel(field, "aab") }.c_str());
+                kb::editor::AppendMenuUtf8(menu, MF_STRING | (current == "apk" ? MF_CHECKED : 0U), 2U,
+                    std::string{ BuildGamePanelModel::ChoiceLabel(field, "apk") }.c_str());
+                POINT cursor{};
+                GetCursorPos(&cursor);
+                const int chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN | TPM_NONOTIFY,
+                    cursor.x, cursor.y, 0, mainWindow_, nullptr);
+                DestroyMenu(menu);
+                if (chosen == 1 || chosen == 2) changed = sceneContext_.SetBuildGameAndroidFormat(chosen == 1 ? "aab" : "apk");
+            }
+            break;
+        }
         case BuildGameField::LinuxIdentity:
             if (const auto selected = EditorBuildGameFileDialog::SelectIdentity(mainWindow_)) {
                 changed = sceneContext_.SetBuildGameLocalFile(field, *selected);
@@ -2010,14 +2051,14 @@ bool EditorLeftButtonDownRouter::HandleBuildGameDown(HWND messageWindow, int x, 
         }
         case BuildGameField::Publisher:
         case BuildGameField::Version:
+        case BuildGameField::Description:
+        case BuildGameField::Copyright:
         case BuildGameField::ProductName:
         case BuildGameField::ExecutableName:
         case BuildGameField::AndroidApplicationId:
         case BuildGameField::AndroidVersionCode:
         case BuildGameField::AndroidLabel:
         case BuildGameField::AndroidKeyAlias:
-        case BuildGameField::AndroidFormat:
-        case BuildGameField::AndroidBundletool:
         case BuildGameField::AndroidStorePassword:
         case BuildGameField::AndroidKeyPassword:
         case BuildGameField::BuilderExecutable:
@@ -2034,7 +2075,6 @@ bool EditorLeftButtonDownRouter::HandleBuildGameDown(HWND messageWindow, int x, 
             changed = sceneContext_.BeginBuildGameTextEdit(field);
             break;
         case BuildGameField::None:
-        case BuildGameField::ProjectName:
             break;
         }
         if (changed) EditorWindowInvalidator::InvalidatePanel(messageWindow, buildGameContent);

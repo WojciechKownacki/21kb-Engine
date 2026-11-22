@@ -1,5 +1,7 @@
 #pragma once
 
+#include "app/EditorHeadlessPopupChecks.hpp"
+
 #include "kb/render/scene/SceneRenderTypes.hpp"
 
 #include "app/EditorKeyState.hpp"
@@ -191,6 +193,7 @@ public:
     [[nodiscard]] bool VerifyParticleControls();
     [[nodiscard]] bool VerifyWorkspaceControls();
     [[nodiscard]] bool VerifyDockingInteractions();
+    [[nodiscard]] bool VerifyBuildGamePanel(const EditorBuildGamePanelCheck& check);
     // What the last check that reports through here found, for the scenario report.
     [[nodiscard]] const std::string& LastCheckDetail() const noexcept { return lastCheckDetail_; }
     [[nodiscard]] bool VerifyDebuggerInteraction();

@@ -1,4 +1,5 @@
 #include "scene/EditorSceneContext.hpp"
+#include "rendering/BuildGamePanelModel.hpp"
 #include "scene/EditorEngineInstallation.hpp"
 #include "scene/BlendSpace2DEditorState.hpp"
 #include "scene/GameplayGraphEditorState.hpp"
@@ -2138,16 +2139,20 @@ int EditorSceneContext::BuildGameScrollOffset() const noexcept {
     return buildGameScrollOffset_;
 }
 
+// The fold of a section is kept by its kind, so it stays with it when another target shows other sections; the
+// bit records a change from the section's default.
 bool EditorSceneContext::IsBuildGameSectionCollapsed(int section) const noexcept {
-    return section >= 0 && section < 32 &&
-        (buildGameCollapsedSections_ & (1U << static_cast<unsigned>(section))) != 0U;
+    const std::vector<BuildGameSectionSpec> sections = BuildGamePanelModel::Sections(BuildGameTarget(), buildGameSelectedProfile_ == 1);
+    if (section < 0 || static_cast<std::size_t>(section) >= sections.size()) return false;
+    const BuildGameSection kind = sections[static_cast<std::size_t>(section)].section;
+    const bool toggled = (buildGameCollapsedSections_ & (1U << static_cast<unsigned>(kind))) != 0U;
+    return toggled != BuildGamePanelModel::CollapsedByDefault(kind);
 }
 
 void EditorSceneContext::ToggleBuildGameSection(int section) noexcept {
-    if (section < 0 || section >= 32) {
-        return;
-    }
-    buildGameCollapsedSections_ ^= (1U << static_cast<unsigned>(section));
+    const std::vector<BuildGameSectionSpec> sections = BuildGamePanelModel::Sections(BuildGameTarget(), buildGameSelectedProfile_ == 1);
+    if (section < 0 || static_cast<std::size_t>(section) >= sections.size()) return;
+    buildGameCollapsedSections_ ^= (1U << static_cast<unsigned>(sections[static_cast<std::size_t>(section)].section));
 }
 
 int EditorSceneContext::BuildGameSelectedTarget() const noexcept {
