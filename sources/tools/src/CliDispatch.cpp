@@ -672,6 +672,12 @@ R"(  run          Run a scene headless and report logs, events, and errors (the
                  [--gi <level>] [--gi-mobile <level>]
                Levels are auto, low, medium, high and ultra. Auto leaves the choice to
                the engine; the mobile settings apply on phones and tablets.
+  project-settings  Show or change any project setting: the startup scene, the game's name,
+               window, display, physics, input, Android and packaging values.
+                 --project <dir> [--set Section.Key=value]...
+               Without --set it lists every setting as Section.Key=value, e.g.
+               Maps.DefaultMap (the scene the game starts in), Identity.GameName,
+               Display.WindowWidth, Physics.GravityY. A scene is /Game/<path>.21kbscene.
 
 Global options:
   --json       Print one JSON object instead of text, for scripts and agents:
@@ -810,6 +816,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"navmesh", &RunNavMeshCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
     {"physics-layers", &RunPhysicsLayersCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
     {"lighting-quality", &RunLightingQualityCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
+    {"project-settings", &RunProjectSettingsCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
 #if KB_CLI_RENDERER
     {"csg", &RunCsgCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
     {"rig2d", &RunRig2DCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},

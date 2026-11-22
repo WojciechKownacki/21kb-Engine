@@ -43,6 +43,10 @@ public:
     // Removes one key, and the section with it when that key was its last.
     bool Remove(std::string_view section, std::string_view key);
 
+    // Every section with its entries, in name order.
+    [[nodiscard]] const std::map<std::string, std::map<std::string, std::string, std::less<>>, std::less<>>& Sections() const noexcept {
+        return sections_;
+    }
     // The entries of one section, in key order. Empty when the section is absent.
     [[nodiscard]] const std::map<std::string, std::string, std::less<>>& SectionEntries(std::string_view section) const;
 

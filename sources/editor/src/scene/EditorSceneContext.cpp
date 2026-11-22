@@ -381,6 +381,7 @@ EditorSceneContext::EditorSceneContext()
     : projectBootstrap_(BootstrapProjectReportingProgress())
     , project_(projectBootstrap_.succeeded ? projectBootstrap_.descriptor : kb::project::ProjectDescriptor{})
     , projectConfig_(projectBootstrap_.settings)
+    , projectConfigOnDisk_(projectBootstrap_.settings)
     // A project that failed to load has no file to write back to: saving the empty fallback
     // descriptor over it would erase its plugins and settings.
     , projectFile_(projectBootstrap_.succeeded ? projectBootstrap_.projectFile : std::filesystem::path{})
@@ -439,6 +440,11 @@ EditorSceneContext::EditorSceneContext()
     static_cast<void>(ActivateProjectPhysicsLayers(*scene_));
     scene_->Runtime().ApplyProjectSimulation(projectConfig_.simulation);
     ApplyProjectAudioAndTags(*scene_);
+    {
+        std::error_code error;
+        projectConfigWritten_ = std::filesystem::last_write_time(
+            kb::project::ProjectSettingsStore::FilePath(EditorProjectPaths::ProjectRoot()), error);
+    }
     // The scene that was open when the editor was last closed, else the startup scene.
     std::error_code error;
     currentScenePath_ = ResolveDefaultScenePath();
@@ -3928,11 +3934,47 @@ bool EditorSceneContext::SaveProjectConfiguration() {
     std::string error;
     const std::filesystem::path settingsFile =
         kb::project::ProjectSettingsStore::FilePath(EditorProjectPaths::ProjectRoot());
+    // What another writer put in the file since the editor last saw it stays; the editor's own
+    // changes go on top of it.
+    std::error_code timeError;
+    if (std::filesystem::last_write_time(settingsFile, timeError) != projectConfigWritten_ && !timeError) {
+        const kb::project::ProjectSettingsLoadResult disk = kb::project::ProjectSettingsStore::Load(settingsFile);
+        if (disk.Succeeded() && disk.found) {
+            projectConfig_ = kb::project::ProjectSettingsStore::Merge(projectConfigOnDisk_, projectConfig_, disk.settings);
+        }
+    }
     if (!kb::project::ProjectSettingsStore::Save(settingsFile, projectConfig_, error)) {
         console_.Error("Project", error.empty() ? "Project settings could not be saved." : error);
         return false;
     }
+    projectConfigOnDisk_ = projectConfig_;
+    projectConfigWritten_ = std::filesystem::last_write_time(settingsFile, timeError);
     return SaveProjectDescriptor();
+}
+
+bool EditorSceneContext::AdoptExternalProjectConfiguration() {
+    const std::filesystem::path settingsFile =
+        kb::project::ProjectSettingsStore::FilePath(EditorProjectPaths::ProjectRoot());
+    std::error_code timeError;
+    const std::filesystem::file_time_type written = std::filesystem::last_write_time(settingsFile, timeError);
+    if (timeError || written == projectConfigWritten_) {
+        return false;
+    }
+    projectConfigWritten_ = written;
+    const kb::project::ProjectSettingsLoadResult disk = kb::project::ProjectSettingsStore::Load(settingsFile);
+    if (!disk.Succeeded() || !disk.found) {
+        return false;
+    }
+    const kb::project::ProjectSettings before = projectConfig_;
+    projectConfig_ = kb::project::ProjectSettingsStore::Merge(projectConfigOnDisk_, projectConfig_, disk.settings);
+    projectConfigOnDisk_ = disk.settings;
+    if (projectConfig_ == before) {
+        return false;
+    }
+    scene_->Runtime().ApplyProjectSimulation(projectConfig_.simulation);
+    ApplyProjectAudioAndTags(*scene_);
+    console_.Info("Project", "Loaded project settings changed outside the editor.");
+    return true;
 }
 
 bool EditorSceneContext::SaveProjectDescriptor() {

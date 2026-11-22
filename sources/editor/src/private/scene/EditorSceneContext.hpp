@@ -284,6 +284,10 @@ public:
     // surface the editor reads and edits; the descriptor carries a mirror of the same
     // values for consumers that still read the project file, written only here.
     [[nodiscard]] const kb::project::ProjectSettings& ProjectConfiguration() const noexcept;
+    // Takes in the settings file when something else (the agent, kb_cli, a text editor) wrote it
+    // since the editor last read or wrote it, keeping any change of the editor's own on top.
+    // Returns whether the settings changed.
+    bool AdoptExternalProjectConfiguration();
     // The project's scenes (virtual paths, sorted): the choices for the scene the game starts in.
     [[nodiscard]] std::vector<std::string> ProjectScenePaths() const;
     // Makes `virtualPath` the scene the game starts in; refused, with a named reason, for a path
@@ -1725,6 +1729,10 @@ private:
     EditorProjectBootstrapResult projectBootstrap_;
     kb::project::ProjectDescriptor project_;
     kb::project::ProjectSettings projectConfig_;
+    // The settings file as the editor last read or wrote it, and when it was written then: a save
+    // merges onto what someone else wrote meanwhile instead of writing over it.
+    kb::project::ProjectSettings projectConfigOnDisk_;
+    std::filesystem::file_time_type projectConfigWritten_{};
     std::filesystem::path projectFile_;
     // The open scene document, and the scene being edited: that document, or the private scene of
     // a prefab in prefab edit mode.

@@ -13,6 +13,7 @@
 #include "rendering/AgentBarRenderer.hpp"
 #include "rendering/AgentPanelRenderer.hpp"
 #include "rendering/HeroIconGdiplusRuntime.hpp"
+#include "scene/EditorEngineInstallation.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #include <CommDlg.h>
@@ -177,9 +178,12 @@ constexpr UINT kModelsPerAgent = 64U;
 EditorAgentWorkspace EditorAgentPanelController::Workspace() {
     wchar_t module[MAX_PATH]{};
     GetModuleFileNameW(nullptr, module, MAX_PATH);
+    // An editor with no known installation opens the folder it runs from.
+    const std::filesystem::path engine = ResolveEditorEngineInstallation().root;
     return EditorAgentWorkspace{
         .project = EditorProjectPaths::ProjectRoot(),
         .kbcli = std::filesystem::path{ module }.parent_path() / "kb_cli.exe",
+        .engine = engine.empty() ? std::filesystem::path{ module }.parent_path() : engine,
     };
 }
 

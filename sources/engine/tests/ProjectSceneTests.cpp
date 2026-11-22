@@ -527,6 +527,28 @@ void RunProjectQualitySettingsTest() {
     CleanTempRoot();
 }
 
+// Two writers of the settings file meet: the editor changed the startup scene from memory while the
+// agent wrote the game's name and gravity on disk. The merge keeps both, the editor's value winning
+// only where it changed one itself, and a list the editor shortened loses its old entries.
+void RunProjectSettingsMergeTest() {
+    kb::project::ProjectSettings base;
+    base.defaultMap = "/Game/Scenes/Main.21kbscene";
+    base.additionalScenes = { "/Game/Scenes/A.21kbscene", "/Game/Scenes/B.21kbscene" };
+    kb::project::ProjectSettings mine = base;
+    mine.lastOpenMap = "/Game/Scenes/Main.21kbscene";
+    mine.additionalScenes = { "/Game/Scenes/A.21kbscene" };
+    kb::project::ProjectSettings theirs = base;
+    theirs.defaultMap = "/Game/Scenes/Showcase.21kbscene";
+    theirs.gameName = "Showcase";
+    theirs.simulation.gravity[1] = -3.5F;
+    const kb::project::ProjectSettings merged = kb::project::ProjectSettingsStore::Merge(base, mine, theirs);
+    Require(merged.defaultMap == "/Game/Scenes/Showcase.21kbscene" && merged.gameName == "Showcase" &&
+            merged.simulation.gravity[1] == -3.5F, "the merge must keep what the other writer changed");
+    Require(merged.lastOpenMap == "/Game/Scenes/Main.21kbscene", "the merge must keep what the editor changed");
+    Require(merged.additionalScenes == mine.additionalScenes, "a list the editor shortened must not keep its old entries");
+    Require(kb::project::ProjectSettingsStore::Merge(base, base, theirs) == theirs, "with no change of its own the editor must take the file");
+}
+
 // The lighting path a project asks for: a project that never chose one leaves it to the platform (Auto), every
 // path round-trips through the settings file, and Auto becomes Deferred on a computer and Forward on a handheld
 // while a named path is used as written on both.
@@ -2231,6 +2253,7 @@ void RunProjectSceneTests() {
     RunProjectFromNewerEngineIsExplainedTest();
     RunLegacyProjectDescriptorCarriesItsSettingsTest();
     RunProjectQualitySettingsTest();
+    RunProjectSettingsMergeTest();
     RunProjectLightingPathTest();
     RunProjectDisplayAndSimulationSettingsTest();
     RunProjectBuildScenesTest();

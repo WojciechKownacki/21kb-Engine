@@ -231,6 +231,11 @@ struct EngineCall {
     if (command == "code") return WithTarget(std::string{ EditorText("agent.step.code", "Searching the engine's code") }, Option(call, { "topic", "text", "symbol", "path" }));
     if (command == "import") return WithTarget(std::string{ EditorText("agent.step.import", "Importing") }, Option(call, { "source" }) + (call.words.empty() ? "" : call.words.front()));
     if (command == "scene-lightmap" || command == "scene-bake-lighting") return WithTarget(std::string{ EditorText("agent.step.bakeLighting", "Baking the lighting") }, Option(call, { "scene" }));
+    if (command == "project-settings") {
+        const std::string set = Option(call, { "set" });
+        return set.empty() ? WithTarget(std::string{ EditorText("agent.step.readProjectSettings", "Checking the project settings") }, {})
+                           : WithTarget(std::string{ EditorText("agent.step.projectSettings", "Changing the project settings") }, set);
+    }
     if (command == "build") return WithTarget(std::string{ EditorText("agent.step.buildGame", "Building the game") }, Option(call, { "target" }));
 
     // "material-new" is a material made; the verb is the last word of the command or its action.
@@ -1103,6 +1108,7 @@ bool EditorAgentPanelState::Send(const EditorAgentWorkspace& workspace) {
     const auto substitute = [&](const std::string& word) {
         std::string text = Replace(word, "{project}", workspace.project.generic_string());
         text = Replace(text, "{kbcli}", workspace.kbcli.generic_string());
+        text = Replace(text, "{engine}", workspace.engine.generic_string());
         text = Replace(text, "{mcpconfig}", mcpConfig.generic_string());
         text = Replace(text, "{session}", conversation.session);
         text = Replace(text, "{model}", model_);

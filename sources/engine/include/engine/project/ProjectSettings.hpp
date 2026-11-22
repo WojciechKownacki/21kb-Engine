@@ -12,6 +12,10 @@
 #include <string_view>
 #include <vector>
 
+namespace kb::config {
+class IniDocument;
+}
+
 namespace kb::project {
 
 // How much a project spends on shadows or global illumination. Auto leaves the choice to the engine;
@@ -293,6 +297,16 @@ public:
         const std::filesystem::path& path,
         const ProjectSettings& settings,
         std::string& error);
+
+    // The settings a document holds (missing or out-of-range values as Load takes them), and the
+    // settings written into a document, keeping its other keys: the file's form, in memory.
+    [[nodiscard]] static ProjectSettings Read(const config::IniDocument& document);
+    static void Write(const ProjectSettings& settings, config::IniDocument& document);
+
+    // `theirs` with the values `mine` changed from `base`: what two writers of the file meant
+    // together, setting by setting (a value both changed keeps `mine`).
+    [[nodiscard]] static ProjectSettings Merge(
+        const ProjectSettings& base, const ProjectSettings& mine, const ProjectSettings& theirs);
 
     // The settings a project carried before it had a settings file, so an existing
     // project keeps its configuration when the file is first created. A project with

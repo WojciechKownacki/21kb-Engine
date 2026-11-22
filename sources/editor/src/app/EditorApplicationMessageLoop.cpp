@@ -649,6 +649,15 @@ void UpdateDrawerForWindowHeight(EditorApplicationState& state) noexcept {
 // the conversation, and after each of the agent's steps that changed the project shows its work -
 // the scene and the project's assets read back from disk, unless you edited the scene meanwhile.
 void PumpAgentPanel(EditorApplicationState& state) {
+    // The project's settings as the agent or kb_cli left them, looked at once a second.
+    static std::chrono::steady_clock::time_point settingsChecked{};
+    if (const auto now = std::chrono::steady_clock::now(); now - settingsChecked >= std::chrono::seconds{ 1 }) {
+        settingsChecked = now;
+        if (state.sceneContext.AdoptExternalProjectConfiguration()) {
+            InvalidatePanelKind(state, DockPanelKind::ProjectSettings);
+            InvalidatePanelKind(state, DockPanelKind::BuildGame);
+        }
+    }
     EditorAgentPanelState& agent = state.sceneContext.AgentPanel();
     const bool docked = EditorPanelContentResolver::Resolve(DockPanelKind::Agent, state.window, state.window, state.dockModel, state.floatingWindows, state.metrics).has_value();
     if (docked) {

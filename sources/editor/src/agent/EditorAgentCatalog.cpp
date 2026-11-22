@@ -108,6 +108,9 @@ struct Preset {
         // tools load at once instead of through a search.
         agent.runArguments = { "-p", "--output-format", "stream-json", "--verbose", "--mcp-config", "{mcpconfig}", "--strict-mcp-config",
             "--tools", "Read", "Edit", "Write", "Glob", "Grep",
+            // The engine's own folder (its scripts' API, guides, samples and sources) is open to it
+            // too, as the project is, so it never stops to ask for access nobody can give.
+            "--add-dir", "{engine}",
             // No skills or slash commands in the context, no per-session sections (date, git status)
             // that keep a new conversation from reusing the cached prompt, and no permission prompt
             // that would stall a run nobody can answer.
@@ -118,6 +121,8 @@ struct Preset {
             "read only the one guide (kb-engine guide tool) or API page (api_reference with a topic) the task needs. "
             "Change scenes, entities, components and assets with the kb-engine tools (kb_cli runs any command); "
             "do not run shell commands or parse the project's binary files. "
+            "Project settings (the startup scene, the game's name, window, physics, input, Android) are "
+            "kb_cli project-settings: it lists them all, --set Section.Key=value changes one, and the editor takes the change in at once. "
             "To show the user how the scene looks, render it with the kb_cli capture command (--out Saved/Agent/Images/<name>.png): "
             "the editor shows that picture in the conversation. Pictures the user attaches are listed as paths; open them with Read." };
         agent.resumeArguments = { "--resume", "{session}" };

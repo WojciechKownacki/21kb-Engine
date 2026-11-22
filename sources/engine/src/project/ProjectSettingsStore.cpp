@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -242,7 +243,12 @@ ProjectSettingsLoadResult ProjectSettingsStore::Load(const std::filesystem::path
         return result;
     }
     result.found = true;
+    result.settings = Read(document);
+    return result;
+}
 
+ProjectSettings ProjectSettingsStore::Read(const config::IniDocument& document) {
+    ProjectSettingsLoadResult result;
     const ProjectSettings defaults;
     result.settings.name = ReadString(document, kIdentity, "Name", defaults.name);
     result.settings.gameName = ReadString(document, kIdentity, "GameName", defaults.gameName);
@@ -361,7 +367,7 @@ ProjectSettingsLoadResult ProjectSettingsStore::Load(const std::filesystem::path
     result.settings.navigationFarPathInterval = ReadBounded(document, kNavigation, "CrowdFarPathInterval", defaults.navigationFarPathInterval,
         1U, kProjectNavigationFarPathIntervalMax);
     result.settings.crashReportUploadUrl = ReadString(document, kCrashReports, "UploadUrl", defaults.crashReportUploadUrl);
-    return result;
+    return result.settings;
 }
 
 bool ProjectSettingsStore::Save(
@@ -380,7 +386,38 @@ bool ProjectSettingsStore::Save(
             document.Clear();
         }
     }
+    Write(settings, document);
+    return document.Save(path, error);
+}
 
+ProjectSettings ProjectSettingsStore::Merge(const ProjectSettings& base, const ProjectSettings& mine, const ProjectSettings& theirs) {
+    config::IniDocument before;
+    config::IniDocument changed;
+    config::IniDocument merged;
+    Write(base, before);
+    Write(mine, changed);
+    Write(theirs, merged);
+    for (const auto& [section, entries] : changed.Sections()) {
+        for (const auto& [key, value] : entries) {
+            if (before.GetString(section, key) != std::optional<std::string_view>{ value }) {
+                merged.SetString(section, key, value);
+            }
+        }
+    }
+    // A list `mine` shortened leaves no entries of the longer one behind.
+    std::vector<std::pair<std::string, std::string>> dropped;
+    for (const auto& [section, entries] : before.Sections()) {
+        for (const auto& [key, value] : entries) {
+            if (!changed.GetString(section, key).has_value()) dropped.emplace_back(section, key);
+        }
+    }
+    for (const auto& [section, key] : dropped) {
+        static_cast<void>(merged.Remove(section, key));
+    }
+    return Read(merged);
+}
+
+void ProjectSettingsStore::Write(const ProjectSettings& settings, config::IniDocument& document) {
     document.SetString(kIdentity, "Name", settings.name);
     document.SetString(kIdentity, "GameName", settings.gameName);
     document.SetString(kIdentity, "Category", settings.category);
@@ -470,7 +507,6 @@ bool ProjectSettingsStore::Save(
     document.SetFloat(kPhysics, "GravityZ", settings.simulation.gravity[2]);
     document.SetFloat(kTime, "TimeScale", settings.simulation.timeScale);
     document.SetString(kCrashReports, "UploadUrl", settings.crashReportUploadUrl);
-    return document.Save(path, error);
 }
 
 } // namespace kb::project
