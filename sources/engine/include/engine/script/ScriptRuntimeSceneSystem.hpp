@@ -169,6 +169,9 @@ private:
     float fixedAccumulatorSeconds_ = 0.0F;
     ScriptRuntimeExecutionResult lastResult_;
     ScriptRuntimeAssetPrepareResult lastPrepareResult_;
+    // The scene's behaviours as the last preparation found them: a behaviour that appears after it (a scene a
+    // button loads) gets its script before it starts.
+    std::uint64_t preparedStamp_ = 0U;
     std::vector<ScriptUIDispatch> uiDispatches_;
     std::unordered_map<BehaviourLifecycleKey, BehaviourLifecycleRecord, BehaviourLifecycleKeyHasher> lifecycleRecords_;
     // The records the per-frame phases visit (created and active), in the guaranteed execution order. Built when a

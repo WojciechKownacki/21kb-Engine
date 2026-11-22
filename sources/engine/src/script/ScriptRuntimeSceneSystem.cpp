@@ -308,6 +308,7 @@ void ScriptRuntimeSceneSystem::PrepareScene(kb::scene::Scene& scene) {
         : frameSettings_.fixedDeltaSeconds;
     scene.Runtime().SetScriptFixedDeltaSeconds(fixedDeltaSeconds);
     lastPrepareResult_ = assetPreparer_ == nullptr ? ScriptRuntimeAssetPrepareResult{} : assetPreparer_->PrepareSceneBehaviours(scene);
+    preparedStamp_ = scene.Components().Behaviours().ChangeStamp();
     RestartReloadedBehaviours(scene);
 }
 
@@ -912,6 +913,14 @@ void ScriptRuntimeSceneSystem::DispatchCompletedFixedStepTasks(kb::scene::Scene&
 }
 
 void ScriptRuntimeSceneSystem::SyncBehaviourLifecycles(kb::scene::Scene& scene, float deltaSeconds) {
+    // Behaviours the events of this frame added (a scene a button loaded, an object a script spawned) get their
+    // scripts here, so they start with them instead of reporting a script that is not loaded.
+    if (assetPreparer_ != nullptr && scene.Components().Behaviours().ChangeStamp() != preparedStamp_) {
+        const ScriptRuntimeAssetPrepareResult added = assetPreparer_->PrepareSceneBehaviours(scene);
+        preparedStamp_ = scene.Components().Behaviours().ChangeStamp();
+        lastPrepareResult_.diagnostics.insert(lastPrepareResult_.diagnostics.end(), added.diagnostics.begin(), added.diagnostics.end());
+        lastPrepareResult_.warnings.insert(lastPrepareResult_.warnings.end(), added.warnings.begin(), added.warnings.end());
+    }
     // Nothing is looked at while the scene's behaviours are as the records last found them. The stamp is taken before
     // the scan: a transition below that changes a behaviour moves it again, and the next frame looks.
     const std::uint64_t stamp = scene.Components().Behaviours().ChangeStamp();
