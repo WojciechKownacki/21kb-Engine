@@ -103,18 +103,19 @@ void DrawDevice(HDC dc, const EditorGameViewFrame& frame, EditorGameViewDevice d
 }
 
 // The rotate button of a device that cannot turn stays on the bar, dimmed.
-void DrawRotateButton(HDC dc, const RECT& rect, bool enabled, bool portrait, const EditorTheme& theme) {
+// A bar button that does nothing for the chosen device stays on the bar, dimmed.
+void DrawDeviceOptionButton(HDC dc, const RECT& rect, HeroIconKind icon, bool enabled, bool active, const EditorTheme& theme) {
     if (enabled) {
-        SceneViewportToolbarDrawing::DrawIconButton(dc, rect, HeroIconKind::Rotate, theme, portrait);
+        SceneViewportToolbarDrawing::DrawIconButton(dc, rect, icon, theme, active);
         return;
     }
     const COLORREF fill = SceneViewportToolbarDrawing::Blend(
         GdiDrawing::ToColorRef(theme.toolbarButton), GdiDrawing::ToColorRef(theme.toolbar), 1, 2);
     SceneViewportToolbarDrawing::FillRound(dc, rect, fill, fill, SceneViewportToolbarMetrics::ButtonRadius);
     const int size = Metrics::IconSize;
-    const RECT icon{ rect.left + (rect.right - rect.left - size) / 2, rect.top + (rect.bottom - rect.top - size) / 2,
+    const RECT iconRect{ rect.left + (rect.right - rect.left - size) / 2, rect.top + (rect.bottom - rect.top - size) / 2,
         rect.left + (rect.right - rect.left - size) / 2 + size, rect.top + (rect.bottom - rect.top - size) / 2 + size };
-    HeroIconPainter::Draw(dc, icon, HeroIconKind::Rotate, GdiDrawing::ToColorRef(theme.textDisabled), 1);
+    HeroIconPainter::Draw(dc, iconRect, icon, GdiDrawing::ToColorRef(theme.textDisabled), 1);
 }
 
 } // namespace
@@ -183,7 +184,7 @@ EditorSceneBgfxViewport::PresentSettings GamePanelContentRenderer::BuildSettings
     const EditorPlayPreferences& play = sceneContext.EditorConfig().play;
     if (play.gameViewSafeArea) {
         // Under the messages, which are already in the list.
-        std::vector<EditorSceneViewportOverlayShape> outlines = EditorGameView::SafeFrameShapes(
+        std::vector<EditorSceneViewportOverlayShape> outlines = EditorGameView::UnsafeAreaShapes(
             play.gameViewDevice, play.gameViewPortrait, static_cast<std::uint32_t>(screen.right - screen.left),
             static_cast<std::uint32_t>(screen.bottom - screen.top));
         settings.viewportOverlayShapes.insert(settings.viewportOverlayShapes.begin(),
@@ -232,8 +233,10 @@ void GamePanelContentRenderer::Paint(
         const EditorGameViewDevice device = EditorGameView::kDevices[index];
         SceneViewportToolbarDrawing::DrawIconButton(dc, rects.devices[index], DeviceIcon(device), theme, device == play.gameViewDevice);
     }
-    DrawRotateButton(dc, rects.rotateButton, EditorGameView::CanRotate(play.gameViewDevice), play.gameViewPortrait, theme);
-    SceneViewportToolbarDrawing::DrawIconButton(dc, rects.safeAreaButton, HeroIconKind::Scan, theme, play.gameViewSafeArea);
+    DrawDeviceOptionButton(dc, rects.rotateButton, HeroIconKind::Rotate, EditorGameView::CanRotate(play.gameViewDevice),
+        play.gameViewPortrait, theme);
+    DrawDeviceOptionButton(dc, rects.safeAreaButton, HeroIconKind::Scan, EditorGameView::HasSafeArea(play.gameViewDevice),
+        play.gameViewSafeArea, theme);
     // The device's name, its screen's pixels and the scale, as the Scene View's bar reads its values.
     const std::string readout = EditorGameView::Label(play.gameViewDevice) + "  " + EditorGameView::FormatResolution(EditorGameViewSize{ picture.renderWidth, picture.renderHeight }) + "  " +
         EditorGameView::FormatScale(static_cast<std::uint32_t>(screen.right - screen.left), picture.renderWidth);

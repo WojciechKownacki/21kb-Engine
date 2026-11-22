@@ -66,53 +66,43 @@ void RunDeviceTableTest() {
 }
 
 void RunSafeAreaTest() {
-    // A computer keeps the television margins: 90% and 80% of the picture.
-    const kb::editor::EditorGameViewSafeFrames computer = EditorGameView::SafeFrames(EditorGameViewDevice::Computer, false);
-    Require(computer.count == 2U, "A computer has two outlines");
-    Require(computer.frames[0].insets.left == 96U && computer.frames[0].insets.top == 54U && !computer.frames[0].inner,
-        "The first outline of a computer leaves 90% of the picture");
-    Require(computer.frames[1].insets.left == 192U && computer.frames[1].insets.bottom == 108U && computer.frames[1].inner,
-        "The inner outline of a computer leaves 80% of the picture");
+    // A computer's whole screen is safe, as in other engines' desktop previews.
+    Require(!EditorGameView::HasSafeArea(EditorGameViewDevice::Computer) && EditorGameView::HasSafeArea(EditorGameViewDevice::Tablet) &&
+            EditorGameView::HasSafeArea(EditorGameViewDevice::Phone),
+        "Tablets and phones have a safe area, a computer does not");
+    const kb::editor::EditorViewportSafeArea computer = EditorGameView::SafeArea(EditorGameViewDevice::Computer, false);
+    Require(computer.left == 0U && computer.top == 0U && computer.right == 0U && computer.bottom == 0U, "A computer keeps no margins");
+    Require(EditorGameView::UnsafeAreaShapes(EditorGameViewDevice::Computer, false, 960U, 540U).empty(), "A computer's picture is not tinted");
 
     // Devices take the insets of the built-in profiles, grown to their screens.
-    const auto only = [](EditorGameViewDevice device, bool portrait) {
-        const kb::editor::EditorGameViewSafeFrames frames = EditorGameView::SafeFrames(device, portrait);
-        Require(frames.count == 1U && !frames.frames[0].inner, "A tablet and a phone have one outline");
-        return frames.frames[0].insets;
-    };
-    const kb::editor::EditorViewportSafeArea phoneLying = only(EditorGameViewDevice::Phone, false);
+    const kb::editor::EditorViewportSafeArea phoneLying = EditorGameView::SafeArea(EditorGameViewDevice::Phone, false);
     Require(phoneLying.left == 130U && phoneLying.right == 130U && phoneLying.top == 0U && phoneLying.bottom == 58U,
         "A lying phone keeps clear of its sides and its bottom edge");
-    const kb::editor::EditorViewportSafeArea phoneStanding = only(EditorGameViewDevice::Phone, true);
+    const kb::editor::EditorViewportSafeArea phoneStanding = EditorGameView::SafeArea(EditorGameViewDevice::Phone, true);
     Require(phoneStanding.top > 0U && phoneStanding.bottom > 0U && phoneStanding.left == 0U && phoneStanding.right == 0U,
         "A standing phone keeps clear of its top and its bottom edge");
-    const kb::editor::EditorViewportSafeArea tabletLying = only(EditorGameViewDevice::Tablet, false);
+    const kb::editor::EditorViewportSafeArea tabletLying = EditorGameView::SafeArea(EditorGameViewDevice::Tablet, false);
     Require(tabletLying.top == 26U && tabletLying.bottom == 22U && tabletLying.left == 0U && tabletLying.right == 0U,
         "A lying tablet keeps clear of its bars at the top and the bottom");
-    const kb::editor::EditorViewportSafeArea tabletStanding = only(EditorGameViewDevice::Tablet, true);
+    const kb::editor::EditorViewportSafeArea tabletStanding = EditorGameView::SafeArea(EditorGameViewDevice::Tablet, true);
     Require(tabletStanding.top == 31U && tabletStanding.bottom == 26U && tabletStanding.left == 0U,
         "A standing tablet keeps its bars at the top and the bottom, grown to its taller screen");
 
-    // The outlines on a picture shown at half the size of the computer's screen.
-    const auto shapes = EditorGameView::SafeFrameShapes(EditorGameViewDevice::Computer, false, 960U, 540U);
-    Require(shapes.size() == 2U, "A computer's two outlines are two lines");
-    for (const auto& shape : shapes) {
-        Require(shape.kind == kb::editor::EditorSceneViewportOverlayShape::Kind::Polyline && shape.thickness == 2.0F && shape.color[3] == 255U &&
-                shape.points.size() == 5U && shape.points.front() == shape.points.back(),
-            "An outline is a closed, opaque line two pixels thick");
+    // A lying phone shown at half its size: bands at the bottom and both sides, none at the top.
+    const auto phone = EditorGameView::UnsafeAreaShapes(EditorGameViewDevice::Phone, false, 1170U, 540U);
+    Require(phone.size() == 3U, "A lying phone has a bottom band and two side bands");
+    for (const auto& band : phone) {
+        Require(band.kind == kb::editor::EditorSceneViewportOverlayShape::Kind::RoundedRect && band.radius == 0.0F && band.points.size() == 2U &&
+                band.color == (std::array<std::uint8_t, 4U>{ 255U, 0U, 0U, 51U }),
+            "A band is a square, translucent red rectangle");
     }
-    Require(shapes[0].color[0] == 255U && shapes[0].color[1] == 140U && shapes[0].color[2] == 0U, "The outline is orange");
-    Require(shapes[1].color[0] == 255U && shapes[1].color[1] == 255U && shapes[1].color[2] == 255U, "The inner outline is white");
-    // Corners: the margin scaled to the shown size, with half the line's thickness kept inside the picture.
-    Require(shapes[0].points[0] == (std::array<float, 2U>{ 49.0F, 28.0F }) && shapes[0].points[2] == (std::array<float, 2U>{ 911.0F, 512.0F }),
-        "The outline lies 5% in from every edge");
-    Require(shapes[1].points[0] == (std::array<float, 2U>{ 97.0F, 55.0F }), "The inner outline lies 10% in");
-    // A lying tablet has margins at the top and bottom only, so its lines run along the sides of the picture.
-    const auto tablet = EditorGameView::SafeFrameShapes(EditorGameViewDevice::Tablet, false, 772U, 454U);
-    Require(tablet.size() == 1U && tablet[0].points[0][0] == 1.0F && tablet[0].points[1][0] == 771.0F,
-        "An outline without side margins keeps its whole thickness inside the picture");
-    Require(EditorGameView::SafeFrameShapes(EditorGameViewDevice::Phone, false, 2U, 2U).empty(),
-        "A picture too small for its margins has no outline");
+    Require(phone[0].points[0] == (std::array<float, 2U>{ 0.0F, 511.0F }) && phone[0].points[1] == (std::array<float, 2U>{ 1170.0F, 540.0F }),
+        "The bottom band spans the width at the scaled margin");
+    Require(phone[1].points[0] == (std::array<float, 2U>{ 0.0F, 0.0F }) && phone[1].points[1] == (std::array<float, 2U>{ 65.0F, 511.0F }),
+        "The left band fills down to the bottom band");
+    Require(phone[2].points[0][0] == 1105.0F, "The right band starts at the scaled margin");
+    Require(EditorGameView::UnsafeAreaShapes(EditorGameViewDevice::Phone, false, 2U, 0U).empty(),
+        "A picture without height has no bands");
 }
 
 void RunDeviceFitTest() {

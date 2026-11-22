@@ -133,6 +133,12 @@ void DrawShape(Gdiplus::Graphics& graphics, const EditorSceneViewportOverlayShap
         const float width = std::abs(shape.points[1][0] - shape.points[0][0]);
         const float height = std::abs(shape.points[1][1] - shape.points[0][1]);
         const float diameter = std::min({ shape.radius * 2.0F, width, height });
+        if (diameter <= 0.0F) {
+            // Arcs of no size are not a shape GDI+ accepts; a square corner is a plain rectangle.
+            const Gdiplus::SolidBrush brush(ToColor(shape.color));
+            graphics.FillRectangle(&brush, left, top, width, height);
+            return;
+        }
         Gdiplus::GraphicsPath path;
         path.AddArc(left, top, diameter, diameter, 180.0F, 90.0F);
         path.AddArc(left + width - diameter, top, diameter, diameter, 270.0F, 90.0F);

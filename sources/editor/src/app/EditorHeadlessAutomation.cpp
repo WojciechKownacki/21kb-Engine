@@ -4003,17 +4003,20 @@ std::pair<bool, std::string> EditorHeadlessAutomation::VerifyGameViewSettings(in
     expect(settings.selectedEntityIds.empty() && !settings.selectionMaskEnabled && !settings.selectionOutlineEnabled, "a selection is shown");
     expect(settings.screenUIEnabled, "the game's UI is not drawn");
     expect(!settings.drawSafeArea, "a safe area is drawn");
-    // The safe area outlines are the lines two pixels thick; the bar's button decides whether they are there.
+    // The bands outside the safe area lead the overlay shapes; the bar's button decides whether they are there.
     const EditorPlayPreferences& play = context_.EditorConfig().play;
-    const auto outlines = static_cast<std::size_t>(std::ranges::count_if(settings.viewportOverlayShapes, [](const auto& shape) {
-        return shape.kind == EditorSceneViewportOverlayShape::Kind::Polyline && shape.thickness == 2.0F;
-    }));
+    const RECT screen = GamePanelContentRenderer::ResolvePicture(GamePanelContentRenderer::Resolve(content).renderArea, context_).frame.screen;
+    const std::vector<EditorSceneViewportOverlayShape> bands = play.gameViewSafeArea
+        ? EditorGameView::UnsafeAreaShapes(play.gameViewDevice, play.gameViewPortrait,
+              static_cast<std::uint32_t>(screen.right - screen.left), static_cast<std::uint32_t>(screen.bottom - screen.top))
+        : std::vector<EditorSceneViewportOverlayShape>{};
     const auto now = static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
     expect(EditorViewportMessages::Recent(context_.Console(), now).empty() == settings.viewportTextLabels.empty(),
         "the messages of the console are not the plates over the picture");
-    expect(outlines == (play.gameViewSafeArea ? EditorGameView::SafeFrames(play.gameViewDevice, play.gameViewPortrait).count : 0U),
-        "the safe area outlines do not follow the button");
+    expect(settings.viewportOverlayShapes.size() >= bands.size() &&
+            std::equal(bands.begin(), bands.end(), settings.viewportOverlayShapes.begin()),
+        "the bands outside the safe area do not follow the button");
     expect(settings.viewportKey == panel.id, "the viewport session is not the Game View's own");
     expect(settings.renderScale == context_.ProjectConfiguration().display.renderScale, "the project's render scale is not applied");
     return { failures.empty(),

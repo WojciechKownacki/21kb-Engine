@@ -32,7 +32,10 @@ bool EditorGameViewPointerController::HandlePointerDown(const EditorResolvedPane
             play.gameViewPortrait = !play.gameViewPortrait;
         }
     } else if (PointInRect(rects.safeAreaButton, x, y)) {
-        play.gameViewSafeArea = !play.gameViewSafeArea;
+        // A computer's whole screen is safe; the button stays on the bar without an effect.
+        if (EditorGameView::HasSafeArea(play.gameViewDevice)) {
+            play.gameViewSafeArea = !play.gameViewSafeArea;
+        }
     } else {
         return true;
     }

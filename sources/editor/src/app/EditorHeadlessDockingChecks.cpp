@@ -221,11 +221,12 @@ EditorHeadlessPopupCheckResult EditorHeadlessPopupChecks::VerifyDockingInteracti
             editor.Click(main, Center(bar.rotateButton));
             expect(play().gameViewPortrait, "the rotate button stands a phone");
             editor.Click(main, Center(bar.safeAreaButton));
-            expect(play().gameViewSafeArea, "the safe area button outlines the safe area");
+            expect(play().gameViewSafeArea, "the safe area button shows the safe area");
             editor.Click(main, Center(bar.devices[static_cast<std::size_t>(EditorGameViewDevice::Computer)]));
             editor.Click(main, Center(bar.rotateButton));
-            expect(play().gameViewDevice == EditorGameViewDevice::Computer && play().gameViewPortrait,
-                "turning does nothing on a computer and the phone's orientation is kept");
+            editor.Click(main, Center(bar.safeAreaButton));
+            expect(play().gameViewDevice == EditorGameViewDevice::Computer && play().gameViewPortrait && play().gameViewSafeArea,
+                "turning and the safe area do nothing on a computer and the phone's choices are kept");
             EditorConfiguration restored = sceneContext.EditorConfig();
             restored.play.gameViewPortrait = false;
             restored.play.gameViewSafeArea = false;

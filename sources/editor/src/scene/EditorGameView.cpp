@@ -28,9 +28,8 @@ constexpr Entry kEntries[] = {
 
 // The space kept free around the device in the panel.
 constexpr int kMargin = 10;
-// What a computer's two outlines leave free, as a part of the width and of the height: 90% and 80% remain.
-constexpr double kOuterComputerMargin = 0.10;
-constexpr double kInnerComputerMargin = 0.20;
+// The bands outside the safe area: red at a fifth of full strength, so the game still shows through.
+constexpr std::array<std::uint8_t, 4U> kUnsafeColor{ 255U, 0U, 0U, 51U };
 
 [[nodiscard]] const Entry& EntryFor(EditorGameViewDevice device) noexcept {
     for (const Entry& entry : kEntries) {
@@ -89,20 +88,16 @@ std::string EditorGameView::Label(EditorGameViewDevice device) {
     return {};
 }
 
-EditorGameViewSafeFrames EditorGameView::SafeFrames(EditorGameViewDevice device, bool portrait) noexcept {
-    const EditorGameViewSize size = Size(device, portrait);
-    if (device == EditorGameViewDevice::Computer) {
-        const auto margins = [&size](double fraction) {
-            const std::uint32_t horizontal = Scaled(size.width, fraction / 2.0);
-            const std::uint32_t vertical = Scaled(size.height, fraction / 2.0);
-            return EditorViewportSafeArea{ .left = horizontal, .top = vertical, .right = horizontal, .bottom = vertical };
-        };
-        return EditorGameViewSafeFrames{
-            .frames = { EditorGameViewSafeFrame{ margins(kOuterComputerMargin), false }, EditorGameViewSafeFrame{ margins(kInnerComputerMargin), true } },
-            .count = 2U,
-        };
+bool EditorGameView::HasSafeArea(EditorGameViewDevice device) noexcept {
+    return device != EditorGameViewDevice::Computer;
+}
+
+EditorViewportSafeArea EditorGameView::SafeArea(EditorGameViewDevice device, bool portrait) noexcept {
+    if (!HasSafeArea(device)) {
+        return {};
     }
     // The profile's insets are in the pixels of its own screen; they grow with the device's screen.
+    const EditorGameViewSize size = Size(device, portrait);
     const EditorViewportProfile& profile = EditorViewportProfileFor(ProfileKind(device, portrait));
     std::uint32_t profileWidth = profile.width;
     std::uint32_t profileHeight = profile.height;
@@ -111,37 +106,36 @@ EditorGameViewSafeFrames EditorGameView::SafeFrames(EditorGameViewDevice device,
     }
     const double scaleX = static_cast<double>(size.width) / static_cast<double>(profileWidth);
     const double scaleY = static_cast<double>(size.height) / static_cast<double>(profileHeight);
-    return EditorGameViewSafeFrames{
-        .frames = { EditorGameViewSafeFrame{ EditorViewportSafeArea{
-            .left = Scaled(profile.safeArea.left, scaleX), .top = Scaled(profile.safeArea.top, scaleY),
-            .right = Scaled(profile.safeArea.right, scaleX), .bottom = Scaled(profile.safeArea.bottom, scaleY) }, false } },
-        .count = 1U,
-    };
+    return EditorViewportSafeArea{
+        .left = Scaled(profile.safeArea.left, scaleX), .top = Scaled(profile.safeArea.top, scaleY),
+        .right = Scaled(profile.safeArea.right, scaleX), .bottom = Scaled(profile.safeArea.bottom, scaleY) };
 }
 
-std::vector<EditorSceneViewportOverlayShape> EditorGameView::SafeFrameShapes(
+std::vector<EditorSceneViewportOverlayShape> EditorGameView::UnsafeAreaShapes(
     EditorGameViewDevice device, bool portrait, std::uint32_t shownWidth, std::uint32_t shownHeight) {
     const EditorGameViewSize size = Size(device, portrait);
-    const EditorGameViewSafeFrames safe = SafeFrames(device, portrait);
-    const float scaleX = static_cast<float>(shownWidth) / static_cast<float>(size.width);
-    const float scaleY = static_cast<float>(shownHeight) / static_cast<float>(size.height);
-    // A line is drawn around its points, so the outline keeps half its thickness inside the picture.
-    constexpr float kThickness = 2.0F;
-    constexpr float kHalf = kThickness / 2.0F;
+    const EditorViewportSafeArea safe = SafeArea(device, portrait);
+    const float width = static_cast<float>(shownWidth);
+    const float height = static_cast<float>(shownHeight);
+    const float left = static_cast<float>(safe.left) * width / static_cast<float>(size.width);
+    const float right = width - static_cast<float>(safe.right) * width / static_cast<float>(size.width);
+    const float top = static_cast<float>(safe.top) * height / static_cast<float>(size.height);
+    const float bottom = height - static_cast<float>(safe.bottom) * height / static_cast<float>(size.height);
     std::vector<EditorSceneViewportOverlayShape> shapes;
-    for (std::size_t index = 0U; index < safe.count; ++index) {
-        const EditorGameViewSafeFrame& frame = safe.frames[index];
-        const float left = static_cast<float>(frame.insets.left) * scaleX + kHalf;
-        const float top = static_cast<float>(frame.insets.top) * scaleY + kHalf;
-        const float right = static_cast<float>(shownWidth) - static_cast<float>(frame.insets.right) * scaleX - kHalf;
-        const float bottom = static_cast<float>(shownHeight) - static_cast<float>(frame.insets.bottom) * scaleY - kHalf;
-        if (right <= left || bottom <= top) continue;
-        shapes.push_back(EditorSceneViewportOverlayShape{
-            .kind = EditorSceneViewportOverlayShape::Kind::Polyline,
-            .points = { { left, top }, { right, top }, { right, bottom }, { left, bottom }, { left, top } },
-            .thickness = kThickness,
-            .color = frame.inner ? std::array<std::uint8_t, 4>{ 255U, 255U, 255U, 255U } : std::array<std::uint8_t, 4>{ 255U, 140U, 0U, 255U } });
+    if (right <= left || bottom <= top) {
+        return shapes;
     }
+    // Top and bottom bands span the whole width; the side bands fill between them, so no pixel is tinted twice.
+    const auto band = [&shapes](float x0, float y0, float x1, float y1) {
+        if (x1 > x0 && y1 > y0) {
+            shapes.push_back(EditorSceneViewportOverlayShape{
+                .kind = EditorSceneViewportOverlayShape::Kind::RoundedRect, .points = { { x0, y0 }, { x1, y1 } }, .color = kUnsafeColor });
+        }
+    };
+    band(0.0F, 0.0F, width, top);
+    band(0.0F, bottom, width, height);
+    band(0.0F, top, left, bottom);
+    band(right, top, width, bottom);
     return shapes;
 }
 

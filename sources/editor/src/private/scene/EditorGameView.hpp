@@ -27,18 +27,6 @@ struct EditorGameViewSize {
     [[nodiscard]] bool operator==(const EditorGameViewSize&) const noexcept = default;
 };
 
-// An outline on the picture, given as the margins (in pixels of the device's screen) it keeps from the edges.
-// The inner outline of a computer is the smaller of its two and is drawn in another color.
-struct EditorGameViewSafeFrame {
-    EditorViewportSafeArea insets{};
-    bool inner = false;
-};
-
-struct EditorGameViewSafeFrames {
-    std::array<EditorGameViewSafeFrame, 2U> frames{};
-    std::size_t count = 0U;
-};
-
 #if defined(_WIN32)
 // Where a device's screen and body are inside an area, in the same coordinates as the area.
 struct EditorGameViewFrame {
@@ -72,12 +60,14 @@ public:
     [[nodiscard]] static std::optional<EditorGameViewDevice> FromName(std::string_view name) noexcept;
     // The device as the bar names it, in the editor language.
     [[nodiscard]] static std::string Label(EditorGameViewDevice device);
-    // The outlines of the safe area: a computer keeps the television margins, a tablet and a phone the
-    // areas notches, rounded corners and system bars leave free.
-    [[nodiscard]] static EditorGameViewSafeFrames SafeFrames(EditorGameViewDevice device, bool portrait) noexcept;
-    // The outlines as lines, in the pixels of a picture shown shownWidth wide and shownHeight high: opaque, two
-    // pixels thick, orange and for the computer's inner outline white.
-    [[nodiscard]] static std::vector<EditorSceneViewportOverlayShape> SafeFrameShapes(
+    // Whether the device has edges the game should keep its UI away from: tablets and phones, with their
+    // notches, rounded corners and system bars. A computer's whole screen is safe.
+    [[nodiscard]] static bool HasSafeArea(EditorGameViewDevice device) noexcept;
+    // The one safe area, as the margins it keeps from the edges in pixels of the device's screen; none on a computer.
+    [[nodiscard]] static EditorViewportSafeArea SafeArea(EditorGameViewDevice device, bool portrait) noexcept;
+    // The parts of a picture shown shownWidth wide and shownHeight high that lie outside the safe area, as
+    // translucent red bands (at most four): the game's UI should stay off them.
+    [[nodiscard]] static std::vector<EditorSceneViewportOverlayShape> UnsafeAreaShapes(
         EditorGameViewDevice device, bool portrait, std::uint32_t shownWidth, std::uint32_t shownHeight);
     // The screen's pixels as the bar reads them: "2340x1080".
     [[nodiscard]] static std::string FormatResolution(EditorGameViewSize size);
