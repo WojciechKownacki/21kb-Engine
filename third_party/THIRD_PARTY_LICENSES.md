@@ -34,7 +34,7 @@ WebRTC implementation.
 ## libjuice
 
 - Repository: https://github.com/paullouisageneau/libjuice
-- Version: `b89c792e3612faf2f12cf35bcc56857313a06be3`
+- Version: 1.7.5 (`4fa015bb029c254443e01f1ead24360df40ceb2e`)
 - License: MPL-2.0
 - License file: `third_party/licenses/mpl-2.0.txt`
 
@@ -61,7 +61,7 @@ The logging header used by libdatachannel.
 ## Mbed TLS
 
 - Repository: https://github.com/Mbed-TLS/mbedtls
-- Version: 3.6.7
+- Version: 3.6.8
 - License: Apache-2.0 (Mbed TLS is dual licensed Apache-2.0 OR GPL-2.0-or-later; the Apache-2.0 option is used)
 - License file: `third_party/licenses/apache-2.0.txt`
 

@@ -22,6 +22,6 @@ set(DISABLE_WERROR ON CACHE BOOL "" FORCE)
 FetchContent_Declare(kb_libwebsockets
     URL https://codeload.github.com/warmcat/libwebsockets/tar.gz/adc128ca082a3c6fb9d4abbadefc09e3bc736724
     URL_HASH SHA256=8da42692347ba5bc3cbd89dc2b30aba3934ad51085ebeb2f8657321bf7164831
-    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    DOWNLOAD_EXTRACT_TIMESTAMP FALSE
 )
 FetchContent_MakeAvailable(kb_libwebsockets)
