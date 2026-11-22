@@ -7,6 +7,7 @@
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cwctype>
 #include <cwchar>
@@ -38,7 +39,9 @@ struct Registry {
     ComPtr<IDirectInput8W> input;
     std::array<Slot, InputDeviceState::kMaxGamepads> slots;
     std::vector<ProductMapping> mappings;
-    ULONGLONG nextScan = 0;
+    // DirectInput enumeration walks every HID device and takes tens of milliseconds, so it runs
+    // once and then only when Windows reports a device arriving or leaving (WM_DEVICECHANGE).
+    std::atomic<bool> rescan{true};
     HWND window = nullptr;
 
     static BOOL CALLBACK Axis(const DIDEVICEOBJECTINSTANCEW* object, void* context) {
@@ -89,17 +92,15 @@ struct Registry {
     }
 
     void Scan(HWND owner) {
-        const auto now = GetTickCount64();
         if (owner != window) {
             for (auto& slot : slots) if (slot.device) {
                 slot.device->Unacquire();
                 slot.device->SetCooperativeLevel(owner, DISCL_NONEXCLUSIVE | DISCL_BACKGROUND);
             }
             window = owner;
-            nextScan = 0;
+            rescan = true;
         }
-        if (now < nextScan || !IsWindow(owner)) return;
-        nextScan = now + 1000;
+        if (!IsWindow(owner) || !rescan.exchange(false)) return;
         if (!input && FAILED(DirectInput8Create(GetModuleHandleW(nullptr), DIRECTINPUT_VERSION,
                 IID_IDirectInput8W, reinterpret_cast<void**>(input.GetAddressOf()), nullptr))) return;
         for (auto& slot : slots) slot.seen = false;
@@ -216,6 +217,10 @@ void CollectWin32Gamepads(InputDeviceState& state, HWND window) noexcept {
             else if (slot.user != noUser && state.HasFocus()) PublishXInput(readings[slot.user].Gamepad, state, index);
         }
     } catch (...) { /* Failed discovery leaves released controls and can retry next frame. */ }
+}
+
+void NotifyWin32InputDevicesChanged() noexcept {
+    Devices().rescan = true;
 }
 
 std::uint32_t Win32GamepadXInputIndex(std::uint32_t slot) noexcept {

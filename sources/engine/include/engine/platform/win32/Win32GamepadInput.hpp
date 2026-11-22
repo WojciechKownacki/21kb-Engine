@@ -24,6 +24,8 @@ struct Win32GamepadMapping {
 
 void ConfigureWin32GamepadMapping(const GUID& product, const Win32GamepadMapping& mapping);
 void CollectWin32Gamepads(InputDeviceState& state, HWND window) noexcept;
+// DirectInput controllers are looked for again on the next collection; call on WM_DEVICECHANGE.
+void NotifyWin32InputDevicesChanged() noexcept;
 // Returns UINT32_MAX for an empty slot or a controller without XInput motors.
 std::uint32_t Win32GamepadXInputIndex(std::uint32_t slot) noexcept;
 } // namespace kb::input

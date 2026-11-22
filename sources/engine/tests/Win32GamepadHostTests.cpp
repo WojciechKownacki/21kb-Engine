@@ -3,6 +3,8 @@
 #include "engine/input/InputDeviceState.hpp"
 #include "../src/platform/win32/Win32GamepadInputInternal.hpp"
 
+#include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -80,6 +82,17 @@ int main() {
         }
         Require(kb::input::Win32GamepadXInputIndex(100) == std::numeric_limits<std::uint32_t>::max(), "invalid slot mapped to a device");
         Require(!haptics.SetVibration(100, 0, 0), "invalid actuator index accepted");
+        // Looking for controllers walks every input device and can take tens of milliseconds; it must
+        // not come back on its own while the game runs, only after a device arrives or leaves.
+        double longest = 0.0;
+        for (const auto start = std::chrono::steady_clock::now(); std::chrono::steady_clock::now() - start < std::chrono::milliseconds{ 1500 };) {
+            const auto before = std::chrono::steady_clock::now();
+            kb::input::CollectWin32Gamepads(state, window);
+            longest = std::max(longest, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - before).count());
+            Sleep(4);
+        }
+        std::cout << "longest collection over 1.5 s: " << longest << " ms\n";
+        Require(longest < 20.0, "controllers were looked for again while nothing changed");
         std::cout << "PASS: native controller discovery, focus release and actuator slot identity\n";
         result = 0;
     } catch (const std::exception& error) { std::cerr << "FAIL: " << error.what() << '\n'; }

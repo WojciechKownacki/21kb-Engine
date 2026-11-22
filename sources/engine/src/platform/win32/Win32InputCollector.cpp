@@ -67,6 +67,10 @@ void Win32InputCollector::AdvanceTouchFrame() noexcept {
 
 bool Win32InputCollector::HandleWindowMessage(
     HWND ownerWindow, UINT message, WPARAM wparam, LPARAM lparam) noexcept {
+    if (message == WM_DEVICECHANGE) {
+        NotifyWin32InputDevicesChanged();
+        return false;
+    }
     if (message == WM_INPUT) {
         RAWINPUT raw{};
         UINT size = sizeof(raw);
