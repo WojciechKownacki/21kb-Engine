@@ -130,6 +130,7 @@ struct Preset {
         agent.efforts = { "low", "medium", "high", "xhigh", "max" };
         agent.effortArguments = { "--effort", "{effort}" };
         agent.output = EditorAgentOutputFormat::ClaudeStreamJson;
+        agent.sessionRecords = "projects";
         presets.push_back({ "Claude Code", L"claude", L".claude", L"CLAUDE_CONFIG_DIR", agent });
     }
     {
@@ -266,6 +267,10 @@ std::vector<EditorAgent> DetectEditorAgents() {
             agent.profile = folder.empty() ? "default" : folder.filename().string();
             if (!folder.empty()) {
                 agent.environment.emplace_back(preset.profileVariable, folder.wstring());
+            }
+            // The session records live in the profile's folder (the CLI's own one by default).
+            if (!agent.sessionRecords.empty()) {
+                agent.sessionRecords = (folder.empty() ? HomeFolder() / preset.profileFolder : folder) / agent.sessionRecords;
             }
             agents.push_back(std::move(agent));
         }

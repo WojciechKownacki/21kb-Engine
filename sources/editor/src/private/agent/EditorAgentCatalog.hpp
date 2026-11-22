@@ -56,6 +56,10 @@ struct EditorAgent {
     std::vector<std::string> efforts;
     std::vector<std::string> effortArguments;
     EditorAgentOutputFormat output = EditorAgentOutputFormat::PlainText;
+    // Where the CLI keeps a record of every session, one folder per project named after the
+    // project's path (every character but letters and digits a dash), one <session>.jsonl each;
+    // empty when it keeps none the panel can read.
+    std::filesystem::path sessionRecords;
     bool custom = false;
 
     // "Claude Code" for the default profile, "Claude Code - .claude-work" for another.

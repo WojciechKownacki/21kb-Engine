@@ -240,6 +240,9 @@ private:
     void AddRequest(EditorAgentConversation& conversation, const std::string& request,
         const std::vector<std::filesystem::path>& images, const std::filesystem::path& project);
     void UseProject(const std::filesystem::path& project);
+    // Every session an agent keeps a record of for this project that the history does not have yet
+    // goes into it (closed, in the conversations menu), so no conversation is lost, whatever ended it.
+    void ImportAgentSessions();
     void Save(EditorAgentConversation& conversation);
     [[nodiscard]] std::filesystem::path HistoryFolder() const;
     // Compares the project's files with the conversation's last look, notes what was added or
@@ -247,7 +250,7 @@ private:
     bool TakeProjectChanges(EditorAgentConversation& conversation);
     void FinishStep(EditorAgentConversation& conversation, const std::string& toolId, bool failed);
     void ReadLine(EditorAgentConversation& conversation, const std::string& line);
-    void ReadClaudeEvent(EditorAgentConversation& conversation, const std::string& line);
+    void ReadStreamJsonEvent(EditorAgentConversation& conversation, const std::string& line);
     void ReadCodexEvent(EditorAgentConversation& conversation, const std::string& line);
     void FinishAccountCheck();
     void StartAccountCheck();
@@ -268,6 +271,7 @@ private:
     std::vector<std::unique_ptr<EditorAgentConversation>> conversations_;
     int active_ = 0;
     std::filesystem::path historyProject_;
+    std::filesystem::path importedProject_;
     std::map<std::filesystem::path, EditorAgentFileChange> changedFiles_;
     bool inputFocused_ = false;
     wchar_t pendingHighSurrogate_ = 0;

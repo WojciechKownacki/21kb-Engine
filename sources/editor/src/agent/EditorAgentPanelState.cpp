@@ -580,6 +580,10 @@ void EditorAgentPanelState::Prepare() {
         }
         RefreshAgents();
     }
+    if (importedProject_ != historyProject_) {
+        importedProject_ = historyProject_;
+        ImportAgentSessions();
+    }
 }
 
 void EditorAgentPanelState::SelectAgent(int index) {
@@ -760,6 +764,76 @@ void EditorAgentPanelState::Save(EditorAgentConversation& conversation) {
 
 void EditorAgentPanelState::Remember(EditorAgentConversation& conversation) {
     conversation.saveDue = true;
+}
+
+void EditorAgentPanelState::ImportAgentSessions() {
+    if (historyProject_.empty()) {
+        return;
+    }
+    // The sessions the history already holds.
+    std::vector<std::string> known;
+    for (const std::unique_ptr<EditorAgentConversation>& conversation : conversations_) {
+        if (!conversation->session.empty()) known.push_back(conversation->session);
+    }
+    std::error_code error;
+    for (std::filesystem::directory_iterator it(HistoryFolder(), error), end; !error && it != end; it.increment(error)) {
+        JsonValue document;
+        if (it->path().extension() == ".json" && ReadDocument(it->path(), document)) {
+            if (const std::string& session = StringOf(document.Find("session")); !session.empty()) known.push_back(session);
+        }
+    }
+    std::string folderName;
+    for (const char8_t character : historyProject_.u8string()) {
+        const bool plain = (character >= u8'a' && character <= u8'z') || (character >= u8'A' && character <= u8'Z') || (character >= u8'0' && character <= u8'9');
+        folderName.push_back(plain ? static_cast<char>(character) : '-');
+    }
+    std::vector<std::pair<std::filesystem::path, std::string>> folders;
+    for (const EditorAgent& agent : agents_) {
+        if (!agent.sessionRecords.empty()) folders.emplace_back(agent.sessionRecords / folderName, agent.Label());
+    }
+    for (const auto& [folder, label] : folders) {
+        for (std::filesystem::directory_iterator it(folder, error), end; !error && it != end; it.increment(error)) {
+            const std::string session = it->path().stem().string();
+            if (it->path().extension() != ".jsonl" || std::ranges::find(known, session) != known.end()) continue;
+            known.push_back(session);
+            EditorAgentConversation conversation;
+            conversation.id = "session-" + session;
+            conversation.session = session;
+            conversation.sessionAgent = label;
+            // No project of its own: reading an old session must not mark today's files as changed.
+            std::ifstream stream(it->path(), std::ios::binary);
+            for (std::string line; std::getline(stream, line);) {
+                JsonValue event;
+                std::string parseError;
+                if (!line.empty() && line.front() == '{' && JsonValue::Parse(line, event, parseError)) {
+                    const JsonValue* message = event.Find("message");
+                    const JsonValue* content = message != nullptr ? message->Find("content") : nullptr;
+                    // A request as typed, without the panel's notes for the agent; the rest as the
+                    // panel shows a running conversation.
+                    if (StringOf(event.Find("type")) == "user" && content != nullptr && content->GetKind() == JsonValue::Kind::String) {
+                        std::string request = content->AsString();
+                        if (request.starts_with("<")) continue;
+                        request = request.substr(0U, request.find("\n\nAttached pictures - "));
+                        if (conversation.title.empty()) conversation.title = TitleFrom(request);
+                        conversation.entries.push_back({ EditorAgentEntryKind::User, std::move(request) });
+                    } else {
+                        ReadStreamJsonEvent(conversation, line);
+                    }
+                }
+            }
+            for (EditorAgentEntry& entry : conversation.entries) {
+                if (entry.step == EditorAgentStepState::Running) entry.step = EditorAgentStepState::Done;
+            }
+            // A session with no request of the user (a sign-in check) is not a conversation.
+            if (conversation.title.empty()) continue;
+            std::filesystem::create_directories(HistoryFolder(), error);
+            std::ofstream file(HistoryFolder() / (conversation.id + ".json"), std::ios::binary | std::ios::trunc);
+            file << ToJson(conversation, false).Dump();
+            error.clear();
+        }
+        error.clear();
+    }
+    pendingImages_.clear();
 }
 
 std::vector<EditorAgentSavedConversation> EditorAgentPanelState::SavedConversations() const {
@@ -1263,7 +1337,7 @@ void EditorAgentPanelState::ReadLine(EditorAgentConversation& conversation, cons
         return;
     }
     if (conversation.runFormat == EditorAgentOutputFormat::ClaudeStreamJson && line.front() == '{') {
-        ReadClaudeEvent(conversation, line);
+        ReadStreamJsonEvent(conversation, line);
     } else if (conversation.runFormat == EditorAgentOutputFormat::CodexJson && line.front() == '{') {
         ReadCodexEvent(conversation, line);
     } else if (conversation.runFormat == EditorAgentOutputFormat::PlainText) {
@@ -1277,7 +1351,7 @@ void EditorAgentPanelState::ReadLine(EditorAgentConversation& conversation, cons
     }
 }
 
-void EditorAgentPanelState::ReadClaudeEvent(EditorAgentConversation& conversation, const std::string& line) {
+void EditorAgentPanelState::ReadStreamJsonEvent(EditorAgentConversation& conversation, const std::string& line) {
     JsonValue event;
     std::string error;
     if (!JsonValue::Parse(line, event, error)) {
