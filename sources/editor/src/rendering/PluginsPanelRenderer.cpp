@@ -39,17 +39,40 @@ constexpr int kCategoryColumnRight = 450;
         (GetBValue(a) * percentA + GetBValue(b) * percentB) / 100);
 }
 
-[[nodiscard]] RECT ProviderAddRect(const RECT& content) noexcept {
-    return { content.right - 154, content.top + 9, content.right - 86, content.top + 33 };
+// Header buttons: 11 pt text with room on both sides, never narrower than a short word needs.
+constexpr int kButtonTextSize = 11;
+constexpr int kButtonPaddingX = 12;
+constexpr int kButtonMinWidth = 68;
+constexpr int kButtonGap = 8;
+
+// The width a header button needs for its text in the editor language, so longer translations are not cut.
+[[nodiscard]] int ButtonWidth(std::string_view text, int weight) {
+    HDC dc = CreateCompatibleDC(nullptr);
+    RECT measured{};
+    {
+        const ScopedFont font{ kButtonTextSize, weight };
+        const ScopedGdiObject selectedFont(dc, font.handle);
+        kb::editor::DrawTextUtf8(dc, text.data(), static_cast<int>(text.size()), &measured, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
+    }
+    DeleteDC(dc);
+    return std::max(kButtonMinWidth, static_cast<int>(measured.right - measured.left) + kButtonPaddingX * 2);
+}
+
+[[nodiscard]] RECT HeaderButtonRect(int right, int width, const RECT& content) noexcept {
+    return { right - width, content.top + 9, right, content.top + 33 };
+}
+
+[[nodiscard]] RECT ProviderCancelRect(const RECT& content) {
+    return HeaderButtonRect(content.right - kPadding, ButtonWidth(EditorText("common.cancel", "Cancel"), FW_NORMAL), content);
+}
+
+[[nodiscard]] RECT ProviderAddRect(const RECT& content) {
+    return HeaderButtonRect(ProviderCancelRect(content).left - kButtonGap, ButtonWidth(EditorText("common.add", "Add"), FW_SEMIBOLD), content);
 }
 
 // Shown in the header while plugin changes wait for the scene to be rebuilt.
-[[nodiscard]] RECT ReloadSceneRect(const RECT& content) noexcept {
-    return { content.right - 124, content.top + 9, content.right - 14, content.top + 33 };
-}
-
-[[nodiscard]] RECT ProviderCancelRect(const RECT& content) noexcept {
-    return { content.right - 78, content.top + 9, content.right - 10, content.top + 33 };
+[[nodiscard]] RECT ReloadSceneRect(const RECT& content) {
+    return HeaderButtonRect(content.right - kPadding, ButtonWidth(EditorText("plugins.reloadScene", "Reload Scene"), FW_SEMIBOLD), content);
 }
 
 [[nodiscard]] bool PointInRect(const RECT& rect, int x, int y) noexcept {
@@ -152,18 +175,18 @@ void DrawHeader(HDC dc, const RECT& content, const EditorTheme& theme, const Edi
     DrawHeader(dc, content, theme);
     if (sceneContext.HasPendingParticleProviderMigration()) {
         const RECT header = HeaderRect(content);
-        DrawText(dc, RECT{ header.left + 92, header.top, header.right - 166, header.bottom },
+        DrawText(dc, RECT{ header.left + 110, header.top, ProviderAddRect(content).left - 10, header.bottom },
             EditorText("plugins.particleEffectsDetected", "Particle effects detected"), RGB(223, 178, 91), 11, FW_NORMAL, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
         GdiDrawing::DrawSharpFrame(dc, ProviderAddRect(content), Color(theme.accent), Color(theme.accent));
         GdiDrawing::DrawSharpFrame(dc, ProviderCancelRect(content), Color(theme.chrome), Color(theme.borderPanel));
-        DrawText(dc, ProviderAddRect(content), EditorText("common.add", "Add"), Color(theme.textPrimary), 11, FW_SEMIBOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        DrawText(dc, ProviderCancelRect(content), EditorText("common.cancel", "Cancel"), Color(theme.textSecondary), 11, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        DrawText(dc, ProviderAddRect(content), EditorText("common.add", "Add"), Color(theme.textPrimary), kButtonTextSize, FW_SEMIBOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        DrawText(dc, ProviderCancelRect(content), EditorText("common.cancel", "Cancel"), Color(theme.textSecondary), kButtonTextSize, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     } else if (sceneContext.Plugins().HasPendingReload()) {
         const RECT header = HeaderRect(content);
         const RECT reload = ReloadSceneRect(content);
         DrawText(dc, RECT{ header.left + 110, header.top, reload.left - 10, header.bottom }, EditorText("plugins.pendingReload", "Pending scene reload"), RGB(223, 178, 91), 11, FW_NORMAL, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
         GdiDrawing::DrawSharpFrame(dc, reload, Color(theme.accent), Color(theme.accent));
-        DrawText(dc, reload, EditorText("plugins.reloadScene", "Reload Scene"), Color(theme.textPrimary), 11, FW_SEMIBOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        DrawText(dc, reload, EditorText("plugins.reloadScene", "Reload Scene"), Color(theme.textPrimary), kButtonTextSize, FW_SEMIBOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 }
 
