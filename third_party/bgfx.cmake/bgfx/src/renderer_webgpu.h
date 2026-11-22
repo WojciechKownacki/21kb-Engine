@@ -520,6 +520,7 @@ namespace wgpu {
 			: m_code(NULL)
 			, m_module(NULL)
 			, m_moduleBgra8(NULL)
+			, m_moduleRgba16f(NULL)
 			, m_constantBuffer(NULL)
 			, m_hash(0)
 			, m_numUniforms(0)
@@ -530,11 +531,12 @@ namespace wgpu {
 		void create(const Memory* _mem);
 		void destroy();
 
-		WGPUShaderModule getModule(bool _bgra8Storage) const;
+		WGPUShaderModule getModule(WGPUTextureFormat _storageFormat) const;
 
 		const Memory* m_code;
 		WGPUShaderModule m_module;
 		mutable WGPUShaderModule m_moduleBgra8;
+		mutable WGPUShaderModule m_moduleRgba16f;
 		UniformBuffer* m_constantBuffer;
 
 		PredefinedUniform m_predefined[PredefinedUniform::Count];

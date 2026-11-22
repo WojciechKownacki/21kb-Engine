@@ -2583,7 +2583,7 @@ WGPU_IMPORT
 				const WGPUFragmentState fragmentState =
 				{
 					.nextInChain   = NULL,
-					.module        = program.m_fsh->getModule(false),
+					.module        = program.m_fsh->getModule(WGPUTextureFormat_Undefined),
 					.entryPoint    = WGPU_STRING_VIEW_INIT,
 					.constantCount = 0,
 					.constants     = NULL,
@@ -2599,7 +2599,7 @@ WGPU_IMPORT
 					.vertex =
 					{
 						.nextInChain   = NULL,
-						.module        = program.m_vsh->getModule(false),
+						.module        = program.m_vsh->getModule(WGPUTextureFormat_Undefined),
 						.entryPoint    = WGPU_STRING_VIEW_INIT,
 						.constantCount = 0,
 						.constants     = NULL,
@@ -3344,17 +3344,25 @@ WGPU_IMPORT
 			}
 		}
 
-		static bool hasBgra8Storage(const WGPUBindGroupLayoutEntry* _entries, uint32_t _num)
+		// Storage format the shader's rgba8unorm images are rewritten to, so embedded shaders written
+		// for rgba8 (mip generation) can write BGRA8 and RGBA16F textures. Undefined keeps the shader.
+		static WGPUTextureFormat storageRewriteFormat(const WGPUBindGroupLayoutEntry* _entries, uint32_t _num)
 		{
+			bool rgba8   = false;
+			bool rgba16f = false;
+
 			for (uint32_t ii = 0; ii < _num; ++ii)
 			{
-				if (WGPUTextureFormat_BGRA8Unorm == _entries[ii].storageTexture.format)
+				switch (_entries[ii].storageTexture.format)
 				{
-					return true;
+				case WGPUTextureFormat_BGRA8Unorm:  return WGPUTextureFormat_BGRA8Unorm;
+				case WGPUTextureFormat_RGBA8Unorm:  rgba8   = true; break;
+				case WGPUTextureFormat_RGBA16Float: rgba16f = true; break;
+				default: break;
 				}
 			}
 
-			return false;
+			return rgba16f && !rgba8 ? WGPUTextureFormat_RGBA16Float : WGPUTextureFormat_Undefined;
 		}
 
 		ComputePipeline* getPipeline(ProgramHandle _program, const RenderBind& _renderBind)
@@ -3409,7 +3417,7 @@ WGPU_IMPORT
 				.compute =
 				{
 					.nextInChain   = NULL,
-					.module        = program.m_vsh->getModule(hasBgra8Storage(entries, entryCount) ),
+					.module        = program.m_vsh->getModule(storageRewriteFormat(entries, entryCount) ),
 					.entryPoint    = WGPU_STRING_VIEW_INIT, // toWGPUStringView("main"),
 					.constantCount = 0,
 					.constants     = NULL,
@@ -3740,7 +3748,7 @@ WGPU_IMPORT
 			const TextureFormat::Enum formatDepthStencil = TextureFormat::Enum(fb.m_formatDepthStencil);
 
 			const bool hasFragmentShader = NULL != program.m_fsh;
-			const bool bgra8Storage = hasBgra8Storage(entries, entryCount);
+			const WGPUTextureFormat storageFormat = storageRewriteFormat(entries, entryCount);
 
 			const uint32_t targetCount = hasFragmentShader ? setColorTargetState(blendState, colorTragetState, fb, _state, _rgba, _mrtMask) : 0;
 
@@ -3756,7 +3764,7 @@ WGPU_IMPORT
 			WGPUFragmentState fragmentState =
 			{
 				.nextInChain   = NULL,
-				.module        = hasFragmentShader ? program.m_fsh->getModule(bgra8Storage) : NULL,
+				.module        = hasFragmentShader ? program.m_fsh->getModule(storageFormat) : NULL,
 				.entryPoint    = WGPU_STRING_VIEW_INIT, // toWGPUStringView("main"),
 				.constantCount = 0,
 				.constants     = NULL,
@@ -3775,7 +3783,7 @@ WGPU_IMPORT
 				.vertex =
 				{
 					.nextInChain   = NULL,
-					.module        = program.m_vsh->getModule(bgra8Storage),
+					.module        = program.m_vsh->getModule(storageFormat),
 					.entryPoint    = WGPU_STRING_VIEW_INIT, // toWGPUStringView("main"),
 					.constantCount = 0,
 					.constants     = NULL,
@@ -4209,8 +4217,8 @@ WGPU_IMPORT
 		bool m_wireframe;
 
 		const MipGen*   m_mipGen;
-		WGPUTexture     m_mipGenStubTexture[2];
-		WGPUTextureView m_mipGenStubTextureView[2][3];
+		WGPUTexture     m_mipGenStubTexture[3];
+		WGPUTextureView m_mipGenStubTextureView[3][3];
 
 		HandleArenaT<IndexBufferWGPU,  BGFX_CONFIG_MAX_INDEX_BUFFERS>  m_indexBuffers;
 		HandleArenaT<VertexBufferWGPU, BGFX_CONFIG_MAX_VERTEX_BUFFERS> m_vertexBuffers;
@@ -4731,18 +4739,24 @@ WGPU_IMPORT
 
 		wgpuRelease(m_module);
 		wgpuRelease(m_moduleBgra8);
+		wgpuRelease(m_moduleRgba16f);
 	}
 
-	WGPUShaderModule ShaderWGPU::getModule(bool _bgra8Storage) const
+	WGPUShaderModule ShaderWGPU::getModule(WGPUTextureFormat _storageFormat) const
 	{
-		if (!_bgra8Storage
+		const bool bgra8 = WGPUTextureFormat_BGRA8Unorm == _storageFormat;
+
+		if ( (!bgra8 && WGPUTextureFormat_RGBA16Float != _storageFormat)
 		||  NULL == m_code)
 		{
 			return m_module;
 		}
 
-		if (NULL == m_moduleBgra8)
+		WGPUShaderModule& module = bgra8 ? m_moduleBgra8 : m_moduleRgba16f;
+
+		if (NULL == module)
 		{
+			const bx::StringView format = bgra8 ? "bgra8unorm" : "rgba16float";
 			const bx::StringView code( (const char*)m_code->data, m_code->size);
 
 			bx::MemoryBlock mb(g_allocator);
@@ -4760,7 +4774,7 @@ WGPU_IMPORT
 				}
 
 				bx::write(&writer, remainder.getPtr(), int32_t(found.getPtr() - remainder.getPtr() ), &err);
-				bx::write(&writer, "bgra8unorm", 10, &err);
+				bx::write(&writer, format.getPtr(), format.getLength(), &err);
 				remainder.set(found.getTerm(), remainder.getTerm() );
 			}
 
@@ -4784,10 +4798,10 @@ WGPU_IMPORT
 				.label       = WGPU_STRING_VIEW_INIT,
 			};
 
-			m_moduleBgra8 = WGPU_CHECK(wgpuDeviceCreateShaderModule(s_renderWGPU->m_device, &shaderModuleDesc) );
+			module = WGPU_CHECK(wgpuDeviceCreateShaderModule(s_renderWGPU->m_device, &shaderModuleDesc) );
 		}
 
-		return m_moduleBgra8;
+		return module;
 	}
 
 	static uint8_t getNumBindGroupEntries(const ShaderBinding& _shaderBinding)
@@ -6901,10 +6915,13 @@ WGPU_IMPORT
 			* bx::max<uint32_t>(_texture.m_numLayers, 1)
 			;
 
-		const bool bgra8 = TextureFormat::BGRA8 == _texture.m_textureFormat;
-		const uint32_t stubIdx = bgra8 ? 1 : 0;
-		const WGPUTextureFormat stubFormat = bgra8
-			? WGPUTextureFormat_BGRA8Unorm
+		// The unused mip outputs are bound to a stub of the same format as the texture.
+		const uint32_t stubIdx = TextureFormat::BGRA8 == _texture.m_textureFormat ? 1
+			: TextureFormat::RGBA16F == _texture.m_textureFormat ? 2
+			: 0
+			;
+		const WGPUTextureFormat stubFormat = 1 == stubIdx ? WGPUTextureFormat_BGRA8Unorm
+			: 2 == stubIdx ? WGPUTextureFormat_RGBA16Float
 			: WGPUTextureFormat_RGBA8Unorm
 			;
 
