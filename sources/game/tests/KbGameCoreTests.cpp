@@ -323,6 +323,11 @@ void RunPackagedRuntimeModuleContractTests() {
             "A monolithic host rejected a provider compiled into its package");
     }
 
+    kb::project::ProjectDescriptor editorTools = supported;
+    editorTools.plugins.push_back({ .name = "Editor.Terrain", .binaryPath = "kb_terrain_editor_plugin.dll", .enabled = true });
+    Require(!kb::game::FirstUnsupportedPackagedRuntimeModule("Android.ASTC.arm64", editorTools).has_value(),
+        "An editor extension stopped a package that leaves it out");
+
     kb::project::ProjectDescriptor unsupported = supported;
     unsupported.plugins.push_back(kb::project::ProjectPluginReference{
         .name = "Company.CustomDesktopPlugin",

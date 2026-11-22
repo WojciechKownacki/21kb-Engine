@@ -79,6 +79,11 @@ constexpr std::string_view kProfileSuffix = ".frames.csv";
         kb::script::NativeScriptBuildPipeline::Build({ .enabled = true, .command = command });
     if (result.exitCode != 0) {
         io.err << "error: " << Utf8Text(tool.filename()) << " failed with exit code " << result.exitCode << '\n';
+        // The first entry is the build pipeline's native-script advice; the rest are the tool's own
+        // lines, which a caller that does not see the live stderr (JSON, MCP) otherwise never gets.
+        for (std::size_t index = 1; index < result.errors.size(); ++index) {
+            io.err << "  " << result.errors[index] << '\n';
+        }
     } else if (!result.errors.empty()) {
         io.err << "error: " << result.errors.front() << '\n';
     }

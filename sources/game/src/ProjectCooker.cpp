@@ -2716,6 +2716,10 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
     }
 
     kb::project::ProjectDescriptor packagedDescriptor = project.descriptor;
+    // The editor's own extensions stay with the editor.
+    std::erase_if(packagedDescriptor.plugins, [](const kb::project::ProjectPluginReference& plugin) {
+        return IsEditorOnlyModule(plugin.name);
+    });
     std::vector<WindowsRuntimeModulePlan> windowsRuntimeModulePlans;
     std::vector<WindowsRuntimeModuleSnapshot> windowsRuntimeModuleSnapshots;
     std::unique_ptr<ScopedCookDirectory> windowsRuntimeModuleCleanup;
