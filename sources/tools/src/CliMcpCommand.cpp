@@ -459,6 +459,8 @@ struct ToolCallOutcome {
 
 int RunMcpCommand(const ArgumentList& arguments, std::istream& in, CommandIo io) {
     const std::string projectRoot = arguments.Option("--project").value_or("");
+    // An agent works through this server: everything it runs stays inside its project.
+    ConfineCliToProject(projectRoot);
 
     std::string line;
     while (std::getline(in, line)) {

@@ -109,6 +109,11 @@ namespace kb::cli {
 [[nodiscard]] int RunPluginsCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunEditorCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunAssetCommand(const ArgumentList& arguments, CommandIo io);
+// From now on every command of this process may only name files and folders inside `projectRoot`: a path
+// anywhere else (absolute, with .., or through a link that leads out) refuses the command before it runs.
+// Reading a source to import and looking at the engine's code stay allowed. The MCP server, through which
+// an agent runs kb_cli, confines itself to its project; nothing lifts the confinement again.
+void ConfineCliToProject(const std::filesystem::path& projectRoot);
 // The directory the cooker and the editor mount as /Game: the content root of the project in
 // `project`, else of the nearest folder above `path` that holds a project file.
 [[nodiscard]] std::optional<std::filesystem::path> FindProjectContentRoot(

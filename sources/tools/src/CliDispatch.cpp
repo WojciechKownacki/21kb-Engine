@@ -7,6 +7,7 @@
 #include <array>
 #include <cctype>
 #include <exception>
+#include <filesystem>
 #include <functional>
 #include <iostream>
 #include <optional>
@@ -1055,10 +1056,80 @@ int RunAsJson(std::string_view command, CommandIo io, const ChangeWatch* watch, 
 
 } // namespace
 
+namespace {
+
+std::filesystem::path g_confinedRoot;
+
+[[nodiscard]] bool LooksLikePath(std::string_view text) noexcept {
+    return text.find('/') != std::string_view::npos || text.find('\\') != std::string_view::npos ||
+        text.find("..") != std::string_view::npos || (text.size() >= 2U && text[1] == ':');
+}
+
+// Why `words` (a command and its arguments) may not run in a confined process: the first path in them that
+// leads outside the project, or an empty string.
+[[nodiscard]] std::string ConfinementRefusal(const std::vector<std::string>& words) {
+    if (g_confinedRoot.empty() || words.empty()) return {};
+    const std::string& command = words.front();
+    // Commands that only read or describe: the engine's code, the guides, the usage text.
+    if (command == "code" || command == "guide" || command == "help" || command == "commands") return {};
+    std::error_code error;
+    const std::filesystem::path root = std::filesystem::weakly_canonical(g_confinedRoot, error);
+    const auto inside = [&root](const std::filesystem::path& candidate) {
+        std::error_code resolveError;
+        // Links and junctions are followed, so a link inside the project cannot lead out of it.
+        const std::filesystem::path resolved = std::filesystem::weakly_canonical(candidate, resolveError);
+        if (resolveError) return false;
+        const std::filesystem::path relative = resolved.lexically_relative(root);
+        return !relative.empty() && *relative.begin() != "..";
+    };
+    std::string option;
+    for (std::size_t index = 1U; index < words.size(); ++index) {
+        const std::string& word = words[index];
+        if (word.starts_with("--")) {
+            option = word;
+            continue;
+        }
+        const std::string previous = option;
+        option.clear();
+        // Reading a file to bring into the project, and the engine and tools the build uses.
+        if (previous == "--source" || previous == "--engine-root" || previous == "--shaderc" ||
+            (command == "import" && previous.empty())) {
+            continue;
+        }
+        // A value may be a setting=value pair whose value is the path.
+        std::string text = word;
+        if (const std::size_t equals = text.find('='); equals != std::string::npos && !LooksLikePath(text.substr(0U, equals))) {
+            text = text.substr(equals + 1U);
+        }
+        if (!LooksLikePath(text)) continue;
+        // A project path (/Game/...) lives in the project's Assets, unless it climbs out with ..
+        if ((text == "/Game" || text.starts_with("/Game/")) && text.find("..") == std::string::npos) continue;
+        std::filesystem::path path{ std::u8string{ reinterpret_cast<const char8_t*>(text.data()), text.size() } };
+        if (path.is_relative()) path = g_confinedRoot / path;
+        if (!inside(path)) {
+            return "refused for safety: '" + word + "' is outside the project. Only files and folders inside the project " +
+                root.string() + " may be created, changed or deleted.";
+        }
+    }
+    return {};
+}
+
+} // namespace
+
+void ConfineCliToProject(const std::filesystem::path& projectRoot) {
+    if (g_confinedRoot.empty() && !projectRoot.empty()) {
+        g_confinedRoot = std::filesystem::absolute(projectRoot);
+    }
+}
+
 int RunCli(std::span<const std::string> args, std::istream& in, CommandIo io) {
     if (args.empty()) {
         PrintUsage(io.out);
         return 0;
+    }
+    if (const std::string refused = ConfinementRefusal(std::vector<std::string>{ args.begin(), args.end() }); !refused.empty()) {
+        io.err << "error: " << refused << '\n';
+        return 1;
     }
 
     // --json may come before the command: kb_cli --json entity add ...

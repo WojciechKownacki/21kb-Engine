@@ -61,8 +61,6 @@ struct EditorAgentEntry {
 struct EditorAgentWorkspace {
     std::filesystem::path project;
     std::filesystem::path kbcli;
-    // The engine's installation (or source) folder, opened to the agent beside the project.
-    std::filesystem::path engine;
 };
 
 // What a conversation has used so far, as the agent reports it (zero while unknown).

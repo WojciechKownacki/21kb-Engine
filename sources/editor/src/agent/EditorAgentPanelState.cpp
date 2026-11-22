@@ -1137,7 +1137,6 @@ bool EditorAgentPanelState::Send(const EditorAgentWorkspace& workspace) {
     const auto substitute = [&](const std::string& word) {
         std::string text = Replace(word, "{project}", workspace.project.generic_string());
         text = Replace(text, "{kbcli}", workspace.kbcli.generic_string());
-        text = Replace(text, "{engine}", workspace.engine.generic_string());
         text = Replace(text, "{mcpconfig}", mcpConfig.generic_string());
         text = Replace(text, "{session}", conversation.session);
         text = Replace(text, "{model}", model_);

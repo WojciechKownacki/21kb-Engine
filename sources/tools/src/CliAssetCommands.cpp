@@ -50,6 +50,7 @@ int RunAssetCommand(const ArgumentList& arguments, CommandIo io) {
         return 1;
     }
     const std::filesystem::path root = projectFile.parent_path();
+    std::error_code missingRoot;
     const kb::project::ProjectDescriptorReadResult descriptor = kb::project::ProjectManager::LoadProject(projectFile);
     if (!descriptor.succeeded) {
         io.err << "error: " << descriptor.error << '\n';
@@ -69,6 +70,37 @@ int RunAssetCommand(const ArgumentList& arguments, CommandIo io) {
         .openScene = SceneFile(root, settings.settings.lastOpenMap),
         .startupScene = SceneFile(root, settings.settings.defaultMap),
     };
+
+    // Whatever this command touches lies inside the project's Assets folder, followed through links: never
+    // the folder itself, nothing reached with .., and no link (whose removal could reach what it points at).
+    const std::filesystem::path assetsRoot = std::filesystem::weakly_canonical(root / "Assets", missingRoot);
+    const auto confined = [&](const std::string& virtualText, std::string& why) {
+        if (virtualText.find("..") != std::string::npos || !virtualText.starts_with("/Game/") || virtualText.size() <= 6U) {
+            why = "'" + virtualText + "' is not a file or folder inside the project's Assets (/Game/<name>)";
+            return false;
+        }
+        const std::filesystem::path physical = root / "Assets" / kb::assets::Utf8Path(virtualText.substr(6U));
+        std::error_code linkError;
+        for (std::filesystem::path part = physical; part != root / "Assets" && part.has_parent_path() && part != part.parent_path(); part = part.parent_path()) {
+            if (std::filesystem::is_symlink(std::filesystem::symlink_status(part, linkError))) {
+                why = "'" + virtualText + "' goes through a link; links are not changed, so nothing outside the project can be";
+                return false;
+            }
+        }
+        const std::filesystem::path resolved = std::filesystem::weakly_canonical(physical, linkError);
+        const std::filesystem::path relative = resolved.lexically_relative(assetsRoot);
+        if (linkError || relative.empty() || *relative.begin() == ".." || relative == ".") {
+            why = "'" + virtualText + "' is outside the project's Assets";
+            return false;
+        }
+        return true;
+    };
+    std::string why;
+    if (!confined(*path, why) || (action == "move" && *to != "/Game" && !confined(*to, why)) ||
+        (action == "rename" && (to->find('/') != std::string::npos || to->find('\\') != std::string::npos || to->find("..") != std::string::npos))) {
+        io.err << "error: refused for safety: " << (why.empty() ? "a new name is a name, not a path" : why) << '\n';
+        return 1;
+    }
 
     const std::filesystem::path virtualPath = kb::assets::Utf8Path(*path);
     if (action == "new-folder") {
