@@ -125,6 +125,22 @@ int RunEditorEntryPoint() {
     std::filesystem::path selfTestScenario;
     std::filesystem::path pythonScript;
     if (argv != nullptr) {
+        // Asking for the usage prints it and opens nothing: no project is found or created for it.
+        for (int index = 1; index < argc; ++index) {
+            const std::wstring_view argument{ argv[index] };
+            if (argument == L"--help" || argument == L"-h" || argument == L"/?") {
+                LocalFree(argv);
+                std::cout << "kb_editor [--project <file.21kbproject>]\n"
+                             "  --project <file>            open this project (without it: the Project folder found from the current folder)\n"
+                             "  --selftest                  run the editor's self-tests headless\n"
+                             "  --selftest-scenario <file>  run an automation scenario headless\n"
+                             "  --selftest-root <dir>       where self-test reports go\n"
+                             "  --selftest-task <name>      the report folder's name\n"
+                             "  --python-script <file>      run an authoring script headless\n"
+                             "  --lua-debug-dir <dir>       where the Lua debugger exchanges its files\n";
+                return 0;
+            }
+        }
         ConfigureProjectFromArguments(argc, argv);
         selfTest = HasSelfTestFlag(argc, argv);
         if(const auto script=ArgumentValue(argc,argv,L"--python-script")) pythonScript=std::filesystem::path{*script};
