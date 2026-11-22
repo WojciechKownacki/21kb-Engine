@@ -592,6 +592,13 @@ bool EditorSceneContext::CreateScene(std::string_view folder, std::string_view n
     if (!PrepareDirtySceneTransition("creating a new scene", dirtyResolution)) {
         return false;
     }
+    // A character or vehicle template names a script, input and physics assets of the project; they are written
+    // when missing, as the Hub and kb_cli do, so the new scene plays and cooks.
+    if (std::string files = kb::scene::SceneTemplates::WriteProjectFiles(EditorProjectPaths::ProjectRoot(), sceneTemplate, Project());
+        !files.empty()) {
+        console_.Error("Project", "Scene could not be created: " + files);
+        return false;
+    }
     if (std::string created = kb::scene::SceneTemplates::WriteSceneFile(target.file, sceneTemplate, Project()); !created.empty()) {
         console_.Error("Project", "Scene could not be created: " + created);
         return false;
