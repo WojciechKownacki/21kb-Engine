@@ -1344,6 +1344,10 @@ target_link_libraries(kb_editor PRIVATE user32 gdi32 gdiplus ole32 dwmapi msimg3
 target_link_libraries(kb_editor PRIVATE kb_crash_reporting)
 # Build Game signs Windows packages with the signer shipped beside the editor.
 add_dependencies(kb_editor kb_authenticode_signer)
+# The Agent panel hands agents the engine's tools through kb_cli beside the editor, so both are built together.
+if(TARGET kb_cli)
+    add_dependencies(kb_editor kb_cli)
+endif()
 target_compile_definitions(kb_editor PRIVATE
     "KB_EDITOR_ENGINE_ROOT=\"${CMAKE_SOURCE_DIR}\""
     "KB_EDITOR_BUILD_ROOT=\"${CMAKE_BINARY_DIR}\""

@@ -2,6 +2,9 @@
 
 #if defined(_WIN32)
 #include "app/EditorTextInputShortcuts.hpp"
+#include "engine/script/ScriptAgentProjectFiles.hpp"
+#include "engine/script/ScriptApiCatalog.hpp"
+#include "engine/script/ScriptRuntimeHost.hpp"
 #include "platform/win32/EditorFileDialogFilter.hpp"
 #include "platform/win32/EditorTextEntryDialog.hpp"
 #include "localization/EditorLocalization.hpp"
@@ -408,7 +411,20 @@ bool EditorAgentPanelController::SendOrStop() {
         agent.Add(EditorAgentEntryKind::Error, "Your unsaved changes could not be saved, so the request was not sent. Save them, then send again.");
         return false;
     }
-    return agent.Send(Workspace());
+    // The agent's map of the project (AGENTS.md and the script API) is what kb_cli init-agent
+    // writes; a project that never had it gets it before its first request, so the agent does not
+    // start by searching the folders.
+    const EditorAgentWorkspace workspace = Workspace();
+    if (std::error_code missing; !workspace.project.empty() && !std::filesystem::exists(workspace.project / "AGENTS.md", missing)) {
+        kb::script::ScriptRuntimeHost host{ sceneContext_.Scene() };
+        const kb::script::ScriptAgentProjectFilesResult written = host.Succeeded()
+            ? kb::script::ScriptAgentProjectFiles::Write(workspace.project, kb::script::ScriptApiCatalog::Build(host))
+            : kb::script::ScriptAgentProjectFilesResult{ .succeeded = false, .error = "the script runtime could not start" };
+        if (!written.succeeded) {
+            agent.Add(EditorAgentEntryKind::Error, "The agent's guide to this project (AGENTS.md) could not be written: " + written.error);
+        }
+    }
+    return agent.Send(workspace);
 }
 
 bool EditorAgentPanelController::HandleChar(WPARAM character) {

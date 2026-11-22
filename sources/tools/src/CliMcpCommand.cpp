@@ -379,7 +379,8 @@ struct ToolCallOutcome {
         // Commands about the project get it (a batch works on the bound project too); the ones that make a project or
         // describe kb_cli do not take it.
         const bool takesProject = !projectRoot.empty() &&
-            (target->kind == CliCommandKind::Normal || target->kind == CliCommandKind::Batch) && words.front() != "new";
+            (target->kind == CliCommandKind::Normal || target->kind == CliCommandKind::Particle || target->kind == CliCommandKind::Batch) &&
+            words.front() != "new";
         if (takesProject) words.insert(words.begin() + 1, { "--project", projectRoot });
         std::ostringstream captured;
         std::istringstream noInput;
