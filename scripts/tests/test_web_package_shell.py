@@ -88,6 +88,33 @@ class WebPackageShellTests(unittest.TestCase):
                     fallback.assert_not_called()
                 verify.assert_called_once()
 
+    def test_minified_shell_names_a_runtime_with_spaces_as_a_url(self):
+        # A Release page is minified: its attributes are unquoted, so a space in the game's file name would end the
+        # address. The runtime files keep their names on disk and are named percent-encoded in the page and loader.
+        engine = Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stage = root / "stage"
+            stage.mkdir()
+            output = root / "packages" / "WebGL.wasm32" / "Release" / "bin"
+            output.mkdir(parents=True)
+            (output / "Game.html").write_text(
+                "<!doctypehtml><html><head><title>Game</title></head><body><script async src=Game.js></script></body></html>",
+                encoding="utf-8")
+            (output / "Game.js").write_text('WebAssembly; const file="Game.wasm";', encoding="utf-8")
+            (output / "Game.wasm").write_bytes(b"\0asm")
+            pack = root / "Game.kbpack"
+            pack.write_bytes(b"fixture")
+            args = argparse.Namespace(target="WebGL.wasm32", configuration="Release", build_root=root,
+                engine_root=engine, executable_name="Zolta Lodz Powrot", product_name="Zolta Lodz",
+                publisher="Studio", version="1.0.0", application_icon=None, webgl_fallback=None)
+            with mock.patch.object(package_game, "_emsdk_root", return_value=root),                     mock.patch.object(package_game, "_ninja_for_cmake", return_value=root / "ninja"),                     mock.patch.object(package_game, "run_checked"),                     mock.patch.object(package_game, "_build_targets"),                     mock.patch.object(package_game, "_stage_licenses"),                     mock.patch.object(package_game, "_verify_web_first_frame", return_value=root / "browser"),                     mock.patch.object(package_game, "_first_frame_result"):
+                package_game._stage_web(args, root / "cmake", pack, stage, root)
+            html = (stage / "Zolta Lodz Powrot.html").read_text(encoding="utf-8")
+            javascript = (stage / "Zolta Lodz Powrot.js").read_text(encoding="utf-8")
+            self.assertTrue((stage / "Zolta Lodz Powrot.wasm").is_file())
+            self.assertIn("src=Zolta%20Lodz%20Powrot.js>", html)
+            self.assertIn('"Zolta%20Lodz%20Powrot.wasm"', javascript)
 
 if __name__ == "__main__":
     unittest.main()

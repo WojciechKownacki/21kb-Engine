@@ -1674,10 +1674,11 @@ def _verify_web_first_frame(stage: Path, html_name: str, backend: str, job: Path
             "--enable-unsafe-webgpu",
         ]
         if backend == "WEBGPU"
+        # WebGL draws on the machine's GPU, as players' browsers do; the software rasterizer is only the fallback
+        # for a machine without one (a forced software context no longer reaches a first frame in current Chrome).
         else [
             "--enable-unsafe-swiftshader",
             "--use-gl=angle",
-            "--use-angle=swiftshader-webgl",
         ]
     )
     browser_log = job / f"chrome-{backend.casefold()}.log"
@@ -1770,9 +1771,11 @@ def _verify_web_first_frame(stage: Path, html_name: str, backend: str, job: Path
                         + (f"; browser log: {log_tail}" if log_tail else "")
                     )
             time.sleep(0.1)
+        log_tail = browser_log_tail()
         raise PackagingError(
             f"{backend} browser smoke timed out before its first frame "
             f"(last stage: {last_fragment})"
+            + (f"; browser log: {log_tail}" if log_tail else "")
         )
     finally:
         terminate_process_tree(process)
@@ -1840,9 +1843,12 @@ def _stage_web(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path, j
     javascript_path = stage / f"{args.executable_name}.js"
     html_text = html_path.read_text(encoding="utf-8", errors="strict")
     javascript_text = javascript_path.read_text(encoding="utf-8", errors="strict")
+    # The page and loader name the runtime files as URLs: a name with spaces is percent-encoded, which also holds in the
+    # unquoted attributes of a minified page (src=Game.js), where a space would end the address.
+    url_name = urllib.parse.quote(args.executable_name, safe="")
     for suffix in (".js", ".wasm", ".data"):
-        html_text = html_text.replace(f"Game{suffix}", f"{args.executable_name}{suffix}")
-        javascript_text = javascript_text.replace(f"Game{suffix}", f"{args.executable_name}{suffix}")
+        html_text = html_text.replace(f"Game{suffix}", f"{url_name}{suffix}")
+        javascript_text = javascript_text.replace(f"Game{suffix}", f"{url_name}{suffix}")
     title = html.escape(args.product_name, quote=False)
     if re.search(r"<title>.*?</title>", html_text, flags=re.IGNORECASE | re.DOTALL):
         html_text = re.sub(
@@ -1902,7 +1908,7 @@ def _stage_web(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path, j
         raise PackagingError(f"{backend} WebAssembly module has an invalid header")
     final_html = html_path.read_text(encoding="utf-8", errors="strict")
     javascript = javascript_path.read_text(encoding="utf-8", errors="strict")
-    if f"{args.executable_name}.js" not in final_html or "WebAssembly" not in javascript:
+    if f"{urllib.parse.quote(args.executable_name, safe='')}.js" not in final_html or "WebAssembly" not in javascript:
         raise PackagingError(f"{backend} loader does not reference its JavaScript/WebAssembly runtime")
     chrome = _verify_web_first_frame(stage, html_path.name, backend, job)
     return StageResult(
