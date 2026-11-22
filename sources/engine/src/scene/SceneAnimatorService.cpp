@@ -2665,6 +2665,10 @@ void ApplySkeletalRigConstraints(
                         rotationWeight), true);
                 break;
             }
+            // Solved above, before a target is looked up; they never reach this switch.
+            case AnimatorRigConstraintType::SpringBones:
+            case AnimatorRigConstraintType::FullBodyIK:
+                break;
             }
         } catch (const std::exception& error) {
             ThrowRigConstraintError(definition, error);

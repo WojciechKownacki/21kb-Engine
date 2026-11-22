@@ -60,7 +60,6 @@ constexpr std::string_view kThirdPersonScript = "ThirdPersonCharacter.lua";
 constexpr std::string_view kTopDownScript = "TopDownCharacter.lua";
 constexpr std::string_view kPlatformer2DScript = "Platformer2DBox2DPlayer.lua";
 constexpr std::string_view kVehicleScript = "VehicleCar.lua";
-constexpr std::string_view kCarAsset = "/Game/Physics/Car.kbphysics";
 
 [[nodiscard]] std::string_view PlayerScript(SceneTemplate kind) noexcept {
     switch (kind) {
