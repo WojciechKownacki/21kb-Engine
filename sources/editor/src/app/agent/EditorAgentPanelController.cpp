@@ -391,6 +391,15 @@ bool EditorAgentPanelController::HandlePointerDown(HWND owner, const RECT& conte
     case AgentPanelHitKind::Attachment:
         agent.RemoveAttachment(static_cast<std::size_t>(hit.index));
         return true;
+    case AgentPanelHitKind::ReviewKeep:
+        agent.KeepChanges();
+        return true;
+    case AgentPanelHitKind::ReviewUndoAll:
+        agent.UndoChanges();
+        return true;
+    case AgentPanelHitKind::ReviewUndoFile:
+        agent.UndoChanges(hit.index);
+        return true;
     case AgentPanelHitKind::Picture: {
         // A picture opens full size in the system's viewer.
         const EditorAgentEntry& entry = agent.Active().entries[static_cast<std::size_t>(hit.index)];

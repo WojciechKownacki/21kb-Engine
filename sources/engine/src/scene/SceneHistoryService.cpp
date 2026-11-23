@@ -144,6 +144,7 @@ template <typename T>
         && SameValue(lhs.lensEcho, rhs.lensEcho)
         && SameValue(lhs.behaviour, rhs.behaviour)
         && SameBehaviourVariableOverrides(lhs.behaviourVariableOverrides, rhs.behaviourVariableOverrides)
+        && SameBehaviourList(lhs.additionalBehaviours, rhs.additionalBehaviours)
         && SameValue(lhs.audioSource, rhs.audioSource)
         && SameValue(lhs.audioListener, rhs.audioListener)
         && SameValue(lhs.animator, rhs.animator)

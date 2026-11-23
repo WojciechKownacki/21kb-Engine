@@ -239,7 +239,8 @@ ScenePrefabOverrideFlag ScenePrefabComponentComparator::Compare(SceneComponents 
     if (!EqualOptionalComponent(components.Tags().TryGet(entity), expected.tags)) {
         flags |= ScenePrefabOverrideFlag::Tags;
     }
-    if (!EqualOptionalComponent(components.Behaviours().TryGet(entity), expected.behaviour)) {
+    if (!EqualOptionalComponent(components.Behaviours().TryGet(entity), expected.behaviour) ||
+        (expected.behaviour.has_value() && !SameBehaviourList(components.Behaviours().Additional(entity), expected.additionalBehaviours))) {
         flags |= ScenePrefabOverrideFlag::Behaviour;
     }
     if (!EqualOptionalComponent(components.AudioSources().TryGet(entity), expected.audioSource)) {

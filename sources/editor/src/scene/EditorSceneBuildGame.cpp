@@ -7,6 +7,7 @@
 #include "localization/EditorLocalization.hpp"
 #include "packaging/EditorAndroidSigningBroker.hpp"
 #include "packaging/EditorPackageInputValidation.hpp"
+#include "packaging/EditorPackageRequestBuilder.hpp"
 #include "packaging/EditorProjectIconTransaction.hpp"
 #include "packaging/EditorProjectPackageService.hpp"
 #include "project/EditorProjectPaths.hpp"
@@ -47,20 +48,6 @@ void SecureClear(std::string& value) noexcept {
     }
     value.clear();
     value.shrink_to_fit();
-}
-
-[[nodiscard]] std::string SafeUnitComponent(std::string_view value, bool windowsTarget) {
-    if (windowsTarget && package_input::IsWindowsReservedDeviceName(value)) return {};
-    std::string result;
-    result.reserve(value.size());
-    for (const char character : value) {
-        const unsigned char byte = static_cast<unsigned char>(character);
-        if (std::isalnum(byte) != 0 || character == '-' || character == '_') result.push_back(character);
-        else if ((character == ' ' || character == '.') && !result.empty() && result.back() != '_') result.push_back('_');
-        else return {};
-    }
-    while (!result.empty() && result.back() == '_') result.pop_back();
-    return result;
 }
 
 [[nodiscard]] std::string Trimmed(std::string_view value) {
@@ -531,97 +518,15 @@ bool EditorSceneContext::StartBuildGamePackage(EditorDirtySceneResolution dirtyR
         return false;
     }
     const kb::packaging::PackagingTargetSpec& targetSpec = targets[static_cast<std::size_t>(buildGameSelectedTarget_)];
-    const EditorBuildGameTargetSettings& targetSettings = buildGameSettings_.For(targetSpec.target);
-    const std::filesystem::path engineRoot = installation.root;
     EditorPackageRequest request;
-    request.builderExecutable = buildGameSettings_.builderExecutable;
-    request.packageScript = engineRoot / "scripts" / "package_game.py";
-    request.projectFile = AbsoluteNormalized(projectFile_);
-    request.targetId = targetSpec.bakeId;
-    request.configuration = release ? "Release" : "Development";
-    const std::filesystem::path outputBase = AbsoluteNormalized(targetSettings.outputDirectory);
-    const std::filesystem::path projectRoot = AbsoluteNormalized(EditorProjectPaths::ProjectRoot());
-    const std::filesystem::path buildRoot = AbsoluteNormalized(buildGameSettings_.buildRoot);
-    if (package_input::IsPathInsideOrEqual(projectRoot, outputBase) ||
-        package_input::IsPathInsideOrEqual(projectRoot, buildRoot)) {
-        console_.Error("Packaging", "Package output and build directories must be outside the project.");
+    std::string requestError;
+    if (!BuildPackageRequest({ .project = projectConfig_, .local = buildGameSettings_, .target = targetSpec, .release = release,
+            .projectFile = projectFile_, .projectRoot = EditorProjectPaths::ProjectRoot(), .engineRoot = installation.root,
+            .androidStorePassword = buildGameStorePassword_, .androidKeyPassword = buildGameKeyPassword_,
+            .windowsCertificatePassword = buildGameCertificatePassword_ }, request, requestError)) {
+        console_.Error("Packaging", requestError);
         return false;
     }
-    const std::string unitComponent = SafeUnitComponent(
-        BuildGamePanelModel::ShippedFileName(projectConfig_), targetSpec.target == kb::packaging::PackagingTarget::WindowsX64);
-    if (unitComponent.empty()) {
-        console_.Error("Packaging", "Product or executable name cannot form a safe package directory name.");
-        return false;
-    }
-    request.outputDirectory = (outputBase /
-        (unitComponent + '-' + request.targetId + '-' + request.configuration)).lexically_normal();
-    if (request.outputDirectory.parent_path() != outputBase) {
-        console_.Error("Packaging", "Package directory escaped the selected output directory.");
-        return false;
-    }
-    request.engineRoot = AbsoluteNormalized(engineRoot);
-    request.buildRoot = buildRoot;
-    request.productName = BuildGamePanelModel::ShippedGameName(projectConfig_);
-    request.publisher = Trimmed(projectConfig_.publisher);
-    request.version = Trimmed(projectConfig_.version);
-    request.description = Trimmed(projectConfig_.description);
-    request.copyright = Trimmed(projectConfig_.copyright);
-    request.executableName = BuildGamePanelModel::ShippedFileName(projectConfig_);
-    if (!projectConfig_.applicationIcon.empty()) {
-        const std::filesystem::path iconRelative{ projectConfig_.applicationIcon };
-        if (!package_input::IsNormalProjectRelativePath(iconRelative)) {
-            console_.Error("Packaging", "Application icon must be a normal project-relative PNG path.");
-            return false;
-        }
-        request.applicationIcon = AbsoluteNormalized(projectRoot / iconRelative);
-        if (!package_input::IsValidProjectPngIcon(request.projectFile, request.applicationIcon)) {
-            console_.Error("Packaging", "Application icon must be an existing PNG inside the project.");
-            return false;
-        }
-    }
-    if (!buildGameSettings_.releaseSigningKey.empty()) {
-        request.releaseSigningKey = AbsoluteNormalized(buildGameSettings_.releaseSigningKey);
-    }
-    if (targetSpec.target == kb::packaging::PackagingTarget::WindowsX64) {
-        request.crashReportUploadUrl = Trimmed(projectConfig_.crashReportUploadUrl);
-        if (release) {
-            request.windowsCertificateThumbprint = targetSettings.windowsCertificateThumbprint;
-            request.windowsCertificateFile = targetSettings.windowsCertificateFile;
-            request.windowsTimestampUrl = targetSettings.windowsTimestampUrl;
-            if (!request.windowsCertificateFile.empty()) request.windowsCertificatePassword = buildGameCertificatePassword_;
-        }
-    }
-    if (targetSpec.needsAndroidMetadata) {
-        request.androidApplicationId = BuildGamePanelModel::ShippedAndroidApplicationId(projectConfig_);
-        request.androidVersionCode = projectConfig_.androidVersionCode;
-        request.androidLabel = BuildGamePanelModel::ShippedAndroidLabel(projectConfig_);
-        request.androidMicrophone = projectConfig_.microphone;
-        for (const float channel : projectConfig_.display.splash.backgroundColor) {
-            static constexpr char kHex[] = "0123456789ABCDEF";
-            const auto value = static_cast<unsigned>(std::lround(std::clamp(channel, 0.0F, 1.0F) * 255.0F));
-            request.androidSplashBackground += kHex[value >> 4U];
-            request.androidSplashBackground += kHex[value & 15U];
-        }
-        request.androidKeystore = targetSettings.androidKeystore;
-        request.androidKeyAlias = Trimmed(targetSettings.androidKeyAlias);
-        request.androidFormat = targetSettings.androidFormat;
-        request.androidStorePassword = buildGameStorePassword_;
-        request.androidKeyPassword = buildGameKeyPassword_;
-    }
-    if (targetSpec.family == kb::packaging::PackagingTargetFamily::Web) {
-        request.emsdkRoot = AbsoluteNormalized(buildGameSettings_.emsdkRoot);
-    }
-    if (targetSpec.target == kb::packaging::PackagingTarget::LinuxX64) {
-        request.linuxHost = Trimmed(buildGameSettings_.linuxHost);
-        request.linuxUser = Trimmed(buildGameSettings_.linuxUser);
-        request.linuxHostKey = Trimmed(buildGameSettings_.linuxHostKey);
-        request.linuxPort = buildGameSettings_.linuxPort;
-        request.linuxEngineRoot = Trimmed(buildGameSettings_.linuxEngineRoot);
-        request.linuxDisplay = Trimmed(buildGameSettings_.linuxDisplay);
-        request.linuxIdentity = buildGameSettings_.linuxIdentity.empty()
-            ? std::filesystem::path{} : AbsoluteNormalized(buildGameSettings_.linuxIdentity);
-    }
-    request.launch = targetSettings.launchAfterBuild;
     std::string error;
     if (!buildGamePackageService_->Start(std::move(request), error)) {
         console_.Error("Packaging", error);

@@ -9,6 +9,9 @@
 #include "engine/scene/AIBrainComponent.hpp"
 #include "engine/scene/MotionSkeletonRuleComponent.hpp"
 #include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
+#include <cstddef>
+#include <cstdint>
+#include <span>
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/CharacterControllerComponent.hpp"
@@ -64,6 +67,11 @@ public:
 
     [[nodiscard]] static bool HasBehaviour(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const BehaviourComponent* TryGetBehaviour(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static std::size_t BehaviourCount(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const BehaviourComponent* TryGetBehaviourAt(const Scene& scene, SceneEntity entity, std::size_t index) noexcept;
+    [[nodiscard]] static const BehaviourComponent* FindBehaviour(
+        const Scene& scene, SceneEntity entity, std::uint64_t assetId, BehaviourBackend backend) noexcept;
+    [[nodiscard]] static std::span<const BehaviourComponent> AdditionalBehaviours(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const std::uint64_t* BehaviourRevisionCounter(const Scene& scene) noexcept;
     [[nodiscard]] static std::uint64_t BehaviourChangeStamp(const Scene& scene) noexcept;
 

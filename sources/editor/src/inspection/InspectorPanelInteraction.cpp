@@ -245,6 +245,15 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
     case InspectorPropertyId::ScriptBuildCancel:
         static_cast<void>(sceneContext.CancelEntityScriptBuild(entity));
         return true;
+    case InspectorPropertyId::ScriptEnabledExtra:
+        if (hit.index > 0) static_cast<void>(sceneContext.ToggleEntityScriptEnabledAt(entity, static_cast<std::size_t>(hit.index)));
+        return true;
+    case InspectorPropertyId::ScriptNameExtra:
+        if (hit.index > 0) SelectAssetInProjectFiles(sceneContext, sceneContext.EntityScriptAssetIdAt(entity, static_cast<std::size_t>(hit.index)));
+        return true;
+    case InspectorPropertyId::ScriptRemoveExtra:
+        if (hit.index > 0) static_cast<void>(sceneContext.RemoveScriptFromEntityAt(entity, static_cast<std::size_t>(hit.index)));
+        return true;
     case InspectorPropertyId::ScriptName:
     case InspectorPropertyId::ScriptPicker:
         // Reveal the bound Lua asset in Project Files (same affordance as the

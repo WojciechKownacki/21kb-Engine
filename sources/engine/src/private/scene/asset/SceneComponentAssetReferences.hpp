@@ -119,6 +119,9 @@ void ForEachReference(const ScenePrefabNodeComponents& components, Sink&& sink) 
     }
     if (components.behaviour.has_value()) {
         sink(components.behaviour->behaviourAssetId, std::string_view{ "behaviour" }, nullptr);
+        for (const BehaviourComponent& further : components.additionalBehaviours) {
+            sink(further.behaviourAssetId, std::string_view{ "behaviour" }, nullptr);
+        }
     }
     if (components.audioSource.has_value()) {
         sink(components.audioSource->clipAssetId, std::string_view{ "audioClip" }, nullptr);

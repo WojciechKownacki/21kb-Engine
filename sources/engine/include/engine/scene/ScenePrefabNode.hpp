@@ -153,6 +153,9 @@ struct ScenePrefabNodeComponents {
     std::optional<BehaviourComponent> behaviour;
     // Per-instance exposed script variables that differ from the script defaults; they belong to `behaviour`.
     std::vector<BehaviourVariableOverride> behaviourVariableOverrides;
+    // The behaviours after `behaviour` (an entity runs up to kMaxBehavioursPerEntity), in attach order. Empty when the
+    // node has no behaviour or one only.
+    std::vector<BehaviourComponent> additionalBehaviours;
     std::optional<AudioSourceComponent> audioSource;
     std::optional<AudioListenerComponent> audioListener;
     std::optional<Animator> animator;

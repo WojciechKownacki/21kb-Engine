@@ -86,21 +86,27 @@ void KeepOutput(const char* data, std::size_t size, BuildRun& run, BuildControl*
 // is on nobody's PATH, so every build printed "'vswhere.exe' is not recognized". Putting that folder in
 // front of PATH for the build process only is the documented way to find it, and a build that really
 // cannot find the compiler still fails the same way and says so.
+//
+// The build also runs with English tool messages (VSLANG=1033, which Visual Studio's compiler, linker and MSBuild read) unless
+// the caller chose a language: a compiler's text in the language of the machine arrives in the console's code page, which the
+// messages a caller reads (JSON, MCP, the editor's console) are not.
 [[nodiscard]] std::vector<wchar_t> BuildEnvironment() {
+    std::filesystem::path installer;
     wchar_t programFiles[MAX_PATH]{};
     const DWORD length = GetEnvironmentVariableW(L"ProgramFiles(x86)", programFiles, MAX_PATH);
-    if (length == 0 || length >= MAX_PATH) return {};
-    const std::filesystem::path installer = std::filesystem::path{ programFiles } / L"Microsoft Visual Studio" / L"Installer";
-    std::error_code error;
-    if (!std::filesystem::is_regular_file(installer / L"vswhere.exe", error) || error) return {};
+    if (length != 0 && length < MAX_PATH) {
+        const std::filesystem::path candidate = std::filesystem::path{ programFiles } / L"Microsoft Visual Studio" / L"Installer";
+        std::error_code error;
+        if (std::filesystem::is_regular_file(candidate / L"vswhere.exe", error) && !error) installer = candidate;
+    }
     LPWCH inherited = GetEnvironmentStringsW();
     if (inherited == nullptr) return {};
     std::vector<wchar_t> block;
-    bool pathFound = false;
+    bool languageSet = false;
     for (const wchar_t* entry = inherited; *entry != L'\0'; entry += std::wcslen(entry) + 1U) {
         const std::size_t entryLength = std::wcslen(entry);
-        if (entryLength >= 5U && CompareStringOrdinal(entry, 5, L"PATH=", 5, TRUE) == CSTR_EQUAL) {
-            pathFound = true;
+        if (entryLength >= 7U && CompareStringOrdinal(entry, 7, L"VSLANG=", 7, TRUE) == CSTR_EQUAL) languageSet = true;
+        if (!installer.empty() && entryLength >= 5U && CompareStringOrdinal(entry, 5, L"PATH=", 5, TRUE) == CSTR_EQUAL) {
             const std::wstring_view current{ entry + 5, entryLength - 5U };
             std::wstring replaced(entry, 5);
             if (current.find(installer.native()) == std::wstring_view::npos) {
@@ -114,9 +120,34 @@ void KeepOutput(const char* data, std::size_t size, BuildRun& run, BuildControl*
         }
     }
     FreeEnvironmentStringsW(inherited);
-    if (!pathFound) return {};
+    if (!languageSet) {
+        constexpr std::wstring_view language = L"VSLANG=1033";
+        block.insert(block.end(), language.begin(), language.end());
+        block.push_back(L'\0');
+    }
     block.push_back(L'\0');
     return block;
+}
+
+// What a build printed, as UTF-8. A tool that is not told otherwise writes the console's code page (OEM on a pipe), so text
+// that is not valid UTF-8 is converted from there: without this the accented letters of a path or a message arrive as noise.
+[[nodiscard]] std::string ConsoleTextToUtf8(std::string text) {
+    if (text.empty() || text.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) return text;
+    const int utf8 = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), nullptr, 0);
+    if (utf8 != 0) return text;
+    for (const UINT codePage : { GetConsoleOutputCP(), GetOEMCP(), GetACP() }) {
+        if (codePage == 0U) continue;
+        const int wide = MultiByteToWideChar(codePage, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
+        if (wide <= 0) continue;
+        std::wstring converted(static_cast<std::size_t>(wide), L'\0');
+        MultiByteToWideChar(codePage, 0, text.data(), static_cast<int>(text.size()), converted.data(), wide);
+        const int bytes = WideCharToMultiByte(CP_UTF8, 0, converted.data(), wide, nullptr, 0, nullptr, nullptr);
+        if (bytes <= 0) continue;
+        std::string result(static_cast<std::size_t>(bytes), '\0');
+        WideCharToMultiByte(CP_UTF8, 0, converted.data(), wide, result.data(), bytes, nullptr, nullptr);
+        return result;
+    }
+    return text;
 }
 #endif
 
@@ -376,7 +407,10 @@ struct BuildMessages {
         }
     }
 
-    const BuildRun run = RunBuildCommand(desc.command, desc.workingDirectory, control);
+    BuildRun run = RunBuildCommand(desc.command, desc.workingDirectory, control);
+#if defined(_WIN32)
+    run.output = ConsoleTextToUtf8(std::move(run.output));
+#endif
     result.exitCode = run.exitCode;
     result.cancelled = run.cancelled;
     if (run.cancelled) {

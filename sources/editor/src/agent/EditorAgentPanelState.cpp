@@ -775,6 +775,72 @@ void EditorAgentPanelState::UseProject(const std::filesystem::path& project) {
         conversations_.erase(conversations_.begin());
     }
     active_ = ConversationCount() - 1;
+    // A request that ended before the editor closed may still wait for its changes to be kept or undone.
+    journal_ = std::make_unique<kb::project::AgentUndoJournal>(project);
+    RefreshReview(true);
+}
+
+void EditorAgentPanelState::BeginUndoPoint(EditorAgentConversation& conversation, const std::filesystem::path& project, const std::string& request) {
+    if (std::ranges::any_of(conversations_, [&conversation](const auto& other) { return other.get() != &conversation && other->running; })) return;
+    journal_ = std::make_unique<kb::project::AgentUndoJournal>(project);
+    std::string error;
+    if (!journal_->Begin(request.substr(0U, 120U), nullptr, error)) {
+        conversation.entries.push_back({ EditorAgentEntryKind::Info, EditorLocalization::Format("agent.undoUnavailable",
+            "The agent's changes cannot be undone this time: {reason}.", { { "reason", error } }) });
+    }
+    review_.clear();
+}
+
+void EditorAgentPanelState::BeginUndoPointNow(const std::string& label) {
+    BeginUndoPoint(ActiveMutable(), EditorProjectPaths::ProjectRoot(), label);
+}
+
+// Reads what differs from the record into the review; a record with nothing left to decide is closed.
+void EditorAgentPanelState::RefreshReview(bool closeWhenEmpty) {
+    review_.clear();
+    if (journal_ == nullptr || !journal_->Open()) return;
+    std::vector<kb::project::AgentFileChange> changes;
+    std::string error;
+    if (!journal_->Changes(changes, error)) return;
+    if (changes.empty()) {
+        if (closeWhenEmpty) static_cast<void>(journal_->Keep(error));
+        return;
+    }
+    for (const kb::project::AgentFileChange& change : changes) review_.push_back({ change.path, change.kind, change.restorable });
+}
+
+void EditorAgentPanelState::KeepChanges() {
+    if (journal_ == nullptr) return;
+    std::string error;
+    if (!journal_->Keep(error)) {
+        Add(EditorAgentEntryKind::Error, error + ".");
+        return;
+    }
+    review_.clear();
+    Add(EditorAgentEntryKind::Info, std::string{ EditorText("agent.changesKept", "The changes are kept.") });
+}
+
+void EditorAgentPanelState::UndoChanges(int row) {
+    if (journal_ == nullptr || review_.empty()) return;
+    if (AnyRunning()) {
+        Add(EditorAgentEntryKind::Info, std::string{ EditorText("agent.undoWhileRunning", "Wait until the agent has finished, then undo.") });
+        return;
+    }
+    std::vector<std::string> paths;
+    if (row >= 0 && static_cast<std::size_t>(row) < review_.size()) paths.push_back(review_[static_cast<std::size_t>(row)].path);
+    std::vector<std::string> restored;
+    std::string error;
+    const bool ok = journal_->Undo(paths, restored, error);
+    if (!restored.empty()) {
+        // The scene and assets that were open are read again from the restored files.
+        projectChangedNow_ = true;
+        reloadFromUndo_ = true;
+        changedFiles_.clear();
+    }
+    if (!ok) Add(EditorAgentEntryKind::Error, error + ".");
+    else Add(EditorAgentEntryKind::Info, EditorLocalization::Format("agent.undone", "Undone: {count} file(s) are as they were.",
+        { { "count", std::to_string(restored.size()) } }));
+    RefreshReview();
 }
 
 void EditorAgentPanelState::Save(EditorAgentConversation& conversation) {
@@ -1274,6 +1340,7 @@ void EditorAgentPanelState::AddRequest(EditorAgentConversation& conversation, co
     conversation.sawError = false;
     conversation.stepTokens.clear();
     conversation.project = project;
+    BeginUndoPoint(conversation, project, request);
     conversation.projectFiles = ProjectSnapshot(project);
     conversation.requestStart = std::filesystem::file_time_type::clock::now();
     // The marks in Project Files show what the newest request did.
@@ -1299,6 +1366,27 @@ void EditorAgentPanelState::FinishStep(EditorAgentConversation& conversation, co
             }
         }
         pendingImages_.erase(named);
+    }
+    // A capture that named no file went to Saved/Agent/Captures: the pictures that appeared there during this request are shown too.
+    if (!failed && !conversation.project.empty()) {
+        std::error_code error;
+        std::vector<std::filesystem::path> fresh;
+        for (const auto& item : std::filesystem::directory_iterator(conversation.project / "Saved" / "Agent" / "Captures", error)) {
+            const std::filesystem::path& image = item.path();
+            const bool shown = std::ranges::any_of(conversation.entries, [&image](const EditorAgentEntry& entry) {
+                return entry.kind == EditorAgentEntryKind::Image && entry.image == image;
+            });
+            if (!shown && image.extension() == ".png" && item.last_write_time(error) >= conversation.requestStart) fresh.push_back(image);
+        }
+        std::ranges::sort(fresh, [](const std::filesystem::path& left, const std::filesystem::path& right) {
+            return left.filename().string().size() != right.filename().string().size()
+                ? left.filename().string().size() < right.filename().string().size() : left < right;
+        });
+        for (const std::filesystem::path& image : fresh) {
+            EditorAgentEntry entry{ EditorAgentEntryKind::Image, image.filename().string() };
+            entry.image = image;
+            conversation.entries.push_back(std::move(entry));
+        }
     }
     // Each step that changed the project is shown at once, not when the whole request ends.
     projectChangedNow_ = TakeProjectChanges(conversation) || projectChangedNow_;
@@ -1358,8 +1446,15 @@ bool EditorAgentPanelState::Pump(bool& projectChanged) {
         }
         if (conversation.requestRun) {
             projectChangedNow_ = TakeProjectChanges(conversation) || projectChangedNow_;
+            reviewDue_ = true;
         }
         Save(conversation);
+    }
+    // When no request is left working, the files it changed are listed for the person to keep or undo.
+    if (reviewDue_ && !AnyRunning()) {
+        reviewDue_ = false;
+        RefreshReview(true);
+        changed = true;
     }
     // While a request runs its history is written every few seconds; drafts and finished
     // conversations at once.

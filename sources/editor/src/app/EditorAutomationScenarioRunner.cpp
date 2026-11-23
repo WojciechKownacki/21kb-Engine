@@ -5611,6 +5611,47 @@ ReadScriptValue(
         return { kb::scene::SceneDocumentService::Save(external, path, loaded.document.name), path.string() };
     }
 
+    // The Agent panel's review of what a request changed (the agent's own work is stood in for by the steps between them):
+    // the undo point a request starts with, the list of changed files, Keep all, and Undo all or one file.
+    if (*operation == "agent_undo_point") {
+        const auto label = StringMember(step, "label", error);
+        if (!label) return { false, error };
+        EditorAgentPanelState& panel = state.context.AgentPanel();
+        panel.Prepare();
+        panel.BeginUndoPointNow(std::string{ *label });
+        return { panel.Review().empty(), "undo point taken" };
+    }
+    if (*operation == "agent_review") {
+        const auto count = NumberMember(step, "expect_count", error);
+        const auto path = StringMember(step, "expect_path", error, false);
+        const auto kind = StringMember(step, "expect_kind", error, false);
+        if (!count || !error.empty()) return { false, error };
+        EditorAgentPanelState& panel = state.context.AgentPanel();
+        panel.RefreshReview();
+        const auto& rows = panel.Review();
+        if (static_cast<double>(rows.size()) != *count) return { false, "the review lists " + std::to_string(rows.size()) + " file(s), expected " + std::to_string(static_cast<int>(*count)) };
+        if (path.has_value()) {
+            const auto found = std::ranges::find_if(rows, [&](const EditorAgentReviewRow& row) { return row.path == *path; });
+            if (found == rows.end()) return { false, "the review does not list " + std::string{ *path } };
+            const char* actual = found->kind == kb::project::AgentChangeKind::Added ? "added"
+                : found->kind == kb::project::AgentChangeKind::Deleted ? "deleted" : "modified";
+            if (kind.has_value() && *kind != actual) return { false, std::string{ *path } + " is " + actual + ", expected " + std::string{ *kind } };
+        }
+        return { true, std::to_string(rows.size()) + " file(s) in the review" };
+    }
+    if (*operation == "agent_undo") {
+        const auto row = NumberMember(step, "row", error, false);
+        EditorAgentPanelState& panel = state.context.AgentPanel();
+        panel.UndoChanges(row.has_value() ? static_cast<int>(*row) : -1);
+        // The editor's loop reads the restored files back as it does after an agent's change.
+        const bool reloaded = state.context.ReloadSceneAfterExternalChange();
+        return { true, reloaded ? "undone; scene reloaded" : "undone" };
+    }
+    if (*operation == "agent_keep") {
+        state.context.AgentPanel().KeepChanges();
+        return { state.context.AgentPanel().Review().empty(), "changes kept" };
+    }
+
     if (*operation == "reload_after_external_change") {
         return { state.context.ReloadSceneAfterExternalChange(), "scene reloaded after an external change" };
     }

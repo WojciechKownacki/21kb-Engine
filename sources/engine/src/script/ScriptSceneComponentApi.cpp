@@ -1,3 +1,4 @@
+#include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/script/ScriptSceneComponentApi.hpp"
 
 #include "script/ScriptUIComponentApi.hpp"
@@ -2577,6 +2578,37 @@ ScriptSceneComponentPropertyResult ScriptSceneComponentApi::GetProperty(
         .value = field->read(component.immutable),
         .error = {},
     };
+}
+
+ScriptSceneComponentPropertyResult ScriptSceneComponentApi::GetBehaviourProperty(
+    kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::size_t index, std::string_view propertyName) {
+    const kb::scene::BehaviourComponent* behaviour = std::as_const(scene).Components().Behaviours().TryGetAt(entity, index);
+    if (behaviour == nullptr) {
+        return ScriptSceneComponentPropertyResult{ .error = "component is not present on entity" };
+    }
+    const FieldBinding* field = FindField(kBehaviourFields, propertyName);
+    if (field == nullptr) {
+        return ScriptSceneComponentPropertyResult{ .error = "component property is not registered for scripts" };
+    }
+    return ScriptSceneComponentPropertyResult{ .succeeded = true, .value = field->read(behaviour), .error = {} };
+}
+
+ScriptSceneComponentMutationResult ScriptSceneComponentApi::SetBehaviourProperty(
+    kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::size_t index, std::string_view propertyName, const ScriptValue& value) {
+    const kb::scene::BehaviourComponent* behaviour = std::as_const(scene).Components().Behaviours().TryGetAt(entity, index);
+    if (behaviour == nullptr) {
+        return ScriptSceneComponentMutationResult{ .error = "component is not present on entity" };
+    }
+    const FieldBinding* field = FindField(kBehaviourFields, propertyName);
+    if (field == nullptr) {
+        return ScriptSceneComponentMutationResult{ .error = "component property is not registered for scripts" };
+    }
+    kb::scene::BehaviourComponent candidate = *behaviour;
+    if (!field->write(&candidate, value)) {
+        return ScriptSceneComponentMutationResult{ .error = "script value type does not match component property" };
+    }
+    static_cast<void>(scene.Components().Behaviours().SetAt(entity, index, candidate));
+    return ScriptSceneComponentMutationResult{ .succeeded = true };
 }
 
 ScriptSceneComponentMutationResult ScriptSceneComponentApi::SetProperty(

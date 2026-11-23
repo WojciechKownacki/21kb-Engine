@@ -413,6 +413,10 @@ void PucLuaScriptRuntime::SetInstanceVariableOverride(kb::scene::SceneEntity ent
                 break;
             }
         }
+        // An entity's overrides are shared by the scripts it runs: one a script does not expose is not its own.
+        if (declaredType == ScriptValueType::Void && !definitions->second.empty()) {
+            return;
+        }
     }
     if (declaredType == ScriptValueType::Void) {
         declaredType = value.Type();

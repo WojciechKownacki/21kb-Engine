@@ -14,10 +14,11 @@ namespace kb::scene {
 // behaviours in an order a script can observe (ScriptRuntime's per-tick
 // dispatch, ScriptRuntimeSceneSystem's Created/Activated/Ready/Deactivated/
 // Destroyed transitions) must sort with this comparator instead of keeping a
-// private copy, so the guarantee cannot silently diverge between them. Only
-// a well-defined ordering for distinct entities: kb::scene::
-// SceneBehaviourComponents stores at most one BehaviourComponent per
-// entity, so the entity id tie-breaker is always unique within a batch.
+// private copy, so the guarantee cannot silently diverge between them. An
+// entity may run several behaviours (kMaxBehavioursPerEntity), which tie
+// here: callers keep the order the behaviours were collected or started in
+// (a stable sort, or the lifecycle sequence of ScriptRuntimeSceneSystem), so
+// the scripts of one entity run in the order they were attached.
 //
 // Defined inline: this runs as the comparator of a std::ranges::sort over
 // every behaviour once per lifecycle phase, every frame, and the engine

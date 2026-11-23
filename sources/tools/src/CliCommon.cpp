@@ -1,11 +1,15 @@
 #include "CliCommon.hpp"
 #include "CliProgram.hpp"
 
+#include "engine/assets/AssetFileName.hpp"
 #include "engine/assets/AssetImportPreset.hpp"
 #include "engine/core/JsonValue.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/math/ColorSpace.hpp"
+#include "engine/project/ProjectManager.hpp"
+#include "engine/project/ProjectSettings.hpp"
+#include "engine/script/ScriptNameSuggestion.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -21,7 +25,9 @@
 #endif
 #endif
 
+#include <cctype>
 #include <cmath>
+#include <span>
 #include <charconv>
 #include <algorithm>
 #include <fstream>
@@ -262,6 +268,228 @@ std::filesystem::path ResolveProjectFile(
         return {};
     }
     return resolved;
+}
+
+std::filesystem::path ResolveProjectArgument(
+    const std::string& text,
+    const std::optional<std::string>& project,
+    std::string& error) {
+    if (text != "/Game" && !text.starts_with("/Game/")) {
+        std::filesystem::path input = kb::assets::Utf8Path(text);
+        std::filesystem::path root = kb::assets::Utf8Path(project.value_or(""));
+        if (!root.empty() && root.has_extension() && !std::filesystem::is_directory(root)) {
+            root = root.parent_path();
+        }
+        // A relative path is the project's, also for a file that is not made yet; one that only exists beside the working
+        // directory stays that.
+        if (!root.empty() && input.is_relative()) {
+            std::error_code status;
+            const bool inProject = std::filesystem::exists(root / input, status);
+            if (inProject || !std::filesystem::exists(input, status)) {
+                input = root / input;
+            }
+        }
+        return ResolveProjectFile(input, root, error);
+    }
+    if (!project.has_value()) {
+        error = "the path " + text + " is a file of a project: add --project <dir>";
+        return {};
+    }
+    const std::filesystem::path projectFile = kb::project::ProjectManager::FindProjectFile(kb::assets::Utf8Path(*project), error);
+    if (projectFile.empty()) {
+        return {};
+    }
+    const kb::project::ProjectDescriptorReadResult descriptor = kb::project::ProjectManager::LoadProject(projectFile);
+    if (!descriptor.succeeded) {
+        error = "the project could not be loaded: " + descriptor.error;
+        return {};
+    }
+    const std::filesystem::path content = (projectFile.parent_path() / kb::assets::Utf8Path(descriptor.descriptor.contentRoot)).lexically_normal();
+    const std::filesystem::path path = (content / kb::assets::Utf8Path(text.size() > 6U ? text.substr(6U) : std::string{})).lexically_normal();
+    const std::filesystem::path relative = path.lexically_relative(content);
+    if (relative.empty() || *relative.begin() == "..") {
+        error = "the path " + text + " leaves the project's content";
+        return {};
+    }
+    return path;
+}
+
+std::filesystem::path ResolveSceneArgument(const ArgumentList& arguments, std::string& error) {
+    const std::optional<std::string> project = arguments.Option("--project");
+    std::string text = arguments.Option("--scene").value_or(std::string{});
+    if (text.empty()) {
+        if (!project.has_value()) {
+            error = "missing required option --scene <path>";
+            return {};
+        }
+        // Like entity and component: without --scene, the scene the game starts in.
+        std::string findError;
+        const std::filesystem::path projectFile = kb::project::ProjectManager::FindProjectFile(kb::assets::Utf8Path(*project), findError);
+        if (projectFile.empty()) {
+            error = findError;
+            return {};
+        }
+        text = kb::project::ProjectSettingsStore::Load(kb::project::ProjectSettingsStore::FilePath(projectFile.parent_path())).settings.defaultMap;
+        if (text.empty()) {
+            error = "the project has no startup scene; pass --scene <path>";
+            return {};
+        }
+    }
+    text = CanonicalSceneText(project, text, error);
+    if (!error.empty()) {
+        return {};
+    }
+    return ResolveProjectArgument(text, project, error);
+}
+
+std::vector<std::string> ProjectScenePaths(const std::filesystem::path& projectRoot) {
+    std::vector<std::string> scenes;
+    const std::filesystem::path assets = projectRoot / "Assets";
+    std::error_code error;
+    if (!std::filesystem::is_directory(assets, error)) {
+        return scenes;
+    }
+    for (std::filesystem::recursive_directory_iterator it{ assets, std::filesystem::directory_options::skip_permission_denied, error }, end; !error && it != end; it.increment(error)) {
+        if (!it->is_regular_file(error) || it->path().extension() != ".21kbscene") continue;
+        std::string relative = it->path().lexically_relative(assets).generic_string();
+        // The cells and objects a world is built into are made by world build, not scenes of the project.
+        if (relative.find(".cells/") != std::string::npos || relative.find(".objects/") != std::string::npos) continue;
+        scenes.push_back("/Game/" + relative);
+    }
+    std::ranges::sort(scenes);
+    return scenes;
+}
+
+namespace {
+
+// The scene of `scenes` (all the project's, as /Game/ paths) that `text` names.
+std::optional<std::string> ResolveSceneIn(const std::vector<std::string>& scenes, std::string_view text, std::string& error) {
+    std::string wanted{ text };
+    std::ranges::replace(wanted, '\\', '/');
+    if (wanted.starts_with("./")) wanted.erase(0U, 2U);
+    if (wanted.starts_with("Assets/")) wanted = "/Game/" + wanted.substr(7U);
+    const auto lower = [](std::string value) {
+        std::ranges::transform(value, value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return value;
+    };
+    // A full path, or a name: Level2, level2.21kbscene or Scenes/Level2 all find /Game/Scenes/Level2.21kbscene.
+    std::string stem = wanted;
+    if (lower(stem).ends_with(".21kbscene")) stem.resize(stem.size() - 10U);
+    const std::string suffix = '/' + lower(stem.starts_with("/Game/") ? stem.substr(6U) : stem) + ".21kbscene";
+    std::vector<std::string> found;
+    for (const std::string& scene : scenes) {
+        const std::string sceneLower = lower(scene);
+        if (scene == wanted || sceneLower == lower(wanted) || sceneLower.ends_with(suffix)) found.push_back(scene);
+    }
+    if (found.size() == 1U) {
+        return found.front();
+    }
+    if (found.size() > 1U) {
+        error = "'" + std::string{ text } + "' names " + std::to_string(found.size()) + " scenes; give the whole path, one of:";
+        for (const std::string& scene : found) error += ' ' + scene;
+        return std::nullopt;
+    }
+    error = "the project has no scene '" + std::string{ text } + "'";
+    std::vector<std::string> names;
+    for (const std::string& scene : scenes) names.push_back(std::filesystem::path{ scene }.stem().string());
+    const std::string closest = kb::script::ClosestScriptName(stem.substr(stem.rfind('/') == std::string::npos ? 0U : stem.rfind('/') + 1U), std::span<const std::string>{ names });
+    if (!closest.empty()) {
+        error += "; did you mean " + closest + "?";
+    }
+    error += scenes.empty() ? " (it has no scenes; scene-new makes one)" : " (its scenes:";
+    if (!scenes.empty()) {
+        for (const std::string& scene : scenes) error += ' ' + scene;
+        error += ')';
+    }
+    return std::nullopt;
+}
+
+} // namespace
+
+std::optional<std::string> ResolveProjectScene(const std::filesystem::path& projectRoot, std::string_view text, std::string& error) {
+    return ResolveSceneIn(ProjectScenePaths(projectRoot), text, error);
+}
+
+std::string CanonicalSceneText(const std::optional<std::string>& project, std::string_view text, std::string& error) {
+    error.clear();
+    if (text.empty() || !project.has_value() || text.starts_with("/Game/")) {
+        return std::string{ text };
+    }
+    std::string findError;
+    const std::filesystem::path projectFile = kb::project::ProjectManager::FindProjectFile(kb::assets::Utf8Path(*project), findError);
+    if (projectFile.empty()) {
+        return std::string{ text };
+    }
+    const std::filesystem::path root = projectFile.parent_path();
+    // A file that is there as written is a path.
+    const std::filesystem::path written = kb::assets::Utf8Path(std::string{ text });
+    std::error_code status;
+    if (std::filesystem::is_regular_file(written.is_absolute() ? written : root / written, status) || std::filesystem::is_regular_file(written, status)) {
+        return std::string{ text };
+    }
+    std::string why;
+    if (const std::optional<std::string> scene = ResolveProjectScene(root, text, why); scene.has_value()) {
+        return *scene;
+    }
+    std::string lowerText{ text };
+    std::ranges::transform(lowerText, lowerText.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    // A path that is not there is left for the command's own message; only a bare name has no other meaning.
+    if (text.find_first_of("/\\") == std::string_view::npos && !lowerText.ends_with(".21kbscene")) {
+        error = why;
+    }
+    return std::string{ text };
+}
+
+std::vector<ScriptSceneReference> FindScriptSceneReferences(const std::filesystem::path& projectRoot) {
+    std::vector<ScriptSceneReference> references;
+    const std::vector<std::string> scenes = ProjectScenePaths(projectRoot);
+    if (scenes.empty()) {
+        return references;
+    }
+    const std::filesystem::path assets = projectRoot / "Assets";
+    std::error_code error;
+    std::vector<std::filesystem::path> scripts;
+    for (std::filesystem::recursive_directory_iterator it{ assets, std::filesystem::directory_options::skip_permission_denied, error }, end; !error && it != end; it.increment(error)) {
+        if (it->is_regular_file(error) && it->path().extension() == ".lua") scripts.push_back(it->path());
+    }
+    std::ranges::sort(scripts);
+    for (const std::filesystem::path& script : scripts) {
+        std::ifstream file(script, std::ios::binary);
+        std::string line;
+        const std::string scriptPath = "/Game/" + script.lexically_relative(assets).generic_string();
+        while (std::getline(file, line)) {
+            const std::size_t first = line.find_first_not_of(" \t");
+            if (first == std::string::npos || line.compare(first, 2U, "--") == 0) continue;
+            // Every quoted text of the line that names a scene: the whole path, or the bare name given to Scene.Load.
+            const bool loads = line.find("Scene.Load") != std::string::npos;
+            for (std::size_t at = 0U; at < line.size(); ++at) {
+                if (line[at] != '"' && line[at] != '\'') continue;
+                const std::size_t close = line.find(line[at], at + 1U);
+                if (close == std::string::npos) break;
+                const std::string text = line.substr(at + 1U, close - at - 1U);
+                at = close;
+                if (text.empty() || (!loads && text.find(".21kbscene") == std::string::npos)) continue;
+                std::string ignored;
+                // A text that is no scene of the project (a message, another path) is not a reference.
+                if (const std::optional<std::string> scene = ResolveSceneIn(scenes, text, ignored); scene.has_value() &&
+                    std::ranges::none_of(references, [&scene](const ScriptSceneReference& known) { return known.scene == *scene; })) {
+                    references.push_back({ *scene, scriptPath });
+                }
+            }
+        }
+    }
+    std::ranges::sort(references, {}, &ScriptSceneReference::scene);
+    return references;
+}
+
+std::vector<ScriptSceneReference> ScenesReferencedButNotInBuild(const std::filesystem::path& projectRoot) {
+    const kb::project::ProjectSettings settings = kb::project::ProjectSettingsStore::Load(kb::project::ProjectSettingsStore::FilePath(projectRoot)).settings;
+    const std::vector<std::string> inBuild = kb::project::ProjectBuildScenes(settings);
+    std::vector<ScriptSceneReference> missing;
+    for (const ScriptSceneReference& reference : FindScriptSceneReferences(projectRoot)) {
+        if (std::ranges::find(inBuild, reference.scene) == inBuild.end()) missing.push_back(reference);
+    }
+    return missing;
 }
 
 const kb::assets::AssetMetadata* FindAssetByFlexiblePath(

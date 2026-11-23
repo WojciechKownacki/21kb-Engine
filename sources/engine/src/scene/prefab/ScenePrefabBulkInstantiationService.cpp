@@ -1125,6 +1125,19 @@ void ApplyBehaviourVariableOverrides(Scene& scene, std::span<const ScenePrefabNo
     }
 }
 
+// The behaviours after a node's first one are kept beside the component, so each instance gets them one entity at a time.
+void ApplyAdditionalBehaviours(Scene& scene, std::span<const ScenePrefabNodeDesc> nodes,
+    std::span<const SceneEntity> entities, std::size_t instanceCount) {
+    if (std::ranges::none_of(nodes, [](const ScenePrefabNodeDesc& node) { return !node.components.additionalBehaviours.empty(); })) return;
+    SceneState& state = SceneAccess::State(scene);
+    for (std::size_t instance = 0U; instance < instanceCount; ++instance) {
+        for (std::size_t index = 0U; index < nodes.size(); ++index) {
+            if (nodes[index].components.additionalBehaviours.empty()) continue;
+            state.componentStorage.Behaviours().SetAdditional(entities[EntityIndex(instance, index, nodes.size())], nodes[index].components.additionalBehaviours);
+        }
+    }
+}
+
 void ApplyModuleComponents(Scene& scene, std::span<const ScenePrefabNodeDesc> nodes,
     std::span<const SceneEntity> entities, std::size_t instanceCount) {
     if (std::ranges::none_of(nodes, [](const ScenePrefabNodeDesc& node) { return !node.components.moduleComponents.empty(); })) return;
@@ -1243,6 +1256,7 @@ void ApplyModuleComponents(Scene& scene, std::span<const ScenePrefabNodeDesc> no
         ResolvePrefabReferences(scene, nodes, std::span<const SceneEntity>{ entities }, count);
         ApplyTranslationResiduals(scene, nodes, std::span<const SceneEntity>{ entities }, count);
         ApplyBehaviourVariableOverrides(scene, nodes, std::span<const SceneEntity>{ entities }, count, settings.linkPrefabInstances);
+        ApplyAdditionalBehaviours(scene, nodes, std::span<const SceneEntity>{ entities }, count);
         ApplyModuleComponents(scene, nodes, std::span<const SceneEntity>{ entities }, count);
 
         const kb::ecs::NativeEcsStorageStats afterStorage = state.world.NativeStorageStats();
@@ -1311,6 +1325,7 @@ void ApplyModuleComponents(Scene& scene, std::span<const ScenePrefabNodeDesc> no
     ResolvePrefabReferences(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
     ApplyTranslationResiduals(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
     ApplyBehaviourVariableOverrides(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count, settings.linkPrefabInstances);
+    ApplyAdditionalBehaviours(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
     ApplyModuleComponents(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
 
     std::uint64_t instanceObjectSlabNanoseconds = 0;

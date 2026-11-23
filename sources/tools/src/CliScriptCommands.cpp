@@ -194,6 +194,11 @@ int RunScriptBuildCommand(const ArgumentList& arguments, CommandIo io) {
         io.out << "The project has no C++ scripts.\n";
         return 0;
     }
+    // Without the engine SDK no build can work: said at once, not after a compiler's failure.
+    if (const std::string problem = kb::script::ScriptProjectFiles::NativeSdkProblem(); !problem.empty()) {
+        io.err << "error: " << problem << '\n';
+        return 1;
+    }
     std::size_t failed = 0;
     for (const kb::assets::AssetMetadata* metadata : scripts) {
         if (std::string problem = BuildScript(manager, *metadata, projectRoot, io); !problem.empty()) {

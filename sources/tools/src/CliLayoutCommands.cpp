@@ -2,11 +2,13 @@
 #include <filesystem>
 #include <fstream>
 #include <chrono>
+#include <thread>
 #include "engine/core/JsonValue.hpp"
 #include "CliProgram.hpp"
 
 #include "engine/assets/AssetFileName.hpp"
 #include "engine/project/ProjectManager.hpp"
+#include "engine/project/ProjectSettings.hpp"
 #include "docking/DefaultDockWorkspace.hpp"
 #include "docking/DockLayoutSerializer.hpp"
 #include "settings/EditorLayoutLibrary.hpp"
@@ -92,8 +94,8 @@ int RunEditorCommand(const ArgumentList& arguments, CommandIo io) {
     const std::string action = arguments.Positionals().size() == 1U ? arguments.Positionals().front() : std::string{};
     const auto scene = arguments.Option("--scene");
     const auto target = arguments.Option("--target");
-    if (!project || !((action == "open-scene" && scene) || (action == "build" && target))) {
-        io.err << "error: editor open-scene --project <dir> --scene /Game/<path>.21kbscene\n"
+    if (!project || !((action == "open-scene") || (action == "build" && target))) {
+        io.err << "error: editor open-scene --project <dir> [--scene /Game/<path>.21kbscene]   (the scene the game starts in without --scene)\n"
                   "       editor build --project <dir> --target windows|android|web|webgpu|linux [--profile development|release]\n";
         return 1;
     }
@@ -106,13 +108,22 @@ int RunEditorCommand(const ArgumentList& arguments, CommandIo io) {
     request.Set("action", kb::core::JsonValue::MakeString(action));
     std::string done;
     if (action == "open-scene") {
-        if (!scene->starts_with("/Game/") || !scene->ends_with(".21kbscene") ||
-            !std::filesystem::is_regular_file(root / "Assets" / kb::assets::Utf8Path(scene->substr(6U)), missing)) {
-            io.err << "error: --scene takes a scene of the project as /Game/<folder>/<Name>.21kbscene, and '" << *scene << "' is not one\n";
+        // Without --scene: the scene the game starts in. A scene may be named by its name (Level2) too.
+        std::string sceneText = scene.value_or(
+            kb::project::ProjectSettingsStore::Load(kb::project::ProjectSettingsStore::FilePath(root)).settings.defaultMap);
+        std::string nameError;
+        sceneText = CanonicalSceneText(project, sceneText, nameError);
+        if (!nameError.empty()) {
+            io.err << "error: " << nameError << '\n';
             return 1;
         }
-        request.Set("scene", kb::core::JsonValue::MakeString(*scene));
-        done = "The editor opens " + *scene + " (if it has the project open).";
+        if (!sceneText.starts_with("/Game/") || !sceneText.ends_with(".21kbscene") ||
+            !std::filesystem::is_regular_file(root / "Assets" / kb::assets::Utf8Path(sceneText.substr(6U)), missing)) {
+            io.err << "error: --scene takes a scene of the project as /Game/<folder>/<Name>.21kbscene, and '" << sceneText << "' is not one\n";
+            return 1;
+        }
+        request.Set("scene", kb::core::JsonValue::MakeString(sceneText));
+        done = "The editor opens " + sceneText + " (if it has the project open).";
     } else {
         // The platform as people name it, and the package target the Build Game panel lists for it.
         const std::string_view targets[][2]{ { "windows", "Windows.x64" }, { "android", "Android.ASTC.arm64" },
@@ -140,8 +151,24 @@ int RunEditorCommand(const ArgumentList& arguments, CommandIo io) {
         std::ofstream output{ partial, std::ios::binary | std::ios::trunc };
         output << request.Dump();
     }
-    std::filesystem::rename(partial, folder / (std::to_string(stamp) + ".json"), missing);
+    const auto requestFile = folder / (std::to_string(stamp) + ".json");
+    std::filesystem::rename(partial, requestFile, missing);
     if (missing) { io.err << "error: the request could not be written: " << missing.message() << '\n'; return 1; }
+    // A running editor takes the file within a second. A build is a job worth knowing about: when nobody takes the request
+    // it is withdrawn and said, instead of waiting for an editor that is not there.
+    if (action == "build") {
+        bool taken = false;
+        for (int waited = 0; waited < 40 && !taken; ++waited) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{ 100 });
+            taken = !std::filesystem::exists(requestFile, missing);
+        }
+        if (!taken) {
+            std::filesystem::remove(requestFile, missing);
+            io.err << "error: no editor took the build request in 4 seconds: the editor is not running with this project open (or it is playing the scene). "
+                      "Open the project in the editor, or build without it: kb_cli build --project <dir> --platform " << *target << " --out <folder>\n";
+            return 1;
+        }
+    }
     io.out << done << '\n';
     kb::core::JsonValue data = DataObject("21kb.cli.editor/v1");
     data.Set("request", std::move(request));

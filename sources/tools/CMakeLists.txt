@@ -15,6 +15,10 @@ add_library(kb_cli_core STATIC
     src/CliAudioCommands.cpp
     src/CliBatchCommand.cpp
     src/CliBuildCommands.cpp
+    src/CliCaptureImage.cpp
+    src/CliUndoCommand.cpp
+    src/CliPlatformBuild.cpp
+    src/private/CliCaptureImage.hpp
     src/CliCommandCatalog.cpp
     src/CliLayoutCommands.cpp
     src/CliChangeWatch.cpp
@@ -79,6 +83,19 @@ target_sources(kb_cli_core PRIVATE
     ../editor/src/scene/EditorViewportPreviewState.cpp
     ../editor/src/scene/EditorPluginCatalog.cpp
     ../editor/src/scene/EditorGameView.cpp)
+# build --platform runs the editor's package pipeline: the request builder, the package service, the saved build settings and
+# the panel's own validation.
+if(WIN32)
+    target_sources(kb_cli_core PRIVATE
+        ../editor/src/packaging/EditorPackageRequestBuilder.cpp
+        ../editor/src/packaging/EditorProjectPackageService.cpp
+        ../editor/src/packaging/EditorAndroidSigningBroker.cpp
+        ../editor/src/packaging/EditorPackageProcessEnvironment.cpp
+        ../editor/src/packaging/EditorSigningProcess.cpp
+        ../editor/src/packaging/EditorWindowsSigningBroker.cpp
+        ../editor/src/settings/EditorBuildGameSettingsStore.cpp
+        ../editor/src/rendering/BuildGamePanelModel.cpp)
+endif()
 
 # world build resolves meshes for HLOD proxies with the same loaders kb_cooker uses.
 # Materials (.kbmat) are renderer assets: material-new/set/show and MeshRenderer material=.
@@ -204,6 +221,7 @@ if(BUILD_TESTING)
         tests/KbCliLanguageServerTests.cpp
         tests/KbCliDebugAdapterTests.cpp
         tests/KbCliPackageTests.cpp
+        tests/KbCliAgentTests.cpp
     )
 
     target_link_libraries(kb_cli_tests PRIVATE kb_cli_core)
@@ -276,6 +294,11 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/tests/CliBuildCaptureTests.py
                 --cli $<TARGET_FILE:kb_cli>)
         set_tests_properties(kb_cli_build_capture PROPERTIES LABELS "tools;gpu" TIMEOUT 900)
+        # The picture a capture sends over mcp needs kb_game beside kb_cli, so it runs against the built kb_cli.
+        add_test(NAME kb_cli_capture_mcp
+            COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/tests/CliCaptureMcpTests.py
+                --cli $<TARGET_FILE:kb_cli>)
+        set_tests_properties(kb_cli_capture_mcp PROPERTIES LABELS "tools;gpu" TIMEOUT 300)
         add_test(NAME kb_cli_renderer_info COMMAND ${CMAKE_COMMAND}
             "-DCLI=$<TARGET_FILE:kb_cli>"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/KbCliRendererInfoTests.cmake")

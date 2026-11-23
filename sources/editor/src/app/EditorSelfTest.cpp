@@ -1230,6 +1230,40 @@ void RunScriptAttachSuite(Report& report) {
     report.Check(!context.HasEntityScript(actor), "Actor has no script after removal");
 }
 
+// An object runs several scripts: the Inspector lists them, adds one beside the others and removes one by its place.
+void RunSeveralScriptsAttachSuite(Report& report) {
+    EditorSceneContext context;
+    report.Check(context.CreateLuaScriptAsset("/Game") && context.CreateLuaScriptAsset("/Game") && context.CreateLuaScriptAsset("/Game"), "Create three Lua script assets");
+    std::vector<kb::assets::AssetId> scripts;
+    for (const auto& [id, name] : context.AvailableScriptAssets()) {
+        static_cast<void>(name);
+        scripts.push_back(id);
+    }
+    report.Check(scripts.size() >= 3U, "Three scripts are available");
+    if (scripts.size() < 3U) return;
+
+    const kb::scene::SceneEntity actor = context.CreateHierarchyObject();
+    report.Check(context.EntityScriptCount(actor) == 0U, "Actor has no script initially");
+    report.Check(context.AttachScriptToEntity(actor, scripts[0]) && context.AttachScriptToEntity(actor, scripts[1]) && context.AttachScriptToEntity(actor, scripts[2]),
+        "Attach three scripts one after the other");
+    report.Check(context.EntityScriptCount(actor) == 3U, "The Inspector lists three scripts");
+    report.Check(context.EntityScriptAssetIdAt(actor, 0U) == scripts[0] && context.EntityScriptAssetIdAt(actor, 1U) == scripts[1] &&
+            context.EntityScriptAssetIdAt(actor, 2U) == scripts[2] && !context.EntityScriptNameAt(actor, 2U).empty(),
+        "The scripts are listed in the order they were added");
+    report.Check(!context.AttachScriptToEntity(actor, scripts[1]) && context.EntityScriptCount(actor) == 3U, "A script the object runs is not added twice");
+
+    report.Check(context.ToggleEntityScriptEnabledAt(actor, 1U) && !context.EntityScriptEnabledAt(actor, 1U) && context.EntityScriptEnabledAt(actor, 0U) &&
+            context.EntityScriptEnabledAt(actor, 2U),
+        "A script is switched off on its own");
+    report.Check(context.RemoveScriptFromEntityAt(actor, 1U) && context.EntityScriptCount(actor) == 2U &&
+            context.EntityScriptAssetIdAt(actor, 1U) == scripts[2],
+        "A script is removed by its place and the next one moves up");
+    report.Check(context.UndoSceneCommand() && context.EntityScriptCount(actor) == 3U && context.EntityScriptAssetIdAt(actor, 1U) == scripts[1],
+        "Undo brings the removed script back in its place");
+    report.Check(context.RemoveScriptFromEntity(actor) && context.EntityScriptCount(actor) == 2U && context.EntityScriptAssetIdAt(actor, 0U) == scripts[1],
+        "Removing the Script component takes the first script and the next one moves up");
+}
+
 // Reproduces the reported bug: editing a script's `Inspector.*` declarations and
 // saving (Ctrl+S) must refresh the Inspector's exposed-variable schema WITHOUT a
 // separate editor/scene save. ReloadOpenScriptAsset() — driven each frame off the
@@ -7245,6 +7279,7 @@ int EditorSelfTest::Run(
     RunSuiteInScratch(report, "headless_editor_automation", &RunHeadlessAutomationWorkflowSuite);
     RunSuiteInScratch(report, "script_editor", &RunScriptEditorSuite);
     RunSuiteInScratch(report, "script_attach", &RunScriptAttachSuite);
+    RunSuiteInScratch(report, "script_attach_several", &RunSeveralScriptsAttachSuite);
     RunSuiteInScratch(report, "script_inspector_schema_refresh", &RunScriptInspectorSchemaRefreshSuite);
     RunSuiteInScratch(report, "inspector_component_affordances", &RunInspectorComponentAffordancesSuite);
     RunSuiteInScratch(report, "physics_component_catalog", &RunPhysicsComponentCatalogSuite);

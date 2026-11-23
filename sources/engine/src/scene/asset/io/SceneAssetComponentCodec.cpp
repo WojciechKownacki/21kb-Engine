@@ -80,6 +80,8 @@ enum SceneNodeComponentBits : std::uint64_t {
       PostProcessVolumeBit = 1ULL << 51U,
       // Read from PlanarReflectionFileVersion on; written after PostProcessVolume.
       PlanarReflectionBit = 1ULL << 52U,
+      // Read from AdditionalBehavioursFileVersion on; the behaviours after the first follow the behaviour's own data.
+      AdditionalBehavioursBit = 1ULL << 53U,
 
 };
 
@@ -100,7 +102,7 @@ constexpr std::uint64_t KnownComponentBits = CameraBit |
     NavObstacleBit |
     RegionShapeBit |
     GuideCurveBit |
-      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit | SurfaceCastBit | FacingPanelBit | SpaceStrokeBit | HistoryRibbonBit | LensEchoBit | SkeletonBindingBit | DeformedGeometryBit | MotionSkeletonRuleBit | ParticleEffectBit | UIBit | NavLinkBit | SocketAttachmentBit | CombatantBit | AIBrainBit | GridBit | TilemapBit | TilemapRendererBit | TilemapColliderBit | Sprite2DBit | Body2DBit | Collider2DBit | CharacterController2DBit | NavBoundsBit | PostProcessVolumeBit | PlanarReflectionBit;
+      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit | SurfaceCastBit | FacingPanelBit | SpaceStrokeBit | HistoryRibbonBit | LensEchoBit | SkeletonBindingBit | DeformedGeometryBit | MotionSkeletonRuleBit | ParticleEffectBit | UIBit | NavLinkBit | SocketAttachmentBit | CombatantBit | AIBrainBit | GridBit | TilemapBit | TilemapRendererBit | TilemapColliderBit | Sprite2DBit | Body2DBit | Collider2DBit | CharacterController2DBit | NavBoundsBit | PostProcessVolumeBit | PlanarReflectionBit | AdditionalBehavioursBit;
 
 [[nodiscard]] std::uint64_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
     std::uint64_t componentBits = 0;
@@ -116,6 +118,7 @@ constexpr std::uint64_t KnownComponentBits = CameraBit |
     include(components.audioSource.has_value(), AudioSourceBit);
     include(components.audioListener.has_value(), AudioListenerBit);
     include(components.behaviour.has_value(), BehaviourBit);
+    include(components.behaviour.has_value() && !components.additionalBehaviours.empty(), AdditionalBehavioursBit);
     include(components.tags.has_value(), TagsBit);
     include(components.characterController.has_value(), CharacterControllerBit);
     include(components.joint.has_value(), JointBit);
@@ -261,6 +264,11 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
             return false;
         }
         output.behaviour = behaviour;
+        output.additionalBehaviours.clear();
+        if ((componentBits & AdditionalBehavioursBit) != 0U &&
+            (fileVersion < SceneDocument::AdditionalBehavioursFileVersion || !SceneAssetBehaviourComponentCodec::ReadAdditional(input, output.additionalBehaviours))) {
+            return false;
+        }
     }
     if ((componentBits & AnimatorBit) != 0U) {
         if (fileVersion < 5U) return false;
@@ -835,6 +843,9 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
     }
     if (components.behaviour.has_value()) {
         SceneAssetBehaviourComponentCodec::Write(output, *components.behaviour, components.behaviourVariableOverrides);
+        if (!components.additionalBehaviours.empty()) {
+            SceneAssetBehaviourComponentCodec::WriteAdditional(output, components.additionalBehaviours);
+        }
     }
     if (components.animator.has_value()) {
         SceneAssetBinaryIO::WriteUInt64(output, components.animator->controllerAssetId);

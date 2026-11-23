@@ -112,7 +112,17 @@ int RunValidateCommand(const ArgumentList& arguments, CommandIo io) {
     int failures = 0;
 
     for (const std::string& positional : arguments.Positionals()) {
-        const std::filesystem::path path = ResolveInputPath(positional, projectRoot);
+        // A /Game/ path (a script or a scene of the project) is looked for in the project's content, as in every command.
+        std::string pathError;
+        const std::filesystem::path path = positional.starts_with("/Game/")
+            ? ResolveProjectArgument(positional, arguments.Option("--project"), pathError)
+            : ResolveInputPath(positional, projectRoot);
+        if (path.empty()) {
+            io.err << "FAIL " << positional << ": " << pathError << '\n';
+            AddValidated(items, positional, {}, { pathError });
+            ++failures;
+            continue;
+        }
         if (path.extension() == ".21kbscene") {
             failures += ValidateSceneUi(scene, projectMounted, projectRoot, path, positional, io, items);
             continue;

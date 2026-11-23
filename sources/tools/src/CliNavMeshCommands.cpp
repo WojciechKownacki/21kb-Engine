@@ -53,23 +53,18 @@ namespace {
 }
 
 [[nodiscard]] int Bake(const ArgumentList& arguments, CommandIo io) {
-    const std::optional<std::string> sceneOption = arguments.Option("--scene");
-    if (!sceneOption.has_value()) {
-        io.err << "error: navmesh bake needs --scene <file.21kbscene>\n";
-        return 1;
-    }
     const std::optional<std::string> project = arguments.Option("--project");
     std::string pathError;
-    const std::filesystem::path scene = ResolveProjectFile(*sceneOption, project.value_or(""), pathError);
+    // --scene as every command takes it (a /Game/ path too); without it, the scene the game starts in.
+    const std::filesystem::path scene = ResolveSceneArgument(arguments, pathError);
     if (scene.empty()) {
-        io.err << "error: " << pathError << '\n';
+        io.err << "error: " << pathError << (arguments.Option("--scene").has_value() ? "" : " (navmesh bake takes --scene <scene>, or the startup scene of --project <dir>)") << '\n';
         return 1;
     }
     std::filesystem::path out = kb::navigation::SceneNavMeshPath(scene);
     if (const std::optional<std::string> outOption = arguments.Option("--out"); outOption.has_value()) {
-        out = std::filesystem::path{ *outOption };
-        if (out.is_relative() && project.has_value()) out = std::filesystem::path{ *project } / out;
-        if (project.has_value() && ResolveProjectFile(out, *project, pathError).empty()) {
+        out = ResolveProjectArgument(*outOption, project, pathError);
+        if (out.empty()) {
             io.err << "error: --out: " << pathError << '\n';
             return 1;
         }

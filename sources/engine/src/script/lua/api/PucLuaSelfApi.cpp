@@ -7,12 +7,32 @@
 #include "engine/script/PucLuaScriptRuntime.hpp"
 #include "engine/script/ScriptExecutionContext.hpp"
 #include "engine/script/ScriptSceneComponentApi.hpp"
+#include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneComponentAuthoring.hpp"
+#include "engine/scene/SceneComponentQueries.hpp"
+#include "engine/scene/SceneComponents.hpp"
 #include "script/lua/PucLuaValueBridge.hpp"
 
 #include <span>
 
 namespace kb::script {
 namespace {
+
+// Where the running script stands among the scripts of its object, when the name asks for the Behaviour component: that
+// component belongs to the script that asks, not to the first one the object runs. SIZE_MAX for any other component.
+[[nodiscard]] std::size_t OwnBehaviourIndex(const ScriptExecutionContext& context, std::string_view componentName) {
+    if (kb::scene::SceneComponentAuthoring::CanonicalName(componentName) != "Behaviour") {
+        return static_cast<std::size_t>(-1);
+    }
+    const auto behaviours = std::as_const(context.GetScene()).Components().Behaviours();
+    for (std::size_t index = 0U; index < behaviours.Count(context.Self()); ++index) {
+        const kb::scene::BehaviourComponent* behaviour = behaviours.TryGetAt(context.Self(), index);
+        if (behaviour != nullptr && behaviour->behaviourAssetId == context.Asset().value && behaviour->backend == context.Backend()) {
+            return index;
+        }
+    }
+    return static_cast<std::size_t>(-1);
+}
 
 [[nodiscard]] ScriptExecutionContext* ContextFromUpvalue(lua_State* state) noexcept {
     return PucLuaRuntimeApi::ContextFromUpvalue(state);
@@ -38,7 +58,10 @@ int LuaSelfGetProperty(lua_State* state) {
     }
     const char* componentName = PucLuaCheckString(state, 2);
     const char* propertyName = PucLuaCheckString(state, 3);
-    const ScriptSceneComponentPropertyResult result = ScriptSceneComponentApi::GetProperty(context->GetScene(), context->Self(), componentName, propertyName);
+    const std::size_t own = OwnBehaviourIndex(*context, componentName);
+    const ScriptSceneComponentPropertyResult result = own != static_cast<std::size_t>(-1)
+        ? ScriptSceneComponentApi::GetBehaviourProperty(context->GetScene(), context->Self(), own, propertyName)
+        : ScriptSceneComponentApi::GetProperty(context->GetScene(), context->Self(), componentName, propertyName);
     if (!result.succeeded) {
         // A component or property that does not exist is a mistake in the script, not a state of the object: stop with the reason.
         if (const std::string unknown = ScriptSceneComponentApi::UnknownNameMessage(componentName, propertyName); !unknown.empty()) {
@@ -62,7 +85,10 @@ int LuaSelfSetProperty(lua_State* state) {
     const char* componentName = PucLuaCheckString(state, 2);
     const char* propertyName = PucLuaCheckString(state, 3);
     const ScriptValue value = PucLuaValueBridge::FromLua(state, 4);
-    const ScriptSceneComponentMutationResult result = ScriptSceneComponentApi::SetProperty(context->GetScene(), context->Self(), componentName, propertyName, value);
+    const std::size_t own = OwnBehaviourIndex(*context, componentName);
+    const ScriptSceneComponentMutationResult result = own != static_cast<std::size_t>(-1)
+        ? ScriptSceneComponentApi::SetBehaviourProperty(context->GetScene(), context->Self(), own, propertyName, value)
+        : ScriptSceneComponentApi::SetProperty(context->GetScene(), context->Self(), componentName, propertyName, value);
     lua_pushboolean(state, result.succeeded ? 1 : 0);
     if (!result.succeeded) {
         // Nothing was written because a name is wrong: raise it, so the script error names what to write instead.

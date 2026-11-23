@@ -72,7 +72,7 @@ void DeferComponents(ScenePrefabNodeComponents& components) {
     components.joint.reset(); components.regionPortal.reset(); components.lensEcho.reset();
     components.ui = {};
     components.rigidbody.reset(); components.collider.reset(); components.characterController.reset();
-    components.behaviour.reset(); components.audioSource.reset(); components.audioListener.reset();
+    components.behaviour.reset(); components.additionalBehaviours.clear(); components.audioSource.reset(); components.audioListener.reset();
     components.contentInstance.reset(); components.streamFocus.reset();
     components.input.reset(); components.navAgent.reset(); components.navObstacle.reset(); components.navLink.reset(); components.navBounds.reset();
 }

@@ -30,10 +30,9 @@ namespace {
 }
 
 [[nodiscard]] int Migrate(const ArgumentList& arguments, CommandIo io) {
-    const std::optional<std::string> sceneOption = arguments.Option("--scene");
     const std::optional<std::string> outOption = arguments.Option("--out");
-    if (!sceneOption.has_value() || !outOption.has_value()) {
-        io.err << "error: world migrate needs --scene <file.21kbscene> --out <file.21kbworld>\n";
+    if (!outOption.has_value()) {
+        io.err << "error: world migrate needs --out <file.21kbworld> (and --scene <scene>, or it takes the startup scene of --project <dir>)\n";
         return 1;
     }
     const std::filesystem::path projectRoot = arguments.Option("--project").value_or("");
@@ -47,18 +46,19 @@ namespace {
         cellSize = *parsed;
     }
     std::string pathError;
-    const std::filesystem::path scene = ResolveProjectFile(*sceneOption, projectRoot, pathError);
+    const std::optional<std::string> project = arguments.Option("--project");
+    const std::filesystem::path scene = ResolveSceneArgument(arguments, pathError);
     if (scene.empty()) {
         io.err << "error: " << pathError << '\n';
         return 1;
     }
-    std::filesystem::path out{ *outOption };
-    if (out.is_relative() && !projectRoot.empty()) {
-        out = projectRoot / out;
-    }
-    if (!projectRoot.empty() && ResolveProjectFile(out, projectRoot, pathError).empty()) {
+    std::filesystem::path out = ResolveProjectArgument(*outOption, project, pathError);
+    if (out.empty()) {
         io.err << "error: --out: " << pathError << '\n';
         return 1;
+    }
+    if (out.is_relative() && !projectRoot.empty()) {
+        out = projectRoot / out;
     }
     const kb::world::WorldMigrationResult migrated = kb::world::WorldMigration::ConvertScene(scene, out, cellSize);
     if (!migrated.succeeded) {
@@ -111,7 +111,7 @@ namespace {
     }
     const std::optional<std::string> project = arguments.Option("--project");
     std::string pathError;
-    const std::filesystem::path world = ResolveProjectFile(*worldOption, project.value_or(""), pathError);
+    const std::filesystem::path world = ResolveProjectArgument(*worldOption, project, pathError);
     if (world.empty()) {
         io.err << "error: " << pathError << '\n';
         return 1;

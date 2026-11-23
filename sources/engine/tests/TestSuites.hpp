@@ -7,6 +7,7 @@ void RunAssetBakeTests();
 void RunAssetPackTests();
 void RunContentStreamingTests();
 void RunSaveGameTests();
+void RunAgentUndoJournalTests();
 void RunSecurityTests();
 void RunEcsRuntimeTests();
 void RunSceneHierarchyTests();
@@ -58,5 +59,6 @@ void RunWorldPartitionJourneyTests();
 void RunTerrainCollisionTests();
 void RunLargeWorldTests();
 void RunSceneBehaviourVariableTests();
+void RunSceneMultiBehaviourTests();
 
 } // namespace kb::tests

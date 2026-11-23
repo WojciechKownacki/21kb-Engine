@@ -80,13 +80,17 @@ std::string InspectorUIClickHandler::Describe(const kb::scene::Scene& scene, kb:
     const kb::scene::SceneEntity target = selectable->eventTarget != 0U ? kb::scene::SceneEntity{ selectable->eventTarget } : widget;
     if (!scene.Entities().IsAlive(target))
         return std::string{ event } + " " + std::string{ EditorText("inspector.onClick.targetMissing", "(target missing)") };
-    const auto* behaviour = scene.Components().Behaviours().TryGet(target);
-    const kb::assets::AssetMetadata* script = behaviour != nullptr
-        ? scene.Assets().Manager().Registry().Find(kb::assets::AssetId{ behaviour->behaviourAssetId }) : nullptr;
-    if (script != nullptr && !script->physicalPath.empty()) {
-        const auto functions = kb::script::FindLuaGlobalFunctions(ReadFile(script->physicalPath));
-        if (std::ranges::any_of(functions, [event](const auto& function) { return function.name == event; }))
-            return script->name + "." + std::string{ event };
+    // Any script the target runs may answer the click.
+    const auto behaviours = scene.Components().Behaviours();
+    for (std::size_t index = 0U; index < behaviours.Count(target); ++index) {
+        const auto* behaviour = behaviours.TryGetAt(target, index);
+        const kb::assets::AssetMetadata* script = behaviour != nullptr
+            ? scene.Assets().Manager().Registry().Find(kb::assets::AssetId{ behaviour->behaviourAssetId }) : nullptr;
+        if (script != nullptr && !script->physicalPath.empty()) {
+            const auto functions = kb::script::FindLuaGlobalFunctions(ReadFile(script->physicalPath));
+            if (std::ranges::any_of(functions, [event](const auto& function) { return function.name == event; }))
+                return script->name + "." + std::string{ event };
+        }
     }
     return std::string{ event } + " " + std::string{ EditorText("inspector.onClick.noScript", "(no script answers)") };
 }
@@ -97,8 +101,9 @@ std::string InspectorUIClickHandler::FunctionTemplate(const std::string& functio
 
 InspectorUIClickHandler::Target InspectorUIClickHandler::FindTarget(
     const kb::scene::Scene& scene, kb::scene::SceneEntity widget, kb::assets::AssetId script) {
-    const auto* own = scene.Components().Behaviours().TryGet(widget);
-    if (own != nullptr && own->behaviourAssetId == script.value) return { true, {}, false };
+    const auto widgetScripts = scene.Components().Behaviours();
+    for (std::size_t index = 0U; index < widgetScripts.Count(widget); ++index)
+        if (widgetScripts.TryGetAt(widget, index)->behaviourAssetId == script.value) return { true, {}, false };
     HolderSearch search{ script, {} };
     scene.Components().Behaviours().ForEach([](kb::scene::SceneEntity entity, const kb::scene::BehaviourComponent& behaviour, void* context) {
         auto& found = *static_cast<HolderSearch*>(context);
@@ -108,8 +113,8 @@ InspectorUIClickHandler::Target InspectorUIClickHandler::FindTarget(
     for (auto ancestor = scene.Hierarchy().Parent(widget); ancestor.IsValid(); ancestor = scene.Hierarchy().Parent(ancestor))
         if (std::ranges::find(search.holders, ancestor) != search.holders.end()) return { true, ancestor, false };
     if (!search.holders.empty()) return { true, search.holders.front(), false };
-    if (own == nullptr) return { true, {}, true };
-    return {};
+    // No object runs the script: the widget gets it, beside the scripts it runs already.
+    return { true, {}, true };
 }
 
 } // namespace kb::editor

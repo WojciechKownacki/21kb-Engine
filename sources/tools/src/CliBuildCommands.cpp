@@ -8,6 +8,9 @@
 #include "engine/project/ProjectManager.hpp"
 #include "engine/script/NativeScriptBuildPipeline.hpp"
 
+#include "CliCaptureImage.hpp"
+#include "CliCommon.hpp"
+
 #include <charconv>
 #include <filesystem>
 #include <optional>
@@ -129,6 +132,10 @@ constexpr std::string_view kProfileSuffix = ".frames.csv";
 } // namespace
 
 int RunBuildCommand(const ArgumentList& arguments, CommandIo io) {
+    // Android, web and Linux packages are made by the editor's package pipeline, run here without the editor.
+    if (const std::optional<std::string> platform = arguments.Option("--platform"); platform.has_value() && *platform != "windows") {
+        return RunPlatformBuild(arguments, io);
+    }
     const std::optional<std::string> project = arguments.Option("--project");
     const std::optional<std::string> out = arguments.Option("--out");
     if (!project.has_value() || !out.has_value()) {
@@ -152,13 +159,24 @@ int RunBuildCommand(const ArgumentList& arguments, CommandIo io) {
         io.err << "error: --pack-compression-level expects 0-19\n";
         return 1;
     }
-    const fs::path outputDirectory = AbsolutePath(*out);
+    // A relative --out is the project's, as it is for capture: not wherever the command was started.
+    fs::path outputPath = kb::assets::Utf8Path(*out);
+    if (outputPath.is_relative()) outputPath = projectFile.parent_path() / outputPath;
+    const fs::path outputDirectory = AbsolutePath(Utf8Text(outputPath));
     std::error_code status;
     if (fs::exists(outputDirectory, status) &&
         (!fs::is_directory(outputDirectory, status) || !fs::is_empty(outputDirectory, status))) {
         io.err << "error: " << Utf8Text(outputDirectory) << " exists and is not empty; build into a new folder\n";
         return 1;
     }
+    // The build holds the scenes the project's settings list. A scene that a script opens and the list leaves out is
+    // not in the built game: it would work in the editor and fail in the game, so it is said before the cook.
+    const std::vector<ScriptSceneReference> leftOut = ScenesReferencedButNotInBuild(projectFile.parent_path());
+    for (const ScriptSceneReference& reference : leftOut) {
+        io.err << "warning: " << reference.script << " opens " << reference.scene << ", which is not in the build, so the built game cannot open it; "
+               << "add it with: project-settings scenes --add " << reference.scene << '\n';
+    }
+
     std::vector<fs::path> libraries;
     if (!FindPlayerLibraries(loaded.descriptor, libraries, error)) {
         io.err << "error: " << error << '\n';
@@ -169,7 +187,6 @@ int RunBuildCommand(const ArgumentList& arguments, CommandIo io) {
     if (cooker.empty() || player.empty()) {
         return 1;
     }
-
     // The cooker is the one place that cooks; the staging folder for the project's own libraries
     // must not exist yet, and the cooker creates it only when the project has some.
     std::vector<std::string> words{ Utf8Text(cooker), "--project", Utf8Text(projectFile), "--target",
@@ -197,18 +214,26 @@ int RunBuildCommand(const ArgumentList& arguments, CommandIo io) {
         }
     }
     io.out << "built " << Utf8Text(outputDirectory) << ": " << kPackName << ", " << Utf8Text(player.filename()) << " and "
-           << libraries.size() - 1U << " libraries\n";
+           << libraries.size() - 1U << " libraries";
+    if (!leftOut.empty()) {
+        io.out << "; warning: " << leftOut.size() << (leftOut.size() == 1U ? " scene a script opens is" : " scenes scripts open are") << " not in the build (";
+        for (std::size_t index = 0U; index < leftOut.size(); ++index) io.out << (index == 0U ? "" : ", ") << leftOut[index].scene;
+        io.out << "); project-settings scenes --add <scene> includes one";
+    }
+    io.out << '\n';
     return 0;
 }
 
 int RunCaptureCommand(const ArgumentList& arguments, CommandIo io) {
     const std::optional<std::string> project = arguments.Option("--project");
     const std::optional<std::string> build = arguments.Option("--build");
-    const std::optional<std::string> out = arguments.Option("--out");
-    if (project.has_value() == build.has_value() || !out.has_value()) {
-        io.err << "error: capture needs --out <file.png> and either --project <dir> or --build <dir>, not both\n";
+    // Without --out a capture of a project goes to Saved/Agent/Captures, under a new name each time.
+    std::optional<std::string> out = arguments.Option("--out");
+    if (project.has_value() == build.has_value() || (!out.has_value() && !project.has_value())) {
+        io.err << "error: capture needs --project <dir> (--out <file.png> is optional) or --build <dir> with --out <file.png>, not both\n";
         return 1;
     }
+    if (!out.has_value()) out = Utf8Text(NextCapturePath(AbsolutePath(*project)));
     unsigned frames = 60U;
     unsigned width = 0U;
     unsigned height = 0U;
@@ -232,7 +257,12 @@ int RunCaptureCommand(const ArgumentList& arguments, CommandIo io) {
         }
         target = Utf8Text(pack);
     }
-    const fs::path picture = AbsolutePath(*out);
+    // A relative --out is the project's, as it is when an agent runs capture: not wherever the command was started.
+    fs::path picture = kb::assets::Utf8Path(*out);
+    if (project.has_value() && picture.is_relative()) {
+        picture = AbsolutePath(*project) / picture;
+    }
+    picture = AbsolutePath(Utf8Text(picture));
     // The player records frame statistics to run on its fixed 1/60 s step, which makes the same
     // frame count give the same picture; they are not the product here and are removed again.
     const fs::path statistics = fs::path{ picture }.concat(kProfileSuffix);
@@ -250,7 +280,26 @@ int RunCaptureCommand(const ArgumentList& arguments, CommandIo io) {
         "--screenshot-file=" + Utf8Text(picture), "--screenshot-frame=" + count, "--profile-fixed-step",
         "--profile-file=" + Utf8Text(statistics) };
     if (const std::optional<std::string> scene = arguments.Option("--scene"); scene.has_value()) {
-        words.push_back("--scene=" + *scene);
+        // A scene by its name (Level2) or as a path of the project is the /Game/ path the player takes.
+        std::string sceneError;
+        std::string sceneText = CanonicalSceneText(project, *scene, sceneError);
+        if (!sceneError.empty()) {
+            io.err << "error: " << sceneError << '\n';
+            return 1;
+        }
+        if (project.has_value() && !sceneText.starts_with("/Game/")) {
+            fs::path file = kb::assets::Utf8Path(sceneText);
+            if (file.is_relative()) file = AbsolutePath(*project) / file;
+            file = file.lexically_normal();
+            const fs::path assets = AbsolutePath(*project) / "Assets";
+            const std::string relative = file.lexically_relative(assets).generic_string();
+            if (!relative.empty() && !relative.starts_with("..")) sceneText = "/Game/" + relative;
+        }
+        words.push_back("--scene=" + sceneText);
+    }
+    // The camera the frame is drawn from: one of the scene's by name, or a free view of the scene.
+    for (const char* option : { "--camera", "--view", "--eye", "--look-at" }) {
+        if (const std::optional<std::string> value = arguments.Option(option); value.has_value()) words.push_back(std::string{ option } + "=" + *value);
     }
     if (width != 0U) {
         words.push_back("--width=" + std::to_string(width));
@@ -259,11 +308,22 @@ int RunCaptureCommand(const ArgumentList& arguments, CommandIo io) {
         words.push_back("--height=" + std::to_string(height));
     }
     const bool rendered = RunEngineTool(player, words, io);
-    fs::remove(statistics, status);
+    // The statistics file and what the player writes beside it (.meta.json, .trace.jsonl) are no part of the picture.
+    const std::string statisticsName = statistics.filename().string();
+    for (const fs::directory_entry& item : fs::directory_iterator(picture.parent_path(), status)) {
+        if (item.path().filename().string().starts_with(statisticsName)) fs::remove(item.path(), status);
+    }
     if (!rendered) {
         return 1;
     }
-    io.out << "captured frame " << frames << " to " << Utf8Text(picture) << '\n';
+    std::string shownPath = Utf8Text(picture);
+    if (project.has_value()) {
+        const std::string relative = picture.lexically_relative(AbsolutePath(*project)).generic_string();
+        if (!relative.empty() && !relative.starts_with("..")) shownPath = relative;
+    }
+    io.out << "captured frame " << frames << " to " << shownPath << '\n';
+    // What a model that cannot see the picture reads instead: size, colours, and whether the frame is blank.
+    if (const std::string summary = CaptureSummary(picture); !summary.empty()) io.out << summary << '\n';
     return 0;
 }
 

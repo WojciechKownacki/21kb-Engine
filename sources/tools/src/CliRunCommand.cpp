@@ -789,6 +789,12 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         }
     }
     if (sceneOption.has_value()) {
+        std::string sceneNameError;
+        *sceneOption = CanonicalSceneText(arguments.Option("--project"), *sceneOption, sceneNameError);
+        if (!sceneNameError.empty()) {
+            io.err << "error: " << sceneNameError << '\n';
+            return 1;
+        }
         if (scene.Assets().Manager().Mounts().Resolve(*sceneOption).has_value()) {
             const kb::assets::AssetMetadata* metadata =
                 FindAssetByFlexiblePath(scene.Assets().Manager().Registry(), *sceneOption);
@@ -863,7 +869,15 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
     }
 
     scene.Runtime().ApplyProjectSimulation(simulation);
-    kb::script::ScriptRuntimeHost host{ scene };
+    // Save.* and Settings.* keep their slots in the project's Saved/Saves, so a second run reads what the first one wrote;
+    // --fresh-saves (and --deterministic, which must not depend on an earlier run) starts from an empty folder.
+    kb::script::ScriptRuntimeHostOptions hostOptions;
+    hostOptions.userStorageRoot = projectRoot / "Saved" / "Saves";
+    if (arguments.Flag("--fresh-saves") || arguments.Flag("--deterministic")) {
+        std::error_code savesError;
+        std::filesystem::remove_all(hostOptions.userStorageRoot, savesError);
+    }
+    kb::script::ScriptRuntimeHost host{ scene, std::move(hostOptions) };
     RegisterStdoutLog(host, io.out);
     if (!host.Succeeded()) {
         for (const std::string& diagnostic : host.Diagnostics()) {

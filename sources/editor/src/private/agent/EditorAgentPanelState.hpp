@@ -2,6 +2,7 @@
 
 #include "agent/EditorAgentCatalog.hpp"
 #include "agent/EditorAgentProcess.hpp"
+#include "engine/project/AgentUndoJournal.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -36,6 +37,14 @@ enum class EditorAgentStepState : std::uint8_t {
 enum class EditorAgentFileChange : std::uint8_t {
     Added,
     Changed,
+};
+
+// One file the latest request changed, in the review under the conversation.
+struct EditorAgentReviewRow {
+    std::string path;
+    kb::project::AgentChangeKind kind = kb::project::AgentChangeKind::Modified;
+    // False for a file too large to keep a copy of: it is listed, an undo leaves it.
+    bool restorable = true;
 };
 
 // How much the agent may do with a request: change the project, only say how it would, or only answer.
@@ -212,6 +221,20 @@ public:
     // The files the latest request of any tab added or changed, by full path.
     [[nodiscard]] const std::map<std::filesystem::path, EditorAgentFileChange>& ChangedFiles() const noexcept { return changedFiles_; }
 
+    // What the latest request changed in the project's files, kept in Saved/Agent/Undo so it also survives a restart: the files
+    // changed, added and deleted since the request began, until the person keeps them or undoes them (all, or one file).
+    [[nodiscard]] const std::vector<EditorAgentReviewRow>& Review() const noexcept { return review_; }
+    // What sending a request does first, and what the end of a request does, as steps of their own (a headless scenario
+    // stands in for the agent between them): the project's files are recorded, then the changes since are read into the review.
+    void BeginUndoPointNow(const std::string& label);
+    // A record with nothing changed is closed when `closeWhenEmpty` (the end of a request), else it stays for what comes next.
+    void RefreshReview(bool closeWhenEmpty = false);
+    void KeepChanges();
+    // Puts back every changed file (`row` < 0) or the one in that row of the review, exactly as it was, deleted files included.
+    void UndoChanges(int row = -1);
+    // Whether the project's files were last reloaded because of an undo (the note after the reload differs); read once.
+    [[nodiscard]] bool TakeUndoReload() noexcept { const bool value = reloadFromUndo_; reloadFromUndo_ = false; return value; }
+
     [[nodiscard]] bool Running() const noexcept { return Active().running; }
     [[nodiscard]] bool AnyRunning() const noexcept;
     // Sends the active tab's draft to the selected agent; leaves a note in the tab when it
@@ -263,6 +286,9 @@ private:
     // Compares the project's files with the conversation's last look, notes what was added or
     // changed and returns whether anything was.
     bool TakeProjectChanges(EditorAgentConversation& conversation);
+    // Records the project's files before a request, so its changes can be undone (a request that starts while another still
+    // works shares the first one's record). Notes in the conversation when a record cannot be made.
+    void BeginUndoPoint(EditorAgentConversation& conversation, const std::filesystem::path& project, const std::string& request);
     void FinishStep(EditorAgentConversation& conversation, const std::string& toolId, bool failed);
     void ReadLine(EditorAgentConversation& conversation, const std::string& line);
     void ReadStreamJsonEvent(EditorAgentConversation& conversation, const std::string& line);
@@ -292,6 +318,10 @@ private:
     std::filesystem::path historyProject_;
     std::filesystem::path importedProject_;
     std::map<std::filesystem::path, EditorAgentFileChange> changedFiles_;
+    std::unique_ptr<kb::project::AgentUndoJournal> journal_;
+    std::vector<EditorAgentReviewRow> review_;
+    bool reviewDue_ = false;
+    bool reloadFromUndo_ = false;
     bool inputFocused_ = false;
     wchar_t pendingHighSurrogate_ = 0;
     bool typingRun_ = false;

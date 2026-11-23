@@ -25,7 +25,7 @@ int RunRig2DCommand(const ArgumentList&, CommandIo);
 #endif
 namespace {
 
-constexpr std::array<std::string_view, 5U> kUsageParts{
+constexpr std::array<std::string_view, 6U> kUsageParts{
 R"(kb_cli - 21kb Engine headless tooling for developers and AI coding agents
 
 Usage: kb_cli <command> [options]
@@ -58,6 +58,8 @@ Commands:
   script-new   Create a script, as the editor's Create menu does: Lua (one .lua
                file) or C++ (a .native asset, with its source and CMake project in
                Source/NativeScripts/<Name>). Existing files are never overwritten.
+               C++ is for developers: it needs the engine SDK and a C++ toolchain
+               (CMake and the Visual Studio C++ tools); a game's scripts are Lua.
                  --project <dir> --name <Name> --language lua|cpp
                  [--folder Assets/Scripts] [--code "<Lua text>"]
                (--code writes the whole Lua script at once instead of the template)
@@ -309,7 +311,8 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                  new --project <dir> --name <Entity> [--scene <path>] [--size 64x64]
                      [--orientation flat|wall] [--topology rectangular|isometric|hexagonal] [--view 15x11]   (map file, Mesh Renderer, Map Camera)
                  ground new --project <dir> --name Grass --texture "/Game/2D Map Sprites/terrain.png"
-                     [--cell-size 32] [--z 30] [--tiles 25] [--island 16] [--hole 19]
+                     [--cell-size 32] [--z 30] [--tiles 25,26] [--weights 3,1] [--island 16] [--hole 19]
+                     (--tiles lists sprites the ground picks between, --weights how often each is picked, one number per tile)
                      [--border n=<cell>,cse=<cell>,...]   (island: top-left sprite of a 3x3 island,
                      hole: of a 2x2 hole; a higher --z borders onto lower grounds and empty tiles)
                  ground set --project <dir> --name <Name> (same options) | ground list --project <dir>
@@ -384,7 +387,8 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                "failedOperation","operations":[...],"changes":[{"path","status",
                "bytesBefore","bytesAfter","diff"}],"errors":[...]})
   script-build Build the project's C++ scripts (or one), as Play and the cooker
-               do. Exits 1 when a build fails.
+               do. Exits 1 when a build fails, or at once when this installation has no
+               engine SDK or C++ toolchain: C++ scripts are for developers, use Lua.
                  --project <dir> [--script <path>]
   entity       Add, remove or show a scene entity (the project's startup scene unless --scene).
                  add --project <dir> [--scene <path>] --name <Name> [--parent <Name>]
@@ -510,10 +514,14 @@ R"(  validate     Validate Lua behaviour scripts (syntax + sandbox load) and the
                  --project <dir> --scene <path> --node <name> --script <path>
                  [--tick-group <group>] [--execution-order <n>] [--disabled] [--replace]
                  [--set <variable>=<value> ...]
-               (an entity runs one behaviour; --replace swaps a different one out; --set gives this node its
-               own value for an exposed variable of the Lua script, stored in the scene and in prefabs made
-               from it; a value equal to the script default stores nothing, an unknown variable lists the
-               ones the script exposes)
+               (a node runs several scripts, up to 8, each with its own self: a second script is added after
+               the first; the same script again changes its settings; --replace makes it the only one.
+               --set gives this node its own value for an exposed variable of the Lua script, stored in the
+               scene and in prefabs made from it; a value equal to the script default stores nothing, an
+               unknown variable lists the ones the script exposes)
+  scene-detach Take one script off a scene node and save the scene.
+                 --project <dir> [--scene <path>] --node <name> [--script <path>]
+               (--script names the one to remove; it can be left out when the node runs one script)
   input-action Create an input action and bind keys in the project's input context
                (made and set when the project has none), as the Input Actions window.
                  new --project <dir> --name <Name> [--type Bool|Float|Axis2D|Axis3D]
@@ -544,7 +552,9 @@ R"(  run          Run a scene headless and report logs, events, and errors (the
                   presses on the frame, lets go on the next; the run says what was under it and who answered)]
                  [--viewport WIDTHxHEIGHT] [--safe-area LEFT,TOP,RIGHT,BOTTOM]
                  [--workers <1..64>] [--ecs-history <1..256> with --report ecs]
-                 [--ecs-parallelism systems|chunks|combined] [--deterministic]
+                 [--ecs-parallelism systems|chunks|combined] [--deterministic] [--fresh-saves]
+               Save.Write and Save.Read (and Settings.*) keep their slots in the project's Saved/Saves, so a
+               second run reads what the first wrote; --fresh-saves (and --deterministic) starts with none.
                Replay uses recorded per-tick durations and controller slots; --frames
                may select a prefix. --dt and audio probes cannot override replay timing.
                Recording captures input before each completed tick, including a partial
@@ -567,9 +577,11 @@ R"(  run          Run a scene headless and report logs, events, and errors (the
                instances, scripts, physics, graphics; each measured, estimated or
                unavailable) against what the streaming budget charged; see
                docs/world_memory.md.
-  mcp          Serve the commands above as MCP tools over stdio (newline-
+)",
+R"(  mcp          Serve the commands above as MCP tools over stdio (newline-
                delimited JSON-RPC), for use from MCP-compatible clients.
-                 [--project <dir>]
+                 [--project <dir>] [--tools core|all] [--images on|off]
+               A capture comes back as an image block under its text; --images off sends the text alone.
   lsp          Serve the Language Server Protocol over stdio for the Lua scripts of a
                project, so any code editor that speaks it gets diagnostics (syntax and
                constructs outside the language every platform runs), completion and hover
@@ -641,23 +653,51 @@ R"(  run          Run a scene headless and report logs, events, and errors (the
                  verify [--anchor <file>] <dir>
   build        Cook a project, pack it and stage a folder that runs: Game.kbpack, the
                player kb_game, the engine module libraries the project enables and the
-               project's own libraries (RuntimeModules). Windows x64 only; for other
-               targets and signed releases use scripts/package_game.py.
+               project's own libraries (RuntimeModules). A relative --out is inside the project.
                  --project <dir> --out <new folder> [--pack-compression-level <0-19>]
                  [--cache <dir>] [--engine-root <dir>] [--shaderc <executable>]
                Needs kb_cooker and kb_game beside kb_cli. Sign the result with pack sign
                and release sign when it ships.
+                 --project <dir> --platform android|web|linux [--out <folder for packages, outside the project>]
+                 [--profile development|release] [--texture astc|etc2 (android)] [--renderer webgl|webgpu (web)]
+                 [--build-root <engine build folder>] [--engine-root <engine folder>] [--python <executable>]
+                 [--emsdk <folder> (web)] [--android-format apk|aab] [--android-keystore <file> --android-key-alias <alias>]
+                 [--linux-host <host> --linux-user <user> --linux-host-key <key> --linux-identity <file> --linux-port <n>] [--verbose]
+               --platform runs the editor's Build Game pipeline (scripts/package_game.py) without the editor, with the
+               settings its panel saved for the project. It needs Python 3.10+, and for android the Android SDK with
+               its NDK; for web the Emscripten SDK (--emsdk or EMSDK); for linux an SSH host to build on. CMake and
+               a JDK 17+ are found by themselves (PATH, JAVA_HOME, the Android SDK, Android Studio, the usual install
+               folders); what is missing is listed before anything starts. A release Android package reads the
+               keystore passwords from KB_ANDROID_STORE_PASSWORD and KB_ANDROID_KEY_PASSWORD.
+               Studio and game name come from the project settings (project-settings --set Product.Publisher=...).
   capture      Render a project or a build headless and write one frame as a PNG.
-                 (--project <dir> | --build <folder made by build>) --out <new file.png>
+                 (--project <dir> | --build <folder made by build>) [--out <new file.png>]
+                 (a relative --out is inside the --project folder; a project without --out
+                 gets Saved/Agent/Captures/capture-<n>.png)
                  [--scene </Game/Path.21kbscene>] [--frames <1-120000>]
                  [--width <64-8192>] [--height <64-8192>]
+                 [--camera <camera entity> | --view overview|top|front|side |
+                  --eye <x,y,z> --look-at <x,y,z>]
                The picture is frame --frames (default 60) of a fixed 1/60 s step, so the
                same count gives the same picture. Needs kb_game beside kb_cli and a GPU.
+               --camera draws from that camera of the scene, --view or --eye/--look-at from
+               a free view like the editor's scene view (overview frames everything).
+               Prints the picture's size, mean colour, dominant colours and whether the frame
+               is blank. Through `kb_cli mcp` the picture itself comes back as an image.
+  undo         The undo point of an agent's changes to the project's files, kept in
+               Saved/Agent/Undo (the editor's Agent panel takes one before each request).
+                 --project <dir> --begin [--label <text>]   record the project as it is
+                 --project <dir> --list                     the files changed, added, deleted since
+                 --project <dir> --last [--file <path>]...  put them back (all, or the named ones)
+                 --project <dir> --accept                   keep the changes
+               Folders of generated data (Saved, Library, Binaries, Intermediate, Build, Saves,
+               .git, .kb) are not covered; a file over 48 MiB is listed but cannot be put back.
   world        Convert a single-file scene into a partitioned world (one file
                per object), or build a world's streaming cells.
-                 migrate --scene <file.21kbscene> --out <file.21kbworld>
+                 migrate [--scene <scene>] --out <file.21kbworld>
                          [--cell-size <metres>] [--project <dir>]
                  build --world <file.21kbworld> [--project <dir>]
+               (the scene defaults to the one the game starts in; scene and files may be /Game/... paths, with --project)
                build writes the cells, the cell index and the HLOD proxies,
                exactly as the editor and kb_cooker do.
                  chunks --project <dir> [--exclude <prefix>[,<prefix>...]]
@@ -665,13 +705,15 @@ R"(  run          Run a scene headless and report logs, events, and errors (the
                A world whose file enables navigation also gets one navigation
                mesh per cell from build.
   navmesh      Bake a scene's navigation mesh, or describe a baked one.
-                 bake --scene <file.21kbscene> [--project <dir>]
+                 bake [--scene <scene>] [--project <dir>]
                       [--out <file.21kbnavmesh>] [--cell-size <metres>]
                       [--cell-height <metres>] [--tile-cells <n>]
                       [--agent <name>:<radius>:<height>:<climb>:<slope>]...
                bake writes <scene>.21kbnavmesh by default, exactly as the
                editor's Bake Navigation Mesh does; settings not given are
-               those of the mesh it replaces, else the defaults.
+               those of the mesh it replaces, else the defaults. Without
+               --scene it takes the scene the game starts in; a scene is
+               /Game/Scenes/Main.21kbscene or a path in the project.
                  info <file.21kbnavmesh>
   physics-layers  Show or edit the project's layer collision matrix.
                  --project <dir> [--name <index>=<Name>]...
@@ -690,6 +732,14 @@ R"(  run          Run a scene headless and report logs, events, and errors (the
                Without --set it lists every setting as Section.Key=value, e.g.
                Maps.DefaultMap (the scene the game starts in), Identity.GameName,
                Display.WindowWidth, Physics.GravityY. A scene is /Game/<path>.21kbscene.
+                 scenes --project <dir> [--add <scene>]... [--remove <scene>]...
+                        [--order <scene>,<scene>...] [--startup <scene>]
+               scenes lists the scenes the built game holds, the startup scene first (only those
+               are in a build, also for a scene a script or a button opens), and changes them:
+               --order sets the whole list (the first one starts the game); a scene is its /Game/
+               path or just its name (Level2). It also warns about a scene a script opens that is left out.
+                 tags --project <dir> [--add <Name>]... [--remove <Name>]...
+               tags lists the project's own tags for objects, besides the built-in ones, and changes them.
   asset        Tidy the project's files as Project Files does: delete (to the Recycle Bin), rename
                or move a file or folder with its .meta, or make a folder.
                  delete --project <dir> --path /Game/<file or folder>
@@ -794,8 +844,9 @@ R"(  image        Draw a picture into the project and import it, so it is an ass
                language with the default language's texts; missing lists what is not translated yet;
                default is the language the game starts in and a missing text falls back to)
   editor       Ask the editor that has the project open to open a scene, or to build the game
-               for a platform with its Build Game panel (its settings, keys and tools).
-                 open-scene --project <dir> --scene /Game/<path>.21kbscene
+               for a platform with its Build Game panel (its settings, keys and tools). Fails when
+               no editor takes the request within a few seconds (build --platform needs no editor).
+                 open-scene --project <dir> [--scene /Game/<path>.21kbscene]
                  build --project <dir> --target windows|android|web|webgpu|linux
                        [--profile development|release]
                A build reports in Saved/Agent/BuildResult.txt: Running, then Succeeded <folder> or
@@ -865,7 +916,7 @@ void PrintCommandUsage(std::ostream& output, std::string_view command) {
 // A misspelled option must fail, not be ignored: for these commands the options accepted are the
 // ones their usage block names, plus the global ones. The other commands check their own.
 constexpr std::string_view kUsageCheckedCommands[]{ "entity", "component", "schema", "guide", "code", "api", "validate", "scene-list",
-    "scene-attach", "scene-new", "scene-duplicate", "run", "material-new", "material-set", "material-show", "input-action", "prefab", "build", "capture",
+    "scene-attach", "scene-detach", "scene-new", "scene-duplicate", "run", "material-new", "material-set", "material-show", "input-action", "prefab", "build", "capture",
     "package" };
 
 bool RejectUnknownOptions(std::string_view command, const ArgumentList& arguments, std::ostream& err) {
@@ -889,9 +940,10 @@ bool RejectUnknownOptions(std::string_view command, const ArgumentList& argument
     return true;
 }
 
-constexpr std::array<std::string_view, 20> kFlagNames{
+constexpr std::array<std::string_view, 25> kFlagNames{
     "--full", "--verbose", "--anti-rollback", "--disabled", "--quiet", "--update-baseline", "--require-gpu", "--allow-fallback", "--as-ground", "--no-borders", "--items",
-    "--diff", "--list-backups", "--allow-unsigned", "--deny-unsigned", "--replace", "--realtime", "--deterministic", "--all", "--check" };
+    "--diff", "--list-backups", "--allow-unsigned", "--deny-unsigned", "--replace", "--realtime", "--deterministic", "--all", "--check",
+    "--begin", "--list", "--last", "--accept", "--fresh-saves" };
 
 #if KB_CLI_RENDERER
 constexpr bool kRendererAvailable = true;
@@ -922,6 +974,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"validate", &RunValidateCommand, CliCommandKind::Normal, true, "validate_script", CliJsonOutput::Structured},
     {"scene-list", &RunSceneListCommand, CliCommandKind::Normal, true, "scene_list", CliJsonOutput::Structured},
     {"scene-attach", &RunSceneAttachCommand, CliCommandKind::Normal, true, "scene_attach", CliJsonOutput::Structured, true},
+    {"scene-detach", &RunSceneDetachCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
     {"input-action", &RunInputActionCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
     {"prefab", &RunPrefabCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
     {"layout", &RunLayoutCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
@@ -937,6 +990,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"release", &RunReleaseCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
     {"build", &RunBuildCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
     {"capture", &RunCaptureCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
+    {"undo", &RunUndoCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
     {"world", &RunWorldCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
     {"navmesh", &RunNavMeshCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
     {"physics-layers", &RunPhysicsLayersCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},

@@ -51,17 +51,21 @@ using kb::core::JsonValue;
 // The functions among `names` that an entity's Lua behaviour defines, with the script's path.
 void AppendAnswers(JsonValue& answers, const kb::scene::Scene& scene, const kb::script::UIScriptIndex& scripts,
     kb::scene::SceneEntity entity, const std::vector<std::string>& names, std::string_view role) {
-    const kb::scene::BehaviourComponent* behaviour = scene.Components().Behaviours().TryGet(entity);
-    if (behaviour == nullptr || !behaviour->enabled) return;
-    const kb::assets::AssetMetadata* script = scene.Assets().Manager().Registry().Find(kb::assets::AssetId{ behaviour->behaviourAssetId });
-    for (const std::string& name : names) {
-        if (!scripts.Defines(behaviour->behaviourAssetId, name)) continue;
-        auto answer = JsonValue::MakeObject();
-        answer.Set("event", JsonValue::MakeString(name));
-        answer.Set("role", JsonValue::MakeString(std::string{ role }));
-        answer.Set("entity", JsonValue::MakeString(PathOf(scene, entity)));
-        answer.Set("script", JsonValue::MakeString(script != nullptr ? script->virtualPath.generic_string() : std::string{}));
-        answers.Append(std::move(answer));
+    // Every script the entity runs may answer.
+    const auto behaviours = scene.Components().Behaviours();
+    for (std::size_t at = 0U; at < behaviours.Count(entity); ++at) {
+        const kb::scene::BehaviourComponent* behaviour = behaviours.TryGetAt(entity, at);
+        if (behaviour == nullptr || !behaviour->enabled) continue;
+        const kb::assets::AssetMetadata* script = scene.Assets().Manager().Registry().Find(kb::assets::AssetId{ behaviour->behaviourAssetId });
+        for (const std::string& name : names) {
+            if (!scripts.Defines(behaviour->behaviourAssetId, name)) continue;
+            auto answer = JsonValue::MakeObject();
+            answer.Set("event", JsonValue::MakeString(name));
+            answer.Set("role", JsonValue::MakeString(std::string{ role }));
+            answer.Set("entity", JsonValue::MakeString(PathOf(scene, entity)));
+            answer.Set("script", JsonValue::MakeString(script != nullptr ? script->virtualPath.generic_string() : std::string{}));
+            answers.Append(std::move(answer));
+        }
     }
 }
 

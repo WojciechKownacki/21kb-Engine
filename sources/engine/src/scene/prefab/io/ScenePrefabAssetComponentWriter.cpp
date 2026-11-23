@@ -513,6 +513,18 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
             output << key << ".name=" << ScenePrefabAssetEscaper::Escape(entry.name) << '\n';
             output << key << ".value=" << ScenePrefabAssetEscaper::Escape(kb::script::FormatTypedValueText(entry.value)) << '\n';
         }
+        if (!components.additionalBehaviours.empty()) {
+            output << "behaviour.extraCount=" << components.additionalBehaviours.size() << '\n';
+        }
+        for (std::size_t index = 0U; index < components.additionalBehaviours.size(); ++index) {
+            const BehaviourComponent& extra = components.additionalBehaviours[index];
+            const std::string key = "behaviour.extra." + std::to_string(index);
+            output << key << ".behaviourAssetId=" << extra.behaviourAssetId << '\n';
+            output << key << ".backend=" << static_cast<int>(extra.backend) << '\n';
+            output << key << ".enabled=" << (extra.enabled ? 1 : 0) << '\n';
+            output << key << ".tickGroup=" << static_cast<int>(extra.tickGroup) << '\n';
+            output << key << ".executionOrder=" << extra.executionOrder << '\n';
+        }
     }
 
     output << "audioSource=" << (components.audioSource.has_value() ? 1 : 0) << '\n';

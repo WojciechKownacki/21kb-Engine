@@ -138,6 +138,41 @@ private:
     const std::filesystem::path& projectRoot,
     std::string& error);
 
+// A path an argument names, as every command takes it: "/Game/..." is a file of the project's content (the folder the
+// project mounts as /Game, which needs --project), any other path is resolved as ResolveProjectFile does. Empty with
+// `error` set when the path leaves the project or /Game/ is used without a project.
+[[nodiscard]] std::filesystem::path ResolveProjectArgument(
+    const std::string& text,
+    const std::optional<std::string>& project,
+    std::string& error);
+
+// The scene --scene names, or without it the scene the project's game starts in (--project is needed for that), as
+// ResolveProjectArgument resolves it. `error` is set when it is empty.
+[[nodiscard]] std::filesystem::path ResolveSceneArgument(const ArgumentList& arguments, std::string& error);
+
+// What a --scene text names: a path (kept as written), or a scene of the project by its name (Level2, Scenes/Level2.21kbscene)
+// as its /Game/ path. A bare name that is no scene of the project sets `error` (with the nearest scene named).
+[[nodiscard]] std::string CanonicalSceneText(const std::optional<std::string>& project, std::string_view text, std::string& error);
+
+// Every scene of the project (a .21kbscene under its content), as /Game/ paths in name order.
+[[nodiscard]] std::vector<std::string> ProjectScenePaths(const std::filesystem::path& projectRoot);
+
+// A scene of the project as a person writes it - /Game/Scenes/Level2.21kbscene, Assets/Scenes/Level2.21kbscene or just
+// Level2 - as its /Game/ path. nullopt with `error` set (and the nearest scene named) when the project has none like it.
+[[nodiscard]] std::optional<std::string> ResolveProjectScene(
+    const std::filesystem::path& projectRoot, std::string_view text, std::string& error);
+
+// A scene one of the project's Lua scripts opens (Scene.Load with its path, or any scene path written in the script).
+struct ScriptSceneReference {
+    std::string scene;  // /Game/ path of a scene of the project
+    std::string script; // /Game/ path of the script that names it
+};
+// Every scene of the project that a Lua script names, with the first script that does, in scene order.
+[[nodiscard]] std::vector<ScriptSceneReference> FindScriptSceneReferences(const std::filesystem::path& projectRoot);
+// The scenes the project's game cannot open: those a script names that its settings leave out of the build. The
+// sentence tells what to run; empty when there are none.
+[[nodiscard]] std::vector<ScriptSceneReference> ScenesReferencedButNotInBuild(const std::filesystem::path& projectRoot);
+
 // A colour as a person writes it: "#RRGGBB" (or "#RRGGBBAA" when `channels` is 4) is sRGB, as
 // every colour picker shows it, and comes back linear; "r,g,b[,a]" are linear values in 0..1.
 [[nodiscard]] std::optional<std::array<float, 4>> ParseColorText(std::string_view text, std::size_t channels);

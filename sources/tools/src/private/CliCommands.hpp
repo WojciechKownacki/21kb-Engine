@@ -52,6 +52,7 @@ namespace kb::cli {
 [[nodiscard]] int RunValidateCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunSceneListCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunSceneAttachCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunSceneDetachCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunInputActionCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunPrefabCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunSceneNewCommand(const ArgumentList& arguments, CommandIo io);
@@ -103,7 +104,11 @@ void AddProjectLuaGlobals(kb::script::ScriptApiCatalog& catalog, const std::file
 [[nodiscard]] int RunReleaseCommand(const ArgumentList& arguments, CommandIo io);
 // Cook, stage and render the project with the engine's cooker and player (CliBuildCommands.cpp).
 [[nodiscard]] int RunBuildCommand(const ArgumentList& arguments, CommandIo io);
+// build --platform android|web|linux: the editor's package pipeline without the editor (CliPlatformBuild.cpp).
+[[nodiscard]] int RunPlatformBuild(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunCaptureCommand(const ArgumentList& arguments, CommandIo io);
+// The undo point of an agent's changes to the project's files (CliUndoCommand.cpp).
+[[nodiscard]] int RunUndoCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunWorldCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunNavMeshCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunPhysicsLayersCommand(const ArgumentList& arguments, CommandIo io);

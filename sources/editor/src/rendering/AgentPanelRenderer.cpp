@@ -32,6 +32,9 @@ constexpr int kCardPad = 12;
 constexpr int kInputPoint = 12;
 constexpr int kAttachmentSize = 52;
 constexpr int kRequestPicture = 64;
+constexpr int kReviewHeader = 32;
+constexpr int kReviewRow = 22;
+constexpr std::size_t kReviewRows = 4U;
 constexpr int kPictureMaxWidth = 420;
 constexpr int kPictureMaxHeight = 260;
 constexpr COLORREF kTeal = RGB(0, 112, 224);
@@ -336,6 +339,41 @@ void PaintPicker(HDC dc, const RECT& rect, const EditorTheme& theme, std::string
     return text;
 }
 
+// The files the latest request changed: how many, Keep all and Undo all, and one row per file with its own Undo.
+void PaintReview(HDC dc, const AgentPanelLayout& layout, const EditorTheme& theme, const EditorAgentPanelState& state) {
+    const std::vector<EditorAgentReviewRow>& review = state.Review();
+    FillRound(dc, layout.review, Color(theme.toolbarButton), Color(theme.borderPanel), 8);
+    const std::string title = EditorLocalization::Format("agent.review.title", "{count} file(s) changed by the agent",
+        { { "count", std::to_string(review.size()) } });
+    Text(dc, RECT{ layout.review.left + 12, layout.review.top + 4, layout.reviewKeep.left - 6, layout.review.top + kReviewHeader }, title,
+        Color(theme.textPrimary), 11, FW_SEMIBOLD, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    FillRound(dc, layout.reviewKeep, Color(theme.panel), Color(theme.borderPanel), 6);
+    Text(dc, layout.reviewKeep, EditorText("agent.review.keepAll", "Keep all"), Color(theme.textPrimary), 10, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    FillRound(dc, layout.reviewUndoAll, Color(theme.accent), Color(theme.accent), 6);
+    Text(dc, layout.reviewUndoAll, EditorText("agent.review.undoAll", "Undo all"), RGB(255, 255, 255), 10, FW_SEMIBOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    for (std::size_t row = 0; row < layout.reviewRows.size(); ++row) {
+        const RECT& area = layout.reviewRows[row];
+        const EditorAgentReviewRow& item = review[row];
+        const bool added = item.kind == kb::project::AgentChangeKind::Added;
+        const bool deleted = item.kind == kb::project::AgentChangeKind::Deleted;
+        const COLORREF colour = added ? kGreen : deleted ? kDanger : kAmber;
+        const std::string_view mark = added ? "+" : deleted ? "-" : "~";
+        Text(dc, RECT{ area.left + 4, area.top, area.left + 18, area.bottom }, mark, colour, 11, FW_BOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        Text(dc, RECT{ area.left + 22, area.top, layout.reviewRowUndo[row].left - 6, area.bottom }, item.path,
+            item.restorable ? Color(theme.textSecondary) : Color(theme.textDisabled), 10, FW_NORMAL,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS);
+        if (item.restorable) {
+            Text(dc, layout.reviewRowUndo[row], EditorText("agent.review.undo", "Undo"), Color(theme.accent), 10, FW_NORMAL, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+        }
+    }
+    if (layout.reviewMore > 0 && !layout.reviewRows.empty()) {
+        const int top = static_cast<int>(layout.reviewRows.back().bottom);
+        Text(dc, RECT{ layout.review.left + 22, top, layout.review.right - 8, top + kReviewRow },
+            EditorLocalization::Format("agent.review.more", "and {count} more", { { "count", std::to_string(layout.reviewMore) } }),
+            Color(theme.textDisabled), 10, FW_NORMAL, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    }
+}
+
 // Entries bottom-aligned in `column`, scrolled up by the conversation's scroll, clipped to `clip`.
 void PaintEntries(HDC dc, const RECT& column, const RECT& clip, const EditorTheme& theme, const EditorAgentPanelState& state) {
     const std::vector<EditorAgentEntry>& entries = state.Active().entries;
@@ -453,7 +491,26 @@ AgentPanelLayout AgentPanelRenderer::Resolve(const RECT& content, const EditorAg
     layout.status = RECT{ layout.composer.left, footerTop, footerMiddle, footerBottom };
     layout.usage = RECT{ footerMiddle + 8, footerTop, footerRight, footerBottom };
 
-    layout.conversation = RECT{ content.left, layout.toolbar.bottom, content.right, std::max(static_cast<int>(layout.toolbar.bottom), attachmentsTop - 8) };
+    // What the latest request changed in the project, with Keep all and Undo all, stands over the pictures and the composer.
+    int conversationEdge = attachmentsTop - 8;
+    if (!state.Review().empty()) {
+        const int shownRows = static_cast<int>(std::min<std::size_t>(state.Review().size(), kReviewRows));
+        layout.reviewMore = static_cast<int>(state.Review().size()) - shownRows;
+        const int height = kReviewHeader + shownRows * kReviewRow + (layout.reviewMore > 0 ? kReviewRow : 0) + 6;
+        const int reviewBottom = attachmentsTop - 6;
+        const int reviewTop = std::max(static_cast<int>(layout.toolbar.bottom) + 40, reviewBottom - height);
+        layout.review = RECT{ columnLeft, reviewTop, columnLeft + columnWidth, reviewBottom };
+        const int buttonWidth = 74;
+        layout.reviewUndoAll = RECT{ layout.review.right - 8 - buttonWidth, reviewTop + 5, layout.review.right - 8, reviewTop + kReviewHeader - 3 };
+        layout.reviewKeep = RECT{ layout.reviewUndoAll.left - 6 - buttonWidth, reviewTop + 5, layout.reviewUndoAll.left - 6, reviewTop + kReviewHeader - 3 };
+        for (int row = 0; row < shownRows; ++row) {
+            const int top = reviewTop + kReviewHeader + row * kReviewRow;
+            layout.reviewRows.push_back(RECT{ layout.review.left + 8, top, layout.review.right - 8, top + kReviewRow });
+            layout.reviewRowUndo.push_back(RECT{ layout.review.right - 8 - 50, top, layout.review.right - 8, top + kReviewRow });
+        }
+        conversationEdge = reviewTop - 8;
+    }
+    layout.conversation = RECT{ content.left, layout.toolbar.bottom, content.right, std::max(static_cast<int>(layout.toolbar.bottom), conversationEdge) };
     layout.column = RECT{ columnLeft, layout.conversation.top + kPad, columnLeft + columnWidth, layout.conversation.bottom };
     // The example requests stand one above another, so they read in a narrow side panel too.
     constexpr int chipHeight = 32;
@@ -588,6 +645,7 @@ void AgentPanelRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& t
     } else {
         PaintInput(dc, layout.input, theme, state);
     }
+    if (layout.review.right > layout.review.left) PaintReview(dc, layout, theme, state);
     for (std::size_t index = 0; index < layout.attachments.size(); ++index) {
         const RECT& slot = layout.attachments[index];
         FillRound(dc, slot, Color(theme.chrome), Color(theme.borderPanel), 6);
@@ -667,6 +725,13 @@ AgentPanelHit AgentPanelRenderer::HitTest(const RECT& content, const EditorAgent
     if (Inside(layout.modelMenu, x, y)) return { AgentPanelHitKind::ModelMenu };
     if (Inside(layout.effortMenu, x, y)) return { AgentPanelHitKind::EffortMenu };
     if (Inside(layout.connectButton, x, y)) return { AgentPanelHitKind::ConnectTools };
+    if (layout.review.right > layout.review.left) {
+        if (Inside(layout.reviewKeep, x, y)) return { AgentPanelHitKind::ReviewKeep };
+        if (Inside(layout.reviewUndoAll, x, y)) return { AgentPanelHitKind::ReviewUndoAll };
+        for (std::size_t row = 0; row < layout.reviewRowUndo.size(); ++row) {
+            if (state.Review()[row].restorable && Inside(layout.reviewRowUndo[row], x, y)) return { AgentPanelHitKind::ReviewUndoFile, static_cast<int>(row) };
+        }
+    }
     if (Inside(layout.status, x, y) && state.Current() != nullptr && !state.SignedIn() && !state.CheckingAccount()) {
         return { AgentPanelHitKind::SignInHint };
     }

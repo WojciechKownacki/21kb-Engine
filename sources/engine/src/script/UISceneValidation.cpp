@@ -30,11 +30,18 @@ using kb::scene::ScenePrefabNodeDesc;
 }
 
 // The behaviour may answer `function`: it defines it, or it is a script this check cannot read.
+[[nodiscard]] bool MayAnswerWith(const kb::scene::BehaviourComponent& behaviour, const UIScriptIndex& scripts, std::string_view function) {
+    if (!behaviour.enabled || behaviour.behaviourAssetId == 0U) return false;
+    if (behaviour.backend != BehaviourBackend::Lua || !scripts.IsLua(behaviour.behaviourAssetId)) return true;
+    return scripts.Defines(behaviour.behaviourAssetId, function);
+}
+
+// Any script of the node may answer: the first one, or one of the others it runs.
 [[nodiscard]] bool MayAnswer(const ScenePrefabNodeDesc& node, const UIScriptIndex& scripts, std::string_view function) {
     const auto& behaviour = node.components.behaviour;
-    if (!behaviour || !behaviour->enabled || behaviour->behaviourAssetId == 0U) return false;
-    if (behaviour->backend != BehaviourBackend::Lua || !scripts.IsLua(behaviour->behaviourAssetId)) return true;
-    return scripts.Defines(behaviour->behaviourAssetId, function);
+    if (!behaviour) return false;
+    if (MayAnswerWith(*behaviour, scripts, function)) return true;
+    return std::ranges::any_of(node.components.additionalBehaviours, [&](const kb::scene::BehaviourComponent& further) { return MayAnswerWith(further, scripts, function); });
 }
 
 [[nodiscard]] bool ThemeMayStyle(const ScenePrefabNodeDesc& node) {

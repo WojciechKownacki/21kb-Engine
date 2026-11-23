@@ -8,6 +8,7 @@
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/assets/BuiltInShapes.hpp"
+#include "engine/assets/CollisionMeshAsset.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/project/ProjectSettings.hpp"
@@ -247,6 +248,12 @@ thread_local OpenScenes* gOpenScenes = nullptr;
             kb::project::ProjectSettingsStore::Load(kb::project::ProjectSettingsStore::FilePath(projectFile.parent_path()));
         sceneOption = settings.settings.defaultMap;
     }
+    std::string sceneNameError;
+    sceneOption = CanonicalSceneText(project, sceneOption, sceneNameError);
+    if (!sceneNameError.empty()) {
+        io.err << "error: " << sceneNameError << '\n';
+        return nullptr;
+    }
     if (session->scene->Assets().Manager().Mounts().Resolve(Utf8Path(sceneOption)).has_value()) {
         const kb::assets::AssetMetadata* metadata =
             FindAssetByFlexiblePath(session->scene->Assets().Manager().Registry(), sceneOption);
@@ -410,6 +417,10 @@ void ListProperties(std::string_view component, std::ostream& out) {
             out << ' ' << desc.name;
         }
     }
+    // The other body of a joint is an object, which a script cannot name: component set takes its name or path.
+    if (component == "Joint") {
+        out << " connectedEntity";
+    }
 }
 
 // A component of `schema` for the data field: id, display name, plugin and the writable properties (as ListProperties
@@ -425,6 +436,7 @@ void ListProperties(std::string_view component, std::ostream& out) {
         for (const kb::script::ScriptSceneComponentPropertyDesc& desc : kb::script::ScriptSceneComponentApi::ComponentProperties(id)) {
             if (desc.writable) names.Append(JsonValue::MakeString(std::string{ desc.name }));
         }
+        if (id == "Joint") names.Append(JsonValue::MakeString("connectedEntity"));
         row.Set("properties", std::move(names));
     }
     return row;
@@ -457,6 +469,23 @@ void ListProperties(std::string_view component, std::ostream& out) {
     }
     const std::string_view name = setting.substr(0, equals);
     const std::string_view value = setting.substr(equals + 1U);
+
+    // Visibility.mode by its words: Visible, Hidden or Inherit (a number is still taken).
+    if (component == "Visibility" && name == "mode" && !value.empty() && std::isalpha(static_cast<unsigned char>(value.front())) != 0) {
+        std::string word{ value };
+        std::ranges::transform(word, word.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        kb::scene::VisibilityComponent visibility = scene.Components().Visibility().Get(entity);
+        if (word == "visible") visibility.mode = kb::scene::VisibilityMode::Visible;
+        else if (word == "hidden") visibility.mode = kb::scene::VisibilityMode::Hidden;
+        else if (word == "inherit") visibility.mode = kb::scene::VisibilityMode::Inherit;
+        else {
+            io.err << "error: Visibility.mode takes Visible, Hidden or Inherit, got '" << value << "'\n";
+            return false;
+        }
+        visibility.visible = visibility.mode != kb::scene::VisibilityMode::Hidden;
+        scene.Components().Visibility().Set(entity, visibility);
+        return true;
+    }
 
     // A character: a Skeletal Mesh given as the mesh makes the entity draw it deformed by its
     // skeleton (Deformed Geometry and Skeleton Binding with it), as dropping it in the editor does.
@@ -528,6 +557,20 @@ void ListProperties(std::string_view component, std::ostream& out) {
         kb::scene::MeshRendererComponent renderer = *scene.Components().MeshRenderers().TryGet(entity);
         (name == "mesh" ? renderer.meshAssetId : renderer.materialAssetId) = id;
         scene.Components().MeshRenderers().Set(entity, renderer);
+        return true;
+    }
+
+    // A mesh Collider by the path of its collision mesh (the .kbcollision file csg build writes), as the Mesh Renderer's mesh.
+    if (component == "Collider" && name == "mesh") {
+        const kb::assets::AssetMetadata* metadata = FindAssetByFlexiblePath(scene.Assets().Manager().Registry(), Utf8Path(value));
+        if (metadata == nullptr || metadata->type != kb::assets::kCollisionMeshAssetType) {
+            io.err << "error: mesh '" << value << "' is not a collision mesh (.kbcollision) of the project\n";
+            return false;
+        }
+        kb::scene::ColliderComponent collider = *scene.Components().Colliders().TryGet(entity);
+        collider.shape = kb::scene::ColliderShape::Mesh;
+        collider.meshAssetId = metadata->id.value;
+        scene.Components().Colliders().Set(entity, collider);
         return true;
     }
 
@@ -616,7 +659,7 @@ void ListProperties(std::string_view component, std::ostream& out) {
             return false;
         }
         kb::scene::SceneEntity other{};
-        if (!value.empty()) {
+        if (!value.empty() && value != "none") {
             const std::optional<kb::scene::SceneEntity> found = FindEntity(scene, value, io);
             if (!found.has_value()) return false;
             if (*found == entity) {
@@ -1527,6 +1570,14 @@ void PrintComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std:
         const kb::scene::BehaviourComponent* behaviour = scene.Components().Behaviours().TryGet(entity);
         line += " script=" + ShownAsset(scene, behaviour->behaviourAssetId);
     }
+    if (component == "Joint") {
+        // The object the joint holds on to, by the name component set takes; none is the world.
+        const kb::scene::JointComponent* joint = scene.Components().Joints().TryGet(entity);
+        const bool connected = joint != nullptr && joint->connectedEntity.IsValid() && scene.Entities().IsAlive(joint->connectedEntity);
+        const std::string other = connected ? EntityPath(scene, joint->connectedEntity) : std::string{ "none" };
+        line += " connectedEntity=" + other;
+        if (json != nullptr) json->Set("connectedEntity", kb::core::JsonValue::MakeString(ToValidUtf8(other)));
+    }
     std::string vector;
     for (const kb::script::ScriptSceneComponentPropertyDesc& desc : kb::script::ScriptSceneComponentApi::ComponentProperties(component)) {
         const kb::script::ScriptSceneComponentPropertyResult read =
@@ -1628,6 +1679,8 @@ void PrintEntity(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::os
         printComponent(name);
         shown.push_back(name);
     }
+    // Every object has a Visibility; it is shown when the object starts hidden (component add --type Visibility).
+    if (scene.Components().Visibility().Get(entity).mode == kb::scene::VisibilityMode::Hidden) printComponent("Visibility");
     if (data != nullptr) data->Set("components", std::move(components));
 }
 
@@ -1672,6 +1725,41 @@ void PrintEntity(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::os
     kb::scene::Scene& scene = *session->scene;
     const std::optional<kb::scene::SceneEntity> entity = FindEntity(scene, *entityName, io);
     if (!entity.has_value()) return 1;
+
+    // Every object has a Visibility. Adding it hides the object when the scene starts (a script shows it again); removing it
+    // makes the object visible again; set changes its mode (Visible, Hidden, Inherit) or mask.
+    if (*type == "Visibility") {
+        kb::scene::VisibilityComponent visibility = scene.Components().Visibility().Get(*entity);
+        const bool hidden = visibility.mode == kb::scene::VisibilityMode::Hidden || (visibility.mode == kb::scene::VisibilityMode::Visible && !visibility.visible);
+        if (action == "set") {
+            if (arguments.Options("--set").empty()) {
+                io.err << "error: component set needs at least one --set name=value, for example --set mode=Hidden\n";
+                return 1;
+            }
+        } else if (action == "add") {
+            if (hidden) {
+                io.err << "error: '" << *entityName << "' is hidden at start already; component set --type Visibility --set mode=Visible shows it\n";
+                return 1;
+            }
+            visibility.mode = kb::scene::VisibilityMode::Hidden;
+            visibility.visible = false;
+            scene.Components().Visibility().Set(*entity, visibility);
+        } else {
+            if (!hidden) {
+                io.err << "error: '" << *entityName << "' has no Visibility to remove: it is visible\n";
+                return 1;
+            }
+            visibility.mode = kb::scene::VisibilityMode::Visible;
+            visibility.visible = true;
+            scene.Components().Visibility().Set(*entity, visibility);
+        }
+        if (action != "remove" && !ApplySettings(scene, *entity, *type, arguments, io)) return 1;
+        NoteEntity(io, *session, *entity, false, "Visibility");
+        return Saved(*session,
+            action == "add" ? "added Visibility to '" + *entityName + "' (hidden at start)"
+            : action == "remove" ? "removed Visibility from '" + *entityName + "' (visible again)"
+                                 : "updated Visibility on '" + *entityName + "'", io);
+    }
 
     // UI components (Rect Transform, Canvas, Image, ...) by their names, as the editor's Add Component adds them.
     if (const kb::scene::UIComponentDescriptor* ui = kb::scene::FindUIComponentDescriptor(*type); ui != nullptr && action != "remove") {
@@ -2505,6 +2593,7 @@ int RunSchemaCommand(const ArgumentList& arguments, CommandIo io) {
             if (kind.id == "Transform") io.out << "Transform rotation is in degrees: --set rotation=x,y,z\n";
             if (kind.id == "MeshRenderer") io.out << "MeshRenderer references: mesh=<asset path | engine shape> material=<asset path | none>\n";
             if (kind.id == "Animator") io.out << "Animator references: controller=<asset path of a .kbanimcontroller>\n";
+            if (kind.id == "Joint") io.out << "Joint references: connectedEntity=<name or path of the other object; none connects it to the world>\n";
             return 0;
         }
         // Transform and the UI components (Text, Canvas, ...) are not in the add table but are set the same way.
@@ -2547,6 +2636,7 @@ int RunSchemaCommand(const ArgumentList& arguments, CommandIo io) {
         for (const auto& preset : kb::scene::UIComponentPresetCatalog()) io.out << " '" << preset.name << '\'';
         io.out << '\n';
         io.out << "MeshRenderer references: mesh=<asset path | engine shape> material=<asset path | none>\n";
+        io.out << "Joint references: connectedEntity=<name or path of the other object | none>\n";
         return 0;
     }
     components.Append(SchemaComponentJson("Transform", "Transform", {}, true));
@@ -2563,6 +2653,7 @@ int RunSchemaCommand(const ArgumentList& arguments, CommandIo io) {
     ListProperties("Transform", io.out);
     io.out << "\nMeshRenderer references: mesh=<asset path | engine shape> material=<asset path | none>\n";
     io.out << "ContentInstance references: assetId=<asset path>; set kind first (0 prefab, 1 scene, 2 fragment, 3 world, 4 navigation).\n";
+    io.out << "Joint references: connectedEntity=<name or path of the other object | none>\n";
     io.out << "Engine shapes:";
     for (const kb::assets::BuiltInShapeDesc& shape : kb::assets::BuiltInShapes()) io.out << ' ' << shape.virtualPath;
     io.out << "\nentity add --create items:";

@@ -99,7 +99,10 @@ struct SceneDocument {
     static constexpr std::uint32_t VirtualListFileVersion = 67U;
     static constexpr std::uint32_t ModuleComponentsFileVersion = 68U;
     static constexpr std::uint32_t StableObjectIdsFileVersion = 69U;
-    static constexpr std::uint32_t CurrentFileVersion = 69U;
+    // From this version a node that runs several scripts says so with a component bit and its further behaviours follow the
+    // first one; every other node is written as it was.
+    static constexpr std::uint32_t AdditionalBehavioursFileVersion = 70U;
+    static constexpr std::uint32_t CurrentFileVersion = 70U;
     static constexpr std::uint32_t SocketAttachmentFileVersion = 49U;
     static constexpr std::uint32_t CombatantFileVersion = 49U;
     static constexpr std::uint32_t AIBrainFileVersion = 49U;

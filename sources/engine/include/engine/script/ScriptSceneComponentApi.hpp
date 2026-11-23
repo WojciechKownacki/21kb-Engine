@@ -52,6 +52,12 @@ public:
         std::string_view componentName,
         std::string_view propertyName,
         const ScriptValue& value);
+    // The Behaviour component of one of the scripts an entity runs: the one an index names (0 is the first). Component "Behaviour"
+    // alone is the first script's; a script that asks for its own through `self` gets its place here.
+    [[nodiscard]] static ScriptSceneComponentPropertyResult GetBehaviourProperty(
+        kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::size_t index, std::string_view propertyName);
+    [[nodiscard]] static ScriptSceneComponentMutationResult SetBehaviourProperty(
+        kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::size_t index, std::string_view propertyName, const ScriptValue& value);
 };
 
 } // namespace kb::script

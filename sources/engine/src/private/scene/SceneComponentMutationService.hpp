@@ -9,6 +9,9 @@
 #include "engine/scene/AIBrainComponent.hpp"
 #include "engine/scene/MotionSkeletonRuleComponent.hpp"
 #include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
+#include <cstddef>
+#include <cstdint>
+#include <span>
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/CharacterControllerComponent.hpp"
@@ -67,6 +70,10 @@ public:
     static void SetBehaviour(Scene& scene, SceneEntity entity, const BehaviourComponent& behaviour);
     static void RemoveBehaviour(Scene& scene, SceneEntity entity) noexcept;
     static void MarkBehaviourModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool AddBehaviour(Scene& scene, SceneEntity entity, const BehaviourComponent& behaviour);
+    static bool RemoveBehaviourAt(Scene& scene, SceneEntity entity, std::size_t index) noexcept;
+    static bool SetBehaviourAt(Scene& scene, SceneEntity entity, std::size_t index, const BehaviourComponent& behaviour);
+    static void SetAdditionalBehaviours(Scene& scene, SceneEntity entity, std::span<const BehaviourComponent> additional);
 
     [[nodiscard]] static CameraComponent* TryGetCamera(Scene& scene, SceneEntity entity) noexcept;
     static void SetCamera(Scene& scene, SceneEntity entity, const CameraComponent& camera);

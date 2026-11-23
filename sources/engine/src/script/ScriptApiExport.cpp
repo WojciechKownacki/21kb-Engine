@@ -822,8 +822,27 @@ std::optional<std::string> ScriptApiExport::ToReferenceTopic(const ScriptApiCata
     }
     // A global spelled exactly (Log, Emit, Events, assert) wins over a function of a group with the same short name
     // (Math.Log, Particles.Emit).
+    // A global that a group shares its name with (Events: the global's Subscribe, the group's EmitFiltered) shows both.
+    const auto withGroup = [&catalog](const ScriptSandboxGlobal& global) {
+        std::string page = ScriptSandboxGlobals::Page(global);
+        for (const auto& [group, functions] : FunctionGroups(catalog)) {
+            if (group == global.name) page += "\n" + GroupPage(catalog, group, functions);
+        }
+        return page;
+    };
     if (const ScriptSandboxGlobal* global = ScriptSandboxGlobals::Find(Trimmed(topic)); global != nullptr) {
-        return ScriptSandboxGlobals::Page(*global);
+        return withGroup(*global);
+    }
+    // A member of a global spelled as it is written in a script (Events.Subscribe, Inspector.speed, string.format, math.floor,
+    // bit.band) is the page of that global, unless the engine has a function of exactly that name (Events.EmitFiltered).
+    if (const std::size_t dot = Trimmed(topic).find('.'); dot != std::string_view::npos) {
+        const std::string_view written = Trimmed(topic);
+        const bool engineFunction = std::ranges::any_of(catalog.functions, [written](const ScriptApiCatalogFunction& function) {
+            return function.name == written;
+        });
+        if (const ScriptSandboxGlobal* global = ScriptSandboxGlobals::Find(written.substr(0U, dot)); global != nullptr && !engineFunction) {
+            return withGroup(*global);
+        }
     }
     if (wanted == "globals" || wanted == "globals.md") return ScriptSandboxGlobals::IndexPage();
     if (wanted == "eventhooks" || wanted == "eventhooks.md" || wanted == "hooks" || wanted == "event hooks") return ScriptEventHooks::Page();

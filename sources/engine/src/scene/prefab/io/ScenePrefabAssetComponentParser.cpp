@@ -605,6 +605,32 @@ template <typename T>
         entry.value = std::move(*value);
         components.behaviourVariableOverrides.push_back(std::move(entry));
     }
+    // The other behaviours of the node (an older file has none).
+    std::uint32_t extraCount = 0U;
+    if (!ParseOptionalField(fields, "behaviour.extraCount", extraCount) || extraCount >= kMaxBehavioursPerEntity) {
+        return false;
+    }
+    components.additionalBehaviours.clear();
+    for (std::uint32_t index = 0U; index < extraCount; ++index) {
+        const std::string key = "behaviour.extra." + std::to_string(index);
+        int extraBackend = 0;
+        int extraTickGroup = 0;
+        BehaviourComponent extra;
+        if (!ParseField(fields, key + ".behaviourAssetId", extra.behaviourAssetId)
+            || !ParseField(fields, key + ".backend", extraBackend)
+            || extraBackend < static_cast<int>(BehaviourBackend::Native)
+            || extraBackend > static_cast<int>(BehaviourBackend::VisualGraph)
+            || !ParseOptionalBool(fields, key + ".enabled", extra.enabled)
+            || !ParseField(fields, key + ".tickGroup", extraTickGroup)
+            || extraTickGroup < static_cast<int>(BehaviourTickGroup::Input)
+            || extraTickGroup > static_cast<int>(BehaviourTickGroup::Presentation)
+            || !ParseField(fields, key + ".executionOrder", extra.executionOrder)) {
+            return false;
+        }
+        extra.backend = static_cast<BehaviourBackend>(extraBackend);
+        extra.tickGroup = static_cast<BehaviourTickGroup>(extraTickGroup);
+        components.additionalBehaviours.push_back(extra);
+    }
     components.behaviour = behaviour;
     return true;
 }

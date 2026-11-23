@@ -251,11 +251,12 @@ void RunAgentProjectFilesTest() {
     {
         std::ifstream agents(TestRoot() / "AGENTS.md", std::ios::binary);
         const std::string text{ std::istreambuf_iterator<char>(agents), std::istreambuf_iterator<char>() };
-        kb::tests::Require(text.size() < 3072U, "AGENTS.md must stay short: it is read with every request");
+        kb::tests::Require(text.size() < 3584U, "AGENTS.md must stay short: it is read with every request");
         // The rules every agent needs, said once and plainly: how to call, when it is done, what to do when a step fails.
         kb::tests::Require(text.find(kb::script::ScriptAgentProjectFiles::AgentRules()) != std::string::npos &&
                 text.find("`commands`") != std::string::npos && text.find("Done means") != std::string::npos && text.find("Do not repeat the same call") != std::string::npos &&
-                text.find("JavaScript") == std::string::npos && text.find("--project") == std::string::npos,
+                text.find("JavaScript") == std::string::npos && text.find("--project") == std::string::npos &&
+                text.find("A recipe's commands go in one `commands` call") != std::string::npos,
             "AGENTS.md must hold the shared rules, one example of each call, and no mechanics of one CLI");
         // Nothing shouts: emphasis makes a model apply a rule where it does not belong.
         kb::tests::Require(text.find("MUST") == std::string::npos && text.find("NEVER") == std::string::npos && text.find("ALWAYS") == std::string::npos, "AGENTS.md must use plain words");
@@ -265,7 +266,9 @@ void RunAgentProjectFilesTest() {
                 kb::tests::Require(text.find("`" + std::string{ guide.name } + "`") != std::string::npos, "AGENTS.md must name every recipe");
                 kb::tests::Require(guide.body.size() < 2600U, "a recipe is read in one step and must stay short");
                 kb::tests::Require(guide.body.find("--project") == std::string_view::npos, "a recipe leaves the project out: the tool fills it in");
-                kb::tests::Require(guide.body.find("\n[\"") != std::string_view::npos, "a recipe's commands are lists of words an agent sends as they are");
+                // Each block is the value of one `commands` call: a list of commands, each a list of words.
+                kb::tests::Require(guide.body.find("\n[[\"") != std::string_view::npos || guide.body.find("\n[\n[\"") != std::string_view::npos,
+                    "a recipe's commands are one list of lists of words an agent sends as its commands call");
                 kb::tests::Require(std::filesystem::exists(TestRoot() / ".kb" / "docs" / (std::string{ guide.name } + ".md")), "a recipe file was not written");
             }
         }

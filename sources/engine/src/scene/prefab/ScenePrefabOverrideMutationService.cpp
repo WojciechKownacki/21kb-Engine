@@ -331,6 +331,7 @@ template <typename T, typename Components>
         return false;
     }
     return SameBehaviourVariableOverrides(entities.BehaviourVariableOverrides(entity), node.components.behaviourVariableOverrides) &&
+        SameBehaviourList(componentReaders.behaviours.Additional(entity), node.components.additionalBehaviours) &&
         LiveComponentsMatchTemplate(componentReaders, entity, node.components, componentMask.available);
 }
 
@@ -436,6 +437,15 @@ void MixLiveSceneComponents(std::uint64_t& hash, SceneComponents components, Sce
         ScenePrefabHashBuilder::Mix(hash, behaviour->enabled ? 1U : 0U);
         ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(behaviour->tickGroup));
         ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(static_cast<std::uint32_t>(behaviour->executionOrder)));
+    }
+    const std::span<const BehaviourComponent> additionalBehaviours = components.Behaviours().Additional(entity);
+    ScenePrefabHashBuilder::Mix(hash, additionalBehaviours.size());
+    for (const BehaviourComponent& extra : additionalBehaviours) {
+        ScenePrefabHashBuilder::Mix(hash, extra.behaviourAssetId);
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(extra.backend));
+        ScenePrefabHashBuilder::Mix(hash, extra.enabled ? 1U : 0U);
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(extra.tickGroup));
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(static_cast<std::uint32_t>(extra.executionOrder)));
     }
 
     const AudioSourceComponent* audioSource = components.AudioSources().TryGet(entity);

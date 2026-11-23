@@ -1,16 +1,20 @@
 #include "CliCommands.hpp"
+#include "CliProgram.hpp"
 #include "engine/core/JsonValue.hpp"
 
 #include "engine/assets/AssetFileName.hpp"
 #include "engine/config/IniDocument.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/project/ProjectSettings.hpp"
+#include "engine/scene/SceneTagCatalog.hpp"
+#include "engine/script/ScriptNameSuggestion.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <array>
 #include <filesystem>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -105,9 +109,188 @@ namespace {
 
 } // namespace
 
+namespace {
+
+// The scenes the game is built with, as the editor's Project Settings lists them: the startup scene first, then the
+// others in order. A scene that is not here is not in the built game, whoever loads it.
+[[nodiscard]] int RunScenesSetting(const ArgumentList& arguments, CommandIo io, const std::filesystem::path& projectRoot,
+    const std::filesystem::path& settingsPath, kb::project::ProjectSettings settings) {
+    using kb::core::JsonValue;
+    std::string error;
+    const std::vector<std::string> before = kb::project::ProjectBuildScenes(settings);
+    std::vector<std::string> scenes = before;
+    const auto resolve = [&](const std::string& text) { return ResolveProjectScene(projectRoot, text, error); };
+    const auto fail = [&]() {
+        io.err << "error: " << error << '\n';
+        return 1;
+    };
+    if (const std::optional<std::string> order = arguments.Option("--order"); order.has_value()) {
+        std::vector<std::string> listed;
+        for (std::size_t start = 0U; start <= order->size();) {
+            const std::size_t comma = std::min(order->find(',', start), order->size());
+            if (comma > start) {
+                const std::optional<std::string> scene = resolve(order->substr(start, comma - start));
+                if (!scene.has_value()) return fail();
+                if (std::ranges::find(listed, *scene) == listed.end()) listed.push_back(*scene);
+            }
+            start = comma + 1U;
+        }
+        if (listed.empty()) {
+            io.err << "error: --order takes the scenes in order, the first one the game starts in, for example --order Main,Level2\n";
+            return 1;
+        }
+        scenes = std::move(listed);
+    }
+    for (const std::string& text : arguments.Options("--add")) {
+        const std::optional<std::string> scene = resolve(text);
+        if (!scene.has_value()) return fail();
+        if (std::ranges::find(scenes, *scene) == scenes.end()) scenes.push_back(*scene);
+    }
+    for (const std::string& text : arguments.Options("--remove")) {
+        const std::optional<std::string> scene = resolve(text);
+        if (!scene.has_value()) return fail();
+        const auto found = std::ranges::find(scenes, *scene);
+        if (found == scenes.end()) {
+            io.err << "error: " << *scene << " is not in the build already; the build has:";
+            for (const std::string& listed : scenes) io.err << ' ' << listed;
+            io.err << '\n';
+            return 1;
+        }
+        if (scenes.size() == 1U) {
+            io.err << "error: the build needs at least one scene, and " << *scene << " is the only one\n";
+            return 1;
+        }
+        if (found == scenes.begin()) {
+            io.err << "error: " << *scene << " is the startup scene; make another one the startup scene first: project-settings scenes --startup <scene>\n";
+            return 1;
+        }
+        scenes.erase(found);
+    }
+    if (const std::optional<std::string> startup = arguments.Option("--startup"); startup.has_value()) {
+        const std::optional<std::string> scene = resolve(*startup);
+        if (!scene.has_value()) return fail();
+        std::erase(scenes, *scene);
+        scenes.insert(scenes.begin(), *scene);
+    }
+    if (scenes.size() > kb::project::kProjectAdditionalScenesMax + 1U) {
+        io.err << "error: a build holds at most " << kb::project::kProjectAdditionalScenesMax + 1U << " scenes\n";
+        return 1;
+    }
+    const bool changed = scenes != before;
+    if (changed) {
+        kb::project::SetProjectBuildScenes(settings, scenes);
+        if (!kb::project::ProjectSettingsStore::Save(settingsPath, settings, error)) {
+            io.err << "error: " << error << '\n';
+            return 1;
+        }
+    }
+    const std::vector<std::string> inBuild = kb::project::ProjectBuildScenes(settings);
+    const std::vector<std::string> all = ProjectScenePaths(projectRoot);
+    io.out << (changed ? "scenes in the build now (" : "scenes in the build (") << inBuild.size() << "):\n";
+    auto rows = JsonValue::MakeArray();
+    for (std::size_t index = 0U; index < inBuild.size(); ++index) {
+        const bool exists = std::ranges::find(all, inBuild[index]) != all.end();
+        io.out << "  " << index + 1U << ". " << inBuild[index] << (index == 0U ? " (startup)" : "") << (exists ? "" : " (the file is missing)") << '\n';
+        auto row = JsonValue::MakeObject();
+        row.Set("scene", JsonValue::MakeString(ToValidUtf8(inBuild[index])));
+        row.Set("startup", JsonValue::MakeBool(index == 0U));
+        row.Set("exists", JsonValue::MakeBool(exists));
+        rows.Append(std::move(row));
+    }
+    auto left = JsonValue::MakeArray();
+    std::string leftText;
+    for (const std::string& scene : all) {
+        if (std::ranges::find(inBuild, scene) != inBuild.end()) continue;
+        leftText += (leftText.empty() ? "" : " ") + scene;
+        left.Append(JsonValue::MakeString(ToValidUtf8(scene)));
+    }
+    if (!leftText.empty()) {
+        io.out << "not in the build: " << leftText << '\n';
+    }
+    auto warnings = JsonValue::MakeArray();
+    for (const ScriptSceneReference& reference : ScenesReferencedButNotInBuild(projectRoot)) {
+        io.out << "warning: " << reference.script << " opens " << reference.scene << ", which is not in the build: project-settings scenes --add " << reference.scene << '\n';
+        warnings.Append(JsonValue::MakeString(ToValidUtf8(reference.scene)));
+    }
+    JsonValue data = DataObject("21kb.cli.project-settings-scenes/v1");
+    data.Set("scenes", std::move(rows));
+    data.Set("startup", JsonValue::MakeString(ToValidUtf8(inBuild.empty() ? std::string{} : inBuild.front())));
+    data.Set("notInBuild", std::move(left));
+    data.Set("referencedNotInBuild", std::move(warnings));
+    data.Set("changed", JsonValue::MakeBool(changed));
+    PublishData(io, std::move(data));
+    return 0;
+}
+
+// The tags the project defines for its objects besides the built-in ones, as the editor's Project Settings > Tags lists them.
+[[nodiscard]] int RunTagsSetting(const ArgumentList& arguments, CommandIo io, const std::filesystem::path& settingsPath,
+    kb::project::ProjectSettings settings) {
+    using kb::core::JsonValue;
+    const std::vector<std::string> before = settings.tags;
+    std::string error;
+    for (const std::string& name : arguments.Options("--add")) {
+        const std::string tag = kb::scene::SceneTagCatalog::CanonicalName(name);
+        if (tag.empty()) {
+            io.err << "error: '" << name << "' is not a tag name: use letters, digits and spaces, for example --add Boss\n";
+            return 1;
+        }
+        if (kb::scene::SceneTagCatalog::IsBuiltIn(tag)) {
+            io.err << "error: " << tag << " is a built-in tag; the project adds its own, for example --add Boss\n";
+            return 1;
+        }
+        if (std::ranges::find(settings.tags, tag) != settings.tags.end()) continue;
+        if (!kb::project::AddProjectTag(settings, tag)) {
+            io.err << "error: the project holds at most " << kb::project::kProjectTagsMax << " tags of its own\n";
+            return 1;
+        }
+    }
+    for (const std::string& name : arguments.Options("--remove")) {
+        const std::string tag = kb::scene::SceneTagCatalog::CanonicalName(name);
+        if (kb::scene::SceneTagCatalog::IsBuiltIn(tag)) {
+            io.err << "error: " << tag << " is a built-in tag and stays\n";
+            return 1;
+        }
+        if (!kb::project::RemoveProjectTag(settings, tag)) {
+            const std::string closest = kb::script::ClosestScriptName(tag, std::span<const std::string>{ settings.tags });
+            io.err << "error: the project has no tag '" << name << '\'' << (closest.empty() ? std::string{} : "; did you mean " + closest + "?")
+                   << " (its tags:";
+            for (const std::string& listed : settings.tags) io.err << ' ' << listed;
+            io.err << (settings.tags.empty() ? " none)\n" : ")\n");
+            return 1;
+        }
+    }
+    const bool changed = settings.tags != before;
+    if (changed && !kb::project::ProjectSettingsStore::Save(settingsPath, settings, error)) {
+        io.err << "error: " << error << '\n';
+        return 1;
+    }
+    io.out << (changed ? "tags of the project now (" : "tags of the project (") << settings.tags.size() << "):";
+    auto tags = JsonValue::MakeArray();
+    for (const std::string& tag : settings.tags) {
+        io.out << ' ' << tag;
+        tags.Append(JsonValue::MakeString(ToValidUtf8(tag)));
+    }
+    io.out << (settings.tags.empty() ? " none" : "") << "\nbuilt in:";
+    auto builtIn = JsonValue::MakeArray();
+    for (const std::string_view tag : kb::scene::SceneTagCatalog::DefaultNames) {
+        io.out << ' ' << tag;
+        builtIn.Append(JsonValue::MakeString(std::string{ tag }));
+    }
+    io.out << '\n';
+    JsonValue data = DataObject("21kb.cli.project-settings-tags/v1");
+    data.Set("tags", std::move(tags));
+    data.Set("builtIn", std::move(builtIn));
+    data.Set("changed", JsonValue::MakeBool(changed));
+    PublishData(io, std::move(data));
+    return 0;
+}
+
+} // namespace
+
 // Every project setting as Section.Key=value, named as the settings file names them (Maps.DefaultMap,
 // Identity.GameName, Display.WindowWidth); --set Section.Key=value changes one, checked as the editor
 // checks it: an unknown name is refused, a number is brought into its range, a scene must exist.
+// `scenes` lists and changes the scenes the game is built with, `tags` the project's own tags.
 int RunProjectSettingsCommand(const ArgumentList& arguments, CommandIo io) {
     const std::optional<std::string> project = arguments.Option("--project");
     if (!project.has_value()) {
@@ -124,6 +307,13 @@ int RunProjectSettingsCommand(const ArgumentList& arguments, CommandIo io) {
     const kb::project::ProjectSettingsLoadResult loaded = kb::project::ProjectSettingsStore::Load(settingsPath);
     if (!loaded.Succeeded()) {
         io.err << "error: " << loaded.error << '\n';
+        return 1;
+    }
+    if (!arguments.Positionals().empty()) {
+        const std::string& topic = arguments.Positionals().front();
+        if (topic == "scenes") return RunScenesSetting(arguments, io, projectFile.parent_path(), settingsPath, loaded.settings);
+        if (topic == "tags") return RunTagsSetting(arguments, io, settingsPath, loaded.settings);
+        io.err << "error: project-settings takes scenes, tags or --set Section.Key=value, not '" << topic << "'\n";
         return 1;
     }
     constexpr std::string_view kSectionPrefix = "Project.";
@@ -162,6 +352,12 @@ int RunProjectSettingsCommand(const ArgumentList& arguments, CommandIo io) {
     kb::project::ProjectSettings settings = loaded.settings;
     if (!changed.empty()) {
         settings = kb::project::ProjectSettingsStore::Read(edited);
+        // Another startup scene must not drop the old one from the game: it stays among the scenes the game is built with.
+        if (!loaded.settings.defaultMap.empty() && settings.defaultMap != loaded.settings.defaultMap) {
+            std::vector<std::string> scenes{ settings.defaultMap, loaded.settings.defaultMap };
+            scenes.insert(scenes.end(), settings.additionalScenes.begin(), settings.additionalScenes.end());
+            kb::project::SetProjectBuildScenes(settings, std::move(scenes));
+        }
         // A value the setting does not take is refused rather than quietly replaced by its default; a number
         // only brought into its range is kept as brought in.
         kb::config::IniDocument taken;

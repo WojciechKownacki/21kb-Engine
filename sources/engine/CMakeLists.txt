@@ -104,6 +104,7 @@ add_library(kb_engine STATIC
     include/engine/project/ProjectDescriptorReader.hpp
     include/engine/project/ProjectDescriptorWriter.hpp
     include/engine/project/ProjectManager.hpp
+    include/engine/project/AgentUndoJournal.hpp
     include/engine/packaging/PackagingTargetCatalog.hpp
     include/engine/save/SaveDomain.hpp
     include/engine/save/SaveGame.hpp
@@ -734,6 +735,7 @@ add_library(kb_engine STATIC
     src/project/ProjectDescriptorWriter.cpp
     src/project/ProjectCreator.cpp
     src/project/ProjectManager.cpp
+    src/project/AgentUndoJournal.cpp
     src/packaging/PackagingTargetCatalog.cpp
     src/ecs/ComponentRegistry.cpp
     src/ecs/CommandBuffer.cpp
@@ -2243,6 +2245,7 @@ if(BUILD_TESTING)
         tests/ModTests.cpp
         tests/ContentStreamingTests.cpp
         tests/SaveGameTests.cpp
+        tests/AgentUndoJournalTests.cpp
         tests/EcsConfigTests.cpp
         tests/EcsEventTests.cpp
         tests/EcsInspectionTests.cpp
@@ -2274,6 +2277,7 @@ if(BUILD_TESTING)
         tests/LocalizationTests.cpp
         tests/LargeWorldTests.cpp
         tests/SceneBehaviourVariableTests.cpp
+        tests/SceneMultiBehaviourTests.cpp
         tests/SceneHierarchyTests.cpp
         tests/SceneUITests.cpp
         tests/VideoMediaConversionTests.cpp

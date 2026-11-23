@@ -71,6 +71,7 @@ add_executable(kb_editor WIN32
     src/app/EditorSkeletalMeshTreeSearchInputHandler.cpp
     src/app/EditorMouseWheelRouter.cpp
     src/settings/EditorBuildGameSettingsStore.cpp
+    src/packaging/EditorPackageRequestBuilder.cpp
     src/packaging/EditorProjectPackageService.cpp
     src/packaging/EditorAndroidSigningBroker.cpp
     src/packaging/EditorPackageProcessEnvironment.cpp
@@ -704,6 +705,7 @@ add_executable(kb_editor WIN32
     src/private/packaging/EditorAndroidSigningBroker.hpp
     src/private/packaging/EditorPackageInputValidation.hpp
     src/private/packaging/EditorPackageProcessEnvironment.hpp
+    src/private/packaging/EditorPackageRequestBuilder.hpp
     src/private/packaging/EditorProjectIconTransaction.hpp
     src/private/packaging/EditorProjectPackageService.hpp
     src/private/packaging/EditorSigningProcess.hpp
@@ -2320,6 +2322,13 @@ if(BUILD_TESTING)
             --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
             --selftest-task "SELFTEST-External-Reload")
     set_tests_properties(kb_editor_external_reload_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;scene" TIMEOUT 180)
+    add_test(NAME kb_editor_agent_undo_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessAgentUndoScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Agent-Undo")
+    set_tests_properties(kb_editor_agent_undo_headless PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;scene" TIMEOUT 180)
     add_test(NAME kb_editor_ui_component_catalog_headless
         COMMAND $<TARGET_FILE:kb_editor>

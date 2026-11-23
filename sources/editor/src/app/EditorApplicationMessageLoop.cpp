@@ -827,9 +827,11 @@ void PumpAgentPanel(EditorApplicationState& state) {
     }
     // The scene from its file as one undoable step, with the selection and undo history kept, and
     // the materials, textures and scripts the agent changed or added picked up too.
+    const bool afterUndo = agent.TakeUndoReload();
     if (state.sceneContext.ReloadSceneAfterExternalChange() && !agent.AnyRunning()) {
-        agent.Add(EditorAgentEntryKind::Info, std::string{ EditorText("agent.sceneReloaded",
-            "The scene shows the agent's changes. Ctrl+Z undoes them.") });
+        agent.Add(EditorAgentEntryKind::Info, afterUndo
+            ? std::string{ EditorText("agent.sceneReloadedAfterUndo", "The scene shows the files as they were before the request.") }
+            : std::string{ EditorText("agent.sceneReloaded", "The scene shows the agent's changes. Ctrl+Z undoes them.") });
     }
     // Project Files, the Hierarchy and the Inspector show the new and changed files and objects.
     InvalidatePanelKind(state, DockPanelKind::Assets);

@@ -73,6 +73,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunModTests();
     } else if (suite == "save") {
         kb::tests::RunSaveGameTests();
+    } else if (suite == "agent-undo") {
+        kb::tests::RunAgentUndoJournalTests();
     } else if (suite == "security") {
         kb::tests::RunSecurityTests();
     } else if (suite == "ecs") {
@@ -225,6 +227,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunLargeWorldTests();
     } else if (suite == "scene-behaviour-variables") {
         kb::tests::RunSceneBehaviourVariableTests();
+    } else if (suite == "scene-multi-behaviours") {
+        kb::tests::RunSceneMultiBehaviourTests();
     } else {
         return false;
     }
@@ -237,6 +241,7 @@ void RunAllSuites() {
     kb::tests::RunAssetPackTests();
     kb::tests::RunContentStreamingTests();
     kb::tests::RunSaveGameTests();
+    kb::tests::RunAgentUndoJournalTests();
     kb::tests::RunModTests();
     kb::tests::RunSecurityTests();
     kb::tests::RunEcsRuntimeTests();
@@ -276,6 +281,7 @@ void RunAllSuites() {
     kb::tests::RunWorldPartitionTests();
     kb::tests::RunLargeWorldTests();
     kb::tests::RunSceneBehaviourVariableTests();
+    kb::tests::RunSceneMultiBehaviourTests();
 }
 
 } // namespace

@@ -84,6 +84,18 @@ struct RawBehaviourRecord {
     return false;
 }
 
+// The guaranteed execution order, and for scripts of one entity that tie in it the order they started in.
+template <typename Record>
+[[nodiscard]] bool LifecycleLess(const Record& lhs, const Record& rhs) noexcept {
+    if (kb::scene::BehaviourExecutionOrderLess(lhs.entity, lhs.behaviour, rhs.entity, rhs.behaviour)) {
+        return true;
+    }
+    if (kb::scene::BehaviourExecutionOrderLess(rhs.entity, rhs.behaviour, lhs.entity, lhs.behaviour)) {
+        return false;
+    }
+    return lhs.sequence < rhs.sequence;
+}
+
 [[nodiscard]] bool SameBehaviour(const kb::scene::BehaviourComponent& lhs, const kb::scene::BehaviourComponent& rhs) noexcept {
     return lhs.behaviourAssetId == rhs.behaviourAssetId && lhs.backend == rhs.backend && lhs.enabled == rhs.enabled &&
            lhs.tickGroup == rhs.tickGroup && lhs.executionOrder == rhs.executionOrder;
@@ -367,7 +379,7 @@ void ScriptRuntimeSceneSystem::RebuildPhaseOrder() {
         }
     }
     std::ranges::sort(phaseOrder_, [](const BehaviourLifecycleRecord* lhs, const BehaviourLifecycleRecord* rhs) {
-        return kb::scene::BehaviourExecutionOrderLess(lhs->entity, lhs->behaviour, rhs->entity, rhs->behaviour);
+        return LifecycleLess(*lhs, *rhs);
     });
     // Each distinct script is asked once per phase, and each ordered behaviour knows which answer is its own.
     phaseScripts_.clear();
@@ -501,9 +513,9 @@ void ScriptRuntimeSceneSystem::ExecuteTrackedBehaviourPhase(
             inlineRunEnd = end;
         }
         if (validate) {
-            const kb::scene::BehaviourComponent* live = constScene.Components().Behaviours().TryGet(entry.entity);
-            if (!scene.Entities().IsAlive(entry.entity) || live == nullptr || !live->enabled ||
-                live->behaviourAssetId != entry.behaviour.behaviourAssetId || live->backend != entry.behaviour.backend) {
+            const kb::scene::BehaviourComponent* live = constScene.Components().Behaviours().Find(
+                entry.entity, entry.behaviour.behaviourAssetId, entry.behaviour.backend);
+            if (!scene.Entities().IsAlive(entry.entity) || live == nullptr || !live->enabled) {
                 ++passedOver;
                 continue;
             }
@@ -951,7 +963,7 @@ void ScriptRuntimeSceneSystem::SyncBehaviourLifecycles(kb::scene::Scene& scene, 
             }
         },
         &pass);
-    std::ranges::sort(pass.changed, [](const RawBehaviourRecord& lhs, const RawBehaviourRecord& rhs) {
+    std::ranges::stable_sort(pass.changed, [](const RawBehaviourRecord& lhs, const RawBehaviourRecord& rhs) {
         return kb::scene::BehaviourExecutionOrderLess(lhs.entity, lhs.behaviour, rhs.entity, rhs.behaviour);
     });
     phaseOrderDirty_ = phaseOrderDirty_ || !pass.changed.empty();
@@ -966,6 +978,7 @@ void ScriptRuntimeSceneSystem::SyncBehaviourLifecycles(kb::scene::Scene& scene, 
                 .active = false,
                 .created = false,
                 .seenEpoch = pass.epoch,
+                .sequence = ++nextLifecycleSequence_,
             };
         }
 
@@ -1051,7 +1064,7 @@ void ScriptRuntimeSceneSystem::DispatchDeactivateAndDestroyInOrder(
     std::vector<BehaviourLifecycleRecord>& records,
     float deltaSeconds) {
     std::ranges::sort(records, [](const BehaviourLifecycleRecord& lhs, const BehaviourLifecycleRecord& rhs) {
-        return kb::scene::BehaviourExecutionOrderLess(lhs.entity, lhs.behaviour, rhs.entity, rhs.behaviour);
+        return LifecycleLess(lhs, rhs);
     });
     for (const BehaviourLifecycleRecord& tracked : records) {
         if (tracked.active) {

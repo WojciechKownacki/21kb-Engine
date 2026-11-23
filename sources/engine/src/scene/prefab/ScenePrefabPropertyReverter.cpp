@@ -61,6 +61,7 @@ void RevertComponentProperty(Scene& scene, SceneObject object, const ScenePrefab
     } else if (ScenePrefabPropertyPath::StartsWith(propertyPath, "behaviour")) {
         if (node.components.behaviour.has_value()) {
             components.Behaviours().Set(entity, *node.components.behaviour);
+            components.Behaviours().SetAdditional(entity, node.components.additionalBehaviours);
         } else {
             components.Behaviours().Remove(entity);
         }

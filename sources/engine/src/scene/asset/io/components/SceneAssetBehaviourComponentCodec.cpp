@@ -11,8 +11,9 @@
 
 namespace kb::scene {
 
-bool SceneAssetBehaviourComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::uint32_t fileVersion, BehaviourComponent& output,
-    std::vector<BehaviourVariableOverride>& variableOverrides) {
+namespace {
+
+bool ReadBehaviourFields(SceneAssetBinaryIO::ByteReader& input, BehaviourComponent& output) {
     std::uint32_t backend = 0U;
     std::uint32_t tickGroup = 0U;
     bool enabled = true;
@@ -28,6 +29,24 @@ bool SceneAssetBehaviourComponentCodec::Read(SceneAssetBinaryIO::ByteReader& inp
     output.backend = static_cast<BehaviourBackend>(backend);
     output.enabled = enabled;
     output.tickGroup = static_cast<BehaviourTickGroup>(tickGroup);
+    return true;
+}
+
+void WriteBehaviourFields(std::vector<std::uint8_t>& output, const BehaviourComponent& behaviour) {
+    SceneAssetBinaryIO::WriteUInt64(output, behaviour.behaviourAssetId);
+    SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(behaviour.backend));
+    SceneAssetBinaryIO::WriteUInt8(output, behaviour.enabled ? 1U : 0U);
+    SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(behaviour.tickGroup));
+    SceneAssetBinaryIO::WriteInt32(output, behaviour.executionOrder);
+}
+
+} // namespace
+
+bool SceneAssetBehaviourComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::uint32_t fileVersion, BehaviourComponent& output,
+    std::vector<BehaviourVariableOverride>& variableOverrides) {
+    if (!ReadBehaviourFields(input, output)) {
+        return false;
+    }
     variableOverrides.clear();
     if (fileVersion < SceneDocument::BehaviourVariableOverridesFileVersion) {
         return true;
@@ -54,17 +73,38 @@ bool SceneAssetBehaviourComponentCodec::Read(SceneAssetBinaryIO::ByteReader& inp
     return true;
 }
 
+bool SceneAssetBehaviourComponentCodec::ReadAdditional(SceneAssetBinaryIO::ByteReader& input, std::vector<BehaviourComponent>& additional) {
+    additional.clear();
+    std::uint32_t extraCount = 0U;
+    if (!input.ReadUInt32(extraCount) || extraCount == 0U || extraCount >= kMaxBehavioursPerEntity) {
+        return false;
+    }
+    additional.reserve(extraCount);
+    for (std::uint32_t index = 0U; index < extraCount; ++index) {
+        BehaviourComponent extra;
+        if (!ReadBehaviourFields(input, extra)) {
+            return false;
+        }
+        additional.push_back(extra);
+    }
+    return true;
+}
+
 void SceneAssetBehaviourComponentCodec::Write(std::vector<std::uint8_t>& output, const BehaviourComponent& behaviour,
     std::span<const BehaviourVariableOverride> variableOverrides) {
-    SceneAssetBinaryIO::WriteUInt64(output, behaviour.behaviourAssetId);
-    SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(behaviour.backend));
-    SceneAssetBinaryIO::WriteUInt8(output, behaviour.enabled ? 1U : 0U);
-    SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(behaviour.tickGroup));
-    SceneAssetBinaryIO::WriteInt32(output, behaviour.executionOrder);
+    WriteBehaviourFields(output, behaviour);
     SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(variableOverrides.size()));
     for (const BehaviourVariableOverride& entry : variableOverrides) {
         SceneAssetBinaryIO::WriteString(output, entry.name);
         SceneAssetBinaryIO::WriteString(output, kb::script::FormatTypedValueText(entry.value));
+    }
+}
+
+void SceneAssetBehaviourComponentCodec::WriteAdditional(std::vector<std::uint8_t>& output, std::span<const BehaviourComponent> additional) {
+    const std::size_t extraCount = std::min(additional.size(), kMaxBehavioursPerEntity - 1U);
+    SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(extraCount));
+    for (std::size_t index = 0U; index < extraCount; ++index) {
+        WriteBehaviourFields(output, additional[index]);
     }
 }
 

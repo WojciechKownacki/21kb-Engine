@@ -1,4 +1,5 @@
 #include "CliCommands.hpp"
+#include "CliCaptureImage.hpp"
 #include "CliProgram.hpp"
 #include "engine/core/JsonValue.hpp"
 #include "engine/script/ScriptAgentProjectFiles.hpp"
@@ -9,6 +10,7 @@
 #include <exception>
 #include <limits>
 #include <initializer_list>
+#include <set>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -31,6 +33,10 @@ constexpr std::string_view kServerVersion = "0.1.0";
 // The tools an agent gets: kb_cli, guide and api_reference by default (every other command is a kb_cli command, and a tool of its
 // own would be sent again with every step), all of them with `kb_cli mcp --tools all`.
 bool gAllTools = false;
+// A capture comes back as a picture too (an image block), unless `kb_cli mcp --images off`: for a client that takes text only.
+bool gImages = true;
+// The widest side a picture is sent at: wide enough to read a scene, small enough to be cheap in tokens.
+constexpr unsigned kPictureWidth = 640U;
 constexpr std::string_view kCodeActions[]{"modules", "map", "find", "show"};
 constexpr std::string_view kEntityActions[]{"add", "set", "remove", "rename", "attach", "detach", "show"};
 constexpr std::string_view kComponentActions[]{"add", "set", "remove"};
@@ -336,7 +342,31 @@ void WriteError(std::ostream& out, const JsonValue& id, int code, std::string_vi
 struct ToolCallOutcome {
     bool isError = false;
     std::string text;
+    // Picture files a command wrote (captures), sent back as image blocks under the text.
+    std::vector<std::filesystem::path> pictures;
 };
+
+// A capture that names no file gets one inside the project, so the picture can be handed back. Returns the file the capture
+// writes (a relative --out is the project's), or an empty path when the words are no capture.
+[[nodiscard]] std::filesystem::path PrepareCapture(std::vector<std::string>& words, const std::string& projectRoot, std::set<std::filesystem::path>& taken) {
+    if (words.empty() || words.front() != "capture" || projectRoot.empty()) return {};
+    const std::filesystem::path root = std::filesystem::absolute(std::filesystem::path{ projectRoot }).lexically_normal();
+    std::filesystem::path picture;
+    for (std::size_t index = 1U; index + 1U < words.size(); ++index) {
+        if (words[index] != "--out") continue;
+        picture = std::filesystem::path{ words[index + 1U] };
+        break;
+    }
+    if (picture.empty()) {
+        picture = NextCapturePath(root, taken);
+        // The project's own relative path: what the agent reads back names no folder of this machine.
+        words.push_back("--out");
+        words.push_back(picture.lexically_relative(root).generic_string());
+    }
+    if (picture.is_relative()) picture = root / picture;
+    taken.insert(picture.lexically_normal());
+    return picture;
+}
 
 // Enforce the same schema that discovery advertises before translating values
 // into CLI arguments, especially before narrowing JSON numbers to native ints.
@@ -426,9 +456,12 @@ struct ToolCallOutcome {
 [[nodiscard]] ToolCallOutcome RunCommandList(const JsonValue& commands, const std::string& projectRoot) {
     if (projectRoot.empty()) return {.isError = true, .text = "commands needs a bound project"};
     std::vector<std::vector<std::string>> operations;
+    std::vector<std::filesystem::path> pictures;
+    std::set<std::filesystem::path> taken;
     for (std::size_t index = 0U; index < commands.Size(); ++index) {
         std::vector<std::string> words = WordsOf(*commands.At(index));
         if (words.empty()) return {.isError = true, .text = "commands[" + std::to_string(index) + "] must name a command"};
+        if (std::filesystem::path picture = PrepareCapture(words, projectRoot, taken); !picture.empty()) pictures.push_back(std::move(picture));
         operations.push_back(std::move(words));
     }
     if (operations.empty()) return {.isError = true, .text = "commands must hold at least one command"};
@@ -443,7 +476,9 @@ struct ToolCallOutcome {
     } catch (...) {
         captured << "error: unexpected tool failure\n";
     }
-    return {.isError = exitCode != 0, .text = captured.str()};
+    ToolCallOutcome outcome{.isError = exitCode != 0, .text = captured.str()};
+    if (!outcome.isError) outcome.pictures = std::move(pictures);
+    return outcome;
 }
 
 [[nodiscard]] ToolCallOutcome DispatchTool(
@@ -467,6 +502,8 @@ struct ToolCallOutcome {
         const bool takesProject = target != nullptr && !projectRoot.empty() &&
             (target->kind == CliCommandKind::Normal || target->kind == CliCommandKind::Particle || target->kind == CliCommandKind::Batch) &&
             words.front() != "new";
+        std::set<std::filesystem::path> taken;
+        const std::filesystem::path picture = PrepareCapture(words, projectRoot, taken);
         if (takesProject) words.insert(words.begin() + 1, { "--project", projectRoot });
         std::ostringstream captured;
         std::istringstream noInput;
@@ -478,7 +515,9 @@ struct ToolCallOutcome {
         } catch (...) {
             captured << "error: unexpected tool failure\n";
         }
-        return {.isError = exitCode != 0, .text = captured.str()};
+        ToolCallOutcome outcome{.isError = exitCode != 0, .text = captured.str()};
+        if (!outcome.isError && !picture.empty()) outcome.pictures.push_back(picture);
+        return outcome;
     }
     const CliCommandDescriptor* command = nullptr;
     for (const auto& entry : CliCommandCatalog())
@@ -546,6 +585,7 @@ struct ToolCallOutcome {
 int RunMcpCommand(const ArgumentList& arguments, std::istream& in, CommandIo io) {
     const std::string projectRoot = arguments.Option("--project").value_or("");
     gAllTools = arguments.Option("--tools").value_or("core") == "all";
+    gImages = arguments.Option("--images").value_or("on") != "off";
     // An agent works through this server: everything it runs stays inside its project.
     ConfineCliToProject(projectRoot);
 
@@ -622,6 +662,17 @@ int RunMcpCommand(const ArgumentList& arguments, std::istream& in, CommandIo io)
             textContent.Set("type", JsonValue::MakeString("text"));
             textContent.Set("text", JsonValue::MakeString(outcome.text));
             JsonValue content = JsonValue::MakeArray();
+            // A capture is seen first, then read: the picture, then what it holds as text.
+            for (const std::filesystem::path& picture : outcome.pictures) {
+                CaptureForModel shown;
+                std::string pictureError;
+                if (!gImages || !DescribeCapture(picture, kPictureWidth, shown, pictureError)) continue;
+                JsonValue image = JsonValue::MakeObject();
+                image.Set("type", JsonValue::MakeString("image"));
+                image.Set("data", JsonValue::MakeString(Base64Encode(shown.png)));
+                image.Set("mimeType", JsonValue::MakeString("image/png"));
+                content.Append(std::move(image));
+            }
             content.Append(std::move(textContent));
             JsonValue result = JsonValue::MakeObject();
             result.Set("content", std::move(content));

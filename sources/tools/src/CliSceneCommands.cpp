@@ -185,6 +185,10 @@ namespace {
     if (node.components.input.has_value()) {
         append("Input");
     }
+    // Every node has a Visibility; it is listed when the node starts hidden.
+    if (node.visibility.mode == kb::scene::VisibilityMode::Hidden) {
+        append("Visibility");
+    }
     for (const auto& descriptor : kb::scene::UIComponentCatalog()) {
         if (kb::scene::HasUIComponent(node.components.ui, descriptor.type)) {
             append(descriptor.displayName);
@@ -213,6 +217,11 @@ struct SceneFileResolution {
     }
     if (!sceneOption.has_value() || sceneOption->empty()) {
         resolution.error = "missing required option --scene <path>";
+        return resolution;
+    }
+    // A scene by its name (Level2) is the scene of the project that has it.
+    *sceneOption = CanonicalSceneText(arguments.Option("--project"), *sceneOption, resolution.error);
+    if (!resolution.error.empty()) {
         return resolution;
     }
 
@@ -295,36 +304,51 @@ int RunSceneListCommand(const ArgumentList& arguments, CommandIo io) {
             io.out << " components: " << components;
         }
         row.Set("behaviour", JsonValue::MakeNull());
+        auto behaviourRows = JsonValue::MakeArray();
         if (node.components.behaviour.has_value()) {
-            const kb::scene::BehaviourComponent& behaviour = *node.components.behaviour;
-            io.out << " behaviour: ";
-            const kb::assets::AssetMetadata* metadata = mounted != nullptr
-                ? mounted->Assets().Manager().Registry().Find(kb::assets::AssetId{ behaviour.behaviourAssetId })
-                : nullptr;
-            const std::string script = metadata != nullptr
-                ? metadata->virtualPath.generic_string()
-                : "0x" + kb::assets::ToString(kb::assets::AssetId{ behaviour.behaviourAssetId });
-            io.out << script;
-            io.out << " (" << BackendName(behaviour.backend)
-                   << ", " << TickGroupName(behaviour.tickGroup)
-                   << ", order " << behaviour.executionOrder
-                   << (behaviour.enabled ? "" : ", disabled")
-                   << ")";
-            auto behaviourRow = JsonValue::MakeObject();
-            behaviourRow.Set("script", JsonValue::MakeString(ToValidUtf8(script)));
-            behaviourRow.Set("backend", JsonValue::MakeString(BackendName(behaviour.backend)));
-            behaviourRow.Set("tickGroup", JsonValue::MakeString(TickGroupName(behaviour.tickGroup)));
-            behaviourRow.Set("order", JsonValue::MakeNumber(behaviour.executionOrder));
-            behaviourRow.Set("enabled", JsonValue::MakeBool(behaviour.enabled));
-            auto variables = JsonValue::MakeObject();
+            // The first behaviour, then the others the node runs (each script of an object has its own `self`).
+            std::vector<kb::scene::BehaviourComponent> all{ *node.components.behaviour };
+            all.insert(all.end(), node.components.additionalBehaviours.begin(), node.components.additionalBehaviours.end());
+            io.out << (all.size() == 1U ? " behaviour: " : " behaviours: ");
+            for (std::size_t at = 0U; at < all.size(); ++at) {
+                const kb::scene::BehaviourComponent& behaviour = all[at];
+                const kb::assets::AssetMetadata* metadata = mounted != nullptr
+                    ? mounted->Assets().Manager().Registry().Find(kb::assets::AssetId{ behaviour.behaviourAssetId })
+                    : nullptr;
+                const std::string script = metadata != nullptr
+                    ? metadata->virtualPath.generic_string()
+                    : "0x" + kb::assets::ToString(kb::assets::AssetId{ behaviour.behaviourAssetId });
+                io.out << (at == 0U ? "" : "; ") << script;
+                io.out << " (" << BackendName(behaviour.backend)
+                       << ", " << TickGroupName(behaviour.tickGroup)
+                       << ", order " << behaviour.executionOrder
+                       << (behaviour.enabled ? "" : ", disabled")
+                       << ")";
+                auto behaviourRow = JsonValue::MakeObject();
+                behaviourRow.Set("script", JsonValue::MakeString(ToValidUtf8(script)));
+                behaviourRow.Set("backend", JsonValue::MakeString(BackendName(behaviour.backend)));
+                behaviourRow.Set("tickGroup", JsonValue::MakeString(TickGroupName(behaviour.tickGroup)));
+                behaviourRow.Set("order", JsonValue::MakeNumber(behaviour.executionOrder));
+                behaviourRow.Set("enabled", JsonValue::MakeBool(behaviour.enabled));
+                if (at == 0U) {
+                    auto variables = JsonValue::MakeObject();
+                    for (std::size_t variable = 0U; variable < node.components.behaviourVariableOverrides.size(); ++variable) {
+                        const kb::scene::BehaviourVariableOverride& entry = node.components.behaviourVariableOverrides[variable];
+                        variables.Set(entry.name, JsonValue::MakeString(ToValidUtf8(kb::script::FormatValueText(entry.value))));
+                    }
+                    behaviourRow.Set("variables", std::move(variables));
+                }
+                if (at == 0U) {
+                    row.Set("behaviour", behaviourRow);
+                }
+                behaviourRows.Append(std::move(behaviourRow));
+            }
             for (std::size_t variable = 0U; variable < node.components.behaviourVariableOverrides.size(); ++variable) {
                 const kb::scene::BehaviourVariableOverride& entry = node.components.behaviourVariableOverrides[variable];
                 io.out << (variable == 0U ? " variables: " : ", ") << entry.name << '=' << kb::script::FormatValueText(entry.value);
-                variables.Set(entry.name, JsonValue::MakeString(ToValidUtf8(kb::script::FormatValueText(entry.value))));
             }
-            behaviourRow.Set("variables", std::move(variables));
-            row.Set("behaviour", std::move(behaviourRow));
         }
+        row.Set("behaviours", std::move(behaviourRows));
         io.out << " @ " << FormatCliNumber(world[index].x) << ',' << FormatCliNumber(world[index].y) << ','
                << FormatCliNumber(world[index].z) << '\n';
         auto position = JsonValue::MakeArray();
@@ -416,17 +440,26 @@ int RunSceneAttachCommand(const ArgumentList& arguments, CommandIo io) {
         return 1;
     }
 
-    // An entity runs one behaviour: replacing another one silently would drop its logic.
-    if (const auto& current = target->components.behaviour;
-        current.has_value() && current->behaviourAssetId != component->behaviourAssetId && !arguments.Flag("--replace")) {
-        const kb::assets::AssetMetadata* running = scene.Assets().Manager().Registry().Find(kb::assets::AssetId{ current->behaviourAssetId });
-        io.err << "error: '" << *nodeName << "' already runs "
-               << (running != nullptr ? running->virtualPath.generic_string() : std::string{ "a behaviour" })
-               << "; an entity runs one behaviour - put both in one script, attach it to a child entity, or pass --replace\n";
-        return 1;
+    // An entity runs several scripts, each with its own `self`: attaching another one adds it after the ones it has.
+    // --replace makes it the only one. The same script again only changes its settings (tick group, order, variables).
+    std::vector<kb::scene::BehaviourComponent> scripts;
+    if (target->components.behaviour.has_value() && !arguments.Flag("--replace")) {
+        scripts.push_back(*target->components.behaviour);
+        scripts.insert(scripts.end(), target->components.additionalBehaviours.begin(), target->components.additionalBehaviours.end());
     }
-    // Overrides belong to the script they were set for: another script starts without any.
-    if (!target->components.behaviour.has_value() || target->components.behaviour->behaviourAssetId != component->behaviourAssetId) {
+    const auto same = std::ranges::find_if(scripts, [&component](const kb::scene::BehaviourComponent& other) {
+        return other.behaviourAssetId == component->behaviourAssetId && other.backend == component->backend;
+    });
+    if (same != scripts.end()) {
+        *same = *component;
+    } else if (scripts.size() >= kb::scene::kMaxBehavioursPerEntity) {
+        io.err << "error: '" << *nodeName << "' runs " << scripts.size() << " scripts already, the most an object can; remove one with scene-detach\n";
+        return 1;
+    } else {
+        scripts.push_back(*component);
+    }
+    // Variables set for a script belong to it: starting over with --replace drops the old ones.
+    if (arguments.Flag("--replace")) {
         target->components.behaviourVariableOverrides.clear();
     }
     std::ostringstream assigned;
@@ -434,7 +467,8 @@ int RunSceneAttachCommand(const ArgumentList& arguments, CommandIo io) {
         !assignments.empty() && !ApplyVariableAssignments(scene, *metadata, assignments, target->components.behaviourVariableOverrides, assigned, io.err)) {
         return 1;
     }
-    target->components.behaviour = *component;
+    target->components.behaviour = scripts.front();
+    target->components.additionalBehaviours.assign(scripts.begin() + 1, scripts.end());
 
     if (!kb::scene::SceneDocumentService::Save(loaded.document, resolved.path)) {
         io.err << "error: could not save scene: " << resolved.path.generic_string() << '\n';
@@ -443,8 +477,120 @@ int RunSceneAttachCommand(const ArgumentList& arguments, CommandIo io) {
 
     io.out << "attached " << metadata->virtualPath.generic_string()
            << " (" << BackendName(component->backend) << ") to node '" << *nodeName
-           << "' in " << resolved.path.generic_string() << '\n'
-           << assigned.str();
+           << "' in " << resolved.path.generic_string();
+    if (scripts.size() > 1U) {
+        io.out << "; the node runs " << scripts.size() << " scripts";
+    }
+    io.out << '\n' << assigned.str();
+    return 0;
+}
+
+int RunSceneDetachCommand(const ArgumentList& arguments, CommandIo io) {
+    const std::optional<std::string> project = arguments.Option("--project");
+    const std::optional<std::string> nodeName = arguments.Option("--node");
+    if (!project.has_value() || !nodeName.has_value()) {
+        io.err << "error: scene-detach requires --project <dir> --node <name> [--script <path>] [--scene <path>]\n";
+        return 1;
+    }
+    kb::scene::Scene scene;
+    std::string error;
+    if (!MountProjectAssets(scene, *project, error)) {
+        io.err << "error: " << error << '\n';
+        return 1;
+    }
+    const SceneFileResolution resolved = ResolveSceneFile(arguments, &scene);
+    if (!resolved.succeeded) {
+        io.err << "error: " << resolved.error << '\n';
+        return 1;
+    }
+    kb::scene::SceneDocumentLoadResult loaded = kb::scene::SceneDocumentService::Load(resolved.path);
+    if (!loaded.succeeded) {
+        io.err << "error: could not load scene " << resolved.path.generic_string() << ": " << loaded.error << '\n';
+        return 1;
+    }
+    kb::scene::ScenePrefabNodeDesc* target = nullptr;
+    const std::span<const kb::scene::ScenePrefabNodeDesc> nodes = loaded.document.worldPrefab.Nodes();
+    for (std::size_t index = 0U; index < nodes.size(); ++index) {
+        if (nodes[index].name == *nodeName) {
+            target = loaded.document.worldPrefab.TryGetMutableNode(static_cast<std::uint32_t>(index));
+            break;
+        }
+    }
+    if (target == nullptr) {
+        io.err << "error: node '" << *nodeName << "' was not found in the scene; available nodes:";
+        for (const kb::scene::ScenePrefabNodeDesc& node : nodes) io.err << ' ' << node.name;
+        io.err << '\n';
+        return 1;
+    }
+    if (!target->components.behaviour.has_value()) {
+        io.err << "error: node '" << *nodeName << "' runs no script\n";
+        return 1;
+    }
+    std::vector<kb::scene::BehaviourComponent> scripts{ *target->components.behaviour };
+    scripts.insert(scripts.end(), target->components.additionalBehaviours.begin(), target->components.additionalBehaviours.end());
+    const auto nameOf = [&scene](const kb::scene::BehaviourComponent& behaviour) {
+        const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().Find(kb::assets::AssetId{ behaviour.behaviourAssetId });
+        return metadata != nullptr ? metadata->virtualPath.generic_string() : "0x" + kb::assets::ToString(kb::assets::AssetId{ behaviour.behaviourAssetId });
+    };
+    // Which one: the --script given, or the only one the node runs; with several and none named, the choice is listed.
+    std::size_t removed = scripts.size();
+    if (const std::optional<std::string> scriptPath = arguments.Option("--script"); scriptPath.has_value()) {
+        const kb::assets::AssetMetadata* metadata =
+            FindAssetByFlexiblePath(scene.Assets().Manager().Registry(), ResolveInputPath(*scriptPath, *project));
+        if (metadata == nullptr) {
+            metadata = FindAssetByFlexiblePath(scene.Assets().Manager().Registry(), *scriptPath);
+        }
+        for (std::size_t index = 0U; metadata != nullptr && index < scripts.size(); ++index) {
+            if (scripts[index].behaviourAssetId == metadata->id.value) removed = index;
+        }
+        if (removed == scripts.size()) {
+            io.err << "error: node '" << *nodeName << "' does not run " << *scriptPath << "; it runs:";
+            for (const kb::scene::BehaviourComponent& behaviour : scripts) io.err << ' ' << nameOf(behaviour);
+            io.err << '\n';
+            return 1;
+        }
+    } else if (scripts.size() == 1U) {
+        removed = 0U;
+    } else {
+        io.err << "error: node '" << *nodeName << "' runs " << scripts.size() << " scripts; name the one to remove with --script:";
+        for (const kb::scene::BehaviourComponent& behaviour : scripts) io.err << ' ' << nameOf(behaviour);
+        io.err << '\n';
+        return 1;
+    }
+    const std::string removedName = nameOf(scripts[removed]);
+    // The variables the removed script exposed go with it, unless a script that stays exposes them too.
+    const auto exposedBy = [&scene](const kb::scene::BehaviourComponent& behaviour) {
+        std::vector<std::string> names;
+        if (const auto asset = scene.Assets().Manager().Load<kb::script::LuaScriptAsset>(kb::assets::AssetId{ behaviour.behaviourAssetId }); asset.IsLoaded()) {
+            for (const kb::script::ScriptApiPin& pin : asset.Get()->exposedVariables) names.push_back(pin.name);
+        }
+        return names;
+    };
+    const std::vector<std::string> gone = exposedBy(scripts[removed]);
+    scripts.erase(scripts.begin() + static_cast<std::ptrdiff_t>(removed));
+    for (const std::string& name : gone) {
+        const bool kept = std::ranges::any_of(scripts, [&](const kb::scene::BehaviourComponent& behaviour) {
+            const std::vector<std::string> names = exposedBy(behaviour);
+            return std::ranges::find(names, name) != names.end();
+        });
+        if (!kept) {
+            std::erase_if(target->components.behaviourVariableOverrides, [&name](const kb::scene::BehaviourVariableOverride& entry) { return entry.name == name; });
+        }
+    }
+    if (scripts.empty()) {
+        target->components.behaviour.reset();
+        target->components.additionalBehaviours.clear();
+        target->components.behaviourVariableOverrides.clear();
+    } else {
+        target->components.behaviour = scripts.front();
+        target->components.additionalBehaviours.assign(scripts.begin() + 1, scripts.end());
+    }
+    if (!kb::scene::SceneDocumentService::Save(loaded.document, resolved.path)) {
+        io.err << "error: could not save scene: " << resolved.path.generic_string() << '\n';
+        return 1;
+    }
+    io.out << "detached " << removedName << " from node '" << *nodeName << "' in " << resolved.path.generic_string();
+    io.out << (scripts.empty() ? "; the node runs no script" : "; the node runs " + std::to_string(scripts.size()) + (scripts.size() == 1U ? " script" : " scripts")) << '\n';
     return 0;
 }
 
@@ -557,13 +703,19 @@ int RunSceneNewCommand(const ArgumentList& arguments, CommandIo io) {
         io.err << "error: " << created << '\n';
         return 1;
     }
-    io.out << "Scene created: " << target.virtualPath << " (template " << kb::scene::SceneTemplates::Name(*sceneTemplate)
-           << ").\n";
+    io.out << "Scene created: " << target.virtualPath << " (template " << kb::scene::SceneTemplates::Name(*sceneTemplate) << ").";
+    if (defaultOption != "yes") {
+        io.out << " It is not in the build yet: project-settings scenes --add " << std::filesystem::path{ target.virtualPath }.stem().string();
+    }
+    io.out << '\n';
 
     if (defaultOption == "yes") {
         const std::filesystem::path settingsFile = kb::project::ProjectSettingsStore::FilePath(projectRoot);
         kb::project::ProjectSettingsLoadResult settings = kb::project::ProjectSettingsStore::Load(settingsFile);
-        settings.settings.defaultMap = target.virtualPath;
+        // The scene that started the game stays among the scenes the game is built with.
+        std::vector<std::string> built{ target.virtualPath, settings.settings.defaultMap };
+        built.insert(built.end(), settings.settings.additionalScenes.begin(), settings.settings.additionalScenes.end());
+        kb::project::SetProjectBuildScenes(settings.settings, std::move(built));
         if (!kb::project::ProjectSettingsStore::Save(settingsFile, settings.settings, error)) {
             io.err << "error: the scene was created, but the startup scene could not be set: " << error << '\n';
             return 1;

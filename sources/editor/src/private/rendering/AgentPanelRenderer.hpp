@@ -38,6 +38,9 @@ enum class AgentPanelHitKind : std::uint8_t {
     Send,          // Send, or Stop while the agent works
     Attachment,    // a picture waiting for the next request (index): takes it off
     Picture,       // a picture in the conversation (index: entry, item: which of a request's pictures)
+    ReviewKeep,    // keeps the files the request changed
+    ReviewUndoAll, // puts them all back
+    ReviewUndoFile, // puts one back (index: its row)
 };
 
 struct AgentPanelHit {
@@ -72,6 +75,14 @@ struct AgentPanelLayout {
     RECT sendButton{};
     // The pictures for the next request, over the composer.
     std::vector<RECT> attachments;
+    // The files the latest request changed, between the conversation and the composer (empty when there are none).
+    RECT review{};
+    RECT reviewKeep{};
+    RECT reviewUndoAll{};
+    std::vector<RECT> reviewRows;
+    std::vector<RECT> reviewRowUndo;
+    // How many files the review does not list for lack of room.
+    int reviewMore = 0;
 };
 
 class AgentPanelRenderer final {

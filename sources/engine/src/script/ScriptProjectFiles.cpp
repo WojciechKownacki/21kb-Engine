@@ -414,7 +414,7 @@ void FindCompilerEnvironment(NativeSdk& sdk) {
     std::string_view name) {
     const std::optional<NativeSdk> sdk = FindNativeSdk();
     if (!sdk.has_value()) {
-        return { {}, {}, "the C++ script SDK was not found. Set KB_ENGINE_SDK_ROOT to an engine build with Release libraries." };
+        return { {}, {}, ScriptProjectFiles::NativeSdkProblem() };
     }
     const NativeScriptFiles files = NativeFiles(projectRoot, folder, name);
     const std::filesystem::path relativeSource = files.source.lexically_relative(folder);
@@ -495,6 +495,13 @@ CreatedScript ScriptProjectFiles::Create(ScriptLanguage language, const std::fil
         return { {}, {}, "the folder " + Utf8Text(folder) + " could not be created: " + error.message() };
     }
     return language == ScriptLanguage::Lua ? CreateLua(folder, name) : CreateCpp(projectRoot, folder, name);
+}
+
+std::string ScriptProjectFiles::NativeSdkProblem() {
+    if (FindNativeSdk().has_value()) return {};
+    return "the C++ script SDK was not found. C++ scripts are for developers: they need the engine SDK (its headers and Release libraries; "
+           "set KB_ENGINE_SDK_ROOT to an engine build that has them) and a C++ toolchain (CMake and the Visual Studio C++ build tools). "
+           "For a game, write the script in Lua instead: script-new --language lua";
 }
 
 NativeScriptBuildDesc ScriptProjectFiles::BuildOf(const NativeBehaviourDescriptor& descriptor,

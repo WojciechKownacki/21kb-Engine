@@ -4340,11 +4340,22 @@ bool EditorSceneContext::AddBehaviourAssetToEntity(kb::assets::AssetId assetId, 
         return false;
     }
 
+    // A script the entity runs already is not run twice; any other is added after the ones it has.
+    if (scene_->Components().Behaviours().Find(entity, behaviour->behaviourAssetId, behaviour->backend) != nullptr) {
+        console_.Warning("Scripts", "The object runs " + metadata->name + " already.");
+        return false;
+    }
+    if (scene_->Components().Behaviours().Count(entity) >= kb::scene::kMaxBehavioursPerEntity) {
+        console_.Warning("Scripts", "An object runs at most " + std::to_string(kb::scene::kMaxBehavioursPerEntity) + " scripts.");
+        return false;
+    }
     if (!ExecuteSceneCommand("Assign Behaviour", [this, entity, behaviour]() {
             if (!scene_->Entities().IsAlive(entity)) {
                 return false;
             }
-            scene_->Components().Behaviours().Set(entity, *behaviour);
+            if (!scene_->Components().Behaviours().Add(entity, *behaviour)) {
+                return false;
+            }
             SelectEntity(entity);
             return true;
         })) {
@@ -4574,15 +4585,59 @@ bool EditorSceneContext::AttachScriptToEntity(kb::scene::SceneEntity entity, kb:
 }
 
 bool EditorSceneContext::RemoveScriptFromEntity(kb::scene::SceneEntity entity) {
-    if (!entity.IsValid() || !scene_->Components().Behaviours().Has(entity)) {
+    return RemoveScriptFromEntityAt(entity, 0U);
+}
+
+std::size_t EditorSceneContext::EntityScriptCount(kb::scene::SceneEntity entity) const {
+    return entity.IsValid() ? scene_->Components().Behaviours().Count(entity) : 0U;
+}
+
+std::string EditorSceneContext::EntityScriptNameAt(kb::scene::SceneEntity entity, std::size_t index) const {
+    const kb::scene::BehaviourComponent* behaviour = scene_->Components().Behaviours().TryGetAt(entity, index);
+    if (behaviour == nullptr) {
+        return {};
+    }
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(kb::assets::AssetId{ behaviour->behaviourAssetId });
+    if (metadata == nullptr) {
+        return std::string{ EditorText("inspector.script.missingScript", "(missing script)") };
+    }
+    return metadata->name.empty() ? metadata->virtualPath.filename().string() : metadata->name;
+}
+
+bool EditorSceneContext::EntityScriptEnabledAt(kb::scene::SceneEntity entity, std::size_t index) const {
+    const kb::scene::BehaviourComponent* behaviour = scene_->Components().Behaviours().TryGetAt(entity, index);
+    return behaviour != nullptr && behaviour->enabled;
+}
+
+kb::assets::AssetId EditorSceneContext::EntityScriptAssetIdAt(kb::scene::SceneEntity entity, std::size_t index) const {
+    const kb::scene::BehaviourComponent* behaviour = scene_->Components().Behaviours().TryGetAt(entity, index);
+    return behaviour != nullptr ? kb::assets::AssetId{ behaviour->behaviourAssetId } : kb::assets::AssetId{};
+}
+
+bool EditorSceneContext::ToggleEntityScriptEnabledAt(kb::scene::SceneEntity entity, std::size_t index) {
+    if (!entity.IsValid() || scene_->Components().Behaviours().TryGetAt(entity, index) == nullptr) {
         return false;
     }
-    return ExecuteSceneCommand("Remove Component", [this, entity]() {
+    return ExecuteSceneCommand("Toggle Script Enabled", [this, entity, index]() {
+        const kb::scene::BehaviourComponent* behaviour = scene_->Components().Behaviours().TryGetAt(entity, index);
+        if (behaviour == nullptr) {
+            return false;
+        }
+        kb::scene::BehaviourComponent toggled = *behaviour;
+        toggled.enabled = !toggled.enabled;
+        return scene_->Components().Behaviours().SetAt(entity, index, toggled);
+    });
+}
+
+bool EditorSceneContext::RemoveScriptFromEntityAt(kb::scene::SceneEntity entity, std::size_t index) {
+    if (!entity.IsValid() || scene_->Components().Behaviours().TryGetAt(entity, index) == nullptr) {
+        return false;
+    }
+    return ExecuteSceneCommand("Remove Component", [this, entity, index]() {
         if (!scene_->Entities().IsAlive(entity)) {
             return false;
         }
-        scene_->Components().Behaviours().Remove(entity);
-        return true;
+        return scene_->Components().Behaviours().RemoveAt(entity, index);
     });
 }
 
@@ -6327,18 +6382,7 @@ bool EditorSceneContext::RemoveAnimatorFromEntity(kb::scene::SceneEntity entity)
 }
 
 bool EditorSceneContext::ToggleEntityScriptEnabled(kb::scene::SceneEntity entity) {
-    if (!entity.IsValid() || !scene_->Components().Behaviours().Has(entity)) {
-        return false;
-    }
-    return ExecuteSceneCommand("Toggle Script Enabled", [this, entity]() {
-        kb::scene::BehaviourComponent* behaviour = scene_->Components().Behaviours().TryGet(entity);
-        if (behaviour == nullptr) {
-            return false;
-        }
-        behaviour->enabled = !behaviour->enabled;
-        scene_->Components().Behaviours().MarkModified(entity);
-        return true;
-    });
+    return ToggleEntityScriptEnabledAt(entity, 0U);
 }
 
 bool EditorSceneContext::BeginSelectedTransformEdit(std::string label) {

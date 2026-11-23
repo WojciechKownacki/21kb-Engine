@@ -53,12 +53,11 @@ constexpr std::string_view kAgentsTail = R"md(
 ## Calls
 
 One command, `kb_cli` with `args`: `["entity","add","--create","Cube","--name","Crate"]`
-Dependent commands, `kb_cli` with `commands`: `[["entity","add","--create","Cube","--name","Crate","--body","Dynamic"],["component","set","--entity","Crate","--type","Collider","--set","restitution=0.6"]]`
-Run `validate`, `run` and `capture` in a call of their own after the change.
+Several, `kb_cli` with `commands`: `[["entity","add","--create","Cube","--name","Crate","--body","Dynamic"],["component","set","--entity","Crate","--type","Collider","--set","restitution=0.6"]]`
 
 ## Recipes
 
-Fetch one with `guide` (its name as `topic`). In a recipe, the lines between blank lines are one call: one line is `args`, several are `commands`.
+Fetch one with `guide` (its name as `topic`). A recipe's commands go in one `commands` call, as written there; its check (`validate`, `run`, `capture`) in a call of its own after it.
 
 - colour, material: `recipe-material`
 - physics, any component: `recipe-component`
@@ -66,7 +65,7 @@ Fetch one with `guide` (its name as `topic`). In a recipe, the lines between bla
 - a Lua script on an object (spin all the time, follow, react to keys or touch): `recipe-script`
 - coins or pickups the player touches: `recipe-pickup`
 - light, sun, sky, time of day: `recipe-light`
-- game name, window, plugins, a build: `recipe-settings`
+- game name, window, plugins, scenes in the build, tags, a build: `recipe-settings`
 - a button, a menu: `recipe-ui-button`
 - a character the person plays: `recipe-player`
 - an icon, sprite, texture: `recipe-image`
@@ -76,15 +75,19 @@ Fetch one with `guide` (its name as `topic`). In a recipe, the lines between bla
 - other languages: `recipe-translate`
 - a motion that plays by itself (bob up and down, a door that opens): `recipe-animation`
 - a reusable material effect: `recipe-material-function`
+- save the game, a score kept between runs: `recipe-save`
+- a character that walks to a place around obstacles: `recipe-navmesh`
+- what collides with what, physics layers: `recipe-collision`
+- a hinge, pendulum, rope, slider: `recipe-joint`
 
-`guide` without a topic lists every guide; `api_reference` shows one function or component at a time.
+`guide` without a topic lists every guide (audio mixer, gameplay graphs, CSG, big worlds, mods too); `api_reference` shows one function or component at a time.
 
 ## More
 
 - `help` lists the commands, `help <command>` shows one's options; `scene-list` the objects, `entity show --name <Name>`
   one object's values, `schema --component <Name>` a component's.
 - `Assets/` is the game, mounted as `/Game/`. Delete, rename or move files with `asset delete|rename|move`, never by hand.
-- A picture of the scene for the person: `capture --out Saved/Agent/Images/<new name>.png`.
+- To see the scene, when the person asks how it looks or a change is hard to judge from the output: `capture` returns the picture (`--view overview` frames the whole scene, `--camera <Name>` uses a camera of it).
 )md";
 
 

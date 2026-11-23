@@ -122,6 +122,11 @@ kb_cli validate Assets/Scripts/Spinner.lua
 - Keys and buttons are input actions: `kb_cli input-action new --name Fire --key Space --key MouseLeft`
   (`--type Axis2D --key W=+y --key S=-y --key D=+x --key A=-x` for movement); scripts read
   `Input.Pressed("Fire")` and `Input.Vector2("Move")`; `input-action list` shows what exists.
+- An object runs up to 8 scripts: `scene-attach` again with another script adds it, `scene-detach --node <Name> --script <path>` takes
+  one off, and the Inspector lists them. Each script has its own `self` and its own variables; an event for the object (`EmitTo`, a
+  touch, a click) reaches every script that handles it; they run by tick group and `--execution-order`, then in the order attached.
+- C++ scripts (`script-new --language cpp`, `script-build`) are for developers: they need the engine SDK and a C++ toolchain (CMake and
+  the Visual Studio C++ tools), and fail at once without them. A game's scripts are Lua: use `--language lua`.
 - `-- @expose <name> <Type> [= default]` makes a variable editable in the Inspector; read it with
   `self:GetVariable`. `kb_cli scene-attach ... --set speed=8` gives one node its own value for it.
 - Component properties: `self:GetProperty(component, property)` / `self:SetProperty(...)`; each
@@ -385,6 +390,8 @@ end
 - Whole screens: `kb_cli entity add --create "Main Menu"` (also `Pause`, `HUD`, `Settings`) builds the title, buttons,
   health bar or sliders at once; the buttons carry event names (`PlayClicked`, `SettingsClicked`, `QuitClicked`, `ResumeClicked`,
   `MainMenuClicked`, `BackClicked`) for your script to answer.
+- A button that opens another scene calls `Scene.Load("/Game/Scenes/Level2.21kbscene")` in its function; that scene must be in the build
+  (`project-settings scenes --add Level2`), or the built game cannot open it.
 - Try the menu without a window: `kb_cli run --frames 12 --click Menu/PlayButton@5` presses the widget on frame 5 and says
   what was under the pointer and which script answered; `--report ui` lists every widget with its rectangle and its answering scripts.
 )md";
@@ -445,8 +452,10 @@ constexpr std::string_view kRecipeMaterial = R"md(# Recipe: a colour or material
 Not sure of the object's name? `kb_cli scene-list` lists the objects.
 
 ```
-["material-new","--name","Green","--set","Base Color=#2ECC40"]
+[
+["material-new","--name","Green","--set","Base Color=#2ECC40"],
 ["component","set","--entity","Crate","--type","MeshRenderer","--set","material=/Game/Materials/Green.kbmat"]
+]
 ```
 
 Done when the second command prints `updated MeshRenderer`.
@@ -459,9 +468,13 @@ Done when the second command prints `updated MeshRenderer`.
 constexpr std::string_view kRecipeComponent = R"md(# Recipe: physics, or another component, on an object
 
 ```
-["component","add","--entity","Crate","--type","Rigidbody","--set","bodyType=Dynamic"]
+[["component","add","--entity","Crate","--type","Rigidbody","--set","bodyType=Dynamic"]]
+```
 
-["run","--frames","120"]
+Check, as a call of its own:
+
+```
+[["run","--frames","120"]]
 ```
 
 Done when `run` ends with `0 diagnostics` and a `moved:` line for the object (`Crate 0,3,0 -> 0,0.5,0` means it fell and landed).
@@ -472,6 +485,8 @@ Done when `run` ends with `0 diagnostics` and a `moved:` line for the object (`C
   each component: when `add` says it is there, change it with `component set`.
 - Heavier: `component set --entity Crate --type Rigidbody --set mass=50`. Bouncy:
   `component set --entity Crate --type Collider --set restitution=0.6`.
+- Hidden when the game starts: `component add --entity Crate --type Visibility` (a script shows it again; `component remove` makes it visible).
+- A joint holds on to another object: `component set --entity Door --type Joint --set connectedEntity=Wall`.
 - Several at once: `entity add --create Cube --name Crate --count 5 --offset 0,1,0 --body Dynamic` makes Crate1..Crate5.
 )md";
 
@@ -480,8 +495,10 @@ constexpr std::string_view kRecipePrefab = R"md(# Recipe: a prefab, with a compo
 Add the component first: a prefab saves the object as it is.
 
 ```
-["component","add","--entity","Crate","--type","Rigidbody","--set","bodyType=Dynamic"]
+[
+["component","add","--entity","Crate","--type","Rigidbody","--set","bodyType=Dynamic"],
 ["prefab","new","--from-entity","Crate","--name","CratePrefab"]
+]
 ```
 
 Done when `prefab new` prints `saved 'Crate' as prefab /Game/Prefabs/CratePrefab.kbprefab`.
@@ -494,11 +511,16 @@ Done when `prefab new` prints `saved 'Crate' as prefab /Game/Prefabs/CratePrefab
 constexpr std::string_view kRecipeScript = R"md(# Recipe: a Lua script on an object
 
 ```
-["script-new","--name","Spin","--language","lua","--code","function Tick(self, dt)\n    Transform.Rotate(self.entity, 0, 20 * dt, 0)\nend"]
+[
+["script-new","--name","Spin","--language","lua","--code","function Tick(self, dt)\n    Transform.Rotate(self.entity, 0, 20 * dt, 0)\nend"],
 ["scene-attach","--node","Crate","--script","/Game/Scripts/Spin.lua"]
+]
+```
 
-["validate","Assets/Scripts/Spin.lua"]
-["run","--frames","120"]
+Check, as a call of its own:
+
+```
+[["validate","Assets/Scripts/Spin.lua"],["run","--frames","120"]]
 ```
 
 `--code` is the whole script, so there is nothing to edit afterwards. Done when `validate` says `OK`
@@ -508,22 +530,32 @@ and `run` ends with `0 diagnostics`. The object's name comes from `kb_cli scene-
 - `Transform.Rotate(self.entity, x, y, z)` turns it by degrees: `0, 20 * dt, 0` is a slow turn around the upright axis.
 - Another engine function: `api_reference` with `search` (a word) or `topic` (`Transform`, `Physics`, `Input`).
 - Changing a script that exists: edit its `.lua` file directly, then `validate` again.
+- A second script on the same object: `scene-attach` again with the other script (up to 8). Each script has its own `self`, and an event for the object reaches all of them. `scene-detach --node Crate --script <path>` takes one off.
 - Keys: `kb_cli input-action new --name Fire --key Space`, read with `Input.Pressed("Fire")`; more in guide `scripts`.
 - React to touching something: `function OnTriggerEnter(self, event)`, guide `recipe-pickup`; every hook: topic `EventHooks`.
 )md";
 
 constexpr std::string_view kRecipePickup = R"md(# Recipe: coins the player collects by touching them, with a counter on the screen
 
+Look at the objects first, as a call of its own: it names the object the person plays.
+
 ```
-["scene-list"]
-
-["pickup","new","--name","Coin","--count","3","--position","0,1,3","--player","Player"]
-
-["run","--frames","150","--press","W@5+90"]
+[["scene-list"]]
 ```
 
-Run `scene-list` first, on its own: it names the object the person plays; put that name in `--player` (the scene has none: add
-`--with-player yes` to `pickup new`, which adds a walking `Player` first). `pickup new` makes the coins (Coin, Coin2, Coin3 in a row along Z, each
+Put that name in `--player` (the scene has none: add `--with-player yes` to `pickup new`, which adds a walking `Player` first):
+
+```
+[["pickup","new","--name","Coin","--count","3","--position","0,1,3","--player","Player"]]
+```
+
+Check, as a call of its own:
+
+```
+[["run","--frames","150","--press","W@5+90"]]
+```
+
+`pickup new` makes the coins (Coin, Coin2, Coin3 in a row along Z, each
 a trigger Collider), the counter text on the screen, the scripts and their attachment, and checks the scripts: all of it or
 nothing. Done when `run` prints `[log] Coin count: 1` and `moved: Coin was destroyed`, then `0 diagnostics`: `--press W@5+90`
 holds W, so the player walks forward (+Z) into the coins. That is the whole job: no prefab, picture or second check is needed.
@@ -544,10 +576,12 @@ shows the names if they differ. The sun's `rotation` x is its height: 90 straigh
 Evening, warm and orange:
 
 ```
-["component","set","--entity","Sun","--type","Light","--set","color=1,0.62,0.34","--set","intensity=2.2"]
-["entity","set","--name","Sun","--rotation","18,-35,0"]
-["component","set","--entity","Environment","--type","WorldBackdrop","--set","horizonColor=0.72,0.34,0.19","--set","zenithColor=0.23,0.18,0.28","--set","skyTint=1,0.64,0.38","--set","groundColor=0.2,0.12,0.08"]
+[
+["component","set","--entity","Sun","--type","Light","--set","color=1,0.62,0.34","--set","intensity=2.2"],
+["entity","set","--name","Sun","--rotation","18,-35,0"],
+["component","set","--entity","Environment","--type","WorldBackdrop","--set","horizonColor=0.72,0.34,0.19","--set","zenithColor=0.23,0.18,0.28","--set","skyTint=1,0.64,0.38","--set","groundColor=0.2,0.12,0.08"],
 ["component","set","--entity","Environment","--type","Ambient Radiance","--set","horizonColor=0.72,0.34,0.19","--set","zenithColor=0.23,0.18,0.28"]
+]
 ```
 
 Done when every command prints `updated ...` or `set 'Sun'`.
@@ -555,20 +589,31 @@ Done when every command prints `updated ...` or `set 'Sun'`.
 - Midday: Light `color=1,0.96,0.9` `intensity=3`, Sun rotation `60,-30,0`; sky `horizonColor=0.6,0.75,0.95` `zenithColor=0.2,0.4,0.85`.
 - Night: Light `color=0.4,0.5,0.9` `intensity=0.3`, Sun rotation `35,-30,0`; sky `horizonColor=0.03,0.04,0.1` `zenithColor=0.01,0.01,0.05`, the same two colours on `Ambient Radiance`.
 - Brighter or dimmer: Light `intensity`. A lamp: `kb_cli entity add --create "Point Light" --name Lamp --position 0,3,0`, then `component set --entity Lamp --type Light --set intensity=8 --set color=1,0.8,0.5`.
-- Fog, bloom, water: guide `water-and-look`. To show the person: `kb_cli capture --out Saved/Agent/Images/<new name>.png`.
+- Fog, bloom, water: guide `water-and-look`. To show the person: `kb_cli capture`.
 )md";
 
-constexpr std::string_view kRecipeSettings = R"md(# Recipe: project settings, plugins and builds
+constexpr std::string_view kRecipeSettings = R"md(# Recipe: project settings, plugins, scenes in the build, tags and builds
 
 ```
-["project-settings","--set","Identity.GameName=Dragon Hills","--set","Identity.Name=Dragon Hills"]
+[["project-settings","--set","Identity.GameName=Dragon Hills","--set","Identity.Name=Dragon Hills"]]
 ```
 
 Done when it prints the settings it changed. Without `--set` it lists all of them (about 70 lines): do that only when the key is unknown.
 
+A second scene (a level, a menu) the game can open: make it and put it in the build, in one call:
+
+```
+[["scene-new","--name","Level2"],["project-settings","scenes","--add","Level2"]]
+```
+
+Done when it lists `Level2` under `scenes in the build`. Only the scenes in that list are in the built game, also one that a button or a script opens with
+`Scene.Load("/Game/Scenes/Level2.21kbscene")`; `build` warns about one that is left out. `["project-settings","scenes"]` lists them.
+
+- Which scene the game starts in: `["project-settings","scenes","--startup","Level2"]`. Order and the rest: `--order Main,Level2`, `--remove Level2`.
+- Tags for objects (a kind of enemy, a pickup): `["project-settings","tags","--add","Boss"]`; `--remove Boss`; without options it lists them.
 - Names: `Identity.GameName` (the game's name) and `Identity.Name` (the project's); set both for "name my game".
 - Window: `Display.WindowWidth`, `Display.WindowHeight`, `Display.WindowMode` (`Windowed` or `BorderlessFullscreen`), `Display.VSync` (1 or 0).
-- Start scene: `Maps.DefaultMap=/Game/Scenes/<Name>.21kbscene`. Gravity: `Physics.GravityY=-9.81`. Volume: `Audio.MasterVolume`.
+- Gravity: `Physics.GravityY=-9.81`. Volume: `Audio.MasterVolume`.
 - Android: `Android.ApplicationId`, `Android.Label`, `Android.VersionCode`.
 - Plugins: `kb_cli plugins` lists them; `--enable <id>` or `--disable <id>` switches one.
 - A game for a platform: `kb_cli editor build --target windows|android|web|webgpu|linux` (`--profile release` for a store build).
@@ -578,22 +623,31 @@ Done when it prints the settings it changed. Without `--set` it lists all of the
 constexpr std::string_view kRecipeUiButton = R"md(# Recipe: a button on the screen
 
 ```
-["entity","add","--create","Button","--name","PlayButton"]
+[
+["entity","add","--create","Button","--name","PlayButton"],
 ["component","set","--entity","PlayButton","--type","Text","--set","content=Play"]
+]
 ```
 
 The button goes under a Canvas, made when the scene has none. Done when both commands print `added` or `updated`.
 It shows, but a click does nothing yet: say so, unless the person told you what it should do. To make it do something:
 
 ```
-["component","set","--entity","PlayButton","--type","Selectable","--set","eventName=PlayClicked"]
-["script-new","--name","MenuController","--language","lua","--code","function PlayClicked(self, event)\n    Log('Play pressed')\nend"]
+[
+["component","set","--entity","PlayButton","--type","Selectable","--set","eventName=PlayClicked"],
+["script-new","--name","MenuController","--language","lua","--code","function PlayClicked(self, event)\n    Log('Play pressed')\nend"],
 ["scene-attach","--node","PlayButton","--script","/Game/Scripts/MenuController.lua"]
+]
+```
 
-["validate","Assets/Scenes/Main.21kbscene","Assets/Scripts/MenuController.lua"]
+Check, as a call of its own:
+
+```
+[["validate","Assets/Scenes/Main.21kbscene","Assets/Scripts/MenuController.lua"]]
 ```
 
 Done when `validate` lists no warnings. Put the real action in the function (a scene change, a score, a sound); guide `menus-and-buttons` has every callback.
+A scene it opens must be in the build: guide `recipe-settings`.
 
 - A whole screen at once: `kb_cli entity add --create "Main Menu"` (also `Pause`, `HUD`, `Settings`).
 - Text on screen: `entity add --create Text --name Score`, then `component set --entity Score --type Text --set "content=Score: 0"`.
@@ -603,9 +657,13 @@ Done when `validate` lists no warnings. Put the real action in the function (a s
 constexpr std::string_view kRecipePlayer = R"md(# Recipe: a character the person plays
 
 ```
-["entity","add","--create","Third Person Player"]
+[["entity","add","--create","Third Person Player"]]
+```
 
-["run","--frames","60"]
+Check, as a call of its own:
+
+```
+[["run","--frames","60"]]
 ```
 
 One command adds the character with its controller script, input and the camera. Done when it prints
@@ -622,9 +680,11 @@ constexpr std::string_view kRecipeImage = R"md(# Recipe: an icon, a picture, a t
 The engine draws it: no outside tool, no file to download.
 
 ```
-["image","new","--name","Heart","--preset","heart","--style","neon","--color","#FF2D6F"]
-["entity","add","--create","Image","--name","HeartIcon"]
+[
+["image","new","--name","Heart","--preset","heart","--style","neon","--color","#FF2D6F"],
+["entity","add","--create","Image","--name","HeartIcon"],
 ["component","set","--entity","HeartIcon","--type","Image","--set","imageAssetId=/Game/Images/Heart.png"]
+]
 ```
 
 Done when `image new` prints `imported as` and `component set` prints `updated Image`. The Image goes under a Canvas
@@ -642,7 +702,7 @@ Done when `image new` prints `imported as` and `component set` prints `updated I
 - Fire in 2D: `image new --name Fire --preset flame` (8 frames in a row), `entity add --create "Sprite 2D" --name Fire`, then
   `component set --entity Fire --type Sprite2D --set imageAssetId=/Game/Images/Fire.png --set cellWidth=256 --set cellHeight=256
   --set frameCount=8 --set framesPerSecond=12` (the cell is the `--size`).
-- Show the person: `kb_cli capture --out Saved/Agent/Images/<new name>.png`.
+- Show the person: `kb_cli capture`.
 )md";
 
 constexpr std::string_view kRecipeSound = R"md(# Recipe: a sound effect or a music loop
@@ -650,7 +710,7 @@ constexpr std::string_view kRecipeSound = R"md(# Recipe: a sound effect or a mus
 The engine makes it with its own synthesiser: no outside tool, no file to download.
 
 ```
-["sound","new","--name","Jump","--preset","jump"]
+[["sound","new","--name","Jump","--preset","jump"]]
 ```
 
 Done when it prints `imported as`. The file is Assets/Audio/<Name>.wav, used as `/Game/Audio/Jump.wav`. A name that
@@ -660,11 +720,14 @@ exists is kept: pick a new `--name`, or add `--replace`.
 - `--pitch 5` moves it up five semitones (negative is lower; 12 is an octave); `--length 0.5` sets the seconds.
 - Play it from a script: `Audio.Play("/Game/Audio/Jump.wav")`, for example in `function Tick(self, dt)` when
   `Input.Pressed("Jump")`; guide `scripts` has the keys.
-- Play it in the scene, on start or as a loop:
+- Play it in the scene, on start or as a loop, in one call (the sound, the object that plays it, and the link):
 
 ```
-["entity","add","--create","Audio Source","--name","Ambience"]
+[
+["sound","new","--name","Wind","--preset","wind"],
+["entity","add","--create","Audio Source","--name","Ambience"],
 ["component","set","--entity","Ambience","--type","AudioSource","--set","clipAssetId=/Game/Audio/Wind.wav","--set","autoplay=true","--set","loop=true"]
+]
 ```
 
 - Check it: `kb_cli run --frames 60 --report audio` ends with `"succeeded":true`.
@@ -673,9 +736,13 @@ exists is kept: pick a new `--name`, or add `--replace`.
 constexpr std::string_view kRecipeTimeline = R"md(# Recipe: an intro, a cutscene, a camera flight
 
 ```
-["timeline","fly","--name","Intro","--to","Player","--seconds","3"]
+[["timeline","fly","--name","Intro","--to","Player","--seconds","3"]]
+```
 
-["run","--frames","240"]
+Check, as a call of its own:
+
+```
+[["run","--frames","240"]]
 ```
 
 `fly` makes the timeline, a camera flight from where `Main Camera` is to a place behind and above the object
@@ -685,7 +752,8 @@ starts` and `run` ends with `0 diagnostics`. The object's name comes from `kb_cl
 - Another camera or object: `--entity "Camera"`. Closer or higher: `--distance 3 --height 1`. Longer: `--seconds 6`.
 - Your own path: `timeline new --name Tour --duration 6`, then one `timeline key` per point
   (`--timeline /Game/Cinematics/Tour.kbtimeline --entity "Main Camera" --time 0 --position 0,3,-10`,
-  `--time 3 --position 8,3,0 --look-at Player`), then `timeline play --timeline /Game/Cinematics/Tour.kbtimeline`.
+  `--time 3 --position 8,3,0 --look-at Player`), then `timeline play --timeline /Game/Cinematics/Tour.kbtimeline`;
+  all of them as the commands of one call.
   A key leaves what it does not give as the object has it now; the object moves smoothly between keys.
 - A moment in it that a script hears: `timeline event --timeline <path> --time 3 --event IntroDone`, and in the script of
   that object `function Created(self) Events.Subscribe("OnTimelineEvent", function(event) Log(event.args.name) end) end`.
@@ -695,12 +763,14 @@ starts` and `run` ends with `0 diagnostics`. The object's name comes from `kb_cl
 constexpr std::string_view kRecipeUiTheme = R"md(# Recipe: the look of the interface
 
 ```
-["ui-theme","new","--name","Dark","--preset","dark","--button","#FF8C1A"]
+[
+["ui-theme","new","--name","Dark","--preset","dark","--button","#FF8C1A"],
 ["ui-theme","apply","--theme","/Game/UI/Dark.kbtheme"]
+]
 ```
 
 A theme is one shared style: panels and texts take the base colours, buttons take their own. Done when `apply` prints
-`applied ... to N controls`. Controls added later: run `apply` again. Check: `kb_cli capture --out Saved/Agent/Images/ui.png`.
+`applied ... to N controls`. Controls added later: run `apply` again. To see it: `kb_cli capture`.
 
 - `--preset dark` (dark panels, light text) or `light`. Colours as `#RRGGBB`: orange #FF8C1A, red #E03C31, green #2ECC40,
   blue #0074D9, purple #B026FF, white #F0F0F0, black #111111. The text on a button is chosen to be readable; `--button-text` sets it.
@@ -713,10 +783,12 @@ A theme is one shared style: panels and texts take the base colours, buttons tak
 constexpr std::string_view kRecipeTranslate = R"md(# Recipe: the texts of the game in other languages
 
 ```
-["localization","collect","--language","pl"]
-["localization","set","--language","en","--set","ui.title=Dragon Hills","--set","ui.playbutton=Play"]
-["localization","set","--language","de","--set","ui.title=Drachenhuegel","--set","ui.playbutton=Spielen"]
+[
+["localization","collect","--language","pl"],
+["localization","set","--language","en","--set","ui.title=Dragon Hills","--set","ui.playbutton=Play"],
+["localization","set","--language","de","--set","ui.title=Drachenhuegel","--set","ui.playbutton=Spielen"],
 ["localization","missing"]
+]
 ```
 
 `collect` turns the texts written on the scene's controls into keys of one catalog (the language they are written in: `--language`
@@ -733,16 +805,25 @@ is its code, such as pl, en, de) and prints each `key = "text"`; give every key 
 
 constexpr std::string_view kRecipeAnimation = R"md(# Recipe: an object that moves by itself (bob, spin, a door, a pulse)
 
+Look at the objects first, as a call of its own: it prints their names.
+
 ```
-["scene-list"]
-
-["animation-clip","new","--name","Float","--preset","bob,spin","--entity","OBJECT_NAME"]
-
-["run","--frames","240"]
+[["scene-list"]]
 ```
 
-Run `scene-list` first, on its own: it prints the names of the objects. Then run the other two with the name of the object that moves
-in place of `OBJECT_NAME` (copy it exactly, as the scene spells it). `new` with a preset makes the animation clip, a controller for it
+Then the clip, with the name of the object that moves in place of `OBJECT_NAME` (copy it exactly, as the scene spells it):
+
+```
+[["animation-clip","new","--name","Float","--preset","bob,spin","--entity","OBJECT_NAME"]]
+```
+
+Check, as a call of its own:
+
+```
+[["run","--frames","240"]]
+```
+
+`new` with a preset makes the animation clip, a controller for it
 and an Animator on the object: it moves from the start of the scene, again and again. Done when it prints `plays on '<name>'` and
 `run` ends with `0 diagnostics`.
 
@@ -754,22 +835,29 @@ and an Animator on the object: it moves from the start of the scene, again and a
 - An object has one Animator, so a second clip on it replaces the first: put the motions in one clip (`bob,spin`).
 - Your own motion: `animation-clip new --name Tour --entity Crate` (starts where it is), then a key per moment
   (`animation-clip key --clip Tour --time 1 --position 0,3,0`, `--time 2 --rotation 0,90,0`; what a key does not give stays as before),
-  then `animation-clip play --clip Tour --entity Crate`. `animation-clip show --clip Tour` lists the keys.
-- To see it: `kb_cli capture --frames 30 --out Saved/Agent/Images/<new name>.png` and again with `--frames 90`.
+  then `animation-clip play --clip Tour --entity Crate`; all of them as the commands of one call. `animation-clip show --clip Tour` lists the keys.
+- To see it: `kb_cli capture --frames 30` and again with `--frames 90`.
 )md";
 
 constexpr std::string_view kRecipeMaterialFunction = R"md(# Recipe: a reusable material effect (a material function)
 
-```
-["scene-list"]
+Look at the objects first, as a call of its own:
 
-["material-function","new","--name","GlowEdge","--preset","fresnel-glow"]
-["material-function","use","--entity","OBJECT_NAME","--function","GlowEdge","--set","Color=#FF8C1A","--set","Power=3"]
+```
+[["scene-list"]]
+```
+
+Then, with the names of the objects whose material gets the effect in place of `OBJECT_NAME` and `OTHER_OBJECT_NAME`:
+
+```
+[
+["material-function","new","--name","GlowEdge","--preset","fresnel-glow"],
+["material-function","use","--entity","OBJECT_NAME","--function","GlowEdge","--set","Color=#FF8C1A","--set","Power=3"],
 ["material-function","use","--entity","OTHER_OBJECT_NAME","--function","GlowEdge","--set","Color=#00E5FF"]
+]
 ```
 
-One function, written once, called from any number of materials. `<Object>` is the name of the object `scene-list` shows whose material gets the
-effect (or name a material: `--material /Game/Materials/<Name>.kbmat`). Done when `use` prints `calls ... Glow -> emissive`. The material keeps
+One function, written once, called from any number of materials (or name a material: `--material /Game/Materials/<Name>.kbmat`). Done when `use` prints `calls ... Glow -> emissive`. The material keeps
 its colour. An object without a material of its own: `kb_cli entity add --create Sphere --name Ball --color "#2E86DE"` makes one.
 
 - Presets: `fresnel-glow` (a glow on the edge: inputs Color, Power (higher is a thinner edge), Intensity; output Glow goes to Emissive),
@@ -777,17 +865,243 @@ its colour. An object without a material of its own: `kb_cli entity add --create
   Customized UV. `kb_cli material-function show --function GlowEdge` lists the inputs with their defaults.
 - A name that exists is kept: pick a new `--name`, or add `--replace`. Check a material: `kb_cli material-graph show --material <path>` ends
   with `Compiles: yes`. Colours as `#RRGGBB`, numbers as 3.
-- To see it: `kb_cli capture --frames 40 --out Saved/Agent/Images/<new name>.png`.
+- To see it: `kb_cli capture --frames 40`.
 )md";
 
-constexpr std::array<ScriptAgentGuide, 27> kGuides{ {
+constexpr std::string_view kRecipeSave = R"md(# Recipe: save the game, keep a value for the next run
+
+`Save.Read(slot)` loads a slot into the open save document, `Save.SetInt(key, value)` changes it, `Save.Write(slot)` keeps it. `Save.GetInt(key)` returns a table: `.value` is the number (0 when the key is new). This script counts how often the scene ran, on an object that exists (`scene-list` names them):
+
+```
+[
+["script-new","--name","RunCounter","--language","lua","--code","function Created(self)\n    Save.Read(\"game\")\n    local runs = Save.GetInt(\"runs\").value + 1\n    Save.SetInt(\"runs\", runs)\n    Save.Write(\"game\")\n    Log(\"runs \" .. runs)\nend"],
+["scene-attach","--node","Plane","--script","/Game/Scripts/RunCounter.lua"]
+]
+```
+
+Check, as two calls of their own, one after the other:
+
+```
+[["run","--frames","5"]]
+```
+
+Done when the first `run` logs `runs 1` and the second `runs 2`: the slot kept the value between runs. `run` keeps its slots in `Saved/Saves` of the project; `run --fresh-saves` starts with none.
+
+- Other types: `Save.SetBool`, `SetFloat`, `SetString` and their `Get...` (each returns `found` and `value`); `Save.Has(key)`, `Save.Remove(key)`, `Save.Delete(slot)`. A slot name is letters, digits, `_` or `-`.
+- A high score: `if score > Save.GetInt("best").value then Save.SetInt("best", score) end`, then `Save.Write("game")`.
+- The built game keeps its slots in the player's own folder, not in the project.
+)md";
+
+constexpr std::string_view kRecipeNavmesh = R"md(# Recipe: a character that walks to a place around obstacles (navigation mesh)
+
+Obstacles and floor need a Collider. Bake the walkable area after they exist, then give the walker a Character Controller and a Nav Agent (the controller sits on an empty parent; the shape is a child without a Collider):
+
+```
+[
+["entity","add","--create","Cube","--name","Wall","--position","0,1,2","--scale","6,2,1"],
+["navmesh","bake"],
+["entity","add","--name","Guard","--position","-4,1,0"],
+["entity","add","--name","Body","--parent","Guard","--create","Capsule"],
+["component","remove","--entity","Guard/Body","--type","Collider"],
+["component","add","--entity","Guard","--type","CharacterController"],
+["component","add","--entity","Guard","--type","NavAgent","--set","destination.x=3","--set","destination.y=0","--set","destination.z=4","--set","enabled=true"]
+]
+```
+
+Check, as a call of its own:
+
+```
+[["run","--frames","700"]]
+```
+
+Done when the `moved:` line of `Guard` ends near the destination (`-4.00,1.00,0.00 -> 2.98,1.01,3.90`: within a metre of 3,4) with `0 diagnostics`; walking round the Wall takes 600 frames or so.
+
+- `destination` must lie on the floor (the new scene's floor is 10x10 around 0,0); a point off the mesh stops at its edge.
+- `maxSpeed` (3.5 m/s) and `stoppingDistance` are `NavAgent` properties. Bake again after the obstacles change: `navmesh bake`.
+- Click-to-walk and the camera: scene template `TopDown`. A script moves the agent with `self:SetProperty("NavAgent", "destination.x", x)` and `Navigation.NearestPoint(x, y, z)`.
+- Fighting AI (chase, flee): guide `combat-and-ai`.
+)md";
+
+constexpr std::string_view kRecipeCollision = R"md(# Recipe: what collides with what (physics layers)
+
+Name layers, say which pairs ignore each other, and put each Collider on a layer. A Collider's `layer` is one bit: layer 1 is 2, layer 2 is 4, layer 3 is 8 (a new Collider is on all layers). Here a ghost falls through a shelf and lands on the floor:
+
+```
+[
+["physics-layers","--name","1=Ghost","--name","2=Shelf","--ignore","Ghost,Shelf"],
+["entity","add","--create","Cube","--name","Shelf","--position","0,2,0","--scale","4,0.3,4"],
+["component","set","--entity","Shelf","--type","Collider","--set","layer=4"],
+["entity","add","--create","Sphere","--name","Ghost","--position","0,5,0","--body","Dynamic"],
+["component","set","--entity","Ghost","--type","Collider","--set","layer=2"]
+]
+```
+
+Check, as a call of its own:
+
+```
+[["run","--frames","180"]]
+```
+
+Done when `moved: Ghost 0.00,5.00,0.00 -> -0.00,0.51,-0.00` (it passed the shelf). To make them touch again: `physics-layers --collide Ghost,Shelf`, and the ghost stops on the shelf (`y` about 2.65).
+
+- `physics-layers` alone lists the layers; `--ignore A,B` and `--collide A,B` edit the matrix, `--name 3=Enemy` names a layer (0-30).
+- Touching is an event: `function OnCollisionEnter(self, event)` for a solid contact, `function OnTriggerEnter(self, event)` for a Collider with `trigger=true` (the other object is `event.args.other`). Guide `physics`, `recipe-pickup`.
+- Rays only hit some layers: `api_reference` topic `Physics`, the `layerMask` argument.
+)md";
+
+constexpr std::string_view kRecipeJoint = R"md(# Recipe: a hinge, a pendulum, a spring (joints)
+
+A Joint on a body holds it to another object (`connectedEntity`, a static one such as a hook) or to the world (leave it out). `anchor` is the point on this body, in its own space, where it is held. A ball on a hinge swings from a hook:
+
+```
+[
+["entity","add","--create","Cube","--name","Hook","--position","0,6,0","--scale","0.3,0.3,0.3","--body","Static"],
+["entity","add","--create","Sphere","--name","Bob","--position","3,6,0","--body","Dynamic"],
+["component","add","--entity","Bob","--type","Joint","--set","type=Hinge","--set","connectedEntity=Hook","--set","axis.x=0","--set","axis.y=0","--set","axis.z=1","--set","anchor.x=-3"]
+]
+```
+
+Check, as a call of its own:
+
+```
+[["run","--frames","120"]]
+```
+
+Done when `moved: Bob 3.00,6.00,0.00 -> -2.99,5.79,0.00`: it swung to the other side of the hook.
+
+- `type`: Fixed (welded), Hinge (turns about `axis`), Distance (a rope), Point (a ball joint), Slider (a door or lift along `axis`).
+- Limits: `enableLimit=true`, `minLimit`, `maxLimit` (degrees for a hinge, metres for a slider). Motor: `motor.targetVelocity`, `motor.force`. Soft: `spring.spring`, `spring.damper`. `breakForce` snaps it.
+- `kb_cli schema --component Joint` lists every property. Change a joint that exists with `component set`.
+)md";
+
+constexpr std::string_view kAudioMixer = R"md(# Audio mixer: buses, volumes and effects
+
+Sounds play on buses; a mixer asset names the buses and their volumes, and a scene uses one mixer.
+
+```
+[
+["sound","new","--name","Theme","--preset","music"],
+["audio-mixer","new","--name","Main","--bus","Music","--bus","Effects","--set","Music.volume=0.6"],
+["audio-mixer","assign","--mixer","/Game/Audio/Main.kbmixer"],
+["entity","add","--name","Speaker","--position","0,1,0"],
+["component","add","--entity","Speaker","--type","AudioSource","--set","clipAssetId=/Game/Audio/Theme.wav","--set","loop=true","--set","autoplay=true","--set","outputBus=Music"]
+]
+```
+
+Check, as a call of its own: `[["run","--frames","30","--report","audio"]]`. Done when the report has `"succeeded":true`, both buses `"initialized":true` and a `peak` above 0 (the loop is heard on Music).
+
+- Change a bus: `audio-mixer set --mixer /Game/Audio/Main.kbmixer --set Music.volume=0.3 --set Effects.mute=true`; a bus under another: `--bus Voices --set Voices.parent=Effects`; `audio-mixer show --mixer <path>` lists them.
+- Effects: `--effect-bus Music --add-effect Echo=delay` (lowpass, highpass, equalizer, delay, reverb, compressor, limiter), `--set-effect Echo.<parameter>=value`. Snapshots (a quiet menu mix): `--add-snapshot Menu --snapshot Menu --set-snapshot Music=0.2`; `assign --snapshot Menu`.
+- In a script: `Audio.SetBusVolume("Music", 0.3)`, `Audio.ClearBusVolume("Music")`; one sound on a bus: `Audio.Play(clip, volume, pitch, mute, loop, spatial, ..., outputBus)`. `kb_cli help audio-mixer` shows every option.
+)md";
+
+constexpr std::string_view kGameplayGraphs = R"md(# Gameplay graphs (.kbgraph): logic as nodes
+
+A graph is a behaviour asset made of nodes and typed connections. A new one starts with a Tick event (node 1); each `graph add` makes the next node (2, 3, ...). This graph sets the object's height to 3 every frame:
+
+```
+[
+["graph","new","--graph","/Game/Float.kbgraph"],
+["graph","add","--graph","/Game/Float.kbgraph","--entry","NativeBinding:SetProperty:Self.SetProperty.Float"],
+["graph","add","--graph","/Game/Float.kbgraph","--entry","Literal:String","--value","Transform"],
+["graph","add","--graph","/Game/Float.kbgraph","--entry","Literal:String","--value","localPosition.y"],
+["graph","add","--graph","/Game/Float.kbgraph","--entry","Literal:Float","--value","3"],
+["graph","connect","--graph","/Game/Float.kbgraph","--from","1","--out","then","--to","2","--in","exec"],
+["graph","connect","--graph","/Game/Float.kbgraph","--from","3","--out","value","--to","2","--in","component"],
+["graph","connect","--graph","/Game/Float.kbgraph","--from","4","--out","value","--to","2","--in","property"],
+["graph","connect","--graph","/Game/Float.kbgraph","--from","5","--out","value","--to","2","--in","value"],
+["graph","check","--graph","/Game/Float.kbgraph"],
+["entity","add","--create","Cube","--name","Floater","--position","0,1,0"],
+["scene-attach","--node","Floater","--script","/Game/Float.kbgraph"]
+]
+```
+
+Check, as a call of its own: `[["run","--frames","30"]]`. Done when `check` says `"valid":true` and `run` ends with `moved: Floater 0.00,1.00,0.00 -> 0.00,3.00,0.00` and `0 diagnostics`.
+
+- Find a node: `graph catalog --filter <word>` lists ids with their pins (`Function.Transform.Translate`, `Self.SetProperty.Float`, `Branch`, `Sequence`). An id is the `--entry`; a function node's pins are its inputs and outputs by name.
+- A value node: `Literal:Float`, `Literal:Int`, `Literal:String`, `Literal:Bool`; change one with `graph literal --node <id> --value <text>`. Other events: `graph event --node 1 --value Created`. `graph show` prints the whole graph; `graph remove`, `move` and `disconnect --edge <index>` edit it.
+- A rejected edit leaves the file as it was; `check` also tests the types of every connection. For logic in text, a Lua script is simpler: guide `recipe-script`.
+)md";
+
+constexpr std::string_view kCsg = R"md(# CSG: a room, a wall with a hole, from boxes added and cut away
+
+A `.kbcsg` source lists brushes in order: the first is a `union` that makes the solid, later ones `union`, `subtract` or `intersect`. `csg build` turns it into a mesh and a collision mesh; give each source its own `--output` folder (the files are always called `Geometry`).
+
+```
+[
+["csg","new","--name","Hall"],
+["csg","set","--source","/Game/Geometry/Hall.kbcsg","--data","{\"schema\":1,\"brushes\":[{\"operation\":\"union\",\"kind\":\"box\",\"position\":[0,0,0],\"rotation\":[0,0,0],\"scale\":[1,1,1],\"size\":[6,3,6]},{\"operation\":\"subtract\",\"kind\":\"box\",\"position\":[0,0,0],\"rotation\":[0,0,0],\"scale\":[1,1,1],\"size\":[5,3,5]}]}"],
+["csg","build","--source","/Game/Geometry/Hall.kbcsg","--output","/Game/Geometry/Hall"],
+["entity","add","--name","Hall","--position","0,1.5,0"],
+["component","add","--entity","Hall","--type","MeshRenderer","--set","mesh=/Game/Geometry/Hall/Geometry.21kb"],
+["component","add","--entity","Hall","--type","Collider","--set","shape=Mesh"],
+["component","set","--entity","Hall","--type","Collider","--set","mesh=/Game/Geometry/Hall/Geometry.kbcollision"]
+]
+```
+
+Done when `csg build` prints `mesh:`, `collision:`, `volume:` (33 for this hall) and `triangles:`, and the last command prints `updated Collider`. Look at it: `capture --view overview`, and `run --frames 60` ends with `0 diagnostics`.
+
+- Every brush has `kind` (`box`), `position`, `rotation` (degrees), `scale` and `size`, all of them written out; `csg show --source <path>` prints a valid example. A brush that is not closed or a wrong field is refused with the reason, and the file stays as it was.
+- Change the shape later: `csg set` again, `csg build` again to the same `--output`; the entity keeps pointing at it.
+)md";
+
+constexpr std::string_view kWorldPartition = R"md(# World partition: a world too big to load at once
+
+A world is split into cells of a set size; only the cells near a streaming source (an object with a Stream Focus) are loaded. Convert the objects of the startup scene, build the cells, and place the world in a scene that the game starts with:
+
+```
+[
+["entity","add","--create","Cube","--name","Tower","--position","-60,1,0"],
+["entity","add","--create","Cube","--name","Hut","--position","60,1,0"],
+["world","migrate","--out","/Game/Worlds/Main.21kbworld","--cell-size","32"],
+["world","build","--world","/Game/Worlds/Main.21kbworld"],
+["scene-new","--name","Level","--template","Empty","--default","yes"],
+["entity","add","--scene","Level","--name","Streamer","--position","0,2,0"],
+["component","add","--scene","Level","--entity","Streamer","--type","StreamFocus","--set","outerRadius=96","--set","innerRadius=64"],
+["entity","add","--scene","Level","--name","World"],
+["component","add","--scene","Level","--entity","World","--type","ContentInstance","--set","kind=PartitionedWorld","--set","assetId=/Game/Worlds/Main.21kbworld"]
+]
+```
+
+Check, as a call of its own: `[["run","--scene","Level","--frames","60","--report","world-memory"]]`. Done when `world build` says `built N cells`, and the report has `"worlds":1` and `"resident_units"` above 0.
+
+- `migrate` copies the objects of a scene into a world (the scene itself is not changed, so the old objects stay in it: do not load both). Set `kind` before `assetId`; `outerRadius` before `innerRadius` (the unload radius is larger).
+- Move the streamer (a script moving the player, or the Stream Focus on the player) and cells load and unload; `run --report world-memory` shows what is resident.
+- Rebuild after changing the world: `world build`. `world chunks` lists the pack chunks a build makes per region. Data layers, HLOD and navigation per cell: docs/world_partition.md.
+)md";
+
+constexpr std::string_view kPacksAndMods = R"md(# Packs and mods: a build, a pack, content added by someone else
+
+For a person at a terminal in the project folder (the signing key must stay outside the project, which is why an agent in the editor cannot do it). `build` cooks the game into `Game.kbpack` and a folder that runs; a mod is a pack of what the game does not already have, signed with the author's key.
+
+```
+kb_cli build --project . --out Saved/Build/game
+kb_cli scene-new --project . --name Crates
+kb_cli entity add --project . --scene Crates --create Cube --name ModCrate --color "#33AAFF"
+kb_cli project-settings --project . scenes --add Crates
+kb_cli build --project . --out Saved/Build/cook
+kb_cli keys generate --out ../author.key
+kb_cli mod build --game Saved/Build/game/Game.kbpack --cook Saved/Build/cook/Game.kbpack --id demo.crates --version 1.0.0 --entry /Game/Scenes/Crates.21kbscene --key ../author.key --output Saved/Build/demo.crates
+kb_cli mod trust --mods Saved/Build/game/Mods --add <the public key `keys generate` printed>
+kb_cli mod install --mods Saved/Build/game/Mods --game Saved/Build/game/Game.kbpack Saved/Build/demo.crates
+kb_cli mod verify --mods Saved/Build/game/Mods --game Saved/Build/game/Game.kbpack
+```
+
+Done when `mod build` says `3 asset(s) added` and sealed, and `mod verify` ends with `1 would load, 0 refused`. The first build is the game as shipped; the second is the same project with the mod's content, and the mod holds only the difference.
+
+- A mod adds assets: it cannot replace a game asset, change settings or bring native code. It is cooked against one build of the game and refused for another.
+- `mod list|disable|enable|remove --mods <folder> [<id>]`; a script lists what loaded with `CallFunction("Mods.Count", {})`. Without `mod trust`, a signed mod is refused as `UntrustedSigner`.
+- Inspect or split a pack: `pack info <file.kbpack>`, `pack split`, `pack patch` (updates), `pack sign|verify`. A game for other platforms: `build --platform android|web|linux`. Details: docs/modding.md.
+)md";
+
+constexpr std::array<ScriptAgentGuide, 36> kGuides{ {
     { "recipe-material", "Recipe: colour or material", "A colour or material on an object: two commands.", kRecipeMaterial },
     { "recipe-component", "Recipe: physics or a component", "Physics (a falling body) or any component on an object, and how to check it.", kRecipeComponent },
     { "recipe-prefab", "Recipe: prefab", "Save an object, with its components, as a prefab and place copies.", kRecipePrefab },
     { "recipe-script", "Recipe: Lua script", "A Lua script on an object (a spin, a movement): create, attach, validate, run.", kRecipeScript },
     { "recipe-pickup", "Recipe: a coin or pickup", "A coin the player collects by touching it: a trigger Collider, OnTriggerEnter, a counter on the screen; also how scripts react to touching.", kRecipePickup },
     { "recipe-light", "Recipe: light and time of day", "The sun, the sky and the ambient light for morning, evening or night.", kRecipeLight },
-    { "recipe-settings", "Recipe: settings, plugins, builds", "The game's name, window, start scene, gravity, plugins and a build for a platform.", kRecipeSettings },
+    { "recipe-settings", "Recipe: settings, plugins, builds", "The game's name, window, start scene, scenes in the build, tags, gravity, plugins and a build for a platform.", kRecipeSettings },
     { "recipe-ui-button", "Recipe: a button", "A button with a label on the screen, and what to add so a click does something.", kRecipeUiButton },
     { "recipe-player", "Recipe: a playable character", "A character the person walks with, with its camera, in one command.", kRecipePlayer },
     { "recipe-image", "Recipe: an icon, picture or texture", "An icon, UI picture, texture or sprite sheet drawn by the engine, in neon, flat, soft or pixel style.", kRecipeImage },
@@ -797,6 +1111,10 @@ constexpr std::array<ScriptAgentGuide, 27> kGuides{ {
     { "recipe-translate", "Recipe: texts in other languages", "The texts of the game in several languages: keys on the controls, translations, the default language, switching in play.", kRecipeTranslate },
     { "recipe-animation", "Recipe: an object that moves by itself", "A coin that bobs, a door that opens and closes, a pulse: an animation clip that plays from the start.", kRecipeAnimation },
     { "recipe-material-function", "Recipe: a reusable material effect", "A material function (glowing edge, scrolling or tiling texture coordinate) written once and used on several materials.", kRecipeMaterialFunction },
+    { "recipe-save", "Recipe: save the game", "A value kept between runs of the game (a score, a counter) in a save slot.", kRecipeSave },
+    { "recipe-navmesh", "Recipe: a character that walks to a place", "A character that walks to a point around obstacles on a baked navigation mesh.", kRecipeNavmesh },
+    { "recipe-collision", "Recipe: what collides with what", "Physics layers: objects that pass through each other, and the collision events.", kRecipeCollision },
+    { "recipe-joint", "Recipe: a hinge, pendulum or spring", "A joint that holds a body to another: hinge, rope, slider, spring, limits, motor.", kRecipeJoint },
     { "objects-and-materials", "Objects and materials", "Shapes, lights and cameras in a scene, their position, materials and colours.", kObjectsAndMaterials },
     { "physics", "Physics", "Rigidbodies, colliders, triggers, character controllers and collision events.", kPhysics },
     { "scripts", "Behaviour scripts", "Write a Lua behaviour, attach it to an entity, expose variables, call the engine.", kScripts },
@@ -807,6 +1125,11 @@ constexpr std::array<ScriptAgentGuide, 27> kGuides{ {
     { "menus-and-buttons", "Menus, buttons and UI events", "A menu or HUD with buttons that run a script: widgets, OnUIClicked, event names, what validate warns about.", kMenusAndButtons },
     { "ui-audio-particles", "UI, sound and particles", "On-screen text and buttons, sounds that play, particle effects.", kUiAudioParticles },
     { "water-and-look", "Water, sky, fog and post-processing", "Translucent water, sky colour, fog, bloom and other post effects.", kWaterAndLook },
+    { "audio-mixer", "Audio mixer", "Buses, volumes, effects and snapshots: put a sound on a bus and check it plays.", kAudioMixer },
+    { "gameplay-graphs", "Gameplay graphs", "Logic made of nodes and connections (.kbgraph): add, connect, check, attach.", kGameplayGraphs },
+    { "csg", "CSG shapes", "A room or a wall with a hole built from boxes added and cut away, with its collision.", kCsg },
+    { "world-partition", "World partition", "A world too big to load at once: cells that stream around the player.", kWorldPartition },
+    { "packs-and-mods", "Packs and mods", "Build a game pack, make a signed mod from a project, install and verify it (for a terminal).", kPacksAndMods },
     { "verify", "Checking your work", "Validate scripts and run scenes headless before you finish.", kVerify },
 } };
 

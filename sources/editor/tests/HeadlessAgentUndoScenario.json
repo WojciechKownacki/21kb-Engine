@@ -1,0 +1,26 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    { "op": "create_scene", "name": "AgentUndo", "template": "Empty" },
+    { "op": "create_entity", "id": "keep", "name": "Kept" },
+    { "op": "save_scene" },
+    { "op": "agent_undo_point", "label": "add an object" },
+    { "op": "agent_review", "expect_count": 0 },
+    { "op": "external_add_entity", "name": "FromAgent" },
+    { "op": "reload_after_external_change" },
+    { "op": "bind_entity", "id": "added", "name": "FromAgent" },
+    { "op": "agent_review", "expect_count": 2, "expect_path": "Assets/Scenes/AgentUndo.21kbscene", "expect_kind": "modified" },
+    { "op": "agent_undo" },
+    { "op": "bind_entity", "id": "gone", "name": "FromAgent", "exists": false },
+    { "op": "bind_entity", "id": "kept", "name": "Kept" },
+    { "op": "agent_review", "expect_count": 0 },
+    { "op": "agent_undo_point", "label": "add another" },
+    { "op": "external_add_entity", "name": "FromAgentAgain" },
+    { "op": "reload_after_external_change" },
+    { "op": "agent_review", "expect_count": 2, "expect_path": "Assets/Scenes/AgentUndo.21kbscene" },
+    { "op": "agent_keep" },
+    { "op": "agent_review", "expect_count": 0 },
+    { "op": "bind_entity", "id": "stays", "name": "FromAgentAgain" },
+    { "op": "assert_no_errors" }
+  ]
+}

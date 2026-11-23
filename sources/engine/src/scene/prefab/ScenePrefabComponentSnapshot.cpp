@@ -161,6 +161,8 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
         components.behaviour = *behaviour;
         const std::span<const BehaviourVariableOverride> overrides = scene.Entities().BehaviourVariableOverrides(entity);
         components.behaviourVariableOverrides.assign(overrides.begin(), overrides.end());
+        const std::span<const BehaviourComponent> additional = sceneComponents.Behaviours().Additional(entity);
+        components.additionalBehaviours.assign(additional.begin(), additional.end());
     }
 
     if (const AudioSourceComponent* audioSource = sceneComponents.AudioSources().TryGet(entity)) {

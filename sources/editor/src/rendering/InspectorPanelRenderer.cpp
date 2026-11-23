@@ -4119,7 +4119,8 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (sceneContext.HasEntityScript(selected)) {
         const std::vector<EditorSceneContext::EntityScriptVariable> scriptVariables = sceneContext.EntityScriptExposedVariables(selected);
         const std::optional<EditorSceneContext::ScriptBuildStatus> scriptBuild = sceneContext.EntityScriptBuild(selected);
-        const int h = SectionHeight(inspector, InspectorSectionId::Script, 2 + static_cast<int>(scriptVariables.size()) + (scriptBuild.has_value() ? 1 : 0));
+        const int extraScripts = static_cast<int>(sceneContext.EntityScriptCount(selected)) - 1;
+        const int h = SectionHeight(inspector, InspectorSectionId::Script, 2 + static_cast<int>(scriptVariables.size()) + (scriptBuild.has_value() ? 1 : 0) + 3 * extraScripts);
         if (sectionVisible(y, h)) {
             SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Script, HeroIconKind::CommandLine, EditorText("inspector.script.title", "Script"), true);
             section.AssetField(EditorText("inspector.script.script", "Script"), sceneContext.EntityScriptName(selected), InspectorPropertyId::ScriptName, InspectorPropertyId::ScriptPicker);
@@ -4150,6 +4151,14 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
                     }
                     section.Field(label, FormatScriptVariableValue(variable.value, variable.type), InspectorPropertyId::ScriptVariable, index, variable.unit, fill);
                 }
+            }
+            // The scripts the object runs besides the first: its name, whether it runs, and a row that removes it.
+            for (int extra = 1; extra <= extraScripts; ++extra) {
+                const std::size_t at = static_cast<std::size_t>(extra);
+                section.AssetField(EditorLocalization::Format("inspector.script.numbered", "Script {number}", { { "number", std::to_string(extra + 1) } }),
+                    sceneContext.EntityScriptNameAt(selected, at), InspectorPropertyId::ScriptNameExtra, InspectorPropertyId::ScriptNameExtra, extra);
+                section.Bool(EditorText("inspector.enabled", "Enabled"), sceneContext.EntityScriptEnabledAt(selected, at), InspectorPropertyId::ScriptEnabledExtra, extra);
+                section.Action(EditorText("inspector.script.removeExtra", "Remove this script"), InspectorPropertyId::ScriptRemoveExtra);
             }
         }
         y += h + kSectionGap;
@@ -4527,7 +4536,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (scene.Components().HistoryRibbons().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::HistoryRibbon, 9) + kSectionGap;
     if (sceneContext.HasEntityScript(selected)) {
         const int scriptRows = 2 + static_cast<int>(sceneContext.EntityScriptExposedVariableCount(selected)) +
-            (sceneContext.EntityScriptBuild(selected).has_value() ? 1 : 0);
+            (sceneContext.EntityScriptBuild(selected).has_value() ? 1 : 0) + 3 * (static_cast<int>(sceneContext.EntityScriptCount(selected)) - 1);
         height += SectionHeight(inspector, InspectorSectionId::Script, scriptRows) + kSectionGap;
     }
     if (scene.Components().Cameras().Has(selected)) {
@@ -6375,6 +6384,26 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTestRows(const RECT& cont
                     : HitTextRow(RowRect(viewport, y), InspectorSectionId::Script, InspectorPropertyId::ScriptVariable, x, scrolledY);
                 if (hit.kind != InspectorHitKind::None) {
                     hit.index = variableIndex;
+                    return hit;
+                }
+                AdvanceRow(y);
+            }
+            // The rows of the scripts after the first, in the order they are drawn.
+            for (int extra = 1; extra < static_cast<int>(sceneContext.EntityScriptCount(selected)); ++extra) {
+                if (InspectorPanelRenderer::Hit hit = HitAssetFieldRow(RowRect(viewport, y), InspectorSectionId::Script, InspectorPropertyId::ScriptNameExtra, InspectorPropertyId::ScriptNameExtra, x, scrolledY); hit.kind != InspectorHitKind::None) {
+                    hit.index = extra;
+                    return hit;
+                }
+                AdvanceRow(y);
+                if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::Script, InspectorPropertyId::ScriptEnabledExtra, x, scrolledY); hit.kind != InspectorHitKind::None) {
+                    hit.index = extra;
+                    return hit;
+                }
+                AdvanceRow(y);
+                const RECT removeRow = RowRect(viewport, y);
+                if (Contains(removeRow, x, scrolledY)) {
+                    InspectorPanelRenderer::Hit hit = MakeHit(InspectorHitKind::TextField, InspectorSectionId::Script, InspectorPropertyId::ScriptRemoveExtra, removeRow);
+                    hit.index = extra;
                     return hit;
                 }
                 AdvanceRow(y);

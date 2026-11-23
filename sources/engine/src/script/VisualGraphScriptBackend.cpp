@@ -280,10 +280,9 @@ void VisualGraphScriptBackend::SubscribeCustomEventsToBus(const kb::scene::Behav
                 // skipped by ExecuteBehaviour's own `!behaviour.enabled`
                 // check, exactly like a normal DispatchEvent-driven call
                 // would see.
-                const kb::scene::BehaviourComponent* liveBehaviour = scene.Components().Behaviours().TryGet(entity);
-                if (liveBehaviour == nullptr || !liveBehaviour->enabled ||
-                    liveBehaviour->backend != kb::scene::BehaviourBackend::VisualGraph ||
-                    liveBehaviour->behaviourAssetId != assetId.value) {
+                const kb::scene::BehaviourComponent* liveBehaviour = scene.Components().Behaviours().Find(
+                    entity, assetId.value, kb::scene::BehaviourBackend::VisualGraph);
+                if (liveBehaviour == nullptr || !liveBehaviour->enabled) {
                     return;
                 }
                 kb::visual::VisualGraphBehaviourInstance* instance = instances_.Find(entity, assetId);

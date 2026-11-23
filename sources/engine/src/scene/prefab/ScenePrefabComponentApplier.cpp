@@ -99,6 +99,9 @@ void ScenePrefabComponentApplier::Apply(Scene& scene, SceneObject object, const 
     if (components.particleEffect.has_value()) sceneComponents.ParticleEffects().Set(entity, *components.particleEffect);
     if (components.behaviour.has_value()) {
         sceneComponents.Behaviours().Set(entity, *components.behaviour);
+        if (!components.additionalBehaviours.empty()) {
+            sceneComponents.Behaviours().SetAdditional(entity, components.additionalBehaviours);
+        }
         if (!components.behaviourVariableOverrides.empty()) {
             scene.Entities().ReplaceBehaviourVariableOverrides(entity, components.behaviourVariableOverrides);
         }

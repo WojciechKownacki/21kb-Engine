@@ -104,6 +104,8 @@ std::optional<ProjectSceneDocument> LoadProjectScene(const ArgumentList& argumen
     if (sceneText.empty()) {
         sceneText = kb::project::ProjectSettingsStore::Load(kb::project::ProjectSettingsStore::FilePath(*project)).settings.defaultMap;
     }
+    sceneText = CanonicalSceneText(project, sceneText, error);
+    if (!error.empty()) return std::nullopt;
     ProjectSceneDocument result;
     if (const kb::assets::AssetMetadata* metadata = FindAssetByFlexiblePath(scene.Assets().Manager().Registry(), kb::assets::Utf8Path(sceneText))) {
         result.file = metadata->physicalPath;

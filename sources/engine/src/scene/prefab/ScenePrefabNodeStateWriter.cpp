@@ -474,6 +474,9 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     if (!node.components.lensEcho.has_value()) context.lensEchoes.Remove(entity);
     if (!componentMask.available || !componentMask.matches || node.components.behaviour.has_value()) {
         WriteOptionalComponent(context.behaviours, entity, node.components.behaviour);
+        if (node.components.behaviour.has_value() && !SameBehaviourList(context.behaviours.Additional(entity), node.components.additionalBehaviours)) {
+            context.behaviours.SetAdditional(entity, node.components.additionalBehaviours);
+        }
         if (!SameBehaviourVariableOverrides(context.entities.BehaviourVariableOverrides(entity), node.components.behaviourVariableOverrides)) {
             context.entities.ReplaceBehaviourVariableOverrides(entity, node.components.behaviourVariableOverrides);
         }

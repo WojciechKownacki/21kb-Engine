@@ -152,7 +152,7 @@ struct Preset {
             "--append-system-prompt",
             "You work inside the 21kb editor on the open project; AGENTS.md says how, and which recipe fits the job. "
             "Use the kb-engine tools, not shell commands. A picture the user attaches is listed as a path: open it with Read. "
-            "A picture you render with kb_cli capture (--out Saved/Agent/Images/<name>.png) is shown in the conversation." };
+            "A picture you render with kb_cli capture is shown in the conversation." };
         agent.resumeArguments = { "--resume", "{session}" };
         agent.persistentArguments = { "--input-format", "stream-json" };
         agent.requestTemplate = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":{request}}}\n";

@@ -18,6 +18,8 @@ struct ScriptBehaviourBindingOptions {
     kb::scene::BehaviourTickGroup tickGroup = kb::scene::BehaviourTickGroup::Gameplay;
     std::int32_t executionOrder = 0;
     bool prepareRuntimeAsset = true;
+    // Adds the script after the behaviours the entity runs already; without it the script replaces the first one.
+    bool additional = false;
 };
 
 struct ScriptBehaviourBindingResult {

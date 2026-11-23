@@ -42,6 +42,9 @@ public:
     // is overwritten, and a C++ script that cannot be finished leaves none of its files behind.
     [[nodiscard]] static CreatedScript Create(ScriptLanguage language, const std::filesystem::path& projectRoot,
         const std::filesystem::path& folder, std::string_view name);
+    // Why C++ scripts cannot be made or built on this machine, or empty: they need the engine SDK (its headers and Release
+    // libraries) and a C++ toolchain, which an installed engine for people who make games does not carry. Names Lua as the way.
+    [[nodiscard]] static std::string NativeSdkProblem();
     // The build of the C++ script whose descriptor is `descriptorFile`, run from the folder its
     // build_working_directory names (relative to the descriptor), else from the project root - the
     // same place the editor's Play and the cooker build it from.

@@ -336,7 +336,10 @@ the folder.
 | `kb_cli script-build --project <dir> [--script <path>]` | build the project's C++ scripts |
 | `kb_cli validate <file.lua>` | check a script: syntax, a global, function, component or property that does not exist (with the nearest real name), the wrong number or type of arguments, a function named like an event hook that the engine never calls, and constructs outside the shared Lua; the editor's language server shows the same findings |
 | `kb_cli scene-list --project <dir> --scene <path>` | show what's in a scene |
-| `kb_cli scene-attach --project <dir> --scene <path> --node <name> --script <path> [--set <variable>=<value> ...]` | attach a script to a node; `--set` gives this node its own value for an exposed variable (stored in the scene and in prefabs made from it, applied when the behaviour starts) |
+| `kb_cli scene-attach --project <dir> --scene <path> --node <name> --script <path> [--set <variable>=<value> ...]` | attach a script to a node; a node runs up to 8 scripts, each with its own `self` and variables (a second script is added after the first, `--replace` makes it the only one); `--set` gives this node its own value for an exposed variable (stored in the scene and in prefabs made from it, applied when the behaviour starts) |
+| `kb_cli scene-detach --project <dir> --scene <path> --node <name> [--script <path>]` | take one script off a node (the script can be left out when the node runs one) |
+| `kb_cli project-settings scenes --project <dir> [--add <scene>] [--remove <scene>] [--order <scene>,...] [--startup <scene>]` | list and change the scenes the built game holds, the startup scene first; a scene that is not listed is not in the build, also one a script opens with `Scene.Load` (`build` warns about it) |
+| `kb_cli project-settings tags --project <dir> [--add <Name>] [--remove <Name>]` | list and change the project's own tags for objects |
 | `kb_cli run --project <dir> --scene <path> --frames <n>` | run a scene without the editor and report errors; it exits 1 when a script fails, so `assert(condition, message)` in a script tests its logic, and `--json` returns the script errors as entries with `file`, `line`, `message` and `traceback` |
 | `kb_cli run --project <dir> --frames <n> --realtime` | pace fixed simulation steps by wall time so asynchronous streaming and external services can run during playback |
 | `kb_cli run --project <dir> --frames <n> --timeout-ms <ms> --cancel-file <path>` | stop playback cooperatively on a wall-time limit or when the cancellation file exists; shutdown still runs; exit 124 means timeout and 130 means cancelled |
@@ -510,7 +513,7 @@ The scene runner also returns `124` on timeout and `130` on cancellation.
   state as `data`, with the list beside it). Edits of a scene name what they touched in `21kb.cli.scene-edit/v1`: `scene`,
   `entity` (`id`, `name`, `path`), `removed` and, for `component`, the `component`. The writing commands are
   `animator`, `skeleton`, `ability`, `ai`, `entity`, `component`, `new`, `init-agent`, `import`,
-  `import-preset-new`, `scene-attach`, `input-action`, `prefab`, `layout`, `scene-new`, `scene-duplicate`,
+  `import-preset-new`, `scene-attach`, `scene-detach`, `input-action`, `prefab`, `layout`, `scene-new`, `scene-duplicate`,
   `script-new`, `script-build`, `pack`, `mod`, `release`, `keys`, `build`, `capture`, `world`, `navmesh`,
   `physics-layers`, `lighting-quality`, `csg`, `rig2d`, `vector2d-new`, `vector2d-set`, `map2d`, `terrain`,
   `mesh-lod`, `scene-lightmap`, `scene-bake-lighting`, `material-new`, `material-set`, `material-graph`,
@@ -626,14 +629,40 @@ The scenarios cover map and sprite editing, input setup, UI, save and export.
 `kb_cli build --project . --out Build` runs the cooker, then stages a folder that starts on its own:
 `Game.kbpack`, `kb_game.exe`, the engine module libraries the project enables and, when it has
 C++ scripts, `RuntimeModules`. The output folder must be new or empty.
-It needs `kb_cooker` and `kb_game` beside `kb_cli`, builds Windows x64 only, and does not sign:
-use `pack sign` and `release sign` for a release, or `scripts/package_game.py` for the other targets.
+It needs `kb_cooker` and `kb_game` beside `kb_cli`, builds Windows x64, and does not sign:
+use `pack sign` and `release sign` for a release.
+
+`kb_cli build --project . --platform android|web|linux --out <folder>` makes the other packages with the
+editor's Build Game pipeline (`scripts/package_game.py`), without the editor, using the settings its panel
+saved for the project (`--profile`, `--build-root`, `--emsdk`, `--python`, Android keystore and Linux SSH options
+override them). Before it starts it lists what the machine lacks: Python 3.10+, and for
+Android the SDK with its NDK, for web the Emscripten SDK, for Linux an SSH host to build on. CMake and a JDK 17+
+are found by themselves when `PATH` and `JAVA_HOME` do not name them (the Android SDK's cmake, the Visual Studio C++ tools,
+Android Studio's JDK, the folders JDK installers use); `JAVA_HOME` is set for the job to the JDK found.
+`kb_cli editor build` asks a running editor instead and fails when none takes the request.
 
 `kb_cli capture --out shot.png` (with `--project .` or `--build Build`) renders `--frames`
 frames (default 60) headless on a fixed 1/60 s step and writes the last one, so the same count
 gives the same picture. `--scene`, `--width` and `--height` choose the scene and the size. It
 needs `kb_game` beside `kb_cli` and a GPU; a built folder is rendered by the engine's own player,
-because a shipped player refuses development options.
+because a shipped player refuses development options. Without `--out` a project's capture goes to
+`Saved/Agent/Captures/capture-<n>.png`. `--camera <entity>` draws from a camera of the scene, `--view
+overview|top|front|side` or `--eye x,y,z --look-at x,y,z` from a free view like the editor's scene view.
+It prints the picture's size, mean colour, dominant colours and whether the frame is blank. Through
+`kb_cli mcp` the picture itself comes back as an image block (640 pixels wide, PNG) above that text;
+`--images off` sends the text only.
+
+## Undo for an agent's changes
+
+`kb_cli undo --project . --begin` records the project's files (Saved/Agent/Undo; the editor's Agent panel does it
+before each request), `--list` shows the files changed, added and deleted since, `--last [--file <path>]` puts them
+back exactly (deleted files too) and `--accept` keeps them. Folders of generated data (`Saved`, `Library`,
+`Binaries`, `Intermediate`, `Build`, `Saves`, `.git`, `.kb`) are not covered; a file over 48 MiB is listed but cannot be put back.
+After a request the Agent panel lists the changed files with Keep all, Undo all and Undo for each file; the list
+survives a restart of the editor.
+
+`kb_cli run` keeps `Save.*` slots in the project's `Saved/Saves`, so a second run reads what the first wrote;
+`--fresh-saves` (and `--deterministic`) starts with none.
 
 ## Good to know
 

@@ -29,6 +29,8 @@ add_library(kb_game_core STATIC
     src/private/GameRuntimeDiagnostics.hpp
     src/GameScriptLog.cpp
     src/private/GameScriptLog.hpp
+    src/GameCaptureCamera.cpp
+    src/private/GameCaptureCamera.hpp
     src/ParticleRuntimeDiagnostics.cpp
     src/private/ParticleRuntimeDiagnostics.hpp
     src/private/GameProjectRuntime.hpp

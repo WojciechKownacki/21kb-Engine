@@ -826,6 +826,12 @@ void RunNativeScriptBuildPipelineTest() {
     SetStdHandle(STD_ERROR_HANDLE, previousError);
     kb::tests::Require(detached.Succeeded() && std::filesystem::is_regular_file(detachedMarker),
         "Native compilation must also work in a host without console handles");
+    // Compiler text arrives in the console's code page; the messages the caller reads are UTF-8, not noise.
+    const kb::script::NativeScriptBuildResult accented = kb::script::NativeScriptBuildPipeline::Build({
+        .enabled = true, .command = "echo broken.cpp(3): error C2065: caf\xC3\xA9 is not declared& exit 1", .workingDirectory = projectRoot });
+    kb::tests::Require(std::ranges::any_of(accented.errors, [](const std::string& message) {
+        return message.find("caf\xC3\xA9 is not declared") != std::string::npos;
+    }), "Compiler output with accented letters must reach the caller as UTF-8");
 #endif
 
     const kb::script::NativeScriptBuildResult missingTool = kb::script::NativeScriptBuildPipeline::Build(kb::script::NativeScriptBuildDesc{

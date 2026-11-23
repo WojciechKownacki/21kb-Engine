@@ -2,6 +2,7 @@
 #include "GameWindow.hpp"
 #include "RuntimeSceneFrameSync.hpp"
 #include "ParticleRuntimeDiagnostics.hpp"
+#include "GameCaptureCamera.hpp"
 #include "GameScriptLog.hpp"
 #include "GameRuntimeDiagnostics.hpp"
 #include "LoadingScreen.hpp"
@@ -100,6 +101,8 @@ struct GameOptions {
     std::int32_t rendererType = -1;
     std::filesystem::path screenshotPath;
     std::uint32_t screenshotFrame = 0U;
+    // The camera a captured frame is drawn from (by name, or a free view); empty keeps the scene's own.
+    kb::game::CaptureCameraRequest captureCamera;
     // Where the run writes the frames the loading screen drew, as JSON.
     std::filesystem::path loadingReportPath;
     // Where the run writes when each step of its start finished, as JSON.
@@ -129,6 +132,9 @@ Usage: kb_game [options]
   --uncapped                        no frame rate limit
   --screenshot-file=<file.png>      write frame --screenshot-frame as PNG (the file must not exist)
   --screenshot-frame=<n>            which frame to capture (within --frames)
+  --camera=<name>                   draw from this camera of the scene (needs --screenshot-file)
+  --view=overview|top|front|side    draw from a free view framing the scene (needs --screenshot-file)
+  --eye=<x,y,z> --look-at=<x,y,z>   draw from a free view at this point, facing that point
   --loading-report=<file.json>      write the progress of every loading screen frame as JSON
   --startup-report=<file.json>      write when each step of the start finished, in ms from the process start
   --profile-file=<file>             per-frame timings (needs --frames=1..120000)
@@ -217,7 +223,7 @@ std::ostream& WriteWorldMemoryProfile(std::ostream& output, const kb::world::Wor
 // Switches that load content other than the game's own package, pick a scene
 // the game did not start in, or write files where the command line says. Only
 // a development player accepts them; a shipped game refuses them.
-constexpr std::array<std::wstring_view, 13U> kDevelopmentSwitches{
+constexpr std::array<std::wstring_view, 17U> kDevelopmentSwitches{
     L"--project=",
     L"--scene=",
     L"--profile-fixed-step",
@@ -231,6 +237,10 @@ constexpr std::array<std::wstring_view, 13U> kDevelopmentSwitches{
     L"--startup-report=",
     L"--renderer=",
     L"--input-replay=",
+    L"--camera=",
+    L"--view=",
+    L"--eye=",
+    L"--look-at=",
 };
 
 // Names the first development switch on the command line, or returns nothing.
@@ -353,6 +363,14 @@ constexpr std::array<std::wstring_view, 13U> kDevelopmentSwitches{
                 return false;
             }
             options.screenshotPath = std::filesystem::path{std::wstring{argument.substr(18U)}};
+        } else if (HasPrefix(argument, L"--camera=")) {
+            options.captureCamera.camera = kb::game::NarrowForDiagnostics(argument.substr(9U));
+        } else if (HasPrefix(argument, L"--view=")) {
+            options.captureCamera.view = kb::game::NarrowForDiagnostics(argument.substr(7U));
+        } else if (HasPrefix(argument, L"--eye=")) {
+            options.captureCamera.eye = kb::game::NarrowForDiagnostics(argument.substr(6U));
+        } else if (HasPrefix(argument, L"--look-at=")) {
+            options.captureCamera.lookAt = kb::game::NarrowForDiagnostics(argument.substr(10U));
         } else if (HasPrefix(argument, L"--screenshot-frame=")) {
             if (!ParseFrameLimit(argument.substr(19U), options.screenshotFrame)) {
                 std::cerr << "kb_game: --screenshot-frame expects a positive frame count\n";
@@ -446,6 +464,10 @@ constexpr std::array<std::wstring_view, 13U> kDevelopmentSwitches{
         (options.screenshotFrame != 0U &&
             (options.frameLimit == 0U || options.screenshotFrame > options.frameLimit))) {
         std::cerr << "kb_game: screenshot requires --screenshot-file, --screenshot-frame and --frames covering that frame\n";
+        return false;
+    }
+    if (!options.captureCamera.Empty() && options.screenshotPath.empty()) {
+        std::cerr << "kb_game: --camera, --view, --eye and --look-at need --screenshot-file\n";
         return false;
     }
     if (!options.screenshotPath.empty() &&
@@ -793,6 +815,10 @@ int RunGame(const GameOptions& options) {
         return EXIT_FAILURE;
     }
     kb::core::StartupTrace::Record("scene_loaded");
+    if (const std::string cameraError = kb::game::ApplyCaptureCamera(scene, options.captureCamera); !cameraError.empty()) {
+        std::cerr << "kb_game: " << cameraError << '\n';
+        return EXIT_FAILURE;
+    }
     std::unique_ptr<kb::net::SceneClient> network;
     if (networkOptions) {
         network = std::make_unique<kb::net::SceneClient>(scene, std::move(*networkOptions),

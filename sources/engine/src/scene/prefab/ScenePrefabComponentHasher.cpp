@@ -251,6 +251,14 @@ void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeC
         ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(components.behaviour->tickGroup));
         ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(static_cast<std::uint32_t>(components.behaviour->executionOrder)));
     }
+    ScenePrefabHashBuilder::Mix(hash, components.additionalBehaviours.size());
+    for (const BehaviourComponent& extra : components.additionalBehaviours) {
+        ScenePrefabHashBuilder::Mix(hash, extra.behaviourAssetId);
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(extra.backend));
+        ScenePrefabHashBuilder::Mix(hash, extra.enabled ? 1U : 0U);
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(extra.tickGroup));
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(static_cast<std::uint32_t>(extra.executionOrder)));
+    }
     // The overrides are a set, so their entry hashes are added: the order they were authored in does not matter.
     std::uint64_t overridesHash = 0U;
     for (const BehaviourVariableOverride& entry : components.behaviourVariableOverrides) {

@@ -74,7 +74,14 @@ ScriptBehaviourBindingResult ScriptBehaviourBindingService::AttachMetadata(
         }
     }
 
-    scene.Components().Behaviours().Set(entity, *component);
+    if (options.additional && scene.Components().Behaviours().Has(entity)) {
+        if (!scene.Components().Behaviours().Add(entity, *component)) {
+            AddError(result, "the entity runs this script already, or runs the most scripts an entity can");
+            return result;
+        }
+    } else {
+        scene.Components().Behaviours().Set(entity, *component);
+    }
     result.bound = true;
     return result;
 }

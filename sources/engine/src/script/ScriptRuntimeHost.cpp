@@ -417,13 +417,19 @@ void ScriptRuntimeHostSceneSystem::CollectDiagnostics() {
 
 void ScriptRuntimeHostSceneSystem::DisableFailingBehaviour(const ScriptDiagnostic& diagnostic) {
     kb::scene::SceneBehaviourComponents behaviours = state_->scene.Components().Behaviours();
-    const kb::scene::BehaviourComponent* current = behaviours.TryGet(diagnostic.entity);
-    if (current == nullptr || !current->enabled || current->behaviourAssetId != diagnostic.assetId.value) {
+    const kb::scene::BehaviourComponent* current = behaviours.Find(diagnostic.entity, diagnostic.assetId.value, diagnostic.backend);
+    if (current == nullptr || !current->enabled) {
         return;
     }
     kb::scene::BehaviourComponent disabled = *current;
     disabled.enabled = false;
-    behaviours.Set(diagnostic.entity, disabled);
+    for (std::size_t at = 0U; at < behaviours.Count(diagnostic.entity); ++at) {
+        const kb::scene::BehaviourComponent* candidate = behaviours.TryGetAt(diagnostic.entity, at);
+        if (candidate != nullptr && candidate->behaviourAssetId == disabled.behaviourAssetId && candidate->backend == disabled.backend) {
+            behaviours.SetAt(diagnostic.entity, at, disabled);
+            break;
+        }
+    }
     state_->pendingSceneSystemDiagnostics.push_back(EntityName(state_->scene, diagnostic.entity) + ", " +
         ScriptName(state_->scene, diagnostic.assetId) + ": the script was disabled after its error");
 }

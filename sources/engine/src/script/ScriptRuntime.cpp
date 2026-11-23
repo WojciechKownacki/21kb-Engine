@@ -175,12 +175,20 @@ private:
 
 void DispatchSceneBehaviours(kb::scene::Scene& scene, DispatchContext& context) {
     if (context.event != nullptr && context.event->target.IsValid()) {
-        // An event for one entity concerns that entity's behaviour only; there is nothing to collect and order.
+        // An event for one entity concerns the behaviours of that entity only (each script it runs, in the order they were
+        // attached); there is nothing to collect and order. They are copied first: a handler may change them.
         const kb::scene::SceneEntity target = context.event->target;
-        if (const kb::scene::BehaviourComponent* behaviour = std::as_const(scene).Components().Behaviours().TryGet(target);
-            behaviour != nullptr && scene.Entities().IsActive(target)) {
-            const kb::scene::BehaviourComponent snapshot = *behaviour;
-            DispatchBehaviour(target, snapshot, context);
+        if (scene.Entities().IsActive(target)) {
+            const auto behaviours = std::as_const(scene).Components().Behaviours();
+            std::array<kb::scene::BehaviourComponent, kb::scene::kMaxBehavioursPerEntity> snapshots{};
+            const std::size_t count = std::min(behaviours.Count(target), snapshots.size());
+            for (std::size_t index = 0U; index < count; ++index) {
+                snapshots[index] = *behaviours.TryGetAt(target, index);
+            }
+            DispatchTarget targetContext{ context };
+            for (std::size_t index = 0U; index < count; ++index) {
+                DispatchBehaviour(target, snapshots[index], context, targetContext);
+            }
         }
         return;
     }
@@ -232,8 +240,9 @@ void DispatchSceneBehaviours(kb::scene::Scene& scene, DispatchContext& context) 
         context.result->visitedBehaviours += passedOver;
     }
     // Behaviours usually come out of the storage in their execution order already; sorting them again is then a waste.
+    // Stable: the behaviours of one entity keep the order they were attached in.
     if (!std::ranges::is_sorted(behaviours, &ComesBefore)) {
-        std::ranges::sort(behaviours, &ComesBefore);
+        std::ranges::stable_sort(behaviours, &ComesBefore);
     }
     std::optional<EventBroadcastScope> broadcast;
     if (context.event != nullptr && !behaviours.empty()) {
@@ -433,8 +442,9 @@ void ScriptRuntime::RefreshEventReceivers(kb::scene::Scene& scene, std::string_v
     std::vector<BehaviourDispatchRecord>& behaviours = leased ? scratch.records : ownRecords;
     behaviours.clear();
     scene.Components().Behaviours().ForEach(&CollectBehaviour, &behaviours);
+    // Stable: the behaviours of one entity keep the order they were attached in.
     if (!std::ranges::is_sorted(behaviours, &ComesBefore)) {
-        std::ranges::sort(behaviours, &ComesBefore);
+        std::ranges::stable_sort(behaviours, &ComesBefore);
     }
     list.answers.clear();
     list.receivers.clear();

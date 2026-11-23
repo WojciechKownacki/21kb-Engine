@@ -35,8 +35,7 @@ bool EditorSceneContext::SetUIClickHandler(kb::scene::SceneEntity widget, const 
     }
     const InspectorUIClickHandler::Target target = InspectorUIClickHandler::FindTarget(*scene_, widget, choice->script);
     if (!target.found) {
-        console_.Warning("Inspector", "This widget already runs another script, and no object runs " + script->name +
-            ": add " + script->name + " to an object first, then choose its function here.");
+        console_.Warning("Inspector", "No object runs " + script->name + ": add it to an object first, then choose its function here.");
         return false;
     }
     if (choice->createFunction) {
@@ -52,7 +51,7 @@ bool EditorSceneContext::SetUIClickHandler(kb::scene::SceneEntity widget, const 
         if (!kb::scene::SetUIEventName(selectable, function)) return false;
         selectable.eventTarget = target.entity.IsValid() ? target.entity.Id() : 0U;
         scene_->Components().UI().Set(widget, selectable);
-        if (target.attachToWidget) scene_->Components().Behaviours().Set(widget, *behaviour);
+        if (target.attachToWidget) static_cast<void>(scene_->Components().Behaviours().Add(widget, *behaviour));
         return true;
     });
 }

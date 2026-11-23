@@ -82,6 +82,9 @@ private:
         // The synchronization pass that last found the behaviour in the scene; a record an older pass left
         // behind belongs to a behaviour that is gone.
         std::uint64_t seenEpoch = 0U;
+        // When the behaviour first started, counted over the system: of the scripts one entity runs, the one that started
+        // first runs first (within the same tick group and execution order).
+        std::uint64_t sequence = 0U;
     };
 
     void BeginFrame(kb::scene::Scene& scene, float deltaSeconds);
@@ -178,6 +181,7 @@ private:
     // synchronization or a restart changes the records, not for every phase of every frame; the pointers refer to
     // lifecycleRecords_ elements, so whoever replaces or erases records marks the order dirty.
     std::vector<BehaviourLifecycleRecord*> phaseOrder_;
+    std::uint64_t nextLifecycleSequence_ = 0U;
     bool phaseOrderDirty_ = true;
     // The scripts the ordered behaviours run, once each, and for every ordered behaviour the index of its script.
     struct PhaseScript {

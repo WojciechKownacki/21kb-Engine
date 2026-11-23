@@ -5018,23 +5018,27 @@ void RunScriptCheckCliTests() {
     Require(Contains(RunCliProgram({ "guide", "--topic", "recipe-pickup" }).out, "OnTriggerEnter") && Contains(RunCliProgram({ "guide" }).out, "recipe-pickup"), "the pickup recipe must be a guide");
 }
 
-// The commands of a recipe as the agent sends them: each line of its first code block is a JSON list of words (the `args` of
-// one kb_cli call, the project left out); the blank lines between lines only separate calls.
+// The commands of a recipe as the agent sends them: each code block is the `commands` of one kb_cli call, a JSON list of lists
+// of words (the project left out); the calls follow each other.
 [[nodiscard]] std::vector<std::vector<std::string>> RecipeCommands(std::string_view recipe) {
     const std::optional<std::string> guide = kb::script::ScriptAgentGuides::Topic(recipe);
     Require(guide.has_value(), "the guide " + std::string{ recipe } + " must exist");
-    const std::size_t begin = guide->find("```\n") + 4U;
-    const std::size_t end = guide->find("\n```", begin);
     std::vector<std::vector<std::string>> commands;
-    std::istringstream lines{ guide->substr(begin, end - begin) };
-    for (std::string line; std::getline(lines, line);) {
-        if (line.empty()) continue;
+    for (std::size_t begin = guide->find("```\n"); begin != std::string::npos; begin = guide->find("```\n", begin + 4U)) {
+        begin += 4U;
+        const std::size_t end = guide->find("\n```", begin);
+        Require(end != std::string::npos, "a code block of " + std::string{ recipe } + " must end");
         JsonValue list;
         std::string error;
-        Require(JsonValue::Parse(line, list, error) && list.GetKind() == JsonValue::Kind::Array && list.Size() > 0U, "a line of " + std::string{ recipe } + " must be a JSON list of words: " + line);
-        std::vector<std::string> words;
-        for (std::size_t index = 0U; index < list.Size(); ++index) words.push_back(list.At(index)->AsString());
-        commands.push_back(std::move(words));
+        Require(JsonValue::Parse(guide->substr(begin, end - begin), list, error) && list.GetKind() == JsonValue::Kind::Array && list.Size() > 0U,
+            "a code block of " + std::string{ recipe } + " must be a JSON list of commands: " + guide->substr(begin, end - begin));
+        for (std::size_t command = 0U; command < list.Size(); ++command) {
+            Require(list.At(command)->GetKind() == JsonValue::Kind::Array && list.At(command)->Size() > 0U, "a command of " + std::string{ recipe } + " must be a list of words");
+            std::vector<std::string> words;
+            for (std::size_t index = 0U; index < list.At(command)->Size(); ++index) words.push_back(list.At(command)->At(index)->AsString());
+            commands.push_back(std::move(words));
+        }
+        begin = end;
     }
     return commands;
 }
@@ -5141,12 +5145,15 @@ void RunPlaybackStopTests() {
         "function Destroyed(self, dt) Log('playback shutdown complete') end\n");
     Require(RunCliProgram({"scene-attach", "--project", root, "--scene", "Assets/Scenes/Main.21kbscene",
         "--node", "Player", "--script", "/Game/Logic/Player.lua"}).exitCode == 0, "stop fixture must attach its shutdown observer");
-    // A second, different behaviour must not silently replace the first.
+    // A second, different behaviour is added beside the first, and taken off again by name.
     WriteTextFile(TestRoot() / "Assets" / "Logic" / "Other.lua", "function Tick(self, dt) end\n");
-    const CliRun replaced = RunCliProgram({"scene-attach", "--project", root, "--scene", "Assets/Scenes/Main.21kbscene",
+    const CliRun added = RunCliProgram({"scene-attach", "--project", root, "--scene", "Assets/Scenes/Main.21kbscene",
         "--node", "Player", "--script", "/Game/Logic/Other.lua"});
-    Require(replaced.exitCode == 1 && Contains(replaced.err, "already runs /Game/Logic/Player.lua") && Contains(replaced.err, "--replace"),
-        "attaching a different behaviour must refuse to drop the current one: " + replaced.err);
+    Require(added.exitCode == 0 && Contains(added.out, "the node runs 2 scripts"),
+        "attaching a different behaviour must add it beside the current one: " + added.out + added.err);
+    const CliRun detached = RunCliProgram({"scene-detach", "--project", root, "--scene", "Assets/Scenes/Main.21kbscene",
+        "--node", "Player", "--script", "/Game/Logic/Other.lua"});
+    Require(detached.exitCode == 0 && Contains(detached.out, "the node runs 1 script"), "scene-detach must take the named script off: " + detached.out + detached.err);
     const auto verifyStopped = [](const CliRun& result, int code, std::string_view reason) {
         JsonValue report;
         std::string error;
@@ -5509,6 +5516,7 @@ struct DataProbe {
         { "input-action", { "input-action", "list", "--project", root }, "21kb.cli.input-action-list/v1" },
         { "layout", { "layout", "list", "--project", root }, "21kb.cli.layout-list/v1" },
         { "physics-layers", { "physics-layers", "--project", root }, "21kb.cli.physics-layers/v1" },
+        { "undo", { "undo", "--project", root, "--list" }, "21kb.cli.undo/v1" },
         { "lighting-quality", { "lighting-quality", "--project", root }, "21kb.cli.lighting-quality/v1" },
         { "skeleton", { "skeleton", "show", "--project", root, "--skeleton", "/Game/Characters/Probe.kbskeleton" }, "21kb.cli.skeleton-show/v1" },
         { "navmesh", { "navmesh", "info", (rootPath / "Assets" / "Level.21kbnavmesh").string() }, "21kb.cli.navmesh-info/v1" },
@@ -5760,12 +5768,14 @@ struct ChangeProbe {
         { "scene-duplicate", withScene({ "scene-duplicate", "--name", "Copy" }), "Assets/Scenes/Copy.21kbscene", "created" },
         { "script-new", line({ "script-new", "--name", "Walker", "--language", "lua" }), "Assets/Scripts/Walker.lua", "created" },
         { "scene-attach", withScene({ "scene-attach", "--node", "Goblin", "--script", "/Game/Scripts/Walker.lua" }), side, "modified" },
+        { "scene-detach", withScene({ "scene-detach", "--node", "Goblin", "--script", "/Game/Scripts/Walker.lua" }), side, "modified" },
         { "script-build", line({ "script-build", "--script", "/Game/Scripts/Walker.lua" }), "", "" },
         { "init-agent", line({ "init-agent" }), "*", "created" },
         { "import-preset-new", line({ "import-preset-new", "--name", "Pixels" }), "*", "created" },
         { "layout", line({ "layout", "save", "--name", "Probe" }), "*", "created" },
         { "input-action", line({ "input-action", "new", "--name", "Jump", "--key", "J" }), "*", "created" },
         { "physics-layers", line({ "physics-layers", "--name", "3=Enemy" }), "*", "*" },
+        { "undo", line({ "undo", "--begin" }), "", "" },
         { "lighting-quality", line({ "lighting-quality", "--shadows", "low" }), "*", "modified" },
         { "navmesh", line({ "navmesh", "bake", "--scene", "Assets/Level.21kbscene" }), "*", "*" },
         { "ability", line({ "ability", "new", "--name", "Strike" }), "Assets/Abilities/Strike.kbability", "created" },
@@ -7395,9 +7405,423 @@ void RunSprite2DAssetRefusalTests() {
 }
 #endif
 
+// ---- Pack 2: scenes in the build, tags, one path syntax everywhere, several scripts per object ----
+
+// A project made by `new` under the tests' folder, with the startup scene Main; the old one of that name goes first.
+[[nodiscard]] std::string FreshProject(std::string_view name) {
+    // An mcp session of an earlier test confines every command of the process to its project.
+    kb::cli::ResetCliConfinementForTests();
+    const std::filesystem::path parent = TestRoot() / "pack2";
+    std::error_code error;
+    std::filesystem::remove_all(parent / std::string{ name }, error);
+    std::filesystem::create_directories(parent, error);
+    const CliRun made = RunCliProgram({ "new", "--parent", parent.string(), "--name", name });
+    Require(made.exitCode == 0, "the pack 2 project could not be made: " + made.out + made.err);
+    return (parent / std::string{ name }).string();
+}
+
+[[nodiscard]] std::string McpText(const std::string& project, std::string_view call) {
+    std::string input = R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}})";
+    input += "\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":" + std::string{ call } + "}\n";
+    std::istringstream in{ input };
+    std::ostringstream out;
+    std::ostringstream err;
+    const std::vector<std::string> raw{ "--project", project };
+    Require(kb::cli::RunMcpCommand(kb::cli::ArgumentList{ raw, kFlagNames }, in, kb::cli::CommandIo{ .out = out, .err = err }) == 0, "the mcp server exited with an error");
+    kb::cli::ResetCliConfinementForTests();
+    std::istringstream lines{ out.str() };
+    std::string line;
+    std::string last;
+    while (std::getline(lines, line)) last = line;
+    JsonValue response;
+    std::string parseError;
+    Require(JsonValue::Parse(last, response, parseError), "the mcp answer must be JSON: " + last);
+    const JsonValue* result = response.Find("result");
+    Require(result != nullptr, "the mcp call must answer: " + last);
+    return std::string{ result->Find("isError")->AsBool() ? "ERROR\n" : "" } + result->Find("content")->At(0U)->Find("text")->AsString();
+}
+
+// project-settings scenes and tags: the scenes the game is built with are listed, added, removed, ordered and started from.
+void RunProjectSettingsScenesAndTagsTests() {
+    const std::string project = FreshProject("Settings");
+    Require(RunCliProgram({ "scene-new", "--project", project, "--name", "Level2" }).out.find("project-settings scenes --add Level2") != std::string::npos,
+        "scene-new must say that the new scene is not in the build yet");
+    Require(RunCliProgram({ "scene-new", "--project", project, "--name", "Menu" }).exitCode == 0, "the second scene could not be made");
+
+    const auto settings = [&project]() {
+        return kb::project::ProjectSettingsStore::Load(kb::project::ProjectSettingsStore::FilePath(project)).settings;
+    };
+    const CliRun listed = RunCliProgram({ "project-settings", "scenes", "--project", project });
+    Require(listed.exitCode == 0 && Contains(listed.out, "1. /Game/Scenes/Main.21kbscene (startup)") && Contains(listed.out, "not in the build: ") &&
+            Contains(listed.out, "/Game/Scenes/Level2.21kbscene") && settings().additionalScenes.empty(),
+        "scenes must list the build and the scenes that are left out: " + listed.out + listed.err);
+
+    // Add by name, by path and twice; nothing is repeated.
+    Require(RunCliProgram({ "project-settings", "scenes", "--project", project, "--add", "Level2" }).out.find("2. /Game/Scenes/Level2.21kbscene") != std::string::npos,
+        "a scene must be added by its name");
+    Require(RunCliProgram({ "project-settings", "scenes", "--project", project, "--add", "/Game/Scenes/Menu.21kbscene", "--add", "Level2" }).exitCode == 0 &&
+            settings().additionalScenes == std::vector<std::string>{ "/Game/Scenes/Level2.21kbscene", "/Game/Scenes/Menu.21kbscene" },
+        "a scene must be added once, by its path too");
+
+    // A scene the project does not have is refused with the nearest one.
+    const CliRun typo = RunCliProgram({ "project-settings", "scenes", "--project", project, "--add", "Levl2" });
+    Require(typo.exitCode == 1 && Contains(typo.err, "did you mean Level2?"), "a misspelled scene must name the nearest: " + typo.err);
+
+    // The startup scene: it leads the list, the old one stays in the build; it cannot be removed while it starts the game.
+    Require(RunCliProgram({ "project-settings", "scenes", "--project", project, "--startup", "Menu" }).exitCode == 0 &&
+            settings().defaultMap == "/Game/Scenes/Menu.21kbscene" &&
+            settings().additionalScenes == std::vector<std::string>{ "/Game/Scenes/Main.21kbscene", "/Game/Scenes/Level2.21kbscene" },
+        "--startup must make the scene the one the game starts in and keep the others");
+    const CliRun startup = RunCliProgram({ "project-settings", "scenes", "--project", project, "--remove", "Menu" });
+    Require(startup.exitCode == 1 && Contains(startup.err, "is the startup scene") && Contains(startup.err, "--startup"), "the startup scene must not be removed: " + startup.err);
+    Require(RunCliProgram({ "project-settings", "scenes", "--project", project, "--remove", "Level2" }).exitCode == 0 &&
+            settings().additionalScenes == std::vector<std::string>{ "/Game/Scenes/Main.21kbscene" },
+        "a scene must be removed from the build");
+    const CliRun absent = RunCliProgram({ "project-settings", "scenes", "--project", project, "--remove", "Level2" });
+    Require(absent.exitCode == 1 && Contains(absent.err, "is not in the build"), "a scene that is not in the build cannot be removed: " + absent.err);
+    Require(RunCliProgram({ "project-settings", "scenes", "--project", project, "--order", "Main,Menu,Level2" }).exitCode == 0 &&
+            settings().defaultMap == "/Game/Scenes/Main.21kbscene" &&
+            kb::project::ProjectBuildScenes(settings()) == std::vector<std::string>{ "/Game/Scenes/Main.21kbscene", "/Game/Scenes/Menu.21kbscene", "/Game/Scenes/Level2.21kbscene" },
+        "--order must set the whole list, the first scene starting the game");
+
+    // As data, for a caller that wants it.
+    const CliRun asData = RunCliProgram({ "project-settings", "scenes", "--project", project, "--json" });
+    JsonValue data;
+    std::string parseError;
+    Require(JsonValue::Parse(asData.out, data, parseError) && data.Find("data") != nullptr && data.Find("data")->Find("scenes")->Size() == 3U &&
+            data.Find("data")->Find("startup")->AsString() == "/Game/Scenes/Main.21kbscene",
+        "scenes must report the build as data: " + asData.out);
+
+    // Another startup scene through --set, or scene-new --default, does not drop the old one from the build.
+    const std::string second = FreshProject("SettingsStartup");
+    Require(RunCliProgram({ "scene-new", "--project", second, "--name", "Intro", "--default", "yes" }).exitCode == 0 &&
+            kb::project::ProjectBuildScenes(kb::project::ProjectSettingsStore::Load(kb::project::ProjectSettingsStore::FilePath(second)).settings) ==
+                std::vector<std::string>{ "/Game/Scenes/Intro.21kbscene", "/Game/Scenes/Main.21kbscene" },
+        "scene-new --default yes must keep the old startup scene in the build");
+    Require(RunCliProgram({ "scene-new", "--project", second, "--name", "Outro" }).exitCode == 0 &&
+            RunCliProgram({ "project-settings", "--project", second, "--set", "Maps.DefaultMap=/Game/Scenes/Outro.21kbscene" }).exitCode == 0 &&
+            kb::project::ProjectBuildScenes(kb::project::ProjectSettingsStore::Load(kb::project::ProjectSettingsStore::FilePath(second)).settings) ==
+                std::vector<std::string>{ "/Game/Scenes/Outro.21kbscene", "/Game/Scenes/Intro.21kbscene", "/Game/Scenes/Main.21kbscene" },
+        "--set Maps.DefaultMap must keep the old startup scene in the build");
+
+    // Tags: listed, added, removed; a built-in one and a misspelling are refused.
+    const CliRun none = RunCliProgram({ "project-settings", "tags", "--project", project });
+    Require(none.exitCode == 0 && Contains(none.out, "tags of the project (0): none") && Contains(none.out, "built in: Player Enemy"), "tags must list the tags: " + none.out);
+    Require(RunCliProgram({ "project-settings", "tags", "--project", project, "--add", "Boss", "--add", "Trap" }).exitCode == 0 &&
+            settings().tags == std::vector<std::string>{ "Boss", "Trap" },
+        "tags must add the project's tags in order");
+    Require(RunCliProgram({ "project-settings", "tags", "--project", project, "--remove", "Boss" }).exitCode == 0 && settings().tags == std::vector<std::string>{ "Trap" },
+        "tags must remove a tag");
+    const CliRun builtIn = RunCliProgram({ "project-settings", "tags", "--project", project, "--add", "Player" });
+    Require(builtIn.exitCode == 1 && Contains(builtIn.err, "built-in tag"), "a built-in tag must not be added: " + builtIn.err);
+    const CliRun missingTag = RunCliProgram({ "project-settings", "tags", "--project", project, "--remove", "Trapp" });
+    Require(missingTag.exitCode == 1 && Contains(missingTag.err, "did you mean Trap?"), "a misspelled tag must name the nearest: " + missingTag.err);
+    Require(RunCliProgram({ "project-settings", "tags", "--project", project, "--json" }).out.find("21kb.cli.project-settings-tags/v1") != std::string::npos,
+        "tags must report as data");
+    Require(RunCliProgram({ "project-settings", "bogus", "--project", project }).exitCode == 1, "an unknown project-settings topic must be refused");
+
+    // Through the tool an agent uses: one commands call makes a scene and puts it in the build.
+    const std::string agent = FreshProject("SettingsAgent");
+    const std::string call = McpText(agent, R"({"name":"kb_cli","arguments":{"commands":[["scene-new","--name","Level9"],["project-settings","scenes","--add","Level9"]]}})");
+    Require(!call.starts_with("ERROR") && Contains(call, "2. /Game/Scenes/Level9.21kbscene"), "one commands call must make a scene and add it to the build: " + call);
+}
+
+// build says which scenes a script opens that the build leaves out.
+void RunBuildScenesWarningTests() {
+    const std::string project = FreshProject("BuildWarning");
+    Require(RunCliProgram({ "scene-new", "--project", project, "--name", "Level2" }).exitCode == 0 &&
+            RunCliProgram({ "scene-new", "--project", project, "--name", "Level3" }).exitCode == 0 &&
+            RunCliProgram({ "script-new", "--project", project, "--name", "Menu", "--language", "lua", "--code",
+                "function PlayClicked(self, event)\n    Scene.Load(\"/Game/Scenes/Level2.21kbscene\")\nend\n-- Scene.Load(\"/Game/Scenes/Level3.21kbscene\")\n" }).exitCode == 0,
+        "the build warning project could not be made");
+    const std::string out = (TestRoot() / "pack2" / "BuildWarningOut").string();
+    const CliRun left = RunCliProgram({ "build", "--project", project, "--out", out });
+    Require(Contains(left.err, "warning: /Game/Scripts/Menu.lua opens /Game/Scenes/Level2.21kbscene, which is not in the build") &&
+            Contains(left.err, "project-settings scenes --add /Game/Scenes/Level2.21kbscene") && !Contains(left.err, "opens /Game/Scenes/Level3.21kbscene"),
+        "build must warn about a scene a script opens that is not in the build, and not about one in a comment: " + left.err);
+    Require(Contains(RunCliProgram({ "project-settings", "scenes", "--project", project }).out, "warning: /Game/Scripts/Menu.lua opens /Game/Scenes/Level2.21kbscene"),
+        "project-settings scenes must warn about it too");
+    Require(RunCliProgram({ "project-settings", "scenes", "--project", project, "--add", "Level2" }).exitCode == 0, "the scene could not be added to the build");
+    const CliRun included = RunCliProgram({ "build", "--project", project, "--out", out });
+    Require(!Contains(included.err, "not in the build"), "build warned about a scene that is in the build: " + included.err);
+    // A bare name given to Scene.Load counts too.
+    Require(RunCliProgram({ "script-new", "--project", project, "--name", "Next", "--language", "lua", "--code", "function Go(self, event)\n    Scene.Load('Level3', true)\nend\n" }).exitCode == 0,
+        "the second script could not be made");
+    Require(Contains(RunCliProgram({ "build", "--project", project, "--out", out }).err, "opens /Game/Scenes/Level3.21kbscene"), "a scene given to Scene.Load by its name must be found");
+}
+
+// navmesh, world, validate, run, entity, scene-list and editor take a scene as /Game/ path, by name, or - without --scene - the startup scene.
+void RunScenePathConsistencyTests() {
+    const std::string project = FreshProject("Paths");
+    const std::string game = "/Game/Scenes/Main.21kbscene";
+    // navmesh bake: the startup scene without --scene, a /Game/ path for --scene and --out.
+    const CliRun bakeDefault = RunCliProgram({ "navmesh", "bake", "--project", project });
+    Require(bakeDefault.exitCode == 0 && std::filesystem::exists(std::filesystem::path{ project } / "Assets" / "Scenes" / "Main.21kbnavmesh"),
+        "navmesh bake must take the startup scene without --scene: " + bakeDefault.out + bakeDefault.err);
+    const CliRun bakeGame = RunCliProgram({ "navmesh", "bake", "--project", project, "--scene", game, "--out", "/Game/Scenes/Alt.21kbnavmesh" });
+    Require(bakeGame.exitCode == 0 && std::filesystem::exists(std::filesystem::path{ project } / "Assets" / "Scenes" / "Alt.21kbnavmesh"),
+        "navmesh bake must take /Game/ paths: " + bakeGame.out + bakeGame.err);
+    const CliRun bakeName = RunCliProgram({ "navmesh", "bake", "--project", project, "--scene", "Main" });
+    Require(bakeName.exitCode == 0, "navmesh bake must take a scene by its name: " + bakeName.out + bakeName.err);
+    const CliRun bakeNone = RunCliProgram({ "navmesh", "bake", "--project", project, "--scene", "Nowhere" });
+    Require(bakeNone.exitCode == 1 && Contains(bakeNone.err, "the project has no scene 'Nowhere'"), "an unknown scene must be named: " + bakeNone.err);
+    Require(RunCliProgram({ "navmesh", "bake" }).exitCode == 1, "navmesh bake without a project and a scene must fail");
+
+    // world migrate and build: /Game/ paths, and the startup scene.
+    const CliRun migrate = RunCliProgram({ "world", "migrate", "--project", project, "--scene", game, "--out", "/Game/Worlds/Main.21kbworld" });
+    Require(migrate.exitCode == 0 && std::filesystem::exists(std::filesystem::path{ project } / "Assets" / "Worlds" / "Main.21kbworld"),
+        "world migrate must take /Game/ paths: " + migrate.out + migrate.err);
+    const CliRun migrateDefault = RunCliProgram({ "world", "migrate", "--project", project, "--out", "/Game/Worlds/Again.21kbworld" });
+    Require(migrateDefault.exitCode == 0, "world migrate must take the startup scene without --scene: " + migrateDefault.out + migrateDefault.err);
+    const CliRun build = RunCliProgram({ "world", "build", "--project", project, "--world", "/Game/Worlds/Main.21kbworld" });
+    Require(build.exitCode == 0 && Contains(build.out, "built "), "world build must take a /Game/ path: " + build.out + build.err);
+    Require(RunCliProgram({ "world", "build", "--world", "/Game/Worlds/Main.21kbworld" }).exitCode == 1, "a /Game/ path without a project must be refused");
+
+    // The commands that always did, by name too.
+    Require(RunCliProgram({ "scene-list", "--project", project, "--scene", "Main" }).exitCode == 0 && RunCliProgram({ "entity", "show", "--project", project, "--scene", "Main", "--name", "Plane" }).exitCode == 0 &&
+            RunCliProgram({ "run", "--project", project, "--scene", "Main", "--frames", "1" }).exitCode == 0,
+        "scene-list, entity and run must take a scene by its name");
+    const CliRun unknown = RunCliProgram({ "entity", "show", "--project", project, "--scene", "Maim", "--name", "Plane" });
+    Require(unknown.exitCode == 1 && Contains(unknown.err, "did you mean Main?"), "a misspelled scene must name the nearest one: " + unknown.err);
+    // validate: a script as /Game/ path.
+    Require(RunCliProgram({ "script-new", "--project", project, "--name", "Probe", "--language", "lua" }).exitCode == 0 &&
+            RunCliProgram({ "validate", "--project", project, "/Game/Scripts/Probe.lua" }).exitCode == 0 &&
+            RunCliProgram({ "validate", "--project", project, "/Game/Scenes/Main.21kbscene" }).exitCode == 0,
+        "validate must take /Game/ paths");
+    // editor open-scene: the startup scene without --scene.
+    const CliRun open = RunCliProgram({ "editor", "open-scene", "--project", project });
+    Require(open.exitCode == 0 && Contains(open.out, "/Game/Scenes/Main.21kbscene"), "editor open-scene must take the startup scene without --scene: " + open.out + open.err);
+
+    // capture: a relative --out is the project's, wherever the command runs.
+    const std::filesystem::path picture = std::filesystem::path{ project } / "Saved" / "Agent" / "Images" / "shot.png";
+    WriteTextFile(picture, "x");
+    const CliRun capture = RunCliProgram({ "capture", "--project", project, "--out", "Saved/Agent/Images/shot.png" });
+    std::string captureError = capture.err;
+    std::ranges::replace(captureError, '\\', '/');
+    Require(capture.exitCode == 1 && Contains(captureError, "shot.png already exists") && Contains(captureError, "Saved/Agent/Images/shot.png") &&
+            Contains(captureError, std::filesystem::path{ project }.generic_string()),
+        "capture --out must resolve a relative path inside the project: " + capture.err);
+    Require(Contains(RunCliProgram({ "help", "capture" }).out, "relative --out is inside the --project folder"), "capture help must say where a relative --out goes");
+}
+
+// component add Visibility, and a Joint's connectedEntity in the schema and in set.
+void RunVisibilityAndJointTests() {
+    const std::string project = FreshProject("Parts");
+    Require(RunCliProgram({ "entity", "add", "--project", project, "--create", "Cube", "--name", "Wall" }).exitCode == 0, "the wall could not be added");
+    const CliRun hide = RunCliProgram({ "component", "add", "--project", project, "--entity", "Wall", "--type", "Visibility" });
+    Require(hide.exitCode == 0 && Contains(hide.out, "hidden at start"), "component add Visibility must hide the object: " + hide.out + hide.err);
+    Require(Contains(RunCliProgram({ "scene-list", "--project", project }).out, "Wall components: MeshRenderer, Collider, Visibility"), "scene-list must show an object that starts hidden");
+    Require(Contains(RunCliProgram({ "entity", "show", "--project", project, "--name", "Wall" }).out, "Visibility:"), "entity show must show Visibility of a hidden object");
+    kb::scene::Scene scene;
+    {
+        const std::filesystem::path file = std::filesystem::path{ project } / "Assets" / "Scenes" / "Main.21kbscene";
+        const kb::scene::SceneDocumentLoadResult loaded = kb::scene::SceneDocumentService::Load(file);
+        Require(loaded.succeeded && kb::scene::SceneDocumentService::LoadIntoScene(scene, loaded.document), "the hidden scene must load");
+        bool hidden = false;
+        for (const kb::scene::SceneEntity entity : scene.Hierarchy().RootEntities()) {
+            if (scene.Entities().Name(entity) == "Wall") hidden = scene.Components().Visibility().Get(entity).mode == kb::scene::VisibilityMode::Hidden;
+        }
+        Require(hidden, "the saved object must start hidden");
+    }
+    const CliRun again = RunCliProgram({ "component", "add", "--project", project, "--entity", "Wall", "--type", "Visibility" });
+    Require(again.exitCode == 1 && Contains(again.err, "hidden at start already"), "a second Visibility must be refused: " + again.err);
+    Require(RunCliProgram({ "component", "set", "--project", project, "--entity", "Wall", "--type", "Visibility", "--set", "mode=Visible" }).exitCode == 0 &&
+            !Contains(RunCliProgram({ "scene-list", "--project", project }).out, "Visibility"), "mode=Visible must show the object again");
+    Require(RunCliProgram({ "component", "add", "--project", project, "--entity", "Wall", "--type", "Visibility" }).exitCode == 0 &&
+            RunCliProgram({ "component", "remove", "--project", project, "--entity", "Wall", "--type", "Visibility" }).exitCode == 0 &&
+            RunCliProgram({ "component", "remove", "--project", project, "--entity", "Wall", "--type", "Visibility" }).exitCode == 1,
+        "component remove Visibility must show the object again, once");
+
+    // Joint: connectedEntity is in the schema, shown, and set by name.
+    const CliRun schema = RunCliProgram({ "schema", "--component", "Joint" });
+    Require(Contains(schema.out, " connectedEntity") && Contains(schema.out, "Joint references: connectedEntity="), "the Joint schema must list connectedEntity: " + schema.out);
+    const CliRun schemaJson = RunCliProgram({ "schema", "--component", "Joint", "--json" });
+    Require(Contains(schemaJson.out, "\"connectedEntity\""), "the Joint schema data must list connectedEntity: " + schemaJson.out);
+    Require(RunCliProgram({ "entity", "add", "--project", project, "--create", "Cube", "--name", "Door" }).exitCode == 0 &&
+            RunCliProgram({ "component", "add", "--project", project, "--entity", "Door", "--type", "Joint", "--set", "connectedEntity=Wall" }).exitCode == 0,
+        "a Joint must take connectedEntity as it is added");
+    Require(Contains(RunCliProgram({ "entity", "show", "--project", project, "--name", "Door" }).out, "connectedEntity=Wall"), "entity show must show the other object of a Joint");
+    Require(RunCliProgram({ "component", "set", "--project", project, "--entity", "Door", "--type", "Joint", "--set", "connectedEntity=none" }).exitCode == 0 &&
+            Contains(RunCliProgram({ "entity", "show", "--project", project, "--name", "Door" }).out, "connectedEntity=none"),
+        "connectedEntity=none must connect the Joint to the world");
+    const CliRun selfJoint = RunCliProgram({ "component", "set", "--project", project, "--entity", "Door", "--type", "Joint", "--set", "connectedEntity=Door" });
+    Require(selfJoint.exitCode == 1, "a Joint must not connect an object to itself");
+}
+
+// The help of map2d lists --weights, and api --topic answers for a global that a group shares its name with, and for its members.
+void RunHelpAndApiTopicTests() {
+    Require(Contains(RunCliProgram({ "help", "map2d" }).out, "--weights"), "the map2d help must list --weights");
+    const auto topic = [](std::string_view name) {
+        const CliRun page = RunCliProgram({ "api", "--topic", name });
+        Require(page.exitCode == 0, "api --topic " + std::string{ name } + " failed: " + page.err);
+        return page.out;
+    };
+    const std::string events = topic("Events");
+    Require(events.starts_with("# Events\n") && Contains(events, "Events.Subscribe") && Contains(events, "Events.EmitFiltered"),
+        "api --topic Events must show the global and the functions of the group of that name: " + events);
+    for (const char* member : { "Events.Subscribe", "Events.Unsubscribe", "Inspector.speed", "string.format", "table.insert", "bit.band", "coroutine.yield", "math.floor" }) {
+        const std::string page = topic(member);
+        const std::string global = std::string{ member }.substr(0U, std::string_view{ member }.find('.'));
+        Require(page.starts_with("# " + global + "\n"), std::string{ "api --topic " } + member + " must be the page of the global " + global + ": " + page.substr(0U, 80U));
+    }
+    Require(topic("Events.EmitFiltered").starts_with("# Events.EmitFiltered\n") && topic("Math.Floor").starts_with("# Math.Floor\n") && topic("Math.Log").starts_with("# Math.Log\n") &&
+            topic("Time.Delta").starts_with("# Time.Delta\n"),
+        "a function of a group must keep its own page");
+    Require(topic("Log").starts_with("# Log\n") && topic("Emit").starts_with("# Emit\n") && topic("Particles.Emit").starts_with("# Particles.Emit\n"),
+        "a global and the function that shares its short name keep their own pages");
+}
+
+// scene-attach adds scripts beside each other, scene-detach takes one off, and both run.
+void RunSeveralScriptsCliTests() {
+    const std::string project = FreshProject("Twins");
+    Require(RunCliProgram({ "entity", "add", "--project", project, "--create", "Cube", "--name", "Twin" }).exitCode == 0, "the twin could not be added");
+    for (const char* letter : { "A", "B", "C" }) {
+        const std::string name = std::string{ "Spin" } + letter;
+        const std::string code = std::string{ "function Ready(self, dt) Log(\"" } + letter + " ready\") end\nfunction Ping(self, event) Log(\"" + letter + " got Ping\") end\n";
+        Require(RunCliProgram({ "script-new", "--project", project, "--name", name, "--language", "lua", "--code", code }).exitCode == 0, "a script could not be made");
+    }
+    Require(RunCliProgram({ "scene-attach", "--project", project, "--node", "Twin", "--script", "/Game/Scripts/SpinA.lua" }).exitCode == 0, "the first script must attach");
+    const CliRun second = RunCliProgram({ "scene-attach", "--project", project, "--node", "Twin", "--script", "/Game/Scripts/SpinB.lua", "--execution-order", "5" });
+    Require(second.exitCode == 0 && Contains(second.out, "the node runs 2 scripts"), "a second script must attach beside the first: " + second.out + second.err);
+    Require(RunCliProgram({ "scene-attach", "--project", project, "--node", "Twin", "--script", "/Game/Scripts/SpinC.lua" }).exitCode == 0, "a third script must attach");
+    const CliRun again = RunCliProgram({ "scene-attach", "--project", project, "--node", "Twin", "--script", "/Game/Scripts/SpinB.lua", "--execution-order", "4" });
+    Require(again.exitCode == 0 && !Contains(again.out, "runs 4 scripts") && Contains(again.out, "the node runs 3 scripts"), "the same script again must only change its settings: " + again.out);
+    const CliRun listed = RunCliProgram({ "scene-list", "--project", project });
+    Require(Contains(listed.out, "Twin components: MeshRenderer, Collider behaviours: /Game/Scripts/SpinA.lua (Lua, Gameplay, order 0); /Game/Scripts/SpinB.lua (Lua, Gameplay, order 4); /Game/Scripts/SpinC.lua"),
+        "scene-list must list every script of a node: " + listed.out);
+    const CliRun listedJson = RunCliProgram({ "scene-list", "--project", project, "--json" });
+    Require(Contains(listedJson.out, "behaviours") && Contains(listedJson.out, "SpinC.lua"), "scene-list data must list every script: " + listedJson.out);
+
+    const CliRun ran = RunCliProgram({ "run", "--project", project, "--frames", "3" });
+    Require(ran.exitCode == 0 && Contains(ran.out, "A ready") && Contains(ran.out, "B ready") && Contains(ran.out, "C ready") && Contains(ran.out, "0 diagnostics"),
+        "every script of an object must run: " + ran.out + ran.err);
+
+    // One that is named, and the error that lists the choices.
+    const CliRun which = RunCliProgram({ "scene-detach", "--project", project, "--node", "Twin" });
+    Require(which.exitCode == 1 && Contains(which.err, "runs 3 scripts") && Contains(which.err, "--script") && Contains(which.err, "/Game/Scripts/SpinB.lua"),
+        "scene-detach without a script must list the scripts of a node that runs several: " + which.err);
+    const CliRun wrong = RunCliProgram({ "scene-detach", "--project", project, "--node", "Twin", "--script", "/Game/Scripts/Nope.lua" });
+    Require(wrong.exitCode == 1 && Contains(wrong.err, "does not run") && Contains(wrong.err, "SpinA.lua"), "scene-detach must name the scripts the node runs: " + wrong.err);
+    const CliRun detached = RunCliProgram({ "scene-detach", "--project", project, "--node", "Twin", "--script", "/Game/Scripts/SpinA.lua" });
+    Require(detached.exitCode == 0 && Contains(detached.out, "the node runs 2 scripts"), "scene-detach must take the named script off: " + detached.out + detached.err);
+    const CliRun after = RunCliProgram({ "run", "--project", project, "--frames", "3" });
+    Require(!Contains(after.out, "A ready") && Contains(after.out, "B ready") && Contains(after.out, "C ready"), "the script taken off must stop and the others stay: " + after.out);
+    Require(RunCliProgram({ "scene-detach", "--project", project, "--node", "Twin", "--script", "/Game/Scripts/SpinB.lua" }).exitCode == 0 &&
+            RunCliProgram({ "scene-detach", "--project", project, "--node", "Twin" }).exitCode == 0 &&
+            !Contains(RunCliProgram({ "scene-list", "--project", project }).out, "behaviour"),
+        "the last script must be taken off by name or alone");
+    Require(RunCliProgram({ "scene-detach", "--project", project, "--node", "Twin" }).exitCode == 1, "a node without a script cannot be detached");
+
+    // --replace makes one script the only one.
+    Require(RunCliProgram({ "scene-attach", "--project", project, "--node", "Twin", "--script", "/Game/Scripts/SpinA.lua" }).exitCode == 0 &&
+            RunCliProgram({ "scene-attach", "--project", project, "--node", "Twin", "--script", "/Game/Scripts/SpinB.lua" }).exitCode == 0 &&
+            RunCliProgram({ "scene-attach", "--project", project, "--node", "Twin", "--script", "/Game/Scripts/SpinC.lua", "--replace" }).exitCode == 0 &&
+            !Contains(RunCliProgram({ "scene-list", "--project", project }).out, "SpinA.lua"),
+        "--replace must leave the one script");
+
+    // A script of an object that is copied as a prefab and placed comes along.
+    Require(RunCliProgram({ "scene-attach", "--project", project, "--node", "Twin", "--script", "/Game/Scripts/SpinA.lua" }).exitCode == 0 &&
+            RunCliProgram({ "prefab", "new", "--project", project, "--from-entity", "Twin", "--name", "TwinPrefab" }).exitCode == 0 &&
+            RunCliProgram({ "prefab", "place", "--project", project, "--prefab", "/Game/Prefabs/TwinPrefab.kbprefab", "--name", "Twin2" }).exitCode == 0 &&
+            Contains(RunCliProgram({ "scene-list", "--project", project }).out, "Twin2 components: MeshRenderer, Collider behaviours: /Game/Scripts/SpinC.lua (Lua, Gameplay, order 0); /Game/Scripts/SpinA.lua"),
+        "a prefab must carry every script of its object");
+}
+
+// A recipe's code blocks are calls of the kb_cli tool: lists of commands, each a list of words, in order.
+[[nodiscard]] std::vector<std::vector<std::vector<std::string>>> RecipeCalls(std::string_view recipe) {
+    const std::optional<std::string> guide = kb::script::ScriptAgentGuides::Topic(recipe);
+    Require(guide.has_value(), "the guide " + std::string{ recipe } + " must exist");
+    std::vector<std::vector<std::vector<std::string>>> calls;
+    for (std::size_t begin = guide->find("```\n"); begin != std::string::npos; begin = guide->find("```\n", begin + 4U)) {
+        begin += 4U;
+        const std::size_t end = guide->find("\n```", begin);
+        Require(end != std::string::npos, "a code block of " + std::string{ recipe } + " must end");
+        JsonValue list;
+        std::string error;
+        Require(JsonValue::Parse(guide->substr(begin, end - begin), list, error) && list.GetKind() == JsonValue::Kind::Array && list.Size() > 0U,
+            "a code block of " + std::string{ recipe } + " must be one JSON commands list: " + guide->substr(begin, end - begin));
+        std::vector<std::vector<std::string>> commands;
+        for (std::size_t command = 0U; command < list.Size(); ++command) {
+            Require(list.At(command)->GetKind() == JsonValue::Kind::Array && list.At(command)->Size() > 0U,
+                "a call of " + std::string{ recipe } + " must hold lists of words: " + list.Dump());
+            std::vector<std::string> words;
+            for (std::size_t word = 0U; word < list.At(command)->Size(); ++word) words.push_back(list.At(command)->At(word)->AsString());
+            commands.push_back(std::move(words));
+        }
+        calls.push_back(std::move(commands));
+        begin = end;
+    }
+    return calls;
+}
+
+// Every recipe is written as calls of the commands tool, runs as written on a fresh project, and AGENTS.md says once that they go in one call.
+void RunRecipeCallsTests() {
+    std::size_t recipes = 0U;
+    for (const kb::script::ScriptAgentGuide& guide : kb::script::ScriptAgentGuides::All()) {
+        if (!guide.name.starts_with("recipe-")) continue;
+        ++recipes;
+        const auto calls = RecipeCalls(guide.name);
+        Require(!calls.empty(), "the recipe " + std::string{ guide.name } + " must show its calls");
+        // The change of a recipe is one call: a block that only looks or checks may stand beside it, no more than two change.
+        std::size_t changing = 0U;
+        for (const auto& call : calls) {
+            const bool reads = std::ranges::all_of(call, [](const std::vector<std::string>& words) {
+                return words.front() == "scene-list" || words.front() == "validate" || words.front() == "run";
+            });
+            changing += reads ? 0U : 1U;
+        }
+        Require(changing <= 2U, "the recipe " + std::string{ guide.name } + " must not spread its change over many calls");
+
+        // As written, on a project with the objects the recipes name: every call works, as one call of the tool.
+        const std::string project = FreshProject(std::string{ guide.name });
+        for (const char* name : { "Crate", "Ball" }) {
+            Require(RunCliProgram({ "entity", "add", "--project", project, "--create", "Cube", "--name", name, "--color", "#2ECC40" }).exitCode == 0, "a recipe object could not be added");
+        }
+        // The recipes that start from a character the person plays find one; the one that makes it does not.
+        if (guide.name == "recipe-pickup" || guide.name == "recipe-timeline") {
+            Require(RunCliProgram({ "entity", "add", "--project", project, "--create", "Third Person Player", "--position", "0,1,0" }).exitCode == 0, "the recipe player could not be added");
+        }
+        if (guide.name != "recipe-ui-button") {
+            Require(RunCliProgram({ "entity", "add", "--project", project, "--create", "Button", "--name", "PlayButton" }).exitCode == 0 &&
+                    RunCliProgram({ "component", "set", "--project", project, "--entity", "PlayButton", "--type", "Text", "--set", "content=Play" }).exitCode == 0,
+                "the recipe button could not be added");
+        }
+        for (const auto& call : calls) {
+            std::string commands = "[";
+            for (const auto& command : call) {
+                commands += std::string{ commands.size() == 1U ? "" : "," } + "[";
+                for (std::size_t index = 0U; index < command.size(); ++index) {
+                    std::string word = command[index];
+                    if (word == "OBJECT_NAME") word = "Crate";
+                    if (word == "OTHER_OBJECT_NAME") word = "Ball";
+                    commands += std::string{ index == 0U ? "" : "," } + JsonValue::MakeString(word).Dump();
+                }
+                commands += "]";
+            }
+            commands += "]";
+            const std::string text = McpText(project, "{\"name\":\"kb_cli\",\"arguments\":{\"commands\":" + commands + "}}");
+            Require(!text.starts_with("ERROR"), "a call of " + std::string{ guide.name } + " must work as written: " + commands + "\n" + text);
+        }
+    }
+    Require(recipes >= 16U, "the recipes must be there");
+
+    // AGENTS.md: the recipe commands go in one call, and the file stays short.
+    const std::string project = FreshProject("AgentsFile");
+    Require(RunCliProgram({ "init-agent", "--project", project }).exitCode == 0, "init-agent must write AGENTS.md");
+    std::ifstream file{ std::filesystem::path{ project } / "AGENTS.md", std::ios::binary };
+    const std::string agents{ std::istreambuf_iterator<char>{ file }, std::istreambuf_iterator<char>{} };
+    Require(Contains(agents, "A recipe's commands go in one `commands` call"), "AGENTS.md must say that a recipe's commands go in one `commands` call");
+    Require(agents.size() < 3584U, "AGENTS.md must stay under its limit");
+    Require(Contains(agents, "scenes in the build") && Contains(agents, "tags"), "AGENTS.md must point to the recipe for scenes in the build and tags");
+    const std::string settingsRecipe = *kb::script::ScriptAgentGuides::Topic("recipe-settings");
+    Require(Contains(settingsRecipe, "\"project-settings\",\"scenes\",\"--add\"") && Contains(settingsRecipe, "\"tags\",\"--add\""),
+        "the settings recipe must show scenes in the build and tags");
+}
+
 void RunLanguageServerTests();
 void RunDebugAdapterTests();
 void RunPackageCommandTests();
+void RunAgentPackTests();
 
 // One suite of the full run. The MCP server confines the whole process to the project it serves and keeps that for good, so a suite
 // that follows one for another project would be refused its own files; each suite starts unconfined, as its own process would.
@@ -7492,6 +7916,20 @@ int main(int argc, char** argv) {
         RunPackageCommandTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{argv[1]} == "pack2") {
+        RunProjectSettingsScenesAndTagsTests();
+        RunBuildScenesWarningTests();
+        RunScenePathConsistencyTests();
+        RunVisibilityAndJointTests();
+        RunHelpAndApiTopicTests();
+        RunSeveralScriptsCliTests();
+        RunRecipeCallsTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{argv[1]} == "pack3") {
+        RunAgentPackTests();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{argv[1]} == "script-checks") {
         RunScriptCheckCliTests();
         RunPickupRecipeCliTests();
@@ -7540,6 +7978,13 @@ int main(int argc, char** argv) {
     RunSuite(RunLuaFunctionTableTests);
     RunSuite(RunScriptCheckCliTests);
     RunSuite(RunPickupRecipeCliTests);
+    RunSuite(RunProjectSettingsScenesAndTagsTests);
+    RunSuite(RunBuildScenesWarningTests);
+    RunSuite(RunScenePathConsistencyTests);
+    RunSuite(RunVisibilityAndJointTests);
+    RunSuite(RunHelpAndApiTopicTests);
+    RunSuite(RunSeveralScriptsCliTests);
+    RunSuite(RunRecipeCallsTests);
     RunSuite(RunInputActionAndPrefabTests);
     RunSuite(RunSceneShortcutTests);
     RunSuite(RunInputRecordingCliTests);
@@ -7575,6 +8020,7 @@ int main(int argc, char** argv) {
     RunSuite(RunPackSetCommandTests);
     RunSuite(RunEncryptedPatchCommandTests);
     RunSuite(RunPackageCommandTests);
+    RunSuite(RunAgentPackTests);
     // Keep the production physics fixture on disk after the test process so
     // the built kb_cli executable can be run against it as a separate-process
     // runtime verification.

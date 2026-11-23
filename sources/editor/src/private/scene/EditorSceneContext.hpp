@@ -1486,8 +1486,18 @@ public:
     [[nodiscard]] std::string EntityScriptName(kb::scene::SceneEntity entity) const;
     [[nodiscard]] bool EntityScriptEnabled(kb::scene::SceneEntity entity) const;
     [[nodiscard]] std::vector<std::pair<kb::assets::AssetId, std::string>> AvailableScriptAssets() const;
+    // Adds the script to the entity: the first script an entity gets is its Script component, the others run beside it
+    // (up to kMaxBehavioursPerEntity). False when the entity runs the script already.
     [[nodiscard]] bool AttachScriptToEntity(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
+    // Takes the first script away; the next one moves up.
     [[nodiscard]] bool RemoveScriptFromEntity(kb::scene::SceneEntity entity);
+    // The scripts of an entity, first to last (index 0 is the Script component).
+    [[nodiscard]] std::size_t EntityScriptCount(kb::scene::SceneEntity entity) const;
+    [[nodiscard]] std::string EntityScriptNameAt(kb::scene::SceneEntity entity, std::size_t index) const;
+    [[nodiscard]] bool EntityScriptEnabledAt(kb::scene::SceneEntity entity, std::size_t index) const;
+    [[nodiscard]] kb::assets::AssetId EntityScriptAssetIdAt(kb::scene::SceneEntity entity, std::size_t index) const;
+    [[nodiscard]] bool ToggleEntityScriptEnabledAt(kb::scene::SceneEntity entity, std::size_t index);
+    [[nodiscard]] bool RemoveScriptFromEntityAt(kb::scene::SceneEntity entity, std::size_t index);
     // Removes the Mesh Renderer component (the section-header "×"), mirroring the
     // Script remove path. Undoable; false if the entity has no Mesh Renderer.
     [[nodiscard]] bool RemoveMeshRendererFromEntity(kb::scene::SceneEntity entity);
