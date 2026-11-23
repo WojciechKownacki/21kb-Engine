@@ -35,6 +35,10 @@
 
 // What an agent sees and undoes: a capture as an image and a summary, the undo point of its changes, Save.* in a headless run,
 // platform builds that say what is missing, and C++ scripts that say they are for developers.
+#if KB_CLI_RENDERER
+void RunMaterialAgentTests();  // KbCliMaterialAgentTests.cpp
+#endif
+
 namespace {
 
 namespace fs = std::filesystem;
@@ -493,6 +497,7 @@ void RunNativeScriptNoticeTests() {
 void RunAgentPackTests() {
 #if KB_CLI_RENDERER
     RunCaptureDescriptionTests();
+    RunMaterialAgentTests();
 #endif
     RunCaptureNamingTests();
     RunUndoCommandTests();

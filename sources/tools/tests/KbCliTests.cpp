@@ -4336,8 +4336,8 @@ void RunMaterialAuthoringCommandTests() {
     }
     Require(graph({ "setting", "--name", "Blend Mode", "--value", "opaque" }).exitCode == 0, "setting Blend Mode back failed");
     const CommandRun graphShown = graph({ "show" });
-    Require(graphShown.exitCode == 0 && Contains(graphShown.output, "Compiles: yes") && Contains(graphShown.output, "Color (color") &&
-            Contains(graphShown.output, "Roughness (scalar") && Contains(graphShown.output, "Metallic (scalar"),
+    Require(graphShown.exitCode == 0 && Contains(graphShown.output, "Compiles: yes") && Contains(graphShown.output, "Parameters: Color, Roughness, Metallic") &&
+            Contains(graphShown.output, "Color = ParameterColor #C8202A") && Contains(graphShown.output, "Roughness = ParameterScalar 0.4"),
         "material-graph show must list the three parameters of a compiling graph: " + graphShown.output);
 
     const std::optional<kb::render::RenderMaterialAssetData> car = kb::render::RenderMaterialAssetLoader::LoadMaterial(
@@ -5815,6 +5815,7 @@ struct ChangeProbe {
         { "material-set", line({ "material-set", "--material", "/Game/Materials/Second.kbmat", "--set", "Roughness=0.3" }), "Assets/Materials/Second.kbmat", "modified" },
         { "material-graph", line({ "material-graph", "add-node", "--material", "/Game/Materials/Second.kbmat", "--kind", "Constant", "--value", "1" }),
             "Assets/Materials/Second.kbmat", "modified" },
+        { "material-preview", line({ "material-preview", "--material", "/Game/Materials/Missing.kbmat" }), "", "" },
         { "material-instance-new", line({ "material-instance-new", "--parent", "/Game/Materials/Second.kbmat", "--name", "SecondInst" }),
             "Assets/Materials/SecondInst.kbmatinst", "created" },
         { "material-instance-set", line({ "material-instance-set", "--instance", "/Game/Materials/SecondInst.kbmatinst", "--set", "Roughness=0.2" }),
@@ -7810,7 +7811,8 @@ void RunRecipeCallsTests() {
     Require(RunCliProgram({ "init-agent", "--project", project }).exitCode == 0, "init-agent must write AGENTS.md");
     std::ifstream file{ std::filesystem::path{ project } / "AGENTS.md", std::ios::binary };
     const std::string agents{ std::istreambuf_iterator<char>{ file }, std::istreambuf_iterator<char>{} };
-    Require(Contains(agents, "A recipe's commands go in one `commands` call"), "AGENTS.md must say that a recipe's commands go in one `commands` call");
+    Require(Contains(agents, "Its commands go in one `commands` call"), "AGENTS.md must say that a recipe's commands go in one `commands` call");
+    Require(Contains(agents, "wait for a yes") && Contains(agents, "never switch or enable a plugin"), "AGENTS.md must say to offer a better tool and wait for the yes");
     Require(agents.size() < 3584U, "AGENTS.md must stay under its limit");
     Require(Contains(agents, "scenes in the build") && Contains(agents, "tags"), "AGENTS.md must point to the recipe for scenes in the build and tags");
     const std::string settingsRecipe = *kb::script::ScriptAgentGuides::Topic("recipe-settings");

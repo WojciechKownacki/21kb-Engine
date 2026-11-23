@@ -64,6 +64,8 @@ namespace kb::cli {
 [[nodiscard]] int RunMaterialSetCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunMaterialShowCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunMaterialGraphCommand(const ArgumentList& arguments, CommandIo io);
+// material-preview: materials drawn on spheres, headless, as a picture (CliMaterialPreview.cpp).
+[[nodiscard]] int RunMaterialPreviewCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunMaterialInstanceNewCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunMaterialInstanceSetCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunMaterialInstanceShowCommand(const ArgumentList& arguments, CommandIo io);

@@ -404,10 +404,11 @@ More commands, each with its options in `kb_cli help`:
 | `kb_cli component` | add, set or remove a component of an entity |
 | `kb_cli schema` | list components and their properties |
 | `kb_cli api-check` | compare the script API against a committed baseline and fail on breaking changes |
-| `kb_cli material-new` | create a material with its values set at once |
+| `kb_cli material-new` | create a material with its values set at once, from graph text, or from a ready preset |
 | `kb_cli material-set` | change values of a material |
 | `kb_cli material-show` | print the values of a material |
-| `kb_cli material-graph` | edit a material graph node by node |
+| `kb_cli material-graph` | edit a material graph node by node or as one text; list the node kinds and show one with its pins |
+| `kb_cli material-preview` | draw materials on spheres headless and write the picture |
 | `kb_cli material-instance-new` | create a material instance with overrides |
 | `kb_cli material-instance-set` | change or clear overrides of a material instance |
 | `kb_cli material-instance-show` | print a material instance and its effective values |
@@ -562,7 +563,7 @@ The scene runner also returns `124` on timeout and `130` on cancellation.
   `import-preset-new`, `scene-attach`, `scene-detach`, `input-action`, `prefab`, `layout`, `scene-new`, `scene-duplicate`,
   `script-new`, `script-build`, `pack`, `mod`, `release`, `keys`, `build`, `capture`, `world`, `navmesh`,
   `physics-layers`, `lighting-quality`, `csg`, `rig2d`, `vector2d-new`, `vector2d-set`, `map2d`, `terrain`,
-  `mesh-lod`, `scene-lightmap`, `scene-bake-lighting`, `material-new`, `material-set`, `material-graph`,
+  `mesh-lod`, `scene-lightmap`, `scene-bake-lighting`, `material-new`, `material-set`, `material-graph`, `material-preview`,
   `material-instance-new`, `material-instance-set`, `post-process-new`, `post-process-set`,
   `scene-post-process`, `particle-process-cook`, `render-effect-run`, `render-effect-export`, `vfx-new`,
   `vfx-set`, `vfx-emitter-add`, `vfx-emitter-remove`, `vfx-module-add`, `vfx-module-remove`, `api` and

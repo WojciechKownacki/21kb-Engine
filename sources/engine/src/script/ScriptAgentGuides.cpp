@@ -10,6 +10,45 @@
 namespace kb::script {
 namespace {
 
+constexpr std::string_view kMaterials = R"md(# Materials: kinds, blend modes, phones
+
+Pick the kind first (`material-graph setting --name Domain`, or `Domain = ...` in graph text), then the blend mode.
+
+| Domain | For | Outputs it uses |
+|---|---|---|
+| surface | anything on a mesh: walls, skin, water, glass, glow | BaseColor, Metallic, Roughness, Emissive, Normal, Alpha, WorldPositionOffset (wind, wobble) |
+| userInterface | a UI Image (`component set --type Image --set materialAssetId=<material>`) | Emissive is the colour, Alpha the opacity; BaseColor is refused |
+| postProcess | the whole screen after drawing: tints, night vision, vignette; on an object with a Mesh Renderer and no mesh | Emissive is the result; reads SceneColor, so it is heavy on phones |
+| deferredDecal | paint on the surfaces inside a box (a Cube with the material) | BaseColor, Normal, Roughness; no vertex outputs |
+
+Shading model (`Shading Model`): defaultLit (normal), unlit (flat colour or glow, no lighting: toon, hologram, UI-like), clearCoat (car paint),
+subsurface (skin, wax), cloth, hair, eye, singleLayerWater, thinTranslucent. Others are refused by name.
+
+Blend mode (`Blend Mode`): opaque (default, cheapest), masked (cut-outs: the Alpha output against AlphaClipThreshold; leaves, dissolve, fences),
+translucent (glass, water: Alpha is the opacity), additive (glow, fire, hologram: adds light), modulate (darkens: smoke, shadows).
+Add `Two Sided = true` for leaves, glass, flags and anything seen from behind.
+
+Other kinds: terrain layers and particle cards take ordinary surface materials (`guide terrain`, `guide ui-audio-particles`); the sky is the
+Environment component, not a material (`recipe-light`); a reusable piece of graph is a material function (`recipe-material-function`).
+
+Phones and older Mali GPUs (the limits `material-graph show` checks, "Warning: too heavy for a phone"):
+- Under 120 instructions per pixel and 6 texture samples (a material may use 15 samplers at most).
+- No SceneColor, SceneDepth, DepthFade: they copy the screen. Post Process materials always read it; use them sparingly.
+- Noise with 1-2 levels and the value or gradient function; Voronoi and many levels are the usual cause of a heavy material.
+- No Parallax Occlusion Mapping (use Bump Offset). Prefer opaque or masked; a big translucent surface costs overdraw.
+- Hair, eye and subsurface shading cost more than defaultLit.
+
+Techniques the graph does well (ready ones: `guide` with `search`): toon and rim light, fresnel glow, dissolve, hologram and glitch, emission and
+pulsing, scrolling UV, wind and wobble (vertex offset, set Max World Position Offset Displacement), snow on top by the normal, wet surfaces, terrain
+by height and slope (world position and normal, noise to break the borders), lava, water, glass, ice. Needs the scene behind (translucent or
+post-process only): foam and depth colour (DepthFade), refraction (SceneColor), screen distortion.
+
+Not in the graph, so do not try: a second pass (an inverted-hull outline; the toon presets draw an outline from the view angle instead), stencil,
+more than the main light in a material, reading other objects' positions (grass that bends from the player: set a parameter from a script),
+ray marching. Graph text cannot write a material function call (`material-function use` adds one); textures need images in the project
+(triplanar: WorldAlignedTexture; many terrain layers: one 2D array texture with TextureSample2DArray, or at most 9 samplers).
+)md";
+
 constexpr std::string_view kObjectsAndMaterials = R"md(# Objects and materials
 
 Each line is one `kb_cli` command (through the kb-engine `kb_cli` tool: the words after `kb_cli`
@@ -463,6 +502,8 @@ Done when the second command prints `updated MeshRenderer`.
 - Colours: red #E03C31, green #2ECC40, blue #0074D9, yellow #FFDC00, orange #FF851B, white #FFFFFF, black #111111.
 - Metal or glow: add `--set Metallic=1 --set Roughness=0.3` or `--set "Emissive Color=#FF851B"` to `material-new`.
 - A new coloured object in one command: `kb_cli entity add --create Cube --name Crate --color "#2ECC40"`.
+- A look in words (shiny gold, oak, frosted glass, neon, lava, toon, dissolve): `guide` with `search` "<the customer's words>" finds a ready material;
+  `recipe-material-look` puts it on the object, previews it and writes a graph of your own.
 )md";
 
 constexpr std::string_view kRecipeComponent = R"md(# Recipe: physics, or another component, on an object
@@ -839,6 +880,39 @@ and an Animator on the object: it moves from the start of the scene, again and a
 - To see it: `kb_cli capture --frames 30` and again with `--frames 90`.
 )md";
 
+constexpr std::string_view kRecipeMaterialLook = R"md(# Recipe: a ready-made material look (gold, wood, glass, neon, lava, toon, dissolve ...)
+
+1. Find it from the customer's own words: `guide` with `search` "shiny gold armour". It returns one to three presets, each with its command. `guide` topic `material-presets` lists them all by family.
+2. Make it and put it on the object in one command, with the object's name in place of `OBJECT_NAME` (`scene-list` lists them):
+
+```
+[["material-new","--preset","gold","--name","ArmorGold","--entity","OBJECT_NAME"]]
+```
+
+   A prefab asset: `"--prefab","/Game/Prefabs/Knight.kbprefab"` (`"--entity","Helmet"` keeps it to that part). Another colour or value:
+   `"--set","Color=#C41E3A"`, with the parameter names the search printed (`Color`, `Roughness`, `Speed`, `Intensity`, `Tiling`).
+3. Look at it, as a call of its own (it needs the player beside kb_cli): `kb_cli` with `["material-preview","--material","/Game/Materials/ArmorGold.kbmatinst"]`
+   returns a picture. Done when it prints its size and `blank: no`. Several materials in one call are drawn side by side.
+4. Phones: the command prints `Warning: too heavy for a phone` when the material is; tell the person and pick a lighter preset.
+
+No preset fits: write the whole graph in one call, `material-new --name Mine --graph "<graph text>"` (or `material-graph text --material <path> --text ...`
+for an existing one). `material-graph show --material <path>` prints a graph in the same form. One node per line, `Name = Kind value(Pin=source, ...)`,
+links into the result as `Output.Pin = source`; a number, `#RRGGBB` or `"x y z"` may stand for a source (this text as the `--graph` value, with a line break
+between the lines, makes a scratched gold):
+
+    Domain = surface
+    Gold = ParameterColor #C9A227
+    Scratches = Noise "value false 1 1 2 2 0 1"(value=Multiply(UV, 30))
+    Output.BaseColor = Lerp(Gold, #3A3A3A, Step(0.8, Scratches))
+    Output.Metallic = 1
+    Output.Roughness = Lerp(0.25, 0.7, Step(0.8, Scratches))
+
+An error names the line, node and pin, with the pins and types that would fit; fix that line and send the text again (nothing was written).
+`material-graph nodes` lists every node kind by group, `material-graph node --kind Lerp` shows one with an example, `guide` topic `materials`
+tells the domains, blend modes and phone limits. A parameter (`ParameterColor`, `ParameterScalar`) can be changed later without a new graph:
+`material-instance-new --parent <material> --set Gold=#FFD700`.
+)md";
+
 constexpr std::string_view kRecipeMaterialFunction = R"md(# Recipe: a reusable material effect (a material function)
 
 Look at the objects first, as a call of its own:
@@ -1094,7 +1168,7 @@ Done when `mod build` says `3 asset(s) added` and sealed, and `mod verify` ends 
 - Inspect or split a pack: `pack info <file.kbpack>`, `pack split`, `pack patch` (updates), `pack sign|verify`. A game for other platforms: `build --platform android|web|linux`. Details: docs/modding.md.
 )md";
 
-constexpr std::array<ScriptAgentGuide, 36> kGuides{ {
+constexpr std::array<ScriptAgentGuide, 38> kGuides{ {
     { "recipe-material", "Recipe: colour or material", "A colour or material on an object: two commands.", kRecipeMaterial },
     { "recipe-component", "Recipe: physics or a component", "Physics (a falling body) or any component on an object, and how to check it.", kRecipeComponent },
     { "recipe-prefab", "Recipe: prefab", "Save an object, with its components, as a prefab and place copies.", kRecipePrefab },
@@ -1110,11 +1184,13 @@ constexpr std::array<ScriptAgentGuide, 36> kGuides{ {
     { "recipe-ui-theme", "Recipe: the look of the interface", "A shared UI theme: dark or light, colours, orange buttons, rounded corners, applied to the controls of a scene.", kRecipeUiTheme },
     { "recipe-translate", "Recipe: texts in other languages", "The texts of the game in several languages: keys on the controls, translations, the default language, switching in play.", kRecipeTranslate },
     { "recipe-animation", "Recipe: an object that moves by itself", "A coin that bobs, a door that opens and closes, a pulse: an animation clip that plays from the start.", kRecipeAnimation },
+    { "recipe-material-look", "Recipe: a ready-made material look", "A look in the customer's words (gold, wood, glass, neon, lava, toon, dissolve, water, hologram): find a preset, put it on an object, preview it, or write a whole graph in one call.", kRecipeMaterialLook },
     { "recipe-material-function", "Recipe: a reusable material effect", "A material function (glowing edge, scrolling or tiling texture coordinate) written once and used on several materials.", kRecipeMaterialFunction },
     { "recipe-save", "Recipe: save the game", "A value kept between runs of the game (a score, a counter) in a save slot.", kRecipeSave },
     { "recipe-navmesh", "Recipe: a character that walks to a place", "A character that walks to a point around obstacles on a baked navigation mesh.", kRecipeNavmesh },
     { "recipe-collision", "Recipe: what collides with what", "Physics layers: objects that pass through each other, and the collision events.", kRecipeCollision },
     { "recipe-joint", "Recipe: a hinge, pendulum or spring", "A joint that holds a body to another: hinge, rope, slider, spring, limits, motor.", kRecipeJoint },
+    { "materials", "Materials: kinds, blend modes, phones", "Surface, UI, post-process and decal materials, shading and blend modes, two-sided, and what is too heavy for a phone.", kMaterials },
     { "objects-and-materials", "Objects and materials", "Shapes, lights and cameras in a scene, their position, materials and colours.", kObjectsAndMaterials },
     { "physics", "Physics", "Rigidbodies, colliders, triggers, character controllers and collision events.", kPhysics },
     { "scripts", "Behaviour scripts", "Write a Lua behaviour, attach it to an entity, expose variables, call the engine.", kScripts },

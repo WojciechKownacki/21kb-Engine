@@ -25,7 +25,7 @@ int RunRig2DCommand(const ArgumentList&, CommandIo);
 #endif
 namespace {
 
-constexpr std::array<std::string_view, 6U> kUsageParts{
+constexpr std::array<std::string_view, 9U> kUsageParts{
 R"(kb_cli - 21kb Engine headless tooling for developers and AI coding agents
 
 Usage: kb_cli <command> [options]
@@ -71,7 +71,14 @@ Commands:
   material-new Create a material, as the editor's Create > Material does, with
                its values set at once. Existing files are never overwritten.
                  --project <dir> --name <Name> [--folder Assets/Materials]
-                 [--set Field=value ...]
+                 [--set Field=value ...] [--graph "<graph text>"]
+               or a ready look: an instance of a library material, from the library of ready presets.
+                 --project <dir> --preset <name> [--name <Name>] [--folder Assets/Materials]
+                 [--set Parameter=value ...] [--entity <Object> [--scene <path>]]
+                 [--prefab /Game/<path>.kbprefab]
+               (guide --search "<words>" finds a preset; --entity puts the material on that
+               object's Mesh Renderer, --prefab on the Mesh Renderers of a prefab asset, of the
+               part --entity names; --graph writes a whole graph at once: material-graph text)
   material-set Change values of a material.
                  --project <dir> --material /Game/<path>.kbmat --set Field=value [...]
   material-show Print the values of a material.
@@ -82,10 +89,19 @@ Commands:
                Color Texture, Normal Texture, Metallic Roughness Texture, Occlusion
                Texture, Emissive Texture = an image of the project, e.g.
                /Game/Textures/Albedo.png, or none)
-  material-graph Edit a material's graph, as the Material Editor does; every change
+)",
+R"(  material-graph Edit a material's graph, as the Material Editor does; every change
                is saved and checked as the editor's Save checks it.
                  show --project <dir> --material /Game/<path>.kbmat
-                 kinds
+                     (the graph as text, whether it compiles, what it costs, and a warning when
+                     it is too heavy for a phone)
+                 text --project <dir> --material <path> --text "<graph text>"
+                     (the whole graph in one call, in the form show prints: one node per line,
+                     Name = Kind value(Pin=source, ...), links into the output as Output.Pin = source,
+                     settings Domain, Shading Model, Blend Mode, Two Sided; a number, #RRGGBB or
+                     "x y z" may stand for a source)
+                 nodes [--group <Group>]    (every node kind, grouped, one line each)
+                 node --kind <Kind>         (one node: its pins and types, its value, an example)
                  add-node --project <dir> --material <path> --kind <Kind>
                           [--name <Name>] [--value <value>] [--at x,y]
                  connect --project <dir> --material <path> --from <node> [--from-pin <pin>]
@@ -96,13 +112,19 @@ Commands:
                  setting --project <dir> --material <path> --name <Domain | Shading Model |
                          Blend Mode> --value <value>
                (<node> is a node id, its name, its parameter id, or Output; kinds as
-               kinds lists them, also ScalarParameter, VectorParameter,
+               nodes lists them, also ScalarParameter, VectorParameter,
                TextureParameter, Constant, Constant3Vector, Constant4Vector; a value is a
                number, r g b [a], #RRGGBB, or a texture path; other nodes take their
                settings as the Material Editor shows them, e.g. Rotator "speed centerU
                centerV", Panner "speedU speedV", TextureCoordinate "uTile vTile set";
                Blend Mode: opaque, masked, translucent, additive, modulate; Shading Model:
                unlit, defaultLit, clearCoat, ...)
+  material-preview Draw materials on spheres, headless, as a picture. Several materials are
+               drawn side by side; a Post Process or User Interface material alone.
+                 --project <dir> --material /Game/<path>.kbmat|.kbmatinst [--material ...]
+                 [--out <new file.png>] [--frames <n>]
+               (through `kb_cli mcp` the picture comes back as an image; it names the size,
+               the colours and whether the frame is blank)
   material-instance-new Create a material instance of a material, as Create Material
                Instance does (beside its parent unless --folder), with overrides.
                  --project <dir> --parent /Game/<path>.kbmat [--name <Name>]
@@ -115,7 +137,8 @@ Commands:
                (a Parameter is one the parent's graph exposes, by name, or a material
                field as material-set names it; a Mesh Renderer takes the instance as
                its material: component set ... --set material=<path>.kbmatinst)
-  post-process-new Create a post-process profile: the image settings (tonemapping,
+)",
+R"(  post-process-new Create a post-process profile: the image settings (tonemapping,
                exposure, bloom, anti-aliasing, vignette, chromatic aberration, film
                grain, ambient occlusion) a scene can use. Existing files are never
                overwritten.
@@ -444,9 +467,12 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                  | --topic <name> | --search <text>
   guide        Print a short how-to for one kind of task (objects and materials,
                physics, scripts, characters, combat and AI, 2D maps, checking your
-               work); without --topic, the list of guides.
-                 [--topic <name>]
-  code         Find your way in the engine's own source without reading all of it; read
+               work); without --topic, the list of guides. --search takes the customer's
+               own words and prints the best one to three guides, ready materials and
+               material nodes, each with the command that uses it.
+                 [--topic <name> | --search "<words>"]
+)",
+R"(  code         Find your way in the engine's own source without reading all of it; read
                from the source tree when asked, so it is never out of date. modules
                prints its own JSON: start there.
                  modules [--topic <words>] [--limit <n>] [--check]
@@ -1030,6 +1056,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"material-set", &RunMaterialSetCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
     {"material-show", &RunMaterialShowCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured},
     {"material-graph", &RunMaterialGraphCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
+    {"material-preview", &RunMaterialPreviewCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
     {"material-instance-new", &RunMaterialInstanceNewCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
     {"material-instance-set", &RunMaterialInstanceSetCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
     {"material-instance-show", &RunMaterialInstanceShowCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured},
@@ -1058,6 +1085,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"material-set", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured, true},
     {"material-show", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured},
     {"material-graph", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured, true},
+    {"material-preview", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured, true},
     {"material-instance-new", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured, true},
     {"material-instance-set", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured, true},
     {"material-instance-show", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured},

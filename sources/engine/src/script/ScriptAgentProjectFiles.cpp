@@ -32,15 +32,17 @@ namespace kb::script {
 namespace {
 
 // The rules every agent gets first: in AGENTS.md, and as the instructions of the MCP server for a CLI that reads no file.
-constexpr std::string_view kAgentRules = R"md(You work on a 21kb Engine project with the kb-engine tools. The person you work for is not technical: do the whole task yourself, never ask them to run a command or edit a file, answer in their language in one or two plain sentences saying what they will see.
+constexpr std::string_view kAgentRules = R"md(You work on a 21kb Engine project with the kb-engine tools. The person you work for is not technical: do the whole task yourself, never ask them to run a command or edit a file, answer in their language in one or two plain sentences on what they will see.
 
 Tools: `kb_cli` runs a command (`args`: its words, one per item; the project is filled in), `guide` returns a how-to (`topic`), `api_reference` the script API (`topic` or `search`). There are no others.
 
 Several commands in one call, all or nothing: `commands` is a list of such `args` lists.
 
-Start with the recipe for the job (`guide`, topic `recipe-<job>`; AGENTS.md names them), run its commands in order, stop when its check passes. Do not read the scene or other guides first.
+Start with the recipe for the job (`guide`, topic `recipe-<job>`; AGENTS.md names them), run its commands in order, stop when its check passes. Read no other guides or the scene first.
 
-Done means the recipe's check passed: `validate` says OK, `run` ends with `0 diagnostics`, or the recipe's named line appears.
+Done means the recipe's check passed: `validate` says OK, `run` ends with `0 diagnostics`, or the recipe's line appears.
+
+If the engine has a better system than the one asked for (a plugin, terrain), say so in one sentence and wait for a yes; never switch or enable a plugin yourself. A fitting ready material is no switch.
 
 When a step fails, change its arguments by what the error says. Do not repeat the same call; if it fails twice, report what is missing.
 
@@ -53,13 +55,13 @@ constexpr std::string_view kAgentsTail = R"md(
 ## Calls
 
 One command, `kb_cli` with `args`: `["entity","add","--create","Cube","--name","Crate"]`
-Several, `kb_cli` with `commands`: `[["entity","add","--create","Cube","--name","Crate","--body","Dynamic"],["component","set","--entity","Crate","--type","Collider","--set","restitution=0.6"]]`
+Several: `[["entity","add","--create","Cube","--name","Crate","--body","Dynamic"],["component","set","--entity","Crate","--type","Collider","--set","restitution=0.6"]]`
 
 ## Recipes
 
-Fetch one with `guide` (its name as `topic`). A recipe's commands go in one `commands` call, as written there; its check (`validate`, `run`, `capture`) in a call of its own after it.
+Fetch one with `guide`. Its commands go in one `commands` call as written; its check (`validate`, `run`, `capture`) in a call of its own after.
 
-- colour, material: `recipe-material`
+- colour, material, a ready look (gold, glass, neon, lava, toon): `recipe-material`
 - physics, any component: `recipe-component`
 - a prefab: `recipe-prefab`
 - a Lua script on an object (spin, follow, react to keys or touch): `recipe-script`
@@ -80,14 +82,14 @@ Fetch one with `guide` (its name as `topic`). A recipe's commands go in one `com
 - collision layers, what hits what: `recipe-collision`
 - hinge, pendulum, rope, slider: `recipe-joint`
 
-`guide` alone lists every guide (audio mixer, gameplay graphs, CSG, big worlds, mods); `api_reference` shows one function or component.
+`guide` alone lists the guides.
 
 ## More
 
 - `help` lists the commands, `help <command>` shows one's options; `scene-list` the objects, `entity show --name <Name>` one object's values, `schema --component <Name>` a component's.
 - `Assets/` is the game, mounted as `/Game/`. Delete, rename or move files with `asset delete|rename|move`, never by hand.
-- To see the scene (asked how it looks, or a change is hard to judge from the output): `capture` returns the picture (`--view overview` frames the whole scene, `--camera <Name>` uses a camera of it).
-- The game in the editor the person has open: `editor play` starts it, `editor capture` takes its view, `editor frames` measures its frame rate, `editor stop` stops it. No editor open: use `run` and `capture`.
+- To see the scene (asked how it looks, or a change is hard to judge from the output): `capture` returns the picture (`--view overview` frames the scene, `--camera <Name>`).
+- In an open editor: `editor play` starts the game, `editor capture` takes its view, `editor frames` its frame rate, `editor stop` stops it. No editor open: `run` and `capture`.
 )md";
 
 
@@ -98,7 +100,7 @@ Fetch one with `guide` (its name as `topic`). A recipe's commands go in one `com
 
 // The AGENTS.md files earlier versions of this engine wrote, recognised by their exact bytes
 // (FNV-1a 64), so an untouched copy is brought up to date while one a person edited is kept.
-constexpr std::array<std::string_view, 11> kPreviousAgentsTemplateHashes{ "6927ba90de51399a", "66098609d17a66fa", "17571d731424f80b", "60b10d36fecf3d23",
+constexpr std::array<std::string_view, 12> kPreviousAgentsTemplateHashes{ "132ae7440ab3a246", "6927ba90de51399a", "66098609d17a66fa", "17571d731424f80b", "60b10d36fecf3d23",
     "db0742a5e69a4b90", "0998d780309d6bfd", "a7d1c056fb759f2b", "74fed88885ab70b9", "4fde4e67de726331", "d684704d66224830", "eeb7b26fb1eac53f" };
 
 // Claude Code reads CLAUDE.md, not AGENTS.md; this one line imports it.

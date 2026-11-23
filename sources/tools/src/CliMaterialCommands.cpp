@@ -1,5 +1,6 @@
 #include "CliCommands.hpp"
 #include "CliCommon.hpp"
+#include "CliMaterialLibrary.hpp"
 #include "CliMaterialShared.hpp"
 
 #include "engine/assets/AssetFileName.hpp"
@@ -328,6 +329,8 @@ void PrintMaterial(const kb::render::RenderMaterialAssetData& asset, const std::
 } // namespace
 
 int RunMaterialNewCommand(const ArgumentList& arguments, CommandIo io) {
+    // A ready look: an instance of a library master with the preset's values (on an object too, with --entity).
+    if (arguments.Option("--preset").has_value()) return material::RunMaterialPresetNew(arguments, io);
     const std::filesystem::path projectRoot = material::ProjectRoot(arguments, "material-new", io);
     const std::optional<std::string> name = arguments.Option("--name");
     if (projectRoot.empty() || !name.has_value()) {
@@ -359,6 +362,13 @@ int RunMaterialNewCommand(const ArgumentList& arguments, CommandIo io) {
         !problem.empty()) {
         io.err << "error: " << problem << '\n';
         return 1;
+    }
+    // The whole graph in one call: graph text, as `material-graph show` prints it.
+    if (const std::optional<std::string> graph = arguments.Option("--graph"); graph.has_value()) {
+        if (const std::string problem = material::ApplyGraphText(asset, *graph, material::ProjectTextureResolver(registry), registry); !problem.empty()) {
+            io.err << "error: --graph: " << problem << '\n' << "nothing was written\n";
+            return 1;
+        }
     }
     std::error_code error;
     std::filesystem::create_directories(folder.folder, error);

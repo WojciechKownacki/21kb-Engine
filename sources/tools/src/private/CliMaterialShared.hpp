@@ -14,6 +14,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace kb::assets {
 class AssetRegistry;
@@ -69,5 +70,15 @@ void PrintBuiltinValues(const kb::render::RenderMaterialDesc& desc, const kb::as
 // The same values as an object for the data field: baseColor (#RRGGBB), baseColorLinear, roughness, metallic,
 // emissiveStrength and the textures by field name.
 [[nodiscard]] kb::core::JsonValue BuiltinValuesJson(const kb::render::RenderMaterialDesc& desc, const kb::assets::AssetRegistry* registry);
+
+// The graph of `asset` replaced by the graph that `text` describes (graph text: a node per line, links in brackets or as
+// Output.Pin = source; material-graph nodes and node pages describe the kinds). The reason the text was refused, with its
+// line, or empty; the asset is changed only when the text is accepted and the graph compiles.
+[[nodiscard]] std::string ApplyGraphText(
+    kb::render::RenderMaterialAssetData& asset, std::string_view text, const TextureResolver& textures, const kb::assets::AssetRegistry& registry);
+// The graph of `asset` as that text.
+[[nodiscard]] std::string GraphText(const kb::render::RenderMaterialAssetData& asset, const kb::assets::AssetRegistry& registry);
+// What stops the material from compiling or loading again; empty when it is fine.
+[[nodiscard]] std::vector<std::string> MaterialProblems(const kb::render::RenderMaterialAssetData& asset, const kb::assets::AssetRegistry& registry);
 
 } // namespace kb::cli::material

@@ -1,5 +1,8 @@
 #include "CliCommands.hpp"
 #include "CliProgram.hpp"
+#if KB_CLI_RENDERER
+#include "CliMaterialLibrary.hpp"
+#endif
 #include "engine/core/JsonValue.hpp"
 
 #include "engine/library/EngineLibraryManifest.hpp"
@@ -10,12 +13,15 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/script/ScriptAgentGuides.hpp"
 #include "engine/script/ScriptAgentProjectFiles.hpp"
+#include "engine/script/ScriptAgentSearch.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
 #include "engine/script/ScriptApiExport.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/script/ScriptValue.hpp"
 
+#include <algorithm>
 #include <fstream>
+#include <set>
 #include <iterator>
 #include <string>
 #include <utility>
@@ -344,7 +350,80 @@ int RunApiCommand(const ArgumentList& arguments, CommandIo io) {
     return 0;
 }
 
+namespace {
+
+// What the customer's words fit best: guides, and (with the renderer) ready materials and material nodes, one to three lines,
+// each with the command that uses it. Three answers differ in kind (a guide, a material, a node) before one kind repeats.
+struct SearchHit {
+    int score = 0;
+    std::string family;
+    std::string line;
+    std::vector<std::string> covered;  // the words of the request it answers
+};
+
+[[nodiscard]] int GuideSearch(const std::string& words, CommandIo io) {
+    const std::vector<std::string> query = kb::script::SearchWords(words);
+    std::vector<SearchHit> hits;
+    // Ready materials and nodes first: at equal score they say more than a guide.
+#if KB_CLI_RENDERER
+    for (material::LibraryHit& hit : material::SearchMaterialLibrary(words)) hits.push_back({ hit.score, hit.family, std::move(hit.line), std::move(hit.covered) });
+#endif
+    for (const kb::script::ScriptAgentGuide& guide : kb::script::ScriptAgentGuides::All()) {
+        const std::vector<std::string> name = kb::script::SearchWords(guide.name);
+        const std::vector<std::string> other = kb::script::SearchWords(std::string{ guide.title } + " " + std::string{ guide.summary });
+        // A word in a guide's summary is weaker evidence than a ready material made for it: half the score.
+        const int score = (kb::script::SearchScore(query, name, other) + 1) / 2;
+        std::vector<std::string> covered;
+        for (const std::string& word : query) {
+            if (kb::script::SearchWordScore(word, name, other) >= 4) covered.push_back(word);
+        }
+        if (score > 0) hits.push_back({ score, "guide", "guide " + std::string{ guide.name } + " - " + std::string{ guide.summary }, std::move(covered) });
+    }
+    std::ranges::stable_sort(hits, [](const SearchHit& left, const SearchHit& right) { return left.score > right.score; });
+    // The best answer first, then each next one the best of those that answer a word of the request nobody has answered yet.
+    std::vector<SearchHit> chosen;
+    std::set<std::string> answered;
+    while (chosen.size() < 3U) {
+        const SearchHit* best = nullptr;
+        std::size_t bestNew = 0U;
+        for (const SearchHit& hit : hits) {
+            if (std::ranges::any_of(chosen, [&](const SearchHit& taken) { return taken.line == hit.line; })) continue;
+            const std::size_t fresh = static_cast<std::size_t>(std::ranges::count_if(hit.covered, [&](const std::string& word) { return !answered.contains(word); }));
+            if (chosen.empty() ? best == nullptr : (fresh > bestNew || (best == nullptr && fresh > 0U && hit.score * 2 >= hits.front().score))) {
+                best = &hit;
+                bestNew = fresh;
+            }
+        }
+        if (best == nullptr) break;
+        chosen.push_back(*best);
+        answered.insert(best->covered.begin(), best->covered.end());
+    }
+    std::ranges::stable_sort(chosen, [](const SearchHit& left, const SearchHit& right) { return left.score > right.score; });
+    if (chosen.empty()) {
+        io.out << "nothing fits '" << words << "': say it with other words (the thing, its colour or its look), or `guide` alone lists every guide\n";
+    }
+    for (const SearchHit& hit : chosen) io.out << hit.line << '\n';
+    if (io.WantsData()) {
+        kb::core::JsonValue data = DataObject("21kb.cli.guide-search/v1");
+        data.Set("search", kb::core::JsonValue::MakeString(ToValidUtf8(words)));
+        auto results = kb::core::JsonValue::MakeArray();
+        for (const SearchHit& hit : chosen) results.Append(kb::core::JsonValue::MakeString(ToValidUtf8(hit.line)));
+        data.Set("results", std::move(results));
+        PublishData(io, std::move(data));
+    }
+    return 0;
+}
+
+} // namespace
+
 int RunGuideCommand(const ArgumentList& arguments, CommandIo io) {
+    if (const std::optional<std::string> search = arguments.Option("--search"); search.has_value()) return GuideSearch(*search, io);
+#if KB_CLI_RENDERER
+    if (arguments.Option("--topic") == std::optional<std::string>{ "material-presets" }) {
+        io.out << material::MaterialPresetIndex();
+        return 0;
+    }
+#endif
     const std::string topic = arguments.Option("--topic").value_or(std::string{});
     const std::optional<std::string> guide = kb::script::ScriptAgentGuides::Topic(topic);
     if (!guide.has_value()) {

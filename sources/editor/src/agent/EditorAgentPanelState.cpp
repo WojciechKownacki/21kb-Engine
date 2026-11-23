@@ -171,7 +171,7 @@ struct EngineCall {
     if (any({ "new", "make", "duplicate", "init", "presets" })) return EditorText("agent.step.create", "Creating");
     if (any({ "add", "add-node", "place", "attach", "socket", "emitter" })) return EditorText("agent.step.add", "Adding");
     if (any({ "remove", "detach", "delete", "disable" })) return EditorText("agent.step.remove", "Removing");
-    if (any({ "show", "list", "info", "kinds", "catalog", "sample", "check", "verify", "view",
+    if (any({ "show", "list", "info", "nodes", "node", "catalog", "sample", "check", "verify", "view",
             "schema", "modules", "map", "find", "profile", "search", "chunks" })) return EditorText("agent.step.inspect", "Checking");
     if (any({ "build", "generate", "erode", "cook", "compress", "split", "patch", "migrate", "locomotion" })) return EditorText("agent.step.build", "Building");
     if (any({ "bake" })) return EditorText("agent.step.bake", "Baking");

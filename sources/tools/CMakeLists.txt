@@ -106,6 +106,10 @@ if(KB_BUILD_RENDERER)
         src/CliMaterialCommands.cpp
         src/CliMeshLodCommands.cpp
         src/CliMaterialGraphCommands.cpp
+        src/CliMaterialPresets.cpp
+        src/CliMaterialPreview.cpp
+        src/CliMaterialLibraryData.cpp
+        src/private/CliMaterialLibrary.hpp
         src/CliMaterialFunctionCommands.cpp
         src/CliPostProcessCommands.cpp
         src/CliParticleProcessCommands.cpp
@@ -239,6 +243,7 @@ if(BUILD_TESTING)
         VERBATIM)
     add_dependencies(kb_cli_tests kb_cli_tests_stage_ui_font)
     if(KB_BUILD_RENDERER)
+        target_sources(kb_cli_tests PRIVATE tests/KbCliMaterialAgentTests.cpp)
         target_include_directories(kb_cli_tests PRIVATE "${PROJECT_SOURCE_DIR}/sources/renderer/tests")
         add_custom_target(kb_cli_tests_stage_particle_content
             COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -299,6 +304,11 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/tests/CliCaptureMcpTests.py
                 --cli $<TARGET_FILE:kb_cli>)
         set_tests_properties(kb_cli_capture_mcp PROPERTIES LABELS "tools;gpu" TIMEOUT 300)
+        # Every ready material is drawn by the player beside kb_cli: none is blank or one flat colour.
+        add_test(NAME kb_cli_material_library
+            COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/tests/CliMaterialLibraryTests.py
+                --cli $<TARGET_FILE:kb_cli>)
+        set_tests_properties(kb_cli_material_library PROPERTIES LABELS "tools;gpu" TIMEOUT 900)
         add_test(NAME kb_cli_renderer_info COMMAND ${CMAKE_COMMAND}
             "-DCLI=$<TARGET_FILE:kb_cli>"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/KbCliRendererInfoTests.cmake")

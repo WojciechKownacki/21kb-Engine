@@ -157,9 +157,11 @@ thread_local bool tDiscovery = false;
         });
     if (command.name == "guide") return MakeToolDescriptor(command.mcpTool,
         "Returns a short how-to with the commands that do the job and the check that proves it. Start with the recipe for the job (AGENTS.md names them); "
-        "without a topic, one line per guide; a wrong topic returns the closest ones.",
+        "without a topic, one line per guide; a wrong topic returns the closest ones. `search` takes the customer's own words and returns the "
+        "best one to three guides, ready materials and nodes, each with the command that uses it.",
         {
             ToolProperty{ "topic", "string", "The guide's name, for example recipe-material.", false, "--topic" },
+            ToolProperty{ "search", "string", "The customer's words, for example: shiny gold armour, lava that glows, dissolve when it dies.", false, "--search" },
         });
     if (command.name == "code") return MakeToolDescriptor(command.mcpTool,
         "Finds your way in the engine's own source without reading all of it: modules returns the code map as JSON (every module and "
@@ -347,10 +349,10 @@ struct ToolCallOutcome {
     std::vector<std::filesystem::path> pictures;
 };
 
-// A capture that names no file gets one inside the project, so the picture can be handed back. Returns the file the capture
-// writes (a relative --out is the project's), or an empty path when the words are no capture.
+// A capture (or a material preview) that names no file gets one inside the project, so the picture can be handed back. Returns
+// the file it writes (a relative --out is the project's), or an empty path when the words name neither.
 [[nodiscard]] std::filesystem::path PrepareCapture(std::vector<std::string>& words, const std::string& projectRoot, std::set<std::filesystem::path>& taken) {
-    if (words.empty() || words.front() != "capture" || projectRoot.empty()) return {};
+    if (words.empty() || (words.front() != "capture" && words.front() != "material-preview") || projectRoot.empty()) return {};
     const std::filesystem::path root = std::filesystem::absolute(std::filesystem::path{ projectRoot }).lexically_normal();
     std::filesystem::path picture;
     for (std::size_t index = 1U; index + 1U < words.size(); ++index) {
