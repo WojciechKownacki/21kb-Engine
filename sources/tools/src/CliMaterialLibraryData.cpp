@@ -103,13 +103,26 @@ Softness = ParameterScalar 0.03
 RimColor = ParameterColor #FFFFFF
 RimAmount = ParameterScalar 0
 OutlineColor = ParameterColor #101010
-OutlineWidth = ParameterScalar 0.1
+OutlineWidth = ParameterScalar 3
+HiddenColor = ParameterColor #FFB020
+HiddenStrength = ParameterScalar 0
 Facing = DotProduct(PixelNormalWS, LightVector)
 Lit = SmoothStep(Subtract(Threshold, Softness), Add(Threshold, Softness), Facing)
 Rim = Fresnel "3 0"
-Edge = Step(Subtract(1, OutlineWidth), Fresnel "1 0")
 Shaded = Add(Lerp(ShadowColor, Color, Lit), Multiply(RimColor, Multiply(Rim, RimAmount)))
-Output.BaseColor = Lerp(Shaded, OutlineColor, Edge)
+Output.BaseColor = Shaded
+)graph" },
+    { "Outlined", R"graph(Albedo = ParameterTexture none
+Color = ParameterColor #FFFFFF
+Metallic = ParameterScalar 0
+Roughness = ParameterScalar 0.6
+OutlineColor = ParameterColor #101010
+OutlineWidth = ParameterScalar 3
+HiddenColor = ParameterColor #FFB020
+HiddenStrength = ParameterScalar 0
+Output.BaseColor = Multiply(TextureSample(texture=Albedo, uv=UV), Color)
+Output.Metallic = Metallic
+Output.Roughness = Roughness
 )graph" },
     { "Glass", R"graph(Blend Mode = translucent
 Two Sided = true
@@ -123,18 +136,49 @@ Output.Alpha = Lerp(Opacity, EdgeOpacity, Fresnel "3 0.04")
 Output.Specular = 1
 )graph" },
     { "Water", R"graph(Blend Mode = translucent
-Color = ParameterColor #3FA7C8
-Color2 = ParameterColor #0B3C5D
-Speed = ParameterScalar 0.03
-Tiling = ParameterScalar 6
-Opacity = ParameterScalar 0.75
-Roughness = ParameterScalar 0.05
-Flow = Add(Multiply(UV, Tiling), Multiply(Time, Speed))
-Ripple = Noise "gradient false 1 1 2 2 0 1"(value=Flow)
-Output.BaseColor = Lerp(Color, Color2, Ripple)
-Output.Alpha = Opacity
-Output.Roughness = Roughness
-Output.Specular = 1
+Shading Model = singleLayerWater
+Color = ParameterColor #2A8FB5
+DeepColor = ParameterColor #0A3550
+Clarity = ParameterScalar 4
+WaveScale = ParameterScalar 0.4
+WaveStrength = ParameterScalar 0.5
+Speed = ParameterScalar 0.5
+FoamColor = ParameterColor #F4FAFC
+FoamDistance = ParameterScalar 0.35
+Opacity = ParameterScalar 0.85
+Roughness = ParameterScalar 0.04
+Where = BreakVector(WorldPosition)
+Ground = MakeVector(x=Where.x, y=Where.z, z=0)
+FlowA = Add(Multiply(Ground, WaveScale), Multiply(MakeVector(x=1, y=0.4, z=0), Multiply(Time, Speed)))
+FlowB = Add(Multiply(Ground, Multiply(WaveScale, 2.3)), Multiply(MakeVector(x=-0.7, y=1, z=0), Multiply(Time, Multiply(Speed, 1.3))))
+StepX = MakeVector(x=0.05, y=0, z=0)
+StepY = MakeVector(x=0, y=0.05, z=0)
+HA = Noise "gradient false 1 1 2 2 0 1"(value=FlowA)
+HAx = Noise "gradient false 1 1 2 2 0 1"(value=Add(FlowA, StepX))
+HAy = Noise "gradient false 1 1 2 2 0 1"(value=Add(FlowA, StepY))
+CA = Noise "gradient false 1 1 1 2 0 1"(value=FlowA)
+CAx = Noise "gradient false 1 1 1 2 0 1"(value=Add(FlowA, StepX))
+CAy = Noise "gradient false 1 1 1 2 0 1"(value=Add(FlowA, StepY))
+HB = Noise "gradient false 1 1 1 2 0 1"(value=FlowB)
+HBx = Noise "gradient false 1 1 1 2 0 1"(value=Add(FlowB, StepX))
+HBy = Noise "gradient false 1 1 1 2 0 1"(value=Add(FlowB, StepY))
+CheapNormal = Normalize(MakeVector(x=Multiply(Subtract(CA, CAx), Multiply(WaveStrength, 4)), y=Multiply(Subtract(CA, CAy), Multiply(WaveStrength, 4)), z=1))
+FullNormal = Normalize(MakeVector(x=Multiply(Add(Subtract(HA, HAx), Multiply(Subtract(HB, HBx), 0.5)), Multiply(WaveStrength, 4)), y=Multiply(Add(Subtract(HA, HAy), Multiply(Subtract(HB, HBy), 0.5)), Multiply(WaveStrength, 4)), z=1))
+Fade = DepthFade "0.35 metres"(fadeDistance=FoamDistance)
+FoamMask = Multiply(OneMinus(Fade), Add(0.35, Multiply(0.65, HB)))
+CheapCode = Add(Multiply(CheapNormal, 0.5), 0.5)
+FullCode = Add(Multiply(FullNormal, 0.5), 0.5)
+Output.Normal = NormalUnpack(QualitySwitch(low=CheapCode, med=CheapCode, high=FullCode, epic=FullCode))
+Output.Roughness = QualitySwitch(low=Roughness, med=Roughness, high=Lerp(Roughness, 0.6, FoamMask), epic=Lerp(Roughness, 0.6, FoamMask))
+Output.Emissive = QualitySwitch(low=#000000, med=#000000, high=Multiply(FoamColor, Multiply(FoamMask, 0.5)), epic=Multiply(FoamColor, Multiply(FoamMask, 0.5)))
+Output.Specular = 0.5
+Output.waterAbsorption = Multiply(OneMinus(Color), Divide(1.2, Clarity))
+Output.waterScattering = Multiply(DeepColor, 0.15)
+Output.waterPhaseG = 0.6
+Output.waterColorScaleBehind = 1
+Output.Refraction = 1.33
+Output.BaseColor = Lerp(Color, DeepColor, Saturate(CA))
+Output.Alpha = Lerp(Opacity, 1, Fresnel "4 0.02")
 )graph" },
     { "Hologram", R"graph(Shading Model = unlit
 Blend Mode = additive
@@ -288,6 +332,55 @@ Varied = Lerp(High, Multiply(High, 0.8), Break)
 Output.BaseColor = Lerp(Varied, Multiply(Rock, Lerp(1, 0.7, Break)), Steep)
 Output.Roughness = 0.9
 )graph" },
+    { "TerrainLayers", R"graph(Layers = TextureObject2DArray none
+LayerCount = ParameterScalar 8
+HeightMin = ParameterScalar 0
+HeightMax = ParameterScalar 30
+Tiling = ParameterScalar 0.2
+SlopeStart = ParameterScalar 0.35
+BlendDepth = ParameterScalar 0.3
+HeightInfluence = ParameterScalar 0.6
+Roughness = ParameterScalar 0.92
+Where = BreakVector(WorldPosition)
+Ground = MakeVector(x=Where.x, y=Where.z, z=0)
+Wobble = Noise "gradient false 0.05 1 2 2 -1 1"(value=WorldPosition)
+T = Saturate(Add(Divide(Subtract(Where.y, HeightMin), Subtract(HeightMax, HeightMin)), Multiply(Wobble, 0.04)))
+Steps = Subtract(LayerCount, 2)
+H = Multiply(T, Steps)
+I0 = Minimum(Floor(H), Subtract(Steps, 1))
+F = Saturate(Subtract(H, I0))
+I1 = Add(I0, 1)
+CliffLayer = Subtract(LayerCount, 1)
+UvA = Multiply(Ground, Tiling)
+UvAx = BreakVector(UvA)
+UvB = MakeVector(x=Add(Multiply(UvAx.y, 0.83), 0.31), y=Subtract(0.77, Multiply(UvAx.x, 0.83)), z=0)
+CliffUv = Multiply(MakeVector(x=Add(Where.x, Where.z), y=Where.y, z=0), Tiling)
+CliffUvB = MakeVector(x=Add(Multiply(BreakVector(CliffUv).y, 0.83), 0.31), y=Subtract(0.77, Multiply(BreakVector(CliffUv).x, 0.83)), z=0)
+Mix = SmoothStep(0.35, 0.65, Noise "gradient false 0.04 1 1 2 0 1"(value=WorldPosition))
+Steep = SmoothStep(SlopeStart, Add(SlopeStart, 0.2), OneMinus(Saturate(BreakVector(VertexNormalWS).y)))
+L0 = TextureSample2DArray(texture=Layers, uv=UvA, layer=I0)
+L1 = TextureSample2DArray(texture=Layers, uv=UvA, layer=I1)
+LC = TextureSample2DArray(texture=Layers, uv=CliffUv, layer=CliffLayer)
+LowA0 = Add(OneMinus(F), Multiply(DotProduct(L0, "0.3 0.59 0.11"), HeightInfluence))
+LowA1 = Add(F, Multiply(DotProduct(L1, "0.3 0.59 0.11"), HeightInfluence))
+LowM = Subtract(Maximum(LowA0, LowA1), BlendDepth)
+LowB0 = Maximum(Subtract(LowA0, LowM), 0)
+LowB1 = Maximum(Subtract(LowA1, LowM), 0)
+LowGround = Divide(Add(Multiply(L0, LowB0), Multiply(L1, LowB1)), Add(Add(LowB0, LowB1), 0.0001))
+LowBase = Lerp(LowGround, LC, Steep)
+H0 = Lerp(TextureSample2DArray(texture=Layers, uv=UvA, layer=I0), TextureSample2DArray(texture=Layers, uv=UvB, layer=I0), Mix)
+H1 = Lerp(TextureSample2DArray(texture=Layers, uv=UvA, layer=I1), TextureSample2DArray(texture=Layers, uv=UvB, layer=I1), Mix)
+HC = Lerp(TextureSample2DArray(texture=Layers, uv=CliffUv, layer=CliffLayer), TextureSample2DArray(texture=Layers, uv=CliffUvB, layer=CliffLayer), Mix)
+HighA0 = Add(OneMinus(F), Multiply(DotProduct(H0, "0.3 0.59 0.11"), HeightInfluence))
+HighA1 = Add(F, Multiply(DotProduct(H1, "0.3 0.59 0.11"), HeightInfluence))
+HighM = Subtract(Maximum(HighA0, HighA1), BlendDepth)
+HighB0 = Maximum(Subtract(HighA0, HighM), 0)
+HighB1 = Maximum(Subtract(HighA1, HighM), 0)
+HighGround = Divide(Add(Multiply(H0, HighB0), Multiply(H1, HighB1)), Add(Add(HighB0, HighB1), 0.0001))
+HighBase = Lerp(HighGround, HC, Steep)
+Output.BaseColor = QualitySwitch(low=LowBase, med=LowBase, high=HighBase, epic=HighBase)
+Output.Roughness = Roughness
+)graph" },
     { "Wet", R"graph(Color = ParameterColor #5A5A5A
 Wetness = ParameterScalar 0.8
 Roughness = ParameterScalar 0.85
@@ -366,6 +459,8 @@ constexpr MaterialPreset kPresets[]{
     { "snow", "ground", "Mottled", "snow white winter cold frost", "Color=#F4F8FB|Color2=#D8E4EE|Tiling=16 16 1|Contrast=1.5|Roughness=0.7|Roughness2=0.55" },
     { "forest-floor", "ground", "Mottled", "forest floor leaves needles woodland litter", "Color=#3B2F1D|Color2=#2A3A18|Tiling=22 22 1|Contrast=2|Roughness=1|Roughness2=0.95" },
     { "gravel", "ground", "Speckled", "gravel pebbles stones driveway rocks", "Color=#8D8A84|SpeckleColor=#4F4C47|Tiling=70|Amount=0.55|Roughness=0.95" },
+    { "terrain-layers", "ground", "TerrainLayers", "terrain mountain mountains hill hills landscape world textured layers eight ten textures array height slope blend rock grass snow sand teren gora gory gorski krajobraz warstwy tekstury", "" },
+    { "terrain-layers-10", "ground", "TerrainLayers", "terrain ten 10 layers textured large world landscape diverse biomes teren dziesiec warstw", "LayerCount=10|HeightMax=60" },
     { "terrain-alpine", "ground", "Terrain", "terrain mountain alpine landscape layers height slope blend sand grass rock snow world", "" },
     { "terrain-desert", "ground", "Terrain", "terrain desert dunes canyon landscape layers height slope sandstone", "Sand=#E3C28B|Grass=#C9A66B|Dirt=#A66C40|Rock=#8C6A4F|Snow=#E8D9BF|Heights=2 5 9|HeightTop=14" },
     { "terrain-volcanic", "ground", "Terrain", "terrain volcanic island ash lava landscape layers height slope black rock", "Sand=#2A2523|Grass=#3B3835|Dirt=#4A3A30|Rock=#5C5754|Snow=#8A8581|Heights=1 4 8|HeightTop=12" },
@@ -429,10 +524,19 @@ constexpr MaterialPreset kPresets[]{
     { "toon-green", "toon", "Toon", "toon cel cartoon green leaf frog", "Color=#4CC04C|ShadowColor=#1F6B2E" },
     { "toon-yellow", "toon", "Toon", "toon cel cartoon yellow banana sun", "Color=#F2D13A|ShadowColor=#9E7A12" },
     { "toon-purple", "toon", "Toon", "toon cel cartoon purple grape wizard", "Color=#9B5BE0|ShadowColor=#4A2A7A" },
-    { "toon-skin", "toon", "Toon", "toon cel cartoon skin character face peach", "Color=#F2C6A0|ShadowColor=#B4725A|OutlineWidth=0.08" },
-    { "toon-ink", "toon", "Toon", "toon ink comic outline thick black white manga", "Color=@object:#F2F2F2|ShadowColor=@object*0.55:#BFC3CC|OutlineColor=#0A0A0A|OutlineWidth=0.35" },
+    { "toon-skin", "toon", "Toon", "toon cel cartoon skin character face peach", "Color=#F2C6A0|ShadowColor=#B4725A|OutlineWidth=2" },
+    { "toon-ink", "toon", "Toon", "toon ink comic thick black white manga", "Color=@object:#F2F2F2|ShadowColor=@object*0.55:#BFC3CC|OutlineColor=#0A0A0A|OutlineWidth=6" },
     { "toon-rim-gold", "toon", "Toon", "toon rim light gold highlight glow hero stylized", "Color=@object:#E8C547|ShadowColor=@object*0.55:#8A5A12|RimColor=#FFF4C2|RimAmount=0.8" },
     { "stylized-low-poly", "toon", "Toon", "stylized low poly flat faceted soft shading", "Color=#6FB98F|ShadowColor=#3B7A5C|Threshold=0.45|Softness=0.25|OutlineWidth=0" },
+    // Outlines and highlights through walls: a line round the object (pixels of the view, equal at any distance) and, with
+    // HiddenStrength, a glow where other surfaces stand in front of it
+    { "outline-black", "outline", "Outlined", "outline contour obrys kontur black thick cartoon comic ink character hero line border postac", "" },
+    { "outline-white", "outline", "Outlined", "outline white glow halo selection selected hover highlight clean thin obrys bialy", "OutlineColor=#FFFFFF|OutlineWidth=2" },
+    { "outline-gold", "outline", "Outlined", "outline gold golden yellow loot treasure pickup quest reward item obrys zloty przedmiot", "OutlineColor=#FFC83D|OutlineWidth=3" },
+    { "outline-enemy", "outline", "Outlined", "outline red enemy hostile danger target boss attack obrys czerwony wrog przeciwnik", "OutlineColor=#FF2A2A|OutlineWidth=3" },
+    { "xray-ally", "outline", "Outlined", "xray x-ray wall behind through see blue ally friend teammate squad coop sojusznik przez sciane", "OutlineColor=#3D8BFF|OutlineWidth=2|HiddenColor=#3D8BFF|HiddenStrength=0.9" },
+    { "xray-enemy", "outline", "Outlined", "xray x-ray wall behind through see red enemy wallhack opponent scout wrog przeciwnik sciane", "OutlineColor=#FF2A2A|OutlineWidth=2|HiddenColor=#FF2A2A|HiddenStrength=0.9" },
+    { "xray-item", "outline", "Outlined", "xray x-ray wall behind through see gold item loot treasure hidden find przedmiot sciane", "OutlineColor=#FFC83D|OutlineWidth=2|HiddenColor=#FFC83D|HiddenStrength=0.9" },
     // Glass
     { "glass-clear", "glass", "Glass", "glass clear transparent window see-through pane", "" },
     { "glass-blue", "glass", "Glass", "glass blue tinted bottle sea window", "Color=#9CC8FF|Opacity=0.25" },
@@ -443,12 +547,12 @@ constexpr MaterialPreset kPresets[]{
     { "crystal-pink", "glass", "Glass", "crystal pink gem rose quartz magical", "Color=#FFB3E6|Opacity=0.4|EdgeOpacity=0.95|Roughness=0.03" },
     { "crystal-purple", "glass", "Glass", "crystal purple amethyst gem magic violet", "Color=#C9A0FF|Opacity=0.4|EdgeOpacity=0.95|Roughness=0.03" },
     // Water
-    { "water-ocean", "water", "Water", "water ocean sea waves blue deep", "Color=#1E6FA8|Color2=#0A2E55|Speed=0.04|Tiling=5" },
-    { "water-lake", "water", "Water", "water lake calm pond green blue", "Color=#3C8FA0|Color2=#17495A|Speed=0.02|Tiling=4|Opacity=0.8" },
-    { "water-pool", "water", "Water", "water pool swimming turquoise clear bright", "Color=#4FD1E8|Color2=#1A9CC0|Opacity=0.6|Tiling=8" },
-    { "water-swamp", "water", "Water", "water swamp bog murky green dirty", "Color=#4B6B3A|Color2=#24331A|Speed=0.01|Opacity=0.92|Roughness=0.2" },
-    { "water-toxic", "water", "Water", "water toxic poison acid green waste", "Color=#7CFF3A|Color2=#1B6B10|Speed=0.03|Opacity=0.85" },
-    { "water-river", "water", "Water", "water river stream flowing fast rapids", "Color=#6FA8B8|Color2=#3A6677|Speed=0.12|Tiling=10" },
+    { "water-ocean", "water", "Water", "water ocean sea waves blue deep realistic foam shore woda morze ocean fale", "Color=#1E6FA8|DeepColor=#06284A|Clarity=6|WaveScale=0.25|Speed=0.7|WaveStrength=0.6" },
+    { "water-lake", "water", "Water", "water lake calm pond green blue realistic reflection woda jezioro jeziora jeziorze staw", "Color=#3C8FA0|DeepColor=#12414F|Clarity=3|WaveScale=0.5|Speed=0.25|WaveStrength=0.2" },
+    { "water-pool", "water", "Water", "water pool swimming turquoise clear bright woda basen", "Color=#4FD1E8|DeepColor=#1A9CC0|Clarity=12|WaveScale=0.9|Speed=0.3|WaveStrength=0.12|Opacity=0.6" },
+    { "water-swamp", "water", "Water", "water swamp bog murky green dirty woda bagno", "Color=#4B6B3A|DeepColor=#1C2A14|Clarity=0.8|WaveScale=0.4|Speed=0.08|WaveStrength=0.06|Opacity=0.92" },
+    { "water-toxic", "water", "Water", "water toxic poison acid green waste woda toksyczna", "Color=#7CFF3A|DeepColor=#1B6B10|Clarity=1.5|WaveScale=0.5|Speed=0.15|WaveStrength=0.15|Opacity=0.88" },
+    { "water-river", "water", "Water", "water river stream flowing fast rapids woda rzeka strumien", "Color=#6FA8B8|DeepColor=#2F5A6B|Clarity=2|WaveScale=0.6|Speed=1.4|WaveStrength=0.4" },
     // Sci-fi
     { "hologram-blue", "scifi", "Hologram", "hologram blue scifi projection scanlines futuristic", "" },
     { "hologram-green", "scifi", "Hologram", "hologram green scifi terminal scanlines hacker", "Color=#39FF88" },
@@ -486,7 +590,7 @@ constexpr MaterialPreset kPresets[]{
     { "glitch-cyan", "effect", "Glitch", "glitch cyan digital corrupted signal error screen bands", "" },
     { "glitch-magenta", "effect", "Glitch", "glitch magenta vhs static broken tv distortion bands", "GlitchColor=#FF2FD0|Rate=14|Threshold=0.7" },
     { "glitch-red", "effect", "Glitch", "glitch red alarm hacked virus damaged robot flicker", "Color=#200808|GlitchColor=#FF2A2A|Density=20|Threshold=0.85" },
-    { "water-stylized", "water", "Water", "water stylized cartoon flat low poly pond bright simple", "Color=#5EC8E5|Color2=#2A8FBF|Speed=0.08|Tiling=3|Opacity=0.85|Roughness=0.25" },
+    { "water-stylized", "water", "Water", "water stylized cartoon flat low poly pond bright simple", "Color=#5EC8E5|DeepColor=#2A8FBF|Clarity=2|WaveScale=0.8|Speed=0.5|WaveStrength=0.1|Opacity=0.85|Roughness=0.25" },
     { "wet-asphalt", "effect", "Wet", "wet asphalt road rain puddles shiny street night", "Color=#2E2E30|Roughness=0.9" },
     { "wet-cobblestone", "effect", "Wet", "wet cobblestone rain puddles stone path damp", "Color=#6B6B68|Wetness=0.7|Tiling=8" },
     { "puddle-mud", "effect", "Wet", "puddle mud rain wet ground track soaked", "Color=#4A3426|Wetness=1|Tiling=3" },

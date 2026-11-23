@@ -38,12 +38,12 @@ Phones and older Mali GPUs (the limits `material-graph show` checks, "Warning: t
 - No Parallax Occlusion Mapping (use Bump Offset). Prefer opaque or masked; a big translucent surface costs overdraw.
 - Hair, eye and subsurface shading cost more than defaultLit.
 
-Techniques the graph does well (ready ones: `guide` with `search`): toon and rim light, fresnel glow, dissolve, hologram and glitch, emission and
+Techniques the graph does well (ready ones: `guide` with `search`): outline and highlight through walls (`recipe-outline`), toon and rim light, fresnel glow, dissolve, hologram and glitch, emission and
 pulsing, scrolling UV, wind and wobble (vertex offset, set Max World Position Offset Displacement), snow on top by the normal, wet surfaces, terrain
-by height and slope (world position and normal, noise to break the borders), lava, water, glass, ice. Needs the scene behind (translucent or
+by height and slope (world position and normal, noise to break the borders; ten textured layers: `recipe-terrain-layers`), lava, water (`recipe-water`), glass, ice. Needs the scene behind (translucent or
 post-process only): foam and depth colour (DepthFade), refraction (SceneColor), screen distortion.
 
-Not in the graph, so do not try: a second pass (an inverted-hull outline; the toon presets draw an outline from the view angle instead), stencil,
+Not in the graph, so do not try: stencil,
 more than the main light in a material, reading other objects' positions (grass that bends from the player: set a parameter from a script),
 ray marching. Graph text cannot write a material function call (`material-function use` adds one); textures need images in the project
 (triplanar: WorldAlignedTexture; many terrain layers: one 2D array texture with TextureSample2DArray, or at most 9 samplers).
@@ -913,6 +913,81 @@ tells the domains, blend modes and phone limits. A parameter (`ParameterColor`, 
 `material-instance-new --parent <material> --set Gold=#FFD700`.
 )md";
 
+constexpr std::string_view kRecipeOutline = R"md(# Recipe: an outline round a character, or a glow where it stands behind a wall
+
+A thick, even line round an object (a cartoon look, a selected unit, a loot item) and, if wanted, the part of it hidden behind walls
+lit in a colour. The engine draws the object a second time as a hull pushed out along its normals (the same number of pixels at any
+distance, on a computer and on a phone; skinned characters too), so any graph material that has these parameters gets it:
+
+- `OutlineWidth` - pixels of the view; 0 is no outline.
+- `OutlineColor` - the colour of the line.
+- `HiddenStrength` and `HiddenColor` - 0 is off; above 0 the parts of the object behind other surfaces glow in `HiddenColor` (strongest at their edges).
+
+The presets already have them: `outline-black`, `outline-white`, `outline-gold`, `outline-enemy` (a line), `xray-ally`, `xray-enemy`, `xray-item` (a line and the glow
+through walls), and every `toon-*` look. `guide` with `search` "outline" or "obrys" finds them. One command puts one on an object (`OBJECT_NAME`; `scene-list` lists them):
+
+```
+[["material-new","--preset","outline-black","--name","HeroLine","--entity","OBJECT_NAME","--set","Color=#C8A27A"]]
+```
+
+`Color` is the object's colour; to keep its colour picture instead, `--set Albedo=/Game/Images/Hero.png` (the picture of the character, tinted by `Color`). Another line: `--set OutlineColor=#FF2A2A --set OutlineWidth=4`;
+a glow through walls on the same material: `--set HiddenStrength=0.9 --set HiddenColor=#3D8BFF`.
+
+Check it as a call of its own (it needs the player beside kb_cli): `kb_cli` with `["capture","--frames","30"]`; done when the line is a solid band round the object.
+- The hull grows along the vertex normals: a mesh with hard edges (a cube) shows gaps at its corners; smooth the normals or use a rounder mesh.
+- The glow through walls shows the hidden part as a lit edge with a faint fill; the parts of the object that its own body hides glow faintly too.
+- Only opaque and masked materials get a line; a translucent one does not.
+)md";
+
+constexpr std::string_view kRecipeWater = R"md(# Recipe: a lake, a sea, a river, a pool - realistic water
+
+`guide` with `search` "lake", "water", "woda" or "jezioro" finds the presets: `water-ocean`, `water-lake`, `water-pool`, `water-river`, `water-swamp`, `water-toxic`,
+`water-stylized`. One material, two looks, chosen by the class of the device:
+
+- On a computer it is full: the colour of the ground fading with the thickness of the water (Clarity), refraction of the scene behind, waves that
+  move the reflection, sun and sky reflection (fresnel), and foam where the water meets the shore or objects.
+- On a phone or tablet the same material draws as lit translucent water with a simpler wave: no copy of the screen, no foam. Nothing to set.
+
+A flat plane is the water; the preset goes on it in the same call:
+
+```
+[["entity","add","--create","Plane","--name","Lake","--scale","40,1,40","--position","0,2,0"],["material-new","--preset","water-lake","--name","LakeWater","--entity","Lake"]]
+```
+
+Parameters (`--set Name=value`): `Color` (shallow water), `DeepColor`, `Clarity` (metres of water before the ground is lost: 1 murky, 12 a clear pool), `WaveScale`,
+`WaveStrength`, `Speed`, `FoamColor`, `FoamDistance` (the width of the foam edge), `Opacity` and `Roughness` (the phone look). Keep the water above a ground, so a
+shore exists and the depth reads.
+
+Look at both, each as a call of its own: `kb_cli` with `["material-preview","--material","/Game/Materials/LakeWater.kbmatinst"]` and the same with `"--device","phone"`.
+)md";
+
+constexpr std::string_view kRecipeTerrainLayers = R"md(# Recipe: a mountain, a hill, a landscape with 8 to 10 textured layers
+
+`guide` with `search` "mountain", "terrain", "gora" or "teren" finds the preset `terrain-layers` (and `terrain-layers-10`). The ground picks its layers from where it is:
+by height (layer 0 the lowest, each next one higher, blended where two meet, the harder one showing through the softer), and the last layer on steep slopes (cliffs).
+Only the two neighbouring layers and the cliff are read per pixel, so ten layers cost what three do, which fits a phone; on a computer a second look at each
+layer, turned and scaled, breaks up the repeating of the pattern.
+
+1. The layers as one array texture, in order from the lowest ground to the cliff (here 8: sand, mud, grass, forest floor, dirt, rock, scree, then the cliff). `ground`
+   draws a tiling texture from two colours (`image new` lists the other presets):
+
+```
+[["image","array","--name","TerrainLayers","--size","256","--layers","ground:#D9C28F:#B89B64,ground:#7A5C3A:#5A4128,ground:#4E8A2E:#2F5A1C,ground:#3C6B26:#27471A,ground:#6B5A3A:#4D4028,ground:#7A7873:#55534F,ground:#B8B4AE:#8E8A84,ground:#5C5A56:#3A3835"]]
+```
+
+2. The ground (here a generated mountain; an existing terrain or mesh works too) and the material on it. `material-new` with `--entity` reads the lowest and the highest
+   height of the ground itself (`HeightMin`, `HeightMax`: the layers spread over the real range of the ground, so the top one shows on the peaks):
+
+```
+[["terrain","new","--name","Land","--terrain","/Game/Terrains/Land.kbterrain","--preset","mountains","--size","128"],["material-new","--preset","terrain-layers","--name","Mountain","--entity","Land","--set","Layers=/Game/Images/TerrainLayers.ktx","--set","LayerCount=8"]]
+```
+
+   Ten layers: draw 10 and use `terrain-layers-10` (`LayerCount=10`). Other parameters: `Tiling` (how often a texture repeats; smaller is bigger rock), `SlopeStart` (0.2
+   cliffs early, 0.6 only the steepest), `BlendDepth` and `HeightInfluence` (how sharply the harder layer shows through the softer one).
+3. The scene's camera stands at the middle of the land, under its surface: lift it over the land first (`terrain info` gives the top; for a land of 128 units): `["entity","set","--name","Main Camera","--position","0,<top + 25>,-110","--look-at","0,<top / 2>,0"]`.
+4. Look at it as a call of its own: `kb_cli` with `["capture","--frames","30"]`; done when the lowest ground, the middle and the top differ and the cliffs are one rock.
+)md";
+
 constexpr std::string_view kRecipeMaterialFunction = R"md(# Recipe: a reusable material effect (a material function)
 
 Look at the objects first, as a call of its own:
@@ -1168,7 +1243,7 @@ Done when `mod build` says `3 asset(s) added` and sealed, and `mod verify` ends 
 - Inspect or split a pack: `pack info <file.kbpack>`, `pack split`, `pack patch` (updates), `pack sign|verify`. A game for other platforms: `build --platform android|web|linux`. Details: docs/modding.md.
 )md";
 
-constexpr std::array<ScriptAgentGuide, 38> kGuides{ {
+constexpr std::array<ScriptAgentGuide, 41> kGuides{ {
     { "recipe-material", "Recipe: colour or material", "A colour or material on an object: two commands.", kRecipeMaterial },
     { "recipe-component", "Recipe: physics or a component", "Physics (a falling body) or any component on an object, and how to check it.", kRecipeComponent },
     { "recipe-prefab", "Recipe: prefab", "Save an object, with its components, as a prefab and place copies.", kRecipePrefab },
@@ -1185,6 +1260,9 @@ constexpr std::array<ScriptAgentGuide, 38> kGuides{ {
     { "recipe-translate", "Recipe: texts in other languages", "The texts of the game in several languages: keys on the controls, translations, the default language, switching in play.", kRecipeTranslate },
     { "recipe-animation", "Recipe: an object that moves by itself", "A coin that bobs, a door that opens and closes, a pulse: an animation clip that plays from the start.", kRecipeAnimation },
     { "recipe-material-look", "Recipe: a ready-made material look", "A look in the customer's words (gold, wood, glass, neon, lava, toon, dissolve, water, hologram): find a preset, put it on an object, preview it, or write a whole graph in one call.", kRecipeMaterialLook },
+    { "recipe-outline", "Recipe: an outline or a glow through walls", "An outline (obrys, kontur) round a character or object, thick and even, cartoon style, and a highlight of it visible through a wall (xray).", kRecipeOutline },
+    { "recipe-water", "Recipe: a lake, sea or river", "Realistic water (woda, jezioro, morze, rzeka) for a lake, sea, river or pool: refraction, depth, foam and waves on a computer, a simple version on a phone.", kRecipeWater },
+    { "recipe-terrain-layers", "Recipe: a mountain with many textured layers", "A mountain, hill or landscape (gora, teren, krajobraz) with 8 to 10 textured layers by height and slope, blended, that fits a phone.", kRecipeTerrainLayers },
     { "recipe-material-function", "Recipe: a reusable material effect", "A material function (glowing edge, scrolling or tiling texture coordinate) written once and used on several materials.", kRecipeMaterialFunction },
     { "recipe-save", "Recipe: save the game", "A value kept between runs of the game (a score, a counter) in a save slot.", kRecipeSave },
     { "recipe-navmesh", "Recipe: a character that walks to a place", "A character that walks to a point around obstacles on a baked navigation mesh.", kRecipeNavmesh },

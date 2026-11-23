@@ -1843,7 +1843,8 @@ struct LinkedNativeModule {
     }
     const kb::render::RenderMaterialCookPayload payload =
         kb::render::RenderMaterialCookPayloadBuilder::Build(
-            materialForCook, metadata, manager.Registry(), functionLibrary);
+            materialForCook, metadata, manager.Registry(), functionLibrary,
+            kb::render::RenderMaterialGraphDeviceContext(profile.shaderPlatform == asset_bake::ShaderBakePlatform::Android));
     if (!payload.graphBacked) {
         if (materialForCook.materialType == "builtin.pbr" && materialForCook.desc.subsurfaceFactor > 0.0F &&
             asset_bake::HasShaderBakeBackend(profile.shaderBackends,asset_bake::ShaderBakeBackend::Essl)) {

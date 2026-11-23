@@ -456,6 +456,15 @@ struct RenderMaterialGraphTextureBinding {
     bool resolved = false;
 };
 
+// What a graph material asks to have drawn around its objects: the graph's parameters OutlineWidth (pixels of the
+// rendered view, 0 for none), OutlineColor, HiddenColor and HiddenStrength (how strongly the parts behind other surfaces
+// glow, 0 for not at all). Read from the parameters, so an instance or a script changes them without a new graph.
+struct RenderMaterialOutline {
+    float width = 0.0F;
+    float color[3]{ 0.0F, 0.0F, 0.0F };
+    float hiddenColor[4]{ 0.0F, 0.0F, 0.0F, 0.0F };
+};
+
 struct RenderMaterialGraphProgramBinding {
     bool active = false;
     std::uint64_t materialTypeId = 0U;
@@ -489,6 +498,7 @@ struct RenderMaterialGraphProgramBinding {
     bool decalDomain = false;
     // User Interface domain: the material draws a UI image's rectangle (ScreenUIComposite).
     bool userInterfaceDomain = false;
+    RenderMaterialOutline outline{};
 };
 
 struct RenderMaterialResource {

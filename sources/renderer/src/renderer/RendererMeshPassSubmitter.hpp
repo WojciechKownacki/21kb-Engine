@@ -41,6 +41,10 @@ public:
         bool terrainLayersOnly = false);
 
     static void SubmitSelectionMask(const RendererMeshPassSubmitDesc& desc);
+
+    // The outline of the objects whose material asks for one, and their silhouette behind other surfaces, drawn into
+    // `viewId` (the transparent view) ahead of the transparent draws.
+    static void SubmitOutlines(const RendererMeshPassSubmitDesc& desc, bgfx::ViewId viewId);
 };
 
 } // namespace kb::render

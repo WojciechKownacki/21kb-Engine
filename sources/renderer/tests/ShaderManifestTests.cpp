@@ -93,8 +93,11 @@ void PackagedShaderManifestRequiresEveryRequiredProgramStage() {
             contains("vs_mesh_shadow_skinned_instanced.sc") &&
             contains("vs_mesh_skinned_motion_vectors_instanced.sc") &&
             contains("vs_mesh_motion_vectors_instanced.sc") &&
-            contains("fs_mesh_motion_vectors.sc"),
-        "Packaged shader closure omitted a stage referenced by a required skinned/motion program");
+            contains("fs_mesh_motion_vectors.sc") &&
+            contains("vs_mesh_outline_instanced.sc") &&
+            contains("vs_mesh_outline_skinned_instanced.sc") &&
+            contains("fs_mesh_outline.sc"),
+        "Packaged shader closure omitted a stage referenced by a required skinned/motion/outline program");
     Require(!contains("fs_editor_grid.sc"),
         "Packaged game shader closure included an unselected editor-only program");
     Require(contains("vs_screen_ui.sc") && contains("fs_screen_ui.sc"),

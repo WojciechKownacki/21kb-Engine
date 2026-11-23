@@ -24,6 +24,22 @@ Texture dimension is asset metadata carried unchanged through loading, the runti
 
 Every reflected graph sampler declares its expected dimension. Submit never binds a resource of a different dimension: it records `TextureDimensionMismatch` with the texture asset id and expected/actual dimensions, increments `textureDimensionMismatchCount`, and binds a white or normal fallback created with the expected Cube, 3D or 2D Array type. A mismatch therefore remains visible and deterministic without reaching the backend as an invalid sampler/resource pair.
 
+### Outline
+
+A graph material that has the parameters `OutlineWidth` (pixels of the view, 0 for none), `OutlineColor`, `HiddenColor` and `HiddenStrength` gets a
+second draw of its objects: `MeshPassType::Outline` draws the mesh again as a hull pushed out along its normals on the screen (the front faces culled, the
+depth tested against the scene), `MeshPassType::OutlineHidden` the part that lies behind other surfaces as a lit edge in `HiddenColor`. Both run in the
+transparent view ahead of the transparent draws, only while a registered material asks for one (`RenderResourceRegistry::OutlineMaterialCount`), skinned meshes
+included. The values are read from the material's parameters (`RuntimeMaterialResolver`), so an instance or a script changes them without a new graph.
+
+### Device class
+
+`RenderMaterialGraphDeviceContext(mobile)` is the quality and level materials are built with: a phone or tablet Medium and ES3, a computer High and SM5.
+The player sets it as its default (`--material-device=phone|computer` overrides it for tests), the cooker takes it from the target platform, and the pack
+validation compares with the same one. A `QualitySwitch` or `FeatureLevelSwitch` follows only the branch the build takes, so what the other branches read (a
+texture, the scene depth) costs nothing. Single Layer Water below the High quality is drawn as the lit translucent surface the graph also describes by its
+Base Color and Alpha, without reading the scene colour and depth.
+
 ## Render Path Support
 
 | Path | Status | Contract |

@@ -180,6 +180,10 @@ enum class MotionPreviousModelUpload : std::uint8_t {
         return "EditorSelection";
     case MeshPassType::Gizmo:
         return "Gizmo";
+    case MeshPassType::Outline:
+        return "Outline";
+    case MeshPassType::OutlineHidden:
+        return "OutlineHidden";
     }
     return "Unknown";
 }

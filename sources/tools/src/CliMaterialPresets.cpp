@@ -28,6 +28,7 @@
 #include <array>
 #include <cctype>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <set>
 #include <sstream>
@@ -86,6 +87,44 @@ struct ObjectLook {
         look.texture = material->desc.albedoTextureAssetId != 0U;
     }
     return look;
+}
+
+// HeightMin and HeightMax of a layered terrain material: the lowest and the highest ground of the terrain the material goes on, in
+// world height (the terrain's own heights, scaled and lifted by its object), so the top layer is reached at the top of the ground.
+[[nodiscard]] std::vector<std::string> TerrainHeightSettings(const ArgumentList& arguments, const std::string& entity) {
+    const std::string project = arguments.Option("--project").value_or(std::string{});
+    std::vector<std::string> show{ "show", "--project", project, "--name", entity };
+    if (const std::optional<std::string> scene = arguments.Option("--scene")) show.insert(show.end(), { "--scene", *scene });
+    std::ostringstream shown;
+    std::ostringstream ignored;
+    if (RunEntityCommand(ArgumentList{ show }, CommandIo{ .out = shown, .err = ignored }) != 0) return {};
+    const std::string text = shown.str();
+    const std::size_t meshAt = text.find("mesh=/Game/");
+    if (meshAt == std::string::npos) return {};
+    const std::string mesh = text.substr(meshAt + 5U, text.find_first_of(" \r\n", meshAt) - meshAt - 5U);
+    if (!mesh.ends_with(".kbterrain")) return {};
+    const auto number = [&](const std::string& source, const std::string& key, int index, float fallback) {
+        const std::size_t at = source.find(key);
+        if (at == std::string::npos) return fallback;
+        const char* cursor = source.c_str() + at + key.size();
+        for (int skipped = 0; skipped < index && cursor != nullptr; ++skipped) cursor = std::strchr(cursor, ',') != nullptr ? std::strchr(cursor, ',') + 1 : nullptr;
+        return cursor != nullptr ? static_cast<float>(std::atof(cursor)) : fallback;
+    };
+    const float lift = number(text, "worldPosition=", 1, 0.0F);
+    const float scale = number(text, "localScale=", 1, 1.0F);
+    std::ostringstream info;
+    if (RunTerrainCommand(ArgumentList{ std::vector<std::string>{ "info", "--project", project, "--terrain", mesh } }, CommandIo{ .out = info, .err = ignored }) != 0) return {};
+    const std::string infoText = info.str();
+    const std::size_t at = infoText.find("height min ");
+    if (at == std::string::npos) return {};
+    const float low = static_cast<float>(std::atof(infoText.c_str() + at + 11U));
+    const std::size_t highAt = infoText.find(" max ", at);
+    if (highAt == std::string::npos) return {};
+    const float high = static_cast<float>(std::atof(infoText.c_str() + highAt + 5U));
+    char heights[2][48];
+    std::snprintf(heights[0], sizeof(heights[0]), "HeightMin=%.3f", lift + low * scale);
+    std::snprintf(heights[1], sizeof(heights[1]), "HeightMax=%.3f", lift + high * scale);
+    return { heights[0], heights[1] };
 }
 
 // "Color=@object[*factor]:#fallback" in a preset: the colour the object already wears (darker by the factor), else the fallback.
@@ -321,6 +360,17 @@ int RunMaterialPresetNew(const ArgumentList& arguments, CommandIo io) {
     const ObjectLook look = onObject ? LookOfObject(arguments, projectRoot, *object) : ObjectLook{};
     std::vector<std::string> named;
     for (const std::string& setting : arguments.Options("--set")) named.push_back(setting.substr(0U, setting.find('=')));
+    // A terrain material takes its height range from the terrain it goes on, unless the call names one.
+    if (onObject) {
+        const std::vector<std::string> parameters = MasterParameters(*master);
+        const auto has = [&](const std::string& key) { return std::ranges::find(parameters, key) != parameters.end(); };
+        if (has("HeightMin") && has("HeightMax") && std::ranges::find(named, "HeightMin") == named.end() && std::ranges::find(named, "HeightMax") == named.end()) {
+            for (const std::string& setting : TerrainHeightSettings(arguments, *object)) {
+                settings.push_back(setting);
+                io.out << "Note: " << setting << " (the height of the terrain under " << *object << ")\n";
+            }
+        }
+    }
     std::erase_if(settings, [&](const std::string& setting) {
         return setting.find("=@object") != std::string::npos && std::ranges::find(named, setting.substr(0U, setting.find('='))) != named.end();
     });

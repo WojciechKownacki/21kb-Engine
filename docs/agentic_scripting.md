@@ -376,6 +376,7 @@ the folder.
 | `kb_cli guide [--topic <name>]` | print one how-to guide, or the list of them |
 | `kb_cli script-new --project <dir> --name <Name> --language lua\|cpp` | create a Lua or C++ script from the template (never overwrites); `--code "<Lua text>"` writes a Lua script's whole text instead |
 | `kb_cli image new --project <dir> --name <Name> --preset <preset> [--style flat\|soft\|neon\|pixel] [--color #RRGGBB] [--color2 #RRGGBB] [--size 256]` | draw an icon, a UI background, a texture that tiles, a soft dot or a flame sprite sheet with the engine's own code, write it as a PNG into `Assets/Images` and import it; `--replace` draws an existing one again |
+| `kb_cli image array --project <dir> --name <Name> --layers <preset[:#color[:#color2]]>,... [--size 256]` | draw 2 to 16 pictures with the presets of `image new` and write them as the layers of one 2D array texture (`Assets/Images/<Name>.ktx`), imported, for the layered terrain material (`terrain-layers`) |
 | `kb_cli sound new --project <dir> --name <Name> --preset jump\|coin\|hit\|explosion\|click\|laser\|powerup\|footstep\|wind\|music [--pitch <semitones>] [--length <seconds>]` | synthesise a sound effect or a loop, write it as a WAV into `Assets/Audio` and import it |
 | `kb_cli animation-clip new --project <dir> --name <Name> --preset bob\|spin\|open-close\|pulse[,...] --entity <Object> [--seconds 2] [--amount <n>] [--loop yes\|no]` | make an animation clip (a coin that bobs and spins, a door that opens and closes), a controller for it and an Animator on the object, so it moves from the start of the scene; `key`, `show` and `play` author a clip by hand |
 | `kb_cli material-function new --project <dir> --name <Name> --preset fresnel-glow\|panner\|tiling` | write a reusable material function (`.kbmatfn`); `material-function use --material <path> --function <Name> [--set Input=value]` adds a call to it to a material's graph, gives every input a value and wires its output (Emissive, or Customized UV) |
@@ -408,7 +409,7 @@ More commands, each with its options in `kb_cli help`:
 | `kb_cli material-set` | change values of a material |
 | `kb_cli material-show` | print the values of a material |
 | `kb_cli material-graph` | edit a material graph node by node or as one text; list the node kinds and show one with its pins |
-| `kb_cli material-preview` | draw materials on spheres headless and write the picture |
+| `kb_cli material-preview` | draw materials on spheres headless and write the picture (`--device phone` draws it as a phone builds it: the water without the scene read) |
 | `kb_cli material-instance-new` | create a material instance with overrides |
 | `kb_cli material-instance-set` | change or clear overrides of a material instance |
 | `kb_cli material-instance-show` | print a material instance and its effective values |

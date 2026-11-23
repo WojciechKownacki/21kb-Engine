@@ -38,6 +38,32 @@ void RendererMeshPassSubmitter::SubmitViewportPass(
     });
 }
 
+void RendererMeshPassSubmitter::SubmitOutlines(const RendererMeshPassSubmitDesc& desc, bgfx::ViewId viewId) {
+    for (const MeshPassType pass : { MeshPassType::Outline, MeshPassType::OutlineHidden }) {
+        desc.sceneRenderer.SubmitMeshPass(
+            viewId,
+            pass,
+            desc.renderScene,
+            desc.width,
+            desc.height,
+            desc.sceneCamera,
+            desc.sceneDesc.drawBudget,
+            desc.lightingConfig,
+            nullptr,
+            {},
+            &desc.gpuDrivenSupport);
+        desc.aggregateSubmitStats += desc.sceneRenderer.LastSubmitStats();
+        desc.diagnostics += desc.sceneRenderer.LastDiagnostics();
+        desc.passSubmitStats.push_back(SceneRenderPassSubmitStats{
+            .viewportId = desc.sceneDesc.target.viewport.id.value,
+            .viewportIndex = desc.sceneDesc.target.viewport.viewportIndex,
+            .renderPass = RenderPassKind::TransparentScene,
+            .pass = pass,
+            .stats = desc.sceneRenderer.LastSubmitStats(),
+        });
+    }
+}
+
 void RendererMeshPassSubmitter::SubmitSelectionMask(const RendererMeshPassSubmitDesc& desc) {
     if (!desc.sceneDesc.postProcess.enabled || !bgfx::isValid(desc.sceneDesc.postProcess.selectionMaskFrameBuffer) || desc.sceneDesc.selectedEntityIds.empty()) {
         return;

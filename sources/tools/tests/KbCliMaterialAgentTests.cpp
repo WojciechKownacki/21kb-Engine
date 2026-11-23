@@ -212,7 +212,7 @@ void RunGraphTextTests() {
 void RunLibraryTests() {
     const std::span<const kb::cli::material::MaterialPreset> presets = kb::cli::material::MaterialPresets();
     Require(presets.size() >= 150U, "the library holds about 150 presets: " + std::to_string(presets.size()));
-    static const std::set<std::string_view> families{ "metal", "plastic", "wood", "stone", "ground", "fabric", "pattern", "emissive", "effect", "toon", "glass", "water", "scifi", "ui", "post" };
+    static const std::set<std::string_view> families{ "metal", "plastic", "wood", "stone", "ground", "fabric", "pattern", "emissive", "effect", "toon", "outline", "glass", "water", "scifi", "ui", "post" };
     std::set<std::string_view> names;
     std::vector<std::set<std::string>> words;
     for (const kb::cli::material::MaterialPreset& preset : presets) {
@@ -279,7 +279,13 @@ void RunSearchTests() {
     const std::string mixed = search("neon toon water");
     Require(Contains(mixed, "preset neon-") && Contains(mixed, "preset toon-") && Contains(mixed, "preset water-"), "three kinds of answer for three wishes: " + mixed);
     Require(std::ranges::count(mixed, '\n') <= 3, "at most three answers: " + mixed);
-    Require(Contains(search("outline for a character"), "preset toon-"), "an outline is found as a toon look");
+    Require(Contains(search("outline for a character"), "preset outline-"), "an outline is found as an outline look");
+    Require(Contains(search("obrys postaci"), "preset outline-") || Contains(search("kontur"), "preset outline-"), "an outline is found by its Polish words");
+    Require(Contains(search("see the enemy through a wall"), "preset xray-enemy"), "a highlight through a wall is found");
+    Require(Contains(search("realistic lake"), "preset water-lake"), "a lake is found");
+    Require(Contains(search("jezioro"), "preset water-lake") && Contains(search("woda"), "preset water-"), "water is found by its Polish words");
+    Require(Contains(search("mountain with textured layers"), "preset terrain-layers"), "a layered mountain is found");
+    Require(Contains(search("gora"), "terrain-layers") && Contains(search("teren"), "terrain-layers"), "a mountain is found by its Polish words");
     Require(Contains(search("snow on top of the rocks"), "preset snow-on-"), "snow on top is found");
     Require(Contains(search("glitch effect"), "preset glitch-"), "a glitch is found");
     Require(Contains(search("wind in the grass"), "preset grass-wind"), "wind on plants is found");

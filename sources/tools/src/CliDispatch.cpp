@@ -122,8 +122,8 @@ R"(  material-graph Edit a material's graph, as the Material Editor does; every 
   material-preview Draw materials on spheres, headless, as a picture. Several materials are
                drawn side by side; a Post Process or User Interface material alone.
                  --project <dir> --material /Game/<path>.kbmat|.kbmatinst [--material ...]
-                 [--out <new file.png>] [--frames <n>]
-               (through `kb_cli mcp` the picture comes back as an image; it names the size,
+                 [--out <new file.png>] [--frames <n>] [--device phone|computer]
+               (--device phone draws it as a phone would build it; through `kb_cli mcp` the picture comes back as an image; it names the size,
                the colours and whether the frame is blank)
   material-instance-new Create a material instance of a material, as Create Material
                Instance does (beside its parent unless --folder), with overrides.
@@ -701,7 +701,7 @@ R"(  mcp          Serve the commands above as MCP tools over stdio (newline-
                  (a relative --out is inside the --project folder; a project without --out
                  gets Saved/Agent/Captures/capture-<n>.png)
                  [--scene </Game/Path.21kbscene>] [--frames <1-120000>]
-                 [--width <64-8192>] [--height <64-8192>]
+                 [--width <64-8192>] [--height <64-8192>] [--device phone|computer]
                  [--camera <camera entity> | --view overview|top|front|side |
                   --eye <x,y,z> --look-at <x,y,z>]
                The picture is frame --frames (default 60) of a fixed 1/60 s step, so the
@@ -785,6 +785,9 @@ R"(  image        Draw a picture into the project and import it, so it is an ass
                one frame, up to 512). --color is the main colour, --color2 the
                second one (a gradient, a glow, a flame's core). The file is Assets/Images/<Name>.png
                and is used as /Game/Images/<Name>.png: imageAssetId of a UI Image or a Sprite2D)
+                 array --project <dir> --name <Name> --layers <preset[:#color[:#color2]]>,... [--size 256]
+               (2 to 16 pictures as the layers of one 2D array texture, /Game/Images/<Name>.ktx; the
+               terrain-layers material picks a layer by the height and the slope of the ground)
   sound        Make a sound with the engine's own synthesiser and import it, so it is an asset
                at once. No outside tool is needed.
                  new --project <dir> --name <Name> --preset <preset> [--pitch <semitones>]

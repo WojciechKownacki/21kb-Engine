@@ -535,6 +535,7 @@ set(KB_RENDERER_SHADER_MANIFEST
     fs_mesh_instanced.sc
     fs_mesh_instanced_cmp.sc
     fs_mesh_motion_vectors.sc
+    fs_mesh_outline.sc
     fs_mesh_selection_instanced.sc
     fs_mesh_shadow_instanced.sc
     fs_post_bloom_blur.sc
@@ -559,6 +560,8 @@ set(KB_RENDERER_SHADER_MANIFEST
     vs_mesh.sc
     vs_mesh_instanced.sc
     vs_mesh_motion_vectors_instanced.sc
+    vs_mesh_outline_instanced.sc
+    vs_mesh_outline_skinned_instanced.sc
     vs_mesh_shadow_instanced.sc
     vs_mesh_shadow_skinned_instanced.sc
     vs_mesh_skinned_instanced.sc
@@ -603,6 +606,8 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_mesh.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_mesh_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_mesh_skinned_instanced.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_mesh_outline_instanced.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_mesh_outline_skinned_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_mesh_shadow_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_mesh_shadow_skinned_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_present.sc
@@ -656,6 +661,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_instanced_cmp.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_motion_vectors.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_outline.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_selection_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_shadow_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_present_tex.sc

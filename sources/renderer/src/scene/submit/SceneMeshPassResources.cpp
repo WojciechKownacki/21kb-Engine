@@ -56,6 +56,10 @@ namespace {
     return pass == MeshPassType::SelectionId || pass == MeshPassType::EditorSelection;
 }
 
+[[nodiscard]] bool IsOutlinePass(MeshPassType pass) noexcept {
+    return pass == MeshPassType::Outline || pass == MeshPassType::OutlineHidden;
+}
+
 constexpr std::uint64_t kBuiltinMeshMaterialTypeId = 0x6275696C74696E70ULL; // "builtinp"
 constexpr std::uint32_t kBuiltinMeshMaterialTypeVersion = 1U;
 
@@ -216,6 +220,10 @@ constexpr const char* kShadowCompareTransparentPass = "BaseTransparentShadowComp
     if (key.pass == "SelectionId") {
         return ShaderLoader::LoadProgram(meshVertexShader, "fs_mesh_selection_instanced.sc");
     }
+    if (key.pass == "Outline") {
+        return ShaderLoader::LoadProgram(
+            skinned ? "vs_mesh_outline_skinned_instanced.sc" : "vs_mesh_outline_instanced.sc", "fs_mesh_outline.sc");
+    }
     if (key.pass == "MotionVectors") {
         return ShaderLoader::LoadProgram(
             skinned ? "vs_mesh_skinned_motion_vectors_instanced.sc" : "vs_mesh_motion_vectors_instanced.sc",
@@ -372,6 +380,8 @@ bool SceneMeshPassResources::Initialize() {
     emissiveSampler_ = bgfx::createUniform("s_emissive", bgfx::UniformType::Sampler);
     terrainLayerWeightSampler_ = bgfx::createUniform("s_terrainLayerWeights", bgfx::UniformType::Sampler);
     terrainLayerParamsUniform_ = bgfx::createUniform("u_terrainLayerParams", bgfx::UniformType::Vec4);
+    outlineColorUniform_ = bgfx::createUniform("u_outlineColor", bgfx::UniformType::Vec4);
+    outlineParamsUniform_ = bgfx::createUniform("u_outlineParams", bgfx::UniformType::Vec4);
     clearcoatSampler_ = bgfx::createUniform("s_clearcoat", bgfx::UniformType::Sampler);
     clearcoatRoughnessSampler_ = bgfx::createUniform("s_clearcoatRoughness", bgfx::UniformType::Sampler);
     materialLayersUniform_ = bgfx::createUniform("u_materialLayers", bgfx::UniformType::Vec4);
@@ -471,6 +481,14 @@ void SceneMeshPassResources::Shutdown() {
     if (bgfx::isValid(terrainLayerParamsUniform_)) {
         bgfx::destroy(terrainLayerParamsUniform_);
         terrainLayerParamsUniform_ = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(outlineColorUniform_)) {
+        bgfx::destroy(outlineColorUniform_);
+        outlineColorUniform_ = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(outlineParamsUniform_)) {
+        bgfx::destroy(outlineParamsUniform_);
+        outlineParamsUniform_ = BGFX_INVALID_HANDLE;
     }
     if (bgfx::isValid(terrainLayerWeightSampler_)) {
         bgfx::destroy(terrainLayerWeightSampler_);
@@ -726,6 +744,7 @@ bool SceneMeshPassResources::IsInitialized() const noexcept {
         bgfx::isValid(emissiveSampler_) &&
         bgfx::isValid(terrainLayerWeightSampler_) &&
         bgfx::isValid(terrainLayerParamsUniform_) &&
+        bgfx::isValid(outlineColorUniform_) && bgfx::isValid(outlineParamsUniform_) &&
         bgfx::isValid(fogParamsUniform_) && bgfx::isValid(fogColorUniform_) &&
         bgfx::isValid(clearcoatSampler_) && bgfx::isValid(clearcoatRoughnessSampler_) &&
         bgfx::isValid(materialLayersUniform_) && bgfx::isValid(materialSubsurfaceUniform_) && localReflections_.IsInitialized() && planarReflections_.IsInitialized() &&
@@ -1098,7 +1117,22 @@ void SceneMeshPassResources::EndFrame(std::uint64_t frameIndex) const {
 SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(
     const RenderMaterialResource* material, MeshPassType pass, bool skinned, bool shadowCompare) const noexcept {
     SceneMeshPassProgramResolution resolution{};
-    if (IsSelectionPass(pass)) {
+    if (IsOutlinePass(pass)) {
+        // The hull and the silhouette behind surfaces are one program; the draw tells them apart by its uniforms.
+        resolution.key = BuiltinMeshProgramKey("Outline", skinned);
+        resolution.program = programRegistry_.Find(resolution.key);
+        if (!bgfx::isValid(resolution.program)) {
+            resolution.program = programRegistry_.Acquire(resolution.key);
+            if (bgfx::isValid(resolution.program)) {
+                AppendUniqueValue(residentProgramKeys_, resolution.key);
+            }
+        }
+        if (bgfx::isValid(resolution.program)) {
+            AppendUniqueValue(usedProgramKeys_, resolution.key);
+        }
+        resolution.materialProgramIdentity = MaterialProgramKeyIdentityHash(resolution.key);
+        resolution.status = SceneRenderMaterialProgramStatus::Builtin;
+    } else if (IsSelectionPass(pass)) {
         resolution.key = BuiltinMeshProgramKey("SelectionId", skinned);
         resolution.program = skinned ? programRegistry_.Find(resolution.key) : selectionProgram_;
         if (skinned && !bgfx::isValid(resolution.program)) {
@@ -1337,6 +1371,20 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
                     BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
             bgfx::setUniform(previousSkinningPaletteInfoUniform_, previousPaletteInfo.data());
         }
+    }
+    if (IsOutlinePass(desc.pass)) {
+        if (material == nullptr) {
+            return BGFX_INVALID_HANDLE;
+        }
+        const RenderMaterialOutline& outline = material->graphProgram.outline;
+        const bool hull = desc.pass == MeshPassType::Outline;
+        const std::array<float, 4U> color = hull
+            ? std::array<float, 4U>{ outline.color[0], outline.color[1], outline.color[2], 1.0F }
+            : std::array<float, 4U>{ outline.hiddenColor[0], outline.hiddenColor[1], outline.hiddenColor[2], outline.hiddenColor[3] };
+        const std::array<float, 4U> params{ hull ? outline.width : 0.0F, hull ? 0.0F : 1.0F, 0.0F, 0.0F };
+        bgfx::setUniform(outlineColorUniform_, color.data());
+        bgfx::setUniform(outlineParamsUniform_, params.data());
+        return resolution.program;
     }
     if (IsSelectionPass(desc.pass)) {
         const std::array<float, 16> disabledShadowViewProj{};

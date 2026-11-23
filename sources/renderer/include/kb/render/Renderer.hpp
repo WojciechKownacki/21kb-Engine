@@ -263,6 +263,8 @@ public:
     [[nodiscard]] SceneRenderDrawBudget DefaultSceneDrawBudget() const noexcept;
     void SetDefaultSceneLightingConfig(SceneRenderLightingConfig lightingConfig) noexcept;
     [[nodiscard]] SceneRenderLightingConfig DefaultSceneLightingConfig() const noexcept;
+    // The quality and level the materials of a runtime scene are built with (RenderMaterialGraphDeviceContext).
+    void SetDefaultMaterialGraphContext(RenderMaterialGraphBuildContext context) noexcept;
     // Optional GPU compaction drives indexed indirect and bounded meshlet draws.
     void SetGpuDrivenRuntimeDispatchEnabled(bool enabled) noexcept;
     [[nodiscard]] RenderEffectHost& RenderEffects();
@@ -424,6 +426,7 @@ private:
     RuntimeSceneResourceReserveDesc runtimeSceneResourceReserveDesc_{};
     SceneRenderDrawBudget defaultSceneDrawBudget_{};
     SceneRenderLightingConfig defaultSceneLightingConfig_{};
+    RenderMaterialGraphBuildContext defaultMaterialGraphContext_{};
     ScenePostProcessSettings defaultPostProcessSettings_{};
     float renderScale_ = 1.0F;
     std::optional<SceneRenderLightingPath> lastRuntimeMaterialLightingPath_;

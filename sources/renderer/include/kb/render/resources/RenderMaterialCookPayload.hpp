@@ -67,7 +67,9 @@ public:
         const RenderMaterialAssetData& material,
         const kb::assets::AssetMetadata& metadata,
         const kb::assets::AssetRegistry& registry,
-        const RenderMaterialGraphFunctionLibrary& functionLibrary);
+        const RenderMaterialGraphFunctionLibrary& functionLibrary,
+        // The quality and level the graph is built for: the device class of the target platform.
+        const RenderMaterialGraphBuildContext& deviceContext = {});
 };
 
 class RenderMaterialCookManifestBuilder final {

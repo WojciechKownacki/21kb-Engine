@@ -535,6 +535,16 @@ struct RenderMaterialGraphBuildContext {
     const RenderMaterialGraphFunctionLibrary* functionLibrary = nullptr;
 };
 
+// The context a device class builds its materials with: a phone or tablet takes the Medium quality and the ES3 level, a
+// computer the High quality and SM5. QualitySwitch and FeatureLevelSwitch nodes pick their branch by it, and
+// Single Layer Water draws as a lit translucent surface below the High quality (it reads the scene colour and depth).
+[[nodiscard]] inline RenderMaterialGraphBuildContext RenderMaterialGraphDeviceContext(bool mobile) {
+    RenderMaterialGraphBuildContext context;
+    context.qualityLevel = mobile ? RenderMaterialGraphQualityLevel::Medium : RenderMaterialGraphQualityLevel::High;
+    context.featureLevel = mobile ? RenderMaterialGraphFeatureLevel::Es3 : RenderMaterialGraphFeatureLevel::Sm5;
+    return context;
+}
+
 struct RenderMaterialGraphIrPin {
     std::string name;
     std::uint32_t stablePinId = 0U;
@@ -800,6 +810,13 @@ void StripRenderMaterialGraphEditorOnlyState(RenderMaterialGraphDocument& graph)
 [[nodiscard]] RenderMaterialGraphIrBuildResult BuildRenderMaterialGraphIr(
     const RenderMaterialGraphDocument& graph,
     RenderMaterialGraphBuildContext context = {});
+// The nodes that feed the Material Output (a node nothing uses costs nothing), found from the output backwards; a switch on
+// the quality, the level, the lighting path or the stage follows only the branch `context` takes.
+[[nodiscard]] std::vector<std::uint32_t> RenderMaterialGraphReachableNodes(
+    const RenderMaterialGraphDocument& graph,
+    const RenderMaterialGraphBuildContext& context,
+    std::uint32_t outputNodeId);
+
 [[nodiscard]] RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     const RenderMaterialGraphDocument& graph,
     RenderMaterialGraphBuildContext context = {});

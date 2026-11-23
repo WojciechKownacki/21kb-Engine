@@ -645,6 +645,7 @@ std::optional<RenderSceneSubmitDesc> Renderer::RuntimeSceneSubmitDesc(const Runt
         .upscaledExtent = extent == outputExtent ? RenderExtent{} : outputExtent,
         .drawBudget = defaultSceneDrawBudget_,
         .lightingConfig = defaultSceneLightingConfig_,
+        .materialGraphContext = defaultMaterialGraphContext_,
         .dirtySceneEntityIds = synchronization.dirtySceneEntityIds,
         .synchronizeScene = synchronization.fullSync,
         .structuralSync = synchronization.structuralSync,
@@ -1891,6 +1892,9 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
                 ? TransparentDepthCopy(viewportPlan.viewIds.transparentScene, desc.target)
                 : bgfx::TextureHandle{bgfx::kInvalidHandle});
         }
+        if (!terrainLayersOnly && sceneRenderer_->Resources().OutlineMaterialCount() != 0U) {
+            RendererMeshPassSubmitter::SubmitOutlines(meshPassSubmitDesc, viewportPlan.viewIds.transparentScene);
+        }
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport transparent pass begin");
         RendererMeshPassSubmitter::SubmitViewportPass(
             meshPassSubmitDesc,
@@ -2522,6 +2526,10 @@ void Renderer::SetDefaultSceneLightingConfig(SceneRenderLightingConfig lightingC
     if (sceneRenderer_ != nullptr) {
         sceneRenderer_->SetDefaultLightingConfig(lightingConfig);
     }
+}
+
+void Renderer::SetDefaultMaterialGraphContext(RenderMaterialGraphBuildContext context) noexcept {
+    defaultMaterialGraphContext_ = std::move(context);
 }
 
 SceneRenderLightingConfig Renderer::DefaultSceneLightingConfig() const noexcept {

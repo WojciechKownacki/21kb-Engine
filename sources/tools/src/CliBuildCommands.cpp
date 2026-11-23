@@ -301,6 +301,14 @@ int RunCaptureCommand(const ArgumentList& arguments, CommandIo io) {
     for (const char* option : { "--camera", "--view", "--eye", "--look-at" }) {
         if (const std::optional<std::string> value = arguments.Option(option); value.has_value()) words.push_back(std::string{ option } + "=" + *value);
     }
+    // The class of device the materials are built for (water draws simpler on a phone): this computer's own without it.
+    if (const std::optional<std::string> device = arguments.Option("--device"); device.has_value()) {
+        if (*device != "phone" && *device != "computer") {
+            io.err << "error: --device takes phone or computer, got '" << *device << "'\n";
+            return 1;
+        }
+        words.push_back("--material-device=" + *device);
+    }
     if (width != 0U) {
         words.push_back("--width=" + std::to_string(width));
     }

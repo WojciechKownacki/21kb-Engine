@@ -101,19 +101,13 @@ using Kind = RenderMaterialGraphNodeKind;
 } // namespace
 
 RenderMaterialGraphCost EstimateRenderMaterialGraphCost(const RenderMaterialGraphDocument& graph) {
-    // The nodes that feed the output, found from the output backwards.
+    // The nodes that feed the output on a phone, found from the output backwards: a quality or level switch keeps the
+    // branch the phone takes, so a scene read behind the High quality is no cost here.
+    const RenderMaterialGraphBuildContext phone = RenderMaterialGraphDeviceContext(true);
     std::unordered_set<std::uint32_t> reached;
-    std::vector<std::uint32_t> pending;
     for (const RenderMaterialGraphNode& node : graph.nodes) {
-        if (node.kind == Kind::MaterialOutput) pending.push_back(node.id);
-    }
-    while (!pending.empty()) {
-        const std::uint32_t id = pending.back();
-        pending.pop_back();
-        if (!reached.insert(id).second) continue;
-        for (const RenderMaterialGraphLink& link : graph.links) {
-            if (link.toNodeId == id) pending.push_back(link.fromNodeId);
-        }
+        if (node.kind != Kind::MaterialOutput) continue;
+        for (const std::uint32_t id : RenderMaterialGraphReachableNodes(graph, phone, node.id)) reached.insert(id);
     }
     RenderMaterialGraphCost cost;
     bool parallax = false;
@@ -135,6 +129,7 @@ RenderMaterialGraphCost EstimateRenderMaterialGraphCost(const RenderMaterialGrap
     if (cost.textureSamples > kRenderMaterialMobileTextureSampleBudget) {
         cost.mobileWarnings.push_back(std::to_string(cost.textureSamples) + " texture samples (a phone should stay under " + std::to_string(kRenderMaterialMobileTextureSampleBudget) + ")");
     }
+    // Single Layer Water reads the scene behind it too, but a phone draws it as a lit translucent surface (see RenderMaterialGraphDeviceContext).
     if (cost.sceneReads > 0U) {
         cost.mobileWarnings.push_back("reads the scene behind the surface (" + std::to_string(cost.sceneReads) + " reads): a full-screen copy per frame on a phone");
     }

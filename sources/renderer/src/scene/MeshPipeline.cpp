@@ -167,6 +167,10 @@ const char* MeshPassTypeName(MeshPassType pass) noexcept {
         return "EditorSelection";
     case MeshPassType::Gizmo:
         return "Gizmo";
+    case MeshPassType::Outline:
+        return "Outline";
+    case MeshPassType::OutlineHidden:
+        return "OutlineHidden";
     }
 
     return "Unknown";

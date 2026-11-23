@@ -309,6 +309,11 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/tests/CliMaterialLibraryTests.py
                 --cli $<TARGET_FILE:kb_cli>)
         set_tests_properties(kb_cli_material_library PROPERTIES LABELS "tools;gpu" TIMEOUT 900)
+        # Outline, water on a computer and on a phone, and layered terrain are drawn as they promise.
+        add_test(NAME kb_cli_material_effects
+            COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/tests/CliMaterialEffectsTests.py
+                --cli $<TARGET_FILE:kb_cli>)
+        set_tests_properties(kb_cli_material_effects PROPERTIES LABELS "tools;gpu" TIMEOUT 900)
         add_test(NAME kb_cli_renderer_info COMMAND ${CMAKE_COMMAND}
             "-DCLI=$<TARGET_FILE:kb_cli>"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/KbCliRendererInfoTests.cmake")

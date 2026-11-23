@@ -61,6 +61,8 @@ void EmitInstanceDiagnostic(
     case MeshPassType::BaseTransparent:
     case MeshPassType::ShadowDepth:
     case MeshPassType::Gizmo:
+    case MeshPassType::Outline:
+    case MeshPassType::OutlineHidden:
         return true;
     }
     return true;
@@ -81,6 +83,8 @@ void EmitInstanceDiagnostic(
     case MeshPassType::SelectionId:
     case MeshPassType::EditorSelection:
     case MeshPassType::Gizmo:
+    case MeshPassType::Outline:
+    case MeshPassType::OutlineHidden:
         return false;
     }
     return true;
@@ -98,6 +102,8 @@ void EmitInstanceDiagnostic(
     case MeshPassType::BaseTransparent:
     case MeshPassType::MotionVectors:
     case MeshPassType::Gizmo:
+    case MeshPassType::Outline:
+    case MeshPassType::OutlineHidden:
         return false;
     }
     return true;
@@ -521,6 +527,8 @@ constexpr std::size_t kMotionReadSize = offsetof(SceneRenderMeshInstance, worldB
     case MeshPassType::BaseTransparent:
     case MeshPassType::ShadowDepth:
     case MeshPassType::Gizmo:
+    case MeshPassType::Outline:
+    case MeshPassType::OutlineHidden:
         return true;
     }
     return false;

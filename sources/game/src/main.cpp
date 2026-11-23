@@ -97,6 +97,8 @@ struct GameOptions {
     std::filesystem::path profilePath;
     std::filesystem::path inputReplayPath;
     std::optional<kb::render::SceneRenderLightingPath> profileLighting;
+    // The device class the materials are built for: unset is this device's own (a phone builds its water without the scene read).
+    std::optional<bool> materialDeviceMobile;
     // -1 lets the renderer choose; otherwise a bgfx::RendererType.
     std::int32_t rendererType = -1;
     std::filesystem::path screenshotPath;
@@ -143,6 +145,7 @@ Usage: kb_game [options]
   --profile-scene-overdraw           measure scene geometry and particle overdraw (needs --profile-file)
   --profile-gpu-views                GPU time of every render view in the frame trace (needs --profile-file)
   --profile-lighting=Forward|ForwardPlus|Deferred
+  --material-device=phone|computer  build the materials for that class of device (default: this device's own)
   --renderer=d3d11|d3d12|vulkan|opengl  graphics backend (default: the platform's)
   --help                            this text
 )";
@@ -223,13 +226,14 @@ std::ostream& WriteWorldMemoryProfile(std::ostream& output, const kb::world::Wor
 // Switches that load content other than the game's own package, pick a scene
 // the game did not start in, or write files where the command line says. Only
 // a development player accepts them; a shipped game refuses them.
-constexpr std::array<std::wstring_view, 17U> kDevelopmentSwitches{
+constexpr std::array<std::wstring_view, 18U> kDevelopmentSwitches{
     L"--project=",
     L"--scene=",
     L"--profile-fixed-step",
     L"--profile-scene-overdraw",
     L"--profile-gpu-views",
     L"--profile-lighting=",
+    L"--material-device=",
     L"--profile-file=",
     L"--screenshot-file=",
     L"--screenshot-frame=",
@@ -405,6 +409,14 @@ constexpr std::array<std::wstring_view, 17U> kDevelopmentSwitches{
             else if (value == L"Deferred") options.profileLighting = kb::render::SceneRenderLightingPath::Deferred;
             else {
                 std::cerr << "kb_game: --profile-lighting expects Forward, ForwardPlus or Deferred\n";
+                return false;
+            }
+        } else if (HasPrefix(argument, L"--material-device=")) {
+            const auto value = argument.substr(18U);
+            if (value == L"phone") options.materialDeviceMobile = true;
+            else if (value == L"computer") options.materialDeviceMobile = false;
+            else {
+                std::cerr << "kb_game: --material-device expects phone or computer\n";
                 return false;
             }
         } else if (HasPrefix(argument, L"--input-replay=")) {
@@ -741,6 +753,7 @@ int RunGame(const GameOptions& options) {
         lighting.maxForwardLights = lighting.lightingPath == kb::render::SceneRenderLightingPath::ClusteredForwardPlus
             ? kb::render::kMaxSceneForwardPlusLights : kb::render::kMaxSceneForwardLights;
         renderer.SetDefaultSceneLightingConfig(lighting);
+        renderer.SetDefaultMaterialGraphContext(kb::render::RenderMaterialGraphDeviceContext(options.materialDeviceMobile.value_or(kb::game::kMobileDevice)));
         rendererReady = true;
         loadingScreen.Report(renderer, 0.0F, nullptr);
         return true;

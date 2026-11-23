@@ -241,7 +241,8 @@ void HashGraphParameterValues(std::uint64_t& hash, const std::vector<RenderMater
     const kb::assets::AssetMetadata& metadata,
     const kb::assets::AssetRegistry& registry,
     const RenderMaterialGraphFunctionLibrary& functionLibrary,
-    std::vector<RenderMaterialGraphDiagnostic> functionDiagnostics) {
+    std::vector<RenderMaterialGraphDiagnostic> functionDiagnostics,
+    const RenderMaterialGraphBuildContext& deviceContext = {}) {
     RenderMaterialCookPayload payload{};
     payload.materialType = material.materialType.empty() ? kRenderMaterialAssetBuiltInPbrType : material.materialType;
     payload.materialTypeVersion = material.materialTypeVersion == 0U ? kRenderMaterialAssetBuiltInPbrTypeVersion : material.materialTypeVersion;
@@ -258,6 +259,8 @@ void HashGraphParameterValues(std::uint64_t& hash, const std::vector<RenderMater
         RenderMaterialGraphBuildContext graphContext{
             .assetId = metadata.id.value,
             .sourcePath = metadata.virtualPath.generic_string(),
+            .qualityLevel = deviceContext.qualityLevel,
+            .featureLevel = deviceContext.featureLevel,
             .functionLibrary = &functionLibrary,
         };
         payload.graphCompileKey = BuildRenderMaterialGraphCompileArtifactCacheKey(
@@ -297,8 +300,9 @@ RenderMaterialCookPayload RenderMaterialCookPayloadBuilder::Build(
     const RenderMaterialAssetData& material,
     const kb::assets::AssetMetadata& metadata,
     const kb::assets::AssetRegistry& registry,
-    const RenderMaterialGraphFunctionLibrary& functionLibrary) {
-    return BuildPayloadWithFunctionLibrary(material, metadata, registry, functionLibrary, {});
+    const RenderMaterialGraphFunctionLibrary& functionLibrary,
+    const RenderMaterialGraphBuildContext& deviceContext) {
+    return BuildPayloadWithFunctionLibrary(material, metadata, registry, functionLibrary, {}, deviceContext);
 }
 
 RenderMaterialCookManifest RenderMaterialCookManifestBuilder::Build(

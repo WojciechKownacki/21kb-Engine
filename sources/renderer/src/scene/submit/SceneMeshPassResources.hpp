@@ -204,6 +204,9 @@ private:
     bgfx::UniformHandle emissiveSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle terrainLayerWeightSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle terrainLayerParamsUniform_ = BGFX_INVALID_HANDLE;
+    // The outline passes: the colour (a = strength of the silhouette behind surfaces) and the width in pixels.
+    bgfx::UniformHandle outlineColorUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle outlineParamsUniform_ = BGFX_INVALID_HANDLE;
     mutable std::array<bool, 2> layeredGbufferUnavailable_{};
     // The comparison forward program (rigid, skinned) failed to load: the stored-depth program lights instead.
     mutable std::array<bool, 2> shadowCompareUnavailable_{};

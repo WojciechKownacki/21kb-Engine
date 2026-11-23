@@ -277,6 +277,15 @@ void RenderResourceRegistry::DestroyMesh(RenderMeshHandle handle) noexcept {
     }
 }
 
+namespace {
+
+[[nodiscard]] bool HasOutline(const RenderMaterialResource& resource) noexcept {
+    const RenderMaterialOutline& outline = resource.graphProgram.outline;
+    return resource.graphProgram.active && (outline.width > 0.0F || outline.hiddenColor[3] > 0.0F);
+}
+
+} // namespace
+
 RenderMaterialHandle RenderResourceRegistry::RegisterMaterial(const RenderMaterialDesc& desc) {
     return RegisterMaterial(desc, RenderMaterialGraphProgramBinding{});
 }
@@ -293,6 +302,7 @@ RenderMaterialHandle RenderResourceRegistry::RegisterMaterial(const RenderMateri
         resource.translucencyBlend = resource.graphProgram.translucencyBlend;
     }
     resource.version = AllocateResourceVersion();
+    outlineMaterialCount_ += HasOutline(resource) ? 1U : 0U;
     materials_.Activate(slotIndex, std::move(resource));
     const RenderMaterialHandle handle{ detail::MakeRenderHandleValue(slotIndex, materials_.Generation(slotIndex)) };
     if (const RenderMaterialResource* material = materials_.Find(handle); material != nullptr && material->graphProgram.active) {
@@ -446,6 +456,7 @@ void RenderResourceRegistry::Shutdown() noexcept {
     materials_.Shutdown([](RenderMaterialResource& resource) noexcept {
         resource = RenderMaterialResource{};
     });
+    outlineMaterialCount_ = 0U;
     textures_.Shutdown([](RenderTextureResource& resource) noexcept {
         RenderResourceReleaser::ReleaseTexture(resource);
     });
@@ -499,7 +510,8 @@ void RenderResourceRegistry::ReleaseDeferred(const DeferredDestroyEntry& entry) 
         });
         break;
     case DeferredDestroyKind::Material:
-        materials_.ReleasePending(entry.slot, [](RenderMaterialResource& resource) noexcept {
+        materials_.ReleasePending(entry.slot, [this](RenderMaterialResource& resource) noexcept {
+            outlineMaterialCount_ -= HasOutline(resource) ? 1U : 0U;
             resource = RenderMaterialResource{};
         });
         break;

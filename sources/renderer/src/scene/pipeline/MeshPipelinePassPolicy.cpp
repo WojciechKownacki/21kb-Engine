@@ -48,6 +48,8 @@ bool MeshPipelinePassPolicy::CanEverContain(
     case MeshPassType::GBuffer:
     case MeshPassType::BaseTransparent:
     case MeshPassType::Gizmo:
+    case MeshPassType::Outline:
+    case MeshPassType::OutlineHidden:
         return true;
     }
 
@@ -102,6 +104,12 @@ bool MeshPipelinePassPolicy::Accepts(
         return IsSelectedEntity(selectedEntityIds, instance.entityId);
     case MeshPassType::Gizmo:
         return true;
+    case MeshPassType::Outline:
+        return material != nullptr && material->graphProgram.active && material->graphProgram.outline.width > 0.0F &&
+            !UsesDisabledAlphaBlend(material);
+    case MeshPassType::OutlineHidden:
+        return material != nullptr && material->graphProgram.active && material->graphProgram.outline.hiddenColor[3] > 0.0F &&
+            !UsesDisabledAlphaBlend(material);
     }
 
     return false;
@@ -209,6 +217,14 @@ std::uint64_t MeshPipelinePassPolicy::State(
     case MeshPassType::EditorSelection:
     case MeshPassType::Gizmo:
         return SceneDepthPolicy::SceneOverlayState(true) | cullState | rasterStateExtra;
+    case MeshPassType::Outline:
+        // The hull: only its far side is drawn, so it shows only where it reaches past the object it surrounds.
+        return SceneDepthPolicy::SceneDepthReadState() | BGFX_STATE_CULL_CW | rasterStateExtra;
+    case MeshPassType::OutlineHidden:
+        // Only where another surface is nearer than this one: the depth test is the opposite of the scene's.
+        return (SceneDepthPolicy::SceneDepthReadState() & ~BGFX_STATE_DEPTH_TEST_MASK) | BGFX_STATE_DEPTH_TEST_LESS |
+            SceneColorAlphaPolicy::KeepingBlend(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA) |
+            cullState | rasterStateExtra;
     case MeshPassType::BaseOpaque: {
         const std::uint64_t opaqueState = SceneDepthPolicy::SceneMeshState(doubleSided) | rasterStateExtra;
         return writesDepth ? opaqueState : (opaqueState & ~BGFX_STATE_WRITE_Z);

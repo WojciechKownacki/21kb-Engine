@@ -200,6 +200,8 @@ struct MaterialShaderQualifier final {
         return Failure("graph material has no cooked shader artifacts: " + DescribeAsset(asset));
     }
 
+    const RenderMaterialGraphBuildContext deviceContext = RenderMaterialGraphDeviceContext(
+        profile.shaderPlatform == kb::assets::bake::ShaderBakePlatform::Android);
     const RenderMaterialFunctionLibraryBuildResult functions =
         BuildRenderMaterialFunctionLibrary(assets, *resolved.graph);
     if (std::ranges::any_of(functions.diagnostics, [](const RenderMaterialGraphDiagnostic& diagnostic) {
@@ -213,6 +215,8 @@ struct MaterialShaderQualifier final {
         RenderMaterialGraphBuildContext{
             .assetId = asset.id.value,
             .sourcePath = asset.virtualPath,
+            .qualityLevel = deviceContext.qualityLevel,
+            .featureLevel = deviceContext.featureLevel,
             .functionLibrary = &functions.library,
         });
     if (!compiled.Succeeded()) {

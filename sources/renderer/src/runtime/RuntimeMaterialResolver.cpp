@@ -1745,6 +1745,24 @@ void ApplyMaterialOutputGraphToPbrDesc(RenderMaterialDesc& desc, const RenderMat
     }
 }
 
+// The outline a graph asks for by its parameters OutlineWidth, OutlineColor, HiddenColor and HiddenStrength (see RenderMaterialOutline).
+[[nodiscard]] RenderMaterialOutline ReadMaterialOutline(const std::vector<RenderMaterialGraphParameterValue>& values) {
+    RenderMaterialOutline outline;
+    for (const RenderMaterialGraphParameterValue& value : values) {
+        const std::string key = NormalizeMaterialParameterKey(value.stableId);
+        if (key == "outlinewidth") {
+            outline.width = std::clamp(value.numbers[0], 0.0F, 64.0F);
+        } else if (key == "outlinecolor") {
+            std::copy_n(value.numbers.begin(), 3, outline.color);
+        } else if (key == "hiddencolor") {
+            std::copy_n(value.numbers.begin(), 3, outline.hiddenColor);
+        } else if (key == "hiddenstrength") {
+            outline.hiddenColor[3] = std::clamp(value.numbers[0], 0.0F, 1.0F);
+        }
+    }
+    return outline;
+}
+
 } // namespace
 
 RuntimeMaterialResolver::RuntimeMaterialResolver(RenderMaterialGraphBuildContext graphBuildContext) noexcept
@@ -2028,6 +2046,7 @@ ResolvedRuntimeMaterialDesc RuntimeMaterialResolver::ResolveLoadedMaterial(
                     resolved.graphDiagnostics);
                 resolved.graphProgram = std::move(bindingResult.binding);
                 resolved.graphProgram.boundsMargin = std::max(materialAsset.graph.maxWorldPositionOffsetDisplacement, 0.0F);
+                resolved.graphProgram.outline = ReadMaterialOutline(materialAsset.graphParameterValues);
                 WriteRendererMaterialGraphDebugLog(
                     "runtime",
                     "resolve-graph-binding-ok asset=" + std::to_string(materialMetadata.id.value) +

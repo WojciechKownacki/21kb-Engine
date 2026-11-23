@@ -213,6 +213,7 @@ int RunMaterialPreviewCommand(const ArgumentList& arguments, CommandIo io) {
 
     std::vector<std::string> capture{ "--project", project, "--scene", scenePath, "--camera", "Eye", "--out", material::Utf8Text(picture), "--frames", arguments.Option("--frames").value_or("40"),
         "--width", std::to_string(width), "--height", std::to_string(height) };
+    if (const std::optional<std::string> device = arguments.Option("--device"); device.has_value()) capture.insert(capture.end(), { "--device", *device });
     std::ostringstream captured;
     if (RunCaptureCommand(ArgumentList{ capture }, CommandIo{ .out = captured, .err = io.err }) != 0) return 1;
     std::string shownPath = material::Utf8Text(picture);

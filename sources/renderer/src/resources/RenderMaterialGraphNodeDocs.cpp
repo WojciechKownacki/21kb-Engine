@@ -185,7 +185,7 @@ constexpr RenderMaterialGraphNodeDoc kDocs[]{
     { Kind::SceneDepth, "Scene", "The depth of the opaque scene behind this pixel. Needs a translucent material; heavy on phones.", "" },
     { Kind::SceneColor, "Scene", "The opaque scene colour behind this pixel (refraction, distortion). Needs a translucent or post-process material; heavy on phones.", "" },
     { Kind::SceneTexture, "Scene", "A buffer of the scene (colour or depth) at a screen position. Heavy on phones.", "color | depth" },
-    { Kind::DepthFade, "Scene", "0..1 by how far this surface is in front of the scene behind it: soft water edges, soft particles.", "fadeDistance" },
+    { Kind::DepthFade, "Scene", "0..1 by how far this surface is in front of the scene behind it: soft water edges, soft particles. The distance is in depth-buffer units; the setting \"<distance> metres\" measures it in world units (the foam of the water presets).", "fadeDistance; or \"0.35 metres\"" },
 
     // Attributes
     { Kind::MakeMaterialAttributes, "Attributes", "Packs all surface channels into one attribute bundle.", "" },
@@ -198,7 +198,7 @@ constexpr RenderMaterialGraphNodeDoc kDocs[]{
     // Switches
     { Kind::RuntimeSwitch, "Switch", "Picks one of four cases by an index at run time.", "" },
     { Kind::StaticSwitch, "Switch", "Keeps the True or the False branch, chosen when the shader is built.", "" },
-    { Kind::QualitySwitch, "Switch", "A different branch per quality level (Low for phones).", "" },
+    { Kind::QualitySwitch, "Switch", "A different branch per quality level: a phone or tablet builds Medium, a computer High. Connect all four (low, med, high, epic); only the branch taken costs anything, so the cheap one can leave out a texture or a scene read.", "" },
     { Kind::FeatureLevelSwitch, "Switch", "A different branch per graphics level (ES3 phones, SM5, SM6 desktop).", "" },
     { Kind::ShadingPathSwitch, "Switch", "A different branch per lighting path (forward, forward plus, deferred).", "" },
     { Kind::ShaderStageSwitch, "Switch", "A different branch for the vertex and the pixel stage.", "" },

@@ -64,23 +64,24 @@ Fetch one with `guide`. Its commands go in one `commands` call as written; its c
 - colour, material, a ready look (gold, glass, neon, lava, toon): `recipe-material`
 - physics, any component: `recipe-component`
 - a prefab: `recipe-prefab`
-- a Lua script on an object (spin, follow, react to keys or touch): `recipe-script`
+- a Lua script on an object (spin, follow, keys, touch): `recipe-script`
 - coins or pickups the player touches: `recipe-pickup`
 - light, sun, sky, time of day: `recipe-light`
 - game name, window, plugins, scenes in the build, tags, a build: `recipe-settings`
 - a button, a menu: `recipe-ui-button`
-- a character the person plays: `recipe-player`
+- a playable character: `recipe-player`
 - an icon, sprite, texture: `recipe-image`
 - a sound effect, music: `recipe-sound`
 - an intro, a camera flight: `recipe-timeline`
 - the look of the interface: `recipe-ui-theme`
 - other languages: `recipe-translate`
-- a motion that plays alone (bob, a door that opens): `recipe-animation`
+- a motion that plays alone (a door): `recipe-animation`
+- outline, glow through walls, water, many-layer terrain: `recipe-outline`, `recipe-water`, `recipe-terrain-layers`
 - a reusable material effect: `recipe-material-function`
-- save the game, a score kept for later: `recipe-save`
+- a saved score: `recipe-save`
 - a character that walks around obstacles: `recipe-navmesh`
-- collision layers, what hits what: `recipe-collision`
-- hinge, pendulum, rope, slider: `recipe-joint`
+- collision layers: `recipe-collision`
+- hinge, rope, slider: `recipe-joint`
 
 `guide` alone lists the guides.
 
@@ -88,7 +89,7 @@ Fetch one with `guide`. Its commands go in one `commands` call as written; its c
 
 - `help` lists the commands, `help <command>` shows one's options; `scene-list` the objects, `entity show --name <Name>` one object's values, `schema --component <Name>` a component's.
 - `Assets/` is the game, mounted as `/Game/`. Delete, rename or move files with `asset delete|rename|move`, never by hand.
-- To see the scene (asked how it looks, or a change is hard to judge from the output): `capture` returns the picture (`--view overview` frames the scene, `--camera <Name>`).
+- To see the scene (asked how it looks, or the output is not enough): `capture` returns the picture (`--view overview`, `--camera <Name>`).
 - In an open editor: `editor play` starts the game, `editor capture` takes its view, `editor frames` its frame rate, `editor stop` stops it. No editor open: `run` and `capture`.
 )md";
 

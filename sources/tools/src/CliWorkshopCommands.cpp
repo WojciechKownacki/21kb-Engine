@@ -131,8 +131,106 @@ namespace {
 
 } // namespace
 
+namespace {
+
+// A KTX file holding the pictures as the layers of one 2D array texture (RGBA8, sRGB).
+[[nodiscard]] std::vector<std::uint8_t> EncodeArrayKtx(const std::vector<workshop::Bitmap>& layers) {
+    std::vector<std::uint8_t> pixels;
+    for (const workshop::Bitmap& layer : layers) pixels.insert(pixels.end(), layer.rgba.begin(), layer.rgba.end());
+    bx::DefaultAllocator allocator;
+    bx::MemoryBlock block(&allocator);
+    bx::MemoryWriter writer(&block);
+    bx::Error error;
+    bimg::imageWriteKtx(&writer, bimg::TextureFormat::RGBA8, false, layers.front().width, layers.front().height, 1U, 1U,
+        static_cast<std::uint32_t>(layers.size()), true, pixels.data(), &error);
+    const auto size = static_cast<std::size_t>(bx::seek(&writer, 0, bx::Whence::Current));
+    if (!error.isOk() || size == 0U) return {};
+    const auto* data = static_cast<const std::uint8_t*>(block.more(0U));
+    return std::vector<std::uint8_t>(data, data + size);
+}
+
+// `image array`: pictures drawn by the presets of `image new`, one per layer, as one 2D array texture that a material
+// samples by layer number (the terrain layers use it).
+int RunImageArray(const ArgumentList& arguments, CommandIo io) {
+    constexpr std::size_t kMostLayers = 16U;
+    const std::optional<std::string> layersText = arguments.Option("--layers");
+    if (!layersText.has_value()) {
+        io.err << "usage: kb_cli image array --project <dir> --name <Name> --layers <layer>,<layer>,... [--size 256] [--folder Assets/Images] [--replace]\n"
+                  "a layer is <preset>[:#color[:#color2]] as in image new, e.g. ground:#4E8A2E:#2F5A1C (2 to " << kMostLayers << " layers of one size)\n"
+                  "presets: " << workshop::ImagePresetList() << '\n';
+        return 1;
+    }
+    bool bad = false;
+    const int size = IntOption(arguments, "--size", io, bad).value_or(256);
+    if (bad) return 1;
+    std::vector<workshop::Bitmap> layers;
+    std::string_view rest = *layersText;
+    while (!rest.empty()) {
+        const std::size_t comma = rest.find(',');
+        std::string_view entry = rest.substr(0U, comma);
+        rest = comma == std::string_view::npos ? std::string_view{} : rest.substr(comma + 1U);
+        workshop::ImageRequest request;
+        request.size = size;
+        std::size_t field = 0U;
+        while (true) {
+            const std::size_t colon = entry.find(':');
+            const std::string_view part = entry.substr(0U, colon);
+            if (field == 0U) {
+                request.preset = Lower(part);
+            } else {
+                workshop::Rgb color;
+                if (!workshop::ParseHexColor(part, color)) {
+                    io.err << "error: a layer colour is #RRGGBB, got '" << part << "'\n";
+                    return 1;
+                }
+                (field == 1U ? request.color : request.color2) = color;
+            }
+            ++field;
+            if (colon == std::string_view::npos || field > 2U) break;
+            entry.remove_prefix(colon + 1U);
+        }
+        std::string error;
+        std::optional<workshop::Bitmap> bitmap = workshop::RenderImage(request, error);
+        if (!bitmap.has_value()) {
+            io.err << "error: layer " << layers.size() << ": " << error << '\n';
+            return 1;
+        }
+        layers.push_back(std::move(*bitmap));
+    }
+    if (layers.size() < 2U || layers.size() > kMostLayers) {
+        io.err << "error: an array takes 2 to " << kMostLayers << " layers, --layers has " << layers.size() << '\n';
+        return 1;
+    }
+    const std::optional<Target> target = ResolveAssetTarget(arguments, "image array", "--project <dir> --name <Name> --layers <layers>", "Assets/Images", ".ktx", false, io);
+    if (!target.has_value()) return 1;
+    const bool replaced = std::filesystem::exists(target->file);
+    const std::vector<std::uint8_t> ktx = EncodeArrayKtx(layers);
+    if (ktx.empty()) {
+        io.err << "error: the layers could not be encoded as one texture\n";
+        return 1;
+    }
+    if (!WriteFile(*target, ktx.data(), ktx.size(), io)) return 1;
+    const std::optional<std::string> asset = ImportResult(*target, replaced, io);
+    if (!asset.has_value()) return 1;
+    io.out << "texture array " << target->virtualPath << " (" << layers.size() << " layers of " << layers.front().width << 'x' << layers.front().height
+           << "), imported as " << *asset << '\n'
+           << "use it: material-new --preset terrain-layers --set Layers=" << target->virtualPath << " --set LayerCount=" << layers.size()
+           << " (layer 0 is the lowest ground, the last layer is the cliff)\n";
+    if (io.WantsData()) {
+        kb::core::JsonValue data = DataObject("21kb.cli.image-array/v1");
+        data.Set("asset", kb::core::JsonValue::MakeString(target->virtualPath));
+        data.Set("imported", kb::core::JsonValue::MakeString(*asset));
+        data.Set("layers", kb::core::JsonValue::MakeNumber(static_cast<double>(layers.size())));
+        PublishData(io, std::move(data));
+    }
+    return 0;
+}
+
+} // namespace
+
 int RunImageCommand(const ArgumentList& arguments, CommandIo io) {
     const std::string action = arguments.Positionals().size() == 1U ? arguments.Positionals().front() : std::string{};
+    if (action == "array") return RunImageArray(arguments, io);
     const std::optional<std::string> preset = arguments.Option("--preset");
     if (action != "new" || !preset.has_value()) {
         io.err << "usage: kb_cli image new --project <dir> --name <Name> --preset <preset> [--style flat|soft|neon|pixel]\n"

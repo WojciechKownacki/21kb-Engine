@@ -85,6 +85,8 @@ public:
     [[nodiscard]] const RenderMaterialResource* FindMaterial(RenderMaterialHandle handle) const noexcept;
     [[nodiscard]] bool ContainsMaterial(RenderMaterialHandle handle) const noexcept;
     void DestroyMaterial(RenderMaterialHandle handle) noexcept;
+    // How many registered materials ask for an outline (see RenderMaterialOutline): the outline passes run only while it is not zero.
+    [[nodiscard]] std::uint32_t OutlineMaterialCount() const noexcept { return outlineMaterialCount_; }
 
     [[nodiscard]] RenderTextureHandle RegisterTexture(const RenderTextureDesc& desc);
     // Compatibility entry point for existing callers. Descriptors are still validated as true 2D
@@ -129,6 +131,7 @@ private:
 
     detail::RenderResourceSlotPool<RenderMeshResource> meshes_;
     detail::RenderResourceSlotPool<RenderMaterialResource> materials_;
+    std::uint32_t outlineMaterialCount_ = 0U;
     detail::RenderResourceSlotPool<RenderTextureResource> textures_;
     RenderUploadMemory uploads_;
     std::vector<DeferredDestroyEntry> deferredDestroy_;

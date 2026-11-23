@@ -1196,6 +1196,13 @@ void AppendCustomCodeFunctionDefinitions(
     return "vec4(" + r + ", " + g + ", " + b + ", " + a + ")";
 }
 
+// Depth Fade with the setting "metres" measures its distance along the view in world units; without it the distance is in
+// the units of the depth buffer, which shrink with the square of the distance from the camera.
+[[nodiscard]] bool DepthFadeInMetres(const RenderMaterialGraphNode& node) {
+    const std::string_view hint = node.parameter.defaultValueHint;
+    return hint.find("metres") != std::string_view::npos || hint.find("meters") != std::string_view::npos;
+}
+
 [[nodiscard]] std::string ViewPropertyExpression(std::string_view hint) {
     if (EqualsIgnoreCase(hint, "invViewSize") || EqualsIgnoreCase(hint, "inverseViewSize") || EqualsIgnoreCase(hint, "viewInvSize")) {
         return "(vec2(1.0, 1.0) / max(ctx.viewSize, vec2(1.0, 1.0)))";
@@ -1468,6 +1475,9 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
             "fadeDistance",
             RenderMaterialGraphPinType::Float,
             FloatLiteral(defaultFadeDistance));
+        if (DepthFadeInMetres(node)) {
+            return "clamp(abs(kbViewDepth(texture2D(s_kbSceneDepth, ctx.screenPosition).x) - kbViewDepth(ctx.fragmentDepth)) / max(" + fadeDistance + ", 0.0001), 0.0, 1.0)";
+        }
         return "clamp(abs(texture2D(s_kbSceneDepth, ctx.screenPosition).x - ctx.fragmentDepth) / max(" + fadeDistance + ", 0.0001), 0.0, 1.0)";
     }
     case RenderMaterialGraphNodeKind::Panner: {
@@ -3581,7 +3591,8 @@ RenderMaterialGraphCompileArtifactCacheKey BuildRenderMaterialGraphCompileArtifa
     HashString64(combined, std::to_string(graphHash));
     HashString64(combined, std::to_string(dependencyHash));
     HashString64(combined, std::to_string(shaderIncludeHash));
-    if (GraphContainsNodeKind(graph, RenderMaterialGraphNodeKind::QualitySwitch)) {
+    if (GraphContainsNodeKind(graph, RenderMaterialGraphNodeKind::QualitySwitch) ||
+        ParseRenderMaterialShadingModel(graph.shadingModel) == RenderMaterialShadingModel::SingleLayerWater) {
         HashString64(combined, std::string{ RenderMaterialGraphQualityLevelPinName(context.qualityLevel) });
     }
     if (GraphContainsNodeKind(graph, RenderMaterialGraphNodeKind::FeatureLevelSwitch)) {
@@ -3726,6 +3737,40 @@ RenderMaterialGraphIrBuildResult BuildRenderMaterialGraphIr(
     return result;
 }
 
+std::vector<std::uint32_t> RenderMaterialGraphReachableNodes(
+    const RenderMaterialGraphDocument& graph,
+    const RenderMaterialGraphBuildContext& context,
+    std::uint32_t outputNodeId) {
+    std::vector<std::uint32_t> reachable;
+    reachable.push_back(outputNodeId);
+    for (std::size_t i = 0U; i < reachable.size(); ++i) {
+        const std::uint32_t currentId = reachable[i];
+        // A switch on the quality, the level, the lighting path or the stage keeps only the branch this build takes:
+        // what feeds the others (a scene depth read behind the High quality) costs nothing in this one.
+        const RenderMaterialGraphNode* const reaching = FindRenderMaterialGraphNode(graph, currentId);
+        const bool variantSwitch = reaching != nullptr && (reaching->kind == RenderMaterialGraphNodeKind::QualitySwitch ||
+            reaching->kind == RenderMaterialGraphNodeKind::FeatureLevelSwitch || reaching->kind == RenderMaterialGraphNodeKind::ShadingPathSwitch ||
+            reaching->kind == RenderMaterialGraphNodeKind::ShaderStageSwitch);
+        for (const RenderMaterialGraphLink& link : graph.links) {
+            if (link.toNodeId == currentId && (!variantSwitch || link.toPin == SelectedStaticVariantSwitchPin(context, reaching->kind))) {
+                if (std::find(reachable.begin(), reachable.end(), link.fromNodeId) == reachable.end()) {
+                    reachable.push_back(link.fromNodeId);
+                }
+            }
+        }
+        // A named reroute usage is fed by its declaration, which no link joins to it: what feeds the
+        // declaration (a parameter, a texture) is just as much part of the shader.
+        if (reaching != nullptr && reaching->kind == RenderMaterialGraphNodeKind::NamedRerouteUsage) {
+            for (const RenderMaterialGraphNode* declaration : NamedRerouteDeclarations(graph, NamedRerouteKey(*reaching))) {
+                if (std::find(reachable.begin(), reachable.end(), declaration->id) == reachable.end()) {
+                    reachable.push_back(declaration->id);
+                }
+            }
+        }
+    }
+    return reachable;
+}
+
 RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     const RenderMaterialGraphDocument& sourceGraph,
     RenderMaterialGraphBuildContext context) {
@@ -3828,7 +3873,11 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         AttachDiagnosticContext(graph, context, result.diagnostics);
         return result;
     }
-    const RenderMaterialShadingModel resolvedShadingModel = requestedShadingModel;
+    // Single Layer Water reads the scene colour and depth, a copy of the screen a phone cannot afford: below the High
+    // quality it draws as the lit translucent surface the graph also describes by its Base Color and Opacity.
+    const bool singleLayerWaterDemoted = requestedShadingModel == RenderMaterialShadingModel::SingleLayerWater &&
+        context.qualityLevel < RenderMaterialGraphQualityLevel::High;
+    const RenderMaterialShadingModel resolvedShadingModel = singleLayerWaterDemoted ? RenderMaterialShadingModel::DefaultLit : requestedShadingModel;
 
     // MAT-38: resolve the blend mode. All seven modes are implemented, so there is no fallback; the value
     // selects the masked clip in the wrapper and the transparent cook/scene blend equation downstream.
@@ -3851,28 +3900,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         return result;
     }
 
-    std::vector<std::uint32_t> reachable;
-    reachable.push_back(outputNode->id);
-    for (std::size_t i = 0U; i < reachable.size(); ++i) {
-        const std::uint32_t currentId = reachable[i];
-        for (const RenderMaterialGraphLink& link : graph.links) {
-            if (link.toNodeId == currentId) {
-                if (std::find(reachable.begin(), reachable.end(), link.fromNodeId) == reachable.end()) {
-                    reachable.push_back(link.fromNodeId);
-                }
-            }
-        }
-        // A named reroute usage is fed by its declaration, which no link joins to it: what feeds the
-        // declaration (a parameter, a texture) is just as much part of the shader.
-        const RenderMaterialGraphNode* current = FindRenderMaterialGraphNode(graph, currentId);
-        if (current != nullptr && current->kind == RenderMaterialGraphNodeKind::NamedRerouteUsage) {
-            for (const RenderMaterialGraphNode* declaration : NamedRerouteDeclarations(graph, NamedRerouteKey(*current))) {
-                if (std::find(reachable.begin(), reachable.end(), declaration->id) == reachable.end()) {
-                    reachable.push_back(declaration->id);
-                }
-            }
-        }
-    }
+    const std::vector<std::uint32_t> reachable = RenderMaterialGraphReachableNodes(graph, context, outputNode->id);
 
     struct ReflectionUniformEntry {
         std::string name;
@@ -3901,6 +3929,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     bool usesFastTrig = false;
     bool usesRuntimeSwitch = false;
     bool usesBlackBody = false;
+    bool usesMetricDepth = false;
     bool usesNoise = false;
     bool usesSimplexNoise = false;
     bool usesGradientNoise = false;
@@ -3924,6 +3953,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
             // MAT-80/#18b: these nodes sample the opaque scene depth (screen-space) which the scene binds
             // into the graph fragment shader for the transparent pass.
             usesSceneDepth = true;
+            usesMetricDepth = usesMetricDepth || (node.kind == RenderMaterialGraphNodeKind::DepthFade && DepthFadeInMetres(node));
             break;
         case RenderMaterialGraphNodeKind::SceneColor:
             usesSceneColor = true;
@@ -4146,7 +4176,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         AttachDiagnosticContext(graph, context, result.diagnostics);
         return result;
     }
-    const bool usesRefraction = resolvedBlendMode == RenderMaterialGraphBlendMode::Translucent &&
+    const bool usesRefraction = resolvedBlendMode == RenderMaterialGraphBlendMode::Translucent && !singleLayerWaterDemoted &&
         std::any_of(graph.links.begin(), graph.links.end(),
             [](const RenderMaterialGraphLink& link) { return link.toPin == "refraction"; });
     usesSceneColor = usesSceneColor || usesRefraction || usesThinTranslucent || usesSingleLayerWater;
@@ -4296,6 +4326,16 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         source += "}\n\n";
     }
 
+    if (usesMetricDepth) {
+        // The distance along the view of a device depth (the inverse projection of a point on the view axis).
+        source += "float kbViewDepth(float deviceDepth) {\n";
+        source += "#if BGFX_SHADER_LANGUAGE_GLSL\n";
+        source += "    deviceDepth = deviceDepth * 2.0 - 1.0;\n";
+        source += "#endif\n";
+        source += "    vec4 view = mul(u_invProj, vec4(0.0, 0.0, deviceDepth, 1.0));\n";
+        source += "    return view.z / view.w;\n";
+        source += "}\n\n";
+    }
     if (usesBlackBody) {
         // MAT-50: Tanner Helland's blackbody approximation, normalized to [0,1]; bases are guarded so the
         // unselected ternary branch can never feed pow()/log() a negative argument.
