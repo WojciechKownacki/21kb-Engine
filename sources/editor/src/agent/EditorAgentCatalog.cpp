@@ -1,5 +1,6 @@
 #include "agent/EditorAgentCatalog.hpp"
 
+#include "agent/EditorAgentGuidance.hpp"
 #include "engine/core/JsonValue.hpp"
 
 #if defined(_WIN32)
@@ -12,6 +13,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <fstream>
+#include <map>
 #include <optional>
 #include <sstream>
 #include <system_error>
@@ -96,36 +98,28 @@ struct Preset {
     EditorAgent agent;
 };
 
-// The models a CLI lists in its cache: the "slug" of each entry of "models", in the file's order, without the
-// entries the file marks as hidden. Empty when the file is missing or unreadable, so the CLI's own default stays.
-[[nodiscard]] std::vector<std::string> ListedModels(const std::filesystem::path& file) {
-    std::vector<std::string> slugs;
-    std::ifstream stream(file, std::ios::binary);
-    if (!stream) {
-        return slugs;
-    }
-    std::ostringstream text;
-    text << stream.rdbuf();
-    kb::core::JsonValue document;
-    std::string error;
-    if (!kb::core::JsonValue::Parse(text.str(), document, error)) {
-        return slugs;
-    }
-    const kb::core::JsonValue* models = document.Find("models");
-    if (models == nullptr || models->GetKind() != kb::core::JsonValue::Kind::Array) {
-        return slugs;
-    }
-    for (std::size_t index = 0; index < models->Size(); ++index) {
-        const kb::core::JsonValue* model = models->At(index);
-        const kb::core::JsonValue* slug = model != nullptr ? model->Find("slug") : nullptr;
-        const kb::core::JsonValue* visibility = model != nullptr ? model->Find("visibility") : nullptr;
-        if (slug == nullptr || slug->GetKind() != kb::core::JsonValue::Kind::String || slug->AsString().empty() ||
-            (visibility != nullptr && visibility->GetKind() == kb::core::JsonValue::Kind::String && visibility->AsString() == "hide")) {
-            continue;
+// The newest file of `pattern` under `base`: a path whose last part may hold one * (the name the CLI gives its cache file is
+// not fixed), or a plain path.
+[[nodiscard]] std::filesystem::path ResolveModelsFile(const std::filesystem::path& base, const std::string& pattern) {
+    const std::filesystem::path wanted = base / std::filesystem::path{ pattern };
+    const std::string name = wanted.filename().string();
+    const std::size_t star = name.find('*');
+    if (star == std::string::npos) return wanted;
+    const std::string head = name.substr(0U, star);
+    const std::string tail = name.substr(star + 1U);
+    std::filesystem::path newest;
+    std::filesystem::file_time_type newestTime{};
+    std::error_code error;
+    for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(wanted.parent_path(), error)) {
+        const std::string candidate = entry.path().filename().string();
+        if (candidate.size() < head.size() + tail.size() || !candidate.starts_with(head) || !candidate.ends_with(tail)) continue;
+        const std::filesystem::file_time_type time = entry.last_write_time(error);
+        if (newest.empty() || time > newestTime) {
+            newest = entry.path();
+            newestTime = time;
         }
-        slugs.push_back(slug->AsString());
     }
-    return slugs;
+    return newest;
 }
 
 [[nodiscard]] std::vector<Preset> Presets() {
@@ -147,7 +141,7 @@ struct Preset {
             // It changes files only in the project (the working folder edits are accepted in); anywhere else it
             // may only read, so it never stops to ask, and a write outside the project is refused. It has no
             // shell, and kb_cli under the engine's tools refuses any path outside the project.
-            "--allowedTools", "mcp__kb-engine", "Read", "Glob", "Grep", "--disallowedTools", "Bash", "PowerShell",
+            "--allowedTools", "mcp__kb-engine", "Read", "Glob", "Grep", "--disallowedTools", "Bash", "PowerShell", "Agent", "Task",
             // The engine's own source folders are not for it to read; its docs and the SDK headers stay open.
             "{denyRead}",
             "--permission-mode", "{permissionMode}",
@@ -160,12 +154,12 @@ struct Preset {
         agent.requestTemplate = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":{request}}}\n";
         agent.statusArguments = { "auth", "status", "--json" };
         agent.signInArguments = { "auth", "login" };
-        // Aliases always name the newest model of each line, so the list never goes stale.
-        agent.models = { "fable", "opus", "sonnet", "haiku" };
+        // The models it offers are those of its own catalog, as the CLI names them on its command line.
+        agent.modelsFile = "cache/model-catalog/*-cc.json";
         agent.modelArguments = { "--model", "{model}" };
         agent.efforts = { "low", "medium", "high", "xhigh", "max" };
         agent.effortArguments = { "--effort", "{effort}" };
-        agent.output = EditorAgentOutputFormat::ClaudeStreamJson;
+        agent.output = EditorAgentOutputFormat::StreamJson;
         agent.sessionRecords = "projects";
         presets.push_back({ "Claude Code", L"claude", L".claude", L"CLAUDE_CONFIG_DIR", agent });
     }
@@ -179,7 +173,9 @@ struct Preset {
         const std::string calling = "developer_instructions=\"The kb-engine tools are called from JavaScript in the exec tool, and the result is printed with text(result): "
             "tools.mcp__kb_engine__kb_cli({args:[...]}) or ({commands:[[...],[...]]}), tools.mcp__kb_engine__guide({topic:'recipe-...'}), "
             "tools.mcp__kb_engine__api_reference({topic:'...'}). Do not list or search the tool catalogue. Calls that do not depend on each other go in one exec, each awaited.\"";
+        // Only the model the person chose works on the request: no sub-agents (features multi_agent and multi_agent_v2 off).
         agent.runArguments = { "exec", "--json", "--skip-git-repo-check", "-C", "{project}", "-s", "workspace-write",
+            "--disable", "multi_agent", "--disable", "multi_agent_v2",
             "-c", "mcp_servers.kb-engine.command=\"{kbcli}\"",
             "-c", "mcp_servers.kb-engine.args=[\"mcp\",\"--project\",\"{project}\"]",
             "-c", "mcp_servers.kb-engine.default_tools_approval_mode=\"approve\"",
@@ -187,6 +183,7 @@ struct Preset {
         // A follow-up continues the thread (the process already runs in the project folder; resume
         // takes no -C or -s), with the request read from standard input.
         agent.resumeRunArguments = { "exec", "resume", "{session}", "--json", "--skip-git-repo-check",
+            "--disable", "multi_agent", "--disable", "multi_agent_v2",
             "-c", "mcp_servers.kb-engine.command=\"{kbcli}\"",
             "-c", "mcp_servers.kb-engine.args=[\"mcp\",\"--project\",\"{project}\"]",
             "-c", "mcp_servers.kb-engine.default_tools_approval_mode=\"approve\"",
@@ -217,7 +214,7 @@ struct Preset {
     }
     {
         EditorAgent agent;
-        agent.runArguments = { "-p", "{prompt}", "--cwd", "{project}", "--always-approve" };
+        agent.runArguments = { "-p", "{prompt}", "--cwd", "{project}", "--always-approve", "--no-subagents" };
         agent.efforts = { "low", "medium", "high" };
         agent.effortArguments = { "--reasoning-effort", "{effort}" };
         presets.push_back({ "Grok", L"grok", L"", L"", agent });
@@ -238,18 +235,32 @@ struct Preset {
     return words;
 }
 
-void AppendCustomAgents(std::vector<EditorAgent>& agents) {
+// The agents file as a document; null when it is missing or damaged.
+[[nodiscard]] kb::core::JsonValue AgentsDocument() {
     std::ifstream file(EditorAgentsFile(), std::ios::binary);
-    if (!file) {
-        return;
-    }
+    kb::core::JsonValue document;
+    if (!file) return document;
     std::ostringstream text;
     text << file.rdbuf();
-    kb::core::JsonValue document;
     std::string error;
-    if (!kb::core::JsonValue::Parse(text.str(), document, error)) {
-        return;
+    if (!kb::core::JsonValue::Parse(text.str(), document, error)) return {};
+    return document;
+}
+
+// The model order the user wrote for an agent, lightest first ("tiers": { "<agent name>": [ ... ] }).
+[[nodiscard]] std::map<std::string, std::vector<std::string>> UserTiers() {
+    std::map<std::string, std::vector<std::string>> tiers;
+    const kb::core::JsonValue document = AgentsDocument();
+    const kb::core::JsonValue* list = document.Find("tiers");
+    if (list == nullptr || list->GetKind() != kb::core::JsonValue::Kind::Object) return tiers;
+    for (std::size_t index = 0; index < list->Size(); ++index) {
+        tiers[list->MemberName(index)] = Strings(list->At(index));
     }
+    return tiers;
+}
+
+void AppendCustomAgents(std::vector<EditorAgent>& agents, const std::map<std::string, std::vector<std::string>>& tiers) {
+    const kb::core::JsonValue document = AgentsDocument();
     const kb::core::JsonValue* list = document.Find("agents");
     if (list == nullptr || list->GetKind() != kb::core::JsonValue::Kind::Array) {
         return;
@@ -277,8 +288,12 @@ void AppendCustomAgents(std::vector<EditorAgent>& agents) {
         agent.runArguments = Strings(entry->Find("arguments"));
         agent.connectArguments = Strings(entry->Find("connect"));
         agent.custom = true;
+        // The models it can be started with, best first, and the words that pass the chosen one ({model}).
+        agent.models = Strings(entry->Find("models"));
+        agent.modelArguments = Strings(entry->Find("modelArguments"));
+        agent.ladder = ModelLadder(agent.models, tiers.contains(agent.name) ? tiers.at(agent.name) : std::vector<std::string>{});
         if (const kb::core::JsonValue* output = entry->Find("output"); output != nullptr) {
-            agent.output = output->AsString() == "claude" ? EditorAgentOutputFormat::ClaudeStreamJson
+            agent.output = output->AsString() == "stream-json" ? EditorAgentOutputFormat::StreamJson
                 : output->AsString() == "codex" ? EditorAgentOutputFormat::CodexJson
                 : EditorAgentOutputFormat::PlainText;
         }
@@ -294,12 +309,59 @@ void AppendCustomAgents(std::vector<EditorAgent>& agents) {
 
 } // namespace
 
+std::vector<std::string> ListedEditorAgentModels(const std::filesystem::path& file) {
+    std::vector<std::string> names;
+    std::ifstream stream(file, std::ios::binary);
+    if (!stream) {
+        return names;
+    }
+    std::ostringstream text;
+    text << stream.rdbuf();
+    kb::core::JsonValue document;
+    std::string error;
+    if (!kb::core::JsonValue::Parse(text.str(), document, error)) {
+        return names;
+    }
+    // The list is at the top of the file or under catalog.config.
+    const kb::core::JsonValue* catalog = document.Find("catalog");
+    const kb::core::JsonValue* config = catalog != nullptr ? catalog->Find("config") : nullptr;
+    const kb::core::JsonValue* models = config != nullptr ? config->Find("models") : document.Find("models");
+    if (models == nullptr || models->GetKind() != kb::core::JsonValue::Kind::Array) {
+        return names;
+    }
+    const auto textOf = [](const kb::core::JsonValue* value) {
+        return value != nullptr && value->GetKind() == kb::core::JsonValue::Kind::String ? value->AsString() : std::string{};
+    };
+    for (std::size_t index = 0; index < models->Size(); ++index) {
+        const kb::core::JsonValue* model = models->At(index);
+        if (model == nullptr) continue;
+        // The name the CLI takes: the entry's slug, else the family of its runtime, else its id.
+        const kb::core::JsonValue* runtime = model->Find("runtime");
+        std::string name = textOf(model->Find("slug"));
+        if (name.empty()) name = textOf(runtime != nullptr ? runtime->Find("family") : nullptr);
+        if (name.empty()) name = textOf(model->Find("id"));
+        // What the CLI itself keeps out of its picker: hidden entries and the ones it files as overflow.
+        const std::string section = textOf(model->Find("section"));
+        if (name.empty() || textOf(model->Find("visibility")) == "hide" || (!section.empty() && section != "main") ||
+            std::ranges::find(names, name) != names.end()) {
+            continue;
+        }
+        names.push_back(std::move(name));
+    }
+    return names;
+}
+
+EditorAgentPrices LoadEditorAgentPrices() {
+    return EditorAgentPrices::FromJson(AgentsDocument());
+}
+
 std::string EditorAgent::Label() const {
     return profile == "default" ? name : name + " \xC2\xB7 " + profile;
 }
 
 std::vector<EditorAgent> DetectEditorAgents() {
     std::vector<EditorAgent> agents;
+    const std::map<std::string, std::vector<std::string>> tiers = UserTiers();
     for (const Preset& preset : Presets()) {
         const std::optional<std::filesystem::path> executable = FindOnPath(preset.command);
         if (!executable.has_value()) {
@@ -321,8 +383,9 @@ std::vector<EditorAgent> DetectEditorAgents() {
                 agent.sessionRecords = (folder.empty() ? HomeFolder() / preset.profileFolder : folder) / agent.sessionRecords;
             }
             if (!agent.modelsFile.empty() && agent.models.empty()) {
-                agent.models = ListedModels((folder.empty() ? HomeFolder() / preset.profileFolder : folder) / agent.modelsFile);
+                agent.models = ListedEditorAgentModels(ResolveModelsFile(folder.empty() ? HomeFolder() / preset.profileFolder : folder, agent.modelsFile));
             }
+            agent.ladder = ModelLadder(agent.models, tiers.contains(agent.name) ? tiers.at(agent.name) : std::vector<std::string>{});
             agents.push_back(std::move(agent));
         }
         // Local models: Codex runs against Ollama when it is installed, with no account at all.
@@ -342,11 +405,22 @@ std::vector<EditorAgent> DetectEditorAgents() {
             agents.push_back(std::move(local));
         }
     }
-    AppendCustomAgents(agents);
+    AppendCustomAgents(agents, tiers);
     return agents;
 }
 
 std::filesystem::path EditorAgentsFile() {
+    // Another file can be named, for a setup that keeps its preferences elsewhere or a run that must leave the user's own alone.
+#if defined(_WIN32)
+    wchar_t chosen[MAX_PATH]{};
+    if (const DWORD length = GetEnvironmentVariableW(L"KB_EDITOR_AGENTS_FILE", chosen, MAX_PATH); length > 0U && length < MAX_PATH) {
+        return std::filesystem::path{ chosen };
+    }
+#else
+    if (const char* chosen = std::getenv("KB_EDITOR_AGENTS_FILE"); chosen != nullptr && chosen[0] != '\0') {
+        return std::filesystem::path{ chosen };
+    }
+#endif
 #if defined(_WIN32)
     PWSTR local = nullptr;
     std::filesystem::path root;
@@ -374,6 +448,13 @@ bool EnsureEditorAgentsFile() {
     // JSON has no comments, so the format is shown by an example the editor does not read.
     file << "{\n"
             "  \"agents\": [],\n"
+            // What the window shows as money, and the order it takes models in when it suggests one: both are the user's.
+            // Prices are per million tokens; a tier list runs from the lightest model to the strongest.
+            "  \"currency\": \"USD\",\n"
+            "  \"prices\": {},\n"
+            "  \"tiers\": {},\n"
+            "  \"examplePrices\": { \"model-name\": { \"input\": 1.0, \"cacheRead\": 0.1, \"cacheWrite\": 1.25, \"output\": 5.0 } },\n"
+            "  \"exampleTiers\": { \"My agent\": [\"lightest-model\", \"middle-model\", \"strongest-model\"] },\n"
             "  \"example\": {\n"
             "    \"name\": \"My agent\",\n"
             "    \"command\": \"my-agent\",\n"

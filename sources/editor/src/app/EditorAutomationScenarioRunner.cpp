@@ -8,6 +8,8 @@
 #include "inspection/InspectorGenericComponentModel.hpp"
 #include "inspection/ui/InspectorUIThemeModel.hpp"
 #include "inspection/ui/InspectorUIComponentModel.hpp"
+#include "rendering/AgentBarRenderer.hpp"
+#include "rendering/AgentPanelRenderer.hpp"
 #include "rendering/AnimatorEditorPanelRenderer.hpp"
 #include "rendering/GamePanelContentRenderer.hpp"
 #include "scene/EditorGameView.hpp"
@@ -1511,6 +1513,217 @@ ReadScriptValue(
     return std::nullopt;
 }
 
+[[nodiscard]] std::optional<StepOutcome> ExecuteAgentGuidanceStep(
+    ScenarioState& state, const JsonValue& step, std::string_view operation) {
+    std::string error;
+    // The Agent window's guidance - the stuck bubble, a plan, the suggestions, what a request cost - against an agent that is a script
+    // (the agents file named in KB_EDITOR_AGENTS_FILE lists it): the window runs, stops and continues a real process, and no model is asked.
+    if (operation == "agent_scripted") {
+        const auto model = StringMember(step, "model", error, false);
+        if (!error.empty()) return StepOutcome{ false, error };
+        EditorAgentPanelState& panel = state.context.AgentPanel();
+        panel.Prepare();
+        panel.SetRememberSelection(false);
+        int chosen = -1;
+        for (std::size_t index = 0; index < panel.Agents().size(); ++index) {
+            if (panel.Agents()[index].name == "Scripted agent") chosen = static_cast<int>(index);
+        }
+        if (chosen < 0) return StepOutcome{ false, "the scripted agent is not in the agents file named by KB_EDITOR_AGENTS_FILE" };
+        panel.SelectAgent(chosen);
+        panel.SelectModel(model.value_or(std::string{}));
+        return StepOutcome{ true, "scripted agent, model " + (model.has_value() ? *model : std::string{ "default" }) };
+    }
+    if (operation == "agent_type") {
+        const auto text = StringMember(step, "text", error);
+        if (!text) return StepOutcome{ false, error };
+        state.context.AgentPanel().SetInput(std::string{ *text });
+        return StepOutcome{ true, "typed" };
+    }
+    if (operation == "agent_send") {
+        return StepOutcome{ EditorAgentPanelController{ state.context }.SendOrStop(), "sent" };
+    }
+    if (operation == "agent_wait") {
+        const auto until = StringMember(step, "until", error);
+        const auto timeout = NumberMember(step, "timeout_seconds", error, false);
+        if (!until) return StepOutcome{ false, error };
+        EditorAgentPanelState& panel = state.context.AgentPanel();
+        const auto reached = [&] {
+            if (panel.AnyRunning()) return false;
+            if (*until == "idle") return true;
+            if (*until == "card") return panel.Card().has_value();
+            if (*until == "plan_review") return panel.StepPlan().phase == EditorAgentPlan::Phase::Review;
+            if (*until == "plan_end") return panel.StepPlan().phase == EditorAgentPlan::Phase::None;
+            return false;
+        };
+        if (*until != "idle" && *until != "card" && *until != "plan_review" && *until != "plan_end") return StepOutcome{ false, "unknown wait: " + std::string{ *until } };
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{ static_cast<long long>(timeout.value_or(120.0)) };
+        while (std::chrono::steady_clock::now() < deadline) {
+            bool changed = false;
+            static_cast<void>(panel.Pump(changed));
+            if (reached()) return StepOutcome{ true, "reached " + std::string{ *until } };
+            std::this_thread::sleep_for(std::chrono::milliseconds{ 50 });
+        }
+        return StepOutcome{ false, "the window did not reach '" + std::string{ *until } + "' in time" };
+    }
+    // A click on what the window draws: the button's place is read from the same layout the painting uses.
+    if (operation == "agent_press") {
+        const auto target = StringMember(step, "target", error);
+        const auto index = NumberMember(step, "index", error, false);
+        if (!target) return StepOutcome{ false, error };
+        EditorAgentPanelState& panel = state.context.AgentPanel();
+        const RECT content{ 0, 0, 900, 700 };
+        const AgentPanelLayout layout = AgentPanelRenderer::Resolve(content, panel);
+        const std::size_t at = static_cast<std::size_t>(index.value_or(0.0));
+        const auto pick = [&](const std::vector<RECT>& rects) { return at < rects.size() ? rects[at] : RECT{}; };
+        RECT button{};
+        if (*target == "card") button = pick(layout.cardButtons);
+        else if (*target == "plan_toggle") button = pick(layout.planChecks);
+        else if (*target == "plan_edit") button = pick(layout.planEdits);
+        else if (*target == "plan_up") button = pick(layout.planUps);
+        else if (*target == "plan_down") button = pick(layout.planDowns);
+        else return StepOutcome{ false, "unknown target: " + std::string{ *target } };
+        if (button.right <= button.left) return StepOutcome{ false, "the window shows no '" + std::string{ *target } + "' there" };
+        const int x = static_cast<int>(button.left + button.right) / 2;
+        const int y = static_cast<int>(button.top + button.bottom) / 2;
+        if (AgentPanelRenderer::HitTest(content, panel, x, y).kind == AgentPanelHitKind::None) return StepOutcome{ false, "a click there hits nothing" };
+        return StepOutcome{ EditorAgentPanelController{ state.context }.HandlePointerDown(nullptr, content, x, y), "pressed " + std::string{ *target } };
+    }
+    if (operation == "agent_key") {
+        const auto key = StringMember(step, "key", error);
+        if (!key) return StepOutcome{ false, error };
+        const WPARAM code = *key == "tab" ? VK_TAB : *key == "enter" ? VK_RETURN : *key == "escape" ? VK_ESCAPE : 0;
+        if (code == 0) return StepOutcome{ false, "unknown key: " + std::string{ *key } };
+        state.context.AgentPanel().FocusInput(true);
+        return StepOutcome{ EditorAgentPanelController{ state.context }.HandleKeyDown(nullptr, code), "key " + std::string{ *key } };
+    }
+    // The bubble over the agent bar: painted as the bar paints it (written as a picture), its button found by a click on what is
+    // drawn, and pressed through the same path the bar's window takes.
+    if (operation == "agent_bar") {
+        const auto checkpoint = StringMember(step, "checkpoint", error);
+        const auto press = NumberMember(step, "press", error, false);
+        if (!checkpoint) return StepOutcome{ false, error };
+        EditorAgentPanelState& panel = state.context.AgentPanel();
+        const AgentBarLayout layout = AgentBarRenderer::Resolve(640, 520, panel);
+        if (!layout.noticeShown || layout.noticeButtons.empty()) return StepOutcome{ false, "the bar shows no bubble that waits for a decision" };
+        std::vector<std::uint32_t> pixels(static_cast<std::size_t>(layout.windowWidth) * static_cast<std::size_t>(layout.windowHeight));
+        AgentBarRenderer::Paint(pixels.data(), layout, panel, POINT{ -1, -1 });
+        const std::filesystem::path file = state.automation.ArtifactRoot() / "screenshots" / (*checkpoint + ".bmp");
+        std::error_code folderError;
+        std::filesystem::create_directories(file.parent_path(), folderError);
+        BITMAPINFOHEADER header{ sizeof(BITMAPINFOHEADER), layout.windowWidth, -layout.windowHeight, 1, 32, BI_RGB, static_cast<DWORD>(pixels.size() * 4U), 0, 0, 0, 0 };
+        BITMAPFILEHEADER fileHeader{ 0x4D42, static_cast<DWORD>(sizeof(BITMAPFILEHEADER) + sizeof(header) + pixels.size() * 4U), 0, 0, sizeof(BITMAPFILEHEADER) + sizeof(header) };
+        std::ofstream out(file, std::ios::binary | std::ios::trunc);
+        out.write(reinterpret_cast<const char*>(&fileHeader), sizeof(fileHeader));
+        out.write(reinterpret_cast<const char*>(&header), sizeof(header));
+        out.write(reinterpret_cast<const char*>(pixels.data()), static_cast<std::streamsize>(pixels.size() * 4U));
+        if (!out) return StepOutcome{ false, "the picture of the bar could not be written" };
+        if (!press.has_value()) return StepOutcome{ true, *checkpoint };
+        const std::size_t at = static_cast<std::size_t>(*press);
+        if (at >= layout.noticeButtons.size()) return StepOutcome{ false, "the bubble has no button " + std::to_string(at) };
+        const RECT& button = layout.noticeButtons[at];
+        const AgentBarHit hit = AgentBarRenderer::HitTest(layout, panel, static_cast<int>(button.left + button.right) / 2, static_cast<int>(button.top + button.bottom) / 2);
+        if (hit.kind != AgentBarHitKind::NoticeButton || hit.index != static_cast<int>(at)) return StepOutcome{ false, "a click on the button hits something else" };
+        return StepOutcome{ EditorAgentPanelController{ state.context }.PressNotice(hit.index), "pressed bar button " + std::to_string(at) };
+    }
+    if (operation == "agent_expect") {
+        EditorAgentPanelState& panel = state.context.AgentPanel();
+        const auto fail = [](std::string message) { return StepOutcome{ false, std::move(message) }; };
+        // The window is let run for a while first: nothing may start, switch or change by itself in that time.
+        if (const auto settle = NumberMember(step, "settle_seconds", error, false); settle.has_value()) {
+            const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds{ static_cast<long long>(*settle * 1000.0) };
+            while (std::chrono::steady_clock::now() < end) {
+                bool changed = false;
+                static_cast<void>(panel.Pump(changed));
+                std::this_thread::sleep_for(std::chrono::milliseconds{ 50 });
+            }
+        }
+        if (const auto running = BoolMember(step, "running", error, false); running.has_value() && panel.AnyRunning() != *running) {
+            return fail(std::string{ "an agent is " } + (panel.AnyRunning() ? "running" : "not running") + ", expected the opposite");
+        }
+        const auto card = panel.Card();
+        if (const auto expected = StringMember(step, "card", error, false); expected.has_value()) {
+            const std::string actual = !card.has_value() ? "none" : card->kind == EditorAgentCardKind::Stuck ? "stuck"
+                : card->kind == EditorAgentCardKind::Advice ? "advice" : "plan";
+            if (actual != *expected) return fail("the bubble is '" + actual + "', expected '" + *expected + "'");
+        }
+        if (const auto count = NumberMember(step, "buttons", error, false); count.has_value()) {
+            const std::size_t actual = card.has_value() ? card->buttons.size() : 0U;
+            if (static_cast<double>(actual) != *count) return fail("the bubble has " + std::to_string(actual) + " buttons, expected " + std::to_string(static_cast<int>(*count)));
+        }
+        if (const auto label = StringMember(step, "button", error, false); label.has_value()) {
+            const bool found = card.has_value() && std::ranges::any_of(card->buttons, [&](const EditorAgentCardButton& button) { return button.label.find(*label) != std::string::npos; });
+            if (!found) return fail("no button says '" + *label + "'");
+        }
+        if (const auto focus = NumberMember(step, "focus", error, false); focus.has_value() && static_cast<double>(panel.CardFocus()) != *focus) {
+            return fail("the keyboard is on button " + std::to_string(panel.CardFocus()) + ", expected " + std::to_string(static_cast<int>(*focus)));
+        }
+        if (const auto expected = StringMember(step, "hint", error, false); expected.has_value()) {
+            const auto hint = panel.Hint();
+            const std::string actual = !hint.has_value() ? "none" : hint->action == EditorAgentHintAction::UseModel ? "use_model"
+                : hint->action == EditorAgentHintAction::PlanInSteps ? "plan" : "fresh";
+            if (actual != *expected) return fail("the suggestion is '" + actual + "', expected '" + *expected + "'");
+            if (const auto model = StringMember(step, "hint_model", error, false); model.has_value() && hint->model != *model) {
+                return fail("the suggested model is '" + hint->model + "', expected '" + *model + "'");
+            }
+        }
+        const EditorAgentPlan& plan = panel.StepPlan();
+        if (const auto expected = StringMember(step, "plan_phase", error, false); expected.has_value()) {
+            const char* actual = plan.phase == EditorAgentPlan::Phase::Writing ? "writing" : plan.phase == EditorAgentPlan::Phase::Review ? "review"
+                : plan.phase == EditorAgentPlan::Phase::Running ? "running" : "none";
+            if (*expected != actual) return fail(std::string{ "the plan is '" } + actual + "', expected '" + *expected + "'");
+        }
+        if (const auto count = NumberMember(step, "plan_steps", error, false); count.has_value() && static_cast<double>(plan.steps.size()) != *count) {
+            return fail("the plan has " + std::to_string(plan.steps.size()) + " steps, expected " + std::to_string(static_cast<int>(*count)));
+        }
+        if (const auto count = NumberMember(step, "plan_off", error, false); count.has_value()) {
+            const auto off = static_cast<double>(std::ranges::count_if(plan.steps, [](const EditorAgentPlanStep& item) { return !item.enabled; }));
+            if (off != *count) return fail("the plan has " + std::to_string(static_cast<int>(off)) + " steps switched off, expected " + std::to_string(static_cast<int>(*count)));
+        }
+        if (const auto first = StringMember(step, "plan_first", error, false); first.has_value() && (plan.steps.empty() || plan.steps.front().text.find(*first) == std::string::npos)) {
+            return fail("the plan's first step is '" + (plan.steps.empty() ? std::string{} : plan.steps.front().text) + "', expected '" + *first + "'");
+        }
+        if (const auto count = NumberMember(step, "plan_done", error, false); count.has_value()) {
+            const auto done = static_cast<double>(std::ranges::count_if(plan.steps, [](const EditorAgentPlanStep& item) { return item.progress == EditorAgentStepProgress::Done; }));
+            if (done != *count) return fail(std::to_string(static_cast<int>(done)) + " steps are done, expected " + std::to_string(static_cast<int>(*count)));
+        }
+        if (const auto model = StringMember(step, "model", error, false); model.has_value() && panel.Model() != *model) {
+            return fail("the model is '" + panel.Model() + "', expected '" + *model + "'");
+        }
+        if (const auto count = NumberMember(step, "conversations", error, false); count.has_value() && static_cast<double>(panel.ConversationCount()) != *count) {
+            return fail("there are " + std::to_string(panel.ConversationCount()) + " conversations, expected " + std::to_string(static_cast<int>(*count)));
+        }
+        if (const auto draft = StringMember(step, "draft", error, false); draft.has_value() && panel.Input() != *draft) {
+            return fail("the request box holds '" + panel.Input() + "', expected '" + *draft + "'");
+        }
+        if (const JsonValue* wanted = step.Find("entries"); wanted != nullptr && wanted->GetKind() == JsonValue::Kind::Array) {
+            for (std::size_t index = 0; index < wanted->Size(); ++index) {
+                const std::string& text = wanted->At(index)->AsString();
+                const bool found = std::ranges::any_of(panel.Active().entries, [&](const EditorAgentEntry& entry) { return entry.text.find(text) != std::string::npos; });
+                if (!found) return fail("the conversation never says '" + text + "'");
+            }
+        }
+        const EditorAgentUsage& usage = panel.Active().usage;
+        const auto same = [&](std::string_view name, double actual) {
+            const auto expected = NumberMember(step, name, error, false);
+            return !expected.has_value() || std::fabs(actual - *expected) <= 1e-9 + 1e-6 * std::fabs(*expected);
+        };
+        if (!same("uncached", static_cast<double>(usage.UncachedInput())) || !same("cache_read", static_cast<double>(usage.cacheReadTokens)) ||
+            !same("cache_write", static_cast<double>(usage.cacheWriteTokens)) || !same("output", static_cast<double>(usage.outputTokens)) ||
+            !same("priced_cost", usage.pricedCost) || !same("program_cost", usage.programCost)) {
+            return fail("the usage is uncached " + std::to_string(usage.UncachedInput()) + ", cache read " + std::to_string(usage.cacheReadTokens) + ", cache write " +
+                std::to_string(usage.cacheWriteTokens) + ", output " + std::to_string(usage.outputTokens) + ", priced cost " + std::to_string(usage.pricedCost) +
+                ", the program's cost " + std::to_string(usage.programCost));
+        }
+        if (const auto complete = BoolMember(step, "cost_complete", error, false); complete.has_value() && *complete == usage.unpriced) {
+            return fail(std::string{ "the cost is " } + (usage.unpriced ? "incomplete" : "complete") + " (a model has no price)");
+        }
+        if (!error.empty()) return fail(error);
+        return StepOutcome{ true, "as expected" };
+    }
+
+    return std::nullopt;
+}
+
 // Steps that put data in place outside the editor's own controls (a file written or copied into the project). They are
 // listed in the report so a scenario that needs many of them shows how much the authoring path leaves undone.
 [[nodiscard]] bool IsWorkaroundOperation(std::string_view operation) noexcept {
@@ -1528,6 +1741,9 @@ ReadScriptValue(
     if (!operation.has_value()) return { false, error };
     if (std::optional<StepOutcome> world = ExecuteWorldStep(state, step, *operation)) {
         return *world;
+    }
+    if (std::optional<StepOutcome> guidance = ExecuteAgentGuidanceStep(state, step, *operation)) {
+        return *guidance;
     }
     if (std::optional<StepOutcome> navigation = ExecuteNavigationStep(state, step, *operation)) {
         return *navigation;
@@ -5771,7 +5987,14 @@ ReadScriptValue(
         measures.Set("inputTokens", JsonValue::MakeNumber(static_cast<double>(inputTokens)));
         measures.Set("outputTokens", JsonValue::MakeNumber(static_cast<double>(outputTokens)));
         measures.Set("totalTokens", JsonValue::MakeNumber(static_cast<double>(spent)));
-        measures.Set("costUsd", JsonValue::MakeNumber(conversation.usage.costUsd - usageBefore.costUsd));
+        // What the model read fresh, from the agent's cache and into it, and the cost as the agent reports it and by the user's price table.
+        measures.Set("uncachedInputTokens", JsonValue::MakeNumber(static_cast<double>(conversation.usage.UncachedInput() - usageBefore.UncachedInput())));
+        measures.Set("cacheReadTokens", JsonValue::MakeNumber(static_cast<double>(conversation.usage.cacheReadTokens - usageBefore.cacheReadTokens)));
+        measures.Set("cacheWriteTokens", JsonValue::MakeNumber(static_cast<double>(conversation.usage.cacheWriteTokens - usageBefore.cacheWriteTokens)));
+        measures.Set("costUsd", JsonValue::MakeNumber(conversation.usage.programCost - usageBefore.programCost));
+        measures.Set("cost", JsonValue::MakeNumber(conversation.usage.pricedCost - usageBefore.pricedCost));
+        measures.Set("currency", JsonValue::MakeString(conversation.usage.currency));
+        measures.Set("costComplete", JsonValue::MakeBool(!conversation.usage.unpriced));
         measures.Set("toolSteps", JsonValue::MakeNumber(static_cast<double>(toolSteps)));
         measures.Set("failedSteps", JsonValue::MakeNumber(static_cast<double>(failedSteps)));
         measures.Set("pictures", JsonValue::MakeNumber(static_cast<double>(pictures)));

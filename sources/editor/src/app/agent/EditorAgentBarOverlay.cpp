@@ -6,6 +6,7 @@
 #include "rendering/AgentBarRenderer.hpp"
 #include "scene/EditorSceneContext.hpp"
 
+#include <optional>
 #include <shellapi.h>
 #include <windowsx.h>
 
@@ -101,6 +102,10 @@ void EditorAgentBarOverlay::Render() {
     key += state.Model() + ',' + state.Effort() + ',' + std::to_string(state.Agents().size()) + ',';
     for (int index = 0; index < state.ConversationCount(); ++index) {
         key += state.Conversation(index).title + (state.Conversation(index).running ? "*," : ",");
+    }
+    key += std::to_string(state.CardFocus()) + ',';
+    if (const std::optional<EditorAgentCard> card = state.Card()) {
+        key += card->title + card->body + std::to_string(card->buttons.size());
     }
     key += active.draft;
     if (shown_ && key == renderedKey_) {
@@ -247,6 +252,10 @@ void EditorAgentBarOverlay::HandlePointerDown(int x, int y) {
     case AgentBarHitKind::Dock:
         agent.RequestDock(EditorAgentPanelState::DockRequest::Dock);
         break;
+    case AgentBarHitKind::NoticeButton:
+        static_cast<void>(controller.PressNotice(hit.index));
+        break;
+    case AgentBarHitKind::Notice:
     case AgentBarHitKind::Input:
     case AgentBarHitKind::Conversation:
     case AgentBarHitKind::None:

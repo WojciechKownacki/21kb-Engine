@@ -368,6 +368,7 @@ FindInspectorHit(
     if (panel == "inspector") return DockPanelKind::Inspector;
     if (panel == "assets") return DockPanelKind::Assets;
     if (panel == "console") return DockPanelKind::Console;
+    if (panel == "agent") return DockPanelKind::Agent;
     if (panel == "audio-mixer") return DockPanelKind::AudioMixer;
     if (panel == "timeline") return DockPanelKind::TimelineEditor;
     if (panel == "blend-space-2d") return DockPanelKind::BlendSpace2DEditor;

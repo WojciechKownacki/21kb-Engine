@@ -1,5 +1,7 @@
 #pragma once
 
+#include "agent/EditorAgentPrices.hpp"
+
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -11,7 +13,7 @@ namespace kb::editor {
 // How an agent's output is read: the line-delimited JSON events of Claude Code or of Codex, or
 // plain text, one line after another.
 enum class EditorAgentOutputFormat : std::uint8_t {
-    ClaudeStreamJson,
+    StreamJson,
     CodexJson,
     PlainText,
 };
@@ -55,9 +57,13 @@ struct EditorAgent {
     // {model} in modelArguments receives the choice; nothing is passed for the default.
     std::vector<std::string> models;
     std::vector<std::string> modelArguments;
-    // A file in the profile folder where the CLI keeps the models it offers; when `models` is empty the list
-    // is read from it as the agent is detected, so it is the CLI's own and current.
+    // A file in the profile folder where the CLI keeps the models it offers (the last part of the path may hold one *: the newest
+    // such file is read); when `models` is empty the list is read from it as the agent is detected, so it is the CLI's own and
+    // current. Empty `models` after that: the agent picks its model itself.
     std::string modelsFile;
+    // `models` from the lightest to the strongest, to suggest one by the size of a request and to move one step up; the user's
+    // own order for the agent when the agents file has one (Agents.json "tiers"), else the program's list turned round.
+    std::vector<std::string> ladder;
     // Reasoning (effort) levels, lowest first, and how a chosen level is passed ({effort}).
     std::vector<std::string> efforts;
     std::vector<std::string> effortArguments;
@@ -76,6 +82,12 @@ struct EditorAgent {
 // profile folder found in the user's home, followed by the user's own agents from
 // EditorAgentsFile().
 [[nodiscard]] std::vector<EditorAgent> DetectEditorAgents();
+
+// The names of the models in a CLI's cache file, in the file's order, without the ones the CLI keeps out of its picker.
+// Empty when the file is missing or unreadable.
+[[nodiscard]] std::vector<std::string> ListedEditorAgentModels(const std::filesystem::path& file);
+// The prices the user keeps in the agents file; no entry for any model when there are none.
+[[nodiscard]] EditorAgentPrices LoadEditorAgentPrices();
 
 // The user's own agents (any CLI that takes a request and works in a folder), kept next to the
 // other editor preferences. EnsureEditorAgentsFile writes an empty list with an example the

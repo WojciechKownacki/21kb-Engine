@@ -2,6 +2,8 @@
 
 #include "agent/EditorAgentPanelState.hpp"
 
+#include <optional>
+
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -26,6 +28,11 @@ public:
     [[nodiscard]] bool HandleKeyDown(HWND owner, WPARAM key);
     // Sends the typed request, or stops the one in progress.
     bool SendOrStop();
+    // A button of the bubble that waits for a decision (the agent got stuck, a plan), and the suggestion over the request box: the
+    // panel and the bar both press them here. What they start sees the project as the editor has it.
+    bool PressCardButton(int index);
+    // A button of the bubble over the agent bar: the card's own buttons, the suggestion's, and for a plan the one that opens its list.
+    bool PressNotice(int index);
     // One menu for the agent bar: every agent with its models, then the reasoning level. It opens
     // upwards from `screenAnchor`, its bottom-left corner.
     void ShowModelMenu(HWND owner, POINT screenAnchor);
@@ -34,6 +41,8 @@ public:
     [[nodiscard]] static EditorAgentWorkspace Workspace();
 
 private:
+    // Saves what is open and gathers what the agent is told about the editor, for a request the agent works on.
+    [[nodiscard]] std::optional<EditorAgentWorkspace> PrepareRun();
     void ShowAgentMenu(HWND owner, const RECT& anchor);
     void ShowModeMenu(HWND owner, const RECT& anchor);
     void AttachFile(HWND owner);

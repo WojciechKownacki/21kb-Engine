@@ -1,0 +1,18 @@
+{
+  "agents": [
+    {
+      "name": "Scripted agent",
+      "command": "powershell",
+      "arguments": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "@KB_SCRIPTED_AGENT@"],
+      "models": ["strong", "middle", "light"],
+      "modelArguments": ["-Model", "{model}"],
+      "output": "stream-json"
+    }
+  ],
+  "currency": "EUR",
+  "prices": {
+    "fake-light": { "input": 1.0, "cacheRead": 0.1, "cacheWrite": 1.25, "output": 5.0 },
+    "fake-middle": { "input": 2.0, "cacheRead": 0.2, "cacheWrite": 2.5, "output": 10.0 },
+    "fake-strong": { "input": 4.0, "cacheRead": 0.4, "cacheWrite": 5.0, "output": 20.0 }
+  }
+}

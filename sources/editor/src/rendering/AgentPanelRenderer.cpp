@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <optional>
 
 namespace kb::editor {
 namespace {
@@ -404,10 +405,112 @@ void PaintEntries(HDC dc, const RECT& column, const RECT& clip, const EditorThem
     return total;
 }
 
+constexpr int kNoticePad = 12;
+constexpr int kButtonHeight = 28;
+constexpr int kPlanRow = 24;
+
+[[nodiscard]] int ButtonWidth(HDC dc, std::string_view label) {
+    return TextWidth(dc, label, 10, FW_SEMIBOLD) + 24;
+}
+
+// A button of a bubble: the first is the one to press (filled), the rest are quiet; the one the keyboard is on has a ring.
+void PaintButton(HDC dc, const RECT& rect, const EditorTheme& theme, std::string_view label, bool primary, bool focused) {
+    const COLORREF fill = primary ? Color(theme.accent) : Color(theme.panel);
+    panel_style::DrawRoundedFrame(dc, rect, fill, focused ? Color(theme.textPrimary) : primary ? fill : Color(theme.borderPanel), 3.0F, focused ? 2.0F : 1.0F);
+    Text(dc, rect, label, primary ? RGB(255, 255, 255) : Color(theme.textPrimary), 10, primary ? FW_SEMIBOLD : FW_NORMAL,
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+
+// How a plan step stands, as a small mark in front of its words.
+void PaintStepMark(HDC dc, const RECT& box, const EditorTheme& theme, const EditorAgentPlanStep& step) {
+    switch (step.progress) {
+    case EditorAgentStepProgress::Done:
+        HeroIconPainter::Draw(dc, RECT{ box.left + 2, box.top + 2, box.right - 2, box.bottom - 2 }, HeroIconKind::Check, kGreen, 1);
+        break;
+    case EditorAgentStepProgress::Running:
+        HeroIconPainter::Draw(dc, RECT{ box.left + 2, box.top + 2, box.right - 2, box.bottom - 2 }, HeroIconKind::Clock, kAmber, 1);
+        break;
+    case EditorAgentStepProgress::Stuck:
+        HeroIconPainter::Draw(dc, RECT{ box.left + 2, box.top + 2, box.right - 2, box.bottom - 2 }, HeroIconKind::Warning, kDanger, 1);
+        break;
+    case EditorAgentStepProgress::Pending:
+        FillRound(dc, box, Color(theme.panel), step.enabled ? Color(theme.accent) : Color(theme.borderPanel), 5);
+        if (step.enabled) HeroIconPainter::Draw(dc, RECT{ box.left + 3, box.top + 3, box.right - 3, box.bottom - 3 }, HeroIconKind::Check, Color(theme.accent), 1);
+        break;
+    }
+}
+
+// The bubble that waits for a decision: what happened in plain words, a plan's steps as a checklist, and the buttons.
+void PaintCard(HDC dc, const AgentPanelLayout& layout, const EditorTheme& theme, const EditorAgentPanelState& state, const EditorAgentCard& card) {
+    const RECT& area = layout.card;
+    FillRound(dc, area, Color(theme.toolbarButton), Color(theme.borderPanel), 8);
+    const bool stuck = card.kind == EditorAgentCardKind::Stuck;
+    HeroIconPainter::Draw(dc, RECT{ area.left + kNoticePad, area.top + 12, area.left + kNoticePad + 14, area.top + 26 },
+        stuck ? HeroIconKind::Warning : card.kind == EditorAgentCardKind::Advice ? HeroIconKind::Bolt : HeroIconKind::ListBullet,
+        stuck ? kAmber : Color(theme.accent), 1);
+    Text(dc, RECT{ area.left + kNoticePad + 22, area.top + 8, area.right - kNoticePad, area.top + 30 }, card.title, Color(theme.textPrimary), 12, FW_SEMIBOLD,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    int top = static_cast<int>(area.top) + 32;
+    if (!card.body.empty()) {
+        const int height = static_cast<int>(Wrapped(dc, card.body, static_cast<int>(area.right - area.left) - kNoticePad * 2, 11).cy);
+        Text(dc, RECT{ area.left + kNoticePad, top, area.right - kNoticePad, top + height }, card.body, Color(theme.textSecondary), 11, FW_NORMAL,
+            DT_LEFT | DT_WORDBREAK | DT_EDITCONTROL);
+    }
+    const EditorAgentPlan& plan = state.StepPlan();
+    const bool review = plan.phase == EditorAgentPlan::Phase::Review;
+    for (std::size_t row = 0; row < layout.planRows.size(); ++row) {
+        const RECT& line = layout.planRows[row];
+        const EditorAgentPlanStep& step = plan.steps[row];
+        if (static_cast<int>(row) == plan.current && plan.phase == EditorAgentPlan::Phase::Running) {
+            FillRound(dc, line, Color(theme.panel), Color(theme.panel), 6);
+        }
+        PaintStepMark(dc, layout.planChecks[row], theme, step);
+        const bool editing = static_cast<int>(row) == plan.editing;
+        const RECT words{ layout.planChecks[row].right + 8, line.top, (review ? layout.planEdits[row].left : line.right) - 6, line.bottom };
+        Text(dc, words, step.text, step.enabled ? (editing ? Color(theme.accent) : Color(theme.textPrimary)) : Color(theme.textDisabled), 11, FW_NORMAL,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        if (!review) continue;
+        Text(dc, layout.planEdits[row], EditorText("agent.plan.edit", "Edit"), Color(theme.accent), 10, FW_NORMAL, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+        const bool canUp = row > 0U;
+        const bool canDown = row + 1U < layout.planRows.size() + static_cast<std::size_t>(layout.planMore);
+        Text(dc, layout.planUps[row], "\xE2\x86\x91", canUp ? Color(theme.textSecondary) : Color(theme.textDisabled), 11, FW_BOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        Text(dc, layout.planDowns[row], "\xE2\x86\x93", canDown ? Color(theme.textSecondary) : Color(theme.textDisabled), 11, FW_BOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+    if (layout.planMore > 0 && !layout.planRows.empty()) {
+        const int rowTop = static_cast<int>(layout.planRows.back().bottom);
+        Text(dc, RECT{ area.left + kNoticePad + 24, rowTop, area.right - kNoticePad, rowTop + kPlanRow },
+            EditorLocalization::Format("agent.plan.more", "and {count} more", { { "count", std::to_string(layout.planMore) } }),
+            Color(theme.textDisabled), 10, FW_NORMAL, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    }
+    for (std::size_t index = 0; index < layout.cardButtons.size(); ++index) {
+        PaintButton(dc, layout.cardButtons[index], theme, card.buttons[index].label, index == 0U, state.CardFocus() == static_cast<int>(index));
+    }
+}
+
 } // namespace
 
 std::string AgentPanelRenderer::TokenCount(std::uint64_t count) {
     return Tokens(count);
+}
+
+std::string AgentPanelRenderer::UsageSummary(const EditorAgentUsage& usage) {
+    std::string text;
+    double amount = 0.0;
+    std::string currency;
+    if (usage.Money(amount, currency)) {
+        char money[48]{};
+        if (amount < 0.001) {
+            std::snprintf(money, sizeof(money), "<0.001 %s", currency.c_str());
+        } else {
+            std::snprintf(money, sizeof(money), amount < 10.0 ? "%.3f %s" : "%.2f %s", amount, currency.c_str());
+        }
+        text = money;
+    }
+    if (usage.inputTokens + usage.outputTokens > 0U) {
+        text += (text.empty() ? "" : " \xC2\xB7 ") + EditorLocalization::Format("agent.usage.tokens", "in {new} \xC2\xB7 cached {cached} \xC2\xB7 out {output}",
+            { { "new", Tokens(usage.UncachedInput() + usage.cacheWriteTokens) }, { "cached", Tokens(usage.cacheReadTokens) }, { "output", Tokens(usage.outputTokens) } });
+    }
+    return text;
 }
 
 void AgentPanelRenderer::PaintConversation(HDC dc, const RECT& area, const EditorTheme& theme, const EditorAgentPanelState& state) {
@@ -487,17 +590,68 @@ AgentPanelLayout AgentPanelRenderer::Resolve(const RECT& content, const EditorAg
         layout.connectButton = RECT{ footerRight - 140, footerTop, footerRight, footerBottom };
         footerRight = static_cast<int>(layout.connectButton.left) - 8;
     }
-    const int footerMiddle = (static_cast<int>(layout.composer.left) + footerRight) / 2;
+    const int footerMiddle = static_cast<int>(layout.composer.left) + (footerRight - static_cast<int>(layout.composer.left)) * 35 / 100;
     layout.status = RECT{ layout.composer.left, footerTop, footerMiddle, footerBottom };
     layout.usage = RECT{ footerMiddle + 8, footerTop, footerRight, footerBottom };
 
-    // What the latest request changed in the project, with Keep all and Undo all, stands over the pictures and the composer.
-    int conversationEdge = attachmentsTop - 8;
+    // From the composer up: the bubble that waits for a decision (a suggestion, a stuck agent, a plan), and what the latest request
+    // changed in the project with Keep all and Undo all.
+    int stackTop = attachmentsTop;
+    if (const std::optional<EditorAgentCard> card = state.Card()) {
+        const int inner = columnWidth - kNoticePad * 2;
+        const int bodyHeight = card->body.empty() ? 0 : static_cast<int>(Wrapped(dc, card->body, inner, 11).cy) + 4;
+        // The buttons stand in rows of what fits.
+        std::vector<int> widths;
+        for (const EditorAgentCardButton& button : card->buttons) widths.push_back(ButtonWidth(dc, button.label));
+        int buttonRows = 1;
+        int used = 0;
+        for (const int width : widths) {
+            if (used > 0 && used + width > inner) {
+                ++buttonRows;
+                used = 0;
+            }
+            used += width + 6;
+        }
+        const bool listed = card->kind == EditorAgentCardKind::Plan && state.StepPlan().phase != EditorAgentPlan::Phase::Writing;
+        const int steps = listed ? static_cast<int>(state.StepPlan().steps.size()) : 0;
+        const int fixed = 10 + 22 + bodyHeight + buttonRows * (kButtonHeight + 6) + 8;
+        const int bottom = stackTop - 6;
+        const int fit = std::max(0, (bottom - (static_cast<int>(layout.toolbar.bottom) + 40) - fixed) / kPlanRow);
+        const int shown = steps <= fit ? steps : std::max(0, fit - 1);
+        layout.planMore = steps - shown;
+        const int rowsHeight = (shown + (layout.planMore > 0 ? 1 : 0)) * kPlanRow;
+        const int top = std::max(static_cast<int>(layout.toolbar.bottom) + 40, bottom - fixed - rowsHeight);
+        layout.card = RECT{ columnLeft, top, columnLeft + columnWidth, bottom };
+        int y = top + 10 + 22 + bodyHeight;
+        for (int row = 0; row < shown; ++row) {
+            const int planTop = y + row * kPlanRow;
+            layout.planRows.push_back(RECT{ columnLeft + kNoticePad, planTop, columnLeft + columnWidth - kNoticePad, planTop + kPlanRow });
+            layout.planChecks.push_back(RECT{ columnLeft + kNoticePad, planTop + 4, columnLeft + kNoticePad + 16, planTop + 20 });
+            const int right = columnLeft + columnWidth - kNoticePad;
+            layout.planDowns.push_back(RECT{ right - 20, planTop + 2, right, planTop + kPlanRow - 2 });
+            layout.planUps.push_back(RECT{ right - 44, planTop + 2, right - 24, planTop + kPlanRow - 2 });
+            layout.planEdits.push_back(RECT{ right - 92, planTop, right - 48, planTop + kPlanRow });
+        }
+        y += rowsHeight + 4;
+        int buttonLeft = columnLeft + kNoticePad;
+        int line = 0;
+        for (const int width : widths) {
+            if (buttonLeft > columnLeft + kNoticePad && buttonLeft + width > columnLeft + columnWidth - kNoticePad) {
+                buttonLeft = columnLeft + kNoticePad;
+                ++line;
+            }
+            const int buttonTop = y + line * (kButtonHeight + 6);
+            layout.cardButtons.push_back(RECT{ buttonLeft, buttonTop, buttonLeft + width, buttonTop + kButtonHeight });
+            buttonLeft += width + 6;
+        }
+        stackTop = top;
+    }
+    int conversationEdge = stackTop - 8;
     if (!state.Review().empty()) {
         const int shownRows = static_cast<int>(std::min<std::size_t>(state.Review().size(), kReviewRows));
         layout.reviewMore = static_cast<int>(state.Review().size()) - shownRows;
         const int height = kReviewHeader + shownRows * kReviewRow + (layout.reviewMore > 0 ? kReviewRow : 0) + 6;
-        const int reviewBottom = attachmentsTop - 6;
+        const int reviewBottom = stackTop - 6;
         const int reviewTop = std::max(static_cast<int>(layout.toolbar.bottom) + 40, reviewBottom - height);
         layout.review = RECT{ columnLeft, reviewTop, columnLeft + columnWidth, reviewBottom };
         const int buttonWidth = 74;
@@ -646,6 +800,9 @@ void AgentPanelRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& t
         PaintInput(dc, layout.input, theme, state);
     }
     if (layout.review.right > layout.review.left) PaintReview(dc, layout, theme, state);
+    if (layout.card.right > layout.card.left) {
+        if (const std::optional<EditorAgentCard> card = state.Card()) PaintCard(dc, layout, theme, state, *card);
+    }
     for (std::size_t index = 0; index < layout.attachments.size(); ++index) {
         const RECT& slot = layout.attachments[index];
         FillRound(dc, slot, Color(theme.chrome), Color(theme.borderPanel), 6);
@@ -690,6 +847,8 @@ void AgentPanelRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& t
             status = std::string{ EditorText("agent.signInPrompt", "Not signed in - click here to sign in") };
         } else {
             status = std::string{ EditorText("agent.signedIn", "Signed in") } + (state.Plan().empty() ? std::string{} : " \xC2\xB7 " + state.Plan());
+            // One line when the program names no models: its own is used.
+            if (state.NoModelList()) status += " \xC2\xB7 " + std::string{ EditorText("agent.noModelList", "no model list, its own model is used") };
         }
         const int dotTop = static_cast<int>(layout.status.top + layout.status.bottom) / 2 - 3;
         FillRound(dc, RECT{ layout.status.left + 2, dotTop, layout.status.left + 8, dotTop + 6 }, dot, dot, 6);
@@ -697,12 +856,16 @@ void AgentPanelRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& t
             DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     }
     const EditorAgentUsage& usage = state.Active().usage;
+    std::string usageText = UsageSummary(usage);
     if (usage.contextTokens > 0U) {
-        std::string text = Tokens(usage.contextTokens);
+        // How much of the model's window the conversation fills.
+        usageText += (usageText.empty() ? "" : "  ") + std::string{ EditorText("agent.bar.context", "context") } + " " + Tokens(usage.contextTokens);
         if (usage.contextWindow > 0U) {
-            text += " / " + Tokens(usage.contextWindow);
+            usageText += " / " + Tokens(usage.contextWindow);
         }
-        Text(dc, layout.usage, text, Color(theme.textDisabled), 10, FW_NORMAL, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    }
+    if (!usageText.empty()) {
+        Text(dc, layout.usage, usageText, Color(theme.textDisabled), 10, FW_NORMAL, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     }
     if (layout.connectButton.right > layout.connectButton.left) {
         Text(dc, layout.connectButton, EditorText("agent.connectTools", "Connect engine tools"), Color(theme.accent), 10, FW_SEMIBOLD,
@@ -725,6 +888,20 @@ AgentPanelHit AgentPanelRenderer::HitTest(const RECT& content, const EditorAgent
     if (Inside(layout.modelMenu, x, y)) return { AgentPanelHitKind::ModelMenu };
     if (Inside(layout.effortMenu, x, y)) return { AgentPanelHitKind::EffortMenu };
     if (Inside(layout.connectButton, x, y)) return { AgentPanelHitKind::ConnectTools };
+    if (layout.card.right > layout.card.left) {
+        for (std::size_t index = 0; index < layout.cardButtons.size(); ++index) {
+            if (Inside(layout.cardButtons[index], x, y)) return { AgentPanelHitKind::CardButton, static_cast<int>(index) };
+        }
+        if (state.StepPlan().phase == EditorAgentPlan::Phase::Review) {
+            for (std::size_t row = 0; row < layout.planRows.size(); ++row) {
+                const int index = static_cast<int>(row);
+                if (Inside(layout.planChecks[row], x, y)) return { AgentPanelHitKind::PlanToggle, index };
+                if (Inside(layout.planEdits[row], x, y)) return { AgentPanelHitKind::PlanEdit, index };
+                if (Inside(layout.planUps[row], x, y)) return { AgentPanelHitKind::PlanUp, index };
+                if (Inside(layout.planDowns[row], x, y)) return { AgentPanelHitKind::PlanDown, index };
+            }
+        }
+    }
     if (layout.review.right > layout.review.left) {
         if (Inside(layout.reviewKeep, x, y)) return { AgentPanelHitKind::ReviewKeep };
         if (Inside(layout.reviewUndoAll, x, y)) return { AgentPanelHitKind::ReviewUndoAll };

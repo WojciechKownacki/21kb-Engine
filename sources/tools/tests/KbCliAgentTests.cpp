@@ -258,6 +258,55 @@ void RunUndoCommandTests() {
     Require(!viaMcp.isError && Contains(viaMcp.text, "undo point taken"), "undo works through mcp: " + viaMcp.text);
 }
 
+// The answers of one MCP server session to several tool calls, in order (text and whether each was an error).
+[[nodiscard]] std::vector<std::pair<bool, std::string>> McpSession(const std::string& project, const std::vector<std::string>& calls) {
+    std::string input = R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}})";
+    input += "\n";
+    for (std::size_t index = 0U; index < calls.size(); ++index) {
+        input += "{\"jsonrpc\":\"2.0\",\"id\":" + std::to_string(index + 2U) + ",\"method\":\"tools/call\",\"params\":" + calls[index] + "}\n";
+    }
+    std::istringstream in{ input };
+    std::ostringstream out;
+    std::ostringstream err;
+    const std::vector<std::string> raw{ "--project", project };
+    Require(kb::cli::RunMcpCommand(kb::cli::ArgumentList{ raw }, in, kb::cli::CommandIo{ .out = out, .err = err }) == 0, "the mcp server exited with an error");
+    kb::cli::ResetCliConfinementForTests();
+    std::vector<std::pair<bool, std::string>> answers;
+    std::istringstream lines{ out.str() };
+    std::string line;
+    std::getline(lines, line); // the initialize answer
+    while (std::getline(lines, line)) {
+        JsonValue response;
+        std::string parseError;
+        Require(JsonValue::Parse(line, response, parseError) && response.Find("result") != nullptr, "the mcp answer must be JSON: " + line.substr(0U, 200U));
+        const JsonValue* result = response.Find("result");
+        std::string text;
+        const JsonValue* content = result->Find("content");
+        for (std::size_t block = 0U; block < content->Size(); ++block) text += content->At(block)->Find("text") != nullptr ? content->At(block)->Find("text")->AsString() : std::string{};
+        answers.emplace_back(result->Find("isError")->AsBool(), text);
+    }
+    return answers;
+}
+
+// A command that fails the same way again is answered with a short hint to change course, in the same server session, whatever ran
+// in between; a different command is a first failure, and one that works is a plain success.
+void RunRepeatedFailureTests() {
+    const std::string project = Project("RepeatedFailure");
+    const std::string failing = R"({"name":"kb_cli","arguments":{"args":["material-show","--material","/Game/Materials/Nope.kbmat"]}})";
+    const std::string other = R"({"name":"kb_cli","arguments":{"args":["material-show","--material","/Game/Materials/Other.kbmat"]}})";
+    const std::string make = R"({"name":"kb_cli","arguments":{"args":["material-new","--name","Made"]}})";
+    const std::string showMade = R"({"name":"kb_cli","arguments":{"args":["material-show","--material","/Game/Materials/Made.kbmat"]}})";
+    const auto answers = McpSession(project, { failing, failing, other, failing, make, showMade });
+    Require(answers.size() == 6U, "every call is answered");
+    Require(answers[0].first && !Contains(answers[0].second, "This failed"), "the first failure is told in full: " + answers[0].second);
+    Require(answers[1].first && Contains(answers[1].second, "This failed 2 times") && Contains(answers[1].second, "Change the arguments") &&
+            Contains(answers[1].second, "stop and report") && answers[1].second.size() < answers[0].second.size() + 220U,
+        "the second identical failure is answered with the hint: " + answers[1].second);
+    Require(answers[2].first && !Contains(answers[2].second, "This failed"), "a different command is a first failure: " + answers[2].second);
+    Require(answers[3].first && Contains(answers[3].second, "This failed 3 times"), "the hint counts the failures, whatever ran between them: " + answers[3].second);
+    Require(!answers[4].first && !answers[5].first && !Contains(answers[5].second, "This failed"), "what works is a plain success: " + answers[5].second);
+}
+
 // A transaction whose process was cut off is put back by the next command in the project; a damaged marker is named, not thrown;
 // a second transaction while the first runs is refused.
 void RunInterruptedTransactionTests() {
@@ -447,6 +496,7 @@ void RunAgentPackTests() {
 #endif
     RunCaptureNamingTests();
     RunUndoCommandTests();
+    RunRepeatedFailureTests();
     RunInterruptedTransactionTests();
     RunEditorControlTests();
     RunSaveRunTests();

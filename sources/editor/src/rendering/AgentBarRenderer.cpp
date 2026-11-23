@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
+#include <optional>
 #include <unordered_map>
 
 namespace kb::editor {
@@ -301,20 +302,96 @@ void Cross(Gdiplus::Graphics& graphics, const RECT& rect, const Gdiplus::Color& 
     return std::min(1.0, static_cast<double>(usage.contextTokens) / static_cast<double>(usage.contextWindow));
 }
 
-// "context 48.2k / 1.0M   $0.14": how much of the model's window the conversation fills, and
-// what it has cost so far.
+// What the bubble puts over everything else when something waits for a decision (the agent got stuck, a plan) or the window has a
+// suggestion: a title, a few words and buttons. The first button is the one to press.
+struct Notice {
+    bool shown = false;
+    bool warning = false;
+    std::wstring title;
+    std::wstring body;
+    std::vector<std::wstring> buttons;
+};
+
+[[nodiscard]] Notice NoticeOf(const EditorAgentPanelState& state) {
+    Notice notice;
+    if (const std::optional<EditorAgentCard> card = state.Card()) {
+        notice.shown = true;
+        notice.warning = card->kind == EditorAgentCardKind::Stuck;
+        notice.title = Wide(card->title);
+        notice.body = Wide(card->body);
+        for (const EditorAgentCardButton& button : card->buttons) notice.buttons.push_back(Wide(button.label));
+        // The list of a plan is a checklist the docked panel shows.
+        if (card->kind == EditorAgentCardKind::Plan && state.StepPlan().phase == EditorAgentPlan::Phase::Review) {
+            notice.buttons.push_back(Wide(EditorText("agent.plan.openList", "Open the list")));
+        }
+    }
+    return notice;
+}
+
+constexpr int kNoticeButton = 28;
+
+[[nodiscard]] int NoticeButtonWidth(const std::wstring& label) {
+    return static_cast<int>(Width(label, Type().strong)) + 28;
+}
+
+// The notice's height in a bubble `width` wide, and where its buttons stand (relative to the bubble's top-left corner at (left, top)).
+int LayOutNotice(AgentBarLayout& layout, const Notice& notice, int left, int top, int width) {
+    layout.noticeButtons.clear();
+    if (!notice.shown) return 0;
+    Typography& type = Type();
+    const int lines = static_cast<int>(Wrap(notice.body, type.caption, static_cast<float>(width - kPad * 2), 6).size());
+    const int textHeight = (notice.title.empty() ? 0 : 24) + lines * kTextLine;
+    int x = left + kPad;
+    int row = 0;
+    const int buttonsTop = top + 14 + textHeight + 6;
+    for (const std::wstring& label : notice.buttons) {
+        const int buttonWidth = NoticeButtonWidth(label);
+        if (x > left + kPad && x + buttonWidth > left + width - kPad) {
+            x = left + kPad;
+            ++row;
+        }
+        const int buttonTop = buttonsTop + row * (kNoticeButton + 6);
+        layout.noticeButtons.push_back(RECT{ x, buttonTop, x + buttonWidth, buttonTop + kNoticeButton });
+        x += buttonWidth + 8;
+    }
+    return 14 + textHeight + 6 + (row + 1) * (kNoticeButton + 6) + 6;
+}
+
+void PaintNotice(Gdiplus::Graphics& graphics, const AgentBarLayout& layout, const Notice& notice, int focused) {
+    Typography& type = Type();
+    float y = static_cast<float>(layout.notice.top) + 14.0F;
+    const float left = static_cast<float>(layout.notice.left + kPad);
+    if (!notice.title.empty()) {
+        float titleLeft = left;
+        if (notice.warning) {
+            const Gdiplus::SolidBrush dot(kAmber);
+            graphics.FillEllipse(&dot, left, y + 6.0F, 7.0F, 7.0F);
+            titleLeft += 14.0F;
+        }
+        DrawLabel(graphics, notice.title, type.strong, kText, titleLeft, y);
+        y += 24.0F;
+    }
+    for (const std::wstring& line : Wrap(notice.body, type.caption, static_cast<float>(layout.notice.right - layout.notice.left - kPad * 2), 6)) {
+        DrawLabel(graphics, line, type.caption, kDim, left, y);
+        y += static_cast<float>(kTextLine);
+    }
+    for (std::size_t index = 0; index < layout.noticeButtons.size() && index < notice.buttons.size(); ++index) {
+        const RECT& rect = layout.noticeButtons[index];
+        Gdiplus::GraphicsPath path;
+        RoundedPath(path, ToRectF(rect), kNoticeButton / 2.0F);
+        const Gdiplus::SolidBrush fill(index == 0U ? kAccent : Gdiplus::Color(22, 255, 255, 255));
+        graphics.FillPath(&fill, &path);
+        if (static_cast<int>(index) == focused) {
+            const Gdiplus::Pen ring(kText, 1.6F);
+            graphics.DrawPath(&ring, &path);
+        }
+        DrawLabel(graphics, notice.buttons[index], type.strong, kText, static_cast<float>(rect.left) + 14.0F, static_cast<float>(rect.top) + 6.0F);
+    }
+}
+
+// "0.14 USD · in 3.1k · cached 40k · out 1.2k": what the conversation has cost and used, the three kinds of tokens apart.
 [[nodiscard]] std::wstring UsageText(const EditorAgentUsage& usage) {
-    if (usage.contextTokens == 0U) return {};
-    std::string text = std::string{ EditorText("agent.bar.context", "context") } + " " + AgentPanelRenderer::TokenCount(usage.contextTokens);
-    if (usage.contextWindow > 0U) {
-        text += " / " + AgentPanelRenderer::TokenCount(usage.contextWindow);
-    }
-    if (usage.costUsd > 0.0) {
-        char cost[32]{};
-        std::snprintf(cost, sizeof(cost), "   $%.2f", usage.costUsd);
-        text += cost;
-    }
-    return Wide(text);
+    return Wide(AgentPanelRenderer::UsageSummary(usage));
 }
 
 // An agent's account as the picker shows it under the agent's name.
@@ -513,12 +590,14 @@ AgentBarLayout AgentBarRenderer::Resolve(int bubbleWidth, int maximumBubbleHeigh
     const std::vector<std::wstring> inputLines = Wrap(Wide(state.Input()), type.body, static_cast<float>(inputRight - inputLeft), kMaxInputLines);
     const int lineHeight = std::max(kLineMinHeight, static_cast<int>(inputLines.size()) * kTextLine + 28);
 
+    const Notice notice = NoticeOf(state);
+    const int noticeHeight = LayOutNotice(layout, notice, 0, 0, width);
     const Latest latest = LatestAnswer(state);
     layout.expanded = state.BarExpanded();
     layout.answerShown = latest.shown;
     int above = 0;
     if (layout.expanded) {
-        above = std::min(maximumBubbleHeight - lineHeight, kPanelMaxHeight);
+        above = std::min(maximumBubbleHeight - lineHeight - noticeHeight, kPanelMaxHeight);
         if (above < 140) {
             above = 0;
             layout.expanded = false;
@@ -527,7 +606,7 @@ AgentBarLayout AgentBarRenderer::Resolve(int bubbleWidth, int maximumBubbleHeigh
         const int lines = static_cast<int>(Wrap(Wide(latest.text), type.body, static_cast<float>(width - kPad * 2 - 30), kMaxAnswerLines).size());
         above = lines * kTextLine + 30;
     }
-    const int height = above + lineHeight;
+    const int height = noticeHeight + above + lineHeight;
     // The picker opens from the model label: inside the unfolded bubble, over the conversation's
     // left side, when it fits there; otherwise above the bubble, in the same window.
     layout.menuShown = state.ModelMenuOpen();
@@ -541,7 +620,14 @@ AgentBarLayout AgentBarRenderer::Resolve(int bubbleWidth, int maximumBubbleHeigh
     const int left = kMargin;
     const int top = kMargin + menuSpace;
     layout.bubble = RECT{ left, top, left + width, top + height };
-    layout.line = RECT{ left, top + above, left + width, top + height };
+    layout.line = RECT{ left, top + noticeHeight + above, left + width, top + height };
+    layout.noticeShown = notice.shown;
+    layout.bodyTop = top + noticeHeight;
+    if (notice.shown) {
+        layout.notice = RECT{ left, top, left + width, top + noticeHeight };
+        // The buttons were placed from the bubble's own corner; the bubble stands at (left, top).
+        LayOutNotice(layout, notice, left, top, width);
+    }
 
     // Controls sit on the request line's last text line, so a growing request lifts only the text.
     const int centre = static_cast<int>(layout.line.bottom) - kLineMinHeight / 2;
@@ -558,8 +644,8 @@ AgentBarLayout AgentBarRenderer::Resolve(int bubbleWidth, int maximumBubbleHeigh
         layout.menu = RECT{ left + 8, menuTop, left + 8 + menuWidth, menuTop + menuHeight };
     }
     if (layout.answerShown && !layout.expanded) {
-        layout.answer = RECT{ left, top, left + width, top + above };
-        layout.answerClose = RECT{ left + width - 36, top + 10, left + width - 12, top + 34 };
+        layout.answer = RECT{ left, layout.bodyTop, left + width, layout.bodyTop + above };
+        layout.answerClose = RECT{ left + width - 36, layout.bodyTop + 10, left + width - 12, layout.bodyTop + 34 };
     }
     if (layout.expanded) {
         int x = left + kPad;
@@ -569,18 +655,18 @@ AgentBarLayout AgentBarRenderer::Resolve(int bubbleWidth, int maximumBubbleHeigh
             const bool active = index == state.ActiveConversation();
             const int tabWidth = std::min(180, static_cast<int>(Width(Wide(state.Conversation(index).title), active ? type.strong : type.caption)) + 2);
             if (x + tabWidth + (active ? 22 : 0) > tabsRight) break;
-            layout.tabs.push_back(RECT{ x, top + 8, x + tabWidth, top + kHeaderHeight - 8 });
+            layout.tabs.push_back(RECT{ x, layout.bodyTop + 8, x + tabWidth, layout.bodyTop + kHeaderHeight - 8 });
             x += tabWidth;
             if (active) {
-                layout.closeTab = RECT{ x + 2, top + 12, x + 20, top + kHeaderHeight - 12 };
+                layout.closeTab = RECT{ x + 2, layout.bodyTop + 12, x + 20, layout.bodyTop + kHeaderHeight - 12 };
                 x += 20;
             }
             x += 18;
         }
-        layout.newTab = RECT{ x - 4, top + 10, x + 18, top + kHeaderHeight - 10 };
-        layout.dock = RECT{ left + width - 16 - 22, top + 9, left + width - 16, top + kHeaderHeight - 9 };
-        layout.usage = RECT{ layout.dock.left - 12 - usageWidth, top + 8, layout.dock.left - 12, top + kHeaderHeight - 8 };
-        layout.conversation = RECT{ left + kPad, top + kHeaderHeight + 14, left + width - kPad, top + above - 14 };
+        layout.newTab = RECT{ x - 4, layout.bodyTop + 10, x + 18, layout.bodyTop + kHeaderHeight - 10 };
+        layout.dock = RECT{ left + width - 16 - 22, layout.bodyTop + 9, left + width - 16, layout.bodyTop + kHeaderHeight - 9 };
+        layout.usage = RECT{ layout.dock.left - 12 - usageWidth, layout.bodyTop + 8, layout.dock.left - 12, layout.bodyTop + kHeaderHeight - 8 };
+        layout.conversation = RECT{ left + kPad, layout.bodyTop + kHeaderHeight + 14, left + width - kPad, layout.bodyTop + above - 14 };
     }
     return layout;
 }
@@ -638,6 +724,10 @@ void AgentBarRenderer::Paint(void* pixels, const AgentBarLayout& layout, const E
     const Gdiplus::Pen hairline(Gdiplus::Color(18, 255, 255, 255), 1.0F);
     if (layout.line.top > layout.bubble.top) {
         graphics.DrawLine(&hairline, bubble.X + 16.0F, static_cast<float>(layout.line.top), bubble.GetRight() - 16.0F, static_cast<float>(layout.line.top));
+    }
+
+    if (layout.noticeShown) {
+        PaintNotice(graphics, layout, NoticeOf(state), state.CardFocus());
     }
 
     // The latest answer.
@@ -702,7 +792,7 @@ void AgentBarRenderer::Paint(void* pixels, const AgentBarLayout& layout, const E
             const Gdiplus::SolidBrush panel(kDim);
             graphics.FillRectangle(&panel, x - 6.8F, y + 1.5F, 13.6F, 4.3F);
         }
-        const float headerBottom = static_cast<float>(layout.bubble.top + kHeaderHeight);
+        const float headerBottom = static_cast<float>(layout.bodyTop + kHeaderHeight);
         graphics.DrawLine(&hairline, bubble.X + 16.0F, headerBottom, bubble.GetRight() - 16.0F, headerBottom);
 
         const RECT& area = layout.conversation;
@@ -821,6 +911,12 @@ AgentBarHit AgentBarRenderer::HitTest(const AgentBarLayout& layout, const Editor
         return { AgentBarHitKind::MenuPanel };
     }
     if (!Inside(layout.bubble, x, y)) return {};
+    if (layout.noticeShown && y < layout.bodyTop) {
+        for (std::size_t index = 0; index < layout.noticeButtons.size(); ++index) {
+            if (Inside(layout.noticeButtons[index], x, y)) return { AgentBarHitKind::NoticeButton, static_cast<int>(index) };
+        }
+        return { AgentBarHitKind::Notice };
+    }
     if (layout.expanded && y < layout.line.top) {
         for (std::size_t index = 0; index < layout.tabs.size(); ++index) {
             if (Inside(layout.tabs[index], x, y)) return { AgentBarHitKind::Tab, static_cast<int>(index) };

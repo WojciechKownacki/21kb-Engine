@@ -41,6 +41,11 @@ enum class AgentPanelHitKind : std::uint8_t {
     ReviewKeep,    // keeps the files the request changed
     ReviewUndoAll, // puts them all back
     ReviewUndoFile, // puts one back (index: its row)
+    CardButton,    // a button of the bubble that waits for a decision (index)
+    PlanToggle,    // a plan step's check box (index)
+    PlanEdit,      // changes a plan step's words (index)
+    PlanUp,        // moves a plan step up (index)
+    PlanDown,      // moves it down (index)
 };
 
 struct AgentPanelHit {
@@ -83,6 +88,17 @@ struct AgentPanelLayout {
     std::vector<RECT> reviewRowUndo;
     // How many files the review does not list for lack of room.
     int reviewMore = 0;
+    // The bubble that waits for a decision (a suggestion, the agent got stuck, a plan) with its buttons and, for a plan, one row
+    // per step.
+    RECT card{};
+    std::vector<RECT> cardButtons;
+    std::vector<RECT> planRows;
+    std::vector<RECT> planChecks;
+    std::vector<RECT> planEdits;
+    std::vector<RECT> planUps;
+    std::vector<RECT> planDowns;
+    // How many plan steps the bubble does not list for lack of room.
+    int planMore = 0;
 };
 
 class AgentPanelRenderer final {
@@ -107,6 +123,8 @@ public:
     [[nodiscard]] static int ConversationMaximumScroll(const RECT& area, const EditorAgentPanelState& state);
     // "12.4k" for a token count.
     [[nodiscard]] static std::string TokenCount(std::uint64_t count);
+    // "0.14 USD · in 3.1k · cached 40k · out 1.2k": what a conversation has cost and used, the kinds of tokens apart.
+    [[nodiscard]] static std::string UsageSummary(const EditorAgentUsage& usage);
 };
 
 #endif

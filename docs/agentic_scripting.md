@@ -291,6 +291,37 @@ the scene and the assets; unsaved scene edits are saved before a request is sent
   and `{mcpconfig}` for the project folder, kb_cli and an MCP configuration file), optional
   `environment` variables, an optional `connect` command and the `output` format (`plain`,
   `claude` or `codex`). Choose *Refresh* after saving.
+- **What it costs.** The tokens of a conversation are counted in three kinds, new input, input
+  taken from the agent's cache, and output, and shown with their cost. The prices are yours:
+  `Agents.json` takes a `currency` and a `prices` table, a model's name (or a part of it) with
+  `input`, `cacheRead`, `cacheWrite` and `output` per million tokens. A model with no entry has no
+  price; the window then shows the cost the agent program reports itself, when it reports one.
+- **Models by tier.** The models an agent offers are read from its own cache files (an agent that
+  keeps none chooses its model itself). The window works from the lightest model to the strongest:
+  the agent's list, best first, turned round, or your own order in `Agents.json` under `tiers`
+  (`"tiers": { "<agent name>": ["lightest", "middle", "strongest"] }`).
+- **The right model.** Before a request is sent the window sizes it up (its length, the systems it
+  names, pictures and files) and suggests the lightest model for a small change and a middle one
+  for a feature; a request over several systems or for a whole game is offered a plan instead. It
+  is a bubble like the one for a stuck agent, with two answers (use the suggested model, or stay
+  with the current one): no model or agent changes, and no second process starts, until you press
+  a button. Every agent is started without sub-agents where its program has a switch for it.
+- **A request that is stuck.** The window stops an agent that makes the same failing call twice,
+  meets the same error three times, goes several steps with no change and nothing new, or takes
+  far more steps than a request of its size does. A bubble says so in plain words (nothing is
+  lost, the changes can be undone) and offers to continue with the next stronger model in the same
+  conversation, to split the job into smaller steps, to try again, or to stop; Tab and Enter work
+  in it. `kb_cli` answers the second identical failing command of a session with a short hint to
+  change the arguments or report the problem.
+- **A plan in steps.** A big request is split once by the strongest model into 3 to 10 small steps,
+  each with a check. The list opens as a checklist you can change (switch a step off, move it,
+  rewrite it); the lightest model then does the steps one at a time. A step that fails its
+  check or gets stuck pauses the plan with the same bubble as a stuck request (continue that
+  step with a stronger model, split it, try again, stop); nothing moves up by itself, and the
+  plan is only written by the strongest model after you press the button that says so.
+- **Long conversations.** When the topic changes, or a conversation has grown expensive, the
+  window suggests a fresh conversation that starts from a one-line summary of this one; it never
+  starts one by itself.
 
 ## How to work
 

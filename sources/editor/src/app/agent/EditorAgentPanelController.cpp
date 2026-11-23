@@ -373,7 +373,7 @@ bool EditorAgentPanelController::HandlePointerDown(HWND owner, const RECT& conte
     agent.Prepare();
     const AgentPanelHit hit = AgentPanelRenderer::HitTest(content, agent, x, y);
     agent.FocusInput(hit.kind == AgentPanelHitKind::Input || hit.kind == AgentPanelHitKind::Suggestion ||
-        hit.kind == AgentPanelHitKind::NewTab || hit.kind == AgentPanelHitKind::Attachment);
+        hit.kind == AgentPanelHitKind::NewTab || hit.kind == AgentPanelHitKind::Attachment || hit.kind == AgentPanelHitKind::PlanEdit);
     const AgentPanelLayout layout = AgentPanelRenderer::Resolve(content, agent);
     switch (hit.kind) {
     case AgentPanelHitKind::Tab:
@@ -426,6 +426,20 @@ bool EditorAgentPanelController::HandlePointerDown(HWND owner, const RECT& conte
         return true;
     case AgentPanelHitKind::Send:
         return SendOrStop();
+    case AgentPanelHitKind::CardButton:
+        return PressCardButton(hit.index);
+    case AgentPanelHitKind::PlanToggle:
+        agent.TogglePlanStep(hit.index);
+        return true;
+    case AgentPanelHitKind::PlanEdit:
+        agent.EditPlanStep(hit.index);
+        return true;
+    case AgentPanelHitKind::PlanUp:
+        agent.MovePlanStep(hit.index, -1);
+        return true;
+    case AgentPanelHitKind::PlanDown:
+        agent.MovePlanStep(hit.index, 1);
+        return true;
     case AgentPanelHitKind::Input:
         // The caret goes where you click; Shift+click selects up to there.
         agent.PlaceCaret(AgentPanelRenderer::InputOffset(content, agent, x, y), ShiftDown());
@@ -572,22 +586,14 @@ void EditorAgentPanelController::ShowModelMenu(HWND owner, POINT screenAnchor) {
     }
 }
 
-bool EditorAgentPanelController::SendOrStop() {
+std::optional<EditorAgentWorkspace> EditorAgentPanelController::PrepareRun() {
     EditorAgentPanelState& agent = sceneContext_.AgentPanel();
-    agent.Prepare();
-    if (agent.Running()) {
-        agent.Stop();
-        return true;
-    }
-    if (agent.Input().empty() && agent.Attachments().empty()) {
-        return false;
-    }
     // The agent works on the files: every unsaved edit (the scene and any open asset editor) goes to
     // disk first, so it sees what you see and an editor never writes an older copy over its work.
     if (!sceneContext_.CurrentScenePath().empty() && !sceneContext_.SaveOpenDocuments()) {
         agent.Add(EditorAgentEntryKind::Error, std::string{ EditorText("agent.unsavedNotSent",
             "Your unsaved changes could not be saved, so the request was not sent. Save them, then send again.") });
-        return false;
+        return std::nullopt;
     }
     // The agent's map of the project (AGENTS.md and the script API) is what kb_cli init-agent
     // writes; a project that never had it gets it before its first request, so the agent does not
@@ -617,7 +623,48 @@ bool EditorAgentPanelController::SendOrStop() {
                 "The agent's guide to this project (AGENTS.md) could not be written: {error}", { { "error", written.error } }));
         }
     }
-    return agent.Send(workspace);
+    return workspace;
+}
+
+bool EditorAgentPanelController::SendOrStop() {
+    EditorAgentPanelState& agent = sceneContext_.AgentPanel();
+    agent.Prepare();
+    if (agent.Running()) {
+        agent.Stop();
+        return true;
+    }
+    if (agent.Input().empty() && agent.Attachments().empty()) {
+        return false;
+    }
+    const std::optional<EditorAgentWorkspace> workspace = PrepareRun();
+    return workspace.has_value() && agent.Send(*workspace);
+}
+
+bool EditorAgentPanelController::PressCardButton(int index) {
+    EditorAgentPanelState& agent = sceneContext_.AgentPanel();
+    agent.Prepare();
+    const std::optional<EditorAgentCard> card = agent.Card();
+    if (!card.has_value() || index < 0 || index >= static_cast<int>(card->buttons.size())) return false;
+    // Stopping, cancelling and the answers to a suggestion start nothing (but a plan), so they need nothing saved first.
+    const EditorAgentCardAction action = card->buttons[static_cast<std::size_t>(index)].action;
+    const std::optional<EditorAgentHint> hint = action == EditorAgentCardAction::AcceptAdvice ? agent.Hint() : std::nullopt;
+    if (action == EditorAgentCardAction::Stop || action == EditorAgentCardAction::CancelPlan || action == EditorAgentCardAction::DismissAdvice ||
+        action == EditorAgentCardAction::ChooseAgent || action == EditorAgentCardAction::ChooseModel ||
+        (hint.has_value() && hint->action != EditorAgentHintAction::PlanInSteps)) {
+        return agent.PressCard(index, Workspace());
+    }
+    const std::optional<EditorAgentWorkspace> workspace = PrepareRun();
+    return workspace.has_value() && agent.PressCard(index, *workspace);
+}
+
+bool EditorAgentPanelController::PressNotice(int index) {
+    EditorAgentPanelState& agent = sceneContext_.AgentPanel();
+    const std::optional<EditorAgentCard> card = agent.Card();
+    if (!card.has_value()) return false;
+    if (index < static_cast<int>(card->buttons.size())) return PressCardButton(index);
+    // The checklist of a plan is in the docked panel.
+    agent.RequestDock(EditorAgentPanelState::DockRequest::Dock);
+    return true;
 }
 
 bool EditorAgentPanelController::HandleChar(WPARAM character) {
@@ -680,7 +727,15 @@ bool EditorAgentPanelController::HandleKeyDown(HWND owner, WPARAM key) {
     }
     using Move = EditorAgentPanelState::CaretMove;
     switch (key) {
+    case VK_TAB:
+        // With a bubble waiting for a decision, Tab goes from button to button (Shift+Tab back) and Enter presses the one it is on.
+        if (agent.Card().has_value()) agent.MoveCardFocus(shift ? -1 : 1);
+        return true;
     case VK_RETURN:
+        if (agent.CardFocus() >= 0 && agent.Input().empty()) {
+            static_cast<void>(PressCardButton(agent.CardFocus()));
+            return true;
+        }
         // Shift+Enter starts a new line; Enter sends.
         if (shift) {
             agent.InsertText("\n");
@@ -716,6 +771,8 @@ bool EditorAgentPanelController::HandleKeyDown(HWND owner, WPARAM key) {
         // Esc closes the bubble's picker first, then lets go of the keyboard.
         if (agent.ModelMenuOpen()) {
             agent.SetModelMenuOpen(false);
+        } else if (agent.CardFocus() >= 0) {
+            agent.ClearCardFocus();
         } else {
             agent.FocusInput(false);
         }

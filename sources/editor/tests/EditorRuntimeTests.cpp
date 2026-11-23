@@ -78,6 +78,10 @@ int main(int argumentCount, char** arguments) {
         kb::editor::tests::RunEditorPackagesTests();
         return 0;
     }
+    if (argumentCount == 2 && std::string_view{ arguments[1] } == "agent-guidance") {
+        kb::editor::tests::RunEditorAgentGuidanceTests();
+        return 0;
+    }
     if (argumentCount == 2 && std::string_view{ arguments[1] } == "terrain-foliage") {
         kb::editor::tests::RunEditorTerrainFoliageTests();
         return 0;
@@ -102,6 +106,7 @@ int main(int argumentCount, char** arguments) {
     kb::editor::tests::RunEditorDockingTests();
     kb::editor::tests::RunEditorProjectTests();
     kb::editor::tests::RunEditorSettingsTests();
+    kb::editor::tests::RunEditorAgentGuidanceTests();
     kb::editor::tests::RunEditorProfilerTests();
     kb::editor::tests::RunEditorProfilerPanelTests();
     kb::editor::tests::RunEditorLocalizationTests();

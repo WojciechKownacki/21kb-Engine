@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <sstream>
 #include <span>
 #include <string>
@@ -481,6 +482,29 @@ struct ToolCallOutcome {
     return outcome;
 }
 
+// What a command that failed was told, and how often in a row: a command that fails the same way again is answered with one
+// short hint instead of the whole error, so an agent that loops on it is turned round. A success forgets it.
+struct RepeatedFailure {
+    std::string text;
+    int count = 0;
+};
+
+void NoteRepeatedFailure(std::map<std::string, RepeatedFailure>& memory, const std::string& key, ToolCallOutcome& outcome) {
+    if (!outcome.isError) {
+        memory.erase(key);
+        return;
+    }
+    RepeatedFailure& seen = memory[key];
+    if (seen.count > 0 && seen.text == outcome.text) {
+        ++seen.count;
+        std::string firstLine = seen.text.substr(0U, seen.text.find('\n'));
+        if (firstLine.size() > 200U) firstLine.resize(200U);
+        outcome.text = "This failed " + std::to_string(seen.count) + " times with the same arguments. Change the arguments, or stop and report the problem.\nThe error: " + firstLine;
+        return;
+    }
+    seen = { outcome.text, 1 };
+}
+
 [[nodiscard]] ToolCallOutcome DispatchTool(
     std::string_view toolName,
     const JsonValue* toolArguments,
@@ -589,6 +613,7 @@ int RunMcpCommand(const ArgumentList& arguments, std::istream& in, CommandIo io)
     // An agent works through this server: everything it runs stays inside its project.
     ConfineCliToProject(projectRoot);
 
+    std::map<std::string, RepeatedFailure> failures;
     std::string line;
     while (std::getline(in, line)) {
         if (line.empty() || line.find_first_not_of(" \t\r") == std::string::npos) {
@@ -656,7 +681,8 @@ int RunMcpCommand(const ArgumentList& arguments, std::istream& in, CommandIo io)
                 continue;
             }
             const JsonValue* toolArguments = params->Find("arguments");
-            const ToolCallOutcome outcome = DispatchTool(name->AsString(), toolArguments, projectRoot);
+            ToolCallOutcome outcome = DispatchTool(name->AsString(), toolArguments, projectRoot);
+            NoteRepeatedFailure(failures, name->AsString() + "\n" + (toolArguments != nullptr ? toolArguments->Dump() : std::string{}), outcome);
 
             JsonValue textContent = JsonValue::MakeObject();
             textContent.Set("type", JsonValue::MakeString("text"));

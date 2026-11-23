@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cctype>
 #include <fstream>
+#include <functional>
 #include <sstream>
 #include <system_error>
 
@@ -565,6 +566,85 @@ struct EngineCall {
     return value != nullptr ? static_cast<std::uint64_t>(std::max(0.0, value->AsNumber())) : 0U;
 }
 
+// What a total grew by: the whole of it when it is smaller than before (a new process counts again from nothing).
+[[nodiscard]] std::uint64_t Grew(std::uint64_t now, std::uint64_t before) noexcept {
+    return now >= before ? now - before : now;
+}
+
+// A tool call as the same call is told twice: its name and its arguments.
+[[nodiscard]] std::string CallKey(const std::string& name, const JsonValue* input) {
+    return name + "|" + (input != nullptr ? input->Dump() : std::string{});
+}
+
+// What a tool answered: its text, and a mark for each picture so a new picture is something new.
+[[nodiscard]] std::string ResultText(const JsonValue* content) {
+    if (content == nullptr) return {};
+    if (content->GetKind() == JsonValue::Kind::String) return content->AsString();
+    std::string text;
+    if (content->GetKind() != JsonValue::Kind::Array) return text;
+    for (std::size_t index = 0; index < content->Size(); ++index) {
+        const JsonValue* part = content->At(index);
+        const JsonValue* data = part->Find("data");
+        if (StringOf(part->Find("type")) == "image" && data != nullptr) {
+            text += "[picture " + std::to_string(std::hash<std::string>{}(data->AsString())) + "]";
+        } else {
+            text += StringOf(part->Find("text"));
+        }
+    }
+    return text;
+}
+
+[[nodiscard]] std::string Capitalized(std::string text) {
+    if (!text.empty()) text[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(text[0])));
+    return text;
+}
+
+// Why the agent was stopped, in plain words for the person and as a clause for the agent.
+[[nodiscard]] std::string StuckText(EditorAgentStuck reason) {
+    switch (reason) {
+    case EditorAgentStuck::SameCallFailedTwice: return std::string{ EditorText("agent.stuck.sameCall", "It tried the same step twice and it did not work either time.") };
+    case EditorAgentStuck::SameErrorThreeTimes: return std::string{ EditorText("agent.stuck.sameError", "It keeps running into the same problem.") };
+    case EditorAgentStuck::NoProgress: return std::string{ EditorText("agent.stuck.noProgress", "It has been busy for a while without changing anything in your project.") };
+    case EditorAgentStuck::TooCostly: return std::string{ EditorText("agent.stuck.costly", "This is taking much more effort than a request like this normally needs.") };
+    case EditorAgentStuck::StepNotDone: return std::string{ EditorText("agent.stuck.stepNotDone", "This step of the plan did not work out.") };
+    case EditorAgentStuck::None: break;
+    }
+    return {};
+}
+
+[[nodiscard]] std::string_view StuckClause(EditorAgentStuck reason) noexcept {
+    switch (reason) {
+    case EditorAgentStuck::SameCallFailedTwice: return "the same step failed twice";
+    case EditorAgentStuck::SameErrorThreeTimes: return "the same problem kept coming back";
+    case EditorAgentStuck::NoProgress: return "nothing in the project changed for several steps";
+    case EditorAgentStuck::TooCostly: return "the job took far more steps than expected";
+    case EditorAgentStuck::StepNotDone: return "the step did not pass its check";
+    case EditorAgentStuck::None: break;
+    }
+    return "the job did not move on";
+}
+
+// The words that tell a request's size, in the editor's language: terms are separated by commas, alternatives of one term by |.
+[[nodiscard]] EditorAgentSizeWords CurrentSizeWords() {
+    return EditorAgentSizeWords::FromLists(
+        EditorText("agent.size.systems", "physics|collision, ui|menu|hud|button*|screen*, audio|sound*|music, enemy|enemies|ai|npc*, animation*|animate, "
+            "terrain|water|world, light*|shadow*, camera, inventory|items, save*|load*, network*|multiplayer|online, shop|economy|currency, "
+            "quest*|mission*|dialog*, particle*|effect*|vfx, level*|map*, score|points|health|lives, weapon*|combat|shoot*, vehicle*|car|cars"),
+        EditorText("agent.size.large", "whole game, entire game, full game, complete game, whole project, from scratch, multiplayer, online game, open world, "
+            "thousands of lines"));
+}
+
+// The text of the user requests of a conversation, newest last.
+[[nodiscard]] std::string RecentRequests(const EditorAgentConversation& conversation, std::size_t count) {
+    std::vector<const std::string*> found;
+    for (auto entry = conversation.entries.rbegin(); entry != conversation.entries.rend() && found.size() < count; ++entry) {
+        if (entry->kind == EditorAgentEntryKind::User) found.push_back(&entry->text);
+    }
+    std::string joined;
+    for (auto text = found.rbegin(); text != found.rend(); ++text) joined += **text + "\n";
+    return joined;
+}
+
 } // namespace
 
 EditorAgentPanelState::EditorAgentPanelState() {
@@ -597,16 +677,21 @@ void EditorAgentPanelState::RefreshAgents() {
     }
     prepared_ = true;
     agents_ = DetectEditorAgents();
+    prices_ = LoadEditorAgentPrices();
     current_ = agents_.empty() ? -1 : 0;
+    bool found = false;
     for (int index = 0; index < static_cast<int>(agents_.size()); ++index) {
         if (agents_[static_cast<std::size_t>(index)].Label() == remembered) {
             current_ = index;
+            found = true;
             break;
         }
     }
-    // A remembered model or level the agent does not offer falls back to its default.
+    // An agent or model that is not offered any more is not swapped for another behind the person's back: the window says so and
+    // nothing starts until they choose (the model stays as remembered; the choice of agent is open).
+    missingAgent_ = !found && !remembered.empty() && !agents_.empty() ? remembered : std::string{};
     const EditorAgent* agent = Current();
-    model_ = agent != nullptr && std::ranges::find(agent->models, model) != agent->models.end() ? model : std::string{};
+    model_ = missingAgent_.empty() ? model : std::string{};
     effort_ = agent != nullptr && std::ranges::find(agent->efforts, effort) != agent->efforts.end() ? effort : std::string{};
     StartAccountCheck();
 }
@@ -637,6 +722,16 @@ void EditorAgentPanelState::SelectAgent(int index) {
     effort_.clear();
     RememberSelection();
     StartAccountCheck();
+}
+
+bool EditorAgentPanelState::ModelUnavailable() const {
+    const EditorAgent* agent = Current();
+    return agent != nullptr && !model_.empty() && std::ranges::find(agent->models, model_) == agent->models.end();
+}
+
+bool EditorAgentPanelState::NoModelList() const {
+    const EditorAgent* agent = Current();
+    return agent != nullptr && agent->models.empty();
 }
 
 void EditorAgentPanelState::SelectModel(std::string model) {
@@ -695,7 +790,7 @@ void EditorAgentPanelState::FinishAccountCheck() {
         text += line;
         text += '\n';
     }
-    if (agent->output == EditorAgentOutputFormat::ClaudeStreamJson) {
+    if (agent->output == EditorAgentOutputFormat::StreamJson) {
         JsonValue status;
         std::string error;
         if (JsonValue::Parse(text, status, error)) {
@@ -1174,11 +1269,47 @@ bool EditorAgentPanelState::Send(const EditorAgentWorkspace& workspace) {
     if (conversation.running || (request.empty() && conversation.attachments.empty())) {
         return false;
     }
-    const std::vector<std::filesystem::path> images = conversation.attachments;
+    // A step of a plan whose text is being changed: what was typed goes into the step, not to the agent.
+    if (EditorAgentPlan& plan = conversation.plan; plan.editing >= 0 && plan.editing < static_cast<int>(plan.steps.size())) {
+        if (!request.empty()) plan.steps[static_cast<std::size_t>(plan.editing)].text = request;
+        plan.editing = -1;
+        conversation.draft.clear();
+        conversation.caret = conversation.anchor = 0U;
+        conversation.undo.clear();
+        conversation.redo.clear();
+        return true;
+    }
     answerDismissed_ = false;
     if (agent == nullptr) {
         Add(EditorAgentEntryKind::Error, std::string{ EditorText("agent.noAgentInstalled",
             "No agent is installed on this computer. Install one of those the Agent menu names, then choose Refresh there.") });
+        return false;
+    }
+    // A request of the person's own ends whatever waited for a decision.
+    conversation.paused = false;
+    conversation.plan = {};
+    cardFocus_ = -1;
+    Launch launch;
+    launch.shown = request;
+    launch.fromDraft = true;
+    launch.images = conversation.attachments;
+    launch.text = request + AttachmentNote(launch.images, workspace.project);
+    launch.size = EstimateAgentRequestSize(request, launch.images.size(), CurrentSizeWords());
+    conversation.goal = request;
+    return Start(conversation, workspace, launch);
+}
+
+bool EditorAgentPanelState::Start(EditorAgentConversation& conversation, const EditorAgentWorkspace& workspace, const Launch& launch) {
+    const EditorAgent* agent = Current();
+    // Nothing runs on an agent or model the person did not choose now.
+    if (!missingAgent_.empty() || (!launch.model.has_value() && ModelUnavailable())) {
+        conversation.entries.push_back({ EditorAgentEntryKind::Error, std::string{ EditorText("agent.chooseFirst",
+            "Choose the agent or model to work with first (the message above the box), then send again.") } });
+        return false;
+    }
+    if (agent == nullptr) {
+        conversation.entries.push_back({ EditorAgentEntryKind::Error, std::string{ EditorText("agent.noAgentInstalled",
+            "No agent is installed on this computer. Install one of those the Agent menu names, then choose Refresh there.") } });
         return false;
     }
 
@@ -1203,46 +1334,66 @@ bool EditorAgentPanelState::Send(const EditorAgentWorkspace& workspace) {
     }
 
     // The agent reads the limit with every request, so a mode holds for agents that have no switch for it. What the person
-    // has open in the editor and the project's own notes come with it, so the agent starts from the same picture.
-    const std::string wire = (mode_ == EditorAgentMode::Plan
+    // has open in the editor and the project's own notes come with it, so the agent starts from the same picture; a summary
+    // of an earlier conversation comes with the first request of a fresh one.
+    const EditorAgentMode mode = launch.mode.value_or(mode_);
+    const std::string& model = launch.model.has_value() ? *launch.model : model_;
+    const std::string wire = (mode == EditorAgentMode::Plan
         ? std::string{ "Plan only. Do not change any file, scene or asset, and do not run anything that changes the project. Reply with the steps you would take.\n\n" }
-        : mode_ == EditorAgentMode::Ask
+        : mode == EditorAgentMode::Ask
             ? std::string{ "Answer only. Do not change any file, scene or asset, and do not run anything that changes the project.\n\n" }
-            : std::string{}) + workspace.context + kb::project::AgentProjectNotes(workspace.project) + request + AttachmentNote(images, workspace.project);
+            : std::string{}) +
+        (launch.withContext ? workspace.context + kb::project::AgentProjectNotes(workspace.project) : std::string{}) +
+        (conversation.carried.empty() ? std::string{} : "Earlier in this project (the previous conversation): " + conversation.carried + "\n\n") + launch.text;
     bool promptInArguments = false;
     const auto substitute = [&](const std::string& word) {
         std::string text = Replace(word, "{project}", workspace.project.generic_string());
         text = Replace(text, "{kbcli}", workspace.kbcli.generic_string());
         text = Replace(text, "{mcpconfig}", mcpConfig.generic_string());
         text = Replace(text, "{session}", conversation.session);
-        text = Replace(text, "{model}", model_);
+        text = Replace(text, "{model}", model);
         text = Replace(text, "{effort}", effort_);
-        text = Replace(text, "{permissionMode}", mode_ == EditorAgentMode::Agent ? "acceptEdits" : "plan");
+        text = Replace(text, "{permissionMode}", mode == EditorAgentMode::Agent ? "acceptEdits" : "plan");
         if (text.find("{prompt}") != std::string::npos) {
             promptInArguments = true;
             text = Replace(text, "{prompt}", wire);
         }
         return Widen(text);
     };
+    // The request is under way: the loop guard starts counting, and what waited for a decision is decided.
+    const auto begun = [&] {
+        conversation.guard.Reset(launch.size);
+        conversation.runSize = launch.size;
+        conversation.paused = false;
+        conversation.pausedBy = EditorAgentStuck::None;
+        dismissedAdvice_.clear();
+        conversation.runModel = launch.model.value_or(std::string{});
+        conversation.carried.clear();
+        conversation.running = true;
+        conversation.requestRun = true;
+        conversation.started = std::chrono::steady_clock::now();
+        workspace_ = workspace;
+        cardFocus_ = -1;
+    };
+    const bool addsEntry = !launch.shown.empty() || !launch.images.empty();
     // An agent that stays running gets the next request on its input, as long as it runs with the
     // same agent, model and reasoning level; otherwise it starts again and resumes the session.
     const bool persistent = !agent->requestTemplate.empty() && !promptInArguments;
-    const std::string runKey = agent->Label() + "|" + model_ + "|" + effort_ + "|" + std::to_string(static_cast<int>(mode_));
+    const std::string runKey = agent->Label() + "|" + model + "|" + effort_ + "|" + std::to_string(static_cast<int>(mode));
     const std::string message = persistent ? Replace(agent->requestTemplate, "{request}", JsonValue::MakeString(wire).Dump()) : std::string{};
-    if (persistent && conversation.run != nullptr && conversation.run->Alive() && conversation.runKey == runKey) {
-        AddRequest(conversation, request, images, workspace.project);
+    if (persistent && launch.resume && conversation.run != nullptr && conversation.run->Alive() && conversation.runKey == runKey) {
+        AddRequest(conversation, launch, workspace.project);
         conversation.turnEnded = false;
         if (conversation.run->Write(message)) {
-            conversation.running = true;
-            conversation.requestRun = true;
-            conversation.started = std::chrono::steady_clock::now();
+            begun();
             return true;
         }
-        conversation.entries.pop_back(); // it ended meanwhile: start it again below, with the request
+        if (addsEntry) conversation.entries.pop_back(); // it ended meanwhile: start it again below, with the request
     }
     if (conversation.run != nullptr && conversation.run->Alive()) {
         conversation.run->Stop();
     }
+    if (!launch.resume) conversation.session.clear();
 
     std::vector<std::wstring> arguments;
     const bool resuming = !conversation.session.empty() && conversation.sessionAgent == agent->Label();
@@ -1257,7 +1408,7 @@ bool EditorAgentPanelState::Send(const EditorAgentWorkspace& workspace) {
     if (persistent) {
         for (const std::string& word : agent->persistentArguments) arguments.push_back(substitute(word));
     }
-    if (!model_.empty()) {
+    if (!model.empty()) {
         for (const std::string& word : agent->modelArguments) arguments.push_back(substitute(word));
     }
     if (!effort_.empty()) {
@@ -1271,8 +1422,8 @@ bool EditorAgentPanelState::Send(const EditorAgentWorkspace& workspace) {
     // the request on standard input instead.
     const std::wstring extension = agent->executable.extension().wstring();
     if (promptInArguments && (_wcsicmp(extension.c_str(), L".cmd") == 0 || _wcsicmp(extension.c_str(), L".bat") == 0)) {
-        Add(EditorAgentEntryKind::Error, agent->Label() + " is a batch script that takes the request on its command line, "
-            "where cmd.exe would change it. Give it the request on standard input (leave {prompt} out of its arguments in Agents.json).");
+        conversation.entries.push_back({ EditorAgentEntryKind::Error, agent->Label() + " is a batch script that takes the request on its command line, "
+            "where cmd.exe would change it. Give it the request on standard input (leave {prompt} out of its arguments in Agents.json)." });
         return false;
     }
 
@@ -1284,21 +1435,19 @@ bool EditorAgentPanelState::Send(const EditorAgentWorkspace& workspace) {
     environment.emplace_back(L"PATH", workspace.kbcli.parent_path().wstring() + L";" + path);
 #endif
 
-    AddRequest(conversation, request, images, workspace.project);
+    AddRequest(conversation, launch, workspace.project);
     conversation.turnEnded = false;
     conversation.run = std::make_unique<EditorAgentProcess>();
-    conversation.processTotals = {};
+    conversation.processModels.clear();
     std::string error;
     if (!conversation.run->Start(agent->executable, arguments, workspace.project, environment,
             persistent ? message : promptInArguments ? std::string{} : wire, error, persistent)) {
-        Add(EditorAgentEntryKind::Error, agent->Label() + ": " + error + ".");
+        conversation.entries.push_back({ EditorAgentEntryKind::Error, agent->Label() + ": " + error + "." });
         return false;
     }
     conversation.runKey = persistent ? runKey : std::string{};
     conversation.runFormat = agent->output;
-    conversation.running = true;
-    conversation.requestRun = true;
-    conversation.started = std::chrono::steady_clock::now();
+    begun();
     return true;
 }
 
@@ -1334,35 +1483,593 @@ void EditorAgentPanelState::Stop() {
         conversation.run->Stop();
         Add(EditorAgentEntryKind::Info, std::string{ EditorText("agent.stopped", "Stopped.") });
         conversation.sawError = true;
+        // A plan goes back to its list: what was done stays done, and the step that was running is the next to run.
+        EditorAgentPlan& plan = conversation.plan;
+        if (plan.phase == EditorAgentPlan::Phase::Running) {
+            if (plan.current >= 0 && plan.current < static_cast<int>(plan.steps.size())) {
+                plan.steps[static_cast<std::size_t>(plan.current)].progress = EditorAgentStepProgress::Pending;
+            }
+            plan.phase = EditorAgentPlan::Phase::Review;
+        } else if (plan.phase == EditorAgentPlan::Phase::Writing) {
+            plan = {};
+        }
     }
 }
 
-void EditorAgentPanelState::AddRequest(EditorAgentConversation& conversation, const std::string& request,
-    const std::vector<std::filesystem::path>& images, const std::filesystem::path& project) {
-    if (conversation.entries.empty()) {
-        conversation.title = TitleFrom(request.empty() ? std::string{ EditorText("agent.pictureRequest", "Picture") } : request);
+void EditorAgentPanelState::AddRequest(EditorAgentConversation& conversation, const Launch& launch, const std::filesystem::path& project) {
+    if (launch.fromDraft) {
+        conversation.draft.clear();
+        conversation.caret = conversation.anchor = 0U;
+        conversation.undo.clear();
+        conversation.redo.clear();
+        conversation.attachments.clear();
     }
-    EditorAgentEntry entry{ EditorAgentEntryKind::User, request };
-    entry.images = images;
-    conversation.entries.push_back(std::move(entry));
-    conversation.draft.clear();
-    conversation.caret = conversation.anchor = 0U;
-    conversation.undo.clear();
-    conversation.redo.clear();
-    conversation.attachments.clear();
+    if (!launch.shown.empty() || !launch.images.empty()) {
+        if (conversation.entries.empty()) {
+            conversation.title = TitleFrom(launch.shown.empty() ? std::string{ EditorText("agent.pictureRequest", "Picture") } : launch.shown);
+        }
+        EditorAgentEntry entry{ EditorAgentEntryKind::User, launch.shown };
+        entry.images = launch.images;
+        conversation.entries.push_back(std::move(entry));
+    }
     conversation.scrollFromBottom = 0;
     conversation.sawError = false;
     conversation.stepTokens.clear();
     conversation.project = project;
-    BeginUndoPoint(conversation, project, request);
+    // A request that goes on from an earlier one stays in its undo point, unless that was closed because nothing had changed yet.
+    if (launch.newUndoPoint || journal_ == nullptr || !journal_->Open()) {
+        BeginUndoPoint(conversation, project, launch.shown.empty() ? conversation.goal : launch.shown);
+        // The marks in Project Files show what the newest request did.
+        if (launch.newUndoPoint) changedFiles_.clear();
+    }
     conversation.projectFiles = ProjectSnapshot(project);
     conversation.requestStart = std::filesystem::file_time_type::clock::now();
-    // The marks in Project Files show what the newest request did.
-    changedFiles_.clear();
     Save(conversation);
 }
 
-void EditorAgentPanelState::FinishStep(EditorAgentConversation& conversation, const std::string& toolId, bool failed) {
+std::string EditorAgentPanelState::ModelName(const EditorAgentConversation& conversation) const {
+    return conversation.running && !conversation.runModel.empty() ? conversation.runModel : model_;
+}
+
+void EditorAgentPanelState::AddUsage(EditorAgentConversation& conversation, const std::string& model, const EditorAgentTokens& delta, double programCost) {
+    EditorAgentUsage& usage = conversation.usage;
+    usage.inputTokens += delta.uncached + delta.cacheRead + delta.cacheWrite;
+    usage.cacheReadTokens += delta.cacheRead;
+    usage.cacheWriteTokens += delta.cacheWrite;
+    usage.outputTokens += delta.output;
+    usage.programCost += programCost;
+    if (const EditorAgentPrice* price = prices_.Find(model)) {
+        usage.pricedCost += EditorAgentPrices::Cost(*price, delta);
+        usage.currency = prices_.Currency();
+    } else if (delta.uncached + delta.cacheRead + delta.cacheWrite + delta.output > 0U) {
+        usage.unpriced = true;
+    }
+}
+
+// What the agent answered since entry `from`, as one text.
+std::string EditorAgentPanelState::LastAnswer(const EditorAgentConversation& conversation, std::size_t from) const {
+    std::string answer;
+    for (std::size_t index = from; index < conversation.entries.size(); ++index) {
+        if (conversation.entries[index].kind == EditorAgentEntryKind::Agent) answer += conversation.entries[index].text + "\n";
+    }
+    return answer;
+}
+
+// A turn is over, whether the agent finished it or was stopped (`cut`): steps left running are closed and the project's
+// changes are read.
+void EditorAgentPanelState::EndTurn(EditorAgentConversation& conversation, int code, bool cut) {
+    if (!cut) {
+        if (code != 0 && !conversation.sawError) {
+            conversation.entries.push_back({ EditorAgentEntryKind::Error, EditorLocalization::Format("agent.exitedWithCode",
+                "The agent stopped unexpectedly (code {code}). Send the request again; if it keeps happening, choose Refresh in the agent menu.",
+                { { "code", std::to_string(code) } }) });
+        }
+        const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - conversation.started).count();
+        conversation.entries.push_back({ EditorAgentEntryKind::Info,
+            EditorLocalization::Format("agent.finished", "Done in {seconds} s.", { { "seconds", std::to_string(seconds) } }) });
+    }
+    // Steps left without a result were cut short.
+    for (EditorAgentEntry& entry : conversation.entries) {
+        if (entry.kind == EditorAgentEntryKind::Tool && entry.step == EditorAgentStepState::Running) {
+            entry.step = !cut && code == 0 && !conversation.sawError ? EditorAgentStepState::Done : EditorAgentStepState::Failed;
+        }
+    }
+    if (conversation.requestRun) {
+        projectChangedNow_ = TakeProjectChanges(conversation) || projectChangedNow_;
+        reviewDue_ = true;
+    }
+    Save(conversation);
+}
+
+// The agent is looping: it is stopped at once and the person is asked; no other model takes over by itself.
+void EditorAgentPanelState::PauseStuck(EditorAgentConversation& conversation) {
+    const EditorAgentStuck reason = conversation.guard.Reason();
+    if (conversation.run != nullptr) conversation.run->Stop();
+    conversation.running = false;
+    conversation.turnEnded = false;
+    EndTurn(conversation, 0, true);
+    Pause(conversation, reason);
+}
+
+void EditorAgentPanelState::Pause(EditorAgentConversation& conversation, EditorAgentStuck reason) {
+    EditorAgentPlan& plan = conversation.plan;
+    if (plan.phase == EditorAgentPlan::Phase::Writing) plan = {};
+    if (StepIsStuck(conversation)) plan.steps[static_cast<std::size_t>(plan.current)].progress = EditorAgentStepProgress::Stuck;
+    conversation.paused = true;
+    conversation.pausedBy = reason;
+    cardFocus_ = -1;
+}
+
+bool EditorAgentPanelState::StepIsStuck(const EditorAgentConversation& conversation) const {
+    const EditorAgentPlan& plan = conversation.plan;
+    return plan.phase == EditorAgentPlan::Phase::Running && plan.current >= 0 && plan.current < static_cast<int>(plan.steps.size());
+}
+
+// A step runs on the model the person chose in the window; only a step they moved up themselves runs on another.
+std::string EditorAgentPanelState::StepModel(const EditorAgentPlanStep& step) const {
+    return step.model;
+}
+
+std::string EditorAgentPanelState::StrongerStepModel(const EditorAgentPlanStep& step) const {
+    const EditorAgent* agent = Current();
+    return agent != nullptr ? StrongerModel(agent->ladder, step.model.empty() ? model_ : step.model) : std::string{};
+}
+
+void EditorAgentPanelState::StartPlan(EditorAgentConversation& conversation, const EditorAgentWorkspace& workspace, std::string goal, bool fromDraft) {
+    // The pictures that came with the request are named in the job, so every step finds them.
+    const std::string note = fromDraft ? AttachmentNote(conversation.attachments, workspace.project) : std::string{};
+    conversation.plan = {};
+    conversation.plan.phase = EditorAgentPlan::Phase::Writing;
+    conversation.plan.goal = goal + note;
+    Launch launch;
+    // The request the person typed is shown; one that was already shown (a stuck request split in two) is not shown again.
+    launch.shown = fromDraft ? goal : std::string{};
+    launch.fromDraft = fromDraft;
+    launch.images = fromDraft ? conversation.attachments : std::vector<std::filesystem::path>{};
+    launch.text = AgentPlanRequest(conversation.plan.goal);
+    if (const std::string strongest = Strongest(); !strongest.empty()) launch.model = strongest;
+    launch.mode = EditorAgentMode::Plan;
+    launch.newUndoPoint = fromDraft;
+    launch.resume = false;
+    launch.size = EditorAgentRequestSize::Feature;
+    conversation.goal = goal;
+    if (!Start(conversation, workspace, launch)) {
+        conversation.plan = {};
+        return;
+    }
+    conversation.entries.push_back({ EditorAgentEntryKind::Info, std::string{ EditorText("agent.plan.writing", "Splitting the job into small steps...") } });
+    conversation.plan.stepEntry = conversation.entries.size();
+}
+
+void EditorAgentPanelState::RunPlanStep(EditorAgentConversation& conversation, const EditorAgentWorkspace& workspace, bool retry) {
+    EditorAgentPlan& plan = conversation.plan;
+    EditorAgentPlanStep& step = plan.steps[static_cast<std::size_t>(plan.current)];
+    step.progress = EditorAgentStepProgress::Running;
+    Launch launch;
+    // A step starts a conversation of the agent's own with the whole job and what is done, on the model the plan card named
+    // (the lightest unless the person chose a stronger one for this step).
+    launch.text = retry ? AgentStepRetryRequest(step) : AgentStepRequest(plan, static_cast<std::size_t>(plan.current));
+    if (const std::string model = StepModel(step); !model.empty()) launch.model = model;
+    launch.mode = EditorAgentMode::Agent;
+    launch.newUndoPoint = false;
+    launch.resume = retry;
+    launch.size = EditorAgentRequestSize::Feature;
+    conversation.entries.push_back({ EditorAgentEntryKind::Info, EditorLocalization::Format("agent.plan.step", "Step {number} of {count}: {text}",
+        { { "number", std::to_string(plan.current + 1) }, { "count", std::to_string(plan.steps.size()) }, { "text", Shorten(step.text, 120U) } }) });
+    plan.stepEntry = conversation.entries.size();
+    if (!Start(conversation, workspace, launch)) {
+        step.progress = EditorAgentStepProgress::Pending;
+        plan.phase = EditorAgentPlan::Phase::Review;
+    }
+}
+
+// What follows a turn that ended by itself: the plan that was written is read, or the step that ran is judged and the next begun.
+void EditorAgentPanelState::AfterTurn(EditorAgentConversation& conversation) {
+    EditorAgentPlan& plan = conversation.plan;
+    if (plan.phase == EditorAgentPlan::Phase::Writing) {
+        const std::string answer = LastAnswer(conversation, plan.stepEntry);
+        plan.steps = conversation.sawError ? std::vector<EditorAgentPlanStep>{} : ParseAgentPlan(answer);
+        if (plan.steps.empty()) {
+            plan = {};
+            if (!conversation.sawError) {
+                conversation.entries.push_back({ EditorAgentEntryKind::Error, std::string{ EditorText("agent.plan.unreadable",
+                    "The steps could not be made out. Try describing the job in smaller pieces, or send it as it is.") } });
+            }
+            return;
+        }
+        // The list is shown as a checklist, so the answer's own text is not.
+        for (std::size_t index = conversation.entries.size(); index > plan.stepEntry; --index) {
+            if (conversation.entries[index - 1U].kind == EditorAgentEntryKind::Agent) {
+                conversation.entries.erase(conversation.entries.begin() + static_cast<std::ptrdiff_t>(index - 1U));
+            }
+        }
+        plan.phase = EditorAgentPlan::Phase::Review;
+        return;
+    }
+    if (plan.phase != EditorAgentPlan::Phase::Running || plan.current < 0 || plan.current >= static_cast<int>(plan.steps.size())) return;
+    EditorAgentPlanStep& step = plan.steps[static_cast<std::size_t>(plan.current)];
+    // Done when the agent says its check passed and, for something to look at, a picture of it was taken.
+    const bool pictured = std::any_of(conversation.entries.begin() + static_cast<std::ptrdiff_t>(std::min(plan.stepEntry, conversation.entries.size())),
+        conversation.entries.end(), [](const EditorAgentEntry& entry) { return entry.kind == EditorAgentEntryKind::Image; });
+    if (conversation.sawError || ReadAgentVerdict(LastAnswer(conversation, plan.stepEntry)) != EditorAgentVerdict::Passed || (step.visual && !pictured)) {
+        // The person decides what happens to it; no other model takes it over by itself.
+        Pause(conversation, EditorAgentStuck::StepNotDone);
+        return;
+    }
+    step.progress = EditorAgentStepProgress::Done;
+    conversation.entries.push_back({ EditorAgentEntryKind::Info, EditorLocalization::Format("agent.plan.done", "Step {number} is done.",
+        { { "number", std::to_string(plan.current + 1) } }) });
+    for (int next = plan.current + 1; next < static_cast<int>(plan.steps.size()); ++next) {
+        if (plan.steps[static_cast<std::size_t>(next)].enabled && plan.steps[static_cast<std::size_t>(next)].progress != EditorAgentStepProgress::Done) {
+            plan.current = next;
+            RunPlanStep(conversation, workspace_, false);
+            return;
+        }
+    }
+    conversation.entries.push_back({ EditorAgentEntryKind::Info, std::string{ EditorText("agent.plan.finished", "All the steps are done.") } });
+    plan = {};
+}
+
+// The model that writes a plan, or one that is stuck takes over: the strongest of the agent's own list.
+std::string EditorAgentPanelState::Strongest() const {
+    const EditorAgent* agent = Current();
+    return agent != nullptr ? ModelForSize(agent->ladder, EditorAgentRequestSize::Large) : std::string{};
+}
+
+std::optional<EditorAgentCard> EditorAgentPanelState::Card() const {
+    const EditorAgentConversation& conversation = Active();
+    const EditorAgent* agent = Current();
+    EditorAgentCard card;
+    if (!missingAgent_.empty() || ModelUnavailable()) {
+        card.kind = EditorAgentCardKind::Stuck;
+        if (!missingAgent_.empty()) {
+            card.title = std::string{ EditorText("agent.missingAgent.title", "The agent is not available") };
+            card.body = EditorLocalization::Format("agent.missingAgent.body", "{agent} is not installed here any more. Choose the agent to work with.",
+                { { "agent", missingAgent_ } });
+            for (std::size_t index = 0U; index < agents_.size(); ++index) {
+                card.buttons.push_back({ agents_[index].Label(), EditorAgentCardAction::ChooseAgent, std::to_string(index) });
+            }
+        } else {
+            card.title = std::string{ EditorText("agent.missingModel.title", "The model is not available") };
+            card.body = EditorLocalization::Format("agent.missingModel.body", "{model} is not offered by {agent} any more. Choose another model.",
+                { { "model", Capitalized(model_) }, { "agent", agent->Label() } });
+            for (const std::string& name : agent->models) {
+                if (card.buttons.size() < 4U) card.buttons.push_back({ Capitalized(name), EditorAgentCardAction::ChooseModel, name });
+            }
+            card.buttons.push_back({ std::string{ EditorText("agent.missingModel.own", "The program's own") }, EditorAgentCardAction::ChooseModel, {} });
+        }
+        return card;
+    }
+    if (conversation.paused) {
+        card.kind = EditorAgentCardKind::Stuck;
+        card.title = std::string{ EditorText("agent.stuck.title", "The agent got stuck") };
+        card.body = StuckText(conversation.pausedBy) + " " + (review_.empty()
+            ? std::string{ EditorText("agent.stuck.safe", "Nothing is lost.") }
+            : EditorLocalization::Format("agent.stuck.changed", "It changed {count} file(s) so far. Nothing is lost: Undo all puts them back.",
+                { { "count", std::to_string(review_.size()) } }));
+        // A plan's step goes on with the model one rung above the one it ran on; anything else, one above the panel's.
+        const std::string stronger = StepIsStuck(conversation)
+            ? StrongerStepModel(conversation.plan.steps[static_cast<std::size_t>(conversation.plan.current)])
+            : agent != nullptr ? StrongerModel(agent->ladder, model_) : std::string{};
+        if (!stronger.empty()) {
+            card.buttons.push_back({ EditorLocalization::Format("agent.stuck.stronger", "Continue with {model}", { { "model", Capitalized(stronger) } }),
+                EditorAgentCardAction::ContinueStronger });
+        }
+        card.buttons.push_back({ std::string{ EditorText("agent.stuck.split", "Split into smaller steps") }, EditorAgentCardAction::SplitIntoSteps });
+        card.buttons.push_back({ std::string{ EditorText("agent.stuck.again", "Try again") }, EditorAgentCardAction::TryAgain });
+        card.buttons.push_back({ std::string{ EditorText("agent.stuck.stop", "Stop") }, EditorAgentCardAction::Stop });
+        return card;
+    }
+    const EditorAgentPlan& plan = conversation.plan;
+    if (plan.phase == EditorAgentPlan::Phase::None) {
+        // A suggestion is the same bubble as the one for a stuck agent: what it says, and the person's two answers.
+        const std::optional<EditorAgentHint> hint = Hint();
+        if (!hint.has_value()) return std::nullopt;
+        card.kind = EditorAgentCardKind::Advice;
+        const bool forModel = hint->action == EditorAgentHintAction::UseModel;
+        const bool forPlan = hint->action == EditorAgentHintAction::PlanInSteps;
+        card.title = forModel ? std::string{ EditorText("agent.advice.modelTitle", "A model that fits better") }
+            : forPlan ? std::string{ EditorText("agent.advice.planTitle", "A big request") }
+                      : std::string{ EditorText("agent.advice.freshTitle", "A new conversation?") };
+        card.body = hint->text;
+        card.buttons.push_back({ hint->label, EditorAgentCardAction::AcceptAdvice });
+        card.buttons.push_back({ forModel && !model_.empty()
+                ? EditorLocalization::Format("agent.advice.stayModel", "Stay with {model}", { { "model", Capitalized(model_) } })
+                : std::string{ EditorText("agent.advice.stay", "Keep it as it is") },
+            EditorAgentCardAction::DismissAdvice });
+        return card;
+    }
+    card.kind = EditorAgentCardKind::Plan;
+    const std::string chosen = Capitalized(model_);
+    const std::string strong = agent != nullptr && !agent->ladder.empty() ? Capitalized(agent->ladder.back()) : std::string{};
+    switch (plan.phase) {
+    case EditorAgentPlan::Phase::Writing:
+        card.title = std::string{ EditorText("agent.plan.writingTitle", "Making a plan") };
+        card.body = strong.empty() ? std::string{ EditorText("agent.plan.writingBody", "The job is being split into small steps.") }
+            : EditorLocalization::Format("agent.plan.writingBodyModel", "{model} is splitting the job into small steps.", { { "model", strong } });
+        card.buttons.push_back({ std::string{ EditorText("agent.stuck.stop", "Stop") }, EditorAgentCardAction::Stop });
+        break;
+    case EditorAgentPlan::Phase::Review:
+        card.title = EditorLocalization::Format("agent.plan.title", "A plan of {count} steps", { { "count", std::to_string(plan.steps.size()) } });
+        card.body = plan.editing >= 0
+            ? EditorLocalization::Format("agent.plan.editing", "Type the new words for step {number} and press Enter.", { { "number", std::to_string(plan.editing + 1) } })
+            : (chosen.empty() ? std::string{ EditorText("agent.plan.reviewBody", "Change the steps if you like, then run them one by one.") }
+                              : EditorLocalization::Format("agent.plan.reviewBodyModel", "Change the steps if you like. {model} does them one by one; if a step does not work out, you decide what happens.",
+                                    { { "model", chosen } }));
+        card.buttons.push_back({ std::string{ EditorText("agent.plan.run", "Run the steps") }, EditorAgentCardAction::RunPlan });
+        card.buttons.push_back({ std::string{ EditorText("agent.plan.cancel", "Cancel") }, EditorAgentCardAction::CancelPlan });
+        break;
+    case EditorAgentPlan::Phase::Running: {
+        const bool known = plan.current >= 0 && plan.current < static_cast<int>(plan.steps.size());
+        card.title = EditorLocalization::Format("agent.plan.running", "Step {number} of {count}",
+            { { "number", std::to_string(plan.current + 1) }, { "count", std::to_string(plan.steps.size()) } });
+        card.body = known ? plan.steps[static_cast<std::size_t>(plan.current)].text : std::string{};
+        card.buttons.push_back({ std::string{ EditorText("agent.stuck.stop", "Stop") }, EditorAgentCardAction::Stop });
+        break;
+    }
+    case EditorAgentPlan::Phase::None:
+        break;
+    }
+    return card;
+}
+
+void EditorAgentPanelState::MoveCardFocus(int step) {
+    const std::optional<EditorAgentCard> card = Card();
+    if (!card.has_value() || card->buttons.empty()) {
+        cardFocus_ = -1;
+        return;
+    }
+    const int count = static_cast<int>(card->buttons.size());
+    cardFocus_ = cardFocus_ < 0 ? (step > 0 ? 0 : count - 1) : ((cardFocus_ + step) % count + count) % count;
+}
+
+bool EditorAgentPanelState::PressCard(int button, const EditorAgentWorkspace& workspace) {
+    const std::optional<EditorAgentCard> card = Card();
+    if (!card.has_value() || button < 0 || button >= static_cast<int>(card->buttons.size())) return false;
+    EditorAgentConversation& conversation = ActiveMutable();
+    cardFocus_ = -1;
+    const std::string goal = !conversation.goal.empty() ? conversation.goal : [&] {
+        for (auto entry = conversation.entries.rbegin(); entry != conversation.entries.rend(); ++entry) {
+            if (entry->kind == EditorAgentEntryKind::User) return entry->text;
+        }
+        return std::string{};
+    }();
+    // The same job goes on where it stopped; the agent is told why it was stopped, and the job itself in case it has lost it.
+    const auto carryOn = [&](const std::optional<std::string>& model) {
+        Launch launch;
+        launch.text = "You were stopped because " + std::string{ StuckClause(conversation.pausedBy) } + ". The job is: " + goal +
+            "\nCarry on with the same job from where you stopped, and take a different way where the last one failed.";
+        launch.model = model;
+        launch.newUndoPoint = false;
+        launch.size = conversation.runSize;
+        launch.withContext = false;
+        conversation.paused = false;
+        return Start(conversation, workspace, launch);
+    };
+    switch (card->buttons[static_cast<std::size_t>(button)].action) {
+    case EditorAgentCardAction::ContinueStronger: {
+        if (StepIsStuck(conversation)) {
+            // Only this step goes on with the stronger model, because the person pressed the button.
+            EditorAgentPlanStep& step = conversation.plan.steps[static_cast<std::size_t>(conversation.plan.current)];
+            const std::string stronger = StrongerStepModel(step);
+            if (stronger.empty()) return false;
+            step.model = stronger;
+            conversation.paused = false;
+            RunPlanStep(conversation, workspace, true);
+            return true;
+        }
+        const EditorAgent* agent = Current();
+        const std::string stronger = agent != nullptr ? StrongerModel(agent->ladder, model_) : std::string{};
+        if (stronger.empty()) return false;
+        // The person chose it, so it is the panel's model from now on.
+        SelectModel(stronger);
+        return carryOn(std::nullopt);
+    }
+    case EditorAgentCardAction::TryAgain:
+        if (StepIsStuck(conversation)) {
+            conversation.paused = false;
+            RunPlanStep(conversation, workspace, true);
+            return true;
+        }
+        return carryOn(std::nullopt);
+    case EditorAgentCardAction::SplitIntoSteps: {
+        // A stuck step is the piece to split into smaller ones.
+        const std::string piece = StepIsStuck(conversation) ? conversation.plan.steps[static_cast<std::size_t>(conversation.plan.current)].text : goal;
+        conversation.paused = false;
+        StartPlan(conversation, workspace, piece, false);
+        return true;
+    }
+    case EditorAgentCardAction::Stop:
+        if (conversation.paused) {
+            conversation.paused = false;
+            // A plan goes back to its list: what was done stays done, and the stuck step waits to be run again.
+            if (StepIsStuck(conversation)) {
+                conversation.plan.steps[static_cast<std::size_t>(conversation.plan.current)].progress = EditorAgentStepProgress::Pending;
+                conversation.plan.phase = EditorAgentPlan::Phase::Review;
+            }
+            Add(EditorAgentEntryKind::Info, std::string{ EditorText("agent.stopped", "Stopped.") });
+        } else {
+            Stop();
+        }
+        return true;
+    case EditorAgentCardAction::RunPlan: {
+        EditorAgentPlan& plan = conversation.plan;
+        // A step that got stuck is tried again on the model the person has chosen now.
+        for (EditorAgentPlanStep& step : plan.steps) {
+            if (step.progress == EditorAgentStepProgress::Stuck) {
+                step.progress = EditorAgentStepProgress::Pending;
+                step.model.clear();
+            }
+        }
+        plan.current = -1;
+        for (int index = 0; index < static_cast<int>(plan.steps.size()); ++index) {
+            const EditorAgentPlanStep& step = plan.steps[static_cast<std::size_t>(index)];
+            if (step.enabled && step.progress != EditorAgentStepProgress::Done) {
+                plan.current = index;
+                break;
+            }
+        }
+        plan.editing = -1;
+        if (plan.current < 0) {
+            plan = {};
+            return true;
+        }
+        plan.phase = EditorAgentPlan::Phase::Running;
+        RunPlanStep(conversation, workspace, false);
+        return true;
+    }
+    case EditorAgentCardAction::CancelPlan:
+        conversation.plan = {};
+        return true;
+    case EditorAgentCardAction::ChooseAgent:
+        missingAgent_.clear();
+        SelectAgent(std::stoi(card->buttons[static_cast<std::size_t>(button)].value));
+        RememberSelection();
+        return true;
+    case EditorAgentCardAction::ChooseModel:
+        SelectModel(card->buttons[static_cast<std::size_t>(button)].value);
+        return true;
+    case EditorAgentCardAction::AcceptAdvice:
+        return PressHint(workspace);
+    case EditorAgentCardAction::DismissAdvice:
+        if (const std::optional<EditorAgentHint> hint = Hint(); hint.has_value()) {
+            dismissedAdvice_ = AdviceKey(*hint);
+        }
+        return true;
+    }
+    return false;
+}
+
+void EditorAgentPanelState::TogglePlanStep(int row) {
+    EditorAgentPlan& plan = ActiveMutable().plan;
+    if (plan.phase != EditorAgentPlan::Phase::Review || row < 0 || row >= static_cast<int>(plan.steps.size())) return;
+    EditorAgentPlanStep& step = plan.steps[static_cast<std::size_t>(row)];
+    // A step that is done stays done.
+    if (step.progress != EditorAgentStepProgress::Done) step.enabled = !step.enabled;
+}
+
+void EditorAgentPanelState::MovePlanStep(int row, int step) {
+    EditorAgentPlan& plan = ActiveMutable().plan;
+    const int other = row + step;
+    if (plan.phase != EditorAgentPlan::Phase::Review || row < 0 || other < 0 || row >= static_cast<int>(plan.steps.size()) ||
+        other >= static_cast<int>(plan.steps.size())) {
+        return;
+    }
+    std::swap(plan.steps[static_cast<std::size_t>(row)], plan.steps[static_cast<std::size_t>(other)]);
+    if (plan.editing == row) plan.editing = other;
+    else if (plan.editing == other) plan.editing = row;
+}
+
+void EditorAgentPanelState::EditPlanStep(int row) {
+    EditorAgentConversation& conversation = ActiveMutable();
+    EditorAgentPlan& plan = conversation.plan;
+    if (plan.phase != EditorAgentPlan::Phase::Review || row < 0 || row >= static_cast<int>(plan.steps.size())) return;
+    plan.editing = row;
+    SetInput(plan.steps[static_cast<std::size_t>(row)].text);
+    inputFocused_ = true;
+}
+
+// What a suggestion is, for the person's "stay" to hold: what it suggests and the model it was given for.
+std::string EditorAgentPanelState::AdviceKey(const EditorAgentHint& hint) const {
+    return std::to_string(static_cast<int>(hint.action)) + '|' + hint.model + '|' + model_;
+}
+
+std::optional<EditorAgentHint> EditorAgentPanelState::Hint() const {
+    std::optional<EditorAgentHint> hint = ComputedHint();
+    if (hint.has_value() && AdviceKey(*hint) == dismissedAdvice_) return std::nullopt;
+    return hint;
+}
+
+std::optional<EditorAgentHint> EditorAgentPanelState::ComputedHint() const {
+    const EditorAgentConversation& conversation = Active();
+    const EditorAgent* agent = Current();
+    if (agent == nullptr || conversation.running || conversation.paused || conversation.plan.phase != EditorAgentPlan::Phase::None) return std::nullopt;
+    const std::string key = conversation.draft + '\x1F' + model_ + '\x1F' + std::to_string(conversation.entries.size()) + '\x1F' +
+        std::to_string(conversation.attachments.size()) + '\x1F' + std::to_string(conversation.usage.contextTokens) + '\x1F' + std::to_string(current_);
+    if (key == hintKey_) return hint_;
+    hintKey_ = key;
+    hint_.reset();
+    const std::string draft = [&] {
+        std::string text = conversation.draft;
+        while (!text.empty() && (text.back() == ' ' || text.back() == '\n')) text.pop_back();
+        return text;
+    }();
+    const bool hasHistory = std::ranges::any_of(conversation.entries, [](const EditorAgentEntry& entry) { return entry.kind == EditorAgentEntryKind::User; });
+    // A new conversation costs less than a long one, whose every step reads all of it again.
+    const EditorAgentUsage& usage = conversation.usage;
+    const bool costly = hasHistory && (usage.contextWindow > 0U ? usage.contextTokens * 10U >= usage.contextWindow * 4U : usage.contextTokens >= 120000U);
+    if (hasHistory && ((!draft.empty() && AgentTopicChanged(RecentRequests(conversation, 2U), draft)) || costly)) {
+        std::string last;
+        std::string answer;
+        for (auto entry = conversation.entries.rbegin(); entry != conversation.entries.rend() && (last.empty() || answer.empty()); ++entry) {
+            if (entry->kind == EditorAgentEntryKind::User && last.empty()) last = entry->text;
+            if (entry->kind == EditorAgentEntryKind::Agent && answer.empty()) answer = entry->text;
+        }
+        hint_ = EditorAgentHint{ EditorAgentHintAction::StartFresh,
+            costly ? EditorLocalization::Format("agent.hint.longConversation", "This conversation has grown long, so every step costs more. A fresh one starts from: {summary}",
+                         { { "summary", AgentCarrySummary(last, answer) } })
+                   : EditorLocalization::Format("agent.hint.newTopic", "This looks like something new. A fresh conversation costs less and starts from: {summary}",
+                         { { "summary", AgentCarrySummary(last, answer) } }),
+            std::string{ EditorText("agent.hint.startFresh", "Start fresh") }, {} };
+        return hint_;
+    }
+    if (draft.empty()) return hint_;
+    const EditorAgentRequestSize size = EstimateAgentRequestSize(draft, conversation.attachments.size(), CurrentSizeWords());
+    if (size == EditorAgentRequestSize::Large) {
+        hint_ = EditorAgentHint{ EditorAgentHintAction::PlanInSteps,
+            std::string{ EditorText("agent.hint.big", "This is a big request. It works best in small steps.") },
+            agent->ladder.empty() ? std::string{ EditorText("agent.hint.plan", "Plan it in steps") }
+                : EditorLocalization::Format("agent.hint.planWith", "Plan it with {model}", { { "model", Capitalized(Strongest()) } }), {} };
+        return hint_;
+    }
+    const std::string suggested = ModelForSize(agent->ladder, size);
+    if (!suggested.empty() && suggested != model_) {
+        hint_ = EditorAgentHint{ EditorAgentHintAction::UseModel,
+            size == EditorAgentRequestSize::Small
+                ? EditorLocalization::Format("agent.hint.small", "A small change: {model} is enough.", { { "model", Capitalized(suggested) } })
+                : EditorLocalization::Format("agent.hint.feature", "A feature: {model} suits it.", { { "model", Capitalized(suggested) } }),
+            EditorLocalization::Format("agent.hint.use", "Use {model}", { { "model", Capitalized(suggested) } }), suggested };
+    }
+    return hint_;
+}
+
+bool EditorAgentPanelState::PressHint(const EditorAgentWorkspace& workspace) {
+    const std::optional<EditorAgentHint> hint = Hint();
+    if (!hint.has_value()) return false;
+    EditorAgentConversation& conversation = ActiveMutable();
+    switch (hint->action) {
+    case EditorAgentHintAction::UseModel:
+        SelectModel(hint->model);
+        return true;
+    case EditorAgentHintAction::PlanInSteps: {
+        std::string goal = conversation.draft;
+        while (!goal.empty() && (goal.back() == ' ' || goal.back() == '\n')) goal.pop_back();
+        StartPlan(conversation, workspace, goal + AttachmentNote(conversation.attachments, workspace.project), true);
+        return true;
+    }
+    case EditorAgentHintAction::StartFresh: {
+        std::string last;
+        std::string answer;
+        for (auto entry = conversation.entries.rbegin(); entry != conversation.entries.rend() && (last.empty() || answer.empty()); ++entry) {
+            if (entry->kind == EditorAgentEntryKind::User && last.empty()) last = entry->text;
+            if (entry->kind == EditorAgentEntryKind::Agent && answer.empty()) answer = entry->text;
+        }
+        const std::string summary = AgentCarrySummary(last, answer);
+        std::string draft = std::move(conversation.draft);
+        conversation.draft.clear();
+        conversation.caret = conversation.anchor = 0U;
+        NewConversation();
+        EditorAgentConversation& fresh = ActiveMutable();
+        fresh.carried = summary;
+        if (!draft.empty()) SetInput(std::move(draft));
+        inputFocused_ = true;
+        return true;
+    }
+    }
+    return false;
+}
+
+void EditorAgentPanelState::FinishStep(EditorAgentConversation& conversation, const std::string& toolId, bool failed, std::string_view result) {
     for (auto entry = conversation.entries.rbegin(); entry != conversation.entries.rend(); ++entry) {
         if (entry->kind == EditorAgentEntryKind::Tool && entry->toolId == toolId) {
             entry->step = failed ? EditorAgentStepState::Failed : EditorAgentStepState::Done;
@@ -1403,7 +2110,9 @@ void EditorAgentPanelState::FinishStep(EditorAgentConversation& conversation, co
         }
     }
     // Each step that changed the project is shown at once, not when the whole request ends.
-    projectChangedNow_ = TakeProjectChanges(conversation) || projectChangedNow_;
+    const bool changed = TakeProjectChanges(conversation);
+    projectChangedNow_ = changed || projectChangedNow_;
+    conversation.guard.End(toolId, failed, result, changed);
 }
 
 void EditorAgentPanelState::Add(EditorAgentEntryKind kind, std::string text) {
@@ -1436,6 +2145,12 @@ bool EditorAgentPanelState::Pump(bool& projectChanged) {
             changed = true;
             conversation.saveDue = true;
         }
+        // An agent that is looping is stopped at once and the person is asked what to do.
+        if (conversation.guard.Reason() != EditorAgentStuck::None) {
+            PauseStuck(conversation);
+            changed = true;
+            continue;
+        }
         // A turn ends when the agent exits, or, for one that stays running, at its result event.
         const std::optional<int> code = conversation.turnEnded ? std::optional<int>{ 0 } : conversation.run->ExitCode();
         if (!code.has_value()) {
@@ -1444,25 +2159,8 @@ bool EditorAgentPanelState::Pump(bool& projectChanged) {
         conversation.turnEnded = false;
         conversation.running = false;
         changed = true;
-        if (*code != 0 && !conversation.sawError) {
-            conversation.entries.push_back({ EditorAgentEntryKind::Error, EditorLocalization::Format("agent.exitedWithCode",
-                "The agent stopped unexpectedly (code {code}). Send the request again; if it keeps happening, choose Refresh in the agent menu.",
-                { { "code", std::to_string(*code) } }) });
-        }
-        const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - conversation.started).count();
-        conversation.entries.push_back({ EditorAgentEntryKind::Info,
-            EditorLocalization::Format("agent.finished", "Done in {seconds} s.", { { "seconds", std::to_string(seconds) } }) });
-        // Steps left without a result were cut short.
-        for (EditorAgentEntry& entry : conversation.entries) {
-            if (entry.kind == EditorAgentEntryKind::Tool && entry.step == EditorAgentStepState::Running) {
-                entry.step = *code == 0 && !conversation.sawError ? EditorAgentStepState::Done : EditorAgentStepState::Failed;
-            }
-        }
-        if (conversation.requestRun) {
-            projectChangedNow_ = TakeProjectChanges(conversation) || projectChangedNow_;
-            reviewDue_ = true;
-        }
-        Save(conversation);
+        EndTurn(conversation, *code, false);
+        AfterTurn(conversation);
     }
     // When no request is left working, the files it changed are listed for the person to keep or undo.
     if (reviewDue_ && !AnyRunning()) {
@@ -1487,7 +2185,7 @@ void EditorAgentPanelState::ReadLine(EditorAgentConversation& conversation, cons
     if (line.empty()) {
         return;
     }
-    if (conversation.runFormat == EditorAgentOutputFormat::ClaudeStreamJson && line.front() == '{') {
+    if (conversation.runFormat == EditorAgentOutputFormat::StreamJson && line.front() == '{') {
         ReadStreamJsonEvent(conversation, line);
     } else if (conversation.runFormat == EditorAgentOutputFormat::CodexJson && line.front() == '{') {
         ReadCodexEvent(conversation, line);
@@ -1525,6 +2223,7 @@ void EditorAgentPanelState::ReadStreamJsonEvent(EditorAgentConversation& convers
             conversation.usage.contextTokens = filled;
             // One message arrives as a line per block, each repeating the message's usage: counted once.
             conversation.stepTokens[StringOf(message->Find("id"))] = filled;
+            conversation.guard.AddTokens(conversation.LiveTokens());
         }
     }
     if ((type == "assistant" || type == "user") && content != nullptr && content->GetKind() == JsonValue::Kind::Array) {
@@ -1537,6 +2236,7 @@ void EditorAgentPanelState::ReadStreamJsonEvent(EditorAgentConversation& convers
                 EditorAgentEntry entry{ EditorAgentEntryKind::Tool, DescribeTool(StringOf(part->Find("name")), part->Find("input")) };
                 entry.toolId = StringOf(part->Find("id"));
                 entry.step = EditorAgentStepState::Running;
+                conversation.guard.Begin(entry.toolId, CallKey(StringOf(part->Find("name")), part->Find("input")));
                 // Reading a picture is looking at it, not making one.
                 if (StringOf(part->Find("name")) != "Read") {
                     if (std::vector<std::filesystem::path> images = ImagesNamed(part->Find("input"), conversation.project); !images.empty()) {
@@ -1546,7 +2246,7 @@ void EditorAgentPanelState::ReadStreamJsonEvent(EditorAgentConversation& convers
                 conversation.entries.push_back(std::move(entry));
             } else if (type == "user" && kind == "tool_result") {
                 const JsonValue* failed = part->Find("is_error");
-                FinishStep(conversation, StringOf(part->Find("tool_use_id")), failed != nullptr && failed->AsBool());
+                FinishStep(conversation, StringOf(part->Find("tool_use_id")), failed != nullptr && failed->AsBool(), ResultText(part->Find("content")));
                 // A refused or failed tool call is part of the agent's own work - it reads the reason and
                 // tries another way - so the step is marked failed and nothing technical is shown for it.
             }
@@ -1564,24 +2264,21 @@ void EditorAgentPanelState::ReadStreamJsonEvent(EditorAgentConversation& convers
         // again, mostly from cache) and their cost. The totals reported are those of the whole process, so the
         // part before this turn is taken off. The context fill comes from the steps.
         if (const JsonValue* models = event.Find("modelUsage"); models != nullptr && models->GetKind() == JsonValue::Kind::Object) {
-            EditorAgentUsage reported;
             for (std::size_t index = 0; index < models->Size(); ++index) {
                 const JsonValue* model = models->At(index);
-                reported.inputTokens += Count(model->Find("inputTokens")) + Count(model->Find("cacheReadInputTokens")) +
-                    Count(model->Find("cacheCreationInputTokens"));
-                reported.outputTokens += Count(model->Find("outputTokens"));
-                reported.costUsd += model->Find("costUSD") != nullptr ? model->Find("costUSD")->AsNumber() : 0.0;
+                const EditorAgentTokens total{ Count(model->Find("inputTokens")), Count(model->Find("cacheReadInputTokens")),
+                    Count(model->Find("cacheCreationInputTokens")), Count(model->Find("outputTokens")) };
+                const double cost = model->Find("costUSD") != nullptr ? model->Find("costUSD")->AsNumber() : 0.0;
+                EditorAgentModelTotals& before = conversation.processModels[models->MemberName(index)];
+                AddUsage(conversation, models->MemberName(index),
+                    { Grew(total.uncached, before.tokens.uncached), Grew(total.cacheRead, before.tokens.cacheRead),
+                        Grew(total.cacheWrite, before.tokens.cacheWrite), Grew(total.output, before.tokens.output) },
+                    cost >= before.programCost ? cost - before.programCost : cost);
+                before = { total, cost };
                 if (index == 0U) {
                     conversation.usage.contextWindow = Count(model->Find("contextWindow"));
                 }
             }
-            EditorAgentUsage& before = conversation.processTotals;
-            conversation.usage.inputTokens += reported.inputTokens >= before.inputTokens ? reported.inputTokens - before.inputTokens : reported.inputTokens;
-            conversation.usage.outputTokens += reported.outputTokens >= before.outputTokens ? reported.outputTokens - before.outputTokens : reported.outputTokens;
-            conversation.usage.costUsd += reported.costUsd >= before.costUsd ? reported.costUsd - before.costUsd : reported.costUsd;
-            before.inputTokens = reported.inputTokens;
-            before.outputTokens = reported.outputTokens;
-            before.costUsd = reported.costUsd;
         }
     }
 }
@@ -1608,10 +2305,12 @@ void EditorAgentPanelState::ReadCodexEvent(EditorAgentConversation& conversation
     }
     if (type == "turn.completed") {
         if (const JsonValue* usage = event.Find("usage"); usage != nullptr) {
+            // The input it reports includes what came from the cache.
             const std::uint64_t input = Count(usage->Find("input_tokens"));
-            conversation.usage.inputTokens += input;
-            conversation.usage.outputTokens += Count(usage->Find("output_tokens"));
-            conversation.usage.contextTokens = input + Count(usage->Find("output_tokens"));
+            const std::uint64_t cached = std::min(Count(usage->Find("cached_input_tokens")), input);
+            const std::uint64_t output = Count(usage->Find("output_tokens"));
+            AddUsage(conversation, ModelName(conversation), { input - cached, cached, 0U, output }, 0.0);
+            conversation.usage.contextTokens = input + output;
         }
         return;
     }
@@ -1631,8 +2330,11 @@ void EditorAgentPanelState::ReadCodexEvent(EditorAgentConversation& conversation
         if (StringOf(item->Find("status")) == "failed" || (exitCode != nullptr && exitCode->GetKind() == JsonValue::Kind::Number && exitCode->AsNumber() != 0.0)) {
             entry.step = EditorAgentStepState::Failed;
         }
+        const bool failed = entry.step == EditorAgentStepState::Failed;
         conversation.entries.push_back(std::move(entry));
-        projectChangedNow_ = TakeProjectChanges(conversation) || projectChangedNow_;
+        const bool changed = TakeProjectChanges(conversation);
+        projectChangedNow_ = changed || projectChangedNow_;
+        conversation.guard.Record("$" + StringOf(item->Find("command")), failed, StringOf(item->Find("aggregated_output")), changed);
     } else if (kind == "mcp_tool_call") {
         EditorAgentEntry entry{ EditorAgentEntryKind::Tool,
             DescribeTool("mcp__kb-engine__" + StringOf(item->Find("tool")), item->Find("arguments")) };
@@ -1640,8 +2342,13 @@ void EditorAgentPanelState::ReadCodexEvent(EditorAgentConversation& conversation
         if (StringOf(item->Find("status")) == "failed" || (toolError != nullptr && toolError->GetKind() != JsonValue::Kind::Null)) {
             entry.step = EditorAgentStepState::Failed;
         }
+        const bool failed = entry.step == EditorAgentStepState::Failed;
         conversation.entries.push_back(std::move(entry));
-        projectChangedNow_ = TakeProjectChanges(conversation) || projectChangedNow_;
+        const bool changed = TakeProjectChanges(conversation);
+        projectChangedNow_ = changed || projectChangedNow_;
+        const JsonValue* result = item->Find("result");
+        conversation.guard.Record(CallKey(StringOf(item->Find("tool")), item->Find("arguments")), failed,
+            failed ? (toolError != nullptr ? StringOf(toolError->Find("message")) : std::string{}) : ResultText(result != nullptr ? result->Find("content") : nullptr), changed);
     } else if (kind == "file_change") {
         std::string files;
         if (const JsonValue* changes = item->Find("changes"); changes != nullptr && changes->GetKind() == JsonValue::Kind::Array) {

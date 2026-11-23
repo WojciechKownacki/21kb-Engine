@@ -22,6 +22,7 @@ void RunEditorMaterialGraphCookServiceTests();
 void RunEditorDockingTests();
 void RunEditorProjectTests();
 void RunEditorSettingsTests();
+void RunEditorAgentGuidanceTests();
 void RunEditorProfilerTests();
 void RunEditorProfilerPanelTests();
 void RunEditorLocalizationTests();

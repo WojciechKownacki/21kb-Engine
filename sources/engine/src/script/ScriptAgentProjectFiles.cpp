@@ -32,7 +32,7 @@ namespace kb::script {
 namespace {
 
 // The rules every agent gets first: in AGENTS.md, and as the instructions of the MCP server for a CLI that reads no file.
-constexpr std::string_view kAgentRules = R"md(You work on a 21kb Engine project with the kb-engine tools. The person you work for is not technical: do the whole task yourself, never ask them to run a command or edit a file, answer in their language in one or two plain sentences, and say what they will see.
+constexpr std::string_view kAgentRules = R"md(You work on a 21kb Engine project with the kb-engine tools. The person you work for is not technical: do the whole task yourself, never ask them to run a command or edit a file, answer in their language in one or two plain sentences saying what they will see.
 
 Tools: `kb_cli` runs a command (`args`: its words, one per item; the project is filled in), `guide` returns a how-to (`topic`), `api_reference` the script API (`topic` or `search`). There are no others.
 
@@ -40,11 +40,11 @@ Several commands in one call, all or nothing: `commands` is a list of such `args
 
 Start with the recipe for the job (`guide`, topic `recipe-<job>`; AGENTS.md names them), run its commands in order, stop when its check passes. Do not read the scene or other guides first.
 
-Done means the recipe's check passed: `validate` says OK, `run` ends with `0 diagnostics`, or the line the recipe names appears.
+Done means the recipe's check passed: `validate` says OK, `run` ends with `0 diagnostics`, or the recipe's named line appears.
 
 When a step fails, change its arguments by what the error says. Do not repeat the same call; if it fails twice, report what is missing.
 
-Scenes, the project file and assets are binary: change them only with kb_cli. Lua scripts are text: edit them directly.
+Scenes, the project file and assets are binary: change them only with kb_cli. Lua scripts are text: edit directly.
 )md";
 
 constexpr std::string_view kAgentsHead = "# AGENTS.md - working in this 21kb Engine project\n\n";
@@ -62,7 +62,7 @@ Fetch one with `guide` (its name as `topic`). A recipe's commands go in one `com
 - colour, material: `recipe-material`
 - physics, any component: `recipe-component`
 - a prefab: `recipe-prefab`
-- a Lua script on an object (spin all the time, follow, react to keys or touch): `recipe-script`
+- a Lua script on an object (spin, follow, react to keys or touch): `recipe-script`
 - coins or pickups the player touches: `recipe-pickup`
 - light, sun, sky, time of day: `recipe-light`
 - game name, window, plugins, scenes in the build, tags, a build: `recipe-settings`
@@ -73,22 +73,21 @@ Fetch one with `guide` (its name as `topic`). A recipe's commands go in one `com
 - an intro, a camera flight: `recipe-timeline`
 - the look of the interface: `recipe-ui-theme`
 - other languages: `recipe-translate`
-- a motion that plays by itself (bob up and down, a door that opens): `recipe-animation`
+- a motion that plays alone (bob, a door that opens): `recipe-animation`
 - a reusable material effect: `recipe-material-function`
-- save the game, a score kept between runs: `recipe-save`
-- a character that walks to a place around obstacles: `recipe-navmesh`
-- what collides with what, physics layers: `recipe-collision`
-- a hinge, pendulum, rope, slider: `recipe-joint`
+- save the game, a score kept for later: `recipe-save`
+- a character that walks around obstacles: `recipe-navmesh`
+- collision layers, what hits what: `recipe-collision`
+- hinge, pendulum, rope, slider: `recipe-joint`
 
-`guide` without a topic lists every guide (audio mixer, gameplay graphs, CSG, big worlds, mods too); `api_reference` shows one function or component at a time.
+`guide` alone lists every guide (audio mixer, gameplay graphs, CSG, big worlds, mods); `api_reference` shows one function or component.
 
 ## More
 
-- `help` lists the commands, `help <command>` shows one's options; `scene-list` the objects, `entity show --name <Name>`
-  one object's values, `schema --component <Name>` a component's.
+- `help` lists the commands, `help <command>` shows one's options; `scene-list` the objects, `entity show --name <Name>` one object's values, `schema --component <Name>` a component's.
 - `Assets/` is the game, mounted as `/Game/`. Delete, rename or move files with `asset delete|rename|move`, never by hand.
-- To see the scene, when the person asks how it looks or a change is hard to judge from the output: `capture` returns the picture (`--view overview` frames the whole scene, `--camera <Name>` uses a camera of it).
-- When the person asks for the game in the editor they have open: `editor play` starts it there, `editor capture` takes the editor's view, `editor frames` measures its frame rate, `editor stop` stops it. Without an editor they say so; then use `run` and `capture`.
+- To see the scene (asked how it looks, or a change is hard to judge from the output): `capture` returns the picture (`--view overview` frames the whole scene, `--camera <Name>` uses a camera of it).
+- The game in the editor the person has open: `editor play` starts it, `editor capture` takes its view, `editor frames` measures its frame rate, `editor stop` stops it. No editor open: use `run` and `capture`.
 )md";
 
 

@@ -487,6 +487,18 @@ bool ResolveInterruptedTransaction(const std::string& projectOption, std::ostrea
     return false;
 }
 
+namespace {
+// How many batches of this thread are running: a command that is made of operations (a recipe such as `pickup new`) called inside a
+// batch works in that batch's transaction, whose snapshot and marker already cover it.
+thread_local int batchDepth = 0;
+struct BatchDepth {
+    BatchDepth() noexcept { ++batchDepth; }
+    ~BatchDepth() { --batchDepth; }
+    BatchDepth(const BatchDepth&) = delete;
+    BatchDepth& operator=(const BatchDepth&) = delete;
+};
+} // namespace
+
 int RunBatchOperations(const std::string& projectOption, std::vector<std::vector<std::string>> operations, bool dryRun, bool json, bool brief,
     CommandIo io, const CommandRunner& run) {
     const std::string* project = &projectOption;
@@ -497,7 +509,9 @@ int RunBatchOperations(const std::string& projectOption, std::vector<std::vector
         return 1;
     }
     std::string error;
-    if (ResolveInterruptedTransaction(*project, io.err)) {
+    const bool nested = batchDepth > 0;
+    const BatchDepth depth;
+    if (!nested && ResolveInterruptedTransaction(*project, io.err)) {
         io.err << "error: another transaction is running in this project; wait for it to end and send the commands again\n";
         return 1;
     }
@@ -532,9 +546,11 @@ int RunBatchOperations(const std::string& projectOption, std::vector<std::vector
     bool snapshotTaken = false;
     SceneEditBatch scenes;
     try {
-        snapshotTaken = TakeSnapshot(snapshot, error) && kb::project::WriteAgentProcessMarker(TransactionMarker(root), snapshot.backup.string(), error);
-        if (!snapshotTaken) report.errors.push_back(error);
-        for (std::size_t index = 0U; snapshotTaken && index < operations.size(); ++index) {
+        if (!nested) {
+            snapshotTaken = TakeSnapshot(snapshot, error) && kb::project::WriteAgentProcessMarker(TransactionMarker(root), snapshot.backup.string(), error);
+            if (!snapshotTaken) report.errors.push_back(error);
+        }
+        for (std::size_t index = 0U; (snapshotTaken || nested) && index < operations.size(); ++index) {
             // The words as the caller wrote them: the project the batch added to each is the caller's own, and a path is noise to an agent.
             std::vector<std::string> shown = operations[index];
             if (brief) {

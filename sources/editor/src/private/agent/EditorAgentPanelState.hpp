@@ -1,6 +1,9 @@
 #pragma once
 
 #include "agent/EditorAgentCatalog.hpp"
+#include "agent/EditorAgentGuidance.hpp"
+#include "agent/EditorAgentPlan.hpp"
+#include "agent/EditorAgentPrices.hpp"
 #include "agent/EditorAgentProcess.hpp"
 #include "engine/project/AgentUndoJournal.hpp"
 
@@ -79,12 +82,89 @@ struct EditorAgentWorkspace {
 
 // What a conversation has used so far, as the agent reports it (zero while unknown).
 struct EditorAgentUsage {
+    // Everything the model read: new input, input taken from the agent's cache, and input written to that cache.
     std::uint64_t inputTokens = 0U;
+    std::uint64_t cacheReadTokens = 0U;
+    std::uint64_t cacheWriteTokens = 0U;
     std::uint64_t outputTokens = 0U;
     // The last request's prompt as the model saw it, against the model's whole context window.
     std::uint64_t contextTokens = 0U;
     std::uint64_t contextWindow = 0U;
-    double costUsd = 0.0;
+    // The cost the agent program itself reports (in USD), and the cost by the user's price table (in its currency), which
+    // counts only models that have a price.
+    double programCost = 0.0;
+    double pricedCost = 0.0;
+    std::string currency;
+    bool unpriced = false;
+
+    // Input the model read fresh, not from the cache and not written to it.
+    [[nodiscard]] std::uint64_t UncachedInput() const noexcept {
+        return inputTokens > cacheReadTokens + cacheWriteTokens ? inputTokens - cacheReadTokens - cacheWriteTokens : 0U;
+    }
+    // What it cost: by the price table when every model used has a price, else the program's own figure; false when neither is known.
+    [[nodiscard]] bool Money(double& amount, std::string& currencyName) const {
+        if (!unpriced && pricedCost > 0.0) {
+            amount = pricedCost;
+            currencyName = currency;
+            return true;
+        }
+        amount = programCost;
+        currencyName = "USD";
+        return programCost > 0.0;
+    }
+};
+
+// What the agent program reported in total for one model since its process started, so a turn adds only the part that is new.
+struct EditorAgentModelTotals {
+    EditorAgentTokens tokens;
+    double programCost = 0.0;
+};
+
+// A bubble that stops the person to decide: the agent got stuck, or a plan waits to be run. Plain words only.
+enum class EditorAgentCardKind : std::uint8_t {
+    Stuck,
+    Plan,
+    Advice, // a suggestion (another model, a plan, a fresh conversation): the person decides, nothing changes by itself
+};
+
+enum class EditorAgentCardAction : std::uint8_t {
+    ContinueStronger, // the same conversation goes on with a stronger model
+    SplitIntoSteps,
+    TryAgain,
+    Stop,
+    RunPlan,
+    CancelPlan,
+    AcceptAdvice,
+    DismissAdvice,
+    ChooseAgent, // the remembered agent is gone: this one (value: its index)
+    ChooseModel, // the remembered model is gone: this one (value: its name, empty for the program's own)
+};
+
+struct EditorAgentCardButton {
+    std::string label;
+    EditorAgentCardAction action = EditorAgentCardAction::Stop;
+    std::string value;
+};
+
+struct EditorAgentCard {
+    EditorAgentCardKind kind = EditorAgentCardKind::Stuck;
+    std::string title;
+    std::string body;
+    std::vector<EditorAgentCardButton> buttons;
+};
+
+// A quiet suggestion over the request box, one at a time, that does nothing unless it is clicked.
+enum class EditorAgentHintAction : std::uint8_t {
+    UseModel,    // the model that suits the request
+    PlanInSteps, // a big request, split into small steps
+    StartFresh,  // a new conversation with a one-line summary of this one
+};
+
+struct EditorAgentHint {
+    EditorAgentHintAction action = EditorAgentHintAction::UseModel;
+    std::string text;
+    std::string label;
+    std::string model;
 };
 
 // One conversation tab: its own history, draft, agent session and request in progress, so
@@ -108,6 +188,18 @@ struct EditorAgentConversation {
     std::string sessionAgent;
     std::unique_ptr<EditorAgentProcess> run;
     EditorAgentOutputFormat runFormat = EditorAgentOutputFormat::PlainText;
+    // The request in progress or last made: what the person asked (for splitting it or trying it again), how big it looked, and
+    // the loop guard that watches it. `paused` is set while the stuck bubble waits for a decision.
+    std::string goal;
+    EditorAgentRequestSize runSize = EditorAgentRequestSize::Feature;
+    EditorAgentLoopGuard guard;
+    bool paused = false;
+    EditorAgentStuck pausedBy = EditorAgentStuck::None;
+    // The model the running request was started with, when it was not the panel's choice (a plan's step).
+    std::string runModel;
+    // A big request split into steps, and the one-line summary of an earlier conversation this one starts from.
+    EditorAgentPlan plan;
+    std::string carried;
     // The agent, model and reasoning level a running agent was started with, and whether its
     // current turn has ended (an agent that stays running reports that instead of exiting).
     std::string runKey;
@@ -122,9 +214,9 @@ struct EditorAgentConversation {
     std::map<std::filesystem::path, std::filesystem::file_time_type> projectFiles;
     std::filesystem::file_time_type requestStart{};
     EditorAgentUsage usage;
-    // What the running agent process has reported in total: some agents' result totals count every turn
+    // What the running agent process has reported in total, by model: some agents' result totals count every turn
     // of their process, so each turn adds only the part that is new. Starts again with a new process.
-    EditorAgentUsage processTotals;
+    std::map<std::string, EditorAgentModelTotals> processModels;
     // The tokens each step of the current request has used so far, by the agent's id of the step, so a
     // request can be held to a budget while it runs (the totals above arrive only when it ends). Only an
     // agent that reports its steps' usage fills it.
@@ -166,6 +258,10 @@ public:
 
     // The chosen model and reasoning level of the current agent; empty means its default.
     [[nodiscard]] const std::string& Model() const noexcept { return model_; }
+    // The model (or agent) the person used last is not offered any more: nothing starts until they choose another.
+    [[nodiscard]] bool ModelUnavailable() const;
+    // The agent's program gave no list of models, so it works with its own.
+    [[nodiscard]] bool NoModelList() const;
     [[nodiscard]] const std::string& Effort() const noexcept { return effort_; }
     void SelectModel(std::string model);
     void SelectEffort(std::string effort);
@@ -257,6 +353,25 @@ public:
     // Adds a line of the panel's own to the active tab (a note, an error).
     void Add(EditorAgentEntryKind kind, std::string text);
 
+    // The bubble that waits for a decision in the active tab - the agent got stuck, or a plan waits to be run - and the button
+    // the keyboard is on (Tab moves it, Enter presses it; -1 for none). Pressing a button carries its action out.
+    [[nodiscard]] std::optional<EditorAgentCard> Card() const;
+    [[nodiscard]] int CardFocus() const noexcept { return cardFocus_; }
+    void MoveCardFocus(int step);
+    void ClearCardFocus() noexcept { cardFocus_ = -1; }
+    bool PressCard(int button, const EditorAgentWorkspace& workspace);
+    // The active tab's plan: its steps can be switched off, moved, and have their text changed (the text goes to the request
+    // box, and sending saves it into the step).
+    [[nodiscard]] const EditorAgentPlan& StepPlan() const noexcept { return Active().plan; }
+    void TogglePlanStep(int row);
+    void MovePlanStep(int row, int step);
+    void EditPlanStep(int row);
+    // The one suggestion for what is typed or for the conversation so far; nothing happens until it is pressed.
+    [[nodiscard]] std::optional<EditorAgentHint> Hint() const;
+    bool PressHint(const EditorAgentWorkspace& workspace);
+    // The user's price table, read with the agents.
+    [[nodiscard]] const EditorAgentPrices& Prices() const noexcept { return prices_; }
+
     void ScrollBy(int pixels, int maximum) noexcept;
 
     // The agent bar over the Scene View: whether its conversation is unfolded above it, and
@@ -280,8 +395,6 @@ private:
     [[nodiscard]] EditorAgentConversation& ActiveMutable() noexcept { return *conversations_[static_cast<std::size_t>(active_)]; }
     void Remember(EditorAgentConversation& conversation);
     void ReplaceSelection(std::string_view text, bool typing = false);
-    void AddRequest(EditorAgentConversation& conversation, const std::string& request,
-        const std::vector<std::filesystem::path>& images, const std::filesystem::path& project);
     void UseProject(const std::filesystem::path& project);
     // Every session an agent keeps a record of for this project that the history does not have yet
     // goes into it (closed, in the conversations menu), so no conversation is lost, whatever ended it.
@@ -294,10 +407,52 @@ private:
     // Records the project's files before a request, so its changes can be undone (a request that starts while another still
     // works shares the first one's record). Notes in the conversation when a record cannot be made.
     void BeginUndoPoint(EditorAgentConversation& conversation, const std::filesystem::path& project, const std::string& request);
-    void FinishStep(EditorAgentConversation& conversation, const std::string& toolId, bool failed);
+    void FinishStep(EditorAgentConversation& conversation, const std::string& toolId, bool failed, std::string_view result);
     void ReadLine(EditorAgentConversation& conversation, const std::string& line);
     void ReadStreamJsonEvent(EditorAgentConversation& conversation, const std::string& line);
     void ReadCodexEvent(EditorAgentConversation& conversation, const std::string& line);
+
+    // One request to the agent, whoever asks: the person's own, a plan, a plan's step, a continuation.
+    struct Launch {
+        // What the conversation shows as the person's request; empty when the panel's own note says what runs.
+        std::string shown;
+        // What the agent is told, after the mode and what the editor knows (`withContext`).
+        std::string text;
+        std::vector<std::filesystem::path> images;
+        bool withContext = true;
+        // A model that is not the panel's choice (a plan's step on a light model, a stronger one for a stuck request).
+        std::optional<std::string> model;
+        std::optional<EditorAgentMode> mode;
+        // False for a request that goes on from an earlier one: its changes stay in the same undo point.
+        bool newUndoPoint = true;
+        // False starts a conversation of the agent's own, with none of the earlier history.
+        bool resume = true;
+        // The request was the person's draft: the box is emptied and its pictures are used.
+        bool fromDraft = false;
+        EditorAgentRequestSize size = EditorAgentRequestSize::Feature;
+    };
+    void AddRequest(EditorAgentConversation& conversation, const Launch& launch, const std::filesystem::path& project);
+    bool Start(EditorAgentConversation& conversation, const EditorAgentWorkspace& workspace, const Launch& launch);
+    // The end of a turn, whether the agent finished or was stopped: steps left running are closed, the project's changes read.
+    void EndTurn(EditorAgentConversation& conversation, int code, bool cut);
+    // What follows a turn that ended by itself: a plan read, a step judged and the next one begun.
+    void AfterTurn(EditorAgentConversation& conversation);
+    // The agent is looping: it is stopped and the person is asked what to do; nothing goes on by itself.
+    void PauseStuck(EditorAgentConversation& conversation);
+    // A request that stopped for `reason` waits for the person's decision (a plan's step is marked as stuck).
+    void Pause(EditorAgentConversation& conversation, EditorAgentStuck reason);
+    // The model a plan's step runs on, and the one a stuck step could go on with; empty when there is no such model.
+    [[nodiscard]] std::string StepModel(const EditorAgentPlanStep& step) const;
+    [[nodiscard]] std::string StrongerStepModel(const EditorAgentPlanStep& step) const;
+    [[nodiscard]] bool StepIsStuck(const EditorAgentConversation& conversation) const;
+    // Asks the strongest model for the steps of `goal`; `fromDraft` when the person just typed it.
+    void StartPlan(EditorAgentConversation& conversation, const EditorAgentWorkspace& workspace, std::string goal, bool fromDraft);
+    void RunPlanStep(EditorAgentConversation& conversation, const EditorAgentWorkspace& workspace, bool retry);
+    [[nodiscard]] std::string Strongest() const;
+    void AddUsage(EditorAgentConversation& conversation, const std::string& model, const EditorAgentTokens& delta, double programCost);
+    [[nodiscard]] std::string LastAnswer(const EditorAgentConversation& conversation, std::size_t from) const;
+    // The model a conversation's request runs on: the panel's choice, its name for the person.
+    [[nodiscard]] std::string ModelName(const EditorAgentConversation& conversation) const;
     void FinishAccountCheck();
     void StartAccountCheck();
     // While the profile is not signed in, its status is asked again now and then, so signing in
@@ -306,6 +461,18 @@ private:
     void RememberSelection() const;
 
     std::vector<EditorAgent> agents_;
+    EditorAgentPrices prices_;
+    // The workspace of the last request, for the requests the panel makes by itself (the next step of a plan).
+    EditorAgentWorkspace workspace_;
+    int cardFocus_ = -1;
+    mutable std::string hintKey_;
+    mutable std::optional<EditorAgentHint> hint_;
+    // The suggestion the person answered "stay" to; it does not come back until the next request.
+    std::string dismissedAdvice_;
+    // The agent the person used last, when it is not installed any more.
+    std::string missingAgent_;
+    [[nodiscard]] std::optional<EditorAgentHint> ComputedHint() const;
+    [[nodiscard]] std::string AdviceKey(const EditorAgentHint& hint) const;
     bool prepared_ = false;
     int current_ = -1;
     std::string model_;

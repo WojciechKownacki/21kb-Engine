@@ -36,6 +36,8 @@ enum class AgentBarHitKind : std::uint8_t {
     MenuRefresh,
     MenuAddAgent,
     MenuPanel,     // the picker's background
+    Notice,        // the bubble over the rest that waits for a decision, or the suggestion: outside its buttons
+    NoticeButton,  // one of its buttons (index; for a plan the last one opens the list in the docked panel)
 };
 
 struct AgentBarHit {
@@ -55,6 +57,12 @@ struct AgentBarLayout {
     RECT tokens{};
     RECT expand{};
     RECT send{};
+    // Over everything else: a bubble that waits for a decision, or a suggestion, with its buttons. `bodyTop` is where the
+    // answer or the conversation begins under it.
+    bool noticeShown = false;
+    RECT notice{};
+    std::vector<RECT> noticeButtons;
+    int bodyTop = 0;
     bool answerShown = false;
     RECT answer{};
     RECT answerClose{};

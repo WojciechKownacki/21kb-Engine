@@ -934,6 +934,9 @@ add_executable(kb_editor WIN32
     src/rendering/AgentPanelRenderer.cpp
     src/rendering/AgentBarRenderer.cpp
     src/agent/EditorAgentCatalog.cpp
+    src/agent/EditorAgentGuidance.cpp
+    src/agent/EditorAgentPlan.cpp
+    src/agent/EditorAgentPrices.cpp
     src/agent/EditorAgentProcess.cpp
     src/agent/EditorAgentPanelState.cpp
     src/app/agent/EditorAgentPanelController.cpp
@@ -1489,6 +1492,11 @@ if(BUILD_TESTING)
         tests/EditorDockingTests.cpp
         tests/EditorProjectTests.cpp
         tests/EditorSettingsTests.cpp
+        tests/EditorAgentGuidanceTests.cpp
+        src/agent/EditorAgentCatalog.cpp
+        src/agent/EditorAgentGuidance.cpp
+        src/agent/EditorAgentPlan.cpp
+        src/agent/EditorAgentPrices.cpp
         tests/EditorProfilerTests.cpp
         tests/EditorProfilerPanelTests.cpp
         tests/EditorLocalizationTests.cpp
@@ -1762,6 +1770,7 @@ if(BUILD_TESTING)
             gdiplus
             msimg32
             ole32
+            shell32
     )
 
     kb_apply_editor_graph_cook_defs(kb_editor_tests)
@@ -1780,6 +1789,7 @@ if(BUILD_TESTING)
     add_test(NAME kb_editor_material_cook COMMAND $<TARGET_FILE:kb_editor_tests> material-cook)
     add_test(NAME kb_editor_static_mesh_tests COMMAND $<TARGET_FILE:kb_editor_tests> static-mesh)
     add_test(NAME kb_editor_gameplay_graph_tests COMMAND $<TARGET_FILE:kb_editor_tests> gameplay-graph)
+    add_test(NAME kb_editor_agent_guidance_tests COMMAND $<TARGET_FILE:kb_editor_tests> agent-guidance)
     set_tests_properties(kb_editor_gameplay_graph_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "editor;gameplay;graph" TIMEOUT 60)
     set_tests_properties(kb_editor_timeline_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "editor;timeline" TIMEOUT 60)
     if(TARGET kb_cooker AND TARGET kb_game AND TARGET kb_engine_tests
@@ -2331,6 +2341,17 @@ if(BUILD_TESTING)
             --selftest-task "SELFTEST-Agent-Undo")
     set_tests_properties(kb_editor_agent_undo_headless PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;scene" TIMEOUT 180)
+    # The Agent window against an agent that is a script: the stuck bubble, a plan, the suggestions and what a request cost.
+    set(KB_SCRIPTED_AGENT "${CMAKE_CURRENT_SOURCE_DIR}/tests/ScriptedAgent.ps1")
+    configure_file(tests/ScriptedAgents.json.in "${CMAKE_BINARY_DIR}/ScriptedAgents.json" @ONLY)
+    add_test(NAME kb_editor_agent_guidance_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessAgentGuidanceScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Agent-Guidance")
+    set_tests_properties(kb_editor_agent_guidance_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;agent" TIMEOUT 600
+        ENVIRONMENT "KB_EDITOR_AGENTS_FILE=${CMAKE_BINARY_DIR}/ScriptedAgents.json")
     add_test(NAME kb_editor_ui_component_catalog_headless
         COMMAND $<TARGET_FILE:kb_editor>
             --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessUIComponentCatalogScenario.json"
