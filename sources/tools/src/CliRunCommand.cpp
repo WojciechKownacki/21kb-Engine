@@ -23,6 +23,7 @@
 #include "engine/project/ProjectManager.hpp"
 #include "engine/project/ParticleProjectPolicy.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
+#include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -34,6 +35,8 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneInputActivation.hpp"
 #include "engine/scene/SceneUI.hpp"
+#include "engine/script/ScriptApiCatalog.hpp"
+#include "engine/script/ScriptLuaCheck.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/script/ScriptRuntimeSceneSystem.hpp"
 #include "engine/script/UISceneValidation.hpp"
@@ -42,6 +45,10 @@
 #include <filesystem>
 #include <charconv>
 #include <deque>
+#include <fstream>
+#include <functional>
+#include <iterator>
+#include <map>
 #include <array>
 #include <algorithm>
 #include <cmath>
@@ -235,6 +242,20 @@ struct DiagnosticPrinter {
     kb::core::JsonValue entries = kb::core::JsonValue::MakeArray();
     // False for `run --json`: the errors are the entries then, not lines on stderr as well.
     bool raw = true;
+    // What the checker of `validate` says about a script that failed (the same message, with the nearest real name), once per script.
+    std::function<std::string(kb::assets::AssetId)> hintFor;
+    std::unordered_set<std::string> hinted;
+    // An error that happens every frame is printed once; this counts the repeats.
+    std::map<std::string, std::size_t> repeats;
+
+    [[nodiscard]] std::string Hint(kb::assets::AssetId assetId) {
+        if (!hintFor || !hinted.insert(kb::assets::ToString(assetId)).second) return {};
+        return hintFor(assetId);
+    }
+
+    void PrintRepeats() {
+        for (const auto& [line, count] : repeats) err << "  [repeated " << count + 1U << " times] " << line << '\n';
+    }
 
     // The script's path, or empty for a reference to a file that is not there.
     [[nodiscard]] std::string ScriptFile(kb::assets::AssetId assetId) const {
@@ -243,7 +264,7 @@ struct DiagnosticPrinter {
     }
 
     void Record(std::string_view kind, std::size_t frame, kb::assets::AssetId assetId, std::string_view message, std::string_view stackTrace,
-        std::string_view entity, std::string_view function) {
+        std::string_view entity, std::string_view function, std::string_view hint = {}) {
         using kb::core::JsonValue;
         const ParsedScriptError parsed = ParseScriptError(message, stackTrace);
         std::string file = ScriptFile(assetId);
@@ -257,6 +278,7 @@ struct DiagnosticPrinter {
         entry.Set("traceback", JsonValue::MakeString(parsed.traceback));
         if (!entity.empty()) entry.Set("entity", JsonValue::MakeString(std::string{ entity }));
         if (!function.empty()) entry.Set("function", JsonValue::MakeString(std::string{ function }));
+        if (!hint.empty()) entry.Set("hint", JsonValue::MakeString(std::string{ hint }));
         entries.Append(std::move(entry));
     }
 
@@ -279,8 +301,11 @@ struct DiagnosticPrinter {
             line += ScriptName(diagnostic.assetId);
             line += ": " + diagnostic.message;
             if (printed.insert(line).second) {
-                if (raw) err << "frame " << frame << ' ' << line << '\n';
-                Record("script", frame, diagnostic.assetId, diagnostic.message, diagnostic.stackTrace, entity, diagnostic.function);
+                const std::string hint = Hint(diagnostic.assetId);
+                if (raw) err << "frame " << frame << ' ' << line << '\n' << hint;
+                Record("script", frame, diagnostic.assetId, diagnostic.message, diagnostic.stackTrace, entity, diagnostic.function, hint);
+            } else {
+                ++repeats[line];
             }
         }
     }
@@ -292,8 +317,11 @@ struct DiagnosticPrinter {
             line += ScriptName(diagnostic.assetId);
             line += ": " + diagnostic.message;
             if (printed.insert(line).second) {
-                if (raw) err << "frame " << frame << ' ' << line << '\n';
-                Record("compile", frame, diagnostic.assetId, diagnostic.message, {}, {}, {});
+                const std::string hint = Hint(diagnostic.assetId);
+                if (raw) err << "frame " << frame << ' ' << line << '\n' << hint;
+                Record("compile", frame, diagnostic.assetId, diagnostic.message, {}, {}, {}, hint);
+            } else {
+                ++repeats[line];
             }
         }
     }
@@ -305,6 +333,8 @@ struct DiagnosticPrinter {
             if (printed.insert(line).second) {
                 if (raw) err << "frame " << frame << ' ' << line << '\n';
                 Record("scene-system", frame, kb::assets::AssetId{}, diagnostic, {}, {}, {});
+            } else {
+                ++repeats[line];
             }
         }
     }
@@ -409,7 +439,28 @@ struct BodyPosition {
     return bodies;
 }
 
+// The top of the lowest floor of the scene: the lowest static box Collider that is not a trigger. Empty without one.
+[[nodiscard]] std::optional<double> LowestFloorTop(kb::scene::Scene& scene) {
+    std::optional<double> lowest;
+    std::vector<kb::scene::SceneEntity> pending = scene.Hierarchy().RootEntities();
+    while (!pending.empty()) {
+        const kb::scene::SceneEntity entity = pending.back();
+        pending.pop_back();
+        for (const kb::scene::SceneEntity child : scene.Hierarchy().ChildEntities(entity)) pending.push_back(child);
+        const auto components = scene.Components();
+        const kb::scene::ColliderComponent* collider = components.Colliders().TryGet(entity);
+        const kb::scene::RigidbodyComponent* body = components.Rigidbodies().TryGet(entity);
+        if (collider == nullptr || collider->trigger || collider->shape != kb::scene::ColliderShape::Box ||
+            (body != nullptr && body->bodyType != kb::scene::RigidbodyBodyType::Static)) continue;
+        const kb::math::DVec3 at = scene.Transforms().WorldTranslation(entity);
+        const double top = at.y + 0.5 * collider->boxSize.y * std::abs(scene.Transforms().Get(entity).localScale.y);
+        lowest = lowest.has_value() ? std::min(*lowest, top) : top;
+    }
+    return lowest;
+}
+
 void PrintBodyMovement(kb::scene::Scene& scene, const std::vector<BodyPosition>& before, std::ostream& out) {
+    const std::optional<double> floorTop = LowestFloorTop(scene);
     const auto text = [](const kb::math::DVec3& value) {
         char buffer[96]{};
         std::snprintf(buffer, sizeof(buffer), "%.2f,%.2f,%.2f", value.x, value.y, value.z);
@@ -426,6 +477,13 @@ void PrintBodyMovement(kb::scene::Scene& scene, const std::vector<BodyPosition>&
         if (distance < 0.005 && !start.physics) continue;
         out << "moved: " << start.name << ' ' << text(start.position) << " -> " << text(end)
             << (distance < 0.005 ? " (at rest)" : "") << '\n';
+        // A body that ends far under the floor went through it: the check "it moved" would pass for it.
+        if (start.physics && floorTop.has_value() && end.y < *floorTop - 2.0) {
+            out << "warning: " << start.name << " fell below the floor (it ended at y=" << std::lround(end.y)
+                << ", the floor is at y=" << std::lround(*floorTop) << "): place it above the ground, for example entity set --name " << start.name << " --position 0,2,0\n";
+        } else if (start.physics && !floorTop.has_value() && start.position.y - end.y > 15.0) {
+            out << "warning: " << start.name << " fell " << static_cast<int>(start.position.y - end.y) << " m and nothing stopped it: there is no floor under it\n";
+        }
     }
 }
 
@@ -697,7 +755,7 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
             io.err << "error: configured module did not become active: " << module << '\n';
             return 1;
         }
-        io.out << "[module] active " << module << '\n';
+        if (arguments.Flag("--verbose")) io.out << "[module] active " << module << '\n';
     }
 
     std::string error;
@@ -833,6 +891,23 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
            << scene.ActiveModuleCount() << " modules active)\n";
 
     DiagnosticPrinter printer{ .scene = scene, .err = io.err, .printed = {}, .total = 0U, .raw = !io.WantsData() };
+    std::optional<kb::script::ScriptApiCatalog> catalog;
+    printer.hintFor = [&scene, &host, &catalog](kb::assets::AssetId assetId) -> std::string {
+        const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().Find(assetId);
+        if (metadata == nullptr || metadata->physicalPath.empty() || metadata->physicalPath.extension() != ".lua") return {};
+        std::ifstream input(metadata->physicalPath, std::ios::binary);
+        const std::string source{ std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>() };
+        if (source.empty()) return {};
+        if (!catalog.has_value()) catalog = kb::script::ScriptApiCatalog::Build(host, scene.Assets().Manager());
+        std::string hints;
+        std::size_t shown = 0U;
+        for (const kb::script::ScriptLuaFinding& finding : kb::script::CheckLuaScript(source, *catalog)) {
+            if (finding.severity != kb::script::ScriptLuaFindingSeverity::Error || shown == 2U) continue;
+            hints += "  hint: " + metadata->virtualPath.generic_string() + ':' + std::to_string(finding.line) + ": " + finding.message + '\n';
+            ++shown;
+        }
+        return hints;
+    };
     std::size_t executedBehaviours = 0U;
     std::size_t emittedEvents = 0U;
 
@@ -1132,9 +1207,12 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         if (!uiReport->good()) { io.err << "error: UI report could not be written\n"; return 1; }
     }
 
+    if (printer.raw) printer.PrintRepeats();
     PrintBodyMovement(scene, bodiesAtStart, io.out);
     io.out << "done: " << completedFrames << " frames, " << executedBehaviours << " behaviour executions, "
-           << emittedEvents << " events, " << printer.total << " diagnostics\n";
+           << emittedEvents << " events, " << printer.total << " diagnostics";
+    if (printer.printed.size() < printer.total) io.out << " (" << printer.printed.size() << " different)";
+    io.out << '\n';
     if (particleReport != nullptr) {
         auto report = ParticleExecutionReport(particleSnapshot, particleProviderAvailable,
             updateWallNanoseconds, printer.total == 0U && stopCode == 0);

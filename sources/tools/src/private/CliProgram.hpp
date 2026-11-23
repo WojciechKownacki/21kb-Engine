@@ -46,6 +46,11 @@ struct CliCommandDescriptor {
 // The catalog as one JSON object: every command of the table with its purpose, subcommands and options
 // (name, type, required, default), its --json output kind, availability and MCP tool name.
 [[nodiscard]] std::string CliCatalogJson();
+// The short forms an agent reads first: one line per command (`kb_cli help`), the same as JSON without options
+// (`kb_cli commands`), and one command with its options and subcommands (`kb_cli commands --command <name>`; empty for an unknown name).
+[[nodiscard]] std::string CliCommandSummary();
+[[nodiscard]] std::string CliCatalogShortJson();
+[[nodiscard]] std::string CliCommandJson(std::string_view command);
 
 // The kb_cli program: `args` are the command line after the program name. Exits 0 on success and
 // 1 on any failure. With --json, prints one result object instead of the command's text.
@@ -57,8 +62,9 @@ using CommandRunner = std::function<int(std::span<const std::string>, CommandIo)
 // batch: runs the operations of a file as one transaction on a project; see the usage text.
 [[nodiscard]] int RunBatchCommand(const ArgumentList& arguments, CommandIo io, const CommandRunner& run);
 // The same transaction for operations a command builds itself: each is the words of one kb_cli command; --project is added to each.
-[[nodiscard]] int RunBatchOperations(const std::string& project, std::vector<std::vector<std::string>> operations, bool dryRun, bool json, CommandIo io,
-    const CommandRunner& run);
+// `brief` leaves out the list of changed files.
+[[nodiscard]] int RunBatchOperations(const std::string& project, std::vector<std::vector<std::string>> operations, bool dryRun, bool json, bool brief,
+    CommandIo io, const CommandRunner& run);
 
 // The scenes that entity and component commands edit, kept open while a batch runs: the first command that
 // names a scene opens it, the later ones edit the same scene in memory, and Commit writes it once. Any other

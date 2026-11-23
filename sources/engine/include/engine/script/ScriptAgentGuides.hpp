@@ -24,6 +24,8 @@ public:
     [[nodiscard]] static std::span<const ScriptAgentGuide> All() noexcept;
     // The index: every guide's name and summary.
     [[nodiscard]] static std::string Index();
+    // The guides a wrong topic probably meant (at most three, as a list of names): those that mention it, else the nearest name; empty when none.
+    [[nodiscard]] static std::string Suggest(std::string_view topic);
     // A guide by name, without regard to case; empty or "index" gives the index.
     [[nodiscard]] static std::optional<std::string> Topic(std::string_view name);
 };

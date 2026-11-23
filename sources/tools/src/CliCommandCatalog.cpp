@@ -573,4 +573,75 @@ std::string CliCatalogJson() {
     return result.Dump();
 }
 
+namespace {
+
+// A purpose cut to a few words for a list: at a phrase that stands alone, else at a word with "..." so a reader sees it goes on.
+[[nodiscard]] std::string ShortPurpose(std::string_view purpose) {
+    constexpr std::size_t kLongest = 56U;
+    constexpr std::size_t kShortest = 20U;
+    std::string text{ purpose };
+    // At the first comma, colon or bracket that leaves a phrase; else at a word.
+    std::size_t cut = std::string::npos;
+    for (const std::string_view delimiter : { std::string_view{ ", " }, std::string_view{ ": " }, std::string_view{ " (" }, std::string_view{ "; " }, std::string_view{ " - " } }) {
+        const std::size_t at = text.find(delimiter, kShortest);
+        if (at != std::string::npos && at <= kLongest + 8U) cut = std::min(cut, at);
+    }
+    bool ellipsis = false;
+    if (cut != std::string::npos) {
+        text.resize(cut);
+    } else if (text.size() > kLongest) {
+        const std::size_t space = text.rfind(' ', kLongest);
+        text.resize(space == std::string::npos ? kLongest : space);
+        ellipsis = true;
+    }
+    constexpr std::string_view joiners[]{ "a", "an", "the", "in", "of", "for", "to", "as", "and", "or", "with", "by", "on", "from", "at", "that", "its", "it", "one", "into" };
+    for (bool trimmed = true; trimmed;) {
+        trimmed = false;
+        while (!text.empty() && (text.back() == ',' || text.back() == ';' || text.back() == ':' || text.back() == ' ' || text.back() == '.')) text.pop_back();
+        const std::size_t space = text.rfind(' ');
+        const std::string_view last = space == std::string::npos ? std::string_view{ text } : std::string_view{ text }.substr(space + 1U);
+        if (space != std::string::npos && std::ranges::find(joiners, last) != std::end(joiners)) {
+            text.resize(space);
+            trimmed = true;
+        }
+    }
+    return ellipsis ? text + "..." : text;
+}
+
+} // namespace
+
+std::string CliCommandSummary() {
+    std::string out;
+    for (const UsageRow& row : UsageRows()) {
+        out += "  " + row.name + std::string(row.name.size() < 20U ? 20U - row.name.size() : 1U, ' ') + ShortPurpose(row.purpose) + '\n';
+    }
+    return out;
+}
+
+std::string CliCommandJson(std::string_view name) {
+    for (const CliCommandDescriptor& command : CliCommandCatalog()) {
+        if (command.name != name) continue;
+        auto result = CommandJson(command);
+        result.Set("schema", JsonValue::MakeString("21kb.cli-command/v1"));
+        return result.Dump();
+    }
+    return {};
+}
+
+std::string CliCatalogShortJson() {
+    auto result = JsonValue::MakeObject();
+    result.Set("schema", JsonValue::MakeString("21kb.cli-commands-short/v1"));
+    result.Set("note", JsonValue::MakeString("kb_cli commands --command <name> gives one command's options and subcommands; kb_cli commands --full lists everything."));
+    auto commands = JsonValue::MakeArray();
+    for (const CliCommandDescriptor& command : CliCommandCatalog()) {
+        const UsageRow* usage = FindRow(command.name);
+        auto row = JsonValue::MakeObject();
+        row.Set("name", JsonValue::MakeString(std::string{ command.name }));
+        row.Set("purpose", JsonValue::MakeString(usage != nullptr ? ShortPurpose(usage->purpose) : std::string{}));
+        commands.Append(std::move(row));
+    }
+    result.Set("commands", std::move(commands));
+    return result.Dump();
+}
+
 } // namespace kb::cli

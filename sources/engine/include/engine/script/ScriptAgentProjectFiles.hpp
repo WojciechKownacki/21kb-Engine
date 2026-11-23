@@ -46,6 +46,10 @@ public:
         const std::filesystem::path& projectRoot,
         const ScriptApiCatalog& catalog);
 
+    // The rules every agent gets first (the tools, the recipe, when it is done, what to do when a step fails): the top of
+    // AGENTS.md, and the instructions of the MCP server of `kb_cli mcp` when the project's AGENTS.md does not hold them.
+    [[nodiscard]] static std::string AgentRules();
+
     // The Lua source of a ready-made 2D player: "Platformer2DPlayer.lua" (a CharacterController that walks,
     // jumps with coyote time, a jump buffer and a variable height) or "TopDown2DPlayer.lua" (8 or 4 direction
     // movement with a normalized diagonal). `kb_cli entity add --create 'Platformer Player'` and 'Top Down Player'

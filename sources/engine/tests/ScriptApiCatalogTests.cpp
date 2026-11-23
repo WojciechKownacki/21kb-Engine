@@ -243,18 +243,36 @@ void RunAgentProjectFilesTest() {
         "the how-to guides were not created");
     kb::tests::Require(std::filesystem::exists(TestRoot() / "CLAUDE.md"), "CLAUDE.md was not created");
     {
+        // CLIs that read their own instruction file import AGENTS.md, so the rules are written once.
+        std::ifstream file(TestRoot() / "GEMINI.md", std::ios::binary);
+        const std::string text{ std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>() };
+        kb::tests::Require(text == "@AGENTS.md\n", "GEMINI.md must be the one line that imports AGENTS.md");
+    }
+    {
         std::ifstream agents(TestRoot() / "AGENTS.md", std::ios::binary);
         const std::string text{ std::istreambuf_iterator<char>(agents), std::istreambuf_iterator<char>() };
         kb::tests::Require(text.size() < 3072U, "AGENTS.md must stay short: it is read with every request");
+        // The rules every agent needs, said once and plainly: how to call, when it is done, what to do when a step fails.
+        kb::tests::Require(text.find(kb::script::ScriptAgentProjectFiles::AgentRules()) != std::string::npos &&
+                text.find("`commands`") != std::string::npos && text.find("Done means") != std::string::npos && text.find("Do not repeat the same call") != std::string::npos &&
+                text.find("JavaScript") == std::string::npos && text.find("--project") == std::string::npos,
+            "AGENTS.md must hold the shared rules, one example of each call, and no mechanics of one CLI");
+        // Nothing shouts: emphasis makes a model apply a rule where it does not belong.
+        kb::tests::Require(text.find("MUST") == std::string::npos && text.find("NEVER") == std::string::npos && text.find("ALWAYS") == std::string::npos, "AGENTS.md must use plain words");
         // It is an index: every recipe is named in it, short, and written beside the other guides.
         for (const kb::script::ScriptAgentGuide& guide : kb::script::ScriptAgentGuides::All()) {
             if (guide.name.starts_with("recipe-")) {
                 kb::tests::Require(text.find("`" + std::string{ guide.name } + "`") != std::string::npos, "AGENTS.md must name every recipe");
                 kb::tests::Require(guide.body.size() < 2600U, "a recipe is read in one step and must stay short");
+                kb::tests::Require(guide.body.find("--project") == std::string_view::npos, "a recipe leaves the project out: the tool fills it in");
+                kb::tests::Require(guide.body.find("\n[\"") != std::string_view::npos, "a recipe's commands are lists of words an agent sends as they are");
                 kb::tests::Require(std::filesystem::exists(TestRoot() / ".kb" / "docs" / (std::string{ guide.name } + ".md")), "a recipe file was not written");
             }
         }
     }
+    kb::tests::Require(kb::script::ScriptAgentGuides::Suggest("recipe-coin").find("recipe-pickup") != std::string::npos &&
+            kb::script::ScriptAgentGuides::Suggest("recipe-materal").find("recipe-material") != std::string::npos,
+        "a wrong guide topic must name the guides it probably meant");
     const std::optional<std::string> raycast = kb::script::ScriptApiExport::ToReferenceTopic(catalog, "physics.raycast");
     kb::tests::Require(raycast.has_value() && raycast->starts_with("# Physics.Raycast"), "an API topic must resolve one function without regard to case");
     kb::tests::Require(!kb::script::ScriptApiExport::ToReferenceTopic(catalog, "NoSuchTopic").has_value(), "an unknown API topic must resolve to nothing");

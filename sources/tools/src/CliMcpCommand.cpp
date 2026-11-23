@@ -1,6 +1,7 @@
 #include "CliCommands.hpp"
 #include "CliProgram.hpp"
 #include "engine/core/JsonValue.hpp"
+#include "engine/script/ScriptAgentProjectFiles.hpp"
 
 #include <array>
 #include <cstdio>
@@ -8,6 +9,9 @@
 #include <exception>
 #include <limits>
 #include <initializer_list>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <sstream>
 #include <span>
 #include <string>
@@ -19,8 +23,14 @@ using kb::core::JsonValue;
 
 namespace {
 
-constexpr std::string_view kProtocolVersion = "2024-11-05";
+// The versions the server speaks: a client that asks for one of them gets it, any other client the newest. Tool annotations
+// (readOnlyHint, destructiveHint) are part of the newer one; a client of the older one ignores the field.
+constexpr std::string_view kProtocolVersions[]{ "2024-11-05", "2025-03-26" };
 constexpr std::string_view kServerVersion = "0.1.0";
+
+// The tools an agent gets: kb_cli, guide and api_reference by default (every other command is a kb_cli command, and a tool of its
+// own would be sent again with every step), all of them with `kb_cli mcp --tools all`.
+bool gAllTools = false;
 constexpr std::string_view kCodeActions[]{"modules", "map", "find", "show"};
 constexpr std::string_view kEntityActions[]{"add", "set", "remove", "rename", "attach", "detach", "show"};
 constexpr std::string_view kComponentActions[]{"add", "set", "remove"};
@@ -65,10 +75,17 @@ thread_local bool tDiscovery = false;
         if (property.name == "topic") descriptor.Set("default", JsonValue::MakeString("index"));
         if (property.name == "inputReplay" || property.name == "inputRecord")
             descriptor.Set("x-project-file", JsonValue::MakeBool(true));
-        if (property.type == "array") {
+        if (property.type == "array" || property.type == "lists") {
             auto items = JsonValue::MakeObject();
             items.Set("type", JsonValue::MakeString("string"));
             items.Set("minLength", JsonValue::MakeNumber(1));
+            if (property.type == "lists") {
+                auto list = JsonValue::MakeObject();
+                list.Set("type", JsonValue::MakeString("array"));
+                list.Set("items", std::move(items));
+                items = std::move(list);
+                descriptor.Set("type", JsonValue::MakeString("array"));
+            }
             descriptor.Set("items", std::move(items));
         }
         if (property.type == "string" && !tDiscovery) descriptor.Set("minLength", JsonValue::MakeNumber(property.name == "value" ? 0 : 1));
@@ -125,19 +142,17 @@ thread_local bool tDiscovery = false;
             ToolProperty{"yParameter","string","Distinct Float parameter bound to the Y axis; created if missing.",false,"--y-param"},
         });
     if (command.name == "api") return MakeToolDescriptor(command.mcpTool,
-        "Returns one page of the 21kb Engine script API: without arguments the index of function groups and components; "
-        "with topic a group (Physics), one function (Physics.Raycast), a component (Rigidbody), a global (Log, Emit, assert) or an event hook (OnTriggerEnter, EventHooks lists them all); with search the topics matching the text. "
-        "Ask for the one function or component you are about to use.",
+        "Returns one page of the script API: topic a group (Physics), a function (Physics.Raycast), a component (Rigidbody), a global (Log, Emit) "
+        "or an event hook (OnTriggerEnter; EventHooks lists them); search the topics matching words; neither, the index. Ask for the one you are about to use.",
         {
             ToolProperty{ "topic", "string", "A group, function or component name, or 'index'.", false, "--topic" },
             ToolProperty{ "search", "string", "Words to find in function and component names and descriptions.", false, "--search" },
         });
     if (command.name == "guide") return MakeToolDescriptor(command.mcpTool,
-        "Returns a short how-to for one kind of task, with the kb_cli commands that do it. Start with the recipe for the job: "
-        "recipe-material, recipe-component, recipe-prefab, recipe-script, recipe-pickup, recipe-light, recipe-settings, recipe-ui-button, recipe-player, recipe-image, recipe-sound, recipe-timeline, recipe-ui-theme, recipe-translate, recipe-animation, recipe-material-function. "
-        "Other guides: objects-and-materials, physics, scripts, characters-and-animation, combat-and-ai, maps-2d, verify. Without a topic, the list of guides.",
+        "Returns a short how-to with the commands that do the job and the check that proves it. Start with the recipe for the job (AGENTS.md names them); "
+        "without a topic, one line per guide; a wrong topic returns the closest ones.",
         {
-            ToolProperty{ "topic", "string", "The guide's name, or 'index'.", false, "--topic" },
+            ToolProperty{ "topic", "string", "The guide's name, for example recipe-material.", false, "--topic" },
         });
     if (command.name == "code") return MakeToolDescriptor(command.mcpTool,
         "Finds your way in the engine's own source without reading all of it: modules returns the code map as JSON (every module and "
@@ -251,19 +266,38 @@ constexpr std::string_view kCliToolName = "kb_cli";
 
 [[nodiscard]] JsonValue MakeCliToolDescriptor() {
     return MakeToolDescriptor(kCliToolName,
-        "Runs one kb_cli command for this project, as in the guides: args are the words after kb_cli, for example "
-        "[\"material-new\", \"--name\", \"Red\", \"--set\", \"Base Color=#E03C31\"]. The project is filled in; a --project in args is replaced. "
-        "[\"help\", \"<command>\"] prints one command's options.",
+        "Runs kb_cli commands for this project; the project is filled in. `args` is one command: its words, one per item, for example "
+        "[\"material-new\",\"--name\",\"Red\",\"--set\",\"Base Color=#E03C31\"]. `commands` is several, a list of such lists, run in order as one "
+        "transaction: if one fails every file is put back. [\"help\"] lists the commands, [\"help\",\"<command>\"] shows one's options.",
         {
-            ToolProperty{ "args", "array", "The command and its options, one word per item.", true, "" },
+            ToolProperty{ "args", "array", "One command and its options, one word per item.", false, "" },
+            ToolProperty{ "commands", "lists", "Several commands, each a list of words, run as one all-or-nothing transaction.", false, "" },
         });
+}
+
+// What a client may rely on: a tool that only reads says so, and none of these tools changes anything outside the project or
+// deletes for good (an asset removed goes to the Recycle Bin).
+void Annotate(JsonValue& tool) {
+    const std::string name = tool.Find("name")->AsString();
+    const bool readOnly = name == "guide" || name == "api_reference" || name == "code" || name == "component_schema" || name == "scene_list" || name == "validate_script";
+    JsonValue annotations = JsonValue::MakeObject();
+    annotations.Set("readOnlyHint", JsonValue::MakeBool(readOnly));
+    if (!readOnly) annotations.Set("destructiveHint", JsonValue::MakeBool(false));
+    annotations.Set("openWorldHint", JsonValue::MakeBool(false));
+    tool.Set("annotations", std::move(annotations));
 }
 
 [[nodiscard]] JsonValue MakeToolList() {
     auto tools = JsonValue::MakeArray();
-    for (const auto& command : CliCommandCatalog())
-        if (command.available && !command.mcpTool.empty()) tools.Append(MakeCommandToolDescriptor(command));
-    tools.Append(MakeCliToolDescriptor());
+    const auto add = [&tools](JsonValue tool) {
+        Annotate(tool);
+        tools.Append(std::move(tool));
+    };
+    add(MakeCliToolDescriptor());
+    for (const auto& command : CliCommandCatalog()) {
+        const bool core = command.name == "guide" || command.name == "api";
+        if (command.available && !command.mcpTool.empty() && (core || gAllTools)) add(MakeCommandToolDescriptor(command));
+    }
     return tools;
 }
 
@@ -338,10 +372,17 @@ struct ToolCallOutcome {
                     if (!accepted) return key + " is not one of the advertised values";
                 }
             } else if (type == "array") {
-                if (value->GetKind() != JsonValue::Kind::Array) return key + " must be an array of strings";
-                for (std::size_t element = 0U; element < value->Size(); ++element)
-                    if (value->At(element)->GetKind() != JsonValue::Kind::String || value->At(element)->AsString().empty())
-                        return key + " must contain nonempty strings";
+                const bool nested = property->Find("items")->Find("type")->AsString() == "array";
+                if (value->GetKind() != JsonValue::Kind::Array) return key + (nested ? " must be a list of lists of strings" : " must be an array of strings");
+                const auto nonempty = [](const JsonValue* word) { return word->GetKind() == JsonValue::Kind::String && !word->AsString().empty(); };
+                for (std::size_t element = 0U; element < value->Size(); ++element) {
+                    const JsonValue* entry = value->At(element);
+                    if (!nested && !nonempty(entry)) return key + " must contain nonempty strings";
+                    if (!nested) continue;
+                    if (entry->GetKind() != JsonValue::Kind::Array || entry->Size() == 0U) return key + " must be a list of nonempty lists of strings";
+                    for (std::size_t word = 0U; word < entry->Size(); ++word)
+                        if (!nonempty(entry->At(word))) return key + " must contain nonempty strings";
+                }
             } else {
                 const double number = value->AsNumber();
                 if (value->GetKind() != JsonValue::Kind::Number || !std::isfinite(number))
@@ -356,6 +397,55 @@ struct ToolCallOutcome {
     return "unknown tool: " + std::string{name};
 }
 
+// The words of one command of the kb_cli tool: a leading "kb_cli" and a --project (the project is the bound one) are dropped.
+[[nodiscard]] std::vector<std::string> WordsOf(const JsonValue& list) {
+    std::vector<std::string> words;
+    for (std::size_t index = 0U; index < list.Size(); ++index) {
+        const std::string& word = list.At(index)->AsString();
+        if (word == "kb_cli" && words.empty()) continue;
+        if (word == "--project") {
+            ++index;
+            continue;
+        }
+        words.push_back(word);
+    }
+    return words;
+}
+
+// True when the project's AGENTS.md opens with the rules the server would send (an older or edited file does not).
+[[nodiscard]] bool ProjectFileHoldsRules(const std::string& projectRoot) {
+    if (projectRoot.empty()) return false;
+    std::ifstream file(std::filesystem::path{ projectRoot } / "AGENTS.md", std::ios::binary);
+    std::string text{ std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>() };
+    std::erase(text, '');
+    return text.find(kb::script::ScriptAgentProjectFiles::AgentRules()) != std::string::npos;
+}
+
+// Several commands as one transaction on the bound project (the batch command's: all of them take effect, or none), with
+// the output of each. A scene a command changed is on disk when the next one runs.
+[[nodiscard]] ToolCallOutcome RunCommandList(const JsonValue& commands, const std::string& projectRoot) {
+    if (projectRoot.empty()) return {.isError = true, .text = "commands needs a bound project"};
+    std::vector<std::vector<std::string>> operations;
+    for (std::size_t index = 0U; index < commands.Size(); ++index) {
+        std::vector<std::string> words = WordsOf(*commands.At(index));
+        if (words.empty()) return {.isError = true, .text = "commands[" + std::to_string(index) + "] must name a command"};
+        operations.push_back(std::move(words));
+    }
+    if (operations.empty()) return {.isError = true, .text = "commands must hold at least one command"};
+    std::ostringstream captured;
+    std::istringstream noInput;
+    int exitCode = 1;
+    try {
+        exitCode = RunBatchOperations(projectRoot, std::move(operations), false, false, true, {.out = captured, .err = captured},
+            [&noInput](std::span<const std::string> words, CommandIo target) { return RunCli(words, noInput, target); });
+    } catch (const std::exception& error) {
+        captured << "error: " << error.what() << '\n';
+    } catch (...) {
+        captured << "error: unexpected tool failure\n";
+    }
+    return {.isError = exitCode != 0, .text = captured.str()};
+}
+
 [[nodiscard]] ToolCallOutcome DispatchTool(
     std::string_view toolName,
     const JsonValue* toolArguments,
@@ -363,24 +453,18 @@ struct ToolCallOutcome {
     if (const auto error = ValidateToolArguments(toolName, toolArguments); !error.empty())
         return {.isError = true, .text = error};
     if (toolName == kCliToolName) {
-        const JsonValue* args = toolArguments->Find("args");
-        std::vector<std::string> words;
-        for (std::size_t index = 0U; index < args->Size(); ++index) {
-            const std::string& word = args->At(index)->AsString();
-            if (word == "kb_cli" && words.empty()) continue;
-            if (word == "--project") {
-                ++index;
-                continue;
-            }
-            words.push_back(word);
-        }
+        const JsonValue* args = toolArguments != nullptr ? toolArguments->Find("args") : nullptr;
+        const JsonValue* commands = toolArguments != nullptr ? toolArguments->Find("commands") : nullptr;
+        if ((args == nullptr) == (commands == nullptr)) return {.isError = true, .text = "give either args (one command) or commands (a list of commands)"};
+        if (commands != nullptr) return RunCommandList(*commands, projectRoot);
+        std::vector<std::string> words = WordsOf(*args);
         if (words.empty()) return {.isError = true, .text = "args must name a command"};
         const CliCommandDescriptor* target = FindCliCommand(words.front());
-        if (target == nullptr) return {.isError = true, .text = "unknown kb_cli command: " + words.front()};
-        if (target->json == CliJsonOutput::Protocol) return {.isError = true, .text = "a protocol server (mcp, lsp, dap) cannot run inside the MCP server"};
+        // An unknown command goes to the program, which names the nearest one.
+        if (target != nullptr && target->json == CliJsonOutput::Protocol) return {.isError = true, .text = "a protocol server (mcp, lsp, dap) cannot run inside the MCP server"};
         // Commands about the project get it (a batch works on the bound project too); the ones that make a project or
         // describe kb_cli do not take it.
-        const bool takesProject = !projectRoot.empty() &&
+        const bool takesProject = target != nullptr && !projectRoot.empty() &&
             (target->kind == CliCommandKind::Normal || target->kind == CliCommandKind::Particle || target->kind == CliCommandKind::Batch) &&
             words.front() != "new";
         if (takesProject) words.insert(words.begin() + 1, { "--project", projectRoot });
@@ -461,6 +545,7 @@ struct ToolCallOutcome {
 
 int RunMcpCommand(const ArgumentList& arguments, std::istream& in, CommandIo io) {
     const std::string projectRoot = arguments.Option("--project").value_or("");
+    gAllTools = arguments.Option("--tools").value_or("core") == "all";
     // An agent works through this server: everything it runs stays inside its project.
     ConfineCliToProject(projectRoot);
 
@@ -488,10 +573,18 @@ int RunMcpCommand(const ArgumentList& arguments, std::istream& in, CommandIo io)
             JsonValue serverInfo = JsonValue::MakeObject();
             serverInfo.Set("name", JsonValue::MakeString("kb-engine"));
             serverInfo.Set("version", JsonValue::MakeString(std::string{ kServerVersion }));
+            const JsonValue* initializeParams = request.Find("params");
+            const JsonValue* requested = initializeParams != nullptr ? initializeParams->Find("protocolVersion") : nullptr;
+            std::string_view version = kProtocolVersions[std::size(kProtocolVersions) - 1U];
+            for (const std::string_view supported : kProtocolVersions)
+                if (requested != nullptr && requested->AsString() == supported) version = supported;
             JsonValue result = JsonValue::MakeObject();
-            result.Set("protocolVersion", JsonValue::MakeString(std::string{ kProtocolVersion }));
+            result.Set("protocolVersion", JsonValue::MakeString(std::string{ version }));
             result.Set("capabilities", std::move(capabilities));
             result.Set("serverInfo", std::move(serverInfo));
+            // The rules of working here, for a CLI that reads no instruction file of the project: one that does has them in its
+            // context already (AGENTS.md opens with them), and sending them again would cost every step the same text twice.
+            if (!ProjectFileHoldsRules(projectRoot)) result.Set("instructions", JsonValue::MakeString(kb::script::ScriptAgentProjectFiles::AgentRules()));
             if (!isNotification) {
                 WriteResult(io.out, *id, std::move(result));
             }

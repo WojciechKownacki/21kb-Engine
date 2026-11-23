@@ -126,7 +126,7 @@ int New(const ArgumentList& arguments, CommandIo io) {
     std::istringstream noInput;
     std::ostringstream out;
     std::ostringstream err;
-    const int code = RunBatchOperations(*project, std::move(operations), false, false, CommandIo{ .out = out, .err = err },
+    const int code = RunBatchOperations(*project, std::move(operations), false, false, true, CommandIo{ .out = out, .err = err },
         [&noInput](std::span<const std::string> words, CommandIo target) { return RunCli(words, noInput, target); });
     if (code != 0) {
         io.out << out.str();
@@ -135,7 +135,7 @@ int New(const ArgumentList& arguments, CommandIo io) {
     }
     io.out << "added " << (count == 1 ? name : std::to_string(count) + " coins " + name + ".." + coins.back()) << " from " << position << " (a trigger Collider: each is collected when " << player << " touches it) and a counter '" << counter
            << "' on the screen; both scripts validate\n"
-           << "check: kb_cli run --project " << *project << " --frames 150 --press W@5+90   (the log shows '" << name << " count: 1' when the player walked into it)\n";
+           << "check: run --frames 150 --press W@5+90   (the log shows '" << name << " count: 1' when the player walked into it)\n";
     return 0;
 }
 

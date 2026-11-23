@@ -1,8 +1,11 @@
 #include "engine/script/ScriptAgentGuides.hpp"
 
+#include "engine/script/ScriptNameSuggestion.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <vector>
 
 namespace kb::script {
 namespace {
@@ -16,7 +19,7 @@ together are safe, edits of one scene simply wait for each other.
 One command makes a shape with its colour (a material named after it) and, if wanted, physics:
 
 ```
-kb_cli entity add --project . --create Sphere --name RedBall --position 0,5,0 --color "#E03C31" --body Dynamic
+kb_cli entity add --create Sphere --name RedBall --position 0,5,0 --color "#E03C31" --body Dynamic
 ```
 
 - `--create`: Cube, Sphere, Capsule, Cylinder, Cone, Plane, Quad, Directional Light, Point
@@ -27,25 +30,25 @@ kb_cli entity add --project . --create Sphere --name RedBall --position 0,5,0 --
   or an object: cameras, spot lights).
 - `--color` makes `/Game/Materials/<Name>.kbmat`; `--material /Game/...kbmat` uses an existing
   one instead. `--body Static|Dynamic|Kinematic` adds a Rigidbody.
-- More material fields: `kb_cli material-new --project . --name Gold --set "Base Color=#D4AF37" --set Metallic=1 --set Roughness=0.3`,
+- More material fields: `kb_cli material-new --name Gold --set "Base Color=#D4AF37" --set Metallic=1 --set Roughness=0.3`,
   later `material-set --material /Game/Materials/Gold.kbmat --set ...`. Fields: Base Color,
   Roughness, Metallic, Emissive Color, Emissive Strength, Normal Scale, Occlusion Strength,
   Alpha Cutoff, and textures (Base Color Texture, Normal Texture, ... = `/Game/Textures/x.png`).
-- Move, turn or aim later: `kb_cli entity set --project . --name "Main Camera" --position 0,4,-8 --look-at RedBall`.
+- Move, turn or aim later: `kb_cli entity set --name "Main Camera" --position 0,4,-8 --look-at RedBall`.
 - `--parent` makes positions, rotation and scale relative to the parent: a child of a scaled object is
   scaled too. Build an object from parts under an unscaled empty entity (`entity add --name Table`), each
   part with its own `--scale`; `entity set --name Leg1 --parent none` moves one back to the root.
-- Change anything later: `kb_cli component set --project . --entity RedBall --type Transform --set localPosition=0,3,0`
+- Change anything later: `kb_cli component set --entity RedBall --type Transform --set localPosition=0,3,0`
   (any component: `--type MeshRenderer --set material=/Game/Materials/Gold.kbmat`,
   `--type Light --set intensity=8 --set range=10`).
-- Read the scene: `kb_cli scene-list --project .` gives every object with its position
-  (`@ x,y,z`); `kb_cli entity show --project . --name RedBall` gives one object's transform and
+- Read the scene: `kb_cli scene-list` gives every object with its position
+  (`@ x,y,z`); `kb_cli entity show --name RedBall` gives one object's transform and
   every component value.
-- A camera from above: `kb_cli entity add --project . --create Camera --name TopCamera --position 0,12,0 --look-at 0,0,0`,
+- A camera from above: `kb_cli entity add --create Camera --name TopCamera --position 0,12,0 --look-at 0,0,0`,
   then `component set --entity TopCamera --type Camera --set primary=true` and the old camera
   `primary=false`.
 - Remove or rename: `entity remove --name RedBall`, `entity rename --name RedBall --to Ball`.
-- Reuse an object: `kb_cli prefab new --project . --from-entity Crate` saves `/Game/Prefabs/Crate.kbprefab`;
+- Reuse an object: `kb_cli prefab new --from-entity Crate` saves `/Game/Prefabs/Crate.kbprefab`;
   `prefab place --prefab /Game/Prefabs/Crate.kbprefab --name Crate2 --position 3,1,0` adds a copy,
   and a script spawns one with `World.InstantiatePrefab("/Game/Prefabs/Crate.kbprefab", nil, nil, x, y, z)`.
 )md";
@@ -55,8 +58,8 @@ constexpr std::string_view kPhysics = R"md(# Physics
 A ball that falls and collides, in one command (shapes already have a Collider):
 
 ```
-kb_cli entity add --project . --create Sphere --name Ball --position 0,5,0 --color "#E03C31" --body Dynamic
-kb_cli run --project . --frames 120
+kb_cli entity add --create Sphere --name Ball --position 0,5,0 --color "#E03C31" --body Dynamic
+kb_cli run --frames 120
 ```
 
 `run` ends with a `moved:` line per dynamic body (`Ball 0,5,0 -> 0,0.5,0`): the proof it fell.
@@ -111,12 +114,12 @@ every one with its arguments, and a topic of a hook name (`OnTriggerEnter`) show
 called: `validate` warns about it and names the closest. A coin that is collected by touching it: `recipe-pickup`.
 
 ```
-kb_cli script-new --project . --name Spinner --language lua --folder Assets/Scripts
-kb_cli scene-attach --project . --scene Assets/Scenes/Main.21kbscene --node RedCube --script /Game/Scripts/Spinner.lua
-kb_cli validate --project . Assets/Scripts/Spinner.lua
+kb_cli script-new --name Spinner --language lua --folder Assets/Scripts
+kb_cli scene-attach --scene Assets/Scenes/Main.21kbscene --node RedCube --script /Game/Scripts/Spinner.lua
+kb_cli validate Assets/Scripts/Spinner.lua
 ```
 
-- Keys and buttons are input actions: `kb_cli input-action new --project . --name Fire --key Space --key MouseLeft`
+- Keys and buttons are input actions: `kb_cli input-action new --name Fire --key Space --key MouseLeft`
   (`--type Axis2D --key W=+y --key S=-y --key D=+x --key A=-x` for movement); scripts read
   `Input.Pressed("Fire")` and `Input.Vector2("Move")`; `input-action list` shows what exists.
 - `-- @expose <name> <Type> [= default]` makes a variable editable in the Inspector; read it with
@@ -142,18 +145,18 @@ kb_cli validate --project . Assets/Scripts/Spinner.lua
 - Ready-made controllers live in `Assets/Samples/` (third person, top down, platformer,
   shooter).
 
-A script is done when `validate` says OK and `kb_cli run --project . --frames 120` reports no
+A script is done when `validate` says OK and `kb_cli run --frames 120` reports no
 script diagnostics (`run` exits 1 when it reports any). `validate` also fails a global, function, component or property
 that does not exist, with the nearest real name, and a call with the wrong number of arguments.
 To test logic without a window write `assert(double(4) == 8, "double(4) must be 8")` in `Ready`: a failed assert is a script
 error with file and line, so `run` exits 1; `run --json` lists the errors as data.
-`kb_cli capture --project . --out shot.png` renders a frame headless to check what a scene looks like;
-`kb_cli build --project . --out Build` cooks a folder the game runs from.
+`kb_cli capture --out shot.png` renders a frame headless to check what a scene looks like;
+`kb_cli build --out Build` cooks a folder the game runs from.
 
 ## C++ scripts
 
-`kb_cli script-new --project . --name Spinner --language cpp` makes `/Game/Scripts/Spinner.native`
-and its source `Source/NativeScripts/Spinner/Spinner.cpp`; `kb_cli script-build --project .`
+`kb_cli script-new --name Spinner --language cpp` makes `/Game/Scripts/Spinner.native`
+and its source `Source/NativeScripts/Spinner/Spinner.cpp`; `kb_cli script-build`
 compiles it (Play and `run` build it too), `scene-attach` attaches the `.native` asset. The same
 functions are called by name, inputs by name, results read with `Output`:
 
@@ -178,26 +181,26 @@ constexpr std::string_view kCharacters = R"md(# Characters and animation
 ```
 # A character the player walks with (WASD or arrows, Space jumps) and the camera the game shows, in one
 # step: its controller script, input and camera come with it. Then give it a model or colour as below.
-kb_cli entity add --project . --create 'Third Person Player'     # camera behind it
-kb_cli entity add --project . --create 'First Person Player'     # through its eyes, mouse look
+kb_cli entity add --create 'Third Person Player'     # camera behind it
+kb_cli entity add --create 'First Person Player'     # through its eyes, mouse look
 
 # A character from Blender (glTF/GLB or FBX): Skeleton, Skeletal Mesh and one Animation Clip per
 # action, named <file>_<action>.
-kb_cli import --project . --destination /Game/Characters Hero.glb
-kb_cli entity add --project . --name Hero
-kb_cli component set --project . --entity Hero --type MeshRenderer --set mesh=/Game/Characters/Hero.kbskeletalmesh
+kb_cli import --destination /Game/Characters Hero.glb
+kb_cli entity add --name Hero
+kb_cli component set --entity Hero --type MeshRenderer --set mesh=/Game/Characters/Hero.kbskeletalmesh
 
 # A state machine: one state per clip, a speed blend, transitions; check it before use.
-kb_cli animator new --project . --name Hero --clip /Game/Characters/Hero_Idle.kbanim --clip /Game/Characters/Hero_Run.kbanim
-kb_cli animator locomotion --project . --controller /Game/Animation/Hero.kbanimcontroller --parameter Speed --clip 0=/Game/Characters/Hero_Idle.kbanim --clip 4=/Game/Characters/Hero_Run.kbanim
-kb_cli animator check --project . --controller /Game/Animation/Hero.kbanimcontroller --character /Game/Characters/Hero.kbskeletalmesh
-kb_cli component add --project . --entity Hero --type Animator --set controller=/Game/Animation/Hero.kbanimcontroller
+kb_cli animator new --name Hero --clip /Game/Characters/Hero_Idle.kbanim --clip /Game/Characters/Hero_Run.kbanim
+kb_cli animator locomotion --controller /Game/Animation/Hero.kbanimcontroller --parameter Speed --clip 0=/Game/Characters/Hero_Idle.kbanim --clip 4=/Game/Characters/Hero_Run.kbanim
+kb_cli animator check --controller /Game/Animation/Hero.kbanimcontroller --character /Game/Characters/Hero.kbskeletalmesh
+kb_cli component add --entity Hero --type Animator --set controller=/Game/Animation/Hero.kbanimcontroller
 
 # A sword in the right hand: a socket on a bone, then attach an entity to it.
-kb_cli skeleton show --project . --skeleton /Game/Characters/Hero.kbskeletalmesh
-kb_cli skeleton socket add --project . --skeleton /Game/Characters/Hero.kbskeletalmesh --name weapon_r --bone hand_r --rotation 0,0,90
-kb_cli entity add --project . --name Sword --create Cube
-kb_cli entity attach --project . --name Sword --to Hero --socket weapon_r --scale 0.05,0.8,0.05
+kb_cli skeleton show --skeleton /Game/Characters/Hero.kbskeletalmesh
+kb_cli skeleton socket add --skeleton /Game/Characters/Hero.kbskeletalmesh --name weapon_r --bone hand_r --rotation 0,0,90
+kb_cli entity add --name Sword --create Cube
+kb_cli entity attach --name Sword --to Hero --socket weapon_r --scale 0.05,0.8,0.05
 ```
 
 - Clips of another rig (common rig naming schemes) play too: bones are matched by name and role;
@@ -210,14 +213,14 @@ constexpr std::string_view kCombatAndAi = R"md(# Combat and AI
 
 ```
 # An ability and a Combatant (health, mana, resistances, team, senses, 8 ability slots).
-kb_cli ability new --project . --name Fireball --set damageType=Fire --set amount=40 --set range=12 --set radius=3 --set manaCost=10 --set animatorTrigger=Cast
-kb_cli component add --project . --entity Hero --type Combatant --set team=1 --set maximumHealth=200 --set maximumMana=50 --set ability1=/Game/Abilities/Fireball.kbability
+kb_cli ability new --name Fireball --set damageType=Fire --set amount=40 --set range=12 --set radius=3 --set manaCost=10 --set animatorTrigger=Cast
+kb_cli component add --entity Hero --type Combatant --set team=1 --set maximumHealth=200 --set maximumMana=50 --set ability1=/Game/Abilities/Fireball.kbability
 
 # A whole AI in one line: Combatant + AI Brain from a preset (Melee, Ranged, Guard, Coward, Wanderer).
-kb_cli entity add --project . --name Goblin --create Capsule --position 0,1,8
-kb_cli ai make --project . --entity Goblin --preset Melee --health 60
-kb_cli ai rule --project . --entity Goblin --rule 1 --when HealthBelowPercent=20 --do Flee
-kb_cli ai show --project . --entity Goblin
+kb_cli entity add --name Goblin --create Capsule --position 0,1,8
+kb_cli ai make --entity Goblin --preset Melee --health 60
+kb_cli ai rule --entity Goblin --rule 1 --when HealthBelowPercent=20 --do Flee
+kb_cli ai show --entity Goblin
 ```
 
 - Teams 1 and 2 are enemies; 0 is nobody's.
@@ -241,29 +244,29 @@ A World 2D Map is a tile map: grounds with automatic borders, sprites as items, 
 
 ```
 # The map entity, its Mesh Renderer and a Map Camera; --orientation wall hangs it like a picture.
-kb_cli map2d new --project . --name World --size 64x64 --view 15x11
+kb_cli map2d new --name World --size 64x64 --view 15x11
 # Sprite sheets (PNG, cells row by row from 0) go into Assets/2D Map Sprites/<Category>.
-kb_cli map2d ground new --project . --name Grass --texture "/Game/2D Map Sprites/Ground/terrain.png" --island 16 --hole 19 --z 30
-kb_cli map2d ground new --project . --name Dirt --texture "/Game/2D Map Sprites/Ground/terrain.png" --tiles 0,1 --weights 3,1 --z 10
-kb_cli map2d object new --project . --name Oak --texture "/Game/2D Map Sprites/Nature/trees.png" --cell 0 --size 2x2
-kb_cli map2d fill --project . --map /Game/Maps/World.kbmap2d --ground Dirt --at 0,0
-kb_cli map2d paint --project . --map /Game/Maps/World.kbmap2d --ground Grass --at 10,10 --to 20,14
-kb_cli map2d paint --project . --map /Game/Maps/World.kbmap2d --object Oak --at 14,12
-kb_cli map2d info --project . --map /Game/Maps/World.kbmap2d
+kb_cli map2d ground new --name Grass --texture "/Game/2D Map Sprites/Ground/terrain.png" --island 16 --hole 19 --z 30
+kb_cli map2d ground new --name Dirt --texture "/Game/2D Map Sprites/Ground/terrain.png" --tiles 0,1 --weights 3,1 --z 10
+kb_cli map2d object new --name Oak --texture "/Game/2D Map Sprites/Nature/trees.png" --cell 0 --size 2x2
+kb_cli map2d fill --map /Game/Maps/World.kbmap2d --ground Dirt --at 0,0
+kb_cli map2d paint --map /Game/Maps/World.kbmap2d --ground Grass --at 10,10 --to 20,14
+kb_cli map2d paint --map /Game/Maps/World.kbmap2d --object Oak --at 14,12
+kb_cli map2d info --map /Game/Maps/World.kbmap2d
 ```
 
 - A higher ground `--z` draws its edges over lower grounds; `--at x,y,z` paints another floor.
 - Tile (x, y) of a flat map lies at X = x + 0.5 - width/2, Z = height/2 - y - 0.5 relative to its
   entity; floor z is z * 3 m up.
-- 2D players: `kb_cli entity add --project . --create "Platformer Player"` or `"Top Down Player"`.
+- 2D players: `kb_cli entity add --create "Platformer Player"` or `"Top Down Player"`.
 
 A 2D platformer without a tile map: the player preset, then platforms in the X/Y plane with 2D
 physics, each one command (its Collider 2D follows `--scale`, so leave its size at 1x1):
 
 ```
-kb_cli entity add --project . --create "Platformer Player" --position 0,2,0
-kb_cli entity add --project . --create Cube --name Ground --position 10,-0.5,0 --scale 40,1,1 --color "#4C8C3A" --body2d Static
-kb_cli entity add --project . --create Cube --name Platform1 --position 6,1.5,0 --scale 4,0.5,1 --body2d Static
+kb_cli entity add --create "Platformer Player" --position 0,2,0
+kb_cli entity add --create Cube --name Ground --position 10,-0.5,0 --scale 40,1,1 --color "#4C8C3A" --body2d Static
+kb_cli entity add --create Cube --name Platform1 --position 6,1.5,0 --scale 4,0.5,1 --body2d Static
 ```
 
 The preset's camera follows the player; `run` prints where the player moved.
@@ -274,9 +277,9 @@ constexpr std::string_view kVerify = R"md(# Checking your work
 Always finish with these, and fix what they report:
 
 ```
-kb_cli validate --project . Assets/Scripts/MyScript.lua   # syntax and sandbox load of a script
-kb_cli run --project . --frames 120                        # the startup scene headless
-kb_cli scene-list --project . --scene Assets/Scenes/Main.21kbscene   # what the scene holds
+kb_cli validate Assets/Scripts/MyScript.lua   # syntax and sandbox load of a script
+kb_cli run --frames 120                        # the startup scene headless
+kb_cli scene-list --scene Assets/Scenes/Main.21kbscene   # what the scene holds
 ```
 
 - `run` prints script logs, events and errors; a change is done when it ends with `0 diagnostics` (any error: exit code 1).
@@ -300,20 +303,20 @@ are world units from the terrain's centre (`terrain info` prints the extent); he
 
 ```
 # A whole world in one command: mountains, cut by rivers (also plains, hills, valley, island, plateau; `--character 0..1` is gentle to dramatic).
-kb_cli terrain new --project . --name World --size 1024 --resolution 513 --preset mountains --seed 7
+kb_cli terrain new --name World --size 1024 --resolution 513 --preset mountains --seed 7
 # Or a flat terrain, shaped by hand.
-kb_cli terrain new --project . --name Hills --size 256 --resolution 257
-kb_cli terrain brush --project . --terrain /Game/Terrains/Hills.kbterrain --mode raise --x 0 --z 0 --radius 30 --strength 4
-kb_cli terrain brush --project . --terrain /Game/Terrains/Hills.kbterrain --mode raise --path "-80,-60;0,0;80,60" --radius 12 --strength 2
-kb_cli terrain brush --project . --terrain /Game/Terrains/Hills.kbterrain --mode noise --x 0 --z 0 --radius 90 --strength 3 --noise-scale 24
-kb_cli terrain brush --project . --terrain /Game/Terrains/Hills.kbterrain --mode ramp --x -60 --z 0 --to 60,0 --radius 6
-kb_cli terrain generate --project . --terrain /Game/Terrains/Hills.kbterrain --kind ridged --seed 3 --amplitude 80 --scale 120
-kb_cli terrain erode --project . --terrain /Game/Terrains/Hills.kbterrain --mode hydraulic --iterations 150
-kb_cli terrain layer add --project . --terrain /Game/Terrains/Hills.kbterrain --material /Game/Materials/Grass.kbmat
-kb_cli terrain layer add --project . --terrain /Game/Terrains/Hills.kbterrain --material /Game/Materials/Rock.kbmat
-kb_cli terrain paint --project . --terrain /Game/Terrains/Hills.kbterrain --layer 1 --auto slope=35..90
-kb_cli terrain preview --project . --terrain /Game/Terrains/Hills.kbterrain --out Exports/hills.png --kind height
-kb_cli terrain info --project . --terrain /Game/Terrains/Hills.kbterrain
+kb_cli terrain new --name Hills --size 256 --resolution 257
+kb_cli terrain brush --terrain /Game/Terrains/Hills.kbterrain --mode raise --x 0 --z 0 --radius 30 --strength 4
+kb_cli terrain brush --terrain /Game/Terrains/Hills.kbterrain --mode raise --path "-80,-60;0,0;80,60" --radius 12 --strength 2
+kb_cli terrain brush --terrain /Game/Terrains/Hills.kbterrain --mode noise --x 0 --z 0 --radius 90 --strength 3 --noise-scale 24
+kb_cli terrain brush --terrain /Game/Terrains/Hills.kbterrain --mode ramp --x -60 --z 0 --to 60,0 --radius 6
+kb_cli terrain generate --terrain /Game/Terrains/Hills.kbterrain --kind ridged --seed 3 --amplitude 80 --scale 120
+kb_cli terrain erode --terrain /Game/Terrains/Hills.kbterrain --mode hydraulic --iterations 150
+kb_cli terrain layer add --terrain /Game/Terrains/Hills.kbterrain --material /Game/Materials/Grass.kbmat
+kb_cli terrain layer add --terrain /Game/Terrains/Hills.kbterrain --material /Game/Materials/Rock.kbmat
+kb_cli terrain paint --terrain /Game/Terrains/Hills.kbterrain --layer 1 --auto slope=35..90
+kb_cli terrain preview --terrain /Game/Terrains/Hills.kbterrain --out Exports/hills.png --kind height
+kb_cli terrain info --terrain /Game/Terrains/Hills.kbterrain
 ```
 
 - Brush modes: `raise lower smooth flatten noise terrace cut-hole fill-hole ramp stamp`. Strength
@@ -343,13 +346,13 @@ constexpr std::string_view kMenusAndButtons = R"md(# Menus, buttons and UI event
 A menu is a Canvas with widgets under it; a button does something only when a script answers it.
 
 ```
-kb_cli entity add --project . --create Canvas --name Menu
-kb_cli entity add --project . --create Button --name PlayButton --parent Menu
-kb_cli component set --project . --entity Menu/PlayButton --type Text --set "content=Play"
-kb_cli component set --project . --entity Menu/PlayButton --type Selectable --set eventName=PlayClicked
-kb_cli script-new --project . --name MenuController --language lua
-kb_cli scene-attach --project . --scene Assets/Scenes/Main.21kbscene --node PlayButton --script /Game/Scripts/MenuController.lua
-kb_cli validate --project . Assets/Scenes/Main.21kbscene Assets/Scripts/MenuController.lua
+kb_cli entity add --create Canvas --name Menu
+kb_cli entity add --create Button --name PlayButton --parent Menu
+kb_cli component set --entity Menu/PlayButton --type Text --set "content=Play"
+kb_cli component set --entity Menu/PlayButton --type Selectable --set eventName=PlayClicked
+kb_cli script-new --name MenuController --language lua
+kb_cli scene-attach --scene Assets/Scenes/Main.21kbscene --node PlayButton --script /Game/Scripts/MenuController.lua
+kb_cli validate Assets/Scenes/Main.21kbscene Assets/Scripts/MenuController.lua
 ```
 
 ```lua
@@ -379,10 +382,10 @@ end
   cook print the same warnings.
 - `entity add --create Button` (or Text, Slider, ...) puts the widget under a Canvas, creating one when the scene has none, and gives
   every Text the bundled font; `component set ... --set eventTarget=Menu/Root` takes an object by its path.
-- Whole screens: `kb_cli entity add --project . --create "Main Menu"` (also `Pause`, `HUD`, `Settings`) builds the title, buttons,
+- Whole screens: `kb_cli entity add --create "Main Menu"` (also `Pause`, `HUD`, `Settings`) builds the title, buttons,
   health bar or sliders at once; the buttons carry event names (`PlayClicked`, `SettingsClicked`, `QuitClicked`, `ResumeClicked`,
   `MainMenuClicked`, `BackClicked`) for your script to answer.
-- Try the menu without a window: `kb_cli run --project . --frames 12 --click Menu/PlayButton@5` presses the widget on frame 5 and says
+- Try the menu without a window: `kb_cli run --frames 12 --click Menu/PlayButton@5` presses the widget on frame 5 and says
   what was under the pointer and which script answered; `--report ui` lists every widget with its rectangle and its answering scripts.
 )md";
 
@@ -390,25 +393,25 @@ constexpr std::string_view kUiAudioParticles = R"md(# UI, sound and particles
 
 ```
 # A "Score: 0" label on screen: a Canvas with a Text under it.
-kb_cli entity add --project . --create Canvas --name HUD
-kb_cli entity add --project . --create Text --name Score --parent HUD
-kb_cli component set --project . --entity HUD/Score --type Text --set "content=Score: 0" --set fontSize=32
+kb_cli entity add --create Canvas --name HUD
+kb_cli entity add --create Text --name Score --parent HUD
+kb_cli component set --entity HUD/Score --type Text --set "content=Score: 0" --set fontSize=32
 
 # A sound on start: a .wav under Assets/ (copied there or `kb_cli import`).
-kb_cli entity add --project . --create "Audio Source" --name Music
-kb_cli component set --project . --entity Music --type AudioSource --set clipAssetId=/Game/Audio/Music.wav --set autoplay=true --set loop=true
+kb_cli entity add --create "Audio Source" --name Music
+kb_cli component set --entity Music --type AudioSource --set clipAssetId=/Game/Audio/Music.wav --set autoplay=true --set loop=true
 
 # Particles: a particle effect asset, then a Particle System that plays it.
-kb_cli vfx-new --project . --name Sparks
-kb_cli entity add --project . --create "Particle System" --name Sparks --position 0,1,0
-kb_cli component set --project . --entity Sparks --type "Particle Effect" --set effectAssetId=/Game/Particles/Sparks.kbvfx
+kb_cli vfx-new --name Sparks
+kb_cli entity add --create "Particle System" --name Sparks --position 0,1,0
+kb_cli component set --entity Sparks --type "Particle Effect" --set effectAssetId=/Game/Particles/Sparks.kbvfx
 ```
 
 - UI items for `--create`: Canvas, Text, Image, Button, Toggle, Slider, Progress Bar, Input
   Field, Dropdown, Scroll View, Horizontal Box, Vertical Box, Grid; put them under a Canvas.
 - Scripts change text with `self:SetProperty("Text", "content", "Score: " .. score)`.
 - A button that runs a script, and what `validate` says about UI: guide `menus-and-buttons`.
-- Check sound and particles: `kb_cli run --project . --frames 60 --report audio` (or
+- Check sound and particles: `kb_cli run --frames 60 --report audio` (or
   `--report particles`).
 - Microphone: `Microphone.Start()` (or `Microphone.Start("Device name")`; `Microphone.Devices()` and
   `Microphone.Device(i)` list the inputs), then `Microphone.Level()` and `Microphone.Peak()` each frame, and
@@ -421,16 +424,16 @@ constexpr std::string_view kWaterAndLook = R"md(# Water, sky, fog and post-proce
 
 ```
 # Water: a translucent material with the water shading model on a plane without a collider.
-kb_cli material-new --project . --name Water --set "Base Color=0.1,0.3,0.6,0.5" --set Roughness=0.05
-kb_cli material-graph --project . setting --material /Game/Materials/Water.kbmat --name "Blend Mode" --value translucent
-kb_cli material-graph --project . setting --material /Game/Materials/Water.kbmat --name "Shading Model" --value singleLayerWater
-kb_cli entity add --project . --create Plane --name Water --scale 3,1,3 --material /Game/Materials/Water.kbmat
-kb_cli component remove --project . --entity Water --type Collider
+kb_cli material-new --name Water --set "Base Color=0.1,0.3,0.6,0.5" --set Roughness=0.05
+kb_cli material-graph setting --material /Game/Materials/Water.kbmat --name "Blend Mode" --value translucent
+kb_cli material-graph setting --material /Game/Materials/Water.kbmat --name "Shading Model" --value singleLayerWater
+kb_cli entity add --create Plane --name Water --scale 3,1,3 --material /Game/Materials/Water.kbmat
+kb_cli component remove --entity Water --type Collider
 
 # Fog, bloom and vignette for the scene, and the sky colour.
-kb_cli post-process-new --project . --name Look --set fogEnabled=1 --set fogDensity=0.03 --set bloomEnabled=1 --set vignetteEnabled=1
-kb_cli scene-post-process --project . --profile /Game/PostProcess/Look.kbppfx
-kb_cli component set --project . --entity Environment --type WorldBackdrop --set skyTint=0.4,0.6,1
+kb_cli post-process-new --name Look --set fogEnabled=1 --set fogDensity=0.03 --set bloomEnabled=1 --set vignetteEnabled=1
+kb_cli scene-post-process --profile /Game/PostProcess/Look.kbppfx
+kb_cli component set --entity Environment --type WorldBackdrop --set skyTint=0.4,0.6,1
 ```
 
 - Any translucent material: the alpha of Base Color plus `Blend Mode` translucent.
@@ -439,25 +442,26 @@ kb_cli component set --project . --entity Environment --type WorldBackdrop --set
 
 constexpr std::string_view kRecipeMaterial = R"md(# Recipe: a colour or material on an object
 
-Not sure of the object's name? `kb_cli scene-list --project .` lists the objects.
+Not sure of the object's name? `kb_cli scene-list` lists the objects.
 
 ```
-kb_cli material-new --project . --name Green --set "Base Color=#2ECC40"
-kb_cli component set --project . --entity Crate --type MeshRenderer --set material=/Game/Materials/Green.kbmat
+["material-new","--name","Green","--set","Base Color=#2ECC40"]
+["component","set","--entity","Crate","--type","MeshRenderer","--set","material=/Game/Materials/Green.kbmat"]
 ```
 
 Done when the second command prints `updated MeshRenderer`.
 
 - Colours: red #E03C31, green #2ECC40, blue #0074D9, yellow #FFDC00, orange #FF851B, white #FFFFFF, black #111111.
 - Metal or glow: add `--set Metallic=1 --set Roughness=0.3` or `--set "Emissive Color=#FF851B"` to `material-new`.
-- A new coloured object in one command: `kb_cli entity add --project . --create Cube --name Crate --color "#2ECC40"`.
+- A new coloured object in one command: `kb_cli entity add --create Cube --name Crate --color "#2ECC40"`.
 )md";
 
 constexpr std::string_view kRecipeComponent = R"md(# Recipe: physics, or another component, on an object
 
 ```
-kb_cli component add --project . --entity Crate --type Rigidbody --set bodyType=Dynamic
-kb_cli run --project . --frames 120
+["component","add","--entity","Crate","--type","Rigidbody","--set","bodyType=Dynamic"]
+
+["run","--frames","120"]
 ```
 
 Done when `run` ends with `0 diagnostics` and a `moved:` line for the object (`Crate 0,3,0 -> 0,0.5,0` means it fell and landed).
@@ -476,13 +480,13 @@ constexpr std::string_view kRecipePrefab = R"md(# Recipe: a prefab, with a compo
 Add the component first: a prefab saves the object as it is.
 
 ```
-kb_cli component add --project . --entity Crate --type Rigidbody --set bodyType=Dynamic
-kb_cli prefab new --project . --from-entity Crate --name CratePrefab
+["component","add","--entity","Crate","--type","Rigidbody","--set","bodyType=Dynamic"]
+["prefab","new","--from-entity","Crate","--name","CratePrefab"]
 ```
 
 Done when `prefab new` prints `saved 'Crate' as prefab /Game/Prefabs/CratePrefab.kbprefab`.
 
-- Another copy in the scene: `kb_cli prefab place --project . --prefab /Game/Prefabs/CratePrefab.kbprefab --name Crate2 --position 3,0,0`.
+- Another copy in the scene: `kb_cli prefab place --prefab /Game/Prefabs/CratePrefab.kbprefab --name Crate2 --position 3,0,0`.
 - A script spawns copies with `World.InstantiatePrefab("/Game/Prefabs/CratePrefab.kbprefab", nil, nil, x, y, z)`.
 - `kb_cli schema --component <Name>` lists the properties of any component.
 )md";
@@ -490,31 +494,32 @@ Done when `prefab new` prints `saved 'Crate' as prefab /Game/Prefabs/CratePrefab
 constexpr std::string_view kRecipeScript = R"md(# Recipe: a Lua script on an object
 
 ```
-kb_cli script-new --project . --name Spin --language lua --code "function Tick(self, dt)
-    Transform.Rotate(self.entity, 0, 20 * dt, 0)
-end"
-kb_cli scene-attach --project . --node Crate --script /Game/Scripts/Spin.lua
-kb_cli validate --project . Assets/Scripts/Spin.lua
-kb_cli run --project . --frames 120
+["script-new","--name","Spin","--language","lua","--code","function Tick(self, dt)\n    Transform.Rotate(self.entity, 0, 20 * dt, 0)\nend"]
+["scene-attach","--node","Crate","--script","/Game/Scripts/Spin.lua"]
+
+["validate","Assets/Scripts/Spin.lua"]
+["run","--frames","120"]
 ```
 
 `--code` is the whole script, so there is nothing to edit afterwards. Done when `validate` says `OK`
-and `run` ends with `0 diagnostics`. The object's name comes from `kb_cli scene-list --project .`.
+and `run` ends with `0 diagnostics`. The object's name comes from `kb_cli scene-list`.
 
 - `Tick(self, dt)` runs every frame (`dt` in seconds), `Ready(self, dt)` once at the start; `self.entity` is the object.
 - `Transform.Rotate(self.entity, x, y, z)` turns it by degrees: `0, 20 * dt, 0` is a slow turn around the upright axis.
 - Another engine function: `api_reference` with `search` (a word) or `topic` (`Transform`, `Physics`, `Input`).
 - Changing a script that exists: edit its `.lua` file directly, then `validate` again.
-- Keys: `kb_cli input-action new --project . --name Fire --key Space`, read with `Input.Pressed("Fire")`; more in guide `scripts`.
+- Keys: `kb_cli input-action new --name Fire --key Space`, read with `Input.Pressed("Fire")`; more in guide `scripts`.
 - React to touching something: `function OnTriggerEnter(self, event)`, guide `recipe-pickup`; every hook: topic `EventHooks`.
 )md";
 
 constexpr std::string_view kRecipePickup = R"md(# Recipe: coins the player collects by touching them, with a counter on the screen
 
 ```
-kb_cli scene-list --project .
-kb_cli pickup new --project . --name Coin --count 3 --position 0,1,3 --player Player
-kb_cli run --project . --frames 150 --press W@5+90
+["scene-list"]
+
+["pickup","new","--name","Coin","--count","3","--position","0,1,3","--player","Player"]
+
+["run","--frames","150","--press","W@5+90"]
 ```
 
 Run `scene-list` first, on its own: it names the object the person plays; put that name in `--player` (the scene has none: add
@@ -533,30 +538,30 @@ holds W, so the player walks forward (+Z) into the coins. That is the whole job:
 
 constexpr std::string_view kRecipeLight = R"md(# Recipe: light, sun, sky and time of day
 
-A scene from a template has a `Sun` (a directional light) and an `Environment` (the sky); `kb_cli scene-list --project .`
+A scene from a template has a `Sun` (a directional light) and an `Environment` (the sky); `kb_cli scene-list`
 shows the names if they differ. The sun's `rotation` x is its height: 90 straight above, 10 near the horizon.
 
 Evening, warm and orange:
 
 ```
-kb_cli component set --project . --entity Sun --type Light --set color=1,0.62,0.34 --set intensity=2.2
-kb_cli entity set --project . --name Sun --rotation 18,-35,0
-kb_cli component set --project . --entity Environment --type WorldBackdrop --set horizonColor=0.72,0.34,0.19 --set zenithColor=0.23,0.18,0.28 --set skyTint=1,0.64,0.38 --set groundColor=0.2,0.12,0.08
-kb_cli component set --project . --entity Environment --type "Ambient Radiance" --set horizonColor=0.72,0.34,0.19 --set zenithColor=0.23,0.18,0.28
+["component","set","--entity","Sun","--type","Light","--set","color=1,0.62,0.34","--set","intensity=2.2"]
+["entity","set","--name","Sun","--rotation","18,-35,0"]
+["component","set","--entity","Environment","--type","WorldBackdrop","--set","horizonColor=0.72,0.34,0.19","--set","zenithColor=0.23,0.18,0.28","--set","skyTint=1,0.64,0.38","--set","groundColor=0.2,0.12,0.08"]
+["component","set","--entity","Environment","--type","Ambient Radiance","--set","horizonColor=0.72,0.34,0.19","--set","zenithColor=0.23,0.18,0.28"]
 ```
 
 Done when every command prints `updated ...` or `set 'Sun'`.
 
 - Midday: Light `color=1,0.96,0.9` `intensity=3`, Sun rotation `60,-30,0`; sky `horizonColor=0.6,0.75,0.95` `zenithColor=0.2,0.4,0.85`.
 - Night: Light `color=0.4,0.5,0.9` `intensity=0.3`, Sun rotation `35,-30,0`; sky `horizonColor=0.03,0.04,0.1` `zenithColor=0.01,0.01,0.05`, the same two colours on `Ambient Radiance`.
-- Brighter or dimmer: Light `intensity`. A lamp: `kb_cli entity add --project . --create "Point Light" --name Lamp --position 0,3,0`, then `component set --entity Lamp --type Light --set intensity=8 --set color=1,0.8,0.5`.
-- Fog, bloom, water: guide `water-and-look`. To show the person: `kb_cli capture --project . --out Saved/Agent/Images/<new name>.png`.
+- Brighter or dimmer: Light `intensity`. A lamp: `kb_cli entity add --create "Point Light" --name Lamp --position 0,3,0`, then `component set --entity Lamp --type Light --set intensity=8 --set color=1,0.8,0.5`.
+- Fog, bloom, water: guide `water-and-look`. To show the person: `kb_cli capture --out Saved/Agent/Images/<new name>.png`.
 )md";
 
 constexpr std::string_view kRecipeSettings = R"md(# Recipe: project settings, plugins and builds
 
 ```
-kb_cli project-settings --project . --set Identity.GameName="Dragon Hills" --set Identity.Name="Dragon Hills"
+["project-settings","--set","Identity.GameName=Dragon Hills","--set","Identity.Name=Dragon Hills"]
 ```
 
 Done when it prints the settings it changed. Without `--set` it lists all of them (about 70 lines): do that only when the key is unknown.
@@ -565,42 +570,42 @@ Done when it prints the settings it changed. Without `--set` it lists all of the
 - Window: `Display.WindowWidth`, `Display.WindowHeight`, `Display.WindowMode` (`Windowed` or `BorderlessFullscreen`), `Display.VSync` (1 or 0).
 - Start scene: `Maps.DefaultMap=/Game/Scenes/<Name>.21kbscene`. Gravity: `Physics.GravityY=-9.81`. Volume: `Audio.MasterVolume`.
 - Android: `Android.ApplicationId`, `Android.Label`, `Android.VersionCode`.
-- Plugins: `kb_cli plugins --project .` lists them; `--enable <id>` or `--disable <id>` switches one.
-- A game for a platform: `kb_cli editor build --project . --target windows|android|web|webgpu|linux` (`--profile release` for a store build).
+- Plugins: `kb_cli plugins` lists them; `--enable <id>` or `--disable <id>` switches one.
+- A game for a platform: `kb_cli editor build --target windows|android|web|webgpu|linux` (`--profile release` for a store build).
   `Saved/Agent/BuildResult.txt` says `Running`, then `Succeeded <folder>` or `Failed <reason>`.
 )md";
 
 constexpr std::string_view kRecipeUiButton = R"md(# Recipe: a button on the screen
 
 ```
-kb_cli entity add --project . --create Button --name PlayButton
-kb_cli component set --project . --entity PlayButton --type Text --set "content=Play"
+["entity","add","--create","Button","--name","PlayButton"]
+["component","set","--entity","PlayButton","--type","Text","--set","content=Play"]
 ```
 
 The button goes under a Canvas, made when the scene has none. Done when both commands print `added` or `updated`.
 It shows, but a click does nothing yet: say so, unless the person told you what it should do. To make it do something:
 
 ```
-kb_cli component set --project . --entity PlayButton --type Selectable --set eventName=PlayClicked
-kb_cli script-new --project . --name MenuController --language lua --code "function PlayClicked(self, event)
-    Log('Play pressed')
-end"
-kb_cli scene-attach --project . --node PlayButton --script /Game/Scripts/MenuController.lua
-kb_cli validate --project . Assets/Scenes/Main.21kbscene Assets/Scripts/MenuController.lua
+["component","set","--entity","PlayButton","--type","Selectable","--set","eventName=PlayClicked"]
+["script-new","--name","MenuController","--language","lua","--code","function PlayClicked(self, event)\n    Log('Play pressed')\nend"]
+["scene-attach","--node","PlayButton","--script","/Game/Scripts/MenuController.lua"]
+
+["validate","Assets/Scenes/Main.21kbscene","Assets/Scripts/MenuController.lua"]
 ```
 
 Done when `validate` lists no warnings. Put the real action in the function (a scene change, a score, a sound); guide `menus-and-buttons` has every callback.
 
-- A whole screen at once: `kb_cli entity add --project . --create "Main Menu"` (also `Pause`, `HUD`, `Settings`).
+- A whole screen at once: `kb_cli entity add --create "Main Menu"` (also `Pause`, `HUD`, `Settings`).
 - Text on screen: `entity add --create Text --name Score`, then `component set --entity Score --type Text --set "content=Score: 0"`.
-- Try a click without a window: `kb_cli run --project . --frames 12 --click Canvas/PlayButton@5`.
+- Try a click without a window: `kb_cli run --frames 12 --click Canvas/PlayButton@5`.
 )md";
 
 constexpr std::string_view kRecipePlayer = R"md(# Recipe: a character the person plays
 
 ```
-kb_cli entity add --project . --create "Third Person Player"
-kb_cli run --project . --frames 60
+["entity","add","--create","Third Person Player"]
+
+["run","--frames","60"]
 ```
 
 One command adds the character with its controller script, input and the camera. Done when it prints
@@ -617,9 +622,9 @@ constexpr std::string_view kRecipeImage = R"md(# Recipe: an icon, a picture, a t
 The engine draws it: no outside tool, no file to download.
 
 ```
-kb_cli image new --project . --name Heart --preset heart --style neon --color "#FF2D6F"
-kb_cli entity add --project . --create Image --name HeartIcon
-kb_cli component set --project . --entity HeartIcon --type Image --set imageAssetId=/Game/Images/Heart.png
+["image","new","--name","Heart","--preset","heart","--style","neon","--color","#FF2D6F"]
+["entity","add","--create","Image","--name","HeartIcon"]
+["component","set","--entity","HeartIcon","--type","Image","--set","imageAssetId=/Game/Images/Heart.png"]
 ```
 
 Done when `image new` prints `imported as` and `component set` prints `updated Image`. The Image goes under a Canvas
@@ -645,7 +650,7 @@ constexpr std::string_view kRecipeSound = R"md(# Recipe: a sound effect or a mus
 The engine makes it with its own synthesiser: no outside tool, no file to download.
 
 ```
-kb_cli sound new --project . --name Jump --preset jump
+["sound","new","--name","Jump","--preset","jump"]
 ```
 
 Done when it prints `imported as`. The file is Assets/Audio/<Name>.wav, used as `/Game/Audio/Jump.wav`. A name that
@@ -658,23 +663,24 @@ exists is kept: pick a new `--name`, or add `--replace`.
 - Play it in the scene, on start or as a loop:
 
 ```
-kb_cli entity add --project . --create "Audio Source" --name Ambience
-kb_cli component set --project . --entity Ambience --type AudioSource --set clipAssetId=/Game/Audio/Wind.wav --set autoplay=true --set loop=true
+["entity","add","--create","Audio Source","--name","Ambience"]
+["component","set","--entity","Ambience","--type","AudioSource","--set","clipAssetId=/Game/Audio/Wind.wav","--set","autoplay=true","--set","loop=true"]
 ```
 
-- Check it: `kb_cli run --project . --frames 60 --report audio` ends with `"succeeded":true`.
+- Check it: `kb_cli run --frames 60 --report audio` ends with `"succeeded":true`.
 )md";
 
 constexpr std::string_view kRecipeTimeline = R"md(# Recipe: an intro, a cutscene, a camera flight
 
 ```
-kb_cli timeline fly --project . --name Intro --to Player --seconds 3
-kb_cli run --project . --frames 240
+["timeline","fly","--name","Intro","--to","Player","--seconds","3"]
+
+["run","--frames","240"]
 ```
 
 `fly` makes the timeline, a camera flight from where `Main Camera` is to a place behind and above the object
 `--to`, looking at it, and a script that plays it when the scene starts. Done when it prints `plays when the scene
-starts` and `run` ends with `0 diagnostics`. The object's name comes from `kb_cli scene-list --project .`.
+starts` and `run` ends with `0 diagnostics`. The object's name comes from `kb_cli scene-list`.
 
 - Another camera or object: `--entity "Camera"`. Closer or higher: `--distance 3 --height 1`. Longer: `--seconds 6`.
 - Your own path: `timeline new --name Tour --duration 6`, then one `timeline key` per point
@@ -689,8 +695,8 @@ starts` and `run` ends with `0 diagnostics`. The object's name comes from `kb_cl
 constexpr std::string_view kRecipeUiTheme = R"md(# Recipe: the look of the interface
 
 ```
-kb_cli ui-theme new --project . --name Dark --preset dark --button "#FF8C1A"
-kb_cli ui-theme apply --project . --theme /Game/UI/Dark.kbtheme
+["ui-theme","new","--name","Dark","--preset","dark","--button","#FF8C1A"]
+["ui-theme","apply","--theme","/Game/UI/Dark.kbtheme"]
 ```
 
 A theme is one shared style: panels and texts take the base colours, buttons take their own. Done when `apply` prints
@@ -707,10 +713,10 @@ A theme is one shared style: panels and texts take the base colours, buttons tak
 constexpr std::string_view kRecipeTranslate = R"md(# Recipe: the texts of the game in other languages
 
 ```
-kb_cli localization collect --project . --language pl
-kb_cli localization set --project . --language en --set ui.title="Dragon Hills" --set ui.playbutton="Play"
-kb_cli localization set --project . --language de --set ui.title="Drachenhuegel" --set ui.playbutton="Spielen"
-kb_cli localization missing --project .
+["localization","collect","--language","pl"]
+["localization","set","--language","en","--set","ui.title=Dragon Hills","--set","ui.playbutton=Play"]
+["localization","set","--language","de","--set","ui.title=Drachenhuegel","--set","ui.playbutton=Spielen"]
+["localization","missing"]
 ```
 
 `collect` turns the texts written on the scene's controls into keys of one catalog (the language they are written in: `--language`
@@ -728,9 +734,11 @@ is its code, such as pl, en, de) and prints each `key = "text"`; give every key 
 constexpr std::string_view kRecipeAnimation = R"md(# Recipe: an object that moves by itself (bob, spin, a door, a pulse)
 
 ```
-kb_cli scene-list --project .
-kb_cli animation-clip new --project . --name Float --preset bob,spin --entity OBJECT_NAME
-kb_cli run --project . --frames 240
+["scene-list"]
+
+["animation-clip","new","--name","Float","--preset","bob,spin","--entity","OBJECT_NAME"]
+
+["run","--frames","240"]
 ```
 
 Run `scene-list` first, on its own: it prints the names of the objects. Then run the other two with the name of the object that moves
@@ -753,10 +761,11 @@ and an Animator on the object: it moves from the start of the scene, again and a
 constexpr std::string_view kRecipeMaterialFunction = R"md(# Recipe: a reusable material effect (a material function)
 
 ```
-kb_cli scene-list --project .
-kb_cli material-function new --project . --name GlowEdge --preset fresnel-glow
-kb_cli material-function use --project . --entity <Object> --function GlowEdge --set Color="#FF8C1A" --set Power=3
-kb_cli material-function use --project . --entity <Another object> --function GlowEdge --set Color="#00E5FF"
+["scene-list"]
+
+["material-function","new","--name","GlowEdge","--preset","fresnel-glow"]
+["material-function","use","--entity","OBJECT_NAME","--function","GlowEdge","--set","Color=#FF8C1A","--set","Power=3"]
+["material-function","use","--entity","OTHER_OBJECT_NAME","--function","GlowEdge","--set","Color=#00E5FF"]
 ```
 
 One function, written once, called from any number of materials. `<Object>` is the name of the object `scene-list` shows whose material gets the
@@ -786,7 +795,7 @@ constexpr std::array<ScriptAgentGuide, 27> kGuides{ {
     { "recipe-timeline", "Recipe: an intro or cutscene", "A camera flight or any object moving over time as a timeline that plays when the scene starts, with events.", kRecipeTimeline },
     { "recipe-ui-theme", "Recipe: the look of the interface", "A shared UI theme: dark or light, colours, orange buttons, rounded corners, applied to the controls of a scene.", kRecipeUiTheme },
     { "recipe-translate", "Recipe: texts in other languages", "The texts of the game in several languages: keys on the controls, translations, the default language, switching in play.", kRecipeTranslate },
-    { "recipe-animation", "Recipe: an object that moves by itself", "A coin that bobs and spins, a door that opens and closes, a pulse: an animation clip that plays from the start.", kRecipeAnimation },
+    { "recipe-animation", "Recipe: an object that moves by itself", "A coin that bobs, a door that opens and closes, a pulse: an animation clip that plays from the start.", kRecipeAnimation },
     { "recipe-material-function", "Recipe: a reusable material effect", "A material function (glowing edge, scrolling or tiling texture coordinate) written once and used on several materials.", kRecipeMaterialFunction },
     { "objects-and-materials", "Objects and materials", "Shapes, lights and cameras in a scene, their position, materials and colours.", kObjectsAndMaterials },
     { "physics", "Physics", "Rigidbodies, colliders, triggers, character controllers and collision events.", kPhysics },
@@ -813,13 +822,54 @@ std::span<const ScriptAgentGuide> ScriptAgentGuides::All() noexcept {
     return kGuides;
 }
 
+// The summary of a guide cut to a line of an index: at a word, without a trailing comma or colon.
+[[nodiscard]] static std::string ShortSummary(std::string_view summary) {
+    constexpr std::size_t kLongest = 64U;
+    std::string text{ summary };
+    if (text.size() > kLongest) {
+        const std::size_t space = text.rfind(' ', kLongest);
+        text.resize(space == std::string::npos ? kLongest : space);
+    }
+    while (!text.empty() && (text.back() == ',' || text.back() == ':' || text.back() == ';' || text.back() == ' ' || text.back() == '.')) text.pop_back();
+    return text;
+}
+
 std::string ScriptAgentGuides::Index() {
-    std::string out = "# How-to guides\n\n";
-    out += "Start with the recipe for your job (the names starting with recipe-): its commands in order, and how to check the result. ";
-    out += "Read only the guide for your task: the kb-engine `guide` tool with its name as `topic`, or the file of that name ";
-    out += "next to this one. The script API is separate: the `api_reference` tool, one function or component at a time.\n\n";
+    std::string out = "# Guides\n\n";
+    out += "One per line; `guide` with the name as `topic` returns it. The recipe-* guides are for jobs (AGENTS.md says which fits).\n\n";
     for (const ScriptAgentGuide& guide : kGuides) {
-        out += "- `" + std::string{ guide.name } + "` - " + std::string{ guide.summary } + "\n";
+        out += "- `" + std::string{ guide.name } + "` - " + ShortSummary(guide.summary) + "\n";
+    }
+    return out;
+}
+
+std::string ScriptAgentGuides::Suggest(std::string_view topic) {
+    const std::string wanted = Lower(topic);
+    // The words of the topic that say something: "recipe-coin" is looking for "coin", not for every recipe.
+    std::vector<std::string> words;
+    for (std::size_t start = 0U; start < wanted.size();) {
+        const std::size_t end = wanted.find_first_of("-_ ", start);
+        const std::string word = wanted.substr(start, end == std::string::npos ? std::string::npos : end - start);
+        if (word.size() >= 3U && word != "recipe" && word != "guide") words.push_back(word);
+        start = end == std::string::npos ? wanted.size() : end + 1U;
+    }
+    std::vector<std::string> names;
+    std::vector<const ScriptAgentGuide*> found;
+    for (const ScriptAgentGuide& guide : kGuides) {
+        names.emplace_back(guide.name);
+        // A word of the topic in the name or the summary: "coin" finds recipe-pickup, "light" recipe-light.
+        if (std::ranges::any_of(words, [&](const std::string& word) { return Lower(guide.name).find(word) != std::string::npos || Lower(guide.summary).find(word) != std::string::npos; })) found.push_back(&guide);
+    }
+    if (found.empty()) {
+        const std::string nearest = ClosestScriptName(wanted, std::span<const std::string>{ names });
+        for (const ScriptAgentGuide& guide : kGuides) {
+            if (!nearest.empty() && guide.name == nearest) found.push_back(&guide);
+        }
+    }
+    if (found.size() > 3U) found.resize(3U);
+    std::string out;
+    for (const ScriptAgentGuide* guide : found) {
+        out += (out.empty() ? "" : ", ") + std::string{ "`" } + std::string{ guide->name } + "`";
     }
     return out;
 }

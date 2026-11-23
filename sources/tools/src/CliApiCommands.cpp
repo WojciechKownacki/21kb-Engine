@@ -348,7 +348,9 @@ int RunGuideCommand(const ArgumentList& arguments, CommandIo io) {
     const std::string topic = arguments.Option("--topic").value_or(std::string{});
     const std::optional<std::string> guide = kb::script::ScriptAgentGuides::Topic(topic);
     if (!guide.has_value()) {
-        io.err << "error: there is no guide called '" << topic << "'\n" << kb::script::ScriptAgentGuides::Index();
+        const std::string suggestion = kb::script::ScriptAgentGuides::Suggest(topic);
+        io.err << "error: there is no guide called '" << topic << '\'' << (suggestion.empty() ? std::string{} : "; did you mean " + suggestion + "?")
+               << " (guide without a topic lists them)\n";
         return 1;
     }
     io.out << *guide;

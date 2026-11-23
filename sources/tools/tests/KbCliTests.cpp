@@ -40,6 +40,7 @@
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/security/ReleaseKeys.hpp"
+#include "engine/script/ScriptAgentProjectFiles.hpp"
 #include "engine/script/ScriptAgentGuides.hpp"
 #include "engine/world/WorldCellIndex.hpp"
 #include "engine/world/WorldDescriptor.hpp"
@@ -167,7 +168,7 @@ void WriteProjectDescriptor(
     return text.substr(match, lineEnd == std::string::npos ? std::string::npos : lineEnd - match);
 }
 
-constexpr std::array<std::string_view, 4> kFlagNames{ "--anti-rollback", "--disabled", "--quiet", "--update-baseline" };
+constexpr std::array<std::string_view, 6> kFlagNames{ "--anti-rollback", "--disabled", "--quiet", "--update-baseline", "--verbose", "--full" };
 
 struct CommandRun {
     int exitCode = 0;
@@ -479,7 +480,7 @@ void RunParticleReportCommandTests() {
     std::istringstream requests{R"({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run_scene","arguments":{"scene":"/Game/Scenes/Main.21kbscene","frames":1,"report":"particles"}}})"};
     std::ostringstream mcpOut;
     std::ostringstream mcpErr;
-    const std::vector<std::string> mcpRaw{"--project", TestRoot().string()};
+    const std::vector<std::string> mcpRaw{"--project", TestRoot().string(), "--tools", "all"};
     const kb::cli::ArgumentList mcpArguments{mcpRaw};
     Require(kb::cli::RunMcpCommand(mcpArguments, requests, {.out = mcpOut, .err = mcpErr}) == 0,
         "MCP particle report failed");
@@ -2149,7 +2150,7 @@ void RunProjectileTemplateTests() {
     const CommandRun run = Run(&kb::cli::RunRunCommand, {
         "--project", root,
         "--scene", "Assets/Scenes/Main.21kbscene",
-        "--frames", "300",
+        "--frames", "300", "--verbose",
     });
     if (run.exitCode != 0) {
         std::fputs(run.output.c_str(), stderr);
@@ -2227,7 +2228,7 @@ void RunProjectileTemplateTests() {
     const CommandRun secondRun = Run(&kb::cli::RunRunCommand, {
         "--project", root,
         "--scene", "Assets/Scenes/Main.21kbscene",
-        "--frames", "300",
+        "--frames", "300", "--verbose",
     });
     Require(secondRun.exitCode == 0, "second sequential kb_cli runtime reported diagnostics");
     Require(Contains(secondRun.output, "[module] active Physics.Jolt"),
@@ -2612,8 +2613,10 @@ void RunEntityComponentCommandTests() {
                 Contains(second.output, "Fix: kb_cli component set --entity Sun --type Light --set <name>=<value>"),
             "a refused add must name the object, the cause and a command that works: " + second.output);
         const auto unknown = Run(&kb::cli::RunComponentCommand, { "add", "--project", project, "--entity", "Sun", "--type", "NoSuchThing" });
-        Require(unknown.exitCode != 0 && Contains(unknown.output, "unknown component 'NoSuchThing'") && Contains(unknown.output, "Fix: kb_cli schema"),
-            "an unknown component must say how to find the right one: " + unknown.output);
+        Require(unknown.exitCode != 0 && Contains(unknown.output, "unknown component 'NoSuchThing'") && Contains(unknown.output, "kb_cli schema lists the components") && unknown.output.size() < 300U,
+            "an unknown component must say how to find the right one, in a line: " + unknown.output);
+        const auto misspelt = Run(&kb::cli::RunComponentCommand, { "set", "--project", project, "--entity", "Sun", "--type", "Ligth", "--set", "intensity=2" });
+        Require(misspelt.exitCode != 0 && Contains(misspelt.output, "did you mean 'Light'?"), "a misspelt component must name the nearest one: " + misspelt.output);
     }
     Require(Run(&kb::cli::RunComponentCommand, { "set", "--project", project, "--entity", "Sun", "--type", "Light",
         "--set", "nosuch=1" }).exitCode != 0, "an unknown property must be refused");
@@ -3588,7 +3591,7 @@ void RunMcpCommandTests() {
     std::istringstream in{ input };
     std::ostringstream out;
     std::ostringstream err;
-    const std::vector<std::string> raw{ "--project", root };
+    const std::vector<std::string> raw{ "--project", root, "--tools", "all" };
     const kb::cli::ArgumentList arguments{ raw, kFlagNames };
     const int exitCode = kb::cli::RunMcpCommand(arguments, in, kb::cli::CommandIo{ .out = out, .err = err });
     Require(exitCode == 0, "mcp server exited with an error");
@@ -3621,6 +3624,85 @@ void RunMcpCommandTests() {
     Require(Contains(responses[8], "Input.IsPressed") && Contains(responses[8], "\"isError\":false"), "mcp api_reference call failed");
 }
 
+// The tools an agent gets by default are three, so every step does not carry the others: kb_cli (one command, or a list of
+// them as one transaction), guide and api_reference. The server also sends the rules of working here.
+void RunMcpAgentProfileTests() {
+    PrepareProject();
+    const std::string root = TestRoot().string();
+    const auto session = [&](const std::string& requests) {
+        std::istringstream input{ requests };
+        std::ostringstream output;
+        std::ostringstream diagnostics;
+        const std::vector<std::string> words{ "--project", root };
+        Require(kb::cli::RunMcpCommand(kb::cli::ArgumentList{ words }, input, { .out = output, .err = diagnostics }) == 0, "the MCP session must finish cleanly");
+        std::vector<JsonValue> responses;
+        std::istringstream lines{ output.str() };
+        for (std::string line; std::getline(lines, line);) {
+            JsonValue parsed;
+            std::string error;
+            if (!line.empty()) {
+                Require(JsonValue::Parse(line, parsed, error), "the MCP server wrote invalid JSON");
+                responses.push_back(std::move(parsed));
+            }
+        }
+        return responses;
+    };
+    const auto call = [](int id, const std::string& tool, const std::string& arguments) {
+        return R"({"jsonrpc":"2.0","id":)" + std::to_string(id) + R"(,"method":"tools/call","params":{"name":")" + tool + R"(","arguments":)" + arguments + "}}\n";
+    };
+    const auto text = [](const JsonValue& response) { return response.Find("result")->Find("content")->At(0)->Find("text")->AsString(); };
+    const auto failed = [](const JsonValue& response) { return response.Find("result")->Find("isError")->AsBool(); };
+
+    std::string requests = R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}})" + std::string{ "\n" };
+    requests += R"({"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"2024-11-05"}})" + std::string{ "\n" };
+    requests += R"({"jsonrpc":"2.0","id":3,"method":"tools/list"})" + std::string{ "\n" };
+    requests += call(4, "entity_edit", R"({"action":"show","name":"Player"})");
+    requests += call(5, "kb_cli", R"({"commands":[["entity","add","--create","Cube","--name","PackedA","--position","0,3,0"],["entity","add","--create","Cube","--name","PackedB","--position","2,3,0"],["scene-list"]]})");
+    requests += call(6, "kb_cli", R"({"commands":[["entity","add","--create","Cube","--name","PackedC"],["entity","add","--create","Cube","--name","PackedA"]]})");
+    requests += call(7, "kb_cli", R"({"commands":[["scene-list"]],"args":["scene-list"]})");
+    requests += call(8, "kb_cli", R"({"commands":[[]]})");
+    requests += call(9, "kb_cli", R"({"args":["componnt","add"]})");
+    requests += call(10, "kb_cli", R"({"commands":[["scene-list"]]})");
+    const std::vector<JsonValue> responses = session(requests);
+    Require(responses.size() == 10U, "the agent profile session must answer every request");
+
+    const JsonValue* newest = responses[0].Find("result");
+    const JsonValue* older = responses[1].Find("result");
+    Require(newest->Find("protocolVersion")->AsString() == "2025-03-26" && older->Find("protocolVersion")->AsString() == "2024-11-05",
+        "a client gets the version it asks for when the server speaks it, the newest the server speaks otherwise");
+    const std::string& instructions = newest->Find("instructions")->AsString();
+    Require(instructions.size() < 4096U && instructions.find("Do not repeat the same call") != std::string::npos && instructions.find("`commands`") != std::string::npos &&
+            instructions == kb::script::ScriptAgentProjectFiles::AgentRules(),
+        "the server must send the rules of working, in under 4 KB, the same as AGENTS.md opens with");
+
+    const JsonValue* tools = responses[2].Find("result")->Find("tools");
+    Require(tools->Size() == 3U && tools->At(0)->Find("name")->AsString() == "kb_cli" && tools->At(1)->Find("name")->AsString() == "api_reference" &&
+            tools->At(2)->Find("name")->AsString() == "guide",
+        "an agent gets kb_cli, api_reference and guide, in that order");
+    Require(responses[2].Find("result")->Dump().size() < 4500U, "the tool definitions are sent with every step and must stay small: " + std::to_string(responses[2].Find("result")->Dump().size()));
+    Require(tools->At(1)->Find("annotations")->Find("readOnlyHint")->AsBool() && tools->At(2)->Find("annotations")->Find("readOnlyHint")->AsBool() &&
+            !tools->At(0)->Find("annotations")->Find("readOnlyHint")->AsBool() && !tools->At(0)->Find("annotations")->Find("destructiveHint")->AsBool(),
+        "the tools must say which of them only read");
+    Require(failed(responses[3]) && text(responses[3]).find("unknown tool") != std::string::npos, "a tool that is not offered must be refused");
+
+    Require(!failed(responses[4]) && text(responses[4]).find("PackedA") != std::string::npos && text(responses[4]).find("PackedB") != std::string::npos &&
+            text(responses[4]).find("applied: 3 operation(s)") != std::string::npos && text(responses[4]).find("bytes)") == std::string::npos,
+        "commands must run in order and answer with the output of each: " + text(responses[4]));
+    Require(failed(responses[5]) && text(responses[5]).find("rolled back") != std::string::npos, "a failed command must roll the whole list back: " + text(responses[5]));
+    Require(text(responses[9]).find("PackedA") != std::string::npos && text(responses[9]).find("PackedC") == std::string::npos,
+        "what a rolled back list added must not be in the scene: " + text(responses[9]));
+    Require(failed(responses[6]) && failed(responses[7]), "args together with commands, and an empty command, must be refused");
+    Require(failed(responses[8]) && text(responses[8]).find("did you mean component?") != std::string::npos, "an unknown command must name the nearest one: " + text(responses[8]));
+
+    // A project whose AGENTS.md already opens with the rules gets them once, from the file: the CLI reads that file, and the server
+    // would send the same text again with every step. An edited file that lacks them still gets them from the server.
+    const std::string initialize = R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}})" + std::string{ "\n" };
+    WriteTextFile(TestRoot() / "AGENTS.md", "# AGENTS.md\n\n" + kb::script::ScriptAgentProjectFiles::AgentRules() + "\n## Recipes\n");
+    Require(session(initialize)[0].Find("result")->Find("instructions") == nullptr, "rules that AGENTS.md holds must not be sent a second time");
+    WriteTextFile(TestRoot() / "AGENTS.md", "# AGENTS.md\n\nMy own notes.\n");
+    Require(session(initialize)[0].Find("result")->Find("instructions") != nullptr, "a project file without the rules must get them from the server");
+}
+
 // Over MCP an unknown tool, a call without its required arguments and a path that leaves the project are refused as tool
 // errors that say why, and every tool tools/list offers is a tool the server can dispatch.
 void RunMcpCommandRefusalTests() {
@@ -3647,7 +3729,7 @@ void RunMcpCommandRefusalTests() {
     std::istringstream in{ input };
     std::ostringstream out;
     std::ostringstream err;
-    const std::vector<std::string> raw{ "--project", root };
+    const std::vector<std::string> raw{ "--project", root, "--tools", "all" };
     const kb::cli::ArgumentList arguments{ raw, kFlagNames };
     Require(kb::cli::RunMcpCommand(arguments, in, kb::cli::CommandIo{ .out = out, .err = err }) == 0, "mcp server exited with an error");
     std::vector<std::string> responses;
@@ -4936,6 +5018,42 @@ void RunScriptCheckCliTests() {
     Require(Contains(RunCliProgram({ "guide", "--topic", "recipe-pickup" }).out, "OnTriggerEnter") && Contains(RunCliProgram({ "guide" }).out, "recipe-pickup"), "the pickup recipe must be a guide");
 }
 
+// The commands of a recipe as the agent sends them: each line of its first code block is a JSON list of words (the `args` of
+// one kb_cli call, the project left out); the blank lines between lines only separate calls.
+[[nodiscard]] std::vector<std::vector<std::string>> RecipeCommands(std::string_view recipe) {
+    const std::optional<std::string> guide = kb::script::ScriptAgentGuides::Topic(recipe);
+    Require(guide.has_value(), "the guide " + std::string{ recipe } + " must exist");
+    const std::size_t begin = guide->find("```\n") + 4U;
+    const std::size_t end = guide->find("\n```", begin);
+    std::vector<std::vector<std::string>> commands;
+    std::istringstream lines{ guide->substr(begin, end - begin) };
+    for (std::string line; std::getline(lines, line);) {
+        if (line.empty()) continue;
+        JsonValue list;
+        std::string error;
+        Require(JsonValue::Parse(line, list, error) && list.GetKind() == JsonValue::Kind::Array && list.Size() > 0U, "a line of " + std::string{ recipe } + " must be a JSON list of words: " + line);
+        std::vector<std::string> words;
+        for (std::size_t index = 0U; index < list.Size(); ++index) words.push_back(list.At(index)->AsString());
+        commands.push_back(std::move(words));
+    }
+    return commands;
+}
+
+// Runs them one after the other on the project, as the tool does with the project filled in; the last result is returned.
+CliRun RunRecipeCommands(const std::filesystem::path& root, const std::vector<std::vector<std::string>>& commands, std::string_view recipe) {
+    CliRun last;
+    for (std::vector<std::string> words : commands) {
+        words.insert(words.begin() + 1, { "--project", root.string() });
+        std::istringstream in;
+        std::ostringstream out;
+        std::ostringstream err;
+        const int exitCode = kb::cli::RunCli(words, in, kb::cli::CommandIo{ .out = out, .err = err });
+        last = CliRun{ .exitCode = exitCode, .out = out.str(), .err = err.str() };
+        Require(exitCode == 0, "a command of " + std::string{ recipe } + " failed: " + words.front() + "\n" + last.out + last.err);
+    }
+    return last;
+}
+
 // The recipe `recipe-pickup`, run exactly as written in the guide on a fresh project: a coin the player walks into disappears
 // and a counter on the screen counts it.
 void RunPickupRecipeCliTests() {
@@ -4946,56 +5064,9 @@ void RunPickupRecipeCliTests() {
     // The scene the recipe starts from has the player the person plays.
     Require(RunCliProgram({ "entity", "add", "--project", root.string(), "--create", "Third Person Player", "--position", "0,1,0" }).exitCode == 0, "the pickup player could not be added");
 
-    const std::optional<std::string> guide = kb::script::ScriptAgentGuides::Topic("recipe-pickup");
-    Require(guide.has_value(), "recipe-pickup must be a guide");
-    // The commands of the guide's code block: a command that opens a quote goes on until it closes.
-    std::vector<std::string> commands;
-    {
-        const std::size_t begin = guide->find("```\n") + 4U;
-        const std::size_t end = guide->find("\n```", begin);
-        std::string current;
-        std::istringstream lines{ guide->substr(begin, end - begin) };
-        for (std::string line; std::getline(lines, line);) {
-            current += (current.empty() ? "" : "\n") + line;
-            if (std::count(current.begin(), current.end(), '"') % 2 == 0) {
-                commands.push_back(current);
-                current.clear();
-            }
-        }
-    }
-    Require(commands.size() == 3U, "the recipe must be three commands: scene-list, pickup new, run");
-    CliRun last;
-    for (const std::string& command : commands) {
-        std::vector<std::string> words;
-        std::string word;
-        bool quoted = false;
-        bool started = false;
-        for (const char c : command) {
-            if (c == '"') {
-                quoted = !quoted;
-                started = true;
-            } else if (c == ' ' && !quoted) {
-                if (started) words.push_back(word);
-                word.clear();
-                started = false;
-            } else {
-                word += c;
-                started = true;
-            }
-        }
-        if (started) words.push_back(word);
-        Require(words.size() > 2U && words.front() == "kb_cli", "a recipe line must be a kb_cli command: " + command);
-        words.erase(words.begin());
-        for (std::size_t index = 0U; index + 1U < words.size(); ++index) {
-            if (words[index] == "--project" && words[index + 1U] == ".") words[index + 1U] = root.string();
-        }
-        std::istringstream in;
-        std::ostringstream out;
-        std::ostringstream err;
-        const int exitCode = kb::cli::RunCli(words, in, kb::cli::CommandIo{ .out = out, .err = err });
-        last = CliRun{ .exitCode = exitCode, .out = out.str(), .err = err.str() };
-        Require(exitCode == 0, "a command of recipe-pickup failed: " + command + "\n" + last.out + last.err);
-    }
+    const std::vector<std::vector<std::string>> lines = RecipeCommands("recipe-pickup");
+    Require(lines.size() == 3U && lines[0].front() == "scene-list" && lines[1].front() == "pickup" && lines[2].front() == "run", "the recipe must be three commands: scene-list, pickup new, run");
+    CliRun last = RunRecipeCommands(root, lines, "recipe-pickup");
     Require(Contains(last.out, "[log] Coin count: 1") && Contains(last.out, "moved: Coin was destroyed") && Contains(last.out, "0 diagnostics"),
         "walking into the coin must collect it and count it: " + last.out + last.err);
 
@@ -5152,7 +5223,7 @@ void RunCliJsonTests() {
     // text (an agent reads it on every wrong guess), and exit code 1.
     const CliRun unknownText = RunCliProgram({ "no-such-command" });
     Require(unknownText.exitCode == 1 && unknownText.out.empty() &&
-            Contains(unknownText.err, "error: unknown command 'no-such-command'") && Contains(unknownText.err, "kb_cli commands") &&
+            Contains(unknownText.err, "error: unknown command 'no-such-command'") && Contains(unknownText.err, "kb_cli help") &&
             !Contains(unknownText.err, "Exit codes:"),
         "an unknown command must print one short error on stderr and exit 1");
 
@@ -5198,15 +5269,31 @@ void RunCliJsonTests() {
     Require(ParseCliResult(unicode).Find("command")->AsString() == "polecenie-\xC5\xBC\xC3\xB3\xC5\x82w",
         "a command name with letters must come back unchanged");
 
-    // help: the exit codes are documented in it, as text and as a result.
+    // help: one line per command and small; the options of a command and the exit codes are one step further.
     const CliRun help = RunCliProgram({ "help" });
-    Require(help.exitCode == 0 && Contains(help.out, "Exit codes: normally 0 on success and 1 on failure") &&
-            Contains(help.out, "124 on timeout and 130 on cancellation") && Contains(help.out, "--json"),
-        "help must document --json and the exit codes");
+    Require(help.exitCode == 0 && help.out.size() < 8192U && Contains(help.out, "  entity ") && Contains(help.out, "  validate ") && !Contains(help.out, "--set") &&
+            help.out.find('\xE2') == std::string::npos,
+        "help must be one short line per command, in plain characters: " + std::to_string(help.out.size()));
+    for (const std::string& name : kb::cli::CliUsageCommandNames()) {
+        Require(Contains(help.out, "  " + name + " "), "help must list the command " + name);
+    }
+    const CliRun helpOptions = RunCliProgram({ "help", "options" });
+    Require(helpOptions.exitCode == 0 && Contains(helpOptions.out, "Exit codes: normally 0 on success and 1 on failure") &&
+            Contains(helpOptions.out, "124 on timeout and 130 on cancellation") && Contains(helpOptions.out, "--json"),
+        "help options must document --json and the exit codes");
     const CliRun helpJson = RunCliProgram({ "help", "--json" });
     Require(helpJson.exitCode == 0 && ParseCliResult(helpJson).Find("ok")->AsBool() &&
-            Contains(ParseCliResult(helpJson).Find("output")->AsString(), "Exit codes:"),
+            Contains(ParseCliResult(helpJson).Find("output")->AsString(), "Commands:"),
         "help --json must wrap the usage");
+    // A misspelt command is answered with the nearest one, not a list.
+    const CliRun misspelt = RunCliProgram({ "componnt", "add" });
+    Require(misspelt.exitCode == 1 && Contains(misspelt.err, "did you mean component?") && misspelt.err.size() < 300U, "an unknown command must name the nearest command: " + misspelt.err);
+    // commands: short by default, one command on request, everything with --full.
+    const CliRun shortCommands = RunCliProgram({ "commands" });
+    Require(shortCommands.exitCode == 0 && shortCommands.out.size() < 24000U && !Contains(shortCommands.out, "\"options\""), "commands must be short by default: " + std::to_string(shortCommands.out.size()));
+    const CliRun oneCommand = RunCliProgram({ "commands", "--command", "entity" });
+    Require(oneCommand.exitCode == 0 && Contains(oneCommand.out, "\"subcommands\"") && Contains(oneCommand.out, "--create") && oneCommand.out.size() < 8000U, "commands --command must describe one command");
+    Require(RunCliProgram({ "commands", "--command", "entty" }).exitCode == 1, "commands --command of an unknown command must fail");
     const CliRun commandHelp = RunCliProgram({ "new", "--help" });
     Require(commandHelp.exitCode == 0 && commandHelp.out == RunCliProgram({ "help", "new" }).out && Contains(commandHelp.out, "--template"),
         "a command followed by --help must print that command's usage");
@@ -5563,7 +5650,7 @@ void RunStructuredOutputTests() {
         "navmesh info data must give the cell size and the agents' tiles");
     // The remaining read commands: guides and the script API, the code map, authored assets and their settings.
     const JsonValue guide = data("guide");
-    Require(guide.Find("guides")->Size() > 3U && Contains(guide.Find("text")->AsString(), "How-to") && guide.Find("topic")->AsString() == "index",
+    Require(guide.Find("guides")->Size() > 3U && Contains(guide.Find("text")->AsString(), "# Guides") && guide.Find("topic")->AsString() == "index",
         "guide data must hold the index text and the list of guides");
     Require(Contains(data("21kb.cli.api-topic/v1").Find("text")->AsString(), "script API") && !data("21kb.cli.api-search/v1").Find("text")->AsString().empty(),
         "api data must carry the page of a topic and the matches of a search");
@@ -6141,6 +6228,39 @@ void RunStudioAssetCommandTests() {
     Require(Contains(accepted, "Main Camera") && !Contains(accepted, "\"isError\":true"), "the agent's tool must run the command inside the project: " + accepted);
 }
 
+// What an agent reads from a run: a short output (the active plugins only on request), a body that falls through the floor named
+// as such, one line for an error that repeats every frame with the hint `validate` gives, and a body added without a position
+// that stands on the floor instead of starting inside it.
+void RunAgentSignalTests() {
+    const std::filesystem::path parent = TestRoot() / "agent_signals";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Studio", "--template", "Basic3D" }).exitCode == 0, "the signal project could not be made");
+    const std::filesystem::path root = parent / "Studio";
+    const std::string project = root.string();
+    Require(RunCliProgram({ "entity", "add", "--project", project, "--create", "Cube", "--name", "Crate", "--body", "Dynamic" }).exitCode == 0, "the crate could not be added");
+    const CliRun placed = RunCliProgram({ "entity", "show", "--project", project, "--name", "Crate" });
+    Require(Contains(placed.out, "localPosition=0,0.5") && !Contains(placed.out, "localPosition=0,0,0"), "a body added without a position must stand on the floor: " + placed.out);
+    const CliRun quiet = RunCliProgram({ "run", "--project", project, "--frames", "90" });
+    Require(quiet.exitCode == 0 && !Contains(quiet.out, "[module] active") && Contains(quiet.out, "moved: Crate") && !Contains(quiet.out, "warning:"),
+        "a run is short, and a crate that stands on the floor is not a warning: " + quiet.out);
+    Require(Contains(RunCliProgram({ "run", "--project", project, "--frames", "2", "--verbose" }).out, "[module] active"), "--verbose lists the active plugins");
+
+    Require(RunCliProgram({ "entity", "add", "--project", project, "--create", "Cube", "--name", "Sunk", "--position", "0,-4,0", "--body", "Dynamic" }).exitCode == 0, "the sunk cube could not be added");
+    const CliRun fell = RunCliProgram({ "run", "--project", project, "--frames", "120" });
+    Require(Contains(fell.out, "warning: Sunk fell below the floor") && Contains(fell.out, "entity set --name Sunk --position"), "a body that went through the floor must be named: " + fell.out);
+
+    // An error in every frame: one line, how many times, and what validate says about the call.
+    Require(RunCliProgram({ "script-new", "--project", project, "--name", "Broken", "--language", "lua", "--code",
+        "function Tick(self, dt)\n    Physics.Raycat(0, 5, 0, 0, -1, 0, 10)\nend\n" }).exitCode == 0, "the broken script could not be made");
+    Require(RunCliProgram({ "scene-attach", "--project", project, "--node", "Crate", "--script", "/Game/Scripts/Broken.lua" }).exitCode == 0, "the broken script could not be attached");
+    const CliRun broken = RunCliProgram({ "run", "--project", project, "--frames", "30" });
+    Require(broken.exitCode == 1 && Contains(broken.err, "hint: /Game/Scripts/Broken.lua:2: Physics.Raycat does not exist; did you mean Physics.Raycast?") && Contains(broken.err, "[repeated") &&
+            Contains(broken.out, "diagnostics (1 different)"),
+        "a repeated error must be one line with its count and the validate hint: " + broken.out + broken.err);
+    Require(broken.err.size() < 1500U, "a repeated error must not fill the answer: " + std::to_string(broken.err.size()));
+}
+
 // pickup new: a coin with a trigger Collider, a counter on the screen and their scripts, in one step; a second one with the same
 // name fails and changes nothing; the scene runs and the counter counts the touch.
 void RunPickupCommandTests() {
@@ -6362,7 +6482,7 @@ void RunMotionAndFunctionCommandTests() {
 void RunCommandCatalogTests() {
     PrepareProject();
     const auto root = TestRoot().string();
-    const auto catalog = RunCliProgram({"commands", "--json"});
+    const auto catalog = RunCliProgram({"commands", "--full", "--json"});
     JsonValue described;
     std::string error;
     Require(catalog.exitCode == 0 && JsonValue::Parse(catalog.out, described, error) &&
@@ -6457,7 +6577,7 @@ void RunCommandCatalogTests() {
     const auto mcp = [&](std::string request) {
         std::istringstream input{std::move(request)};
         std::ostringstream output, diagnostics;
-        const std::vector<std::string> words{"--project", root};
+        const std::vector<std::string> words{"--project", root, "--tools", "all"};
         Require(kb::cli::RunMcpCommand(kb::cli::ArgumentList{words}, input, {.out = output, .err = diagnostics}) == 0,
             "Catalog MCP session must finish cleanly");
         JsonValue response;
@@ -7439,11 +7559,13 @@ int main(int argc, char** argv) {
     RunSuite(RunStudioAssetCommandTests);
     RunSuite(RunMotionAndFunctionCommandTests);
     RunSuite(RunPickupCommandTests);
+    RunSuite(RunAgentSignalTests);
     RunSuite(RunEntityComponentCommandTests);
     RunSuite(RunApiCommandTests);
     RunSuite(RunApiCheckCommandTests);
     RunSuite(RunMcpCommandTests);
     RunSuite(RunMcpCommandRefusalTests);
+    RunSuite(RunMcpAgentProfileTests);
     RunSuite(RunLanguageServerTests);
     RunSuite(RunDebugAdapterTests);
     RunSuite(RunKeyAndPackCommandTests);

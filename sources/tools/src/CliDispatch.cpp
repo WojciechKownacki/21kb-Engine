@@ -2,6 +2,7 @@
 #include "CliProgram.hpp"
 
 #include "engine/core/JsonValue.hpp"
+#include "engine/script/ScriptNameSuggestion.hpp"
 
 #include <algorithm>
 #include <array>
@@ -11,6 +12,7 @@
 #include <functional>
 #include <iostream>
 #include <optional>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -24,14 +26,15 @@ int RunRig2DCommand(const ArgumentList&, CommandIo);
 namespace {
 
 constexpr std::array<std::string_view, 5U> kUsageParts{
-R"(kb_cli — 21kb Engine headless tooling for developers and AI coding agents
+R"(kb_cli - 21kb Engine headless tooling for developers and AI coding agents
 
 Usage: kb_cli <command> [options]
 
 Commands:
-  commands     List every command as JSON: purpose, subcommands, options (name, type,
-               required, default), JSON output kind, availability and MCP tool name.
-  help         Print this text, or the usage of one command.
+  commands     List the commands as JSON: name and purpose. --command gives one command's
+               subcommands and options (name, type, required, default), --full every command with them.
+                 [--command <name>] [--full]
+  help         One line per command, or the usage of one command.
                  [<command>]
   new          Create a project, the same one the Hub creates, in a new or empty
                folder. Its startup scene Assets/Scenes/Main.21kbscene is made from
@@ -532,7 +535,7 @@ R"(  run          Run a scene headless and report logs, events, and errors (the
                124 on playback timeout, or 130 on cancellation. A script error (a failed assert, a call
                that does not exist) is an error; --json lists them with file, line, message and traceback.
                  --project <dir> [--scene <path>] [--frames <n>] [--dt <seconds>] [--realtime]
-                 [--quiet] [--report particles|audio|audio-meters|ecs|world-memory|input|ai|determinism|ui] [--pcm-frames <n>]
+                 [--quiet] [--verbose (lists the active plugins)] [--report particles|audio|audio-meters|ecs|world-memory|input|ai|determinism|ui] [--pcm-frames <n>]
                  [--timeout-ms <1..86400000>] [--cancel-file <path>]
                  [--input-replay <recording>] [--input-record <recording>]
                  [--press <Key>@<frame>[+<frames>] ... (holds a key: --press Space@30, --press E@10+20)]
@@ -833,32 +836,30 @@ Scene paths may be physical (relative to the project root) or virtual
 )"
 };
 
+// What `kb_cli help` prints: one line per command. The options of a command are `kb_cli help <command>`, so a first look
+// costs a few KB instead of the whole manual.
 void PrintUsage(std::ostream& output) {
-    for (const auto part : kUsageParts) output << part;
+    output << "kb_cli - 21kb Engine headless tooling for developers and AI coding agents\n\n"
+              "Usage: kb_cli <command> [options]     kb_cli help <command> prints that command's options\n\n"
+              "Commands:\n"
+           << CliCommandSummary()
+           << "\nkb_cli help options explains the global options (--json, timeouts) and the exit codes.\n";
 }
 
 void PrintCommandUsage(std::ostream& output, std::string_view command) {
+    if (command == "options") {
+        const std::string_view tail = kUsageParts.back();
+        output << tail.substr(tail.find("Global options:"));
+        return;
+    }
     const std::string block = CliCommandUsageBlock(command);
     if (block.empty()) {
-        output << "kb_cli has no command '" << command << "'; kb_cli commands lists them\n";
+        const std::vector<std::string> names = CliUsageCommandNames();
+        const std::string closest = kb::script::ClosestScriptName(command, std::span<const std::string>{ names });
+        output << "kb_cli has no command '" << command << '\'' << (closest.empty() ? std::string{} : "; did you mean " + closest + "?") << " (kb_cli help lists them)\n";
         return;
     }
     output << block;
-}
-
-std::size_t EditDistance(std::string_view a, std::string_view b) {
-    std::vector<std::size_t> row(b.size() + 1U);
-    for (std::size_t j = 0; j <= b.size(); ++j) row[j] = j;
-    for (std::size_t i = 1; i <= a.size(); ++i) {
-        std::size_t diagonal = row[0];
-        row[0] = i;
-        for (std::size_t j = 1; j <= b.size(); ++j) {
-            const std::size_t above = row[j];
-            row[j] = std::min({ row[j] + 1U, row[j - 1U] + 1U, diagonal + (a[i - 1U] == b[j - 1U] ? 0U : 1U) });
-            diagonal = above;
-        }
-    }
-    return row[b.size()];
 }
 
 // A misspelled option must fail, not be ignored: for these commands the options accepted are the
@@ -881,15 +882,15 @@ bool RejectUnknownOptions(std::string_view command, const ArgumentList& argument
     const std::vector<std::string> unknown = arguments.UnknownOptions(allowed);
     if (unknown.empty()) return false;
     const std::string& wrong = unknown.front();
-    const auto closest = std::ranges::min_element(known, {}, [&](const std::string& name) { return EditDistance(name, wrong); });
+    const std::string closest = kb::script::ClosestScriptName(wrong, std::span<const std::string>{ known });
     err << "error: " << command << " has no option '" << wrong << '\'';
-    if (EditDistance(*closest, wrong) <= 2U) err << "; did you mean " << *closest << '?';
+    if (!closest.empty()) err << "; did you mean " << closest << '?';
     err << " (kb_cli help " << command << " lists its options)\n";
     return true;
 }
 
-constexpr std::array<std::string_view, 18> kFlagNames{
-    "--anti-rollback", "--disabled", "--quiet", "--update-baseline", "--require-gpu", "--allow-fallback", "--as-ground", "--no-borders", "--items",
+constexpr std::array<std::string_view, 20> kFlagNames{
+    "--full", "--verbose", "--anti-rollback", "--disabled", "--quiet", "--update-baseline", "--require-gpu", "--allow-fallback", "--as-ground", "--no-borders", "--items",
     "--diff", "--list-backups", "--allow-unsigned", "--deny-unsigned", "--replace", "--realtime", "--deterministic", "--all", "--check" };
 
 #if KB_CLI_RENDERER
@@ -1052,7 +1053,15 @@ std::optional<int> RunNamedCommand(
         else PrintUsage(io.out);
         return 0;
     case CliCommandKind::Catalog:
-        io.out << CliCatalogJson() << '\n';
+        if (arguments.Flag("--full")) io.out << CliCatalogJson() << '\n';
+        else if (const std::optional<std::string> one = arguments.Option("--command"); one.has_value()) {
+            const std::string json = CliCommandJson(*one);
+            if (json.empty()) {
+                io.err << "error: kb_cli has no command '" << *one << "' (kb_cli help lists them)\n";
+                return 1;
+            }
+            io.out << json << '\n';
+        } else io.out << CliCatalogShortJson() << '\n';
         return 0;
     }
     return std::nullopt;
@@ -1287,7 +1296,10 @@ int RunCli(std::span<const std::string> args, std::istream& in, CommandIo io) {
             return *code;
         }
         // One line, not the whole usage text: an agent that guessed a name reads it on every mistake.
-        target.err << "error: unknown command '" << command << "'; kb_cli commands lists them, kb_cli help <command> shows one\n";
+        const std::vector<std::string> names = CliUsageCommandNames();
+        const std::string closest = kb::script::ClosestScriptName(command, std::span<const std::string>{ names });
+        target.err << "error: unknown command '" << command << '\'' << (closest.empty() ? std::string{} : "; did you mean " + closest + "?")
+                   << " (kb_cli help lists the commands, kb_cli help <command> shows one)\n";
         static_cast<void>(json);
         return 1;
     };

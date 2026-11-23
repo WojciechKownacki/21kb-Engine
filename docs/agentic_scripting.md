@@ -385,7 +385,8 @@ More commands, each with its options in `kb_cli help`:
 | `kb_cli import` | import external source assets into the project |
 | `kb_cli import-preset-new` | create an import preset |
 | `kb_cli mcp` | serve the commands as MCP tools over stdio |
-| `kb_cli commands` | list every command as JSON: purpose, subcommands, options (name, type, required, default), JSON output kind, build availability and MCP tool name |
+| `kb_cli commands` | list the commands as JSON (name and purpose); `--command <name>` one command with its subcommands and options (name, type, required, default), JSON output kind, build availability and MCP tool name; `--full` every command with them |
+| `kb_cli help` | one line per command; `help <command>` the options of one; `help options` the global options and exit codes |
 | `kb_cli keys` | generate release signing keys and print public keys |
 | `kb_cli pack` | sign, verify, inspect, recompress, split and patch asset packs |
 | `kb_cli release` | sign or verify the manifest of a finished release directory |
@@ -536,8 +537,9 @@ overflow are refused as tool errors. `run_scene` recording paths are confined to
 bound project; relative paths are anchored there even when the output file is new.
 These path checks do not sandbox code executed by a trusted project.
 
-CLI dispatch and MCP discovery use one command catalog. `kb_cli commands` returns
-`21kb.cli-commands/v1`: one entry for every command the CLI dispatches, with its
+CLI dispatch and MCP discovery use one command catalog. `kb_cli commands --full` returns
+`21kb.cli-commands/v1` (`commands` alone is the short list, `commands --command <name>` one entry):
+one entry for every command the CLI dispatches, with its
 `purpose`, its `subcommands` (each with its own `options`), the `options` of the command itself
 (each with `name`, `type` of flag, number, path, string or enum, `required`, `default` and
 `choices`), what `--json` gives (`json`: `envelope`, `native`, `partial`, `structured` or `protocol`), the
@@ -546,7 +548,13 @@ through the CLI, and `available` reflects the current build's capabilities.
 The entries are read from the usage text that `kb_cli help` prints, so a command is described
 once for people and for agents, and a test fails when a dispatched command has no entry or
 an entry names a command that is not dispatched.
-The server retains its original tools and also exposes `component_schema`,
+By default the server offers three tools, so that every step of an agent does not carry the
+others: `kb_cli` (one command as `args`, or several as `commands`, a list of such lists run as one
+transaction: if one fails every file is put back), `api_reference` and `guide`. Its `initialize`
+answer carries the rules of working (`instructions`), the same text AGENTS.md opens with and sent only when the
+project's AGENTS.md does not hold them (a CLI that reads that file has them already), and the
+tools say which of them only read (`annotations`). `kb_cli mcp --tools all` also exposes the
+original tools, `component_schema`,
 `scene_create`, `script_create`, `entity_edit` and `component_edit`. Authoring tools
 use the bound project and invoke the same command handlers and save validation as
 the CLI. For example, `component_edit` takes `action: "set"`, `entity`, `type`,

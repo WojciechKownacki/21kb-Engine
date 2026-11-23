@@ -29,6 +29,7 @@
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/resources/RenderMeshAssetBuilder.hpp"
 #include "engine/scene/SceneLightComponents.hpp"
+#include <algorithm>
 #include <fstream>
 #include <cmath>
 #include "Map2DEditing.hpp"
@@ -39,6 +40,9 @@
 #include "engine/scene/MeshRendererComponent.hpp"
 #endif
 #include "engine/scene/CombatantComponent.hpp"
+#include "engine/scene/ColliderComponent.hpp"
+#include "engine/scene/RigidbodyComponent.hpp"
+#include "engine/script/ScriptNameSuggestion.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/Navigation.hpp"
 #include "engine/scene/SocketAttachmentComponent.hpp"
@@ -819,6 +823,45 @@ void NoteEntity(CommandIo io, const SceneSession& session, kb::scene::SceneEntit
 
 [[nodiscard]] int EntityAdd(const ArgumentList& arguments, CommandIo io);
 
+// A body added without a position would start at 0,0,0, which is inside the floor, and fall through it. Where no position
+// is given it is lifted to stand on the highest floor under that point: a static box Collider whose top face lies below it.
+void StandOnGround(kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+    const kb::scene::ColliderComponent* collider = scene.Components().Colliders().TryGet(entity);
+    const kb::scene::TransformComponent* placed = scene.Transforms().TryGet(entity);
+    if (collider == nullptr || placed == nullptr) return;
+    const kb::math::Vec3 scale = placed->localScale;
+    float below = 0.5F * std::abs(scale.y); // from the origin of the entity down to the lowest point of its Collider
+    switch (collider->shape) {
+    case kb::scene::ColliderShape::Box:
+    case kb::scene::ColliderShape::OneWayBox: below = 0.5F * collider->boxSize.y * std::abs(scale.y) - collider->center.y * scale.y; break;
+    case kb::scene::ColliderShape::Sphere: below = collider->radius * std::max({ std::abs(scale.x), std::abs(scale.y), std::abs(scale.z) }) - collider->center.y * scale.y; break;
+    case kb::scene::ColliderShape::Capsule: below = 0.5F * collider->height * std::abs(scale.y) - collider->center.y * scale.y; break;
+    case kb::scene::ColliderShape::Mesh: return;
+    }
+    float ground = 0.0F;
+    std::vector<kb::scene::SceneEntity> pending = scene.Hierarchy().RootEntities();
+    while (!pending.empty()) {
+        const kb::scene::SceneEntity other = pending.back();
+        pending.pop_back();
+        for (const kb::scene::SceneEntity child : scene.Hierarchy().ChildEntities(other)) pending.push_back(child);
+        const kb::scene::ColliderComponent* floor = scene.Components().Colliders().TryGet(other);
+        const kb::scene::RigidbodyComponent* body = scene.Components().Rigidbodies().TryGet(other);
+        if (other == entity || floor == nullptr || floor->trigger || floor->shape != kb::scene::ColliderShape::Box ||
+            (body != nullptr && body->bodyType != kb::scene::RigidbodyBodyType::Static)) continue;
+        const kb::math::DVec3 at = scene.Transforms().WorldTranslation(other);
+        const kb::scene::TransformComponent* floorTransform = scene.Transforms().TryGet(other);
+        if (floorTransform == nullptr) continue;
+        const kb::math::Vec3 floorScale = floorTransform->localScale;
+        const bool under = std::abs(at.x + floor->center.x * floorScale.x) <= 0.5F * floor->boxSize.x * std::abs(floorScale.x) &&
+            std::abs(at.z + floor->center.z * floorScale.z) <= 0.5F * floor->boxSize.z * std::abs(floorScale.z);
+        const float top = static_cast<float>(at.y) + (floor->center.y + 0.5F * floor->boxSize.y) * floorScale.y;
+        if (under) ground = std::max(ground, top);
+    }
+    kb::scene::TransformComponent transform = *placed;
+    transform.localPosition.y = ground + below + 0.01F;
+    scene.Transforms().Set(entity, transform);
+}
+
 // --count 10 --offset 0,1,0: a row, a stack or a tower in one command - Name1..Name10, each one
 // offset further from --position.
 [[nodiscard]] int EntityAddMany(const ArgumentList& arguments, CommandIo io) {
@@ -1018,6 +1061,10 @@ void NoteEntity(CommandIo io, const SceneSession& session, kb::scene::SceneEntit
             return 1;
         }
         added += std::string{ material.has_value() ? " and a " : " with a " } + *body + " Rigidbody";
+        if (*body == "Dynamic" && !arguments.Option("--position").has_value() && !parent.has_value()) {
+            StandOnGround(scene, entity);
+            added += ", standing on the floor";
+        }
     }
     // 2D physics (Box2D): a Body 2D and a Collider 2D whose 1x1 box (a circle for a Sphere, a
     // capsule for a Capsule) follows the entity's scale - a platform is --scale 5,1,1 --body2d Static.
@@ -1600,6 +1647,15 @@ void PrintEntity(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::os
     return 0; // read only: the scene is not saved
 }
 
+// The line for a component name that does not exist: the nearest real one, not the whole list.
+[[nodiscard]] std::string UnknownComponentText(std::string_view type) {
+    std::vector<std::string> names;
+    for (const kb::scene::SceneComponentKind& kind : kb::scene::SceneComponentAuthoring::Kinds()) names.emplace_back(kind.id);
+    const std::string closest = kb::script::ClosestScriptName(type, std::span<const std::string>{ names });
+    return "error: unknown component '" + std::string{ type } + '\'' +
+        (closest.empty() ? std::string{} : "; did you mean '" + closest + "'?") + " (kb_cli schema lists the components)\n";
+}
+
 [[nodiscard]] int ComponentCommand(std::string_view action, const ArgumentList& arguments, CommandIo io) {
     if (action != "add" && action != "set" && action != "remove") {
         io.err << "error: component expects add, set or remove\n";
@@ -1650,9 +1706,7 @@ void PrintEntity(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::os
         }
         case kb::scene::SceneComponentAddStatus::UnknownComponent:
         default:
-            io.err << "error: unknown component '" << *type << "'. Fix: kb_cli schema lists the components. Components:";
-            for (const kb::scene::SceneComponentKind& kind : kb::scene::SceneComponentAuthoring::Kinds()) io.err << " '" << kind.id << "'";
-            io.err << '\n';
+            io.err << UnknownComponentText(*type);
             return 1;
         }
         if (!ApplySettings(scene, *entity, *type, arguments, io)) return 1;
@@ -1661,6 +1715,10 @@ void PrintEntity(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::os
     }
     if (action == "set") {
         const bool transform = *type == "Transform";
+        if (!transform && kb::scene::SceneComponentAuthoring::Find(*type) == nullptr) {
+            io.err << UnknownComponentText(*type);
+            return 1;
+        }
         if (!transform && !kb::scene::SceneComponentAuthoring::Has(scene, *entity, *type)) {
             io.err << "error: '" << *entityName << "' has no " << *type << " (use component add)\n";
             return 1;

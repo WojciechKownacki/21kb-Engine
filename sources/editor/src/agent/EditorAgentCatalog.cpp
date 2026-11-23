@@ -150,14 +150,9 @@ struct Preset {
             "--allowedTools", "mcp__kb-engine", "Read", "Glob", "Grep", "--disallowedTools", "Bash", "PowerShell",
             "--permission-mode", "{permissionMode}",
             "--append-system-prompt",
-            "You work inside the 21kb editor on the open project. Keep the request small: AGENTS.md says where things are. "
-            "Start with the recipe for your job (kb-engine guide tool, topic recipe-material, recipe-component, recipe-prefab, "
-            "recipe-script, recipe-pickup, recipe-light, recipe-settings, recipe-ui-button, recipe-player, recipe-image, recipe-sound, recipe-timeline, recipe-ui-theme, recipe-translate, recipe-animation or recipe-material-function) and run its commands in order. "
-            "Change scenes, entities, components and assets with the kb-engine tools (kb_cli runs any command); "
-            "do not run shell commands or parse the project's binary files. "
-            "Do the whole task yourself: the user does not run commands or change settings by hand. "
-            "To show the user how the scene looks, render it with the kb_cli capture command (--out Saved/Agent/Images/<name>.png): "
-            "the editor shows that picture in the conversation. Pictures the user attaches are listed as paths; open them with Read." };
+            "You work inside the 21kb editor on the open project; AGENTS.md says how, and which recipe fits the job. "
+            "Use the kb-engine tools, not shell commands. A picture the user attaches is listed as a path: open it with Read. "
+            "A picture you render with kb_cli capture (--out Saved/Agent/Images/<name>.png) is shown in the conversation." };
         agent.resumeArguments = { "--resume", "{session}" };
         agent.persistentArguments = { "--input-format", "stream-json" };
         agent.requestTemplate = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":{request}}}\n";
@@ -177,23 +172,31 @@ struct Preset {
         // written to the user's Codex configuration. Its tools are approved up front: exec runs
         // with no one to ask, and a tool that waits for approval is refused there.
         EditorAgent agent;
+        // This CLI calls its MCP tools from JavaScript in its exec tool, which no other CLI does. AGENTS.md is the same for all of
+        // them, so how to call the tools here is said in this CLI's own instructions, and it does not spend a step looking them up.
+        const std::string calling = "developer_instructions=\"The kb-engine tools are called from JavaScript in the exec tool, and the result is printed with text(result): "
+            "tools.mcp__kb_engine__kb_cli({args:[...]}) or ({commands:[[...],[...]]}), tools.mcp__kb_engine__guide({topic:'recipe-...'}), "
+            "tools.mcp__kb_engine__api_reference({topic:'...'}). Do not list or search the tool catalogue. Calls that do not depend on each other go in one exec, each awaited.\"";
         agent.runArguments = { "exec", "--json", "--skip-git-repo-check", "-C", "{project}", "-s", "workspace-write",
             "-c", "mcp_servers.kb-engine.command=\"{kbcli}\"",
             "-c", "mcp_servers.kb-engine.args=[\"mcp\",\"--project\",\"{project}\"]",
-            "-c", "mcp_servers.kb-engine.default_tools_approval_mode=\"approve\"" };
+            "-c", "mcp_servers.kb-engine.default_tools_approval_mode=\"approve\"",
+            "-c", calling };
         // A follow-up continues the thread (the process already runs in the project folder; resume
         // takes no -C or -s), with the request read from standard input.
         agent.resumeRunArguments = { "exec", "resume", "{session}", "--json", "--skip-git-repo-check",
             "-c", "mcp_servers.kb-engine.command=\"{kbcli}\"",
             "-c", "mcp_servers.kb-engine.args=[\"mcp\",\"--project\",\"{project}\"]",
-            "-c", "mcp_servers.kb-engine.default_tools_approval_mode=\"approve\"", "-" };
+            "-c", "mcp_servers.kb-engine.default_tools_approval_mode=\"approve\"",
+            "-c", calling, "-" };
         agent.statusArguments = { "login", "status" };
         agent.signInArguments = { "login" };
         // The models come from the CLI's own cache when the agent is detected; with none chosen the model stays the
         // one in the user's configuration. The choice is passed for a new run and when a thread resumes.
         agent.modelArguments = { "-m", "{model}" };
         agent.modelsFile = "models_cache.json";
-        agent.efforts = { "minimal", "low", "medium", "high" };
+        // What the CLI's own model list offers (its cache names low, medium, high, xhigh and max; "minimal" is not one of them).
+        agent.efforts = { "low", "medium", "high", "xhigh", "max" };
         agent.effortArguments = { "-c", "model_reasoning_effort=\"{effort}\"" };
         agent.output = EditorAgentOutputFormat::CodexJson;
         presets.push_back({ "Codex", L"codex", L".codex", L"CODEX_HOME", agent });

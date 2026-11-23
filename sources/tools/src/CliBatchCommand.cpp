@@ -371,7 +371,7 @@ struct BatchReport {
     fs::path keptBackup;
 };
 
-void PrintText(const BatchReport& report, CommandIo io) {
+void PrintText(const BatchReport& report, CommandIo io, bool brief) {
     for (std::size_t index = 0U; index < report.operations.size(); ++index) {
         const OperationResult& operation = report.operations[index];
         io.out << '[' << index + 1U << '/' << report.operations.size() << "] " << operation.line
@@ -379,7 +379,9 @@ void PrintText(const BatchReport& report, CommandIo io) {
         for (const std::string& line : SplitLines(operation.output)) io.out << "    " << line << '\n';
         for (const std::string& line : SplitLines(operation.errors)) io.err << "    " << line << '\n';
     }
+    // The files that changed are for a person reading the transaction; an agent gets what each command printed and the verdict.
     for (const Change& change : report.changes) {
+        if (brief) break;
         io.out << KindName(change.kind) << ' ' << change.path.generic_string() << " (" << change.bytesBefore << " -> "
                << change.bytesAfter << " bytes)\n";
         for (const std::string& line : change.diff) io.out << "    " << line << '\n';
@@ -439,8 +441,8 @@ void PrintJson(const BatchReport& report, CommandIo io) {
 
 } // namespace
 
-int RunBatchOperations(const std::string& projectOption, std::vector<std::vector<std::string>> operations, bool dryRun, bool json, CommandIo io,
-    const CommandRunner& run) {
+int RunBatchOperations(const std::string& projectOption, std::vector<std::vector<std::string>> operations, bool dryRun, bool json, bool brief,
+    CommandIo io, const CommandRunner& run) {
     const std::string* project = &projectOption;
     std::error_code ec;
     const fs::path root = fs::weakly_canonical(fs::path{ *project }, ec);
@@ -483,7 +485,12 @@ int RunBatchOperations(const std::string& projectOption, std::vector<std::vector
         snapshotTaken = TakeSnapshot(snapshot, error);
         if (!snapshotTaken) report.errors.push_back(error);
         for (std::size_t index = 0U; snapshotTaken && index < operations.size(); ++index) {
-            OperationResult result{ .line = Join(operations[index]), .output = {}, .errors = {} };
+            // The words as the caller wrote them: the project the batch added to each is the caller's own, and a path is noise to an agent.
+            std::vector<std::string> shown = operations[index];
+            if (brief) {
+                if (const auto given = std::ranges::find(shown, "--project"); given != shown.end() && std::next(given) != shown.end()) shown.erase(given, given + 2);
+            }
+            OperationResult result{ .line = Join(shown), .output = {}, .errors = {} };
             std::ostringstream out;
             std::ostringstream err;
             try {
@@ -543,7 +550,7 @@ int RunBatchOperations(const std::string& projectOption, std::vector<std::vector
     if (report.failedOperation != 0U && report.rolledBack) report.changes.clear();
 
     if (json) PrintJson(report, io);
-    else PrintText(report, io);
+    else PrintText(report, io, brief);
     return report.errors.empty() && report.failedOperation == 0U ? 0 : 1;
 }
 
@@ -564,7 +571,7 @@ int RunBatchCommand(const ArgumentList& arguments, CommandIo io, const CommandRu
         io.err << "error: " << *file << " has no operations\n";
         return 1;
     }
-    return RunBatchOperations(*project, std::move(operations), arguments.Flag("--dry-run"), arguments.Flag("--json"), io, run);
+    return RunBatchOperations(*project, std::move(operations), arguments.Flag("--dry-run"), arguments.Flag("--json"), false, io, run);
 }
 
 } // namespace kb::cli
