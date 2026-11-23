@@ -51,11 +51,6 @@ using TextureResolver = std::function<std::optional<std::uint64_t>(std::string_v
 // The project path of a texture id, for printing; empty when it is not registered.
 [[nodiscard]] std::string TexturePath(const kb::assets::AssetRegistry& registry, std::uint64_t textureId);
 
-// The material functions a graph calls (and the ones they call), loaded from the project, so the graph can be compiled as the
-// editor compiles it. A function the project lacks is left out and the compile says so.
-[[nodiscard]] kb::render::RenderMaterialGraphFunctionLibrary FunctionLibraryOf(
-    const kb::render::RenderMaterialGraphDocument& graph, const kb::assets::AssetRegistry& registry);
-
 // One "Field=value" of the built-in PBR material (Base Color, Roughness, ..., Base Color Texture,
 // ...) applied to `desc`; the reason it was refused, or empty. `known` is false when the field
 // name is not one of them (so a caller can try graph parameters first).

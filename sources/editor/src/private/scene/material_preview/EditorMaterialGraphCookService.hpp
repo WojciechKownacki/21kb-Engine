@@ -11,6 +11,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -137,6 +138,13 @@ public:
     EditorMaterialGraphCookService(const EditorMaterialGraphCookService&) = delete;
     EditorMaterialGraphCookService& operator=(const EditorMaterialGraphCookService&) = delete;
 
+    // The material functions a graph calls, from the project: a cook compiles the graph with them, and a change to one of them
+    // changes the cook's cache key, so the materials that call it are cooked again. Called on the caller's thread (a request is
+    // made on the UI thread); without it a graph that calls a function cannot compile.
+    using FunctionLibraryProvider = std::function<std::shared_ptr<const kb::render::RenderMaterialGraphFunctionLibrary>(
+        const kb::render::RenderMaterialGraphDocument& graph)>;
+    void SetFunctionLibraryProvider(FunctionLibraryProvider provider) { functionLibraryProvider_ = std::move(provider); }
+
     [[nodiscard]] bool ShadercAvailable() const noexcept;
     [[nodiscard]] const EditorMaterialGraphCookConfig& Config() const noexcept { return config_; }
     [[nodiscard]] const std::string& CacheRoot() const noexcept { return config_.cacheRoot; }
@@ -179,9 +187,16 @@ private:
     struct PendingEntry {
         kb::render::RenderMaterialAssetData material;
         kb::render::RenderMaterialGraphBuildContext graphContext{};
+        std::shared_ptr<const kb::render::RenderMaterialGraphFunctionLibrary> functionLibrary;
         std::uint64_t generation = 0U;
         std::chrono::steady_clock::time_point readyAt{};
     };
+
+    [[nodiscard]] std::shared_ptr<const kb::render::RenderMaterialGraphFunctionLibrary> FunctionLibraryFor(
+        const kb::render::RenderMaterialGraphDocument& graph) const {
+        return functionLibraryProvider_ ? functionLibraryProvider_(graph) : nullptr;
+    }
+    FunctionLibraryProvider functionLibraryProvider_;
 
     // Starts a drain job unless one is already scheduled. Needs mutex_ held by the caller.
     void ScheduleDrainLocked();

@@ -4745,6 +4745,9 @@ void MaterialEditorState::RefreshFindResults() {
     }
 
     kb::render::RenderMaterialGraphBuildContext context{};
+    const kb::render::RenderMaterialGraphFunctionLibrary functions =
+        functionLibraryProvider_ ? functionLibraryProvider_(graph) : kb::render::RenderMaterialGraphFunctionLibrary{};
+    context.functionLibrary = &functions;
     const kb::render::RenderMaterialGraphIrBuildResult ir = kb::render::BuildRenderMaterialGraphIr(graph, context);
     if (ir.Succeeded()) {
         for (const kb::render::RenderMaterialGraphIrNode& irNode : ir.ir.nodes) {
@@ -4856,6 +4859,9 @@ void MaterialEditorState::RefreshGraphDiagnostics() {
     if (valid) {
         kb::render::RenderMaterialGraphBuildContext context{};
         context.assetId = openAssetId_.value;
+        const kb::render::RenderMaterialGraphFunctionLibrary functions =
+            functionLibraryProvider_ ? functionLibraryProvider_(workingCopy_->graph) : kb::render::RenderMaterialGraphFunctionLibrary{};
+        context.functionLibrary = &functions;
         const kb::render::RenderMaterialGraphCompileResult compile =
             kb::render::CompileRenderMaterialGraphToShaderSource(workingCopy_->graph, context);
         compileSucceeded = compile.Succeeded();

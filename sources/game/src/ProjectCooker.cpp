@@ -968,6 +968,9 @@ struct CookerToolInputSnapshot {
     return ReadFileBytes(snapshot->second.path, bytes, error);
 }
 
+// The cook's own closure check: it reads each material function from the verified source snapshot (never the live file), refuses an
+// editor-only function and stops at the first problem, so it does not use BuildRenderMaterialFunctionLibrary (RenderMaterialFunctionLibrary.hpp),
+// which every other compile path shares. Both walk the calls with DiscoverRenderMaterialGraphFunctionDependencies; keep the two in step.
 [[nodiscard]] bool ValidateMaterialGraphRuntimeDependencies(
     const kb::render::RenderMaterialGraphDocument& rootGraph,
     kb::assets::AssetManager& manager,

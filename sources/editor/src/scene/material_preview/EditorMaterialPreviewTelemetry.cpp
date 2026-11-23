@@ -1,6 +1,7 @@
 #include "scene/material_preview/EditorMaterialPreviewTelemetry.hpp"
 
 #include "engine/assets/AssetMetadata.hpp"
+#include "kb/render/resources/RenderMaterialFunctionLibrary.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 
 #include <array>
@@ -48,6 +49,9 @@ EditorMaterialPreviewTelemetry EditorMaterialPreviewTelemetryBuilder::Build(
     telemetry.graphBacked = kb::render::HasGraphAuthoringData(material->graph);
     if (telemetry.graphBacked) {
         graphContext.assetId = materialAssetId.value;
+        const kb::render::RenderMaterialFunctionLibraryBuildResult functions =
+            kb::render::BuildRenderMaterialFunctionLibraryFromFiles(manager, material->graph);
+        graphContext.functionLibrary = &functions.library;
         const kb::render::RenderMaterialGraphCompileResult compile = kb::render::CompileRenderMaterialGraphToShaderSource(
             material->graph,
             graphContext);

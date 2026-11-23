@@ -7,6 +7,7 @@
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialFunctionLibrary.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetWriter.hpp"
@@ -329,6 +330,8 @@ bool EditorMaterialAssetGateway::WriteExisting(kb::scene::Scene& scene, kb::asse
             materialToWrite.materialTypeAssetPath,
             kb::render::kRenderMaterialTypeAssetType);
         if (materialType != nullptr) {
+            const kb::render::RenderMaterialFunctionLibraryBuildResult functions =
+                kb::render::BuildRenderMaterialFunctionLibrary(scene.Assets().Manager(), materialToWrite.graph);
             const kb::render::RenderMaterialGraphMaterialTypeBuildResult generatedType =
                 kb::render::BuildRenderMaterialGraphMaterialTypeDocument(
                     materialToWrite.graph,
@@ -337,6 +340,7 @@ bool EditorMaterialAssetGateway::WriteExisting(kb::scene::Scene& scene, kb::asse
                     kb::render::RenderMaterialGraphBuildContext{
                         .assetId = sourceGraph->id.value,
                         .sourcePath = sourceGraph->virtualPath.generic_string(),
+                        .functionLibrary = &functions.library,
                     });
             const std::filesystem::path materialTypePath = physicalPath(*materialType);
             if (!generatedType.Succeeded() || !generatedType.document.has_value() || materialTypePath.empty()) {

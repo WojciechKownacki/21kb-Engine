@@ -24,11 +24,6 @@ struct RuntimeMaterialSourceGraphLoadResult {
     bool usedInlineFallback = false;
 };
 
-struct RuntimeMaterialFunctionLibraryBuildResult {
-    RenderMaterialGraphFunctionLibrary library;
-    std::vector<RenderMaterialGraphDiagnostic> diagnostics;
-};
-
 [[nodiscard]] std::filesystem::path ResolveRuntimeMaterialAssetPhysicalPath(
     const kb::assets::AssetManager& manager,
     const kb::assets::AssetMetadata& metadata);
@@ -37,10 +32,6 @@ struct RuntimeMaterialFunctionLibraryBuildResult {
     kb::assets::AssetManager& manager,
     const kb::assets::AssetMetadata& owner,
     const RenderMaterialAssetData& material);
-
-[[nodiscard]] RuntimeMaterialFunctionLibraryBuildResult BuildRuntimeMaterialFunctionLibrary(
-    kb::assets::AssetManager& manager,
-    const RenderMaterialGraphDocument& graph);
 
 [[nodiscard]] std::vector<RenderMaterialGraphDiagnostic> LoadRuntimeMaterialParameterCollectionDefaults(
     kb::assets::AssetManager& manager,

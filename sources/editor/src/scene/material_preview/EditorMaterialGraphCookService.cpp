@@ -1,6 +1,7 @@
 #include "scene/material_preview/EditorMaterialGraphCookService.hpp"
 #include "localization/EditorLocalization.hpp"
 
+#include "kb/render/resources/RenderMaterialFunctionLibrary.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
 #include "kb/render/resources/RenderMaterialGraphShaderPrewarmer.hpp"
@@ -108,8 +109,14 @@ void HashVariantBytes(std::uint64_t& hash, std::string_view value) noexcept {
     const EditorMaterialGraphCookConfig& config,
     kb::assets::AssetId assetId,
     const kb::render::RenderMaterialAssetData& material,
-    const kb::render::RenderMaterialGraphBuildContext& context) {
+    const kb::render::RenderMaterialGraphBuildContext& context,
+    const kb::render::RenderMaterialGraphFunctionLibrary* functionLibrary) {
     std::uint64_t inputHash = ShaderCodeHash(material);
+    // A call node holds only its function's signature, so the key needs the functions themselves: a changed function
+    // changes the shader of every material that calls it.
+    if (functionLibrary != nullptr && !functionLibrary->entries.empty()) {
+        HashVariantBytes(inputHash, std::to_string(kb::render::HashRenderMaterialFunctionLibrary(*functionLibrary)));
+    }
     HashVariantBytes(inputHash, config.shadercPath);
     HashVariantBytes(inputHash, config.varyingDefPath);
     for (const std::string& includeDir : config.includeDirs) {
@@ -241,13 +248,14 @@ struct PassCookOutcome {
     const EditorMaterialGraphCookConfig& config,
     kb::assets::AssetId assetId,
     const kb::render::RenderMaterialAssetData& material,
-    kb::render::RenderMaterialGraphBuildContext graphContext) {
+    kb::render::RenderMaterialGraphBuildContext graphContext,
+    const std::shared_ptr<const kb::render::RenderMaterialGraphFunctionLibrary>& functionLibrary) {
     CookPlan plan{};
     plan.startedAt = std::chrono::steady_clock::now();
     plan.materialTypeVersion = material.materialTypeVersion;
     EditorMaterialGraphCookResult& result = plan.result;
     result.materialAssetId = assetId;
-    result.variantKey = BuildCookVariantKey(config, assetId, material, graphContext);
+    result.variantKey = BuildCookVariantKey(config, assetId, material, graphContext, functionLibrary.get());
     result.materialTypeVersion = material.materialTypeVersion;
 
     if (config.shadercPath.empty()) {
@@ -257,6 +265,7 @@ struct PassCookOutcome {
     }
 
     graphContext.assetId = assetId.value;
+    graphContext.functionLibrary = functionLibrary.get();
     kb::render::RenderMaterialGraphCompileResult compiled =
         kb::render::CompileRenderMaterialGraphToShaderSource(material.graph, graphContext);
     for (const kb::render::RenderMaterialGraphDiagnostic& diagnostic : compiled.diagnostics) {
@@ -571,8 +580,9 @@ std::uint64_t EditorMaterialGraphCookService::RequestCook(
     }
     // Hashing the graph is the costly part of a request; it runs before the lock is taken so a worker that
     // publishes a result is never held up by it.
+    std::shared_ptr<const kb::render::RenderMaterialGraphFunctionLibrary> functionLibrary = FunctionLibraryFor(material.graph);
     const kb::render::RenderMaterialGraphVariantKey variantKey =
-        BuildCookVariantKey(snapshot, assetId, material, graphContext);
+        BuildCookVariantKey(snapshot, assetId, material, graphContext, functionLibrary.get());
 
     std::uint64_t generation = 0U;
     {
@@ -621,6 +631,7 @@ std::uint64_t EditorMaterialGraphCookService::RequestCook(
         PendingEntry entry{};
         entry.material = material;
         entry.graphContext = std::move(graphContext);
+        entry.functionLibrary = std::move(functionLibrary);
         entry.generation = generation;
         entry.readyAt = std::chrono::steady_clock::now() +
             std::chrono::milliseconds(cookedBefore ? 0U : snapshot.debounceMs);
@@ -651,7 +662,7 @@ EditorMaterialGraphCookResult EditorMaterialGraphCookService::CookNow(
         snapshot = config_;
     }
     const auto job = std::make_shared<CookJob>();
-    job->plan = PlanCook(snapshot, assetId, material, std::move(graphContext));
+    job->plan = PlanCook(snapshot, assetId, material, std::move(graphContext), FunctionLibraryFor(material.graph));
     job->config = std::move(snapshot);
     const std::size_t passCount = job->plan.shader != nullptr ? job->plan.passes.size() : 0U;
     job->outcomes.resize(passCount);
@@ -903,7 +914,7 @@ void EditorMaterialGraphCookService::DrainPending() {
 
         // The graph becomes shader source here, on the drain worker, and only the compiles are handed on.
         lock.unlock();
-        job->plan = PlanCook(job->config, assetId, entry.material, std::move(entry.graphContext));
+        job->plan = PlanCook(job->config, assetId, entry.material, std::move(entry.graphContext), entry.functionLibrary);
         lock.lock();
 
         if (stop_ || SupersededLocked(variantKey, entry.generation)) {

@@ -5,6 +5,7 @@
 #include "scene/material_preview/EditorMaterialGraphCookService.hpp"
 
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialFunctionLibrary.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
 
@@ -14,6 +15,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <thread>
 #include <array>
 #include <string>
@@ -241,6 +243,41 @@ void RunEditorOnlyGraphChangesKeepCookVariantIdentityTest() {
     const EditorMaterialGraphCookResult changed = service.CookNow(assetId, semantic);
     Require(!(first.variantKey == changed.variantKey),
         "P2.6: a shader-semantic graph edit must produce a different cook variant identity");
+}
+
+// A graph that calls a material function holds only the function's signature, so what the function is must be in the cook's
+// cache key: changing a function gives every material that calls it a new variant, and the same functions give the same one.
+void RunMaterialFunctionContentChangesCookVariantIdentityTest() {
+    EditorMaterialGraphCookConfig config{};
+    config.cacheRoot = (std::filesystem::temp_directory_path() / "kb_cook_function_identity").generic_string();
+    EditorMaterialGraphCookService service{ config };
+    const kb::assets::AssetId assetId{ 0x9027U };
+    const RenderMaterialAssetData material = MakeConstantColorMaterial("1 0 0 1");
+
+    const EditorMaterialGraphCookResult without = service.CookNow(assetId, material);
+    std::uint64_t functionHash = 111U;
+    service.SetFunctionLibraryProvider([&functionHash](const RenderMaterialGraphDocument&) {
+        auto library = std::make_shared<kb::render::RenderMaterialGraphFunctionLibrary>();
+        library->entries.push_back(kb::render::RenderMaterialGraphFunctionLibraryEntry{ .assetId = 0x77U, .contentHash = functionHash, .name = "/Game/Glow.kbmatfn" });
+        return library;
+    });
+    const EditorMaterialGraphCookResult first = service.CookNow(assetId, material);
+    const EditorMaterialGraphCookResult again = service.CookNow(assetId, material);
+    functionHash = 222U;
+    const EditorMaterialGraphCookResult changed = service.CookNow(assetId, material);
+    Require(first.variantKey == again.variantKey, "the same material functions must give the same cook variant identity");
+    Require(!(first.variantKey == changed.variantKey), "changing a material function's content must change the cook variant identity of the materials that call it");
+    Require(!(without.variantKey == first.variantKey), "a material that has functions must not share a cook variant with one that has none");
+
+    // The key hash the cook uses follows the library: order does not matter, content does.
+    kb::render::RenderMaterialGraphFunctionLibrary one;
+    one.entries.push_back({ .assetId = 1U, .contentHash = 5U });
+    one.entries.push_back({ .assetId = 2U, .contentHash = 6U });
+    kb::render::RenderMaterialGraphFunctionLibrary other = one;
+    std::swap(other.entries[0], other.entries[1]);
+    Require(kb::render::HashRenderMaterialFunctionLibrary(one) == kb::render::HashRenderMaterialFunctionLibrary(other), "a function library's hash must not depend on the order of its entries");
+    other.entries[0].contentHash += 1U;
+    Require(kb::render::HashRenderMaterialFunctionLibrary(one) != kb::render::HashRenderMaterialFunctionLibrary(other), "a function library's hash must follow the content of its functions");
 }
 
 #if defined(KB_EDITOR_GRAPH_SHADERC_PATH)
@@ -1045,6 +1082,7 @@ void RunEditorMaterialGraphCookServiceTests() {
     RunCookUnavailableTest();
     RunFailedGraphTest();
     RunEditorOnlyGraphChangesKeepCookVariantIdentityTest();
+    RunMaterialFunctionContentChangesCookVariantIdentityTest();
     RunCookBannerMappingTest();
 #if defined(KB_EDITOR_GRAPH_SHADERC_PATH)
     RunSynchronousCookProducesBinaryTest();

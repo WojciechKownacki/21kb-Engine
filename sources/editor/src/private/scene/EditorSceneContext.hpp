@@ -843,6 +843,9 @@ public:
     [[nodiscard]] bool ZoomParticlePreviewCamera(float scale);
     void SetParticlePreviewReleaseHandler(std::function<void(const kb::scene::Scene&)> handler);
     [[nodiscard]] bool OpenAnimationClipEditorAsset(kb::assets::AssetId id);
+    // The material functions a graph calls, read from the project: what every compile of a material graph in the editor
+    // (the Material Editor's diagnostics, the cooks of the preview and the scene) is given.
+    [[nodiscard]] kb::render::RenderMaterialGraphFunctionLibrary MaterialFunctionLibrary(const kb::render::RenderMaterialGraphDocument& graph) const;
     [[nodiscard]] bool OpenAnimatorEditorAsset(kb::assets::AssetId id);
     [[nodiscard]] kb::assets::AssetId AnimatorEditorAssetId() const noexcept;
     [[nodiscard]] bool HasAnimatorEditorAsset() const noexcept;

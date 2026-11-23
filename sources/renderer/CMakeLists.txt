@@ -67,6 +67,7 @@ add_library(kb_renderer STATIC
     include/kb/render/resources/RenderMaterialAssetWriter.hpp
     include/kb/render/resources/RenderMaterialCookPayload.hpp
     include/kb/render/resources/RenderMaterialFunctionAssetLoader.hpp
+    include/kb/render/resources/RenderMaterialFunctionLibrary.hpp
     include/kb/render/resources/RenderMaterialGraphAssetLoader.hpp
     include/kb/render/resources/RenderMaterialGraphDocument.hpp
     include/kb/render/resources/RenderMaterialGraphVariantKey.hpp
@@ -223,6 +224,7 @@ add_library(kb_renderer STATIC
     src/resources/RenderMaterialAssetWriter.cpp
     src/resources/RenderMaterialCookPayload.cpp
     src/resources/RenderMaterialFunctionAssetLoader.cpp
+    src/resources/RenderMaterialFunctionLibrary.cpp
     src/resources/RenderMaterialGraphAssetLoader.cpp
     src/resources/RenderMaterialGraphDocument.cpp
     src/resources/RenderMaterialGraphCompiler.cpp

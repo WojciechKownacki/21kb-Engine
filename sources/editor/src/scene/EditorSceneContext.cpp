@@ -392,6 +392,10 @@ EditorSceneContext::EditorSceneContext()
     , animationPreviewScene_(std::make_unique<EditorAnimationPreviewScene>())
     , graphShaderCacheRoot_((EditorProjectPaths::ProjectRoot() / ".cache" / "graph_shaders").generic_string())
     , materialGraphCookService_(std::make_unique<EditorMaterialGraphCookService>(EditorMaterialGraphCookConfig::Resolve(graphShaderCacheRoot_))) {
+    materialEditor_.SetFunctionLibraryProvider([this](const kb::render::RenderMaterialGraphDocument& graph) { return MaterialFunctionLibrary(graph); });
+    materialGraphCookService_->SetFunctionLibraryProvider([this](const kb::render::RenderMaterialGraphDocument& graph) {
+        return std::make_shared<const kb::render::RenderMaterialGraphFunctionLibrary>(MaterialFunctionLibrary(graph));
+    });
     const EditorBuildGameSettingsLoadResult packageSettings = EditorBuildGameSettingsStore::Load(
         EditorBuildGameSettingsStore::FilePath(EditorProjectPaths::ProjectRoot()));
     if (packageSettings.Succeeded()) {

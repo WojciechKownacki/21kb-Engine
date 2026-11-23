@@ -6,6 +6,7 @@
 #include "engine/scene/TimelineAssetIO.hpp"
 #include "engine/ui/UITheme.hpp"
 #include "engine/ui/UIThemeIO.hpp"
+#include "kb/render/resources/RenderMaterialFunctionLibrary.hpp"
 
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetMetadata.hpp"
@@ -6099,7 +6100,7 @@ void RunMotionAndFunctionCommandTests() {
     kb::scene::Scene mounted;
     std::string mountError;
     Require(kb::cli::MountProjectAssets(mounted, root, mountError), "the project could not be mounted: " + mountError);
-    const kb::render::RenderMaterialGraphFunctionLibrary library = kb::cli::material::FunctionLibraryOf(ball->graph, mounted.Assets().Manager().Registry());
+    const kb::render::RenderMaterialGraphFunctionLibrary library = kb::render::BuildRenderMaterialFunctionLibraryFromFiles(mounted.Assets().Manager().Registry(), ball->graph).library;
     kb::render::RenderMaterialGraphBuildContext context;
     context.functionLibrary = &library;
     Require(library.entries.size() == 1U && kb::render::CompileRenderMaterialGraphToShaderSource(ball->graph, context).Succeeded(), "the material that calls the function must compile with it");

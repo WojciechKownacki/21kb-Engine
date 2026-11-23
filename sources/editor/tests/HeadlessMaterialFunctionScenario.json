@@ -1,0 +1,46 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    {
+      "op": "create_scene",
+      "name": "MaterialFunctionEditor",
+      "template": "Empty"
+    },
+    {
+      "op": "write_file",
+      "path": "Assets/Materials/GlowEdge.kbmatfn",
+      "content": "# KB material function\ngraphVersion 3\ngraphMaterialDomain surface\ngraphShadingModel defaultLit\ngraphBlendMode opaque\ngraphStorageModel inline-kbmat\ngraphDiagnosticSchemaVersion 1\ngraphPersistCompileDiagnostics true\ngraphArtifactFailurePolicy LastGoodThenErrorMaterial\ngraphNode 2 FunctionInput 60 40\ngraphParameter 2 Color Color Core color _ _ _ Unknown false 0 default%20%23FF8C1A\ngraphSamplerState 2 Linear Linear Linear Repeat Repeat\ngraphNode 3 FunctionInput 60 160\ngraphParameter 3 Power Power Core float _ _ _ Unknown false 0 default%203\ngraphSamplerState 3 Linear Linear Linear Repeat Repeat\ngraphNode 4 FunctionInput 60 280\ngraphParameter 4 Intensity Intensity Core float _ _ _ Unknown false 0 default%202\ngraphSamplerState 4 Linear Linear Linear Repeat Repeat\ngraphNode 5 Fresnel 260 160\ngraphParameter 5 _ Fresnel Core 5%200.04 _ _ _ Unknown false 0 _\ngraphSamplerState 5 Linear Linear Linear Repeat Repeat\ngraphNode 6 Multiply 460 80\ngraphNode 7 Multiply 660 120\ngraphNode 8 FunctionOutput 860 120\ngraphParameter 8 Glow Glow Core color _ _ _ Unknown false 0 _\ngraphSamplerState 8 Linear Linear Linear Repeat Repeat\ngraphLink 568467823 3 9379841 value 5 3215363 exponent\ngraphLink 2872448084 5 3219457 value 6 1249281 a\ngraphLink 29963678 2 9379841 value 6 1249282 b\ngraphLink 2258247604 6 1253377 value 7 1249281 a\ngraphLink 2021580425 4 9379841 value 7 1249282 b\ngraphLink 4181674481 7 1253377 value 8 9441281 value\n"
+    },
+    {
+      "op": "discover_assets"
+    },
+    {
+      "op": "write_file",
+      "path": "Assets/Materials/GlowBall.kbmat",
+      "content": "# KB material\nversion 1\nmaterialType builtin.pbr\nmaterialTypeVersion 1\nbaseColor 0.0273208916 0.238397658 0.730460882 1\nmetallicFactor 0\nroughnessFactor 1\nnormalScale 1\nocclusionStrength 1\nemissiveColor 0 0 0\nemissiveStrength 1\nalphaMode OPAQUE\nalphaCutoff 0.5\ntranslucencyBlend ALPHA\ndoubleSided false\nwritesDepth true\ntiling 1 1\noffset 0 0\nclearcoatFactor 0\nclearcoatRoughnessFactor 0\nsheenColor 0 0 0\nsheenRoughnessFactor 0\ntransmissionFactor 0\nthicknessFactor 0\nattenuationColor 1 1 1\nattenuationDistance 0\nsubsurfaceColor 1 1 1\nsubsurfaceFactor 0\nanisotropyStrength 0\nanisotropyRotation 0\nlayerWeight 1\ndecalBlendMode DISABLED\nlayerBlendMode REPLACE\ngraphVersion 3\ngraphMaterialDomain surface\ngraphShadingModel defaultLit\ngraphBlendMode opaque\ngraphStorageModel inline-kbmat\ngraphDiagnosticSchemaVersion 1\ngraphPersistCompileDiagnostics true\ngraphArtifactFailurePolicy LastGoodThenErrorMaterial\ngraphNode 1 MaterialOutput 640 240\ngraphNode 2 MaterialFunctionCall 360 120\ngraphParameter 2 {{ASSET_ID:/Game/Materials/GlowEdge.kbmatfn}} GlowEdge Core _ _ _ _ Unknown false 0 Assign%20a%20RenderMaterialFunction%20asset%20id%20to%20call%20a%20reusable%20material%20function.\ngraphSamplerState 2 Linear Linear Linear Repeat Repeat\ngraphCustomCode 2 color Color:color,Power:float,Intensity:float Glow:color _ _ _\ngraphNode 3 ConstantColor 60 200\ngraphParameter 3 _ Color Core 1%200.262251%200.0103298%201 _ _ _ Unknown false 0 _\ngraphSamplerState 3 Linear Linear Linear Repeat Repeat\ngraphNode 4 ConstantScalar 60 320\ngraphParameter 4 _ Power Core 3 _ _ _ Unknown false 0 _\ngraphSamplerState 4 Linear Linear Linear Repeat Repeat\ngraphNode 5 ConstantScalar 60 440\ngraphParameter 5 _ Intensity Core 2 _ _ _ Unknown false 0 _\ngraphSamplerState 5 Linear Linear Linear Repeat Repeat\ngraphNode 6 ConstantColor 60 560\ngraphParameter 6 _ Base%20Color Core 0.027321%200.238398%200.730461%201 _ _ _ Unknown false 0 _\ngraphSamplerState 6 Linear Linear Linear Repeat Repeat\ngraphLink 3777868457 3 270337 rgba 2 9506817 Color\ngraphLink 4207423883 4 139265 value 2 9506818 Power\ngraphLink 745538779 5 139265 value 2 9506819 Intensity\ngraphLink 260209122 2 9510913 Glow 1 69637 emissive\ngraphLink 4260548319 6 270337 rgba 1 69633 baseColor\n"
+    },
+    {
+      "op": "discover_assets"
+    },
+    {
+      "op": "open_asset",
+      "asset": "/Game/Materials/GlowBall.kbmat"
+    },
+    {
+      "op": "assert_material_compiles",
+      "asset": "/Game/Materials/GlowBall.kbmat"
+    },
+    {
+      "op": "wait_material_cook",
+      "timeout_ms": 60000
+    },
+    {
+      "op": "assert_no_errors"
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "material-function-call"
+    }
+  ]
+}

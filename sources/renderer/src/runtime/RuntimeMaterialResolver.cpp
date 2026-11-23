@@ -1,6 +1,7 @@
 #include "kb/render/runtime/RuntimeMaterialResolver.hpp"
 
 #include "runtime/RuntimeMaterialGraphDependencyLoader.hpp"
+#include "kb/render/resources/RenderMaterialFunctionLibrary.hpp"
 
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetManager.hpp"
@@ -1970,7 +1971,7 @@ ResolvedRuntimeMaterialDesc RuntimeMaterialResolver::ResolveLoadedMaterial(
                 " nodes=" + std::to_string(materialAsset.graph.nodes.size()) +
                 " links=" + std::to_string(materialAsset.graph.links.size()) +
                 " values=" + std::to_string(materialAsset.graphParameterValues.size()));
-        RuntimeMaterialFunctionLibraryBuildResult functionLibrary = BuildRuntimeMaterialFunctionLibrary(manager, materialAsset.graph);
+        RenderMaterialFunctionLibraryBuildResult functionLibrary = BuildRenderMaterialFunctionLibrary(manager, materialAsset.graph);
         resolved.graphDiagnostics.insert(
             resolved.graphDiagnostics.end(),
             std::make_move_iterator(functionLibrary.diagnostics.begin()),

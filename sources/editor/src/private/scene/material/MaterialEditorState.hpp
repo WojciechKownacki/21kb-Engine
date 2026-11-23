@@ -13,6 +13,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <initializer_list>
 #include <optional>
 #include <span>
@@ -31,6 +32,11 @@ class MaterialEditorState {
     };
 
 public:
+    // The material functions a graph calls, from the project: the compile that reports the graph's diagnostics needs them,
+    // or a call to a function would be reported as missing.
+    using FunctionLibraryProvider = std::function<kb::render::RenderMaterialGraphFunctionLibrary(const kb::render::RenderMaterialGraphDocument& graph)>;
+    void SetFunctionLibraryProvider(FunctionLibraryProvider provider) { functionLibraryProvider_ = std::move(provider); }
+
     [[nodiscard]] kb::assets::AssetId OpenAssetId() const noexcept {
         return openAssetId_;
     }
@@ -955,6 +961,7 @@ private:
     mutable bool cleanCanonicalValid_ = false;
     mutable bool parametersStale_ = false;
     mutable bool graphDiagnosticsStale_ = false;
+    FunctionLibraryProvider functionLibraryProvider_;
     mutable bool findResultsStale_ = false;
     bool infoPanelVisible_ = false;
     std::uint32_t selectedNodeId_ = 0U;

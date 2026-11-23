@@ -22,6 +22,7 @@
 #include "engine/script/ScriptModule.hpp"
 #include "engine/world/WorldDescriptor.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialParameterCollection.hpp"
@@ -144,6 +145,8 @@ void RegisterEditorSceneDocumentAssetLoaders(kb::scene::Scene& scene) {
     kb::assets::AssetManager& manager = scene.Assets().Manager();
     static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::RenderMeshAssetLoader>()));
     static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()));
+    // Material functions (.kbmatfn): a material that calls one cannot be compiled, nor the function listed, without its loader.
+    static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::RenderMaterialFunctionAssetLoader>()));
     static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::RenderMaterialGraphAssetLoader>()));
     static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::RenderMaterialInstanceAssetLoader>()));
     static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::RenderMaterialParameterCollectionAssetLoader>()));

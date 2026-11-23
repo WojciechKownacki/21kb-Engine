@@ -33,6 +33,7 @@
 #include "resources/RenderMeshResourceBuilder.hpp"
 #include "runtime/RuntimeTextureMipChain.hpp"
 #include "runtime/RuntimeMaterialGraphDependencyLoader.hpp"
+#include "kb/render/resources/RenderMaterialFunctionLibrary.hpp"
 #include "kb/render/runtime/RuntimeMaterialResolver.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
@@ -2489,11 +2490,18 @@ void RunPackagedMaterialDependencyMemoryTest() {
             packagedMissingGraph.parseResult.HasErrors(),
         "The packaged runtime accepted an inline editor snapshot after sourceGraph resolution failed");
 
-    const RuntimeMaterialFunctionLibraryBuildResult functions =
-        BuildRuntimeMaterialFunctionLibrary(manager, *loadedGraph.graph);
+    const RenderMaterialFunctionLibraryBuildResult functions =
+        BuildRenderMaterialFunctionLibrary(manager, *loadedGraph.graph);
     Require(functions.diagnostics.empty() && functions.library.entries.size() == 1U &&
             functions.library.entries.front().assetId == functionId.value,
         "Packaged material function library did not load through AssetManager");
+    // What the function is is part of what a cache of the materials that call it must key on.
+    RenderMaterialGraphFunctionLibrary editedFunctions = functions.library;
+    editedFunctions.entries.front().contentHash += 1U;
+    Require(HashRenderMaterialFunctionLibrary(functions.library) != 0U &&
+            HashRenderMaterialFunctionLibrary(functions.library) == HashRenderMaterialFunctionLibrary(functions.library) &&
+            HashRenderMaterialFunctionLibrary(functions.library) != HashRenderMaterialFunctionLibrary(editedFunctions),
+        "A material function library's hash must change when a function's content changes");
     static_cast<void>(GlobalRenderMaterialParameterCollectionStore().UnloadCollection(collectionId.value));
     const std::vector<RenderMaterialGraphDiagnostic> collectionDiagnostics =
         LoadRuntimeMaterialParameterCollectionDefaults(manager, *loadedGraph.graph);

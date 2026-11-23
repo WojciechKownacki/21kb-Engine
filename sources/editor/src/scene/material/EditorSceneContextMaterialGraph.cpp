@@ -80,6 +80,7 @@
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialFunctionLibrary.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetWriter.hpp"
@@ -996,6 +997,13 @@ bool EditorSceneContext::FindMaterialReferences(kb::assets::AssetId materialAsse
 bool EditorSceneContext::ExtractEmbeddedMaterials(kb::assets::AssetId meshAssetId) {
     EditorEmbeddedMaterialExtractor extractor{ *scene_, assetBrowser_, console_ };
     return extractor.Extract(meshAssetId).Succeeded();
+}
+
+kb::render::RenderMaterialGraphFunctionLibrary EditorSceneContext::MaterialFunctionLibrary(const kb::render::RenderMaterialGraphDocument& graph) const {
+    if (scene_ == nullptr || kb::render::DiscoverRenderMaterialGraphFunctionDependencies(graph).empty()) {
+        return {};
+    }
+    return kb::render::BuildRenderMaterialFunctionLibrary(scene_->Assets().Manager(), graph).library;
 }
 
 bool EditorSceneContext::OpenMaterialEditorAsset(kb::assets::AssetId id) {

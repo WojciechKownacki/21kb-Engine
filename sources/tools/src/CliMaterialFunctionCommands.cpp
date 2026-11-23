@@ -11,6 +11,7 @@
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialAuthoring.hpp"
 #include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialFunctionLibrary.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 
 #include <algorithm>
@@ -277,7 +278,7 @@ struct Check {
             check.problems.push_back(std::string{ kb::render::RenderMaterialGraphDiagnosticKindName(diagnostic.kind) } + ": " + diagnostic.message);
         }
     }
-    const kb::render::RenderMaterialGraphFunctionLibrary library = material::FunctionLibraryOf(asset.graph, registry);
+    const kb::render::RenderMaterialGraphFunctionLibrary library = kb::render::BuildRenderMaterialFunctionLibraryFromFiles(registry, asset.graph).library;
     kb::render::RenderMaterialGraphBuildContext context;
     context.functionLibrary = &library;
     for (const kb::render::RenderMaterialGraphDiagnostic& diagnostic : kb::render::CompileRenderMaterialGraphToShaderSource(asset.graph, context).diagnostics) {

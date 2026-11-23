@@ -19,6 +19,7 @@
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #include "kb/render/runtime/RuntimeRenderAssetDiscovery.hpp"
 #include "runtime/RuntimeMaterialGraphDependencyLoader.hpp"
+#include "kb/render/resources/RenderMaterialFunctionLibrary.hpp"
 
 #include <algorithm>
 #include <array>
@@ -199,8 +200,8 @@ struct MaterialShaderQualifier final {
         return Failure("graph material has no cooked shader artifacts: " + DescribeAsset(asset));
     }
 
-    const RuntimeMaterialFunctionLibraryBuildResult functions =
-        BuildRuntimeMaterialFunctionLibrary(assets, *resolved.graph);
+    const RenderMaterialFunctionLibraryBuildResult functions =
+        BuildRenderMaterialFunctionLibrary(assets, *resolved.graph);
     if (std::ranges::any_of(functions.diagnostics, [](const RenderMaterialGraphDiagnostic& diagnostic) {
             return diagnostic.severity == RenderMaterialGraphDiagnosticSeverity::Error;
         })) {

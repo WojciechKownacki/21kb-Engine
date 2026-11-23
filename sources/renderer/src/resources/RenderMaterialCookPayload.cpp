@@ -1,4 +1,5 @@
 #include "kb/render/resources/RenderMaterialCookPayload.hpp"
+#include "kb/render/resources/RenderMaterialFunctionLibrary.hpp"
 
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetRegistry.hpp"
@@ -160,73 +161,11 @@ void AppendTexturePathDependency(
     return graphDependencies;
 }
 
-struct CookMaterialFunctionLibraryBuildResult {
-    RenderMaterialGraphFunctionLibrary library;
-    std::vector<RenderMaterialGraphDiagnostic> diagnostics;
-};
-
-void AppendCookFunctionDiagnostic(
-    CookMaterialFunctionLibraryBuildResult& result,
-    std::uint64_t assetId,
-    const std::filesystem::path& path,
-    std::string message) {
-    result.diagnostics.push_back(RenderMaterialGraphDiagnostic{
-        .severity = RenderMaterialGraphDiagnosticSeverity::Error,
-        .kind = RenderMaterialGraphDiagnosticKind::MissingMaterialFunction,
-        .assetId = assetId,
-        .sourcePath = path.generic_string(),
-        .message = std::move(message),
-    });
-}
-
-[[nodiscard]] CookMaterialFunctionLibraryBuildResult BuildCookMaterialFunctionLibrary(
+// The cook reads the functions from the registry's files, with the diagnostics of the shared builder.
+[[nodiscard]] RenderMaterialFunctionLibraryBuildResult BuildCookMaterialFunctionLibrary(
     const RenderMaterialGraphDocument& graph,
     const kb::assets::AssetRegistry& registry) {
-    CookMaterialFunctionLibraryBuildResult result{};
-    std::vector<std::uint64_t> pending = DiscoverRenderMaterialGraphFunctionDependencies(graph);
-    std::unordered_set<std::uint64_t> visited;
-    while (!pending.empty()) {
-        const std::uint64_t assetId = pending.back();
-        pending.pop_back();
-        if (assetId == 0U || !visited.insert(assetId).second) {
-            continue;
-        }
-
-        const kb::assets::AssetMetadata* metadata = registry.Find(kb::assets::AssetId{ assetId });
-        if (metadata == nullptr || metadata->type != kRenderMaterialFunctionAssetType) {
-            AppendCookFunctionDiagnostic(
-                result,
-                assetId,
-                {},
-                "Material function asset " + std::to_string(assetId) + " is missing or has the wrong asset type.");
-            continue;
-        }
-
-        const RenderMaterialAssetParseResult loaded = RenderMaterialFunctionAssetLoader::LoadFunctionWithDiagnostics(metadata->physicalPath, metadata->id);
-        if (!loaded.asset.has_value()) {
-            AppendCookFunctionDiagnostic(
-                result,
-                assetId,
-                metadata->physicalPath,
-                loaded.diagnostics.empty()
-                    ? "Material function asset " + std::to_string(assetId) + " could not be loaded."
-                    : "Material function asset could not be loaded: " + loaded.ErrorMessage());
-            continue;
-        }
-
-        result.library.entries.push_back(RenderMaterialGraphFunctionLibraryEntry{
-            .assetId = metadata->id.value,
-            .contentHash = metadata->contentHash,
-            .name = metadata->virtualPath.generic_string(),
-            .graph = loaded.asset->graph,
-        });
-        for (const std::uint64_t nestedAssetId : DiscoverRenderMaterialGraphFunctionDependencies(loaded.asset->graph)) {
-            if (!visited.contains(nestedAssetId)) {
-                pending.push_back(nestedAssetId);
-            }
-        }
-    }
-    return result;
+    return BuildRenderMaterialFunctionLibraryFromFiles(registry, graph);
 }
 
 void HashDesc(std::uint64_t& hash, const RenderMaterialDesc& desc) noexcept {
@@ -344,7 +283,7 @@ RenderMaterialCookPayload RenderMaterialCookPayloadBuilder::Build(
     const RenderMaterialAssetData& material,
     const kb::assets::AssetMetadata& metadata,
     const kb::assets::AssetRegistry& registry) {
-    CookMaterialFunctionLibraryBuildResult functionLibrary =
+    RenderMaterialFunctionLibraryBuildResult functionLibrary =
         BuildCookMaterialFunctionLibrary(material.graph, registry);
     return BuildPayloadWithFunctionLibrary(
         material,

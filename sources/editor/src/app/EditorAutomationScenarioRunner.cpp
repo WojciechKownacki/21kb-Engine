@@ -166,6 +166,7 @@
 #include "scene/EditorTerrainService.hpp"
 #include "platform/win32/EditorMap2DWindow.hpp"
 #include "scene/material_preview/EditorMaterialGraphCookService.hpp"
+#include "scene/material_preview/EditorMaterialPreviewTelemetry.hpp"
 
 #include <Windows.h>
 #include <objidl.h>
@@ -6728,6 +6729,27 @@ ReadScriptValue(
             }
         }
         return {changed >= 100U, "changed pixels: " + std::to_string(changed) + " (minimum 100)"};
+    }
+
+    if (*operation == "assert_material_compiles") {
+        // The material open in the Material Editor compiles without a diagnostic of its own or of the compiler, and its
+        // preview is the compiled graph: a material that calls a material function must not report the function missing.
+        const auto asset = StringMember(step, "asset", error);
+        if (!asset) return { false, error };
+        const kb::assets::AssetId id = ResolveAsset(state, *asset);
+        if (!id.IsValid() || state.context.MaterialEditor().OpenAssetId() != id) return { false, "the material is not open in the Material Editor" };
+        const std::vector<std::string>& diagnostics = state.context.MaterialEditor().Diagnostics();
+        for (const std::string& line : diagnostics) {
+            if (line.find("Error") != std::string::npos || line.find("error") != std::string::npos) return { false, "the Material Editor reports: " + line };
+        }
+        static_cast<void>(state.context.MaterialPreviewScene(id, EditorMaterialPreviewSurface::MaterialEditor));
+        const EditorMaterialPreviewTelemetry& telemetry = state.context.MaterialPreviewTelemetry();
+        if (!telemetry.previewSceneReady || !telemetry.graphBacked) return { false, "the material preview is not available" };
+        for (const std::string& line : telemetry.compileDiagnostics) {
+            if (line.find("rror") != std::string::npos) return { false, "the preview compile reports: " + line };
+        }
+        if (telemetry.renderMode != MaterialPreviewRenderMode::GpuMaterialGraph) return { false, "the preview does not render the compiled graph" };
+        return { true, "the material compiles with no diagnostics and its preview is the compiled graph" };
     }
 
     if (*operation == "capture_material_preview") {

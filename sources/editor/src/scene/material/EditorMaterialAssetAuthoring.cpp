@@ -5,6 +5,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialFunctionLibrary.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialNumericParsing.hpp"
@@ -307,6 +308,8 @@ bool EditorMaterialAssetAuthoring::CreateMaterialFromGraph(kb::assets::AssetId g
     const kb::render::RenderMaterialGraphDocument& graph = graphLoad.asset->graph;
 
     const std::string stableTypeId = StableTypeIdFromGraph(*graphMetadata);
+    const kb::render::RenderMaterialFunctionLibraryBuildResult functions =
+        kb::render::BuildRenderMaterialFunctionLibrary(gateway_.Scene().Assets().Manager(), graph);
     kb::render::RenderMaterialGraphMaterialTypeBuildResult typeResult = kb::render::BuildRenderMaterialGraphMaterialTypeDocument(
         graph,
         stableTypeId,
@@ -314,6 +317,7 @@ bool EditorMaterialAssetAuthoring::CreateMaterialFromGraph(kb::assets::AssetId g
         kb::render::RenderMaterialGraphBuildContext{
             .assetId = graphAssetId.value,
             .sourcePath = graphMetadata->virtualPath.generic_string(),
+            .functionLibrary = &functions.library,
         });
     if (!typeResult.Succeeded() || !typeResult.document.has_value()) {
         console_.Error("Materials", "Material Graph could not generate a Material Type.");

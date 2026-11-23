@@ -13,6 +13,7 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
+#include "kb/render/resources/RenderMaterialFunctionLibrary.hpp"
 #include "kb/render/resources/RenderMaterialTypeSchema.hpp"
 #include "kb/render/resources/RenderMaterialAuthoring.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
@@ -247,7 +248,7 @@ struct MaterialCheck {
         }
     }
     if (kb::render::HasGraphAuthoringData(asset.graph)) {
-        const kb::render::RenderMaterialGraphFunctionLibrary library = material::FunctionLibraryOf(asset.graph, registry);
+        const kb::render::RenderMaterialGraphFunctionLibrary library = kb::render::BuildRenderMaterialFunctionLibraryFromFiles(registry, asset.graph).library;
         kb::render::RenderMaterialGraphBuildContext context;
         context.functionLibrary = &library;
         const kb::render::RenderMaterialGraphCompileResult compiled = kb::render::CompileRenderMaterialGraphToShaderSource(asset.graph, context);
