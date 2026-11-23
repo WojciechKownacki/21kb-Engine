@@ -41,6 +41,7 @@ add_library(kb_cli_core STATIC
     src/CliValidateCommand.cpp
     src/CliAssetTarget.cpp
     src/CliAnimationClipCommands.cpp
+    src/CliPickupCommand.cpp
     src/CliCinematicCommands.cpp
     src/CliLocalizationCommands.cpp
     src/CliThemeCommands.cpp

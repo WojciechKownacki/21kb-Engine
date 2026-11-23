@@ -1,5 +1,7 @@
 #include "engine/script/ScriptApiExport.hpp"
 #include "engine/scene/SceneUI.hpp"
+#include "engine/script/ScriptEventHooks.hpp"
+#include "engine/script/ScriptSandboxGlobals.hpp"
 #include "script/NativeAuthoringGuide.hpp"
 #include "script/PbrMaterialsGuide.hpp"
 #include "script/LightingGuide.hpp"
@@ -649,8 +651,13 @@ namespace {
     out += ". A custom event `Name` calls `function Name(self, event)`.\n\n";
     out += "`self` has `entity`, `asset`, `backend`, `variables` and the methods `HasComponent(name)`, ";
     out += "`GetProperty(component, property)`, `SetProperty(component, property, value)`, `GetVariable(name)`, `SetVariable(name, value)`. ";
-    out += "The sandbox has no `io`, `os`, `require` or `load`; it adds `Emit`, `EmitTo`, `SetShared`, `GetShared`, `Import`, ";
-    out += "`CallFunction(name, args)` and `Log`. Visual Graphs call the same functions as `Function.<name>` nodes.\n\n";
+    out += "The sandbox has no `io`, `os`, `require` or `load`. Visual Graphs call the same functions as `Function.<name>` nodes.\n\n";
+    out += "Every global has its own page: [Globals](Globals.md) lists `Log`, `Emit`, `EmitTo`, `Import`, `SetShared`, `GetShared`, `HasShared`, ";
+    out += "`RemoveShared`, `CallFunction`, `Events`, `Inspector`, `assert` (tests a script's logic: a failed assert makes `kb_cli run` exit 1) and the rest ";
+    out += "(topic: `Globals`, or the name itself: `Log`).\n\n";
+    out += "The functions the engine calls when something happens (`OnTriggerEnter`, `OnCollisionEnter`, `OnAnimationEvent`, `OnAudioMarker`, ";
+    out += "`OnParticleSystemFinished`, `OnTimelineEvent`, ...) with their `event.args` are on [Event hooks](EventHooks.md) (topic: `EventHooks`, or the hook name). ";
+    out += "A pickup that is collected by touching it: guide `recipe-pickup`.\n\n";
     out += "## Function groups\n\n";
     for (const auto& [group, functions] : FunctionGroups(catalog)) {
         out += "- [" + group + "](" + GroupPagePath(group) + ") - " + std::to_string(functions.size()) + " functions: ";
@@ -763,6 +770,14 @@ std::vector<ScriptApiReferencePage> ScriptApiExport::ToReferencePages(const Scri
     pages.push_back({ "RuntimeUI.md", std::string{kRuntimeUIGuide} });
     pages.push_back({ "UIEvents.md", UIEventsPage() });
     pages.push_back({ "SensorInput.md", std::string{kSensorInputGuide} });
+    pages.push_back({ "EventHooks.md", ScriptEventHooks::Page() });
+    for (const ScriptEventHook& hook : ScriptEventHooks::All()) {
+        pages.push_back({ "hooks/" + PageFileName(hook.name) + ".md", ScriptEventHooks::HookPage(hook) });
+    }
+    pages.push_back({ "Globals.md", ScriptSandboxGlobals::IndexPage() });
+    for (const ScriptSandboxGlobal& global : ScriptSandboxGlobals::All()) {
+        pages.push_back({ "globals/" + PageFileName(global.name) + ".md", ScriptSandboxGlobals::Page(global) });
+    }
     for (const auto& [group, functions] : FunctionGroups(catalog)) {
         pages.push_back({ GroupPagePath(group), GroupPage(catalog, group, functions) });
         for (const ScriptApiCatalogFunction* function : functions) {
@@ -776,6 +791,11 @@ std::vector<ScriptApiReferencePage> ScriptApiExport::ToReferencePages(const Scri
 }
 
 std::optional<std::string> ScriptApiExport::ToReferenceTopic(const ScriptApiCatalog& catalog, std::string_view topic) {
+    const auto Trimmed = [](std::string_view text) {
+        while (!text.empty() && text.back() == ' ') text.remove_suffix(1U);
+        while (!text.empty() && text.front() == ' ') text.remove_prefix(1U);
+        return text;
+    };
     std::string wanted = Lower(topic);
     while (!wanted.empty() && wanted.back() == ' ') wanted.pop_back();
     while (!wanted.empty() && wanted.front() == ' ') wanted.erase(wanted.begin());
@@ -800,6 +820,16 @@ std::optional<std::string> ScriptApiExport::ToReferenceTopic(const ScriptApiCata
     if (wanted.empty() || wanted == "index" || wanted == "readme") {
         return IndexPage(catalog);
     }
+    // A global spelled exactly (Log, Emit, Events, assert) wins over a function of a group with the same short name
+    // (Math.Log, Particles.Emit).
+    if (const ScriptSandboxGlobal* global = ScriptSandboxGlobals::Find(Trimmed(topic)); global != nullptr) {
+        return ScriptSandboxGlobals::Page(*global);
+    }
+    if (wanted == "globals" || wanted == "globals.md") return ScriptSandboxGlobals::IndexPage();
+    if (wanted == "eventhooks" || wanted == "eventhooks.md" || wanted == "hooks" || wanted == "event hooks") return ScriptEventHooks::Page();
+    for (const ScriptEventHook& hook : ScriptEventHooks::All()) {
+        if (Lower(hook.name) == wanted || (hook.name == "OnRpc_" && wanted.starts_with("onrpc_"))) return ScriptEventHooks::HookPage(hook);
+    }
     for (const ScriptApiCatalogFunction& function : catalog.functions) {
         if (Lower(function.name) == wanted) return FunctionPage(catalog, function);
     }
@@ -815,6 +845,10 @@ std::optional<std::string> ScriptApiExport::ToReferenceTopic(const ScriptApiCata
     }
     for (const ScriptApiCatalogComponent& component : catalog.components) {
         if (Lower(component.name) == wanted) return ComponentPage(component);
+    }
+    // A global in other letters (log for Log), before a function that only shares its short name.
+    for (const ScriptSandboxGlobal& global : ScriptSandboxGlobals::All()) {
+        if (Lower(global.name) == wanted) return ScriptSandboxGlobals::Page(global);
     }
     // A function by its short name, when only one group has it.
     const ScriptApiCatalogFunction* only = nullptr;
@@ -896,6 +930,19 @@ std::string ScriptApiExport::SearchReference(const ScriptApiCatalog& catalog, st
     if (found < limit && !words.empty() && matches(Lower(std::string{kNativeAuthoringGuide}))) {
         out += "- `NativeAuthoring` - C++ and Lua class creation, CMake/SDK builds, IDE selection and scene execution\n";
         ++found;
+    }
+    for (const ScriptSandboxGlobal& global : ScriptSandboxGlobals::All()) {
+        if (found < limit && !words.empty() && matches(Lower(std::string{ global.name } + " " + std::string{ global.signature } + " " + std::string{ global.summary }))) {
+            out += "- `" + std::string{ global.name } + "` - global: " + std::string{ global.summary } + "\n";
+            ++found;
+        }
+    }
+    for (const ScriptEventHook& hook : ScriptEventHooks::All()) {
+        if (hook.group == "Lifecycle" || hook.group == "UI") continue;
+        if (found < limit && !words.empty() && matches(Lower(std::string{ hook.name } + " " + std::string{ hook.group } + " event hook " + std::string{ hook.when }))) {
+            out += "- `" + std::string{ hook.name } + "` - event hook: " + std::string{ hook.when } + "\n";
+            ++found;
+        }
     }
     for (const ScriptApiCatalogFunction& function : catalog.functions) {
         if (found < limit && !words.empty() && matches(Lower(function.name + " " + function.description))) {

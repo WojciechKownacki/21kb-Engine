@@ -1,6 +1,7 @@
 #include "engine/script/ScriptSceneComponentApi.hpp"
 
 #include "script/ScriptUIComponentApi.hpp"
+#include "engine/script/ScriptNameSuggestion.hpp"
 
 #include "engine/assets/AssetKind.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
@@ -2503,6 +2504,31 @@ ScriptSceneComponentPropertyResult ScriptSceneComponentApi::DefaultProperty(std:
         return ScriptSceneComponentPropertyResult{ .error = "component property is not registered for scripts" };
     }
     return ScriptSceneComponentPropertyResult{ .succeeded = true, .value = ReadModuleValue(info->defaults.data() + property->offset, property->type) };
+}
+
+std::string ScriptSceneComponentApi::UnknownNameMessage(std::string_view componentName, std::string_view propertyName) {
+    const std::string_view canonical = kb::scene::SceneComponentAuthoring::CanonicalName(componentName);
+    const std::span<const std::string_view> components = ComponentNames();
+    const bool knownComponent = std::ranges::find(components, canonical) != components.end() || kb::scene::SceneModuleComponentCatalog::Find(canonical) != nullptr;
+    if (!knownComponent) {
+        std::string message = "there is no component called \"" + std::string{ componentName } + "\"";
+        if (const std::string closest = ClosestScriptName(componentName, components); !closest.empty()) {
+            message += "; did you mean \"" + closest + "\"?";
+        }
+        return message + " (kb_cli schema --component <Name> lists the properties of a component)";
+    }
+    const std::span<const ScriptSceneComponentPropertyDesc> properties = ComponentProperties(canonical);
+    if (std::ranges::any_of(properties, [propertyName](const ScriptSceneComponentPropertyDesc& property) { return property.name == propertyName; })) {
+        return {};
+    }
+    std::vector<std::string_view> names;
+    names.reserve(properties.size());
+    for (const ScriptSceneComponentPropertyDesc& property : properties) names.push_back(property.name);
+    std::string message = "component \"" + std::string{ componentName } + "\" has no property \"" + std::string{ propertyName } + "\"";
+    if (const std::string closest = ClosestScriptName(propertyName, names); !closest.empty()) {
+        message += "; did you mean \"" + closest + "\"?";
+    }
+    return message + " (kb_cli schema --component " + std::string{ componentName } + " lists the properties)";
 }
 
 bool ScriptSceneComponentApi::HasComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::string_view componentName) noexcept {

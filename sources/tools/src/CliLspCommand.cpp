@@ -5,6 +5,7 @@
 #include "engine/core/JsonValue.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
 #include "engine/script/ScriptLanguageSubset.hpp"
+#include "engine/script/ScriptLuaCheck.hpp"
 
 #include <algorithm>
 #include <array>
@@ -374,20 +375,27 @@ private:
 
     void PublishDiagnostics(const Document& document) {
         const std::vector<std::string_view> lines = SplitLines(document.text);
-        const std::vector<kb::script::ScriptSubsetFinding> findings = kb::script::FindOutOfSubsetConstructs(document.text);
+        // The checker `kb_cli validate` runs: what it reports is what the editor underlines.
+        std::vector<kb::script::ScriptLuaFinding> findings = kb::script::CheckLuaScript(document.text, catalog_);
         JsonValue diagnostics = JsonValue::MakeArray();
+        const std::optional<kb::script::ScriptSyntaxError> syntaxError = kb::script::FindSyntaxError(document.text);
+        // `validate` cannot load a script that does not compile and reports only the constructs outside the shared language.
+        if (syntaxError.has_value()) {
+            std::erase_if(findings, [](const kb::script::ScriptLuaFinding& finding) { return finding.code != "outside-subset"; });
+        }
         // A line the compiler of this build refuses because of a construct outside the shared language is explained by
         // that construct's warning, so it gets no second diagnostic.
-        if (const std::optional<kb::script::ScriptSyntaxError> error = kb::script::FindSyntaxError(document.text);
+        if (const std::optional<kb::script::ScriptSyntaxError>& error = syntaxError;
             error.has_value() && std::ranges::none_of(findings, [&](const auto& finding) { return finding.line == error->line; })) {
             const auto line = static_cast<std::uint32_t>(std::min<std::size_t>(std::max<std::size_t>(error->line, 1U), lines.size()) - 1U);
             const std::string_view text = lines[line];
             const auto first = static_cast<std::uint32_t>(std::min(text.find_first_not_of(" \t"), text.size()));
             diagnostics.Append(Diagnostic(RangeJson(lines, { { line, first }, { line, static_cast<std::uint32_t>(text.size()) } }), kErrorSeverity, error->message));
         }
-        for (const kb::script::ScriptSubsetFinding& finding : findings) {
+        for (const kb::script::ScriptLuaFinding& finding : findings) {
             const std::uint32_t line = finding.line - 1U;
-            diagnostics.Append(Diagnostic(RangeJson(lines, { { line, finding.column - 1U }, { line, finding.column - 1U + finding.length } }), kWarningSeverity, finding.message));
+            const int severity = finding.severity == kb::script::ScriptLuaFindingSeverity::Error ? kErrorSeverity : kWarningSeverity;
+            diagnostics.Append(Diagnostic(RangeJson(lines, { { line, finding.column - 1U }, { line, finding.column - 1U + finding.length } }), severity, finding.message));
         }
         JsonValue params = Object({ { "uri", Str(document.uri) }, { "diagnostics", std::move(diagnostics) } });
         if (document.version.has_value()) params.Set("version", Num(*document.version));

@@ -38,6 +38,9 @@ public:
     // The value a property has in a new component of a module's type, from the defaults it registered.
     [[nodiscard]] static ScriptSceneComponentPropertyResult DefaultProperty(std::string_view componentName, std::string_view propertyName);
     [[nodiscard]] static bool HasComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::string_view componentName) noexcept;
+    // Empty when `componentName` is a component scripts can use and `propertyName` one of its properties. Otherwise a sentence
+    // that says which of the two is wrong, with the nearest valid name, for the error a script gets from a call that did nothing.
+    [[nodiscard]] static std::string UnknownNameMessage(std::string_view componentName, std::string_view propertyName);
     [[nodiscard]] static ScriptSceneComponentPropertyResult GetProperty(
         kb::scene::Scene& scene,
         kb::scene::SceneEntity entity,

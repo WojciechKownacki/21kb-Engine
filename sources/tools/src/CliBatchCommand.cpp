@@ -439,29 +439,16 @@ void PrintJson(const BatchReport& report, CommandIo io) {
 
 } // namespace
 
-int RunBatchCommand(const ArgumentList& arguments, CommandIo io, const CommandRunner& run) {
-    const auto project = arguments.Option("--project");
-    const auto file = arguments.Option("--file");
-    if (!project || !file) {
-        io.err << "error: batch needs --project <dir> and --file <operations file>\n";
-        return 1;
-    }
+int RunBatchOperations(const std::string& projectOption, std::vector<std::vector<std::string>> operations, bool dryRun, bool json, CommandIo io,
+    const CommandRunner& run) {
+    const std::string* project = &projectOption;
     std::error_code ec;
     const fs::path root = fs::weakly_canonical(fs::path{ *project }, ec);
     if (ec || !fs::is_directory(root, ec)) {
         io.err << "error: --project is not a folder: " << *project << '\n';
         return 1;
     }
-    std::vector<std::vector<std::string>> operations;
     std::string error;
-    if (!LoadOperations(fs::path{ *file }, operations, error)) {
-        io.err << "error: " << error << '\n';
-        return 1;
-    }
-    if (operations.empty()) {
-        io.err << "error: " << *file << " has no operations\n";
-        return 1;
-    }
     // Every operation works on this project, and none may start a batch of its own.
     for (std::size_t index = 0U; index < operations.size(); ++index) {
         std::vector<std::string>& words = operations[index];
@@ -487,7 +474,7 @@ int RunBatchCommand(const ArgumentList& arguments, CommandIo io, const CommandRu
     }
 
     BatchReport report;
-    report.dryRun = arguments.Flag("--dry-run");
+    report.dryRun = dryRun;
     Snapshot snapshot{ .root = root, .backup = fs::temp_directory_path(ec) / ("21kb-batch-" + std::to_string(
         static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count()))), .listing = {} };
     bool snapshotTaken = false;
@@ -555,9 +542,29 @@ int RunBatchCommand(const ArgumentList& arguments, CommandIo io, const CommandRu
     if (snapshot.backupCreated && report.keptBackup.empty()) fs::remove_all(snapshot.backup, ec);
     if (report.failedOperation != 0U && report.rolledBack) report.changes.clear();
 
-    if (arguments.Flag("--json")) PrintJson(report, io);
+    if (json) PrintJson(report, io);
     else PrintText(report, io);
     return report.errors.empty() && report.failedOperation == 0U ? 0 : 1;
+}
+
+int RunBatchCommand(const ArgumentList& arguments, CommandIo io, const CommandRunner& run) {
+    const auto project = arguments.Option("--project");
+    const auto file = arguments.Option("--file");
+    if (!project || !file) {
+        io.err << "error: batch needs --project <dir> and --file <operations file>\n";
+        return 1;
+    }
+    std::vector<std::vector<std::string>> operations;
+    std::string error;
+    if (!LoadOperations(fs::path{ *file }, operations, error)) {
+        io.err << "error: " << error << '\n';
+        return 1;
+    }
+    if (operations.empty()) {
+        io.err << "error: " << *file << " has no operations\n";
+        return 1;
+    }
+    return RunBatchOperations(*project, std::move(operations), arguments.Flag("--dry-run"), arguments.Flag("--json"), io, run);
 }
 
 } // namespace kb::cli

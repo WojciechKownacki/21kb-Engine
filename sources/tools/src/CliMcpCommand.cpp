@@ -126,7 +126,7 @@ thread_local bool tDiscovery = false;
         });
     if (command.name == "api") return MakeToolDescriptor(command.mcpTool,
         "Returns one page of the 21kb Engine script API: without arguments the index of function groups and components; "
-        "with topic a group (Physics), one function (Physics.Raycast) or a component (Rigidbody); with search the topics matching the text. "
+        "with topic a group (Physics), one function (Physics.Raycast), a component (Rigidbody), a global (Log, Emit, assert) or an event hook (OnTriggerEnter, EventHooks lists them all); with search the topics matching the text. "
         "Ask for the one function or component you are about to use.",
         {
             ToolProperty{ "topic", "string", "A group, function or component name, or 'index'.", false, "--topic" },
@@ -134,7 +134,7 @@ thread_local bool tDiscovery = false;
         });
     if (command.name == "guide") return MakeToolDescriptor(command.mcpTool,
         "Returns a short how-to for one kind of task, with the kb_cli commands that do it. Start with the recipe for the job: "
-        "recipe-material, recipe-component, recipe-prefab, recipe-script, recipe-light, recipe-settings, recipe-ui-button, recipe-player, recipe-image, recipe-sound, recipe-timeline, recipe-ui-theme, recipe-translate, recipe-animation, recipe-material-function. "
+        "recipe-material, recipe-component, recipe-prefab, recipe-script, recipe-pickup, recipe-light, recipe-settings, recipe-ui-button, recipe-player, recipe-image, recipe-sound, recipe-timeline, recipe-ui-theme, recipe-translate, recipe-animation, recipe-material-function. "
         "Other guides: objects-and-materials, physics, scripts, characters-and-animation, combat-and-ai, maps-2d, verify. Without a topic, the list of guides.",
         {
             ToolProperty{ "topic", "string", "The guide's name, or 'index'.", false, "--topic" },

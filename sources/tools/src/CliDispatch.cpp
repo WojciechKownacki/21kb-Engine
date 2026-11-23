@@ -496,6 +496,9 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
 )",
 R"(  validate     Validate Lua behaviour scripts (syntax + sandbox load) and the UI of scenes: a widget
                outside a Canvas, a Text without a font, an event name or Button nothing answers (WARN lines).
+               A script that calls a global, function, component or property that does not exist, or passes the wrong
+               arguments, fails (FAIL lines, with the nearest real name); a function named like an event hook the
+               engine never calls is a WARN line. kb_cli lsp shows the same findings.
                  [--project <dir>] <file.lua|scene.21kbscene> [more files...]
                  --project <dir>   (no files: every scene of the project)
   scene-list   List nodes, components, behaviours and world positions (@ x,y,z) of a scene.
@@ -526,7 +529,8 @@ R"(  validate     Validate Lua behaviour scripts (syntax + sandbox load) and the
 )",
 R"(  run          Run a scene headless and report logs, events, and errors (the
                project's startup scene unless --scene). Exits 1 on errors,
-               124 on playback timeout, or 130 on cancellation.
+               124 on playback timeout, or 130 on cancellation. A script error (a failed assert, a call
+               that does not exist) is an error; --json lists them with file, line, message and traceback.
                  --project <dir> [--scene <path>] [--frames <n>] [--dt <seconds>] [--realtime]
                  [--quiet] [--report particles|audio|audio-meters|ecs|world-memory|input|ai|determinism|ui] [--pcm-frames <n>]
                  [--timeout-ms <1..86400000>] [--cancel-file <path>]
@@ -754,6 +758,15 @@ R"(  image        Draw a picture into the project and import it, so it is an ass
                with a comma are played together: bob,spin. key sets one moment by hand: what it does
                not say stays as the object or the key before has it; play gives the clip a controller
                and puts an Animator with it on --entity)
+  pickup       A coin (or any object) the player collects by touching it, with a counter on the screen,
+               in one step: the object with a trigger Collider, a Canvas with a Text, their two Lua
+               scripts, the attachment and a validate of both; it takes effect completely or not at all.
+                 new --project <dir> [--name Coin] [--count 1] [--position x,y,z] [--player Player] [--label Coins]
+                     [--with-player yes] [--scene <path>]
+               (--player is the name of the object whose touch collects it, as kb_cli scene-list prints it;
+               --with-player yes adds the walking Third Person Player first when the scene has none;
+               --count makes that many (Coin, Coin2, ... in a row, 1.2 units apart along Z) sharing the one script;
+               --label is the word before the count on the screen)
   ui-theme     The look of the user interface as a shared UI Theme (.kbtheme): colours, text size,
                rounded corners. A theme has a base style and a Button variant.
                  new --project <dir> --name <Name> [--preset dark|light] [--folder Assets/UI] [--replace]
@@ -935,6 +948,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"timeline", &RunTimelineCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Envelope},
     {"animation-clip", &RunAnimationClipCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Envelope},
     {"ui-theme", &RunUiThemeCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Envelope},
+    {"pickup", &RunPickupCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Envelope},
     {"localization", &RunLocalizationCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Envelope},
 #if KB_CLI_RENDERER
     {"image", &RunImageCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},

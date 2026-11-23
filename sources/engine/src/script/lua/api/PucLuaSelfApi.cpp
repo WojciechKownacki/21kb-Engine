@@ -40,6 +40,10 @@ int LuaSelfGetProperty(lua_State* state) {
     const char* propertyName = PucLuaCheckString(state, 3);
     const ScriptSceneComponentPropertyResult result = ScriptSceneComponentApi::GetProperty(context->GetScene(), context->Self(), componentName, propertyName);
     if (!result.succeeded) {
+        // A component or property that does not exist is a mistake in the script, not a state of the object: stop with the reason.
+        if (const std::string unknown = ScriptSceneComponentApi::UnknownNameMessage(componentName, propertyName); !unknown.empty()) {
+            PucLuaRaise("self:GetProperty: " + unknown);
+        }
         lua_pushnil(state);
         lua_pushlstring(state, result.error.data(), result.error.size());
         return 2;
@@ -61,6 +65,10 @@ int LuaSelfSetProperty(lua_State* state) {
     const ScriptSceneComponentMutationResult result = ScriptSceneComponentApi::SetProperty(context->GetScene(), context->Self(), componentName, propertyName, value);
     lua_pushboolean(state, result.succeeded ? 1 : 0);
     if (!result.succeeded) {
+        // Nothing was written because a name is wrong: raise it, so the script error names what to write instead.
+        if (const std::string unknown = ScriptSceneComponentApi::UnknownNameMessage(componentName, propertyName); !unknown.empty()) {
+            PucLuaRaise("self:SetProperty: " + unknown);
+        }
         lua_pushlstring(state, result.error.data(), result.error.size());
         return 2;
     }

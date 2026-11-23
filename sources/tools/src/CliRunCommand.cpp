@@ -52,6 +52,8 @@
 #include <thread>
 #include <unordered_set>
 #include <cstdio>
+#include <cstdlib>
+#include <string_view>
 #include <vector>
 
 namespace kb::cli {
@@ -183,11 +185,80 @@ void RegisterStdoutLog(kb::script::ScriptRuntimeHost& host, std::ostream& out) {
     static_cast<void>(host.RegisterFunction(std::move(logDesc)));
 }
 
+// A Lua error as the engine reports it: "<chunk>:<line>: <text>", then a line "stack traceback:" and the frames.
+struct ParsedScriptError {
+    std::string chunk;
+    std::uint32_t line = 0U; // 0 when the message names no line
+    std::string message;
+    std::string traceback;
+};
+
+[[nodiscard]] ParsedScriptError ParseScriptError(std::string_view message, std::string_view stackTrace) {
+    ParsedScriptError parsed;
+    std::string_view head = message;
+    if (const std::size_t trace = head.find("\nstack traceback:"); trace != std::string_view::npos) {
+        parsed.traceback = std::string{ head.substr(trace + 1U) };
+        head = head.substr(0U, trace);
+    }
+    if (!stackTrace.empty()) parsed.traceback = std::string{ stackTrace };
+    for (std::size_t colon = head.find(':'); colon != std::string_view::npos; colon = head.find(':', colon + 1U)) {
+        std::size_t digitsEnd = colon + 1U;
+        while (digitsEnd < head.size() && head[digitsEnd] >= '0' && head[digitsEnd] <= '9') ++digitsEnd;
+        if (digitsEnd == colon + 1U || head.substr(digitsEnd, 2U) != ": ") continue;
+        parsed.chunk = std::string{ head.substr(0U, colon) };
+        parsed.line = static_cast<std::uint32_t>(std::strtoul(std::string{ head.substr(colon + 1U, digitsEnd - colon - 1U) }.c_str(), nullptr, 10));
+        parsed.message = std::string{ head.substr(digitsEnd + 2U) };
+        return parsed;
+    }
+    parsed.message = std::string{ head };
+    // An error raised without a position (a message of `error` with level 0): the first frame of the script names the line.
+    for (std::size_t at = parsed.traceback.find("\n\t"); at != std::string::npos; at = parsed.traceback.find("\n\t", at + 1U)) {
+        const std::string_view frame = std::string_view{ parsed.traceback }.substr(at + 2U);
+        if (frame.starts_with("[C]")) continue;
+        const std::size_t colon = frame.find(':');
+        std::size_t digitsEnd = colon == std::string_view::npos ? 0U : colon + 1U;
+        while (digitsEnd != 0U && digitsEnd < frame.size() && frame[digitsEnd] >= '0' && frame[digitsEnd] <= '9') ++digitsEnd;
+        if (colon == std::string_view::npos || digitsEnd == colon + 1U || frame.substr(digitsEnd, 1U) != ":") continue;
+        parsed.chunk = std::string{ frame.substr(0U, colon) };
+        parsed.line = static_cast<std::uint32_t>(std::strtoul(std::string{ frame.substr(colon + 1U, digitsEnd - colon - 1U) }.c_str(), nullptr, 10));
+        break;
+    }
+    return parsed;
+}
+
 struct DiagnosticPrinter {
     kb::scene::Scene& scene;
     std::ostream& err;
     std::unordered_set<std::string> printed;
     std::size_t total = 0U;
+    // The same diagnostics as data (kind, frame, file, line, message, traceback) for `run --json`.
+    kb::core::JsonValue entries = kb::core::JsonValue::MakeArray();
+    // False for `run --json`: the errors are the entries then, not lines on stderr as well.
+    bool raw = true;
+
+    // The script's path, or empty for a reference to a file that is not there.
+    [[nodiscard]] std::string ScriptFile(kb::assets::AssetId assetId) const {
+        const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().Find(assetId);
+        return metadata != nullptr ? metadata->virtualPath.generic_string() : std::string{};
+    }
+
+    void Record(std::string_view kind, std::size_t frame, kb::assets::AssetId assetId, std::string_view message, std::string_view stackTrace,
+        std::string_view entity, std::string_view function) {
+        using kb::core::JsonValue;
+        const ParsedScriptError parsed = ParseScriptError(message, stackTrace);
+        std::string file = ScriptFile(assetId);
+        if (file.empty()) file = parsed.chunk;
+        auto entry = JsonValue::MakeObject();
+        entry.Set("kind", JsonValue::MakeString(std::string{ kind }));
+        entry.Set("frame", JsonValue::MakeNumber(static_cast<double>(frame)));
+        entry.Set("file", JsonValue::MakeString(file));
+        entry.Set("line", parsed.line == 0U ? JsonValue::MakeNull() : JsonValue::MakeNumber(static_cast<double>(parsed.line)));
+        entry.Set("message", JsonValue::MakeString(parsed.message));
+        entry.Set("traceback", JsonValue::MakeString(parsed.traceback));
+        if (!entity.empty()) entry.Set("entity", JsonValue::MakeString(std::string{ entity }));
+        if (!function.empty()) entry.Set("function", JsonValue::MakeString(std::string{ function }));
+        entries.Append(std::move(entry));
+    }
 
     // The script's path, or what to do about a reference to a file that is not there.
     [[nodiscard]] std::string ScriptName(kb::assets::AssetId assetId) const {
@@ -208,7 +279,8 @@ struct DiagnosticPrinter {
             line += ScriptName(diagnostic.assetId);
             line += ": " + diagnostic.message;
             if (printed.insert(line).second) {
-                err << "frame " << frame << ' ' << line << '\n';
+                if (raw) err << "frame " << frame << ' ' << line << '\n';
+                Record("script", frame, diagnostic.assetId, diagnostic.message, diagnostic.stackTrace, entity, diagnostic.function);
             }
         }
     }
@@ -220,7 +292,8 @@ struct DiagnosticPrinter {
             line += ScriptName(diagnostic.assetId);
             line += ": " + diagnostic.message;
             if (printed.insert(line).second) {
-                err << "frame " << frame << ' ' << line << '\n';
+                if (raw) err << "frame " << frame << ' ' << line << '\n';
+                Record("compile", frame, diagnostic.assetId, diagnostic.message, {}, {}, {});
             }
         }
     }
@@ -230,7 +303,8 @@ struct DiagnosticPrinter {
             ++total;
             const std::string line = "[scene system error] " + diagnostic;
             if (printed.insert(line).second) {
-                err << "frame " << frame << ' ' << line << '\n';
+                if (raw) err << "frame " << frame << ' ' << line << '\n';
+                Record("scene-system", frame, kb::assets::AssetId{}, diagnostic, {}, {}, {});
             }
         }
     }
@@ -758,7 +832,7 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
            << discovered << " assets discovered, "
            << scene.ActiveModuleCount() << " modules active)\n";
 
-    DiagnosticPrinter printer{ .scene = scene, .err = io.err, .printed = {}, .total = 0U };
+    DiagnosticPrinter printer{ .scene = scene, .err = io.err, .printed = {}, .total = 0U, .raw = !io.WantsData() };
     std::size_t executedBehaviours = 0U;
     std::size_t emittedEvents = 0U;
 
@@ -1213,7 +1287,21 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         *audioReport << report.Dump() << '\n';
         if (!audioReport->good()) { io.err << "error: audio execution report could not be written\n"; return 1; }
     }
-    return stopCode != 0 ? stopCode : (printer.total == 0U && audioSucceeded ? 0 : 1);
+    const int exitCode = stopCode != 0 ? stopCode : (printer.total == 0U && audioSucceeded ? 0 : 1);
+    if (io.WantsData()) {
+        // `run --json`: the outcome and every script error as an entry, not as the lines the text prints.
+        using kb::core::JsonValue;
+        JsonValue data = DataObject("21kb.cli.run/v1");
+        data.Set("ok", JsonValue::MakeBool(exitCode == 0));
+        data.Set("frames", JsonValue::MakeNumber(static_cast<double>(completedFrames)));
+        data.Set("stopReason", JsonValue::MakeString(stopReason));
+        data.Set("behaviourExecutions", JsonValue::MakeNumber(static_cast<double>(executedBehaviours)));
+        data.Set("events", JsonValue::MakeNumber(static_cast<double>(emittedEvents)));
+        data.Set("diagnostics", JsonValue::MakeNumber(static_cast<double>(printer.total)));
+        data.Set("errors", std::move(printer.entries));
+        PublishData(io, std::move(data));
+    }
+    return exitCode;
 }
 
 } // namespace

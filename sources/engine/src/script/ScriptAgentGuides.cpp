@@ -79,8 +79,9 @@ kb_cli run --project . --frames 120
   follows it: `local t = Transform.GetPosition(World.FindByName("Hero"))`, then CharacterMove toward `t` and
   stop (CharacterMove 0, 0) closer than 1.5 m - characters collide, so one that keeps walking pushes the other.
   2D players: `--create "Top Down Player"` or `"Platformer Player"`.
-- Scripts: `function OnCollisionEnter(self, event)` (the other entity is `event.args.other`);
-  raycasts and forces: `api_reference` topic `Physics`.
+- Scripts: `function OnCollisionEnter(self, event)` for a solid contact and `function OnTriggerEnter(self, event)` for
+  a Collider with `trigger=true` that nothing bumps into (the other entity is `event.args.other`; a pickup: guide
+  `recipe-pickup`; both also have Stay and Exit); raycasts and forces: `api_reference` topic `Physics`.
 )md";
 
 constexpr std::string_view kScripts = R"md(# Behaviour scripts (Lua)
@@ -103,6 +104,12 @@ function DoorOpened(self, event) -- a custom event, receives (self, event)
 end
 ```
 
+The engine also calls `function Name(self, event)` when something happens, with its values in `event.args`:
+`OnTriggerEnter/Stay/Exit` and `OnCollisionEnter/Stay/Exit` (`other`), `OnAnimationEvent`, `OnAudioMarker`,
+`OnParticleSystemFinished`, `OnTimelineEvent`, `OnDamaged`, `OnUIClicked`, ... `api_reference` topic `EventHooks` lists
+every one with its arguments, and a topic of a hook name (`OnTriggerEnter`) shows one. A hook with another name is never
+called: `validate` warns about it and names the closest. A coin that is collected by touching it: `recipe-pickup`.
+
 ```
 kb_cli script-new --project . --name Spinner --language lua --folder Assets/Scripts
 kb_cli scene-attach --project . --scene Assets/Scenes/Main.21kbscene --node RedCube --script /Game/Scripts/Spinner.lua
@@ -116,6 +123,10 @@ kb_cli validate --project . Assets/Scripts/Spinner.lua
   `self:GetVariable`. `kb_cli scene-attach ... --set speed=8` gives one node its own value for it.
 - Component properties: `self:GetProperty(component, property)` / `self:SetProperty(...)`; each
   component's properties are an `api_reference` topic (for example `Transform`).
+- The engine functions (`Log`, `Emit`, `Transform`, `World`, `Math`, ...) do not exist while the file loads: call them inside a hook
+  (`Ready`, `Tick`, an event function), never on a line at the top level. There only definitions and `Inspector.speed = 5.0` work.
+- Every global has its own `api_reference` topic: `Log`, `Emit`, `EmitTo`, `Import`, `SetShared`, `GetShared`,
+  `CallFunction`, `Events`, `Inspector`, `assert` (topic `Globals` lists them).
 - Engine functions are grouped (`Input`, `Physics`, `Transform`, `World`, `Audio`, `Gameplay`,
   `Animator`, `Math`, `Timer`, ...): ask `api_reference` for a group, then for the one function
   you call. Every function is `Group.Name(inputs in order)`, e.g. `Transform.Rotate(self.entity, 0, 90 * dt, 0)`
@@ -132,7 +143,10 @@ kb_cli validate --project . Assets/Scripts/Spinner.lua
   shooter).
 
 A script is done when `validate` says OK and `kb_cli run --project . --frames 120` reports no
-script diagnostics.
+script diagnostics (`run` exits 1 when it reports any). `validate` also fails a global, function, component or property
+that does not exist, with the nearest real name, and a call with the wrong number of arguments.
+To test logic without a window write `assert(double(4) == 8, "double(4) must be 8")` in `Ready`: a failed assert is a script
+error with file and line, so `run` exits 1; `run --json` lists the errors as data.
 `kb_cli capture --project . --out shot.png` renders a frame headless to check what a scene looks like;
 `kb_cli build --project . --out Build` cooks a folder the game runs from.
 
@@ -265,7 +279,10 @@ kb_cli run --project . --frames 120                        # the startup scene h
 kb_cli scene-list --project . --scene Assets/Scenes/Main.21kbscene   # what the scene holds
 ```
 
-- `run` prints script logs, events and errors; a change is done when it ends with `0 diagnostics`.
+- `run` prints script logs, events and errors; a change is done when it ends with `0 diagnostics` (any error: exit code 1).
+  `run --json` returns the errors as a list with `file`, `line`, `message` and `traceback`.
+- A script tests itself with `assert(condition, "message")` in `Ready` or `Tick`: a failed assert is a script error with
+  its line, so the run fails.
 - `run` ends with `moved:` lines: where each dynamic body, character and scripted object went.
 - A key press for a script: `run --press Space@30` holds Space at frame 30 (`--press E@10+20` for
   20 frames); the `moved:` and log lines show what it did.
@@ -489,6 +506,29 @@ and `run` ends with `0 diagnostics`. The object's name comes from `kb_cli scene-
 - Another engine function: `api_reference` with `search` (a word) or `topic` (`Transform`, `Physics`, `Input`).
 - Changing a script that exists: edit its `.lua` file directly, then `validate` again.
 - Keys: `kb_cli input-action new --project . --name Fire --key Space`, read with `Input.Pressed("Fire")`; more in guide `scripts`.
+- React to touching something: `function OnTriggerEnter(self, event)`, guide `recipe-pickup`; every hook: topic `EventHooks`.
+)md";
+
+constexpr std::string_view kRecipePickup = R"md(# Recipe: coins the player collects by touching them, with a counter on the screen
+
+```
+kb_cli scene-list --project .
+kb_cli pickup new --project . --name Coin --count 3 --position 0,1,3 --player Player
+kb_cli run --project . --frames 150 --press W@5+90
+```
+
+Run `scene-list` first, on its own: it names the object the person plays; put that name in `--player` (the scene has none: add
+`--with-player yes` to `pickup new`, which adds a walking `Player` first). `pickup new` makes the coins (Coin, Coin2, Coin3 in a row along Z, each
+a trigger Collider), the counter text on the screen, the scripts and their attachment, and checks the scripts: all of it or
+nothing. Done when `run` prints `[log] Coin count: 1` and `moved: Coin was destroyed`, then `0 diagnostics`: `--press W@5+90`
+holds W, so the player walks forward (+Z) into the coins. That is the whole job: no prefab, picture or second check is needed.
+
+- One coin: leave out `--count`. Another object or word: `--name Gem --label Gems`.
+- Why it works: a Collider with `trigger=true` blocks nothing. When something that moves (the player) overlaps it, the engine
+  calls `OnTriggerEnter(self, event)` in the coin's script; `event.args.other` is the other object. `OnCollisionEnter` is
+  the same for solid contact. Every hook with its arguments: `api_reference` topic `EventHooks`.
+- Changing what a script does: edit `Assets/Scripts/Coin.lua` or `CoinCounter.lua`, then `validate` and `run` again.
+- Keep the coins on the floor: a player that walks off the 10x10 `Plane` falls.
 )md";
 
 constexpr std::string_view kRecipeLight = R"md(# Recipe: light, sun, sky and time of day
@@ -688,13 +728,15 @@ is its code, such as pl, en, de) and prints each `key = "text"`; give every key 
 constexpr std::string_view kRecipeAnimation = R"md(# Recipe: an object that moves by itself (bob, spin, a door, a pulse)
 
 ```
-kb_cli animation-clip new --project . --name CoinFloat --preset bob,spin --entity Coin
+kb_cli scene-list --project .
+kb_cli animation-clip new --project . --name Float --preset bob,spin --entity OBJECT_NAME
 kb_cli run --project . --frames 240
 ```
 
-`new` with a preset makes the animation clip, a controller for it and an Animator on the object: it moves from the start of the
-scene, again and again. Done when it prints `plays on 'Coin'` and `run` ends with `0 diagnostics`. The object's name comes from
-`kb_cli scene-list --project .`.
+Run `scene-list` first, on its own: it prints the names of the objects. Then run the other two with the name of the object that moves
+in place of `OBJECT_NAME` (copy it exactly, as the scene spells it). `new` with a preset makes the animation clip, a controller for it
+and an Animator on the object: it moves from the start of the scene, again and again. Done when it prints `plays on '<name>'` and
+`run` ends with `0 diagnostics`.
 
 - Presets: `bob` (up and down), `spin` (a full turn around the upright axis), `open-close` (a door swinging open and shut around its
   own centre), `pulse` (grows and shrinks). Several at once, joined by a comma: `bob,spin`.
@@ -729,11 +771,12 @@ its colour. An object without a material of its own: `kb_cli entity add --create
 - To see it: `kb_cli capture --frames 40 --out Saved/Agent/Images/<new name>.png`.
 )md";
 
-constexpr std::array<ScriptAgentGuide, 26> kGuides{ {
+constexpr std::array<ScriptAgentGuide, 27> kGuides{ {
     { "recipe-material", "Recipe: colour or material", "A colour or material on an object: two commands.", kRecipeMaterial },
     { "recipe-component", "Recipe: physics or a component", "Physics (a falling body) or any component on an object, and how to check it.", kRecipeComponent },
     { "recipe-prefab", "Recipe: prefab", "Save an object, with its components, as a prefab and place copies.", kRecipePrefab },
     { "recipe-script", "Recipe: Lua script", "A Lua script on an object (a spin, a movement): create, attach, validate, run.", kRecipeScript },
+    { "recipe-pickup", "Recipe: a coin or pickup", "A coin the player collects by touching it: a trigger Collider, OnTriggerEnter, a counter on the screen; also how scripts react to touching.", kRecipePickup },
     { "recipe-light", "Recipe: light and time of day", "The sun, the sky and the ambient light for morning, evening or night.", kRecipeLight },
     { "recipe-settings", "Recipe: settings, plugins, builds", "The game's name, window, start scene, gravity, plugins and a build for a platform.", kRecipeSettings },
     { "recipe-ui-button", "Recipe: a button", "A button with a label on the screen, and what to add so a click does something.", kRecipeUiButton },

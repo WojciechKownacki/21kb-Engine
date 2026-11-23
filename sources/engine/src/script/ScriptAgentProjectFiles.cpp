@@ -54,11 +54,12 @@ order and stop when its check passes. Do not read the scene, the settings or oth
 - physics or another component on an object: `recipe-component`
 - a prefab, with a component: `recipe-prefab`
 - a Lua script on an object (spin, move, react): `recipe-script`
+- a coin or pickup the player touches: `recipe-pickup`
 - light, sun, sky, time of day: `recipe-light`
-- game name, window, start scene, plugins, a build: `recipe-settings`
+- game name, window, plugins, a build: `recipe-settings`
 - a button or a menu: `recipe-ui-button`
-- a character the person plays, with its camera: `recipe-player`
-- an icon, sprite or texture (neon, flat, pixel): `recipe-image`
+- a character the person plays: `recipe-player`
+- an icon, sprite or texture: `recipe-image`
 - a sound effect or music loop: `recipe-sound`
 - an intro or cutscene, a camera flight: `recipe-timeline`
 - the look of the interface (dark, colours): `recipe-ui-theme`
@@ -84,8 +85,8 @@ Other guides: `guide` without a topic lists them. Script API: `api_reference` wi
 
 // The AGENTS.md files earlier versions of this engine wrote, recognised by their exact bytes
 // (FNV-1a 64), so an untouched copy is brought up to date while one a person edited is kept.
-constexpr std::array<std::string_view, 9> kPreviousAgentsTemplateHashes{ "6927ba90de51399a", "66098609d17a66fa", "17571d731424f80b", "60b10d36fecf3d23",
-    "db0742a5e69a4b90", "0998d780309d6bfd", "a7d1c056fb759f2b", "74fed88885ab70b9", "4fde4e67de726331" };
+constexpr std::array<std::string_view, 10> kPreviousAgentsTemplateHashes{ "6927ba90de51399a", "66098609d17a66fa", "17571d731424f80b", "60b10d36fecf3d23",
+    "db0742a5e69a4b90", "0998d780309d6bfd", "a7d1c056fb759f2b", "74fed88885ab70b9", "4fde4e67de726331", "d684704d66224830" };
 
 // Claude Code reads CLAUDE.md, not AGENTS.md; this one line imports it.
 constexpr std::string_view kClaudeTemplate = "@AGENTS.md\n";

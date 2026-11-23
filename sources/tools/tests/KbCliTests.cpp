@@ -40,6 +40,7 @@
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/security/ReleaseKeys.hpp"
+#include "engine/script/ScriptAgentGuides.hpp"
 #include "engine/world/WorldCellIndex.hpp"
 #include "engine/world/WorldDescriptor.hpp"
 #include "engine/world/WorldObjectFile.hpp"
@@ -3444,6 +3445,9 @@ void RunKeyAndPackCommandTests() {
     std::filesystem::remove_all(root, error);
     std::filesystem::create_directories(root, error);
     Require(!error, "kb_cli release test root could not be prepared");
+    // `keys generate` refuses a key inside a project or a repository, and so does the temp folder these tests use when it lies in one.
+    Require(!kb::security::IsInsideProjectOrRepository(root / "Keys" / "game.kbkey"),
+        "the temp folder " + root.string() + " is inside a project or a repository, where keys cannot be generated: point TEMP at a folder outside any project");
 
     WriteTextFile(root / "Project" / "Project.21kbproject", "{}");
     const std::string projectKey = (root / "Project" / "Keys" / "game.kbkey").string();
@@ -4811,6 +4815,195 @@ end
         "validate must name a function that does not exist: " + checked.out + checked.err);
 }
 
+// What an author that is not careful writes in a script, and what validate, run and the reference tell it.
+void RunScriptCheckCliTests() {
+    PrepareProject();
+    const std::string root = TestRoot().string();
+    const auto validate = [&](std::string_view name, std::string_view source) {
+        WriteTextFile(TestRoot() / "Assets" / "Logic" / std::string{ name }, source);
+        const std::string path = "Assets/Logic/" + std::string{ name };
+        return RunCliProgram({ "validate", "--project", root, path });
+    };
+
+    // Names that do not exist: the global, the function of a group, the hook, the component, the property, the arguments.
+    const CliRun wrong = validate("Wrong.lua",
+        "function OnTriggerEnte(self, event)\n"
+        "    Logg('hit')\n"
+        "    Foo.Bar()\n"
+        "    Physics.Raycat(0, 0, 0, 0, 0, 1)\n"
+        "    self:SetProperty('Transfrom', 'localPosition.x', 1)\n"
+        "    self:GetProperty('Transform', 'localPostion.x')\n"
+        "    Transform.Rotate(self.entity, 0, 1)\n"
+        "    Transform.Rotate(self.entity, 'a', 1, 2)\n"
+        "end\n");
+    Require(wrong.exitCode == 1, "validate must fail a script that calls names that do not exist: " + wrong.out + wrong.err);
+    for (const char* expected : { "Wrong.lua:2: Logg is not defined", "did you mean Log?", "Wrong.lua:3: Foo is not defined",
+             "Wrong.lua:4: Physics.Raycat does not exist; did you mean Physics.Raycast?", "did you mean \"Transform\"?", "did you mean \"localPosition.x\"?",
+             "Wrong.lua:7: Transform.Rotate(entity, x, y, z, w?) needs 4 arguments, the call has 3",
+             "Wrong.lua:8: Transform.Rotate argument 2 (x) must be a number, not a string" }) {
+        Require(Contains(wrong.err, expected), std::string{ "validate must say: " } + expected + "\n" + wrong.out + wrong.err);
+    }
+    Require(Contains(wrong.out, "WARN Assets/Logic/Wrong.lua:1: OnTriggerEnte() is not an event hook of the engine") && Contains(wrong.out, "it is OnTriggerEnter(self, event)"),
+        "validate must warn about a misspelled hook and name the closest: " + wrong.out);
+    const CliRun asData = RunCliProgram({ "validate", "--project", root, "Assets/Logic/Wrong.lua", "--json" });
+    Require(Contains(asData.out, "\"errors\":[") && Contains(asData.out, "Logg is not defined") && Contains(asData.out, "OnTriggerEnter(self, event)"),
+        "validate --json must list the errors and the warnings: " + asData.out);
+
+    // A script that is right, with a guarded call, its own globals and a shadowed table, has nothing to report.
+    const CliRun right = validate("Right.lua",
+        "local Input = { Pressed = function() return false end }\n"
+        "Score = 0\n"
+        "function AddScore(n) Score = Score + n end\n"
+        "function OnTriggerEnter(self, event)\n"
+        "    if World.GetName and World.GetName() then Log('named') end\n"
+        "    AddScore(1)\n"
+        "    Input.Foo()\n"
+        "    self:SetProperty('Transform', 'localPosition.y', 2.5)\n"
+        "    Transform.Rotate(self.entity, 0, 90, 0)\n"
+        "end\n");
+    Require(right.exitCode == 0 && !Contains(right.out + right.err, "WARN") && !Contains(right.out + right.err, "FAIL"), "a correct script must validate clean: " + right.out + right.err);
+
+    // An event of the project is not a misspelled hook.
+    WriteTextFile(TestRoot() / "Assets" / "Logic" / "Emitter.lua", "function Ready(self, dt)\n    Emit('OnGameWon', {})\nend\n");
+    const CliRun known = validate("Winner.lua", "function OnGameWon(self, event)\nend\n");
+    Require(known.exitCode == 0 && !Contains(known.out, "WARN"), "a handler for an event the project emits is not a misspelled hook: " + known.out + known.err);
+
+    // At run time: a wrong component or property is a script error with the nearest real name, not a call that does nothing.
+    WriteTextFile(TestRoot() / "Assets" / "Logic" / "Typo.lua",
+        "function Ready(self, dt)\n    self:SetProperty('Transform', 'localPostion.x', 1)\nend\n");
+    Require(RunCliProgram({ "scene-attach", "--project", root, "--scene", "Assets/Scenes/Main.21kbscene", "--node", "Player", "--script", "/Game/Logic/Typo.lua" }).exitCode == 0,
+        "the typo script must attach");
+    const CliRun typo = RunCliProgram({ "run", "--project", root, "--frames", "2" });
+    Require(typo.exitCode == 1 && Contains(typo.err, "[script error]") && Contains(typo.err, "self:SetProperty: component \"Transform\" has no property \"localPostion.x\"; did you mean \"localPosition.x\"?"),
+        "SetProperty with a wrong name must be a script error naming the right one: " + typo.out + typo.err);
+
+    // assert tests the logic of a script: a failed one fails run (exit 1), and run --json returns it as an entry.
+    WriteTextFile(TestRoot() / "Assets" / "Logic" / "Check.lua",
+        "local function double(n) return n * 2 end\n"
+        "function Ready(self, dt)\n"
+        "    assert(double(4) == 8, 'double works')\n"
+        "    assert(double(2) == 5, 'double(2) must be 5')\n"
+        "end\n");
+    Require(RunCliProgram({ "scene-attach", "--project", root, "--scene", "Assets/Scenes/Main.21kbscene", "--node", "Player", "--script", "/Game/Logic/Check.lua", "--replace" }).exitCode == 0,
+        "the assert script must attach");
+    const CliRun failed = RunCliProgram({ "run", "--project", root, "--frames", "2" });
+    Require(failed.exitCode == 1 && Contains(failed.err, "double(2) must be 5") && Contains(failed.out, "1 diagnostics"), "a failed assert must fail run: " + failed.out + failed.err);
+    const CliRun structured = RunCliProgram({ "run", "--project", root, "--frames", "2", "--json" });
+    JsonValue result;
+    std::string parseError;
+    Require(structured.exitCode == 1 && JsonValue::Parse(structured.out, result, parseError), "run --json must print one JSON object: " + structured.out + parseError);
+    const JsonValue* data = result.Find("data");
+    Require(data != nullptr && data->Find("schema") != nullptr && data->Find("schema")->AsString() == "21kb.cli.run/v1" && data->Find("ok")->AsBool() == false &&
+            data->Find("diagnostics")->AsNumber() == 1.0 && data->Find("errors")->Size() == 1U,
+        "run --json must report the failed run as data: " + structured.out);
+    const JsonValue& entry = *data->Find("errors")->At(0U);
+    Require(entry.Find("kind")->AsString() == "script" && entry.Find("file")->AsString() == "/Game/Logic/Check.lua" && entry.Find("line")->AsNumber() == 4.0 &&
+            entry.Find("message")->AsString() == "double(2) must be 5" && Contains(entry.Find("traceback")->AsString(), "stack traceback:") &&
+            entry.Find("entity")->AsString() == "Player" && entry.Find("frame") != nullptr,
+        "a script error of run --json must carry file, line, message and traceback: " + entry.Dump());
+    Require(!Contains(structured.out, "[script error]"), "the errors of run --json are entries, not raw lines: " + structured.out);
+
+    WriteTextFile(TestRoot() / "Assets" / "Logic" / "Check.lua",
+        "local function double(n) return n * 2 end\nfunction Ready(self, dt)\n    assert(double(4) == 8, 'double works')\nend\n");
+    const CliRun passed = RunCliProgram({ "run", "--project", root, "--frames", "2", "--json" });
+    JsonValue passedResult;
+    Require(passed.exitCode == 0 && JsonValue::Parse(passed.out, passedResult, parseError) && passedResult.Find("data")->Find("ok")->AsBool() &&
+            passedResult.Find("data")->Find("errors")->Size() == 0U,
+        "a script whose asserts hold must run clean with exit 0: " + passed.out + passed.err);
+
+    // The reference: every global has a page and an exact global name wins over a function with the same short name.
+    const auto topic = [&](std::string_view name) {
+        const CliRun page = RunCliProgram({ "api", "--topic", name });
+        Require(page.exitCode == 0, "api --topic " + std::string{ name } + " failed: " + page.err);
+        return page.out;
+    };
+    const std::string log = topic("Log");
+    Require(Contains(log, "Writes a value to the log") && !Contains(log, "Returns the natural logarithm"), "api --topic Log must be the global, not Math.Log: " + log);
+    const std::string emit = topic("Emit");
+    Require(Contains(emit, "custom event") && !Contains(emit, "Emits an explicit number of particles"), "api --topic Emit must be the global, not Particles.Emit: " + emit);
+    for (const char* name : { "EmitTo", "Import", "SetShared", "GetShared", "HasShared", "RemoveShared", "CallFunction", "Events", "Inspector", "assert" }) {
+        Require(topic(name).starts_with(std::string{ "# " } + name + "\n"), std::string{ "api --topic " } + name + " must be the page of that global");
+    }
+    Require(Contains(topic("assert"), "exits with code 1") && Contains(topic("assert"), "without a window"), "assert must be documented as the way to test a script");
+    for (const char* name : { "OnTriggerEnter", "OnTriggerStay", "OnTriggerExit", "OnCollisionEnter", "OnCollisionStay", "OnCollisionExit", "OnAnimationEvent", "OnAudioMarker",
+             "OnParticleSystemFinished", "OnTimelineEvent" }) {
+        const std::string page = topic(name);
+        Require(Contains(page, "event.args.") && Contains(page, std::string{ "function " } + name + "(self, event)"), std::string{ "api --topic " } + name + " must show the hook and its arguments");
+    }
+    Require(Contains(topic("OnTriggerEnter"), "`other`") && Contains(topic("OnAudioMarker"), "`positionSeconds`") && Contains(topic("OnTimelineEvent"), "`payload`"),
+        "the hooks list their exact arguments");
+    Require(Contains(RunCliProgram({ "api", "--search", "trigger" }).out, "OnTriggerEnter"), "api --search must find the hooks");
+    Require(Contains(RunCliProgram({ "guide", "--topic", "recipe-pickup" }).out, "OnTriggerEnter") && Contains(RunCliProgram({ "guide" }).out, "recipe-pickup"), "the pickup recipe must be a guide");
+}
+
+// The recipe `recipe-pickup`, run exactly as written in the guide on a fresh project: a coin the player walks into disappears
+// and a counter on the screen counts it.
+void RunPickupRecipeCliTests() {
+    ResetTestRoot();
+    const std::filesystem::path root = TestRoot();
+    WriteProjectDescriptor(root, true);
+    Require(RunCliProgram({ "scene-new", "--project", root.string(), "--name", "Main", "--template", "Basic3D", "--default", "yes" }).exitCode == 0, "the pickup project scene could not be made");
+    // The scene the recipe starts from has the player the person plays.
+    Require(RunCliProgram({ "entity", "add", "--project", root.string(), "--create", "Third Person Player", "--position", "0,1,0" }).exitCode == 0, "the pickup player could not be added");
+
+    const std::optional<std::string> guide = kb::script::ScriptAgentGuides::Topic("recipe-pickup");
+    Require(guide.has_value(), "recipe-pickup must be a guide");
+    // The commands of the guide's code block: a command that opens a quote goes on until it closes.
+    std::vector<std::string> commands;
+    {
+        const std::size_t begin = guide->find("```\n") + 4U;
+        const std::size_t end = guide->find("\n```", begin);
+        std::string current;
+        std::istringstream lines{ guide->substr(begin, end - begin) };
+        for (std::string line; std::getline(lines, line);) {
+            current += (current.empty() ? "" : "\n") + line;
+            if (std::count(current.begin(), current.end(), '"') % 2 == 0) {
+                commands.push_back(current);
+                current.clear();
+            }
+        }
+    }
+    Require(commands.size() == 3U, "the recipe must be three commands: scene-list, pickup new, run");
+    CliRun last;
+    for (const std::string& command : commands) {
+        std::vector<std::string> words;
+        std::string word;
+        bool quoted = false;
+        bool started = false;
+        for (const char c : command) {
+            if (c == '"') {
+                quoted = !quoted;
+                started = true;
+            } else if (c == ' ' && !quoted) {
+                if (started) words.push_back(word);
+                word.clear();
+                started = false;
+            } else {
+                word += c;
+                started = true;
+            }
+        }
+        if (started) words.push_back(word);
+        Require(words.size() > 2U && words.front() == "kb_cli", "a recipe line must be a kb_cli command: " + command);
+        words.erase(words.begin());
+        for (std::size_t index = 0U; index + 1U < words.size(); ++index) {
+            if (words[index] == "--project" && words[index + 1U] == ".") words[index + 1U] = root.string();
+        }
+        std::istringstream in;
+        std::ostringstream out;
+        std::ostringstream err;
+        const int exitCode = kb::cli::RunCli(words, in, kb::cli::CommandIo{ .out = out, .err = err });
+        last = CliRun{ .exitCode = exitCode, .out = out.str(), .err = err.str() };
+        Require(exitCode == 0, "a command of recipe-pickup failed: " + command + "\n" + last.out + last.err);
+    }
+    Require(Contains(last.out, "[log] Coin count: 1") && Contains(last.out, "moved: Coin was destroyed") && Contains(last.out, "0 diagnostics"),
+        "walking into the coin must collect it and count it: " + last.out + last.err);
+
+    // The counter is on the screen: the Text under the Canvas was written by the script.
+    const CliRun shown = RunCliProgram({ "entity", "show", "--project", root.string(), "--name", "CoinHud/CoinCounter" });
+    Require(shown.exitCode == 0 && Contains(shown.out, "Coins: 0"), "the counter starts at 0: " + shown.out + shown.err);
+}
+
 // input-action makes an action and binds keys in the project's context; prefab saves an entity
 // and places copies that keep its behaviour.
 void RunInputActionAndPrefabTests() {
@@ -5946,6 +6139,29 @@ void RunStudioAssetCommandTests() {
     Require(Contains(refusedScene, "\"isError\":true"), "the agent's tool must refuse a scene of another project: " + refusedScene);
     const std::string accepted = mcp("timeline", "\"show\",\"--timeline\",\"/Game/Cinematics/Intro.kbtimeline\"");
     Require(Contains(accepted, "Main Camera") && !Contains(accepted, "\"isError\":true"), "the agent's tool must run the command inside the project: " + accepted);
+}
+
+// pickup new: a coin with a trigger Collider, a counter on the screen and their scripts, in one step; a second one with the same
+// name fails and changes nothing; the scene runs and the counter counts the touch.
+void RunPickupCommandTests() {
+    const std::filesystem::path parent = TestRoot() / "pickup_project";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Studio", "--template", "Basic3D" }).exitCode == 0, "pickup project could not be made");
+    const std::filesystem::path root = parent / "Studio";
+    const std::string project = root.string();
+    Require(Run(&kb::cli::RunEntityCommand, { "add", "--project", project, "--create", "Plane", "--name", "Floor", "--scale", "4,1,4" }).exitCode == 0, "pickup floor could not be added");
+    const CommandRun made = Run(&kb::cli::RunPickupCommand, { "new", "--project", project, "--name", "Coin", "--count", "2", "--position", "0,0.6,2", "--with-player", "yes" });
+    Require(made.exitCode == 0 && Contains(made.output, "added 2 coins Coin..Coin2 from 0,0.6,2") && Contains(made.output, "'CoinCounter'"), "pickup new failed: " + made.output);
+    Require(std::filesystem::exists(root / "Assets" / "Scripts" / "Coin.lua") && std::filesystem::exists(root / "Assets" / "Scripts" / "CoinCounter.lua"), "pickup new must write both scripts");
+    const CommandRun listed = Run(&kb::cli::RunSceneListCommand, { "--project", project });
+    Require(Contains(listed.output, "Coin2") && Contains(listed.output, "CoinCounter") && Contains(listed.output, "CoinHud") && Contains(listed.output, "Player"), "pickup new must add the coin, the counter, its canvas and the player: " + listed.output);
+    const CommandRun again = Run(&kb::cli::RunPickupCommand, { "new", "--project", project, "--name", "Coin" });
+    Require(again.exitCode != 0, "pickup new twice with one name must fail");
+    Require(Run(&kb::cli::RunPickupCommand, { "new", "--project", project, "--name", "Bad Name" }).exitCode != 0, "a name with a space must be refused");
+    Require(Run(&kb::cli::RunPickupCommand, { "new", "--project", project, "--bogus", "1" }).exitCode != 0, "an unknown option must be refused");
+    const CommandRun played = Run(&kb::cli::RunRunCommand, { "--project", project, "--frames", "150", "--press", "W@5+90" });
+    Require(played.exitCode == 0 && Contains(played.output, "Coin count: 2") && Contains(played.output, "0 diagnostics"), "the player must walk into the coin and the counter must count it: " + played.output);
 }
 
 // animation-clip and material-function: each makes its asset inside the project from a few words, the engine's own loaders read
@@ -7156,6 +7372,11 @@ int main(int argc, char** argv) {
         RunPackageCommandTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{argv[1]} == "script-checks") {
+        RunScriptCheckCliTests();
+        RunPickupRecipeCliTests();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{argv[1]} == "lsp") {
         RunLanguageServerTests();
         return EXIT_SUCCESS;
@@ -7197,6 +7418,8 @@ int main(int argc, char** argv) {
     RunSuite(RunRunCommandTests);
     RunSuite(RunPlaybackStopTests);
     RunSuite(RunLuaFunctionTableTests);
+    RunSuite(RunScriptCheckCliTests);
+    RunSuite(RunPickupRecipeCliTests);
     RunSuite(RunInputActionAndPrefabTests);
     RunSuite(RunSceneShortcutTests);
     RunSuite(RunInputRecordingCliTests);
@@ -7215,6 +7438,7 @@ int main(int argc, char** argv) {
     RunSuite(RunWorkshopTests);
     RunSuite(RunStudioAssetCommandTests);
     RunSuite(RunMotionAndFunctionCommandTests);
+    RunSuite(RunPickupCommandTests);
     RunSuite(RunEntityComponentCommandTests);
     RunSuite(RunApiCommandTests);
     RunSuite(RunApiCheckCommandTests);

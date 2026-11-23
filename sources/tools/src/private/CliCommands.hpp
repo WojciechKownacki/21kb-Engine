@@ -84,6 +84,9 @@ namespace kb::cli {
 [[nodiscard]] int RunDapCommand(const ArgumentList& arguments, std::istream& in, CommandIo io);
 // The script API of the engine, with the names of the project in `project` when one is given (what `api` prints).
 [[nodiscard]] bool BuildScriptApiCatalog(const std::optional<std::string>& project, kb::script::ScriptApiCatalog& catalog, std::string& error);
+// Takes the names a project declares as globals in its .luarc.json ("diagnostics.globals") into `catalog`, so `validate` and `lsp` do not
+// call a table of a plugin or host the project uses undefined. Nothing changes when the file is missing or unreadable.
+void AddProjectLuaGlobals(kb::script::ScriptApiCatalog& catalog, const std::filesystem::path& projectRoot);
 [[nodiscard]] int RunKeysCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunPackCommand(const ArgumentList& arguments, CommandIo io);
 // Mods of a game: build, install, list, verify, enable, disable, remove, trust (CliModCommands.cpp).
@@ -113,6 +116,8 @@ namespace kb::cli {
 [[nodiscard]] int RunTimelineCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunAnimationClipCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunUiThemeCommand(const ArgumentList& arguments, CommandIo io);
+// pickup: a coin the player collects by touching it, with a counter on the screen, in one step (CliPickupCommand.cpp).
+[[nodiscard]] int RunPickupCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunLocalizationCommand(const ArgumentList& arguments, CommandIo io);
 #if KB_CLI_RENDERER
 [[nodiscard]] int RunImageCommand(const ArgumentList& arguments, CommandIo io);

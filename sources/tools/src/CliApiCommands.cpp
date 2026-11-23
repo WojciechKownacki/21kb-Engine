@@ -32,6 +32,25 @@ struct CatalogBuildResult {
     std::string error;
 };
 
+} // namespace
+
+void AddProjectLuaGlobals(kb::script::ScriptApiCatalog& catalog, const std::filesystem::path& projectRoot) {
+    std::ifstream input(projectRoot / ".luarc.json", std::ios::binary);
+    if (!input.is_open()) return;
+    const std::string text{ std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>() };
+    JsonValue root;
+    std::string error;
+    if (!JsonValue::Parse(text, root, error) || root.GetKind() != JsonValue::Kind::Object) return;
+    const JsonValue* globals = root.Find("diagnostics.globals");
+    if (globals == nullptr || globals->GetKind() != JsonValue::Kind::Array) return;
+    for (std::size_t index = 0; index < globals->Size(); ++index) {
+        const JsonValue* name = globals->At(index);
+        if (name != nullptr && name->GetKind() == JsonValue::Kind::String) catalog.declaredGlobals.push_back(name->AsString());
+    }
+}
+
+namespace {
+
 [[nodiscard]] CatalogBuildResult BuildCatalog(const std::optional<std::string>& projectOption) {
     CatalogBuildResult result;
     kb::scene::Scene scene;
@@ -47,6 +66,7 @@ struct CatalogBuildResult {
             return result;
         }
         result.catalog = kb::script::ScriptApiCatalog::Build(host, scene.Assets().Manager());
+        AddProjectLuaGlobals(result.catalog, *projectOption);
     } else {
         kb::script::ScriptRuntimeHost host{ scene };
         if (!host.Succeeded()) {

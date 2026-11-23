@@ -28,6 +28,7 @@ void RunScriptFrameBenchmark();
 void RunScriptCollectionsTests();
 void RunScriptSaveTests();
 void RunScriptApiCatalogTests();
+void RunScriptReferenceRuntimeTests();
 void RunVisualGraphTests();
 void RunInputTests();
 void RunEngineModuleTests();

@@ -56,6 +56,9 @@ using CommandRunner = std::function<int(std::span<const std::string>, CommandIo)
 
 // batch: runs the operations of a file as one transaction on a project; see the usage text.
 [[nodiscard]] int RunBatchCommand(const ArgumentList& arguments, CommandIo io, const CommandRunner& run);
+// The same transaction for operations a command builds itself: each is the words of one kb_cli command; --project is added to each.
+[[nodiscard]] int RunBatchOperations(const std::string& project, std::vector<std::vector<std::string>> operations, bool dryRun, bool json, CommandIo io,
+    const CommandRunner& run);
 
 // The scenes that entity and component commands edit, kept open while a batch runs: the first command that
 // names a scene opens it, the later ones edit the same scene in memory, and Commit writes it once. Any other

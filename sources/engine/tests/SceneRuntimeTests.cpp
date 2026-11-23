@@ -166,6 +166,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunScriptAudioMixerTests();
     } else if (suite == "script-api") {
         kb::tests::RunScriptApiCatalogTests();
+    } else if (suite == "script-reference") {
+        kb::tests::RunScriptReferenceRuntimeTests();
     } else if (suite == "visual-graph") {
         kb::tests::RunVisualGraphTests();
     } else if (suite == "input") {

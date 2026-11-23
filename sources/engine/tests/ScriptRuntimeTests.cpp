@@ -88,7 +88,9 @@
 #include "engine/script/ScriptApiCatalog.hpp"
 #include "engine/script/ScriptBehaviourAsset.hpp"
 #include "engine/script/ScriptBehaviourBindingService.hpp"
+#include "engine/script/ScriptEventHooks.hpp"
 #include "engine/script/ScriptEventTaxonomy.hpp"
+#include "engine/script/ScriptSandboxGlobals.hpp"
 #include "engine/script/ScriptRuntime.hpp"
 #include "engine/script/ScriptRuntimeAssetPreparer.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
@@ -112,8 +114,10 @@
 #include <cstdio>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -12734,6 +12738,115 @@ void RunVisualGraphScriptEventPayloadDispatchTest() {
     kb::tests::Require(fakeLua.receivedArgumentCount == 1U, "Visual graph payload event arguments were not preserved");
 }
 
+// The reference of the event hooks is what the runtime dispatches: the arguments a script receives with a contact event are
+// exactly the ones the documentation lists, under the hook name it lists.
+void RunScriptEventHookArgumentsMatchDocumentationTest() {
+    kb::scene::Scene scene;
+    constexpr kb::assets::AssetId kNativeAsset{ 8861U };
+    const kb::scene::SceneObject subject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Hook Subject" });
+    scene.Components().Behaviours().Set(subject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kNativeAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+    const kb::scene::SceneObject other = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Hook Other" });
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "hook documentation test host did not initialize");
+
+    std::vector<std::string> received;
+    std::string mismatch;
+    const auto record = [&](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent& event) {
+        received.push_back(event.name);
+        const kb::script::ScriptEventHook* hook = kb::script::ScriptEventHooks::Find(event.name);
+        if (hook == nullptr) {
+            mismatch += event.name + " is called by the runtime but is not documented; ";
+            return;
+        }
+        for (const kb::script::ScriptEventArgument& argument : event.arguments) {
+            const bool listed = std::ranges::any_of(hook->args, [&](const kb::script::ScriptEventHookArgument& documented) { return documented.name == argument.name; });
+            if (!listed) mismatch += event.name + " passes the undocumented argument " + argument.name + "; ";
+        }
+        for (const kb::script::ScriptEventHookArgument& documented : hook->args) {
+            const bool passed = std::ranges::any_of(event.arguments, [&](const kb::script::ScriptEventArgument& argument) { return documented.name == argument.name; });
+            if (!passed) mismatch += event.name + " documents the argument " + std::string{ documented.name } + " that it does not pass; ";
+        }
+    };
+    constexpr std::array kHooks{ "OnTriggerEnter", "OnTriggerStay", "OnTriggerExit", "OnCollisionEnter", "OnCollisionStay", "OnCollisionExit", "OnControllerColliderHit" };
+    for (const char* name : kHooks) {
+        kb::tests::Require(host.NativeBackend().RegisterEvent(kNativeAsset, name, record), "Native RegisterEvent failed for a documented hook name");
+    }
+    kb::tests::Require(host.InstallSceneSystem(), "hook documentation test scene system install failed");
+
+    using kb::scene::PhysicsContactPhase;
+    for (const bool trigger : { true, false }) {
+        for (const PhysicsContactPhase phase : { PhysicsContactPhase::Enter, PhysicsContactPhase::Stay, PhysicsContactPhase::Exit }) {
+            kb::scene::PhysicsBackend::QueueCollisionEvent(scene, kb::scene::PendingCollisionEvent{
+                .target = subject.Entity(), .other = other.Entity(), .isTrigger = trigger, .phase = phase });
+        }
+    }
+    kb::scene::PhysicsBackend::QueueCollisionEvent(scene, kb::scene::PendingCollisionEvent{
+        .target = subject.Entity(), .other = other.Entity(), .isTrigger = false, .phase = PhysicsContactPhase::ControllerHit });
+    static_cast<void>(scene.Runtime().Update(0.016F));
+
+    kb::tests::Require(received.size() == kHooks.size(), "every documented contact hook must be called once");
+    for (const char* name : kHooks) {
+        kb::tests::Require(std::ranges::find(received, std::string{ name }) != received.end(), "a documented contact hook was never called");
+    }
+    kb::tests::Require(mismatch.empty(), mismatch.c_str());
+}
+
+// Every global a script has is documented under its own page, and every documented global exists in the sandbox.
+void RunScriptSandboxGlobalsAreDocumentedTest() {
+    kb::scene::Scene scene;
+    constexpr kb::assets::AssetId kLuaAsset{ 8862U };
+    const kb::scene::SceneObject subject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Globals Subject" });
+    scene.Components().Behaviours().Set(subject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kLuaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "sandbox globals test host did not initialize");
+    const std::string script =
+        "function Ready(self, dt)\n"
+        "    local names = {}\n"
+        "    for name, value in pairs(_G) do names[#names + 1] = name .. '=' .. type(value) end\n"
+        "    table.sort(names)\n"
+        "    SetShared('globals', table.concat(names, ','))\n"
+        "end\n";
+    kb::tests::Require(host.LuaRuntime().LoadScript(kLuaAsset, script).succeeded, "sandbox globals test script did not load");
+    kb::tests::Require(host.InstallSceneSystem(), "sandbox globals test scene system install failed");
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    const std::optional<kb::script::ScriptValue> listed = host.SharedState().Get("globals");
+    kb::tests::Require(listed.has_value(), "the sandbox globals test script did not run");
+
+    std::map<std::string, std::string> globals;
+    const std::string text = listed->AsString();
+    for (std::size_t begin = 0U; begin < text.size();) {
+        const std::size_t end = std::min(text.find(',', begin), text.size());
+        const std::string entry = text.substr(begin, end - begin);
+        const std::size_t equals = entry.find('=');
+        globals[entry.substr(0U, equals)] = entry.substr(equals + 1U);
+        begin = end + 1U;
+    }
+    globals.erase("Ready"); // the script's own function
+    const kb::script::ScriptApiCatalog catalog = kb::script::ScriptApiCatalog::Build(host);
+    std::set<std::string> tables;
+    for (const kb::script::ScriptApiCatalogLuaBinding& binding : catalog.luaBindings) tables.insert(binding.tableName.empty() ? binding.luaName : binding.tableName);
+    std::string undocumented;
+    for (const auto& [name, type] : globals) {
+        if (name.starts_with("__kb_")) continue; // the runtime's own storage
+        if (!kb::script::ScriptSandboxGlobals::IsKnown(name) && !tables.contains(name)) undocumented += name + " (" + type + "), ";
+    }
+    kb::tests::Require(undocumented.empty(), ("a global of the script sandbox has no reference page: " + undocumented).c_str());
+    std::string missing;
+    for (const kb::script::ScriptSandboxGlobal& global : kb::script::ScriptSandboxGlobals::All()) {
+        const auto found = globals.find(std::string{ global.name });
+        if (found == globals.end() || found->second == "nil") missing += std::string{ global.name } + ", ";
+    }
+    kb::tests::Require(missing.empty(), ("a documented global does not exist in the script sandbox: " + missing).c_str());
+}
+
 void RunScriptRuntimeAssetPreparerEndToEndTest() {
     ResetTestRoot();
 
@@ -18131,6 +18244,12 @@ void RunScriptAudioMixerTests() {
     RunScriptAudioMixerApiTest();
 }
 
+// The reference of the script surface (event hooks, globals) against the runtime that serves it; the suite `script-reference`.
+void RunScriptReferenceRuntimeTests() {
+    RunScriptEventHookArgumentsMatchDocumentationTest();
+    RunScriptSandboxGlobalsAreDocumentedTest();
+}
+
 void RunScriptRuntimeTests() {
     RunScriptTouchApiTest();
     RunNativeScriptRuntimeDispatchTest();
@@ -18211,6 +18330,8 @@ void RunScriptRuntimeTests() {
     RunScriptPhysicsCastOverlapClosestPointApiTest();
     RunPhysicsBackendNonAllocQueriesTest();
     RunScriptPhysicsCollisionTriggerEventDispatchTest();
+    RunScriptEventHookArgumentsMatchDocumentationTest();
+    RunScriptSandboxGlobalsAreDocumentedTest();
     RunScriptTimeApiElapsedAndAliasingTest();
     RunScriptTimeApiScaleAndPauseTest();
     RunScriptTimerApiTest();

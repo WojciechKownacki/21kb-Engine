@@ -548,6 +548,10 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptRendererApi.hpp
     include/engine/script/ScriptLanguageSubset.hpp
     include/engine/script/ScriptLifecycle.hpp
+    include/engine/script/ScriptEventHooks.hpp
+    include/engine/script/ScriptLuaCheck.hpp
+    include/engine/script/ScriptNameSuggestion.hpp
+    include/engine/script/ScriptSandboxGlobals.hpp
     include/engine/script/UISceneValidation.hpp
     include/engine/script/ScriptModule.hpp
     include/engine/script/ScriptRuntime.hpp
@@ -1386,6 +1390,10 @@ add_library(kb_engine STATIC
     src/script/ScriptRendererApi.cpp
     src/script/ScriptLanguageSubset.cpp
     src/script/ScriptLifecycle.cpp
+    src/script/ScriptEventHooks.cpp
+    src/script/ScriptLuaCheck.cpp
+    src/script/ScriptNameSuggestion.cpp
+    src/script/ScriptSandboxGlobals.cpp
     src/script/UISceneValidation.cpp
     src/script/ScriptModule.cpp
     src/script/ScriptRuntime.cpp

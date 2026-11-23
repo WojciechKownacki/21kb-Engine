@@ -334,10 +334,10 @@ the folder.
 | `kb_cli animation-clip new --project <dir> --name <Name> --preset bob\|spin\|open-close\|pulse[,...] --entity <Object> [--seconds 2] [--amount <n>] [--loop yes\|no]` | make an animation clip (a coin that bobs and spins, a door that opens and closes), a controller for it and an Animator on the object, so it moves from the start of the scene; `key`, `show` and `play` author a clip by hand |
 | `kb_cli material-function new --project <dir> --name <Name> --preset fresnel-glow\|panner\|tiling` | write a reusable material function (`.kbmatfn`); `material-function use --material <path> --function <Name> [--set Input=value]` adds a call to it to a material's graph, gives every input a value and wires its output (Emissive, or Customized UV) |
 | `kb_cli script-build --project <dir> [--script <path>]` | build the project's C++ scripts |
-| `kb_cli validate <file.lua>` | check a script for errors |
+| `kb_cli validate <file.lua>` | check a script: syntax, a global, function, component or property that does not exist (with the nearest real name), the wrong number or type of arguments, a function named like an event hook that the engine never calls, and constructs outside the shared Lua; the editor's language server shows the same findings |
 | `kb_cli scene-list --project <dir> --scene <path>` | show what's in a scene |
 | `kb_cli scene-attach --project <dir> --scene <path> --node <name> --script <path> [--set <variable>=<value> ...]` | attach a script to a node; `--set` gives this node its own value for an exposed variable (stored in the scene and in prefabs made from it, applied when the behaviour starts) |
-| `kb_cli run --project <dir> --scene <path> --frames <n>` | run a scene without the editor and report errors |
+| `kb_cli run --project <dir> --scene <path> --frames <n>` | run a scene without the editor and report errors; it exits 1 when a script fails, so `assert(condition, message)` in a script tests its logic, and `--json` returns the script errors as entries with `file`, `line`, `message` and `traceback` |
 | `kb_cli run --project <dir> --frames <n> --realtime` | pace fixed simulation steps by wall time so asynchronous streaming and external services can run during playback |
 | `kb_cli run --project <dir> --frames <n> --timeout-ms <ms> --cancel-file <path>` | stop playback cooperatively on a wall-time limit or when the cancellation file exists; shutdown still runs; exit 124 means timeout and 130 means cancelled |
 | `kb_cli batch --project <dir> --file <list> [--dry-run]` | run many commands as one all-or-nothing transaction, or preview their changes |
@@ -477,7 +477,9 @@ The scene runner also returns `124` on timeout and `130` on cancellation.
  "output":"OK   Assets/Logic/Player.lua\n","errors":["FAIL Assets/Logic/Broken.lua: ..."]}
 ```
 
-- `ok` is `exitCode == 0`, and `exitCode` is also the process exit code.
+- `ok` is `exitCode == 0`, and `exitCode` is also the process exit code. `run` adds a `data` object (schema
+  `21kb.cli.run/v1`) with `ok`, `frames`, `diagnostics` and `errors`: one entry per script error with `kind`, `frame`,
+  `file`, `line`, `message`, `traceback` and the object's `entity` name.
 - `output` is what the command printed on stdout; `errors` has one entry per line it wrote on
   stderr (without the `error: ` prefix). On success `errors` may still hold warnings.
 - A read command marked `structured` in the catalog adds a `data` object to this result: the
@@ -696,10 +698,15 @@ kb_cli lsp --project .
 
 What the server gives the editor, all from the engine itself:
 
-- **Diagnostics** while you type: the syntax error of the script (as an error on its line) and every construct
+- **Diagnostics** while you type: the syntax error of the script (as an error on its line), every construct
   outside [the language every platform runs](#the-language-every-platform-runs) (as a warning that covers the
-  construct), the same findings `kb_cli validate` and the editor's script editor report. A line that the VM refuses
-  only because of such a construct shows the warning alone.
+  construct), and what the engine's script checker finds: a global, function, component or property that does not
+  exist (an error naming the nearest real name), the wrong number or type of arguments for a documented function, and
+  a function named like an event hook that is never called (a warning naming the closest hook). `kb_cli validate`
+  prints exactly the same findings from the same checker. A table that a plugin or host of your own registers, which this
+  build does not know, is not called undefined when the project lists its name under `diagnostics.globals` in its
+  `.luarc.json`. A line that the VM refuses only because of such a
+  construct shows the warning alone.
 - **Completion** for the script API: after `Transform.` the functions of that table, elsewhere the tables and the global
   functions, each with its call, inputs and description from the script API of the engine (`kb_cli api`). With
   `--project`, the names of the project are part of that API.

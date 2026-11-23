@@ -1,4 +1,5 @@
 #include "CliCommands.hpp"
+#include "CliProgram.hpp"
 #include "engine/core/JsonValue.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
 #include "engine/script/ScriptLanguageSubset.hpp"
@@ -223,6 +224,63 @@ void TestDiagnostics(const std::vector<std::string>& project) {
         "a syntax error is an error on its line");
 }
 
+// The language server and `kb_cli validate` read one checker: every diagnostic of the editor is a line of validate, on the
+// same line, with the same words, and validate has no line the editor does not underline.
+void TestDiagnosticsAgreeWithValidate(const std::vector<std::string>& project) {
+    const std::filesystem::path file = Root() / "Assets" / "Scripts" / "Agree.lua";
+    const std::string text =
+        "function OnTriggerEnte(self, event)\n"
+        "    Logg(\"hit\")\n"
+        "    Foo.Bar()\n"
+        "    Physics.Raycat(0, 0, 0, 0, 0, 1)\n"
+        "    self:SetProperty(\"Transform\", \"localPostion.x\", 1)\n"
+        "    Transform.Rotate(self.entity, 0, 1)\n"
+        "    local fine = World.GetName and World.GetName()\n"
+        "end\n";
+    WriteFile(file, text);
+    const std::string uri = UriOf(file);
+    const Session session = Converse(Initialize() + Open(uri, text) + Shutdown(), project);
+    const JsonValue& diagnostics = *session.Diagnostics()[0]->Find("diagnostics");
+    Require(diagnostics.Size() == 6U, "the editor must underline the hook, the two unknown names, the property and the argument count: " + session.Diagnostics()[0]->Dump());
+
+    std::istringstream in;
+    std::ostringstream out;
+    std::ostringstream err;
+    const std::vector<std::string> words{ "validate", file.string() };
+    const int exitCode = kb::cli::RunCli(words, in, kb::cli::CommandIo{ .out = out, .err = err });
+    const std::string printed = err.str() + out.str();
+    Require(exitCode == 1, "validate must fail the script the editor underlines in red: " + printed);
+    std::size_t errors = 0U;
+    std::size_t warnings = 0U;
+    for (std::size_t index = 0U; index < diagnostics.Size(); ++index) {
+        const JsonValue& diagnostic = *diagnostics.At(index);
+        const double severity = diagnostic.Find("severity")->AsNumber();
+        const std::string line = std::to_string(static_cast<int>(diagnostic.Find("range")->Find("start")->Find("line")->AsNumber()) + 1);
+        const std::string expected = std::string{ severity == 1.0 ? "FAIL " : "WARN " } + file.string() + ":" + line + ": " + diagnostic.Find("message")->AsString();
+        Require(printed.find(expected) != std::string::npos, "validate must print the editor's diagnostic: " + expected + "\n" + printed);
+        (severity == 1.0 ? errors : warnings) += 1U;
+    }
+    const auto count = [&printed](std::string_view marker) {
+        std::size_t found = 0U;
+        for (std::size_t at = printed.find(marker); at != std::string::npos; at = printed.find(marker, at + 1U)) ++found;
+        return found;
+    };
+    Require(count("FAIL ") == errors && count("WARN ") == warnings, "validate must print no finding the editor does not show: " + printed);
+    // Where the unknown name is: line 2, columns 4 to 8.
+    for (std::size_t index = 0U; index < diagnostics.Size(); ++index) {
+        const JsonValue& diagnostic = *diagnostics.At(index);
+        if (diagnostic.Find("message")->AsString().starts_with("Logg is not defined")) {
+            const JsonValue& range = *diagnostic.Find("range");
+            Require(Number(range.Find("start")->Find("line")) == 1.0 && Number(range.Find("start")->Find("character")) == 4.0 && Number(range.Find("end")->Find("character")) == 8.0,
+                "the unknown name is underlined where it is");
+        }
+    }
+    // A script with nothing wrong has no diagnostics at all.
+    const std::string correct = "function OnTriggerEnter(self, event)\n    Log(tostring(event.args.other))\nend\n";
+    const Session clean = Converse(Initialize() + Open(uri, correct) + Shutdown(), project);
+    Require(clean.Diagnostics()[0]->Find("diagnostics")->Size() == 0U, "a correct script has no diagnostics: " + clean.Diagnostics()[0]->Dump());
+}
+
 void TestApiFeatures(const std::vector<std::string>& project) {
     kb::script::ScriptApiCatalog catalog;
     std::string error;
@@ -331,6 +389,7 @@ void RunLanguageServerTests() {
     std::filesystem::create_directories(Root() / "Assets" / "Scripts");
     const std::vector<std::string> project{ "--project", Root().string() };
     TestDiagnostics(project);
+    TestDiagnosticsAgreeWithValidate(project);
     TestApiFeatures(project);
     TestDefinition(project);
     TestProtocolErrors(project);

@@ -237,6 +237,20 @@
           "check": "validate"
         }
       ]
+    },
+    {
+      "id": "pickup_coins", "area": "scripts", "tags": ["script", "physics", "ui"], "template": "Basic3D",
+      "setup": [["entity", "add", "--create", "Third Person Player", "--position", "0,1,0"]],
+      "requests": ["Dodaj monety, które gracz zbiera dotykiem, i licznik monet na ekranie."],
+      "checks": [
+        {"check": "entity_show", "name": "mone|coin", "component": "Collider", "regex": "trigger=true", "label": "a coin whose Collider is a trigger, so the player can touch it"},
+        {"check": "files", "glob": "Assets/**/*.lua", "contains": "OnTriggerEnter|OnCollisionEnter", "label": "a script that answers the touch"},
+        {"check": "files", "glob": "Assets/**/*.lua", "contains": "World\\.Destroy|SetActive|visible", "label": "that removes or hides the coin"},
+        {"check": "scene_entities", "component": "Text", "label": "a text on the screen"},
+        {"check": "files", "glob": "Assets/**/*.lua", "contains": "SetProperty\\(\\s*[\"']Text[\"']\\s*,\\s*[\"']content[\"']|SetPropertyString", "label": "a script that writes the counter into the text"},
+        {"check": "validate"},
+        {"check": "run", "frames": 120}
+      ]
     }
   ]
 }

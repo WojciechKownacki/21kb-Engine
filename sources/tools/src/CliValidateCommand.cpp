@@ -8,7 +8,7 @@
 #include "engine/script/PucLuaScriptRuntime.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
 #include "engine/script/ScriptLanguageSubset.hpp"
-#include "engine/script/ScriptLifecycle.hpp"
+#include "engine/script/ScriptLuaCheck.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/script/UISceneValidation.hpp"
 
@@ -33,68 +33,6 @@ namespace {
     buffer << input.rdbuf();
     content = buffer.str();
     return true;
-}
-
-struct UnknownCall {
-    std::size_t line = 0;
-    std::string call;
-    std::string closest;
-};
-
-// Table.Name( where Table is an engine API table without Name: at run time that is a call to nil.
-// Comments and string literals are skipped; tables the engine does not define (a script's own
-// modules, a plugin not loaded here) are not judged.
-[[nodiscard]] std::vector<UnknownCall> FindUnknownApiCalls(std::string_view source, const kb::script::ScriptApiCatalog& catalog) {
-    std::map<std::string, std::set<std::string>, std::less<>> tables;
-    for (const kb::script::ScriptApiCatalogLuaBinding& binding : catalog.luaBindings) {
-        if (!binding.tableName.empty()) tables[binding.tableName].insert(binding.luaName);
-    }
-    const auto word = [](char c) { return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_'; };
-    std::vector<UnknownCall> found;
-    std::size_t line = 1;
-    for (std::size_t at = 0; at < source.size();) {
-        const char c = source[at];
-        if (c == '\n') { ++line; ++at; continue; }
-        if (source.compare(at, 2, "--") == 0) {
-            const bool block = source.compare(at + 2U, 2, "[[") == 0;
-            const std::size_t end = block ? source.find("]]", at) : source.find('\n', at);
-            if (end == std::string_view::npos) break;
-            line += static_cast<std::size_t>(std::count(source.begin() + static_cast<std::ptrdiff_t>(at), source.begin() + static_cast<std::ptrdiff_t>(end), '\n'));
-            at = block ? end + 2U : end;
-            continue;
-        }
-        if (c == '"' || c == '\'') {
-            for (++at; at < source.size() && source[at] != c && source[at] != '\n'; ++at) if (source[at] == '\\') ++at;
-            ++at;
-            continue;
-        }
-        if (!word(c) || (at > 0U && (word(source[at - 1U]) || source[at - 1U] == '.' || source[at - 1U] == ':'))) { ++at; continue; }
-        std::size_t end = at;
-        while (end < source.size() && word(source[end])) ++end;
-        const std::string_view table = source.substr(at, end - at);
-        const auto known = tables.find(table);
-        if (known == tables.end() || end >= source.size() || source[end] != '.') { at = end; continue; }
-        std::size_t nameEnd = end + 1U;
-        while (nameEnd < source.size() && word(source[nameEnd])) ++nameEnd;
-        std::size_t paren = nameEnd;
-        while (paren < source.size() && (source[paren] == ' ' || source[paren] == '\t')) ++paren;
-        const std::string name{ source.substr(end + 1U, nameEnd - end - 1U) };
-        if (paren < source.size() && source[paren] == '(' && !name.empty() && !known->second.contains(name)) {
-            std::string closest;
-            std::size_t best = 3;
-            for (const std::string& candidate : known->second) {
-                // Same letters ignoring case, or a near spelling, is worth naming.
-                std::string a = candidate, b = name;
-                std::ranges::transform(a, a.begin(), [](unsigned char x) { return static_cast<char>(std::tolower(x)); });
-                std::ranges::transform(b, b.begin(), [](unsigned char x) { return static_cast<char>(std::tolower(x)); });
-                const std::size_t distance = a == b ? 0U : (a.starts_with(b) || b.starts_with(a) ? 2U : 3U);
-                if (distance < best) { best = distance; closest = candidate; }
-            }
-            found.push_back(UnknownCall{ line, std::string{ table } + '.' + name, closest.empty() ? closest : std::string{ table } + '.' + closest });
-        }
-        at = nameEnd;
-    }
-    return found;
 }
 
 // One checked file for the data field: whether it passed, and the warning and error lines the text prints for it.
@@ -164,7 +102,12 @@ int RunValidateCommand(const ArgumentList& arguments, CommandIo io) {
         return finish(ValidateSceneUi(scene, projectMounted, projectRoot, {}, "project scenes", io, items));
     }
     const kb::script::ScriptRuntimeHost host{ scene };
-    const kb::script::ScriptApiCatalog catalog = kb::script::ScriptApiCatalog::Build(host);
+    // With a project, the events its scripts emit are known too: a handler for one is not a misspelled hook.
+    std::string mountError;
+    if (!projectRoot.empty()) projectMounted = MountProjectAssets(scene, projectRoot, mountError);
+    kb::script::ScriptApiCatalog catalog = projectMounted ? kb::script::ScriptApiCatalog::Build(host, scene.Assets().Manager())
+                                                          : kb::script::ScriptApiCatalog::Build(host);
+    if (!projectRoot.empty()) AddProjectLuaGlobals(catalog, projectRoot);
     std::uint64_t nextAssetId = 1U;
     int failures = 0;
 
@@ -199,46 +142,26 @@ int RunValidateCommand(const ArgumentList& arguments, CommandIo io) {
             ++failures;
             continue;
         }
-        if (const std::vector<UnknownCall> unknown = FindUnknownApiCalls(source, catalog); !unknown.empty()) {
-            std::vector<std::string> unknownLines;
-            for (const UnknownCall& call : unknown) {
-                io.err << "FAIL " << positional << ':' << call.line << ": " << call.call << " does not exist";
-                std::string line = positional + ':' + std::to_string(call.line) + ": " + call.call + " does not exist";
-                if (!call.closest.empty()) {
-                    io.err << "; did you mean " << call.closest << '?';
-                    line += "; did you mean " + call.closest + '?';
-                }
-                io.err << " (kb_cli api --topic " << call.call.substr(0, call.call.find('.')) << " lists the functions)\n";
-                unknownLines.push_back(std::move(line));
-            }
-            AddValidated(items, positional, {}, unknownLines);
-            ++failures;
-            continue;
-        }
-        // Loads fine, but a callback named for another lifecycle is never called: say so instead of a bare OK.
-        const std::vector<kb::script::ForeignLifecycleName> foreign = kb::script::FindForeignLifecycleNames(source);
-        // The script runs on the two script VMs; what only one of them has would fail on a platform that uses the other.
-        const std::vector<kb::script::ScriptSubsetFinding> outsideSubset = kb::script::FindOutOfSubsetConstructs(source);
-        const std::size_t warnings = foreign.size() + outsideSubset.size();
-        io.out << "OK   " << positional;
-        if (warnings != 0U) {
-            io.out << " (" << warnings << (warnings == 1U ? " warning)" : " warnings)");
-        }
-        io.out << '\n';
+        // The same checker the language server uses: names that do not exist, wrong arguments, hooks that are never
+        // called, callbacks named for another engine and constructs outside the Lua both script VMs share.
+        std::vector<std::string> errorLines;
         std::vector<std::string> warningLines;
-        for (const kb::script::ScriptSubsetFinding& finding : outsideSubset) {
-            io.out << "WARN " << positional << ':' << finding.line << ": " << finding.message << '\n';
-            warningLines.push_back(positional + ':' + std::to_string(finding.line) + ": " + finding.message);
+        for (const kb::script::ScriptLuaFinding& finding : kb::script::CheckLuaScript(source, catalog)) {
+            const std::string line = positional + ':' + std::to_string(finding.line) + ": " + finding.message;
+            (finding.severity == kb::script::ScriptLuaFindingSeverity::Error ? errorLines : warningLines).push_back(line);
         }
-        for (const kb::script::ForeignLifecycleName& name : foreign) {
-            const char* hook = kb::script::ToString(name.hook);
-            io.out << "WARN " << positional << ':' << name.line << ": " << name.name
-                   << "() is never called - 21kb calls " << hook << "(self, dt). Rename the function to " << hook
-                   << ".\n";
-            warningLines.push_back(positional + ':' + std::to_string(name.line) + ": " + name.name + "() is never called - 21kb calls " +
-                hook + "(self, dt). Rename the function to " + hook + ".");
+        if (errorLines.empty()) {
+            io.out << "OK   " << positional;
+            if (!warningLines.empty()) {
+                io.out << " (" << warningLines.size() << (warningLines.size() == 1U ? " warning)" : " warnings)");
+            }
+            io.out << '\n';
+        } else {
+            ++failures;
         }
-        AddValidated(items, positional, warningLines, {});
+        for (const std::string& line : errorLines) io.err << "FAIL " << line << '\n';
+        for (const std::string& line : warningLines) io.out << "WARN " << line << '\n';
+        AddValidated(items, positional, warningLines, errorLines);
     }
 
     return finish(failures);

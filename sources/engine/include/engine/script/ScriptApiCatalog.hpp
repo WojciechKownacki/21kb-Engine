@@ -96,6 +96,9 @@ struct ScriptApiCatalog {
     std::vector<ScriptApiCatalogLuaBinding> luaBindings;
     std::vector<ScriptApiCatalogSourceMapEntry> sourceMap;
     std::vector<ScriptApiNameEntry> projectEntries;
+    // Global names the project declares itself ("diagnostics.globals" of its .luarc.json), for a table a plugin or a host of its
+    // own registers that this build does not know: `kb_cli validate` and the language server do not call them undefined.
+    std::vector<std::string> declaredGlobals;
 
     [[nodiscard]] const ScriptApiCatalogFunction* FindFunction(std::string_view name) const noexcept;
 
