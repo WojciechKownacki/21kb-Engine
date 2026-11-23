@@ -235,7 +235,9 @@ one page at a time, so a request stays small:
 
 - `.kb/docs/` holds how-to guides, one per kind of task (objects and materials, physics,
   scripts, characters and animation, combat and AI, 2D maps, checking your work), each with the
-  commands that do it.
+  commands that do it, and short `recipe-*` guides for the most common jobs (a material, physics or
+  a prefab, a Lua script, light and time of day, settings, a button, a playable character): the exact
+  commands in order and how to check the result. `AGENTS.md` is only an index of these.
 - `.kb/api/` holds the script API as small pages: `README.md` lists the function groups and
   components, and every group, function and component has a page of its own.
 
@@ -325,7 +327,7 @@ the folder.
 | `kb_cli api --project <dir>` | refresh the API reference pages after engine updates |
 | `kb_cli api --topic <name>` / `--search <text>` | print one page of the API reference, or the topics matching a text |
 | `kb_cli guide [--topic <name>]` | print one how-to guide, or the list of them |
-| `kb_cli script-new --project <dir> --name <Name> --language lua\|cpp` | create a Lua or C++ script from the template (never overwrites) |
+| `kb_cli script-new --project <dir> --name <Name> --language lua\|cpp` | create a Lua or C++ script from the template (never overwrites); `--code "<Lua text>"` writes a Lua script's whole text instead |
 | `kb_cli script-build --project <dir> [--script <path>]` | build the project's C++ scripts |
 | `kb_cli validate <file.lua>` | check a script for errors |
 | `kb_cli scene-list --project <dir> --scene <path>` | show what's in a scene |

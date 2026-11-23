@@ -9,6 +9,7 @@
 #include "engine/script/ScriptAsset.hpp"
 #include "engine/script/ScriptProjectFiles.hpp"
 
+#include <fstream>
 #include <optional>
 #include <string>
 #include <system_error>
@@ -110,6 +111,10 @@ int RunScriptNewCommand(const ArgumentList& arguments, CommandIo io) {
         io.err << "error: unknown language '" << *languageText << "'. Languages: lua cpp\n";
         return 1;
     }
+    if (arguments.Option("--code").has_value() && *language != kb::script::ScriptLanguage::Lua) {
+        io.err << "error: --code is the text of a Lua script; a C++ script is made from its template\n";
+        return 1;
+    }
     const std::filesystem::path projectFile = ProjectFile(arguments, "script-new", io);
     if (projectFile.empty()) {
         return 1;
@@ -128,6 +133,16 @@ int RunScriptNewCommand(const ArgumentList& arguments, CommandIo io) {
     }
     const std::string asset = folder.virtualPath + "/" + Utf8Text(created.asset.filename());
     if (*language == kb::script::ScriptLanguage::Lua) {
+        // --code is the script's whole text, so the file is made and written in one step.
+        if (const std::optional<std::string> code = arguments.Option("--code"); code.has_value()) {
+            std::ofstream file(created.asset, std::ios::binary | std::ios::trunc);
+            file << *code << (code->ends_with('\n') ? "" : "\n");
+            file.close();
+            if (!file) {
+                io.err << "error: the script text could not be written to " << asset << '\n';
+                return 1;
+            }
+        }
         io.out << "Lua script created: " << asset << '\n';
         return 0;
     }

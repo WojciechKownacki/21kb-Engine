@@ -46,7 +46,7 @@ kb_cli entity add --project . --create Sphere --name RedBall --position 0,5,0 --
   `primary=false`.
 - Remove or rename: `entity remove --name RedBall`, `entity rename --name RedBall --to Ball`.
 - Reuse an object: `kb_cli prefab new --project . --from-entity Crate` saves `/Game/Prefabs/Crate.kbprefab`;
-  `prefab place --prefab /Game/Prefabs/Crate.kbprefab --name Crate2 --position 3,0,0` adds a copy,
+  `prefab place --prefab /Game/Prefabs/Crate.kbprefab --name Crate2 --position 3,1,0` adds a copy,
   and a script spawns one with `World.InstantiatePrefab("/Game/Prefabs/Crate.kbprefab", nil, nil, x, y, z)`.
 )md";
 
@@ -420,7 +420,167 @@ kb_cli component set --project . --entity Environment --type WorldBackdrop --set
 - `kb_cli help material-graph` and `kb_cli help post-process-new` list every setting.
 )md";
 
-constexpr std::array<ScriptAgentGuide, 11> kGuides{ {
+constexpr std::string_view kRecipeMaterial = R"md(# Recipe: a colour or material on an object
+
+Not sure of the object's name? `kb_cli scene-list --project .` lists the objects.
+
+```
+kb_cli material-new --project . --name Green --set "Base Color=#2ECC40"
+kb_cli component set --project . --entity Crate --type MeshRenderer --set material=/Game/Materials/Green.kbmat
+```
+
+Done when the second command prints `updated MeshRenderer`.
+
+- Colours: red #E03C31, green #2ECC40, blue #0074D9, yellow #FFDC00, orange #FF851B, white #FFFFFF, black #111111.
+- Metal or glow: add `--set Metallic=1 --set Roughness=0.3` or `--set "Emissive Color=#FF851B"` to `material-new`.
+- A new coloured object in one command: `kb_cli entity add --project . --create Cube --name Crate --color "#2ECC40"`.
+)md";
+
+constexpr std::string_view kRecipeComponent = R"md(# Recipe: physics, or another component, on an object
+
+```
+kb_cli component add --project . --entity Crate --type Rigidbody --set bodyType=Dynamic
+kb_cli run --project . --frames 120
+```
+
+Done when `run` ends with `0 diagnostics` and a `moved:` line for the object (`Crate 0,3,0 -> 0,0.5,0` means it fell and landed).
+
+- Shapes already have a Collider; a floor or wall that never moves needs no Rigidbody.
+- Any other component: `kb_cli schema --component <Name>` lists its properties, then
+  `component add --entity Crate --type <Component> --set property=value`. An object has one of
+  each component: when `add` says it is there, change it with `component set`.
+- Heavier: `component set --entity Crate --type Rigidbody --set mass=50`. Bouncy:
+  `component set --entity Crate --type Collider --set restitution=0.6`.
+- Several at once: `entity add --create Cube --name Crate --count 5 --offset 0,1,0 --body Dynamic` makes Crate1..Crate5.
+)md";
+
+constexpr std::string_view kRecipePrefab = R"md(# Recipe: a prefab, with a component
+
+Add the component first: a prefab saves the object as it is.
+
+```
+kb_cli component add --project . --entity Crate --type Rigidbody --set bodyType=Dynamic
+kb_cli prefab new --project . --from-entity Crate --name CratePrefab
+```
+
+Done when `prefab new` prints `saved 'Crate' as prefab /Game/Prefabs/CratePrefab.kbprefab`.
+
+- Another copy in the scene: `kb_cli prefab place --project . --prefab /Game/Prefabs/CratePrefab.kbprefab --name Crate2 --position 3,0,0`.
+- A script spawns copies with `World.InstantiatePrefab("/Game/Prefabs/CratePrefab.kbprefab", nil, nil, x, y, z)`.
+- `kb_cli schema --component <Name>` lists the properties of any component.
+)md";
+
+constexpr std::string_view kRecipeScript = R"md(# Recipe: a Lua script on an object
+
+```
+kb_cli script-new --project . --name Spin --language lua --code "function Tick(self, dt)
+    Transform.Rotate(self.entity, 0, 20 * dt, 0)
+end"
+kb_cli scene-attach --project . --node Crate --script /Game/Scripts/Spin.lua
+kb_cli validate --project . Assets/Scripts/Spin.lua
+kb_cli run --project . --frames 120
+```
+
+`--code` is the whole script, so there is nothing to edit afterwards. Done when `validate` says `OK`
+and `run` ends with `0 diagnostics`. The object's name comes from `kb_cli scene-list --project .`.
+
+- `Tick(self, dt)` runs every frame (`dt` in seconds), `Ready(self, dt)` once at the start; `self.entity` is the object.
+- `Transform.Rotate(self.entity, x, y, z)` turns it by degrees: `0, 20 * dt, 0` is a slow turn around the upright axis.
+- Another engine function: `api_reference` with `search` (a word) or `topic` (`Transform`, `Physics`, `Input`).
+- Changing a script that exists: edit its `.lua` file directly, then `validate` again.
+- Keys: `kb_cli input-action new --project . --name Fire --key Space`, read with `Input.Pressed("Fire")`; more in guide `scripts`.
+)md";
+
+constexpr std::string_view kRecipeLight = R"md(# Recipe: light, sun, sky and time of day
+
+A scene from a template has a `Sun` (a directional light) and an `Environment` (the sky); `kb_cli scene-list --project .`
+shows the names if they differ. The sun's `rotation` x is its height: 90 straight above, 10 near the horizon.
+
+Evening, warm and orange:
+
+```
+kb_cli component set --project . --entity Sun --type Light --set color=1,0.62,0.34 --set intensity=2.2
+kb_cli entity set --project . --name Sun --rotation 18,-35,0
+kb_cli component set --project . --entity Environment --type WorldBackdrop --set horizonColor=0.72,0.34,0.19 --set zenithColor=0.23,0.18,0.28 --set skyTint=1,0.64,0.38 --set groundColor=0.2,0.12,0.08
+kb_cli component set --project . --entity Environment --type "Ambient Radiance" --set horizonColor=0.72,0.34,0.19 --set zenithColor=0.23,0.18,0.28
+```
+
+Done when every command prints `updated ...` or `set 'Sun'`.
+
+- Midday: Light `color=1,0.96,0.9` `intensity=3`, Sun rotation `60,-30,0`; sky `horizonColor=0.6,0.75,0.95` `zenithColor=0.2,0.4,0.85`.
+- Night: Light `color=0.4,0.5,0.9` `intensity=0.3`, Sun rotation `35,-30,0`; sky `horizonColor=0.03,0.04,0.1` `zenithColor=0.01,0.01,0.05`, the same two colours on `Ambient Radiance`.
+- Brighter or dimmer: Light `intensity`. A lamp: `kb_cli entity add --project . --create "Point Light" --name Lamp --position 0,3,0`, then `component set --entity Lamp --type Light --set intensity=8 --set color=1,0.8,0.5`.
+- Fog, bloom, water: guide `water-and-look`. To show the person: `kb_cli capture --project . --out Saved/Agent/Images/<new name>.png`.
+)md";
+
+constexpr std::string_view kRecipeSettings = R"md(# Recipe: project settings, plugins and builds
+
+```
+kb_cli project-settings --project . --set Identity.GameName="Dragon Hills" --set Identity.Name="Dragon Hills"
+```
+
+Done when it prints the settings it changed. Without `--set` it lists all of them (about 70 lines): do that only when the key is unknown.
+
+- Names: `Identity.GameName` (the game's name) and `Identity.Name` (the project's); set both for "name my game".
+- Window: `Display.WindowWidth`, `Display.WindowHeight`, `Display.WindowMode` (`Windowed` or `BorderlessFullscreen`), `Display.VSync` (1 or 0).
+- Start scene: `Maps.DefaultMap=/Game/Scenes/<Name>.21kbscene`. Gravity: `Physics.GravityY=-9.81`. Volume: `Audio.MasterVolume`.
+- Android: `Android.ApplicationId`, `Android.Label`, `Android.VersionCode`.
+- Plugins: `kb_cli plugins --project .` lists them; `--enable <id>` or `--disable <id>` switches one.
+- A game for a platform: `kb_cli editor build --project . --target windows|android|web|webgpu|linux` (`--profile release` for a store build).
+  `Saved/Agent/BuildResult.txt` says `Running`, then `Succeeded <folder>` or `Failed <reason>`.
+)md";
+
+constexpr std::string_view kRecipeUiButton = R"md(# Recipe: a button on the screen
+
+```
+kb_cli entity add --project . --create Button --name PlayButton
+kb_cli component set --project . --entity PlayButton --type Text --set "content=Play"
+```
+
+The button goes under a Canvas, made when the scene has none. Done when both commands print `added` or `updated`.
+It shows, but a click does nothing yet: say so, unless the person told you what it should do. To make it do something:
+
+```
+kb_cli component set --project . --entity PlayButton --type Selectable --set eventName=PlayClicked
+kb_cli script-new --project . --name MenuController --language lua --code "function PlayClicked(self, event)
+    Log('Play pressed')
+end"
+kb_cli scene-attach --project . --node PlayButton --script /Game/Scripts/MenuController.lua
+kb_cli validate --project . Assets/Scenes/Main.21kbscene Assets/Scripts/MenuController.lua
+```
+
+Done when `validate` lists no warnings. Put the real action in the function (a scene change, a score, a sound); guide `menus-and-buttons` has every callback.
+
+- A whole screen at once: `kb_cli entity add --project . --create "Main Menu"` (also `Pause`, `HUD`, `Settings`).
+- Text on screen: `entity add --create Text --name Score`, then `component set --entity Score --type Text --set "content=Score: 0"`.
+- Try a click without a window: `kb_cli run --project . --frames 12 --click Canvas/PlayButton@5`.
+)md";
+
+constexpr std::string_view kRecipePlayer = R"md(# Recipe: a character the person plays
+
+```
+kb_cli entity add --project . --create "Third Person Player"
+kb_cli run --project . --frames 60
+```
+
+One command adds the character with its controller script, input and the camera. Done when it prints
+`added a walking character 'Player' ...` and `run` ends with `0 diagnostics`. Tell the person: WASD or the arrows
+walk, Space jumps, the camera follows from behind.
+
+- From its eyes with mouse look: `"First Person Player"`. In 2D: `"Platformer Player"` or `"Top Down Player"`.
+- Where it starts: add `--position 0,1,0`. A model, a colour or animations: guide `characters-and-animation`.
+- Do not add a second camera or controller by hand: the preset has them.
+)md";
+
+constexpr std::array<ScriptAgentGuide, 19> kGuides{ {
+    { "recipe-material", "Recipe: colour or material", "A colour or material on an object: two commands.", kRecipeMaterial },
+    { "recipe-component", "Recipe: physics or a component", "Physics (a falling body) or any component on an object, and how to check it.", kRecipeComponent },
+    { "recipe-prefab", "Recipe: prefab", "Save an object, with its components, as a prefab and place copies.", kRecipePrefab },
+    { "recipe-script", "Recipe: Lua script", "A Lua script on an object (a spin, a movement): create, attach, validate, run.", kRecipeScript },
+    { "recipe-light", "Recipe: light and time of day", "The sun, the sky and the ambient light for morning, evening or night.", kRecipeLight },
+    { "recipe-settings", "Recipe: settings, plugins, builds", "The game's name, window, start scene, gravity, plugins and a build for a platform.", kRecipeSettings },
+    { "recipe-ui-button", "Recipe: a button", "A button with a label on the screen, and what to add so a click does something.", kRecipeUiButton },
+    { "recipe-player", "Recipe: a playable character", "A character the person walks with, with its camera, in one command.", kRecipePlayer },
     { "objects-and-materials", "Objects and materials", "Shapes, lights and cameras in a scene, their position, materials and colours.", kObjectsAndMaterials },
     { "physics", "Physics", "Rigidbodies, colliders, triggers, character controllers and collision events.", kPhysics },
     { "scripts", "Behaviour scripts", "Write a Lua behaviour, attach it to an entity, expose variables, call the engine.", kScripts },
@@ -448,6 +608,7 @@ std::span<const ScriptAgentGuide> ScriptAgentGuides::All() noexcept {
 
 std::string ScriptAgentGuides::Index() {
     std::string out = "# How-to guides\n\n";
+    out += "Start with the recipe for your job (the names starting with recipe-): its commands in order, and how to check the result. ";
     out += "Read only the guide for your task: the kb-engine `guide` tool with its name as `topic`, or the file of that name ";
     out += "next to this one. The script API is separate: the `api_reference` tool, one function or component at a time.\n\n";
     for (const ScriptAgentGuide& guide : kGuides) {

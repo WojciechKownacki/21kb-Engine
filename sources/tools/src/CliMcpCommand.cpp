@@ -133,8 +133,9 @@ thread_local bool tDiscovery = false;
             ToolProperty{ "search", "string", "Words to find in function and component names and descriptions.", false, "--search" },
         });
     if (command.name == "guide") return MakeToolDescriptor(command.mcpTool,
-        "Returns a short how-to for one kind of task, with the kb_cli commands that do it: objects-and-materials, physics, scripts, "
-        "characters-and-animation, combat-and-ai, maps-2d, verify. Without a topic, the list of guides.",
+        "Returns a short how-to for one kind of task, with the kb_cli commands that do it. Start with the recipe for the job: "
+        "recipe-material, recipe-component, recipe-prefab, recipe-script, recipe-light, recipe-settings, recipe-ui-button, recipe-player. "
+        "Other guides: objects-and-materials, physics, scripts, characters-and-animation, combat-and-ai, maps-2d, verify. Without a topic, the list of guides.",
         {
             ToolProperty{ "topic", "string", "The guide's name, or 'index'.", false, "--topic" },
         });
@@ -168,12 +169,12 @@ thread_local bool tDiscovery = false;
     if (command.name == "scene-list") return MakeToolDescriptor(command.mcpTool,
         "Lists the nodes of a .21kbscene file with their components, behaviours and world positions (@ x,y,z).",
         {
-            ToolProperty{ "scene", "string", "Scene path: physical (relative to project root) or virtual (/Game/...).", true, "--scene" },
+            ToolProperty{ "scene", "string", "Scene path: physical (relative to project root) or virtual (/Game/...); defaults to the startup scene.", false, "--scene" },
         });
     if (command.name == "scene-attach") return MakeToolDescriptor(command.mcpTool,
         "Attaches a behaviour script asset to a named scene node and saves the scene.",
         {
-            ToolProperty{ "scene", "string", "Scene path: physical (relative to project root) or virtual (/Game/...).", true, "--scene" },
+            ToolProperty{ "scene", "string", "Scene path: physical (relative to project root) or virtual (/Game/...); defaults to the startup scene.", false, "--scene" },
             ToolProperty{ "node", "string", "Name of the scene node to attach the behaviour to.", true, "--node" },
             ToolProperty{ "script", "string", "Script asset path: /Game/... virtual path or a path under Assets/.", true, "--script" },
             ToolProperty{ "tickGroup", "string", "Optional tick group: Input, Gameplay, Physics, Animation, Camera, Presentation.", false, "--tick-group" },
@@ -239,6 +240,7 @@ thread_local bool tDiscovery = false;
             ToolProperty{"name", "string", "New script name.", true, "--name"},
             ToolProperty{"language", "string", "Script language.", true, "--language", kScriptLanguages},
             ToolProperty{"folder", "string", "Project asset folder.", false, "--folder"},
+            ToolProperty{"code", "string", "Lua only: the script's whole text, written instead of the template.", false, "--code"},
         });
     return JsonValue::MakeNull();
 }

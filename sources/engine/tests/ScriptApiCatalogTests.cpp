@@ -3,6 +3,7 @@
 #include "engine/assets/AssetId.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/script/PucLuaScriptRuntime.hpp"
+#include "engine/script/ScriptAgentGuides.hpp"
 #include "engine/script/ScriptAgentProjectFiles.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
 #include "engine/script/ScriptApiExport.hpp"
@@ -239,7 +240,15 @@ void RunAgentProjectFilesTest() {
     {
         std::ifstream agents(TestRoot() / "AGENTS.md", std::ios::binary);
         const std::string text{ std::istreambuf_iterator<char>(agents), std::istreambuf_iterator<char>() };
-        kb::tests::Require(text.size() < 4096U, "AGENTS.md must stay short: it is read with every request");
+        kb::tests::Require(text.size() < 3072U, "AGENTS.md must stay short: it is read with every request");
+        // It is an index: every recipe is named in it, short, and written beside the other guides.
+        for (const kb::script::ScriptAgentGuide& guide : kb::script::ScriptAgentGuides::All()) {
+            if (guide.name.starts_with("recipe-")) {
+                kb::tests::Require(text.find("`" + std::string{ guide.name } + "`") != std::string::npos, "AGENTS.md must name every recipe");
+                kb::tests::Require(guide.body.size() < 2600U, "a recipe is read in one step and must stay short");
+                kb::tests::Require(std::filesystem::exists(TestRoot() / ".kb" / "docs" / (std::string{ guide.name } + ".md")), "a recipe file was not written");
+            }
+        }
     }
     const std::optional<std::string> raycast = kb::script::ScriptApiExport::ToReferenceTopic(catalog, "physics.raycast");
     kb::tests::Require(raycast.has_value() && raycast->starts_with("# Physics.Raycast"), "an API topic must resolve one function without regard to case");

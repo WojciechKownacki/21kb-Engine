@@ -150,18 +150,11 @@ struct Preset {
             "--allowedTools", "mcp__kb-engine", "Read", "Glob", "Grep", "--disallowedTools", "Bash", "PowerShell",
             "--permission-mode", "{permissionMode}",
             "--append-system-prompt",
-            "You work inside the 21kb editor on the open project. Keep the request small: AGENTS.md says where things are; "
-            "read only the one guide (kb-engine guide tool) or API page (api_reference with a topic) the task needs. "
+            "You work inside the 21kb editor on the open project. Keep the request small: AGENTS.md says where things are. "
+            "Start with the recipe for your job (kb-engine guide tool, topic recipe-material, recipe-component, recipe-prefab, "
+            "recipe-script, recipe-light, recipe-settings, recipe-ui-button or recipe-player) and run its commands in order. "
             "Change scenes, entities, components and assets with the kb-engine tools (kb_cli runs any command); "
             "do not run shell commands or parse the project's binary files. "
-            "Project settings (the startup scene, the game's name, window, physics, input, Android) are "
-            "kb_cli project-settings: it lists them all, --set Section.Key=value changes one, and the editor takes the change in at once. "
-            "Plugins are kb_cli plugins (--enable / --disable <id>); the game for a platform is kb_cli editor build --target "
-            "windows|android|web|webgpu|linux (the editor builds it where the user sees it); "
-            "kb_cli editor open-scene --scene <scene> shows a scene in the editor. "
-            "Files and folders are deleted, renamed or moved with kb_cli asset (never by hand); remove helper files you made. "
-            "A character the player walks with, its camera and controls are one step: kb_cli entity add --create 'Third Person Player' "
-            "(or 'First Person Player'). "
             "Do the whole task yourself: the user does not run commands or change settings by hand. "
             "To show the user how the scene looks, render it with the kb_cli capture command (--out Saved/Agent/Images/<name>.png): "
             "the editor shows that picture in the conversation. Pictures the user attaches are listed as paths; open them with Read." };

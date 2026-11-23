@@ -2489,6 +2489,17 @@ void RunScriptCommandTests() {
     Require(Contains(luaSource, "function Ready(self, dt)") && Contains(luaSource, "function Tick(self, dt)"),
         "script-new must write the Lua template with Ready and Tick");
     luaFile.close();
+    // --code writes the whole script at once, so the agent need not read the template and edit it.
+    const CommandRun coded = Run(&kb::cli::RunScriptNewCommand,
+        { "--project", project, "--name", "Spin", "--language", "lua", "--code", "function Tick(self, dt)\n    Transform.Rotate(self.entity, 0, 20 * dt, 0)\nend" });
+    Require(coded.exitCode == 0 && Contains(coded.output, "Lua script created: /Game/Scripts/Spin.lua"), "script-new --code failed: " + coded.output);
+    std::ifstream codedFile{ root / "Assets" / "Scripts" / "Spin.lua" };
+    const std::string codedSource{ std::istreambuf_iterator<char>{ codedFile }, {} };
+    Require(Contains(codedSource, "Transform.Rotate(self.entity, 0, 20 * dt, 0)") && !Contains(codedSource, "Hello from Lua"),
+        "script-new --code must write the given text instead of the template: " + codedSource);
+    const CommandRun codedNative = Run(&kb::cli::RunScriptNewCommand,
+        { "--project", project, "--name", "SpinNative", "--language", "cpp", "--code", "int x;" });
+    Require(codedNative.exitCode == 1 && Contains(codedNative.output, "--code"), "script-new --code must be refused for a C++ script: " + codedNative.output);
     WriteTextFile(root / "Assets" / "Scripts" / "Player.lua", "-- the user's own code\n");
 
     const auto refusedWith = [&](std::vector<std::string> arguments, std::string_view reason) {
@@ -5470,6 +5481,10 @@ struct ChangeProbe {
         { "lighting-quality", line({ "lighting-quality", "--shadows", "low" }), "*", "modified" },
         { "navmesh", line({ "navmesh", "bake", "--scene", "Assets/Level.21kbscene" }), "*", "*" },
         { "ability", line({ "ability", "new", "--name", "Strike" }), "Assets/Abilities/Strike.kbability", "created" },
+        { "asset", line({ "asset", "rename", "--path", "/Game/Abilities/Strike.kbability", "--to", "Strike2" }), "Assets/Abilities/Strike2.kbability", "created" },
+        { "project-settings", line({ "project-settings", "--set", "Display.WindowWidth=1024" }), "Config/ProjectSettings.ini", "modified" },
+        { "plugins", line({ "plugins", "--enable", "Editor.Terrain" }), "*", "modified" },
+        { "editor", line({ "editor", "build", "--target", "nowhere" }), "", "" },
         { "ai", withScene({ "ai", "make", "--entity", "Goblin", "--preset", "Ranged" }), side, "modified" },
         { "animator", line({ "animator", "new", "--name", "Second", "--clip", "/Game/Animation/Hero_Walk.kbanim" }), "Assets/Animation/Second.kbanimcontroller", "created" },
         { "skeleton", line({ "skeleton", "socket", "add", "--skeleton", "/Game/Characters/Probe.kbskeleton", "--name", "Grip", "--bone", "Hand" }),
@@ -5535,8 +5550,8 @@ void RunChangeReportTests() {
     const std::string outside = outsidePath.generic_string();
     WriteTextFile(outsidePath / "Wedge.obj", "v 0 0 0\nv 2 0 0\nv 0 3 0\nv 0 0 4\nf 1 2 3\nf 1 2 4\n");
     WriteTextFile(outsidePath / "DemoSource" / "package.json", R"({"name":"demo","version":"1.0.0"})");
-    Require(RunCliProgram({ "package", "publish", "--registry", (outsidePath / "Registry").generic_string(), (outsidePath / "DemoSource").generic_string() }).exitCode == 0,
-        "the demo package could not be published");
+    const CliRun published = RunCliProgram({ "package", "publish", "--registry", (outsidePath / "Registry").generic_string(), (outsidePath / "DemoSource").generic_string() });
+    Require(published.exitCode == 0, "the demo package could not be published: " + published.out + published.err);
     std::filesystem::copy_file(rootPath / "Probe.kbpack", outsidePath / "Probe.kbpack", error);
 
     for (const ChangeProbe& probe : ChangeProbeTable(root, outside)) {
@@ -5784,6 +5799,16 @@ void RunCommandCatalogTests() {
     Require(Contains(page("api_reference", R"({"topic":"Physics.Raycast"})"), "# Physics.Raycast"), "api_reference must return one function page");
     Require(Contains(page("api_reference", R"({"search":"raycast"})"), "Physics.Raycast"), "api_reference must find topics by text");
     Require(Contains(page("guide", R"({"topic":"objects-and-materials"})"), "material-new"), "guide must return one how-to");
+    // The recipes AGENTS.md points to: short, with the commands in order, and the tools it names exist.
+    Require(Contains(page("guide", R"({"topic":"recipe-script"})"), "script-new") && Contains(page("guide", R"({"topic":"recipe-light"})"), "WorldBackdrop"),
+        "guide must return the recipes");
+    for (const std::string_view agentTool : { "kb_cli", "guide", "api_reference" }) {
+        bool found = false;
+        for (std::size_t listedIndex = 0U; listedIndex < descriptors->Size(); ++listedIndex) {
+            found = found || descriptors->At(listedIndex)->Find("name")->AsString() == agentTool;
+        }
+        Require(found, "AGENTS.md names the tool " + std::string{ agentTool } + " but the server does not list it");
+    }
     // Reading the scene back: what component_edit wrote, without opening the scene file.
     const std::string shown = page("entity_edit", R"({"action":"show","name":"Probe","scene":"/Game/Scenes/McpScene.21kbscene"})");
     Require(Contains(shown, "localPosition=3,4,5") && Contains(shown, "localScale=2,2,2"),
@@ -6053,7 +6078,7 @@ void RunBatchSceneSessionTests() {
     std::filesystem::remove_all(projectPath / "Assets" / "Data", error);
 
     // A batch sent to the MCP server works on the project the server is bound to.
-    const std::filesystem::path mcpFile = parent / "mcp.txt";
+    const std::filesystem::path mcpFile = projectPath / "mcp.txt"; // inside the project: the server confines paths to it
     WriteTextFile(mcpFile, "entity add --name ByMcp\ncomponent add --entity ByMcp --type Light\n");
     std::string mcpInput = R"({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"kb_cli","arguments":{"args":["batch","--file",")";
     for (const char character : mcpFile.generic_string()) mcpInput += character;
@@ -6066,6 +6091,7 @@ void RunBatchSceneSessionTests() {
     Require(kb::cli::RunMcpCommand(mcpList, mcpIn, kb::cli::CommandIo{ .out = mcpOut, .err = mcpErr }) == 0 &&
             Contains(mcpOut.str(), "applied: 2 operation(s)") && Contains(mcpOut.str(), "\"isError\":false"),
         "a batch sent over MCP must run on the bound project: " + mcpOut.str() + mcpErr.str());
+    kb::cli::ResetCliConfinementForTests(); // the server confined this process to the project; the rest of the test runs commands directly
 
 #if KB_CLI_RENDERER
     // --color makes a material before it edits the scene: the scene kept open from the first object must see the second one's.
@@ -6542,6 +6568,13 @@ void RunLanguageServerTests();
 void RunDebugAdapterTests();
 void RunPackageCommandTests();
 
+// One suite of the full run. The MCP server confines the whole process to the project it serves and keeps that for good, so a suite
+// that follows one for another project would be refused its own files; each suite starts unconfined, as its own process would.
+void RunSuite(void (*suite)()) {
+    kb::cli::ResetCliConfinementForTests();
+    suite();
+}
+
 int main(int argc, char** argv) {
 #if KB_CLI_RENDERER
     kb::render::tests::InstallRendererAssertionPolicy();
@@ -6637,70 +6670,70 @@ int main(int argc, char** argv) {
         return EXIT_SUCCESS;
     }
     if (argc != 1) return EXIT_FAILURE;
-    RunAudioMixerCommandTests();
-    RunCliJsonTests();
-    RunCommandCatalogTests();
-    RunStructuredOutputTests();
-    RunChangeReportTests();
-    RunCodeMapTests();
-    RunBatchCommandTests();
-    RunBatchSceneSessionTests();
-    RunSceneDuplicateCommandTests();
-    RunMiniJsonTests();
-    RunArgumentListTests();
-    RunFlexibleAssetPathTests();
-    RunValidateCommandTests();
-    RunImportCommandTests();
+    RunSuite(RunAudioMixerCommandTests);
+    RunSuite(RunCliJsonTests);
+    RunSuite(RunCommandCatalogTests);
+    RunSuite(RunStructuredOutputTests);
+    RunSuite(RunChangeReportTests);
+    RunSuite(RunCodeMapTests);
+    RunSuite(RunBatchCommandTests);
+    RunSuite(RunBatchSceneSessionTests);
+    RunSuite(RunSceneDuplicateCommandTests);
+    RunSuite(RunMiniJsonTests);
+    RunSuite(RunArgumentListTests);
+    RunSuite(RunFlexibleAssetPathTests);
+    RunSuite(RunValidateCommandTests);
+    RunSuite(RunImportCommandTests);
 #if KB_CLI_RENDERER
-    RunPostProcessCommandTests();
-    RunImportSettingsCommandTests();
-    RunMeshLodCommandTests();
-    RunMaterialAuthoringCommandTests();
-    RunMaterialGraphUtilityNodeCommandTests();
-    RunMap2DCameraCliTests();
-    RunSprite2DCliTests();
-    RunWorldMemoryCliTests();
-    RunMeshReimportCliTests();
-    RunPlayerPresetCliTests();
+    RunSuite(RunPostProcessCommandTests);
+    RunSuite(RunImportSettingsCommandTests);
+    RunSuite(RunMeshLodCommandTests);
+    RunSuite(RunMaterialAuthoringCommandTests);
+    RunSuite(RunMaterialGraphUtilityNodeCommandTests);
+    RunSuite(RunMap2DCameraCliTests);
+    RunSuite(RunSprite2DCliTests);
+    RunSuite(RunWorldMemoryCliTests);
+    RunSuite(RunMeshReimportCliTests);
+    RunSuite(RunPlayerPresetCliTests);
 #else
-    RunSprite2DAssetRefusalTests();
+    RunSuite(RunSprite2DAssetRefusalTests);
 #endif
-    RunSceneCommandTests();
-    RunRunCommandTests();
-    RunPlaybackStopTests();
-    RunLuaFunctionTableTests();
-    RunInputActionAndPrefabTests();
-    RunSceneShortcutTests();
-    RunInputRecordingCliTests();
-    RunUiValidationCliTests();
-    RunUiDependencyCliTests();
-    RunUiClickCliTests();
-    RunUiScreenCliTests();
-    RunSafeAreaCliTests();
-    RunNewerSceneMetadataCliTest();
-    RunParticleReportCommandTests();
-    RunPlayerControllerTemplateTests();
-    RunNewCommandTests();
-    RunProjectTemplateTests();
-    RunSceneNewCommandTests();
-    RunScriptCommandTests();
-    RunEntityComponentCommandTests();
-    RunApiCommandTests();
-    RunApiCheckCommandTests();
-    RunMcpCommandTests();
-    RunMcpCommandRefusalTests();
-    RunLanguageServerTests();
-    RunDebugAdapterTests();
-    RunKeyAndPackCommandTests();
-    RunWorldCommandTests();
-    RunNavMeshCommandTests();
-    RunLightingQualityCommandTests();
-    RunPackSetCommandTests();
-    RunEncryptedPatchCommandTests();
-    RunPackageCommandTests();
+    RunSuite(RunSceneCommandTests);
+    RunSuite(RunRunCommandTests);
+    RunSuite(RunPlaybackStopTests);
+    RunSuite(RunLuaFunctionTableTests);
+    RunSuite(RunInputActionAndPrefabTests);
+    RunSuite(RunSceneShortcutTests);
+    RunSuite(RunInputRecordingCliTests);
+    RunSuite(RunUiValidationCliTests);
+    RunSuite(RunUiDependencyCliTests);
+    RunSuite(RunUiClickCliTests);
+    RunSuite(RunUiScreenCliTests);
+    RunSuite(RunSafeAreaCliTests);
+    RunSuite(RunNewerSceneMetadataCliTest);
+    RunSuite(RunParticleReportCommandTests);
+    RunSuite(RunPlayerControllerTemplateTests);
+    RunSuite(RunNewCommandTests);
+    RunSuite(RunProjectTemplateTests);
+    RunSuite(RunSceneNewCommandTests);
+    RunSuite(RunScriptCommandTests);
+    RunSuite(RunEntityComponentCommandTests);
+    RunSuite(RunApiCommandTests);
+    RunSuite(RunApiCheckCommandTests);
+    RunSuite(RunMcpCommandTests);
+    RunSuite(RunMcpCommandRefusalTests);
+    RunSuite(RunLanguageServerTests);
+    RunSuite(RunDebugAdapterTests);
+    RunSuite(RunKeyAndPackCommandTests);
+    RunSuite(RunWorldCommandTests);
+    RunSuite(RunNavMeshCommandTests);
+    RunSuite(RunLightingQualityCommandTests);
+    RunSuite(RunPackSetCommandTests);
+    RunSuite(RunEncryptedPatchCommandTests);
+    RunSuite(RunPackageCommandTests);
     // Keep the production physics fixture on disk after the test process so
     // the built kb_cli executable can be run against it as a separate-process
     // runtime verification.
-    RunProjectileTemplateTests();
+    RunSuite(RunProjectileTemplateTests);
     return EXIT_SUCCESS;
 }

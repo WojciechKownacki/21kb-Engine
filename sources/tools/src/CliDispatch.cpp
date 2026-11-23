@@ -56,7 +56,8 @@ Commands:
                file) or C++ (a .native asset, with its source and CMake project in
                Source/NativeScripts/<Name>). Existing files are never overwritten.
                  --project <dir> --name <Name> --language lua|cpp
-                 [--folder Assets/Scripts]
+                 [--folder Assets/Scripts] [--code "<Lua text>"]
+               (--code writes the whole Lua script at once instead of the template)
   scene-lightmap Bake static diffuse lighting and ray shadows into a UV0 texture.
                  --project <dir> --entity <receiver> --out /Game/<path>.tga [--scene <path>] [--resolution 128]
   scene-bake-lighting Bake the whole scene: static lights, bounces, generated lightmap UVs and light probes.
@@ -1120,6 +1121,10 @@ void ConfineCliToProject(const std::filesystem::path& projectRoot) {
     if (g_confinedRoot.empty() && !projectRoot.empty()) {
         g_confinedRoot = std::filesystem::absolute(projectRoot);
     }
+}
+
+void ResetCliConfinementForTests() {
+    g_confinedRoot.clear();
 }
 
 int RunCli(std::span<const std::string> args, std::istream& in, CommandIo io) {

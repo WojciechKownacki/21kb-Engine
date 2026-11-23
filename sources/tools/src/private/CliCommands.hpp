@@ -114,6 +114,8 @@ namespace kb::cli {
 // Reading a source to import and looking at the engine's code stay allowed. The MCP server, through which
 // an agent runs kb_cli, confines itself to its project; nothing lifts the confinement again.
 void ConfineCliToProject(const std::filesystem::path& projectRoot);
+// For the test binary only, which runs the MCP server of many projects in one process: the engine itself never lifts a confinement.
+void ResetCliConfinementForTests();
 // The directory the cooker and the editor mount as /Game: the content root of the project in
 // `project`, else of the nearest folder above `path` that holds a project file.
 [[nodiscard]] std::optional<std::filesystem::path> FindProjectContentRoot(

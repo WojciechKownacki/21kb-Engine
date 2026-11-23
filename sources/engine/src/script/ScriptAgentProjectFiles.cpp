@@ -33,62 +33,55 @@ namespace {
 
 constexpr std::string_view kAgentsTemplate = R"md(# AGENTS.md - working in this 21kb Engine project
 
-This is a 21kb Engine game project. Keep every request small: read this file, then only the one
-guide or API page your task needs. Never read whole folders or the machine files listed below.
+Keep every request small. The person you work for is not technical: do the whole task yourself with the
+tools below, never ask them to run a command, edit a file or change a setting by hand. Answer briefly, in
+plain words and in their language, and say what they will see in the editor.
 
-The person you work for is not technical. Do the whole task yourself with the tools below; never
-ask them to run a command, edit a file, open a setting or install anything by hand. Answer
-briefly, in plain words and in their language, and say what they will see in the editor.
+## Tools
 
-## Where things are
+Three kb-engine tools: `kb_cli` runs any command (`args` are the words after `kb_cli`, one per item; the
+project is filled in; outside the editor `.mcp.json` names the program), `guide` gives a how-to (`topic`) and
+`api_reference` the script API (`topic` or `search`). Call them by these names (from JavaScript:
+`tools.mcp__kb_engine__<name>`); never list or search the tool catalogue to find them. In one JavaScript exec
+call several tools, each awaited in order, and print every result: do that for all the lines of a recipe.
 
-- How-to guides with the exact commands for one kind of task, through the kb-engine `guide`
-  tool (its name as `topic`) or `.kb/docs/<name>.md`: `objects-and-materials` (shapes, colours,
-  lights, cameras), `physics`, `scripts` (Lua), `menus-and-buttons` (UI that
-  runs scripts), `ui-audio-particles`, `water-and-look` (water,
-  sky, fog, post effects), `characters-and-animation`, `combat-and-ai`, `maps-2d`, `verify`.
-- Script API, one page per function group, function and component: `api_reference` with a
-  `topic` (`Physics`, `Physics.Raycast`, `Rigidbody`) or a `search` text; files in `.kb/api/`.
-- The scene: `kb_cli scene-list --project .` lists every object with its position;
-  `kb_cli entity show --project . --name <Name>` prints one object's transform and component values.
-- `Assets/` is the game, mounted as `/Game/`; `kb_cli project-settings --project .` names the
-  startup scene (`Maps.DefaultMap`).
-- Project settings (startup scene, game name, window and full screen, loading screen, physics,
-  input, Android): `kb_cli project-settings --project .` lists them, `--set Section.Key=value`
-  changes one. Plugins (physics, audio, particles, AI, 2D maps, the terrain editor):
-  `kb_cli plugins --project .`, `--enable <id>` / `--disable <id>`. The editor takes both in at once.
-- A character the person plays, with its camera and controls in one step: `kb_cli entity add --project .
-  --create 'Third Person Player'` (or `'First Person Player'`; in 2D `'Platformer Player'`, `'Top Down Player'`).
-- The game for a platform: `kb_cli editor build --project . --target windows|android|web|webgpu|linux`
-  (`--profile release` for a store build). The open editor builds it in its Build Game panel and writes
-  `Saved/Agent/BuildResult.txt`: `Running`, then `Succeeded <folder>` or `Failed <reason>`. Without
-  an open editor, `kb_cli build --project . --out Build/<Name>` makes a Windows build.
-- Tidying the project (a scene or asset no longer wanted, a better name, folders):
-  `kb_cli asset delete|rename|move|new-folder --project . --path /Game/<file or folder>` (`--to` a new
-  name or folder). Deleted files go to the Recycle Bin. Remove what you made only to help yourself.
-- To show the person a scene in the editor (a new level, one they asked about): `kb_cli editor open-scene
-  --project . --scene /Game/<path>.21kbscene`.
-- To show the person how a scene looks: `kb_cli capture --project . --scene <scene> --out
-  Saved/Agent/Images/<name>.png` (a new file name each time); the editor shows the picture.
-- Machine files, not for reading: `.kb/api/script_api.json`, `authoring_hints.json`,
-  `manifest.json`, `kb.lua`.
+## Start with the recipe for your job
+
+Fetch it with the `guide` tool (its name as `topic`; or the file `.kb/docs/<name>.md`), run its commands in
+order and stop when its check passes. Do not read the scene, the settings or other guides first.
+
+- colour or material on an object: `recipe-material`
+- physics, or any other component, on an object: `recipe-component`
+- a prefab, with a component: `recipe-prefab`
+- a Lua script on an object (spin, move, react): `recipe-script`
+- light, sun, sky, time of day: `recipe-light`
+- game name, window, start scene, plugins, a build: `recipe-settings`
+- a button or a menu: `recipe-ui-button`
+- a character the person plays, with its camera: `recipe-player`
+
+Anything else: guides `objects-and-materials`, `physics`, `scripts`, `menus-and-buttons`, `ui-audio-particles`,
+`water-and-look` (water, fog, post effects), `characters-and-animation`, `combat-and-ai`, `maps-2d`, `terrain`,
+`verify`. Script API, one page per group, function and component: `api_reference` with a `topic` or a `search`.
 
 ## Rules
 
-- Change scenes, entities, components and assets only with `kb_cli` (the kb-engine `kb_cli`
-  tool runs any command; outside the editor `.mcp.json` names the program). Scenes, the project
-  file and assets are binary: never edit or parse them. Lua scripts are text: edit them directly.
-- `kb_cli help <command>` prints one command's options; `kb_cli schema --component <Name>`
-  (tool `component_schema`) one component's properties.
-- Finish with `kb_cli validate --project . <script>` for every script you wrote and
-  `kb_cli run --project . --frames 120`: done when it ends with `0 diagnostics`; its `moved:`
-  lines show where dynamic bodies went.
+- Change scenes, entities, components and assets only with `kb_cli`. Scenes, the project file and assets are
+  binary: never edit or parse them. Lua scripts are text: edit them directly. `.kb/api/*.json` and `kb.lua`
+  are machine files, not for reading.
+- `kb_cli help <command>` prints one command's options; `kb_cli scene-list` the objects of the startup scene;
+  `kb_cli entity show --name <Name>` one object's values; `kb_cli schema --component <Name>` a component's properties.
+- `Assets/` is the game, mounted as `/Game/`. Delete, rename or move files with `kb_cli asset delete|rename|move`
+  (`--path /Game/<file>`, `--to`), never by hand; remove only what you made.
+- To show the person a new scene: `kb_cli editor open-scene --scene /Game/<path>.21kbscene`; how a scene looks:
+  `kb_cli capture --out Saved/Agent/Images/<new name>.png` (the editor shows the picture).
+- Finish scripts with `kb_cli validate <script>` and `kb_cli run --frames 120`: done when it ends with
+  `0 diagnostics`; its `moved:` lines show where dynamic bodies went.
 )md";
 
 // The AGENTS.md files earlier versions of this engine wrote, recognised by their exact bytes
 // (FNV-1a 64), so an untouched copy is brought up to date while one a person edited is kept.
-constexpr std::array<std::string_view, 5> kPreviousAgentsTemplateHashes{ "6927ba90de51399a", "66098609d17a66fa", "17571d731424f80b", "60b10d36fecf3d23",
-    "db0742a5e69a4b90" };
+constexpr std::array<std::string_view, 6> kPreviousAgentsTemplateHashes{ "6927ba90de51399a", "66098609d17a66fa", "17571d731424f80b", "60b10d36fecf3d23",
+    "db0742a5e69a4b90", "0998d780309d6bfd" };
 
 // Claude Code reads CLAUDE.md, not AGENTS.md; this one line imports it.
 constexpr std::string_view kClaudeTemplate = "@AGENTS.md\n";
