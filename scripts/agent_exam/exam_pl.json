@@ -86,6 +86,47 @@
       "checks": [
         {"check": "files", "glob": "Assets/**/*.wav", "magic": "52494646", "min_bytes": 2000, "label": "a new WAV sound inside Assets"}
       ]
+    },
+    {
+      "id": "intro_camera_flight", "area": "cinematic", "tags": ["timeline", "cinematic"], "template": "Basic3D",
+      "setup": [["entity", "add", "--create", "Third Person Player"]],
+      "requests": ["Zrób krótkie intro: kamera przelatuje do gracza przez 3 sekundy na starcie sceny"],
+      "checks": [
+        {"check": "files", "glob": "Assets/**/*.kbtimeline", "contains": "(?s)duration 3\\b.*transform \"[^\"]*\" 0 (\\S+) (\\S+) (\\S+) .*transform \"[^\"]*\" 3 (\\S+) (\\S+) (\\S+) ",
+         "expr": "abs(g1 - g4) + abs(g2 - g5) + abs(g3 - g6) > 0.5",
+         "label": "a 3 second timeline whose object really moves between the start and the end"},
+        {"check": "files", "glob": "Assets/**/*.lua", "contains": "Timeline\\.Play", "label": "a script that plays it"},
+        {"check": "run", "frames": 200}
+      ]
+    },
+    {
+      "id": "dark_orange_ui", "area": "UI look", "tags": ["ui", "theme"], "template": "Basic3D",
+      "setup": [["entity", "add", "--create", "Button", "--name", "Graj"],
+                ["component", "set", "--entity", "Graj", "--type", "Text", "--set", "content=Graj"],
+                ["entity", "add", "--create", "Button", "--name", "Wyjscie"],
+                ["component", "set", "--entity", "Wyjscie", "--type", "Text", "--set", "content=Wyjscie"]],
+      "requests": ["Zmień wygląd interfejsu na ciemny z pomarańczowymi przyciskami"],
+      "checks": [
+        {"check": "files", "glob": "Assets/**/*.kbtheme", "contains": "backgroundColor\\.r\" 3 0\\.[0-2]\\S*\\s+\"[^\"]*\" \"backgroundColor\\.g\" 3 0\\.[0-2]\\S*\\s+\"[^\"]*\" \"backgroundColor\\.b\" 3 0\\.[0-3]", "label": "a theme with a dark background"},
+        {"check": "files", "glob": "Assets/**/*.kbtheme", "contains": "backgroundColor\\.r\" 3 (0\\.[7-9]\\S*|1)\\s+\"[^\"]*\" \"backgroundColor\\.g\" 3 0\\.[3-7]\\S*\\s+\"[^\"]*\" \"backgroundColor\\.b\" 3 0\\.[0-3]", "label": "a theme with orange buttons"},
+        {"check": "entity_show", "name": "Graj", "component": "Rect Transform", "regex": "themeAssetId=/Game/\\S+\\.kbtheme", "label": "the buttons use the theme"},
+        {"check": "validate"}
+      ]
+    },
+    {
+      "id": "translate_texts", "area": "localization", "tags": ["localization", "ui"], "template": "Basic3D",
+      "setup": [["entity", "add", "--create", "Button", "--name", "NowaGra"],
+                ["component", "set", "--entity", "NowaGra", "--type", "Text", "--set", "content=Nowa gra"],
+                ["entity", "add", "--create", "Text", "--name", "Tytul"],
+                ["component", "set", "--entity", "Tytul", "--type", "Text", "--set", "content=Smocze Wzgorza"]],
+      "requests": ["Dodaj angielską i niemiecką wersję tekstów gry"],
+      "checks": [
+        {"check": "files", "glob": "Assets/**/*.kbloc", "contains": "language \"en\"(?s:.*)\"[^\"\\n]*new game", "label": "an English version, translated"},
+        {"check": "files", "glob": "Assets/**/*.kbloc", "contains": "language \"de\"(?s:.*)\"[^\"\\n]*(neues spiel|neu)", "label": "a German version, translated"},
+        {"check": "entity_show", "name": "NowaGra", "component": "Text", "regex": "localizationKey=[a-z]", "label": "the button text uses a key"},
+        {"check": "files", "glob": "Assets/**/*.lua", "contains": "Localization\\.SetCatalog", "label": "a script that gives the game its catalog"},
+        {"check": "run", "frames": 30}
+      ]
     }
   ]
 }

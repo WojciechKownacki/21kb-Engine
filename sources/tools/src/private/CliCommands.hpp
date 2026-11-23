@@ -110,6 +110,9 @@ namespace kb::cli {
 [[nodiscard]] int RunEditorCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunAssetCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunSoundCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunTimelineCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunUiThemeCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunLocalizationCommand(const ArgumentList& arguments, CommandIo io);
 #if KB_CLI_RENDERER
 [[nodiscard]] int RunImageCommand(const ArgumentList& arguments, CommandIo io);
 #endif

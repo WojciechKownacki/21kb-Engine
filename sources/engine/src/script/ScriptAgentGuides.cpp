@@ -625,7 +625,67 @@ kb_cli component set --project . --entity Ambience --type AudioSource --set clip
 - Check it: `kb_cli run --project . --frames 60 --report audio` ends with `"succeeded":true`.
 )md";
 
-constexpr std::array<ScriptAgentGuide, 21> kGuides{ {
+constexpr std::string_view kRecipeTimeline = R"md(# Recipe: an intro, a cutscene, a camera flight
+
+```
+kb_cli timeline fly --project . --name Intro --to Player --seconds 3
+kb_cli run --project . --frames 240
+```
+
+`fly` makes the timeline, a camera flight from where `Main Camera` is to a place behind and above the object
+`--to`, looking at it, and a script that plays it when the scene starts. Done when it prints `plays when the scene
+starts` and `run` ends with `0 diagnostics`. The object's name comes from `kb_cli scene-list --project .`.
+
+- Another camera or object: `--entity "Camera"`. Closer or higher: `--distance 3 --height 1`. Longer: `--seconds 6`.
+- Your own path: `timeline new --name Tour --duration 6`, then one `timeline key` per point
+  (`--timeline /Game/Cinematics/Tour.kbtimeline --entity "Main Camera" --time 0 --position 0,3,-10`,
+  `--time 3 --position 8,3,0 --look-at Player`), then `timeline play --timeline /Game/Cinematics/Tour.kbtimeline`.
+  A key leaves what it does not give as the object has it now; the object moves smoothly between keys.
+- A moment in it that a script hears: `timeline event --timeline <path> --time 3 --event IntroDone`, and in the script of
+  that object `function Created(self) Events.Subscribe("OnTimelineEvent", function(event) Log(event.args.name) end) end`.
+- `timeline show --timeline <path>` lists the keys. Play it again with `--loop yes` on `timeline play`.
+)md";
+
+constexpr std::string_view kRecipeUiTheme = R"md(# Recipe: the look of the interface
+
+```
+kb_cli ui-theme new --project . --name Dark --preset dark --button "#FF8C1A"
+kb_cli ui-theme apply --project . --theme /Game/UI/Dark.kbtheme
+```
+
+A theme is one shared style: panels and texts take the base colours, buttons take their own. Done when `apply` prints
+`applied ... to N controls`. Controls added later: run `apply` again. Check: `kb_cli capture --out Saved/Agent/Images/ui.png`.
+
+- `--preset dark` (dark panels, light text) or `light`. Colours as `#RRGGBB`: orange #FF8C1A, red #E03C31, green #2ECC40,
+  blue #0074D9, purple #B026FF, white #F0F0F0, black #111111. The text on a button is chosen to be readable; `--button-text` sets it.
+- Change a theme later: `kb_cli ui-theme set --theme /Game/UI/Dark.kbtheme --background "#101018" --font-size 20 --corner-radius 12`.
+  Tokens: `--background`, `--text`, `--border`, `--border-width`, `--corner-radius`, `--font-size`, `--button`, `--button-text`.
+- Only one menu: `apply ... --entity Menu` (that object and what is below it). `ui-theme show --theme <path>` lists the style.
+- Make the controls first (guide `recipe-ui-button`), then the theme.
+)md";
+
+constexpr std::string_view kRecipeTranslate = R"md(# Recipe: the texts of the game in other languages
+
+```
+kb_cli localization collect --project . --language pl
+kb_cli localization set --project . --language en --set ui.title="Dragon Hills" --set ui.playbutton="Play"
+kb_cli localization set --project . --language de --set ui.title="Drachenhuegel" --set ui.playbutton="Spielen"
+kb_cli localization missing --project .
+```
+
+`collect` turns the texts written on the scene's controls into keys of one catalog (the language they are written in: `--language`
+is its code, such as pl, en, de) and prints each `key = "text"`; give every key a text in each other language with `set`
+(one `--set key=text` per key). Done when `missing` says `every text is translated`.
+
+- Changing the default language, the one the game starts in: `kb_cli localization default --language en`.
+- `localization show` lists every key with its texts. `add-language --language fr` starts a language with the default texts.
+- A text from a script: `Localization.Translate("ui.title")`. Switch while playing: `Localization.SetLanguage("de")`, for
+  example from a button script (guide `recipe-ui-button`); a Text with a `localizationKey` changes at once.
+- A new text of your own: `localization set --language en --set hud.score="Score"`, then on the control
+  `component set --entity Score --type Text --set localizationKey=hud.score`.
+)md";
+
+constexpr std::array<ScriptAgentGuide, 24> kGuides{ {
     { "recipe-material", "Recipe: colour or material", "A colour or material on an object: two commands.", kRecipeMaterial },
     { "recipe-component", "Recipe: physics or a component", "Physics (a falling body) or any component on an object, and how to check it.", kRecipeComponent },
     { "recipe-prefab", "Recipe: prefab", "Save an object, with its components, as a prefab and place copies.", kRecipePrefab },
@@ -636,6 +696,9 @@ constexpr std::array<ScriptAgentGuide, 21> kGuides{ {
     { "recipe-player", "Recipe: a playable character", "A character the person walks with, with its camera, in one command.", kRecipePlayer },
     { "recipe-image", "Recipe: an icon, picture or texture", "An icon, UI picture, texture or sprite sheet drawn by the engine, in neon, flat, soft or pixel style.", kRecipeImage },
     { "recipe-sound", "Recipe: a sound effect or music loop", "A jump, coin, hit, explosion or other sound effect, an ambient or music loop, made by the engine.", kRecipeSound },
+    { "recipe-timeline", "Recipe: an intro or cutscene", "A camera flight or any object moving over time as a timeline that plays when the scene starts, with events.", kRecipeTimeline },
+    { "recipe-ui-theme", "Recipe: the look of the interface", "A shared UI theme: dark or light, colours, orange buttons, rounded corners, applied to the controls of a scene.", kRecipeUiTheme },
+    { "recipe-translate", "Recipe: texts in other languages", "The texts of the game in several languages: keys on the controls, translations, the default language, switching in play.", kRecipeTranslate },
     { "objects-and-materials", "Objects and materials", "Shapes, lights and cameras in a scene, their position, materials and colours.", kObjectsAndMaterials },
     { "physics", "Physics", "Rigidbodies, colliders, triggers, character controllers and collision events.", kPhysics },
     { "scripts", "Behaviour scripts", "Write a Lua behaviour, attach it to an entity, expose variables, call the engine.", kScripts },

@@ -710,6 +710,44 @@ R"(  image        Draw a picture into the project and import it, so it is an ass
                and music, which loop. --pitch moves it up or down in semitones (12 is an octave), --length
                is its duration. The file is Assets/Audio/<Name>.wav, used as /Game/Audio/<Name>.wav:
                clipAssetId of an Audio Source, or Audio.Play in a script)
+  timeline     A short cinematic (the engine's Timeline, .kbtimeline): a camera or object that moves
+               over time, and events. `fly` makes the usual intro in one step.
+                 fly --project <dir> --name <Name> --to <Object> [--entity "Main Camera"] [--seconds 3]
+                     [--distance 5] [--height 2] [--scene <path>]
+                 new --project <dir> --name <Name> [--duration 3] [--folder Assets/Cinematics] [--replace]
+                 key --project <dir> --timeline <path> --entity <Object> --time <s> [--position x,y,z]
+                     [--rotation x,y,z] [--look-at x,y,z|<Object>] [--scale x,y,z] [--scene <path>]
+                 event --project <dir> --timeline <path> --time <s> --event <Name> [--entity <Object>]
+                     [--payload <text>]
+                 show --project <dir> --timeline <path>
+                 play --project <dir> --timeline <path> [--loop yes] [--scene <path>]
+               (fly: the object flies from where it is to a place --distance behind and --height above
+               the --to object, looking at it, and plays when the scene starts. key: a position and
+               rotation at a time (what is not given stays as it is); play: a Lua script on an empty
+               object <Name>Player starts the timeline with the scene)
+  ui-theme     The look of the user interface as a shared UI Theme (.kbtheme): colours, text size,
+               rounded corners. A theme has a base style and a Button variant.
+                 new --project <dir> --name <Name> [--preset dark|light] [--folder Assets/UI] [--replace]
+                     [tokens]
+                 set --project <dir> --theme <path> [tokens]
+                 show --project <dir> --theme <path>
+                 apply --project <dir> --theme <path> [--scene <path>] [--entity <Object>]
+               (tokens: --background #RRGGBB, --text #RRGGBB, --border #RRGGBB, --border-width <px>,
+               --corner-radius <px>, --font-size <px>, --button #RRGGBB and --button-text #RRGGBB for
+               the buttons. apply gives the theme to every control of the scene, or of --entity and
+               what is below it)
+  localization The texts of the game in several languages, as one catalog (Assets/Localization/Game.kbloc)
+               that Text controls read through their localizationKey.
+                 collect --project <dir> [--language en] [--scene <path>] [--catalog <path>]
+                 set --project <dir> --language <code> --set key=text [--set key=text ...] [--catalog <path>]
+                 add-language --project <dir> --language <code> [--catalog <path>]
+                 show --project <dir> [--catalog <path>]
+                 missing --project <dir> [--catalog <path>]
+                 default --project <dir> --language <code> [--catalog <path>]
+               (collect: the texts written on the controls of the scene become keys of the default
+               language, and the game loads the catalog when the scene starts. add-language starts a
+               language with the default language's texts; missing lists what is not translated yet;
+               default is the language the game starts in and a missing text falls back to)
   editor       Ask the editor that has the project open to open a scene, or to build the game
                for a platform with its Build Game panel (its settings, keys and tools).
                  open-scene --project <dir> --scene /Game/<path>.21kbscene
@@ -865,6 +903,9 @@ constexpr CliCommandDescriptor kCommands[]{
     {"editor", &RunEditorCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
     {"asset", &RunAssetCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
     {"sound", &RunSoundCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
+    {"timeline", &RunTimelineCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Envelope},
+    {"ui-theme", &RunUiThemeCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Envelope},
+    {"localization", &RunLocalizationCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Envelope},
 #if KB_CLI_RENDERER
     {"image", &RunImageCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
     {"csg", &RunCsgCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},

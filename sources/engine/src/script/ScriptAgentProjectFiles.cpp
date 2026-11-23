@@ -35,7 +35,7 @@ constexpr std::string_view kAgentsTemplate = R"md(# AGENTS.md - working in this 
 
 Keep every request small. The person you work for is not technical: do the whole task yourself with the
 tools below, never ask them to run a command, edit a file or change a setting by hand. Answer briefly, in
-plain words and in their language, and say what they will see in the editor.
+plain words and in their language, and say what they will see.
 
 ## Tools
 
@@ -60,18 +60,19 @@ order and stop when its check passes. Do not read the scene, the settings or oth
 - a character the person plays, with its camera: `recipe-player`
 - an icon, sprite, texture or other picture (neon, flat, pixel): `recipe-image`
 - a sound effect or music loop (jump, coin, hit, explosion): `recipe-sound`
+- an intro or cutscene, a camera flight: `recipe-timeline`
+- the look of the interface (dark, colours, rounded): `recipe-ui-theme`
+- texts in other languages: `recipe-translate`
 
-Anything else: guides `objects-and-materials`, `physics`, `scripts`, `menus-and-buttons`, `ui-audio-particles`,
-`water-and-look`, `characters-and-animation`, `combat-and-ai`, `maps-2d`, `terrain`,
-`verify`. Script API: `api_reference` with a `topic` or a `search`.
+Anything else: `guide` without a topic lists the other guides (`scripts`, `water-and-look`, `maps-2d` ...);
+the script API: `api_reference` with a `topic` or a `search`.
 
 ## Rules
 
 - Change scenes, entities, components and assets only with `kb_cli`. Scenes, the project file and assets are
-  binary: never edit or parse them. Lua scripts are text: edit them directly. `.kb/api/*.json` and `kb.lua`
-  are machine files, not for reading.
-- `kb_cli help <command>` prints one command's options; `kb_cli scene-list` the objects of the startup scene;
-  `kb_cli entity show --name <Name>` one object's values; `kb_cli schema --component <Name>` a component's properties.
+  binary: never edit or parse them. Lua scripts are text: edit them directly. Do not read `.kb/api/*.json` or `kb.lua`.
+- `kb_cli help <command>` prints a command's options; `kb_cli scene-list` the objects of the startup scene;
+  `kb_cli entity show --name <Name>` one object's values; `kb_cli schema --component <Name>` a component's.
 - `Assets/` is the game, mounted as `/Game/`. Delete, rename or move files with `kb_cli asset delete|rename|move`
   never by hand; remove only what you made.
 - To show the person a new scene: `kb_cli editor open-scene --scene /Game/<path>.21kbscene`; how a scene looks:
@@ -82,8 +83,8 @@ Anything else: guides `objects-and-materials`, `physics`, `scripts`, `menus-and-
 
 // The AGENTS.md files earlier versions of this engine wrote, recognised by their exact bytes
 // (FNV-1a 64), so an untouched copy is brought up to date while one a person edited is kept.
-constexpr std::array<std::string_view, 7> kPreviousAgentsTemplateHashes{ "6927ba90de51399a", "66098609d17a66fa", "17571d731424f80b", "60b10d36fecf3d23",
-    "db0742a5e69a4b90", "0998d780309d6bfd", "a7d1c056fb759f2b" };
+constexpr std::array<std::string_view, 8> kPreviousAgentsTemplateHashes{ "6927ba90de51399a", "66098609d17a66fa", "17571d731424f80b", "60b10d36fecf3d23",
+    "db0742a5e69a4b90", "0998d780309d6bfd", "a7d1c056fb759f2b", "74fed88885ab70b9" };
 
 // Claude Code reads CLAUDE.md, not AGENTS.md; this one line imports it.
 constexpr std::string_view kClaudeTemplate = "@AGENTS.md\n";

@@ -39,6 +39,11 @@ add_library(kb_cli_core STATIC
     src/CliScriptCommands.cpp
     src/CliSecurityCommands.cpp
     src/CliValidateCommand.cpp
+    src/CliAssetTarget.cpp
+    src/CliCinematicCommands.cpp
+    src/CliLocalizationCommands.cpp
+    src/CliThemeCommands.cpp
+    src/private/CliAssetTarget.hpp
     src/CliWorkshopCommands.cpp
     src/CliWorkshopImage.cpp
     src/CliWorkshopSound.cpp

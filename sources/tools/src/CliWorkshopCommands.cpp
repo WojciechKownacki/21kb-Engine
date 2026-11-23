@@ -1,3 +1,4 @@
+#include "CliAssetTarget.hpp"
 #include "CliCommands.hpp"
 #include "CliWorkshop.hpp"
 
@@ -39,74 +40,7 @@ namespace {
     return lower;
 }
 
-struct Target {
-    std::filesystem::path projectRoot;
-    std::filesystem::path file;
-    std::string name;
-    std::string folderVirtual; // /Game/Images
-    std::string virtualPath;   // /Game/Images/Heart.png
-    std::string project;       // --project as given
-};
-
-// The file this command writes: <Assets>/<folder>/<name><extension>. The name is a plain name, the folder lies inside
-// the project's Assets (links followed), and an existing file is kept unless --replace says so.
-[[nodiscard]] std::optional<Target> ResolveTarget(const ArgumentList& arguments, std::string_view command, std::string_view defaultFolder,
-    std::string_view extension, CommandIo io) {
-    const std::optional<std::string> project = arguments.Option("--project");
-    std::optional<std::string> name = arguments.Option("--name");
-    if (!project.has_value() || !name.has_value()) {
-        io.err << "error: " << command << " new requires --project <dir> --name <Name> --preset <preset>\n";
-        return std::nullopt;
-    }
-    if (Lower(*name).ends_with(extension)) name->resize(name->size() - extension.size());
-    const bool plain = !name->empty() && name->size() <= 64U && std::ranges::all_of(*name, [](char c) {
-        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-';
-    });
-    if (!plain) {
-        io.err << "error: --name is a plain name of letters, digits, - and _ (for example Heart), not a path, got '" << *name << "'\n";
-        return std::nullopt;
-    }
-    // Names Windows keeps for devices (CON, NUL, COM1 ...) cannot be files there, with any extension.
-    const std::string lowerName = Lower(*name);
-    const bool device = lowerName == "con" || lowerName == "prn" || lowerName == "aux" || lowerName == "nul" ||
-        ((lowerName.starts_with("com") || lowerName.starts_with("lpt")) && lowerName.size() == 4U && lowerName[3] >= '0' && lowerName[3] <= '9');
-    if (device) {
-        io.err << "error: --name '" << *name << "' is a reserved system name; pick another, for example " << *name << "Sound\n";
-        return std::nullopt;
-    }
-    std::string error;
-    const std::filesystem::path projectFile = kb::project::ProjectManager::FindProjectFile(kb::assets::Utf8Path(*project), error);
-    if (projectFile.empty()) {
-        io.err << "error: " << error << '\n';
-        return std::nullopt;
-    }
-    Target target;
-    target.projectRoot = projectFile.parent_path();
-    target.project = *project;
-    target.name = *name;
-    const kb::assets::ProjectAssetFolder folder =
-        kb::assets::ResolveProjectAssetFolder(target.projectRoot, arguments.Option("--folder").value_or(std::string{ defaultFolder }));
-    if (!folder.error.empty()) {
-        io.err << "error: " << folder.error << '\n';
-        return std::nullopt;
-    }
-    std::error_code ec;
-    const std::filesystem::path assetsRoot = std::filesystem::weakly_canonical(target.projectRoot / "Assets", ec);
-    const std::filesystem::path resolved = std::filesystem::weakly_canonical(folder.folder, ec);
-    const std::filesystem::path relative = resolved.lexically_relative(assetsRoot);
-    if (ec || relative.empty() || *relative.begin() == "..") {
-        io.err << "error: refused for safety: the folder must lie inside the project's Assets\n";
-        return std::nullopt;
-    }
-    target.folderVirtual = folder.virtualPath;
-    target.file = folder.folder / kb::assets::Utf8Path(*name + std::string{ extension });
-    target.virtualPath = folder.virtualPath + "/" + *name + std::string{ extension };
-    if (std::filesystem::exists(target.file, ec) && !arguments.Flag("--replace")) {
-        io.err << "error: " << target.virtualPath << " already exists; pick another --name, or add --replace to draw it again\n";
-        return std::nullopt;
-    }
-    return target;
-}
+using Target = AssetTarget;
 
 [[nodiscard]] bool WriteFile(const Target& target, const void* bytes, std::size_t size, CommandIo io) {
     std::error_code ec;
@@ -229,7 +163,7 @@ int RunImageCommand(const ArgumentList& arguments, CommandIo io) {
         io.err << "error: " << error << '\n';
         return 1;
     }
-    const std::optional<Target> target = ResolveTarget(arguments, "image", "Assets/Images", ".png", io);
+    const std::optional<Target> target = ResolveAssetTarget(arguments, "image new", "--project <dir> --name <Name> --preset <preset>", "Assets/Images", ".png", false, io);
     if (!target.has_value()) return 1;
     const bool replaced = std::filesystem::exists(target->file);
     const std::vector<std::uint8_t> png = EncodePng(*bitmap);
@@ -279,7 +213,7 @@ int RunSoundCommand(const ArgumentList& arguments, CommandIo io) {
         io.err << "error: " << error << '\n';
         return 1;
     }
-    const std::optional<Target> target = ResolveTarget(arguments, "sound", "Assets/Audio", ".wav", io);
+    const std::optional<Target> target = ResolveAssetTarget(arguments, "sound new", "--project <dir> --name <Name> --preset <preset>", "Assets/Audio", ".wav", false, io);
     if (!target.has_value()) return 1;
     const bool replaced = std::filesystem::exists(target->file);
     const std::vector<std::uint8_t> wav = workshop::EncodeWav(*sound);

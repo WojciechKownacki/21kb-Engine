@@ -2,6 +2,10 @@
 #include "CliProgram.hpp"
 #include "CliWorkshop.hpp"
 #include "engine/core/JsonValue.hpp"
+#include "engine/localization/LocalizationCatalogIO.hpp"
+#include "engine/scene/TimelineAssetIO.hpp"
+#include "engine/ui/UITheme.hpp"
+#include "engine/ui/UIThemeIO.hpp"
 
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetMetadata.hpp"
@@ -5778,6 +5782,169 @@ void RunWorkshopTests() {
 #endif
 }
 
+// timeline, ui-theme and localization: each makes its asset inside the project from a few words, the engine's own loaders
+// read it back, the project's scene points at it, and a name, folder or scene that leads out of the project is refused.
+void RunStudioAssetCommandTests() {
+    const std::filesystem::path parent = TestRoot() / "studio_assets_project";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Studio", "--template", "Basic3D" }).exitCode == 0, "studio project could not be made");
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Obcy", "--template", "Empty" }).exitCode == 0, "foreign project could not be made");
+    const std::filesystem::path root = parent / "Studio";
+    const std::string project = root.string();
+    const std::filesystem::path foreignScene = parent / "Obcy" / "Assets" / "Scenes" / "Main.21kbscene";
+    const auto foreignSize = std::filesystem::file_size(foreignScene);
+    Require(Run(&kb::cli::RunEntityCommand, { "add", "--project", project, "--create", "Cube", "--name", "Hero", "--position", "4,1,10" }).exitCode == 0, "hero could not be added");
+
+    // ---- timeline ----
+    const CommandRun fly = Run(&kb::cli::RunTimelineCommand, { "fly", "--project", project, "--name", "Intro", "--to", "Hero", "--seconds", "3" });
+    Require(fly.exitCode == 0 && Contains(fly.output, "plays when the scene starts"), "timeline fly failed: " + fly.output);
+    const std::optional<kb::scene::TimelineAsset> intro = kb::scene::TimelineAssetIO::Load(root / "Assets" / "Cinematics" / "Intro.kbtimeline");
+    Require(intro.has_value() && intro->durationSeconds == 3.0F && intro->bindings.size() == 1U && intro->bindings.front().name == "Main Camera" &&
+            intro->transformTracks.size() == 1U && intro->transformTracks.front().keyframes.size() == 2U,
+        "timeline fly must make a 3 s timeline with two keys on the camera");
+    const kb::scene::TimelineTransformKeyframe& arrival = intro->transformTracks.front().keyframes.back();
+    Require(arrival.timeSeconds == 3.0F && std::abs(arrival.transform.position.x - 4.0F) < 1.0e-3F && std::abs(arrival.transform.position.y - 3.0F) < 1.0e-3F &&
+            std::abs(arrival.transform.position.z - 5.0F) < 1.0e-3F,
+        "the camera must arrive behind and above the hero");
+    const CommandRun list = Run(&kb::cli::RunSceneListCommand, { "--project", project });
+    Require(Contains(list.output, "IntroPlayer") && Contains(list.output, "/Game/Scripts/IntroPlay.lua"), "the intro must play from a script on an object: " + list.output);
+    std::ifstream startFile{ root / "Assets" / "Scripts" / "IntroPlay.lua" };
+    const std::string start{ std::istreambuf_iterator<char>{ startFile }, {} };
+    Require(Contains(start, "Timeline.Create(\"/Game/Cinematics/Intro.kbtimeline\"") && Contains(start, "-- @asset /Game/Cinematics/Intro.kbtimeline") && Contains(start, "Timeline.Play"),
+        "the start script must create and play the timeline: " + start);
+    const CliRun played = RunCliProgram({ "run", "--project", project, "--frames", "200" });
+    Require(played.exitCode == 0 && Contains(played.out, "0 diagnostics"), "a scene with the intro must run cleanly: " + played.out + played.err);
+    Require(Run(&kb::cli::RunTimelineCommand, { "fly", "--project", project, "--name", "Intro", "--to", "Hero" }).exitCode != 0, "a timeline must not be replaced");
+    Require(Run(&kb::cli::RunTimelineCommand, { "fly", "--project", project, "--name", "Other", "--to", "Nobody" }).exitCode != 0, "a flight to an object the scene lacks must be refused");
+
+    Require(Run(&kb::cli::RunTimelineCommand, { "new", "--project", project, "--name", "Tour", "--duration", "6" }).exitCode == 0, "timeline new failed");
+    const std::string tour = "/Game/Cinematics/Tour.kbtimeline";
+    Require(Run(&kb::cli::RunTimelineCommand, { "key", "--project", project, "--timeline", tour, "--entity", "Main Camera", "--time", "0", "--position", "0,3,-10" }).exitCode == 0, "timeline key failed");
+    const CommandRun look = Run(&kb::cli::RunTimelineCommand, { "key", "--project", project, "--timeline", tour, "--entity", "Main Camera", "--time", "8", "--position", "8,3,0", "--look-at", "Hero" });
+    Require(look.exitCode == 0 && Contains(look.output, "8 s long"), "a key past the end must lengthen the timeline: " + look.output);
+    Require(Run(&kb::cli::RunTimelineCommand, { "event", "--project", project, "--timeline", tour, "--time", "5", "--event", "TourHalf" }).exitCode == 0, "timeline event failed");
+    const CommandRun shown = Run(&kb::cli::RunTimelineCommand, { "show", "--project", project, "--timeline", tour });
+    Require(shown.exitCode == 0 && Contains(shown.output, "Main Camera") && Contains(shown.output, "TourHalf") && Contains(shown.output, "8 s"), "timeline show must list keys and events: " + shown.output);
+    const std::optional<kb::scene::TimelineAsset> touring = kb::scene::TimelineAssetIO::Load(root / "Assets" / "Cinematics" / "Tour.kbtimeline");
+    Require(touring.has_value() && touring->bindings.size() == 1U && touring->bindings.front().name == "Main Camera" && touring->transformTracks.front().keyframes.size() == 2U &&
+            touring->eventTracks.size() == 1U,
+        "the first key must replace the placeholder binding");
+    Require(Run(&kb::cli::RunTimelineCommand, { "play", "--project", project, "--timeline", tour, "--loop", "yes" }).exitCode == 0, "timeline play failed");
+    Require(Run(&kb::cli::RunTimelineCommand, { "key", "--project", project, "--timeline", tour, "--entity", "Main Camera", "--time", "1" }).exitCode != 0, "a key that says nothing must be refused");
+    Require(Run(&kb::cli::RunTimelineCommand, { "key", "--project", project, "--timeline", "/Game/Cinematics/None.kbtimeline", "--entity", "Main Camera", "--time", "1", "--position", "0,0,0" }).exitCode != 0,
+        "a key on a timeline that is not there must be refused");
+    for (const std::string& bad : { std::string{ "../Escape" }, std::string{ "a/b" }, std::string{ "CON" } }) {
+        Require(Run(&kb::cli::RunTimelineCommand, { "new", "--project", project, "--name", bad }).exitCode != 0, "a timeline name that is a path or a device must be refused: " + bad);
+    }
+    const std::filesystem::path outside = parent / "Outside";
+    for (const std::string& folder : { outside.string(), std::string{ "Assets/../Outside" }, std::string{ "Config" } }) {
+        Require(Run(&kb::cli::RunTimelineCommand, { "new", "--project", project, "--name", "Out", "--folder", folder }).exitCode != 0, "a timeline folder outside Assets must be refused: " + folder);
+    }
+    Require(Run(&kb::cli::RunTimelineCommand, { "fly", "--project", project, "--name", "Elsewhere", "--to", "Hero", "--scene", foreignScene.string() }).exitCode != 0, "a scene of another project must be refused");
+
+    // A camera that ranks below another primary camera (a player's) would fly unseen: the flight takes the view while it plays.
+    Require(Run(&kb::cli::RunEntityCommand, { "add", "--project", project, "--create", "Camera", "--name", "PlayerCam" }).exitCode == 0, "second camera could not be added");
+    Require(Run(&kb::cli::RunComponentCommand, { "set", "--project", project, "--entity", "PlayerCam", "--type", "Camera", "--set", "primary=true", "--set", "priority=50" }).exitCode == 0, "camera priority could not be set");
+    const CommandRun handoff = Run(&kb::cli::RunTimelineCommand, { "fly", "--project", project, "--name", "Hand", "--to", "Hero" });
+    Require(handoff.exitCode == 0 && Contains(handoff.output, "takes over the view"), "a flight below another camera must say it takes over: " + handoff.output);
+    std::ifstream handFile{ root / "Assets" / "Scripts" / "HandPlay.lua" };
+    const std::string hand{ std::istreambuf_iterator<char>{ handFile }, {} };
+    Require(Contains(hand, "\"priority\", 51") && Contains(hand, "Timeline.IsPlaying") && Contains(hand, "\"priority\", 0"), "the flight must raise the camera above the other one and give it back: " + hand);
+    const CliRun handRun = RunCliProgram({ "run", "--project", project, "--frames", "240" });
+    Require(handRun.exitCode == 0 && Contains(handRun.out, "0 diagnostics"), "a scene with the handing-over flight must run cleanly: " + handRun.out + handRun.err);
+
+    // ---- ui-theme ----
+    Require(Run(&kb::cli::RunEntityCommand, { "add", "--project", project, "--create", "Button", "--name", "PlayButton" }).exitCode == 0, "button could not be added");
+    Require(Run(&kb::cli::RunEntityCommand, { "add", "--project", project, "--create", "Text", "--name", "Title" }).exitCode == 0, "text could not be added");
+    Require(Run(&kb::cli::RunComponentCommand, { "set", "--project", project, "--entity", "PlayButton", "--type", "Text", "--set", "content=Graj" }).exitCode == 0, "button text could not be set");
+    Require(Run(&kb::cli::RunComponentCommand, { "set", "--project", project, "--entity", "Title", "--type", "Text", "--set", "content=Smocze Wzgorza" }).exitCode == 0, "title text could not be set");
+    const CommandRun theme = Run(&kb::cli::RunUiThemeCommand, { "new", "--project", project, "--name", "Dark", "--preset", "dark", "--button", "#FF8C1A", "--corner-radius", "8" });
+    Require(theme.exitCode == 0 && Contains(theme.output, "#FF8C1A"), "ui-theme new failed: " + theme.output);
+    const std::optional<kb::scene::UITheme> dark = kb::scene::UIThemeIO::Load(root / "Assets" / "UI" / "Dark.kbtheme");
+    Require(dark.has_value() && kb::scene::ValidateUITheme(*dark) && dark->variants.size() == 1U && dark->variants.front().name == "Button" && !dark->properties.empty(),
+        "the theme must be a valid theme with a Button variant");
+    const auto channel = [](const std::vector<kb::scene::UIThemeProperty>& properties, kb::scene::UIComponentType component, std::string_view name) {
+        for (const kb::scene::UIThemeProperty& property : properties) {
+            if (property.key.component == component && property.key.property == name) return std::get<float>(property.value);
+        }
+        return -1.0F;
+    };
+    Require(std::abs(channel(dark->variants.front().properties, kb::scene::UIComponentType::Border, "backgroundColor.r") - 1.0F) < 1.0e-3F &&
+            channel(dark->properties, kb::scene::UIComponentType::Border, "backgroundColor.r") < 0.3F &&
+            std::abs(channel(dark->properties, kb::scene::UIComponentType::Border, "cornerRadius.x") - 8.0F) < 1.0e-3F,
+        "buttons must be orange on a dark base with rounded corners");
+    const CommandRun set = Run(&kb::cli::RunUiThemeCommand, { "set", "--project", project, "--theme", "/Game/UI/Dark.kbtheme", "--font-size", "22" });
+    Require(set.exitCode == 0 && Contains(set.output, "fontSize = 22"), "ui-theme set failed: " + set.output);
+    const CommandRun apply = Run(&kb::cli::RunUiThemeCommand, { "apply", "--project", project, "--theme", "/Game/UI/Dark.kbtheme" });
+    Require(apply.exitCode == 0 && Contains(apply.output, "1 buttons"), "ui-theme apply failed: " + apply.output);
+    const CommandRun themed = Run(&kb::cli::RunEntityCommand, { "show", "--project", project, "--name", "PlayButton" });
+    Require(Contains(themed.output, "themeAssetId=/Game/UI/Dark.kbtheme") && Contains(themed.output, "themeVariant=Button"), "a button must carry the theme and its variant: " + themed.output);
+    const CommandRun titleThemed = Run(&kb::cli::RunEntityCommand, { "show", "--project", project, "--name", "Title" });
+    Require(Contains(titleThemed.output, "themeAssetId=/Game/UI/Dark.kbtheme") && !Contains(titleThemed.output, "themeVariant=Button"), "a text must carry the theme without the button variant: " + titleThemed.output);
+    Require(Run(&kb::cli::RunUiThemeCommand, { "apply", "--project", project, "--theme", "/Game/UI/Dark.kbtheme", "--entity", "Nobody" }).exitCode != 0, "apply to an object that is not there must be refused");
+    Require(Run(&kb::cli::RunUiThemeCommand, { "show", "--project", project, "--theme", "/Game/UI/Dark.kbtheme" }).exitCode == 0, "ui-theme show failed");
+    for (const std::vector<std::string>& bad : std::vector<std::vector<std::string>>{ { "--name", "Bad", "--background", "dark" }, { "--name", "Bad", "--preset", "neon" }, { "--name", "Bad", "--font-size", "1" },
+             { "--name", "../Escape" }, { "--name", "Dark" }, { "--name", "Bad", "--folder", "Config" } }) {
+        std::vector<std::string> words{ "new", "--project", project };
+        words.insert(words.end(), bad.begin(), bad.end());
+        Require(Run(&kb::cli::RunUiThemeCommand, words).exitCode != 0, "a bad theme request must be refused: " + bad.back());
+    }
+    Require(Run(&kb::cli::RunUiThemeCommand, { "apply", "--project", project, "--theme", "/Game/UI/Dark.kbtheme", "--scene", foreignScene.string() }).exitCode != 0, "a scene of another project must be refused");
+
+    // ---- localization ----
+    const CommandRun collect = Run(&kb::cli::RunLocalizationCommand, { "collect", "--project", project, "--language", "pl" });
+    Require(collect.exitCode == 0 && Contains(collect.output, "ui.playbutton") && Contains(collect.output, "Smocze Wzgorza"), "localization collect failed: " + collect.output);
+    const std::optional<kb::localization::LocalizationCatalog> catalog = kb::localization::LocalizationCatalogIO::Load(root / "Assets" / "Localization" / "Game.kbloc");
+    Require(catalog.has_value() && catalog->fallbackLanguage == "pl" && catalog->languages.at("pl").size() == 2U && catalog->languages.at("pl").at("ui.playbutton").text == "Graj",
+        "collect must make a catalog of the texts on the controls");
+    const CommandRun keyed = Run(&kb::cli::RunEntityCommand, { "show", "--project", project, "--name", "PlayButton" });
+    Require(Contains(keyed.output, "localizationKey=ui.playbutton"), "a control must point at its key: " + keyed.output);
+    Require(Run(&kb::cli::RunLocalizationCommand, { "collect", "--project", project, "--language", "pl" }).exitCode != 0, "collect with nothing new must say so");
+    Require(Run(&kb::cli::RunLocalizationCommand, { "add-language", "--project", project, "--language", "de" }).exitCode == 0, "add-language failed");
+    const CommandRun untranslated = Run(&kb::cli::RunLocalizationCommand, { "missing", "--project", project });
+    Require(untranslated.exitCode == 0 && Contains(untranslated.output, "de: ui.title") && Contains(untranslated.output, "2 to translate"), "missing must list the texts still in the default language: " + untranslated.output);
+    Require(Run(&kb::cli::RunLocalizationCommand, { "set", "--project", project, "--language", "de", "--set", "ui.title=Drachenhuegel", "--set", "ui.playbutton=Spielen" }).exitCode == 0, "set de failed");
+    Require(Run(&kb::cli::RunLocalizationCommand, { "set", "--project", project, "--language", "en", "--set", "ui.title=Dragon Hills", "--set", "ui.playbutton=Play" }).exitCode == 0, "set en failed");
+    const CommandRun translated = Run(&kb::cli::RunLocalizationCommand, { "missing", "--project", project });
+    Require(Contains(translated.output, "every text is translated"), "nothing may be missing after both languages are set: " + translated.output);
+    Require(Run(&kb::cli::RunLocalizationCommand, { "default", "--project", project, "--language", "en" }).exitCode == 0, "default failed");
+    const std::optional<kb::localization::LocalizationCatalog> three = kb::localization::LocalizationCatalogIO::Load(root / "Assets" / "Localization" / "Game.kbloc");
+    Require(three.has_value() && three->fallbackLanguage == "en" && three->languages.size() == 3U && three->languages.at("de").at("ui.playbutton").text == "Spielen", "the catalog must hold three languages with en as default");
+    Require(Run(&kb::cli::RunLocalizationCommand, { "default", "--project", project, "--language", "fr" }).exitCode != 0, "a default language the catalog lacks must be refused");
+    for (const std::vector<std::string>& bad : std::vector<std::vector<std::string>>{ { "set", "--language", "de" }, { "set", "--language", "de", "--set", "bad key=x" }, { "set", "--language", "de", "--set", "k=" },
+             { "set", "--language", "not a code", "--set", "k=x" }, { "set", "--language", "de", "--set", "k=x", "--catalog", "/Game/Missing.kbloc" } }) {
+        std::vector<std::string> words{ bad.front(), "--project", project };
+        words.insert(words.end(), bad.begin() + 1, bad.end());
+        Require(Run(&kb::cli::RunLocalizationCommand, words).exitCode != 0, "a bad localization request must be refused: " + bad.back());
+    }
+    std::ifstream setupFile{ root / "Assets" / "Scripts" / "LocalizationSetup.lua" };
+    const std::string setup{ std::istreambuf_iterator<char>{ setupFile }, {} };
+    Require(Contains(setup, "Localization.SetCatalog(\"") && Contains(setup, "-- @asset /Game/Localization/Game.kbloc"), "the game must load its catalog on start: " + setup);
+    const CliRun translatedRun = RunCliProgram({ "run", "--project", project, "--frames", "30" });
+    Require(translatedRun.exitCode == 0 && Contains(translatedRun.out, "0 diagnostics"), "a localized scene must run cleanly: " + translatedRun.out + translatedRun.err);
+    Require(Run(&kb::cli::RunLocalizationCommand, { "collect", "--project", project, "--scene", foreignScene.string() }).exitCode != 0, "a scene of another project must be refused");
+
+    // Nothing was written outside the project.
+    Require(!std::filesystem::exists(outside) && !std::filesystem::exists(parent / "Escape.kbtimeline") && std::filesystem::file_size(foreignScene) == foreignSize, "a refused command must write nothing outside the project");
+
+    // The agent's tool (MCP) holds every project path inside the project, with the same refusals.
+    const auto mcp = [&](std::string_view command, std::string_view argumentsJson) {
+        std::istringstream input{ "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"kb_cli\",\"arguments\":{\"args\":[\"" + std::string{ command } + "\"," + std::string{ argumentsJson } + "]}}}\n" };
+        std::ostringstream output;
+        std::ostringstream diagnostics;
+        const std::vector<std::string> words{ "--project", project };
+        Require(kb::cli::RunMcpCommand(kb::cli::ArgumentList{ words }, input, { .out = output, .err = diagnostics }) == 0, "the MCP session must finish cleanly");
+        return output.str();
+    };
+    const std::string refused = mcp("timeline", "\"new\",\"--name\",\"Out\",\"--folder\",\"../Outside\"");
+    Require(Contains(refused, "\"isError\":true") && Contains(refused, "outside the project"), "the agent's tool must refuse a folder outside the project: " + refused);
+    const std::string refusedScene = mcp("ui-theme", "\"apply\",\"--theme\",\"/Game/UI/Dark.kbtheme\",\"--scene\",\"" + foreignScene.generic_string() + "\"");
+    Require(Contains(refusedScene, "\"isError\":true"), "the agent's tool must refuse a scene of another project: " + refusedScene);
+    const std::string accepted = mcp("timeline", "\"show\",\"--timeline\",\"/Game/Cinematics/Intro.kbtimeline\"");
+    Require(Contains(accepted, "Main Camera") && !Contains(accepted, "\"isError\":true"), "the agent's tool must run the command inside the project: " + accepted);
+}
+
 void RunCommandCatalogTests() {
     PrepareProject();
     const auto root = TestRoot().string();
@@ -6848,6 +7015,7 @@ int main(int argc, char** argv) {
     RunSuite(RunSceneNewCommandTests);
     RunSuite(RunScriptCommandTests);
     RunSuite(RunWorkshopTests);
+    RunSuite(RunStudioAssetCommandTests);
     RunSuite(RunEntityComponentCommandTests);
     RunSuite(RunApiCommandTests);
     RunSuite(RunApiCheckCommandTests);
