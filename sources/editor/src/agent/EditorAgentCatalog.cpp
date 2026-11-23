@@ -148,6 +148,8 @@ struct Preset {
             // may only read, so it never stops to ask, and a write outside the project is refused. It has no
             // shell, and kb_cli under the engine's tools refuses any path outside the project.
             "--allowedTools", "mcp__kb-engine", "Read", "Glob", "Grep", "--disallowedTools", "Bash", "PowerShell",
+            // The engine's own source folders are not for it to read; its docs and the SDK headers stay open.
+            "{denyRead}",
             "--permission-mode", "{permissionMode}",
             "--append-system-prompt",
             "You work inside the 21kb editor on the open project; AGENTS.md says how, and which recipe fits the job. "

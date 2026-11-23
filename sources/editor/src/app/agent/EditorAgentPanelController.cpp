@@ -3,6 +3,8 @@
 #if defined(_WIN32)
 #include "app/EditorTextInputShortcuts.hpp"
 #include "engine/platform/win32/Win32ClipboardText.hpp"
+#include "engine/project/AgentRequestContext.hpp"
+#include "engine/scene/SceneEntities.hpp"
 #include "engine/script/ScriptAgentProjectFiles.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
@@ -28,6 +30,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <initializer_list>
 #include <cwctype>
 #include <memory>
 #include <optional>
@@ -172,15 +175,54 @@ constexpr UINT kModelsPerAgent = 64U;
     return static_cast<std::size_t>(chosen) - kFirstChoiceCommand;
 }
 
+// The engine's own folders an agent may not read: beside the editor the checkout is found as the SDK finds it (the folder that holds
+// the SDK headers), and everything in it is hidden but its documentation, its build folder (the SDK libraries) and the headers. A
+// folder the project lies in or holds is never hidden.
+[[nodiscard]] bool Contains(const std::filesystem::path& outer, const std::filesystem::path& inner) {
+    const std::filesystem::path relative = inner.lexically_relative(outer);
+    return !relative.empty() && *relative.begin() != "..";
+}
+
+[[nodiscard]] std::vector<std::filesystem::path> HiddenEngineFolders(const std::filesystem::path& kbcli, const std::filesystem::path& project) {
+    namespace fs = std::filesystem;
+    std::error_code error;
+    fs::path root;
+    for (fs::path probe = kbcli.parent_path(); !probe.empty() && probe != probe.parent_path(); probe = probe.parent_path()) {
+        if (fs::is_regular_file(probe / "sources" / "engine" / "include" / "engine" / "script" / "NativeScriptPlugin.hpp", error)) {
+            root = probe;
+            break;
+        }
+    }
+    std::vector<fs::path> hidden;
+    if (root.empty()) return hidden;
+    const fs::path where = fs::weakly_canonical(project, error);
+    const auto addChildren = [&](const fs::path& folder, std::initializer_list<const char*> kept) {
+        for (fs::directory_iterator it(folder, error), end; !error && it != end; it.increment(error)) {
+            const fs::path& child = it->path();
+            const std::string name = child.filename().string();
+            if (!it->is_directory(error) || std::ranges::any_of(kept, [&name](const char* keep) { return name == keep; })) continue;
+            const fs::path resolved = fs::weakly_canonical(child, error);
+            if (Contains(resolved, where) || Contains(where, resolved)) continue;
+            hidden.push_back(child);
+        }
+    };
+    addChildren(root, { "docs", "build", "sources" });
+    addChildren(root / "sources", { "engine" });
+    addChildren(root / "sources" / "engine", { "include" });
+    return hidden;
+}
+
 } // namespace
 
 EditorAgentWorkspace EditorAgentPanelController::Workspace() {
     wchar_t module[MAX_PATH]{};
     GetModuleFileNameW(nullptr, module, MAX_PATH);
-    return EditorAgentWorkspace{
+    EditorAgentWorkspace workspace{
         .project = EditorProjectPaths::ProjectRoot(),
         .kbcli = std::filesystem::path{ module }.parent_path() / "kb_cli.exe",
     };
+    workspace.hiddenFolders = HiddenEngineFolders(workspace.kbcli, workspace.project);
+    return workspace;
 }
 
 void EditorAgentPanelController::ShowAgentMenu(HWND owner, const RECT& anchor) {
@@ -550,7 +592,17 @@ bool EditorAgentPanelController::SendOrStop() {
     // The agent's map of the project (AGENTS.md and the script API) is what kb_cli init-agent
     // writes; a project that never had it gets it before its first request, so the agent does not
     // start by searching the folders.
-    const EditorAgentWorkspace workspace = Workspace();
+    EditorAgentWorkspace workspace = Workspace();
+    {
+        std::vector<std::string> selected;
+        for (const kb::scene::SceneEntity entity : sceneContext_.SelectedHierarchyEntities()) {
+            selected.push_back(sceneContext_.Scene().Entities().Name(entity));
+        }
+        std::error_code error;
+        const std::filesystem::path scene = sceneContext_.CurrentScenePath().empty()
+            ? std::filesystem::path{} : sceneContext_.CurrentScenePath().lexically_relative(workspace.project);
+        workspace.context = kb::project::AgentEditorContextLine(scene.generic_string(), selected);
+    }
     // Written once per editor session, so a project made by an older engine gets the current guide
     // too (a guide a person edited is kept as it is).
     static std::filesystem::path guided;

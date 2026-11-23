@@ -843,12 +843,20 @@ R"(  image        Draw a picture into the project and import it, so it is an ass
                language, and the game loads the catalog when the scene starts. add-language starts a
                language with the default language's texts; missing lists what is not translated yet;
                default is the language the game starts in and a missing text falls back to)
-  editor       Ask the editor that has the project open to open a scene, or to build the game
-               for a platform with its Build Game panel (its settings, keys and tools). Fails when
-               no editor takes the request within a few seconds (build --platform needs no editor).
+  editor       Ask the editor that has the project open to open a scene, to build the game
+               for a platform with its Build Game panel (its settings, keys and tools), to start or
+               stop the game, to take a picture of its view or to measure its frame times. Fails
+               when no editor takes the request within a few seconds, and says what to do without
+               one (build --platform and capture need no editor).
                  open-scene --project <dir> [--scene /Game/<path>.21kbscene]
                  build --project <dir> --target windows|android|web|webgpu|linux
                        [--profile development|release]
+                 play|stop --project <dir>
+                 capture --project <dir> [--out <file.png>]
+                 frames --project <dir> [--seconds <1-30>]
+               capture writes the editor's scene view (Saved/Agent/Captures/editor-view.png by
+               default); frames reports the editor's frames per second and the slowest frames over
+               the seconds, and says whether the game was playing (start it with play first).
                A build reports in Saved/Agent/BuildResult.txt: Running, then Succeeded <folder> or
                Failed <reason>.
   plugins      List the engine's plugins with whether the project has each on, or switch them,
@@ -1346,6 +1354,10 @@ int RunCli(std::span<const std::string> args, std::istream& in, CommandIo io) {
             return 1;
         }
         if (RejectUnknownOptions(command, arguments, target.err)) return 1;
+        // The first command after a cut-off transaction puts the project back (a batch checks for itself).
+        if (const std::optional<std::string> project = arguments.Option("--project"); project.has_value() && command != "batch") {
+            static_cast<void>(ResolveInterruptedTransaction(*project, target.err));
+        }
         if (const std::optional<int> code = RunNamedCommand(command, arguments, in, target)) {
             return *code;
         }

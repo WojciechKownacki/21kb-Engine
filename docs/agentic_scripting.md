@@ -183,6 +183,21 @@ registration API version. Failed builds retain the compiler output and suggest i
 required toolchain, correcting the `.native` build command and retrying `script-build`;
 incompatible modules instruct the author to rebuild against the current SDK.
 
+## The agent in the editor
+
+The Agent panel sends each request with one line about what the person has open (the scene and the selected
+objects) and with the project's own notes: put them in `AgentNotes.md` in the project folder. Notes over 8 KiB
+are cut, and the request says how many bytes were shown. Rules of the engine itself stay in `AGENTS.md`.
+
+With the editor open on the project, `kb_cli editor` drives it: `play` and `stop` the game, `capture` the view to
+a PNG, `frames --seconds 5` for the frame rate and the slowest frames. Without an editor each says so and names what
+to use instead (`capture` and `run` need none).
+
+`kb_cli batch` and the `commands` tool are transactions: all of them take effect or none. If the process ends in the
+middle, the next command in the project puts every file back and says so in one line; a second transaction started
+while the first one runs is refused. The agent may read the engine's documentation and SDK headers, not the other
+folders of the engine's source.
+
 ## Hot reload
 
 Reloading a Lua script runs the new code in a fresh environment and swaps it in only if that works: a

@@ -3,6 +3,7 @@
 #include "CliProgram.hpp"
 
 #include "engine/core/JsonValue.hpp"
+#include "engine/project/AgentProcessMarker.hpp"
 
 #if KB_CLI_RENDERER
 #include <bimg/bimg.h>
@@ -12,6 +13,7 @@
 #include <bx/readerwriter.h>
 #endif
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -20,6 +22,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -255,6 +258,88 @@ void RunUndoCommandTests() {
     Require(!viaMcp.isError && Contains(viaMcp.text, "undo point taken"), "undo works through mcp: " + viaMcp.text);
 }
 
+// A transaction whose process was cut off is put back by the next command in the project; a damaged marker is named, not thrown;
+// a second transaction while the first runs is refused.
+void RunInterruptedTransactionTests() {
+    const std::string project = Project("CutOff");
+    const fs::path root{ project };
+    const fs::path marker = root / "Saved" / "Agent" / "transaction.json";
+    Write(root / "Assets" / "Notes" / "keep.txt", "kept");
+    const std::string sceneBefore = Read(root / "Assets" / "Scenes" / "Main.21kbscene");
+    // The backup a transaction takes before it changes anything, and the marker of its process.
+    const fs::path backup = Root() / "CutOffBackup";
+    std::error_code error;
+    fs::remove_all(backup, error);
+    fs::copy(root, backup, fs::copy_options::recursive, error);
+    Require(!error, "the backup is made: " + error.message());
+    // The transaction changed files and was cut off.
+    fs::remove(root / "Assets" / "Notes" / "keep.txt", error);
+    Write(root / "Assets" / "Scenes" / "Main.21kbscene", "half written");
+    Write(root / "Assets" / "Scripts" / "Extra.lua", "function Tick(self, dt) end\n");
+    Write(marker, "{\"pid\":999999,\"started\":1,\"detail\":\"" + backup.generic_string() + "\"}");
+
+    const Run next = Cli({ "scene-list", "--project", project });
+    Require(Contains(next.err, "restored the project after a transaction of process 999999 was cut off"), "the next command says it put the project back: " + next.err);
+    Require(Read(root / "Assets" / "Notes" / "keep.txt") == "kept" && Read(root / "Assets" / "Scenes" / "Main.21kbscene") == sceneBefore &&
+            !fs::exists(root / "Assets" / "Scripts" / "Extra.lua"),
+        "the deleted file is back, the changed one as it was, the added one gone");
+    Require(!fs::exists(marker) && !fs::exists(backup), "the marker and the backup are gone");
+    Require(!Contains(Cli({ "scene-list", "--project", project }).err, "restored"), "it is said once");
+
+    // A marker nobody can read: one named line, the command still runs.
+    Write(marker, "not json");
+    const Run damaged = Cli({ "scene-list", "--project", project });
+    Require(damaged.exitCode == 0 && Contains(damaged.err, "transaction marker Saved/Agent/transaction.json was damaged") && !fs::exists(marker),
+        "a damaged marker is named and dropped: " + damaged.err);
+
+    // A transaction of a process that runs (this one): a command goes on, a second transaction is refused.
+    std::string markerError;
+    Require(kb::project::WriteAgentProcessMarker(marker, "somewhere", markerError), "a live marker: " + markerError);
+    Require(Cli({ "scene-list", "--project", project }).exitCode == 0 && fs::exists(marker), "an ordinary command leaves a live transaction alone");
+    const McpAnswer refused = Mcp(project, R"({"name":"kb_cli","arguments":{"commands":[["entity","add","--create","Cube","--name","Crate"]]}})");
+    Require(refused.isError && Contains(refused.text, "another transaction is running"), "a second transaction is refused: " + refused.text);
+    Require(fs::exists(marker), "the first one's marker stays");
+    fs::remove(marker, error);
+
+    // A transaction that ends leaves no marker.
+    const McpAnswer done = Mcp(project, R"({"name":"kb_cli","arguments":{"commands":[["entity","add","--create","Cube","--name","Crate"]]}})");
+    Require(!done.isError && !fs::exists(marker), "a finished transaction leaves no marker: " + done.text);
+    fs::remove_all(backup, error);
+}
+
+// editor play, stop, capture and frames: with no editor they say so and what to do instead; with one they wait for its answer.
+void RunEditorControlTests() {
+    const std::string project = Project("EditorControl");
+    const fs::path root{ project };
+    const Run capture = Cli({ "editor", "capture", "--project", project });
+    Require(capture.exitCode == 1 && Contains(capture.err, "no editor took the capture request") && Contains(capture.err, "kb_cli capture --project"),
+        "capture without an editor names the capture command: " + capture.err);
+    const Run play = Cli({ "editor", "play", "--project", project });
+    Require(play.exitCode == 1 && Contains(play.err, "no editor took the play request") && Contains(play.err, "kb_cli run --project"),
+        "play without an editor names the headless run: " + play.err);
+    Require(Cli({ "editor", "frames", "--project", project, "--seconds", "99" }).exitCode == 1, "the measurement has a limit");
+    const fs::path requests = root / "Saved" / "Agent" / "EditorRequests";
+    Require(!fs::exists(requests) || fs::is_empty(requests), "the withdrawn requests are gone");
+
+    // An editor that answers: takes the request file and writes the reply the command waits for.
+    std::thread editor([&root, &requests] {
+        for (int waited = 0; waited < 100; ++waited) {
+            std::error_code error;
+            for (const fs::directory_entry& entry : fs::directory_iterator(requests, error)) {
+                if (entry.path().extension() != ".json") continue;
+                const std::string stamp = entry.path().stem().string();
+                fs::remove(entry.path(), error);
+                Write(root / "Saved" / "Agent" / "EditorReply" / (stamp + ".txt"), "ok\n120 frames in 3 s: 40.0 fps\n");
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds{ 50 });
+        }
+    });
+    const Run frames = Cli({ "editor", "frames", "--project", project, "--seconds", "3" });
+    editor.join();
+    Require(frames.exitCode == 0 && Contains(frames.out, "120 frames in 3 s: 40.0 fps"), "the editor's answer is the command's output: " + frames.out + frames.err);
+}
+
 // Save.* in a headless run: a second run reads what the first wrote.
 void RunSaveRunTests() {
     const std::string project = Project("SaveRuns");
@@ -362,6 +447,8 @@ void RunAgentPackTests() {
 #endif
     RunCaptureNamingTests();
     RunUndoCommandTests();
+    RunInterruptedTransactionTests();
+    RunEditorControlTests();
     RunSaveRunTests();
     RunPlatformBuildTests();
     RunNativeScriptNoticeTests();

@@ -28,8 +28,9 @@ struct EditorAgent {
     std::vector<std::pair<std::wstring, std::wstring>> environment;
     // The words after the executable for one request. The request text goes to the agent's
     // standard input unless a word holds {prompt}. Other placeholders: {project} (the project
-    // folder), {kbcli} (kb_cli next to the editor) and {mcpconfig} (an MCP configuration file
-    // naming the engine's tools).
+    // folder), {kbcli} (kb_cli next to the editor), {mcpconfig} (an MCP configuration file
+    // naming the engine's tools) and {denyRead}, which becomes one "Read(//drive/folder/**)"
+    // permission rule per engine folder the agent may not read (for a CLI that takes such rules).
     std::vector<std::string> runArguments;
     // Asks the CLI who is signed in; empty when it has no such command.
     std::vector<std::string> statusArguments;

@@ -32,6 +32,7 @@
 #include "project/EditorPackages.hpp"
 #include "project/EditorVersionControl.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
+#include "app/EditorAgentControl.hpp"
 #include "app/EditorPlayCommands.hpp"
 #include "profiler/EditorProfilerSampler.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
@@ -727,11 +728,12 @@ void PumpAgentPanel(EditorApplicationState& state) {
         }
     }
     // What the agent asks the editor to show (kb_cli editor): a scene to open, carried out here and
-    // removed; a request older than two minutes is from a session that is gone.
+    // removed; a request older than two minutes is from a session that is gone. Starting and stopping the game, a
+    // picture and a measurement are taken while the game runs, the rest wait until it stops.
     static std::chrono::steady_clock::time_point requestsChecked{};
-    if (const auto now = std::chrono::steady_clock::now(); now - requestsChecked >= std::chrono::milliseconds{ 300 } &&
-        !state.playMode.IsPlaying() && !state.sceneContext.InPrefabEditMode()) {
+    if (const auto now = std::chrono::steady_clock::now(); now - requestsChecked >= std::chrono::milliseconds{ 300 }) {
         requestsChecked = now;
+        const bool idle = !state.playMode.IsPlaying() && !state.sceneContext.InPrefabEditMode();
         const std::filesystem::path folder = EditorProjectPaths::ProjectRoot() / "Saved" / "Agent" / "EditorRequests";
         std::vector<std::filesystem::path> requests;
         std::error_code error;
@@ -744,13 +746,20 @@ void PumpAgentPanel(EditorApplicationState& state) {
             std::ifstream input{ file, std::ios::binary };
             const std::string text{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
             input.close();
-            std::filesystem::remove(file, error);
             long long stamp = 0;
-            try { stamp = std::stoll(file.stem().string()); } catch (...) { continue; }
+            try { stamp = std::stoll(file.stem().string()); } catch (...) { std::filesystem::remove(file, error); continue; }
             kb::core::JsonValue request;
             std::string parseError;
-            if (epoch - stamp > 120000 || !kb::core::JsonValue::Parse(text, request, parseError)) continue;
-            const kb::core::JsonValue* action = request.Find("action");
+            const bool valid = epoch - stamp <= 120000 && kb::core::JsonValue::Parse(text, request, parseError);
+            const kb::core::JsonValue* action = valid ? request.Find("action") : nullptr;
+            const bool live = action != nullptr && IsAgentControlAction(action->AsString());
+            if (valid && !idle && !live) continue;
+            std::filesystem::remove(file, error);
+            if (!valid) continue;
+            if (live) {
+                StartAgentControl(state, request);
+                continue;
+            }
             if (action != nullptr && action->AsString() == "build") {
                 StartAgentBuild(state, request);
                 continue;
@@ -1996,6 +2005,7 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
             std::chrono::steady_clock::now() - playStart).count() : 0.0;
         static_cast<void>(TickPointerDragFrame(state));
         const bool sceneFramePresented = TickEditorFrame(state, deltaSeconds);
+        PumpAgentControl(state, wallDeltaSeconds * 1000.0);
         const double tickMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tickStart).count();
         if (BenchmarkCaptureEnabled()) {
             BenchmarkCapture().Record(state, wallDeltaSeconds * 1000.0, tickMs);

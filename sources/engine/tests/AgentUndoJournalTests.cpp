@@ -1,6 +1,8 @@
 #include "TestSupport.hpp"
 #include "TestSuites.hpp"
 
+#include "engine/project/AgentProcessMarker.hpp"
+#include "engine/project/AgentRequestContext.hpp"
 #include "engine/project/AgentUndoJournal.hpp"
 
 #include <algorithm>
@@ -169,6 +171,60 @@ void RunAgentUndoJournalLargeFileTest() {
     Check(!journal.Undo({}, restored, error) && error.find("too large") != std::string::npos, "undo says the large file stays as it is");
 }
 
+// The marker of a process: this one is alive, one that is not running is dead, a file that is no marker is damaged.
+void RunAgentProcessMarkerTest() {
+    const fs::path root = JournalRoot() / "Marker";
+    std::error_code code;
+    fs::remove_all(root, code);
+    const fs::path file = root / "Saved" / "Agent" / "marker.json";
+    using kb::project::AgentMarkerState;
+    Check(kb::project::ReadAgentProcessMarker(file).state == AgentMarkerState::Absent, "no file is no marker");
+    std::string error;
+    Check(kb::project::WriteAgentProcessMarker(file, "backup folder", error), "the marker is written, its folder made: " + error);
+    const kb::project::AgentProcessMarker own = kb::project::ReadAgentProcessMarker(file);
+    Check(own.state == AgentMarkerState::Alive && own.detail == "backup folder" && own.pid != 0U, "this process is alive");
+    Write(file, "{\"pid\":999999,\"started\":1,\"detail\":\"x\"}");
+    Check(kb::project::ReadAgentProcessMarker(file).state == AgentMarkerState::Dead, "a process that is not running is dead");
+    // The pid of a running process with another start time is a reused pid: dead too.
+    Write(file, "{\"pid\":" + std::to_string(own.pid) + ",\"started\":1,\"detail\":\"x\"}");
+#if defined(_WIN32)
+    Check(kb::project::ReadAgentProcessMarker(file).state == AgentMarkerState::Dead, "a reused pid is dead");
+#endif
+    Write(file, "not a marker");
+    const kb::project::AgentProcessMarker damaged = kb::project::ReadAgentProcessMarker(file);
+    Check(damaged.state == AgentMarkerState::Damaged && !damaged.error.empty(), "a file that is not a marker is damaged, with the reason");
+    Write(file, "{\"pid\":0,\"started\":1,\"detail\":\"x\"}");
+    Check(kb::project::ReadAgentProcessMarker(file).state == AgentMarkerState::Damaged, "a marker without a process is damaged");
+}
+
+// What the agent is told with a request: the project's notes, cut at the limit and said so, and one line about the editor.
+void RunAgentRequestContextTest() {
+    const fs::path root = JournalRoot() / "Context";
+    std::error_code code;
+    fs::remove_all(root, code);
+    Check(kb::project::AgentProjectNotes(root).empty(), "a project without notes sends none");
+    Write(root / "AgentNotes.md", "The hero is called Mira.\n");
+    const std::string notes = kb::project::AgentProjectNotes(root);
+    Check(notes.find("The hero is called Mira.") != std::string::npos && notes.find("was cut") == std::string::npos, "short notes are sent whole");
+    std::string longNotes(kb::project::kAgentNotesLimit - 1U, 'a');
+    longNotes += "\xC3\xA9" + std::string(100U, 'b');
+    Write(root / "AgentNotes.md", longNotes);
+    const std::string cut = kb::project::AgentProjectNotes(root);
+    Check(cut.find("AgentNotes.md was cut: " + std::to_string(kb::project::kAgentNotesLimit - 1U) + " of " + std::to_string(longNotes.size()) + " bytes shown") != std::string::npos,
+        "long notes are cut inside no character, and the cut is named with the sizes: " + cut.substr(cut.size() - 120U));
+    Check(cut.find("\xC3") == std::string::npos, "a half character is not sent");
+
+    const std::vector<std::string> none;
+    Check(kb::project::AgentEditorContextLine("", none) == "Editor: no scene open, nothing selected.\n\n", "an empty editor says so");
+    const std::vector<std::string> two{ "Crate", "Ball" };
+    Check(kb::project::AgentEditorContextLine("Assets/Scenes/Main.21kbscene", two) == "Editor: scene Assets/Scenes/Main.21kbscene open, selected: Crate, Ball.\n\n",
+        "the scene and the selected objects are named");
+    std::vector<std::string> many;
+    for (int index = 0; index < 11; ++index) many.push_back("O" + std::to_string(index));
+    const std::string long_ = kb::project::AgentEditorContextLine("S", many);
+    Check(long_.find("O7 and 3 more.") != std::string::npos && long_.find("O8") == std::string::npos, "a long selection is named in part and counted");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -177,6 +233,8 @@ void RunAgentUndoJournalTests() {
     RunAgentUndoJournalTest();
     RunAgentUndoJournalConfinementTest();
     RunAgentUndoJournalLargeFileTest();
+    RunAgentProcessMarkerTest();
+    RunAgentRequestContextTest();
     std::error_code error;
     fs::remove_all(JournalRoot(), error);
 }

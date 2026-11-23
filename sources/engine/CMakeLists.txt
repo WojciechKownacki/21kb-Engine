@@ -105,6 +105,8 @@ add_library(kb_engine STATIC
     include/engine/project/ProjectDescriptorWriter.hpp
     include/engine/project/ProjectManager.hpp
     include/engine/project/AgentUndoJournal.hpp
+    include/engine/project/AgentProcessMarker.hpp
+    include/engine/project/AgentRequestContext.hpp
     include/engine/packaging/PackagingTargetCatalog.hpp
     include/engine/save/SaveDomain.hpp
     include/engine/save/SaveGame.hpp
@@ -736,6 +738,8 @@ add_library(kb_engine STATIC
     src/project/ProjectCreator.cpp
     src/project/ProjectManager.cpp
     src/project/AgentUndoJournal.cpp
+    src/project/AgentProcessMarker.cpp
+    src/project/AgentRequestContext.cpp
     src/packaging/PackagingTargetCatalog.cpp
     src/ecs/ComponentRegistry.cpp
     src/ecs/CommandBuffer.cpp

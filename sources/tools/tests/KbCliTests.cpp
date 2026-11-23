@@ -7865,6 +7865,10 @@ int main(int argc, char** argv) {
         RunBatchCommandTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{argv[1]} == "agent-pack") {
+        RunSuite(RunAgentPackTests);
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{argv[1]} == "scene-duplicate") {
         RunSceneDuplicateCommandTests();
         return EXIT_SUCCESS;

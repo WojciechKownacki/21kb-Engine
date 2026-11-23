@@ -1,6 +1,7 @@
 #include "CliProgram.hpp"
 
 #include "engine/core/JsonValue.hpp"
+#include "engine/project/AgentProcessMarker.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -61,6 +62,14 @@ bool TakeSnapshot(Snapshot& snapshot, std::string& error) {
     if (!snapshot.backupCreated) {
         error = "cannot create transaction backup: " + (ec ? ec.message() : std::string{"folder already exists"});
         return false;
+    }
+    // Folders too, so an empty one is still there when the snapshot is put back.
+    for (const fs::path& directory : snapshot.listing.directories) {
+        fs::create_directories(snapshot.backup / directory, ec);
+        if (ec) {
+            error = "cannot create backup folder for " + directory.generic_string() + ": " + ec.message();
+            return false;
+        }
     }
     for (const auto& [path, size] : snapshot.listing.files) {
         fs::create_directories((snapshot.backup / path).parent_path(), ec);
@@ -257,6 +266,11 @@ bool Restore(const Snapshot& snapshot, std::string& error) {
     return true;
 }
 
+// The file that says a transaction is in progress: its process and where its backup is. It lives in Saved, which a snapshot leaves out.
+[[nodiscard]] fs::path TransactionMarker(const fs::path& root) {
+    return root / "Saved" / "Agent" / "transaction.json";
+}
+
 // One operation of the batch: a kb_cli command line, split into words.
 bool Tokenize(std::string_view line, std::vector<std::string>& words, std::string& error) {
     std::string current;
@@ -441,6 +455,38 @@ void PrintJson(const BatchReport& report, CommandIo io) {
 
 } // namespace
 
+bool ResolveInterruptedTransaction(const std::string& projectOption, std::ostream& message) {
+    std::error_code ec;
+    const fs::path root = fs::weakly_canonical(fs::path{ projectOption }, ec);
+    const fs::path markerFile = TransactionMarker(root);
+    const kb::project::AgentProcessMarker marker = kb::project::ReadAgentProcessMarker(markerFile);
+    using State = kb::project::AgentMarkerState;
+    if (marker.state == State::Absent) return false;
+    if (marker.state == State::Alive) return true;
+    if (marker.state == State::Damaged) {
+        fs::remove(markerFile, ec);
+        message << "warning: the transaction marker Saved/Agent/transaction.json was damaged (" << marker.error
+                << ") and was removed; a transaction cut off earlier cannot be put back, check the project with `undo --list`\n";
+        return false;
+    }
+    Snapshot snapshot{ .root = root, .backup = fs::path{ marker.detail }, .listing = {} };
+    std::string error;
+    if (!fs::is_directory(snapshot.backup, ec)) {
+        fs::remove(markerFile, ec);
+        message << "warning: the transaction of process " << marker.pid << " was cut off and its backup is gone, so the project was left as it is\n";
+        return false;
+    }
+    if (!ScanProject(snapshot.backup, snapshot.listing, error, false) || !Restore(snapshot, error)) {
+        message << "error: the transaction of process " << marker.pid << " was cut off and could not be put back: " << error
+                << "; the original files are in " << snapshot.backup.generic_string() << '\n';
+        return false;
+    }
+    fs::remove_all(snapshot.backup, ec);
+    fs::remove(markerFile, ec);
+    message << "restored the project after a transaction of process " << marker.pid << " was cut off: every file is as it was before it\n";
+    return false;
+}
+
 int RunBatchOperations(const std::string& projectOption, std::vector<std::vector<std::string>> operations, bool dryRun, bool json, bool brief,
     CommandIo io, const CommandRunner& run) {
     const std::string* project = &projectOption;
@@ -451,6 +497,10 @@ int RunBatchOperations(const std::string& projectOption, std::vector<std::vector
         return 1;
     }
     std::string error;
+    if (ResolveInterruptedTransaction(*project, io.err)) {
+        io.err << "error: another transaction is running in this project; wait for it to end and send the commands again\n";
+        return 1;
+    }
     // Every operation works on this project, and none may start a batch of its own.
     for (std::size_t index = 0U; index < operations.size(); ++index) {
         std::vector<std::string>& words = operations[index];
@@ -482,7 +532,7 @@ int RunBatchOperations(const std::string& projectOption, std::vector<std::vector
     bool snapshotTaken = false;
     SceneEditBatch scenes;
     try {
-        snapshotTaken = TakeSnapshot(snapshot, error);
+        snapshotTaken = TakeSnapshot(snapshot, error) && kb::project::WriteAgentProcessMarker(TransactionMarker(root), snapshot.backup.string(), error);
         if (!snapshotTaken) report.errors.push_back(error);
         for (std::size_t index = 0U; snapshotTaken && index < operations.size(); ++index) {
             // The words as the caller wrote them: the project the batch added to each is the caller's own, and a path is noise to an agent.
@@ -546,7 +596,11 @@ int RunBatchOperations(const std::string& projectOption, std::vector<std::vector
             report.applied = true;
         }
     }
-    if (snapshot.backupCreated && report.keptBackup.empty()) fs::remove_all(snapshot.backup, ec);
+    // A backup that could not be put back stays, with the marker that names it: the next command tries again.
+    if (snapshot.backupCreated && report.keptBackup.empty()) {
+        fs::remove_all(snapshot.backup, ec);
+        fs::remove(TransactionMarker(root), ec);
+    }
     if (report.failedOperation != 0U && report.rolledBack) report.changes.clear();
 
     if (json) PrintJson(report, io);

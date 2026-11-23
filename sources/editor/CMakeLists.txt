@@ -16,6 +16,7 @@ add_executable(kb_editor WIN32
     src/app/EditorCrashBreadcrumbs.cpp
     src/app/EditorApplicationMessageDispatcher.cpp
     src/app/EditorApplicationMessageLoop.cpp
+    src/app/EditorAgentControl.cpp
     src/app/EditorApplicationWindowProc.cpp
     src/app/EditorAutomationScenarioRunner.cpp
     src/app/EditorSelfTest.cpp

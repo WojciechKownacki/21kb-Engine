@@ -1,6 +1,7 @@
 #include "agent/EditorAgentPanelState.hpp"
 
 #include "engine/core/JsonValue.hpp"
+#include "engine/project/AgentRequestContext.hpp"
 #include "localization/EditorLocalization.hpp"
 #include "project/EditorProjectPaths.hpp"
 
@@ -31,6 +32,14 @@ using kb::core::JsonValue;
 #else
     return std::wstring(text.begin(), text.end());
 #endif
+}
+
+// The permission rule that forbids reading a folder and everything in it, in the form an agent CLI takes it: an absolute path
+// starts with two slashes and a Windows drive is a folder of the root ("//e/folder/**").
+[[nodiscard]] std::string DenyReadRule(const std::filesystem::path& folder) {
+    std::string text = folder.generic_string();
+    if (text.size() > 1U && text[1] == ':') text = "/" + std::string{ static_cast<char>(std::tolower(static_cast<unsigned char>(text[0]))) } + text.substr(2U);
+    return "Read(/" + text + "/**)";
 }
 
 void AppendUtf8(std::string& text, char32_t code) {
@@ -1193,12 +1202,13 @@ bool EditorAgentPanelState::Send(const EditorAgentWorkspace& workspace) {
         file << document.Dump();
     }
 
-    // The agent reads the limit with every request, so a mode holds for agents that have no switch for it.
+    // The agent reads the limit with every request, so a mode holds for agents that have no switch for it. What the person
+    // has open in the editor and the project's own notes come with it, so the agent starts from the same picture.
     const std::string wire = (mode_ == EditorAgentMode::Plan
         ? std::string{ "Plan only. Do not change any file, scene or asset, and do not run anything that changes the project. Reply with the steps you would take.\n\n" }
         : mode_ == EditorAgentMode::Ask
             ? std::string{ "Answer only. Do not change any file, scene or asset, and do not run anything that changes the project.\n\n" }
-            : std::string{}) + request + AttachmentNote(images, workspace.project);
+            : std::string{}) + workspace.context + kb::project::AgentProjectNotes(workspace.project) + request + AttachmentNote(images, workspace.project);
     bool promptInArguments = false;
     const auto substitute = [&](const std::string& word) {
         std::string text = Replace(word, "{project}", workspace.project.generic_string());
@@ -1238,6 +1248,10 @@ bool EditorAgentPanelState::Send(const EditorAgentWorkspace& workspace) {
     const bool resuming = !conversation.session.empty() && conversation.sessionAgent == agent->Label();
     const bool resumeCommand = resuming && !agent->resumeRunArguments.empty();
     for (const std::string& word : resumeCommand ? agent->resumeRunArguments : agent->runArguments) {
+        if (word == "{denyRead}") {
+            for (const std::filesystem::path& folder : workspace.hiddenFolders) arguments.push_back(Widen(DenyReadRule(folder)));
+            continue;
+        }
         arguments.push_back(substitute(word));
     }
     if (persistent) {

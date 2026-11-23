@@ -88,6 +88,7 @@ Fetch one with `guide` (its name as `topic`). A recipe's commands go in one `com
   one object's values, `schema --component <Name>` a component's.
 - `Assets/` is the game, mounted as `/Game/`. Delete, rename or move files with `asset delete|rename|move`, never by hand.
 - To see the scene, when the person asks how it looks or a change is hard to judge from the output: `capture` returns the picture (`--view overview` frames the whole scene, `--camera <Name>` uses a camera of it).
+- When the person asks for the game in the editor they have open: `editor play` starts it there, `editor capture` takes the editor's view, `editor frames` measures its frame rate, `editor stop` stops it. Without an editor they say so; then use `run` and `capture`.
 )md";
 
 

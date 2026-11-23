@@ -70,6 +70,11 @@ struct EditorAgentEntry {
 struct EditorAgentWorkspace {
     std::filesystem::path project;
     std::filesystem::path kbcli;
+    // The engine's own folders the agent may not read: all of them but its documentation and the SDK headers. Empty when the
+    // engine's sources are not beside the editor.
+    std::vector<std::filesystem::path> hiddenFolders;
+    // What the person has open in the editor (one line), sent with each request.
+    std::string context;
 };
 
 // What a conversation has used so far, as the agent reports it (zero while unknown).

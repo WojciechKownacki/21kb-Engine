@@ -66,6 +66,10 @@ using CommandRunner = std::function<int(std::span<const std::string>, CommandIo)
 [[nodiscard]] int RunBatchOperations(const std::string& project, std::vector<std::vector<std::string>> operations, bool dryRun, bool json, bool brief,
     CommandIo io, const CommandRunner& run);
 
+// A transaction that was cut off (its process is gone) is put back from its backup before the next command runs in the project, with one
+// line on `message`; a damaged marker is named and dropped. True when a transaction of a process that still runs is in progress.
+[[nodiscard]] bool ResolveInterruptedTransaction(const std::string& project, std::ostream& message);
+
 // The scenes that entity and component commands edit, kept open while a batch runs: the first command that
 // names a scene opens it, the later ones edit the same scene in memory, and Commit writes it once. Any other
 // command first has the scenes written and closed (Prepare), so it sees the files as they are. At most one exists.
