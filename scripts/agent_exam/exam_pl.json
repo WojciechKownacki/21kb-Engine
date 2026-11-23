@@ -127,6 +127,116 @@
         {"check": "files", "glob": "Assets/**/*.lua", "contains": "Localization\\.SetCatalog", "label": "a script that gives the game its catalog"},
         {"check": "run", "frames": 30}
       ]
+    },
+    {
+      "id": "coin_bob_spin",
+      "area": "animation",
+      "tags": [
+        "animation"
+      ],
+      "template": "Basic3D",
+      "setup": [
+        [
+          "entity",
+          "add",
+          "--create",
+          "Cylinder",
+          "--name",
+          "Moneta",
+          "--position",
+          "0,1.5,3",
+          "--scale",
+          "1,0.1,1",
+          "--color",
+          "#F5B921"
+        ]
+      ],
+      "requests": [
+        "Niech moneta na scenie unosi się w górę i w dół i obraca w kółko"
+      ],
+      "checks": [
+        {
+          "check": "files",
+          "glob": "Assets/**/*.kbanim",
+          "contains": "looping 1(?s:.*?)track \"\\.\" \\d+\\s+(?:key [^\\n]*\\n)*?key \\d+ (\\S+) (\\S+) (\\S+) (\\S+) (\\S+) (\\S+) (\\S+) (\\S+) (\\S+) (\\S+) (\\S+)\\s+key \\d+ (\\S+) (\\S+) (\\S+) (\\S+) (\\S+) (\\S+) (\\S+) (\\S+) (\\S+) (\\S+) (\\S+)\\s+key \\d+ (\\S+) (\\S+) (\\S+) (\\S+) (\\S+) (\\S+) (\\S+) (\\S+) (\\S+) (\\S+) (\\S+)\\s+",
+          "expr": "max(g3, g14, g25) - min(g3, g14, g25) > 0.05 and (max(g5, g16, g27) - min(g5, g16, g27) > 0.05 or max(g6, g17, g28) - min(g6, g17, g28) > 0.05 or max(g7, g18, g29) - min(g7, g18, g29) > 0.05 or max(g8, g19, g30) - min(g8, g19, g30) > 0.05)",
+          "label": "a looping clip of the coin whose height and rotation both change over three keys in a row"
+        },
+        {
+          "check": "files",
+          "glob": "Assets/**/*.kbanimcontroller",
+          "contains": "state \\d+ \\d+ \"[^\"]*\" \"/Game/[^\"]+\\.kbanim\"",
+          "label": "a controller that plays the clip"
+        },
+        {
+          "check": "entity_show",
+          "name": "Moneta",
+          "component": "Animator",
+          "regex": "controllerAssetId=/Game/\\S+\\.kbanimcontroller",
+          "label": "the coin has an Animator with that controller"
+        },
+        {
+          "check": "run",
+          "frames": 240
+        }
+      ]
+    },
+    {
+      "id": "glow_edge_function",
+      "area": "material function",
+      "tags": [
+        "material",
+        "function"
+      ],
+      "template": "Basic3D",
+      "setup": [
+        [
+          "entity",
+          "add",
+          "--create",
+          "Sphere",
+          "--name",
+          "Kula",
+          "--position",
+          "0,1,3",
+          "--color",
+          "#2E86DE"
+        ]
+      ],
+      "requests": [
+        "Zrób efekt świecącej krawędzi jako funkcję materiału i użyj go w materiale kuli"
+      ],
+      "checks": [
+        {
+          "check": "files",
+          "glob": "Assets/**/*.kbmatfn",
+          "contains": "(?s)graphNode \\d+ FunctionOutput.*graphNode \\d+ Fresnel|graphNode \\d+ Fresnel.*graphNode \\d+ FunctionOutput",
+          "label": "a new material function with a Fresnel edge and an output"
+        },
+        {
+          "check": "files",
+          "glob": "Assets/**/*.kbmat",
+          "contains": "(?s)graphNode \\d+ MaterialFunctionCall.*graphLink \\d+ \\d+ \\d+ \\S+ \\d+ \\d+ emissive",
+          "label": "a material that calls a function and sends it to Emissive"
+        },
+        {
+          "check": "cli",
+          "args": [
+            "material-graph",
+            "show",
+            "--material",
+            "/Game/Materials/Kula.kbmat"
+          ],
+          "output_matches": [
+            "MaterialFunctionCall",
+            "Compiles: yes"
+          ],
+          "label": "the ball's material calls the function and compiles"
+        },
+        {
+          "check": "validate"
+        }
+      ]
     }
   ]
 }

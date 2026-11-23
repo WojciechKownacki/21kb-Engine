@@ -15,6 +15,7 @@
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #if KB_CLI_RENDERER
+#include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #endif
@@ -217,6 +218,8 @@ bool MountProjectAssets(
     // textures (images under Assets, imported textures) for the materials' texture slots.
     static_cast<void>(scene.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialInstanceAssetLoader>()));
     static_cast<void>(scene.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderTextureAssetLoader>()));
+    // Material functions (.kbmatfn) that a material graph calls, as in the editor and the game.
+    static_cast<void>(scene.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialFunctionAssetLoader>()));
 #endif
     // Import presets (.kbimportpreset) for import --preset, as the editor's import dialog lists them.
     static_cast<void>(scene.Assets().Manager().RegisterLoader(std::make_unique<kb::assets::AssetImportPresetLoader>()));

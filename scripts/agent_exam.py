@@ -42,6 +42,7 @@ setting must be new or changed against the fresh project, default true):
   plugin          "id" and "enabled"
   run             `kb_cli run`: "frames", "clean" (no diagnostics, default true), "output_matches" (regexes)
   validate        `kb_cli validate` finds no error
+  cli             any kb_cli command ("args"): exits 0 and its output matches every "output_matches" regex and none of "output_absent"
   answer          "regex" on the agent's own answer text
   unchanged       nothing in the project but Saved/ changed
   any_of          "checks": passes when one of them does
@@ -464,6 +465,17 @@ class Judge:
         errors = [line for line in output.splitlines() if re.match(r"\s*(ERROR|error|FAIL)", line)]
         return Verdict(code == 0 and not errors, "clean" if code == 0 and not errors else (errors[0] if errors else f"exit code {code}"))
 
+    def cli(self, check: dict) -> Verdict:
+        code, output = self.project.kb_cli(*check["args"], timeout=240)
+        problems = [f"exit code {code}"] if code != 0 else []
+        for pattern in check.get("output_matches", []):
+            if re.search(pattern, output, re.IGNORECASE | re.MULTILINE) is None:
+                problems.append(f"no output matches {pattern}")
+        for pattern in check.get("output_absent", []):
+            if re.search(pattern, output, re.IGNORECASE | re.MULTILINE) is not None:
+                problems.append(f"the output matches {pattern}")
+        return Verdict(not problems, "; ".join(problems) if problems else "as expected")
+
     def answer(self, check: dict) -> Verdict:
         text = "\n".join(self.answers)
         return Verdict(re.search(check["regex"], text, re.IGNORECASE | re.DOTALL) is not None, text[:160].replace("\n", " "))
@@ -475,7 +487,7 @@ class Judge:
 
     def evaluate(self, check: dict) -> Verdict:
         kinds = {"scene_entities": self.scene_entities, "entity_show": self.entity_show, "files": self.files, "setting": self.setting,
-                 "plugin": self.plugin, "run": self.run, "validate": self.validate, "answer": self.answer,
+                 "plugin": self.plugin, "run": self.run, "validate": self.validate, "cli": self.cli, "answer": self.answer,
                  "unchanged": self.unchanged, "any_of": self.any_of}
         handler = kinds.get(check.get("check", ""))
         if handler is None:

@@ -40,6 +40,7 @@ add_library(kb_cli_core STATIC
     src/CliSecurityCommands.cpp
     src/CliValidateCommand.cpp
     src/CliAssetTarget.cpp
+    src/CliAnimationClipCommands.cpp
     src/CliCinematicCommands.cpp
     src/CliLocalizationCommands.cpp
     src/CliThemeCommands.cpp
@@ -87,6 +88,7 @@ if(KB_BUILD_RENDERER)
         src/CliMaterialCommands.cpp
         src/CliMeshLodCommands.cpp
         src/CliMaterialGraphCommands.cpp
+        src/CliMaterialFunctionCommands.cpp
         src/CliPostProcessCommands.cpp
         src/CliParticleProcessCommands.cpp
         src/CliRenderEffectCommands.cpp

@@ -40,25 +40,9 @@ constexpr std::string_view kUsage =
 
 [[nodiscard]] std::string Triple(Vec3 value) { return Num(value.x) + "," + Num(value.y) + "," + Num(value.z); }
 
-// A scene object's own transform as the scene file stores it, found by name or path.
-struct SceneObject {
-    kb::scene::LocalTransform transform;
-    std::string path;
-};
+using SceneObject = SceneObjectTransform;
 
-[[nodiscard]] std::optional<SceneObject> FindObject(const ProjectSceneDocument& scene, std::string_view name) {
-    const std::span<const kb::scene::ScenePrefabNodeDesc> nodes = scene.document.worldPrefab.Nodes();
-    for (std::size_t index = 0U; index < nodes.size(); ++index) {
-        if (nodes[index].name != name && NodePath(nodes, index) != name) continue;
-        SceneObject found;
-        found.transform.position = nodes[index].transform.localPosition;
-        found.transform.rotation = nodes[index].transform.localRotation;
-        found.transform.scale = nodes[index].transform.localScale;
-        found.path = NodePath(nodes, index);
-        return found;
-    }
-    return std::nullopt;
-}
+[[nodiscard]] std::optional<SceneObject> FindObject(const ProjectSceneDocument& scene, std::string_view name) { return FindSceneObject(scene, name); }
 
 [[nodiscard]] std::optional<std::filesystem::path> ProjectRoot(const ArgumentList& arguments, kb::scene::Scene& scene, CommandIo io) {
     const std::optional<std::string> project = arguments.Option("--project");

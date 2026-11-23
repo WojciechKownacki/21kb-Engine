@@ -51,21 +51,22 @@ Fetch it with the `guide` tool (its name as `topic`; or the file `.kb/docs/<name
 order and stop when its check passes. Do not read the scene, the settings or other guides first.
 
 - colour or material on an object: `recipe-material`
-- physics, or any other component, on an object: `recipe-component`
+- physics or another component on an object: `recipe-component`
 - a prefab, with a component: `recipe-prefab`
 - a Lua script on an object (spin, move, react): `recipe-script`
 - light, sun, sky, time of day: `recipe-light`
 - game name, window, start scene, plugins, a build: `recipe-settings`
 - a button or a menu: `recipe-ui-button`
 - a character the person plays, with its camera: `recipe-player`
-- an icon, sprite, texture or other picture (neon, flat, pixel): `recipe-image`
-- a sound effect or music loop (jump, coin, hit, explosion): `recipe-sound`
+- an icon, sprite or texture (neon, flat, pixel): `recipe-image`
+- a sound effect or music loop: `recipe-sound`
 - an intro or cutscene, a camera flight: `recipe-timeline`
-- the look of the interface (dark, colours, rounded): `recipe-ui-theme`
+- the look of the interface (dark, colours): `recipe-ui-theme`
 - texts in other languages: `recipe-translate`
+- an object that moves by itself (bob, spin, a door): `recipe-animation`
+- a reusable material effect (glowing edge): `recipe-material-function`
 
-Anything else: `guide` without a topic lists the other guides (`scripts`, `water-and-look`, `maps-2d` ...);
-the script API: `api_reference` with a `topic` or a `search`.
+Other guides: `guide` without a topic lists them. Script API: `api_reference` with a `topic` or a `search`.
 
 ## Rules
 
@@ -76,15 +77,15 @@ the script API: `api_reference` with a `topic` or a `search`.
 - `Assets/` is the game, mounted as `/Game/`. Delete, rename or move files with `kb_cli asset delete|rename|move`
   never by hand; remove only what you made.
 - To show the person a new scene: `kb_cli editor open-scene --scene /Game/<path>.21kbscene`; how a scene looks:
-  `kb_cli capture --out Saved/Agent/Images/<new name>.png` (the editor shows the picture).
+  `kb_cli capture --out Saved/Agent/Images/<new name>.png`.
 - Finish scripts with `kb_cli validate <script>` and `kb_cli run --frames 120`: done when it ends with
   `0 diagnostics`; its `moved:` lines show where dynamic bodies went.
 )md";
 
 // The AGENTS.md files earlier versions of this engine wrote, recognised by their exact bytes
 // (FNV-1a 64), so an untouched copy is brought up to date while one a person edited is kept.
-constexpr std::array<std::string_view, 8> kPreviousAgentsTemplateHashes{ "6927ba90de51399a", "66098609d17a66fa", "17571d731424f80b", "60b10d36fecf3d23",
-    "db0742a5e69a4b90", "0998d780309d6bfd", "a7d1c056fb759f2b", "74fed88885ab70b9" };
+constexpr std::array<std::string_view, 9> kPreviousAgentsTemplateHashes{ "6927ba90de51399a", "66098609d17a66fa", "17571d731424f80b", "60b10d36fecf3d23",
+    "db0742a5e69a4b90", "0998d780309d6bfd", "a7d1c056fb759f2b", "74fed88885ab70b9", "4fde4e67de726331" };
 
 // Claude Code reads CLAUDE.md, not AGENTS.md; this one line imports it.
 constexpr std::string_view kClaudeTemplate = "@AGENTS.md\n";

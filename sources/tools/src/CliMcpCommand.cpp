@@ -134,7 +134,7 @@ thread_local bool tDiscovery = false;
         });
     if (command.name == "guide") return MakeToolDescriptor(command.mcpTool,
         "Returns a short how-to for one kind of task, with the kb_cli commands that do it. Start with the recipe for the job: "
-        "recipe-material, recipe-component, recipe-prefab, recipe-script, recipe-light, recipe-settings, recipe-ui-button, recipe-player, recipe-image, recipe-sound, recipe-timeline, recipe-ui-theme, recipe-translate. "
+        "recipe-material, recipe-component, recipe-prefab, recipe-script, recipe-light, recipe-settings, recipe-ui-button, recipe-player, recipe-image, recipe-sound, recipe-timeline, recipe-ui-theme, recipe-translate, recipe-animation, recipe-material-function. "
         "Other guides: objects-and-materials, physics, scripts, characters-and-animation, combat-and-ai, maps-2d, verify. Without a topic, the list of guides.",
         {
             ToolProperty{ "topic", "string", "The guide's name, or 'index'.", false, "--topic" },

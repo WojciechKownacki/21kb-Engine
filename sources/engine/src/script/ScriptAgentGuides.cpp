@@ -685,7 +685,51 @@ is its code, such as pl, en, de) and prints each `key = "text"`; give every key 
   `component set --entity Score --type Text --set localizationKey=hud.score`.
 )md";
 
-constexpr std::array<ScriptAgentGuide, 24> kGuides{ {
+constexpr std::string_view kRecipeAnimation = R"md(# Recipe: an object that moves by itself (bob, spin, a door, a pulse)
+
+```
+kb_cli animation-clip new --project . --name CoinFloat --preset bob,spin --entity Coin
+kb_cli run --project . --frames 240
+```
+
+`new` with a preset makes the animation clip, a controller for it and an Animator on the object: it moves from the start of the
+scene, again and again. Done when it prints `plays on 'Coin'` and `run` ends with `0 diagnostics`. The object's name comes from
+`kb_cli scene-list --project .`.
+
+- Presets: `bob` (up and down), `spin` (a full turn around the upright axis), `open-close` (a door swinging open and shut around its
+  own centre), `pulse` (grows and shrinks). Several at once, joined by a comma: `bob,spin`.
+- `--seconds 4` is the length of one cycle; `--amount` the size of ONE preset (bob: units, open-close and spin: degrees, pulse: 0.2 is a
+  fifth bigger); `--loop no` plays it once. A name that exists is kept: pick a new `--name`, or add `--replace`.
+- The keys are relative to where the object is when `new` runs: place the object first, then make the clip.
+- An object has one Animator, so a second clip on it replaces the first: put the motions in one clip (`bob,spin`).
+- Your own motion: `animation-clip new --name Tour --entity Crate` (starts where it is), then a key per moment
+  (`animation-clip key --clip Tour --time 1 --position 0,3,0`, `--time 2 --rotation 0,90,0`; what a key does not give stays as before),
+  then `animation-clip play --clip Tour --entity Crate`. `animation-clip show --clip Tour` lists the keys.
+- To see it: `kb_cli capture --frames 30 --out Saved/Agent/Images/<new name>.png` and again with `--frames 90`.
+)md";
+
+constexpr std::string_view kRecipeMaterialFunction = R"md(# Recipe: a reusable material effect (a material function)
+
+```
+kb_cli scene-list --project .
+kb_cli material-function new --project . --name GlowEdge --preset fresnel-glow
+kb_cli material-function use --project . --entity <Object> --function GlowEdge --set Color="#FF8C1A" --set Power=3
+kb_cli material-function use --project . --entity <Another object> --function GlowEdge --set Color="#00E5FF"
+```
+
+One function, written once, called from any number of materials. `<Object>` is the name of the object `scene-list` shows whose material gets the
+effect (or name a material: `--material /Game/Materials/<Name>.kbmat`). Done when `use` prints `calls ... Glow -> emissive`. The material keeps
+its colour. An object without a material of its own: `kb_cli entity add --create Sphere --name Ball --color "#2E86DE"` makes one.
+
+- Presets: `fresnel-glow` (a glow on the edge: inputs Color, Power (higher is a thinner edge), Intensity; output Glow goes to Emissive),
+  `panner` (a texture coordinate that scrolls: Speed), `tiling` (a texture coordinate repeated: Tiling); the last two give UV, wired to
+  Customized UV. `kb_cli material-function show --function GlowEdge` lists the inputs with their defaults.
+- A name that exists is kept: pick a new `--name`, or add `--replace`. Check a material: `kb_cli material-graph show --material <path>` ends
+  with `Compiles: yes`. Colours as `#RRGGBB`, numbers as 3.
+- To see it: `kb_cli capture --frames 40 --out Saved/Agent/Images/<new name>.png`.
+)md";
+
+constexpr std::array<ScriptAgentGuide, 26> kGuides{ {
     { "recipe-material", "Recipe: colour or material", "A colour or material on an object: two commands.", kRecipeMaterial },
     { "recipe-component", "Recipe: physics or a component", "Physics (a falling body) or any component on an object, and how to check it.", kRecipeComponent },
     { "recipe-prefab", "Recipe: prefab", "Save an object, with its components, as a prefab and place copies.", kRecipePrefab },
@@ -699,6 +743,8 @@ constexpr std::array<ScriptAgentGuide, 24> kGuides{ {
     { "recipe-timeline", "Recipe: an intro or cutscene", "A camera flight or any object moving over time as a timeline that plays when the scene starts, with events.", kRecipeTimeline },
     { "recipe-ui-theme", "Recipe: the look of the interface", "A shared UI theme: dark or light, colours, orange buttons, rounded corners, applied to the controls of a scene.", kRecipeUiTheme },
     { "recipe-translate", "Recipe: texts in other languages", "The texts of the game in several languages: keys on the controls, translations, the default language, switching in play.", kRecipeTranslate },
+    { "recipe-animation", "Recipe: an object that moves by itself", "A coin that bobs and spins, a door that opens and closes, a pulse: an animation clip that plays from the start.", kRecipeAnimation },
+    { "recipe-material-function", "Recipe: a reusable material effect", "A material function (glowing edge, scrolling or tiling texture coordinate) written once and used on several materials.", kRecipeMaterialFunction },
     { "objects-and-materials", "Objects and materials", "Shapes, lights and cameras in a scene, their position, materials and colours.", kObjectsAndMaterials },
     { "physics", "Physics", "Rigidbodies, colliders, triggers, character controllers and collision events.", kPhysics },
     { "scripts", "Behaviour scripts", "Write a Lua behaviour, attach it to an entity, expose variables, call the engine.", kScripts },

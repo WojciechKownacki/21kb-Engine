@@ -49,4 +49,11 @@ struct ProjectSceneDocument {
 // "Parent/Child/Name" of a node of the document.
 [[nodiscard]] std::string NodePath(std::span<const kb::scene::ScenePrefabNodeDesc> nodes, std::size_t index);
 
+// A scene object found by name or path, with its own (local) transform as the scene file stores it.
+struct SceneObjectTransform {
+    kb::scene::LocalTransform transform;
+    std::string path;
+};
+[[nodiscard]] std::optional<SceneObjectTransform> FindSceneObject(const ProjectSceneDocument& scene, std::string_view name);
+
 } // namespace kb::cli

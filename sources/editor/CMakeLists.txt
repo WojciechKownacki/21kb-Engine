@@ -2279,6 +2279,13 @@ if(BUILD_TESTING)
             --selftest-task "SELFTEST-Animator-Workflow")
     set_tests_properties(kb_editor_animator_workflow_headless PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;animation" TIMEOUT 180)
+    add_test(NAME kb_editor_object_clip_editor_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessObjectClipEditorScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Object-Clip-Editor")
+    set_tests_properties(kb_editor_object_clip_editor_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;animation" TIMEOUT 180)
     add_test(NAME kb_editor_terrain_simple_headless
         COMMAND $<TARGET_FILE:kb_editor>
             --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessTerrainSimpleScenario.json"

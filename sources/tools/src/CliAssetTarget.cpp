@@ -161,6 +161,20 @@ bool AttachScriptOnObject(const ArgumentList& arguments, const std::string& obje
     return true;
 }
 
+std::optional<SceneObjectTransform> FindSceneObject(const ProjectSceneDocument& scene, std::string_view name) {
+    const std::span<const kb::scene::ScenePrefabNodeDesc> nodes = scene.document.worldPrefab.Nodes();
+    for (std::size_t index = 0U; index < nodes.size(); ++index) {
+        if (nodes[index].name != name && NodePath(nodes, index) != name) continue;
+        SceneObjectTransform found;
+        found.transform.position = nodes[index].transform.localPosition;
+        found.transform.rotation = nodes[index].transform.localRotation;
+        found.transform.scale = nodes[index].transform.localScale;
+        found.path = NodePath(nodes, index);
+        return found;
+    }
+    return std::nullopt;
+}
+
 std::string NodePath(std::span<const kb::scene::ScenePrefabNodeDesc> nodes, std::size_t index) {
     std::string path = nodes[index].name;
     std::size_t parent = nodes[index].parentNode;

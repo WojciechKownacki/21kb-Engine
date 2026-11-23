@@ -229,7 +229,7 @@ struct MaterialCheck {
     std::vector<std::string> problems;
 };
 
-[[nodiscard]] MaterialCheck CheckMaterial(const kb::render::RenderMaterialAssetData& asset) {
+[[nodiscard]] MaterialCheck CheckMaterial(const kb::render::RenderMaterialAssetData& asset, const kb::assets::AssetRegistry& registry) {
     MaterialCheck check{};
     std::ostringstream serialized;
     kb::render::RenderMaterialAssetWriter::Write(serialized, asset);
@@ -247,7 +247,10 @@ struct MaterialCheck {
         }
     }
     if (kb::render::HasGraphAuthoringData(asset.graph)) {
-        const kb::render::RenderMaterialGraphCompileResult compiled = kb::render::CompileRenderMaterialGraphToShaderSource(asset.graph);
+        const kb::render::RenderMaterialGraphFunctionLibrary library = material::FunctionLibraryOf(asset.graph, registry);
+        kb::render::RenderMaterialGraphBuildContext context;
+        context.functionLibrary = &library;
+        const kb::render::RenderMaterialGraphCompileResult compiled = kb::render::CompileRenderMaterialGraphToShaderSource(asset.graph, context);
         for (const kb::render::RenderMaterialGraphDiagnostic& diagnostic : compiled.diagnostics) {
             if (diagnostic.severity == kb::render::RenderMaterialGraphDiagnosticSeverity::Error) {
                 check.problems.push_back("shader: " + diagnostic.message);
@@ -282,13 +285,13 @@ void PrintGraph(const kb::render::RenderMaterialAssetData& asset, const std::str
         if (value != asset.graphParameterValues.end()) io.out << " = " << ParameterValueText(*value, registry);
         io.out << '\n';
     }
-    const MaterialCheck check = CheckMaterial(asset);
+    const MaterialCheck check = CheckMaterial(asset, registry);
     io.out << (check.problems.empty() ? "Compiles: yes\n" : "Compiles: no\n");
     for (const std::string& problem : check.problems) io.out << "  " << problem << '\n';
 }
 
-[[nodiscard]] bool SaveMaterial(const kb::render::RenderMaterialAssetData& asset, const material::ProjectAsset& located, CommandIo io) {
-    const MaterialCheck check = CheckMaterial(asset);
+[[nodiscard]] bool SaveMaterial(const kb::render::RenderMaterialAssetData& asset, const material::ProjectAsset& located, const kb::assets::AssetRegistry& registry, CommandIo io) {
+    const MaterialCheck check = CheckMaterial(asset, registry);
     if (!check.loads) {
         io.err << "error: the material would not load again; nothing was written:\n";
         for (const std::string& problem : check.problems) io.err << "  " << problem << '\n';
@@ -470,7 +473,7 @@ int GraphCommand(std::string_view action, const ArgumentList& arguments, Command
                 return 1;
             }
         }
-        if (!SaveMaterial(*asset, *located, io)) return 1;
+        if (!SaveMaterial(*asset, *located, registry, io)) return 1;
         io.out << "added node " << NodeLabel(*kb::render::FindRenderMaterialGraphNode(asset->graph, *id)) << '\n';
         return 0;
     }
@@ -505,7 +508,7 @@ int GraphCommand(std::string_view action, const ArgumentList& arguments, Command
                    << "' (outputs: " << JoinNames(outputs) << "; inputs: " << JoinNames(inputs) << ")\n";
             return 1;
         }
-        if (!SaveMaterial(*asset, *located, io)) return 1;
+        if (!SaveMaterial(*asset, *located, registry, io)) return 1;
         io.out << "connected " << fromId << '.' << fromPin << " -> " << toId << '.' << *toPin << '\n';
         return 0;
     }
@@ -521,7 +524,7 @@ int GraphCommand(std::string_view action, const ArgumentList& arguments, Command
             io.err << "error: " << problem << '\n';
             return 1;
         }
-        if (!SaveMaterial(*asset, *located, io)) return 1;
+        if (!SaveMaterial(*asset, *located, registry, io)) return 1;
         io.out << "set " << NodeLabel(*kb::render::FindRenderMaterialGraphNode(asset->graph, copy.id)) << " = " << *value << '\n';
         return 0;
     }
@@ -539,7 +542,7 @@ int GraphCommand(std::string_view action, const ArgumentList& arguments, Command
             static_cast<void>(kb::render::RenameRenderMaterialGraphNode(asset->graph, id, *name,
                 kb::render::RenderMaterialGraphNodeKindName(promoted->kind)));
         }
-        if (!SaveMaterial(*asset, *located, io)) return 1;
+        if (!SaveMaterial(*asset, *located, registry, io)) return 1;
         io.out << "promoted " << NodeLabel(*kb::render::FindRenderMaterialGraphNode(asset->graph, id)) << '\n';
         return 0;
     }
@@ -553,7 +556,7 @@ int GraphCommand(std::string_view action, const ArgumentList& arguments, Command
         const std::uint32_t id = target->id;
         static_cast<void>(kb::render::RenameRenderMaterialGraphNode(asset->graph, id, *name,
             kb::render::RenderMaterialGraphNodeKindName(target->kind)));
-        if (!SaveMaterial(*asset, *located, io)) return 1;
+        if (!SaveMaterial(*asset, *located, registry, io)) return 1;
         io.out << "renamed " << NodeLabel(*kb::render::FindRenderMaterialGraphNode(asset->graph, id)) << '\n';
         return 0;
     }
@@ -568,7 +571,7 @@ int GraphCommand(std::string_view action, const ArgumentList& arguments, Command
             io.err << "error: " << problem << '\n';
             return 1;
         }
-        if (!SaveMaterial(*asset, *located, io)) return 1;
+        if (!SaveMaterial(*asset, *located, registry, io)) return 1;
         io.out << "set " << *name << " = " << *value << '\n';
         return 0;
     }

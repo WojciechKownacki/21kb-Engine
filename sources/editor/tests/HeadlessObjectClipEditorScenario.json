@@ -1,0 +1,53 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    {
+      "op": "create_scene",
+      "name": "ObjectClipEditor",
+      "template": "Empty"
+    },
+    {
+      "op": "write_file",
+      "path": "Assets/Animation/Bob.kbanim",
+      "content": "21kb AnimationClip 3\ndurationSeconds 2\nlooping 1\ntrack \".\" 18446744073709551615\nkey 0 0 0 1.5 3 0 0 0 1 1 1 1\nkey 0 1 0 1.75 3 0 0 0 1 1 1 1\nkey 0 2 0 1.5 3 0 0 0 1 1 1 1\n"
+    },
+    {
+      "op": "write_file",
+      "path": "Assets/Animation/Bob.kbanimcontroller",
+      "content": "21kb AnimatorController 7\nlayer \"Base\" \"Bob\" 1 18446744073709551615\nstate 0 1 \"Bob\" \"/Game/Animation/Bob.kbanim\"\ngraphNode 1 0 0\n"
+    },
+    {
+      "op": "discover_assets"
+    },
+    {
+      "op": "open_asset",
+      "asset": "/Game/Animation/Bob.kbanim"
+    },
+    {
+      "op": "assert_console",
+      "contains": "Opened document: /Game/Animation/Bob.kbanim",
+      "category": "Animation Clip Editor",
+      "level": "info"
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "object-clip-editor"
+    },
+    {
+      "op": "open_asset",
+      "asset": "/Game/Animation/Bob.kbanimcontroller"
+    },
+    {
+      "op": "assert_console",
+      "contains": "Opened document: /Game/Animation/Bob.kbanimcontroller",
+      "category": "Animator Editor",
+      "level": "info"
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "object-controller-editor"
+    }
+  ]
+}

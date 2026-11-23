@@ -49,6 +49,8 @@
 #include "RendererAssertionPolicy.hpp"
 #include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
+#include "CliMaterialShared.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #endif
@@ -5945,6 +5947,201 @@ void RunStudioAssetCommandTests() {
     Require(Contains(accepted, "Main Camera") && !Contains(accepted, "\"isError\":true"), "the agent's tool must run the command inside the project: " + accepted);
 }
 
+// animation-clip and material-function: each makes its asset inside the project from a few words, the engine's own loaders read
+// it back, the object really moves (a script reads its place while the scene runs), and a name, folder or scene that leads out
+// of the project is refused.
+void RunMotionAndFunctionCommandTests() {
+    const std::filesystem::path parent = TestRoot() / "motion_function_project";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Studio", "--template", "Basic3D" }).exitCode == 0, "motion project could not be made");
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Obcy", "--template", "Empty" }).exitCode == 0, "foreign project could not be made");
+    const std::filesystem::path root = parent / "Studio";
+    const std::string project = root.string();
+    const std::filesystem::path foreignScene = parent / "Obcy" / "Assets" / "Scenes" / "Main.21kbscene";
+    const auto foreignSize = std::filesystem::file_size(foreignScene);
+    const auto readText = [](const std::filesystem::path& path) {
+        std::ifstream input{ path, std::ios::binary };
+        return std::string{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+    };
+    Require(Run(&kb::cli::RunEntityCommand, { "add", "--project", project, "--create", "Cylinder", "--name", "Coin", "--position", "0,1.5,3", "--scale", "1,0.1,1" }).exitCode == 0, "coin could not be added");
+    Require(Run(&kb::cli::RunEntityCommand, { "add", "--project", project, "--create", "Cube", "--name", "Door", "--position", "4,1,2", "--scale", "1,2,0.1" }).exitCode == 0, "door could not be added");
+
+    // ---- animation-clip ----
+    const CommandRun made = Run(&kb::cli::RunAnimationClipCommand, { "new", "--project", project, "--name", "CoinFloat", "--preset", "bob,spin", "--entity", "Coin" });
+    Require(made.exitCode == 0 && Contains(made.output, "plays on 'Coin'"), "animation-clip new with a preset failed: " + made.output);
+    const std::optional<kb::scene::AnimationClip> clip = kb::scene::AnimationAssetIO::LoadClip(root / "Assets" / "Animation" / "CoinFloat.kbanim");
+    Require(clip.has_value() && clip->looping && std::abs(clip->durationSeconds - 4.0F) < 1.0e-4F && clip->tracks.size() == 1U && (clip->tracks.front().targetPath == "." || clip->tracks.front().targetPath.empty()) &&
+            clip->tracks.front().keyframes.size() == 17U,
+        "the preset must make a looping 4 s clip with one track on the object and 17 keys");
+    float lowest = 100.0F;
+    float highest = -100.0F;
+    for (const kb::scene::AnimationTransformKeyframe& key : clip->tracks.front().keyframes) {
+        lowest = std::min(lowest, key.transform.position.y);
+        highest = std::max(highest, key.transform.position.y);
+    }
+    Require(std::abs(highest - 1.75F) < 1.0e-3F && std::abs(lowest - 1.25F) < 1.0e-3F, "bob must rise and fall a quarter unit around where the coin is");
+    const auto& firstKey = clip->tracks.front().keyframes.front();
+    const auto& lastKey = clip->tracks.front().keyframes.back();
+    Require(std::abs(firstKey.transform.position.y - lastKey.transform.position.y) < 1.0e-4F && std::abs(std::abs(firstKey.transform.rotation.w) - std::abs(lastKey.transform.rotation.w)) < 1.0e-3F,
+        "a looping clip must end where it starts");
+    const std::optional<kb::scene::AnimatorController> controller = kb::scene::AnimationAssetIO::LoadController(root / "Assets" / "Animation" / "CoinFloat.kbanimcontroller");
+    Require(controller.has_value() && controller->layers.size() == 1U && controller->layers.front().states.size() == 1U &&
+            Contains(controller->layers.front().states.front().clipReference, "CoinFloat.kbanim"),
+        "the preset must also make a controller that plays the clip");
+    const CommandRun coinShown = Run(&kb::cli::RunEntityCommand, { "show", "--project", project, "--name", "Coin" });
+    Require(Contains(coinShown.output, "controllerAssetId=/Game/Animation/CoinFloat.kbanimcontroller"), "the coin must carry an Animator with the controller: " + coinShown.output);
+    // The scene runs, and a script that reads the coin's place sees it bob and turn.
+    Require(Run(&kb::cli::RunScriptNewCommand, { "--project", project, "--name", "CoinProbe", "--language", "lua", "--code",
+                "local n = 0\nfunction Tick(self, dt)\n    n = n + 1\n    if n == 60 or n == 180 then\n        local c = World.FindByName(\"Coin\")\n"
+                "        local p = Transform.GetPosition(c)\n        local r = Transform.Rotation(c)\n        Log(string.format(\"probe %d y=%.2f yaw=%.0f\", n, p.y, r.y))\n    end\nend" }).exitCode == 0,
+        "probe script could not be made");
+    Require(Run(&kb::cli::RunEntityCommand, { "add", "--project", project, "--name", "Watcher" }).exitCode == 0, "watcher could not be added");
+    Require(Run(&kb::cli::RunSceneAttachCommand, { "--project", project, "--node", "Watcher", "--script", "/Game/Scripts/CoinProbe.lua" }).exitCode == 0, "probe could not be attached");
+    const CliRun running = RunCliProgram({ "run", "--project", project, "--frames", "240" });
+    Require(running.exitCode == 0 && Contains(running.out, "0 diagnostics") && Contains(running.out + running.err, "probe 60 y=1.75 yaw=90") && Contains(running.out + running.err, "probe 180 y=1.25 yaw=-90"),
+        "the coin must bob and turn while the scene runs: " + running.out + running.err);
+
+    const CommandRun swing = Run(&kb::cli::RunAnimationClipCommand, { "new", "--project", project, "--name", "DoorSwing", "--preset", "open-close", "--entity", "Door", "--seconds", "6", "--amount", "100" });
+    Require(swing.exitCode == 0, "open-close failed: " + swing.output);
+    const std::optional<kb::scene::AnimationClip> swung = kb::scene::AnimationAssetIO::LoadClip(root / "Assets" / "Animation" / "DoorSwing.kbanim");
+    Require(swung.has_value() && std::abs(swung->durationSeconds - 6.0F) < 1.0e-4F &&
+            std::abs(kb::math::ToEulerDegrees(swung->tracks.front().keyframes[8].transform.rotation).y - 100.0F) < 0.1F &&
+            std::abs(kb::math::ToEulerDegrees(swung->tracks.front().keyframes.back().transform.rotation).y) < 0.1F,
+        "the door must swing open 100 degrees half way and be shut again at the end");
+    const CommandRun pulse = Run(&kb::cli::RunAnimationClipCommand, { "new", "--project", project, "--name", "Throb", "--preset", "pulse", "--entity", "Coin", "--play", "no" });
+    Require(pulse.exitCode == 0 && !Contains(pulse.output, "plays on"), "--play no must only make the clip: " + pulse.output);
+    const std::optional<kb::scene::AnimationClip> throb = kb::scene::AnimationAssetIO::LoadClip(root / "Assets" / "Animation" / "Throb.kbanim");
+    Require(throb.has_value() && std::abs(throb->tracks.front().keyframes[8].transform.scale.x - 1.2F) < 1.0e-3F, "pulse must grow a fifth at its peak");
+    Require(!std::filesystem::exists(root / "Assets" / "Animation" / "Throb.kbanimcontroller"), "--play no must not make a controller");
+
+    Require(Run(&kb::cli::RunAnimationClipCommand, { "new", "--project", project, "--name", "Tour", "--entity", "Door", "--play", "no" }).exitCode == 0, "animation-clip new without a preset failed");
+    const std::string tour = "/Game/Animation/Tour.kbanim";
+    Require(Run(&kb::cli::RunAnimationClipCommand, { "key", "--project", project, "--clip", tour, "--time", "1", "--position", "4,3,2" }).exitCode == 0, "animation-clip key failed");
+    const CommandRun later = Run(&kb::cli::RunAnimationClipCommand, { "key", "--project", project, "--clip", "Tour", "--time", "5", "--rotation", "0,90,0", "--scale", "2,2,2" });
+    Require(later.exitCode == 0 && Contains(later.output, "5 s long"), "a key past the end must lengthen the clip, and a clip may be named by its name: " + later.output);
+    const std::optional<kb::scene::AnimationClip> toured = kb::scene::AnimationAssetIO::LoadClip(root / "Assets" / "Animation" / "Tour.kbanim");
+    Require(toured.has_value() && toured->tracks.front().keyframes.size() == 3U && std::abs(toured->tracks.front().keyframes.back().transform.position.y - 3.0F) < 1.0e-4F &&
+            std::abs(toured->tracks.front().keyframes.back().transform.scale.x - 2.0F) < 1.0e-4F,
+        "a key must keep what it does not say from the key before");
+    const CommandRun shown = Run(&kb::cli::RunAnimationClipCommand, { "show", "--project", project, "--clip", tour });
+    Require(shown.exitCode == 0 && Contains(shown.output, "5 s") && Contains(shown.output, "position 4,3,2"), "animation-clip show must list the keys: " + shown.output);
+    const CommandRun played = Run(&kb::cli::RunAnimationClipCommand, { "play", "--project", project, "--clip", tour, "--entity", "Door" });
+    Require(played.exitCode == 0 && Contains(played.output, "plays on 'Door'"), "animation-clip play failed: " + played.output);
+    Require(Contains(Run(&kb::cli::RunEntityCommand, { "show", "--project", project, "--name", "Door" }).output, "controllerAssetId=/Game/Animation/Tour.kbanimcontroller"), "play must put the controller on the object");
+
+    for (const std::vector<std::string>& bad : std::vector<std::vector<std::string>>{ { "--name", "../Escape", "--preset", "bob", "--entity", "Coin" }, { "--name", "CON", "--preset", "bob", "--entity", "Coin" },
+             { "--name", "X1", "--preset", "wobble", "--entity", "Coin" }, { "--name", "X2", "--preset", "bob" }, { "--name", "X3", "--preset", "bob", "--entity", "Nobody" },
+             { "--name", "X4", "--preset", "bob,spin", "--entity", "Coin", "--amount", "2" }, { "--name", "X5", "--preset", "bob", "--entity", "Coin", "--seconds", "0" },
+             { "--name", "CoinFloat", "--preset", "bob", "--entity", "Coin" }, { "--name", "X6", "--preset", "bob", "--entity", "Coin", "--loop", "maybe" },
+             { "--name", "X7", "--preset", "bob", "--entity", "Coin", "--folder", "Config" }, { "--name", "X8", "--preset", "bob", "--entity", "Coin", "--folder", "Assets/../Outside" },
+             { "--name", "X9", "--preset", "bob", "--entity", "Coin", "--amount", "1e30" } }) {
+        std::vector<std::string> words{ "new", "--project", project };
+        words.insert(words.end(), bad.begin(), bad.end());
+        Require(Run(&kb::cli::RunAnimationClipCommand, words).exitCode != 0, "a bad clip request must be refused: " + bad[1]);
+    }
+    Require(Run(&kb::cli::RunAnimationClipCommand, { "new", "--project", project, "--name", "Elsewhere", "--preset", "bob", "--entity", "Coin", "--scene", foreignScene.string() }).exitCode != 0, "a scene of another project must be refused");
+    Require(Run(&kb::cli::RunAnimationClipCommand, { "key", "--project", project, "--clip", tour, "--time", "1" }).exitCode != 0, "a key that says nothing must be refused");
+    Require(Run(&kb::cli::RunAnimationClipCommand, { "key", "--project", project, "--clip", "/Game/Animation/None.kbanim", "--time", "1", "--position", "0,0,0" }).exitCode != 0, "a key on a clip that is not there must be refused");
+    Require(Run(&kb::cli::RunAnimationClipCommand, { "play", "--project", project, "--clip", tour, "--entity", "Nobody" }).exitCode != 0, "play on an object the scene lacks must be refused");
+    Require(Run(&kb::cli::RunAnimationClipCommand, { "new", "--project", project, "--name", "Redone", "--preset", "bob", "--entity", "Coin", "--folder", (parent / "Outside").string() }).exitCode != 0, "a folder outside the project must be refused");
+    const CliRun replaced = RunCliProgram({ "animation-clip", "new", "--project", project, "--name", "CoinFloat", "--preset", "spin", "--entity", "Coin", "--replace" });
+    Require(replaced.exitCode == 0, "--replace must make the clip again: " + replaced.out + replaced.err);
+    Require(!std::filesystem::exists(parent / "Outside") && !std::filesystem::exists(parent / "Escape.kbanim") && std::filesystem::file_size(foreignScene) == foreignSize, "a refused command must write nothing outside the project");
+    const auto mcp = [&](std::string_view command, std::string_view argumentsJson) {
+        std::istringstream input{ "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"kb_cli\",\"arguments\":{\"args\":[\"" + std::string{ command } + "\"," + std::string{ argumentsJson } + "]}}}\n" };
+        std::ostringstream output;
+        std::ostringstream diagnostics;
+        const std::vector<std::string> words{ "--project", project };
+        Require(kb::cli::RunMcpCommand(kb::cli::ArgumentList{ words }, input, { .out = output, .err = diagnostics }) == 0, "the MCP session must finish cleanly");
+        return output.str();
+    };
+    const std::string refused = mcp("animation-clip", "\"new\",\"--name\",\"Out\",\"--preset\",\"bob\",\"--entity\",\"Coin\",\"--folder\",\"../Outside\"");
+    Require(Contains(refused, "\"isError\":true") && Contains(refused, "outside the project"), "the agent's tool must refuse a folder outside the project: " + refused);
+    const std::string accepted = mcp("animation-clip", "\"show\",\"--clip\",\"/Game/Animation/Tour.kbanim\"");
+    Require(Contains(accepted, "position 4,3,2") && !Contains(accepted, "\"isError\":true"), "the agent's tool must run the command inside the project: " + accepted);
+    kb::cli::ResetCliConfinementForTests();
+
+#if KB_CLI_RENDERER
+    // ---- material-function ----
+    Require(Run(&kb::cli::RunEntityCommand, { "add", "--project", project, "--create", "Sphere", "--name", "Ball", "--position", "-2,1,0", "--color", "#2E86DE" }).exitCode == 0, "ball could not be added");
+    Require(Run(&kb::cli::RunEntityCommand, { "add", "--project", project, "--create", "Sphere", "--name", "Ball2", "--position", "2,1,0", "--color", "#2ECC40" }).exitCode == 0, "second ball could not be added");
+    const CommandRun glow = Run(&kb::cli::RunMaterialFunctionCommand, { "new", "--project", project, "--name", "GlowEdge", "--preset", "fresnel-glow" });
+    Require(glow.exitCode == 0 && Contains(glow.output, "Color (color) default #FF8C1A") && Contains(glow.output, "Glow (color)"), "material-function new failed: " + glow.output);
+    const std::optional<kb::render::RenderMaterialFunctionAssetData> function = kb::render::RenderMaterialFunctionAssetLoader::LoadFunction(root / "Assets" / "Materials" / "GlowEdge.kbmatfn");
+    Require(function.has_value(), "the function must load through the engine's loader");
+    std::size_t inputs = 0U;
+    std::size_t outputs = 0U;
+    bool fresnel = false;
+    bool materialOutput = false;
+    for (const kb::render::RenderMaterialGraphNode& node : function->graph.nodes) {
+        inputs += node.kind == kb::render::RenderMaterialGraphNodeKind::FunctionInput ? 1U : 0U;
+        outputs += node.kind == kb::render::RenderMaterialGraphNodeKind::FunctionOutput ? 1U : 0U;
+        fresnel = fresnel || node.kind == kb::render::RenderMaterialGraphNodeKind::Fresnel;
+        materialOutput = materialOutput || node.kind == kb::render::RenderMaterialGraphNodeKind::MaterialOutput;
+    }
+    Require(inputs == 3U && outputs == 1U && fresnel && !materialOutput, "the glow function must have three inputs, one output, a Fresnel and no Material Output");
+    const kb::render::RenderMaterialGraphCustomCode signature = kb::render::BuildRenderMaterialFunctionCallCustomCode(function->graph);
+    Require(signature.inputs.size() == 3U && signature.inputs[0].name == "Color" && signature.inputs[1].name == "Power" && signature.inputs[2].name == "Intensity" && signature.outputs.size() == 1U &&
+            signature.outputs.front().name == "Glow",
+        "the function's call signature must be Color, Power, Intensity -> Glow");
+    const std::filesystem::path ballFile = root / "Assets" / "Materials" / "Ball.kbmat";
+    const std::string ballBefore = readText(ballFile);
+    const CommandRun used = Run(&kb::cli::RunMaterialFunctionCommand, { "use", "--project", project, "--material", "/Game/Materials/Ball.kbmat", "--function", "GlowEdge", "--set", "Color=#FF8C1A", "--set", "Power=3" });
+    Require(used.exitCode == 0 && Contains(used.output, "Glow -> emissive") && Contains(used.output, "Power = 3"), "material-function use failed: " + used.output);
+    const std::optional<kb::render::RenderMaterialAssetData> ball = kb::render::RenderMaterialAssetLoader::LoadMaterial(ballFile);
+    Require(ball.has_value(), "the material must still load");
+    const auto call = std::ranges::find_if(ball->graph.nodes, [](const kb::render::RenderMaterialGraphNode& node) { return node.kind == kb::render::RenderMaterialGraphNodeKind::MaterialFunctionCall; });
+    Require(call != ball->graph.nodes.end() && call->parameter.stableId != "0" && !call->parameter.stableId.empty() && call->customCode.inputs.size() == 3U, "the material must hold a call of the function with its signature");
+    const auto emissive = std::ranges::find_if(ball->graph.links, [&](const kb::render::RenderMaterialGraphLink& link) { return link.fromNodeId == call->id && link.toPin == "emissive"; });
+    const auto base = std::ranges::find_if(ball->graph.links, [](const kb::render::RenderMaterialGraphLink& link) { return link.toPin == "baseColor"; });
+    Require(emissive != ball->graph.links.end() && base != ball->graph.links.end(), "the call must be wired to Emissive and the ball must keep its colour on Base Color");
+    kb::scene::Scene mounted;
+    std::string mountError;
+    Require(kb::cli::MountProjectAssets(mounted, root, mountError), "the project could not be mounted: " + mountError);
+    const kb::render::RenderMaterialGraphFunctionLibrary library = kb::cli::material::FunctionLibraryOf(ball->graph, mounted.Assets().Manager().Registry());
+    kb::render::RenderMaterialGraphBuildContext context;
+    context.functionLibrary = &library;
+    Require(library.entries.size() == 1U && kb::render::CompileRenderMaterialGraphToShaderSource(ball->graph, context).Succeeded(), "the material that calls the function must compile with it");
+    const CommandRun graphShown = Run(&kb::cli::RunMaterialGraphCommand, { "show", "--project", project, "--material", "/Game/Materials/Ball.kbmat" });
+    Require(Contains(graphShown.output, "MaterialFunctionCall 'GlowEdge'") && Contains(graphShown.output, "Compiles: yes"), "material-graph show must compile a material that calls a function: " + graphShown.output);
+    Require(Run(&kb::cli::RunMaterialFunctionCommand, { "use", "--project", project, "--material", "/Game/Materials/Ball2.kbmat", "--function", "/Game/Materials/GlowEdge.kbmatfn", "--set", "Color=#00E5FF" }).exitCode == 0,
+        "the same function must be usable on a second material");
+    Require(Contains(Run(&kb::cli::RunMaterialFunctionCommand, { "show", "--project", project, "--function", "GlowEdge" }).output, "Intensity (float) default 2"), "material-function show must list the inputs");
+    const CommandRun byObject = Run(&kb::cli::RunMaterialFunctionCommand, { "use", "--project", project, "--entity", "Ball2", "--function", "GlowEdge", "--set", "Power=5" });
+    Require(byObject.exitCode == 0 && Contains(byObject.output, "/Game/Materials/Ball2.kbmat calls") && Contains(byObject.output, "Power = 5"), "use --entity must take the material of the object: " + byObject.output);
+
+    for (const std::string_view preset : { "panner", "tiling" }) {
+        const std::string name = std::string{ preset } + "Fn";
+        Require(Run(&kb::cli::RunMaterialFunctionCommand, { "new", "--project", project, "--name", name, "--preset", std::string{ preset } }).exitCode == 0, "material-function new " + std::string{ preset } + " failed");
+        Require(kb::render::RenderMaterialFunctionAssetLoader::LoadFunction(root / "Assets" / "Materials" / (name + ".kbmatfn")).has_value(), "the " + std::string{ preset } + " function must load");
+        const CommandRun uv = Run(&kb::cli::RunMaterialFunctionCommand, { "use", "--project", project, "--material", "/Game/Materials/Ball2.kbmat", "--function", name });
+        Require(uv.exitCode == 0 && Contains(uv.output, "UV -> customizedUv0"), "using " + std::string{ preset } + " failed: " + uv.output);
+    }
+    Require(Contains(Run(&kb::cli::RunMaterialGraphCommand, { "show", "--project", project, "--material", "/Game/Materials/Ball2.kbmat" }).output, "Compiles: yes"), "a material with three function calls must compile");
+
+    const std::string untouched = readText(ballFile);
+    for (const std::vector<std::string>& bad : std::vector<std::vector<std::string>>{ { "new", "--name", "../Escape", "--preset", "panner" }, { "new", "--name", "NUL", "--preset", "panner" },
+             { "new", "--name", "Swirl", "--preset", "swirl" }, { "new", "--name", "NoPreset" }, { "new", "--name", "GlowEdge", "--preset", "panner" },
+             { "new", "--name", "Out1", "--preset", "panner", "--folder", "Config" }, { "new", "--name", "Out2", "--preset", "panner", "--folder", "Assets/../Outside" },
+             { "use", "--material", "/Game/Materials/Ball.kbmat", "--function", "Nobody" }, { "use", "--material", "/Game/Materials/Ball.kbmat", "--function", "GlowEdge", "--set", "Bogus=1" },
+             { "use", "--material", "/Game/Materials/Ball.kbmat", "--function", "GlowEdge", "--to", "nowhere" }, { "use", "--material", "/Game/Materials/Ball.kbmat", "--function", "GlowEdge", "--set", "Color=notacolor" },
+             { "use", "--material", "/Game/Materials/Nobody.kbmat", "--function", "GlowEdge" }, { "use", "--material", (parent / "Obcy" / "Assets" / "Materials" / "X.kbmat").string(), "--function", "GlowEdge" },
+             { "use", "--entity", "Main Camera", "--function", "GlowEdge" }, { "use", "--entity", "Nobody", "--function", "GlowEdge" }, { "use", "--function", "GlowEdge" },
+             { "show", "--function", "/Game/Materials/Ball.kbmat" } }) {
+        std::vector<std::string> words{ bad.front(), "--project", project };
+        words.insert(words.end(), bad.begin() + 1, bad.end());
+        Require(Run(&kb::cli::RunMaterialFunctionCommand, words).exitCode != 0, "a bad function request must be refused: " + bad.back());
+    }
+    Require(readText(ballFile) == untouched, "a refused use must leave the material as it was");
+    Require(!std::filesystem::exists(parent / "Outside") && !std::filesystem::exists(parent / "Escape.kbmatfn") && std::filesystem::file_size(foreignScene) == foreignSize, "a refused function command must write nothing outside the project");
+    const std::string refusedFunction = mcp("material-function", "\"new\",\"--name\",\"Out\",\"--preset\",\"panner\",\"--folder\",\"../Outside\"");
+    Require(Contains(refusedFunction, "\"isError\":true") && Contains(refusedFunction, "outside the project"), "the agent's tool must refuse a function folder outside the project: " + refusedFunction);
+    kb::cli::ResetCliConfinementForTests();
+    static_cast<void>(ballBefore);
+#endif
+}
+
 void RunCommandCatalogTests() {
     PrepareProject();
     const auto root = TestRoot().string();
@@ -7016,6 +7213,7 @@ int main(int argc, char** argv) {
     RunSuite(RunScriptCommandTests);
     RunSuite(RunWorkshopTests);
     RunSuite(RunStudioAssetCommandTests);
+    RunSuite(RunMotionAndFunctionCommandTests);
     RunSuite(RunEntityComponentCommandTests);
     RunSuite(RunApiCommandTests);
     RunSuite(RunApiCheckCommandTests);

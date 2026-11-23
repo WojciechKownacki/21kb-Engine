@@ -1,6 +1,8 @@
 #include "CliCommands.hpp"
 #include "CliCommon.hpp"
 #include "CliMaterialShared.hpp"
+#include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
+#include <set>
 
 #include "engine/assets/AssetFileName.hpp"
 #include "engine/assets/AssetRegistry.hpp"
@@ -135,6 +137,25 @@ std::optional<ProjectAsset> ProjectAssetFile(
         return std::nullopt;
     }
     return ProjectAsset{ file, "/Game/" + Utf8Text(std::filesystem::path{ inside }.lexically_relative("Assets")) };
+}
+
+kb::render::RenderMaterialGraphFunctionLibrary FunctionLibraryOf(
+    const kb::render::RenderMaterialGraphDocument& graph, const kb::assets::AssetRegistry& registry) {
+    kb::render::RenderMaterialGraphFunctionLibrary library;
+    std::vector<std::uint64_t> pending = kb::render::DiscoverRenderMaterialGraphFunctionDependencies(graph);
+    std::set<std::uint64_t> visited;
+    while (!pending.empty()) {
+        const std::uint64_t assetId = pending.back();
+        pending.pop_back();
+        if (assetId == 0U || !visited.insert(assetId).second) continue;
+        const kb::assets::AssetMetadata* metadata = registry.Find(kb::assets::AssetId{ assetId });
+        if (metadata == nullptr || metadata->type != kb::render::kRenderMaterialFunctionAssetType) continue;
+        const std::optional<kb::render::RenderMaterialFunctionAssetData> loaded = kb::render::RenderMaterialFunctionAssetLoader::LoadFunction(metadata->physicalPath);
+        if (!loaded.has_value()) continue;
+        library.entries.push_back({ metadata->id.value, metadata->contentHash, metadata->virtualPath.generic_string(), loaded->graph });
+        for (const std::uint64_t nested : kb::render::DiscoverRenderMaterialGraphFunctionDependencies(loaded->graph)) pending.push_back(nested);
+    }
+    return library;
 }
 
 TextureResolver ProjectTextureResolver(const kb::assets::AssetRegistry& registry) {

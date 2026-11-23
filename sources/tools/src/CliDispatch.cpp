@@ -725,6 +725,35 @@ R"(  image        Draw a picture into the project and import it, so it is an ass
                the --to object, looking at it, and plays when the scene starts. key: a position and
                rotation at a time (what is not given stays as it is); play: a Lua script on an empty
                object <Name>Player starts the timeline with the scene)
+  material-function A reusable piece of material graph (.kbmatfn) that several materials call: a glowing
+               edge, a scrolling or tiling texture coordinate. `use` adds the call to a material, gives
+               every input a value and wires the output, in one step.
+                 new --project <dir> --name <Name> --preset fresnel-glow|panner|tiling
+                     [--folder Assets/Materials] [--replace]
+                 show --project <dir> --function <path|Name>
+                 use --project <dir> (--entity <Object> | --material /Game/<path>.kbmat) --function <path|Name>
+                     [--set Input=value ...] [--to emissive|customizedUv0|<output>] [--output <Name>]
+                     [--scene <path>]
+               (fresnel-glow has the inputs Color, Power (thin edge = high) and Intensity and the output
+               Glow, wired to Emissive; panner has Speed, tiling has Tiling, both give UV, wired to
+               customizedUv0; a colour is #RRGGBB, a number is 3. The same function can be used on any
+               number of materials; show lists the inputs with their defaults; --entity takes the material the
+               object's Mesh Renderer uses)
+  animation-clip A motion of an object over time as an animation clip (.kbanim): a coin that bobs and
+               spins, a door that opens and closes, something that pulses. The presets do it in one
+               step: the clip, a controller for it and an Animator on the object, playing from the start.
+                 new --project <dir> --name <Name> [--preset bob|spin|open-close|pulse[,...]]
+                     [--entity <Object>] [--seconds 2] [--amount <n>] [--loop yes|no] [--play no]
+                     [--folder Assets/Animation] [--scene <path>] [--replace]
+                 key --project <dir> --clip <path|Name> --time <s> [--entity <Object>] [--position x,y,z]
+                     [--rotation x,y,z] [--scale x,y,z] [--target Child/Path]
+                 show --project <dir> --clip <path|Name>
+                 play --project <dir> --clip <path|Name> --entity <Object> [--scene <path>]
+               (the preset's keys are relative to the object's own place; --amount is the size of one
+               preset: bob height in units, spin or open degrees, pulse share; several presets joined
+               with a comma are played together: bob,spin. key sets one moment by hand: what it does
+               not say stays as the object or the key before has it; play gives the clip a controller
+               and puts an Animator with it on --entity)
   ui-theme     The look of the user interface as a shared UI Theme (.kbtheme): colours, text size,
                rounded corners. A theme has a base style and a Button variant.
                  new --project <dir> --name <Name> [--preset dark|light] [--folder Assets/UI] [--replace]
@@ -904,10 +933,12 @@ constexpr CliCommandDescriptor kCommands[]{
     {"asset", &RunAssetCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
     {"sound", &RunSoundCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
     {"timeline", &RunTimelineCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Envelope},
+    {"animation-clip", &RunAnimationClipCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Envelope},
     {"ui-theme", &RunUiThemeCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Envelope},
     {"localization", &RunLocalizationCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Envelope},
 #if KB_CLI_RENDERER
     {"image", &RunImageCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
+    {"material-function", &RunMaterialFunctionCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Envelope},
     {"csg", &RunCsgCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
     {"rig2d", &RunRig2DCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
     {"vector2d-new", &RunVectorShapeNewCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
@@ -935,6 +966,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"vfx-profile", &RunVfxProfileCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Native},
 #else
     {"image", nullptr, CliCommandKind::Normal, false, "", CliJsonOutput::Structured, true},
+    {"material-function", nullptr, CliCommandKind::Normal, false, "", CliJsonOutput::Envelope},
     {"csg", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured, true},
     {"rig2d", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured, true},
     {"vector2d-new", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured, true},
