@@ -108,6 +108,18 @@ struct EditorAgentConversation {
     std::map<std::filesystem::path, std::filesystem::file_time_type> projectFiles;
     std::filesystem::file_time_type requestStart{};
     EditorAgentUsage usage;
+    // What the running agent process has reported in total: some agents' result totals count every turn
+    // of their process, so each turn adds only the part that is new. Starts again with a new process.
+    EditorAgentUsage processTotals;
+    // The tokens each step of the current request has used so far, by the agent's id of the step, so a
+    // request can be held to a budget while it runs (the totals above arrive only when it ends). Only an
+    // agent that reports its steps' usage fills it.
+    std::map<std::string, std::uint64_t> stepTokens;
+    [[nodiscard]] std::uint64_t LiveTokens() const noexcept {
+        std::uint64_t total = 0U;
+        for (const auto& step : stepTokens) total += step.second;
+        return total;
+    }
     int scrollFromBottom = 0;
     bool saveDue = false;
     std::chrono::steady_clock::time_point savedAt{};
@@ -143,6 +155,9 @@ public:
     [[nodiscard]] const std::string& Effort() const noexcept { return effort_; }
     void SelectModel(std::string model);
     void SelectEffort(std::string effort);
+    // Whether a choice of agent, model or level is remembered for the next editor session; an
+    // automated run turns it off so it leaves the user's own choice alone.
+    void SetRememberSelection(bool remember) noexcept { rememberSelection_ = remember; }
     [[nodiscard]] EditorAgentMode Mode() const noexcept { return mode_; }
     void SelectMode(EditorAgentMode mode) noexcept { mode_ = mode; }
 
@@ -264,6 +279,7 @@ private:
     int current_ = -1;
     std::string model_;
     std::string effort_;
+    bool rememberSelection_ = true;
     EditorAgentMode mode_ = EditorAgentMode::Agent;
     std::string plan_;
     bool signedIn_ = false;

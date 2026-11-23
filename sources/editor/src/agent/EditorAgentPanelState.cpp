@@ -642,7 +642,7 @@ void EditorAgentPanelState::SelectEffort(std::string effort) {
 
 void EditorAgentPanelState::RememberSelection() const {
     const std::filesystem::path path = SelectionFile();
-    if (path.empty() || Current() == nullptr) {
+    if (!rememberSelection_ || path.empty() || Current() == nullptr) {
         return;
     }
     std::error_code error;
@@ -1207,6 +1207,7 @@ bool EditorAgentPanelState::Send(const EditorAgentWorkspace& workspace) {
     AddRequest(conversation, request, images, workspace.project);
     conversation.turnEnded = false;
     conversation.run = std::make_unique<EditorAgentProcess>();
+    conversation.processTotals = {};
     std::string error;
     if (!conversation.run->Start(agent->executable, arguments, workspace.project, environment,
             persistent ? message : promptInArguments ? std::string{} : wire, error, persistent)) {
@@ -1271,6 +1272,7 @@ void EditorAgentPanelState::AddRequest(EditorAgentConversation& conversation, co
     conversation.attachments.clear();
     conversation.scrollFromBottom = 0;
     conversation.sawError = false;
+    conversation.stepTokens.clear();
     conversation.project = project;
     conversation.projectFiles = ProjectSnapshot(project);
     conversation.requestStart = std::filesystem::file_time_type::clock::now();
@@ -1412,6 +1414,8 @@ void EditorAgentPanelState::ReadStreamJsonEvent(EditorAgentConversation& convers
             Count(usage->Find("cache_creation_input_tokens")) + Count(usage->Find("output_tokens"));
         if (filled > 0U) {
             conversation.usage.contextTokens = filled;
+            // One message arrives as a line per block, each repeating the message's usage: counted once.
+            conversation.stepTokens[StringOf(message->Find("id"))] = filled;
         }
     }
     if ((type == "assistant" || type == "user") && content != nullptr && content->GetKind() == JsonValue::Kind::Array) {
@@ -1447,19 +1451,28 @@ void EditorAgentPanelState::ReadStreamJsonEvent(EditorAgentConversation& convers
             conversation.entries.push_back({ EditorAgentEntryKind::Error, Shorten(StringOf(event.Find("result"))) });
             conversation.sawError = true;
         }
-        // The run's totals: tokens the model processed over all its steps (every step reads the whole
-        // conversation again, mostly from cache) and their cost. The context fill comes from the steps.
+        // The turn's tokens the model processed over all its steps (every step reads the whole conversation
+        // again, mostly from cache) and their cost. The totals reported are those of the whole process, so the
+        // part before this turn is taken off. The context fill comes from the steps.
         if (const JsonValue* models = event.Find("modelUsage"); models != nullptr && models->GetKind() == JsonValue::Kind::Object) {
+            EditorAgentUsage reported;
             for (std::size_t index = 0; index < models->Size(); ++index) {
                 const JsonValue* model = models->At(index);
-                conversation.usage.inputTokens += Count(model->Find("inputTokens")) + Count(model->Find("cacheReadInputTokens")) +
+                reported.inputTokens += Count(model->Find("inputTokens")) + Count(model->Find("cacheReadInputTokens")) +
                     Count(model->Find("cacheCreationInputTokens"));
-                conversation.usage.outputTokens += Count(model->Find("outputTokens"));
-                conversation.usage.costUsd += model->Find("costUSD") != nullptr ? model->Find("costUSD")->AsNumber() : 0.0;
+                reported.outputTokens += Count(model->Find("outputTokens"));
+                reported.costUsd += model->Find("costUSD") != nullptr ? model->Find("costUSD")->AsNumber() : 0.0;
                 if (index == 0U) {
                     conversation.usage.contextWindow = Count(model->Find("contextWindow"));
                 }
             }
+            EditorAgentUsage& before = conversation.processTotals;
+            conversation.usage.inputTokens += reported.inputTokens >= before.inputTokens ? reported.inputTokens - before.inputTokens : reported.inputTokens;
+            conversation.usage.outputTokens += reported.outputTokens >= before.outputTokens ? reported.outputTokens - before.outputTokens : reported.outputTokens;
+            conversation.usage.costUsd += reported.costUsd >= before.costUsd ? reported.costUsd - before.costUsd : reported.costUsd;
+            before.inputTokens = reported.inputTokens;
+            before.outputTokens = reported.outputTokens;
+            before.costUsd = reported.costUsd;
         }
     }
 }
@@ -1504,11 +1517,21 @@ void EditorAgentPanelState::ReadCodexEvent(EditorAgentConversation& conversation
     if (kind == "agent_message") {
         conversation.entries.push_back({ EditorAgentEntryKind::Agent, WithoutMarkdown(StringOf(item->Find("text"))) });
     } else if (kind == "command_execution") {
-        conversation.entries.push_back({ EditorAgentEntryKind::Tool, "$ " + Shorten(StringOf(item->Find("command")), 120U) });
+        EditorAgentEntry entry{ EditorAgentEntryKind::Tool, "$ " + Shorten(StringOf(item->Find("command")), 120U) };
+        const JsonValue* exitCode = item->Find("exit_code");
+        if (StringOf(item->Find("status")) == "failed" || (exitCode != nullptr && exitCode->GetKind() == JsonValue::Kind::Number && exitCode->AsNumber() != 0.0)) {
+            entry.step = EditorAgentStepState::Failed;
+        }
+        conversation.entries.push_back(std::move(entry));
         projectChangedNow_ = TakeProjectChanges(conversation) || projectChangedNow_;
     } else if (kind == "mcp_tool_call") {
-        conversation.entries.push_back({ EditorAgentEntryKind::Tool,
-            DescribeTool("mcp__kb-engine__" + StringOf(item->Find("tool")), item->Find("arguments")) });
+        EditorAgentEntry entry{ EditorAgentEntryKind::Tool,
+            DescribeTool("mcp__kb-engine__" + StringOf(item->Find("tool")), item->Find("arguments")) };
+        const JsonValue* toolError = item->Find("error");
+        if (StringOf(item->Find("status")) == "failed" || (toolError != nullptr && toolError->GetKind() != JsonValue::Kind::Null)) {
+            entry.step = EditorAgentStepState::Failed;
+        }
+        conversation.entries.push_back(std::move(entry));
         projectChangedNow_ = TakeProjectChanges(conversation) || projectChangedNow_;
     } else if (kind == "file_change") {
         std::string files;

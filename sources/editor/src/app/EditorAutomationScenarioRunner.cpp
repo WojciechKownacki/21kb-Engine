@@ -5615,39 +5615,141 @@ ReadScriptValue(
     }
 
     // A request to an installed agent, as the agent bar sends it: open documents saved, the agent
-    // run to its answer, and the scene reloaded when it changed the project.
+    // run to its answer, and the scene reloaded when it changed the project. "model" and "effort"
+    // choose them on the panel (an empty text is the agent's own default). "timeout_seconds" and "max_tokens"
+    // hold one request to a budget: past either the agent is stopped and the request is recorded as over
+    // budget (tokens are counted live for an agent that reports its steps, otherwise when its turn ends). The
+    // files the project had once the request was sent are listed in automation/pre_agent_files.tsv (size and
+    // write time), so a check can tell what the agent made from what the editor wrote itself. The run's measures
+    // (tokens, tool steps, failed steps, seconds, whether it reported an error) are written to
+    // automation/agent_requests.jsonl in the report folder, one line per request, whatever the outcome.
     if (*operation == "agent_request") {
         const auto agentName = StringMember(step, "agent", error);
         const auto text = StringMember(step, "text", error);
-        if (!agentName || !text) return { false, error };
+        const auto model = StringMember(step, "model", error, false);
+        const auto effort = StringMember(step, "effort", error, false);
+        const auto timeoutSeconds = NumberMember(step, "timeout_seconds", error, false);
+        const auto maxTokens = NumberMember(step, "max_tokens", error, false);
+        if (!agentName || !text || !error.empty()) return { false, error };
         EditorAgentPanelState& panel = state.context.AgentPanel();
         panel.Prepare();
+        // A scenario must not change the agent, model or level the person using this machine chose.
+        panel.SetRememberSelection(false);
         int chosen = -1;
         for (std::size_t index = 0; index < panel.Agents().size(); ++index) {
             if (panel.Agents()[index].name == *agentName) chosen = static_cast<int>(index);
         }
         if (chosen < 0) return { false, "agent not installed: " + std::string{ *agentName } };
         panel.SelectAgent(chosen);
+        const EditorAgent& agent = panel.Agents()[static_cast<std::size_t>(chosen)];
+        if (model.has_value()) {
+            if (!model->empty() && std::ranges::find(agent.models, *model) == agent.models.end()) {
+                std::string offered;
+                for (const std::string& name : agent.models) offered += (offered.empty() ? "" : ", ") + name;
+                return { false, "model not offered by " + agent.name + ": " + *model + " (offered: " + (offered.empty() ? "none" : offered) + ")" };
+            }
+            panel.SelectModel(*model);
+        }
+        if (effort.has_value()) {
+            if (!effort->empty() && std::ranges::find(agent.efforts, *effort) == agent.efforts.end()) {
+                return { false, "effort not offered by " + agent.name + ": " + *effort };
+            }
+            panel.SelectEffort(*effort);
+        }
         panel.SetInput(std::string{ *text });
-        if (!state.context.CurrentScenePath().empty() && !state.context.SaveOpenDocuments()) return { false, "open documents could not be saved" };
-        if (!panel.Send(EditorAgentPanelController::Workspace())) return { false, "agent request was not sent" };
+        const std::size_t firstEntry = panel.Active().entries.size();
+        const EditorAgentUsage usageBefore = panel.Active().usage;
+        const auto started = std::chrono::steady_clock::now();
+        // The send button's own path: documents saved, the project's guide for agents written, the request sent.
+        if (!EditorAgentPanelController{ state.context }.SendOrStop()) return { false, "agent request was not sent" };
+        // The project as the editor left it for this request (its guide for agents and sample files are written
+        // while sending). The agent needs seconds to do anything, so the first request's list is taken at once.
+        if (const std::filesystem::path manifest = state.automation.ArtifactRoot() / "pre_agent_files.tsv"; !std::filesystem::exists(manifest)) {
+            std::ofstream list(manifest, std::ios::binary | std::ios::trunc);
+            const std::filesystem::path root = EditorProjectPaths::ProjectRoot();
+            std::error_code walkError;
+            for (std::filesystem::recursive_directory_iterator it(root, walkError), end; !walkError && it != end; it.increment(walkError)) {
+                std::error_code entryError;
+                if (!it->is_regular_file(entryError)) continue;
+                const std::string relative = std::filesystem::relative(it->path(), root, entryError).generic_string();
+                if (relative.starts_with("Saved/")) continue;
+                list << relative << '\t' << it->file_size(entryError) << '\t' << it->last_write_time(entryError).time_since_epoch().count() << '\n';
+            }
+        }
         bool projectChanged = false;
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes{ 15 };
+        const auto deadline = started + std::chrono::seconds{ static_cast<long long>(timeoutSeconds.value_or(900.0)) };
+        bool overTokens = false;
         while (panel.AnyRunning() && std::chrono::steady_clock::now() < deadline) {
             bool changed = false;
             static_cast<void>(panel.Pump(changed));
             projectChanged = projectChanged || changed;
+            if (maxTokens.has_value() && static_cast<double>(panel.Active().LiveTokens()) > *maxTokens) {
+                overTokens = true;
+                break;
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds{ 50 });
         }
+        const bool timedOut = panel.AnyRunning() && !overTokens;
+        if (timedOut || overTokens) panel.Stop();
         bool changed = false;
         static_cast<void>(panel.Pump(changed));
         projectChanged = projectChanged || changed;
-        if (panel.AnyRunning()) return { false, "agent did not finish in 15 minutes" };
-        const auto& entries = panel.Active().entries;
-        std::string last = entries.empty() ? std::string{} : entries.back().text.substr(0, 300);
-        if (panel.Active().sawError) return { false, "agent reported an error: " + last };
+        const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+        const EditorAgentConversation& conversation = panel.Active();
+        std::size_t toolSteps = 0U;
+        std::size_t failedSteps = 0U;
+        std::size_t pictures = 0U;
+        std::string answer;
+        std::string errorText;
+        for (std::size_t index = firstEntry; index < conversation.entries.size(); ++index) {
+            const EditorAgentEntry& entry = conversation.entries[index];
+            if (entry.kind == EditorAgentEntryKind::Tool) {
+                ++toolSteps;
+                if (entry.step == EditorAgentStepState::Failed) ++failedSteps;
+            } else if (entry.kind == EditorAgentEntryKind::Image) {
+                ++pictures;
+            } else if (entry.kind == EditorAgentEntryKind::Agent) {
+                answer = entry.text;
+            } else if (entry.kind == EditorAgentEntryKind::Error && errorText.empty()) {
+                errorText = entry.text;
+            }
+        }
+        const std::uint64_t inputTokens = conversation.usage.inputTokens - usageBefore.inputTokens;
+        const std::uint64_t outputTokens = conversation.usage.outputTokens - usageBefore.outputTokens;
+        // A stopped run reports no totals, so the tokens its steps used count; one that ended is judged by its totals.
+        const std::uint64_t spent = (overTokens || timedOut) ? std::max<std::uint64_t>(inputTokens + outputTokens, conversation.LiveTokens())
+                                                              : inputTokens + outputTokens;
+        overTokens = overTokens || (maxTokens.has_value() && static_cast<double>(spent) > *maxTokens);
+        JsonValue measures = JsonValue::MakeObject();
+        measures.Set("agent", JsonValue::MakeString(agent.name));
+        measures.Set("model", JsonValue::MakeString(panel.Model()));
+        measures.Set("effort", JsonValue::MakeString(panel.Effort()));
+        measures.Set("request", JsonValue::MakeString(std::string{ *text }));
+        measures.Set("seconds", JsonValue::MakeNumber(seconds));
+        measures.Set("inputTokens", JsonValue::MakeNumber(static_cast<double>(inputTokens)));
+        measures.Set("outputTokens", JsonValue::MakeNumber(static_cast<double>(outputTokens)));
+        measures.Set("totalTokens", JsonValue::MakeNumber(static_cast<double>(spent)));
+        measures.Set("costUsd", JsonValue::MakeNumber(conversation.usage.costUsd - usageBefore.costUsd));
+        measures.Set("toolSteps", JsonValue::MakeNumber(static_cast<double>(toolSteps)));
+        measures.Set("failedSteps", JsonValue::MakeNumber(static_cast<double>(failedSteps)));
+        measures.Set("pictures", JsonValue::MakeNumber(static_cast<double>(pictures)));
+        measures.Set("reportedError", JsonValue::MakeBool(conversation.sawError));
+        measures.Set("timedOut", JsonValue::MakeBool(timedOut));
+        measures.Set("overTokenBudget", JsonValue::MakeBool(overTokens));
+        measures.Set("error", JsonValue::MakeString(errorText));
+        measures.Set("answer", JsonValue::MakeString(answer));
+        {
+            std::ofstream measuresFile(state.automation.ArtifactRoot() / "agent_requests.jsonl", std::ios::binary | std::ios::app);
+            measuresFile << measures.Dump() << '\n';
+        }
+        const std::string last = answer.substr(0, 300);
+        if (timedOut) return { false, "budget: the agent did not finish in time" };
+        if (overTokens) return { false, "budget: the request used " + std::to_string(spent) + " tokens" };
+        if (conversation.sawError) return { false, "agent reported an error: " + (errorText.empty() ? last : errorText.substr(0, 300)) };
         if (projectChanged && !state.context.ReloadSceneAfterExternalChange()) return { false, "scene was not reloaded" };
-        state.automation.Trace("agent_request", true, std::string{ projectChanged ? "changed " : "unchanged " } + last);
+        state.automation.Trace("agent_request", true, std::string{ projectChanged ? "changed " : "unchanged " } + last +
+            " | tokens " + std::to_string(inputTokens + outputTokens) + ", steps " + std::to_string(toolSteps) +
+            ", failed " + std::to_string(failedSteps) + ", seconds " + std::to_string(static_cast<int>(seconds)));
         return { true, last };
     }
 

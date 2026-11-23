@@ -96,6 +96,38 @@ struct Preset {
     EditorAgent agent;
 };
 
+// The models a CLI lists in its cache: the "slug" of each entry of "models", in the file's order, without the
+// entries the file marks as hidden. Empty when the file is missing or unreadable, so the CLI's own default stays.
+[[nodiscard]] std::vector<std::string> ListedModels(const std::filesystem::path& file) {
+    std::vector<std::string> slugs;
+    std::ifstream stream(file, std::ios::binary);
+    if (!stream) {
+        return slugs;
+    }
+    std::ostringstream text;
+    text << stream.rdbuf();
+    kb::core::JsonValue document;
+    std::string error;
+    if (!kb::core::JsonValue::Parse(text.str(), document, error)) {
+        return slugs;
+    }
+    const kb::core::JsonValue* models = document.Find("models");
+    if (models == nullptr || models->GetKind() != kb::core::JsonValue::Kind::Array) {
+        return slugs;
+    }
+    for (std::size_t index = 0; index < models->Size(); ++index) {
+        const kb::core::JsonValue* model = models->At(index);
+        const kb::core::JsonValue* slug = model != nullptr ? model->Find("slug") : nullptr;
+        const kb::core::JsonValue* visibility = model != nullptr ? model->Find("visibility") : nullptr;
+        if (slug == nullptr || slug->GetKind() != kb::core::JsonValue::Kind::String || slug->AsString().empty() ||
+            (visibility != nullptr && visibility->GetKind() == kb::core::JsonValue::Kind::String && visibility->AsString() == "hide")) {
+            continue;
+        }
+        slugs.push_back(slug->AsString());
+    }
+    return slugs;
+}
+
 [[nodiscard]] std::vector<Preset> Presets() {
     std::vector<Preset> presets;
     {
@@ -164,7 +196,10 @@ struct Preset {
             "-c", "mcp_servers.kb-engine.default_tools_approval_mode=\"approve\"", "-" };
         agent.statusArguments = { "login", "status" };
         agent.signInArguments = { "login" };
-        // The model stays the one in the user's Codex configuration; only the effort is offered.
+        // The models come from the CLI's own cache when the agent is detected; with none chosen the model stays the
+        // one in the user's configuration. The choice is passed for a new run and when a thread resumes.
+        agent.modelArguments = { "-m", "{model}" };
+        agent.modelsFile = "models_cache.json";
         agent.efforts = { "minimal", "low", "medium", "high" };
         agent.effortArguments = { "-c", "model_reasoning_effort=\"{effort}\"" };
         agent.output = EditorAgentOutputFormat::CodexJson;
@@ -287,6 +322,9 @@ std::vector<EditorAgent> DetectEditorAgents() {
             if (!agent.sessionRecords.empty()) {
                 agent.sessionRecords = (folder.empty() ? HomeFolder() / preset.profileFolder : folder) / agent.sessionRecords;
             }
+            if (!agent.modelsFile.empty() && agent.models.empty()) {
+                agent.models = ListedModels((folder.empty() ? HomeFolder() / preset.profileFolder : folder) / agent.modelsFile);
+            }
             agents.push_back(std::move(agent));
         }
         // Local models: Codex runs against Ollama when it is installed, with no account at all.
@@ -296,6 +334,8 @@ std::vector<EditorAgent> DetectEditorAgents() {
             local.profile = "default";
             local.executable = *executable;
             local.statusArguments.clear();
+            local.models.clear();
+            local.modelArguments.clear();
             local.efforts.clear();
             local.effortArguments.clear();
             local.runArguments.insert(local.runArguments.end(), { "--oss", "--local-provider", "ollama" });

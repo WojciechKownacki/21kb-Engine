@@ -54,6 +54,9 @@ struct EditorAgent {
     // {model} in modelArguments receives the choice; nothing is passed for the default.
     std::vector<std::string> models;
     std::vector<std::string> modelArguments;
+    // A file in the profile folder where the CLI keeps the models it offers; when `models` is empty the list
+    // is read from it as the agent is detected, so it is the CLI's own and current.
+    std::string modelsFile;
     // Reasoning (effort) levels, lowest first, and how a chosen level is passed ({effort}).
     std::vector<std::string> efforts;
     std::vector<std::string> effortArguments;

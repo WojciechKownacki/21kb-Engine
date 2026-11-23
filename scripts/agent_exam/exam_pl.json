@@ -1,0 +1,74 @@
+{
+  "schema": "21kb.agent-exam/v1",
+  "title": "Core requests in Polish, first set",
+  "tasks": [
+    {
+      "id": "material_on_object", "area": "materials", "tags": ["material", "look"], "template": "Basic3D",
+      "setup": [["entity", "add", "--name", "Skrzynia", "--create", "Cube", "--position", "0,1,0"]],
+      "requests": ["Zrób zielony materiał i nałóż go na skrzynię."],
+      "checks": [
+        {"check": "files", "glob": "Assets/**/*.kbmat", "contains": "baseColor\\s+([0-9.]+)\\s+([0-9.]+)\\s+([0-9.]+)", "expr": "g2 > g1 + 0.2 and g2 > g3 + 0.2", "label": "a green material"},
+        {"check": "entity_show", "name": "Skrzynia", "regex": "material=/Game/", "label": "on the crate"}
+      ]
+    },
+    {
+      "id": "add_physics", "area": "physics", "tags": ["physics", "component"], "template": "Basic3D",
+      "setup": [["entity", "add", "--name", "Skrzynia", "--create", "Cube", "--position", "0,3,0"]],
+      "requests": ["Niech skrzynia spada na podłogę, jak prawdziwy przedmiot. Dodaj jej fizykę."],
+      "checks": [
+        {"check": "entity_show", "name": "Skrzynia", "component": "Rigidbody", "regex": "bodyType=Dynamic", "label": "the crate is a dynamic body"}
+      ]
+    },
+    {
+      "id": "prefab_component", "area": "prefabs", "tags": ["prefab", "component"], "template": "Basic3D",
+      "setup": [["entity", "add", "--name", "Skrzynia", "--create", "Cube", "--position", "0,1,0"]],
+      "requests": ["Zrób ze skrzyni prefab o nazwie SkrzyniaPrefab i dodaj do tego prefabu fizykę."],
+      "checks": [
+        {"check": "files", "glob": "Assets/**/SkrzyniaPrefab.kbprefab", "label": "a prefab with that name"},
+        {"check": "files", "glob": "Assets/**/SkrzyniaPrefab.kbprefab", "contains": "rigidbody", "label": "that has physics"}
+      ]
+    },
+    {
+      "id": "rotate_script", "area": "scripts", "tags": ["script"], "template": "Basic3D",
+      "setup": [["entity", "add", "--name", "Skrzynia", "--create", "Cube", "--position", "0,1,0"]],
+      "requests": ["Ta skrzynia na scenie ma cały czas powoli kręcić się wokół własnej osi."],
+      "checks": [
+        {"check": "files", "glob": "Assets/**/*.lua", "contains": "rotat|euler|Transform", "label": "a new script that turns something"},
+        {"check": "entity_show", "name": "Skrzynia", "regex": "Behaviour: script=/Game/[^ ]*\\.lua", "label": "attached to the crate"},
+        {"check": "run", "frames": 60}
+      ]
+    },
+    {
+      "id": "evening_light", "area": "lights and mood", "tags": ["light", "look"], "template": "Basic3D",
+      "requests": ["Niech będzie wieczór: ciepłe, pomarańczowe światło słońca."],
+      "checks": [
+        {"check": "entity_show", "component": "Light", "regex": "kind=Directional color=([0-9.]+),([0-9.]+),([0-9.]+)", "expr": "g1 > g3 + 0.15", "label": "the sun gets a warm colour"}
+      ]
+    },
+    {
+      "id": "game_name", "area": "game settings", "tags": ["settings"], "template": "Basic3D",
+      "requests": ["Nazwij moją grę Smocze Wzgórza."],
+      "checks": [
+        {"check": "setting", "key": "Identity.GameName", "regex": "Smocze Wz", "label": "the game's name"}
+      ]
+    },
+    {
+      "id": "ui_button", "area": "UI", "tags": ["ui"], "template": "Basic3D",
+      "requests": ["Dodaj na ekran gry przycisk z napisem Graj."],
+      "checks": [
+        {"check": "scene_entities", "component": "Button", "label": "a button"},
+        {"check": "entity_show", "component": "Text", "regex": "Graj", "label": "with the text Graj"},
+        {"check": "validate"}
+      ]
+    },
+    {
+      "id": "walking_character", "area": "3D character", "tags": ["character", "3d"], "template": "Basic3D",
+      "requests": ["Dodaj postać, którą mogę chodzić po scenie, z kamerą za nią."],
+      "checks": [
+        {"check": "scene_entities", "component": "CharacterController", "label": "a walking character"},
+        {"check": "scene_entities", "behaviour": "Character", "label": "with a controller script"},
+        {"check": "run", "frames": 60}
+      ]
+    }
+  ]
+}
