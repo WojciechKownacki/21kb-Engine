@@ -572,7 +572,60 @@ walk, Space jumps, the camera follows from behind.
 - Do not add a second camera or controller by hand: the preset has them.
 )md";
 
-constexpr std::array<ScriptAgentGuide, 19> kGuides{ {
+constexpr std::string_view kRecipeImage = R"md(# Recipe: an icon, a picture, a texture or a sprite sheet
+
+The engine draws it: no outside tool, no file to download.
+
+```
+kb_cli image new --project . --name Heart --preset heart --style neon --color "#FF2D6F"
+kb_cli entity add --project . --create Image --name HeartIcon
+kb_cli component set --project . --entity HeartIcon --type Image --set imageAssetId=/Game/Images/Heart.png
+```
+
+Done when `image new` prints `imported as` and `component set` prints `updated Image`. The Image goes under a Canvas
+(made when the scene has none). A name that exists is kept: pick a new `--name`, or add `--replace` to draw it again.
+
+- Style words: neon, glowing, cyberpunk, synthwave -> `--style neon` with a bright `--color` (pink #FF2D6F, cyan #00E5FF,
+  green #39FF14, yellow #FFE600, purple #B026FF); flat, cartoon, clean, minimal -> `flat`; soft, glossy, shiny, rounded 3D
+  button -> `soft`; pixel, retro, 8-bit -> `pixel`. "Dark" is a dark `--color` (a panel `#1E2233`, low-poly `#2A2F3A`).
+  `--color2` is a gradient end, the glow of a neon or the core of a flame.
+- `--preset`: heart, star, coin, circle, ring, square, arrow, gem (icons); button, panel (backgrounds, wide); glow (a soft
+  dot); noise, ground, lowpoly (textures that tile; "dark low-poly" is `lowpoly --color "#2A2F3A"`); sky (a gradient); flame.
+- `--size 128` makes a smaller file (16 to 1024, default 256). The file is Assets/Images/<Name>.png.
+- A texture on a 3D object: `kb_cli material-new --name Ground --set "Base Color Texture=/Game/Images/Ground.png"`, then
+  `component set --entity Floor --type MeshRenderer --set material=/Game/Materials/Ground.kbmat`.
+- Fire in 2D: `image new --name Fire --preset flame` (8 frames in a row), `entity add --create "Sprite 2D" --name Fire`, then
+  `component set --entity Fire --type Sprite2D --set imageAssetId=/Game/Images/Fire.png --set cellWidth=256 --set cellHeight=256
+  --set frameCount=8 --set framesPerSecond=12` (the cell is the `--size`).
+- Show the person: `kb_cli capture --out Saved/Agent/Images/<new name>.png`.
+)md";
+
+constexpr std::string_view kRecipeSound = R"md(# Recipe: a sound effect or a music loop
+
+The engine makes it with its own synthesiser: no outside tool, no file to download.
+
+```
+kb_cli sound new --project . --name Jump --preset jump
+```
+
+Done when it prints `imported as`. The file is Assets/Audio/<Name>.wav, used as `/Game/Audio/Jump.wav`. A name that
+exists is kept: pick a new `--name`, or add `--replace`.
+
+- Presets: jump, coin (also pickup), hit, explosion, click, laser, powerup, footstep; wind (ambient) and music loop.
+- `--pitch 5` moves it up five semitones (negative is lower; 12 is an octave); `--length 0.5` sets the seconds.
+- Play it from a script: `Audio.Play("/Game/Audio/Jump.wav")`, for example in `function Tick(self, dt)` when
+  `Input.Pressed("Jump")`; guide `scripts` has the keys.
+- Play it in the scene, on start or as a loop:
+
+```
+kb_cli entity add --project . --create "Audio Source" --name Ambience
+kb_cli component set --project . --entity Ambience --type AudioSource --set clipAssetId=/Game/Audio/Wind.wav --set autoplay=true --set loop=true
+```
+
+- Check it: `kb_cli run --project . --frames 60 --report audio` ends with `"succeeded":true`.
+)md";
+
+constexpr std::array<ScriptAgentGuide, 21> kGuides{ {
     { "recipe-material", "Recipe: colour or material", "A colour or material on an object: two commands.", kRecipeMaterial },
     { "recipe-component", "Recipe: physics or a component", "Physics (a falling body) or any component on an object, and how to check it.", kRecipeComponent },
     { "recipe-prefab", "Recipe: prefab", "Save an object, with its components, as a prefab and place copies.", kRecipePrefab },
@@ -581,6 +634,8 @@ constexpr std::array<ScriptAgentGuide, 19> kGuides{ {
     { "recipe-settings", "Recipe: settings, plugins, builds", "The game's name, window, start scene, gravity, plugins and a build for a platform.", kRecipeSettings },
     { "recipe-ui-button", "Recipe: a button", "A button with a label on the screen, and what to add so a click does something.", kRecipeUiButton },
     { "recipe-player", "Recipe: a playable character", "A character the person walks with, with its camera, in one command.", kRecipePlayer },
+    { "recipe-image", "Recipe: an icon, picture or texture", "An icon, UI picture, texture or sprite sheet drawn by the engine, in neon, flat, soft or pixel style.", kRecipeImage },
+    { "recipe-sound", "Recipe: a sound effect or music loop", "A jump, coin, hit, explosion or other sound effect, an ambient or music loop, made by the engine.", kRecipeSound },
     { "objects-and-materials", "Objects and materials", "Shapes, lights and cameras in a scene, their position, materials and colours.", kObjectsAndMaterials },
     { "physics", "Physics", "Rigidbodies, colliders, triggers, character controllers and collision events.", kPhysics },
     { "scripts", "Behaviour scripts", "Write a Lua behaviour, attach it to an entity, expose variables, call the engine.", kScripts },

@@ -23,7 +23,7 @@ int RunRig2DCommand(const ArgumentList&, CommandIo);
 #endif
 namespace {
 
-constexpr std::array<std::string_view, 4U> kUsageParts{
+constexpr std::array<std::string_view, 5U> kUsageParts{
 R"(kb_cli — 21kb Engine headless tooling for developers and AI coding agents
 
 Usage: kb_cli <command> [options]
@@ -691,6 +691,25 @@ R"(  run          Run a scene headless and report logs, events, and errors (the
                  new-folder --project <dir> --path /Game/<folder>
                Refused for a file another asset uses, the startup scene and the scene open in
                the editor (and the folders holding them).
+)",
+R"(  image        Draw a picture into the project and import it, so it is an asset at once: an icon,
+               a UI background, a texture or a sprite sheet. No outside tool is needed.
+                 new --project <dir> --name <Name> --preset <preset> [--style flat|soft|neon|pixel]
+                     [--color #RRGGBB] [--color2 #RRGGBB] [--size 256] [--folder Assets/Images] [--replace]
+               (presets: heart, star, coin, circle, ring, square, arrow, gem - shapes; button, panel -
+               interface backgrounds; noise, ground, lowpoly - textures that tile; sky - a gradient that
+               tiles sideways; glow - a soft dot; flame - a sprite sheet of 8 frames in a row (--size is
+               one frame, up to 512). --color is the main colour, --color2 the
+               second one (a gradient, a glow, a flame's core). The file is Assets/Images/<Name>.png
+               and is used as /Game/Images/<Name>.png: imageAssetId of a UI Image or a Sprite2D)
+  sound        Make a sound with the engine's own synthesiser and import it, so it is an asset
+               at once. No outside tool is needed.
+                 new --project <dir> --name <Name> --preset <preset> [--pitch <semitones>]
+                     [--length <seconds>] [--folder Assets/Audio] [--replace]
+               (presets: jump, coin (or pickup), hit, explosion, click, laser, powerup, footstep, wind
+               and music, which loop. --pitch moves it up or down in semitones (12 is an octave), --length
+               is its duration. The file is Assets/Audio/<Name>.wav, used as /Game/Audio/<Name>.wav:
+               clipAssetId of an Audio Source, or Audio.Play in a script)
   editor       Ask the editor that has the project open to open a scene, or to build the game
                for a platform with its Build Game panel (its settings, keys and tools).
                  open-scene --project <dir> --scene /Game/<path>.21kbscene
@@ -845,7 +864,9 @@ constexpr CliCommandDescriptor kCommands[]{
     {"plugins", &RunPluginsCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
     {"editor", &RunEditorCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
     {"asset", &RunAssetCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
+    {"sound", &RunSoundCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
 #if KB_CLI_RENDERER
+    {"image", &RunImageCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},
     {"csg", &RunCsgCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
     {"rig2d", &RunRig2DCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
     {"vector2d-new", &RunVectorShapeNewCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Structured, true},
@@ -872,6 +893,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"renderer-info", &RunRendererInfoCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Native},
     {"vfx-profile", &RunVfxProfileCommand, CliCommandKind::Normal, true, {}, CliJsonOutput::Native},
 #else
+    {"image", nullptr, CliCommandKind::Normal, false, "", CliJsonOutput::Structured, true},
     {"csg", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured, true},
     {"rig2d", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured, true},
     {"vector2d-new", nullptr, CliCommandKind::Normal, false, {}, CliJsonOutput::Structured, true},

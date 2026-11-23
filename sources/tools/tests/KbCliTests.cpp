@@ -1,5 +1,6 @@
 #include "CliCommands.hpp"
 #include "CliProgram.hpp"
+#include "CliWorkshop.hpp"
 #include "engine/core/JsonValue.hpp"
 
 #include "engine/assets/AssetId.hpp"
@@ -5481,6 +5482,7 @@ struct ChangeProbe {
         { "lighting-quality", line({ "lighting-quality", "--shadows", "low" }), "*", "modified" },
         { "navmesh", line({ "navmesh", "bake", "--scene", "Assets/Level.21kbscene" }), "*", "*" },
         { "ability", line({ "ability", "new", "--name", "Strike" }), "Assets/Abilities/Strike.kbability", "created" },
+        { "sound", line({ "sound", "new", "--name", "Second", "--preset", "click" }), "Assets/Audio/Second.wav", "created" },
         { "asset", line({ "asset", "rename", "--path", "/Game/Abilities/Strike.kbability", "--to", "Strike2" }), "Assets/Abilities/Strike2.kbability", "created" },
         { "project-settings", line({ "project-settings", "--set", "Display.WindowWidth=1024" }), "Config/ProjectSettings.ini", "modified" },
         { "plugins", line({ "plugins", "--enable", "Editor.Terrain" }), "*", "modified" },
@@ -5502,6 +5504,7 @@ struct ChangeProbe {
         { "build", line({ "build", "--out", outside + "/Out", "--engine-root", outside + "/NoEngine" }), "", "" },
         { "capture", line({ "capture", "--scene", "Assets/Missing.21kbscene", "--out", outside + "/shot.png" }), "", "" },
 #if KB_CLI_RENDERER
+        { "image", line({ "image", "new", "--name", "Second", "--preset", "star" }), "Assets/Images/Second.png", "created" },
         { "csg", line({ "csg", "new", "--name", "Second" }), "Assets/Geometry/Second.kbcsg", "created" },
         { "rig2d", line({ "rig2d", "new", "--name", "Second" }), "Assets/Rigs/Second.kbrig2d", "created" },
         { "vector2d-new", line({ "vector2d-new", "--name", "Second" }), "Assets/Shapes/Second.kbvector2d", "created" },
@@ -5646,6 +5649,133 @@ void CheckStructuredCommands() {
         Require(command != nullptr && command->writes && command->json == kb::cli::CliJsonOutput::Structured,
             "'" + probe.command + "' has a change probe, so the table must mark it as writing and structured");
     }
+}
+
+// image new and sound new: every preset writes a valid file of the right size inside the project and imports it, a
+// path or a name that leads out of the project is refused, and the result is a usable asset.
+void RunWorkshopTests() {
+    const std::filesystem::path parent = TestRoot() / "workshop_project";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Studio", "--template", "Basic3D" }).exitCode == 0, "workshop project could not be made");
+    const std::filesystem::path root = parent / "Studio";
+    const std::string project = root.string();
+    const auto readFile = [](const std::filesystem::path& path) {
+        std::ifstream input{ path, std::ios::binary };
+        return std::vector<std::uint8_t>{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+    };
+    const auto be32 = [](const std::vector<std::uint8_t>& bytes, std::size_t at) {
+        return (static_cast<std::uint32_t>(bytes[at]) << 24U) | (static_cast<std::uint32_t>(bytes[at + 1U]) << 16U) | (static_cast<std::uint32_t>(bytes[at + 2U]) << 8U) | bytes[at + 3U];
+    };
+    const auto le32 = [](const std::vector<std::uint8_t>& bytes, std::size_t at) {
+        return static_cast<std::uint32_t>(bytes[at]) | (static_cast<std::uint32_t>(bytes[at + 1U]) << 8U) | (static_cast<std::uint32_t>(bytes[at + 2U]) << 16U) |
+            (static_cast<std::uint32_t>(bytes[at + 3U]) << 24U);
+    };
+
+    // Sounds: every preset (and the alias) writes a mono 16-bit WAV whose size matches its header and is not silent.
+    for (const std::string_view preset : { "jump", "coin", "pickup", "hit", "explosion", "click", "laser", "powerup", "power-up", "footstep", "wind", "music" }) {
+        const std::string name = "S_" + std::string{ preset };
+        const CommandRun made = Run(&kb::cli::RunSoundCommand, { "new", "--project", project, "--name", name, "--preset", std::string{ preset } });
+        Require(made.exitCode == 0 && Contains(made.output, "/Game/Audio/" + name + ".wav"), "sound new " + std::string{ preset } + " failed: " + made.output);
+        const std::vector<std::uint8_t> wav = readFile(root / "Assets" / "Audio" / (name + ".wav"));
+        Require(wav.size() > 44U + 800U && std::string(wav.begin(), wav.begin() + 4) == "RIFF" && std::string(wav.begin() + 8, wav.begin() + 12) == "WAVE", "a sound must be a WAV file: " + name);
+        Require(le32(wav, 16U) == 16U && wav[20] == 1U && wav[22] == 1U && le32(wav, 24U) == 22050U && wav[34] == 16U, "a sound must be mono 16-bit PCM: " + name);
+        Require(le32(wav, 40U) == wav.size() - 44U && le32(wav, 4U) == wav.size() - 8U, "the WAV header must match the file size: " + name);
+        int peak = 0;
+        for (std::size_t at = 44U; at + 1U < wav.size(); at += 2U) peak = std::max(peak, std::abs(static_cast<int>(static_cast<std::int16_t>(wav[at] | (wav[at + 1U] << 8U)))));
+        Require(peak > 4000 && peak <= 32767, "a sound must be audible and not clipped: " + name);
+        Require(std::filesystem::exists(root / "Assets" / "Audio" / (name + ".21kb")), "a sound must be imported: " + name);
+    }
+    // --length sets the duration, --pitch changes the sound, and the usage is checked.
+    Require(Run(&kb::cli::RunSoundCommand, { "new", "--project", project, "--name", "Long", "--preset", "jump", "--length", "0.5" }).exitCode == 0, "sound --length failed");
+    Require(readFile(root / "Assets" / "Audio" / "Long.wav").size() == 44U + static_cast<std::size_t>(0.5 * 22050.0) * 2U, "--length must set the duration");
+    Require(Run(&kb::cli::RunSoundCommand, { "new", "--project", project, "--name", "High", "--preset", "jump", "--pitch", "7" }).exitCode == 0, "sound --pitch failed");
+    Require(readFile(root / "Assets" / "Audio" / "High.wav") != readFile(root / "Assets" / "Audio" / "S_jump.wav"), "--pitch must change the sound");
+    const CommandRun badPreset = Run(&kb::cli::RunSoundCommand, { "new", "--project", project, "--name", "Bad", "--preset", "banjo" });
+    Require(badPreset.exitCode != 0 && Contains(badPreset.output, "presets:") && Contains(badPreset.output, "jump"), "an unknown sound preset must list the presets: " + badPreset.output);
+    Require(Run(&kb::cli::RunSoundCommand, { "new", "--project", project, "--name", "S_jump", "--preset", "jump" }).exitCode != 0, "an existing sound must not be overwritten");
+    const CliRun again = RunCliProgram({ "sound", "new", "--project", project, "--name", "S_jump", "--preset", "jump", "--replace" });
+    Require(again.exitCode == 0, "sound --replace must draw it again: " + again.out + again.err);
+
+    // Nothing leaves the project: the name is a plain name and the folder is inside Assets.
+    for (const std::string& bad : { std::string{ "../Escape" }, std::string{ "a/b" }, std::string{ "a\\b" }, std::string{ "..\\Escape" }, std::string{}, std::string{ "CON" }, std::string{ "nul" }, std::string{ "Com1" } }) {
+        const CommandRun refused = Run(&kb::cli::RunSoundCommand, { "new", "--project", project, "--name", bad, "--preset", "click" });
+        Require(refused.exitCode != 0 && Contains(refused.output, "--name"), "a name that is a path must be refused: " + bad + ": " + refused.output);
+    }
+    const std::filesystem::path outside = parent / "Outside";
+    for (const std::string& folder : { outside.string(), std::string{ "Assets/../Outside" }, std::string{ "Source" }, std::string{ "/Game/../../Outside" } }) {
+        const CommandRun refused = Run(&kb::cli::RunSoundCommand, { "new", "--project", project, "--name", "Out", "--preset", "click", "--folder", folder });
+        Require(refused.exitCode != 0, "a folder outside Assets must be refused: " + folder + ": " + refused.output);
+    }
+    Require(!std::filesystem::exists(outside) && !std::filesystem::exists(parent / "Escape.wav") && !std::filesystem::exists(root / "Source" / "Out.wav"), "a refused sound must write nothing");
+
+    // The sound is an asset a component takes.
+    Require(Run(&kb::cli::RunEntityCommand, { "add", "--project", project, "--create", "Audio Source", "--name", "Music" }).exitCode == 0, "audio source could not be added");
+    const CommandRun used = Run(&kb::cli::RunComponentCommand, { "set", "--project", project, "--entity", "Music", "--type", "AudioSource", "--set", "clipAssetId=/Game/Audio/S_coin.wav" });
+    Require(used.exitCode == 0, "a made sound must be usable as a clip: " + used.output);
+
+#if KB_CLI_RENDERER
+    constexpr std::array<std::string_view, 16U> kPresets{ "heart", "star", "coin", "circle", "ring", "square", "arrow", "gem", "button", "panel", "sky", "noise", "ground", "lowpoly", "glow", "flame" };
+    for (const std::string_view preset : kPresets) {
+        for (const std::string_view style : { "flat", "neon" }) {
+            const std::string name = "I_" + std::string{ preset } + "_" + std::string{ style };
+            const CommandRun made = Run(&kb::cli::RunImageCommand, { "new", "--project", project, "--name", name, "--preset", std::string{ preset }, "--style", std::string{ style }, "--size", "64" });
+            Require(made.exitCode == 0 && Contains(made.output, "/Game/Images/" + name + ".png"), "image new " + name + " failed: " + made.output);
+            const std::vector<std::uint8_t> png = readFile(root / "Assets" / "Images" / (name + ".png"));
+            const std::uint32_t expectedWidth = preset == "flame" ? 64U * 8U : 64U;
+            const std::uint32_t expectedHeight = preset == "button" ? 21U : preset == "panel" ? 48U : 64U;
+            Require(png.size() > 100U && png[0] == 0x89 && png[1] == 'P' && png[2] == 'N' && png[3] == 'G' && be32(png, 16U) == expectedWidth && be32(png, 20U) == expectedHeight,
+                "an image must be a PNG of the right size: " + name);
+            // The file ends with the PNG's own end chunk: no padding after it (readers that walk the chunks fail on it).
+            Require(png.size() >= 12U && be32(png, png.size() - 8U) == 0x49454E44U && be32(png, png.size() - 12U) == 0U, "a PNG must end with its IEND chunk: " + name);
+            Require(std::filesystem::exists(root / "Assets" / "Images" / (name + ".21kb")), "an image must be imported: " + name);
+        }
+    }
+    // Pictures are drawn, not empty, in every style.
+    std::string drawError;
+    for (const std::string_view preset : kPresets) {
+        for (const std::string_view style : { "flat", "soft", "neon", "pixel" }) {
+            kb::cli::workshop::ImageRequest request;
+            request.preset = std::string{ preset };
+            request.style = std::string{ style };
+            request.size = 64;
+            const std::optional<kb::cli::workshop::Bitmap> bitmap = kb::cli::workshop::RenderImage(request, drawError);
+            Require(bitmap.has_value() && bitmap->rgba.size() == static_cast<std::size_t>(bitmap->width) * bitmap->height * 4U, "RenderImage failed for " + request.preset + " " + request.style + ": " + drawError);
+            std::size_t visible = 0U;
+            for (std::size_t at = 3U; at < bitmap->rgba.size(); at += 4U) visible += bitmap->rgba[at] > 40U ? 1U : 0U;
+            Require(visible > bitmap->rgba.size() / 4U / 20U, "a picture must not be empty: " + request.preset + " " + request.style);
+        }
+    }
+    kb::cli::workshop::ImageRequest heart;
+    heart.preset = "heart";
+    heart.size = 64;
+    const std::optional<kb::cli::workshop::Bitmap> heartBitmap = kb::cli::workshop::RenderImage(heart, drawError);
+    Require(heartBitmap.has_value() && heartBitmap->rgba[3] == 0U && heartBitmap->rgba[(32U * 64U + 32U) * 4U + 3U] == 255U, "a shape must be clear around and solid in the middle");
+    Require(Run(&kb::cli::RunImageCommand, { "new", "--project", project, "--name", "Red", "--preset", "heart", "--color", "#FF0000" }).exitCode == 0, "image --color failed");
+    for (const std::vector<std::string>& bad : std::vector<std::vector<std::string>>{ { "--preset", "teapot" }, { "--preset", "heart", "--style", "wet" }, { "--preset", "heart", "--color", "red" },
+             { "--preset", "heart", "--size", "5" }, { "--preset", "heart", "--size", "99999" }, { "--preset", "flame", "--size", "1024" } }) {
+        std::vector<std::string> words{ "new", "--project", project, "--name", "Bad" };
+        words.insert(words.end(), bad.begin(), bad.end());
+        const CommandRun refused = Run(&kb::cli::RunImageCommand, words);
+        Require(refused.exitCode != 0, "a bad image request must be refused: " + refused.output);
+    }
+    Require(Run(&kb::cli::RunImageCommand, { "new", "--project", project, "--name", "../Escape", "--preset", "heart" }).exitCode != 0, "an image name that is a path must be refused");
+    for (const std::string& folder : { outside.string(), std::string{ "Assets/../Outside" }, std::string{ "Config" } }) {
+        const CommandRun refused = Run(&kb::cli::RunImageCommand, { "new", "--project", project, "--name", "Out", "--preset", "star", "--folder", folder });
+        Require(refused.exitCode != 0, "an image folder outside Assets must be refused: " + folder + ": " + refused.output);
+    }
+    Require(!std::filesystem::exists(outside) && !std::filesystem::exists(parent / "Escape.png"), "a refused image must write nothing");
+    Require(Run(&kb::cli::RunImageCommand, { "new", "--project", project, "--name", "I_heart_neon", "--preset", "heart" }).exitCode != 0, "an existing image must not be overwritten");
+    const CliRun againImage = RunCliProgram({ "image", "new", "--project", project, "--name", "I_heart_neon", "--preset", "heart", "--style", "soft", "--replace" });
+    Require(againImage.exitCode == 0, "image --replace must draw it again: " + againImage.out + againImage.err);
+
+    // The picture is an asset a UI Image takes.
+    Require(Run(&kb::cli::RunEntityCommand, { "add", "--project", project, "--create", "Image", "--name", "HeartIcon" }).exitCode == 0, "ui image could not be added");
+    const CommandRun placed = Run(&kb::cli::RunComponentCommand, { "set", "--project", project, "--entity", "HeartIcon", "--type", "Image", "--set", "imageAssetId=/Game/Images/I_heart_neon.png" });
+    Require(placed.exitCode == 0, "a made image must be usable as a UI image: " + placed.output);
+    const CommandRun shown = Run(&kb::cli::RunEntityCommand, { "show", "--project", project, "--name", "HeartIcon" });
+    Require(Contains(shown.output, "imageAssetId=/Game/Images/I_heart_neon"), "the UI image must keep the picture: " + shown.output);
+#endif
 }
 
 void RunCommandCatalogTests() {
@@ -6717,6 +6847,7 @@ int main(int argc, char** argv) {
     RunSuite(RunProjectTemplateTests);
     RunSuite(RunSceneNewCommandTests);
     RunSuite(RunScriptCommandTests);
+    RunSuite(RunWorkshopTests);
     RunSuite(RunEntityComponentCommandTests);
     RunSuite(RunApiCommandTests);
     RunSuite(RunApiCheckCommandTests);

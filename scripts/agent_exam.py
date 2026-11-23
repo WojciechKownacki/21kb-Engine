@@ -37,7 +37,7 @@ setting must be new or changed against the fresh project, default true):
                   (a scene path; "*" for every scene of the project; the startup scene when absent)
   entity_show     an entity's values from `kb_cli entity show`: filters of scene_entities plus "regex" / "expr"
   files           files by "glob" (or a list of them, from the project folder): "contains" regex, "expr", "max_count",
-                  "non_blank_picture"
+                  "non_blank_picture", "magic" (the file starts with these bytes, hex), "min_bytes"
   setting         a project setting "key": "equals" | "one_of" | "regex", numbers compared as numbers
   plugin          "id" and "enabled"
   run             `kb_cli run`: "frames", "clean" (no diagnostics, default true), "output_matches" (regexes)
@@ -390,6 +390,12 @@ class Judge:
             paths = [path for path in paths if self.baseline_files.get(path) != self.project.files().get(path) or path.startswith("Saved/")]
         matching = []
         for path in paths:
+            if check.get("magic") is not None:
+                magic = bytes.fromhex(check["magic"])
+                if (self.project.folder / path).read_bytes()[:len(magic)] != magic:
+                    continue
+            if check.get("min_bytes") is not None and (self.project.folder / path).stat().st_size < check["min_bytes"]:
+                continue
             if check.get("contains") is not None:
                 text = (self.project.folder / path).read_text(encoding="utf-8", errors="replace")
                 if not text_matches(text, check["contains"], check.get("expr")):

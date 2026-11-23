@@ -152,7 +152,7 @@ struct Preset {
             "--append-system-prompt",
             "You work inside the 21kb editor on the open project. Keep the request small: AGENTS.md says where things are. "
             "Start with the recipe for your job (kb-engine guide tool, topic recipe-material, recipe-component, recipe-prefab, "
-            "recipe-script, recipe-light, recipe-settings, recipe-ui-button or recipe-player) and run its commands in order. "
+            "recipe-script, recipe-light, recipe-settings, recipe-ui-button, recipe-player, recipe-image or recipe-sound) and run its commands in order. "
             "Change scenes, entities, components and assets with the kb-engine tools (kb_cli runs any command); "
             "do not run shell commands or parse the project's binary files. "
             "Do the whole task yourself: the user does not run commands or change settings by hand. "

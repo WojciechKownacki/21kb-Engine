@@ -58,10 +58,12 @@ order and stop when its check passes. Do not read the scene, the settings or oth
 - game name, window, start scene, plugins, a build: `recipe-settings`
 - a button or a menu: `recipe-ui-button`
 - a character the person plays, with its camera: `recipe-player`
+- an icon, sprite, texture or other picture (neon, flat, pixel): `recipe-image`
+- a sound effect or music loop (jump, coin, hit, explosion): `recipe-sound`
 
 Anything else: guides `objects-and-materials`, `physics`, `scripts`, `menus-and-buttons`, `ui-audio-particles`,
-`water-and-look` (water, fog, post effects), `characters-and-animation`, `combat-and-ai`, `maps-2d`, `terrain`,
-`verify`. Script API, one page per group, function and component: `api_reference` with a `topic` or a `search`.
+`water-and-look`, `characters-and-animation`, `combat-and-ai`, `maps-2d`, `terrain`,
+`verify`. Script API: `api_reference` with a `topic` or a `search`.
 
 ## Rules
 
@@ -71,7 +73,7 @@ Anything else: guides `objects-and-materials`, `physics`, `scripts`, `menus-and-
 - `kb_cli help <command>` prints one command's options; `kb_cli scene-list` the objects of the startup scene;
   `kb_cli entity show --name <Name>` one object's values; `kb_cli schema --component <Name>` a component's properties.
 - `Assets/` is the game, mounted as `/Game/`. Delete, rename or move files with `kb_cli asset delete|rename|move`
-  (`--path /Game/<file>`, `--to`), never by hand; remove only what you made.
+  never by hand; remove only what you made.
 - To show the person a new scene: `kb_cli editor open-scene --scene /Game/<path>.21kbscene`; how a scene looks:
   `kb_cli capture --out Saved/Agent/Images/<new name>.png` (the editor shows the picture).
 - Finish scripts with `kb_cli validate <script>` and `kb_cli run --frames 120`: done when it ends with
@@ -80,8 +82,8 @@ Anything else: guides `objects-and-materials`, `physics`, `scripts`, `menus-and-
 
 // The AGENTS.md files earlier versions of this engine wrote, recognised by their exact bytes
 // (FNV-1a 64), so an untouched copy is brought up to date while one a person edited is kept.
-constexpr std::array<std::string_view, 6> kPreviousAgentsTemplateHashes{ "6927ba90de51399a", "66098609d17a66fa", "17571d731424f80b", "60b10d36fecf3d23",
-    "db0742a5e69a4b90", "0998d780309d6bfd" };
+constexpr std::array<std::string_view, 7> kPreviousAgentsTemplateHashes{ "6927ba90de51399a", "66098609d17a66fa", "17571d731424f80b", "60b10d36fecf3d23",
+    "db0742a5e69a4b90", "0998d780309d6bfd", "a7d1c056fb759f2b" };
 
 // Claude Code reads CLAUDE.md, not AGENTS.md; this one line imports it.
 constexpr std::string_view kClaudeTemplate = "@AGENTS.md\n";

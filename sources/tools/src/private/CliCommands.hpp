@@ -109,6 +109,10 @@ namespace kb::cli {
 [[nodiscard]] int RunPluginsCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunEditorCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunAssetCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunSoundCommand(const ArgumentList& arguments, CommandIo io);
+#if KB_CLI_RENDERER
+[[nodiscard]] int RunImageCommand(const ArgumentList& arguments, CommandIo io);
+#endif
 // From now on every command of this process may only name files and folders inside `projectRoot`: a path
 // anywhere else (absolute, with .., or through a link that leads out) refuses the command before it runs.
 // Reading a source to import and looking at the engine's code stay allowed. The MCP server, through which

@@ -69,6 +69,23 @@
         {"check": "scene_entities", "behaviour": "Character", "label": "with a controller script"},
         {"check": "run", "frames": 60}
       ]
+    },
+    {
+      "id": "neon_heart_icon", "area": "art", "tags": ["art", "ui"], "template": "Basic3D",
+      "requests": ["Zrób neonową ikonę serca i postaw ją jako obrazek w interfejsie."],
+      "checks": [
+        {"check": "files", "glob": "Assets/**/*.png", "magic": "89504e470d0a1a0a", "min_bytes": 500, "non_blank_picture": true,
+         "label": "a new PNG picture inside Assets"},
+        {"check": "entity_show", "component": "Image", "regex": "imageAssetId=/Game/\\S+\\.(png|21kb)", "label": "a UI Image that shows it"},
+        {"check": "validate"}
+      ]
+    },
+    {
+      "id": "jump_sound", "area": "sound", "tags": ["sound", "art"], "template": "Basic3D",
+      "requests": ["Dodaj dźwięk skoku do projektu."],
+      "checks": [
+        {"check": "files", "glob": "Assets/**/*.wav", "magic": "52494646", "min_bytes": 2000, "label": "a new WAV sound inside Assets"}
+      ]
     }
   ]
 }
