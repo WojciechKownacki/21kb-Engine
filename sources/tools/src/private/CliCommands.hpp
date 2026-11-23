@@ -125,6 +125,8 @@ void AddProjectLuaGlobals(kb::script::ScriptApiCatalog& catalog, const std::file
 [[nodiscard]] int RunUiThemeCommand(const ArgumentList& arguments, CommandIo io);
 // pickup: a coin the player collects by touching it, with a counter on the screen, in one step (CliPickupCommand.cpp).
 [[nodiscard]] int RunPickupCommand(const ArgumentList& arguments, CommandIo io);
+// recipe: ready recipes for games, systems and bricks, listed, shown and run as one transaction (CliRecipes.cpp).
+[[nodiscard]] int RunRecipeCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunLocalizationCommand(const ArgumentList& arguments, CommandIo io);
 #if KB_CLI_RENDERER
 [[nodiscard]] int RunImageCommand(const ArgumentList& arguments, CommandIo io);

@@ -23,7 +23,7 @@ namespace {
 
 constexpr std::string_view kUsage =
     "usage: kb_cli pickup new --project <dir> [--name Coin] [--count 1] [--position x,y,z] [--player Player] [--label Coins]\n"
-    "                         [--with-player yes] [--scene <path>]\n";
+    "                         [--with-player yes] [--side-view yes] [--scene <path>]\n";
 
 [[nodiscard]] bool IsName(std::string_view text) {
     return !text.empty() && std::isalpha(static_cast<unsigned char>(text.front())) != 0 &&
@@ -40,7 +40,7 @@ constexpr std::string_view kUsage =
 }
 
 int New(const ArgumentList& arguments, CommandIo io) {
-    static constexpr std::array<std::string_view, 8> kAllowed{ "--project", "--name", "--count", "--position", "--player", "--label", "--with-player", "--scene" };
+    static constexpr std::array<std::string_view, 9> kAllowed{ "--project", "--name", "--count", "--position", "--player", "--label", "--with-player", "--side-view", "--scene" };
     const std::vector<std::string> unknown = arguments.UnknownOptions(kAllowed);
     const std::optional<std::string> project = arguments.Option("--project");
     if (!unknown.empty() || !project.has_value()) {
@@ -52,6 +52,7 @@ int New(const ArgumentList& arguments, CommandIo io) {
     const std::string label = arguments.Option("--label").value_or(name + "s");
     const std::string position = arguments.Option("--position").value_or("0,1,3");
     const std::optional<std::string> scene = arguments.Option("--scene");
+    const bool sideView = arguments.Option("--side-view").value_or("no") == "yes";
     const std::string countText = arguments.Option("--count").value_or("1");
     const int count = countText.size() <= 2U && std::ranges::all_of(countText, [](char c) { return std::isdigit(static_cast<unsigned char>(c)) != 0; }) ? std::atoi(countText.c_str()) : 0;
     double start[3]{};
@@ -102,13 +103,21 @@ int New(const ArgumentList& arguments, CommandIo io) {
     if (arguments.Option("--with-player").value_or("no") == "yes") {
         operations.push_back(onScene({ "entity", "add", "--create", "Third Person Player", "--position", "0,1,0" }));
     }
-    // Coin, Coin2, Coin3, ... in a row along Z, 1.2 units apart. Each is a flat disc whose trigger zone is wider and taller than it
-    // (1.8 by 1 by 1.8 units), so a player passing near it still touches it; all of them share the one script.
+    // Coin, Coin2, Coin3, ... in a row along Z (along X in a side view), 1.2 units apart. Each is a flat disc whose trigger zone is wider and
+    // taller than it (1.8 by 1 by 1.8 units), so a player passing near it still touches it; all of them share the one script. In a side view
+    // a coin is a ball with a 2D circle trigger instead, which is what a 2D character touches.
     std::vector<std::string> coins;
     for (int index = 1; index <= count; ++index) {
         coins.push_back(index == 1 ? name : name + std::to_string(index));
         std::ostringstream place;
-        place << start[0] << ',' << start[1] << ',' << start[2] + 1.2 * (index - 1);
+        const double along = 1.2 * (index - 1);
+        place << start[0] + (sideView ? along : 0.0) << ',' << start[1] << ',' << start[2] + (sideView ? 0.0 : along);
+        if (sideView) {
+            operations.push_back(onScene({ "entity", "add", "--create", "Sphere", "--name", coins.back(), "--position", place.str(), "--scale", "0.6,0.6,0.2", "--color", "#F5B921" }));
+            operations.push_back(onScene({ "component", "remove", "--entity", coins.back(), "--type", "Collider" }));
+            operations.push_back(onScene({ "component", "add", "--entity", coins.back(), "--type", "Collider2D", "--set", "shape=Circle", "--set", "isTrigger=true", "--set", "radius=0.8" }));
+            continue;
+        }
         operations.push_back(onScene({ "entity", "add", "--create", "Cylinder", "--name", coins.back(), "--position", place.str(), "--scale", "0.6,0.1,0.6", "--color", "#F5B921" }));
         operations.push_back(onScene({ "component", "set", "--entity", coins.back(), "--type", "Collider", "--set", "shape=Box", "--set", "trigger=true", "--set", "boxSize.x=3", "--set", "boxSize.y=10", "--set", "boxSize.z=3" }));
     }

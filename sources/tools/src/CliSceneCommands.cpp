@@ -197,6 +197,30 @@ namespace {
     return summary;
 }
 
+// The node called `text`, or the one at the path Parent/Child when the name alone is not enough (two nodes may share a name).
+[[nodiscard]] std::optional<std::uint32_t> FindNodeByNameOrPath(std::span<const kb::scene::ScenePrefabNodeDesc> nodes, const std::string& text) {
+    for (std::uint32_t index = 0U; index < nodes.size(); ++index) {
+        if (nodes[index].name == text) return index;
+    }
+    std::vector<std::string> parts;
+    for (std::size_t start = 0U; start <= text.size();) {
+        const std::size_t slash = text.find('/', start);
+        parts.push_back(text.substr(start, slash == std::string::npos ? std::string::npos : slash - start));
+        start = slash == std::string::npos ? text.size() + 1U : slash + 1U;
+    }
+    if (parts.size() < 2U) return std::nullopt;
+    for (std::uint32_t index = 0U; index < nodes.size(); ++index) {
+        std::uint32_t at = index;
+        bool matches = true;
+        for (std::size_t part = parts.size(); part-- > 0U && matches;) {
+            matches = at != kb::scene::ScenePrefabNodeDesc::NoParent && nodes[at].name == parts[part];
+            if (matches) at = nodes[at].parentNode;
+        }
+        if (matches) return index;
+    }
+    return std::nullopt;
+}
+
 struct SceneFileResolution {
     bool succeeded = false;
     std::filesystem::path path;
@@ -425,11 +449,8 @@ int RunSceneAttachCommand(const ArgumentList& arguments, CommandIo io) {
 
     kb::scene::ScenePrefabNodeDesc* target = nullptr;
     const std::span<const kb::scene::ScenePrefabNodeDesc> nodes = loaded.document.worldPrefab.Nodes();
-    for (std::size_t index = 0U; index < nodes.size(); ++index) {
-        if (nodes[index].name == *nodeName) {
-            target = loaded.document.worldPrefab.TryGetMutableNode(static_cast<std::uint32_t>(index));
-            break;
-        }
+    if (const std::optional<std::uint32_t> found = FindNodeByNameOrPath(nodes, *nodeName)) {
+        target = loaded.document.worldPrefab.TryGetMutableNode(*found);
     }
     if (target == nullptr) {
         io.err << "error: node '" << *nodeName << "' was not found in the scene; available nodes:";
@@ -510,11 +531,8 @@ int RunSceneDetachCommand(const ArgumentList& arguments, CommandIo io) {
     }
     kb::scene::ScenePrefabNodeDesc* target = nullptr;
     const std::span<const kb::scene::ScenePrefabNodeDesc> nodes = loaded.document.worldPrefab.Nodes();
-    for (std::size_t index = 0U; index < nodes.size(); ++index) {
-        if (nodes[index].name == *nodeName) {
-            target = loaded.document.worldPrefab.TryGetMutableNode(static_cast<std::uint32_t>(index));
-            break;
-        }
+    if (const std::optional<std::uint32_t> found = FindNodeByNameOrPath(nodes, *nodeName)) {
+        target = loaded.document.worldPrefab.TryGetMutableNode(*found);
     }
     if (target == nullptr) {
         io.err << "error: node '" << *nodeName << "' was not found in the scene; available nodes:";

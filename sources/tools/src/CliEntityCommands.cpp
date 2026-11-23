@@ -1225,12 +1225,39 @@ void StandOnGround(kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
     return Saved(*session, "placed " + *prefab + " as '" + scene.Entities().Name(entity) + "'", io);
 }
 
+// prefab apply: writes what was changed on a placed copy back to its prefab asset, as the editor's Apply, so every copy has it.
+[[nodiscard]] int PrefabApply(const ArgumentList& arguments, CommandIo io) {
+    const std::optional<std::string> entityName = arguments.Option("--entity");
+    if (!entityName.has_value()) {
+        io.err << "error: prefab apply requires --entity <Name of a placed copy>\n";
+        return 1;
+    }
+    const SceneSessionPtr session = OpenScene(arguments, io);
+    if (!session) return 1;
+    kb::scene::Scene& scene = *session->scene;
+    const std::optional<kb::scene::SceneEntity> entity = FindEntity(scene, *entityName, io);
+    if (!entity.has_value()) return 1;
+    const kb::scene::ScenePrefabInstanceHandle instance = scene.Prefabs().RootInstance(*entity);
+    if (!instance.IsValid()) {
+        io.err << "error: '" << *entityName << "' is not a copy of a prefab (prefab place makes one)\n";
+        return 1;
+    }
+    // The prefab's own file is written too: what is applied in memory only would be gone when the command ends.
+    const std::filesystem::path file = scene.Prefabs().SourcePath(scene.Prefabs().SourcePrefab(instance));
+    if (file.empty() || !scene.Prefabs().ApplyOverrides(instance, file)) {
+        io.err << "error: the changes of '" << *entityName << "' could not be written to its prefab\n";
+        return 1;
+    }
+    return Saved(*session, "applied the changes of '" + *entityName + "' to its prefab", io);
+}
+
 [[nodiscard]] int RunPrefabAction(const ArgumentList& arguments, CommandIo io) {
     const std::vector<std::string>& positionals = arguments.Positionals();
     const std::string action = positionals.empty() ? std::string{} : positionals.front();
     if (action == "new") return PrefabNew(arguments, io);
     if (action == "place") return PrefabPlace(arguments, io);
-    io.err << "error: prefab expects new or place\n";
+    if (action == "apply") return PrefabApply(arguments, io);
+    io.err << "error: prefab expects new, place or apply\n";
     return 1;
 }
 
@@ -1777,6 +1804,11 @@ void PrintEntity(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::os
         if (!ApplySettings(scene, *entity, *type, arguments, io)) return 1;
         NoteEntity(io, *session, *entity, false, ui->displayName);
         return Saved(*session, (action == "add" ? "added " : "updated ") + std::string{ ui->displayName } + " on '" + *entityName + "'", io);
+    }
+    // --if-missing: a recipe's component goes on an object that may have it already; the one it has stays as it is.
+    if (action == "add" && arguments.Flag("--if-missing") && kb::scene::SceneComponentAuthoring::Has(scene, *entity, *type)) {
+        io.out << "kept the " << *type << " that '" << *entityName << "' already has\n";
+        return 0;
     }
     if (action == "add") {
         const kb::scene::SceneComponentAddResult added =

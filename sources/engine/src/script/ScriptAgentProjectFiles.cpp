@@ -38,7 +38,7 @@ Tools: `kb_cli` runs a command (`args`: its words, one per item; the project is 
 
 Several commands in one call, all or nothing: `commands` is a list of such `args` lists.
 
-Start with the recipe for the job (`guide`, topic `recipe-<job>`; AGENTS.md names them), run its commands in order, stop when its check passes. Read no other guides or the scene first.
+Start with `guide` and `search`, the customer's own words: it returns the best recipe, material or how-to. A game, a system (camera, health, menu) or a brick (walk, jump) is made by `kb_cli recipe run <id>`, on new objects or on one the project has (`--entity`, `--prefab`); other recipes are `recipe-<job>` guides (AGENTS.md names them). Run its commands in order, stop when its check passes; read nothing else first.
 
 Done means the recipe's check passed: `validate` says OK, `run` ends with `0 diagnostics`, or the recipe's line appears.
 
@@ -61,13 +61,13 @@ Several: `[["entity","add","--create","Cube","--name","Crate","--body","Dynamic"
 
 Fetch one with `guide`. Its commands go in one `commands` call as written; its check (`validate`, `run`, `capture`) in a call of its own after.
 
-- colour, material, a ready look (gold, glass, neon, lava, toon): `recipe-material`
+- colour, material, a ready look (gold, lava): `recipe-material`, `recipe-material-look`
 - physics, any component: `recipe-component`
 - a prefab: `recipe-prefab`
-- a Lua script on an object (spin, follow, keys, touch): `recipe-script`
-- coins or pickups the player touches: `recipe-pickup`
+- a Lua script on an object: `recipe-script`
+- coins the player touches: `recipe-pickup`
 - light, sun, sky, time of day: `recipe-light`
-- game name, window, plugins, scenes in the build, tags, a build: `recipe-settings`
+- settings, plugins, scenes in the build, tags, a build: `recipe-settings`
 - a button, a menu: `recipe-ui-button`
 - a playable character: `recipe-player`
 - an icon, sprite, texture: `recipe-image`
@@ -75,8 +75,8 @@ Fetch one with `guide`. Its commands go in one `commands` call as written; its c
 - an intro, a camera flight: `recipe-timeline`
 - the look of the interface: `recipe-ui-theme`
 - other languages: `recipe-translate`
-- a motion that plays alone (a door): `recipe-animation`
-- outline, glow through walls, water, many-layer terrain: `recipe-outline`, `recipe-water`, `recipe-terrain-layers`
+- a motion that plays alone: `recipe-animation`
+- outline, water, terrain: `recipe-outline`, `recipe-water`, `recipe-terrain-layers`
 - a reusable material effect: `recipe-material-function`
 - a saved score: `recipe-save`
 - a character that walks around obstacles: `recipe-navmesh`
@@ -89,8 +89,8 @@ Fetch one with `guide`. Its commands go in one `commands` call as written; its c
 
 - `help` lists the commands, `help <command>` shows one's options; `scene-list` the objects, `entity show --name <Name>` one object's values, `schema --component <Name>` a component's.
 - `Assets/` is the game, mounted as `/Game/`. Delete, rename or move files with `asset delete|rename|move`, never by hand.
-- To see the scene (asked how it looks, or the output is not enough): `capture` returns the picture (`--view overview`, `--camera <Name>`).
-- In an open editor: `editor play` starts the game, `editor capture` takes its view, `editor frames` its frame rate, `editor stop` stops it. No editor open: `run` and `capture`.
+- To see the scene: `capture` returns the picture (`--view overview`, `--camera <Name>`).
+- Open editor: `editor play|capture|frames|stop`. Otherwise `run` and `capture`.
 )md";
 
 
@@ -101,7 +101,7 @@ Fetch one with `guide`. Its commands go in one `commands` call as written; its c
 
 // The AGENTS.md files earlier versions of this engine wrote, recognised by their exact bytes
 // (FNV-1a 64), so an untouched copy is brought up to date while one a person edited is kept.
-constexpr std::array<std::string_view, 12> kPreviousAgentsTemplateHashes{ "132ae7440ab3a246", "6927ba90de51399a", "66098609d17a66fa", "17571d731424f80b", "60b10d36fecf3d23",
+constexpr std::array<std::string_view, 13> kPreviousAgentsTemplateHashes{ "bc50f7b572c0041b", "132ae7440ab3a246", "6927ba90de51399a", "66098609d17a66fa", "17571d731424f80b", "60b10d36fecf3d23",
     "db0742a5e69a4b90", "0998d780309d6bfd", "a7d1c056fb759f2b", "74fed88885ab70b9", "4fde4e67de726331", "d684704d66224830", "eeb7b26fb1eac53f" };
 
 // Claude Code reads CLAUDE.md, not AGENTS.md; this one line imports it.

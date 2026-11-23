@@ -38,6 +38,7 @@
 #if KB_CLI_RENDERER
 void RunMaterialAgentTests();  // KbCliMaterialAgentTests.cpp
 #endif
+void RunRecipeTests();  // KbCliRecipeTests.cpp
 
 namespace {
 
@@ -499,6 +500,7 @@ void RunAgentPackTests() {
     RunCaptureDescriptionTests();
     RunMaterialAgentTests();
 #endif
+    RunRecipeTests();
     RunCaptureNamingTests();
     RunUndoCommandTests();
     RunRepeatedFailureTests();

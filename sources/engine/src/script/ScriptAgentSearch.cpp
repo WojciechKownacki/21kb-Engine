@@ -7,8 +7,13 @@
 namespace kb::script {
 namespace {
 
-constexpr std::array<std::string_view, 30> kFillerWords{ "a", "an", "the", "of", "for", "with", "and", "or", "to", "in", "on", "my", "me", "i", "it", "that", "this",
-    "is", "are", "make", "want", "need", "some", "like", "when", "then", "look", "looks", "effect", "material" };
+constexpr auto kFillerWords = std::to_array<std::string_view>({ "a", "an", "the", "of", "for", "with", "and", "or", "to", "in", "on", "my", "me", "i", "it", "that", "this",
+    "is", "are", "make", "want", "need", "some", "like", "when", "then", "look", "looks", "effect", "material",
+    // Polish: what the customer says round the thing they mean.
+    "gra", "gry", "gre", "chce", "chcialbym", "zrob", "zrobic", "mam", "ma", "po", "ktory", "ktora", "ktore", "moja", "moj", "moje", "typu", "jak", "sie", "na", "do", "ze",
+    "dla", "czy", "zeby", "ale", "game", "games",
+    // English function words that say nothing about the job.
+    "can", "could", "should", "would", "will", "be", "been", "have", "has", "get", "where", "what", "how", "which", "who", "does", "if", "by", "at", "as", "from", "you", "your", "we", "they" });
 
 [[nodiscard]] std::string Stem(std::string word) {
     const auto ends = [&](std::string_view tail) { return word.size() > tail.size() + 2U && word.ends_with(tail); };
@@ -27,8 +32,14 @@ constexpr std::array<std::string_view, 30> kFillerWords{ "a", "an", "the", "of",
     return word;
 }
 
+// Whether two words start the same way: one begins the other, or they differ only in their last letters (Polish endings change a
+// word after its stem: platformowa and platformowej, kamera and kamery).
 [[nodiscard]] bool SharesStart(const std::string& left, const std::string& right) {
-    return left.size() >= 4U && right.size() >= 4U && (left.starts_with(right) || right.starts_with(left));
+    if (left.size() < 4U || right.size() < 4U) return false;
+    if (left.starts_with(right) || right.starts_with(left)) return true;
+    std::size_t common = 0U;
+    while (common < left.size() && common < right.size() && left[common] == right[common]) ++common;
+    return common >= 5U && common + 2U >= std::min(left.size(), right.size());
 }
 
 // The plain letter of a Polish letter written in UTF-8 (two bytes), so a customer who types "gora" or "góra" finds the

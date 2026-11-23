@@ -455,7 +455,8 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                  same-named entities made elsewhere)
   component    Add, set or remove a component of an entity.
                  add|set|remove --project <dir> [--scene <path>] --entity <Name>
-                     --type <Component> [--set name=value ...]
+                     --type <Component> [--set name=value ...] [--if-missing]
+                 (--if-missing: add leaves a component the object has as it is)
                  (vectors at once: --set localPosition=0,2,-8; Transform rotation in
                  degrees: --set rotation=35,30,0)
   schema       List the components, one component's properties, or everything.
@@ -468,8 +469,8 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
   guide        Print a short how-to for one kind of task (objects and materials,
                physics, scripts, characters, combat and AI, 2D maps, checking your
                work); without --topic, the list of guides. --search takes the customer's
-               own words and prints the best one to three guides, ready materials and
-               material nodes, each with the command that uses it.
+               own words and prints the best one to three recipes (recipe run), guides, ready
+               materials and material nodes, each with the command that uses it.
                  [--topic <name> | --search "<words>"]
 )",
 R"(  code         Find your way in the engine's own source without reading all of it; read
@@ -562,6 +563,8 @@ R"(  validate     Validate Lua behaviour scripts (syntax + sandbox load) and the
                  place --project <dir> [--scene <path>] --prefab /Game/<path>.kbprefab
                      [--name <Name>] [--parent <Name>] [--position x,y,z] [--rotation x,y,z]
                      [--scale x,y,z] [--look-at x,y,z|<Entity>]
+                 apply --project <dir> [--scene <path>] --entity <Name of a placed copy>
+                     (writes the copy's changes back to its prefab, so every copy has them)
                (scripts spawn copies with World.InstantiatePrefab)
 )",
 R"(  run          Run a scene headless and report logs, events, and errors (the
@@ -844,11 +847,22 @@ R"(  image        Draw a picture into the project and import it, so it is an ass
                in one step: the object with a trigger Collider, a Canvas with a Text, their two Lua
                scripts, the attachment and a validate of both; it takes effect completely or not at all.
                  new --project <dir> [--name Coin] [--count 1] [--position x,y,z] [--player Player] [--label Coins]
-                     [--with-player yes] [--scene <path>]
+                     [--with-player yes] [--side-view yes] [--scene <path>]
                (--player is the name of the object whose touch collects it, as kb_cli scene-list prints it;
                --with-player yes adds the walking Third Person Player first when the scene has none;
+               --side-view yes makes the coins for a side-view 2D game: balls in a row along X with a 2D trigger;
                --count makes that many (Coin, Coin2, ... in a row, 1.2 units apart along Z) sharing the one script;
                --label is the word before the count on the screen)
+  recipe       Ready recipes in three floors: a game (platformer, shooter ...) is made of systems (camera, health,
+               menu ...), a system of bricks (walk, jump, collect ...). One command makes it as one transaction, on
+               new objects or on an object or prefab the project has, keeping what it already has.
+                 list [--kind game|system|brick]
+                 show <id>
+                 run <id> --project <dir> [--entity <Object> | --prefab /Game/<path>.kbprefab] [--name <Name>]
+                     [--position x,y,z] [--set name=value ...] [--scene <path>] [--dry-run]
+               (guide --search "<the customer's words>" finds the recipe; --set changes a value the recipe shows
+               with show; a script of the project with the same name is never overwritten; a recipe that makes
+               objects of its own cannot go on --entity or --prefab)
   ui-theme     The look of the user interface as a shared UI Theme (.kbtheme): colours, text size,
                rounded corners. A theme has a base style and a Button variant.
                  new --project <dir> --name <Name> [--preset dark|light] [--folder Assets/UI] [--replace]
@@ -977,10 +991,10 @@ bool RejectUnknownOptions(std::string_view command, const ArgumentList& argument
     return true;
 }
 
-constexpr std::array<std::string_view, 25> kFlagNames{
+constexpr std::array<std::string_view, 26> kFlagNames{
     "--full", "--verbose", "--anti-rollback", "--disabled", "--quiet", "--update-baseline", "--require-gpu", "--allow-fallback", "--as-ground", "--no-borders", "--items",
     "--diff", "--list-backups", "--allow-unsigned", "--deny-unsigned", "--replace", "--realtime", "--deterministic", "--all", "--check",
-    "--begin", "--list", "--last", "--accept", "--fresh-saves" };
+    "--begin", "--list", "--last", "--accept", "--fresh-saves", "--if-missing" };
 
 #if KB_CLI_RENDERER
 constexpr bool kRendererAvailable = true;
@@ -1041,6 +1055,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"animation-clip", &RunAnimationClipCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Envelope},
     {"ui-theme", &RunUiThemeCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Envelope},
     {"pickup", &RunPickupCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Envelope},
+    {"recipe", &RunRecipeCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Envelope},
     {"localization", &RunLocalizationCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Envelope},
 #if KB_CLI_RENDERER
     {"image", &RunImageCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},

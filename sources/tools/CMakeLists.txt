@@ -46,6 +46,10 @@ add_library(kb_cli_core STATIC
     src/CliAssetTarget.cpp
     src/CliAnimationClipCommands.cpp
     src/CliPickupCommand.cpp
+    src/CliRecipes.cpp
+    src/CliRecipeBricks.cpp
+    src/CliRecipeSystems.cpp
+    src/private/CliRecipes.hpp
     src/CliCinematicCommands.cpp
     src/CliLocalizationCommands.cpp
     src/CliThemeCommands.cpp
@@ -226,6 +230,7 @@ if(BUILD_TESTING)
         tests/KbCliDebugAdapterTests.cpp
         tests/KbCliPackageTests.cpp
         tests/KbCliAgentTests.cpp
+        tests/KbCliRecipeTests.cpp
     )
 
     target_link_libraries(kb_cli_tests PRIVATE kb_cli_core)

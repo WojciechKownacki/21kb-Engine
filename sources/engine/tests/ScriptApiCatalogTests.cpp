@@ -256,7 +256,7 @@ void RunAgentProjectFilesTest() {
         kb::tests::Require(text.find(kb::script::ScriptAgentProjectFiles::AgentRules()) != std::string::npos &&
                 text.find("`commands`") != std::string::npos && text.find("Done means") != std::string::npos && text.find("Do not repeat the same call") != std::string::npos &&
                 text.find("JavaScript") == std::string::npos && text.find("--project") == std::string::npos &&
-                text.find("A recipe's commands go in one `commands` call") != std::string::npos,
+                text.find("Its commands go in one `commands` call") != std::string::npos,
             "AGENTS.md must hold the shared rules, one example of each call, and no mechanics of one CLI");
         // Nothing shouts: emphasis makes a model apply a rule where it does not belong.
         kb::tests::Require(text.find("MUST") == std::string::npos && text.find("NEVER") == std::string::npos && text.find("ALWAYS") == std::string::npos, "AGENTS.md must use plain words");

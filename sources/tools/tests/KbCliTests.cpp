@@ -7824,6 +7824,7 @@ void RunLanguageServerTests();
 void RunDebugAdapterTests();
 void RunPackageCommandTests();
 void RunAgentPackTests();
+void RunRecipeTests();
 
 // One suite of the full run. The MCP server confines the whole process to the project it serves and keeps that for good, so a suite
 // that follows one for another project would be refused its own files; each suite starts unconfined, as its own process would.
@@ -7865,6 +7866,10 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{argv[1]} == "batch") {
         RunBatchCommandTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{argv[1]} == "recipes") {
+        RunSuite(RunRecipeTests);
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{argv[1]} == "agent-pack") {

@@ -157,8 +157,8 @@ thread_local bool tDiscovery = false;
         });
     if (command.name == "guide") return MakeToolDescriptor(command.mcpTool,
         "Returns a short how-to with the commands that do the job and the check that proves it. Start with the recipe for the job (AGENTS.md names them); "
-        "without a topic, one line per guide; a wrong topic returns the closest ones. `search` takes the customer's own words and returns the "
-        "best one to three guides, ready materials and nodes, each with the command that uses it.",
+        "without a topic, one line per guide; a wrong topic returns the closest ones. `search` takes the customer's own words, in any language, and returns the "
+        "best one to three recipes (a game, a system such as a camera or health, a brick such as walk or jump), guides, ready materials and nodes, each with the command that uses it.",
         {
             ToolProperty{ "topic", "string", "The guide's name, for example recipe-material.", false, "--topic" },
             ToolProperty{ "search", "string", "The customer's words, for example: shiny gold armour, lava that glows, dissolve when it dies.", false, "--search" },

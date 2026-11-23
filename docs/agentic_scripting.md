@@ -254,6 +254,15 @@ one page at a time, so a request stays small:
   a prefab, a Lua script, light and time of day, settings, a button, a playable character, a picture,
   a sound): the exact
   commands in order and how to check the result. `AGENTS.md` is only an index of these.
+- Recipes in three floors, built into `kb_cli` (`kb_cli recipe list`): a **game** (a platformer, a
+  shooter, a racing or puzzle game ...) is made of **systems** (a camera, a player, health, enemies,
+  a menu, a key and a door ...), and a system of **bricks**, each one small job with its Lua script
+  (walk, jump, collect, patrol, a score on the screen ...). `kb_cli recipe run <id> --project <dir>`
+  makes one as a single transaction, on new objects, or with `--entity <Object>` or
+  `--prefab /Game/<path>.kbprefab` on one the project has, keeping what it has: its components, its
+  own scripts, its material, and a script of the project with the same name is never overwritten.
+  `--set name=value` changes a value the recipe shows with `recipe show <id>`. `guide` with `search`
+  takes the customer's own words (any language) and names the best one to three recipes.
 - `.kb/api/` holds the script API as small pages: `README.md` lists the function groups and
   components, and every group, function and component has a page of its own.
 
@@ -374,6 +383,8 @@ the folder.
 | `kb_cli api --project <dir>` | refresh the API reference pages after engine updates |
 | `kb_cli api --topic <name>` / `--search <text>` | print one page of the API reference, or the topics matching a text |
 | `kb_cli guide [--topic <name>]` | print one how-to guide, or the list of them |
+| `kb_cli guide --search "<words>"` | the customer's own words in, the best one to three recipes, guides and ready materials out, each with its command |
+| `kb_cli recipe list\|show\|run` | list the recipes (games, systems, bricks), show one with its values, or run one on new objects, an object (`--entity`) or a prefab (`--prefab`) |
 | `kb_cli script-new --project <dir> --name <Name> --language lua\|cpp` | create a Lua or C++ script from the template (never overwrites); `--code "<Lua text>"` writes a Lua script's whole text instead |
 | `kb_cli image new --project <dir> --name <Name> --preset <preset> [--style flat\|soft\|neon\|pixel] [--color #RRGGBB] [--color2 #RRGGBB] [--size 256]` | draw an icon, a UI background, a texture that tiles, a soft dot or a flame sprite sheet with the engine's own code, write it as a PNG into `Assets/Images` and import it; `--replace` draws an existing one again |
 | `kb_cli image array --project <dir> --name <Name> --layers <preset[:#color[:#color2]]>,... [--size 256]` | draw 2 to 16 pictures with the presets of `image new` and write them as the layers of one 2D array texture (`Assets/Images/<Name>.ktx`), imported, for the layered terrain material (`terrain-layers`) |

@@ -1,5 +1,6 @@
 #include "CliCommands.hpp"
 #include "CliProgram.hpp"
+#include "CliRecipes.hpp"
 #if KB_CLI_RENDERER
 #include "CliMaterialLibrary.hpp"
 #endif
@@ -364,10 +365,11 @@ struct SearchHit {
 [[nodiscard]] int GuideSearch(const std::string& words, CommandIo io) {
     const std::vector<std::string> query = kb::script::SearchWords(words);
     std::vector<SearchHit> hits;
-    // Ready materials and nodes first: at equal score they say more than a guide.
+    // Ready materials and nodes, then recipes, before the guides: at equal score they say more than a guide.
 #if KB_CLI_RENDERER
     for (material::LibraryHit& hit : material::SearchMaterialLibrary(words)) hits.push_back({ hit.score, hit.family, std::move(hit.line), std::move(hit.covered) });
 #endif
+    for (recipes::RecipeHit& hit : recipes::SearchRecipes(words)) hits.push_back({ hit.score, hit.family, std::move(hit.line), std::move(hit.covered) });
     for (const kb::script::ScriptAgentGuide& guide : kb::script::ScriptAgentGuides::All()) {
         const std::vector<std::string> name = kb::script::SearchWords(guide.name);
         const std::vector<std::string> other = kb::script::SearchWords(std::string{ guide.title } + " " + std::string{ guide.summary });
