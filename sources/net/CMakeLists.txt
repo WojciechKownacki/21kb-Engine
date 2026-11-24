@@ -5,6 +5,7 @@ add_library(kb_net STATIC
     include/kb/net/Auth.hpp
     include/kb/net/ByteIO.hpp
     include/kb/net/Host.hpp
+    include/kb/net/NetworkClock.hpp
     include/kb/net/Prediction.hpp
     include/kb/net/ProjectScene.hpp
     include/kb/net/Replication.hpp

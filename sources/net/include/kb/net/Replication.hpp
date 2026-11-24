@@ -480,6 +480,8 @@ public:
     [[nodiscard]] const kb::ecs::World& ReplicaWorld() const noexcept { return *world_; }
     [[nodiscard]] std::vector<NetworkId> ReplicaIds() const;
     [[nodiscard]] bool Ready() const noexcept { return ready_; }
+    // Ticks per second announced by the server in Hello (0 before Hello).
+    [[nodiscard]] std::uint32_t ServerTickRate() const noexcept { return serverTickRate_; }
 
     [[nodiscard]] RpcStatus CallRpc(const std::string& name, std::span<const RpcValue> args);
     void SetRpcHandler(const std::string& name, RpcHandler handler);
@@ -509,6 +511,7 @@ private:
     ReplicationClientStats stats_;
     DiagLog diagnostics_;
     bool ready_ = false;
+    std::uint32_t serverTickRate_ = 0U;
     std::uint32_t latestUpdate_ = 0U;
     std::uint32_t receivedBits_ = 0U; // bit i: update (latestUpdate_ - 1 - i) was received
     bool ackDirty_ = false;

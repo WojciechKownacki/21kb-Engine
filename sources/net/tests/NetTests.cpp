@@ -4,14 +4,18 @@
 
 #include "kb/net/ByteIO.hpp"
 #include "kb/net/Host.hpp"
+#include "kb/net/NetworkClock.hpp"
+#include "kb/net/Prediction.hpp"
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <exception>
 #include <functional>
 #include <memory>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -1676,6 +1680,63 @@ void TestLoopbackNetwork() {
     Require(dropped(5U) == dropped(5U) && dropped(5U) > 40U && dropped(5U) < 160U, "the loss simulation is not deterministic or not near 50%");
 }
 
+void TestClockConvergesWithin2Seconds() {
+    NetworkClock clock;
+    clock.SetTickRate(30U);
+    std::mt19937 rng{ 7U };
+    std::uniform_real_distribution<double> jitter{ 0.0, 0.040 };
+    std::uniform_real_distribution<double> loss{ 0.0, 1.0 };
+    for (std::uint32_t tick = 0U; tick <= 120U; ++tick) {
+        if (loss(rng) < 0.05) continue;
+        const double arrival = static_cast<double>(tick) / 30.0 + 0.050 + jitter(rng);
+        clock.OnState(tick, arrival);
+        if (tick >= 60U) {
+            Require(std::abs(clock.LocalTimeOf(tick) - (static_cast<double>(tick) / 30.0 + 0.050)) <= 0.010, "clock offset error above 10 ms after 2 s");
+        }
+    }
+}
+
+void TestInterpolatedReplicaIsSmoothUnderJitter() {
+    NetworkClock clock;
+    clock.SetTickRate(30U);
+    std::mt19937 rng{ 7U };
+    std::uniform_real_distribution<double> jitter{ 0.0, 0.040 };
+    std::uniform_real_distribution<double> loss{ 0.0, 1.0 };
+    const double v = 5.0;
+    SnapshotInterpolator<double> interp{ [](const double& a, const double& b, double t) { return a + (b - a) * t; }, 0.1 };
+    struct Received {
+        double arrival;
+        std::uint32_t tick;
+    };
+    std::vector<Received> received;
+    for (std::uint32_t tick = 0U; tick <= 120U; ++tick) {
+        if (loss(rng) < 0.05) continue;
+        const double arrival = static_cast<double>(tick) / 30.0 + 0.050 + jitter(rng);
+        received.push_back(Received{ arrival, tick });
+    }
+    std::size_t next = 0U;
+    bool havePrevious = false;
+    double previous = 0.0;
+    const double step = 1.0 / 144.0;
+    for (double local = 1.0; local <= 3.5; local += step) {
+        while (next < received.size() && received[next].arrival <= local) {
+            const std::uint32_t tick = received[next].tick;
+            clock.OnState(tick, received[next].arrival);
+            static_cast<void>(interp.Add(clock.LocalTimeOf(tick), v * static_cast<double>(tick) / 30.0));
+            ++next;
+        }
+        interp.SetDelay(clock.ViewDelaySeconds());
+        const std::optional<double> x = interp.Sample(local);
+        Require(x.has_value(), "the interpolator had no snapshot");
+        if (havePrevious) {
+            Require(std::abs(*x - previous) <= 1.5 * v / 144.0 + 1e-9, "frame-to-frame jump too large");
+        }
+        Require(std::abs(*x - v * (local - clock.ViewDelaySeconds() - 0.050)) <= v / 30.0 + 0.001, "replica strays from its true path");
+        previous = *x;
+        havePrevious = true;
+    }
+}
+
 } // namespace
 
 int main() {
@@ -1683,6 +1744,8 @@ int main() {
         { "every-refusal-named", &TestEveryRefusalIsNamedAndCounted },
         { "diagnostics-rate-limit", &TestDiagLogIsRateLimited },
         { "byte-io", &TestByteIo },
+        { "network-clock-converges", &TestClockConvergesWithin2Seconds },
+        { "network-interpolation-smooth", &TestInterpolatedReplicaIsSmoothUnderJitter },
         { "idle-host-no-allocations", &TestIdleHostDoesNotAllocate },
         { "udp-readiness", &TestUdpWaitReadableWakesOnDatagram },
         { "session-deadlines", &TestSessionDeadlineTracksPendingWork },

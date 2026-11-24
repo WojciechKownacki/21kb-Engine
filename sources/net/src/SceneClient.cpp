@@ -4,6 +4,7 @@
 #include "kb/net/Auth.hpp"
 #include "kb/net/SceneReplication.hpp"
 #include "kb/net/Prediction.hpp"
+#include "kb/net/NetworkClock.hpp"
 #include "kb/net/ScriptBridge.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/Scene.hpp"
@@ -20,10 +21,6 @@
 
 namespace kb::net {
 namespace {
-// A replica of another player's object is shown this long in the past, between two snapshots, so that it moves smoothly although the
-// server sends 30 states a second and they arrive unevenly (three ticks of the default rate).
-constexpr double kInterpolationDelaySeconds = 0.1;
-
 kb::scene::TransformComponent LerpTransform(const kb::scene::TransformComponent& from, const kb::scene::TransformComponent& to, double fraction) {
     const float t = static_cast<float>(fraction);
     kb::scene::TransformComponent result = to;
@@ -190,17 +187,20 @@ struct SceneClient::Impl {
         replication = std::make_unique<ReplicationClient>(*client, scene.Runtime().EcsWorld(), *components, rpcs, replicationConfig);
         script.BindClient(*replication, *client);
         smoothed.clear();
-        serverClock = TickClock{};
+        clock = NetworkClock{};
         auto variablesChanged = replication->SetStateCallback({});
         replication->SetStateCallback([this, variablesChanged = std::move(variablesChanged)](NetworkId id, kb::ecs::Entity entity, std::uint32_t tick) {
             if (variablesChanged) variablesChanged(id, entity, tick);
             const kb::scene::TransformComponent* transform = scene.Runtime().EcsWorld().TryGet<kb::scene::TransformComponent>(entity);
             if (transform == nullptr) return;
+            if (replication->OwnerOf(id) == client->AssignedId()) return; // the player's own replica is not delayed (prediction owns it)
+            clock.SetTickRate(replication->ServerTickRate());
+            clock.OnState(tick, nowSeconds);
             auto found = smoothed.find(id);
             if (found == smoothed.end()) {
-                found = smoothed.emplace(id, SnapshotInterpolator<kb::scene::TransformComponent>{ LerpTransform, kInterpolationDelaySeconds }).first;
+                found = smoothed.emplace(id, SnapshotInterpolator<kb::scene::TransformComponent>{ LerpTransform, clock.ViewDelaySeconds() }).first;
             }
-            static_cast<void>(found->second.Add(ServerTime(tick), *transform));
+            static_cast<void>(found->second.Add(clock.LocalTimeOf(tick), *transform));
         });
         authorized = false;
         disconnected = false;
@@ -234,34 +234,9 @@ struct SceneClient::Impl {
     std::size_t lastReplicas = 0U;
     std::uint64_t mismatches = 0U; // of the sessions that ended
     double nowSeconds = 0.0;
-    // The server's snapshots of each replica, on a clock of the server's ticks: each new tick is stamped where the ticks before it say it should be
-    // (the period read from how fast they come), nudged a tenth of the way towards when it really arrived, so a datagram that came a frame late
-    // does not bunch two snapshots together and a clock that runs a little differently is followed.
+    // Each replica's server snapshots on the network clock, shown ViewDelaySeconds() in the past.
     std::map<NetworkId, SnapshotInterpolator<kb::scene::TransformComponent>> smoothed;
-    struct TickClock {
-        bool started = false;
-        std::uint32_t tick = 0U;
-        double stamp = 0.0;
-        double period = 1.0 / 30.0;
-    } serverClock;
-
-    double ServerTime(std::uint32_t tick) {
-        TickClock& clock = serverClock;
-        if (!clock.started) {
-            clock.started = true;
-            clock.tick = tick;
-            clock.stamp = nowSeconds;
-        }
-        if (tick > clock.tick) {
-            const double steps = static_cast<double>(tick - clock.tick);
-            const double predicted = clock.stamp + steps * clock.period;
-            const double error = nowSeconds - predicted;
-            clock.period = std::clamp(clock.period + 0.02 * error / steps, 0.004, 0.25);
-            clock.stamp = std::max(predicted + 0.1 * error, clock.stamp + 0.0005);
-            clock.tick = tick;
-        }
-        return clock.stamp - static_cast<double>(clock.tick - tick) * clock.period;
-    }
+    NetworkClock clock;
 
     void Smooth() {
         for (auto it = smoothed.begin(); it != smoothed.end();) {
@@ -270,6 +245,7 @@ struct SceneClient::Impl {
                 it = smoothed.erase(it);
                 continue;
             }
+            it->second.SetDelay(clock.ViewDelaySeconds());
             if (const std::optional<kb::scene::TransformComponent> shown = it->second.Sample(nowSeconds)) {
                 scene.Runtime().EcsWorld().Set(entity, *shown);
             }

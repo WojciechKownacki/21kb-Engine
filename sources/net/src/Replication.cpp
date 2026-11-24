@@ -754,6 +754,7 @@ void ReplicationServer::HandleEvent(const NetEvent& event, std::uint64_t nowMill
         writer.U64(components_->Fingerprint());
         writer.U64(rpcs_->Fingerprint());
         writer.U32(lastTick_);
+        writer.U16(static_cast<std::uint16_t>(config_.tickRate));
         static_cast<void>(SendReliable(event.peer, hello));
         break;
     }
@@ -1081,7 +1082,8 @@ void ReplicationClient::HandleHello(std::span<const std::uint8_t> data) {
     const std::uint64_t replication = reader.U64();
     const std::uint64_t rpc = reader.U64();
     static_cast<void>(reader.U32());
-    if (!reader.Ok() || reader.Remaining() != 0U) {
+    const std::uint16_t tickRate = reader.U16();
+    if (!reader.Ok() || reader.Remaining() != 0U || tickRate == 0U) {
         ++stats_.rejectedMalformed;
         return;
     }
@@ -1092,6 +1094,7 @@ void ReplicationClient::HandleHello(std::span<const std::uint8_t> data) {
         return;
     }
     ready_ = true;
+    serverTickRate_ = tickRate;
     helloAckPending_ = true; // sent by Flush, and repeated there until the session takes it
     Flush();
 }

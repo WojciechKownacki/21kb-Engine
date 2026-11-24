@@ -148,6 +148,8 @@ public:
         return snapshots_.back().second;
     }
 
+    void SetDelay(double delaySeconds) noexcept { delay_ = delaySeconds; }
+
     [[nodiscard]] std::size_t Size() const noexcept { return snapshots_.size(); }
 
 private:
