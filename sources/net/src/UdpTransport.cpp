@@ -1,10 +1,34 @@
 #include "kb/net/Transport.hpp"
 
+namespace kb::net {
+
+std::string UdpBufferWarning(const UdpOptions& requested, const SocketBufferSizes& effective) {
+    std::string shortfall;
+    const auto append = [&shortfall](std::uint32_t got, std::uint32_t wanted, const char* name) {
+        if (wanted == 0U || got >= wanted) return;
+        if (!shortfall.empty()) shortfall += ", ";
+        shortfall += std::string(name) + ' ' + std::to_string(got) + " of " + std::to_string(wanted) + " bytes";
+    };
+    append(effective.receiveBytes, requested.receiveBufferBytes, "receive");
+    append(effective.sendBytes, requested.sendBufferBytes, "send");
+    if (shortfall.empty()) return {};
+#if defined(_WIN32)
+    return "socket buffers below the request: " + shortfall;
+#else
+    return "socket buffers below the request: " + shortfall + " (raise net.core.rmem_max and net.core.wmem_max)";
+#endif
+}
+
+} // namespace kb::net
+
 #if defined(__EMSCRIPTEN__)
 
 namespace kb::net {
 
-std::unique_ptr<IDatagramTransport> CreateUdpTransport(Endpoint, std::string& error, UdpOptions) {
+std::unique_ptr<IDatagramTransport> CreateUdpTransport(Endpoint, std::string& error, UdpOptions, SocketBufferSizes* effectiveBuffers) {
+    if (effectiveBuffers != nullptr) {
+        *effectiveBuffers = {};
+    }
     error = "UDP sockets are not available in the browser build";
     return nullptr;
 }
@@ -170,7 +194,8 @@ private:
 
 } // namespace
 
-std::unique_ptr<IDatagramTransport> CreateUdpTransport(Endpoint bindTo, std::string& error, UdpOptions options) {
+std::unique_ptr<IDatagramTransport> CreateUdpTransport(Endpoint bindTo, std::string& error, UdpOptions options,
+    SocketBufferSizes* effectiveBuffers) {
     if (!EnsureNetworkStack()) {
         error = "the network stack could not be started";
         return nullptr;
@@ -222,6 +247,17 @@ std::unique_ptr<IDatagramTransport> CreateUdpTransport(Endpoint bindTo, std::str
         CloseSocket(handle);
         return nullptr;
     }
+    SocketBufferSizes effective;
+    const auto readOption = [handle](int level, int name, std::uint32_t& value) {
+        int got = 0;
+        SocketLength length = static_cast<SocketLength>(sizeof(got));
+        if (getsockopt(handle, level, name, reinterpret_cast<char*>(&got), &length) != 0 || got <= 0) return false;
+        value = static_cast<std::uint32_t>(got);
+        return true;
+    };
+    if (options.receiveBufferBytes != 0U) static_cast<void>(readOption(SOL_SOCKET, SO_RCVBUF, effective.receiveBytes));
+    if (options.sendBufferBytes != 0U) static_cast<void>(readOption(SOL_SOCKET, SO_SNDBUF, effective.sendBytes));
+    if (effectiveBuffers != nullptr) *effectiveBuffers = effective;
     const sockaddr_in address = ToSockaddr(bindTo);
     if (bind(handle, reinterpret_cast<const sockaddr*>(&address), static_cast<SocketLength>(sizeof(address))) != 0) {
         error = "bind() to " + bindTo.ToString() + " failed with code " + std::to_string(LastError());

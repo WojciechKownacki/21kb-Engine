@@ -164,4 +164,11 @@ if(BUILD_TESTING)
     add_test(NAME kb_net_bench_smoke COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/net_bench.py
         --server $<TARGET_FILE:kb_dedicated_server> --bot $<TARGET_FILE:kb_net_bot> --smoke)
     set_tests_properties(kb_net_bench_smoke PROPERTIES TIMEOUT 90 LABELS "network;process;performance")
+
+    # The server runs a real project in the Linux CI job: three bots, the status file and SIGTERM.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_test(NAME kb_net_linux_smoke COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/net_linux_smoke.py
+            --server $<TARGET_FILE:kb_dedicated_server> --bot $<TARGET_FILE:kb_net_bot>)
+        set_tests_properties(kb_net_linux_smoke PROPERTIES TIMEOUT 120 LABELS "network;process")
+    endif()
 endif()

@@ -215,10 +215,10 @@ struct Rig {
 
 void TestEveryRefusalIsNamedAndCounted() {
     DiagLog log;
-    for (std::uint16_t code = 0U; code <= static_cast<std::uint16_t>(DiagCode::UnauthenticatedGuests); ++code) {
+    for (std::uint16_t code = 0U; code <= static_cast<std::uint16_t>(DiagCode::SocketBufferSmall); ++code) {
         log.Report(static_cast<DiagCode>(code), "entity=42 bytes=2048");
     }
-    const auto codeCount = static_cast<std::size_t>(DiagCode::UnauthenticatedGuests) + 1U;
+    const auto codeCount = static_cast<std::size_t>(DiagCode::SocketBufferSmall) + 1U;
     Require(log.Total() == codeCount && log.Entries().size() == codeCount, "diagnostic codes were lost");
     for (std::size_t index = 0U; index < log.Entries().size(); ++index) {
         const DiagEntry& entry = log.Entries()[index];
@@ -1910,6 +1910,25 @@ void TestUdpBroadcastOptionOpens() {
 #endif
 }
 
+void TestUdpBufferSizesAreReadBack() {
+#if !defined(__EMSCRIPTEN__)
+    std::string error;
+    kb::net::SocketBufferSizes effective;
+    const kb::net::UdpOptions requested{ .receiveBufferBytes = 1U << 20U, .sendBufferBytes = 1U << 20U };
+    const auto socket = kb::net::CreateUdpTransport(kb::net::Endpoint::Loopback(0), error, requested, &effective);
+    Require(socket != nullptr, "a sized UDP socket could not be opened: " + error);
+    Require(effective.receiveBytes > 0U && effective.sendBytes > 0U, "the socket did not report its effective buffer sizes");
+    const bool shortfall = effective.receiveBytes < requested.receiveBufferBytes || effective.sendBytes < requested.sendBufferBytes;
+    const std::string warning = kb::net::UdpBufferWarning(requested, effective);
+    Require(warning.empty() != shortfall, "the buffer warning does not match the effective sizes");
+#if !defined(_WIN32)
+    // The kernel cap names the settings an operator has to raise.
+    Require(!shortfall || (warning.find("net.core.rmem_max") != std::string::npos && warning.find("net.core.wmem_max") != std::string::npos),
+        "the buffer warning does not name the kernel settings: " + warning);
+#endif
+#endif
+}
+
 } // namespace
 
 int main() {
@@ -1921,6 +1940,7 @@ int main() {
         { "network-interpolation-smooth", &TestInterpolatedReplicaIsSmoothUnderJitter },
         { "idle-host-no-allocations", &TestIdleHostDoesNotAllocate },
         { "udp-readiness", &TestUdpWaitReadableWakesOnDatagram },
+        { "udp-buffer-sizes", &TestUdpBufferSizesAreReadBack },
         { "session-deadlines", &TestSessionDeadlineTracksPendingWork },
         { "packet-record-capacity", &TestPacketRecordLimitMatchesReceiverCapacity },
         { "config-validation", &TestConfigValidation },

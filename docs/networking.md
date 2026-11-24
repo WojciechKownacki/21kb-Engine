@@ -287,15 +287,27 @@ renderer, steps it at a fixed rate, and replicates it over UDP.
   The scene file contains entities, serialized components and asset references. It does not preserve Lua coroutine stacks, network
   connections or physics solver state. Scripts initialize again after a restart. A save failure exits 1 with `state-save-error`;
   status JSON reports `state_loaded` and `state_saved`. The scene writer uses atomic replacement for the scene payload.
+* **Socket buffers.** The server asks for a 1 MiB `SO_RCVBUF`/`SO_SNDBUF`, because a burst of 300 clients
+  joining in one tick overflows the 208 KiB default Linux buffer. The startup log prints the sizes the
+  socket actually got back from `getsockopt`; a smaller value is logged and reported as the
+  `SocketBufferSmall` diagnostic, which on Linux names `net.core.rmem_max` and `net.core.wmem_max`.
+* **Linux.** Configure with `-DKB_BUILD_EDITOR=OFF -DKB_BUILD_RENDERER=OFF -DBUILD_TESTING=ON`; `kb_dedicated_server`,
+  `kb_net_bot` and the network test executables build with GCC. `scripts/net_linux_smoke.py --server <kb_dedicated_server>
+  --bot <kb_net_bot>` makes a sample project and keys, runs the server and three bots over real UDP, checks
+  `clients_peak`, the replicated object count and the diagnostics, sends SIGTERM and checks exit code 0 within
+  three seconds and the saved scene checkpoint. ctest registers it as `kb_net_linux_smoke` (labels `network;process`,
+  Linux only); the CI job `Linux dedicated server` builds the targets, runs `ctest -L network` and then the script.
+  On a two-core Linux host in Release, a 50-bot run on a 1000-object scene kept 50 clients for 20 s: the server
+  wrote its port file 0.03 s after start, peaked at 41 MiB resident and used about a third of one core at 30 ticks
+  per second; the socket reported 2 MiB buffers for the 1 MiB request.
 * **Tested.** `kb_dedicated_server_tests` starts the real process and talks to it over real UDP on 127.0.0.1:
   handshake, replication of the scene's entities, RPC both ways and a broadcast, a wrong key and an unknown id,
   600 hostile datagrams, a client dropped by the idle timeout, the client limit, `--max-seconds` and
   `--empty-timeout`, a clean stop by file with exit code 0 and the final JSON, and the command line errors.
   This is the remote process proof the transport needed (A145).
 
-Not done in the server: it replicates the local transform only (no hierarchy, no other component), has no
-player spawning or authority rules of its own (scripts and RPCs would add them), and has not been run on
-Linux.
+Not done in the server: it replicates the local transform only (no hierarchy, no other component), and has no
+player spawning or authority rules of its own (scripts and RPCs would add them).
 
 ## Not done
 
@@ -322,8 +334,9 @@ unknown client, invented MAC, replayed Response from another address, short Conn
 one peer, 20000 random and mutated datagrams into a host and 50000 into a session, disconnect and
 timeout, host capacity, a 30% loss, 15% duplication, 20% reordering network with 200 reliable
 messages each way, two clients on that network with one of them reconnecting from another address
-(which prints a report of loss, round trip time, retransmissions and rejected packets), and a real UDP
-round trip on 127.0.0.1.
+(which prints a report of loss, round trip time, retransmissions and rejected packets), a real UDP
+round trip on 127.0.0.1, and the socket buffer sizes read back from a socket that asks for 1 MiB and the
+warning produced when the kernel caps them.
 
 ## Dedicated-server distribution
 

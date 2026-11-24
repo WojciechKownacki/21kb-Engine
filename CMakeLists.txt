@@ -595,10 +595,12 @@ copy /y lua51.lib \"@kb_luajit_library_native@\" >nul
         target_include_directories(kb_luajit PRIVATE ${kb_luajit_gen_dir})
         target_include_directories(kb_luajit SYSTEM PUBLIC ${kb_luajit_SOURCE_DIR}/src ${kb_luajit_gen_dir})
         target_compile_definitions(kb_luajit PRIVATE LUAJIT_ENABLE_CHECKHOOK _FILE_OFFSET_BITS=64 _LARGEFILE_SOURCE)
-        target_compile_options(kb_luajit PRIVATE -U_FORTIFY_SOURCE -fno-stack-protector -w)
         if(NOT ANDROID)
+            # LuaJIT's own Makefile sets this on Linux; without it errors cannot unwind out of the VM on x64.
+            target_compile_definitions(kb_luajit PRIVATE LUAJIT_UNWIND_EXTERNAL)
             target_link_libraries(kb_luajit PUBLIC m ${CMAKE_DL_LIBS})
         endif()
+        target_compile_options(kb_luajit PRIVATE -U_FORTIFY_SOURCE -fno-stack-protector -w)
     endif()
     add_library(kb_script_vm INTERFACE)
     target_link_libraries(kb_script_vm INTERFACE kb_luajit)

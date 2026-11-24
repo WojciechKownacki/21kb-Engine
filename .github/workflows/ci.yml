@@ -183,6 +183,33 @@ jobs:
       - name: Verify persistence, chunk commits, corruption and ENOSPC
         run: ctest --test-dir build/save-storage --output-on-failure
 
+  linux-dedicated-server:
+    name: Linux dedicated server
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - name: Configure the server build
+        run: |
+          cmake -S . -B build/net -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DKB_BUILD_EDITOR=OFF -DKB_BUILD_RENDERER=OFF -DBUILD_TESTING=ON \
+            -DKB_STRICT_OWN_WARNINGS=ON
+      - name: Build the server, the bot and the network tests
+        run: |
+          # Every executable that `ctest -L network` runs, plus the server and bot the smoke test uses.
+          cmake --build build/net --parallel 4 --target \
+            kb_dedicated_server kb_net_bot kb_net_tests kb_net_replication_tests \
+            kb_net_script_tests kb_net_auth_tests kb_dedicated_server_tests \
+            kb_http_tests kb_net_webrtc_tests
+      - name: Run the network tests
+        run: ctest --test-dir build/net -L network --output-on-failure --no-tests=error
+      - name: Run the dedicated server smoke test
+        run: |
+          python3 scripts/net_linux_smoke.py \
+            --server "$(find build/net -type f -name kb_dedicated_server -perm -u+x | head -n 1)" \
+            --bot "$(find build/net -type f -name kb_net_bot -perm -u+x | head -n 1)"
+
   build-and-test:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}

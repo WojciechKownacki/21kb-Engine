@@ -158,11 +158,13 @@ struct Rig {
         server = std::make_unique<ReplicationServer>(*host, *world, *components, *rpcs, config);
     }
 
+#if defined(KB_NET_WEBRTC)
     [[nodiscard]] static WebRtcConfig RtcConfig() {
         WebRtcConfig config;
         config.bindAddress = "127.0.0.1";
         return config;
     }
+#endif
 
     // A client's transport to the server: a simulated port, or a WebRTC link signaled in memory.
     [[nodiscard]] std::unique_ptr<IDatagramTransport> MakePort(std::uint16_t port) {

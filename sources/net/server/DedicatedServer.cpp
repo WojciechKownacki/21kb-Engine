@@ -361,6 +361,8 @@ bool DedicatedServer::Start(std::string& error) {
     // The listener is opened here: the dedicated server decides between UDP, WebSocket and WebRTC and hands the socket over.
     std::string bindError;
     std::unique_ptr<IDatagramTransport> transport;
+    SocketBufferSizes socketBuffers;
+    std::uint32_t requestedSocketBufferBytes = 0U;
     if (options.webSocketEnabled) {
         WebSocketServerOptions web;
         web.udpBind = Endpoint{address, options.port};
@@ -386,7 +388,11 @@ bool DedicatedServer::Start(std::string& error) {
         }
 #endif
     } else {
-        transport = CreateUdpTransport(Endpoint{address, options.port}, bindError);
+        // A burst of 300 clients in one tick overflows the 208 KiB default Linux buffer, so ask for 1 MiB.
+        constexpr std::uint32_t kSocketBufferBytes = 1U << 20U;
+        const UdpOptions udpOptions{ .receiveBufferBytes = kSocketBufferBytes, .sendBufferBytes = kSocketBufferBytes };
+        transport = CreateUdpTransport(Endpoint{address, options.port}, bindError, udpOptions, &socketBuffers);
+        requestedSocketBufferBytes = kSocketBufferBytes;
     }
     if (transport == nullptr) {
         error = std::string(options.webSocketEnabled ? "the network listener could not be opened: " :
@@ -450,6 +456,16 @@ bool DedicatedServer::Start(std::string& error) {
     s.Log("loaded " + scenePath.filename().generic_string() + " from " + projectRoot.generic_string() + ", " + std::to_string(keyCount) + " client keys");
     s.Log("listening on " + options.bindAddress + ":" + std::to_string(s.summary.port) + ", " + std::to_string(options.tickRate) + " ticks per second, up to " +
         std::to_string(options.maxClients) + " clients");
+    if (requestedSocketBufferBytes != 0U) {
+        s.Log("socket buffers: receive " + std::to_string(socketBuffers.receiveBytes) + " bytes, send " + std::to_string(socketBuffers.sendBytes) +
+            " bytes (requested " + std::to_string(requestedSocketBufferBytes) + " each)");
+        const std::string bufferWarning = UdpBufferWarning(
+            UdpOptions{ .receiveBufferBytes = requestedSocketBufferBytes, .sendBufferBytes = requestedSocketBufferBytes }, socketBuffers);
+        if (!bufferWarning.empty()) {
+            s.network->NetHost().Diagnostics().Report(DiagCode::SocketBufferSmall, bufferWarning);
+            s.Log("warning: " + bufferWarning);
+        }
+    }
     return true;
 }
 

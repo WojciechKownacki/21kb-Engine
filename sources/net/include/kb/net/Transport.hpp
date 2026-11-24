@@ -126,9 +126,22 @@ struct UdpOptions {
     std::uint32_t sendBufferBytes = 0U;    // SO_SNDBUF when nonzero
 };
 
+// The buffer sizes a UDP socket actually got, read back with getsockopt. A kernel may cap the
+// request (net.core.rmem_max and net.core.wmem_max on Linux); the effective value shows that.
+struct SocketBufferSizes {
+    std::uint32_t receiveBytes = 0U;
+    std::uint32_t sendBytes = 0U;
+};
+
+// Empty when the socket got at least the requested buffers; otherwise a warning that names the
+// shortfall and, on Linux, the kernel settings to raise.
+[[nodiscard]] std::string UdpBufferWarning(const UdpOptions& requested, const SocketBufferSizes& effective);
+
 // Non-blocking UDP over Winsock or BSD sockets. Returns nullptr and fills `error` when the socket
 // cannot be created or bound, or on a platform without sockets (the browser build). Port 0 asks the
-// system for a free port; LocalEndpoint() then reports the one that was chosen.
-[[nodiscard]] std::unique_ptr<IDatagramTransport> CreateUdpTransport(Endpoint bindTo, std::string& error, UdpOptions options = {});
+// system for a free port; LocalEndpoint() then reports the one that was chosen. When
+// `effectiveBuffers` is not null it receives the sizes the socket ended up with.
+[[nodiscard]] std::unique_ptr<IDatagramTransport> CreateUdpTransport(Endpoint bindTo, std::string& error, UdpOptions options = {},
+    SocketBufferSizes* effectiveBuffers = nullptr);
 
 } // namespace kb::net
