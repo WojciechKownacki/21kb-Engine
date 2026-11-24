@@ -771,6 +771,108 @@ void TestScriptJoinRequestIsRefusedByName() {
         "a second join before the update was accepted");
 }
 
+void TestHostPlayerSeesGuestAndGuestSeesHostObject() {
+    LoopbackNetwork network;
+    kb::scene::Scene hostScene;
+    const auto object = hostScene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "HostObject" });
+    kb::scene::TransformComponent transform = *hostScene.Transforms().TryGet(object.Entity());
+    transform.localPosition = { 5.0F, 1.0F, -2.0F };
+    hostScene.Transforms().Set(object.Entity(), transform);
+    SceneNetwork host(hostScene, SceneNetworkOptions{
+        .defaults = {},
+        .transport = [](std::string&) -> std::unique_ptr<IDatagramTransport> { return nullptr; },
+        .scriptJoin = true,
+        .listen = [&](std::uint16_t port, std::string&) { return network.CreateTransport(Endpoint::Loopback(port)); } });
+    std::string error;
+    Require(host.RequestHost(kb::network::ScriptHostRequest{ .port = 9800U, .maxPlayers = 4U, .password = "pw" }, error),
+        "the host request was refused: " + error);
+    kb::scene::Scene guestScene;
+    std::uint16_t nextPort = 9801U;
+    SceneNetwork guest(guestScene, SceneNetworkOptions{
+        .defaults = {},
+        .transport = [&](std::string&) { return network.CreateTransport(Endpoint::Loopback(nextPort++)); } });
+    SceneClientOptions join;
+    join.server = Endpoint::Loopback(9800);
+    join.joinPassword = "pw";
+    Require(guest.RequestJoin(join, error), "the guest join was refused: " + error);
+    std::ostringstream diagnostics;
+    std::uint64_t now = 0U;
+    for (int i = 0; i < 600 && !(guest.Connected() && guest.ReplicaCount() == 1U); ++i) {
+        now += 10U;
+        network.Advance(now);
+        Require(host.Update(now, diagnostics), diagnostics.str());
+        Require(guest.Update(now, diagnostics), diagnostics.str());
+    }
+    auto* hostRuntime = kb::script::ScriptNetApi::Attached(hostScene);
+    auto* guestRuntime = kb::script::ScriptNetApi::Attached(guestScene);
+    Require(hostRuntime != nullptr && hostRuntime->Mode() == kb::network::ScriptNetMode::Host, "the host scene is not in the host mode");
+    Require(hostRuntime->PlayerCount() == 2U,
+        "the host does not count its own player and the guest: players=" + std::to_string(hostRuntime->PlayerCount()) + " guestConnected=" +
+            std::to_string(guest.Connected()) + " replicas=" + std::to_string(guest.ReplicaCount()) + " " + diagnostics.str());
+    Require(hostRuntime->LocalPlayerId() == 1U, "the host's player id is not 1");
+    Require(guestRuntime != nullptr && guestRuntime->Mode() == kb::network::ScriptNetMode::Client, "the guest scene is not a client");
+    Require(guest.Connected() && guest.ReplicaCount() == 1U, "the guest did not see the host's object");
+    Require(guestRuntime->LocalPlayerId() > 1U, "the guest was not assigned a player id above the host's");
+}
+
+void TestHostLeaving() {
+    LoopbackNetwork network;
+    kb::scene::Scene hostScene;
+    const auto object = hostScene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "HostObject" });
+    static_cast<void>(object);
+    SceneNetwork host(hostScene, SceneNetworkOptions{
+        .defaults = {},
+        .transport = [](std::string&) -> std::unique_ptr<IDatagramTransport> { return nullptr; },
+        .listen = [&](std::uint16_t port, std::string&) { return network.CreateTransport(Endpoint::Loopback(port)); } });
+    std::string error;
+    Require(host.RequestHost(kb::network::ScriptHostRequest{ .port = 9810U, .maxPlayers = 4U, .password = "pw" }, error),
+        "the host request was refused: " + error);
+    kb::scene::Scene guestScene;
+    std::uint16_t nextPort = 9811U;
+    SceneNetwork guest(guestScene, SceneNetworkOptions{
+        .defaults = {},
+        .transport = [&](std::string&) { return network.CreateTransport(Endpoint::Loopback(nextPort++)); } });
+    SceneClientOptions join;
+    join.server = Endpoint::Loopback(9810);
+    join.joinPassword = "pw";
+    Require(guest.RequestJoin(join, error), "the guest join was refused: " + error);
+    std::ostringstream diagnostics;
+    std::uint64_t now = 0U;
+    for (int i = 0; i < 600 && !(guest.Connected() && guest.ReplicaCount() == 1U); ++i) {
+        now += 10U;
+        network.Advance(now);
+        Require(host.Update(now, diagnostics), diagnostics.str());
+        Require(guest.Update(now, diagnostics), diagnostics.str());
+    }
+    Require(guest.Connected(), "the guest did not connect before the host left: " + diagnostics.str());
+    host.Leave();
+    for (int i = 0; i < 300 && guest.Connected(); ++i) {
+        now += 10U;
+        network.Advance(now);
+        Require(host.Update(now, diagnostics), diagnostics.str());
+        Require(guest.Update(now, diagnostics), diagnostics.str());
+    }
+    Require(!guest.Connected(), "the guest did not notice that the host left");
+    Require(kb::script::ScriptNetApi::Attached(hostScene)->Mode() == kb::network::ScriptNetMode::Offline, "the host did not return offline");
+}
+
+void TestHostRequestRefusals() {
+    kb::scene::Scene scene;
+    SceneNetwork withoutListener(scene, SceneNetworkOptions{});
+    std::string error;
+    Require(!withoutListener.RequestHost(kb::network::ScriptHostRequest{ .port = 9800U }, error) && error.find("cannot host") != std::string::npos,
+        "hosting without a listener was accepted: " + error);
+    LoopbackNetwork network;
+    kb::scene::Scene hostingScene;
+    SceneNetwork hosting(hostingScene, SceneNetworkOptions{
+        .defaults = {},
+        .transport = [](std::string&) -> std::unique_ptr<IDatagramTransport> { return nullptr; },
+        .listen = [&](std::uint16_t port, std::string&) { return network.CreateTransport(Endpoint::Loopback(port)); } });
+    Require(hosting.RequestHost(kb::network::ScriptHostRequest{ .port = 9820U }, error), "a valid host request was refused: " + error);
+    Require(!hosting.RequestHost(kb::network::ScriptHostRequest{ .port = 9821U }, error) && error.find("already in a session") != std::string::npos,
+        "a second host request was accepted");
+}
+
 // The server side of a token login that answers as the test says; counts the logins it saw.
 struct ScriptedAuthServer {
     explicit ScriptedAuthServer(std::uint16_t port) : socket(network.CreateTransport(Endpoint::Loopback(port))) {
@@ -971,6 +1073,9 @@ int main() {
         { "scene-network-join-leave", &TestSceneNetworkJoinLeaveAndJoinAgain },
         { "scene-server-on-provided-scene", &TestSceneServerRunsOnProvidedScene },
         { "script-join-refusals", &TestScriptJoinRequestIsRefusedByName },
+        { "host-and-guest", &TestHostPlayerSeesGuestAndGuestSeesHostObject },
+        { "host-leaving", &TestHostLeaving },
+        { "host-refusals", &TestHostRequestRefusals },
         { "reconnect-budget-resets", &TestReconnectBudgetResetsAfterSuccess },
         { "token-refusal-kinds", &TestExpiredTokenAllowsRetryDeniedDoesNot },
         { "spawn-despawn-before-drain", &TestSpawnDespawnBeforeDrainDoesNotDeliverStaleSpawn },

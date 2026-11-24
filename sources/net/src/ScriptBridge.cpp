@@ -163,6 +163,18 @@ bool ScriptNetworkRuntime::RequestJoin(const kb::network::ScriptJoinRequest& req
     return join_(request, error);
 }
 
+bool ScriptNetworkRuntime::RequestHost(const kb::network::ScriptHostRequest& request, std::string& error) {
+    if (role_ != Role::Offline) {
+        error = "already in a session";
+        return false;
+    }
+    if (!host_) {
+        error = "this scene has no network";
+        return false;
+    }
+    return host_(request, error);
+}
+
 void ScriptNetworkRuntime::RequestLeave() {
     if (leave_) {
         leave_();

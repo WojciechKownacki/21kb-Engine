@@ -180,10 +180,12 @@ struct SceneClient::Impl {
         config.authorizationRequired = !options.token.empty();
         config.session.timeoutMilliseconds = 5000U;
         config.joinPassword = options.joinPassword;
-        if (options.joinPassword.empty()) {
-            client = std::make_unique<Client>(*transport, config, options.clientId, options.key, options.server, now);
-        } else {
+        // A join without a client id is a script join: it uses the host's password admission, with an empty password when the game has none.
+        config.admission = options.clientId == 0U || !options.joinPassword.empty() ? Admission::JoinPassword : Admission::KeyTable;
+        if (config.admission == Admission::JoinPassword) {
             client = std::make_unique<Client>(*transport, config, options.server, now);
+        } else {
+            client = std::make_unique<Client>(*transport, config, options.clientId, options.key, options.server, now);
         }
         for (const auto& entry : client->Diagnostics().Entries()) {
             diagnostics << DiagName(entry.code) << ": " << entry.detail << '\n';
@@ -281,7 +283,7 @@ kb::ecs::Entity SceneClient::Replica(std::uint64_t networkId) const {
 bool SceneClient::Update(std::uint64_t now, std::ostream& diagnostics) {
     auto& s = *impl_;
     if (!s.initialized) {
-        if ((s.options.clientId == 0U && s.options.joinPassword.empty()) || !s.factory || !SceneTransformCodec{s.options.worldExtent}.Valid() ||
+        if (!s.factory || !SceneTransformCodec{s.options.worldExtent}.Valid() ||
             s.options.token.size() > 1024U || s.options.reconnectAttempts > 10U || s.options.joinPassword.size() > 256U) {
             diagnostics << "network: invalid session settings\n";
             return false;

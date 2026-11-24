@@ -41,6 +41,10 @@ public:
         joinRequest = request;
         return true;
     }
+    bool RequestHost(const kb::network::ScriptHostRequest& request, std::string&) override {
+        hostRequest = request;
+        return true;
+    }
     void RequestLeave() override { ++leaves; }
     bool DeclareRpc(const ScriptRpcDeclaration& declaration, std::string& error) override {
         if (frozen) {
@@ -102,6 +106,7 @@ public:
     std::vector<std::uint64_t> replicated;
     std::map<std::uint64_t, std::uint64_t> owners;
     kb::network::ScriptJoinRequest joinRequest;
+    kb::network::ScriptHostRequest hostRequest;
     std::size_t leaves = 0U;
 };
 
@@ -146,7 +151,7 @@ void RunOfflineTest() {
     kb::scene::Scene scene;
     kb::script::ScriptRuntimeHost host{ scene };
     Check(host.Succeeded(), "the script host did not initialize");
-    for (const char* name : { "Net.Mode", "Net.IsServer", "Net.IsClient", "Net.LocalPlayerId", "Net.RegisterRpc", "Net.Call", "Net.Replicate", "Net.IsReplicated", "Net.SetOwner" }) {
+    for (const char* name : { "Net.Mode", "Net.IsServer", "Net.IsClient", "Net.LocalPlayerId", "Net.Join", "Net.Host", "Net.RegisterRpc", "Net.Call", "Net.Replicate", "Net.IsReplicated", "Net.SetOwner" }) {
         Check(host.Functions().FindSignature(name) != nullptr, std::string{ "Net function was not registered: " } + name);
     }
     Check(ScriptNetApi::Attached(scene) == nullptr, "a fresh scene has a network session");
@@ -172,6 +177,15 @@ void RunDeclareAndCallTest() {
     FakeNet net;
     ScriptNetApi::Attach(scene, &net);
     Check(ScriptNetApi::Attached(scene) == &net, "the session was not attached");
+
+    // Hosting: the port and the player limit are checked before they reach the session.
+    Check(Failed(CallNet(host, scene, "Net.Host", { Arg("port", ScriptValue{ 0 }) }), "port must be 1..65535"), "a zero host port was accepted");
+    Check(Failed(CallNet(host, scene, "Net.Host", { Arg("port", ScriptValue{ 70000 }) }), "port must be 1..65535"), "a host port above 65535 was accepted");
+    Check(Failed(CallNet(host, scene, "Net.Host", { Arg("port", ScriptValue{ 7000 }), Arg("maxPlayers", ScriptValue{ 65 }) }), "maxPlayers must be 1..64"),
+        "a host player limit above 64 was accepted");
+    Check(CallNet(host, scene, "Net.Host", { Arg("port", ScriptValue{ 7000 }), Arg("maxPlayers", ScriptValue{ 4 }), Arg("password", ScriptValue{ std::string{ "pw" } }) }).Succeeded() &&
+            net.hostRequest.port == 7000U && net.hostRequest.maxPlayers == 4U && net.hostRequest.password == "pw",
+        "a valid host request did not reach the session");
 
     const ScriptFunctionCallResult mode = CallNet(host, scene, "Net.Mode");
     Check(mode.Output("mode")->AsString() == "server" && mode.Output("connected")->AsBool() && mode.Output("players")->AsInt() == 2, "Net.Mode does not report the session");

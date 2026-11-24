@@ -304,6 +304,38 @@ ScriptFunctionCallResult Join(const ScriptFunctionCallContext& context, Argument
     return Ok({ { "requested", ScriptValue{ true } } });
 }
 
+ScriptFunctionCallResult Host(const ScriptFunctionCallContext& context, Arguments arguments) {
+    INetworkScriptRuntime* runtime = RuntimeOf(context);
+    const ScriptValue* port = Find(arguments, "port");
+    if (port == nullptr) {
+        return Failure(context, "Net.Host: port is required");
+    }
+    const int number = port->AsInt(0);
+    if (number < 1 || number > 65535) {
+        return Failure(context, "Net.Host: port must be 1..65535");
+    }
+    kb::network::ScriptHostRequest request;
+    request.port = static_cast<std::uint16_t>(number);
+    if (const ScriptValue* maxPlayers = Find(arguments, "maxPlayers")) {
+        const int maximum = maxPlayers->AsInt(8);
+        if (maximum < 1 || maximum > 64) {
+            return Failure(context, "Net.Host: maxPlayers must be 1..64");
+        }
+        request.maxPlayers = static_cast<std::uint32_t>(maximum);
+    }
+    if (const ScriptValue* password = Find(arguments, "password")) {
+        request.password = password->AsString();
+    }
+    if (runtime == nullptr) {
+        return Failure(context, "Net.Host: this scene has no network");
+    }
+    std::string error;
+    if (!runtime->RequestHost(request, error)) {
+        return Failure(context, "Net.Host: " + (error.empty() ? std::string{ "refused" } : error));
+    }
+    return Ok({ { "hosting", ScriptValue{ true } } });
+}
+
 ScriptFunctionCallResult Leave(const ScriptFunctionCallContext& context, Arguments) {
     INetworkScriptRuntime* runtime = RuntimeOf(context);
     if (runtime == nullptr) {
@@ -554,6 +586,10 @@ bool ScriptNetApi::Register(ScriptRuntimeHost& host) {
         "Joins a game at a literal IPv4 address and port, with the game's join password if it has one. Only an offline scene can join; the session starts on the next frame and OnNetConnected follows.",
         { { "address", T::String, true }, { "port", T::Int, true }, { "password", T::String, false } },
         { { "requested", T::Bool, true } }, &Join) && ok;
+    ok = add("Net.Host",
+        "Hosts a game on this machine: this scene becomes the server and its player is player 1; others join with Net.Join and the password (empty: anyone on the network may join). Only an offline scene can host; the game starts on the next frame and OnNetConnected (player 1) follows.",
+        { { "port", T::Int, true }, { "maxPlayers", T::Int, false }, { "password", T::String, false } },
+        { { "hosting", T::Bool, true } }, &Host) && ok;
     ok = add("Net.Leave", "Leaves the session; the scene is offline again on the next frame and OnNetDisconnected follows.", {},
         { { "left", T::Bool, true } }, &Leave) && ok;
     ok = add("Net.RegisterRpc",

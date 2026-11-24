@@ -142,7 +142,10 @@ bool PackagedGameRuntime::Initialize(
     network_ = std::make_unique<kb::net::SceneNetwork>(*scene_, kb::net::SceneNetworkOptions{
         .defaults = {},
         .transport = [](std::string& error) { return kb::net::CreateUdpTransport(kb::net::Endpoint::Make(0, 0, 0, 0, 0), error); },
-        .scriptJoin = true });
+        .scriptJoin = true,
+        .listen = [](std::uint16_t port, std::string& error) {
+            return kb::net::CreateUdpTransport(kb::net::Endpoint::Make(0, 0, 0, 0, port), error);
+        } });
 #endif
     runtimeClean_ = true;
     lightingApplied_ = false;

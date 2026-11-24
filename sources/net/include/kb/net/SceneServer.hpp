@@ -41,6 +41,8 @@ struct SceneServerOptions {
     float visibilityRadius = 0.0F;
     GridPlane gridPlane = GridPlane::XZ;
     BuildIdentity identity{};
+    Admission admission = Admission::KeyTable;
+    std::string joinPassword;
     std::filesystem::path authProviderKeyFile;
     std::filesystem::path authRevocationsFile;
 };

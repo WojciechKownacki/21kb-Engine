@@ -79,10 +79,17 @@ public:
     // The role may change only while no session is bound (offline <-> client): the RPC declarations and the replication declarations stay.
     [[nodiscard]] bool SetRole(Role role) noexcept;
     void UnbindClient() noexcept { replication_ = nullptr; connection_ = nullptr; clientAuthorized_ = false; }
+    void UnbindServer() noexcept { server_ = nullptr; }
     [[nodiscard]] const kb::network::ReplicationDeclarations& Declarations() const noexcept { return replicationDeclarations_; }
     using JoinHandler = std::function<bool(const kb::network::ScriptJoinRequest&, std::string&)>;
-    void SetSessionHandlers(JoinHandler join, std::function<void()> leave) { join_ = std::move(join); leave_ = std::move(leave); }
+    using HostHandler = std::function<bool(const kb::network::ScriptHostRequest&, std::string&)>;
+    void SetSessionHandlers(JoinHandler join, std::function<void()> leave, HostHandler host) {
+        join_ = std::move(join);
+        leave_ = std::move(leave);
+        host_ = std::move(host);
+    }
     bool RequestJoin(const kb::network::ScriptJoinRequest& request, std::string& error) override;
+    bool RequestHost(const kb::network::ScriptHostRequest& request, std::string& error) override;
     void RequestLeave() override;
 
 private:
@@ -108,6 +115,7 @@ private:
     std::function<void(kb::ecs::Entity)> transformAppeared_;
     JoinHandler join_;
     std::function<void()> leave_;
+    HostHandler host_;
     kb::network::ReplicationDeclarations replicationDeclarations_;
     std::string replicationError_;
     struct VariableSnapshot { std::array<float, 32U> values{}; std::uint32_t present = 0U; };

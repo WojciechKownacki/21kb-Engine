@@ -176,6 +176,8 @@ bool SceneServer::Start(std::string& error) {
     }
     HostConfig hostConfig;
     hostConfig.identity = options.identity;
+    hostConfig.admission = options.admission;
+    hostConfig.joinPassword = options.joinPassword;
     hostConfig.maxClients = options.maxClients;
     hostConfig.maxConnectsPerSecondPerAddress = options.maxConnectsPerSecondPerAddress;
     hostConfig.maxSessionsPerAddress = options.maxSessionsPerAddress;

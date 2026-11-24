@@ -835,7 +835,10 @@ int RunGame(const GameOptions& options) {
     auto network = std::make_unique<kb::net::SceneNetwork>(scene, kb::net::SceneNetworkOptions{
         .defaults = {},
         .transport = [](std::string& error) { return kb::net::CreateUdpTransport(kb::net::Endpoint::Make(0, 0, 0, 0, 0), error); },
-        .scriptJoin = true });
+        .scriptJoin = true,
+        .listen = [](std::uint16_t port, std::string& error) {
+            return kb::net::CreateUdpTransport(kb::net::Endpoint::Make(0, 0, 0, 0, port), error);
+        } });
     if (networkOptions) {
         std::string error;
         if (!network->RequestJoin(std::move(*networkOptions), error)) {
