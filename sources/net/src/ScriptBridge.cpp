@@ -175,10 +175,28 @@ bool ScriptNetworkRuntime::RequestHost(const kb::network::ScriptHostRequest& req
     return host_(request, error);
 }
 
+bool ScriptNetworkRuntime::RequestDiscover(bool on, std::string& error) {
+    if (!discover_) {
+        error = "this scene has no network";
+        return false;
+    }
+    return discover_(on, error);
+}
+
 void ScriptNetworkRuntime::RequestLeave() {
     if (leave_) {
         leave_();
     }
+}
+
+void ScriptNetworkRuntime::NotifyLanGameFound(const LanGame& game) {
+    Queue("OnNetGameFound", { { "name", game.name }, { "address", game.address.ToString() }, { "port", static_cast<std::uint32_t>(game.port) },
+        { "players", static_cast<std::uint32_t>(game.players) }, { "maxPlayers", static_cast<std::uint32_t>(game.maxPlayers) },
+        { "passwordRequired", game.passwordRequired } });
+}
+
+void ScriptNetworkRuntime::NotifyLanGameLost(const Endpoint& address, std::uint16_t port) {
+    Queue("OnNetGameLost", { { "address", address.ToString() }, { "port", static_cast<std::uint32_t>(port) } });
 }
 
 void ScriptNetworkRuntime::Queue(std::string name, std::vector<std::pair<std::string, ScriptRpcValue>> arguments) {

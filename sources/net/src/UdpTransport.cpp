@@ -4,7 +4,7 @@
 
 namespace kb::net {
 
-std::unique_ptr<IDatagramTransport> CreateUdpTransport(Endpoint, std::string& error) {
+std::unique_ptr<IDatagramTransport> CreateUdpTransport(Endpoint, std::string& error, UdpOptions) {
     error = "UDP sockets are not available in the browser build";
     return nullptr;
 }
@@ -170,7 +170,7 @@ private:
 
 } // namespace
 
-std::unique_ptr<IDatagramTransport> CreateUdpTransport(Endpoint bindTo, std::string& error) {
+std::unique_ptr<IDatagramTransport> CreateUdpTransport(Endpoint bindTo, std::string& error, UdpOptions options) {
     if (!EnsureNetworkStack()) {
         error = "the network stack could not be started";
         return nullptr;
@@ -182,6 +182,43 @@ std::unique_ptr<IDatagramTransport> CreateUdpTransport(Endpoint bindTo, std::str
     }
     if (!SetNonBlocking(handle)) {
         error = "the socket could not be made non-blocking";
+        CloseSocket(handle);
+        return nullptr;
+    }
+    const auto setOption = [handle](int level, int name, int value) {
+        return setsockopt(handle, level, name, reinterpret_cast<const char*>(&value), static_cast<SocketLength>(sizeof(value))) == 0;
+    };
+    if (options.broadcast && !setOption(SOL_SOCKET, SO_BROADCAST, 1)) {
+        error = "SO_BROADCAST failed with code " + std::to_string(LastError());
+        CloseSocket(handle);
+        return nullptr;
+    }
+#if defined(_WIN32)
+    // Discovery needs several applications bound to the same port; SO_EXCLUSIVEADDRUSE would forbid that.
+    if (options.reuseAddress && !setOption(SOL_SOCKET, SO_REUSEADDR, 1)) {
+        error = "SO_REUSEADDR failed with code " + std::to_string(LastError());
+        CloseSocket(handle);
+        return nullptr;
+    }
+#else
+    if (options.reuseAddress) {
+        if (!setOption(SOL_SOCKET, SO_REUSEADDR, 1)) {
+            error = "SO_REUSEADDR failed with code " + std::to_string(LastError());
+            CloseSocket(handle);
+            return nullptr;
+        }
+#ifdef SO_REUSEPORT
+        static_cast<void>(setOption(SOL_SOCKET, SO_REUSEPORT, 1));
+#endif
+    }
+#endif
+    if (options.receiveBufferBytes != 0U && !setOption(SOL_SOCKET, SO_RCVBUF, static_cast<int>(options.receiveBufferBytes))) {
+        error = "SO_RCVBUF failed with code " + std::to_string(LastError());
+        CloseSocket(handle);
+        return nullptr;
+    }
+    if (options.sendBufferBytes != 0U && !setOption(SOL_SOCKET, SO_SNDBUF, static_cast<int>(options.sendBufferBytes))) {
+        error = "SO_SNDBUF failed with code " + std::to_string(LastError());
         CloseSocket(handle);
         return nullptr;
     }

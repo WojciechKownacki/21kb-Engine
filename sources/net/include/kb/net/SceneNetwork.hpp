@@ -1,11 +1,13 @@
 #pragma once
 
+#include "kb/net/LanDiscovery.hpp"
 #include "kb/net/SceneClient.hpp"
 
 #include <cstdint>
 #include <iosfwd>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace kb::scene { class Scene; }
 namespace kb::network { struct ScriptHostRequest; }
@@ -20,6 +22,9 @@ struct SceneNetworkOptions {
     bool scriptJoin = true;
     // Opens the listener of a hosted game on the given port (UDP on native hosts); empty where this build cannot host (the browser).
     std::function<std::unique_ptr<IDatagramTransport>(std::uint16_t port, std::string& error)> listen;
+    // Opens a datagram transport for local network discovery (UDP with broadcast on native hosts); empty where this build
+    // cannot look for games on the local network (the browser).
+    std::function<std::unique_ptr<IDatagramTransport>(std::uint16_t port, bool broadcast, std::string& error)> lan;
     std::uint32_t tickRate = 30U;
 };
 
@@ -36,6 +41,10 @@ public:
     // Hosts a game: this scene becomes the server and its player is player 1. False with `error` while a session exists or where
     // this build cannot host (the browser).
     bool RequestHost(const kb::network::ScriptHostRequest& request, std::string& error);
+    // Turns looking for games on the local network on or off. False with `error` where this build cannot look.
+    bool RequestDiscover(bool on, std::string& error);
+    // The games seen on the local network (empty while discovery is off).
+    [[nodiscard]] std::vector<LanGame> LanGames() const;
     void Leave() noexcept;
     // Starts a requested join, ends a requested leave, pumps the session. False when the session failed (as SceneClient::Update).
     [[nodiscard]] bool Update(std::uint64_t nowMilliseconds, std::ostream& diagnostics);

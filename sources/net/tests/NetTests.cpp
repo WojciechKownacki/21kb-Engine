@@ -4,10 +4,12 @@
 
 #include "kb/net/ByteIO.hpp"
 #include "kb/net/Host.hpp"
+#include "kb/net/LanDiscovery.hpp"
 #include "kb/net/NetworkClock.hpp"
 #include "kb/net/Prediction.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -1737,6 +1739,177 @@ void TestInterpolatedReplicaIsSmoothUnderJitter() {
     }
 }
 
+// Builds a discovery announce by hand, so a test can hand the browser a packet no beacon would send.
+std::vector<std::uint8_t> MakeAnnounce(std::uint8_t protocol, std::uint64_t gameKey, std::uint16_t gamePort, const std::string& name) {
+    std::vector<std::uint8_t> datagram;
+    kb::net::ByteWriter writer(datagram);
+    writer.U8('2'); writer.U8('1'); writer.U8('K'); writer.U8('B');
+    writer.U8(protocol);
+    writer.U8(2U);
+    writer.U32(7U);
+    writer.U64(gameKey);
+    writer.U16(gamePort);
+    writer.U16(1U);
+    writer.U16(8U);
+    writer.U8(0U);
+    writer.U64(11U);
+    writer.U8(static_cast<std::uint8_t>(name.size()));
+    writer.Bytes(std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(name.data()), name.size()));
+    while (datagram.size() < kb::net::kLanDiscoveryDatagramBytes) {
+        datagram.push_back(0U);
+    }
+    return datagram;
+}
+
+void TestLanDiscoveryFindsHostAndExpires() {
+    kb::net::LoopbackNetwork links;
+    const kb::net::Endpoint hostEndpoint = kb::net::Endpoint::Loopback(kb::net::kLanDiscoveryPort);
+    const kb::net::Endpoint browserEndpoint = kb::net::Endpoint::Loopback(41000U);
+    const auto host = links.CreateTransport(hostEndpoint);
+    const auto client = links.CreateTransport(browserEndpoint);
+    Require(host != nullptr && client != nullptr, "the discovery transports could not be opened");
+    kb::net::LanBeaconOptions options;
+    options.gameKey = 0x1122334455667788ULL;
+    options.hostPort = 7777U;
+    options.maxPlayers = 8U;
+    options.passwordRequired = true;
+    options.hostSalt = 0x99U;
+    options.name = "The Room";
+    options.announceTargets = { browserEndpoint };
+    kb::net::LanBeacon beacon(*host, options);
+    beacon.SetPlayers(3U);
+    kb::net::LanBrowser browser(*client, options.gameKey, { hostEndpoint });
+    browser.Update(0U);
+    links.Advance(0U);
+    beacon.Update(0U);
+    links.Advance(0U);
+    browser.Update(0U);
+    links.Advance(0U);
+    const std::vector<kb::net::LanGame>& found = browser.Games();
+    Require(found.size() == 1U, "the host was not found");
+    Require(found[0].name == "The Room" && found[0].port == 7777U && found[0].players == 3U && found[0].maxPlayers == 8U,
+        "the announced game details were lost");
+    Require(found[0].passwordRequired && found[0].hostSalt == 0x99U && found[0].address.address == hostEndpoint.address,
+        "the announce flags or salt were lost");
+    beacon.Update(2000U);
+    links.Advance(2000U);
+    browser.Update(2000U);
+    Require(browser.Games().size() == 1U, "a live game expired");
+    browser.Update(8001U);
+    Require(browser.Games().empty(), "a game that stopped announcing did not expire");
+}
+
+void TestLanDiscoveryIgnoresOtherGameAndProtocol() {
+    kb::net::LoopbackNetwork links;
+    const kb::net::Endpoint hostEndpoint = kb::net::Endpoint::Loopback(kb::net::kLanDiscoveryPort);
+    const auto host = links.CreateTransport(hostEndpoint);
+    const auto other = links.CreateTransport(kb::net::Endpoint::Loopback(41001U));
+    const auto matching = links.CreateTransport(kb::net::Endpoint::Loopback(41002U));
+    kb::net::LanBeaconOptions options;
+    options.gameKey = 5U;
+    options.hostPort = 7000U;
+    options.name = "Mine";
+    options.announceTargets = { kb::net::Endpoint::Loopback(41001U), kb::net::Endpoint::Loopback(41002U) };
+    kb::net::LanBeacon beacon(*host, options);
+    kb::net::LanBrowser otherGame(*other, 6U, { hostEndpoint });
+    kb::net::LanBrowser sameGame(*matching, 5U, { hostEndpoint });
+    otherGame.Update(0U);
+    sameGame.Update(0U);
+    links.Advance(0U);
+    beacon.Update(0U);
+    links.Advance(0U);
+    otherGame.Update(0U);
+    sameGame.Update(0U);
+    Require(otherGame.Games().empty(), "a game of another content set was listed");
+    Require(sameGame.Games().size() == 1U, "the matching game was not listed");
+    links.Inject(kb::net::Endpoint::Loopback(41999U), kb::net::Endpoint::Loopback(41002U), MakeAnnounce(2U, 5U, 7001U, "Stale"));
+    links.Advance(0U);
+    sameGame.Update(0U);
+    Require(sameGame.Games().size() == 1U, "an announce of another protocol version was accepted");
+    links.Inject(kb::net::Endpoint::Loopback(41998U), kb::net::Endpoint::Loopback(41002U), std::span<const std::uint8_t>{});
+    sameGame.Update(0U);
+    Require(sameGame.Games().size() == 1U, "an empty datagram added a game");
+}
+
+void TestLanDiscoveryFuzz() {
+    kb::net::LoopbackNetwork links;
+    const kb::net::Endpoint beaconEndpoint = kb::net::Endpoint::Loopback(43000U);
+    const kb::net::Endpoint browserEndpoint = kb::net::Endpoint::Loopback(43001U);
+    const auto beaconTransport = links.CreateTransport(beaconEndpoint);
+    const auto browserTransport = links.CreateTransport(browserEndpoint);
+    Require(beaconTransport != nullptr && browserTransport != nullptr, "the fuzz transports could not be opened");
+    kb::net::LanBeaconOptions options;
+    options.gameKey = 7U;
+    options.announceTargets = { browserEndpoint };
+    kb::net::LanBeacon beacon(*beaconTransport, options);
+    kb::net::LanBrowser browser(*browserTransport, 7U, {});
+    std::mt19937 random(12345U);
+    const std::vector<std::uint8_t> valid = MakeAnnounce(1U, 7U, 7000U, std::string(32U, 'x'));
+    for (std::uint32_t index = 0U; index < 20000U; ++index) {
+        std::vector<std::uint8_t> datagram(random() % 200U);
+        for (std::uint8_t& byte : datagram) {
+            byte = static_cast<std::uint8_t>(random() & 0xFFU);
+        }
+        if (datagram.size() >= valid.size() && index % 3U == 0U) {
+            datagram = valid;
+            datagram[random() % datagram.size()] ^= static_cast<std::uint8_t>(random() & 0xFFU);
+        }
+        const kb::net::Endpoint from = kb::net::Endpoint::Loopback(static_cast<std::uint16_t>(44000U + index % 1000U));
+        links.Inject(from, browserEndpoint, datagram);
+        links.Inject(from, beaconEndpoint, datagram);
+        browser.Update(index);
+        beacon.Update(index);
+        links.Advance(index);
+    }
+    browser.Update(20000U);
+    beacon.Update(20000U);
+    Require(browser.Games().size() <= kb::net::kLanMaxGames, "the browser kept an unbounded list of games");
+}
+
+void TestAnnounceNeverLargerThanQuery() {
+    kb::net::LoopbackNetwork links;
+    const auto host = links.CreateTransport(kb::net::Endpoint::Loopback(45000U));
+    const auto announceSink = links.CreateTransport(kb::net::Endpoint::Loopback(45001U));
+    const auto querySink = links.CreateTransport(kb::net::Endpoint::Loopback(45002U));
+    Require(host != nullptr && announceSink != nullptr && querySink != nullptr, "the size transports could not be opened");
+    kb::net::LanBeaconOptions options;
+    options.name = std::string(40U, 'x');
+    options.announceTargets = { kb::net::Endpoint::Loopback(45001U) };
+    kb::net::LanBeacon beacon(*host, options);
+    beacon.Update(0U);
+    links.Advance(0U);
+    std::array<std::uint8_t, kb::net::kMaxDatagramBytes + 1U> buffer{};
+    kb::net::Endpoint from;
+    std::size_t size = 0U;
+    Require(announceSink->Receive(from, buffer, size) == kb::net::TransportStatus::Ok, "no announce was sent");
+    const std::size_t announceSize = size;
+    const auto queryTransport = links.CreateTransport(kb::net::Endpoint::Loopback(45003U));
+    Require(queryTransport != nullptr, "the query transport could not be opened");
+    kb::net::LanBrowser browser(*queryTransport, 0U, { kb::net::Endpoint::Loopback(45002U) });
+    browser.Update(0U);
+    links.Advance(0U);
+    Require(querySink->Receive(from, buffer, size) == kb::net::TransportStatus::Ok, "no query was sent");
+    Require(announceSize <= size && size == kb::net::kLanDiscoveryDatagramBytes, "an announce is larger than a query");
+}
+
+void TestUdpBroadcastOptionOpens() {
+#if !defined(__EMSCRIPTEN__)
+    std::string error;
+    const auto receiver = kb::net::CreateUdpTransport(kb::net::Endpoint::Loopback(0), error);
+    const auto sender = kb::net::CreateUdpTransport(kb::net::Endpoint::Loopback(0), error,
+        kb::net::UdpOptions{ .broadcast = true, .reuseAddress = true });
+    Require(receiver != nullptr && sender != nullptr, "a broadcast UDP socket could not be opened: " + error);
+    const std::array<std::uint8_t, 4U> payload{ 1U, 2U, 3U, 4U };
+    Require(sender->Send(receiver->LocalEndpoint(), payload) == kb::net::TransportStatus::Ok, "a unicast datagram was refused");
+    Require(receiver->WaitReadable(1000U), "the unicast datagram did not arrive");
+    kb::net::Endpoint from;
+    std::array<std::uint8_t, 16U> buffer{};
+    std::size_t size = 0U;
+    Require(receiver->Receive(from, buffer, size) == kb::net::TransportStatus::Ok && size == payload.size(),
+        "the unicast datagram did not arrive intact");
+#endif
+}
+
 } // namespace
 
 int main() {
@@ -1787,6 +1960,11 @@ int main() {
         { "bad-network", &TestBadNetwork },
         { "two-clients-reconnect", &TestTwoClientsAndReconnectOnBadNetwork },
         { "real-udp", &TestRealUdp },
+        { "lan-discovery-finds-host", &TestLanDiscoveryFindsHostAndExpires },
+        { "lan-discovery-ignores-other", &TestLanDiscoveryIgnoresOtherGameAndProtocol },
+        { "lan-discovery-fuzz", &TestLanDiscoveryFuzz },
+        { "lan-announce-not-larger", &TestAnnounceNeverLargerThanQuery },
+        { "udp-broadcast-option", &TestUdpBroadcastOptionOpens },
     };
     int failures = 0;
     for (const auto& [name, run] : tests) {

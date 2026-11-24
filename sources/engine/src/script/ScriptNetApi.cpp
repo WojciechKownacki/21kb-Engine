@@ -326,6 +326,12 @@ ScriptFunctionCallResult Host(const ScriptFunctionCallContext& context, Argument
     if (const ScriptValue* password = Find(arguments, "password")) {
         request.password = password->AsString();
     }
+    if (const ScriptValue* name = Find(arguments, "name")) {
+        request.name = name->AsString();
+        if (request.name.size() > 32U) {
+            return Failure(context, "Net.Host: name must be at most 32 bytes of UTF-8");
+        }
+    }
     if (runtime == nullptr) {
         return Failure(context, "Net.Host: this scene has no network");
     }
@@ -334,6 +340,20 @@ ScriptFunctionCallResult Host(const ScriptFunctionCallContext& context, Argument
         return Failure(context, "Net.Host: " + (error.empty() ? std::string{ "refused" } : error));
     }
     return Ok({ { "hosting", ScriptValue{ true } } });
+}
+
+ScriptFunctionCallResult Discover(const ScriptFunctionCallContext& context, Arguments arguments) {
+    INetworkScriptRuntime* runtime = RuntimeOf(context);
+    const ScriptValue* on = Find(arguments, "on");
+    const bool enable = on == nullptr ? true : on->AsBool(true);
+    if (runtime == nullptr) {
+        return Failure(context, "Net.Discover: this scene has no network");
+    }
+    std::string error;
+    if (!runtime->RequestDiscover(enable, error)) {
+        return Failure(context, "Net.Discover: " + (error.empty() ? std::string{ "refused" } : error));
+    }
+    return Ok({ { "discovering", ScriptValue{ enable } } });
 }
 
 ScriptFunctionCallResult Leave(const ScriptFunctionCallContext& context, Arguments) {
@@ -588,10 +608,13 @@ bool ScriptNetApi::Register(ScriptRuntimeHost& host) {
         { { "requested", T::Bool, true } }, &Join) && ok;
     ok = add("Net.Host",
         "Hosts a game on this machine: this scene becomes the server and its player is player 1; others join with Net.Join and the password (empty: anyone on the network may join). Only an offline scene can host; the game starts on the next frame and OnNetConnected (player 1) follows.",
-        { { "port", T::Int, true }, { "maxPlayers", T::Int, false }, { "password", T::String, false } },
+        { { "port", T::Int, true }, { "maxPlayers", T::Int, false }, { "password", T::String, false }, { "name", T::String, false } },
         { { "hosting", T::Bool, true } }, &Host) && ok;
     ok = add("Net.Leave", "Leaves the session; the scene is offline again on the next frame and OnNetDisconnected follows.", {},
         { { "left", T::Bool, true } }, &Leave) && ok;
+    ok = add("Net.Discover",
+        "Starts (on = true) or stops looking for games on the local network. Each game that appears arrives as OnNetGameFound(name, address, port, players, maxPlayers, passwordRequired) and each that stops announcing as OnNetGameLost(address, port).",
+        { { "on", T::Bool, false } }, { { "discovering", T::Bool, true } }, &Discover) && ok;
     ok = add("Net.RegisterRpc",
         "Declares a remote procedure call before the session starts (call it from Created or Ready). direction is \"toServer\" or \"toClients\"; args lists the types, for example "
         "\"float(-1..1),string(32),entity\" (at most 4 numbers, 2 strings, 2 bools, 2 entities); owner is the index of an entity argument that the caller must own, or -1. "

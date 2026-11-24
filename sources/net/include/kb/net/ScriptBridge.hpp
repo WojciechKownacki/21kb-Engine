@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/network/NetworkScriptBridge.hpp"
+#include "kb/net/LanDiscovery.hpp"
 #include "kb/net/Replication.hpp"
 #include "engine/network/ReplicationDeclarations.hpp"
 
@@ -83,14 +84,20 @@ public:
     [[nodiscard]] const kb::network::ReplicationDeclarations& Declarations() const noexcept { return replicationDeclarations_; }
     using JoinHandler = std::function<bool(const kb::network::ScriptJoinRequest&, std::string&)>;
     using HostHandler = std::function<bool(const kb::network::ScriptHostRequest&, std::string&)>;
-    void SetSessionHandlers(JoinHandler join, std::function<void()> leave, HostHandler host) {
+    using DiscoverHandler = std::function<bool(bool, std::string&)>;
+    void SetSessionHandlers(JoinHandler join, std::function<void()> leave, HostHandler host, DiscoverHandler discover = {}) {
         join_ = std::move(join);
         leave_ = std::move(leave);
         host_ = std::move(host);
+        discover_ = std::move(discover);
     }
     bool RequestJoin(const kb::network::ScriptJoinRequest& request, std::string& error) override;
     bool RequestHost(const kb::network::ScriptHostRequest& request, std::string& error) override;
+    bool RequestDiscover(bool on, std::string& error) override;
     void RequestLeave() override;
+    // Discovery results, queued as OnNetGameFound / OnNetGameLost for the scene's scripts.
+    void NotifyLanGameFound(const LanGame& game);
+    void NotifyLanGameLost(const Endpoint& address, std::uint16_t port);
 
 private:
     // This scene runs the authoritative server (on a dedicated server or on a host with a local player).
@@ -116,6 +123,7 @@ private:
     JoinHandler join_;
     std::function<void()> leave_;
     HostHandler host_;
+    DiscoverHandler discover_;
     kb::network::ReplicationDeclarations replicationDeclarations_;
     std::string replicationError_;
     struct VariableSnapshot { std::array<float, 32U> values{}; std::uint32_t present = 0U; };

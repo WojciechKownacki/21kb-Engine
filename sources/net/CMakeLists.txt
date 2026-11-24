@@ -5,6 +5,7 @@ add_library(kb_net STATIC
     include/kb/net/Auth.hpp
     include/kb/net/ByteIO.hpp
     include/kb/net/Host.hpp
+    include/kb/net/LanDiscovery.hpp
     include/kb/net/NetworkClock.hpp
     include/kb/net/Prediction.hpp
     include/kb/net/ProjectScene.hpp
@@ -21,7 +22,9 @@ add_library(kb_net STATIC
     src/BrowserWebSocketTransport.cpp
     src/Auth.cpp
     src/Host.cpp
+    src/LanDiscovery.cpp
     src/Loopback.cpp
+    src/PlatformInterfaces.cpp
     src/ProjectScene.cpp
     src/ReflectedFieldsCodec.cpp
     src/Replication.cpp
@@ -54,7 +57,7 @@ if(EMSCRIPTEN)
 endif()
 
 if(WIN32)
-    target_link_libraries(kb_net PUBLIC ws2_32)
+    target_link_libraries(kb_net PUBLIC ws2_32 iphlpapi)
 endif()
 
 kb_apply_quality_gates(kb_net)

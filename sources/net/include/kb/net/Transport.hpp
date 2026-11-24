@@ -117,9 +117,18 @@ private:
     LoopbackStats stats_;
 };
 
+// Socket options of a UDP transport. Discovery opens a broadcast socket that several applications
+// bind at once; a session keeps the defaults.
+struct UdpOptions {
+    bool broadcast = false;         // SO_BROADCAST: the socket may send to a broadcast address
+    bool reuseAddress = false;      // SO_REUSEADDR (and SO_REUSEPORT on POSIX): several listeners share a port
+    std::uint32_t receiveBufferBytes = 0U; // SO_RCVBUF when nonzero
+    std::uint32_t sendBufferBytes = 0U;    // SO_SNDBUF when nonzero
+};
+
 // Non-blocking UDP over Winsock or BSD sockets. Returns nullptr and fills `error` when the socket
 // cannot be created or bound, or on a platform without sockets (the browser build). Port 0 asks the
 // system for a free port; LocalEndpoint() then reports the one that was chosen.
-[[nodiscard]] std::unique_ptr<IDatagramTransport> CreateUdpTransport(Endpoint bindTo, std::string& error);
+[[nodiscard]] std::unique_ptr<IDatagramTransport> CreateUdpTransport(Endpoint bindTo, std::string& error, UdpOptions options = {});
 
 } // namespace kb::net

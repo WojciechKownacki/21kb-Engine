@@ -838,7 +838,16 @@ int RunGame(const GameOptions& options) {
         .scriptJoin = true,
         .listen = [](std::uint16_t port, std::string& error) {
             return kb::net::CreateUdpTransport(kb::net::Endpoint::Make(0, 0, 0, 0, port), error);
-        } });
+        },
+#if defined(__EMSCRIPTEN__)
+        .lan = nullptr
+#else
+        .lan = [](std::uint16_t port, bool broadcast, std::string& error) {
+            return kb::net::CreateUdpTransport(kb::net::Endpoint::Make(0, 0, 0, 0, port), error,
+                kb::net::UdpOptions{ .broadcast = broadcast, .reuseAddress = true });
+        }
+#endif
+        });
     if (networkOptions) {
         std::string error;
         if (!network->RequestJoin(std::move(*networkOptions), error)) {

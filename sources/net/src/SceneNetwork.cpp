@@ -5,6 +5,7 @@
 #include "engine/network/ReplicationDeclarations.hpp"
 #include "engine/scene/Scene.hpp"
 
+#include <algorithm>
 #include <optional>
 #include <ostream>
 #include <utility>
@@ -18,7 +19,8 @@ struct SceneNetwork::Impl {
         script.SetSessionHandlers(
             [this](const kb::network::ScriptJoinRequest& request, std::string& error) { return JoinFromScript(request, error); },
             [this] { Leave(); },
-            [this](const kb::network::ScriptHostRequest& request, std::string& error) { return HostFromScript(request, error); });
+            [this](const kb::network::ScriptHostRequest& request, std::string& error) { return HostFromScript(request, error); },
+            [this](bool on, std::string& error) { return RequestDiscover(on, error); });
     }
     static kb::network::ReplicationDeclarations LoadDeclarations(kb::scene::Scene& scene, std::string& error) {
         kb::network::ReplicationDeclarations result;
@@ -60,8 +62,60 @@ struct SceneNetwork::Impl {
             error = "this build cannot host a game";
             return false;
         }
+        if (request.name.size() > kLanGameNameBytes) {
+            error = "the game name must be at most 32 bytes of UTF-8";
+            return false;
+        }
         pendingHost = request;
         return true;
+    }
+    bool RequestDiscover(bool on, std::string& error) {
+        if (!on) {
+            for (const LanGame& game : announcedGames) {
+                script.NotifyLanGameLost(game.address, game.port);
+            }
+            announcedGames.clear();
+            browser.reset();
+            browserTransport.reset();
+            return true;
+        }
+        if (browser) {
+            return true;
+        }
+        if (!options.lan) {
+            error = "this build cannot look for games on the local network";
+            return false;
+        }
+        browserTransport = options.lan(0U, true, error);
+        if (!browserTransport) {
+            if (error.empty()) {
+                error = "the discovery socket could not be opened";
+            }
+            return false;
+        }
+        browser = std::make_unique<LanBrowser>(*browserTransport, options.defaults.identity.contentHash);
+        return true;
+    }
+    [[nodiscard]] std::vector<LanGame> LanGames() const { return browser ? browser->Games() : std::vector<LanGame>{}; }
+    void ReportLanGames() {
+        if (!browser) {
+            return;
+        }
+        const std::vector<LanGame>& current = browser->Games();
+        const auto matches = [](const LanGame& game, const LanGame& other) {
+            return game.address.address == other.address.address && game.port == other.port;
+        };
+        for (const LanGame& game : announcedGames) {
+            if (std::none_of(current.begin(), current.end(), [&game, &matches](const LanGame& seen) { return matches(game, seen); })) {
+                script.NotifyLanGameLost(game.address, game.port);
+            }
+        }
+        for (const LanGame& game : current) {
+            if (std::none_of(announcedGames.begin(), announcedGames.end(), [&game, &matches](const LanGame& known) { return matches(game, known); })) {
+                script.NotifyLanGameFound(game);
+            }
+        }
+        announcedGames = current;
     }
     void Leave() noexcept {
         pendingLeave = client != nullptr || pendingJoin.has_value() || server != nullptr || pendingHost.has_value();
@@ -79,6 +133,8 @@ struct SceneNetwork::Impl {
                 }
                 server->Pump(now); // sends the close notices before the listener goes away
                 server.reset();
+                lanBeacon.reset();
+                beaconTransport.reset();
                 script.UnbindServer();
                 static_cast<void>(script.SetRole(ScriptNetworkRuntime::Role::Offline));
             }
@@ -90,8 +146,9 @@ struct SceneNetwork::Impl {
                 pendingHost.reset();
                 return false;
             }
+            const kb::network::ScriptHostRequest request = *pendingHost;
             std::string error;
-            std::unique_ptr<IDatagramTransport> transport = options.listen(pendingHost->port, error);
+            std::unique_ptr<IDatagramTransport> transport = options.listen(request.port, error);
             if (transport == nullptr) {
                 diagnostics << "network: cannot host: " << error << '\n';
                 pendingHost.reset();
@@ -99,11 +156,11 @@ struct SceneNetwork::Impl {
             }
             static_cast<void>(script.SetRole(ScriptNetworkRuntime::Role::Host));
             SceneServerOptions hosted;
-            hosted.maxClients = pendingHost->maxPlayers;
+            hosted.maxClients = request.maxPlayers;
             hosted.tickRate = options.tickRate;
             hosted.identity = options.defaults.identity;
             hosted.admission = Admission::JoinPassword;
-            hosted.joinPassword = pendingHost->password;
+            hosted.joinPassword = request.password;
             hosted.worldExtent = options.defaults.worldExtent;
             pendingHost.reset();
             server = std::make_unique<SceneServer>(scene, script, script.Declarations(), noKeys, std::move(transport), std::move(hosted),
@@ -116,6 +173,26 @@ struct SceneNetwork::Impl {
                 script.UnbindServer();
                 static_cast<void>(script.SetRole(ScriptNetworkRuntime::Role::Offline));
                 return false;
+            }
+            if (options.lan) {
+                std::string lanError;
+                std::unique_ptr<IDatagramTransport> discovered = options.lan(kLanDiscoveryPort, true, lanError);
+                if (discovered == nullptr) {
+                    diagnostics << "network: local network discovery is off: " << lanError << '\n';
+                } else {
+                    LanBeaconOptions beacon;
+                    beacon.gameKey = options.defaults.identity.contentHash;
+                    beacon.hostPort = server->Transport().LocalEndpoint().port;
+                    beacon.maxPlayers = static_cast<std::uint16_t>(std::min<std::uint32_t>(request.maxPlayers, 65535U));
+                    beacon.passwordRequired = !request.password.empty();
+                    beacon.name = request.name;
+                    const auto salt = server->NetHost().HostSalt();
+                    for (std::size_t index = 0U; index < salt.size(); ++index) {
+                        beacon.hostSalt |= static_cast<std::uint64_t>(salt[index]) << (8U * index);
+                    }
+                    beaconTransport = std::move(discovered);
+                    lanBeacon = std::make_unique<LanBeacon>(*beaconTransport, std::move(beacon));
+                }
             }
             nextTickAt = now;
         }
@@ -139,6 +216,14 @@ struct SceneNetwork::Impl {
                 }
             }
         }
+        if (browser) {
+            browser->Update(now);
+            ReportLanGames();
+        }
+        if (lanBeacon) {
+            lanBeacon->SetPlayers(static_cast<std::uint16_t>(std::min<std::size_t>(script.PlayerCount(), 65535U)));
+            lanBeacon->Update(now);
+        }
         return client ? client->Update(now, diagnostics) : true;
     }
 
@@ -152,6 +237,11 @@ struct SceneNetwork::Impl {
     std::unique_ptr<SceneClient> client;
     StaticKeyTable noKeys;
     std::unique_ptr<SceneServer> server;
+    std::unique_ptr<IDatagramTransport> browserTransport;
+    std::unique_ptr<LanBrowser> browser;
+    std::unique_ptr<IDatagramTransport> beaconTransport;
+    std::unique_ptr<LanBeacon> lanBeacon;
+    std::vector<LanGame> announcedGames;
     std::ostream* diagnosticStream = nullptr;
     std::uint32_t tick = 0U;
     std::uint64_t nextTickAt = 0U;
@@ -167,6 +257,14 @@ bool SceneNetwork::RequestJoin(SceneClientOptions options, std::string& error) {
 
 bool SceneNetwork::RequestHost(const kb::network::ScriptHostRequest& request, std::string& error) {
     return impl_->HostFromScript(request, error);
+}
+
+bool SceneNetwork::RequestDiscover(bool on, std::string& error) {
+    return impl_->RequestDiscover(on, error);
+}
+
+std::vector<LanGame> SceneNetwork::LanGames() const {
+    return impl_->LanGames();
 }
 
 void SceneNetwork::Leave() noexcept {

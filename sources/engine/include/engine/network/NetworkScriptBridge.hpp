@@ -44,12 +44,13 @@ struct ScriptJoinRequest {
     std::string password;
 };
 
-// A request from the scripts to host a game on this machine: the port the others connect to, how many players it takes and
-// the join password (empty: none).
+// A request from the scripts to host a game on this machine: the port the others connect to, how many players it takes, the
+// join password (empty: none) and the name the game shows in a local network list (at most 32 bytes of UTF-8).
 struct ScriptHostRequest {
     std::uint16_t port = 0U;
     std::uint32_t maxPlayers = 8U;
     std::string password;
+    std::string name;
 };
 
 class INetworkScriptRuntime {
@@ -71,6 +72,9 @@ public:
     // Asks the scene's network to host a game: this scene becomes the server and its player is player 1. Only an offline scene can;
     // false with `error` naming why not (already in a session, no network for this scene, this build cannot host).
     virtual bool RequestHost(const ScriptHostRequest& request, std::string& error) = 0;
+    // Turns looking for games on the local network on or off. False with `error` naming why not (this build cannot look,
+    // already looking, this scene has no network).
+    virtual bool RequestDiscover(bool on, std::string& error) = 0;
     // Leaves the session (no effect offline). The scene is offline again after the next network update.
     virtual void RequestLeave() = 0;
 

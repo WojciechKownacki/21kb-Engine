@@ -45,6 +45,14 @@ public:
         hostRequest = request;
         return true;
     }
+    bool RequestDiscover(bool on, std::string& error) override {
+        if (!discover) {
+            error = "this build cannot look for games on the local network";
+            return false;
+        }
+        requestedDiscover = on;
+        return true;
+    }
     void RequestLeave() override { ++leaves; }
     bool DeclareRpc(const ScriptRpcDeclaration& declaration, std::string& error) override {
         if (frozen) {
@@ -107,6 +115,8 @@ public:
     std::map<std::uint64_t, std::uint64_t> owners;
     kb::network::ScriptJoinRequest joinRequest;
     kb::network::ScriptHostRequest hostRequest;
+    bool discover = true;
+    bool requestedDiscover = false;
     std::size_t leaves = 0U;
 };
 

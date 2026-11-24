@@ -145,6 +145,10 @@ bool PackagedGameRuntime::Initialize(
         .scriptJoin = true,
         .listen = [](std::uint16_t port, std::string& error) {
             return kb::net::CreateUdpTransport(kb::net::Endpoint::Make(0, 0, 0, 0, port), error);
+        },
+        .lan = [](std::uint16_t port, bool broadcast, std::string& error) {
+            return kb::net::CreateUdpTransport(kb::net::Endpoint::Make(0, 0, 0, 0, port), error,
+                kb::net::UdpOptions{ .broadcast = broadcast, .reuseAddress = true });
         } });
 #endif
     runtimeClean_ = true;
