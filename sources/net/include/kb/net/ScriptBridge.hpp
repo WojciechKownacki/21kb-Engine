@@ -35,7 +35,7 @@ namespace kb::net {
 
 class ScriptNetworkRuntime final : public kb::network::INetworkScriptRuntime {
 public:
-    enum class Role : std::uint8_t { Offline, Server, Client };
+    enum class Role : std::uint8_t { Offline, Server, Client, Host };
 
     ScriptNetworkRuntime(Role role, kb::scene::Scene& scene, kb::network::ReplicationDeclarations declarations);
     ~ScriptNetworkRuntime() override;
@@ -45,6 +45,8 @@ public:
     void BindServer(ReplicationServer& server);
     void BindClient(ReplicationClient& replication, Client& connection);
     void SetClientAuthorized(bool authorized) noexcept { clientAuthorized_ = authorized; }
+    // The clock used for rate limits of local calls (the hosting player's calls); the owner's loop advances it every frame.
+    void SetNow(std::uint64_t nowMilliseconds) noexcept { nowMilliseconds_ = nowMilliseconds; }
     void NotifyAuthExpired() { Queue("OnNetAuthExpired", {}); }
     void HandleEvent(const NetEvent& event);
 
@@ -53,11 +55,15 @@ public:
         case Role::Offline: return kb::network::ScriptNetMode::Offline;
         case Role::Server: return kb::network::ScriptNetMode::Server;
         case Role::Client: return kb::network::ScriptNetMode::Client;
+        case Role::Host: return kb::network::ScriptNetMode::Host;
         }
         return kb::network::ScriptNetMode::Offline;
     }
     [[nodiscard]] bool Connected() const override;
-    [[nodiscard]] std::uint64_t LocalPlayerId() const override { return role_ == Role::Client && connection_ != nullptr ? connection_->AssignedId() : 0U; }
+    [[nodiscard]] std::uint64_t LocalPlayerId() const override {
+        if (role_ == Role::Host) return kHostPlayerId;
+        return role_ == Role::Client && connection_ != nullptr ? connection_->AssignedId() : 0U;
+    }
     [[nodiscard]] std::size_t PlayerCount() const override;
     bool DeclareRpc(const kb::network::ScriptRpcDeclaration& declaration, std::string& error) override;
     [[nodiscard]] const kb::network::ScriptRpcDeclaration* FindRpc(const std::string& name) const override;
@@ -80,6 +86,8 @@ public:
     void RequestLeave() override;
 
 private:
+    // This scene runs the authoritative server (on a dedicated server or on a host with a local player).
+    [[nodiscard]] bool ServesScene() const noexcept { return role_ == Role::Server || role_ == Role::Host; }
     void Deliver(const kb::network::ScriptRpcDeclaration& declaration, std::uint64_t sender, std::span<const RpcValue> args);
     void Queue(std::string name, std::vector<std::pair<std::string, kb::network::ScriptRpcValue>> arguments);
     void PrepareVariables(kb::ecs::Entity entity);
@@ -96,6 +104,7 @@ private:
     ReplicationClient* replication_ = nullptr;
     Client* connection_ = nullptr;
     bool clientAuthorized_ = true;
+    std::uint64_t nowMilliseconds_ = 0U;
     std::function<void(kb::ecs::Entity)> transformAppeared_;
     JoinHandler join_;
     std::function<void()> leave_;

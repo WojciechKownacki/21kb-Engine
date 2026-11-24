@@ -919,28 +919,32 @@ void ReplicationServer::HandleRpc(std::uint64_t client, std::uint8_t, bool relia
         host_->Diagnostics().Report(DiagCode::RpcRejected, "rpcRejectedMalformed");
         return;
     }
-    if (!limiter_.Allow(client, id, definition->maxCallsPerSecond, nowMilliseconds)) {
+    static_cast<void>(Dispatch(client, id, *definition, args, nowMilliseconds));
+}
+
+RpcStatus ReplicationServer::Dispatch(std::uint64_t caller, std::uint16_t id, const RpcDefinition& definition, std::span<const RpcValue> args, std::uint64_t now) {
+    if (!limiter_.Allow(caller, id, definition.maxCallsPerSecond, now)) {
         ++stats_.rpcRejectedRate;
         host_->Diagnostics().Report(DiagCode::RpcRejected, "rpcRejectedRate");
-        return;
+        return RpcStatus::RateLimited;
     }
-    if (definition->ownerArg >= 0) {
-        const NetworkId target = std::get<NetworkId>(args[static_cast<std::size_t>(definition->ownerArg)]);
+    if (definition.ownerArg >= 0) {
+        const NetworkId target = std::get<NetworkId>(args[static_cast<std::size_t>(definition.ownerArg)]);
         const auto* replicated = slots_->Find(target);
-        if (replicated == nullptr || replicated->owner != client) {
+        if (replicated == nullptr || replicated->owner != caller) {
             ++stats_.rpcRejectedPermission;
             host_->Diagnostics().Report(DiagCode::RpcRejected, "rpcRejectedPermission");
-            return;
+            return RpcStatus::PermissionDenied;
         }
     }
     const auto handler = handlers_.find(id);
     if (handler == handlers_.end()) {
         ++stats_.rpcNoHandler;
         host_->Diagnostics().Report(DiagCode::RpcRejected, "rpcNoHandler");
-        return;
+        return RpcStatus::NoHandler;
     }
     try {
-        handler->second(client, args);
+        handler->second(caller, args);
         ++stats_.rpcDispatched;
     } catch (const std::exception&) {
         ++stats_.rpcHandlerErrors;
@@ -949,6 +953,24 @@ void ReplicationServer::HandleRpc(std::uint64_t client, std::uint8_t, bool relia
         ++stats_.rpcHandlerErrors;
         host_->Diagnostics().Report(DiagCode::RpcRejected, "rpcHandlerErrors");
     }
+    return RpcStatus::Ok;
+}
+
+RpcStatus ReplicationServer::CallLocalRpc(std::uint64_t caller, const std::string& name, std::span<const RpcValue> args, std::uint64_t nowMilliseconds) {
+    std::uint16_t id = 0U;
+    const RpcDefinition* definition = rpcs_->FindByName(name, id);
+    if (definition == nullptr) {
+        return RpcStatus::UnknownRpc;
+    }
+    if (definition->direction != RpcDirection::ClientToServer) {
+        return RpcStatus::WrongDirection;
+    }
+    if (const RpcStatus status = ValidateRpcArguments(*definition, args); status != RpcStatus::Ok) {
+        ++stats_.rpcRejectedArguments;
+        host_->Diagnostics().Report(DiagCode::RpcRejected, "rpcRejectedArguments");
+        return status;
+    }
+    return Dispatch(caller, id, *definition, args, nowMilliseconds);
 }
 
 void ReplicationServer::SetRpcHandler(const std::string& name, RpcHandler handler) {

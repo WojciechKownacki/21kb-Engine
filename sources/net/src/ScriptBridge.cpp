@@ -72,6 +72,9 @@ using kb::network::ScriptRpcValue;
     case RpcStatus::TooLarge: return "the call is too large";
     case RpcStatus::Busy: return "the send queue is full, try again later";
     case RpcStatus::NotReady: return "the connection is not ready yet";
+    case RpcStatus::RateLimited: return "too many calls per second";
+    case RpcStatus::PermissionDenied: return "the caller does not own the entity the call names";
+    case RpcStatus::NoHandler: return "the server has no handler for this call";
     }
     return "failed";
 }
@@ -92,7 +95,7 @@ bool ScriptNetworkRuntime::Connected() const {
     if (role_ == Role::Offline) {
         return false;
     }
-    if (role_ == Role::Server) {
+    if (ServesScene()) {
         return server_ != nullptr;
     }
     // Up means the player can call the server: the session is open and the server has agreed on the declarations (OnNetConnected comes a moment earlier).
@@ -100,8 +103,8 @@ bool ScriptNetworkRuntime::Connected() const {
 }
 
 std::size_t ScriptNetworkRuntime::PlayerCount() const {
-    if (role_ == Role::Server) {
-        return server_ == nullptr ? 0U : server_->ReadyClients();
+    if (ServesScene()) {
+        return (server_ == nullptr ? 0U : server_->ReadyClients()) + (role_ == Role::Host ? 1U : 0U);
     }
     return Connected() ? 1U : 0U;
 }
@@ -184,6 +187,9 @@ void ScriptNetworkRuntime::BindServer(ReplicationServer& server) {
         static_cast<void>(server.SetAlwaysRelevant(server.NetworkIdOf(kb::ecs::Entity{ request.entity }), request.global));
     }
     pendingReplicate_.clear();
+    if (role_ == Role::Host) {
+        Queue("OnNetConnected", { { "player", static_cast<std::uint32_t>(kHostPlayerId) } });
+    }
 }
 
 void ScriptNetworkRuntime::BindClient(ReplicationClient& replication, Client& connection) {
@@ -206,9 +212,9 @@ void ScriptNetworkRuntime::BindClient(ReplicationClient& replication, Client& co
 
 void ScriptNetworkRuntime::HandleEvent(const NetEvent& event) {
     if (event.type == NetEventType::Connected) {
-        Queue("OnNetConnected", { { "player", static_cast<std::uint32_t>(role_ == Role::Server ? event.peer : LocalPlayerId()) } });
+        Queue("OnNetConnected", { { "player", static_cast<std::uint32_t>(ServesScene() ? event.peer : LocalPlayerId()) } });
     } else if (event.type == NetEventType::Disconnected) {
-        Queue("OnNetDisconnected", { { "player", static_cast<std::uint32_t>(role_ == Role::Server ? event.peer : LocalPlayerId()) }, { "reason", std::string{ ReasonText(event.reason) } } });
+        Queue("OnNetDisconnected", { { "player", static_cast<std::uint32_t>(ServesScene() ? event.peer : LocalPlayerId()) }, { "reason", std::string{ ReasonText(event.reason) } } });
     }
 }
 
@@ -230,7 +236,7 @@ void ScriptNetworkRuntime::Deliver(const ScriptRpcDeclaration& declaration, std:
             break;
         case ScriptRpcArgKind::Entity: {
             const NetworkId id = std::get<NetworkId>(args[index]);
-            const kb::ecs::Entity entity = role_ == Role::Server ? (server_ != nullptr ? server_->EntityOf(id) : kb::ecs::Entity{})
+            const kb::ecs::Entity entity = ServesScene() ? (server_ != nullptr ? server_->EntityOf(id) : kb::ecs::Entity{})
                                                                   : (replication_ != nullptr ? replication_->Find(id) : kb::ecs::Entity{});
             if (!entity.IsValid()) {
                 return; // names an entity this side does not have (any more): the call is dropped
@@ -257,6 +263,57 @@ bool ScriptNetworkRuntime::CallRpc(const std::string& name, std::uint64_t target
     if (declaration == nullptr) {
         error = "no such RPC";
         return false;
+    }
+    if (role_ == Role::Host) {
+        if (server_ == nullptr) {
+            error = "the session has not started (declare RPCs in Ready and call them from Tick or an event)";
+            return false;
+        }
+        if (declaration->toServer && target != 0U) {
+            error = "a player calls the server only (target 0)";
+            return false;
+        }
+        std::vector<RpcValue> wire;
+        wire.reserve(args.size());
+        for (const ScriptRpcValue& value : args) {
+            if (const auto* flag = std::get_if<bool>(&value)) {
+                wire.emplace_back(*flag);
+            } else if (const auto* number = std::get_if<std::int32_t>(&value)) {
+                wire.emplace_back(*number);
+            } else if (const auto* unsignedNumber = std::get_if<std::uint32_t>(&value)) {
+                wire.emplace_back(*unsignedNumber);
+            } else if (const auto* real = std::get_if<float>(&value)) {
+                wire.emplace_back(*real);
+            } else if (const auto* text = std::get_if<std::string>(&value)) {
+                wire.emplace_back(*text);
+            } else {
+                const kb::ecs::Entity entity{ std::get<std::uint64_t>(value) };
+                const NetworkId id = server_->NetworkIdOf(entity);
+                if (id == 0U) {
+                    error = "an entity argument is not replicated (the server marks an object with Net.Replicate; a client passes the replica it got in OnNetSpawned, not its own scene object)";
+                    return false;
+                }
+                wire.emplace_back(id);
+            }
+        }
+        RpcStatus status = RpcStatus::Ok;
+        if (declaration->toServer) {
+            status = server_->CallLocalRpc(kHostPlayerId, name, wire, nowMilliseconds_);
+        } else {
+            if (target == 0U) {
+                server_->CallRpcAll(name, wire, status);
+            } else if (target != kHostPlayerId) {
+                status = server_->CallRpc(target, name, wire);
+            }
+            if (target == 0U || target == kHostPlayerId) {
+                Deliver(*declaration, 0U, wire);
+            }
+        }
+        if (status != RpcStatus::Ok) {
+            error = StatusText(status);
+            return false;
+        }
+        return true;
     }
     if (role_ == Role::Server ? declaration->toServer : !declaration->toServer) {
         error = role_ == Role::Server ? "this RPC goes from clients to the server" : "this RPC goes from the server to clients";
@@ -289,7 +346,7 @@ bool ScriptNetworkRuntime::CallRpc(const std::string& name, std::uint64_t target
             wire.emplace_back(*text);
         } else {
             const kb::ecs::Entity entity{ std::get<std::uint64_t>(value) };
-            const NetworkId id = role_ == Role::Server ? server_->NetworkIdOf(entity) : replication_->NetworkIdOf(entity);
+            const NetworkId id = ServesScene() ? server_->NetworkIdOf(entity) : replication_->NetworkIdOf(entity);
             if (id == 0U) {
                 error = "an entity argument is not replicated (the server marks an object with Net.Replicate; a client passes the replica it got in OnNetSpawned, not its own scene object)";
                 return false;
@@ -331,7 +388,7 @@ void ScriptNetworkRuntime::PrepareVariables(kb::ecs::Entity entity) {
 }
 
 bool ScriptNetworkRuntime::VariableVisible(const kb::network::ReplicatedVariableDecl& variable, NetworkId id) const {
-    if (role_ == Role::Server) return true;
+    if (ServesScene()) return true;
     if (replication_ == nullptr || id == 0U) return false;
     const auto owner = replication_->OwnerOf(id);
     return variable.audience == ReplicationAudience::Everyone || variable.audience == ReplicationAudience::InitialOnly ||
@@ -340,7 +397,7 @@ bool ScriptNetworkRuntime::VariableVisible(const kb::network::ReplicatedVariable
 }
 
 bool ScriptNetworkRuntime::SetVar(std::uint64_t entity, const std::string& name, double value, std::string& error) {
-    if (role_ != Role::Server) { error = name + ": only a server can set variables"; return false; }
+    if (!ServesScene()) { error = name + ": only a server can set variables"; return false; }
     if (!replicationError_.empty()) { error = replicationError_; return false; }
     const auto found = std::ranges::find(replicationDeclarations_.variables, name, &kb::network::ReplicatedVariableDecl::name);
     if (found == replicationDeclarations_.variables.end()) { error = name + ": unknown variable"; return false; }
@@ -394,7 +451,7 @@ void ScriptNetworkRuntime::VariablesChanged(NetworkId id, kb::ecs::Entity entity
 }
 
 bool ScriptNetworkRuntime::Replicate(std::uint64_t entity, std::string& error, bool global) {
-    if (role_ != Role::Server) {
+    if (!ServesScene()) {
         error = "only a server replicates";
         return false;
     }
@@ -418,7 +475,7 @@ bool ScriptNetworkRuntime::Replicate(std::uint64_t entity, std::string& error, b
 }
 
 bool ScriptNetworkRuntime::IsReplicated(std::uint64_t entity) const {
-    if (role_ != Role::Server) {
+    if (!ServesScene()) {
         return false;
     }
     if (server_ == nullptr) {

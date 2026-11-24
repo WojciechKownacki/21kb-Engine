@@ -339,6 +339,9 @@ public:
     [[nodiscard]] RpcStatus CallRpc(std::uint64_t client, const std::string& name, std::span<const RpcValue> args);
     void CallRpcAll(const std::string& name, std::span<const RpcValue> args, RpcStatus& status);
     void SetRpcHandler(const std::string& name, RpcHandler handler);
+    // A client-to-server call made on this machine (the hosting player): the same checks as a call from a guest (direction, arguments,
+    // rate, ownership) and the same handler; refusals are counted and reported the same way.
+    [[nodiscard]] RpcStatus CallLocalRpc(std::uint64_t caller, const std::string& name, std::span<const RpcValue> args, std::uint64_t nowMilliseconds);
 
     [[nodiscard]] DiagLog& Diagnostics() noexcept { return host_->Diagnostics(); }
     [[nodiscard]] const ReplicationServerStats& Stats() const noexcept { return stats_; }
@@ -404,6 +407,7 @@ private:
     void UpdateRate(std::uint64_t client, ClientState& state, std::uint64_t now);
     void ApplyAcked(ClientState& state, const SentUpdate& update);
     void HandleRpc(std::uint64_t client, std::uint8_t channel, bool reliable, std::span<const std::uint8_t> data, std::uint64_t nowMilliseconds);
+    [[nodiscard]] RpcStatus Dispatch(std::uint64_t caller, std::uint16_t id, const RpcDefinition& definition, std::span<const RpcValue> args, std::uint64_t now);
     [[nodiscard]] RpcStatus SendRpc(std::uint64_t client, std::uint16_t id, const RpcDefinition& definition, std::span<const RpcValue> args);
 
     Host* host_;

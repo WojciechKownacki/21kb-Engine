@@ -14,7 +14,7 @@
 // scene is offline and every Net.* function that needs a session says so.
 namespace kb::network {
 
-enum class ScriptNetMode : std::uint8_t { Offline, Server, Client };
+enum class ScriptNetMode : std::uint8_t { Offline, Server, Client, Host };
 
 enum class ScriptRpcArgKind : std::uint8_t { Bool, Int, UInt, Float, String, Entity };
 

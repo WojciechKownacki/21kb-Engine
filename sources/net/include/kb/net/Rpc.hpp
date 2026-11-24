@@ -60,6 +60,10 @@ enum class RpcStatus : std::uint8_t {
     TooLarge,
     Busy,         // the send queue is full; try again later (only from the calling side)
     NotReady,     // the connection is not ready for calls yet (only from the calling side)
+    // Refusals of a call made on this machine (a host's player calling its own server); they never travel the wire.
+    RateLimited,
+    PermissionDenied,
+    NoHandler,
 };
 
 class RpcRegistry final {

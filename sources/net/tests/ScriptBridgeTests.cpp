@@ -435,6 +435,55 @@ void TestRuntimeGuards() {
     static_cast<void>(project);
 }
 
+void TestHostRpcGoesThroughValidation() {
+    LoopbackNetwork network;
+    auto socket = network.CreateTransport(Endpoint::Loopback(9900));
+    StaticKeyTable keys;
+    Host host(*socket, HostConfig{}, keys);
+    kb::scene::Scene scene;
+    ScriptNetworkRuntime net(ScriptNetworkRuntime::Role::Host, scene, {});
+    std::string error;
+    kb::network::ScriptRpcDeclaration move;
+    move.name = "Move";
+    move.args.push_back(kb::network::ScriptRpcArgSpec{ kb::network::ScriptRpcArgKind::Float, -1.0, 1.0, 64U });
+    move.maxCallsPerSecond = 2U;
+    Require(net.DeclareRpc(move, error), error);
+    RpcRegistry rpcs;
+    DefineStandardRpcs(rpcs);
+    Require(net.Freeze(rpcs, error), error);
+    std::string registryError;
+    auto components = BuildReplicationRegistry(scene.Runtime().EcsWorld(), {}, 1000.0F, registryError);
+    Require(components != nullptr, registryError);
+    ReplicationServer replication(host, scene.Runtime().EcsWorld(), *components, rpcs);
+    net.BindServer(replication);
+    net.SetNow(1000U);
+    Require(net.Mode() == kb::network::ScriptNetMode::Host, "a host does not report the host mode");
+    Require(net.LocalPlayerId() == kHostPlayerId, "the host's player id is not 1");
+    Require(net.PlayerCount() == 1U, "the host's own player is not counted");
+    const std::vector<kb::network::ScriptRpcValue> outside{ 2.0F };
+    Require(!net.CallRpc("Move", 0U, outside, error), "an argument outside the declared range reached the handler");
+    const std::vector<kb::network::ScriptRpcValue> inside{ 0.5F };
+    Require(net.CallRpc("Move", 0U, inside, error), error);
+    const bool second = net.CallRpc("Move", 0U, inside, error);
+    const bool third = net.CallRpc("Move", 0U, inside, error);
+    Require(!second || !third, "the host's calls were not rate limited");
+    net.SetNow(5000U);
+    Require(!net.CallRpc("Move", 5U, inside, error), "a player call with a target other than 0 was accepted");
+    bool connected = false;
+    std::size_t moves = 0U;
+    for (const auto& event : kb::script::ScriptNetApi::DrainEvents(scene)) {
+        for (const auto& [name, value] : event.arguments) {
+            if (event.name == "OnNetConnected" && name == "player") {
+                connected = connected || std::get<std::uint32_t>(value) == kHostPlayerId;
+            } else if (event.name == "OnRpc_Move" && name == "sender") {
+                moves += std::get<std::uint32_t>(value) == kHostPlayerId ? 1U : 0U;
+            }
+        }
+    }
+    Require(connected, "the host's scripts did not get OnNetConnected for player 1");
+    Require(moves == 2U, "the host's two accepted moves were not delivered to its own scripts");
+}
+
 fs::path MakeVariableProject() {
     const auto root = MakeProject();
     fs::create_directories(root / "Config");
@@ -914,6 +963,7 @@ void TestNativeSessionSettings() {
 int main() {
     const std::vector<std::pair<const char*, void (*)()>> tests{
         { "runtime-guards", &TestRuntimeGuards },
+        { "host-rpc-validation", &TestHostRpcGoesThroughValidation },
         { "net-vars-audiences", &TestNetVarSetOnServerReachesAllowedClients },
         { "net-vars-named-errors", &TestNetVarOutOfRangeIsRefusedNamed },
         { "net-vars-change-once", &TestNetVarChangedEventFiresOncePerChange },

@@ -114,19 +114,19 @@ const char* SlotPrefix(ScriptRpcArgKind kind) noexcept {
 ScriptFunctionCallResult Mode(const ScriptFunctionCallContext& context, Arguments) {
     INetworkScriptRuntime* runtime = RuntimeOf(context);
     const ScriptNetMode mode = runtime == nullptr ? ScriptNetMode::Offline : runtime->Mode();
-    return Ok({ { "mode", ScriptValue{ std::string{ mode == ScriptNetMode::Server ? "server" : mode == ScriptNetMode::Client ? "client" : "offline" } } },
+    return Ok({ { "mode", ScriptValue{ std::string{ mode == ScriptNetMode::Server ? "server" : mode == ScriptNetMode::Client ? "client" : mode == ScriptNetMode::Host ? "host" : "offline" } } },
         { "connected", ScriptValue{ runtime != nullptr && runtime->Connected() } },
         { "players", ScriptValue{ static_cast<int>(runtime == nullptr ? 0U : runtime->PlayerCount()) } } });
 }
 
 ScriptFunctionCallResult IsServer(const ScriptFunctionCallContext& context, Arguments) {
     INetworkScriptRuntime* runtime = RuntimeOf(context);
-    return Ok({ { "value", ScriptValue{ runtime != nullptr && runtime->Mode() == ScriptNetMode::Server } } });
+    return Ok({ { "value", ScriptValue{ runtime != nullptr && (runtime->Mode() == ScriptNetMode::Server || runtime->Mode() == ScriptNetMode::Host) } } });
 }
 
 ScriptFunctionCallResult IsClient(const ScriptFunctionCallContext& context, Arguments) {
     INetworkScriptRuntime* runtime = RuntimeOf(context);
-    return Ok({ { "value", ScriptValue{ runtime != nullptr && runtime->Mode() == ScriptNetMode::Client } } });
+    return Ok({ { "value", ScriptValue{ runtime != nullptr && (runtime->Mode() == ScriptNetMode::Client || runtime->Mode() == ScriptNetMode::Host) } } });
 }
 
 ScriptFunctionCallResult LocalPlayerId(const ScriptFunctionCallContext& context, Arguments) {
@@ -545,11 +545,11 @@ bool ScriptNetApi::Register(ScriptRuntimeHost& host) {
         desc.callback = std::move(callback);
         return host.RegisterFunction(std::move(desc));
     };
-    bool ok = add("Net.Mode", "Reports whether this scene is offline, a server or a client, whether the session is connected, and how many players a server has.", {},
+    bool ok = add("Net.Mode", "Reports whether this scene is offline, a server, a client or a host (a server whose machine also has a player), whether the session is connected, and how many players a server has.", {},
         { { "mode", T::String, true }, { "connected", T::Bool, true }, { "players", T::Int, true } }, &Mode);
-    ok = add("Net.IsServer", "True when this scene runs as the authoritative server.", {}, { { "value", T::Bool, true } }, &IsServer) && ok;
-    ok = add("Net.IsClient", "True when this scene runs as a client of a server.", {}, { { "value", T::Bool, true } }, &IsClient) && ok;
-    ok = add("Net.LocalPlayerId", "The player id of this machine's player on a client; 0 on a server or offline.", {}, { { "player", T::UInt32, true } }, &LocalPlayerId) && ok;
+    ok = add("Net.IsServer", "True when this scene is the authoritative server (also on a host).", {}, { { "value", T::Bool, true } }, &IsServer) && ok;
+    ok = add("Net.IsClient", "True when this scene has a player in a session: a client of a server, or the player of a host.", {}, { { "value", T::Bool, true } }, &IsClient) && ok;
+    ok = add("Net.LocalPlayerId", "The player id of this machine's player: assigned by the server on a client, 1 on a host, 0 on a dedicated server or offline.", {}, { { "player", T::UInt32, true } }, &LocalPlayerId) && ok;
     ok = add("Net.Join",
         "Joins a game at a literal IPv4 address and port, with the game's join password if it has one. Only an offline scene can join; the session starts on the next frame and OnNetConnected follows.",
         { { "address", T::String, true }, { "port", T::Int, true }, { "password", T::String, false } },
