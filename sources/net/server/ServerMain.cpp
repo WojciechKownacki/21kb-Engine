@@ -220,11 +220,11 @@ ParsedArguments Parse(const std::vector<std::string>& arguments) {
     }
     if (const auto mode = values.find("--replicate"); mode != values.end()) {
         if (mode->second == "all") {
-            options.replicate = kb::net::server::ReplicateMode::All;
+            options.replicate = kb::net::ReplicateMode::All;
         } else if (mode->second == "none") {
-            options.replicate = kb::net::server::ReplicateMode::None;
+            options.replicate = kb::net::ReplicateMode::None;
         } else if (mode->second.rfind("prefix:", 0U) == 0U && mode->second.size() > 7U) {
-            options.replicate = kb::net::server::ReplicateMode::Prefix;
+            options.replicate = kb::net::ReplicateMode::Prefix;
             options.replicatePrefix = mode->second.substr(7U);
         } else {
             parsed.error = "--replicate expects all, none or prefix:<name>";

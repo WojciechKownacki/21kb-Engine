@@ -21,6 +21,7 @@
 #include "kb/net/ScriptBridge.hpp"
 #include "kb/net/SceneClient.hpp"
 #include "kb/net/SceneNetwork.hpp"
+#include "kb/net/SceneServer.hpp"
 #include <sstream>
 
 #include <cmath>
@@ -661,6 +662,49 @@ void TestSceneNetworkJoinLeaveAndJoinAgain() {
     Require(network.Connected() && network.ReplicaCount() == 1U, "the scene network did not connect again after leaving");
 }
 
+void TestSceneServerRunsOnProvidedScene() {
+    LoopbackNetwork loopback;
+    auto socket = loopback.CreateTransport(Endpoint::Loopback(9800));
+    const std::uint16_t serverPort = socket->LocalEndpoint().port;
+    StaticKeyTable keys;
+    keys.Set(7U, KeyFor(7U));
+    kb::scene::Scene serverScene;
+    kb::scene::Scene clientScene;
+    const auto object = serverScene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Provided" });
+    kb::scene::TransformComponent transform = *serverScene.Transforms().TryGet(object.Entity());
+    transform.localPosition = { 10.0F, 2.0F, -3.0F };
+    serverScene.Transforms().Set(object.Entity(), transform);
+    ScriptNetworkRuntime serverNet(ScriptNetworkRuntime::Role::Server, serverScene, {});
+    SceneServerOptions serverOptions;
+    serverOptions.identity = MakeBuildIdentity(7U, "scene-content");
+    SceneServer server(serverScene, serverNet, {}, keys, std::move(socket), serverOptions, [](const std::string&) {});
+    std::string error;
+    Require(server.Start(error), "the scene server did not start: " + error);
+    SceneClientOptions defaults;
+    defaults.identity = MakeBuildIdentity(7U, "scene-content");
+    std::uint16_t nextPort = 9801;
+    SceneNetwork network(clientScene, SceneNetworkOptions{ .defaults = defaults, .transport = [&](std::string&) -> std::unique_ptr<IDatagramTransport> {
+        return loopback.CreateTransport(Endpoint::Loopback(nextPort++));
+    } });
+    SceneClientOptions options;
+    options.clientId = 7U;
+    options.key = KeyFor(7U);
+    options.server = Endpoint::Loopback(serverPort);
+    Require(network.RequestJoin(options, error), "the join was refused: " + error);
+    std::ostringstream diagnostics;
+    std::uint64_t now = 0U;
+    std::uint32_t tick = 0U;
+    for (int i = 0; i < 300 && !(network.Connected() && network.ReplicaCount() == 1U); ++i) {
+        now += 10U;
+        loopback.Advance(now);
+        server.Pump(now);
+        server.Tick(++tick, now);
+        Require(network.Update(now, diagnostics), diagnostics.str());
+    }
+    Require(network.Connected() && network.ReplicaCount() == 1U,
+        "the scene server on a provided scene did not connect and replicate");
+}
+
 void TestScriptJoinRequestIsRefusedByName() {
     kb::scene::Scene fixedScene;
     SceneNetwork fixed(fixedScene, SceneNetworkOptions{ .scriptJoin = false });
@@ -875,6 +919,7 @@ int main() {
         { "net-vars-change-once", &TestNetVarChangedEventFiresOncePerChange },
         { "scene-client-lifecycle", &TestSceneClientLifecycle },
         { "scene-network-join-leave", &TestSceneNetworkJoinLeaveAndJoinAgain },
+        { "scene-server-on-provided-scene", &TestSceneServerRunsOnProvidedScene },
         { "script-join-refusals", &TestScriptJoinRequestIsRefusedByName },
         { "reconnect-budget-resets", &TestReconnectBudgetResetsAfterSuccess },
         { "token-refusal-kinds", &TestExpiredTokenAllowsRetryDeniedDoesNot },

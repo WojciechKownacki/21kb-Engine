@@ -31,6 +31,8 @@ add_library(kb_net STATIC
     include/kb/net/SceneClient.hpp
     src/SceneNetwork.cpp
     include/kb/net/SceneNetwork.hpp
+    src/SceneServer.cpp
+    include/kb/net/SceneServer.hpp
     src/ScriptBridge.cpp
     src/Session.cpp
     src/Signaling.cpp

@@ -3,6 +3,7 @@
 #include "kb/net/Replication.hpp"
 #include "kb/net/Auth.hpp"
 #include "kb/net/Rpc.hpp"
+#include "kb/net/SceneServer.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -17,12 +18,6 @@
 // scene on a fixed step, listens on a UDP port, and replicates the scene's entities to authenticated
 // clients through kb_net. Command line parsing is in ServerMain.cpp; this is the part tests can reach.
 namespace kb::net::server {
-
-enum class ReplicateMode : std::uint8_t {
-    None,   // nothing is replicated by the server itself (scripts may mark entities)
-    All,    // every entity with a transform
-    Prefix, // entities whose name starts with `replicatePrefix`
-};
 
 struct ServerOptions {
     std::filesystem::path project;

@@ -217,6 +217,8 @@ struct DedicatedServer::Impl {
     void RefreshSummary() {
         summary.ticks = tick;
         summary.uptimeMilliseconds = NowMilliseconds();
+        Host* host = network != nullptr ? &network->NetHost() : nullptr;
+        ReplicationServer* replication = network != nullptr ? &network->Replication() : nullptr;
         summary.clientsNow = host != nullptr ? host->ClientCount() : 0U;
         summary.clientsPeak = std::max(summary.clientsPeak, summary.clientsNow);
         summary.replicatedEntities = replication != nullptr ? replication->ReplicatedCount() : 0U;
@@ -229,85 +231,9 @@ struct DedicatedServer::Impl {
         if (replication != nullptr) {
             summary.replication = replication->Stats();
         }
-        if (auth != nullptr) {
-            summary.authenticatedClients = authorizedPeers.size();
+        if (AuthGate* auth = network != nullptr ? network->Authorization() : nullptr) {
+            summary.authenticatedClients = network->AuthorizedPeers();
             summary.authorization = auth->GetStats();
-        }
-    }
-
-    void SyncReplicatedEntities() {
-        if (options.replicate == ReplicateMode::None) {
-            return;
-        }
-        for (const kb::ecs::Entity entity : candidates) {
-            if (replication->IsReplicated(entity)) {
-                continue;
-            }
-            if (options.replicate == ReplicateMode::Prefix) {
-                const std::string name{ scene->Entities().Name(entity) };
-                if (name.rfind(options.replicatePrefix, 0U) != 0U) {
-                    continue;
-                }
-            }
-            std::string error;
-            if (!net->Replicate(entity.Id(), error)) Log("replication: " + error);
-        }
-        candidates.clear();
-    }
-
-    void HandleHostEvent(const NetEvent& event, std::uint64_t now) {
-        switch (event.type) {
-        case NetEventType::Connected:
-            Log("client " + std::to_string(event.peer) + " connected");
-            break;
-        case NetEventType::Disconnected:
-            Log("client " + std::to_string(event.peer) + " disconnected");
-            break;
-        case NetEventType::Message:
-            break;
-        }
-        net->HandleEvent(event);
-        replication->HandleEvent(event, now);
-    }
-
-    void RemoveAuthorizedPeer(std::uint64_t peer, DisconnectReason reason) {
-        if (authorizedPeers.erase(peer) != 0U) {
-            HandleHostEvent(NetEvent{ .type = NetEventType::Disconnected, .peer = peer, .reason = reason }, NowMilliseconds());
-        }
-    }
-
-    bool ReloadRevocations() {
-        if (options.authRevocationsFile.empty()) return true;
-        constexpr std::size_t limit = 1024U * 1024U;
-        std::ifstream input(options.authRevocationsFile, std::ios::binary);
-        std::vector<std::uint8_t> bytes(limit + 1U);
-        input.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-        bytes.resize(static_cast<std::size_t>(input.gcount()));
-        const bool valid = !input.bad() && bytes.size() <= limit && auth->UpdateRevocations(bytes);
-        if (!valid && !revocationErrorReported) Log("authorization: revocation snapshot rejected; retaining the last valid snapshot");
-        revocationErrorReported = !valid;
-        return valid;
-    }
-
-    void PumpHost(std::uint64_t now) {
-        host->Update(now);
-        if (auth != nullptr) {
-            if (now >= nextRevocationReload) {
-                static_cast<void>(ReloadRevocations());
-                nextRevocationReload = now + 1000U;
-            }
-            std::vector<NetEvent> commands;
-            const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(
-                std::chrono::system_clock::now().time_since_epoch()).count();
-            auth->Update(now, seconds, commands);
-            for (const NetEvent& command : commands) {
-                if (auth->Authorize(command.peer, kScopePlay)) HandleHostEvent(command, now);
-            }
-            return;
-        }
-        NetEvent event;
-        while (host->PollEvent(event)) {
-            HandleHostEvent(event, now);
         }
     }
 
@@ -327,17 +253,7 @@ struct DedicatedServer::Impl {
     std::unique_ptr<kb::scene::Scene> scene;
     std::unique_ptr<kb::script::ScriptRuntimeHost> scripts;
     std::unique_ptr<ScriptNetworkRuntime> net;
-    std::unique_ptr<ReplicationRegistry> components;
-    std::unique_ptr<RpcRegistry> rpcs;
-    std::unique_ptr<IDatagramTransport> transport;
-    std::unique_ptr<Host> host;
-    std::unique_ptr<AuthGate> auth;
-    std::unordered_set<std::uint64_t> authorizedPeers;
-    std::uint64_t nextRevocationReload = 0U;
-    bool revocationErrorReported = false;
-    std::unique_ptr<ReplicationServer> replication;
-    bool profileMetrics = false;
-    std::vector<kb::ecs::Entity> candidates;
+    std::unique_ptr<SceneServer> network;
     std::uint32_t tick = 0U;
 };
 
@@ -442,17 +358,9 @@ bool DedicatedServer::Start(std::string& error) {
         s.Log("[scene system error] " + problem);
     }
 
-    // The network.
-    s.components = BuildReplicationRegistry(s.scene->Runtime().EcsWorld(), opened.replication, options.worldExtent, error);
-    if (s.components == nullptr) {
-        return false;
-    }
-    s.rpcs = std::make_unique<RpcRegistry>();
-    DefineStandardRpcs(*s.rpcs);
-    if (!s.net->Freeze(*s.rpcs, error)) {
-        return false;
-    }
+    // The listener is opened here: the dedicated server decides between UDP, WebSocket and WebRTC and hands the socket over.
     std::string bindError;
+    std::unique_ptr<IDatagramTransport> transport;
     if (options.webSocketEnabled) {
         WebSocketServerOptions web;
         web.udpBind = Endpoint{address, options.port};
@@ -468,25 +376,25 @@ bool DedicatedServer::Start(std::string& error) {
             return false;
 #endif
         }
-        s.transport = CreateWebSocketServerTransport(web, s.summary.webSocketPort, bindError);
+        transport = CreateWebSocketServerTransport(web, s.summary.webSocketPort, bindError);
 #if defined(KB_NET_WEBRTC)
-        if (s.transport != nullptr && signaling != nullptr) {
+        if (transport != nullptr && signaling != nullptr) {
             WebRtcServerOptions rtc;
             rtc.link.iceServers = options.iceServers;
             rtc.maxClients = options.maxClients;
-            s.transport = CreateWebRtcServerTransport(rtc, std::move(signaling), std::move(s.transport), bindError);
+            transport = CreateWebRtcServerTransport(rtc, std::move(signaling), std::move(transport), bindError);
         }
 #endif
     } else {
-        s.transport = CreateUdpTransport(Endpoint{address, options.port}, bindError);
+        transport = CreateUdpTransport(Endpoint{address, options.port}, bindError);
     }
-    if (s.transport == nullptr) {
+    if (transport == nullptr) {
         error = std::string(options.webSocketEnabled ? "the network listener could not be opened: " :
             "the UDP socket could not be opened: ") + bindError;
         return false;
     }
-    s.summary.port = s.transport->LocalEndpoint().port;
-    HostConfig hostConfig;
+    s.summary.port = transport->LocalEndpoint().port;
+
     std::uint32_t release = 0U;
     std::string contentVersion;
     const auto manifestPath = projectRoot / std::filesystem::path(kb::security::kReleaseManifestFileName);
@@ -513,81 +421,27 @@ bool DedicatedServer::Start(std::string& error) {
     }
     if (options.release) release = *options.release;
     if (options.contentVersion) contentVersion = *options.contentVersion;
-    hostConfig.identity = MakeBuildIdentity(release, contentVersion);
-    hostConfig.maxClients = options.maxClients;
-    hostConfig.maxConnectsPerSecondPerAddress = options.maxConnectsPerSecondPerAddress;
-    hostConfig.maxSessionsPerAddress = options.maxSessionsPerAddress;
-    hostConfig.session.timeoutMilliseconds = options.idleTimeoutSeconds * 1000U;
-    s.host = std::make_unique<Host>(*s.transport, hostConfig, s.keys);
-    s.host->Diagnostics().SetSink([&s](std::string_view message) { s.Log(std::string(message)); });
-    for (const DiagEntry& entry : s.host->Diagnostics().Entries()) {
-        s.Log(std::string(DiagName(entry.code)) + ": " + entry.detail);
-    }
-    if (!s.host->Valid()) {
-        error = "the network host could not be created (random numbers unavailable?)";
-        return false;
-    }
-    ReplicationConfig replicationConfig;
-    replicationConfig.visibilityRadius = options.visibilityRadius;
-    replicationConfig.gridPlane = options.gridPlane;
-    replicationConfig.tickRate = options.tickRate;
-#if defined(_WIN32)
-    char profileValue[2]{};
-    std::size_t profileLength = 0U;
-    replicationConfig.profile = getenv_s(&profileLength, profileValue, sizeof(profileValue), "KB_NET_PROFILE") == 0 && profileLength > 1U;
-#else
-    replicationConfig.profile = std::getenv("KB_NET_PROFILE") != nullptr;
-#endif
-    replicationConfig.minClientRate = options.minClientRate;
-    replicationConfig.maxClientRate = options.maxClientRate;
-    s.profileMetrics = replicationConfig.profile;
-    s.replication = std::make_unique<ReplicationServer>(*s.host, s.scene->Runtime().EcsWorld(), *s.components, *s.rpcs, replicationConfig);
-    s.net->BindServer(*s.replication);
-    if (options.replicate != ReplicateMode::None) {
-        s.net->SetTransformAppeared([&s](kb::ecs::Entity entity) { s.candidates.push_back(entity); });
-        s.scene->Runtime().EcsWorld().ForEach<kb::scene::TransformComponent>(
-            [](kb::ecs::Entity entity, const kb::scene::TransformComponent&, void* context) { static_cast<Impl*>(context)->candidates.push_back(entity); }, &s);
-    }
-    s.replication->SetRpcHandler("Ping", [&s](std::uint64_t caller, std::span<const RpcValue> args) {
-        const std::vector<RpcValue> reply{ std::get<std::uint32_t>(args[0]) };
-        static_cast<void>(s.replication->CallRpc(caller, "Pong", reply));
-    });
-    s.replication->SetRpcHandler("Say", [&s](std::uint64_t caller, std::span<const RpcValue> args) {
-        s.Log("client " + std::to_string(caller) + " says: " + std::get<std::string>(args[0]));
-        const std::vector<RpcValue> message{ static_cast<std::uint32_t>(caller), std::get<std::string>(args[0]) };
-        RpcStatus status = RpcStatus::Ok;
-        s.replication->CallRpcAll("Said", message, status);
-    });
 
-    if (!options.authProviderKeyFile.empty()) {
-        AuthGateConfig config;
-        config.maxCommandBytes = hostConfig.session.maxMessageBytes - 1U;
-        std::ifstream keyFile(options.authProviderKeyFile);
-        std::string hex, trailing;
-        if (!(keyFile >> hex) || (keyFile >> trailing) || !kb::security::TryParseHex(hex, config.providerKey)) {
-            error = "the authorization provider key must contain exactly 64 hex digits";
-            return false;
-        }
-        AuthGateHooks hooks;
-        hooks.onAuthenticated = [&s](std::uint64_t peer, const AuthClaims& claims) {
-            if ((claims.scopes & kScopePlay) == 0U) {
-                s.RemoveAuthorizedPeer(peer, DisconnectReason::Requested);
-                static_cast<void>(s.auth->Authorize(peer, kScopePlay));
-            } else if (s.authorizedPeers.insert(peer).second) {
-                s.HandleHostEvent(NetEvent{ .type = NetEventType::Connected, .peer = peer }, s.NowMilliseconds());
-            }
-        };
-        hooks.onKicked = [&s](std::uint64_t peer, AuthKickReason) {
-            s.RemoveAuthorizedPeer(peer, DisconnectReason::Requested);
-        };
-        hooks.onDisconnected = [&s](std::uint64_t peer, DisconnectReason reason) {
-            s.RemoveAuthorizedPeer(peer, reason);
-        };
-        s.auth = std::make_unique<AuthGate>(*s.host, config, std::move(hooks));
-        if (!s.ReloadRevocations()) {
-            error = "the initial authorization revocation snapshot is invalid";
-            return false;
-        }
+    SceneServerOptions networkOptions;
+    networkOptions.maxClients = options.maxClients;
+    networkOptions.maxConnectsPerSecondPerAddress = options.maxConnectsPerSecondPerAddress;
+    networkOptions.maxSessionsPerAddress = options.maxSessionsPerAddress;
+    networkOptions.tickRate = options.tickRate;
+    networkOptions.minClientRate = options.minClientRate;
+    networkOptions.maxClientRate = options.maxClientRate;
+    networkOptions.idleTimeoutSeconds = options.idleTimeoutSeconds;
+    networkOptions.replicate = options.replicate;
+    networkOptions.replicatePrefix = options.replicatePrefix;
+    networkOptions.worldExtent = options.worldExtent;
+    networkOptions.visibilityRadius = options.visibilityRadius;
+    networkOptions.gridPlane = options.gridPlane;
+    networkOptions.identity = MakeBuildIdentity(release, contentVersion);
+    networkOptions.authProviderKeyFile = options.authProviderKeyFile;
+    networkOptions.authRevocationsFile = options.authRevocationsFile;
+    s.network = std::make_unique<SceneServer>(*s.scene, *s.net, opened.replication, s.keys, std::move(transport),
+        std::move(networkOptions), [&s](const std::string& message) { s.Log(message); });
+    if (!s.network->Start(error)) {
+        return false;
     }
 
     if (!options.portFile.empty()) {
@@ -616,7 +470,7 @@ int DedicatedServer::Run(const std::atomic<bool>& stop) {
         metrics.open(options.metricsFile);
         if (!metrics) { s.Log("error: metrics file could not be opened"); return 1; }
         metrics << "second,tick_avg_ms,tick_max_ms,pump_ms,replication_ms,clients,state_msgs,bytes_out,bytes_in,datagrams_in,diag_total";
-        if (s.profileMetrics) metrics << ",visibility_ms,candidates_ms,ordering_ms,encoding_ms";
+        if (s.network->ProfileMetrics()) metrics << ",visibility_ms,candidates_ms,ordering_ms,encoding_ms";
         metrics << '\n';
     }
     double tickSum = 0.0, tickMax = 0.0, pumpSum = 0.0, replicationSum = 0.0;
@@ -625,7 +479,7 @@ int DedicatedServer::Run(const std::atomic<bool>& stop) {
     for (;;) {
         const std::uint64_t now = s.NowMilliseconds();
         const auto pumpStart = Clock::now();
-        s.PumpHost(now);
+        s.network->Pump(now);
         pumpSum += elapsedMs(pumpStart);
 
         std::size_t steps = 0U;
@@ -635,9 +489,8 @@ int DedicatedServer::Run(const std::atomic<bool>& stop) {
             for (const std::string& problem : s.scene->Runtime().DrainSceneSystemErrors()) {
                 s.Log("[scene system error] " + problem);
             }
-            s.SyncReplicatedEntities();
             const auto replicationStart = Clock::now();
-            s.replication->Tick(++s.tick, now);
+            s.network->Tick(++s.tick, now);
             replicationSum += elapsedMs(replicationStart);
             const auto tickMs = elapsedMs(tickStart);
             tickSum += tickMs;
@@ -653,19 +506,21 @@ int DedicatedServer::Run(const std::atomic<bool>& stop) {
         if (now >= nextStatusAt) {
             s.WriteStatus();
             if (metrics.is_open()) {
+                Host& host = s.network->NetHost();
+                ReplicationServer& replication = s.network->Replication();
                 std::uint64_t bytesOut = 0U, bytesIn = 0U;
-                for (const auto id : s.host->ClientIds()) {
-                    if (const auto* stats = s.host->ClientStats(id)) {
+                for (const auto id : host.ClientIds()) {
+                    if (const auto* stats = host.ClientStats(id)) {
                         bytesOut += stats->bytesSent;
                         bytesIn += stats->bytesAccepted;
                     }
                 }
                 metrics << now / 1000U << ',' << (measuredTicks == 0U ? 0.0 : tickSum / static_cast<double>(measuredTicks))
-                    << ',' << tickMax << ',' << pumpSum << ',' << replicationSum << ',' << s.host->ClientCount()
-                    << ',' << s.replication->Stats().stateMessagesSent << ',' << bytesOut << ',' << bytesIn
-                    << ',' << s.host->Stats().datagramsReceived << ',' << s.host->Diagnostics().Total();
-                if (s.profileMetrics) metrics << ',' << s.replication->Stats().visibilityNs / 1e6 << ',' << s.replication->Stats().candidatesNs / 1e6
-                    << ',' << s.replication->Stats().orderingNs / 1e6 << ',' << s.replication->Stats().encodingNs / 1e6;
+                    << ',' << tickMax << ',' << pumpSum << ',' << replicationSum << ',' << host.ClientCount()
+                    << ',' << replication.Stats().stateMessagesSent << ',' << bytesOut << ',' << bytesIn
+                    << ',' << host.Stats().datagramsReceived << ',' << host.Diagnostics().Total();
+                if (s.network->ProfileMetrics()) metrics << ',' << replication.Stats().visibilityNs / 1e6 << ',' << replication.Stats().candidatesNs / 1e6
+                    << ',' << replication.Stats().orderingNs / 1e6 << ',' << replication.Stats().encodingNs / 1e6;
                 metrics << '\n';
                 tickSum = tickMax = pumpSum = replicationSum = 0.0;
                 measuredTicks = 0U;
@@ -673,7 +528,7 @@ int DedicatedServer::Run(const std::atomic<bool>& stop) {
             }
             nextStatusAt = now + 1000U;
         }
-        const std::size_t clients = s.host->ClientCount();
+        const std::size_t clients = s.network->NetHost().ClientCount();
         s.summary.clientsPeak = std::max(s.summary.clientsPeak, clients);
         if (clients != 0U) {
             hadClients = true;
@@ -703,17 +558,17 @@ int DedicatedServer::Run(const std::atomic<bool>& stop) {
         }
         const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - s.started).count();
         const auto remaining = nextTickAt > static_cast<std::uint64_t>(elapsed) ? nextTickAt - static_cast<std::uint64_t>(elapsed) : 0U;
-        static_cast<void>(s.transport->WaitReadable(static_cast<std::uint32_t>(std::min<std::uint64_t>(1U, remaining / 1000U))));
+        static_cast<void>(s.network->Transport().WaitReadable(static_cast<std::uint32_t>(std::min<std::uint64_t>(1U, remaining / 1000U))));
     }
 
-    s.Log(std::string("stopping (") + reason + "): telling " + std::to_string(s.host->ClientCount()) + " clients");
-    for (const std::uint64_t client : s.host->ClientIds()) {
-        s.host->Disconnect(client);
+    s.Log(std::string("stopping (") + reason + "): telling " + std::to_string(s.network->NetHost().ClientCount()) + " clients");
+    for (const std::uint64_t client : s.network->NetHost().ClientIds()) {
+        s.network->NetHost().Disconnect(client);
     }
     // A few rounds so that the goodbyes are sent.
     const std::uint64_t shutdownStarted = s.NowMilliseconds();
-    while (s.NowMilliseconds() - shutdownStarted < 300U && s.host->ClientCount() != 0U) {
-        s.PumpHost(s.NowMilliseconds());
+    while (s.NowMilliseconds() - shutdownStarted < 300U && s.network->NetHost().ClientCount() != 0U) {
+        s.network->Pump(s.NowMilliseconds());
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     if (exitCode == 0 && !options.stateFile.empty()) {
