@@ -238,6 +238,22 @@ public:
     virtual bool CharacterMove(SceneEntity entity, Vec3 horizontalVelocity) noexcept = 0;
     virtual bool CharacterJump(SceneEntity entity, float verticalSpeed) noexcept = 0;
 
+    // One character step run now, outside the scene's fixed step: the same code the fixed step runs,
+    // with this move and jump instead of the pending ones. Used by network prediction on both sides
+    // (the server steps a player's input when it arrives, the player steps it at once and replays it).
+    struct CharacterStepState {
+        Vec3 position{};
+        Vec3 velocity{};
+        bool grounded = false;
+    };
+    virtual bool CharacterSimulate(
+        SceneEntity entity, Vec3 horizontalVelocity, float jumpSpeed, float deltaSeconds,
+        CharacterStepState& out) noexcept = 0;
+    // Puts the character at a given state (the server's, before replaying the inputs it has not processed yet).
+    virtual bool CharacterSetState(SceneEntity entity, const CharacterStepState& state) noexcept = 0;
+    // A driven character moves only through CharacterSimulate; the fixed step leaves it alone.
+    virtual bool CharacterSetDriven(SceneEntity entity, bool driven) noexcept = 0;
+
     // Real, resulting state after the backend's own last fixed step - honest
     // found=false/grounded=false for an entity with no live character (never
     // synchronized yet, or has no CharacterControllerComponent at all).
@@ -418,6 +434,13 @@ public:
     // honest false/empty when none is.
     static bool CharacterMove(Scene& scene, SceneEntity entity, Vec3 horizontalVelocity) noexcept;
     static bool CharacterJump(Scene& scene, SceneEntity entity, float verticalSpeed) noexcept;
+    using CharacterStepState = IPhysicsBackend::CharacterStepState;
+    static bool CharacterSimulate(
+        Scene& scene, SceneEntity entity, Vec3 horizontalVelocity, float jumpSpeed, float deltaSeconds,
+        IPhysicsBackend::CharacterStepState& out) noexcept;
+    static bool CharacterSetState(
+        Scene& scene, SceneEntity entity, const IPhysicsBackend::CharacterStepState& state) noexcept;
+    static bool CharacterSetDriven(Scene& scene, SceneEntity entity, bool driven) noexcept;
     [[nodiscard]] static PhysicsVectorResult CharacterVelocity(Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool CharacterIsGrounded(Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static PhysicsVectorResult CharacterGroundNormal(Scene& scene, SceneEntity entity) noexcept;

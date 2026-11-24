@@ -282,6 +282,25 @@ bool PhysicsBackend::CharacterJump(Scene& scene, SceneEntity entity, float verti
     return backend != nullptr && backend->CharacterJump(entity, verticalSpeed);
 }
 
+bool PhysicsBackend::CharacterSimulate(
+    Scene& scene, SceneEntity entity, Vec3 horizontalVelocity, float jumpSpeed, float deltaSeconds,
+    IPhysicsBackend::CharacterStepState& out) noexcept {
+    IPhysicsBackend* backend = FindBackend(scene);
+    return backend != nullptr &&
+        backend->CharacterSimulate(entity, horizontalVelocity, jumpSpeed, deltaSeconds, out);
+}
+
+bool PhysicsBackend::CharacterSetState(
+    Scene& scene, SceneEntity entity, const IPhysicsBackend::CharacterStepState& state) noexcept {
+    IPhysicsBackend* backend = FindBackend(scene);
+    return backend != nullptr && backend->CharacterSetState(entity, state);
+}
+
+bool PhysicsBackend::CharacterSetDriven(Scene& scene, SceneEntity entity, bool driven) noexcept {
+    IPhysicsBackend* backend = FindBackend(scene);
+    return backend != nullptr && backend->CharacterSetDriven(entity, driven);
+}
+
 PhysicsVectorResult PhysicsBackend::CharacterVelocity(Scene& scene, SceneEntity entity) noexcept {
     IPhysicsBackend* backend = FindBackend(scene);
     return backend != nullptr ? backend->CharacterVelocity(entity) : PhysicsVectorResult{};

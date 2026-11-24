@@ -855,6 +855,9 @@ struct CharacterRecord {
     // the AI turned the character (the rotation is the Transform's).
     Quat writtenRotation{};
     bool hasWrittenRotation = false;
+    // A driven character is stepped only by CharacterSimulate (network prediction); the fixed
+    // step neither moves it nor consumes its move input.
+    bool driven = false;
 };
 
 struct RootMotionSegment {
@@ -1848,6 +1851,55 @@ public:
         return true;
     }
 
+    bool CharacterSimulate(
+        SceneEntity entity, Vec3 horizontalVelocity, float jumpSpeed, float deltaSeconds,
+        kb::scene::PhysicsBackend::CharacterStepState& out) noexcept override {
+        JoinStep();
+        CharacterRecord* record = FindCharacterRecord(entity);
+        if (record == nullptr || !std::isfinite(deltaSeconds) || deltaSeconds <= 0.0F || deltaSeconds > 0.25F) {
+            return false;
+        }
+        const JPH::Vec3 newVelocity = CharacterStepVelocity(
+            *record, ToJolt(horizontalVelocity), std::max(0.0F, jumpSpeed), deltaSeconds);
+        CharacterStepMove(*record, newVelocity, deltaSeconds);
+        WriteBackCharacterNow(entity.Id(), *record);
+        out.position = FromJoltPosition(record->character->GetPosition());
+        out.velocity = record->velocity;
+        out.grounded = record->character->GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround;
+        return true;
+    }
+
+    bool CharacterSetState(SceneEntity entity, const kb::scene::PhysicsBackend::CharacterStepState& state) noexcept override {
+        JoinStep();
+        CharacterRecord* record = FindCharacterRecord(entity);
+        if (record == nullptr || !IsFinite(state.position) || !IsFinite(state.velocity)) {
+            return false;
+        }
+        JPH::CharacterVirtual* character = record->character;
+        character->SetPosition(ToJoltPosition(state.position));
+        character->SetLinearVelocity(ToJolt(state.velocity));
+        record->velocity = state.velocity;
+        const JPH::ObjectLayer characterLayer = ToObjectLayer(0U, false);
+        character->RefreshContacts(
+            physicsSystem_.GetDefaultBroadPhaseLayerFilter(characterLayer),
+            physicsSystem_.GetDefaultLayerFilter(characterLayer),
+            {},
+            {},
+            tempAllocator_);
+        WriteBackCharacterNow(entity.Id(), *record);
+        return true;
+    }
+
+    bool CharacterSetDriven(SceneEntity entity, bool driven) noexcept override {
+        JoinStep();
+        CharacterRecord* record = FindCharacterRecord(entity);
+        if (record == nullptr) {
+            return false;
+        }
+        record->driven = driven;
+        return true;
+    }
+
     [[nodiscard]] kb::scene::PhysicsVectorResult CharacterVelocity(SceneEntity entity) const noexcept override {
         JoinStep();
         const CharacterRecord* record = FindCharacterRecord(entity);
@@ -2713,77 +2765,121 @@ private:
     // LIB-131: the movement algorithm below is a faithful port of Jolt's OWN reference
     // implementation (third_party/jolt/Samples/Tests/Character/CharacterVirtualTest.cpp,
     // HandleInput) - not reinvented. Runs BEFORE Step() - see OnFixedUpdate's own comment.
+    // The velocity half of one character step (ground motion, jump, gravity, slope-following move),
+    // shared by the fixed step and CharacterSimulate: the move and jump come in as arguments, so a
+    // prediction step uses the input it was handed instead of the pending one.
+    [[nodiscard]] JPH::Vec3 CharacterStepVelocity(
+        CharacterRecord& record, JPH::Vec3 moveInput, float jumpSpeed, float deltaSeconds) {
+        JPH::CharacterVirtual* character = record.character;
+        const JPH::ObjectLayer characterLayer = ToObjectLayer(0U, false);
+
+        // A cheaper re-estimate of ground velocity than a full contact refresh - the
+        // ground body's own velocity may have changed since the last contact was
+        // detected (e.g. SynchronizeBodies just re-derived a Kinematic platform's
+        // velocity from its transform this very step).
+        character->UpdateGroundVelocity();
+
+        const JPH::Vec3 up = character->GetUp();
+        const JPH::Vec3 currentVerticalVelocity = character->GetLinearVelocity().Dot(up) * up;
+        const JPH::Vec3 groundVelocity = character->GetGroundVelocity();
+        const bool movingTowardsGround = (currentVerticalVelocity.Dot(up) - groundVelocity.Dot(up)) < 0.1F;
+
+        JPH::Vec3 newVelocity;
+        const bool onGround = character->GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround;
+        if (onGround && movingTowardsGround) {
+            // LIB-131 "platform motion": assume the velocity of whatever is stood on -
+            // zero for static/no ground, the real moving velocity for a Kinematic/Dynamic
+            // platform, so the character rides along with it automatically.
+            newVelocity = groundVelocity;
+            // LIB-131 jump: only actually honored while grounded and not already moving
+            // away from the ground - a request made while airborne was already dropped by
+            // this same `if` not being taken, so the jump speed is simply never added.
+            record.jumpGraceSeconds = record.jumpGraceLimit;
+            if (jumpSpeed > 0.0F) {
+                newVelocity += up * jumpSpeed;
+                record.jumpGraceSeconds = 0.0F;
+            }
+        } else {
+            newVelocity = currentVerticalVelocity;
+            record.jumpGraceSeconds = std::max(0.0F, record.jumpGraceSeconds - deltaSeconds);
+            // Coyote time: a jump asked for just after the ground was lost, while the character has not
+            // started to rise, is honored as if it were still standing. The ground's velocity is kept.
+            if (jumpSpeed > 0.0F && record.jumpGraceSeconds > 0.0F && currentVerticalVelocity.Dot(up) <= 0.1F) {
+                newVelocity = groundVelocity + up * jumpSpeed;
+                record.jumpGraceSeconds = 0.0F;
+            }
+        }
+
+        // LIB-131 gravity: this component's own gravityScale/useGravity, not the scene
+        // gravity vector unmodified - mirrors RigidbodyComponent's identically-named
+        // fields, since a character has no Rigidbody of its own to read them from.
+        const JPH::Vec3 gravity = physicsSystem_.GetGravity() * (record.useGravity ? record.gravityScale : 0.0F);
+        newVelocity += gravity * deltaSeconds;
+
+        // LIB-131 movement input (Physics.CharacterMove): horizontal only - any vertical
+        // component is projected out so a script cannot bypass CharacterJump/gravity by
+        // passing a nonzero Y through CharacterMove instead (ScriptPhysicsApi.cpp's
+        // Physics.CharacterMove pins do not even accept a Y value).
+        const JPH::Vec3 desiredVelocity = moveInput;
+        JPH::Vec3 horizontalVelocity = desiredVelocity - desiredVelocity.Dot(up) * up;
+        // On walkable ground the move follows the slope keeping its horizontal speed
+        // Jolt alone would project it
+        // onto the slope and walk slower uphill.
+        if (character->GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround) {
+            const JPH::Vec3 groundNormal = SurfaceBelow(*character, characterLayer);
+            const float normalUp = groundNormal.Dot(up);
+            if (normalUp > 1.0e-3F) {
+                horizontalVelocity += up * (-groundNormal.Dot(horizontalVelocity) / normalUp);
+            }
+        }
+        newVelocity += horizontalVelocity;
+        return newVelocity;
+    }
+
+    // The motion half of one character step: the real Jolt update and the velocity it actually moved with.
+    void CharacterStepMove(CharacterRecord& record, JPH::Vec3 newVelocity, float deltaSeconds) {
+        JPH::CharacterVirtual* character = record.character;
+        const JPH::Vec3 up = character->GetUp();
+        const JPH::ObjectLayer characterLayer = ToObjectLayer(0U, false);
+        const JPH::Vec3 gravity = physicsSystem_.GetGravity() * (record.useGravity ? record.gravityScale : 0.0F);
+
+        character->SetLinearVelocity(newVelocity);
+        // Jolt changes the character's velocity during the update; a hit compares the move asked for.
+        updatingCharacterVelocity_ = newVelocity;
+
+        // LIB-131 step offset: ExtendedUpdate's own WalkStairs pass, magnitude taken from
+        // this character's configured stepOffset (not Jolt's built-in 0.4 default, though
+        // that IS this field's own default value - see CharacterControllerComponent.hpp).
+        JPH::CharacterVirtual::ExtendedUpdateSettings updateSettings;
+        updateSettings.mWalkStairsStepUp = up * record.stepOffset;
+        const JPH::RVec3 startPosition = character->GetPosition();
+
+        character->ExtendedUpdate(
+            deltaSeconds,
+            gravity,
+            updateSettings,
+            physicsSystem_.GetDefaultBroadPhaseLayerFilter(characterLayer),
+            physicsSystem_.GetDefaultLayerFilter(characterLayer),
+            {},
+            {},
+            tempAllocator_);
+        record.velocity = FromJolt(JPH::Vec3(character->GetPosition() - startPosition) / deltaSeconds);
+    }
+
     void UpdateCharacters(SceneSystemContext& context) {
         const float deltaSeconds = context.DeltaSeconds();
         if (deltaSeconds <= 0.0F) {
             return;
         }
-        const JPH::ObjectLayer characterLayer = ToObjectLayer(0U, false);
         for (auto& [entityId, record] : characters_) {
-            static_cast<void>(entityId);
+            // A driven character is stepped only through CharacterSimulate.
+            if (record.driven) {
+                continue;
+            }
             JPH::CharacterVirtual* character = record.character;
-
-            // A cheaper re-estimate of ground velocity than a full contact refresh - the
-            // ground body's own velocity may have changed since the last contact was
-            // detected (e.g. SynchronizeBodies just re-derived a Kinematic platform's
-            // velocity from its transform this very step).
-            character->UpdateGroundVelocity();
-
-            const JPH::Vec3 up = character->GetUp();
-            const JPH::Vec3 currentVerticalVelocity = character->GetLinearVelocity().Dot(up) * up;
-            const JPH::Vec3 groundVelocity = character->GetGroundVelocity();
-            const bool movingTowardsGround = (currentVerticalVelocity.Dot(up) - groundVelocity.Dot(up)) < 0.1F;
-
-            JPH::Vec3 newVelocity;
-            const bool onGround = character->GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround;
-            if (onGround && movingTowardsGround) {
-                // LIB-131 "platform motion": assume the velocity of whatever is stood on -
-                // zero for static/no ground, the real moving velocity for a Kinematic/Dynamic
-                // platform, so the character rides along with it automatically.
-                newVelocity = groundVelocity;
-                // LIB-131 jump: only actually honored while grounded and not already moving
-                // away from the ground - a request made while airborne was already dropped by
-                // this same `if` not being taken, so pendingJumpSpeed is simply never added.
-                record.jumpGraceSeconds = record.jumpGraceLimit;
-                if (record.pendingJumpSpeed > 0.0F) {
-                    newVelocity += up * record.pendingJumpSpeed;
-                    record.jumpGraceSeconds = 0.0F;
-                }
-            } else {
-                newVelocity = currentVerticalVelocity;
-                record.jumpGraceSeconds = std::max(0.0F, record.jumpGraceSeconds - deltaSeconds);
-                // Coyote time: a jump asked for just after the ground was lost, while the character has not
-                // started to rise, is honored as if it were still standing. The ground's velocity is kept.
-                if (record.pendingJumpSpeed > 0.0F && record.jumpGraceSeconds > 0.0F && currentVerticalVelocity.Dot(up) <= 0.1F) {
-                    newVelocity = groundVelocity + up * record.pendingJumpSpeed;
-                    record.jumpGraceSeconds = 0.0F;
-                }
-            }
+            JPH::Vec3 newVelocity = CharacterStepVelocity(
+                record, ToJolt(record.moveInput), record.pendingJumpSpeed, deltaSeconds);
             record.pendingJumpSpeed = 0.0F;
-
-            // LIB-131 gravity: this component's own gravityScale/useGravity, not the scene
-            // gravity vector unmodified - mirrors RigidbodyComponent's identically-named
-            // fields, since a character has no Rigidbody of its own to read them from.
-            const JPH::Vec3 gravity = physicsSystem_.GetGravity() * (record.useGravity ? record.gravityScale : 0.0F);
-            newVelocity += gravity * deltaSeconds;
-
-            // LIB-131 movement input (Physics.CharacterMove): horizontal only - any vertical
-            // component is projected out so a script cannot bypass CharacterJump/gravity by
-            // passing a nonzero Y through CharacterMove instead (ScriptPhysicsApi.cpp's
-            // Physics.CharacterMove pins do not even accept a Y value).
-            const JPH::Vec3 desiredVelocity = ToJolt(record.moveInput);
-            JPH::Vec3 horizontalVelocity = desiredVelocity - desiredVelocity.Dot(up) * up;
-            // On walkable ground the move follows the slope keeping its horizontal speed
-            // Jolt alone would project it
-            // onto the slope and walk slower uphill.
-            if (character->GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround) {
-                const JPH::Vec3 groundNormal = SurfaceBelow(*character, characterLayer);
-                const float normalUp = groundNormal.Dot(up);
-                if (normalUp > 1.0e-3F) {
-                    horizontalVelocity += up * (-groundNormal.Dot(horizontalVelocity) / normalUp);
-                }
-            }
-            newVelocity += horizontalVelocity;
 
             const auto rootMotion = pendingCharacterRootMotion_.find(entityId);
             if (rootMotion != pendingCharacterRootMotion_.end()) {
@@ -2816,27 +2912,7 @@ private:
                 }
             }
 
-            character->SetLinearVelocity(newVelocity);
-            // Jolt changes the character's velocity during the update; a hit compares the move asked for.
-            updatingCharacterVelocity_ = newVelocity;
-
-            // LIB-131 step offset: ExtendedUpdate's own WalkStairs pass, magnitude taken from
-            // this character's configured stepOffset (not Jolt's built-in 0.4 default, though
-            // that IS this field's own default value - see CharacterControllerComponent.hpp).
-            JPH::CharacterVirtual::ExtendedUpdateSettings updateSettings;
-            updateSettings.mWalkStairsStepUp = up * record.stepOffset;
-            const JPH::RVec3 startPosition = character->GetPosition();
-
-            character->ExtendedUpdate(
-                deltaSeconds,
-                gravity,
-                updateSettings,
-                physicsSystem_.GetDefaultBroadPhaseLayerFilter(characterLayer),
-                physicsSystem_.GetDefaultLayerFilter(characterLayer),
-                {},
-                {},
-                tempAllocator_);
-            record.velocity = FromJolt(JPH::Vec3(character->GetPosition() - startPosition) / deltaSeconds);
+            CharacterStepMove(record, newVelocity, deltaSeconds);
         }
     }
 
@@ -2913,22 +2989,41 @@ private:
         return lock.Succeeded() ? lock.GetBody().GetWorldSpaceSurfaceNormal(hit.mSubShapeID2, ray.GetPointOnRay(hit.mFraction)) : up;
     }
 
+    // One character's new world pose reaches its Transform - shared by the batched fixed-step
+    // write-back and by a character step run outside it.
+    void WriteBackCharacter(SceneSystemContext& context, std::uint64_t entityId, CharacterRecord& record) {
+        SceneEntity entity{ entityId };
+        if (!context.Transforms().IsAlive(entity)) {
+            return;
+        }
+        TransformComponent* transform = context.Transforms().TryGet(entity);
+        if (transform == nullptr) {
+            return;
+        }
+        const kb::math::DVec3 position = FromJoltWorldPosition(record.character->GetPosition());
+        const Quat rotation = FromJolt(record.character->GetRotation());
+        StageWriteBackWorldPose(*transform, context.Transforms().WorldTranslation(entity, *transform), position, rotation);
+        record.writtenRotation = rotation;
+        record.hasWrittenRotation = true;
+        writeBackPoses_.push_back({entity, transform, context.EcsWorld().NativeStorage().StructuralVersion(), position});
+    }
+
+    // Outside the fixed step there is no batched local-pose pass after the step: publish the one
+    // character's pose now.
+    void WriteBackCharacterNow(std::uint64_t entityId, CharacterRecord& record) {
+        if (scene_ == nullptr) {
+            return;
+        }
+        SceneSystemContext context(*scene_, 0.0F);
+        writeBackPoses_.clear();
+        WriteBackCharacter(context, entityId, record);
+        FinalizeWriteBackLocalPoses(context);
+        writeBackPoses_.clear();
+    }
+
     void WriteBackCharacters(SceneSystemContext& context) {
         for (auto& [entityId, record] : characters_) {
-            SceneEntity entity{ entityId };
-            if (!context.Transforms().IsAlive(entity)) {
-                continue;
-            }
-            TransformComponent* transform = context.Transforms().TryGet(entity);
-            if (transform == nullptr) {
-                continue;
-            }
-            const kb::math::DVec3 position = FromJoltWorldPosition(record.character->GetPosition());
-            const Quat rotation = FromJolt(record.character->GetRotation());
-            StageWriteBackWorldPose(*transform, context.Transforms().WorldTranslation(entity, *transform), position, rotation);
-            record.writtenRotation = rotation;
-            record.hasWrittenRotation = true;
-            writeBackPoses_.push_back({entity, transform, context.EcsWorld().NativeStorage().StructuralVersion(), position});
+            WriteBackCharacter(context, entityId, record);
         }
     }
 

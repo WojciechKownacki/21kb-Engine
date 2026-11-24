@@ -3745,7 +3745,86 @@ void RunGravityChangeWakesBodiesTest() {
     kb::tests::Require(!kb::scene::PhysicsBackend::IsSleeping(scene, box.Entity()), "Changing the gravity must wake a sleeping body");
 }
 
+// A character controller on a flat floor, as the network prediction tests below need it: one
+// priming step synchronizes the real Jolt character before any prediction call targets it.
+[[nodiscard]] std::unique_ptr<kb::scene::Scene> MakePredictedCharacterScene(kb::scene::SceneEntity& character) {
+    kb::project::ProjectDescriptor descriptor;
+    descriptor.disableEnginePluginsByDefault = true;
+    descriptor.plugins.push_back({ .name = "Physics.Jolt", .binaryPath = KB_PHYSICS_JOLT_PLUGIN_PATH, .enabled = true });
+    auto scene = std::make_unique<kb::scene::Scene>(std::move(descriptor));
+    kb::scene::PhysicsBackend::SetStepPipelining(*scene, false);
+
+    const auto floor = scene->Entities().CreateObject({ .name = "Floor", .transform = { .localPosition = { 0.0F, -0.5F, 0.0F } } });
+    scene->Components().Colliders().Set(floor.Entity(), { .boxSize = { 20.0F, 1.0F, 4.0F } });
+
+    const auto body = scene->Entities().CreateObject({ .name = "Character", .transform = { .localPosition = { 0.0F, 0.95F, 0.0F } } });
+    scene->Components().CharacterControllers().Set(body.Entity(), { .radius = 0.4F, .height = 1.8F });
+    static_cast<void>(scene->Runtime().Update(1.0F / 60.0F));
+    character = body.Entity();
+    return scene;
+}
+
+void RunCharacterSimulateDrivenTest() {
+    if (std::filesystem::path{ KB_PHYSICS_JOLT_PLUGIN_PATH }.empty()) return;
+    kb::scene::SceneEntity character{};
+    const std::unique_ptr<kb::scene::Scene> owner = MakePredictedCharacterScene(character);
+    kb::scene::Scene& scene = *owner;
+    kb::tests::Require(kb::scene::PhysicsBackend::CharacterSetDriven(scene, character, true), "a live character can be driven by prediction");
+    const float startX = scene.Transforms().Get(character).localPosition.x;
+
+    kb::scene::PhysicsBackend::CharacterStepState state{};
+    for (int step = 0; step < 30; ++step) {
+        kb::tests::Require(kb::scene::PhysicsBackend::CharacterSimulate(scene, character, { 3.0F, 0.0F, 0.0F }, 0.0F, 1.0F / 30.0F, state),
+            "a driven character takes a prediction step");
+    }
+    const float traveled = state.position.x - startX;
+    kb::tests::Require(traveled > 2.7F && traveled < 3.3F, "30 steps of 3 m/s for 1/30 s move the character 3 m");
+    kb::tests::Require(state.grounded, "a character walking on flat ground stays grounded");
+    const kb::scene::Vec3 predictedPosition = scene.Transforms().Get(character).localPosition;
+    kb::tests::Require(std::fabs(predictedPosition.x - state.position.x) < 1.0e-3F, "the predicted position reaches the transform");
+
+    for (int frame = 0; frame < 30; ++frame) static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    const kb::scene::Vec3 afterFixedSteps = scene.Transforms().Get(character).localPosition;
+    kb::tests::Require(std::fabs(afterFixedSteps.x - predictedPosition.x) < 1.0e-4F &&
+            std::fabs(afterFixedSteps.y - predictedPosition.y) < 1.0e-4F &&
+            std::fabs(afterFixedSteps.z - predictedPosition.z) < 1.0e-4F,
+        "the fixed step leaves a driven character where prediction put it");
+}
+
+void RunCharacterSimulateReplayTest() {
+    if (std::filesystem::path{ KB_PHYSICS_JOLT_PLUGIN_PATH }.empty()) return;
+    kb::scene::SceneEntity character{};
+    const std::unique_ptr<kb::scene::Scene> owner = MakePredictedCharacterScene(character);
+    kb::scene::Scene& scene = *owner;
+    kb::tests::Require(kb::scene::PhysicsBackend::CharacterSetDriven(scene, character, true), "a live character can be driven by prediction");
+
+    const kb::scene::PhysicsBackend::CharacterStepState saved{ .position = scene.Transforms().Get(character).localPosition, .velocity = {}, .grounded = true };
+    const auto replay = [&]() {
+        kb::scene::PhysicsBackend::CharacterStepState result{};
+        for (int step = 0; step < 20; ++step) {
+            const float horizontal = 1.0F + 0.25F * static_cast<float>(step % 4);
+            const float jump = step == 5 ? 5.0F : 0.0F;
+            kb::tests::Require(kb::scene::PhysicsBackend::CharacterSimulate(scene, character, { horizontal, 0.0F, 0.0F }, jump, 1.0F / 30.0F, result),
+                "a replay step is taken");
+        }
+        return result;
+    };
+
+    kb::tests::Require(kb::scene::PhysicsBackend::CharacterSetState(scene, character, saved), "a character takes a given state before replay");
+    const kb::scene::PhysicsBackend::CharacterStepState first = replay();
+    kb::tests::Require(kb::scene::PhysicsBackend::CharacterSetState(scene, character, saved), "a character takes the saved state again");
+    const kb::scene::PhysicsBackend::CharacterStepState second = replay();
+
+    const float dx = first.position.x - second.position.x;
+    const float dy = first.position.y - second.position.y;
+    const float dz = first.position.z - second.position.z;
+    kb::tests::Require(std::sqrt(dx * dx + dy * dy + dz * dz) < 1.0e-4F, "the same inputs from the same state replay to the same position");
+    kb::tests::Require(first.grounded == second.grounded, "the same inputs from the same state replay to the same grounded state");
+}
+
 void RunPhysicsSceneSystemTests() {
+    RunCharacterSimulateDrivenTest();
+    RunCharacterSimulateReplayTest();
     RunProjectSimulationSettingsTest();
     RunGravityChangeWakesBodiesTest();
     RunPhysicsMemoryMeasurementTest();

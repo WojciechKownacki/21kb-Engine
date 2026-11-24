@@ -435,6 +435,32 @@ public:
         return true;
     }
 
+    bool CharacterSimulate(kb::scene::SceneEntity entity, kb::scene::Vec3 horizontalVelocity, float jumpSpeed,
+        float deltaSeconds, kb::scene::PhysicsBackend::CharacterStepState& out) noexcept override {
+        static_cast<void>(entity);
+        static_cast<void>(horizontalVelocity);
+        static_cast<void>(jumpSpeed);
+        static_cast<void>(deltaSeconds);
+        static_cast<void>(out);
+        // no characters in this backend
+        return false;
+    }
+
+    bool CharacterSetState(
+        kb::scene::SceneEntity entity, const kb::scene::PhysicsBackend::CharacterStepState& state) noexcept override {
+        static_cast<void>(entity);
+        static_cast<void>(state);
+        // no characters in this backend
+        return false;
+    }
+
+    bool CharacterSetDriven(kb::scene::SceneEntity entity, bool driven) noexcept override {
+        static_cast<void>(entity);
+        static_cast<void>(driven);
+        // no characters in this backend
+        return false;
+    }
+
     [[nodiscard]] kb::scene::PhysicsVectorResult CharacterVelocity(kb::scene::SceneEntity entity) const noexcept override {
         if (entity != knownCharacterEntity) {
             return {};
