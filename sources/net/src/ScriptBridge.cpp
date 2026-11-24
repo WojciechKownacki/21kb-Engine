@@ -56,6 +56,7 @@ using kb::network::ScriptRpcValue;
     case DisconnectReason::ContentMismatch: return "content-mismatch";
     case DisconnectReason::OutdatedClient: return "outdated-client";
     case DisconnectReason::ServerFull: return "server-full";
+    case DisconnectReason::PasswordRejected: return "password-rejected";
     case DisconnectReason::None: break;
     }
     return "none";
@@ -156,10 +157,9 @@ void ScriptNetworkRuntime::BindServer(ReplicationServer& server) {
     pendingReplicate_.clear();
 }
 
-void ScriptNetworkRuntime::BindClient(ReplicationClient& replication, Client& connection, std::uint64_t playerId) {
+void ScriptNetworkRuntime::BindClient(ReplicationClient& replication, Client& connection) {
     replication_ = &replication;
     connection_ = &connection;
-    playerId_ = playerId;
     variableSnapshots_.clear();
     replication.SetStateCallback([this](NetworkId id, kb::ecs::Entity entity, std::uint32_t) { VariablesChanged(id, entity, false); });
     for (std::size_t index = 0U; index < declarations_.size(); ++index) {
@@ -177,9 +177,9 @@ void ScriptNetworkRuntime::BindClient(ReplicationClient& replication, Client& co
 
 void ScriptNetworkRuntime::HandleEvent(const NetEvent& event) {
     if (event.type == NetEventType::Connected) {
-        Queue("OnNetConnected", { { "player", static_cast<std::uint32_t>(role_ == Role::Server ? event.peer : playerId_) } });
+        Queue("OnNetConnected", { { "player", static_cast<std::uint32_t>(role_ == Role::Server ? event.peer : LocalPlayerId()) } });
     } else if (event.type == NetEventType::Disconnected) {
-        Queue("OnNetDisconnected", { { "player", static_cast<std::uint32_t>(role_ == Role::Server ? event.peer : playerId_) }, { "reason", std::string{ ReasonText(event.reason) } } });
+        Queue("OnNetDisconnected", { { "player", static_cast<std::uint32_t>(role_ == Role::Server ? event.peer : LocalPlayerId()) }, { "reason", std::string{ ReasonText(event.reason) } } });
     }
 }
 
@@ -306,8 +306,8 @@ bool ScriptNetworkRuntime::VariableVisible(const kb::network::ReplicatedVariable
     if (replication_ == nullptr || id == 0U) return false;
     const auto owner = replication_->OwnerOf(id);
     return variable.audience == ReplicationAudience::Everyone || variable.audience == ReplicationAudience::InitialOnly ||
-        (variable.audience == ReplicationAudience::Owner && owner == playerId_) ||
-        (variable.audience == ReplicationAudience::Others && owner != playerId_);
+        (variable.audience == ReplicationAudience::Owner && owner == LocalPlayerId()) ||
+        (variable.audience == ReplicationAudience::Others && owner != LocalPlayerId());
 }
 
 bool ScriptNetworkRuntime::SetVar(std::uint64_t entity, const std::string& name, double value, std::string& error) {

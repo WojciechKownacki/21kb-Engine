@@ -157,7 +157,7 @@ private:
     std::map<std::string, Account> accounts_;
     StaticKeyTable keys_;
     RevocationList revocations_;
-    std::uint64_t nextClientId_ = 1U;
+    std::uint64_t nextClientId_ = kHostPlayerId + 1U;
     std::uint64_t nextTokenId_ = 1U;
 };
 

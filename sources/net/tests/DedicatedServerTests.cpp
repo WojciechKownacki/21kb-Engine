@@ -824,7 +824,7 @@ void TestKeysFile() {
     Require(server::ParseKeysFile(KeysFileText(), keys, count, error) && count == 2U, "the keys file was not read: " + error);
     SessionKey key{};
     Require(keys.LookupKey(7U, key) && key == KeyFrom(7U) && keys.LookupKey(8U, key) && !keys.LookupKey(9U, key), "the keys are wrong");
-    for (const char* bad : { "x y\n", "0 " "00" "\n", "5\n", "5 abc\n", "5 00 extra\n" }) {
+    for (const char* bad : { "x y\n", "0 " "00" "\n", "1 0000000000000000000000000000000000000000000000000000000000000000\n", "5\n", "5 abc\n", "5 00 extra\n" }) {
         StaticKeyTable table;
         Require(!server::ParseKeysFile(bad, table, count, error), std::string("a bad keys file was accepted: ") + bad);
     }

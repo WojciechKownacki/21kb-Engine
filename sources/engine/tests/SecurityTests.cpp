@@ -42,6 +42,31 @@ template <std::size_t Size>
     return std::vector<std::uint8_t>(count, value);
 }
 
+void TestCPaceDraftVectors() {
+    const auto sid = Hex("7e4b4791d6a8ef019b936c79fb7f2c57");
+    const auto channel = Hex("0b415f696e69746961746f720b425f726573706f6e646572");
+    const auto generator = kb::security::CPaceGenerator("Password", channel, sid);
+    Require(generator == HexArray<32U>("d04bf6d41f6a289632a2e929fa29bebd51092512a7829fdde7d314b62f05a73f"), "CPace draft generator differs");
+    kb::security::SecretBytes<32U> a, b, ya, yb, ka, kb;
+    const auto aBytes = Hex("21b4f4bd9e64ed355c3eb676a28ebedaf6d8f17bdc365995b319097153044080");
+    const auto bBytes = Hex("848b0779ff415f0af4ea14df9dd1d3c29ac41d836c7808896c4eba19c51ac40a");
+    std::copy(aBytes.begin(), aBytes.end(), a.data()); std::copy(bBytes.begin(), bBytes.end(), b.data());
+    Require(kb::security::X25519SharedSecret(a, generator, ya) && kb::security::X25519SharedSecret(b, generator, yb), "CPace public messages failed");
+    Require(kb::security::ConstantTimeEqual(ya.Span(), Hex("1d13c89278cdadd826f6d8d7f887701430f8380ddc17611cdd6dc989ce0c9f32")) &&
+        kb::security::ConstantTimeEqual(yb.Span(), Hex("248cccf6d5cdc3646f0ad593f9e6cef4e69d4945f8372e623512ecea32185623")), "CPace draft public messages differ");
+    Require(kb::security::X25519SharedSecret(a, yb.Span(), ka) && kb::security::X25519SharedSecret(b, ya.Span(), kb) &&
+        kb::security::ConstantTimeEqual(ka.Span(), kb.Span()) &&
+        kb::security::ConstantTimeEqual(ka.Span(), Hex("5b067effbdc0b2a0e1d907b21ebb25cfedb96a852179a847c37e43ee71322c6b")), "CPace draft shared point differs");
+    kb::security::SecretBytes<64U> isk;
+    kb::security::CPaceISK(isk, sid, ka, ya.Span(), Text("ADa"), yb.Span(), Text("ADb"));
+    Require(kb::security::ConstantTimeEqual(isk.Span(), Hex("6e19b875f7a561d6b3ca3dbb9ef42ac55de3e717881018204b8922b4d5e53bb2aa82c300bea7b65d2b671da71922ddf6472301b79bc270adfa8bf413285f2263")), "CPace draft ISK differs");
+    for (const auto encoded : {"0000000000000000000000000000000000000000000000000000000000000000",
+        "0100000000000000000000000000000000000000000000000000000000000000",
+        "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+        "0000000000000000000000000000000000000000000000000000000000000080"})
+        Require(!kb::security::X25519SharedSecret(a, HexArray<32U>(encoded), ka), "CPace low-order point accepted");
+}
+
 void TestX25519Rfc7748Vectors() {
     struct Vector { const char* secret; const char* peer; const char* expected; };
     const Vector vectors[] = {
@@ -649,6 +674,7 @@ void RunReleaseManifestTests() {
 namespace kb::tests {
 
 void RunSecurityTests() {
+    TestCPaceDraftVectors();
     RunPbkdf2Tests();
     TestX25519Rfc7748Vectors();
     RunEd25519VectorTests();

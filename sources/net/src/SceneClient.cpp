@@ -188,7 +188,7 @@ struct SceneClient::Impl {
         ReplicationConfig replicationConfig;
         replicationConfig.requestedBytesPerSecond = options.downlinkBytesPerSecond;
         replication = std::make_unique<ReplicationClient>(*client, scene.Runtime().EcsWorld(), *components, rpcs, replicationConfig);
-        script.BindClient(*replication, *client, options.clientId);
+        script.BindClient(*replication, *client);
         smoothed.clear();
         serverClock = TickClock{};
         auto variablesChanged = replication->SetStateCallback({});

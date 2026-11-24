@@ -50,6 +50,32 @@ Each client has a 32 byte secret that the host also holds (`IKeyProvider`). The 
 Do not use a password-derived value as this transport secret: a recorded handshake MAC verifies
 password guesses offline. Password admission requires authentication bound to the DH shared secret.
 
+For admission without a key table, set `HostConfig::admission` and `ClientConfig::admission` to
+`Admission::JoinPassword` with the same `joinPassword`. The host and client overloads without
+keys use this mode. `Host::HostSalt()` exposes the random eight-byte host salt for discovery.
+CPACE-X25519-SHA512 follows draft-irtf-cfrg-cpace-21 (length-prefixed generator input, zero padding,
+and initiator/responder transcript). The host salt is CI; the client salt and address cookie form sid.
+The client and server ephemeral public keys are authenticated as associated data in ISK.
+The underlying Elligator map accepts 254-bit representatives; canonicalizing the 255-bit draft
+input and selecting its sign preserves the map, which depends only on its square.
+
+Connect remains stateless and its Challenge is smaller. Only a cookie-verified Response starts a
+bounded, expiring PAKE exchange. `PasswordChallenge` returns the server's blinded point and fresh
+ephemeral key; `PasswordFinish` proves the client's ISK. Password rejection occurs online at the
+host, reports `PasswordRejected`, and never emits Accept. New exchanges consume the existing
+per-address Response allowance and report `PasswordRateLimited`; bucket exhaustion refuses
+password exchanges instead of bypassing this allowance. Retransmissions reuse the same exchange
+without extending its expiry or creating another session.
+
+ISK supplies the Accept confirmation key and joins the independent ephemeral X25519 shared
+secret in session HKDF. Encrypted Accept adds a random, unique 64-bit `assignedId` and an
+authenticated-guest flag. Read these through `Client::AssignedId()` and `GuestAuthenticated()`.
+Claimed client ids cannot replace other guests. Ids zero and one are reserved in server key files.
+An empty password explicitly means encrypted connections **without guest authentication**;
+Accept marks this state and `UnauthenticatedGuests` reports it through the diagnostic log.
+The passive dictionary regression exercises 1000 guesses, including the correct password, without
+an online oracle; it detects deterministic password tags, not a proof of computational indistinguishability.
+
 1. `Connect` contains client id, client salt, release (U32), content hash (U64), and a fresh 32-byte
    client ephemeral public key, padded to 128 bytes.
 2. `Challenge` contains the client salt, address cookie, and MAC; the host stores no pending state.

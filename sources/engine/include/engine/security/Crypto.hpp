@@ -64,6 +64,12 @@ struct X25519KeyPair {
 };
 
 [[nodiscard]] bool GenerateX25519KeyPair(X25519KeyPair& out) noexcept;
+// CPACE-X25519-SHA512, initiator/responder encoding from draft-irtf-cfrg-cpace-21.
+[[nodiscard]] std::array<std::uint8_t, 32U> CPaceGenerator(std::string_view password,
+    std::span<const std::uint8_t> channel, std::span<const std::uint8_t> sid) noexcept;
+void CPaceISK(SecretBytes<64U>& out, std::span<const std::uint8_t> sid, const SecretBytes<32U>& shared,
+    std::span<const std::uint8_t, 32U> ya, std::span<const std::uint8_t> ada,
+    std::span<const std::uint8_t, 32U> yb, std::span<const std::uint8_t> adb) noexcept;
 // Rejects small-order inputs that produce the all-zero result (RFC 7748 section 6.1).
 [[nodiscard]] bool X25519SharedSecret(const SecretBytes<32U>& secret,
     std::span<const std::uint8_t, 32U> peerPublic, SecretBytes<32U>& out) noexcept;

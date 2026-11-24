@@ -12,6 +12,8 @@ inline constexpr std::uint8_t kTypeChallenge = 0x02U;
 inline constexpr std::uint8_t kTypeResponse = 0x03U;
 inline constexpr std::uint8_t kTypeAccept = 0x04U;
 inline constexpr std::uint8_t kTypeReject = 0x05U;
+inline constexpr std::uint8_t kTypePasswordChallenge = 0x06U;
+inline constexpr std::uint8_t kTypePasswordFinish = 0x07U;
 inline constexpr std::uint8_t kTypeData = 0x10U;
 
 } // namespace kb::net::wire

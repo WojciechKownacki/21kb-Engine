@@ -43,14 +43,14 @@ public:
     // Defines the declared RPCs after the ones already in `registry` (the standard ones). After this, Net.RegisterRpc is refused.
     [[nodiscard]] bool Freeze(RpcRegistry& registry, std::string& error);
     void BindServer(ReplicationServer& server);
-    void BindClient(ReplicationClient& replication, Client& connection, std::uint64_t playerId);
+    void BindClient(ReplicationClient& replication, Client& connection);
     void SetClientAuthorized(bool authorized) noexcept { clientAuthorized_ = authorized; }
     void NotifyAuthExpired() { Queue("OnNetAuthExpired", {}); }
     void HandleEvent(const NetEvent& event);
 
     [[nodiscard]] kb::network::ScriptNetMode Mode() const override { return role_ == Role::Server ? kb::network::ScriptNetMode::Server : kb::network::ScriptNetMode::Client; }
     [[nodiscard]] bool Connected() const override;
-    [[nodiscard]] std::uint64_t LocalPlayerId() const override { return role_ == Role::Client ? playerId_ : 0U; }
+    [[nodiscard]] std::uint64_t LocalPlayerId() const override { return role_ == Role::Client && connection_ != nullptr ? connection_->AssignedId() : 0U; }
     [[nodiscard]] std::size_t PlayerCount() const override;
     bool DeclareRpc(const kb::network::ScriptRpcDeclaration& declaration, std::string& error) override;
     [[nodiscard]] const kb::network::ScriptRpcDeclaration* FindRpc(const std::string& name) const override;
@@ -79,7 +79,6 @@ private:
     ReplicationServer* server_ = nullptr;
     ReplicationClient* replication_ = nullptr;
     Client* connection_ = nullptr;
-    std::uint64_t playerId_ = 0U;
     bool clientAuthorized_ = true;
     std::function<void(kb::ecs::Entity)> transformAppeared_;
     kb::network::ReplicationDeclarations replicationDeclarations_;

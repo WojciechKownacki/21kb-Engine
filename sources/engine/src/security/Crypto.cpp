@@ -144,6 +144,69 @@ bool GenerateX25519KeyPair(X25519KeyPair& out) noexcept {
     return true;
 }
 
+namespace {
+std::span<const std::uint8_t> CPaceBytes(std::string_view text) noexcept {
+    return {reinterpret_cast<const std::uint8_t*>(text.data()), text.size()};
+}
+void CPaceLength(Sha512Hasher& hash, std::size_t length) noexcept {
+    do {
+        const auto byte = static_cast<std::uint8_t>((length & 127U) | (length > 127U ? 128U : 0U));
+        hash.Update({&byte, 1U});
+        length >>= 7U;
+    } while (length != 0U);
+}
+void CPaceField(Sha512Hasher& hash, std::span<const std::uint8_t> bytes) noexcept {
+    CPaceLength(hash, bytes.size()); hash.Update(bytes);
+}
+}
+
+std::array<std::uint8_t, 32U> CPaceGenerator(std::string_view password,
+    std::span<const std::uint8_t> channel, std::span<const std::uint8_t> sid) noexcept {
+    Sha512Hasher hash;
+    CPaceField(hash, CPaceBytes("CPace255"));
+    CPaceField(hash, CPaceBytes(password));
+    std::size_t lengthBytes = 1U;
+    for (auto size = password.size(); size > 127U; size >>= 7U) ++lengthBytes;
+    const auto used = 9U + lengthBytes + password.size();
+    const std::array<std::uint8_t, 128U> zero{};
+    CPaceField(hash, std::span(zero).first(used < 127U ? 127U - used : 0U));
+    CPaceField(hash, channel); CPaceField(hash, sid);
+    auto digest = hash.Finish();
+    std::array<std::uint8_t, 32U> r{}, reduced{}, negative{}, generator{};
+    std::copy_n(digest.begin(), 32U, r.begin());
+    r[31] &= 127U;
+    // The map accepts 254 bits. Canonicalize modulo p, then use r or -r: Elligator depends on r squared.
+    unsigned borrow = 0U;
+    for (std::size_t i = 0U; i < 32U; ++i) {
+        const unsigned p = i == 0U ? 237U : i == 31U ? 127U : 255U;
+        const unsigned difference = static_cast<unsigned>(r[i]) - p - borrow;
+        reduced[i] = static_cast<std::uint8_t>(difference); borrow = difference >> 31U;
+    }
+    const auto mask = static_cast<std::uint8_t>(0U - (borrow ^ 1U));
+    for (std::size_t i = 0U; i < 32U; ++i) r[i] = (r[i] & ~mask) | (reduced[i] & mask);
+    borrow = 0U;
+    for (std::size_t i = 0U; i < 32U; ++i) {
+        const unsigned p = i == 0U ? 237U : i == 31U ? 127U : 255U;
+        const unsigned difference = p - static_cast<unsigned>(r[i]) - borrow;
+        negative[i] = static_cast<std::uint8_t>(difference); borrow = difference >> 31U;
+    }
+    const auto sign = static_cast<std::uint8_t>(0U - ((r[31] >> 6U) & 1U));
+    for (std::size_t i = 0U; i < 32U; ++i) r[i] = (r[i] & ~sign) | (negative[i] & sign);
+    crypto_elligator_map(generator.data(), r.data());
+    SecureWipe(digest); SecureWipe(r); SecureWipe(reduced); SecureWipe(negative);
+    return generator;
+}
+
+void CPaceISK(SecretBytes<64U>& out, std::span<const std::uint8_t> sid, const SecretBytes<32U>& shared,
+    std::span<const std::uint8_t, 32U> ya, std::span<const std::uint8_t> ada,
+    std::span<const std::uint8_t, 32U> yb, std::span<const std::uint8_t> adb) noexcept {
+    Sha512Hasher hash;
+    CPaceField(hash, CPaceBytes("CPace255_ISK")); CPaceField(hash, sid); CPaceField(hash, shared.Span());
+    CPaceField(hash, ya); CPaceField(hash, ada); CPaceField(hash, yb); CPaceField(hash, adb);
+    auto digest = hash.Finish();
+    std::copy(digest.begin(), digest.end(), out.data()); SecureWipe(digest);
+}
+
 bool X25519SharedSecret(const SecretBytes<32U>& secret, std::span<const std::uint8_t, 32U> peerPublic,
     SecretBytes<32U>& out) noexcept {
     crypto_x25519(out.data(), secret.data(), peerPublic.data());

@@ -148,7 +148,7 @@ struct ClientSide {
         client = std::make_unique<Client>(*transport, config, id, KeyFor(static_cast<std::uint8_t>(id)), Endpoint::Loopback(9300), now);
         replicaWorld = std::make_unique<kb::ecs::World>();
         replication = std::make_unique<ReplicationClient>(*client, *replicaWorld, *side.components, *side.rpcs);
-        side.runtime->BindClient(*replication, *client, id);
+        side.runtime->BindClient(*replication, *client);
     }
 
     Side side;

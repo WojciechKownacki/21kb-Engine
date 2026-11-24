@@ -209,10 +209,10 @@ struct Rig {
 
 void TestEveryRefusalIsNamedAndCounted() {
     DiagLog log;
-    for (std::uint16_t code = 0U; code <= static_cast<std::uint16_t>(DiagCode::ConnectBucketsFull); ++code) {
+    for (std::uint16_t code = 0U; code <= static_cast<std::uint16_t>(DiagCode::UnauthenticatedGuests); ++code) {
         log.Report(static_cast<DiagCode>(code), "entity=42 bytes=2048");
     }
-    const auto codeCount = static_cast<std::size_t>(DiagCode::ConnectBucketsFull) + 1U;
+    const auto codeCount = static_cast<std::size_t>(DiagCode::UnauthenticatedGuests) + 1U;
     Require(log.Total() == codeCount && log.Entries().size() == codeCount, "diagnostic codes were lost");
     for (std::size_t index = 0U; index < log.Entries().size(); ++index) {
         const DiagEntry& entry = log.Entries()[index];
@@ -945,29 +945,161 @@ std::vector<std::uint8_t> PacketOf(const TappingTransport& tap, std::uint8_t typ
     throw std::runtime_error("expected datagram type was not recorded");
 }
 
-void TestRecordedPasswordKeyHasOfflineVerifier() {
-    const std::array<std::uint8_t, 8U> publicSalt{1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U};
-    SessionKey key{};
-    Require(kb::security::Pbkdf2HmacSha512(key, "sample-password", publicSalt, 100000U), "password key derivation failed");
-    Rig rig({}, {}, {}, 42U, key);
-    rig.keys.Set(42U, key);
-    rig.Run(0U, 1000U, [&] { return rig.client->State() == ClientState::Connected; });
-    Require(rig.client->State() == ClientState::Connected, "password-key transport did not connect");
-    const auto response = PacketOf(*rig.clientTap, 3U);
-    const std::string_view label = "21kb-net-response";
-    std::vector<std::uint8_t> transcript(label.begin(), label.end());
-    transcript.insert(transcript.end(), response.begin() + 4, response.end() - 32);
-    std::string recovered;
-    for (const auto guess : {"wrong-password", "sample-password"}) {
-        SessionKey candidate{};
-        Require(kb::security::Pbkdf2HmacSha512(candidate, guess, publicSalt, 100000U), "password guess derivation failed");
-        const auto mac = kb::security::HmacSha512(candidate, transcript);
-        if (kb::security::ConstantTimeEqual(std::span(mac).first(32U), std::span(response).last(32U))) recovered = guess;
-        kb::security::SecureWipe(candidate);
+HostConfig PasswordHost(std::string password = "sample-password") {
+    HostConfig config; config.admission = Admission::JoinPassword; config.joinPassword = std::move(password);
+    return config;
+}
+ClientConfig PasswordClient(std::string password = "sample-password") {
+    ClientConfig config; config.admission = Admission::JoinPassword; config.joinPassword = std::move(password);
+    return config;
+}
+
+void TestJoinPasswordAdmitsMatchingGuest() {
+    Rig rig({}, PasswordHost(), PasswordClient(), kHostPlayerId);
+    auto now = rig.Run(0U, 1000U, [&] { return rig.client->State() == ClientState::Connected; });
+    Require(rig.client->State() == ClientState::Connected && rig.client->GuestAuthenticated(), "matching password did not authenticate");
+    const auto id = rig.client->AssignedId();
+    Require(id > kHostPlayerId && rig.host->ClientIds() == std::vector<std::uint64_t>{id}, "host did not assign the identity");
+    Require(rig.client->Send(0U, Pattern(15U, 20U)) == SendResult::Queued && rig.host->Send(id, 0U, Pattern(16U, 20U)) == SendResult::Queued, "password session send failed");
+    rig.Run(now + 10U, now + 1000U, [&] { return Rig::HasEvent(rig.hostEvents, NetEventType::Message) && Rig::HasEvent(rig.clientEvents, NetEventType::Message); });
+    Require(Rig::HasEvent(rig.hostEvents, NetEventType::Message) && Rig::HasEvent(rig.clientEvents, NetEventType::Message), "PAKE and ephemeral DH did not agree on session keys");
+    Require(rig.host->Stats().passwordAttempts == 1U, "matching exchange counted more than once");
+}
+
+void TestWrongPasswordNeverConnects() {
+    Rig rig({}, PasswordHost(), PasswordClient("wrong-password"));
+    std::uint64_t now = 0U;
+    for (; now < 1000U; now += 10U) {
+        rig.Step(now);
+        if (std::ranges::any_of(rig.clientTap->sent, [](const auto& p) { return p[3] == 7U; })) break;
     }
-    Require(recovered == "sample-password", "recorded password-key verifier characterization changed");
-    std::printf("  password admission blocked: a recorded Response MAC verifies password guesses without either DH secret\n");
-    kb::security::SecureWipe(key);
+    Require(now < 1000U && rig.host->Stats().passwordRejected == 0U && rig.host->ClientCount() == 0U &&
+        rig.client->State() == ClientState::Connecting, "wrong password was checked before online confirmation");
+    rig.Run(now + 10U, now + 500U, [&] { return rig.client->State() == ClientState::Disconnected; });
+    Require(rig.client->State() == ClientState::Disconnected && rig.host->Stats().passwordRejected == 1U &&
+        rig.host->Stats().handshakesRejected == 1U && rig.host->ClientCount() == 0U &&
+        rig.client->RejectInfo() != nullptr && rig.client->RejectInfo()->reason == RejectReason::PasswordRejected, "wrong password was not refused online");
+    Require(std::ranges::none_of(rig.hostTap->sent, [](const auto& p) { return p[3] == 4U; }), "wrong password received Accept");
+    Require(std::ranges::any_of(rig.host->Diagnostics().Entries(), [](const auto& e) { return e.code == DiagCode::PasswordRejected && e.count == 1U; }), "password refusal has no named counter");
+}
+
+void TestPasswordHandshakeSurvivesPacketLoss() {
+    auto client = PasswordClient(); client.connectTimeoutMilliseconds = 30'000U;
+    Rig rig(BadNetwork(), PasswordHost(), client);
+    rig.Run(0U, 30'000U, [&] { return rig.client->State() == ClientState::Connected; });
+    Require(rig.client->State() == ClientState::Connected && rig.host->ClientCount() == 1U &&
+        rig.host->Stats().passwordAttempts == 1U && rig.host->Stats().handshakesCompleted == 1U,
+        "PAKE retransmissions lost the exchange or created another session");
+}
+
+void TestPasswordConfirmationBindsEphemeralKey() {
+    Rig rig({}, PasswordHost(), PasswordClient());
+    std::uint64_t now = 0U;
+    for (; now < 1000U; now += 10U) {
+        rig.network.Advance(now); rig.host->Update(now);
+        if (std::ranges::any_of(rig.hostTap->sent, [](const auto& p) { return p[3] == 6U; })) break;
+        rig.client->Update(now);
+    }
+    Require(now < 1000U, "password exchange did not reach server public message");
+    rig.network.Advance(now + 1U);
+    std::array<std::uint8_t, kMaxDatagramBytes> bytes{};
+    Endpoint from; std::size_t size = 0U;
+    while (rig.clientPort->Receive(from, bytes, size) == TransportStatus::Ok) {}
+    auto challenge = PacketOf(*rig.hostTap, 6U);
+    challenge[52U] ^= 1U;
+    rig.network.Inject(rig.hostPort->LocalEndpoint(), rig.clientPort->LocalEndpoint(), challenge);
+    rig.Run(now + 10U, now + 1000U, [&] { return rig.client->State() == ClientState::Disconnected; });
+    Require(rig.host->Stats().passwordRejected == 1U && rig.host->ClientCount() == 0U &&
+        rig.client->State() == ClientState::Disconnected, "changed ephemeral key was not bound to PAKE confirmation");
+}
+
+void TestPasswordAttemptsAreLimitedAfterCookie() {
+    Rig rig({}, PasswordHost(), PasswordClient("wrong-password"));
+    std::uint64_t now = 0U;
+    for (std::uint64_t i = 0U; i < 10U; ++i) {
+        auto config = PasswordClient("wrong-password"); config.clientSalt = 100U + i;
+        rig.client = std::make_unique<Client>(*rig.clientTap, config, 42U, SessionKey{}, rig.hostPort->LocalEndpoint(), now);
+        for (unsigned step = 0U; step < 8U; ++step) rig.Step(now++);
+    }
+    Require(rig.host->Stats().passwordAttempts == 8U && rig.host->Stats().passwordRejected == 8U && rig.host->Stats().passwordRateLimited > 0U,
+        "password rate limit did not bound online guesses");
+    Require(std::ranges::any_of(rig.host->Diagnostics().Entries(), [](const auto& e) { return e.code == DiagCode::PasswordRateLimited; }), "password rate limit was unnamed");
+    const auto attempts = rig.host->Stats().passwordAttempts;
+    auto response = PacketOf(*rig.clientTap, 3U); response[20] ^= 128U;
+    rig.network.Inject(rig.clientPort->LocalEndpoint(), rig.hostPort->LocalEndpoint(), response);
+    rig.Step(now);
+    Require(rig.host->Stats().passwordAttempts == attempts, "invalid cookie consumed a password attempt");
+}
+
+void TestOpenAdmissionAssignsUniqueIds() {
+    LoopbackNetwork network;
+    auto hostPort = network.CreateTransport(Endpoint::Loopback(7000));
+    auto config = PasswordHost(""); config.maxClients = 256U; config.maxConnectsPerSecondPerAddress = 512U; config.maxSessionsPerAddress = 256U;
+    Host host(*hostPort, config);
+    std::size_t logLines = 0U;
+    host.Diagnostics().SetSink([&](std::string_view line) { if (line.starts_with("UnauthenticatedGuests:")) ++logLines; });
+    std::vector<std::unique_ptr<IDatagramTransport>> ports;
+    std::vector<std::unique_ptr<Client>> clients;
+    for (unsigned i = 0U; i < 200U; ++i) {
+        ports.push_back(network.CreateTransport(Endpoint::Loopback(static_cast<std::uint16_t>(7100U + i))));
+        clients.push_back(std::make_unique<Client>(*ports.back(), PasswordClient(""), hostPort->LocalEndpoint(), 0U));
+    }
+    for (std::uint64_t now = 0U; now < 1000U; now += 10U) { network.Advance(now); host.Update(now); for (auto& client : clients) client->Update(now); }
+    auto ids = host.ClientIds(); std::ranges::sort(ids);
+    Require(ids.size() == 200U && std::adjacent_find(ids.begin(), ids.end()) == ids.end() && ids.front() > kHostPlayerId,
+        "open guests did not receive unique host identities");
+    for (const auto& client : clients) Require(client->State() == ClientState::Connected && !client->GuestAuthenticated() && std::ranges::binary_search(ids, client->AssignedId()), "open Accept did not declare unauthenticated guest identity");
+    const auto victim = clients.front()->AssignedId();
+    auto attackerPort = network.CreateTransport(Endpoint::Loopback(7400));
+    Client attacker(*attackerPort, PasswordClient(""), victim, SessionKey{}, hostPort->LocalEndpoint(), 1000U);
+    for (std::uint64_t now = 1000U; now < 1400U; now += 10U) { network.Advance(now); host.Update(now); attacker.Update(now); for (auto& client : clients) client->Update(now); }
+    Require(attacker.State() == ClientState::Connected && attacker.AssignedId() != victim && host.ClientCount() == 201U &&
+        clients.front()->State() == ClientState::Connected && host.ClientStats(victim) != nullptr, "claimed guest identity replaced an existing guest");
+    NetEvent event; while (host.PollEvent(event)) Require(event.type != NetEventType::Disconnected, "open admission emitted Replaced or disconnected a guest");
+    Require(logLines > 0U, "unauthenticated admission was not logged");
+}
+
+void TestPassivelyRecordedHandshakeDoesNotVerifyPasswordGuesses() {
+    Rig rig({}, PasswordHost("word-537"), PasswordClient("word-537"));
+    rig.Run(0U, 1000U, [&] { return rig.client->State() == ClientState::Connected; });
+    Require(rig.client->State() == ClientState::Connected, "recording fixture failed");
+    const auto challenge = PacketOf(*rig.hostTap, 2U), pake = PacketOf(*rig.hostTap, 6U), finish = PacketOf(*rig.clientTap, 7U);
+    ByteReader salt(std::span(challenge).subspan(4U)); const auto clientSalt = salt.U64();
+    // Regression for a deterministic password verifier, not a statistical proof of the DH assumption.
+    // All dictionary entries, including the correct one, generate the same message shapes with fresh blinded points.
+    for (unsigned guess = 0U; guess < 1000U; ++guess) {
+        LoopbackNetwork offline;
+        auto port = offline.CreateTransport(Endpoint::Loopback(7001)); TappingTransport tap(*port);
+        auto config = PasswordClient("word-" + std::to_string(guess)); config.clientSalt = clientSalt;
+        Client candidate(tap, config, 42U, SessionKey{}, Endpoint::Loopback(7000), 0U);
+        offline.Inject(Endpoint::Loopback(7000), port->LocalEndpoint(), challenge); offline.Advance(0U); candidate.Update(0U);
+        offline.Inject(Endpoint::Loopback(7000), port->LocalEndpoint(), pake); offline.Advance(1U); candidate.Update(1U);
+        const auto response = PacketOf(tap, 3U), confirmation = PacketOf(tap, 7U);
+        Require(response.size() == 92U && confirmation.size() == finish.size() && candidate.State() == ClientState::Connecting &&
+            !kb::security::ConstantTimeEqual(confirmation, finish), "recorded confirmation became a deterministic password verifier");
+    }
+    Require(rig.host->Stats().passwordAttempts == 1U && rig.host->Stats().passwordRejected == 0U, "dictionary evaluation made online queries");
+}
+
+void TestPasswordHandshakeReplayDoesNotCreateSession() {
+    auto hostConfig = PasswordHost(); hostConfig.maxConnectsPerSecondPerAddress = 64U;
+    Rig rig({}, hostConfig, PasswordClient());
+    auto now = rig.Run(0U, 1000U, [&] { return rig.client->State() == ClientState::Connected; });
+    const auto response = PacketOf(*rig.clientTap, 3U), finish = PacketOf(*rig.clientTap, 7U), accept = PacketOf(*rig.hostTap, 4U);
+    const auto assigned = rig.client->AssignedId();
+    const auto completed = rig.host->Stats().handshakesCompleted;
+    for (unsigned i = 0U; i < 3U; ++i) {
+        rig.network.Inject(rig.clientPort->LocalEndpoint(), rig.hostPort->LocalEndpoint(), response);
+        rig.network.Inject(rig.clientPort->LocalEndpoint(), rig.hostPort->LocalEndpoint(), finish); rig.Step(now += 10U);
+    }
+    Require(rig.host->Stats().handshakesCompleted == completed && rig.host->ClientCount() == 1U &&
+        rig.client->AssignedId() == assigned && PacketOf(*rig.hostTap, 4U) == accept, "replay reset an established session");
+    rig.host->Disconnect(assigned);
+    rig.Run(now + 10U, now + 1000U, [&] { return rig.host->ClientCount() == 0U; });
+    rig.network.Inject(rig.clientPort->LocalEndpoint(), rig.hostPort->LocalEndpoint(), response); rig.Step(now += 1010U);
+    rig.network.Inject(rig.clientPort->LocalEndpoint(), rig.hostPort->LocalEndpoint(), finish); rig.Step(now += 10U);
+    Require(rig.host->ClientCount() == 0U && rig.host->Stats().handshakesCompleted == completed && rig.host->Stats().passwordRejected > 0U,
+        "recorded PAKE confirmation created a new session");
 }
 
 std::array<std::uint8_t, 64U> OpenAcceptKeys(const std::vector<std::uint8_t>& response, const std::vector<std::uint8_t>& accept) {
@@ -1570,7 +1702,14 @@ int main() {
         { "sessions-per-address", &TestSessionsPerAddressLimit },
         { "handshake-authentication", &TestHandshakeAuthentication },
         { "recorded-session-key-leak", &TestRecordedSessionSurvivesKeyLeak },
-        { "recorded-password-key-verifier", &TestRecordedPasswordKeyHasOfflineVerifier },
+        { "join-password-matching", &TestJoinPasswordAdmitsMatchingGuest },
+        { "join-password-wrong-online", &TestWrongPasswordNeverConnects },
+        { "join-password-packet-loss", &TestPasswordHandshakeSurvivesPacketLoss },
+        { "join-password-ephemeral-binding", &TestPasswordConfirmationBindsEphemeralKey },
+        { "join-password-rate-limit", &TestPasswordAttemptsAreLimitedAfterCookie },
+        { "open-assigned-identities", &TestOpenAdmissionAssignsUniqueIds },
+        { "password-passive-dictionary", &TestPassivelyRecordedHandshakeDoesNotVerifyPasswordGuesses },
+        { "password-handshake-replay", &TestPasswordHandshakeReplayDoesNotCreateSession },
         { "ephemeral-keys-per-handshake", &TestEphemeralKeysDifferPerHandshake },
         { "replayed-response-fresh-keys", &TestReplayedResponseGetsFreshKeys },
         { "version-refusal-reason", &TestVersionMismatchIsRefusedWithReason },

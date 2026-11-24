@@ -18,9 +18,12 @@ constexpr std::size_t kMacBytes = 32U;
 constexpr std::size_t kChallengeBytes = kHandshakeHeaderBytes + 8U + 8U + kMacBytes;
 constexpr std::size_t kAcceptPlainBytes = 76U;
 constexpr std::size_t kAcceptPrefixBytes = kHandshakeHeaderBytes + kb::security::kAeadNonceBytes;
-constexpr std::size_t kAcceptBytes = kAcceptPrefixBytes + kAcceptPlainBytes + kb::security::kAeadTagBytes;
 constexpr std::size_t kRejectBytes = 25U;
 constexpr std::size_t kResponseBytes = kHandshakeHeaderBytes + 8U + 8U + 8U + 32U + kMacBytes;
+constexpr std::size_t kPasswordChallengeBytes = 84U;
+constexpr std::size_t kPasswordFinishBytes = 52U;
+constexpr std::size_t kOpenChallengeBytes = 28U;
+constexpr std::size_t kOpenAcceptPlainBytes = kAcceptPlainBytes + 9U;
 static_assert(kChallengeBytes < kMinConnectBytes, "a Challenge must be smaller than the Connect that asks for it");
 
 constexpr std::size_t kMaxQueuedEvents = 4096U;
@@ -49,17 +52,19 @@ using Mac = std::array<std::uint8_t, kMacBytes>;
 }
 
 void DeriveSessionKeys(const SessionKey& key, std::uint64_t clientSalt, std::uint64_t serverSalt, std::span<const std::uint8_t, 32U> serverRandom,
-    const kb::security::SecretBytes<32U>& shared, SessionKey& clientToServer, SessionKey& serverToClient) {
+    const kb::security::SecretBytes<32U>& shared, SessionKey& clientToServer, SessionKey& serverToClient,
+    std::span<const std::uint8_t> isk = {}) {
     std::vector<std::uint8_t> salt;
     ByteWriter writer(salt);
     writer.U64(clientSalt);
     writer.U64(serverSalt);
     writer.Bytes(serverRandom);
     std::array<std::uint8_t, 2U * kSessionKeyBytes> output{};
-    kb::security::SecretBytes<64U> material;
+    kb::security::SecretBytes<128U> material;
     std::copy(key.begin(), key.end(), material.data());
     std::copy(shared.Span().begin(), shared.Span().end(), material.data() + key.size());
-    kb::security::HkdfSha512(output, material.Span(), salt, AsBytes("21kb-net-session-v2"));
+    std::copy(isk.begin(), isk.end(), material.data() + 64U);
+    kb::security::HkdfSha512(output, material.Span().first(64U + isk.size()), salt, AsBytes("21kb-net-session-v2"));
     std::copy_n(output.begin(), kSessionKeyBytes, clientToServer.begin());
     std::copy_n(output.begin() + static_cast<std::ptrdiff_t>(kSessionKeyBytes), kSessionKeyBytes, serverToClient.begin());
     kb::security::SecureWipe(output);
@@ -86,6 +91,29 @@ void WriteHandshakeHeader(ByteWriter& writer, std::uint8_t type) {
     writer.U8(type);
 }
 
+const StaticKeyTable& NoKeys() { static const StaticKeyTable keys; return keys; }
+
+std::vector<std::uint8_t> PasswordSid(std::uint64_t clientSalt, std::uint64_t serverSalt) {
+    std::vector<std::uint8_t> sid;
+    ByteWriter writer(sid); writer.U64(clientSalt); writer.U64(serverSalt);
+    return sid;
+}
+
+SessionKey PasswordKey(const kb::security::SecretBytes<64U>& isk) {
+    SessionKey key{};
+    kb::security::HkdfSha512(key, isk.Span(), {}, AsBytes("21kb-net-cpace-confirm"));
+    return key;
+}
+
+Mac PasswordProof(const SessionKey& key, std::span<const std::uint8_t> response, std::span<const std::uint8_t> challenge) {
+    kb::security::HmacSha512Hasher hash(key);
+    hash.Update(AsBytes("21kb-net-cpace-client")); hash.Update(response); hash.Update(challenge);
+    auto digest = hash.Finish();
+    Mac proof{}; std::copy_n(digest.begin(), proof.size(), proof.begin());
+    kb::security::SecureWipe(digest);
+    return proof;
+}
+
 } // namespace
 
 BuildIdentity MakeBuildIdentity(std::uint32_t release, std::string_view contentVersion) noexcept {
@@ -100,6 +128,8 @@ BuildIdentity MakeBuildIdentity(std::uint32_t release, std::string_view contentV
 
 // ---------------------------------------------------------------- Host
 
+Host::Host(IDatagramTransport& transport, HostConfig config) : Host(transport, std::move(config), NoKeys()) {}
+
 Host::Host(IDatagramTransport& transport, HostConfig config, const IKeyProvider& keys)
     : transport_(&transport), keys_(&keys), config_(std::move(config)) {
     scratch_.reserve(kMaxDatagramBytes);
@@ -107,6 +137,8 @@ Host::Host(IDatagramTransport& transport, HostConfig config, const IKeyProvider&
         config_.maxPacketsPerPeerPerUpdate != 0U && config_.cookieLifetimeMilliseconds != 0U && config_.confirmMilliseconds != 0U &&
         config_.maxConnectsPerSecondPerAddress != 0U && config_.maxSessionsPerAddress != 0U &&
         kb::security::SecureRandom(cookieSecret_);
+    if (config_.admission == Admission::JoinPassword && config_.hostSalt == std::array<std::uint8_t, 8U>{})
+        valid_ = valid_ && kb::security::SecureRandom(config_.hostSalt);
     if (config_.identity.release == 0U && config_.identity.contentHash == 0U) {
         diagnostics_.Report(DiagCode::VersionUnchecked, "host build identity is unchecked");
     }
@@ -155,8 +187,8 @@ bool Host::AllowConnect(std::uint64_t nowMilliseconds, std::uint32_t address) {
         if (connectBuckets_.size() >= kMaxBuckets) sweep();
         if (connectBuckets_.size() >= kMaxBuckets) {
             ++stats_.connectBucketsFull;
-            diagnostics_.Report(DiagCode::ConnectBucketsFull, "authenticated Response admitted without an address bucket: table is full");
-            return true;
+            diagnostics_.Report(DiagCode::ConnectBucketsFull, config_.admission == Admission::JoinPassword ? "password exchange refused: address bucket table is full" : "authenticated Response admitted without an address bucket: table is full");
+            return config_.admission != Admission::JoinPassword;
         }
         found = connectBuckets_.emplace(address, ConnectBucket{ rate, nowMilliseconds }).first;
     }
@@ -214,11 +246,15 @@ void Host::Update(std::uint64_t nowMilliseconds) {
         switch (type) {
         case wire::kTypeConnect: HandleConnect(nowMilliseconds, from, datagram); break;
         case wire::kTypeResponse: HandleResponse(nowMilliseconds, from, datagram); break;
+        case wire::kTypePasswordFinish: HandlePasswordFinish(nowMilliseconds, from, datagram); break;
         case wire::kTypeData: HandleData(nowMilliseconds, from, datagram); break;
         default: ++stats_.malformed; break;
         }
     }
 
+    for (auto iterator = passwordExchanges_.begin(); iterator != passwordExchanges_.end();) {
+        iterator = nowMilliseconds - iterator->second.createdAt >= config_.confirmMilliseconds ? passwordExchanges_.erase(iterator) : std::next(iterator);
+    }
     for (auto iterator = peers_.begin(); iterator != peers_.end();) {
         Peer& peer = iterator->second;
         DrainMessages(peer);
@@ -266,6 +302,12 @@ void Host::HandleConnect(std::uint64_t nowMilliseconds, const Endpoint& from, st
     const std::uint64_t clientSalt = reader.U64();
     const BuildIdentity identity{ reader.U32(), reader.U64() };
     const auto ephemeral = reader.Bytes(32U);
+    const auto admission = static_cast<Admission>(reader.U8());
+    if (admission != config_.admission) {
+        ++stats_.handshakesRejected;
+        diagnostics_.Report(DiagCode::HandshakeContent, "admission mode mismatch");
+        return;
+    }
     if (identity.release < config_.minClientRelease) {
         ++stats_.handshakesRejected;
         diagnostics_.Report(DiagCode::HandshakeVersion, "client release is below minimum");
@@ -278,9 +320,19 @@ void Host::HandleConnect(std::uint64_t nowMilliseconds, const Endpoint& from, st
         SendReject(from, RejectReason::ContentMismatch, clientSalt);
         return;
     }
-    if (!reader.Ok() || clientId == 0U) {
+    if (!reader.Ok() || (clientId == 0U && config_.admission == Admission::KeyTable)) {
         ++stats_.handshakesRejected;
         diagnostics_.Report(DiagCode::HandshakeContent, "invalid client id in Connect");
+        return;
+    }
+    if (config_.admission == Admission::JoinPassword) {
+        std::vector<std::uint8_t> challenge;
+        ByteWriter writer(challenge); WriteHandshakeHeader(writer, wire::kTypeChallenge);
+        writer.U64(clientSalt);
+        writer.U64(Cookie(from, clientId, clientSalt, nowMilliseconds / config_.cookieLifetimeMilliseconds));
+        writer.Bytes(config_.hostSalt);
+        if (transport_->Send(from, challenge) == TransportStatus::Error) ++stats_.sendErrors;
+        ++stats_.challengesSent;
         return;
     }
     // An unknown id gets the same Challenge, made from a key only this host can compute: its Response cannot pass, and nobody learns which ids exist.
@@ -306,6 +358,7 @@ void Host::HandleConnect(std::uint64_t nowMilliseconds, const Endpoint& from, st
 }
 
 void Host::HandleResponse(std::uint64_t nowMilliseconds, const Endpoint& from, std::span<const std::uint8_t> datagram) {
+    if (config_.admission == Admission::JoinPassword) { HandlePasswordResponse(nowMilliseconds, from, datagram); return; }
     if (datagram.size() != kResponseBytes) {
         ++stats_.handshakesRejected;
         diagnostics_.Report(DiagCode::HandshakeContent, "invalid Response length");
@@ -377,26 +430,35 @@ void Host::HandleResponse(std::uint64_t nowMilliseconds, const Endpoint& from, s
         return;
     }
 
-    std::array<std::uint8_t, 32U> serverRandom{};
-    kb::security::AeadNonce nonce{};
-    if (!kb::security::SecureRandom(serverRandom) || !kb::security::SecureRandom(nonce)) {
-        kb::security::SecureWipe(key);
-        kb::security::SecureWipe(serverRandom);
-        diagnostics_.Report(DiagCode::HandshakeContent, "secure random source unavailable");
-        return;
-    }
     kb::security::X25519KeyPair serverEphemeral;
     kb::security::SecretBytes<32U> shared;
     if (!kb::security::GenerateX25519KeyPair(serverEphemeral) || !kb::security::X25519SharedSecret(serverEphemeral.secret,
         std::span<const std::uint8_t, 32U>(ephemeral.data(), 32U), shared)) {
         kb::security::SecureWipe(key);
-        kb::security::SecureWipe(serverRandom);
         ++stats_.handshakesRejected;
         diagnostics_.Report(DiagCode::HandshakeContent, "invalid ephemeral public key or random source unavailable");
         return;
     }
+    CompleteHandshake(nowMilliseconds, from, clientId, clientSalt, serverSalt,
+        std::span<const std::uint8_t, 32U>(ephemeral.data(), 32U), serverEphemeral.publicKey, key, shared);
+    kb::security::SecureWipe(key);
+}
+
+void Host::CompleteHandshake(std::uint64_t nowMilliseconds, const Endpoint& from, std::uint64_t clientId,
+    std::uint64_t clientSalt, std::uint64_t serverSalt, std::span<const std::uint8_t, 32U> ephemeral,
+    std::span<const std::uint8_t, 32U> serverEphemeral, const SessionKey& key, const kb::security::SecretBytes<32U>& shared,
+    std::span<const std::uint8_t> isk, std::span<const std::uint8_t> response, std::span<const std::uint8_t> finish) {
+    std::array<std::uint8_t, 32U> serverRandom{};
+    kb::security::AeadNonce nonce{};
+    if (!kb::security::SecureRandom(serverRandom) || !kb::security::SecureRandom(nonce)) {
+        kb::security::SecureWipe(serverRandom);
+        diagnostics_.Report(DiagCode::HandshakeContent, "secure random source unavailable");
+        return;
+    }
     Peer peer;
     std::copy(ephemeral.begin(), ephemeral.end(), peer.clientEphemeral.begin());
+    peer.response.assign(response.begin(), response.end());
+    peer.finish.assign(finish.begin(), finish.end());
     peer.endpoint = from;
     peer.clientId = clientId;
     peer.clientSalt = clientSalt;
@@ -408,7 +470,11 @@ void Host::HandleResponse(std::uint64_t nowMilliseconds, const Endpoint& from, s
     accept.Bytes(serverRandom);
     accept.U32(config_.identity.release);
     accept.U64(config_.identity.contentHash);
-    accept.Bytes(serverEphemeral.publicKey);
+    accept.Bytes(serverEphemeral);
+    if (config_.admission == Admission::JoinPassword) {
+        accept.U64(clientId);
+        accept.U8(config_.joinPassword.empty() ? 0U : 1U);
+    }
     kb::security::AeadKey acceptKey;
     DeriveAcceptKey(key, clientSalt, serverSalt, acceptKey);
     kb::security::AeadTag tag{};
@@ -417,9 +483,8 @@ void Host::HandleResponse(std::uint64_t nowMilliseconds, const Endpoint& from, s
     accept.Bytes(tag);
     SessionKey clientToServer{};
     SessionKey serverToClient{};
-    DeriveSessionKeys(key, clientSalt, serverSalt, serverRandom, shared, clientToServer, serverToClient);
+    DeriveSessionKeys(key, clientSalt, serverSalt, serverRandom, shared, clientToServer, serverToClient, isk);
     kb::security::SecureWipe(serverRandom);
-    kb::security::SecureWipe(key);
     if (transport_->Send(from, peer.accept) == TransportStatus::Error) ++stats_.sendErrors;
     peer.session = std::make_unique<Session>(config_.session, serverToClient, clientToServer, nowMilliseconds);
     kb::security::SecureWipe(clientToServer);
@@ -431,6 +496,109 @@ void Host::HandleResponse(std::uint64_t nowMilliseconds, const Endpoint& from, s
     event.type = NetEventType::Connected;
     event.peer = clientId;
     events_.push_back(std::move(event));
+}
+
+void Host::HandlePasswordResponse(std::uint64_t nowMilliseconds, const Endpoint& from, std::span<const std::uint8_t> datagram) {
+    if (datagram.size() != kResponseBytes) { ++stats_.handshakesRejected; diagnostics_.Report(DiagCode::HandshakeContent, "invalid password Response length"); return; }
+    ByteReader reader(datagram.subspan(kHandshakeHeaderBytes));
+    const auto claimedId = reader.U64(), clientSalt = reader.U64(), serverSalt = reader.U64();
+    const auto ephemeral = reader.Bytes(32U), ya = reader.Bytes(32U);
+    const auto epoch = nowMilliseconds / config_.cookieLifetimeMilliseconds;
+    if (serverSalt != Cookie(from, claimedId, clientSalt, epoch) &&
+        (epoch == 0U || serverSalt != Cookie(from, claimedId, clientSalt, epoch - 1U))) {
+        ++stats_.handshakesRejected; diagnostics_.Report(DiagCode::HandshakeContent, "invalid password address cookie"); return;
+    }
+    if (const auto peer = peers_.find(from); peer != peers_.end() && std::ranges::equal(peer->second.response, datagram)) {
+        if (transport_->Send(from, peer->second.accept) == TransportStatus::Error) ++stats_.sendErrors;
+        return;
+    }
+    if (const auto pending = passwordExchanges_.find(from); pending != passwordExchanges_.end() && std::ranges::equal(pending->second.response, datagram)) {
+        if (transport_->Send(from, pending->second.challenge) == TransportStatus::Error) ++stats_.sendErrors;
+        return;
+    }
+    // Every new PAKE exchange consumes a token only after proving address ownership. A full table fails closed here.
+    if (!AllowConnect(nowMilliseconds, from.address)) {
+        ++stats_.passwordRateLimited;
+        diagnostics_.Report(DiagCode::PasswordRateLimited, "password attempts per address exhausted");
+        return;
+    }
+    std::size_t sameAddress = 0U;
+    for (const auto& peer : peers_) if (peer.first.address == from.address && peer.first != from) ++sameAddress;
+    for (const auto& pending : passwordExchanges_) if (pending.first.address == from.address && pending.first != from) ++sameAddress;
+    if (sameAddress >= config_.maxSessionsPerAddress || (passwordExchanges_.size() >= config_.maxClients && !passwordExchanges_.contains(from))) {
+        ++stats_.handshakesRejected;
+        diagnostics_.Report(DiagCode::HandshakeServerFull, "password exchange capacity reached");
+        SendReject(from, RejectReason::ServerFull, clientSalt); return;
+    }
+    ++stats_.passwordAttempts;
+    PasswordExchange exchange;
+    exchange.createdAt = nowMilliseconds;
+    exchange.response.assign(datagram.begin(), datagram.end());
+    kb::security::X25519KeyPair ephemeralPair;
+    kb::security::SecretBytes<32U> scalar, publicPoint, shared;
+    const auto sid = PasswordSid(clientSalt, serverSalt);
+    auto generator = kb::security::CPaceGenerator(config_.joinPassword, config_.hostSalt, sid);
+    const bool ok = kb::security::SecureRandom(scalar.Span()) && kb::security::X25519SharedSecret(scalar, generator, publicPoint) &&
+        kb::security::X25519SharedSecret(scalar, std::span<const std::uint8_t, 32U>(ya.data(), 32U), shared) &&
+        kb::security::GenerateX25519KeyPair(ephemeralPair) && kb::security::X25519SharedSecret(ephemeralPair.secret,
+            std::span<const std::uint8_t, 32U>(ephemeral.data(), 32U), exchange.shared);
+    kb::security::SecureWipe(generator);
+    if (!ok) { ++stats_.handshakesRejected; diagnostics_.Report(DiagCode::HandshakeContent, "invalid password group element or random source unavailable"); return; }
+    exchange.serverEphemeral = ephemeralPair.publicKey;
+    ByteWriter writer(exchange.challenge);
+    WriteHandshakeHeader(writer, wire::kTypePasswordChallenge);
+    writer.U64(clientSalt); writer.U64(serverSalt);
+    writer.Bytes(publicPoint.Span()); writer.Bytes(exchange.serverEphemeral);
+    kb::security::CPaceISK(exchange.isk, sid, shared, std::span<const std::uint8_t, 32U>(ya.data(), 32U),
+        datagram.first(60U), publicPoint.Span(), std::span(exchange.challenge).subspan(52U));
+    if (transport_->Send(from, exchange.challenge) == TransportStatus::Error) ++stats_.sendErrors;
+    passwordExchanges_.insert_or_assign(from, std::move(exchange));
+}
+
+void Host::HandlePasswordFinish(std::uint64_t nowMilliseconds, const Endpoint& from, std::span<const std::uint8_t> datagram) {
+    if (config_.admission != Admission::JoinPassword || datagram.size() != kPasswordFinishBytes) {
+        ++stats_.handshakesRejected; diagnostics_.Report(DiagCode::HandshakeContent, "invalid password confirmation"); return;
+    }
+    if (const auto peer = peers_.find(from); peer != peers_.end() && kb::security::ConstantTimeEqual(peer->second.finish, datagram)) {
+        if (transport_->Send(from, peer->second.accept) == TransportStatus::Error) ++stats_.sendErrors;
+        return;
+    }
+    const auto pending = passwordExchanges_.find(from);
+    if (pending == passwordExchanges_.end()) { ++stats_.handshakesRejected; diagnostics_.Report(DiagCode::HandshakeContent, "password confirmation has no exchange"); return; }
+    auto& exchange = pending->second;
+    auto key = PasswordKey(exchange.isk);
+    const auto expected = PasswordProof(key, exchange.response, exchange.challenge);
+    const bool valid = nowMilliseconds - exchange.createdAt < config_.confirmMilliseconds &&
+        std::ranges::equal(datagram.subspan(4U, 16U), std::span(exchange.challenge).subspan(4U, 16U)) &&
+        kb::security::ConstantTimeEqual(expected, datagram.last(kMacBytes));
+    ByteReader response(std::span(exchange.response).subspan(4U));
+    static_cast<void>(response.U64());
+    const auto clientSalt = response.U64(), serverSalt = response.U64();
+    const auto ephemeral = response.Bytes(32U);
+    if (!valid) {
+        ++stats_.passwordRejected; ++stats_.handshakesRejected;
+        diagnostics_.Report(DiagCode::PasswordRejected, "password confirmation rejected online");
+        SendReject(from, RejectReason::PasswordRejected, clientSalt);
+    } else if (peers_.size() >= config_.maxClients && !peers_.contains(from)) {
+        ++stats_.handshakesRejected;
+        diagnostics_.Report(DiagCode::HandshakeServerFull, "server client limit reached");
+        SendReject(from, RejectReason::ServerFull, clientSalt);
+    } else {
+        std::array<std::uint8_t, 8U> random{};
+        std::uint64_t assigned = 0U;
+        do {
+            if (!kb::security::SecureRandom(random)) { kb::security::SecureWipe(key); passwordExchanges_.erase(pending); return; }
+            ByteReader id(random); assigned = id.U64();
+        } while (assigned <= kHostPlayerId || byClient_.contains(assigned));
+        if (const auto peer = peers_.find(from); peer != peers_.end()) RemovePeer(peer, DisconnectReason::Requested);
+        CompleteHandshake(nowMilliseconds, from, assigned, clientSalt, serverSalt,
+            std::span<const std::uint8_t, 32U>(ephemeral.data(), 32U), exchange.serverEphemeral, key, exchange.shared,
+            exchange.isk.Span(), exchange.response, datagram);
+        if (config_.joinPassword.empty() && byClient_.contains(assigned))
+            diagnostics_.Report(DiagCode::UnauthenticatedGuests, "encrypted connection accepted without guest authentication");
+    }
+    kb::security::SecureWipe(key);
+    passwordExchanges_.erase(pending);
 }
 
 void Host::HandleData(std::uint64_t nowMilliseconds, const Endpoint& from, std::span<const std::uint8_t> datagram) {
@@ -520,6 +688,9 @@ const SessionStats* Host::ClientStats(std::uint64_t clientId) const noexcept {
 
 // -------------------------------------------------------------- Client
 
+Client::Client(IDatagramTransport& transport, ClientConfig config, Endpoint host, std::uint64_t nowMilliseconds)
+    : Client(transport, std::move(config), 0U, SessionKey{}, host, nowMilliseconds) {}
+
 Client::Client(IDatagramTransport& transport, ClientConfig config, std::uint64_t clientId, const SessionKey& key, Endpoint host,
     std::uint64_t nowMilliseconds)
     : transport_(&transport), config_(std::move(config)), clientId_(clientId), key_(key), host_(host), clientSalt_(config_.clientSalt),
@@ -528,7 +699,7 @@ Client::Client(IDatagramTransport& transport, ClientConfig config, std::uint64_t
     if (config_.identity.release == 0U && config_.identity.contentHash == 0U) {
         diagnostics_.Report(DiagCode::VersionUnchecked, "client build identity is unchecked");
     }
-    if (!config_.session.IsValid() || clientId_ == 0U || config_.retryMilliseconds == 0U) {
+    if (!config_.session.IsValid() || (clientId_ == 0U && config_.admission == Admission::KeyTable) || config_.retryMilliseconds == 0U) {
         Fail(DisconnectReason::Error);
         return;
     }
@@ -552,6 +723,9 @@ void Client::Fail(DisconnectReason reason) {
         return;
     }
     kb::security::SecureWipe(ephemeral_.secret.Span());
+    kb::security::SecureWipe(passwordScalar_.Span());
+    kb::security::SecureWipe(isk_.Span());
+    kb::security::SecureWipe(key_);
     state_ = ClientState::Disconnected;
     NetEvent event;
     event.type = NetEventType::Disconnected;
@@ -568,11 +742,22 @@ void Client::SendConnect() {
     writer.U32(config_.identity.release);
     writer.U64(config_.identity.contentHash);
     writer.Bytes(ephemeral_.publicKey);
+    writer.U8(static_cast<std::uint8_t>(config_.admission));
     writer.Zeros(kMinConnectBytes - packet.size());
     static_cast<void>(transport_->Send(host_, packet));
 }
 
 void Client::SendResponse() {
+    if (config_.admission == Admission::JoinPassword) {
+        if (stage_ == Stage::PasswordFinish) { static_cast<void>(transport_->Send(host_, passwordFinish_)); return; }
+        if (passwordResponse_.empty()) {
+            ByteWriter writer(passwordResponse_); WriteHandshakeHeader(writer, wire::kTypeResponse);
+            writer.U64(clientId_); writer.U64(clientSalt_); writer.U64(serverSalt_);
+            writer.Bytes(ephemeral_.publicKey); writer.Bytes(passwordPublic_);
+        }
+        static_cast<void>(transport_->Send(host_, passwordResponse_));
+        return;
+    }
     const Mac mac = ComputeMac(key_, "21kb-net-response", clientId_, clientSalt_, serverSalt_, ephemeral_.publicKey);
     std::vector<std::uint8_t> packet;
     ByteWriter writer(packet);
@@ -593,6 +778,22 @@ void Client::HandleDatagram(std::uint64_t nowMilliseconds, std::span<const std::
         return;
     }
     if (type == wire::kTypeChallenge) {
+        if (config_.admission == Admission::JoinPassword) {
+            if (stage_ != Stage::Connect || datagram.size() != kOpenChallengeBytes) return;
+            const auto echoedSalt = reader.U64(), cookie = reader.U64();
+            const auto hostSalt = reader.Bytes(8U);
+            if (!reader.Ok() || echoedSalt != clientSalt_) return;
+            const auto sid = PasswordSid(clientSalt_, cookie);
+            auto generator = kb::security::CPaceGenerator(config_.joinPassword, hostSalt, sid);
+            kb::security::SecretBytes<32U> point;
+            const bool ok = kb::security::SecureRandom(passwordScalar_.Span()) && kb::security::X25519SharedSecret(passwordScalar_, generator, point);
+            kb::security::SecureWipe(generator);
+            if (!ok) { Fail(DisconnectReason::Error); return; }
+            std::copy(point.Span().begin(), point.Span().end(), passwordPublic_.begin());
+            serverSalt_ = cookie; stage_ = Stage::Response;
+            SendResponse(); lastHandshakeSend_ = nowMilliseconds;
+            return;
+        }
         if (stage_ != Stage::Connect || datagram.size() != kChallengeBytes) {
             return;
         }
@@ -612,20 +813,39 @@ void Client::HandleDatagram(std::uint64_t nowMilliseconds, std::span<const std::
         lastHandshakeSend_ = nowMilliseconds;
         return;
     }
-    if (type == wire::kTypeAccept && stage_ == Stage::Response && datagram.size() == kAcceptBytes) {
+    if (type == wire::kTypePasswordChallenge && config_.admission == Admission::JoinPassword && stage_ == Stage::Response) {
+        if (datagram.size() != kPasswordChallengeBytes || reader.U64() != clientSalt_ || reader.U64() != serverSalt_) return;
+        const auto yb = reader.Bytes(32U);
+        kb::security::SecretBytes<32U> shared;
+        if (!kb::security::X25519SharedSecret(passwordScalar_, std::span<const std::uint8_t, 32U>(yb.data(), 32U), shared)) { Fail(DisconnectReason::Error); return; }
+        kb::security::CPaceISK(isk_, PasswordSid(clientSalt_, serverSalt_), shared, passwordPublic_,
+            std::span(passwordResponse_).first(60U), std::span<const std::uint8_t, 32U>(yb.data(), 32U), datagram.subspan(52U));
+        kb::security::SecureWipe(passwordScalar_.Span());
+        key_ = PasswordKey(isk_);
+        const auto proof = PasswordProof(key_, passwordResponse_, datagram);
+        ByteWriter writer(passwordFinish_); WriteHandshakeHeader(writer, wire::kTypePasswordFinish);
+        writer.U64(clientSalt_); writer.U64(serverSalt_); writer.Bytes(proof);
+        stage_ = Stage::PasswordFinish;
+        SendResponse(); lastHandshakeSend_ = nowMilliseconds;
+        return;
+    }
+    const bool password = config_.admission == Admission::JoinPassword;
+    const auto acceptPlainBytes = password ? kOpenAcceptPlainBytes : kAcceptPlainBytes;
+    if (type == wire::kTypeAccept && stage_ == (password ? Stage::PasswordFinish : Stage::Response) &&
+        datagram.size() == kAcceptPrefixBytes + acceptPlainBytes + kb::security::kAeadTagBytes) {
         kb::security::AeadNonce nonce{};
         const auto receivedNonce = reader.Bytes(nonce.size());
         std::copy(receivedNonce.begin(), receivedNonce.end(), nonce.begin());
-        std::array<std::uint8_t, kAcceptPlainBytes> plaintext{};
-        const auto ciphertext = reader.Bytes(plaintext.size());
+        std::array<std::uint8_t, kOpenAcceptPlainBytes> plaintext{};
+        const auto ciphertext = reader.Bytes(acceptPlainBytes);
         std::copy(ciphertext.begin(), ciphertext.end(), plaintext.begin());
         kb::security::AeadTag tag{};
         const auto receivedTag = reader.Bytes(tag.size());
         std::copy(receivedTag.begin(), receivedTag.end(), tag.begin());
         kb::security::AeadKey acceptKey;
         DeriveAcceptKey(key_, clientSalt_, serverSalt_, acceptKey);
-        if (!kb::security::AeadDecryptInPlace(plaintext, tag, acceptKey, nonce, datagram.first(kAcceptPrefixBytes))) return;
-        ByteReader payload(plaintext);
+        if (!kb::security::AeadDecryptInPlace(std::span(plaintext).first(acceptPlainBytes), tag, acceptKey, nonce, datagram.first(kAcceptPrefixBytes))) return;
+        ByteReader payload(std::span(plaintext).first(acceptPlainBytes));
         const auto random = payload.Bytes(32U);
         const BuildIdentity identity{ payload.U32(), payload.U64() };
         if (identity.contentHash != 0U && config_.identity.contentHash != 0U &&
@@ -635,6 +855,13 @@ void Client::HandleDatagram(std::uint64_t nowMilliseconds, std::span<const std::
             return;
         }
         const auto publicKey = payload.Bytes(32U);
+        if (password) {
+            const auto assigned = payload.U64();
+            const auto authenticated = payload.U8();
+            if (!payload.Ok() || assigned <= kHostPlayerId || authenticated != (config_.joinPassword.empty() ? 0U : 1U)) { Fail(DisconnectReason::Error); return; }
+            clientId_ = assigned;
+            guestAuthenticated_ = authenticated != 0U;
+        } else guestAuthenticated_ = true;
         kb::security::SecretBytes<32U> shared;
         if (!kb::security::X25519SharedSecret(ephemeral_.secret,
             std::span<const std::uint8_t, 32U>(publicKey.data(), 32U), shared)) {
@@ -645,7 +872,10 @@ void Client::HandleDatagram(std::uint64_t nowMilliseconds, std::span<const std::
         }
         SessionKey clientToServer{};
         SessionKey serverToClient{};
-        DeriveSessionKeys(key_, clientSalt_, serverSalt_, std::span<const std::uint8_t, 32U>(random.data(), 32U), shared, clientToServer, serverToClient);
+        DeriveSessionKeys(key_, clientSalt_, serverSalt_, std::span<const std::uint8_t, 32U>(random.data(), 32U), shared, clientToServer, serverToClient,
+            password ? std::span<const std::uint8_t>(isk_.Span()) : std::span<const std::uint8_t>{});
+        kb::security::SecureWipe(isk_.Span());
+        kb::security::SecureWipe(key_);
         kb::security::SecureWipe(ephemeral_.secret.Span());
         kb::security::SecureWipe(plaintext);
         session_ = std::make_unique<Session>(config_.session, clientToServer, serverToClient, nowMilliseconds);
@@ -669,6 +899,7 @@ void Client::HandleDatagram(std::uint64_t nowMilliseconds, std::span<const std::
         case RejectReason::OutdatedClient: disconnect = DisconnectReason::VersionMismatch; break;
         case RejectReason::ContentMismatch: disconnect = DisconnectReason::ContentMismatch; break;
         case RejectReason::ServerFull: disconnect = DisconnectReason::ServerFull; break;
+        case RejectReason::PasswordRejected: if (!password || stage_ != Stage::PasswordFinish) return; disconnect = DisconnectReason::PasswordRejected; break;
         default: return;
         }
         rejected_ = true;

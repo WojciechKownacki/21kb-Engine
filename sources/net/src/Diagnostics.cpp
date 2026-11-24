@@ -26,6 +26,9 @@ std::string_view DiagName(DiagCode code) noexcept {
     case DiagCode::NotAuthority: return "NotAuthority";
     case DiagCode::EventsDropped: return "EventsDropped";
     case DiagCode::ConnectBucketsFull: return "ConnectBucketsFull";
+    case DiagCode::PasswordRejected: return "PasswordRejected";
+    case DiagCode::PasswordRateLimited: return "PasswordRateLimited";
+    case DiagCode::UnauthenticatedGuests: return "UnauthenticatedGuests";
     }
     return "Unknown";
 }

@@ -118,8 +118,8 @@ bool ParseKeysFile(const std::string& text, StaticKeyTable& keys, std::size_t& c
             return false;
         }
         SessionKey key{};
-        if (clientId == 0U || !kb::security::TryParseHex(hex, key)) {
-            error = "keys file line " + std::to_string(number) + ": the client id must be above zero and the key 64 hex digits";
+        if (clientId <= kHostPlayerId || !kb::security::TryParseHex(hex, key)) {
+            error = "keys file line " + std::to_string(number) + ": client ids 0 and 1 are reserved; expected 64 hex key digits";
             return false;
         }
         keys.Set(clientId, key);
@@ -162,6 +162,9 @@ std::string SummaryJson(const ServerOptions& options, const ServerSummary& summa
     host.Set("handshakes_completed", number(summary.host.handshakesCompleted));
     host.Set("handshakes_rejected", number(summary.host.handshakesRejected));
     host.Set("connect_buckets_full", number(summary.host.connectBucketsFull));
+    host.Set("password_attempts", number(summary.host.passwordAttempts));
+    host.Set("password_rejected", number(summary.host.passwordRejected));
+    host.Set("password_rate_limited", number(summary.host.passwordRateLimited));
     host.Set("unknown_peer", number(summary.host.unknownPeer));
     host.Set("rate_limited", number(summary.host.rateLimited));
     root.Set("host", std::move(host));

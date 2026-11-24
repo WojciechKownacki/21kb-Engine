@@ -212,7 +212,7 @@ void TestProvider() {
     Require(ok.ok && ok.claims.subject == "ada" && ok.claims.scopes == (kScopePlay | kScopeChat) && ok.claims.expiresAt == kBase + 60, "a login did not give the account's claims");
     Require(VerifyToken(ok.token, provider.PublicKey(), kBase + 1).status == AuthStatus::Ok, "the provider's token does not verify under its public key");
     SessionKey keyOfHost{};
-    Require(provider.Keys().LookupKey(ok.clientId, keyOfHost) && keyOfHost == ok.sessionKey, "the session key was not handed to the key table");
+    Require(ok.clientId > kHostPlayerId && provider.Keys().LookupKey(ok.clientId, keyOfHost) && keyOfHost == ok.sessionKey, "the provider must skip reserved ids and hand the session key to the key table");
     const LoginResult again = provider.Login("ada", "correct horse", kBase + 1);
     Require(again.ok && again.claims.tokenId != ok.claims.tokenId && again.clientId == ok.clientId && again.sessionKey != ok.sessionKey, "a second login did not give a new token and key for the same client");
     const LoginResult other = provider.Login("grace", "battery staple", kBase);

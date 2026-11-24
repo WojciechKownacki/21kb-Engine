@@ -10,13 +10,14 @@
 #include <memory>
 #include <span>
 #include <string_view>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
 // Connection establishment on top of IDatagramTransport, and the host and client objects that own
 // Sessions.
 //
-// Authentication. Each client has a 32 byte secret key that the host also knows (handed out by a
+// KeyTable authentication. Each client has a 32 byte secret key that the host also knows (handed out by a
 // login or matchmaking service over a channel the application already trusts, never sent in the
 // clear here). The handshake proves both sides know it without revealing it:
 //
@@ -38,9 +39,14 @@
 // proven address before key agreement, and an address holds a bounded number of sessions.
 //
 // Ephemeral X25519 keys contribute to session keys and are wiped after agreement. Key distribution is external.
+// JoinPassword instead runs CPACE-X25519-SHA512 after the address cookie. Passwords only enter
+// the blinded generator. A bounded, expiring exchange precedes client confirmation and encrypted
+// Accept, which assigns a host-generated id and declares whether the guest is authenticated.
 namespace kb::net {
 
 inline constexpr std::size_t kMinConnectBytes = 128U;
+inline constexpr std::uint64_t kHostPlayerId = 1U;
+enum class Admission : std::uint8_t { KeyTable, JoinPassword };
 
 // Looks up the secret key of a client id. Return false for an unknown or banned client.
 class IKeyProvider {
@@ -83,6 +89,7 @@ enum class DisconnectReason : std::uint8_t {
     ContentMismatch,
     OutdatedClient,
     ServerFull,
+    PasswordRejected,
 };
 
 struct NetEvent {
@@ -105,6 +112,9 @@ struct HostStats {
     std::uint64_t handshakesRateLimited = 0U;     // authenticated Responses over the per-address rate: dropped before key agreement
     std::uint64_t sessionsPerAddressRefused = 0U; // proven Responses refused because the address already holds its share of sessions
     std::uint64_t connectBucketsFull = 0U;       // authenticated Responses admitted without a bucket when the table remains full
+    std::uint64_t passwordAttempts = 0U;
+    std::uint64_t passwordRejected = 0U;
+    std::uint64_t passwordRateLimited = 0U;
 };
 
 struct BuildIdentity {
@@ -114,7 +124,7 @@ struct BuildIdentity {
 
 [[nodiscard]] BuildIdentity MakeBuildIdentity(std::uint32_t release, std::string_view contentVersion) noexcept;
 
-enum class RejectReason : std::uint8_t { ProtocolVersion = 1U, OutdatedClient = 2U, ContentMismatch = 3U, ServerFull = 4U };
+enum class RejectReason : std::uint8_t { ProtocolVersion = 1U, OutdatedClient = 2U, ContentMismatch = 3U, ServerFull = 4U, PasswordRejected = 5U };
 
 struct HandshakeRejectInfo {
     RejectReason reason = RejectReason::ProtocolVersion;
@@ -122,6 +132,9 @@ struct HandshakeRejectInfo {
 };
 
 struct HostConfig {
+    Admission admission = Admission::KeyTable;
+    std::string joinPassword;
+    std::array<std::uint8_t, 8U> hostSalt{}; // Zero draws a random salt; advertise Host::HostSalt().
     SessionConfig session{};
     BuildIdentity identity{};
     std::size_t maxClients = 64U;
@@ -130,7 +143,7 @@ struct HostConfig {
     std::uint64_t cookieLifetimeMilliseconds = 30'000U;
     std::uint32_t minClientRelease = 0U;
     std::uint32_t confirmMilliseconds = 5000U;
-    // Per IPv4 address (the port does not count): Connects a second (also the burst), and open sessions. Raise the session limit for
+    // Per IPv4 address (the port does not count): verified Responses a second (also the burst), and open sessions. Raise the session limit for
     // players behind one shared address or for many test clients on one machine.
     std::uint32_t maxConnectsPerSecondPerAddress = 8U;
     std::uint32_t maxSessionsPerAddress = 16U;
@@ -141,8 +154,10 @@ public:
     // `transport` and `keys` must outlive the host. `Valid()` is false when the configuration is
     // invalid or the system could not supply random bytes for the cookie secret.
     Host(IDatagramTransport& transport, HostConfig config, const IKeyProvider& keys);
+    Host(IDatagramTransport& transport, HostConfig config);
 
     [[nodiscard]] bool Valid() const noexcept { return valid_; }
+    [[nodiscard]] const auto& HostSalt() const noexcept { return config_.hostSalt; }
     void Update(std::uint64_t nowMilliseconds);
     [[nodiscard]] SendResult Send(std::uint64_t clientId, std::uint8_t channel, std::span<const std::uint8_t> data);
     void Disconnect(std::uint64_t clientId);
@@ -166,15 +181,31 @@ private:
         std::uint64_t serverSalt = 0U;
         std::array<std::uint8_t, 32U> clientEphemeral{};
         std::vector<std::uint8_t> accept;
+        std::vector<std::uint8_t> response;
+        std::vector<std::uint8_t> finish;
         std::uint64_t createdAt = 0U;
         bool confirmed = false;
         std::unique_ptr<Session> session;
         std::size_t packetsThisUpdate = 0U;
     };
+    struct PasswordExchange {
+        std::uint64_t createdAt = 0U;
+        std::vector<std::uint8_t> response;
+        std::vector<std::uint8_t> challenge;
+        std::array<std::uint8_t, 32U> serverEphemeral{};
+        kb::security::SecretBytes<32U> shared;
+        kb::security::SecretBytes<64U> isk;
+    };
 
     void SendReject(const Endpoint& to, RejectReason reason, std::uint64_t clientSalt);
     void HandleConnect(std::uint64_t nowMilliseconds, const Endpoint& from, std::span<const std::uint8_t> datagram);
     void HandleResponse(std::uint64_t nowMilliseconds, const Endpoint& from, std::span<const std::uint8_t> datagram);
+    void HandlePasswordResponse(std::uint64_t nowMilliseconds, const Endpoint& from, std::span<const std::uint8_t> datagram);
+    void HandlePasswordFinish(std::uint64_t nowMilliseconds, const Endpoint& from, std::span<const std::uint8_t> datagram);
+    void CompleteHandshake(std::uint64_t nowMilliseconds, const Endpoint& from, std::uint64_t clientId,
+        std::uint64_t clientSalt, std::uint64_t serverSalt, std::span<const std::uint8_t, 32U> clientEphemeral,
+        std::span<const std::uint8_t, 32U> serverEphemeral, const SessionKey& key, const kb::security::SecretBytes<32U>& shared,
+        std::span<const std::uint8_t> isk = {}, std::span<const std::uint8_t> response = {}, std::span<const std::uint8_t> finish = {});
     void HandleData(std::uint64_t nowMilliseconds, const Endpoint& from, std::span<const std::uint8_t> datagram);
     void DrainMessages(Peer& peer);
     [[nodiscard]] bool AllowConnect(std::uint64_t nowMilliseconds, std::uint32_t address);
@@ -188,6 +219,7 @@ private:
     SessionKey cookieSecret_{};
     bool valid_ = false;
     std::map<Endpoint, Peer> peers_;
+    std::map<Endpoint, PasswordExchange> passwordExchanges_;
     std::map<std::uint64_t, Endpoint> byClient_;
     std::unordered_map<std::uint32_t, ConnectBucket> connectBuckets_;
     std::uint64_t lastBucketSweep_ = 0U;
@@ -200,6 +232,8 @@ private:
 enum class ClientState : std::uint8_t { Connecting, Connected, Disconnected };
 
 struct ClientConfig {
+    Admission admission = Admission::KeyTable;
+    std::string joinPassword;
     SessionConfig session{};
     BuildIdentity identity{};
     std::uint32_t retryMilliseconds = 250U;
@@ -214,6 +248,7 @@ class Client final {
 public:
     Client(IDatagramTransport& transport, ClientConfig config, std::uint64_t clientId, const SessionKey& key, Endpoint host,
         std::uint64_t nowMilliseconds);
+    Client(IDatagramTransport& transport, ClientConfig config, Endpoint host, std::uint64_t nowMilliseconds);
 
     void Update(std::uint64_t nowMilliseconds);
     [[nodiscard]] SendResult Send(std::uint8_t channel, std::span<const std::uint8_t> data);
@@ -223,10 +258,12 @@ public:
     [[nodiscard]] const HandshakeRejectInfo* RejectInfo() const noexcept { return rejected_ ? &rejectInfo_ : nullptr; }
     [[nodiscard]] DiagLog& Diagnostics() noexcept { return diagnostics_; }
     [[nodiscard]] ClientState State() const noexcept { return state_; }
+    [[nodiscard]] std::uint64_t AssignedId() const noexcept { return clientId_; }
+    [[nodiscard]] bool GuestAuthenticated() const noexcept { return guestAuthenticated_; }
     [[nodiscard]] const SessionStats* Stats() const noexcept { return session_ != nullptr ? &session_->Stats() : nullptr; }
 
 private:
-    enum class Stage : std::uint8_t { Connect, Response, Established };
+    enum class Stage : std::uint8_t { Connect, Response, PasswordFinish, Established };
 
     void HandleDatagram(std::uint64_t nowMilliseconds, std::span<const std::uint8_t> datagram);
     void Fail(DisconnectReason reason);
@@ -238,6 +275,12 @@ private:
     std::uint64_t clientId_;
     SessionKey key_;
     kb::security::X25519KeyPair ephemeral_;
+    kb::security::SecretBytes<32U> passwordScalar_;
+    kb::security::SecretBytes<64U> isk_;
+    std::array<std::uint8_t, 32U> passwordPublic_{};
+    std::vector<std::uint8_t> passwordResponse_;
+    std::vector<std::uint8_t> passwordFinish_;
+    bool guestAuthenticated_ = false;
     Endpoint host_;
     std::uint64_t clientSalt_ = 0U;
     std::uint64_t serverSalt_ = 0U;
