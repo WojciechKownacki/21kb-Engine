@@ -2,6 +2,7 @@
 #include "CliProgram.hpp"
 
 #include "engine/core/JsonValue.hpp"
+#include "engine/project/ProjectSettingsStore.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
 #include "engine/script/ScriptEventHooks.hpp"
 #include "engine/security/Crypto.hpp"
@@ -258,6 +259,21 @@ constexpr std::string_view kUsage =
         return 1;
     }
 #endif
+    // The project now runs online: the editor reads this mode when it builds an Android package (its permissions).
+    const fs::path settingsPath = kb::project::ProjectSettingsStore::FilePath(root);
+    std::error_code settingsError;
+    fs::create_directories(settingsPath.parent_path(), settingsError);
+    kb::project::ProjectSettingsLoadResult projectSettings = kb::project::ProjectSettingsStore::Load(settingsPath);
+    if (!projectSettings.Succeeded()) {
+        io.err << "error: the project settings could not be read: " << projectSettings.error << '\n';
+        return 1;
+    }
+    projectSettings.settings.networkingMode = kb::project::ProjectNetworkingMode::Online;
+    std::string saveError;
+    if (!kb::project::ProjectSettingsStore::Save(settingsPath, projectSettings.settings, saveError)) {
+        io.err << "error: the project settings could not be saved: " << saveError << '\n';
+        return 1;
+    }
     io.out << "wrote " << keysFile.generic_string() << " and session-1.json .. session-" << players << ".json in " << out.generic_string() << '\n'
            << "server: kb_dedicated_server --project " << *project << " --keys " << keysFile.generic_string() << " --replicate none --port " << port << '\n'
            << "player N: kb_game --project " << *project << " --network-config=" << (out / "session-N.json").generic_string() << '\n'

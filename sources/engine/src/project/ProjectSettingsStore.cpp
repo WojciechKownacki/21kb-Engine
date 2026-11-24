@@ -24,6 +24,7 @@ constexpr std::string_view kDisplay = "Project.Display";
 constexpr std::string_view kInput = "Project.Input";
 constexpr std::string_view kPhysics = "Project.Physics";
 constexpr std::string_view kTime = "Project.Time";
+constexpr std::string_view kNetwork = "Project.Network";
 constexpr std::string_view kAudio = "Project.Audio";
 constexpr std::string_view kTags = "Project.Tags";
 constexpr std::string_view kNavigation = "Project.Navigation";
@@ -160,6 +161,27 @@ std::optional<ProjectQualityLevel> ParseProjectQualityLevel(std::string_view nam
     if (same("medium")) return ProjectQualityLevel::Medium;
     if (same("high")) return ProjectQualityLevel::High;
     if (same("ultra")) return ProjectQualityLevel::Ultra;
+    return std::nullopt;
+}
+
+std::string_view ProjectNetworkingModeName(ProjectNetworkingMode mode) noexcept {
+    switch (mode) {
+    case ProjectNetworkingMode::Online: return "Online";
+    case ProjectNetworkingMode::Lan: return "Lan";
+    case ProjectNetworkingMode::None:
+    default: return "None";
+    }
+}
+
+std::optional<ProjectNetworkingMode> ParseProjectNetworkingMode(std::string_view name) noexcept {
+    const auto same = [name](std::string_view expected) noexcept {
+        return std::ranges::equal(name, expected, [](char lhs, char rhs) noexcept {
+            return (lhs >= 'A' && lhs <= 'Z' ? static_cast<char>(lhs + ('a' - 'A')) : lhs) == rhs;
+        });
+    };
+    if (same("none")) return ProjectNetworkingMode::None;
+    if (same("online")) return ProjectNetworkingMode::Online;
+    if (same("lan")) return ProjectNetworkingMode::Lan;
     return std::nullopt;
 }
 
@@ -322,6 +344,9 @@ ProjectSettings ProjectSettingsStore::Read(const config::IniDocument& document) 
     splash.minimumDisplayMilliseconds = ReadBounded(document, kDisplay, "SplashMinimumMilliseconds",
         defaults.display.splash.minimumDisplayMilliseconds, 0U, kProjectSplashMinimumMillisecondsMax);
     splash.showProgress = document.GetBool(kDisplay, "SplashProgress").value_or(defaults.display.splash.showProgress);
+    result.settings.networkingMode = ParseProjectNetworkingMode(
+        ReadString(document, kNetwork, "Mode", std::string{ProjectNetworkingModeName(defaults.networkingMode)}))
+        .value_or(defaults.networkingMode);
     result.settings.masterVolume = ReadBoundedFloat(document, kAudio, "MasterVolume", defaults.masterVolume, 0.0F, 1.0F);
     result.settings.microphone = document.GetBool(kAudio, "Microphone").value_or(defaults.microphone);
     const std::int64_t tagCount = std::clamp<std::int64_t>(
@@ -469,6 +494,7 @@ void ProjectSettingsStore::Write(const ProjectSettings& settings, config::IniDoc
     document.SetString(kDisplay, "SplashScale", std::string{SplashScaleName(settings.display.splash.scale)});
     document.SetInt(kDisplay, "SplashMinimumMilliseconds", settings.display.splash.minimumDisplayMilliseconds);
     document.SetBool(kDisplay, "SplashProgress", settings.display.splash.showProgress);
+    document.SetString(kNetwork, "Mode", std::string{ProjectNetworkingModeName(settings.networkingMode)});
     document.SetFloat(kAudio, "MasterVolume", settings.masterVolume);
     document.SetBool(kAudio, "Microphone", settings.microphone);
     // The tags as a count and one key each; keys a shorter list leaves behind are removed.

@@ -1522,6 +1522,9 @@ def _stage_android(args: argparse.Namespace, pack: Path, stage: Path, job: Path)
         command.append(f"-PkbApplicationIcon={args.application_icon}")
     if getattr(args, "android_microphone", False):
         command.append("-PkbMicrophone=true")
+    android_network = getattr(args, "android_network", "none")
+    if android_network != "none":
+        command.append(f"-PkbNetwork={android_network}")
     if getattr(args, "android_splash_background", None):
         command.append(f"-PkbSplashBackground=#{args.android_splash_background}")
     if getattr(args, "trust_anchor", None):
@@ -2571,6 +2574,9 @@ def _parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--android-min-sdk", type=int, default=23)
     parser.add_argument("--android-target-sdk", type=int, default=36)
     parser.add_argument("--android-microphone", action="store_true")
+    parser.add_argument("--android-network", choices=("none", "online", "lan"), default="none",
+                        help="network permissions the Android package declares: online (INTERNET, ACCESS_NETWORK_STATE), "
+                             "lan (also CHANGE_WIFI_MULTICAST_STATE for local game discovery), or none")
     parser.add_argument("--android-splash-background", type=_splash_background_color)
     parser.add_argument("--android-keystore", type=Path)
     parser.add_argument("--android-key-alias", default="")

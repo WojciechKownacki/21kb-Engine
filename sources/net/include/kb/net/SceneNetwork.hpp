@@ -25,6 +25,9 @@ struct SceneNetworkOptions {
     // Opens a datagram transport for local network discovery (UDP with broadcast on native hosts); empty where this build
     // cannot look for games on the local network (the browser).
     std::function<std::unique_ptr<IDatagramTransport>(std::uint16_t port, bool broadcast, std::string& error)> lan;
+    // Android only: holds the platform's multicast lock while local network discovery is on (empty elsewhere, where
+    // broadcast reaches the network without one).
+    std::function<void(bool)> multicastLock;
     std::uint32_t tickRate = 30U;
 };
 
@@ -48,6 +51,13 @@ public:
     void Leave() noexcept;
     // Starts a requested join, ends a requested leave, pumps the session. False when the session failed (as SceneClient::Update).
     [[nodiscard]] bool Update(std::uint64_t nowMilliseconds, std::ostream& diagnostics);
+    // The application went to the background: a client tells its server and stops until the foreground returns; a host
+    // keeps its game open (the system stops its loop anyway and the guests time out on their own).
+    void OnAppBackground();
+    // The application came back: a client that is not connected negotiates again at once.
+    void OnAppForeground();
+    // The device gained or lost its network: without one no attempt is made; a new one negotiates again at once.
+    void OnNetworkChanged(bool available);
     [[nodiscard]] bool Connected() const noexcept;
     [[nodiscard]] std::size_t ReplicaCount() const;
     [[nodiscard]] std::uint64_t DeclarationMismatches() const;

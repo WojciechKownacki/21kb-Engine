@@ -327,7 +327,7 @@ def check_android_apk(args):
         'Android.ASTC.arm64', package,
         '--android-application-id', android['ApplicationId'], '--android-version-code', android['VersionCode'],
         '--android-label', android['Label'], '--android-min-sdk', '23', '--android-target-sdk', '36',
-        '--android-microphone'),
+        '--android-microphone', '--android-network', 'lan'),
         timeout=7200, env=env, low_priority=True)
 
     files = {path.name for path in package.iterdir()}
@@ -367,8 +367,12 @@ def check_android_apk(args):
     for needle in (f"package: name='{android['ApplicationId']}'", f"versionCode='{android['VersionCode']}'",
                    f"versionName='{SETTINGS['Project.Product']['Version']}'", "minSdkVersion:'23'", "targetSdkVersion:'36'",
                    f"application-label:'{android['Label']}'", "native-code: 'arm64-v8a'", 'kb_custom_launcher',
-                   "uses-permission: name='android.permission.RECORD_AUDIO'"):
+                   "uses-permission: name='android.permission.RECORD_AUDIO'",
+                   "uses-permission: name='android.permission.INTERNET'",
+                   "uses-permission: name='android.permission.ACCESS_NETWORK_STATE'",
+                   "uses-permission: name='android.permission.CHANGE_WIFI_MULTICAST_STATE'"):
         assert needle in badging, (needle, badging[:1500])
+    assert badging.count("android.permission.INTERNET'") == 1, badging
     signature = context.run(package_game._apksigner_command(build_tools, ['verify', '--verbose', '--print-certs', apk])).stdout
     assert 'Verifies' in signature and 'CN=Android Debug' in signature, signature
     print('android apk contract passed')

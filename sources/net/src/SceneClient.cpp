@@ -235,6 +235,10 @@ struct SceneClient::Impl {
     bool tokenPending = false;
     bool disconnected = false;
     bool refused = false;
+    // The application's lifecycle: suspended stops every pump until ResumeNow; without a device network no attempt is made.
+    bool suspended = false;
+    bool networkAvailable = true;
+    std::uint64_t lastNow = 0U;
     std::uint32_t retries = 0U;
     std::uint64_t reconnectAt = 0U;
     std::size_t lastReplicas = 0U;
@@ -282,6 +286,7 @@ kb::ecs::Entity SceneClient::Replica(std::uint64_t networkId) const {
 
 bool SceneClient::Update(std::uint64_t now, std::ostream& diagnostics) {
     auto& s = *impl_;
+    s.lastNow = now;
     if (!s.initialized) {
         if (!s.factory || !SceneTransformCodec{s.options.worldExtent}.Valid() ||
             s.options.token.size() > 1024U || s.options.reconnectAttempts > 10U || s.options.joinPassword.size() > 256U) {
@@ -294,6 +299,11 @@ bool SceneClient::Update(std::uint64_t now, std::ostream& diagnostics) {
         DefineStandardRpcs(s.rpcs);
         if (!s.script.Freeze(s.rpcs, error)) { diagnostics << "network: RPC registry rejected\n"; return false; }
         s.initialized = true;
+    }
+    if (s.suspended) return true;
+    if (!s.networkAvailable) {
+        const bool up = s.authorized && !s.disconnected && s.client != nullptr && s.client->State() == ClientState::Connected;
+        if (!up) return true;
     }
     if (!s.client && !s.Connect(now, diagnostics)) return false;
     if (s.disconnected) {
@@ -361,5 +371,65 @@ bool SceneClient::Update(std::uint64_t now, std::ostream& diagnostics) {
         }
     }
     return true;
+}
+
+void SceneClient::Suspend(std::uint64_t now) {
+    auto& s = *impl_;
+    s.lastNow = now;
+    s.suspended = true;
+    if (s.client) {
+        if (s.client->State() == ClientState::Connected) {
+            s.client->Disconnect();
+            s.client->Update(now); // the session's three disconnect notices leave with this update
+        }
+        if (s.authorized) {
+            s.authorized = false;
+            s.script.SetClientAuthorized(false);
+            s.Deliver(NetEvent{.type = NetEventType::Disconnected, .reason = DisconnectReason::Requested});
+        }
+        s.client.reset();
+        s.transport.reset();
+        s.replication.reset();
+    }
+    s.disconnected = true;
+    s.reconnectAt = now;
+    s.retries = 0U;
+}
+
+void SceneClient::ResumeNow(std::uint64_t now) {
+    auto& s = *impl_;
+    s.lastNow = now;
+    s.suspended = false;
+    if (!s.authorized || s.disconnected || !s.client || s.client->State() != ClientState::Connected) {
+        s.disconnected = true;
+        s.retries = 0U;
+        s.reconnectAt = now;
+    }
+}
+
+void SceneClient::SetNetworkAvailable(bool available, std::uint64_t now) {
+    auto& s = *impl_;
+    s.lastNow = now;
+    if (!available) {
+        if (s.networkAvailable) s.networkAvailable = false; // Update holds every attempt until a network comes back
+        return;
+    }
+    // A true report is a network generation, even when the previous one was available as well (the new network's
+    // onAvailable arrives before the old network's onLost): the old session's address may no longer reach the server,
+    // so negotiate again right away.
+    s.networkAvailable = true;
+    if (s.client) {
+        if (s.authorized) {
+            s.authorized = false;
+            s.script.SetClientAuthorized(false);
+            s.Deliver(NetEvent{.type = NetEventType::Disconnected, .reason = DisconnectReason::Timeout});
+        }
+        s.client.reset();
+        s.transport.reset();
+        s.replication.reset();
+    }
+    s.disconnected = true;
+    s.retries = 0U;
+    s.reconnectAt = now;
 }
 } // namespace kb::net

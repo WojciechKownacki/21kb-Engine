@@ -31,6 +31,8 @@
 #include "engine/security/ReleaseKeys.hpp"
 #include "engine/script/ScriptModule.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
+#include "kb/net/SceneNetwork.hpp"
+#include "kb/net/Transport.hpp"
 #include "kb/render/DisplayConfig.hpp"
 #include "kb/render/Renderer.hpp"
 #include "kb/render/RenderSurface.hpp"
@@ -72,12 +74,50 @@ namespace {
 
 constexpr std::string_view kLogTag = "21kb";
 constexpr std::string_view kPackagedAssetPack = "game.kbpack";
+void LogError(std::string_view message) noexcept;
 std::atomic<bool> audioFocusGranted{false};
 // The microphone permission: unknown until a script starts the microphone, then asked (the dialog is open),
 // then the user's answer. A refusal is reported once and the next start asks again.
 enum MicrophoneState : int { kMicrophoneUnknown, kMicrophoneAsked, kMicrophoneGranted, kMicrophoneDenied };
 std::atomic<int> microphoneState{kMicrophoneUnknown};
+// The device's network, as NetworkMonitor last saw it: the owner thread hands the change to the scene network.
+std::atomic<bool> networkAvailable{true};
+// Each report from NetworkMonitor is a new generation, also when it repeats "available": the owner thread compares it.
+std::atomic<std::uint32_t> networkGeneration{0U};
 android_app* microphoneApp = nullptr;
+
+// Holds or releases the Wi-Fi multicast lock on the UI thread (local network discovery keeps it while it is on).
+// Without the permission the Java side logs the refusal; discovery still works where broadcast arrives.
+void SetMulticastLock(bool held) {
+    if (microphoneApp == nullptr || microphoneApp->activity == nullptr) {
+        LogError("multicast lock bridge: no activity");
+        return;
+    }
+    JNIEnv* environment = nullptr;
+    if (microphoneApp->activity->vm->GetEnv(reinterpret_cast<void**>(&environment), JNI_VERSION_1_6) != JNI_OK) {
+        LogError("multicast lock bridge: no JNI environment");
+        return;
+    }
+    const auto activityClass = environment->GetObjectClass(microphoneApp->activity->javaGameActivity);
+    if (activityClass == nullptr) {
+        environment->ExceptionClear();
+        LogError("multicast lock bridge: activity class unavailable");
+        return;
+    }
+    const auto lock = environment->GetMethodID(activityClass, "setMulticastLock", "(Z)V");
+    if (lock == nullptr) {
+        environment->ExceptionClear();
+        environment->DeleteLocalRef(activityClass);
+        LogError("multicast lock bridge: setMulticastLock missing");
+        return;
+    }
+    environment->CallVoidMethod(microphoneApp->activity->javaGameActivity, lock, held ? JNI_TRUE : JNI_FALSE);
+    if (environment->ExceptionCheck()) {
+        environment->ExceptionClear();
+        LogError("multicast lock bridge: setMulticastLock threw");
+    }
+    environment->DeleteLocalRef(activityClass);
+}
 
 // Asks the activity for the record-audio permission; false when the Java side cannot be reached.
 bool RequestMicrophonePermission() noexcept {
@@ -603,10 +643,12 @@ private:
             break;
         case APP_CMD_RESUME:
             resumed_ = true;
+            if (network_) network_->OnAppForeground();
             break;
         case APP_CMD_PAUSE:
         case APP_CMD_STOP:
             resumed_ = false;
+            if (network_) network_->OnAppBackground();
             ApplyAudioState();
             tickClockReady_ = false;
             SetImeVisible(false);
@@ -615,6 +657,7 @@ private:
             break;
         case APP_CMD_START:
             gamepads_.OnStart();
+            if (network_) network_->OnAppForeground();
             break;
         case APP_CMD_SAVE_STATE:
             DrainStorageWrites();
@@ -852,6 +895,22 @@ private:
               << " modules=" << scene_->ActiveModuleCount();
         LogInfo(ready.str());
         startupSceneLoaded_ = true;
+        // The scene network attaches its script runtime once the scene (and its replication declarations) is loaded,
+        // and before the first script update. Scripts join, host and discover through Net.*.
+        network_ = std::make_unique<kb::net::SceneNetwork>(*scene_, kb::net::SceneNetworkOptions{
+            .defaults = {},
+            .transport = [](std::string& error) {
+                return kb::net::CreateUdpTransport(kb::net::Endpoint::Make(0, 0, 0, 0, 0), error);
+            },
+            .scriptJoin = true,
+            .listen = [](std::uint16_t port, std::string& error) {
+                return kb::net::CreateUdpTransport(kb::net::Endpoint::Make(0, 0, 0, 0, port), error);
+            },
+            .lan = [](std::uint16_t port, bool broadcast, std::string& error) {
+                return kb::net::CreateUdpTransport(kb::net::Endpoint::Make(0, 0, 0, 0, port), error,
+                    kb::net::UdpOptions{ .broadcast = broadcast, .reuseAddress = true });
+            },
+            .multicastLock = &SetMulticastLock });
         return true;
     }
 
@@ -915,6 +974,21 @@ private:
             }
             failed_ = true;
             return;
+        }
+        if (network_) {
+            // The generation, not the boolean: a new network reports "available" again before the old one is lost.
+            const std::uint32_t generation = networkGeneration.load(std::memory_order_acquire);
+            if (generation != networkGenerationSeen_) {
+                networkGenerationSeen_ = generation;
+                network_->OnNetworkChanged(networkAvailable.load(std::memory_order_acquire));
+            }
+            const auto milliseconds = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count());
+            if (networkStarted_ == 0U) networkStarted_ = milliseconds;
+            std::ostringstream networkDiagnostics;
+            if (!network_->Update(milliseconds - networkStarted_, networkDiagnostics)) failed_ = true;
+            const std::string message = networkDiagnostics.str();
+            if (!message.empty()) LogInfo(message);
         }
         if (presentedGeneration_ != rendererGeneration_) {
             std::ostringstream message;
@@ -1017,6 +1091,8 @@ private:
             }
         }
         ShutdownRenderer();
+        network_.reset();
+        networkStarted_ = 0U;
         scene_.reset();
         scriptModule_ = nullptr;
         static_cast<void>(renderer_.SetShaderBinaryProvider({}));
@@ -1041,6 +1117,9 @@ private:
     std::shared_ptr<kb::render::RuntimeAssetShaderProvider> shaderProvider_;
     kb::game::GameProjectRuntime projectRuntime_;
     std::unique_ptr<kb::scene::Scene> scene_;
+    std::unique_ptr<kb::net::SceneNetwork> network_;
+    std::uint64_t networkStarted_ = 0U;
+    std::uint32_t networkGenerationSeen_ = 0U;
     kb::script::ScriptModule* scriptModule_ = nullptr;
     AndroidRenderSurface surface_;
     kb::render::Renderer renderer_;
@@ -1082,6 +1161,12 @@ Java_com_kbengine_runtime_MainActivity_setAudioFocusGranted(JNIEnv*, jclass, jbo
 extern "C" JNIEXPORT void JNICALL
 Java_com_kbengine_runtime_MainActivity_setMicrophonePermission(JNIEnv*, jclass, jboolean granted) {
     microphoneState.store(granted == JNI_TRUE ? kMicrophoneGranted : kMicrophoneDenied, std::memory_order_release);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_kbengine_runtime_NetworkMonitor_onNetworkChanged(JNIEnv*, jclass, jboolean available) {
+    networkAvailable.store(available == JNI_TRUE, std::memory_order_release);
+    networkGeneration.fetch_add(1U, std::memory_order_release);
 }
 
 extern "C" void android_main(android_app* app) {

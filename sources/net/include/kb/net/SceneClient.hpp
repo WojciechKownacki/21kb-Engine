@@ -53,6 +53,14 @@ public:
     SceneClient(const SceneClient&) = delete;
     SceneClient& operator=(const SceneClient&) = delete;
     [[nodiscard]] bool Update(std::uint64_t nowMilliseconds, std::ostream& diagnostics);
+    // The application went to the background: tells the server (the session's three notices) and stops reconnecting
+    // until ResumeNow. Replicas and the join settings stay, so the foreground resumes the same game.
+    void Suspend(std::uint64_t nowMilliseconds);
+    // The application came back: the next Update starts a new handshake at once instead of waiting for the retry delay.
+    void ResumeNow(std::uint64_t nowMilliseconds);
+    // The device has (or lost) a network. Without one no attempt is made; a network coming back drops the old session
+    // and negotiates a new one at once (the server replaces the session of the same id).
+    void SetNetworkAvailable(bool available, std::uint64_t nowMilliseconds);
     // The session is up and the scripts may call the server.
     [[nodiscard]] bool Connected() const noexcept;
     // The replicas this client holds, and the one for a network id (invalid when it has none).

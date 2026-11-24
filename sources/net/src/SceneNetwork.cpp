@@ -13,6 +13,7 @@
 namespace kb::net {
 
 struct SceneNetwork::Impl {
+    ~Impl() { SetMulticastLock(false); }
     Impl(kb::scene::Scene& value, SceneNetworkOptions settings)
         : scene(value), options(std::move(settings)), declarationError(),
           script(ScriptNetworkRuntime::Role::Offline, scene, LoadDeclarations(scene, declarationError)) {
@@ -69,6 +70,14 @@ struct SceneNetwork::Impl {
         pendingHost = request;
         return true;
     }
+    // The platform's multicast lock exists only while discovery does (Android); elsewhere the hook is empty.
+    void SetMulticastLock(bool on) {
+        if (!options.multicastLock || multicastLocked == on) {
+            return;
+        }
+        multicastLocked = on;
+        options.multicastLock(on);
+    }
     bool RequestDiscover(bool on, std::string& error) {
         if (!on) {
             for (const LanGame& game : announcedGames) {
@@ -77,6 +86,7 @@ struct SceneNetwork::Impl {
             announcedGames.clear();
             browser.reset();
             browserTransport.reset();
+            SetMulticastLock(false);
             return true;
         }
         if (browser) {
@@ -86,8 +96,10 @@ struct SceneNetwork::Impl {
             error = "this build cannot look for games on the local network";
             return false;
         }
+        SetMulticastLock(true);
         browserTransport = options.lan(0U, true, error);
         if (!browserTransport) {
+            SetMulticastLock(false);
             if (error.empty()) {
                 error = "the discovery socket could not be opened";
             }
@@ -122,7 +134,23 @@ struct SceneNetwork::Impl {
         pendingJoin.reset();
         pendingHost.reset();
     }
+    void OnAppBackground() {
+        if (client) {
+            client->Suspend(latestNow);
+        }
+    }
+    void OnAppForeground() {
+        if (client) {
+            client->ResumeNow(latestNow);
+        }
+    }
+    void OnNetworkChanged(bool available) {
+        if (client) {
+            client->SetNetworkAvailable(available, latestNow);
+        }
+    }
     bool Update(std::uint64_t now, std::ostream& diagnostics) {
+        latestNow = now;
         diagnosticStream = &diagnostics;
         script.SetNow(now);
         if (pendingLeave) {
@@ -245,6 +273,9 @@ struct SceneNetwork::Impl {
     std::ostream* diagnosticStream = nullptr;
     std::uint32_t tick = 0U;
     std::uint64_t nextTickAt = 0U;
+    // The last time Update saw, so the lifecycle calls (which carry no clock) can act on the same timeline.
+    std::uint64_t latestNow = 0U;
+    bool multicastLocked = false;
 };
 
 SceneNetwork::SceneNetwork(kb::scene::Scene& scene, SceneNetworkOptions options)
@@ -273,6 +304,18 @@ void SceneNetwork::Leave() noexcept {
 
 bool SceneNetwork::Update(std::uint64_t nowMilliseconds, std::ostream& diagnostics) {
     return impl_->Update(nowMilliseconds, diagnostics);
+}
+
+void SceneNetwork::OnAppBackground() {
+    impl_->OnAppBackground();
+}
+
+void SceneNetwork::OnAppForeground() {
+    impl_->OnAppForeground();
+}
+
+void SceneNetwork::OnNetworkChanged(bool available) {
+    impl_->OnNetworkChanged(available);
 }
 
 bool SceneNetwork::Connected() const noexcept {

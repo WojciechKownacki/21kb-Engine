@@ -19,6 +19,8 @@ public final class MainActivity extends TextInputActivity {
     private static final int REQUEST_MICROPHONE = 4021;
     private AudioManager audioManager;
     private AudioFocusRequest audioRequest;
+    private NetworkMonitor networkMonitor;
+    private android.net.wifi.WifiManager.MulticastLock multicastLock;
     private boolean audioEnabled;
     private boolean resumed;
     private boolean focusRequested;
@@ -46,6 +48,31 @@ public final class MainActivity extends TextInputActivity {
         WindowLayout.configure(this);
         audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
         if (audioManager != null) audioManager.registerAudioDeviceCallback(audioDevices, new Handler(Looper.getMainLooper()));
+        networkMonitor = new NetworkMonitor(this);
+        networkMonitor.start();
+    }
+
+    // Called from the native owner thread while local network discovery is on: the Wi-Fi driver drops multicast
+    // datagrams unless the application holds this lock. Without the permission the platform refuses it.
+    public void setMulticastLock(boolean held) {
+        runOnUiThread(() -> {
+            if (held) {
+                if (multicastLock == null) {
+                    android.net.wifi.WifiManager wifi =
+                        (android.net.wifi.WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
+                    if (wifi == null) return;
+                    multicastLock = wifi.createMulticastLock("21kb-discovery");
+                    multicastLock.setReferenceCounted(false);
+                }
+                try {
+                    if (!multicastLock.isHeld()) multicastLock.acquire();
+                } catch (RuntimeException error) {
+                    Log.w("21kb", "multicast lock unavailable: " + error.getMessage());
+                }
+            } else if (multicastLock != null && multicastLock.isHeld()) {
+                multicastLock.release();
+            }
+        });
     }
 
     // Called from the native owner thread; AudioManager policy stays on the UI thread.
@@ -127,6 +154,7 @@ public final class MainActivity extends TextInputActivity {
     @Override protected void onDestroy() {
         audioEnabled = false;
         releaseAudio();
+        if (networkMonitor != null) networkMonitor.stop();
         if (audioManager != null) audioManager.unregisterAudioDeviceCallback(audioDevices);
         super.onDestroy();
     }

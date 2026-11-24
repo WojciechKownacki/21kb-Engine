@@ -1685,6 +1685,55 @@ class PackageGameTests(unittest.TestCase):
                 command = [str(part) for part in gradle.call_args.args[0]]
                 self.assertEqual(enabled, "-PkbMicrophone=true" in command)
 
+    def test_android_network_permissions_follow_the_packaging_flag(self) -> None:
+        app = Path(package_game.__file__).resolve().parents[1] / "platform/android/app"
+        manifest = (app / "src/main/AndroidManifest.xml").read_text(encoding="utf-8")
+        gradle = (app / "build.gradle").read_text(encoding="utf-8")
+        for permission in ("INTERNET", "ACCESS_NETWORK_STATE", "CHANGE_WIFI_MULTICAST_STATE"):
+            self.assertNotIn(permission, manifest)
+            self.assertEqual(1, gradle.count(f"android.permission.{permission}"))
+        self.assertIn('providers.gradleProperty("kbNetwork")', gradle)
+        self.assertIn('networkMode == "lan"', gradle)
+        for mode in ("none", "online", "lan"):
+            with tempfile.TemporaryDirectory() as temporary_text:
+                root = Path(temporary_text)
+                engine = root / "engine"
+                wrapper = engine / "platform/android/gradle/wrapper/gradle-wrapper.jar"
+                wrapper.parent.mkdir(parents=True)
+                wrapper.write_bytes(b"wrapper")
+                pack = root / "Game.kbpack"
+                pack.write_bytes(b"pack")
+                job = root / "job"
+                job.mkdir()
+                args = argparse.Namespace(
+                    target="Android.ETC2.arm64",
+                    configuration="Development",
+                    engine_root=engine,
+                    build_root=root / "build",
+                    executable_name="Game",
+                    product_name="Game",
+                    version="1.0",
+                    application_icon=None,
+                    android_application_id="com.example.game",
+                    android_version_code=1,
+                    android_label=None,
+                    android_min_sdk=23,
+                    android_target_sdk=36,
+                    android_microphone=False,
+                    android_network=mode,
+                    launch=False,
+                )
+                with mock.patch.object(package_game, "_android_sdk", return_value=root / "sdk"), \
+                        mock.patch.object(package_game, "_latest_android_build_tools", return_value=root / "build-tools"), \
+                        mock.patch.object(package_game, "_build_tool_path", return_value=Path("validator.exe")), \
+                        mock.patch.object(package_game, "_stage_licenses"), \
+                        mock.patch.object(package_game, "_java", return_value=Path("java.exe")), \
+                        mock.patch.object(package_game, "run_checked", side_effect=RuntimeError("gradle reached")) as gradle_run:
+                    with self.assertRaisesRegex(RuntimeError, "gradle reached"):
+                        package_game._stage_android(args, pack, root / "stage", job)
+                command = [str(part) for part in gradle_run.call_args.args[0]]
+                self.assertEqual(mode != "none", f"-PkbNetwork={mode}" in command)
+
     def test_android_manifest_declares_the_microphone_only_through_the_gradle_property(self) -> None:
         app = Path(package_game.__file__).resolve().parents[1] / "platform/android/app"
         manifest = (app / "src/main/AndroidManifest.xml").read_text(encoding="utf-8")

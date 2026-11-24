@@ -91,6 +91,11 @@ def requestedMinSdk = providers.gradleProperty("kbMinSdk").orElse("23")
 def requestedTargetSdk = providers.gradleProperty("kbTargetSdk").orElse("36")
 def requestedApplicationIcon = providers.gradleProperty("kbApplicationIcon")
 def microphoneEnabled = providers.gradleProperty("kbMicrophone").orElse("false").get() == "true"
+// The project's network use: none (offline), online (joins and hosts over the internet) or lan (also local discovery).
+def networkMode = providers.gradleProperty("kbNetwork").orElse("none").get().trim()
+if (!(networkMode in ["none", "online", "lan"])) {
+    throw new GradleException("kbNetwork must be none, online or lan")
+}
 def requestedLegalAssets = providers.gradleProperty("kbLegalAssets")
 // Release public key and product id the player checks its pack against; written by packaging.
 def requestedTrustAnchor = providers.gradleProperty("kbTrustAnchor")
@@ -149,19 +154,33 @@ if (!(splashBackground ==~ /#[0-9A-Fa-f]{6}/)) {
 File splashColors = new File(generatedRuntimeResources, "values/kb_splash.xml")
 splashColors.parentFile.mkdirs()
 splashColors.setText("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<resources>\n    <color name=\"kb_splash_background\">${splashBackground}</color>\n</resources>\n", "UTF-8")
-// The record-audio permission is declared only when the project records from the microphone: the package is built
-// from the source manifest plus that one line.
+// The permissions are declared only for the features the project uses: the package is built from the source manifest
+// plus the lines of one list (the record-audio permission, and the network permissions the mode needs).
+List<String> declaredPermissions = []
+if (microphoneEnabled) {
+    declaredPermissions.add("android.permission.RECORD_AUDIO")
+}
+if (networkMode == "online" || networkMode == "lan") {
+    declaredPermissions.add("android.permission.INTERNET")
+    declaredPermissions.add("android.permission.ACCESS_NETWORK_STATE")
+}
+if (networkMode == "lan") {
+    declaredPermissions.add("android.permission.CHANGE_WIFI_MULTICAST_STATE")
+}
 File sourceManifest = file("src/main/AndroidManifest.xml")
 File packageManifest = layout.buildDirectory.get().file("generated/manifest/AndroidManifest.xml").asFile
-if (microphoneEnabled) {
+if (!declaredPermissions.isEmpty()) {
     String manifestText = sourceManifest.getText("UTF-8")
     String applicationTag = "<application"
     if (!manifestText.contains(applicationTag)) {
-        throw new GradleException("The Android manifest has no application element to declare the microphone permission before")
+        throw new GradleException("The Android manifest has no application element to declare permissions before")
+    }
+    StringBuilder permissionLines = new StringBuilder()
+    for (String permission : declaredPermissions) {
+        permissionLines.append("<uses-permission android:name=\"").append(permission).append("\" />\n\n    ")
     }
     packageManifest.parentFile.mkdirs()
-    packageManifest.setText(manifestText.replace(applicationTag,
-        "<uses-permission android:name=\"android.permission.RECORD_AUDIO\" />\n\n    " + applicationTag), "UTF-8")
+    packageManifest.setText(manifestText.replace(applicationTag, permissionLines.toString() + applicationTag), "UTF-8")
 }
 String applicationIconResource = "@drawable/kb_launcher"
 // A project icon becomes an adaptive icon on Android 8 and later: the picture sits inside the safe zone the launcher
@@ -243,7 +262,7 @@ android {
 
     sourceSets {
         main {
-            manifest.srcFile(microphoneEnabled ? packageManifest : sourceManifest)
+            manifest.srcFile(declaredPermissions.isEmpty() ? sourceManifest : packageManifest)
         }
     }
 

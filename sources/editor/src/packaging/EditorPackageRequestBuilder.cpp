@@ -105,6 +105,10 @@ bool BuildPackageRequest(const EditorPackageRequestInput& input, EditorPackageRe
         request.androidVersionCode = project.androidVersionCode;
         request.androidLabel = BuildGamePanelModel::ShippedAndroidLabel(project);
         request.androidMicrophone = project.microphone;
+        request.androidNetwork = std::string{ kb::project::ProjectNetworkingModeName(project.networkingMode) };
+        std::ranges::transform(request.androidNetwork, request.androidNetwork.begin(), [](char value) {
+            return static_cast<char>(value >= 'A' && value <= 'Z' ? value + ('a' - 'A') : value);
+        });
         for (const float channel : project.display.splash.backgroundColor) {
             static constexpr char kHex[] = "0123456789ABCDEF";
             const auto value = static_cast<unsigned>(std::lround(std::clamp(channel, 0.0F, 1.0F) * 255.0F));

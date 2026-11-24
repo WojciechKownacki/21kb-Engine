@@ -36,6 +36,19 @@ inline constexpr std::uint8_t kProjectQualityLevelCount = 5U;
 // The level a name stands for, whatever its letter case; nullopt for anything else.
 [[nodiscard]] std::optional<ProjectQualityLevel> ParseProjectQualityLevel(std::string_view name) noexcept;
 
+// What the project does with the network: none leaves every scene offline, online joins and hosts over the
+// Internet, lan also finds and hosts games on the local network. A package declares the permissions it needs.
+enum class ProjectNetworkingMode : std::uint8_t {
+    None = 0,
+    Online,
+    Lan,
+};
+
+// The mode's name as the settings file and the command line spell it ("None", "Online", "Lan").
+[[nodiscard]] std::string_view ProjectNetworkingModeName(ProjectNetworkingMode mode) noexcept;
+// The mode a name stands for, whatever its letter case; nullopt for anything else.
+[[nodiscard]] std::optional<ProjectNetworkingMode> ParseProjectNetworkingMode(std::string_view name) noexcept;
+
 enum class ProjectWindowMode : std::uint8_t {
     Windowed = 0,
     // A frameless window covering the primary monitor at its native resolution.
@@ -200,6 +213,10 @@ struct ProjectSettings {
 
     // Display
     ProjectDisplaySettings display;
+
+    // Network
+    // The mode the scenes run in; an Android package declares the network permissions this needs.
+    ProjectNetworkingMode networkingMode = ProjectNetworkingMode::None;
 
     // Audio
     // The master gain of the game, 0 (silent) to 1 (full); it scales every sound after the mixer.

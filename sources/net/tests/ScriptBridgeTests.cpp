@@ -711,6 +711,109 @@ void TestSceneNetworkJoinLeaveAndJoinAgain() {
     Require(network.Connected() && network.ReplicaCount() == 1U, "the scene network did not connect again after leaving");
 }
 
+// A client scene, a host on the loopback and the scene network over it: the steps both sides need to talk.
+struct SceneNetworkLifecycleFixture {
+    LoopbackNetwork loopback;
+    std::unique_ptr<IDatagramTransport> socket;
+    StaticKeyTable keys;
+    HostConfig hostConfig;
+    std::unique_ptr<Host> host;
+    kb::scene::Scene clientScene;
+    std::ostringstream diagnostics;
+    std::uint64_t now = 0U;
+    std::uint16_t nextPort = 9501U;
+    std::uint32_t transportAttempts = 0U;
+    std::unique_ptr<SceneNetwork> network;
+
+    explicit SceneNetworkLifecycleFixture(std::uint16_t port) {
+        socket = loopback.CreateTransport(Endpoint::Loopback(port));
+        keys.Set(7U, KeyFor(7U));
+        hostConfig.identity = MakeBuildIdentity(7U, "scene-content");
+        hostConfig.minClientRelease = 7U;
+        host = std::make_unique<Host>(*socket, hostConfig, keys);
+        SceneClientOptions defaults;
+        defaults.identity = MakeBuildIdentity(7U, "scene-content");
+        network = std::make_unique<SceneNetwork>(clientScene, SceneNetworkOptions{ .defaults = defaults,
+            .transport = [this](std::string&) -> std::unique_ptr<IDatagramTransport> {
+                ++transportAttempts;
+                return loopback.CreateTransport(Endpoint::Loopback(nextPort++));
+            } });
+        SceneClientOptions options;
+        options.clientId = 7U;
+        options.key = KeyFor(7U);
+        options.server = Endpoint::Loopback(port);
+        std::string error;
+        Require(network->RequestJoin(options, error), "the lifecycle join was refused: " + error);
+    }
+    void Step() {
+        now += 10U;
+        loopback.Advance(now);
+        host->Update(now);
+        NetEvent event;
+        while (host->PollEvent(event)) {
+        }
+        Require(network->Update(now, diagnostics), diagnostics.str());
+    }
+    void Connect() {
+        for (int i = 0; i < 200 && !network->Connected(); ++i) Step();
+        Require(network->Connected(), "the scene network did not connect");
+    }
+};
+
+void TestSceneNetworkLeavesOnBackgroundAndRejoinsOnForeground() {
+    SceneNetworkLifecycleFixture fixture{ 9500U };
+    fixture.Connect();
+    fixture.network->OnAppBackground();
+    for (int i = 0; i < 10; ++i) fixture.Step();
+    Require(!fixture.network->Connected() && fixture.host->ClientIds().empty(),
+        "the backgrounded client did not tell its server and leave");
+    fixture.network->OnAppForeground();
+    for (int i = 0; i < 10 && !fixture.network->Connected(); ++i) fixture.Step();
+    Require(fixture.network->Connected() && fixture.host->ClientIds().size() == 1U,
+        "the foregrounded client did not rejoin within 100 ms");
+}
+
+void TestNetworkChangeForcesNewHandshakeWithin100ms() {
+    SceneNetworkLifecycleFixture fixture{ 9510U };
+    fixture.Connect();
+    const std::uint32_t before = fixture.transportAttempts;
+    fixture.network->OnNetworkChanged(false);
+    fixture.network->OnNetworkChanged(true);
+    for (int i = 0; i < 10 && !fixture.network->Connected(); ++i) fixture.Step();
+    Require(fixture.network->Connected() && fixture.transportAttempts == before + 1U,
+        "a network change did not negotiate a new session within 100 ms");
+    Require(fixture.host->ClientIds().size() == 1U, "the server did not replace the session of the same id");
+}
+
+void TestRepeatedNetworkAvailableNegotiatesAgain() {
+    SceneNetworkLifecycleFixture fixture{ 9530U };
+    fixture.Connect();
+    const std::uint32_t before = fixture.transportAttempts;
+    fixture.network->OnNetworkChanged(true);
+    for (int i = 0; i < 10 && !fixture.network->Connected(); ++i) fixture.Step();
+    Require(fixture.network->Connected() && fixture.transportAttempts == before + 1U,
+        "the first available report did not negotiate a new session");
+    // A new network reports available again while the old one is still connected: another generation, another handshake.
+    fixture.network->OnNetworkChanged(true);
+    for (int i = 0; i < 10 && !fixture.network->Connected(); ++i) fixture.Step();
+    Require(fixture.network->Connected() && fixture.transportAttempts == before + 2U,
+        "the repeated available report did not negotiate a new session");
+}
+
+void TestNoReconnectWhileNetworkUnavailable() {
+    SceneNetworkLifecycleFixture fixture{ 9520U };
+    fixture.Connect();
+    const std::uint32_t before = fixture.transportAttempts;
+    fixture.network->OnNetworkChanged(false);
+    fixture.host->Disconnect(7U);
+    for (int i = 0; i < 200; ++i) fixture.Step();
+    Require(!fixture.network->Connected() && fixture.transportAttempts == before,
+        "the client tried to connect while the device had no network");
+    fixture.network->OnNetworkChanged(true);
+    for (int i = 0; i < 10 && !fixture.network->Connected(); ++i) fixture.Step();
+    Require(fixture.network->Connected(), "the client did not reconnect after the network came back");
+}
+
 void TestSceneServerRunsOnProvidedScene() {
     LoopbackNetwork loopback;
     auto socket = loopback.CreateTransport(Endpoint::Loopback(9800));
@@ -1071,6 +1174,10 @@ int main() {
         { "net-vars-change-once", &TestNetVarChangedEventFiresOncePerChange },
         { "scene-client-lifecycle", &TestSceneClientLifecycle },
         { "scene-network-join-leave", &TestSceneNetworkJoinLeaveAndJoinAgain },
+        { "scene-network-background-rejoin", &TestSceneNetworkLeavesOnBackgroundAndRejoinsOnForeground },
+        { "scene-network-change-rehandshake", &TestNetworkChangeForcesNewHandshakeWithin100ms },
+        { "scene-network-unavailable-no-reconnect", &TestNoReconnectWhileNetworkUnavailable },
+        { "scene-network-repeated-available", &TestRepeatedNetworkAvailableNegotiatesAgain },
         { "scene-server-on-provided-scene", &TestSceneServerRunsOnProvidedScene },
         { "script-join-refusals", &TestScriptJoinRequestIsRefusedByName },
         { "host-and-guest", &TestHostPlayerSeesGuestAndGuestSeesHostObject },
