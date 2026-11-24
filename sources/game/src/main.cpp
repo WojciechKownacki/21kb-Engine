@@ -6,7 +6,7 @@
 #include "GameScriptLog.hpp"
 #include "GameRuntimeDiagnostics.hpp"
 #include "LoadingScreen.hpp"
-#include "kb/net/SceneClient.hpp"
+#include "kb/net/SceneNetwork.hpp"
 
 #include "engine/input/InputHaptics.hpp"
 #include "engine/core/JsonValue.hpp"
@@ -832,10 +832,16 @@ int RunGame(const GameOptions& options) {
         std::cerr << "kb_game: " << cameraError << '\n';
         return EXIT_FAILURE;
     }
-    std::unique_ptr<kb::net::SceneClient> network;
+    auto network = std::make_unique<kb::net::SceneNetwork>(scene, kb::net::SceneNetworkOptions{
+        .defaults = {},
+        .transport = [](std::string& error) { return kb::net::CreateUdpTransport(kb::net::Endpoint::Make(0, 0, 0, 0, 0), error); },
+        .scriptJoin = true });
     if (networkOptions) {
-        network = std::make_unique<kb::net::SceneClient>(scene, std::move(*networkOptions),
-            [](std::string& error) { return kb::net::CreateUdpTransport(kb::net::Endpoint::Make(0,0,0,0,0), error); });
+        std::string error;
+        if (!network->RequestJoin(std::move(*networkOptions), error)) {
+            std::cerr << "kb_game: network join refused: " << error << '\n';
+            return EXIT_FAILURE;
+        }
     }
     if (!options.luaDebugDirectory.empty()) {
         std::string error;
@@ -1013,7 +1019,7 @@ int RunGame(const GameOptions& options) {
             static_cast<float>(window.Height())));
         renderSceneSync.BeforeUpdate(scene);
         static_cast<void>(scene.Runtime().Update(deltaSeconds));
-        if (network && !network->Update(static_cast<std::uint64_t>(
+        if (!network->Update(static_cast<std::uint64_t>(
                 std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count()), std::cerr)) {
             reportError("network session update failed");
             break;
@@ -1350,7 +1356,7 @@ int RunGame(const GameOptions& options) {
         reportError(std::move(error));
     }
     hapticsBackend.StopAll();
-    network.reset();
+    network.reset(); // the session ends before the scene is released
     kb::input::InputHaptics::UnregisterBackend(scene, hapticsBackend);
     renderer.ReleaseScene(scene);
     loadingScreen.Release(renderer);

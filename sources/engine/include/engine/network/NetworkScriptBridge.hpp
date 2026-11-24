@@ -37,6 +37,13 @@ struct ScriptRpcDeclaration {
 // Entity values are the scene entity ids as std::uint64_t.
 using ScriptRpcValue = std::variant<bool, std::int32_t, std::uint32_t, float, std::string, std::uint64_t>;
 
+// A request from the scripts to join a game: a literal IPv4 address, a port and the game's join password (empty: none).
+struct ScriptJoinRequest {
+    std::string address;
+    std::uint16_t port = 0U;
+    std::string password;
+};
+
 class INetworkScriptRuntime {
 public:
     INetworkScriptRuntime() = default;
@@ -49,6 +56,12 @@ public:
     // The client id of this machine's player; 0 on a server.
     [[nodiscard]] virtual std::uint64_t LocalPlayerId() const = 0;
     [[nodiscard]] virtual std::size_t PlayerCount() const = 0;
+
+    // Asks the scene's network to join a game. Only an offline scene can; false with `error` naming why not (already in a session,
+    // no network for this scene, a malformed address). The session then starts on the next network update.
+    virtual bool RequestJoin(const ScriptJoinRequest& request, std::string& error) = 0;
+    // Leaves the session (no effect offline). The scene is offline again after the next network update.
+    virtual void RequestLeave() = 0;
 
     // Declares an RPC. Only possible before the session starts; false with `error` after that, for a repeated
     // name or for a declaration the network layer cannot carry.

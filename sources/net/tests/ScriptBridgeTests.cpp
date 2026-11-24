@@ -20,6 +20,7 @@
 #include "kb/net/Auth.hpp"
 #include "kb/net/ScriptBridge.hpp"
 #include "kb/net/SceneClient.hpp"
+#include "kb/net/SceneNetwork.hpp"
 #include <sstream>
 
 #include <cmath>
@@ -421,7 +422,8 @@ void TestRuntimeGuards() {
         options.clientId = 7U;
         options.worldExtent = 1.0e8F;
         bool transportCreated = false;
-        SceneClient client(scene, options, [&](std::string&) -> std::unique_ptr<IDatagramTransport> {
+        ScriptNetworkRuntime clientScript(ScriptNetworkRuntime::Role::Offline, scene, {});
+        SceneClient client(scene, clientScript, options, [&](std::string&) -> std::unique_ptr<IDatagramTransport> {
             transportCreated = true; return nullptr;
         });
         std::ostringstream diagnostics;
@@ -559,8 +561,9 @@ void TestSceneClientLifecycle() {
     std::uint64_t now = 0U;
     std::size_t connections = 0U;
     std::size_t transportAttempts = 0U;
+    ScriptNetworkRuntime clientScript(ScriptNetworkRuntime::Role::Offline, clientScene, {});
     {
-        SceneClient client(clientScene, options, [&](std::string&) -> std::unique_ptr<IDatagramTransport> {
+        SceneClient client(clientScene, clientScript, options, [&](std::string&) -> std::unique_ptr<IDatagramTransport> {
             if (++transportAttempts == 1U) return nullptr;
             return network.CreateTransport(Endpoint::Loopback(nextPort++));
         });
@@ -590,10 +593,90 @@ void TestSceneClientLifecycle() {
         Require(cleared && connections == 2U && clientScene.Entities().Count() == 1U,
             "reconnect did not clear and restore exactly one replica");
     }
-    Require(clientScene.Entities().Count() == 0U && kb::script::ScriptNetApi::Attached(clientScene) == nullptr,
-        "scene client shutdown retained replicas or script attachment");
+    Require(clientScene.Entities().Count() == 0U && clientScript.Mode() == kb::network::ScriptNetMode::Offline,
+        "scene client shutdown retained replicas or did not return the script to offline");
 }
 
+
+void TestSceneNetworkJoinLeaveAndJoinAgain() {
+    struct RestoreRelease {
+        std::shared_ptr<const kb::security::InstalledRelease> previous = kb::security::CurrentVerifiedRelease();
+        ~RestoreRelease() { kb::security::InstallVerifiedRelease(std::move(previous)); }
+    } restore;
+    auto release = std::make_shared<kb::security::InstalledRelease>();
+    release->manifest.releaseNumber = 7U;
+    release->manifest.contentVersion = "scene-content";
+    kb::security::InstallVerifiedRelease(release);
+    LoopbackNetwork loopback;
+    auto socket = loopback.CreateTransport(Endpoint::Loopback(9700));
+    StaticKeyTable keys;
+    keys.Set(7U, KeyFor(7U));
+    HostConfig hostConfig;
+    hostConfig.identity = MakeBuildIdentity(7U, "scene-content");
+    hostConfig.minClientRelease = 7U;
+    Host host(*socket, hostConfig, keys);
+    kb::scene::Scene serverScene;
+    kb::scene::Scene clientScene;
+    const auto object = serverScene.Entities().CreateObject(kb::scene::SceneObjectDesc{.name = "Replica"});
+    std::string registryError;
+    auto components = BuildReplicationRegistry(serverScene.Runtime().EcsWorld(), {}, 1000.0F, registryError);
+    RpcRegistry rpcs;
+    DefineStandardRpcs(rpcs);
+    ReplicationServer replication(host, serverScene.Runtime().EcsWorld(), *components, rpcs);
+    Require(replication.Replicate(object.Entity()) == ReplicateResult::Ok, "scene entity was not replicated");
+    std::ostringstream diagnostics;
+    std::uint64_t now = 0U;
+    std::uint16_t nextPort = 9701;
+    SceneNetwork network(clientScene, SceneNetworkOptions{ .defaults = {}, .transport = [&](std::string&) -> std::unique_ptr<IDatagramTransport> {
+        return loopback.CreateTransport(Endpoint::Loopback(nextPort++));
+    } });
+    Require(kb::script::ScriptNetApi::Attached(clientScene) != nullptr && kb::script::ScriptNetApi::Attached(clientScene)->Mode() == kb::network::ScriptNetMode::Offline,
+        "the scene network did not attach an offline script runtime");
+    SceneClientOptions options;
+    options.clientId = 7U;
+    options.key = KeyFor(7U);
+    options.server = Endpoint::Loopback(9700);
+    std::string error;
+    Require(network.RequestJoin(options, error), "the first join was refused: " + error);
+    Require(!network.RequestJoin(options, error) && error.find("already in a session") != std::string::npos,
+        "a second join before the first update was accepted");
+    const auto step = [&] {
+        now += 10U;
+        loopback.Advance(now);
+        host.Update(now);
+        NetEvent event;
+        while (host.PollEvent(event)) replication.HandleEvent(event, now);
+        replication.Tick(static_cast<std::uint32_t>(now / 10U), now);
+        Require(network.Update(now, diagnostics), diagnostics.str());
+    };
+    for (int i = 0; i < 200 && !(network.Connected() && network.ReplicaCount() == 1U); ++i) step();
+    Require(network.Connected() && network.ReplicaCount() == 1U, "the scene network did not connect and replicate");
+    network.Leave();
+    for (int i = 0; i < 5; ++i) step();
+    Require(!network.Connected() && network.ReplicaCount() == 0U &&
+            kb::script::ScriptNetApi::Attached(clientScene)->Mode() == kb::network::ScriptNetMode::Offline,
+        "leaving did not take the scene back offline");
+    Require(network.RequestJoin(options, error), "the second join was refused: " + error);
+    for (int i = 0; i < 200 && !(network.Connected() && network.ReplicaCount() == 1U); ++i) step();
+    Require(network.Connected() && network.ReplicaCount() == 1U, "the scene network did not connect again after leaving");
+}
+
+void TestScriptJoinRequestIsRefusedByName() {
+    kb::scene::Scene fixedScene;
+    SceneNetwork fixed(fixedScene, SceneNetworkOptions{ .scriptJoin = false });
+    std::string error;
+    Require(kb::script::ScriptNetApi::Attached(fixedScene) != nullptr, "the fixed scene network did not attach a runtime");
+    Require(!kb::script::ScriptNetApi::Attached(fixedScene)->RequestJoin({ "127.0.0.1", 9600, "" }, error) && error.find("only the server") != std::string::npos,
+        "a join without a usable transport was not refused by name");
+    kb::scene::Scene scene;
+    SceneNetwork network(scene, SceneNetworkOptions{});
+    auto* runtime = kb::script::ScriptNetApi::Attached(scene);
+    Require(runtime != nullptr, "the scene network did not attach a runtime");
+    Require(!runtime->RequestJoin({ "localhost", 9600, "" }, error) && error.find("IPv4") != std::string::npos, "a host name was accepted as an IPv4 address");
+    Require(runtime->RequestJoin({ "127.0.0.1", 9600, "" }, error), "a valid join was refused: " + error);
+    Require(!runtime->RequestJoin({ "127.0.0.1", 9600, "" }, error) && error.find("already in a session") != std::string::npos,
+        "a second join before the update was accepted");
+}
 
 // The server side of a token login that answers as the test says; counts the logins it saw.
 struct ScriptedAuthServer {
@@ -626,7 +709,7 @@ struct ScriptedAuthServer {
     std::size_t logins = 0U;
 };
 
-std::unique_ptr<SceneClient> MakeTokenClient(kb::scene::Scene& scene, ScriptedAuthServer& server, std::uint32_t attempts) {
+std::unique_ptr<SceneClient> MakeTokenClient(kb::scene::Scene& scene, ScriptNetworkRuntime& script, ScriptedAuthServer& server, std::uint32_t attempts) {
     SceneClientOptions options;
     options.clientId = 7U;
     options.key = KeyFor(7U);
@@ -634,7 +717,7 @@ std::unique_ptr<SceneClient> MakeTokenClient(kb::scene::Scene& scene, ScriptedAu
     options.token = "token";
     options.reconnectAttempts = attempts;
     auto nextPort = std::make_shared<std::uint16_t>(9701);
-    return std::make_unique<SceneClient>(scene, options, [&server, nextPort](std::string&) -> std::unique_ptr<IDatagramTransport> {
+    return std::make_unique<SceneClient>(scene, script, options, [&server, nextPort](std::string&) -> std::unique_ptr<IDatagramTransport> {
         return server.network.CreateTransport(Endpoint::Loopback((*nextPort)++));
     });
 }
@@ -642,7 +725,8 @@ std::unique_ptr<SceneClient> MakeTokenClient(kb::scene::Scene& scene, ScriptedAu
 void TestReconnectBudgetResetsAfterSuccess() {
     ScriptedAuthServer server(9700);
     kb::scene::Scene scene;
-    auto client = MakeTokenClient(scene, server, 2U);
+    ScriptNetworkRuntime script(ScriptNetworkRuntime::Role::Offline, scene, {});
+    auto client = MakeTokenClient(scene, script, server, 2U);
     std::ostringstream diagnostics;
     std::uint64_t now = 0U;
     std::size_t dropped = 0U;
@@ -665,7 +749,8 @@ void TestExpiredTokenAllowsRetryDeniedDoesNot() {
         server.answer = answer;
         server.answerValue = value;
         kb::scene::Scene scene;
-        auto client = MakeTokenClient(scene, server, 3U);
+        ScriptNetworkRuntime script(ScriptNetworkRuntime::Role::Offline, scene, {});
+        auto client = MakeTokenClient(scene, script, server, 3U);
         std::ostringstream diagnostics;
         for (std::uint64_t now = 10U; now < 12'000U; now += 10U) {
             server.Step(now);
@@ -789,6 +874,8 @@ int main() {
         { "net-vars-named-errors", &TestNetVarOutOfRangeIsRefusedNamed },
         { "net-vars-change-once", &TestNetVarChangedEventFiresOncePerChange },
         { "scene-client-lifecycle", &TestSceneClientLifecycle },
+        { "scene-network-join-leave", &TestSceneNetworkJoinLeaveAndJoinAgain },
+        { "script-join-refusals", &TestScriptJoinRequestIsRefusedByName },
         { "reconnect-budget-resets", &TestReconnectBudgetResetsAfterSuccess },
         { "token-refusal-kinds", &TestExpiredTokenAllowsRetryDeniedDoesNot },
         { "spawn-despawn-before-drain", &TestSpawnDespawnBeforeDrainDoesNotDeliverStaleSpawn },

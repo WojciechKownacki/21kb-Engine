@@ -106,6 +106,23 @@ bool ParseWebSceneClientSettings(std::string_view json, SceneClientOptions& opti
     return true;
 }
 
+bool ParseIpv4Literal(std::string_view text, std::uint32_t& address) {
+    std::uint32_t ipv4 = 0U;
+    std::size_t start = 0U;
+    for (std::size_t index = 0U; index < 4U; ++index) {
+        const std::size_t end = index == 3U ? text.size() : text.find('.', start);
+        if (end == std::string_view::npos || end <= start) return false;
+        unsigned int octet = 0U;
+        const auto value = std::from_chars(text.data() + start, text.data() + end, octet);
+        if (value.ec != std::errc{} || value.ptr != text.data() + end || octet > 255U) return false;
+        ipv4 = (ipv4 << 8U) | octet;
+        start = end + 1U;
+    }
+    if (ipv4 == 0U || ipv4 == UINT32_MAX) return false;
+    address = ipv4;
+    return true;
+}
+
 bool ParseNativeSceneClientSettings(std::string_view json, SceneClientOptions& options) {
     if (json.size() > 8192U) return false;
     kb::core::JsonValue root;
@@ -118,17 +135,7 @@ bool ParseNativeSceneClientSettings(std::string_view json, SceneClientOptions& o
     if (!std::isfinite(number) || number < 1.0 || number > 65535.0 || std::floor(number) != number) return false;
     const std::string& text = address->AsString();
     std::uint32_t ipv4 = 0U;
-    std::size_t start = 0U;
-    for (std::size_t index = 0U; index < 4U; ++index) {
-        const std::size_t end = index == 3U ? text.size() : text.find('.', start);
-        if (end == std::string::npos || end <= start) return false;
-        unsigned int octet = 0U;
-        const auto value = std::from_chars(text.data() + start, text.data() + end, octet);
-        if (value.ec != std::errc{} || value.ptr != text.data() + end || octet > 255U) return false;
-        ipv4 = (ipv4 << 8U) | octet;
-        start = end + 1U;
-    }
-    if (ipv4 == 0U || ipv4 == UINT32_MAX) return false;
+    if (!ParseIpv4Literal(text, ipv4)) return false;
     SceneClientOptions parsed;
     if (!ParseSessionIdentity(root, parsed)) return false;
     parsed.server = Endpoint{ipv4, static_cast<std::uint16_t>(number)};
@@ -136,24 +143,18 @@ bool ParseNativeSceneClientSettings(std::string_view json, SceneClientOptions& o
     return true;
 }
 
-namespace {
-kb::network::ReplicationDeclarations LoadClientDeclarations(const kb::scene::Scene& scene, std::string& error) {
-    kb::network::ReplicationDeclarations result;
-    static_cast<void>(LoadReplicationDeclarations(scene, result, error));
-    return result;
-}
-}
-
 struct SceneClient::Impl {
-    Impl(kb::scene::Scene& value, SceneClientOptions settings, TransportFactory create)
-        : scene(value), options(std::move(settings)), factory(std::move(create)),
-          replicationDeclarations(LoadClientDeclarations(value, declarationError)),
-          script(ScriptNetworkRuntime::Role::Client, value, replicationDeclarations) {
+    Impl(kb::scene::Scene& value, ScriptNetworkRuntime& runtime, SceneClientOptions settings, TransportFactory create)
+        : scene(value), script(runtime), options(std::move(settings)), factory(std::move(create)) {
+        static_cast<void>(script.SetRole(ScriptNetworkRuntime::Role::Client));
         script.SetClientAuthorized(false);
     }
     ~Impl() {
         if (replication) replication->HandleEvent(NetEvent{.type = NetEventType::Disconnected});
         if (client) client->Disconnect();
+        if (authorized) script.HandleEvent(NetEvent{.type = NetEventType::Disconnected}); // the runtime outlives the session: its scripts hear OnNetDisconnected
+        script.UnbindClient();
+        static_cast<void>(script.SetRole(ScriptNetworkRuntime::Role::Offline));
     }
     bool Connect(std::uint64_t now, std::ostream& diagnostics) {
         std::string error;
@@ -178,7 +179,12 @@ struct SceneClient::Impl {
         }
         config.authorizationRequired = !options.token.empty();
         config.session.timeoutMilliseconds = 5000U;
-        client = std::make_unique<Client>(*transport, config, options.clientId, options.key, options.server, now);
+        config.joinPassword = options.joinPassword;
+        if (options.joinPassword.empty()) {
+            client = std::make_unique<Client>(*transport, config, options.clientId, options.key, options.server, now);
+        } else {
+            client = std::make_unique<Client>(*transport, config, options.server, now);
+        }
         for (const auto& entry : client->Diagnostics().Entries()) {
             diagnostics << DiagName(entry.code) << ": " << entry.detail << '\n';
         }
@@ -214,11 +220,9 @@ struct SceneClient::Impl {
         script.HandleEvent(event);
     }
     kb::scene::Scene& scene;
+    ScriptNetworkRuntime& script;
     SceneClientOptions options;
     TransportFactory factory;
-    std::string declarationError;
-    kb::network::ReplicationDeclarations replicationDeclarations;
-    ScriptNetworkRuntime script;
     std::unique_ptr<ReplicationRegistry> components;
     RpcRegistry rpcs;
     std::unique_ptr<IDatagramTransport> transport;
@@ -254,8 +258,8 @@ struct SceneClient::Impl {
     }
 };
 
-SceneClient::SceneClient(kb::scene::Scene& scene, SceneClientOptions options, TransportFactory factory)
-    : impl_(std::make_unique<Impl>(scene, std::move(options), std::move(factory))) {}
+SceneClient::SceneClient(kb::scene::Scene& scene, ScriptNetworkRuntime& script, SceneClientOptions options, TransportFactory factory)
+    : impl_(std::make_unique<Impl>(scene, script, std::move(options), std::move(factory))) {}
 SceneClient::~SceneClient() = default;
 
 bool SceneClient::Connected() const noexcept {
@@ -277,14 +281,13 @@ kb::ecs::Entity SceneClient::Replica(std::uint64_t networkId) const {
 bool SceneClient::Update(std::uint64_t now, std::ostream& diagnostics) {
     auto& s = *impl_;
     if (!s.initialized) {
-        if (s.options.clientId == 0U || !s.factory || !SceneTransformCodec{s.options.worldExtent}.Valid() ||
-            s.options.token.size() > 1024U || s.options.reconnectAttempts > 10U) {
+        if ((s.options.clientId == 0U && s.options.joinPassword.empty()) || !s.factory || !SceneTransformCodec{s.options.worldExtent}.Valid() ||
+            s.options.token.size() > 1024U || s.options.reconnectAttempts > 10U || s.options.joinPassword.size() > 256U) {
             diagnostics << "network: invalid session settings\n";
             return false;
         }
         std::string error;
-        if (!s.declarationError.empty()) { diagnostics << "network: " << s.declarationError << '\n'; return false; }
-        s.components = BuildReplicationRegistry(s.scene.Runtime().EcsWorld(), s.replicationDeclarations, s.options.worldExtent, error);
+        s.components = BuildReplicationRegistry(s.scene.Runtime().EcsWorld(), s.script.Declarations(), s.options.worldExtent, error);
         if (!s.components) { diagnostics << "network: " << error << '\n'; return false; }
         DefineStandardRpcs(s.rpcs);
         if (!s.script.Freeze(s.rpcs, error)) { diagnostics << "network: RPC registry rejected\n"; return false; }

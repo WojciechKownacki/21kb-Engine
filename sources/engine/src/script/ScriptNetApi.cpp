@@ -277,6 +277,42 @@ ScriptFunctionCallResult Replicate(const ScriptFunctionCallContext& context, Arg
     return Ok({ { "replicated", ScriptValue{ true } } });
 }
 
+ScriptFunctionCallResult Join(const ScriptFunctionCallContext& context, Arguments arguments) {
+    INetworkScriptRuntime* runtime = RuntimeOf(context);
+    const ScriptValue* address = Find(arguments, "address");
+    const ScriptValue* port = Find(arguments, "port");
+    if (address == nullptr || port == nullptr) {
+        return Failure(context, "Net.Join: address and port are required");
+    }
+    const int number = port->AsInt(0);
+    if (number < 1 || number > 65535) {
+        return Failure(context, "Net.Join: port must be 1..65535");
+    }
+    if (runtime == nullptr) {
+        return Failure(context, "Net.Join: this scene has no network");
+    }
+    kb::network::ScriptJoinRequest request;
+    request.address = address->AsString();
+    request.port = static_cast<std::uint16_t>(number);
+    if (const ScriptValue* password = Find(arguments, "password")) {
+        request.password = password->AsString();
+    }
+    std::string error;
+    if (!runtime->RequestJoin(request, error)) {
+        return Failure(context, "Net.Join: " + (error.empty() ? std::string{ "refused" } : error));
+    }
+    return Ok({ { "requested", ScriptValue{ true } } });
+}
+
+ScriptFunctionCallResult Leave(const ScriptFunctionCallContext& context, Arguments) {
+    INetworkScriptRuntime* runtime = RuntimeOf(context);
+    if (runtime == nullptr) {
+        return Ok({ { "left", ScriptValue{ false } } });
+    }
+    runtime->RequestLeave();
+    return Ok({ { "left", ScriptValue{ true } } });
+}
+
 ScriptFunctionCallResult IsReplicated(const ScriptFunctionCallContext& context, Arguments arguments) {
     INetworkScriptRuntime* runtime = RuntimeOf(context);
     const ScriptValue* entity = Find(arguments, "entity");
@@ -514,6 +550,12 @@ bool ScriptNetApi::Register(ScriptRuntimeHost& host) {
     ok = add("Net.IsServer", "True when this scene runs as the authoritative server.", {}, { { "value", T::Bool, true } }, &IsServer) && ok;
     ok = add("Net.IsClient", "True when this scene runs as a client of a server.", {}, { { "value", T::Bool, true } }, &IsClient) && ok;
     ok = add("Net.LocalPlayerId", "The player id of this machine's player on a client; 0 on a server or offline.", {}, { { "player", T::UInt32, true } }, &LocalPlayerId) && ok;
+    ok = add("Net.Join",
+        "Joins a game at a literal IPv4 address and port, with the game's join password if it has one. Only an offline scene can join; the session starts on the next frame and OnNetConnected follows.",
+        { { "address", T::String, true }, { "port", T::Int, true }, { "password", T::String, false } },
+        { { "requested", T::Bool, true } }, &Join) && ok;
+    ok = add("Net.Leave", "Leaves the session; the scene is offline again on the next frame and OnNetDisconnected follows.", {},
+        { { "left", T::Bool, true } }, &Leave) && ok;
     ok = add("Net.RegisterRpc",
         "Declares a remote procedure call before the session starts (call it from Created or Ready). direction is \"toServer\" or \"toClients\"; args lists the types, for example "
         "\"float(-1..1),string(32),entity\" (at most 4 numbers, 2 strings, 2 bools, 2 entities); owner is the index of an entity argument that the caller must own, or -1. "

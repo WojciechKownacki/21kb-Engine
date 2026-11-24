@@ -37,6 +37,11 @@ public:
     bool Connected() const override { return connected; }
     std::uint64_t LocalPlayerId() const override { return player; }
     std::size_t PlayerCount() const override { return players; }
+    bool RequestJoin(const kb::network::ScriptJoinRequest& request, std::string&) override {
+        joinRequest = request;
+        return true;
+    }
+    void RequestLeave() override { ++leaves; }
     bool DeclareRpc(const ScriptRpcDeclaration& declaration, std::string& error) override {
         if (frozen) {
             error = "the session has started";
@@ -96,6 +101,8 @@ public:
     std::vector<Call> calls;
     std::vector<std::uint64_t> replicated;
     std::map<std::uint64_t, std::uint64_t> owners;
+    kb::network::ScriptJoinRequest joinRequest;
+    std::size_t leaves = 0U;
 };
 
 ScriptFunctionCallResult CallNet(kb::script::ScriptRuntimeHost& host, kb::scene::Scene& scene, const char* name, std::vector<ScriptFunctionArgument> arguments = {}) {

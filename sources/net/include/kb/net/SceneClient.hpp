@@ -10,12 +10,15 @@
 namespace kb::scene { class Scene; }
 namespace kb::net {
 
+class ScriptNetworkRuntime;
+
 struct SceneClientOptions {
     BuildIdentity identity{};
     std::uint64_t clientId = 0U;
     SessionKey key{};
     Endpoint server{};
     std::string token;
+    std::string joinPassword; // non-empty: join with the game's password (the host assigns the player id; clientId and key are not used)
     float worldExtent = 1000.0F;
     std::uint32_t reconnectAttempts = 3U;
 #if defined(__ANDROID__)
@@ -37,12 +40,15 @@ struct SceneClientOptions {
 // string identity/session credentials as the browser client. Failure leaves options unchanged.
 [[nodiscard]] bool ParseNativeSceneClientSettings(std::string_view json, SceneClientOptions& options);
 
+// A literal IPv4 address ("192.168.1.20"); false for anything else, 0.0.0.0 and 255.255.255.255.
+[[nodiscard]] bool ParseIpv4Literal(std::string_view text, std::uint32_t& address);
+
 // Attach before the first script update. Update after scripts have registered
 // their RPCs; subsequent updates pump replication and bounded reconnects.
 class SceneClient final {
 public:
     using TransportFactory = std::function<std::unique_ptr<IDatagramTransport>(std::string&)>;
-    SceneClient(kb::scene::Scene& scene, SceneClientOptions options, TransportFactory factory);
+    SceneClient(kb::scene::Scene& scene, ScriptNetworkRuntime& script, SceneClientOptions options, TransportFactory factory);
     ~SceneClient();
     SceneClient(const SceneClient&) = delete;
     SceneClient& operator=(const SceneClient&) = delete;

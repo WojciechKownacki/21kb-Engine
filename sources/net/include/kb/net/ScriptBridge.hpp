@@ -35,7 +35,7 @@ namespace kb::net {
 
 class ScriptNetworkRuntime final : public kb::network::INetworkScriptRuntime {
 public:
-    enum class Role : std::uint8_t { Server, Client };
+    enum class Role : std::uint8_t { Offline, Server, Client };
 
     ScriptNetworkRuntime(Role role, kb::scene::Scene& scene, kb::network::ReplicationDeclarations declarations);
     ~ScriptNetworkRuntime() override;
@@ -48,7 +48,14 @@ public:
     void NotifyAuthExpired() { Queue("OnNetAuthExpired", {}); }
     void HandleEvent(const NetEvent& event);
 
-    [[nodiscard]] kb::network::ScriptNetMode Mode() const override { return role_ == Role::Server ? kb::network::ScriptNetMode::Server : kb::network::ScriptNetMode::Client; }
+    [[nodiscard]] kb::network::ScriptNetMode Mode() const override {
+        switch (role_) {
+        case Role::Offline: return kb::network::ScriptNetMode::Offline;
+        case Role::Server: return kb::network::ScriptNetMode::Server;
+        case Role::Client: return kb::network::ScriptNetMode::Client;
+        }
+        return kb::network::ScriptNetMode::Offline;
+    }
     [[nodiscard]] bool Connected() const override;
     [[nodiscard]] std::uint64_t LocalPlayerId() const override { return role_ == Role::Client && connection_ != nullptr ? connection_->AssignedId() : 0U; }
     [[nodiscard]] std::size_t PlayerCount() const override;
@@ -62,6 +69,15 @@ public:
     bool SetVar(std::uint64_t entity, const std::string& name, double value, std::string& error) override;
     bool GetVar(std::uint64_t entity, const std::string& name, double& value, std::string& error) const override;
     void SetTransformAppeared(std::function<void(kb::ecs::Entity)> callback) { transformAppeared_ = std::move(callback); }
+
+    // The role may change only while no session is bound (offline <-> client): the RPC declarations and the replication declarations stay.
+    [[nodiscard]] bool SetRole(Role role) noexcept;
+    void UnbindClient() noexcept { replication_ = nullptr; connection_ = nullptr; clientAuthorized_ = false; }
+    [[nodiscard]] const kb::network::ReplicationDeclarations& Declarations() const noexcept { return replicationDeclarations_; }
+    using JoinHandler = std::function<bool(const kb::network::ScriptJoinRequest&, std::string&)>;
+    void SetSessionHandlers(JoinHandler join, std::function<void()> leave) { join_ = std::move(join); leave_ = std::move(leave); }
+    bool RequestJoin(const kb::network::ScriptJoinRequest& request, std::string& error) override;
+    void RequestLeave() override;
 
 private:
     void Deliver(const kb::network::ScriptRpcDeclaration& declaration, std::uint64_t sender, std::span<const RpcValue> args);
@@ -81,6 +97,8 @@ private:
     Client* connection_ = nullptr;
     bool clientAuthorized_ = true;
     std::function<void(kb::ecs::Entity)> transformAppeared_;
+    JoinHandler join_;
+    std::function<void()> leave_;
     kb::network::ReplicationDeclarations replicationDeclarations_;
     std::string replicationError_;
     struct VariableSnapshot { std::array<float, 32U> values{}; std::uint32_t present = 0U; };

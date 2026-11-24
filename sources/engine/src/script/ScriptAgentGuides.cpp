@@ -1272,6 +1272,8 @@ How a game of several players works here:
 - A call is declared with `Net.RegisterRpc` in `Ready`, the same on the server and on every player: name, direction (`toServer` or `toClients`) and typed arguments with
   ranges (`"entity,float(-1..1),string(32)"`). It arrives as `function OnRpc_<name>(self, event)`; `event.args.sender` is the player (0: the server), `n1..` `s1..` `b1..` `e1..` the values.
 - `Net.SetOwner(entity, player)` gives an object to a player; a call that names it (`owner = 0` in the declaration) is refused for anyone else.
+- A player joins a game from a menu with `Net.Join(address, port, password)` (a literal IPv4 address; the password only when the host set one) and leaves with
+  `Net.Leave()`; both take effect on the next frame and the usual `OnNetConnected` / `OnNetDisconnected` follow.
 - Events: `OnNetConnected`, `OnNetDisconnected`, `OnNetSpawned(entity, owner)` and `OnNetDespawned` (`kb_cli net info` lists them with the functions, from the engine).
 - Other players' characters move smoothly by themselves: a player shows each replica about 0.1 s in the past, between the server's two last snapshots, so a script that
   reads `Transform.GetPosition(replica)` every frame sees a steady motion (the player's own character is not predicted: it follows the server).

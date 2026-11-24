@@ -38,8 +38,10 @@ PackagedGameRuntime::~PackagedGameRuntime() = default;
 bool PackagedGameRuntime::ConfigureNetwork(kb::net::SceneClientOptions options,
     kb::net::SceneClient::TransportFactory factory) {
     if (scene_ == nullptr || ticked_ || network_) return false;
-    network_ = std::make_unique<kb::net::SceneClient>(*scene_, std::move(options), std::move(factory));
-    return true;
+    network_ = std::make_unique<kb::net::SceneNetwork>(*scene_, kb::net::SceneNetworkOptions{
+        .defaults = {}, .transport = std::move(factory), .scriptJoin = false });
+    std::string error;
+    return network_->RequestJoin(std::move(options), error);
 }
 
 bool PackagedGameRuntime::Initialize(
@@ -136,6 +138,12 @@ bool PackagedGameRuntime::Initialize(
                 << " modules=" << scene->ActiveModuleCount() << '\n';
     project_ = std::move(project);
     scene_ = std::move(scene);
+#if !defined(__EMSCRIPTEN__)
+    network_ = std::make_unique<kb::net::SceneNetwork>(*scene_, kb::net::SceneNetworkOptions{
+        .defaults = {},
+        .transport = [](std::string& error) { return kb::net::CreateUdpTransport(kb::net::Endpoint::Make(0, 0, 0, 0, 0), error); },
+        .scriptJoin = true });
+#endif
     runtimeClean_ = true;
     lightingApplied_ = false;
     reportedMaterialShadingFallback_ = false;

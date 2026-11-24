@@ -20,7 +20,7 @@
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "kb/net/Host.hpp"
 #include "kb/net/ProjectScene.hpp"
-#include "kb/net/SceneClient.hpp"
+#include "kb/net/SceneNetwork.hpp"
 #include "kb/net/SceneReplication.hpp"
 #include "kb/net/ScriptBridge.hpp"
 
@@ -93,7 +93,7 @@ struct Peer {
     kb::net::OpenedProjectScene opened;
     std::ostringstream log;
     std::unique_ptr<kb::script::ScriptRuntimeHost> host;
-    std::unique_ptr<kb::net::SceneClient> client;       // a player
+    std::unique_ptr<kb::net::SceneNetwork> client;      // a player
     std::unique_ptr<kb::net::ScriptNetworkRuntime> net;  // the server
     std::ostringstream network;
     bool connectedOnce = false;
@@ -346,11 +346,18 @@ int RunNetCheck(const ArgumentList& arguments, CommandIo io) {
         options.clientId = static_cast<std::uint64_t>(id);
         options.key = KeyFor(options.clientId);
         options.server = kb::net::Endpoint::Loopback(kServerPort);
-        player->client = std::make_unique<kb::net::SceneClient>(player->Scene(), std::move(options), [&network, &nextPort](std::string& problem) {
-            std::unique_ptr<kb::net::IDatagramTransport> next = network.CreateTransport(kb::net::Endpoint::Loopback(nextPort++));
-            if (next == nullptr) problem = "no port left on the simulated network";
-            return next;
-        });
+        player->client = std::make_unique<kb::net::SceneNetwork>(player->Scene(), kb::net::SceneNetworkOptions{
+            .defaults = {},
+            .transport = [&network, &nextPort](std::string& problem) {
+                std::unique_ptr<kb::net::IDatagramTransport> next = network.CreateTransport(kb::net::Endpoint::Loopback(nextPort++));
+                if (next == nullptr) problem = "no port left on the simulated network";
+                return next;
+            },
+            .scriptJoin = false });
+        if (!player->client->RequestJoin(std::move(options), error)) {
+            io.err << "error: " << player->label << ": " << error << '\n';
+            return 1;
+        }
         if (!player->host->InstallSceneSystem()) {
             io.err << "error: " << player->label << ": the script scene system could not be installed\n";
             return 1;

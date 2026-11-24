@@ -3,7 +3,7 @@
 #include "GameProjectRuntime.hpp"
 #include "LoadingScreen.hpp"
 #include "RuntimeSceneFrameSync.hpp"
-#include "kb/net/SceneClient.hpp"
+#include "kb/net/SceneNetwork.hpp"
 
 #include <filesystem>
 #include <iosfwd>
@@ -51,6 +51,7 @@ public:
         std::ostream& diagnostics,
         bool* frameSubmitted = nullptr);
     [[nodiscard]] bool Shutdown(kb::render::Renderer& renderer, std::ostream& diagnostics);
+    // Browser only: the page's server; native hosts get a scene network with the scene (scripts join with Net.Join).
     [[nodiscard]] bool ConfigureNetwork(kb::net::SceneClientOptions options,
         kb::net::SceneClient::TransportFactory factory);
     // Keep the running scene while the platform recreates its graphics context.
@@ -62,7 +63,7 @@ public:
 private:
     GameProjectRuntime project_{};
     std::unique_ptr<kb::scene::Scene> scene_;
-    std::unique_ptr<kb::net::SceneClient> network_;
+    std::unique_ptr<kb::net::SceneNetwork> network_;
     std::uint64_t networkStarted_ = 0U;
     bool ticked_ = false;
     kb::script::ScriptModule* script_ = nullptr;

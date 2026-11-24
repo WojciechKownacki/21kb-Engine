@@ -89,6 +89,9 @@ ScriptNetworkRuntime::~ScriptNetworkRuntime() {
 }
 
 bool ScriptNetworkRuntime::Connected() const {
+    if (role_ == Role::Offline) {
+        return false;
+    }
     if (role_ == Role::Server) {
         return server_ != nullptr;
     }
@@ -135,6 +138,32 @@ bool ScriptNetworkRuntime::Freeze(RpcRegistry& registry, std::string& error) {
     }
     frozen_ = true;
     return true;
+}
+
+bool ScriptNetworkRuntime::SetRole(Role role) noexcept {
+    if (server_ != nullptr || connection_ != nullptr) {
+        return false;
+    }
+    role_ = role;
+    return true;
+}
+
+bool ScriptNetworkRuntime::RequestJoin(const kb::network::ScriptJoinRequest& request, std::string& error) {
+    if (role_ != Role::Offline) {
+        error = "already in a session";
+        return false;
+    }
+    if (!join_) {
+        error = "this scene has no network";
+        return false;
+    }
+    return join_(request, error);
+}
+
+void ScriptNetworkRuntime::RequestLeave() {
+    if (leave_) {
+        leave_();
+    }
 }
 
 void ScriptNetworkRuntime::Queue(std::string name, std::vector<std::pair<std::string, ScriptRpcValue>> arguments) {
