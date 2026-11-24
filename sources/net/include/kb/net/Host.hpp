@@ -194,6 +194,7 @@ private:
     std::deque<NetEvent> events_;
     HostStats stats_;
     DiagLog diagnostics_;
+    std::vector<std::uint8_t> scratch_;
 };
 
 enum class ClientState : std::uint8_t { Connecting, Connected, Disconnected };
@@ -250,6 +251,7 @@ private:
     ClientState state_ = ClientState::Connecting;
     std::unique_ptr<Session> session_;
     std::deque<NetEvent> events_;
+    std::vector<std::uint8_t> scratch_;
 };
 
 } // namespace kb::net

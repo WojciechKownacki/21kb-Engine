@@ -275,10 +275,12 @@ struct ReplicationConfig {
     std::uint32_t requestedBytesPerSecond = 131072U;
     std::uint32_t minClientRate = 16384U, maxClientRate = 262144U;
     std::uint32_t tickRate = 30U;
+    bool profile = false;
     std::size_t maxUpdatesInFlight = 64U;      // sent but not yet acknowledged state messages, per client
 };
 
 struct ReplicationServerStats {
+    std::uint64_t visibilityNs = 0U, candidatesNs = 0U, orderingNs = 0U, encodingNs = 0U;
     std::uint64_t capturedEntities = 0U;
     std::uint64_t candidatesExamined = 0U;
     std::uint64_t spawnsSent = 0U;
@@ -362,11 +364,12 @@ private:
         std::uint32_t tick = 0U;
         std::uint32_t changedMask = 0U;
         std::uint32_t removedMask = 0U;
-        std::array<std::vector<std::uint8_t>, kMaxReplicatedComponents> bytes;
+        std::size_t bytesOffset = 0U;
     };
-    struct SentUpdate { std::vector<SentEntry> entries; std::uint64_t sentAt = 0U; bool lossCounted = false; };
+    struct SentUpdate { std::vector<SentEntry> entries; std::vector<std::uint8_t> bytes; std::uint64_t sentAt = 0U; bool lossCounted = false; };
     struct ClientState {
         bool ready = false;
+        std::uint64_t visibilityRevision = 0U;
         std::vector<Known> known;
         std::vector<std::uint32_t> knownIndexBySlot;
         std::vector<std::uint8_t> baselineArena;
@@ -399,7 +402,7 @@ private:
     void BuildUpdates(std::uint64_t client, ClientState& state, std::uint32_t tick);
     void HandleAck(ClientState& state, std::span<const std::uint8_t> data);
     void UpdateRate(std::uint64_t client, ClientState& state, std::uint64_t now);
-    void ApplyAcked(ClientState& state, const std::vector<SentEntry>& entries);
+    void ApplyAcked(ClientState& state, const SentUpdate& update);
     void HandleRpc(std::uint64_t client, std::uint8_t channel, bool reliable, std::span<const std::uint8_t> data, std::uint64_t nowMilliseconds);
     [[nodiscard]] RpcStatus SendRpc(std::uint64_t client, std::uint16_t id, const RpcDefinition& definition, std::span<const RpcValue> args);
 
@@ -423,6 +426,9 @@ private:
     ReplicationServerStats stats_;
     std::uint32_t lastTick_ = 0U;
     std::uint64_t nowMilliseconds_ = 0U;
+    std::uint64_t visibilityRevision_ = 1U;
+    std::array<std::uint32_t, 4U> audienceMasks_{};
+    std::vector<std::uint8_t> captureScratch_;
 };
 
 struct ReplicationClientStats {

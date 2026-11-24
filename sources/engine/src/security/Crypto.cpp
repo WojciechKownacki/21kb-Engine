@@ -244,6 +244,29 @@ Sha512Digest HmacSha512Hasher::Finish() noexcept {
     return mac;
 }
 
+bool Pbkdf2HmacSha512(std::span<std::uint8_t> out, std::string_view password, std::span<const std::uint8_t> salt, std::uint32_t iterations) noexcept {
+    if (iterations == 0U || out.size() / 64U + (out.size() % 64U != 0U ? 1U : 0U) > UINT32_MAX) { SecureWipe(out); return false; }
+    const std::span<const std::uint8_t> key{reinterpret_cast<const std::uint8_t*>(password.data()), password.size()};
+    std::uint32_t block = 1U;
+    while (!out.empty()) {
+        const std::array<std::uint8_t, 4U> index{static_cast<std::uint8_t>(block >> 24U), static_cast<std::uint8_t>(block >> 16U), static_cast<std::uint8_t>(block >> 8U), static_cast<std::uint8_t>(block)};
+        HmacSha512Hasher first(key);
+        first.Update(salt); first.Update(index);
+        auto u = first.Finish();
+        auto t = u;
+        for (std::uint32_t round = 1U; round < iterations; ++round) {
+            u = HmacSha512(key, u);
+            for (std::size_t i = 0U; i < t.size(); ++i) t[i] ^= u[i];
+        }
+        const auto size = std::min(out.size(), t.size());
+        std::copy_n(t.begin(), size, out.begin());
+        out = out.subspan(size);
+        SecureWipe(u); SecureWipe(t);
+        ++block;
+    }
+    return true;
+}
+
 void HkdfSha512(
     std::span<std::uint8_t> out,
     std::span<const std::uint8_t> inputKeyMaterial,

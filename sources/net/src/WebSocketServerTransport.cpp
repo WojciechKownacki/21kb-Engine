@@ -14,6 +14,8 @@
 #include <deque>
 #include <exception>
 #include <mutex>
+#include <condition_variable>
+#include <chrono>
 #include <thread>
 
 namespace kb::net {
@@ -192,6 +194,16 @@ public:
     }
 
     Endpoint LocalEndpoint() const override { return udp_->LocalEndpoint(); }
+    bool WaitReadable(std::uint32_t milliseconds) override {
+        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(milliseconds);
+        for (;;) {
+            if (udp_->WaitReadable(0U)) return true;
+            std::unique_lock lock(mutex_);
+            if (!inbox_.empty() || failed_.load()) return true;
+            if (std::chrono::steady_clock::now() >= until) return false;
+            readable_.wait_until(lock, std::min(until, std::chrono::steady_clock::now() + std::chrono::milliseconds(1)));
+        }
+    }
 
 private:
     static constexpr std::size_t kPeerQueueLimit = 256U;
@@ -277,6 +289,7 @@ private:
                 std::lock_guard lock(mutex_);
                 if (inbox_.size() == kGlobalQueueLimit) return -1;
                 inbox_.push_back(packet);
+                readable_.notify_all();
                 state->received = 0U;
             }
             return 0;
@@ -384,6 +397,7 @@ private:
     std::atomic<bool> stopping_{false};
     std::atomic<bool> failed_{false};
     std::mutex mutex_;
+    std::condition_variable readable_;
     std::map<Endpoint, Peer> peers_;
     std::map<lws*, std::shared_ptr<SignalShared>> signals_;
     std::deque<Packet> inbox_;

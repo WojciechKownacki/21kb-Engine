@@ -220,6 +220,8 @@ public:
         return true;
     }
 
+    bool WaitReadable(std::uint32_t) override { return KbRtcPeek(id_, 1) >= 0 || State() == WebRtcState::Closed; }
+
     void Close() override {
         Fail(WebRtcCloseReason::Local);
         signaling_->Close();

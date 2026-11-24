@@ -43,6 +43,7 @@ public:
     }
 
     [[nodiscard]] Endpoint LocalEndpoint() const override { return local_; }
+    bool WaitReadable(std::uint32_t) override { return !inbox_.empty(); }
 
     // Returns false when the inbox is full, like an overflowing socket buffer.
     [[nodiscard]] bool Push(Packet&& packet) {

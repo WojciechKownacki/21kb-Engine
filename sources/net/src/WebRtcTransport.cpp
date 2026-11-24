@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <map>
+#include <thread>
 
 namespace kb::net {
 namespace {
@@ -42,6 +43,7 @@ public:
     }
 
     Endpoint LocalEndpoint() const override { return Endpoint::Loopback(0U); }
+    bool WaitReadable(std::uint32_t milliseconds) override { return link_->WaitReadable(milliseconds); }
 
 private:
     std::unique_ptr<IWebRtcLink> link_;
@@ -74,6 +76,18 @@ public:
     }
 
     Endpoint LocalEndpoint() const override { return inner_ != nullptr ? inner_->LocalEndpoint() : Endpoint::Loopback(0U); }
+    bool WaitReadable(std::uint32_t milliseconds) override {
+        const auto until = Clock::now() + std::chrono::milliseconds(milliseconds);
+        for (;;) {
+            Maintain();
+            for (auto& peer : peers_) if (peer.second->WaitReadable(0U)) return true;
+            if (inner_ != nullptr && inner_->WaitReadable(0U)) return true;
+            if (Clock::now() >= until) return false;
+            if (inner_ != nullptr) { if (inner_->WaitReadable(1U)) return true; }
+            else if (!peers_.empty()) { if (peers_.begin()->second->WaitReadable(1U)) return true; }
+            else std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
 
 private:
     static Endpoint Identity(std::uint64_t id) {

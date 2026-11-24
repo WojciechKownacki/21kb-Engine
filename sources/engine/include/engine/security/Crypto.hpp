@@ -105,6 +105,9 @@ private:
 
 // RFC 2104 HMAC over SHA-512, one shot or streamed.
 [[nodiscard]] Sha512Digest HmacSha512(std::span<const std::uint8_t> key, std::span<const std::uint8_t> message) noexcept;
+// RFC 8018 PBKDF2. Zero iterations are rejected and clear the output.
+[[nodiscard]] bool Pbkdf2HmacSha512(std::span<std::uint8_t> out, std::string_view password,
+    std::span<const std::uint8_t> salt, std::uint32_t iterations) noexcept;
 
 class HmacSha512Hasher final {
 public:

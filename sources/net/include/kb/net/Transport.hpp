@@ -48,6 +48,7 @@ public:
     IDatagramTransport(const IDatagramTransport&) = delete;
     IDatagramTransport& operator=(const IDatagramTransport&) = delete;
     virtual ~IDatagramTransport() = default;
+    [[nodiscard]] virtual bool WaitReadable(std::uint32_t milliseconds) = 0;
 
     // Never blocks. A datagram handed to Send may still be lost: the transport is unreliable.
     [[nodiscard]] virtual TransportStatus Send(const Endpoint& to, std::span<const std::uint8_t> datagram) = 0;

@@ -269,6 +269,15 @@ void RunPrimitiveHelperTests() {
         "hex parsing must refuse a wrong length or a non-hex digit");
 }
 
+void RunPbkdf2Tests() {
+    std::array<std::uint8_t, 80U> output{};
+    Require(kb::security::Pbkdf2HmacSha512(output, "password", Text("salt"), 2U), "PBKDF2 failed");
+    Require(kb::security::ToHex(output) == "e1d9c16aa681708a45f5c7c4e215ceb66e011a2e9f0040713f18aefdb866d53cf76cab2868a39b9f7840edce4fef5a82be67335c77a6068e04112754f27ccf4e473e311ad827b68945f4e2dddb204c78", "PBKDF2 multi-block vector differs");
+    std::array<std::uint8_t, 32U> shortOutput{};
+    Require(kb::security::Pbkdf2HmacSha512(shortOutput, "password", Text("salt"), 2U) && std::equal(shortOutput.begin(), shortOutput.end(), output.begin()), "PBKDF2 truncation differs");
+    Require(!kb::security::Pbkdf2HmacSha512(output, "password", Text("salt"), 0U) && std::ranges::all_of(output, [](auto byte) { return byte == 0U; }), "PBKDF2 accepted zero iterations or retained output");
+}
+
 // Key files, trust anchors and the installation secret round-trip exactly, and a damaged one is
 // refused instead of being read as something else.
 void RunReleaseKeyMaterialTests() {
@@ -640,6 +649,7 @@ void RunReleaseManifestTests() {
 namespace kb::tests {
 
 void RunSecurityTests() {
+    RunPbkdf2Tests();
     TestX25519Rfc7748Vectors();
     RunEd25519VectorTests();
     RunSha512VectorTests();

@@ -102,6 +102,7 @@ BuildIdentity MakeBuildIdentity(std::uint32_t release, std::string_view contentV
 
 Host::Host(IDatagramTransport& transport, HostConfig config, const IKeyProvider& keys)
     : transport_(&transport), keys_(&keys), config_(std::move(config)) {
+    scratch_.reserve(kMaxDatagramBytes);
     valid_ = config_.session.IsValid() && config_.maxClients != 0U && config_.maxDatagramsPerUpdate != 0U &&
         config_.maxPacketsPerPeerPerUpdate != 0U && config_.cookieLifetimeMilliseconds != 0U && config_.confirmMilliseconds != 0U &&
         config_.maxConnectsPerSecondPerAddress != 0U && config_.maxSessionsPerAddress != 0U &&
@@ -233,11 +234,10 @@ void Host::Update(std::uint64_t nowMilliseconds) {
     for (auto& entry : peers_) {
         Peer& peer = entry.second;
         for (std::size_t sent = 0U; sent < config_.maxPacketsPerPeerPerUpdate; ++sent) {
-            const std::optional<std::vector<std::uint8_t>> packet = peer.session->BuildPacket(nowMilliseconds);
-            if (!packet.has_value()) {
+            if (peer.session->NextDueMs(nowMilliseconds) > nowMilliseconds || !peer.session->BuildPacket(nowMilliseconds, scratch_)) {
                 break;
             }
-            if (transport_->Send(peer.endpoint, *packet) == TransportStatus::Error) {
+            if (transport_->Send(peer.endpoint, scratch_) == TransportStatus::Error) {
                 ++stats_.sendErrors;
             }
         }
@@ -524,6 +524,7 @@ Client::Client(IDatagramTransport& transport, ClientConfig config, std::uint64_t
     std::uint64_t nowMilliseconds)
     : transport_(&transport), config_(std::move(config)), clientId_(clientId), key_(key), host_(host), clientSalt_(config_.clientSalt),
       startedAt_(nowMilliseconds), lastHandshakeSend_(nowMilliseconds) {
+    scratch_.reserve(kMaxDatagramBytes);
     if (config_.identity.release == 0U && config_.identity.contentHash == 0U) {
         diagnostics_.Report(DiagCode::VersionUnchecked, "client build identity is unchecked");
     }
@@ -730,11 +731,10 @@ void Client::Update(std::uint64_t nowMilliseconds) {
         return;
     }
     for (std::size_t sent = 0U; sent < kClientPacketsPerUpdate; ++sent) {
-        const std::optional<std::vector<std::uint8_t>> packet = session_->BuildPacket(nowMilliseconds);
-        if (!packet.has_value()) {
+        if (session_->NextDueMs(nowMilliseconds) > nowMilliseconds || !session_->BuildPacket(nowMilliseconds, scratch_)) {
             break;
         }
-        static_cast<void>(transport_->Send(host_, *packet));
+        static_cast<void>(transport_->Send(host_, scratch_));
     }
 }
 

@@ -24,10 +24,8 @@ constexpr std::uint8_t kRecordReliable = 1U;
 constexpr std::uint8_t kRecordUnreliable = 2U;
 constexpr std::uint8_t kRecordDisconnect = 3U;
 
-constexpr std::size_t kMaxRecordsPerPacket = 64U;
 constexpr std::size_t kReliableWindow = 256U;    // message ids in flight per channel
 constexpr std::size_t kUnreliableQueueLimit = 256U;
-constexpr std::size_t kSentHistory = 512U;
 constexpr std::uint32_t kDisconnectNotices = 3U;
 constexpr std::size_t kMaxFragmentsPerMessage = 255U;
 
@@ -79,6 +77,7 @@ Session::Session(SessionConfig config, const SessionKey& sendKey, const SessionK
     : config_(std::move(config)), lastReceiveMs_(nowMilliseconds), lastSendMs_(nowMilliseconds) {
     std::copy(sendKey.begin(), sendKey.end(), sendKey_.data());
     std::copy(receiveKey.begin(), receiveKey.end(), receiveKey_.data());
+    plain_.reserve(kMaxDatagramBytes);
     channels_.resize(config_.channels.size());
     for (std::size_t index = 0U; index < channels_.size(); ++index) {
         channels_[index].mode = config_.channels[index];
@@ -118,6 +117,7 @@ SendResult Session::Send(std::uint8_t channelIndex, std::span<const std::uint8_t
         if (unreliableOut_.size() >= kUnreliableQueueLimit) {
             return SendResult::Busy;
         }
+        nextDue_ = 0U;
         unreliableOut_.push_back(Queued{ channelIndex, channel.nextUnreliableSeq++, std::vector<std::uint8_t>(data.begin(), data.end()) });
         return SendResult::Queued;
     }
@@ -142,26 +142,43 @@ SendResult Session::Send(std::uint8_t channelIndex, std::span<const std::uint8_t
     } while (offset < data.size());
     queuedSendBytes_ += message.bytes;
     channel.out.push_back(std::move(message));
+    nextDue_ = 0U;
     return SendResult::Queued;
 }
 
-std::optional<std::vector<std::uint8_t>> Session::BuildPacket(std::uint64_t nowMilliseconds) {
+std::uint64_t Session::NextDueMs(std::uint64_t nowMilliseconds) const noexcept {
+    return closed_ ? UINT64_MAX : nextDue_ == 0U ? nowMilliseconds : nextDue_;
+}
+
+void Session::RefreshDue(std::uint64_t nowMilliseconds) noexcept {
+    if (closed_) { nextDue_ = UINT64_MAX; return; }
+    if (disconnectRequested_ || ackPending_ || !unreliableOut_.empty()) { nextDue_ = nowMilliseconds; return; }
+    nextDue_ = lastSendMs_ + config_.keepAliveMilliseconds;
+    for (const auto& channel : channels_) for (const auto& message : channel.out) for (const auto& fragment : message.fragments) {
+        if (!fragment.acked) nextDue_ = std::min(nextDue_, fragment.everSent ? fragment.lastSent + RtoFor(fragment.sends) : nowMilliseconds);
+    }
+}
+
+bool Session::BuildPacket(std::uint64_t nowMilliseconds, std::vector<std::uint8_t>& datagram) {
+    datagram.clear();
+    if (NextDueMs(nowMilliseconds) > nowMilliseconds) return false;
     if (closed_) {
-        return std::nullopt;
+        return false;
     }
     if (disconnectRequested_ && disconnectNotices_ >= kDisconnectNotices) {
         closed_ = true;
-        return std::nullopt;
+        return false;
     }
     const bool keepAliveDue = nowMilliseconds >= lastSendMs_ + config_.keepAliveMilliseconds;
 
-    std::vector<std::uint8_t> plain;
-    plain.reserve(MaxPlaintextBytes());
+    auto& plain = plain_;
+    plain.clear();
     ByteWriter writer(plain);
     writer.U64(highestReceived_);
     writer.U32(static_cast<std::uint32_t>(receivedBitmap_ >> 1U));
     const std::size_t limit = MaxPlaintextBytes();
-    std::vector<FragmentRef> references;
+    std::array<FragmentRef, kMaxSessionRecordsPerPacket> references{};
+    std::size_t referenceCount = 0U, recordCount = 0U;
 
     if (disconnectRequested_) {
         writer.U8(kRecordDisconnect);
@@ -183,7 +200,7 @@ std::optional<std::vector<std::uint8_t>> Session::BuildPacket(std::uint64_t nowM
                     if (!due) {
                         continue;
                     }
-                    if (plain.size() + kReliableRecordOverhead + fragment.data.size() > limit) {
+                    if (recordCount == kMaxSessionRecordsPerPacket || plain.size() + kReliableRecordOverhead + fragment.data.size() > limit) {
                         full = true;
                         break;
                     }
@@ -194,7 +211,8 @@ std::optional<std::vector<std::uint8_t>> Session::BuildPacket(std::uint64_t nowM
                     writer.U8(static_cast<std::uint8_t>(message.fragments.size()));
                     writer.U16(static_cast<std::uint16_t>(fragment.data.size()));
                     writer.Bytes(fragment.data);
-                    references.push_back(FragmentRef{ static_cast<std::uint8_t>(channelIndex), message.id, static_cast<std::uint8_t>(fragmentIndex) });
+                    references[referenceCount++] = FragmentRef{ static_cast<std::uint8_t>(channelIndex), message.id, static_cast<std::uint8_t>(fragmentIndex) };
+                    ++recordCount;
                     ++stats_.fragmentsSent;
                     if (fragment.everSent) {
                         ++stats_.fragmentsRetransmitted;
@@ -208,7 +226,7 @@ std::optional<std::vector<std::uint8_t>> Session::BuildPacket(std::uint64_t nowM
                 }
             }
         }
-        while (!unreliableOut_.empty()) {
+        while (!unreliableOut_.empty() && recordCount < kMaxSessionRecordsPerPacket) {
             const Queued& queued = unreliableOut_.front();
             if (plain.size() + kUnreliableRecordOverhead + queued.data.size() > limit) {
                 break;
@@ -219,15 +237,16 @@ std::optional<std::vector<std::uint8_t>> Session::BuildPacket(std::uint64_t nowM
             writer.U16(static_cast<std::uint16_t>(queued.data.size()));
             writer.Bytes(queued.data);
             unreliableOut_.pop_front();
+            ++recordCount;
         }
     }
 
     if (plain.size() == kAckBytes && !ackPending_ && !keepAliveDue) {
-        return std::nullopt;
+        RefreshDue(nowMilliseconds);
+        return false;
     }
 
     const std::uint64_t packetNumber = nextPacketNumber_++;
-    std::vector<std::uint8_t> datagram;
     datagram.reserve(kHeaderBytes + plain.size() + kTagBytes);
     ByteWriter header(datagram);
     header.U16(kMagic);
@@ -239,10 +258,11 @@ std::optional<std::vector<std::uint8_t>> Session::BuildPacket(std::uint64_t nowM
     header.Bytes(plain);
     header.Bytes(tag);
 
-    sent_[packetNumber] = SentPacket{ nowMilliseconds, std::move(references) };
-    while (sent_.size() > kSentHistory) {
-        sent_.erase(sent_.begin());
-    }
+    auto& sent = sent_[packetNumber & (kSessionSentHistory - 1U)];
+    sent.packetNumber = packetNumber;
+    sent.sentAt = nowMilliseconds;
+    sent.fragmentCount = referenceCount;
+    std::copy_n(references.begin(), referenceCount, sent.fragments.begin());
     ackPending_ = false;
     lastSendMs_ = nowMilliseconds;
     ++stats_.packetsSent;
@@ -250,7 +270,8 @@ std::optional<std::vector<std::uint8_t>> Session::BuildPacket(std::uint64_t nowM
     if (disconnectRequested_ && disconnectNotices_ >= kDisconnectNotices) {
         closed_ = true;
     }
-    return datagram;
+    RefreshDue(nowMilliseconds);
+    return true;
 }
 
 bool Session::IsReplay(std::uint64_t packetNumber) const noexcept {
@@ -303,8 +324,8 @@ PacketResult Session::ProcessPacket(std::uint64_t nowMilliseconds, std::span<con
     }
 
     const std::size_t cipherBytes = datagram.size() - kHeaderBytes - kTagBytes;
-    std::vector<std::uint8_t> plain(datagram.begin() + static_cast<std::ptrdiff_t>(kHeaderBytes),
-        datagram.begin() + static_cast<std::ptrdiff_t>(kHeaderBytes + cipherBytes));
+    auto plain = std::span(decrypted_).first(cipherBytes);
+    std::copy_n(datagram.begin() + kHeaderBytes, cipherBytes, plain.begin());
     kb::security::AeadTag tag{};
     std::copy_n(datagram.end() - static_cast<std::ptrdiff_t>(kTagBytes), kTagBytes, tag.begin());
     if (!kb::security::AeadDecryptInPlace(plain, tag, receiveKey_, MakeNonce(packetNumber), datagram.first(kHeaderBytes))) {
@@ -318,11 +339,11 @@ PacketResult Session::ProcessPacket(std::uint64_t nowMilliseconds, std::span<con
         return reject(PacketResult::Malformed); // acknowledges a packet that was never sent
     }
 
-    std::vector<ParsedRecord> records;
+    std::size_t recordCount = 0U;
     bool peerDisconnect = false;
     bool hasReliable = false;
     while (reader.Remaining() != 0U) {
-        if (records.size() >= kMaxRecordsPerPacket) {
+        if (recordCount >= records_.size()) {
             return reject(PacketResult::Malformed);
         }
         ParsedRecord record;
@@ -354,10 +375,10 @@ PacketResult Session::ProcessPacket(std::uint64_t nowMilliseconds, std::span<con
         } else {
             return reject(PacketResult::Malformed);
         }
-        records.push_back(record);
+        records_[recordCount++] = record;
     }
 
-    const PacketResult committed = CommitRecords(records);
+    const PacketResult committed = CommitRecords(std::span(records_).first(recordCount));
     if (committed != PacketResult::Accepted) {
         return reject(committed);
     }
@@ -373,10 +394,11 @@ PacketResult Session::ProcessPacket(std::uint64_t nowMilliseconds, std::span<con
         peerDisconnected_ = true;
         closed_ = true;
     }
+    RefreshDue(nowMilliseconds);
     return PacketResult::Accepted;
 }
 
-PacketResult Session::CommitRecords(const std::vector<ParsedRecord>& records) {
+PacketResult Session::CommitRecords(std::span<const ParsedRecord> records) {
     // Phase 1: decide whether the whole packet can be taken. A reliable fragment the receiver cannot
     // keep must not be acknowledged, so the packet is refused as a whole and the sender retransmits.
     std::size_t newBytes = 0U;
@@ -408,7 +430,7 @@ PacketResult Session::CommitRecords(const std::vector<ParsedRecord>& records) {
     }
 
     // Phase 2: apply.
-    std::vector<bool> touched(channels_.size(), false);
+    std::array<bool, 8U> touched{};
     for (const ParsedRecord& record : records) {
         Channel& channel = channels_[record.channel];
         if (record.type == kRecordReliable) {
@@ -515,12 +537,12 @@ void Session::ApplyAcks(std::uint64_t nowMilliseconds, std::uint64_t latest, std
 }
 
 void Session::AckPacket(std::uint64_t nowMilliseconds, std::uint64_t packetNumber, bool sampleRtt) {
-    const auto found = sent_.find(packetNumber);
-    if (found == sent_.end()) {
+    auto& packet = sent_[packetNumber & (kSessionSentHistory - 1U)];
+    if (packet.packetNumber != packetNumber) {
         return;
     }
-    if (sampleRtt && nowMilliseconds >= found->second.sentAt) {
-        const std::uint32_t sample = static_cast<std::uint32_t>(std::min<std::uint64_t>(nowMilliseconds - found->second.sentAt, 60'000U));
+    if (sampleRtt && nowMilliseconds >= packet.sentAt) {
+        const std::uint32_t sample = static_cast<std::uint32_t>(std::min<std::uint64_t>(nowMilliseconds - packet.sentAt, 60'000U));
         if (!haveRtt_) {
             stats_.smoothedRttMilliseconds = sample;
             rttVarianceMs_ = sample / 2U;
@@ -532,11 +554,9 @@ void Session::AckPacket(std::uint64_t nowMilliseconds, std::uint64_t packetNumbe
             stats_.smoothedRttMilliseconds = (7U * smoothed + sample) / 8U;
         }
     }
-    const std::vector<FragmentRef> references = std::move(found->second.fragments);
-    sent_.erase(found);
-    for (const FragmentRef& reference : references) {
-        AckFragment(reference);
-    }
+    packet.packetNumber = 0U;
+    for (std::size_t index = 0U; index < packet.fragmentCount; ++index) AckFragment(packet.fragments[index]);
+    packet.fragmentCount = 0U;
 }
 
 void Session::AckFragment(const FragmentRef& reference) {

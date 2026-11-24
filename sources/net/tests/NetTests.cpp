@@ -17,6 +17,48 @@
 #include <thread>
 #include <utility>
 #include <vector>
+#include <cstdlib>
+#include <new>
+#if defined(_WIN32)
+#include <malloc.h>
+#endif
+
+namespace network_allocations {
+thread_local bool enabled = false;
+thread_local std::size_t count = 0U;
+}
+void* operator new(std::size_t bytes) {
+    if (network_allocations::enabled) ++network_allocations::count;
+    if (void* memory = std::malloc(bytes == 0U ? 1U : bytes)) return memory;
+    throw std::bad_alloc{};
+}
+void* operator new[](std::size_t bytes) { return ::operator new(bytes); }
+void operator delete(void* memory) noexcept { std::free(memory); }
+void operator delete[](void* memory) noexcept { std::free(memory); }
+void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
+void operator delete[](void* memory, std::size_t) noexcept { std::free(memory); }
+void* operator new(std::size_t bytes, std::align_val_t alignment) {
+    if (network_allocations::enabled) ++network_allocations::count;
+    void* memory = nullptr;
+#if defined(_WIN32)
+    memory = _aligned_malloc(bytes == 0U ? 1U : bytes, static_cast<std::size_t>(alignment));
+#else
+    if (posix_memalign(&memory, static_cast<std::size_t>(alignment), bytes == 0U ? 1U : bytes) != 0) memory = nullptr;
+#endif
+    if (memory != nullptr) return memory;
+    throw std::bad_alloc{};
+}
+void* operator new[](std::size_t bytes, std::align_val_t alignment) { return ::operator new(bytes, alignment); }
+void operator delete(void* memory, std::align_val_t) noexcept {
+#if defined(_WIN32)
+    _aligned_free(memory);
+#else
+    std::free(memory);
+#endif
+}
+void operator delete[](void* memory, std::align_val_t alignment) noexcept { ::operator delete(memory, alignment); }
+void operator delete(void* memory, std::size_t, std::align_val_t alignment) noexcept { ::operator delete(memory, alignment); }
+void operator delete[](void* memory, std::size_t, std::align_val_t alignment) noexcept { ::operator delete(memory, alignment); }
 
 namespace {
 
@@ -79,6 +121,7 @@ public:
         return inner_->Receive(from, buffer, size);
     }
     Endpoint LocalEndpoint() const override { return inner_->LocalEndpoint(); }
+    bool WaitReadable(std::uint32_t milliseconds) override { return inner_->WaitReadable(milliseconds); }
 
     std::vector<std::vector<std::uint8_t>> sent;
 
@@ -97,12 +140,12 @@ struct SessionPair {
 
 std::size_t Exchange(Session& from, Session& to, std::uint64_t now, std::size_t limit = 64U) {
     std::size_t packets = 0U;
+    std::vector<std::uint8_t> packet;
     while (packets < limit) {
-        const auto packet = from.BuildPacket(now);
-        if (!packet.has_value()) {
+        if (!from.BuildPacket(now, packet)) {
             break;
         }
-        static_cast<void>(to.ProcessPacket(now, *packet));
+        static_cast<void>(to.ProcessPacket(now, packet));
         ++packets;
     }
     return packets;
@@ -289,9 +332,9 @@ void TestReplayAndWindow() {
     std::vector<std::vector<std::uint8_t>> packets;
     for (std::uint32_t index = 0U; index < 100U; ++index) {
         static_cast<void>(pair.a.Send(1U, Pattern(index, 10U)));
-        const auto packet = pair.a.BuildPacket(index);
-        Require(packet.has_value(), "no packet was built");
-        packets.push_back(*packet);
+        std::vector<std::uint8_t> packet;
+        Require(pair.a.BuildPacket(index, packet), "no packet was built");
+        packets.push_back(packet);
     }
     // Newest first, then the rest in descending order. Packets more than 64 behind the newest are too old.
     std::size_t accepted = 0U;
@@ -318,23 +361,23 @@ void TestReplayAndWindow() {
 void TestTamperedPackets() {
     SessionPair pair;
     static_cast<void>(pair.a.Send(0U, Pattern(1U, 200U)));
-    const auto packet = pair.a.BuildPacket(10U);
-    Require(packet.has_value(), "no packet was built");
-    for (std::size_t index = 0U; index < packet->size(); ++index) {
-        std::vector<std::uint8_t> copy = *packet;
+    std::vector<std::uint8_t> packet;
+    Require(pair.a.BuildPacket(10U, packet), "no packet was built");
+    for (std::size_t index = 0U; index < packet.size(); ++index) {
+        std::vector<std::uint8_t> copy = packet;
         copy[index] ^= 0x01U;
         const PacketResult result = pair.b.ProcessPacket(10U, copy);
         Require(result != PacketResult::Accepted, "a packet with byte " + std::to_string(index) + " changed was accepted");
     }
     // A packet with changed bits did not use up its packet number.
-    Require(pair.b.ProcessPacket(10U, *packet) == PacketResult::Accepted, "the genuine packet was refused after tampering");
+    Require(pair.b.ProcessPacket(10U, packet) == PacketResult::Accepted, "the genuine packet was refused after tampering");
     Require(pair.b.Stats().rejectedAuth > 0U && pair.b.Stats().rejectedMalformed > 0U, "rejections were not counted");
 
     // The same bytes under a different key are rejected.
     Session stranger(SessionConfig{}, MakeKey(5U), MakeKey(6U), 0U);
-    Require(stranger.ProcessPacket(10U, *packet) == PacketResult::AuthFailed, "a packet under the wrong key was accepted");
+    Require(stranger.ProcessPacket(10U, packet) == PacketResult::AuthFailed, "a packet under the wrong key was accepted");
     // Truncated and oversized input.
-    Require(pair.b.ProcessPacket(10U, std::span<const std::uint8_t>(packet->data(), 20U)) == PacketResult::Malformed, "a truncated packet was accepted");
+    Require(pair.b.ProcessPacket(10U, std::span<const std::uint8_t>(packet.data(), 20U)) == PacketResult::Malformed, "a truncated packet was accepted");
     Require(pair.b.ProcessPacket(10U, std::span<const std::uint8_t>{}) == PacketResult::Malformed, "an empty packet was accepted");
     std::vector<std::uint8_t> oversized(kMaxDatagramBytes + 1U, 0x4EU);
     Require(pair.b.ProcessPacket(10U, oversized) == PacketResult::Malformed, "an oversized packet was accepted");
@@ -625,6 +668,85 @@ void TestResponseFloodIsLimitedPerAddress() {
     Require(rig.host->Stats().handshakesRateLimited == limitedBefore, "the address bucket did not recover");
 }
 
+void TestIdleHostDoesNotAllocate() {
+    LoopbackNetwork network;
+    auto socket = network.CreateTransport(Endpoint::Loopback(7000U));
+    StaticKeyTable keys;
+    HostConfig config;
+    config.maxClients = config.maxSessionsPerAddress = 512U;
+    config.maxConnectsPerSecondPerAddress = 4096U;
+    Host host(*socket, config, keys);
+    std::vector<std::unique_ptr<IDatagramTransport>> ports;
+    std::vector<std::unique_ptr<Client>> clients;
+    for (std::uint64_t id = 2U; id < 302U; ++id) {
+        keys.Set(id, MakeKey(9U));
+        ports.push_back(network.CreateTransport(Endpoint::Loopback(static_cast<std::uint16_t>(7100U + id))));
+        clients.push_back(std::make_unique<Client>(*ports.back(), ClientConfig{}, id, MakeKey(9U), socket->LocalEndpoint(), 0U));
+    }
+    for (std::uint64_t now = 0U; now < 200U; ++now) {
+        network.Advance(now); host.Update(now);
+        for (auto& client : clients) client->Update(now);
+        NetEvent event;
+        while (host.PollEvent(event)) {}
+    }
+    Require(host.ClientCount() == 300U && std::ranges::all_of(clients, [](const auto& client) { return client->State() == ClientState::Connected; }), "idle clients did not connect");
+    network.Advance(200U); host.Update(200U);
+    network_allocations::count = 0U;
+    network_allocations::enabled = true;
+    for (int iteration = 0; iteration < 1000; ++iteration) host.Update(200U);
+    network_allocations::enabled = false;
+    Require(network_allocations::count == 0U, "idle Host::Update allocated " + std::to_string(network_allocations::count) + " times");
+    std::printf("  idle: 300 sessions, 1000 updates, zero allocations\n");
+}
+
+void TestUdpWaitReadableWakesOnDatagram() {
+    std::string error;
+    auto receiver = CreateUdpTransport(Endpoint::Loopback(0U), error);
+    auto sender = CreateUdpTransport(Endpoint::Loopback(0U), error);
+    Require(receiver && sender, error);
+    const auto target = receiver->LocalEndpoint();
+    const auto start = std::chrono::steady_clock::now();
+    std::thread delivery([&] { std::this_thread::sleep_for(std::chrono::milliseconds(20)); static_cast<void>(sender->Send(target, std::array<std::uint8_t, 1>{1U})); });
+    const bool ready = receiver->WaitReadable(100U);
+    const auto elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    delivery.join();
+    Require(ready && elapsed >= 15.0 && elapsed <= 100.0, "UDP readiness did not wake on the datagram");
+    std::array<std::uint8_t, 16> bytes{};
+    Endpoint from; std::size_t size;
+    Require(receiver->Receive(from, bytes, size) == TransportStatus::Ok, "readiness consumed the datagram");
+    const auto idleStart = std::chrono::steady_clock::now();
+    Require(!receiver->WaitReadable(30U), "idle UDP socket reported readable");
+    const auto idle = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - idleStart).count();
+    Require(idle >= 15.0 && idle <= 45.0, "UDP readiness timeout is outside tolerance");
+}
+
+void TestSessionDeadlineTracksPendingWork() {
+    SessionPair pair;
+    std::vector<std::uint8_t> packet;
+    packet.reserve(kMaxDatagramBytes);
+    Require(pair.a.NextDueMs(0U) == 0U && pair.a.BuildPacket(0U, packet), "initial session deadline was not immediate");
+    Require(pair.a.NextDueMs(1U) == 1000U && !pair.a.BuildPacket(1U, packet), "idle session ignored the keepalive deadline");
+    Require(pair.a.Send(0U, Pattern(1U, 10U)) == SendResult::Queued && pair.a.NextDueMs(10U) == 10U, "Send did not advance the deadline");
+    Require(pair.a.BuildPacket(10U, packet) && pair.a.NextDueMs(11U) == 260U, "reliable retransmission deadline differs");
+    Require(pair.b.ProcessPacket(10U, packet) == PacketResult::Accepted && pair.b.NextDueMs(10U) == 10U, "received reliable data did not schedule its ACK");
+    Require(pair.b.BuildPacket(20U, packet) && pair.a.ProcessPacket(20U, packet) == PacketResult::Accepted, "session ACK failed");
+    Require(pair.a.QueuedSendBytes() == 0U && pair.a.NextDueMs(21U) == 1010U, "ACK did not remove the retransmission deadline");
+    pair.a.Poke();
+    Require(pair.a.NextDueMs(21U) == 21U && pair.a.BuildPacket(21U, packet), "Poke did not advance the deadline");
+    pair.a.Disconnect();
+    Require(pair.a.NextDueMs(22U) == 22U, "Disconnect did not advance the deadline");
+}
+
+void TestPacketRecordLimitMatchesReceiverCapacity() {
+    SessionPair pair;
+    for (std::uint32_t i = 0U; i < 100U; ++i) Require(pair.a.Send(1U, Pattern(i, 4U)) == SendResult::Queued, "small record was refused");
+    Require(Exchange(pair.a, pair.b, 0U) == 2U, "small records were not split at the packet record limit");
+    Message message;
+    std::size_t count = 0U;
+    while (pair.b.PopMessage(message)) ++count;
+    Require(count == 100U && pair.b.Stats().rejectedMalformed == 0U, "sender exceeded receiver record capacity");
+}
+
 void TestSpoofedConnectsDoNotBlockVictimJoin() {
     Rig rig;
     std::vector<std::uint8_t> connect{0x4EU, 0x4BU, 2U, 1U};
@@ -821,6 +943,31 @@ void TestHandshakeAuthentication() {
 std::vector<std::uint8_t> PacketOf(const TappingTransport& tap, std::uint8_t type) {
     for (const auto& packet : tap.sent) if (packet.size() >= 4U && packet[3] == type) return packet;
     throw std::runtime_error("expected datagram type was not recorded");
+}
+
+void TestRecordedPasswordKeyHasOfflineVerifier() {
+    const std::array<std::uint8_t, 8U> publicSalt{1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U};
+    SessionKey key{};
+    Require(kb::security::Pbkdf2HmacSha512(key, "sample-password", publicSalt, 100000U), "password key derivation failed");
+    Rig rig({}, {}, {}, 42U, key);
+    rig.keys.Set(42U, key);
+    rig.Run(0U, 1000U, [&] { return rig.client->State() == ClientState::Connected; });
+    Require(rig.client->State() == ClientState::Connected, "password-key transport did not connect");
+    const auto response = PacketOf(*rig.clientTap, 3U);
+    const std::string_view label = "21kb-net-response";
+    std::vector<std::uint8_t> transcript(label.begin(), label.end());
+    transcript.insert(transcript.end(), response.begin() + 4, response.end() - 32);
+    std::string recovered;
+    for (const auto guess : {"wrong-password", "sample-password"}) {
+        SessionKey candidate{};
+        Require(kb::security::Pbkdf2HmacSha512(candidate, guess, publicSalt, 100000U), "password guess derivation failed");
+        const auto mac = kb::security::HmacSha512(candidate, transcript);
+        if (kb::security::ConstantTimeEqual(std::span(mac).first(32U), std::span(response).last(32U))) recovered = guess;
+        kb::security::SecureWipe(candidate);
+    }
+    Require(recovered == "sample-password", "recorded password-key verifier characterization changed");
+    std::printf("  password admission blocked: a recorded Response MAC verifies password guesses without either DH secret\n");
+    kb::security::SecureWipe(key);
 }
 
 std::array<std::uint8_t, 64U> OpenAcceptKeys(const std::vector<std::uint8_t>& response, const std::vector<std::uint8_t>& accept) {
@@ -1213,9 +1360,9 @@ void TestHostileInputIntoSession() {
     static_cast<void>(pair.a.Send(0U, Pattern(1U, 2000U)));
     std::vector<std::vector<std::uint8_t>> genuine;
     for (int index = 0; index < 8; ++index) {
-        const auto packet = pair.a.BuildPacket(static_cast<std::uint64_t>(index) * 300U);
-        if (packet.has_value()) {
-            genuine.push_back(*packet);
+        std::vector<std::uint8_t> packet;
+        if (pair.a.BuildPacket(static_cast<std::uint64_t>(index) * 300U, packet)) {
+            genuine.push_back(packet);
         }
     }
     Require(!genuine.empty(), "no packets were built");
@@ -1404,6 +1551,10 @@ int main() {
         { "every-refusal-named", &TestEveryRefusalIsNamedAndCounted },
         { "diagnostics-rate-limit", &TestDiagLogIsRateLimited },
         { "byte-io", &TestByteIo },
+        { "idle-host-no-allocations", &TestIdleHostDoesNotAllocate },
+        { "udp-readiness", &TestUdpWaitReadableWakesOnDatagram },
+        { "session-deadlines", &TestSessionDeadlineTracksPendingWork },
+        { "packet-record-capacity", &TestPacketRecordLimitMatchesReceiverCapacity },
         { "config-validation", &TestConfigValidation },
         { "loopback-network", &TestLoopbackNetwork },
         { "basic-exchange", &TestBasicExchange },
@@ -1419,6 +1570,7 @@ int main() {
         { "sessions-per-address", &TestSessionsPerAddressLimit },
         { "handshake-authentication", &TestHandshakeAuthentication },
         { "recorded-session-key-leak", &TestRecordedSessionSurvivesKeyLeak },
+        { "recorded-password-key-verifier", &TestRecordedPasswordKeyHasOfflineVerifier },
         { "ephemeral-keys-per-handshake", &TestEphemeralKeysDifferPerHandshake },
         { "replayed-response-fresh-keys", &TestReplayedResponseGetsFreshKeys },
         { "version-refusal-reason", &TestVersionMismatchIsRefusedWithReason },

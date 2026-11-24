@@ -70,6 +70,7 @@ public:
     }
 
     Endpoint LocalEndpoint() const noexcept override { return Endpoint::Loopback(0U); }
+    bool WaitReadable(std::uint32_t) override { return failed_ || count_ != 0U; }
 
 private:
     static bool OnOpen(int, const EmscriptenWebSocketOpenEvent*, void* context) {

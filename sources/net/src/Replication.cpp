@@ -8,12 +8,23 @@
 #include <cstdio>
 #include <exception>
 #include <utility>
+#include <chrono>
+#include <cstring>
+#include <bit>
 
 namespace kb::net {
 
 namespace {
 
 constexpr std::uint8_t kMsgHello = 1U;
+using ProfileClock = std::chrono::steady_clock;
+struct ProfileScope {
+    bool enabled;
+    std::uint64_t& total;
+    ProfileClock::time_point start;
+    ProfileScope(bool active, std::uint64_t& counter) : enabled(active), total(counter), start(active ? ProfileClock::now() : ProfileClock::time_point{}) {}
+    ~ProfileScope() { if (enabled) total += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(ProfileClock::now() - start).count()); }
+};
 constexpr std::uint8_t kMsgSpawn = 2U;
 constexpr std::uint8_t kMsgDespawn = 3U;
 constexpr std::uint8_t kMsgOwner = 4U;
@@ -40,6 +51,26 @@ constexpr std::uint64_t kFnvPrime = 0x100000001B3ULL;
         }
     }
     return total;
+}
+
+[[nodiscard]] std::size_t MaskedSize(const ReplicationSlots& slots, std::uint32_t mask) {
+    std::size_t size = 0U;
+    while (mask != 0U) {
+        size += slots.EncodedSize(static_cast<std::size_t>(std::countr_zero(mask)));
+        mask &= mask - 1U;
+    }
+    return size;
+}
+
+[[nodiscard]] bool EncodedEqual(std::span<const std::uint8_t> a, std::span<const std::uint8_t> b) {
+    if (a.size() == 6U) {
+        std::uint32_t firstA, firstB;
+        std::uint16_t lastA, lastB;
+        std::memcpy(&firstA, a.data(), 4U); std::memcpy(&firstB, b.data(), 4U);
+        std::memcpy(&lastA, a.data() + 4U, 2U); std::memcpy(&lastB, b.data() + 4U, 2U);
+        return firstA == firstB && lastA == lastB;
+    }
+    return a.empty() || std::memcmp(a.data(), b.data(), a.size()) == 0;
 }
 
 [[nodiscard]] std::uint32_t AllMask(const ReplicationRegistry& registry) noexcept {
@@ -119,6 +150,8 @@ ReplicationServer::ReplicationServer(Host& host, kb::ecs::World& world, const Re
     changeSink_ = {this, [](kb::ecs::Entity entity, void* context) { static_cast<ReplicationServer*>(context)->MarkDirty(entity); }};
     std::vector<kb::ecs::ComponentId> watched;
     for (std::size_t index = 0; index < components.Count(); ++index) {
+        audienceMasks_[static_cast<std::size_t>(components.At(index).Audience())] |= 1U << index;
+        captureScratch_.resize(std::max(captureScratch_.size(), components.At(index).EncodedSize()));
         const auto id = components.At(index).SourceComponent(world);
         if (std::ranges::find(watched, id) != watched.end()) continue;
         watched.push_back(id);
@@ -166,6 +199,7 @@ ReplicateResult ReplicationServer::Replicate(kb::ecs::Entity entity, std::uint64
         return ReplicateResult::Limit;
     }
     if (dirty_.capacity() < slots_->Size()) dirty_.reserve(std::max(slots_->Size(), dirty_.capacity() * 2U));
+    ++visibilityRevision_;
     AddOwner(NetIndex(id));
     slots_->Find(id)->changedTick = lastTick_ + 1U;
     Capture(NetIndex(id), *slots_->Find(id));
@@ -184,6 +218,7 @@ bool ReplicationServer::Unreplicate(NetworkId id) {
     grid_->Remove(NetIndex(id));
     RemoveOwner(NetIndex(id));
     slots_->Erase(id);
+    ++visibilityRevision_;
     if (slots_->Size() < 950'000U) objectWarningArmed_ = true;
     return true;
 }
@@ -271,7 +306,7 @@ void ReplicationServer::EraseKnown(ClientState& state, NetworkId id) {
 }
 
 std::span<std::uint8_t> ReplicationServer::BaselineBytes(ClientState& state, NetworkId id, std::size_t component) const {
-    const auto size = components_->At(component).EncodedSize();
+    const auto size = slots_->EncodedSize(component);
     if (size == 0U) return {};
     const auto offset = state.knownIndexBySlot[NetIndex(id)] * slots_->Stride() + slots_->Offset(component);
     return { state.baselineArena.data() + offset, size };
@@ -321,13 +356,9 @@ bool ReplicationServer::Relevant(std::uint64_t client, const ClientState& state,
 }
 
 std::uint32_t ReplicationServer::AudienceMask(std::uint64_t client, std::uint64_t owner, bool spawn) const {
-    std::uint32_t mask = 0U;
-    for (std::size_t index = 0; index < components_->Count(); ++index) {
-        const auto audience = components_->At(index).Audience();
-        if (audience == ReplicationAudience::Everyone || (audience == ReplicationAudience::Owner && client == owner) ||
-            (audience == ReplicationAudience::Others && client != owner) || (audience == ReplicationAudience::InitialOnly && spawn)) mask |= 1U << index;
-    }
-    return mask;
+    return audienceMasks_[static_cast<std::size_t>(ReplicationAudience::Everyone)] |
+        audienceMasks_[static_cast<std::size_t>(client == owner ? ReplicationAudience::Owner : ReplicationAudience::Others)] |
+        (spawn ? audienceMasks_[static_cast<std::size_t>(ReplicationAudience::InitialOnly)] : 0U);
 }
 
 void ReplicationServer::Capture(std::uint32_t slot, ReplicationSlot& replicated) {
@@ -340,9 +371,18 @@ void ReplicationServer::Capture(std::uint32_t slot, ReplicationSlot& replicated)
         grid_->Remove(slot);
         replicated.hasPosition = false;
     }
+    const auto previous = replicated.presentMask;
     replicated.presentMask = 0U;
     for (std::size_t index = 0U; index < components_->Count(); ++index) {
-        if (components_->At(index).Capture(*world_, replicated.entity, slots_->Bytes(slot, index))) {
+        const auto bytes = slots_->Bytes(slot, index);
+        const auto captured = std::span(captureScratch_).first(bytes.size());
+        const bool present = components_->At(index).Capture(*world_, replicated.entity, captured);
+        const bool had = (previous & (1U << index)) != 0U;
+        if (present != had || (present && std::memcmp(bytes.data(), captured.data(), bytes.size()) != 0)) {
+            replicated.componentTicks[index] = replicated.changedTick;
+            if (present) std::copy(captured.begin(), captured.end(), bytes.begin());
+        }
+        if (present) {
             replicated.presentMask |= 1U << index;
         }
     }
@@ -402,6 +442,9 @@ void ReplicationServer::Despawn(std::uint64_t client, ClientState& state, Networ
 }
 
 void ReplicationServer::UpdateVisibility(std::uint64_t client, ClientState& state, std::uint32_t tick) {
+    ProfileScope profile(config_.profile, stats_.visibilityNs);
+    if (config_.visibilityRadius == 0.0F && state.visibilityRevision == visibilityRevision_) return;
+    bool complete = true;
     const auto owner = owned_.find(client);
     const auto* viewer = slots_->At(state.viewerSlot);
     if (viewer == nullptr || viewer->owner != client || !viewer->hasPosition) {
@@ -413,7 +456,10 @@ void ReplicationServer::UpdateVisibility(std::uint64_t client, ClientState& stat
     const auto seen = VisibleIds(client);
     for (const auto id : seen) {
         ++stats_.candidatesExamined;
-        if (slots_->Find(id) == nullptr || !Relevant(client, state, NetIndex(id), true)) Despawn(client, state, id);
+        if (slots_->Find(id) == nullptr || !Relevant(client, state, NetIndex(id), true)) {
+            Despawn(client, state, id);
+            if (FindKnown(state, id) != nullptr) complete = false;
+        }
     }
     std::vector<std::uint32_t> candidates;
     if (config_.visibilityRadius == 0.0F) {
@@ -431,8 +477,9 @@ void ReplicationServer::UpdateVisibility(std::uint64_t client, ClientState& stat
         const auto& slot = *slots_->At(index);
         const auto id = MakeNetworkId(index, slot.generation);
         if (FindKnown(state, id) != nullptr || !Relevant(client, state, index, false)) continue;
-        if (!SendSpawn(client, state, id, slot, tick)) break;
+        if (!SendSpawn(client, state, id, slot, tick)) { complete = false; break; }
     }
+    if (complete) state.visibilityRevision = visibilityRevision_;
 }
 
 void ReplicationServer::BuildUpdates(std::uint64_t client, ClientState& state, std::uint32_t tick) {
@@ -441,6 +488,8 @@ void ReplicationServer::BuildUpdates(std::uint64_t client, ClientState& state, s
     std::vector<Candidate> order;
     order.reserve(state.known.size());
     const auto* viewer = slots_->At(state.viewerSlot);
+    {
+    ProfileScope profile(config_.profile, stats_.candidatesNs);
     for (auto& known : state.known) {
         const auto* slot = slots_->Find(known.id);
         if (slot == nullptr) continue;
@@ -455,11 +504,12 @@ void ReplicationServer::BuildUpdates(std::uint64_t client, ClientState& state, s
         const auto allowed = AudienceMask(client, slot->owner, false);
         std::uint32_t changed = 0U, removed = 0U;
         for (std::size_t index = 0U; index < components_->Count(); ++index) {
-            if (components_->At(index).Audience() == ReplicationAudience::InitialOnly) continue;
+            if ((audienceMasks_[static_cast<std::size_t>(ReplicationAudience::InitialOnly)] & (1U << index)) != 0U) continue;
             const auto bit = 1U << index;
             const bool present = (slot->presentMask & allowed & bit) != 0U;
             const bool had = (known.presentMask & bit) != 0U;
-            if (present && (!had || !std::ranges::equal(BaselineBytes(state, known.id, index), slots_->Bytes(NetIndex(known.id), index)))) changed |= bit;
+            if (present && (!had || (slot->componentTicks[index] > known.componentTicks[index] &&
+                !EncodedEqual(BaselineBytes(state, known.id, index), slots_->Bytes(NetIndex(known.id), index))))) changed |= bit;
             else if (!present && had) removed |= bit;
         }
         // An acknowledgement of another group must not hide an unacknowledged delta.
@@ -468,6 +518,7 @@ void ReplicationServer::BuildUpdates(std::uint64_t client, ClientState& state, s
         if (tick % period != NetIndex(known.id) % period) continue;
         order.push_back({&known, changed, removed});
     }
+    }
     const auto priority = [](const Candidate& left, const Candidate& right) {
         const auto* a = left.known;
         const auto* b = right.known;
@@ -475,11 +526,30 @@ void ReplicationServer::BuildUpdates(std::uint64_t client, ClientState& state, s
         if (a->accum != b->accum) return a->accum > b->accum;
         return a->id < b->id;
     };
-    const auto selected = std::min(order.size(), static_cast<std::size_t>(state.tokens) / EntryHeaderBytes(*components_, 0U));
+    std::size_t minimumEntry = SIZE_MAX;
+    for (const auto& candidate : order) {
+        auto size = EntryHeaderBytes(*components_, candidate.removed) + MaskedSize(*slots_, candidate.changed);
+        if (size + kStateHeaderBytes > config_.maxUpdateBytes) {
+            size = SIZE_MAX;
+            auto pending = candidate.changed | candidate.removed;
+            while (pending != 0U) {
+                const auto bit = pending & (~pending + 1U);
+                const auto part = EntryHeaderBytes(*components_, candidate.removed & bit) + MaskedSize(*slots_, candidate.changed & bit);
+                size = std::min(size, part + kStateHeaderBytes > config_.maxUpdateBytes ? EntryHeaderBytes(*components_, 0U) : part);
+                pending &= ~bit;
+            }
+        }
+        minimumEntry = std::min(minimumEntry, size);
+    }
+    const auto selected = std::min(order.size(), static_cast<std::size_t>(state.tokens) / std::max<std::size_t>(1U, minimumEntry));
     if (selected == 0U) return;
-    if (selected < order.size()) std::nth_element(order.begin(), order.begin() + selected, order.end(), priority);
-    order.resize(selected);
-    std::ranges::sort(order, priority);
+    {
+        ProfileScope profile(config_.profile, stats_.orderingNs);
+        if (selected < order.size()) std::nth_element(order.begin(), order.begin() + selected, order.end(), priority);
+        order.resize(selected);
+        std::ranges::sort(order, priority);
+    }
+    ProfileScope profile(config_.profile, stats_.encodingNs);
 
     std::vector<std::uint8_t> body;
     std::vector<SentEntry> entries;
@@ -509,7 +579,7 @@ void ReplicationServer::BuildUpdates(std::uint64_t client, ClientState& state, s
             if (auto* known = FindKnown(state, entry.id)) { known->accum = 0.0F; known->sentTick = tick; }
         }
         if (state.inFlight.empty()) state.lastAckAt = nowMilliseconds_;
-        state.inFlight[updateId] = SentUpdate{std::move(entries), nowMilliseconds_};
+        state.inFlight[updateId] = SentUpdate{std::move(entries), std::move(body), nowMilliseconds_};
         while (state.inFlight.size() > config_.maxUpdatesInFlight) {
             if (!state.inFlight.begin()->second.lossCounted) ++state.lostInWindow;
             state.inFlight.erase(state.inFlight.begin());
@@ -530,7 +600,7 @@ void ReplicationServer::BuildUpdates(std::uint64_t client, ClientState& state, s
         }
         Known& baseline = *FindKnown(state, id);
         const auto changed = candidate.changed, removed = candidate.removed;
-        const bool split = kStateHeaderBytes + EntryHeaderBytes(*components_, removed) + MaskedSize(*components_, changed) > config_.maxUpdateBytes;
+        const bool split = kStateHeaderBytes + EntryHeaderBytes(*components_, removed) + MaskedSize(*slots_, changed) > config_.maxUpdateBytes;
         std::uint32_t pending = (changed | removed);
         while (pending != 0U) {
             std::uint32_t part = pending;
@@ -540,7 +610,7 @@ void ReplicationServer::BuildUpdates(std::uint64_t client, ClientState& state, s
             pending = (pending & ~part);
             const std::uint32_t partChanged = (changed & part);
             const std::uint32_t partRemoved = (removed & part);
-            if (kStateHeaderBytes + EntryHeaderBytes(*components_, partRemoved) + MaskedSize(*components_, partChanged) > config_.maxUpdateBytes) {
+            if (kStateHeaderBytes + EntryHeaderBytes(*components_, partRemoved) + MaskedSize(*slots_, partChanged) > config_.maxUpdateBytes) {
                 for (std::size_t index = 0U; index < components_->Count(); ++index) {
                     if ((partChanged & (1U << index)) == 0U) continue;
                     char detail[160]{};
@@ -550,7 +620,7 @@ void ReplicationServer::BuildUpdates(std::uint64_t client, ClientState& state, s
                 }
                 continue;
             }
-            const std::size_t entrySize = EntryHeaderBytes(*components_, partRemoved) + MaskedSize(*components_, partChanged);
+            const std::size_t entrySize = EntryHeaderBytes(*components_, partRemoved) + MaskedSize(*slots_, partChanged);
             if (kStateHeaderBytes + body.size() + entrySize > config_.maxUpdateBytes || count == kMaxEntriesPerState) {
                 if (!flush()) {
                     finished = false;
@@ -573,11 +643,10 @@ void ReplicationServer::BuildUpdates(std::uint64_t client, ClientState& state, s
             sent.tick = tick;
             sent.changedMask = partChanged;
             sent.removedMask = partRemoved;
+            sent.bytesOffset = body.size();
             for (std::size_t index = 0U; index < components_->Count(); ++index) {
                 if ((partChanged & (1U << index)) != 0U) {
                     writer.Bytes(slots_->Bytes(NetIndex(id), index));
-                    const auto bytes = slots_->Bytes(NetIndex(id), index);
-                    sent.bytes[index].assign(bytes.begin(), bytes.end());
                 }
             }
             entries.push_back(std::move(sent));
@@ -653,8 +722,8 @@ void ReplicationServer::Tick(std::uint32_t tick, std::uint64_t nowMilliseconds) 
             static_cast<void>(Unreplicate(id));
             continue;
         }
-        Capture(NetIndex(id), *slot);
         slot->changedTick = tick;
+        Capture(NetIndex(id), *slot);
     }
     dirty_.clear();
     if (slots_->Size() < 950'000U) objectWarningArmed_ = true;
@@ -780,7 +849,7 @@ void ReplicationServer::HandleAck(ClientState& state, std::span<const std::uint8
     const auto acknowledge = [&](std::uint32_t updateId) {
         const auto sent = state.inFlight.find(updateId);
         if (sent != state.inFlight.end()) {
-            ApplyAcked(state, sent->second.entries);
+            ApplyAcked(state, sent->second);
             ++state.ackedInWindow;
             state.lastAckAt = nowMilliseconds_;
             state.breaker = false;
@@ -795,20 +864,24 @@ void ReplicationServer::HandleAck(ClientState& state, std::span<const std::uint8
     }
 }
 
-void ReplicationServer::ApplyAcked(ClientState& state, const std::vector<SentEntry>& entries) {
-    for (const SentEntry& entry : entries) {
+void ReplicationServer::ApplyAcked(ClientState& state, const SentUpdate& update) {
+    for (const SentEntry& entry : update.entries) {
         auto* baseline = FindKnown(state, entry.id);
         if (baseline == nullptr || entry.epoch != baseline->epoch) {
             continue; // despawned (and maybe spawned again) meanwhile, or a newer update was acknowledged first
         }
         Known& target = *baseline;
+        auto offset = entry.bytesOffset;
         for (std::size_t index = 0U; index < components_->Count(); ++index) {
             const std::uint32_t bit = (1U << index);
+            const auto size = (entry.changedMask & bit) != 0U ? components_->At(index).EncodedSize() : 0U;
+            const auto encoded = std::span(update.bytes).subspan(offset, size);
+            offset += size;
             if (entry.tick <= target.componentTicks[index]) continue;
             if (((entry.changedMask | entry.removedMask) & bit) != 0U) target.componentTicks[index] = entry.tick;
             if ((entry.changedMask & bit) != 0U) {
                 const auto bytes = BaselineBytes(state, entry.id, index);
-                std::copy(entry.bytes[index].begin(), entry.bytes[index].end(), bytes.begin());
+                std::copy(encoded.begin(), encoded.end(), bytes.begin());
                 target.presentMask = (target.presentMask | bit);
             }
             if ((entry.removedMask & bit) != 0U) {

@@ -58,6 +58,7 @@ public:
     [[nodiscard]] virtual TransportStatus Send(WebRtcChannel channel, std::span<const std::uint8_t> message) = 0;
     // Messages arrive whole. Empty messages are keep-alives and are never delivered.
     [[nodiscard]] virtual bool Receive(WebRtcChannel channel, std::vector<std::uint8_t>& message) = 0;
+    [[nodiscard]] virtual bool WaitReadable(std::uint32_t milliseconds) = 0;
     virtual void Close() = 0;
 };
 

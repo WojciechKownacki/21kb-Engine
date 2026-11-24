@@ -27,12 +27,14 @@ std::unique_ptr<IDatagramTransport> CreateUdpTransport(Endpoint, std::string& er
 #include <cerrno>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
 #endif
 
 #include <algorithm>
+#include <climits>
 
 namespace kb::net {
 
@@ -151,6 +153,15 @@ public:
     }
 
     [[nodiscard]] Endpoint LocalEndpoint() const override { return local_; }
+    [[nodiscard]] bool WaitReadable(std::uint32_t milliseconds) override {
+#if defined(_WIN32)
+        WSAPOLLFD descriptor{handle_, POLLRDNORM, 0};
+        return WSAPoll(&descriptor, 1U, static_cast<int>(std::min(milliseconds, static_cast<std::uint32_t>(INT_MAX)))) > 0 && (descriptor.revents & POLLRDNORM) != 0;
+#else
+        pollfd descriptor{handle_, POLLIN, 0};
+        return poll(&descriptor, 1U, static_cast<int>(std::min(milliseconds, static_cast<std::uint32_t>(INT_MAX)))) > 0 && (descriptor.revents & POLLIN) != 0;
+#endif
+    }
 
 private:
     SocketHandle handle_;

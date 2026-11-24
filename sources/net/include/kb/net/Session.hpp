@@ -31,6 +31,8 @@
 namespace kb::net {
 
 inline constexpr std::size_t kSessionKeyBytes = 32U;
+inline constexpr std::size_t kSessionSentHistory = 512U;
+inline constexpr std::size_t kMaxSessionRecordsPerPacket = 64U;
 using SessionKey = std::array<std::uint8_t, kSessionKeyBytes>;
 
 enum class ChannelMode : std::uint8_t {
@@ -103,14 +105,13 @@ public:
 
     [[nodiscard]] SendResult Send(std::uint8_t channel, std::span<const std::uint8_t> data);
     // Queues a close notice; the session closes once it has been sent.
-    void Disconnect() noexcept { disconnectRequested_ = true; }
+    void Disconnect() noexcept { disconnectRequested_ = true; nextDue_ = 0U; }
     // Makes the next BuildPacket produce a packet even when there is nothing to send.
-    void Poke() noexcept { ackPending_ = true; }
+    void Poke() noexcept { ackPending_ = true; nextDue_ = 0U; }
 
     [[nodiscard]] PacketResult ProcessPacket(std::uint64_t nowMilliseconds, std::span<const std::uint8_t> datagram);
-    // The next datagram to send, or nothing when there is nothing to say yet. Call until it returns
-    // nothing, within a limit that suits the caller.
-    [[nodiscard]] std::optional<std::vector<std::uint8_t>> BuildPacket(std::uint64_t nowMilliseconds);
+    [[nodiscard]] std::uint64_t NextDueMs(std::uint64_t nowMilliseconds) const noexcept;
+    [[nodiscard]] bool BuildPacket(std::uint64_t nowMilliseconds, std::vector<std::uint8_t>& out);
 
     [[nodiscard]] bool PopMessage(Message& message);
     [[nodiscard]] bool IsClosed() const noexcept { return closed_; }
@@ -159,8 +160,10 @@ private:
         std::uint8_t fragment = 0U;
     };
     struct SentPacket {
+        std::uint64_t packetNumber = 0U;
         std::uint64_t sentAt = 0U;
-        std::vector<FragmentRef> fragments;
+        std::array<FragmentRef, kMaxSessionRecordsPerPacket> fragments{};
+        std::size_t fragmentCount = 0U;
     };
     struct ParsedRecord {
         std::uint8_t type = 0U;
@@ -182,7 +185,8 @@ private:
     void ApplyAcks(std::uint64_t nowMilliseconds, std::uint64_t latest, std::uint32_t bits);
     void AckPacket(std::uint64_t nowMilliseconds, std::uint64_t packetNumber, bool sampleRtt);
     void AckFragment(const FragmentRef& ref);
-    [[nodiscard]] PacketResult CommitRecords(const std::vector<ParsedRecord>& records);
+    [[nodiscard]] PacketResult CommitRecords(std::span<const ParsedRecord> records);
+    void RefreshDue(std::uint64_t nowMilliseconds) noexcept;
     void DeliverReady(Channel& channel, std::uint8_t channelIndex);
     [[nodiscard]] bool IsReplay(std::uint64_t packetNumber) const noexcept;
     void MarkReceived(std::uint64_t packetNumber) noexcept;
@@ -193,7 +197,11 @@ private:
     std::vector<Channel> channels_;
     std::deque<Queued> unreliableOut_;
     std::deque<Message> inbox_;
-    std::map<std::uint64_t, SentPacket> sent_;
+    std::array<SentPacket, kSessionSentHistory> sent_{};
+    std::vector<std::uint8_t> plain_;
+    std::array<std::uint8_t, kMaxDatagramBytes> decrypted_{};
+    std::array<ParsedRecord, kMaxSessionRecordsPerPacket> records_{};
+    std::uint64_t nextDue_ = 0U;
     SessionStats stats_;
 
     std::uint64_t nextPacketNumber_ = 1U;

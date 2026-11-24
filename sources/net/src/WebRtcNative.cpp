@@ -10,6 +10,7 @@
 #include <cstring>
 #include <deque>
 #include <mutex>
+#include <condition_variable>
 
 namespace kb::net {
 namespace {
@@ -129,6 +130,11 @@ public:
         return true;
     }
 
+    bool WaitReadable(std::uint32_t milliseconds) override {
+        std::unique_lock lock(mutex_);
+        return readable_.wait_for(lock, std::chrono::milliseconds(milliseconds), [this] { return !inbox_[1].empty() || State() == WebRtcState::Closed; });
+    }
+
     void Close() override {
         Fail(WebRtcCloseReason::Local);
         signaling_->Close();
@@ -186,6 +192,7 @@ private:
         inboxBytes_ += message.size();
         inbox_[index].emplace_back(reinterpret_cast<const std::uint8_t*>(message.data()),
             reinterpret_cast<const std::uint8_t*>(message.data()) + message.size());
+        readable_.notify_all();
     }
 
     void Apply(const std::string& message) {
@@ -213,6 +220,7 @@ private:
     void Fail(WebRtcCloseReason reason) {
         auto expected = WebRtcCloseReason::None;
         if (reason_.compare_exchange_strong(expected, reason)) state_ = WebRtcState::Closed;
+        readable_.notify_all();
     }
 
     std::unique_ptr<ISignalingChannel> signaling_;
@@ -221,6 +229,7 @@ private:
     std::shared_ptr<rtc::PeerConnection> connection_;
     std::shared_ptr<rtc::DataChannel> channels_[2];
     std::mutex mutex_;
+    std::condition_variable readable_;
     std::deque<std::vector<std::uint8_t>> inbox_[2];
     std::size_t inboxBytes_ = 0U;
     std::atomic<WebRtcState> state_{ WebRtcState::Connecting };

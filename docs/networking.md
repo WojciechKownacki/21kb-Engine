@@ -38,10 +38,17 @@ and state replication on top; see "Replication and RPC" below. Prediction.hpp ad
   send queue (`budget.maxQueuedBytes`) or the 256 message window is full.
 * Every length, count, index and channel read from the wire is checked; a bad datagram is counted
   (`SessionStats`, `HostStats`) and changes nothing.
+* `NextDueMs` keeps idle sessions out of packet construction. `BuildPacket(now, out)` reuses the
+  caller's reserved output buffer; packet history, decrypted bytes and parsed records have fixed
+  capacity. `WaitReadable` wakes the server on socket traffic or at the next tick deadline.
+  `KB_NET_PROFILE=1` enables cumulative visibility, candidate, ordering and encoding timings in the
+  server metrics CSV; profiling is disabled by default.
 
 ## Handshake
 
 Each client has a 32 byte secret that the host also holds (`IKeyProvider`). The key is never sent.
+Do not use a password-derived value as this transport secret: a recorded handshake MAC verifies
+password guesses offline. Password admission requires authentication bound to the DH shared secret.
 
 1. `Connect` contains client id, client salt, release (U32), content hash (U64), and a fresh 32-byte
    client ephemeral public key, padded to 128 bytes.

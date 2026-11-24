@@ -23,6 +23,7 @@
 #include <chrono>
 #include <cmath>
 #include <fstream>
+#include <cstdlib>
 #include <iomanip>
 #include <limits>
 #include <ostream>
@@ -332,6 +333,7 @@ struct DedicatedServer::Impl {
     std::uint64_t nextRevocationReload = 0U;
     bool revocationErrorReported = false;
     std::unique_ptr<ReplicationServer> replication;
+    bool profileMetrics = false;
     std::vector<kb::ecs::Entity> candidates;
     std::uint32_t tick = 0U;
 };
@@ -526,8 +528,16 @@ bool DedicatedServer::Start(std::string& error) {
     replicationConfig.visibilityRadius = options.visibilityRadius;
     replicationConfig.gridPlane = options.gridPlane;
     replicationConfig.tickRate = options.tickRate;
+#if defined(_WIN32)
+    char profileValue[2]{};
+    std::size_t profileLength = 0U;
+    replicationConfig.profile = getenv_s(&profileLength, profileValue, sizeof(profileValue), "KB_NET_PROFILE") == 0 && profileLength > 1U;
+#else
+    replicationConfig.profile = std::getenv("KB_NET_PROFILE") != nullptr;
+#endif
     replicationConfig.minClientRate = options.minClientRate;
     replicationConfig.maxClientRate = options.maxClientRate;
+    s.profileMetrics = replicationConfig.profile;
     s.replication = std::make_unique<ReplicationServer>(*s.host, s.scene->Runtime().EcsWorld(), *s.components, *s.rpcs, replicationConfig);
     s.net->BindServer(*s.replication);
     if (options.replicate != ReplicateMode::None) {
@@ -602,7 +612,9 @@ int DedicatedServer::Run(const std::atomic<bool>& stop) {
     if (!options.metricsFile.empty()) {
         metrics.open(options.metricsFile);
         if (!metrics) { s.Log("error: metrics file could not be opened"); return 1; }
-        metrics << "second,tick_avg_ms,tick_max_ms,pump_ms,replication_ms,clients,state_msgs,bytes_out,bytes_in,datagrams_in,diag_total\n";
+        metrics << "second,tick_avg_ms,tick_max_ms,pump_ms,replication_ms,clients,state_msgs,bytes_out,bytes_in,datagrams_in,diag_total";
+        if (s.profileMetrics) metrics << ",visibility_ms,candidates_ms,ordering_ms,encoding_ms";
+        metrics << '\n';
     }
     double tickSum = 0.0, tickMax = 0.0, pumpSum = 0.0, replicationSum = 0.0;
     std::uint64_t measuredTicks = 0U;
@@ -648,7 +660,10 @@ int DedicatedServer::Run(const std::atomic<bool>& stop) {
                 metrics << now / 1000U << ',' << (measuredTicks == 0U ? 0.0 : tickSum / static_cast<double>(measuredTicks))
                     << ',' << tickMax << ',' << pumpSum << ',' << replicationSum << ',' << s.host->ClientCount()
                     << ',' << s.replication->Stats().stateMessagesSent << ',' << bytesOut << ',' << bytesIn
-                    << ',' << s.host->Stats().datagramsReceived << ',' << s.host->Diagnostics().Total() << '\n';
+                    << ',' << s.host->Stats().datagramsReceived << ',' << s.host->Diagnostics().Total();
+                if (s.profileMetrics) metrics << ',' << s.replication->Stats().visibilityNs / 1e6 << ',' << s.replication->Stats().candidatesNs / 1e6
+                    << ',' << s.replication->Stats().orderingNs / 1e6 << ',' << s.replication->Stats().encodingNs / 1e6;
+                metrics << '\n';
                 tickSum = tickMax = pumpSum = replicationSum = 0.0;
                 measuredTicks = 0U;
                 metrics.flush();
@@ -683,7 +698,9 @@ int DedicatedServer::Run(const std::atomic<bool>& stop) {
             reason = "empty-timeout";
             break;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - s.started).count();
+        const auto remaining = nextTickAt > static_cast<std::uint64_t>(elapsed) ? nextTickAt - static_cast<std::uint64_t>(elapsed) : 0U;
+        static_cast<void>(s.transport->WaitReadable(static_cast<std::uint32_t>(std::min<std::uint64_t>(1U, remaining / 1000U))));
     }
 
     s.Log(std::string("stopping (") + reason + "): telling " + std::to_string(s.host->ClientCount()) + " clients");

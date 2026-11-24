@@ -14,6 +14,7 @@ struct ReplicationSlot {
     std::uint64_t owner = 0U;
     std::uint32_t generation = 0U;
     std::uint32_t changedTick = 0U;
+    std::array<std::uint32_t, kMaxReplicatedComponents> componentTicks{};
     std::uint32_t presentMask = 0U;
     std::uint32_t activePosition = 0U;
     bool alive = false;
@@ -122,6 +123,7 @@ public:
     [[nodiscard]] std::size_t Size() const noexcept { return active_.size(); }
     [[nodiscard]] std::size_t Stride() const noexcept { return stride_; }
     [[nodiscard]] std::size_t Offset(std::size_t component) const noexcept { return offsets_[component]; }
+    [[nodiscard]] std::size_t EncodedSize(std::size_t component) const noexcept { return sizes_[component]; }
 
     void Clear() {
         pages_.clear();

@@ -80,20 +80,6 @@ constexpr char kAlphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwx
     return std::ranges::all_of(name, [](char c) { return static_cast<unsigned char>(c) >= 0x20U && static_cast<unsigned char>(c) != 0x7FU; });
 }
 
-// RFC 8018 PBKDF2 with HMAC-SHA512, one output block.
-[[nodiscard]] kb::security::Sha512Digest Pbkdf2(std::string_view password, std::span<const std::uint8_t> salt, std::uint32_t iterations) {
-    const std::span<const std::uint8_t> key{ reinterpret_cast<const std::uint8_t*>(password.data()), password.size() };
-    std::vector<std::uint8_t> first(salt.begin(), salt.end());
-    first.insert(first.end(), { 0U, 0U, 0U, 1U });
-    kb::security::Sha512Digest u = kb::security::HmacSha512(key, first);
-    kb::security::Sha512Digest t = u;
-    for (std::uint32_t round = 1U; round < iterations; ++round) {
-        u = kb::security::HmacSha512(key, u);
-        for (std::size_t index = 0U; index < t.size(); ++index) t[index] ^= u[index];
-    }
-    return t;
-}
-
 [[nodiscard]] std::uint64_t ToUnsigned(std::int64_t value) noexcept { return static_cast<std::uint64_t>(value); }
 [[nodiscard]] std::int64_t ToSigned(std::uint64_t value) noexcept { return static_cast<std::int64_t>(value); }
 
@@ -256,7 +242,7 @@ bool LocalAuthProvider::AddAccount(const std::string& name, std::string_view pas
     if (!IsPrintableName(name) || password.size() < 8U || accounts_.contains(name)) return false;
     Account account;
     if (!kb::security::SecureRandom(account.salt)) return false;
-    account.verifier = Pbkdf2(password, account.salt, config_.passwordIterations);
+    if (!kb::security::Pbkdf2HmacSha512(account.verifier, password, account.salt, config_.passwordIterations)) return false;
     account.clientId = nextClientId_++;
     account.scopes = scopes;
     accounts_.emplace(name, std::move(account));
@@ -269,7 +255,9 @@ LoginResult LocalAuthProvider::Login(const std::string& name, std::string_view p
     // An unknown name costs the same work as a wrong password, and answers the same.
     if (found == accounts_.end()) {
         static constexpr std::array<std::uint8_t, 16U> kDummySalt{ 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U, 10U, 11U, 12U, 13U, 14U, 15U, 16U };
-        static_cast<void>(Pbkdf2(password, kDummySalt, config_.passwordIterations));
+        kb::security::Sha512Digest dummy{};
+        static_cast<void>(kb::security::Pbkdf2HmacSha512(dummy, password, kDummySalt, config_.passwordIterations));
+        kb::security::SecureWipe(dummy);
         result.error = "the name or the password is wrong";
         return result;
     }
@@ -282,8 +270,11 @@ LoginResult LocalAuthProvider::Login(const std::string& name, std::string_view p
         result.error = "the account is locked after too many wrong passwords; try again later";
         return result;
     }
-    const kb::security::Sha512Digest attempt = Pbkdf2(password, account.salt, config_.passwordIterations);
-    if (!kb::security::ConstantTimeEqual(attempt, account.verifier)) {
+    kb::security::Sha512Digest attempt{};
+    if (!kb::security::Pbkdf2HmacSha512(attempt, password, account.salt, config_.passwordIterations)) { result.error = "password derivation failed"; return result; }
+    const bool matches = kb::security::ConstantTimeEqual(attempt, account.verifier);
+    kb::security::SecureWipe(attempt);
+    if (!matches) {
         if (++account.failures >= config_.maxFailedLogins) {
             account.failures = 0U;
             account.lockedUntil = nowSeconds + config_.lockSeconds;
