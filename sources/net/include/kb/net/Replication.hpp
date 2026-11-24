@@ -331,6 +331,7 @@ public:
     void CallRpcAll(const std::string& name, std::span<const RpcValue> args, RpcStatus& status);
     void SetRpcHandler(const std::string& name, RpcHandler handler);
 
+    [[nodiscard]] DiagLog& Diagnostics() noexcept { return host_->Diagnostics(); }
     [[nodiscard]] const ReplicationServerStats& Stats() const noexcept { return stats_; }
     [[nodiscard]] std::size_t ReadyClients() const noexcept;
     [[nodiscard]] std::size_t VisibleCount(std::uint64_t client) const;
@@ -445,6 +446,7 @@ public:
     [[nodiscard]] RpcStatus CallRpc(const std::string& name, std::span<const RpcValue> args);
     void SetRpcHandler(const std::string& name, RpcHandler handler);
 
+    [[nodiscard]] DiagLog& Diagnostics() noexcept { return diagnostics_; }
     [[nodiscard]] const ReplicationClientStats& Stats() const noexcept { return stats_; }
 
 private:
@@ -473,6 +475,7 @@ private:
     DespawnCallback onDespawn_;
     StateCallback onState_;
     ReplicationClientStats stats_;
+    DiagLog diagnostics_;
     bool ready_ = false;
     std::uint32_t latestUpdate_ = 0U;
     std::uint32_t receivedBits_ = 0U; // bit i: update (latestUpdate_ - 1 - i) was received

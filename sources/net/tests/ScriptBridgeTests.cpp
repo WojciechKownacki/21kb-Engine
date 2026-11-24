@@ -13,6 +13,7 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/script/ScriptNetApi.hpp"
+#include "engine/security/ReleaseManifest.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "kb/net/SceneReplication.hpp"
 #include "kb/net/ScriptBridge.hpp"
@@ -428,11 +429,22 @@ void TestRuntimeGuards() {
 
 
 void TestSceneClientLifecycle() {
+    struct RestoreRelease {
+        std::shared_ptr<const kb::security::InstalledRelease> previous = kb::security::CurrentVerifiedRelease();
+        ~RestoreRelease() { kb::security::InstallVerifiedRelease(std::move(previous)); }
+    } restore;
+    auto release = std::make_shared<kb::security::InstalledRelease>();
+    release->manifest.releaseNumber = 7U;
+    release->manifest.contentVersion = "scene-content";
+    kb::security::InstallVerifiedRelease(release);
     LoopbackNetwork network;
     auto socket = network.CreateTransport(Endpoint::Loopback(9600));
     StaticKeyTable keys;
     keys.Set(7U, KeyFor(7U));
-    Host host(*socket, HostConfig{}, keys);
+    HostConfig hostConfig;
+    hostConfig.identity = MakeBuildIdentity(7U, "scene-content");
+    hostConfig.minClientRelease = 7U;
+    Host host(*socket, hostConfig, keys);
     kb::scene::Scene serverScene;
     kb::scene::Scene clientScene;
     const auto object = serverScene.Entities().CreateObject(kb::scene::SceneObjectDesc{.name = "Replica"});

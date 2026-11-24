@@ -11,6 +11,7 @@ namespace kb::scene { class Scene; }
 namespace kb::net {
 
 struct SceneClientOptions {
+    BuildIdentity identity{};
     std::uint64_t clientId = 0U;
     SessionKey key{};
     Endpoint server{};

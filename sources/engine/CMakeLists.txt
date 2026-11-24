@@ -1,4 +1,5 @@
 add_library(kb_engine STATIC
+    ../net/src/Diagnostics.cpp
     include/engine/core/JsonValue.hpp
     include/engine/core/EngineLog.hpp
     include/engine/core/EngineAssertions.hpp
@@ -2689,3 +2690,6 @@ if(BUILD_TESTING)
     endif()
     kb_apply_quality_gates(kb_ecs_workload_benchmark)
 endif()
+
+set_source_files_properties(../net/src/Diagnostics.cpp src/script/ScriptNetApi.cpp PROPERTIES
+    INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../net/include")

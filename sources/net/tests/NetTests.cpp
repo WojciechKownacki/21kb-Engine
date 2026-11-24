@@ -164,6 +164,32 @@ struct Rig {
 
 // ------------------------------------------------------------------ tests
 
+void TestEveryRefusalIsNamedAndCounted() {
+    DiagLog log;
+    for (std::uint16_t code = 0U; code <= static_cast<std::uint16_t>(DiagCode::ComponentGroupLimit); ++code) {
+        log.Report(static_cast<DiagCode>(code), "entity=42 bytes=2048");
+    }
+    Require(log.Total() == 14U && log.Entries().size() == 14U, "diagnostic codes were lost");
+    for (std::size_t index = 0U; index < log.Entries().size(); ++index) {
+        const DiagEntry& entry = log.Entries()[index];
+        Require(static_cast<std::size_t>(entry.code) == index && entry.count == 1U &&
+            std::string_view(entry.detail) == "entity=42 bytes=2048" && DiagName(entry.code) != "Unknown",
+            "a refusal has no named code, count or detail");
+    }
+}
+
+void TestDiagLogIsRateLimited() {
+    DiagLog log;
+    std::size_t lines = 0U;
+    bool named = true;
+    log.SetSink([&](std::string_view line) { ++lines; named = named && line.starts_with("EntityLimit:"); });
+    for (std::size_t index = 0U; index < 1000U; ++index) log.Report(DiagCode::EntityLimit, "limit=8");
+    Require(named && lines == 1U && log.Total() == 1000U && log.Entries()[0].count == 1000U, "diagnostics were not rate limited");
+    log.SetSink([](std::string_view) { throw std::runtime_error("sink failure"); });
+    log.Report(DiagCode::OversizeRecord, std::string(300U, 'x'));
+    Require(std::string_view(log.Entries()[1].detail).size() == 159U, "detail is not bounded");
+}
+
 void TestByteIo() {
     std::vector<std::uint8_t> bytes;
     ByteWriter writer(bytes);
@@ -575,7 +601,7 @@ void TestHandshakeAuthentication() {
     {
         Rig rig;
         auto attacker = rig.network.CreateTransport(Endpoint::Loopback(7500));
-        std::vector<std::uint8_t> connect{ 0x4EU, 0x4BU, 1U, 1U };
+        std::vector<std::uint8_t> connect{ 0x4EU, 0x4BU, 2U, 1U };
         ByteWriter connectWriter(connect);
         connectWriter.U64(42U);
         connectWriter.U64(0x1122334455667788ULL);
@@ -589,7 +615,7 @@ void TestHandshakeAuthentication() {
         std::size_t size = 0U;
         Require(attacker->Receive(from, challenge, size) == TransportStatus::Ok && size == 52U, "no Challenge was sent");
         Require(size < connect.size(), "the Challenge is not smaller than the Connect");
-        std::vector<std::uint8_t> response{ 0x4EU, 0x4BU, 1U, 3U };
+        std::vector<std::uint8_t> response{ 0x4EU, 0x4BU, 2U, 3U };
         ByteWriter responseWriter(response);
         responseWriter.U64(42U);
         responseWriter.U64(0x1122334455667788ULL);
@@ -652,6 +678,195 @@ void TestHandshakeAuthentication() {
         rig.Step(2030U);
         Require(rig.host->Stats().challengesSent == challenges, "a short Connect received a Challenge");
     }
+}
+
+std::vector<std::uint8_t> PacketOf(const TappingTransport& tap, std::uint8_t type) {
+    for (const auto& packet : tap.sent) if (packet.size() >= 4U && packet[3] == type) return packet;
+    throw std::runtime_error("expected datagram type was not recorded");
+}
+
+std::array<std::uint8_t, 64U> OpenAcceptKeys(const std::vector<std::uint8_t>& response, const std::vector<std::uint8_t>& accept) {
+    Require(accept.size() == 88U, "Accept has the wrong size");
+    const auto label = [](std::string_view text) {
+        return std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(text.data()), text.size());
+    };
+    const std::span<const std::uint8_t> salts(response.data() + 12U, 16U);
+    kb::security::AeadKey key;
+    kb::security::HkdfSha512(key.Span(), MakeKey(9U), salts, label("21kb-net-accept-v2"));
+    kb::security::AeadNonce nonce{};
+    std::copy_n(accept.begin() + 4, nonce.size(), nonce.begin());
+    kb::security::AeadTag tag{};
+    std::copy_n(accept.end() - 16, tag.size(), tag.begin());
+    std::vector<std::uint8_t> plaintext(accept.begin() + 28, accept.end() - 16);
+    Require(kb::security::AeadDecryptInPlace(plaintext, tag, key, nonce, std::span<const std::uint8_t>(accept).first(28U)),
+        "Accept did not authenticate");
+    std::vector<std::uint8_t> salt(salts.begin(), salts.end());
+    salt.insert(salt.end(), plaintext.begin(), plaintext.begin() + 32);
+    std::array<std::uint8_t, 64U> keys{};
+    kb::security::HkdfSha512(keys, MakeKey(9U), salt, label("21kb-net-session-v2"));
+    kb::security::SecureWipe(plaintext);
+    return keys;
+}
+
+void TestReplayedResponseGetsFreshKeys() {
+    Rig rig;
+    const std::uint64_t connected = rig.Run(0U, 2000U, [&] { return rig.client->State() == ClientState::Connected; });
+    Require(rig.client->State() == ClientState::Connected, "initial connection failed");
+    rig.Run(connected, connected + 100U, [] { return false; });
+    const auto response = PacketOf(*rig.clientTap, 3U);
+    const auto oldAccept = PacketOf(*rig.hostTap, 4U);
+    const auto oldClientData = PacketOf(*rig.clientTap, 0x10U);
+    const auto oldServerData = PacketOf(*rig.hostTap, 0x10U);
+    const auto oldKeys = OpenAcceptKeys(response, oldAccept);
+    rig.host->Disconnect(42U);
+    rig.host->Update(connected + 110U);
+    rig.host->Update(connected + 120U);
+    Require(rig.host->ClientCount() == 0U, "the first session was not removed");
+    rig.hostTap->sent.clear();
+    rig.network.Inject(Endpoint::Loopback(7001), Endpoint::Loopback(7000), response);
+    rig.network.Advance(connected + 130U);
+    rig.host->Update(connected + 130U);
+    Require(rig.host->ClientCount() == 1U && rig.host->Stats().handshakesCompleted == 2U, "valid replay did not reach a fresh session");
+    const auto freshAccept = PacketOf(*rig.hostTap, 4U);
+    const auto freshServerData = PacketOf(*rig.hostTap, 0x10U);
+    const auto freshKeys = OpenAcceptKeys(response, freshAccept);
+    Require(oldKeys != freshKeys && oldAccept != freshAccept && oldServerData != freshServerData,
+        "replayed Response reused session keys or server ciphertext");
+    SessionKey sendKey{}, receiveKey{};
+    std::copy_n(freshKeys.begin(), 32U, sendKey.begin());
+    std::copy_n(freshKeys.begin() + 32, 32U, receiveKey.begin());
+    Session freshClient({}, sendKey, receiveKey, connected + 130U);
+    Require(freshClient.ProcessPacket(connected + 140U, oldServerData) == PacketResult::AuthFailed &&
+        freshClient.ProcessPacket(connected + 140U, freshServerData) == PacketResult::Accepted,
+        "old server data authenticated under fresh keys");
+    rig.network.Inject(Endpoint::Loopback(7001), Endpoint::Loopback(7000), oldClientData);
+    rig.network.Advance(connected + 140U);
+    rig.host->Update(connected + 140U);
+    Require(rig.host->ClientStats(42U)->rejectedAuth == 1U && rig.host->ClientStats(42U)->packetsAccepted == 0U,
+        "old client packet was not rejected as AuthFailed");
+    const auto packetsSent = rig.host->ClientStats(42U)->packetsSent;
+    rig.hostTap->sent.clear();
+    rig.network.Inject(Endpoint::Loopback(7001), Endpoint::Loopback(7000), response);
+    rig.network.Advance(connected + 150U);
+    rig.host->Update(connected + 150U);
+    Require(PacketOf(*rig.hostTap, 4U) == freshAccept && rig.host->Stats().handshakesCompleted == 2U &&
+        rig.host->ClientStats(42U)->packetsSent == packetsSent, "duplicate Response reset the live session");
+}
+
+void TestVersionMismatchIsRefusedWithReason() {
+    Require(MakeBuildIdentity(5U, "abc").contentHash == 0xBA7A6193A135AFDDULL &&
+        MakeBuildIdentity(5U, "").contentHash == 0U, "content hash encoding is incorrect");
+    {
+        Rig unchecked;
+        unchecked.Run(0U, 1000U, [] { return false; });
+        const auto hostEntries = unchecked.host->Diagnostics().Entries();
+        const auto clientEntries = unchecked.client->Diagnostics().Entries();
+        Require(hostEntries.size() == 1U && clientEntries.size() == 1U &&
+            hostEntries[0].code == DiagCode::VersionUnchecked && hostEntries[0].count == 1U &&
+            clientEntries[0].code == DiagCode::VersionUnchecked && clientEntries[0].count == 1U,
+            "unchecked build identity was not reported once at startup");
+    }
+    HostConfig host;
+    host.identity = MakeBuildIdentity(3U, "content-a");
+    host.minClientRelease = 3U;
+    ClientConfig client;
+    client.identity = MakeBuildIdentity(2U, "content-a");
+    Rig rig({}, host, client);
+    const auto now = rig.Run(0U, 100U, [&] { return rig.client->State() == ClientState::Disconnected; });
+    Require(now <= 20U && rig.client->State() == ClientState::Disconnected &&
+        rig.clientEvents.back().reason == DisconnectReason::VersionMismatch, "outdated release timed out or lost its reason");
+    const auto* info = rig.client->RejectInfo();
+    Require(info != nullptr && info->reason == RejectReason::OutdatedClient && info->server.release == 3U &&
+        info->server.contentHash == host.identity.contentHash, "server identity was lost from Reject");
+    Require(rig.host->Stats().challengesSent == 0U && PacketOf(*rig.hostTap, 5U).size() == 25U, "version refusal was late or amplified");
+    client.identity = MakeBuildIdentity(3U, "content-b");
+    Rig mismatch({}, host, client);
+    mismatch.Run(0U, 100U, [&] { return mismatch.client->State() == ClientState::Disconnected; });
+    Require(mismatch.client->State() == ClientState::Disconnected && mismatch.clientEvents.back().reason == DisconnectReason::ContentMismatch &&
+        mismatch.client->RejectInfo()->reason == RejectReason::ContentMismatch, "content mismatch was not named");
+}
+
+void TestUnconfirmedPeerExpires() {
+    HostConfig config;
+    config.confirmMilliseconds = 500U;
+    Rig rig({}, config);
+    rig.client->Update(0U);
+    rig.network.Advance(10U);
+    rig.host->Update(10U);
+    rig.network.Advance(20U);
+    rig.client->Update(20U);
+    Require(rig.client->Stats() == nullptr && rig.client->State() == ClientState::Connecting, "Challenge created a client session");
+    rig.network.Advance(30U);
+    rig.host->Update(30U);
+    Require(rig.host->ClientCount() == 1U, "Response did not create the pending peer");
+    const auto response = PacketOf(*rig.clientTap, 3U);
+    const auto accept = PacketOf(*rig.hostTap, 4U);
+    for (std::uint64_t now = 100U; now <= 500U; now += 100U) {
+        rig.network.Inject(Endpoint::Loopback(7001), Endpoint::Loopback(7000), response);
+        rig.network.Advance(now);
+        rig.host->Update(now);
+        Require(rig.host->ClientCount() == 1U && rig.hostTap->sent.back() == accept, "pending Response changed Accept");
+    }
+    rig.host->Update(530U);
+    Require(rig.host->ClientCount() == 0U, "repeated Responses extended confirmation lifetime");
+    Rig confirmed({}, config);
+    confirmed.Run(0U, 1500U, [] { return false; });
+    Require(confirmed.host->ClientCount() == 1U && confirmed.client->State() == ClientState::Connected,
+        "authenticated client data did not confirm the peer");
+}
+
+void TestOldProtocolGetsReject() {
+    Rig rig;
+    rig.client->Update(0U);
+    auto connect = PacketOf(*rig.clientTap, 1U);
+    connect[2] = 1U;
+    rig.hostTap->sent.clear();
+    rig.network.Inject(Endpoint::Loopback(7777), Endpoint::Loopback(7000), connect);
+    rig.network.Advance(10U);
+    rig.host->Update(10U);
+    const auto reject = PacketOf(*rig.hostTap, 5U);
+    ByteReader reader(reject);
+    Require(reader.U16() == 0x4B4EU && reader.U8() == 2U && reader.U8() == 5U &&
+        reader.U8() == static_cast<std::uint8_t>(RejectReason::ProtocolVersion), "old protocol did not receive a named v2 Reject");
+    ByteReader original(std::span<const std::uint8_t>(connect).subspan(12U));
+    Require(reader.U64() == original.U64() && reject.size() <= 40U && reject.size() < connect.size(), "Reject salt or amplification bound is wrong");
+    const auto replies = rig.hostTap->sent.size();
+    connect.resize(20U);
+    rig.network.Inject(Endpoint::Loopback(7777), Endpoint::Loopback(7000), connect);
+    rig.network.Advance(20U);
+    rig.host->Update(20U);
+    Require(rig.hostTap->sent.size() == replies, "short old Connect received a reply");
+}
+
+void TestAcceptAuthenticationAndRetransmission() {
+    Rig rig;
+    rig.client->Update(0U);
+    rig.network.Advance(10U); rig.host->Update(10U);
+    rig.network.Advance(20U); rig.client->Update(20U);
+    rig.network.Advance(30U); rig.host->Update(30U);
+    const auto accept = PacketOf(*rig.hostTap, 4U);
+    Endpoint from;
+    std::array<std::uint8_t, kMaxDatagramBytes> buffer{};
+    std::size_t size = 0U;
+    rig.network.Advance(40U);
+    while (rig.clientPort->Receive(from, buffer, size) == TransportStatus::Ok) { }
+    for (const std::size_t offset : {4U, 28U, 87U}) {
+        auto damaged = accept;
+        damaged[offset] ^= 1U;
+        rig.network.Inject(Endpoint::Loopback(7000), Endpoint::Loopback(7001), damaged);
+    }
+    rig.network.Advance(50U); rig.client->Update(50U);
+    Require(rig.client->State() == ClientState::Connecting && rig.client->Stats() == nullptr, "tampered Accept created a session");
+    auto reject = std::vector<std::uint8_t>{0x4EU, 0x4BU, 2U, 5U};
+    ByteWriter writer(reject);
+    writer.U8(4U); writer.U64(1U); writer.U32(0U); writer.U64(0U);
+    rig.network.Inject(Endpoint::Loopback(7000), Endpoint::Loopback(7001), reject);
+    rig.network.Advance(60U); rig.client->Update(60U);
+    Require(rig.client->State() == ClientState::Connecting, "Reject with another salt was accepted");
+    rig.Run(70U, 1000U, [&] { return rig.client->State() == ClientState::Connected; });
+    Require(rig.client->State() == ClientState::Connected && rig.host->Stats().handshakesCompleted == 1U,
+        "lost Accept did not recover by Response retransmission");
+    for (const auto& packet : rig.hostTap->sent) if (packet[3] == 4U) Require(packet == accept, "Accept retransmission changed bytes");
 }
 
 void TestLimitsAndFlood() {
@@ -771,7 +986,7 @@ void TestHostileInput() {
             bytes = RandomBytes(random, 4U + random.Below(300U));
             bytes[0] = 0x4EU;
             bytes[1] = 0x4BU;
-            bytes[2] = 1U;
+            bytes[2] = 2U;
             bytes[3] = random.Below(2U) == 0U ? 0x10U : static_cast<std::uint8_t>(1U + random.Below(3U));
         }
         rig.network.Inject(from, to, bytes);
@@ -904,6 +1119,7 @@ void TestHostCapacity() {
     }
     Require(other.State() == ClientState::Disconnected && rig.host->ClientCount() == 1U, "a client was accepted beyond the limit");
     Require(rig.client->State() == ClientState::Connected, "the connected client was disturbed");
+    Require(other.RejectInfo() != nullptr && other.RejectInfo()->reason == RejectReason::ServerFull, "capacity rejection lost its reason");
 }
 
 void TestRealUdp() {
@@ -1002,6 +1218,8 @@ void TestLoopbackNetwork() {
 
 int main() {
     const std::vector<std::pair<const char*, void (*)()>> tests{
+        { "every-refusal-named", &TestEveryRefusalIsNamedAndCounted },
+        { "diagnostics-rate-limit", &TestDiagLogIsRateLimited },
         { "byte-io", &TestByteIo },
         { "config-validation", &TestConfigValidation },
         { "loopback-network", &TestLoopbackNetwork },
@@ -1012,6 +1230,11 @@ int main() {
         { "backpressure", &TestBackpressureLosesNothing },
         { "queue-limits", &TestQueueLimits },
         { "handshake-authentication", &TestHandshakeAuthentication },
+        { "replayed-response-fresh-keys", &TestReplayedResponseGetsFreshKeys },
+        { "version-refusal-reason", &TestVersionMismatchIsRefusedWithReason },
+        { "unconfirmed-peer-expires", &TestUnconfirmedPeerExpires },
+        { "old-protocol-reject", &TestOldProtocolGetsReject },
+        { "accept-authentication-retransmission", &TestAcceptAuthenticationAndRetransmission },
         { "limits-and-flood", &TestLimitsAndFlood },
         { "disconnect-and-timeout", &TestDisconnectAndTimeout },
         { "host-capacity", &TestHostCapacity },

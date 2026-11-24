@@ -1,4 +1,5 @@
 #include "engine/script/ScriptNetApi.hpp"
+#include "kb/net/Diagnostics.hpp"
 
 #include "engine/scene/Scene.hpp"
 #include "engine/script/ScriptFunctionRegistry.hpp"
@@ -34,12 +35,11 @@ constexpr std::size_t kStringSlots = 2U;
 constexpr std::size_t kBoolSlots = 2U;
 constexpr std::size_t kEntitySlots = 2U;
 
-constexpr std::size_t kMaxProblems = 64U;
-
 struct SceneNet {
     INetworkScriptRuntime* runtime = nullptr;
     std::deque<ScriptNetEvent> events;
-    std::vector<std::string> problems; // the Net.* calls that failed, each text once, for `kb_cli net check`
+    kb::net::DiagLog diagnostics;
+    std::array<std::uint64_t, 32U> drainedProblems{};
 };
 
 std::mutex g_mutex;
@@ -55,12 +55,12 @@ std::map<const kb::scene::Scene*, SceneNet> g_scenes;
 }
 
 // A failed call returns its text to the script and keeps it for the scene's report: a script that ignores the answer still shows up in it.
-[[nodiscard]] ScriptFunctionCallResult Failure(const ScriptFunctionCallContext& context, std::string message) {
+[[nodiscard]] ScriptFunctionCallResult Failure(const ScriptFunctionCallContext& context, std::string message, kb::net::DiagCode code = kb::net::DiagCode::RpcRejected) {
     if (context.scene != nullptr) {
         const std::lock_guard lock{ g_mutex };
         const auto found = g_scenes.find(context.scene);
-        if (found != g_scenes.end() && found->second.problems.size() < kMaxProblems && std::ranges::find(found->second.problems, message) == found->second.problems.end()) {
-            found->second.problems.push_back(message);
+        if (found != g_scenes.end()) {
+            found->second.diagnostics.Report(code, message);
         }
     }
     return ScriptFunctionCallResult{ .executed = false, .outputs = {}, .errors = { std::move(message) } };
@@ -263,12 +263,12 @@ ScriptFunctionCallResult Call(const ScriptFunctionCallContext& context, Argument
 ScriptFunctionCallResult Replicate(const ScriptFunctionCallContext& context, Arguments arguments) {
     INetworkScriptRuntime* runtime = RuntimeOf(context);
     if (runtime == nullptr || runtime->Mode() != ScriptNetMode::Server) {
-        return Failure(context, "Net.Replicate: only a server can replicate entities (the server shows its objects to the players; on a client guard it with `if Net.IsServer() then`)");
+        return Failure(context, "Net.Replicate: only a server can replicate entities (the server shows its objects to the players; on a client guard it with `if Net.IsServer() then`)", kb::net::DiagCode::NotAuthority);
     }
     const ScriptValue* entity = Find(arguments, "entity");
     std::string error;
     if (entity == nullptr || !runtime->Replicate(entity->AsUInt64(), error)) {
-        return Failure(context, "Net.Replicate: " + (error.empty() ? std::string{ "no entity" } : error));
+        return Failure(context, "Net.Replicate: " + (error.empty() ? std::string{ "no entity" } : error), kb::net::DiagCode::EntityLimit);
     }
     return Ok({ { "replicated", ScriptValue{ true } } });
 }
@@ -421,7 +421,15 @@ std::vector<std::string> ScriptNetApi::DrainProblems(const kb::scene::Scene& sce
     const auto found = g_scenes.find(&scene);
     std::vector<std::string> drained;
     if (found != g_scenes.end()) {
-        drained.swap(found->second.problems);
+        SceneNet& state = found->second;
+        std::size_t index = 0U;
+        for (const auto& entry : state.diagnostics.Entries()) {
+            if (state.drainedProblems[index] != entry.count) {
+                drained.emplace_back(std::string(kb::net::DiagName(entry.code)) + ": " + entry.detail);
+                state.drainedProblems[index] = entry.count;
+            }
+            ++index;
+        }
     }
     return drained;
 }

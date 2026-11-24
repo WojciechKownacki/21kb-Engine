@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <iosfwd>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -44,10 +45,13 @@ struct ServerOptions {
     float worldExtent = 1000.0F;
     std::filesystem::path stopFile;   // the server stops cleanly when this file exists
     std::filesystem::path portFile;   // the bound port, written once the socket is open
+    std::filesystem::path metricsFile;
     std::filesystem::path statusFile; // the status JSON, rewritten about once a second
     std::filesystem::path stateFile;  // optional scene checkpoint, loaded on startup and saved on clean shutdown
     std::filesystem::path authProviderKeyFile; // optional Ed25519 public key, 64 hex digits
     std::filesystem::path authRevocationsFile; // optional signed snapshot, reloaded once per second
+    std::optional<std::uint32_t> release;
+    std::optional<std::string> contentVersion;
     bool quiet = false;
 };
 
@@ -64,6 +68,8 @@ struct ServerSummary {
     bool stateSaved = false;
     std::size_t authenticatedClients = 0U;
     AuthGate::Stats authorization;
+    std::vector<DiagEntry> diagnostics;
+    std::uint64_t diagTotal = 0U;
     HostStats host;
     ReplicationServerStats replication;
 };

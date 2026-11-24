@@ -6,10 +6,12 @@
 namespace kb::net::wire {
 
 inline constexpr std::uint16_t kMagic = 0x4B4EU;
-inline constexpr std::uint8_t kVersion = 1U;
+inline constexpr std::uint8_t kVersion = 2U;
 inline constexpr std::uint8_t kTypeConnect = 0x01U;
 inline constexpr std::uint8_t kTypeChallenge = 0x02U;
 inline constexpr std::uint8_t kTypeResponse = 0x03U;
+inline constexpr std::uint8_t kTypeAccept = 0x04U;
+inline constexpr std::uint8_t kTypeReject = 0x05U;
 inline constexpr std::uint8_t kTypeData = 0x10U;
 
 } // namespace kb::net::wire

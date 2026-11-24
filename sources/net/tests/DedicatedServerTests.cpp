@@ -13,6 +13,8 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/security/Crypto.hpp"
+#include "engine/security/ReleaseManifest.hpp"
+#include "engine/security/ReleaseKeys.hpp"
 #include "kb/net/Replication.hpp"
 #include "kb/net/SceneReplication.hpp"
 
@@ -579,7 +581,7 @@ void TestMainRun() {
             byte = static_cast<std::uint8_t>(state & 0xFFU);
         }
         if (bytes.size() >= 4U && packet % 2 == 0) {
-            bytes[0] = 0x4EU; bytes[1] = 0x4BU; bytes[2] = 1U; bytes[3] = static_cast<std::uint8_t>(1U + packet % 3 * 0x0DU);
+            bytes[0] = 0x4EU; bytes[1] = 0x4BU; bytes[2] = 2U; bytes[3] = static_cast<std::uint8_t>(1U + packet % 3 * 0x0DU);
         }
         static_cast<void>(raw->Send(Endpoint::Loopback(port), bytes));
         if (packet % 50 == 0) {
@@ -657,7 +659,7 @@ void TestLifetimeOptions() {
         ClientConfig shortWait;
         shortWait.connectTimeoutMilliseconds = 2000U;
         RemoteClient two(port, 8U, 8U, shortWait);
-        Require(two.Until([&] { return two.disconnected; }, 6000) && two.lastReason == DisconnectReason::ConnectTimeout, "a client over the limit got in");
+        Require(two.Until([&] { return two.disconnected; }, 6000) && two.lastReason == DisconnectReason::ServerFull, "a client over the limit got in");
         server.RequestStop();
         Require(server.process.Wait(20'000) == 0, "the server did not stop");
     }
@@ -745,6 +747,74 @@ void TestCommandLine() {
     Require(first.process.Wait(20'000) == 0, "the first server did not stop");
 }
 
+void TestBuildIdentityAndDiagnostics() {
+    TestProject project = MakeProject("Identity");
+#if defined(_WIN32)
+    kb::security::ReleaseSigningKey signing;
+    kb::security::Ed25519KeyPairFromSeed(signing.seed, signing.secretKey, signing.publicKey);
+    kb::security::TrustAnchor anchor;
+    anchor.productId = "SampleScene";
+    anchor.releaseKey = signing.publicKey;
+    auto encoded = kb::security::EncodeTrustAnchor(anchor);
+    const auto player = project.root / "Identity.exe";
+    fs::copy_file(serverExecutable, player);
+    HANDLE resource = BeginUpdateResourceW(player.c_str(), FALSE);
+    Require(resource != nullptr, "identity fixture could not open resources");
+    const bool updated = UpdateResourceW(resource, MAKEINTRESOURCEW(10), MAKEINTRESOURCEW(kb::security::kTrustAnchorResourceId),
+        0U, encoded.data(), static_cast<DWORD>(encoded.size())) != FALSE;
+    const bool saved = EndUpdateResourceW(resource, updated ? FALSE : TRUE) != FALSE;
+    Require(updated && saved, "identity fixture trust anchor could not be stored");
+    kb::security::ReleaseManifest manifest;
+    manifest.productId = anchor.productId;
+    manifest.releaseNumber = 7U;
+    manifest.contentVersion = "manifest-content";
+    WriteFile(project.root / "release.kbmanifest", kb::security::SignReleaseManifest(manifest, signing));
+    {
+        Server server(project, {}, "manifest");
+        const auto port = server.WaitForPort();
+        Require(port != 0U, "manifest server did not start: " + ReadFile(server.err));
+        ClientConfig config;
+        config.identity = MakeBuildIdentity(1U, "other-content");
+        RemoteClient client(port, 7U, 7U, config);
+        Require(client.Until([&] { return client.disconnected; }, 2000) && client.lastReason == DisconnectReason::ContentMismatch,
+            "manifest content was not enforced");
+        const auto* info = client.client->RejectInfo();
+        Require(info != nullptr && info->server.release == 7U && info->server.contentHash == MakeBuildIdentity(7U, "manifest-content").contentHash,
+            "manifest identity did not reach Reject");
+        server.RequestStop();
+        Require(server.process.Wait(20'000) == 0, "manifest server did not stop");
+    }
+#endif
+    const auto metrics = project.root / "diagnostics.csv";
+    Server server(project, {"--release", "9", "--content-version", "override-content", "--metrics-file", metrics.string()}, "override");
+    const auto port = server.WaitForPort();
+    Require(port != 0U, "identity override server did not start: " + ReadFile(server.err));
+    ClientConfig config;
+    config.identity = MakeBuildIdentity(1U, "other-content");
+    RemoteClient wrong(port, 7U, 7U, config);
+    Require(wrong.Until([&] { return wrong.disconnected; }, 2000) && wrong.lastReason == DisconnectReason::ContentMismatch,
+        "content override was not enforced");
+    const auto* info = wrong.client->RejectInfo();
+    Require(info != nullptr && info->server.release == 9U && info->server.contentHash == MakeBuildIdentity(9U, "override-content").contentHash,
+        "identity overrides did not reach Reject");
+    config.identity = MakeBuildIdentity(1U, "override-content");
+    RemoteClient matching(port, 8U, 8U, config);
+    Require(matching.Until([&] { return matching.client->State() == ClientState::Connected; }, 2000), "matching content did not connect");
+    Require(WaitFor([&] { matching.Pump(); return Number(server.Status(), "diag_total") >= 1.0; }, 3000), "diagnostic total was not exported");
+    const auto status = server.Status();
+    const auto* entries = status.Find("diagnostics");
+    Require(entries != nullptr && entries->Size() == 1U && entries->At(0U)->Find("code")->AsString() == "HandshakeContent" &&
+        entries->At(0U)->Find("count")->AsNumber() == 1.0, "named refusal was not exported");
+    Require(WaitFor([&] {
+        std::string csv = ReadFile(metrics);
+        std::erase(csv, '\r');
+        return csv.starts_with("second,diag_total\n") && csv.find(",1\n") != std::string::npos;
+    }, 2000), "diagnostic CSV did not contain its total");
+    Require(ReadFile(server.err).find("HandshakeContent:") != std::string::npos, "diagnostic sink did not reach the server log");
+    server.RequestStop();
+    Require(server.process.Wait(20'000) == 0, "identity override server did not stop");
+}
+
 void TestKeysFile() {
     StaticKeyTable keys;
     std::size_t count = 0U;
@@ -768,6 +838,7 @@ int main(int argc, char** argv) {
         return 2;
     }
     const std::vector<std::pair<const char*, void (*)()>> tests{
+        { "build-identity-diagnostics", &TestBuildIdentityAndDiagnostics },
         { "keys-file", &TestKeysFile },
         { "scene-checkpoint", &TestSceneCheckpoint },
         { "command-line", &TestCommandLine },

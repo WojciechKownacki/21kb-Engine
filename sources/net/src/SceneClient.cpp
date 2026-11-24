@@ -1,4 +1,5 @@
 #include "kb/net/SceneClient.hpp"
+#include "engine/security/ReleaseManifest.hpp"
 #include "kb/net/Auth.hpp"
 #include "kb/net/SceneReplication.hpp"
 #include "kb/net/Prediction.hpp"
@@ -9,6 +10,7 @@
 #include "engine/core/JsonValue.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <charconv>
 #include <cmath>
 #include <map>
@@ -151,9 +153,23 @@ struct SceneClient::Impl {
         client.reset();
         transport = std::move(next);
         ClientConfig config;
+        config.identity = options.identity;
+        if (config.identity.release == 0U && config.identity.contentHash == 0U) {
+            if (const auto release = kb::security::CurrentVerifiedRelease()) {
+                if (release->manifest.releaseNumber > std::numeric_limits<std::uint32_t>::max()) {
+                    diagnostics << "network: release number exceeds the protocol limit\n";
+                    return false;
+                }
+                options.identity = MakeBuildIdentity(static_cast<std::uint32_t>(release->manifest.releaseNumber), release->manifest.contentVersion);
+                config.identity = options.identity;
+            }
+        }
         config.authorizationRequired = !options.token.empty();
         config.session.timeoutMilliseconds = 5000U;
         client = std::make_unique<Client>(*transport, config, options.clientId, options.key, options.server, now);
+        for (const auto& entry : client->Diagnostics().Entries()) {
+            diagnostics << DiagName(entry.code) << ": " << entry.detail << '\n';
+        }
         replication = std::make_unique<ReplicationClient>(*client, scene.Runtime().EcsWorld(), *components, rpcs);
         script.BindClient(*replication, *client, options.clientId);
         smoothed.clear();

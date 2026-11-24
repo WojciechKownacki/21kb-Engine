@@ -43,17 +43,31 @@ and state replication on top; see "Replication and RPC" below. Prediction.hpp ad
 
 Each client has a 32 byte secret that the host also holds (`IKeyProvider`). The key is never sent.
 
-1. `Connect` (client id, client salt, padded to at least 128 bytes).
-2. `Challenge` (client salt, server salt, MAC): the server salt is a cookie derived from a host secret
-   and the client address, and the host stores nothing. The Challenge is smaller than the Connect, so
-   the host cannot be used to amplify traffic to a spoofed address.
-3. `Response` (ids, salts, MAC): accepted only from the address that received the Challenge and only
-   with a valid MAC. The client verifies the Challenge MAC first, so it also knows the host holds the key.
+1. `Connect` contains client id, client salt, release (U32), and content hash (U64), padded to 128 bytes.
+2. `Challenge` contains the client salt, address cookie, and MAC; the host stores no pending state.
+3. `Response` proves possession of the key and the address cookie.
+4. `Accept` carries a random 24-byte nonce and an authenticated encrypted 32-byte server random,
+   server release, and content hash, followed by a 16-byte tag. The header and nonce are authenticated.
 
-Both sides then derive the two direction keys with HKDF-SHA-512 from the key and both salts. The
-first sealed packet from the host confirms the connection. A repeated `Response` from the same
-address does not create a second session; the same client id arriving from another address replaces
-the old connection.
+Protocol version 2 uses HKDF-SHA-512 with the client and server salts and the label
+`21kb-net-accept-v2` for the Accept key. Session keys use those salts plus the fresh server random
+and the label `21kb-net-session-v2`. The client creates its session only after authenticating Accept.
+A duplicate Response during a live session repeats the exact cached Accept without resetting packet
+numbers. After teardown, a valid replay creates fresh keys: old session packets fail authentication.
+Peers that send no authenticated data expire after `confirmMilliseconds` (default 5000 ms), even
+when Responses are repeated.
+
+A 25-byte Reject echoes the client salt and names ProtocolVersion, OutdatedClient, ContentMismatch,
+or ServerFull, together with the server identity. A release below `minClientRelease` reports
+`VersionMismatch` to the client, with `OutdatedClient` retained in `Client::RejectInfo()`.
+Content hashes are checked when both are nonzero; a zero release and hash explicitly report
+`VersionUnchecked` through diagnostics. Rejects are unauthenticated and provide a refusal reason,
+not proof of server identity. Invalid MACs and cookies receive no refusal response.
+
+The dedicated server verifies `release.kbmanifest` beside the project using its release trust anchor
+when present; `--release` and `--content-version` override its identity. Scene clients obtain identity
+from the current verified release unless explicitly configured. The content hash is the first eight
+SHA-512 bytes of the content version, decoded little endian.
 
 ## Limits
 

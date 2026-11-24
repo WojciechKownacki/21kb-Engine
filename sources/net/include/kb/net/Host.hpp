@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/net/Session.hpp"
+#include "kb/net/Diagnostics.hpp"
 #include "kb/net/Transport.hpp"
 
 #include <cstdint>
@@ -18,15 +19,18 @@
 // login or matchmaking service over a channel the application already trusts, never sent in the
 // clear here). The handshake proves both sides know it without revealing it:
 //
-//   client -> host  Connect    client id, client salt, padded to at least kMinConnectBytes
+//   client -> host  Connect    client id, client salt, build identity, padded to 128 bytes
 //   host   -> client Challenge  client salt, server salt, MAC(key, ...)    (the host keeps no state)
 //   client -> host  Response   client id, salts, MAC(key, ...)
+//   host   -> client Accept     random nonce, authenticated encrypted server random and identity
 //
 // The server salt is a cookie derived from a host secret and the client address, so a Response can
 // only come from the address that received the Challenge, and the host stores nothing for a Connect
 // that never completes. The Challenge is shorter than the Connect, so the host cannot be used to
-// amplify traffic towards a spoofed address. Both sides then derive two session keys (one per
-// direction) with HKDF from the key and both salts, and every later datagram is sealed by Session.
+// amplify traffic towards a spoofed address. Accept is sealed with a separate HKDF key. Only then
+// does the client create its Session; session keys include fresh server randomness. A duplicate
+// Response gets the cached Accept without resetting keys or packet numbers. Unconfirmed peers
+// expire after HostConfig::confirmMilliseconds, regardless of repeated Responses.
 //
 // Not covered: forward secrecy (the key is long lived), and key distribution itself.
 namespace kb::net {
@@ -70,6 +74,10 @@ enum class DisconnectReason : std::uint8_t {
     ConnectTimeout, // the handshake did not finish
     Replaced,       // the same client id connected from another address
     Error,          // the key or the random source could not be obtained
+    VersionMismatch,
+    ContentMismatch,
+    OutdatedClient,
+    ServerFull,
 };
 
 struct NetEvent {
@@ -91,12 +99,29 @@ struct HostStats {
     std::uint64_t sendErrors = 0U;
 };
 
+struct BuildIdentity {
+    std::uint32_t release = 0U;
+    std::uint64_t contentHash = 0U;
+};
+
+[[nodiscard]] BuildIdentity MakeBuildIdentity(std::uint32_t release, std::string_view contentVersion) noexcept;
+
+enum class RejectReason : std::uint8_t { ProtocolVersion = 1U, OutdatedClient = 2U, ContentMismatch = 3U, ServerFull = 4U };
+
+struct HandshakeRejectInfo {
+    RejectReason reason = RejectReason::ProtocolVersion;
+    BuildIdentity server;
+};
+
 struct HostConfig {
     SessionConfig session{};
+    BuildIdentity identity{};
     std::size_t maxClients = 64U;
     std::size_t maxDatagramsPerUpdate = 1024U; // bound on the work one Update does for any sender
     std::size_t maxPacketsPerPeerPerUpdate = 16U;
     std::uint64_t cookieLifetimeMilliseconds = 30'000U;
+    std::uint32_t minClientRelease = 0U;
+    std::uint32_t confirmMilliseconds = 5000U;
 };
 
 class Host final {
@@ -113,6 +138,7 @@ public:
     [[nodiscard]] std::size_t ClientCount() const noexcept { return peers_.size(); }
     // Ids of the clients that are connected now.
     [[nodiscard]] std::vector<std::uint64_t> ClientIds() const;
+    [[nodiscard]] DiagLog& Diagnostics() noexcept { return diagnostics_; }
     [[nodiscard]] const HostStats& Stats() const noexcept { return stats_; }
     [[nodiscard]] const SessionStats* ClientStats(std::uint64_t clientId) const noexcept;
 
@@ -122,10 +148,14 @@ private:
         std::uint64_t clientId = 0U;
         std::uint64_t clientSalt = 0U;
         std::uint64_t serverSalt = 0U;
+        std::vector<std::uint8_t> accept;
+        std::uint64_t createdAt = 0U;
+        bool confirmed = false;
         std::unique_ptr<Session> session;
         std::size_t packetsThisUpdate = 0U;
     };
 
+    void SendReject(const Endpoint& to, RejectReason reason, std::uint64_t clientSalt);
     void HandleConnect(std::uint64_t nowMilliseconds, const Endpoint& from, std::span<const std::uint8_t> datagram);
     void HandleResponse(std::uint64_t nowMilliseconds, const Endpoint& from, std::span<const std::uint8_t> datagram);
     void HandleData(std::uint64_t nowMilliseconds, const Endpoint& from, std::span<const std::uint8_t> datagram);
@@ -142,12 +172,14 @@ private:
     std::map<std::uint64_t, Endpoint> byClient_;
     std::deque<NetEvent> events_;
     HostStats stats_;
+    DiagLog diagnostics_;
 };
 
 enum class ClientState : std::uint8_t { Connecting, Connected, Disconnected };
 
 struct ClientConfig {
     SessionConfig session{};
+    BuildIdentity identity{};
     std::uint32_t retryMilliseconds = 250U;
     std::uint32_t connectTimeoutMilliseconds = 5000U;
     std::uint64_t clientSalt = 0U; // 0 draws a random one; tests may fix it
@@ -166,6 +198,8 @@ public:
     [[nodiscard]] SendResult Authenticate(std::string_view token);
     void Disconnect();
     [[nodiscard]] bool PollEvent(NetEvent& event);
+    [[nodiscard]] const HandshakeRejectInfo* RejectInfo() const noexcept { return rejected_ ? &rejectInfo_ : nullptr; }
+    [[nodiscard]] DiagLog& Diagnostics() noexcept { return diagnostics_; }
     [[nodiscard]] ClientState State() const noexcept { return state_; }
     [[nodiscard]] const SessionStats* Stats() const noexcept { return session_ != nullptr ? &session_->Stats() : nullptr; }
 
@@ -187,6 +221,9 @@ private:
     std::uint64_t startedAt_;
     std::uint64_t lastHandshakeSend_;
     bool sentFirst_ = false;
+    HandshakeRejectInfo rejectInfo_;
+    bool rejected_ = false;
+    DiagLog diagnostics_;
     Stage stage_ = Stage::Connect;
     ClientState state_ = ClientState::Connecting;
     std::unique_ptr<Session> session_;

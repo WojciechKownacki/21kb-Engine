@@ -261,7 +261,7 @@ void RunWarningTests() {
         const std::string project = Project("NetClientWrites");
         AddScript(project, "Bad", "function Ready(self, dt)\n    CallFunction(\"Net.Replicate\", { entity = self.entity })\nend\n");
         const Run run = Check(project, { "--frames", "60" });
-        Require(Contains(run.out, "warning: client 1: Net.Replicate: only a server can replicate entities") && Contains(run.out, "Net.IsServer()"), "a player calling a server function is told how to guard it: " + run.out);
+        Require(Contains(run.out, "warning: client 1: NotAuthority: Net.Replicate: only a server can replicate entities") && Contains(run.out, "Net.IsServer()"), "a player calling a server function is told how to guard it: " + run.out);
     }
     {
         // A call about an object the caller does not own.

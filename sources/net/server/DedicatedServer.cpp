@@ -13,6 +13,8 @@
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/security/Crypto.hpp"
+#include "engine/security/ReleaseManifest.hpp"
+#include "engine/security/ReleaseKeys.hpp"
 #include "kb/net/ProjectScene.hpp"
 #include "kb/net/SceneReplication.hpp"
 #include "kb/net/ScriptBridge.hpp"
@@ -21,6 +23,7 @@
 #include <chrono>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <ostream>
 #include <sstream>
 #include <thread>
@@ -175,6 +178,17 @@ std::string SummaryJson(const ServerOptions& options, const ServerSummary& summa
     replication.Set("rpc_rejected_rate", number(r.rpcRejectedRate));
     replication.Set("rpc_rejected_arguments", number(r.rpcRejectedArguments + r.rpcRejectedMalformed + r.rpcRejectedDirection));
     root.Set("replication", std::move(replication));
+    auto diagnostics = JsonValue::MakeArray();
+    for (const DiagEntry& entry : summary.diagnostics) {
+        auto item = JsonValue::MakeObject();
+        item.Set("code", JsonValue::MakeString(std::string(DiagName(entry.code))));
+        item.Set("count", number(entry.count));
+        item.Set("last_ms", number(entry.lastMs));
+        item.Set("detail", JsonValue::MakeString(entry.detail));
+        diagnostics.Append(std::move(item));
+    }
+    root.Set("diagnostics", std::move(diagnostics));
+    root.Set("diag_total", number(summary.diagTotal));
     return root.Dump();
 }
 
@@ -202,6 +216,9 @@ struct DedicatedServer::Impl {
         summary.replicatedEntities = replication != nullptr ? replication->ReplicatedCount() : 0U;
         if (host != nullptr) {
             summary.host = host->Stats();
+            const auto entries = host->Diagnostics().Entries();
+            summary.diagnostics.assign(entries.begin(), entries.end());
+            summary.diagTotal = host->Diagnostics().Total();
         }
         if (replication != nullptr) {
             summary.replication = replication->Stats();
@@ -235,9 +252,7 @@ struct DedicatedServer::Impl {
                     continue;
                 }
             }
-            if (replication->Replicate(entity, 0U) == 0U) {
-                Log("warning: an entity could not be replicated (limit reached)");
-            }
+            static_cast<void>(replication->Replicate(entity, 0U));
         }
     }
 
@@ -469,9 +484,40 @@ bool DedicatedServer::Start(std::string& error) {
     }
     s.summary.port = s.transport->LocalEndpoint().port;
     HostConfig hostConfig;
+    std::uint32_t release = 0U;
+    std::string contentVersion;
+    const auto manifestPath = projectRoot / std::filesystem::path(kb::security::kReleaseManifestFileName);
+    std::error_code manifestError;
+    const bool hasManifest = std::filesystem::exists(manifestPath, manifestError);
+    if (manifestError) { error = "release manifest could not be inspected"; return false; }
+    if (hasManifest) {
+        const auto anchor = kb::security::FindReleaseTrustAnchor(projectRoot);
+        if (anchor.state != kb::security::TrustAnchorLookup::State::Present) {
+            error = "release manifest requires a valid release trust anchor";
+            return false;
+        }
+        std::ifstream input(manifestPath, std::ios::binary);
+        std::ostringstream text;
+        text << input.rdbuf();
+        kb::security::ReleaseManifest manifest;
+        if (!input || kb::security::ParseAndVerifyReleaseManifest(text.str(), anchor.anchor.releaseKey, manifest) !=
+            kb::security::ReleaseManifestStatus::Success || manifest.releaseNumber > std::numeric_limits<std::uint32_t>::max()) {
+            error = "release manifest is invalid or its release number exceeds the protocol limit";
+            return false;
+        }
+        release = static_cast<std::uint32_t>(manifest.releaseNumber);
+        contentVersion = manifest.contentVersion;
+    }
+    if (options.release) release = *options.release;
+    if (options.contentVersion) contentVersion = *options.contentVersion;
+    hostConfig.identity = MakeBuildIdentity(release, contentVersion);
     hostConfig.maxClients = options.maxClients;
     hostConfig.session.timeoutMilliseconds = options.idleTimeoutSeconds * 1000U;
     s.host = std::make_unique<Host>(*s.transport, hostConfig, s.keys);
+    s.host->Diagnostics().SetSink([&s](std::string_view message) { s.Log(std::string(message)); });
+    for (const DiagEntry& entry : s.host->Diagnostics().Entries()) {
+        s.Log(std::string(DiagName(entry.code)) + ": " + entry.detail);
+    }
     if (!s.host->Valid()) {
         error = "the network host could not be created (random numbers unavailable?)";
         return false;
@@ -541,6 +587,12 @@ int DedicatedServer::Run(const std::atomic<bool>& stop) {
     const char* reason = "error";
     int exitCode = 0;
 
+    std::ofstream metrics;
+    if (!options.metricsFile.empty()) {
+        metrics.open(options.metricsFile);
+        if (!metrics) { s.Log("error: metrics file could not be opened"); return 1; }
+        metrics << "second,diag_total\n";
+    }
     for (;;) {
         const std::uint64_t now = s.NowMilliseconds();
         s.PumpHost(now);
@@ -562,6 +614,10 @@ int DedicatedServer::Run(const std::atomic<bool>& stop) {
 
         if (now >= nextStatusAt) {
             s.WriteStatus();
+            if (metrics.is_open()) {
+                metrics << now / 1000U << ',' << s.host->Diagnostics().Total() << '\n';
+                metrics.flush();
+            }
             nextStatusAt = now + 1000U;
         }
         const std::size_t clients = s.host->ClientCount();

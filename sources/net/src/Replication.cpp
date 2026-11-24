@@ -2,6 +2,7 @@
 
 #include "kb/net/ByteIO.hpp"
 
+#include <cstdio>
 #include <exception>
 #include <utility>
 
@@ -119,7 +120,11 @@ ReplicationServer::ReplicationServer(Host& host, kb::ecs::World& world, const Re
     : host_(&host), world_(&world), components_(&components), rpcs_(&rpcs), config_(config) {}
 
 NetworkId ReplicationServer::Replicate(kb::ecs::Entity entity, std::uint64_t owner) {
-    if (!world_->IsAlive(entity) || entities_.size() >= config_.maxEntities || byEntity_.contains(entity.Id()) || nextId_ == 0U) {
+    if (entities_.size() >= config_.maxEntities || nextId_ == 0U) {
+        host_->Diagnostics().Report(DiagCode::EntityLimit, "replicated entity limit reached");
+        return 0U;
+    }
+    if (!world_->IsAlive(entity) || byEntity_.contains(entity.Id())) {
         return 0U;
     }
     const NetworkId id = nextId_++;
@@ -204,6 +209,7 @@ bool ReplicationServer::SendReliable(std::uint64_t client, std::span<const std::
         return true;
     }
     ++stats_.sendBusy;
+    host_->Diagnostics().Report(DiagCode::SendQueueFull, "replication send queue refused a message");
     return false;
 }
 
@@ -296,6 +302,7 @@ void ReplicationServer::BuildUpdates(std::uint64_t client, ClientState& state, s
         writer.Bytes(body);
         if (host_->Send(client, kUnreliableChannel, message) != SendResult::Queued) {
             ++stats_.sendBusy;
+            host_->Diagnostics().Report(DiagCode::SendQueueFull, "replication send queue refused a message");
             return false;
         }
         state.nextUpdateId = updateId + 1U == 0U ? 1U : updateId + 1U;
@@ -338,7 +345,14 @@ void ReplicationServer::BuildUpdates(std::uint64_t client, ClientState& state, s
         }
         const std::size_t entrySize = kEntryHeaderBytes + MaskedSize(*components_, changed);
         if (kStateHeaderBytes + entrySize > config_.maxUpdateBytes) {
-            continue; // cannot fit in a message at all; the configuration is too small for this entity
+            for (std::size_t index = 0U; index < components_->Count(); ++index) {
+                if ((changed & (1U << index)) == 0U) continue;
+                char detail[160]{};
+                std::snprintf(detail, sizeof(detail), "entity=%u component=%s bytes=%zu limit=%zu", id,
+                    components_->At(index).Name().c_str(), components_->At(index).EncodedSize(), config_.maxUpdateBytes);
+                host_->Diagnostics().Report(DiagCode::OversizeRecord, detail);
+            }
+            continue;
         }
         if (kStateHeaderBytes + body.size() + entrySize > config_.maxUpdateBytes || count == kMaxEntriesPerState) {
             if (!flush()) {
@@ -432,6 +446,7 @@ void ReplicationServer::HandleMessage(std::uint64_t client, std::uint8_t channel
     ClientState& state = found->second;
     if (data.empty()) {
         ++stats_.rejectedMalformed;
+        host_->Diagnostics().Report(DiagCode::RpcRejected, "rejectedMalformed");
         return;
     }
     switch (data[0]) {
@@ -441,8 +456,10 @@ void ReplicationServer::HandleMessage(std::uint64_t client, std::uint8_t channel
         const std::uint64_t rpc = reader.U64();
         if (channel != kReliableChannel || !reader.Ok() || reader.Remaining() != 0U) {
             ++stats_.rejectedMalformed;
+            host_->Diagnostics().Report(DiagCode::RpcRejected, "rejectedMalformed");
         } else if (replication != components_->Fingerprint() || rpc != rpcs_->Fingerprint()) {
             ++stats_.helloMismatch;
+            host_->Diagnostics().Report(DiagCode::RpcRejected, "helloMismatch");
             host_->Disconnect(client);
         } else {
             state.ready = true;
@@ -452,8 +469,10 @@ void ReplicationServer::HandleMessage(std::uint64_t client, std::uint8_t channel
     case kMsgAck:
         if (channel != kUnreliableChannel) {
             ++stats_.rejectedMalformed;
+            host_->Diagnostics().Report(DiagCode::RpcRejected, "rejectedMalformed");
         } else if (!state.ready) {
             ++stats_.rejectedNotReady;
+            host_->Diagnostics().Report(DiagCode::RpcRejected, "rejectedNotReady");
         } else {
             HandleAck(state, data);
         }
@@ -463,8 +482,10 @@ void ReplicationServer::HandleMessage(std::uint64_t client, std::uint8_t channel
         const bool reliable = data[0] == kMsgRpc;
         if (channel != (reliable ? kReliableChannel : kUnreliableChannel)) {
             ++stats_.rpcRejectedMalformed;
+            host_->Diagnostics().Report(DiagCode::RpcRejected, "rpcRejectedMalformed");
         } else if (!state.ready) {
             ++stats_.rejectedNotReady;
+            host_->Diagnostics().Report(DiagCode::RpcRejected, "rejectedNotReady");
         } else {
             HandleRpc(client, channel, reliable, data, nowMilliseconds);
         }
@@ -472,6 +493,7 @@ void ReplicationServer::HandleMessage(std::uint64_t client, std::uint8_t channel
     }
     default:
         ++stats_.rejectedMalformed;
+        host_->Diagnostics().Report(DiagCode::RpcRejected, "rejectedMalformed");
         break;
     }
 }
@@ -482,6 +504,7 @@ void ReplicationServer::HandleAck(ClientState& state, std::span<const std::uint8
     const std::uint32_t bits = reader.U32();
     if (!reader.Ok() || reader.Remaining() != 0U) {
         ++stats_.rejectedMalformed;
+        host_->Diagnostics().Report(DiagCode::RpcRejected, "rejectedMalformed");
         return;
     }
     ++stats_.acksReceived;
@@ -531,21 +554,26 @@ void ReplicationServer::HandleRpc(std::uint64_t client, std::uint8_t, bool relia
         break;
     case RpcStatus::WrongDirection:
         ++stats_.rpcRejectedDirection;
+        host_->Diagnostics().Report(DiagCode::RpcRejected, "rpcRejectedDirection");
         return;
     case RpcStatus::BadArguments:
         ++stats_.rpcRejectedArguments;
+        host_->Diagnostics().Report(DiagCode::RpcRejected, "rpcRejectedArguments");
         return;
     default:
         ++stats_.rpcRejectedMalformed;
+        host_->Diagnostics().Report(DiagCode::RpcRejected, "rpcRejectedMalformed");
         return;
     }
     const RpcDefinition* definition = rpcs_->Find(id);
     if (definition == nullptr || definition->reliable != reliable) {
         ++stats_.rpcRejectedMalformed;
+        host_->Diagnostics().Report(DiagCode::RpcRejected, "rpcRejectedMalformed");
         return;
     }
     if (!limiter_.Allow(client, id, definition->maxCallsPerSecond, nowMilliseconds)) {
         ++stats_.rpcRejectedRate;
+        host_->Diagnostics().Report(DiagCode::RpcRejected, "rpcRejectedRate");
         return;
     }
     if (definition->ownerArg >= 0) {
@@ -553,12 +581,14 @@ void ReplicationServer::HandleRpc(std::uint64_t client, std::uint8_t, bool relia
         const auto replicated = entities_.find(target);
         if (replicated == entities_.end() || replicated->second.owner != client) {
             ++stats_.rpcRejectedPermission;
+            host_->Diagnostics().Report(DiagCode::RpcRejected, "rpcRejectedPermission");
             return;
         }
     }
     const auto handler = handlers_.find(id);
     if (handler == handlers_.end()) {
         ++stats_.rpcNoHandler;
+        host_->Diagnostics().Report(DiagCode::RpcRejected, "rpcNoHandler");
         return;
     }
     try {
@@ -566,8 +596,10 @@ void ReplicationServer::HandleRpc(std::uint64_t client, std::uint8_t, bool relia
         ++stats_.rpcDispatched;
     } catch (const std::exception&) {
         ++stats_.rpcHandlerErrors;
+        host_->Diagnostics().Report(DiagCode::RpcRejected, "rpcHandlerErrors");
     } catch (...) {
         ++stats_.rpcHandlerErrors;
+        host_->Diagnostics().Report(DiagCode::RpcRejected, "rpcHandlerErrors");
     }
 }
 
@@ -752,6 +784,7 @@ void ReplicationClient::HandleSpawn(std::span<const std::uint8_t> data) {
     }
     if (replicas_.size() >= config_.maxEntities) {
         ++stats_.rejectedLimit;
+        diagnostics_.Report(DiagCode::EntityLimit, "replica entity limit reached");
         return;
     }
     const kb::ecs::Entity entity = world_->CreateEntity();

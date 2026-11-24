@@ -48,6 +48,10 @@ using kb::network::ScriptRpcValue;
     case DisconnectReason::ConnectTimeout: return "connect-timeout";
     case DisconnectReason::Replaced: return "replaced";
     case DisconnectReason::Error: return "error";
+    case DisconnectReason::VersionMismatch: return "version-mismatch";
+    case DisconnectReason::ContentMismatch: return "content-mismatch";
+    case DisconnectReason::OutdatedClient: return "outdated-client";
+    case DisconnectReason::ServerFull: return "server-full";
     case DisconnectReason::None: break;
     }
     return "none";
