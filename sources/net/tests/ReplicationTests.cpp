@@ -2,6 +2,21 @@
 // perfect and on a bad network, permissions, relevance, hostile messages.
 
 #include "kb/net/Prediction.hpp"
+#include "kb/net/ByteIO.hpp"
+#include "kb/net/SceneReplication.hpp"
+#include "kb/net/ScriptBridge.hpp"
+#include "engine/scene/TransformComponent.hpp"
+#include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneDocumentService.hpp"
+#include "engine/scene/CombatantComponent.hpp"
+#include "engine/scene/SceneAssets.hpp"
+#include "kb/net/ProjectScene.hpp"
+#include <fstream>
+#include <filesystem>
+#include "engine/ecs/QueryFilter.hpp"
 #include "kb/net/Replication.hpp"
 #if defined(KB_NET_WEBRTC)
 #include "kb/net/WebRtcTransport.hpp"
@@ -136,6 +151,8 @@ struct Rig {
         keys.Set(2U, MakeKey(2U));
         keys.Set(3U, MakeKey(3U));
         HostConfig hostConfig;
+        hostConfig.maxConnectsPerSecondPerAddress = 1024U;
+        hostConfig.maxSessionsPerAddress = 64U;
         host = std::make_unique<Host>(*hostPort, hostConfig, keys);
         world = std::make_unique<kb::ecs::World>();
         server = std::make_unique<ReplicationServer>(*host, *world, *components, *rpcs, config);
@@ -166,6 +183,7 @@ struct Rig {
 
     Peer& AddPeer(std::uint64_t id, std::uint16_t port, std::uint64_t now) {
         auto peer = std::make_unique<Peer>();
+        keys.Set(id, MakeKey(static_cast<std::uint8_t>(id)));
         peer->id = id;
         peer->port = MakePort(port);
         ClientConfig clientConfig;
@@ -209,7 +227,7 @@ struct Rig {
         }
         for (auto& peer : peers) {
             if (peer->client != nullptr) {
-                peer->replication->Flush();
+                if (flushAcks) peer->replication->Flush(now);
             }
         }
     }
@@ -238,7 +256,7 @@ struct Rig {
     mutable std::string why;
     [[nodiscard]] bool Converged(const Peer& peer, const std::function<bool(NetworkId)>& visible = nullptr) const {
         std::size_t expected = 0U;
-        for (NetworkId id = 1U; id < 1000U; ++id) {
+        for (const auto id : server->NetworkIds()) {
             const kb::ecs::Entity serverEntity = server->EntityOf(id);
             if (!serverEntity.IsValid() || !world->IsAlive(serverEntity)) {
                 continue; // not replicated, or destroyed and not yet noticed by the next Tick
@@ -260,7 +278,7 @@ struct Rig {
                 { why = "check 3 (peer " + std::to_string(peer.id) + ")"; return false; }
             }
             if (sp != nullptr && (std::fabs(sp->x - cp->x) > kPositionTolerance || std::fabs(sp->y - cp->y) > kPositionTolerance || std::fabs(sp->z - cp->z) > kPositionTolerance)) {
-                { why = "check 4 (peer " + std::to_string(peer.id) + ")"; return false; }
+                { why = "position mismatch peer=" + std::to_string(peer.id) + " id=" + std::to_string(id) + " server=" + std::to_string(sp->x) + " replica=" + std::to_string(cp->x); return false; }
             }
             const Health* sh = world->TryGet<Health>(serverEntity);
             const Health* ch = peer.world->TryGet<Health>(replica);
@@ -292,16 +310,27 @@ struct Rig {
 
     kb::ecs::Entity Spawn(float x, float y, std::uint64_t owner, NetworkId* id = nullptr) {
         const kb::ecs::Entity entity = world->CreateEntity();
-        world->Set(entity, Position{ x, y, 0.0F });
+        Move(entity, Position{ x, y, 0.0F });
         world->Set(entity, Health{});
         world->Set(entity, Facing{ 90.0F });
         world->Set(entity, Secret{ 7 });
-        const NetworkId networkId = server->Replicate(entity, owner);
+        Require(server->Replicate(entity, owner) == ReplicateResult::Ok, "entity was not replicated");
+        const NetworkId networkId = server->NetworkIdOf(entity);
         Require(networkId != 0U, "an entity could not be replicated");
         if (id != nullptr) {
             *id = networkId;
         }
         return entity;
+    }
+
+    void Move(kb::ecs::Entity entity, Position position) {
+        world->Set(entity, position);
+        if (config_.visibilityRadius > 0.0F) {
+            kb::scene::TransformComponent transform;
+            transform.localPosition = transform.worldPosition = { position.x, position.y, position.z };
+            transform.worldDirty = false;
+            world->Set(entity, transform);
+        }
     }
 
     struct Captured {
@@ -311,6 +340,7 @@ struct Rig {
     };
 
     LoopbackNetwork network;
+    bool flushAcks = true;
     ReplicationConfig config_;
     bool webRtc_ = false;
 #if defined(KB_NET_WEBRTC)
@@ -425,7 +455,7 @@ void TestRpcRegistryAndWire() {
     const RpcDefinition* setTarget = rpcs->FindByName("SetTarget", id);
     Require(setTarget != nullptr && id == 1U && rpcs->Find(id) == setTarget && rpcs->Find(0U) == nullptr && rpcs->Find(99U) == nullptr, "lookup is wrong");
 
-    const std::vector<RpcValue> good{ std::uint32_t{ 7U }, 12.5F, -3.0F };
+    const std::vector<RpcValue> good{ MakeNetworkId(7U, 123U), 12.5F, -3.0F };
     std::vector<std::uint8_t> wire;
     Require(EncodeRpc(*rpcs, id, good, wire) == RpcStatus::Ok, "encoding failed");
     std::uint16_t decodedId = 0U;
@@ -442,10 +472,10 @@ void TestRpcRegistryAndWire() {
 
     // Arguments out of range, of the wrong type or count, and strings that are too long.
     std::vector<std::uint8_t> sink;
-    Require(EncodeRpc(*rpcs, id, std::vector<RpcValue>{ std::uint32_t{ 0U }, 1.0F, 1.0F }, sink) == RpcStatus::BadArguments, "network id 0 was accepted");
-    Require(EncodeRpc(*rpcs, id, std::vector<RpcValue>{ std::uint32_t{ 1U }, 1000.0F, 1.0F }, sink) == RpcStatus::BadArguments, "a float out of range was accepted");
-    Require(EncodeRpc(*rpcs, id, std::vector<RpcValue>{ std::uint32_t{ 1U }, std::nanf(""), 1.0F }, sink) == RpcStatus::BadArguments, "NaN was accepted");
-    Require(EncodeRpc(*rpcs, id, std::vector<RpcValue>{ std::uint32_t{ 1U }, 1.0F }, sink) == RpcStatus::BadArguments, "a missing argument was accepted");
+    Require(EncodeRpc(*rpcs, id, std::vector<RpcValue>{ NetworkId{ 0U }, 1.0F, 1.0F }, sink) == RpcStatus::BadArguments, "network id 0 was accepted");
+    Require(EncodeRpc(*rpcs, id, std::vector<RpcValue>{ NetworkId{ 1U }, 1000.0F, 1.0F }, sink) == RpcStatus::BadArguments, "a float out of range was accepted");
+    Require(EncodeRpc(*rpcs, id, std::vector<RpcValue>{ NetworkId{ 1U }, std::nanf(""), 1.0F }, sink) == RpcStatus::BadArguments, "NaN was accepted");
+    Require(EncodeRpc(*rpcs, id, std::vector<RpcValue>{ NetworkId{ 1U }, 1.0F }, sink) == RpcStatus::BadArguments, "a missing argument was accepted");
     Require(EncodeRpc(*rpcs, id, std::vector<RpcValue>{ std::int32_t{ 1 }, 1.0F, 1.0F }, sink) == RpcStatus::BadArguments, "a wrong type was accepted");
     Require(EncodeRpc(*rpcs, chatId, std::vector<RpcValue>{ std::string(33U, 'x') }, sink) == RpcStatus::BadArguments, "a long string was accepted");
     Require(EncodeRpc(*rpcs, 77U, std::vector<RpcValue>{}, sink) == RpcStatus::UnknownRpc, "an unknown id was accepted");
@@ -460,7 +490,7 @@ void TestRpcRegistryAndWire() {
     trailing.push_back(0U);
     Require(DecodeRpc(*rpcs, trailing, RpcDirection::ClientToServer, decodedId, decoded) == RpcStatus::Malformed, "trailing bytes were accepted");
     std::vector<std::uint8_t> nan = wire;
-    nan[6U] = 0x00U; nan[7U] = 0x00U; nan[8U] = 0xC0U; nan[9U] = 0x7FU; // the first float becomes a NaN
+    nan[10U] = 0x00U; nan[11U] = 0x00U; nan[12U] = 0xC0U; nan[13U] = 0x7FU; // the first float becomes a NaN
     Require(DecodeRpc(*rpcs, nan, RpcDirection::ClientToServer, decodedId, decoded) == RpcStatus::BadArguments, "a NaN on the wire was accepted");
     std::vector<std::uint8_t> longString = chat;
     longString[2U] = 0xFFU; longString[3U] = 0xFFU; // declares 65535 bytes
@@ -653,7 +683,7 @@ void TestRpcAndPermissions() {
     });
     // Heal changes server state: only the owner of the entity may do it.
     rig.server->SetRpcHandler("Heal", [&](std::uint64_t, std::span<const RpcValue> args) {
-        const kb::ecs::Entity target = rig.server->EntityOf(std::get<std::uint32_t>(args[0]));
+        const kb::ecs::Entity target = rig.server->EntityOf(std::get<NetworkId>(args[0]));
         Health health = *rig.world->TryGet<Health>(target);
         health.hp = std::min<std::uint32_t>(1000U, health.hp + std::get<std::uint32_t>(args[1]));
         rig.world->Set(target, health);
@@ -686,7 +716,7 @@ void TestRpcAndPermissions() {
     // Without permission: bob names alice's entity. Nothing is called, the refusal is counted.
     const std::size_t before = calls.server.size();
     Require(bob.replication->CallRpc("SetTarget", std::vector<RpcValue>{ aliceId, 1.0F, 1.0F }) == RpcStatus::Ok, "bob's call could not be sent");
-    Require(bob.replication->CallRpc("SetTarget", std::vector<RpcValue>{ std::uint32_t{ 999U }, 1.0F, 1.0F }) == RpcStatus::Ok, "bob's call on a missing entity could not be sent");
+    Require(bob.replication->CallRpc("SetTarget", std::vector<RpcValue>{ NetworkId{ 999U }, 1.0F, 1.0F }) == RpcStatus::Ok, "bob's call on a missing entity could not be sent");
     now = rig.Run(now, 5000U, [&] { return rig.server->Stats().rpcRejectedPermission >= 2U; });
     Require(rig.server->Stats().rpcRejectedPermission >= 2U && calls.server.size() == before, "a call without permission reached the handler");
 
@@ -771,9 +801,10 @@ void RunPredictionScenario(bool wall) {
     const kb::ecs::Entity entity = rig.world->CreateEntity();
     rig.world->Set(entity, Position{});
     rig.world->Set(entity, InputAck{});
-    const NetworkId id = rig.server->Replicate(entity, 1U);
+    Require(rig.server->Replicate(entity, 1U) == ReplicateResult::Ok, "entity was not replicated");
+    const NetworkId id = rig.server->NetworkIdOf(entity);
     rig.server->SetRpcHandler("Input", [&](std::uint64_t, std::span<const RpcValue> args) {
-        const kb::ecs::Entity target = rig.server->EntityOf(std::get<std::uint32_t>(args[0]));
+        const kb::ecs::Entity target = rig.server->EntityOf(std::get<NetworkId>(args[0]));
         const Position current = *rig.world->TryGet<Position>(target);
         const Vec2 next = StepMove(Vec2{ current.x, current.y }, MoveInput{ std::get<float>(args[2]), std::get<float>(args[3]) }, kDt, wall);
         rig.world->Set(target, Position{ next.x, next.y, 0.0F });
@@ -887,74 +918,584 @@ void TestRegistryMismatchIsRefused() {
 }
 
 void TestRelevance() {
-    Rig rig;
+    ReplicationConfig config;
+    config.visibilityRadius = 100.0F;
+    config.gridPlane = GridPlane::XY;
+    Rig rig({}, config);
     rig.AddPeer(1U, 9101U, 0U);
     std::vector<kb::ecs::Entity> entities;
     std::vector<NetworkId> ids;
     for (int index = 0; index < 3; ++index) {
         NetworkId id = 0U;
-        entities.push_back(rig.Spawn(static_cast<float>(index) * 200.0F, 0.0F, 0U, &id));
+        entities.push_back(rig.Spawn(static_cast<float>(index) * 200.0F, 0.0F, index == 0 ? 1U : 0U, &id));
         ids.push_back(id);
     }
     // The viewer stands at x = 0 and sees 100 units; the entities are at 0, 200 and 400.
-    RadiusRelevance relevance(
-        100.0F, 1.2F, [](std::uint64_t, float& x, float& y) { x = 0.0F; y = 0.0F; return true; },
-        [&rig](kb::ecs::Entity entity, float& x, float& y) {
-            const Position* position = rig.world->TryGet<Position>(entity);
-            if (position == nullptr) {
-                return false;
-            }
-            x = position->x;
-            y = position->y;
-            return true;
-        });
-    rig.server->SetRelevance(&relevance);
     const auto visibleNow = [&](NetworkId id) { return id == ids[0]; };
     std::uint64_t now = rig.Run(0U, 10'000U, [&] { return rig.AllReady() && rig.Converged(*rig.peers[0], visibleNow); });
     Require(rig.Converged(*rig.peers[0], visibleNow) && rig.peers[0]->replication->ReplicaCount() == 1U, "only the near entity should be replicated");
 
     // Entity 2 walks in (to x = 90) and then to the edge (x = 110, inside the hysteresis band): it stays.
-    rig.world->Set(entities[1], Position{ 90.0F, 0.0F, 0.0F });
+    rig.Move(entities[1], Position{ 90.0F, 0.0F, 0.0F });
     bool nearVisible = true;
     const auto visibleTwo = [&](NetworkId id) { return id == ids[0] || id == ids[1]; };
     now = rig.Run(now, 10'000U, [&] { return rig.Converged(*rig.peers[0], visibleTwo); });
     Require(rig.Converged(*rig.peers[0], visibleTwo), "an entity that came into range was not replicated");
     const std::uint64_t spawnsBefore = rig.peers[0]->replication->Stats().spawnsApplied;
     for (int step = 0; step < 20; ++step) {
-        rig.world->Set(entities[1], Position{ step % 2 == 0 ? 110.0F : 105.0F, 0.0F, 0.0F });
+        rig.Move(entities[1], Position{ step % 2 == 0 ? 110.0F : 105.0F, 0.0F, 0.0F });
         now = rig.Run(now, 60U, [] { return false; });
         nearVisible = nearVisible && rig.peers[0]->replication->Find(ids[1]).IsValid();
     }
     Require(nearVisible && rig.peers[0]->replication->Stats().despawnsApplied == 0U && rig.peers[0]->replication->Stats().spawnsApplied == spawnsBefore,
         "an entity at the edge flickered");
     // Out of the band it goes.
-    rig.world->Set(entities[1], Position{ 150.0F, 0.0F, 0.0F });
+    rig.Move(entities[1], Position{ 150.0F, 0.0F, 0.0F });
     now = rig.Run(now, 10'000U, [&] { return rig.Converged(*rig.peers[0], visibleNow); });
     Require(rig.Converged(*rig.peers[0], visibleNow) && rig.peers[0]->replication->Stats().despawnsApplied == 1U, "an entity out of range was not despawned");
     Require(rig.server->ReplicatedCount() == 3U, "relevance removed an entity from the server");
 }
 
-void TestLimits() {
-    ReplicationConfig config;
-    config.maxEntities = 4U;
-    Rig rig({}, config);
-    rig.AddPeer(1U, 9101U, 0U);
-    for (int index = 0; index < 4; ++index) {
-        static_cast<void>(rig.Spawn(static_cast<float>(index), 0.0F, 0U));
-    }
-    const kb::ecs::Entity extra = rig.world->CreateEntity();
-    Require(rig.server->Replicate(extra) == 0U, "the entity limit was not enforced");
-    const kb::ecs::Entity first = rig.server->EntityOf(1U);
-    Require(rig.server->Replicate(first) == 0U, "an entity was replicated twice");
-    const kb::ecs::Entity dead = rig.world->CreateEntity();
-    rig.world->DestroyEntity(dead);
-    Require(rig.server->Replicate(dead) == 0U, "a dead entity was replicated");
-    rig.Run(0U, 10'000U, [&] { return rig.AllReady() && rig.AllConverged(); });
-    Require(rig.AllConverged(), "the limited set did not replicate");
+void ConfigureHealthAudience(Rig& rig, ReplicationAudience audience) {
+    rig.server.reset();
+    rig.components = std::make_unique<ReplicationRegistry>();
+    auto codec = std::make_unique<StructCodec<Health>>("Health");
+    codec->UInt(&Health::hp, 1000U).Bool(&Health::alive);
+    std::string error;
+    Require(rig.components->Add(std::move(codec), audience, error), error);
+    rig.server = std::make_unique<ReplicationServer>(*rig.host, *rig.world, *rig.components, *rig.rpcs, rig.config_);
+}
 
-    // A bandwidth limit per tick spreads a big change over several ticks and still converges.
+kb::network::ReplicationDeclarations HealthDeclarations() {
+    kb::network::ReplicationDeclarations declarations;
+    declarations.fields.push_back({std::string(kb::scene::CombatantComponent::StableId), "health", ReplicationAudience::Owner, 0.0F, 100.0F, 8U});
+    return declarations;
+}
+
+void TestDeclarationsRoundTrip() {
+    auto declarations = HealthDeclarations();
+    declarations.fields.push_back({std::string(kb::scene::CombatantComponent::StableId), "maximumHealth", ReplicationAudience::Everyone, 0.0F, 1000.0F, 12U});
+    declarations.variables.push_back({"score", kb::network::ReplicatedVariableDecl::Type::Int, 0.0F, 10000.0F, 0U, ReplicationAudience::Everyone});
+    declarations.variables.push_back({"ready", kb::network::ReplicatedVariableDecl::Type::Bool, 0.0F, 1.0F, 1U, ReplicationAudience::InitialOnly});
+    const auto text = kb::network::WriteReplicationDeclarations(declarations);
+    kb::network::ReplicationDeclarations parsed;
+    std::string error;
+    Require(kb::network::ParseReplicationDeclarations(text, parsed, error), error);
+    Require(kb::network::WriteReplicationDeclarations(parsed) == text, "declarations round trip changed the canonical text");
+    kb::scene::Scene scene;
+    auto first = BuildReplicationRegistry(scene.Runtime().EcsWorld(), declarations, 1000.0F, error);
+    std::reverse(declarations.fields.begin(), declarations.fields.end());
+    auto second = BuildReplicationRegistry(scene.Runtime().EcsWorld(), declarations, 1000.0F, error);
+    Require(first && second && first->Fingerprint() == second->Fingerprint(), "field order changed the registry fingerprint");
+}
+
+void TestDeclarationsRejectBadRange() {
+    kb::scene::Scene scene;
+    std::string error;
+    const auto reject = [&](auto mutate, std::string_view name) {
+        auto declarations = HealthDeclarations();
+        mutate(declarations);
+        Require(!BuildReplicationRegistry(scene.Runtime().EcsWorld(), declarations, 1000.0F, error), "invalid declaration was accepted");
+        Require(error.find(name) != std::string::npos, "declaration error omitted the field: " + error);
+    };
+    reject([](auto& d) { d.fields[0].minimum = 100.0F; }, "health");
+    reject([](auto& d) { d.fields[0].bits = 25U; }, "health");
+    reject([](auto& d) { d.fields[0].bits = 0U; }, "health");
+    reject([](auto& d) { d.fields.push_back(d.fields[0]); }, "health");
+    reject([](auto& d) { d.fields[0].component = "missing.component"; }, "missing.component.health");
+    reject([](auto& d) { d.fields[0].field = "missingField"; }, "missingField");
+    reject([](auto& d) { d.variables.push_back({"score", kb::network::ReplicatedVariableDecl::Type::Int, -16777218.0F, 100.0F}); }, "score");
+    kb::network::ReplicationDeclarations parsed;
+    auto tooMany = HealthDeclarations();
+    for (int i = 0; i < 30; ++i) tooMany.fields.push_back({"component" + std::to_string(i), "field"});
+    Require(!kb::network::ParseReplicationDeclarations(kb::network::WriteReplicationDeclarations(tooMany), parsed, error) && error.find("29 groups") != std::string::npos, "group limit was not enforced");
+}
+
+void TestUnknownFieldIsRefusedAtLoad() {
+    const auto root = std::filesystem::temp_directory_path() / "kb_replication_config_test";
+    std::filesystem::create_directories(root / "Config");
+    std::filesystem::create_directories(root / "Content");
+    auto declarations = HealthDeclarations();
+    declarations.fields[0].field = "unknownHealth";
+    { std::ofstream output(root / "Config" / "Replication.json"); output << kb::network::WriteReplicationDeclarations(declarations); }
+    kb::scene::Scene scene;
+    Require(scene.Assets().Manager().Mounts().Mount("Game", root / "Content"), "test assets mount failed");
+    std::string error;
+    Require(!LoadReplicationDeclarations(scene, declarations, error) && error.find("unknownHealth") != std::string::npos, "unknown field was not refused at load: " + error);
+    std::filesystem::remove(root / "Config" / "Replication.json");
+    Require(LoadReplicationDeclarations(scene, declarations, error) && declarations.fields.empty(), "missing file did not use transform-only declarations");
+}
+
+void TestClientWithDifferentDeclarationsIsRefused() {
+    kb::scene::Scene scene;
+    Rig rig;
+    std::string error;
+    rig.server.reset();
+    rig.components = BuildReplicationRegistry(scene.Runtime().EcsWorld(), HealthDeclarations(), 1000.0F, error);
+    Require(rig.components != nullptr, error);
+    rig.server = std::make_unique<ReplicationServer>(*rig.host, *rig.world, *rig.components, *rig.rpcs);
+    auto& peer = rig.AddPeer(1U, 9101U, 0U);
+    auto different = HealthDeclarations();
+    different.fields[0].bits = 9U;
+    auto clientComponents = BuildReplicationRegistry(scene.Runtime().EcsWorld(), different, 1000.0F, error);
+    peer.replication = std::make_unique<ReplicationClient>(*peer.client, *peer.world, *clientComponents, *rig.rpcs);
+    rig.Run(0U, 1000U, [] { return false; });
+    Require(!peer.replication->Ready() && rig.server->ReadyClients() == 0U, "different declarations were accepted");
+    bool named = false;
+    for (const auto& diagnostic : peer.replication->Diagnostics().Entries()) named |= std::string_view(diagnostic.detail).find("helloMismatch") != std::string::npos;
+    Require(named, "declaration mismatch was not named");
+}
+
+void TestReflectedFieldsRoundTrip() {
+    kb::scene::Scene scene;
+    Rig rig;
+    std::string error;
+    rig.server.reset();
+    rig.components = BuildReplicationRegistry(scene.Runtime().EcsWorld(), HealthDeclarations(), 1000.0F, error);
+    Require(rig.components != nullptr, error);
+    rig.server = std::make_unique<ReplicationServer>(*rig.host, *rig.world, *rig.components, *rig.rpcs);
+    auto& owner = rig.AddPeer(1U, 9101U, 0U);
+    auto& other = rig.AddPeer(2U, 9102U, 0U);
+    const auto entity = rig.world->CreateEntity();
+    kb::scene::CombatantComponent combatant;
+    combatant.health = 37.0F;
+    rig.world->Set(entity, combatant);
+    Require(rig.server->Replicate(entity, 1U) == ReplicateResult::Ok, "combatant not replicated");
+    const auto id = rig.server->NetworkIdOf(entity);
+    rig.Run(0U, 1000U, [] { return false; });
+    const auto replica = owner.replication->Find(id);
+    Require(replica.IsValid(), "combatant replica missing; ready=" + std::to_string(owner.replication->Ready()) + " malformed=" + std::to_string(owner.replication->Stats().rejectedMalformed));
+    const auto* value = owner.world->TryGet<kb::scene::CombatantComponent>(replica);
+    Require(value && std::abs(value->health - 37.0F) <= 0.4F, "reflected health did not round trip");
+    Require(!other.world->Has<kb::scene::CombatantComponent>(other.replication->Find(id)), "owner-only native component leaked");
+    combatant.health = 62.0F;
+    rig.world->Set(entity, combatant);
+    rig.Run(1000U, 1000U, [] { return false; });
+    Require(std::abs(owner.world->TryGet<kb::scene::CombatantComponent>(replica)->health - 62.0F) <= 0.4F, "reflected health change was not observed");
+}
+
+void TestReflectedCodecClampsOutOfRange() {
+    kb::scene::Scene scene;
+    auto& world = scene.Runtime().EcsWorld();
+    std::string error;
+    auto registry = BuildReplicationRegistry(world, HealthDeclarations(), 1000.0F, error);
+    Require(registry != nullptr, error);
+    const auto entity = world.CreateEntity();
+    const auto replica = world.CreateEntity();
+    for (const float health : {-50.0F, 150.0F}) {
+        kb::scene::CombatantComponent component;
+        component.health = health;
+        world.Set(entity, component);
+        std::vector<std::uint8_t> bytes(registry->At(3).EncodedSize());
+        Require(registry->At(3).Capture(world, entity, bytes), "native field capture failed: " + registry->At(3).Describe());
+        Require(registry->At(3).Validate(bytes), "native field validation failed");
+        registry->At(3).Apply(world, replica, bytes);
+        Require(world.TryGet<kb::scene::CombatantComponent>(replica)->health == std::clamp(health, 0.0F, 100.0F), "native field did not clamp");
+    }
+}
+
+void CheckAudience(ReplicationAudience audience, bool transfer = false) {
+    Rig rig;
+    ConfigureHealthAudience(rig, audience);
+    for (std::uint64_t id = 1; id <= 3U; ++id) rig.AddPeer(id, static_cast<std::uint16_t>(9100U + id), 0U);
+    NetworkId id;
+    const auto entity = rig.Spawn(0.0F, 0.0F, 1U, &id);
+    rig.world->Set(entity, Health{37U, false});
+    auto now = rig.Run(0U, 1000U, [] { return false; });
+    Require(rig.AllReady(), "audience clients did not connect");
+    const auto check = [&](std::uint64_t owner, std::uint32_t value) {
+        for (auto& peer : rig.peers) {
+            const auto replica = peer->replication->Find(id);
+            Require(replica.IsValid(), "audience test lost an entity");
+            const auto* health = peer->world->TryGet<Health>(replica);
+            const bool allowed = audience == ReplicationAudience::Everyone || audience == ReplicationAudience::InitialOnly ||
+                (audience == ReplicationAudience::Owner ? peer->id == owner : peer->id != owner);
+            Require(allowed ? health != nullptr && health->hp == value : health == nullptr, "a component reached the wrong audience or retained revoked data");
+        }
+    };
+    check(1U, 37U);
+    if (transfer) {
+        Require(rig.server->SetOwner(id, 2U), "ownership transfer failed");
+        now = rig.Run(now, 1000U, [] { return false; });
+        check(2U, 37U);
+    }
+    rig.world->Set(entity, Health{88U, false});
+    rig.Run(now, 1000U, [] { return false; });
+    check(transfer ? 2U : 1U, audience == ReplicationAudience::InitialOnly ? 37U : 88U);
+    if (audience == ReplicationAudience::InitialOnly) Require(rig.server->Stats().stateMessagesSent == 0U, "InitialOnly was sent in state updates");
+}
+void TestOwnerOnlyGroupReachesOnlyOwner() { CheckAudience(ReplicationAudience::Owner); }
+void TestOthersGroupSkipsOwner() { CheckAudience(ReplicationAudience::Others); }
+void TestOwnershipChangeMovesOwnerOnlyData() { CheckAudience(ReplicationAudience::Owner, true); CheckAudience(ReplicationAudience::Others, true); }
+void TestInitialOnlyGroupIsSentOnce() { CheckAudience(ReplicationAudience::InitialOnly); }
+
+void TestRegistryFingerprintCoversAudience() {
+    auto foreign = std::make_unique<ReplicationRegistry>();
+    auto codec = std::make_unique<StructCodec<Health>>("Health");
+    codec->UInt(&Health::hp, 1000U).Bool(&Health::alive);
+    std::string error;
+    Require(foreign->Add(std::move(codec), ReplicationAudience::Everyone, error), error);
+    Rig rig;
+    ConfigureHealthAudience(rig, ReplicationAudience::Owner);
+    Require(foreign->Fingerprint() != rig.components->Fingerprint(), "audience is absent from the registry fingerprint");
+    auto& peer = rig.AddPeer(1U, 9101U, 0U);
+    peer.replication = std::make_unique<ReplicationClient>(*peer.client, *peer.world, *foreign, *rig.rpcs);
+    rig.Run(0U, 2000U, [] { return false; });
+    Require(peer.replication->Stats().helloMismatch == 1U && !peer.replication->Ready(), "different audiences were accepted");
+    bool named = false;
+    for (const auto& entry : peer.replication->Diagnostics().Entries()) named = named || std::string_view(entry.detail) == "helloMismatch";
+    Require(named, "audience mismatch was not named");
+}
+
+void TestThirtyTwoGroupsAndRemovalRoundTrip() {
+    Rig rig;
+    rig.server.reset();
+    rig.components = std::make_unique<ReplicationRegistry>();
+    std::string error;
+    for (std::size_t index = 0; index < 32U; ++index) {
+        auto codec = std::make_unique<StructCodec<Health>>("Health" + std::to_string(index));
+        codec->UInt(&Health::hp, 1000U);
+        Require(rig.components->Add(std::move(codec), error), error);
+    }
+    rig.server = std::make_unique<ReplicationServer>(*rig.host, *rig.world, *rig.components, *rig.rpcs);
+    auto& peer = rig.AddPeer(1U, 9101U, 0U);
+    NetworkId id;
+    const auto entity = rig.Spawn(0.0F, 0.0F, 0U, &id);
+    auto now = rig.Run(0U, 1000U, [] { return false; });
+    rig.world->Set(entity, Health{77U, false});
+    now = rig.Run(now, 1000U, [] { return false; });
+    const auto replica = peer.replication->Find(id);
+    Require(replica.IsValid() && peer.world->TryGet<Health>(replica)->hp == 77U, "32-bit change mask did not round trip");
+    rig.world->Remove<Health>(entity);
+    rig.Run(now, 1000U, [] { return false; });
+    Require(!peer.world->Has<Health>(replica), "32-bit removal mask did not round trip");
+}
+
+void TestSceneWritesMarkReplicationDirty() {
+    kb::scene::Scene scene;
+    static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{.name = "Sample"}));
+    const auto path = std::filesystem::temp_directory_path() / ("21kb_network_scene_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".21kbscene");
+    Require(kb::scene::SceneDocumentService::Save(scene, path, "Sample") && kb::scene::SceneDocumentService::LoadFileIntoScene(scene, path), "scene round trip failed");
+    std::filesystem::remove(path);
+    auto& world = scene.Runtime().EcsWorld();
+    kb::ecs::Entity loaded;
+    world.ForEach<kb::scene::TransformComponent>([](kb::ecs::Entity entity, const kb::scene::TransformComponent&, void* context) { *static_cast<kb::ecs::Entity*>(context) = entity; }, &loaded);
+    std::size_t appeared = 0U;
+    const auto observer = world.ObserveComponent<kb::scene::TransformComponent>(kb::ecs::ComponentEventKind::Added,
+        [](kb::ecs::Entity, kb::ecs::ComponentEventKind, const kb::scene::TransformComponent*, void* context) { ++*static_cast<std::size_t*>(context); }, &appeared, true);
+    std::printf("  loaded scene: %zu existing transforms yielded, mirror=%d\n", appeared, world.MirrorsValueWrites(world.Component<kb::scene::TransformComponent>()));
+    world.DestroyObserver(observer);
+    LoopbackNetwork network;
+    auto port = network.CreateTransport(Endpoint::Loopback(9000));
+    StaticKeyTable keys;
+    Host host(*port, {}, keys);
+    std::string registryError;
+    auto components = BuildReplicationRegistry(world, {}, 1000.0F, registryError);
+    RpcRegistry rpcs;
+    ReplicationServer server(host, world, *components, rpcs);
+    ScriptNetworkRuntime runtime(ScriptNetworkRuntime::Role::Server, scene, {});
+    runtime.BindServer(server);
+    Require(server.Replicate(loaded) == ReplicateResult::Ok, "scene replication failed");
+    const auto before = server.Stats().capturedEntities;
+    auto transform = *scene.Transforms().TryGet(loaded);
+    transform.localPosition.x = 10.0F;
+    scene.Transforms().Set(loaded, transform);
+    server.Tick(1U, 0U);
+    Require(server.Stats().capturedEntities == before + 1U, "scene transform write did not mark replication dirty");
+}
+
+void TestTickCostScalesWithChangedNotTotal() {
+    Rig rig;
+    std::vector<kb::ecs::Entity> moving;
+    for (std::size_t index = 0; index < 100'100U; ++index) {
+        const auto entity = rig.Spawn(0.0F, 0.0F, 0U);
+        if (index < 100U) moving.push_back(entity);
+    }
+    rig.server->Tick(1U, 0U);
+    const auto capacity = rig.server->DirtyCapacity();
+    const auto before = rig.server->Stats().capturedEntities;
+    for (const auto entity : moving) {
+        rig.world->Set(entity, Position{1.0F, 2.0F, 3.0F});
+        rig.world->Set(entity, Position{4.0F, 5.0F, 6.0F});
+    }
+    rig.server->Tick(2U, 33U);
+    const auto captured = rig.server->Stats().capturedEntities - before;
+    Require(captured == 100U && captured <= 120U && rig.server->DirtyCapacity() == capacity, "dirty capture scanned unchanged objects, duplicated work, or grew its buffer");
+    rig.server->Tick(3U, 66U);
+    Require(rig.server->Stats().capturedEntities == before + captured, "a clean tick captured objects");
+    std::printf("  dirty capture: %llu of 100100 objects; capacity unchanged\n", static_cast<unsigned long long>(captured));
+}
+
+void TestRotationSmallestThreeRoundTrip() {
+    kb::ecs::World world;
+    const auto source = world.CreateEntity(), replica = world.CreateEntity();
+    SceneTransformCodec codec(1000.0F, TransformGroup::Rotation);
+    Require(codec.EncodedSize() == 4U, "rotation is not four bytes");
+    Random random{0xAA0123456789ULL};
+    float maximumError = 0.0F;
+    for (std::size_t i = 0; i < 10'000U; ++i) {
+        std::array<float, 4> q{};
+        float sum = 0;
+        for (auto& value : q) { value = static_cast<float>(static_cast<int>(random.Below(2'000'001U)) - 1'000'000) / 1'000'000.0F; sum += value * value; }
+        if (sum < 1.0e-8F) { --i; continue; }
+        for (auto& value : q) value /= std::sqrt(sum);
+        kb::scene::TransformComponent transform;
+        transform.localRotation = {q[0], q[1], q[2], q[3]};
+        world.Set(source, transform);
+        std::array<std::uint8_t, 4> bytes{};
+        Require(codec.Capture(world, source, bytes) && codec.Validate(bytes), "rotation capture failed");
+        codec.Apply(world, replica, bytes);
+        const auto& decoded = world.TryGet<kb::scene::TransformComponent>(replica)->localRotation;
+        const double dot = std::abs(static_cast<double>(q[0]) * decoded.x + static_cast<double>(q[1]) * decoded.y + static_cast<double>(q[2]) * decoded.z + static_cast<double>(q[3]) * decoded.w);
+        const double qLength = std::sqrt(static_cast<double>(q[0])*q[0] + static_cast<double>(q[1])*q[1] + static_cast<double>(q[2])*q[2] + static_cast<double>(q[3])*q[3]);
+        const double decodedLength = std::sqrt(static_cast<double>(decoded.x)*decoded.x + static_cast<double>(decoded.y)*decoded.y + static_cast<double>(decoded.z)*decoded.z + static_cast<double>(decoded.w)*decoded.w);
+        const auto angle = static_cast<float>(2.0 * std::acos(std::clamp(dot / (qLength * decodedLength), 0.0, 1.0)) * 180.0 / 3.141592653589793);
+        maximumError = std::max(maximumError, angle);
+    }
+    std::printf("  rotation: maximum error %.4f degrees over 10000 quaternions\n", maximumError);
+    Require(maximumError <= 0.2F, "rotation error exceeds 0.2 degrees");
+}
+
+void TestPositionOnlyChangeCostsSixBytes() {
+    Rig rig;
+    rig.server.reset();
+    std::string registryError;
+    rig.components = BuildReplicationRegistry(*rig.world, {}, 1000.0F, registryError);
+    rig.server = std::make_unique<ReplicationServer>(*rig.host, *rig.world, *rig.components, *rig.rpcs);
+    auto& peer = rig.AddPeer(1U, 9101U, 0U);
+    const auto entity = rig.world->CreateEntity();
+    rig.world->Set(entity, kb::scene::TransformComponent{});
+    Require(rig.server->Replicate(entity) == ReplicateResult::Ok, "transform was not replicated");
+    const auto id = rig.server->NetworkIdOf(entity);
+    auto now = rig.Run(0U, 3000U, [&] { return rig.AllReady() && peer.replication->Find(id).IsValid(); });
+    now = rig.Run(now, 200U, [] { return false; });
+    rig.capturedToClient.clear();
+    auto transform = *rig.world->TryGet<kb::scene::TransformComponent>(entity);
+    transform.localPosition.x = 123.0F;
+    rig.world->Set(entity, transform);
+    rig.Run(now, 500U, [] { return false; });
+    std::size_t messages = 0U;
+    for (const auto& message : rig.capturedToClient) {
+        if (message.data.empty() || message.data[0] != 0x10U) continue;
+        Require(message.data.size() == 11U + 8U + 6U, "position change did not cost header plus six bytes");
+        ByteReader reader(std::span<const std::uint8_t>(message.data).subspan(17U));
+        Require(reader.U16() == 1U, "unchanged rotation or scale was sent");
+        ++messages;
+    }
+    Require(messages > 0U, "no position state was sent");
+}
+
+void TestScaleSentOnceWhenUnchanged() {
+    Rig rig;
+    rig.server.reset();
+    std::string registryError;
+    rig.components = BuildReplicationRegistry(*rig.world, {}, 1000.0F, registryError);
+    rig.server = std::make_unique<ReplicationServer>(*rig.host, *rig.world, *rig.components, *rig.rpcs);
+    auto& peer = rig.AddPeer(1U, 9101U, 0U);
+    const auto entity = rig.world->CreateEntity();
+    kb::scene::TransformComponent transform;
+    transform.localScale = {2.0F, 3.0F, 4.0F};
+    rig.world->Set(entity, transform);
+    Require(rig.server->Replicate(entity) == ReplicateResult::Ok, "transform was not replicated");
+    rig.Run(0U, 2000U, [] { return false; });
+    Require(rig.AllReady() && peer.replication->Stats().spawnsApplied == 1U && rig.server->Stats().stateMessagesSent == 0U,
+        "unchanged transform groups were sent after Spawn");
+}
+
+void TestChangedFilterReportsNewAndMovedEntities() {
+    kb::ecs::World world(kb::ecs::WorldConfig{ .reserveEntities = 100'100U, .mirrorEntitiesToBackend = false,
+        .mirrorNativeComponentChangesToBackend = false, .trackEntityCatalog = false });
+    std::vector<kb::ecs::Entity> moving;
+    for (std::size_t index = 0; index < 100'100U; ++index) {
+        const auto entity = world.CreateEntity();
+        world.Set(entity, kb::scene::TransformComponent{});
+        if (index < 100U) moving.push_back(entity);
+    }
+    kb::ecs::QueryFilter filter;
+    filter.Changed(world.Component<kb::scene::TransformComponent>());
+    auto query = world.CreateQuery<kb::scene::TransformComponent>(filter);
+    struct Observation { std::size_t visited = 0U; bool movedFound = false; kb::ecs::Entity moved; };
+    const auto visit = [](kb::ecs::Entity entity, const kb::scene::TransformComponent&, void* context) {
+        auto& observed = *static_cast<Observation*>(context);
+        ++observed.visited;
+        observed.movedFound = observed.movedFound || entity == observed.moved;
+    };
+    Observation initial{0U, false, moving.front()};
+    query.ForEach(visit, &initial);
+    Require(initial.visited == 100'100U && initial.movedFound, "Changed filter did not report new transforms");
+    Observation unchanged;
+    query.ForEach(visit, &unchanged);
+    Require(unchanged.visited == 0U, "Changed filter reported an unchanged archetype");
+    for (const auto entity : moving) {
+        auto transform = *world.TryGet<kb::scene::TransformComponent>(entity);
+        transform.localPosition.x = 10.0F;
+        world.Set(entity, transform);
+    }
+    Observation changed{0U, false, moving.front()};
+    query.ForEach(visit, &changed);
+    Require(changed.movedFound, "Changed filter did not report moved transforms");
+    std::printf("  Changed filter: %zu new, %zu unchanged, %zu visited after 100 writes among 100100 transforms\n",
+        initial.visited, unchanged.visited, changed.visited);
+}
+
+void TestGridVisibilityMatchesBruteForce() {
+    ReplicationConfig config;
+    config.visibilityRadius = 100.0F;
+    config.gridPlane = GridPlane::XY;
+    Rig rig({}, config);
+    Random random{0x1234567890ABCDEFULL};
+    std::vector<kb::ecs::Entity> entities;
+    std::vector<NetworkId> ids;
+    std::vector<Position> positions;
+    for (std::size_t i = 0; i < 5000U; ++i) {
+        const auto x = static_cast<float>(static_cast<int>(random.Below(4000U)) - 2000);
+        const auto y = static_cast<float>(static_cast<int>(random.Below(4000U)) - 2000);
+        NetworkId id;
+        entities.push_back(rig.Spawn(x, y, i < 50U ? i + 1U : 0U, &id));
+        ids.push_back(id);
+        positions.push_back({x, y, 0.0F});
+    }
+    for (std::uint64_t client = 1; client <= 50U; ++client) rig.AddPeer(client, static_cast<std::uint16_t>(9100U + client), 0U);
+    auto now = rig.Run(0U, 3000U, [] { return false; });
+    Require(rig.AllReady(), "grid clients did not connect");
+    rig.nextTickAt = UINT64_MAX;
+    std::vector<std::set<NetworkId>> previous(50U);
+    for (std::size_t client = 0; client < 50U; ++client) {
+        const auto visible = rig.server->VisibleIds(client + 1U);
+        previous[client].insert(visible.begin(), visible.end());
+    }
+    for (std::size_t step = 0; step < 200U; ++step) {
+        for (std::size_t move = 0; move < 150U; ++move) {
+            const auto index = move < 50U ? move : random.Below(5000U);
+            positions[index].x += static_cast<float>(static_cast<int>(random.Below(21U)) - 10);
+            positions[index].y += static_cast<float>(static_cast<int>(random.Below(21U)) - 10);
+            rig.Move(entities[index], positions[index]);
+        }
+        rig.server->Tick(++rig.tick, now);
+        for (std::size_t client = 0; client < 50U; ++client) {
+            std::set<NetworkId> expected;
+            for (std::size_t entity = 0; entity < ids.size(); ++entity) {
+                const auto dx = positions[entity].x - positions[client].x, dy = positions[entity].y - positions[client].y;
+                const auto radius = previous[client].contains(ids[entity]) ? 115.0F : 100.0F;
+                if (entity == client || dx * dx + dy * dy <= radius * radius) expected.insert(ids[entity]);
+            }
+            const auto actual = rig.server->VisibleIds(client + 1U);
+            Require(std::vector<NetworkId>(expected.begin(), expected.end()) == actual, "grid visibility differs from brute force");
+            previous[client] = std::move(expected);
+        }
+        now = rig.Run(now, 40U, [] { return false; });
+    }
+}
+
+void TestVisibilityCostIsIndependentOfWorldSize() {
+    ReplicationConfig config;
+    config.visibilityRadius = 100.0F;
+    config.gridPlane = GridPlane::XY;
+    Rig rig({}, config);
+    for (std::size_t index = 0; index < 100'000U; ++index) {
+        static_cast<void>(rig.Spawn(index <= 200U ? static_cast<float>(index) * 0.1F : 10'000.0F + static_cast<float>(index) * 20.0F,
+            0.0F, index == 0U ? 1U : 0U));
+    }
+    auto& peer = rig.AddPeer(1U, 9101U, 0U);
+    const auto now = rig.Run(0U, 3000U, [&] { return rig.AllReady() && peer.replication->ReplicaCount() == 201U; });
+    Require(rig.AllReady() && peer.replication->ReplicaCount() == 201U, "nearby objects were not delivered");
+    const auto before = rig.server->Stats().candidatesExamined;
+    rig.server->Tick(++rig.tick, now);
+    const auto examined = rig.server->Stats().candidatesExamined - before;
+    Require(examined <= 1000U, "visibility examined the entire world");
+    std::printf("  visibility: %llu candidates for 100000 objects\n", static_cast<unsigned long long>(examined));
+}
+
+void TestAlwaysRelevantAndOwnedAreVisibleEverywhere() {
+    ReplicationConfig config;
+    config.visibilityRadius = 10.0F;
+    Rig rig({}, config);
+    auto& peer = rig.AddPeer(1U, 9101U, 0U);
+    NetworkId owned = 0U, global = 0U, hidden = 0U;
+    const auto viewer = rig.Spawn(0.0F, 0.0F, 1U, &owned);
+    static_cast<void>(rig.Spawn(1000.0F, 0.0F, 0U, &global));
+    static_cast<void>(rig.Spawn(1000.0F, 0.0F, 0U, &hidden));
+    Require(rig.server->SetAlwaysRelevant(global, true), "cannot mark global object");
+    const auto now = rig.Run(0U, 3000U, [&] { return rig.AllReady() && peer.replication->ReplicaCount() == 2U; });
+    Require(peer.replication->Find(owned).IsValid() && peer.replication->Find(global).IsValid() && !peer.replication->Find(hidden).IsValid(),
+        "global or owned visibility is incorrect");
+    rig.world->Remove<kb::scene::TransformComponent>(viewer);
+    rig.Run(now, 100U, [] { return false; });
+    Require(peer.replication->Find(owned).IsValid() && peer.replication->Find(global).IsValid() && !peer.replication->Find(hidden).IsValid(),
+        "a client without a viewer saw spatial objects or lost its own or global objects");
+}
+
+void TestMillionObjectsAreAcceptedAndWarned() {
+    LoopbackNetwork network;
+    auto port = network.CreateTransport(Endpoint::Loopback(9000));
+    StaticKeyTable keys;
+    Host host(*port, {}, keys);
+    kb::ecs::World world(kb::ecs::WorldConfig{ .reserveEntities = 1'000'001U, .mirrorEntitiesToBackend = false,
+        .mirrorNativeComponentChangesToBackend = false, .trackEntityCatalog = false });
+    ReplicationRegistry components;
+    RpcRegistry rpcs;
+    ReplicationServer server(host, world, components, rpcs);
+    std::size_t warnings = 0U;
+    host.Diagnostics().SetSink([&](std::string_view message) { if (message.starts_with("ObjectCountWarning:")) ++warnings; });
+    const auto started = std::chrono::steady_clock::now();
+    for (std::size_t i = 0; i < 1'000'001U; ++i) {
+        Require(server.Replicate(world.CreateEntity()) == ReplicateResult::Ok, "a network object was silently dropped");
+    }
+    const auto seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    Require(seconds < 6.0 && server.ReplicatedCount() == 1'000'001U && warnings == 1U, "million object acceptance or warning failed");
+    server.Tick(1U, 0U);
+    Require(warnings == 1U, "the object warning repeated without crossing its threshold");
+    std::printf("  network objects: 1000001 accepted in %.3f s\n", seconds);
+}
+
+void TestNoSilentDropAbove4096() {
+    Rig rig;
+    auto& peer = rig.AddPeer(1U, 9101U, 0U);
+    for (std::size_t index = 0; index < 5001U; ++index) static_cast<void>(rig.Spawn(0.0F, 0.0F, 0U));
+    Require(rig.server->ReplicatedCount() == 5001U, "objects above 4096 were dropped");
+    rig.Run(0U, 60'000U, [&] { return rig.AllReady() && rig.AllConverged(); });
+    Require(peer.replication->ReplicaCount() == 5001U && rig.AllConverged(), "replicas above 4096 were dropped");
+}
+
+void TestSlotReuseBumpsGeneration() {
+    Rig rig;
+    auto& peer = rig.AddPeer(1U, 9101U, 0U);
+    NetworkId oldId = 0U;
+    const auto oldEntity = rig.Spawn(1.0F, 2.0F, 0U, &oldId);
+    auto now = rig.Run(0U, 10'000U, [&] { return rig.AllReady() && rig.AllConverged(); });
+    rig.world->Set(oldEntity, Position{99.0F, 0.0F, 0.0F});
+    now = rig.Run(now, 500U, [] { return false; });
+    std::vector<std::uint8_t> oldState;
+    for (const auto& message : rig.capturedToClient) if (!message.data.empty() && message.data[0] == 0x10U) oldState = message.data;
+    Require(!oldState.empty() && rig.server->Unreplicate(oldId), "no old state or unreplication failed");
+    NetworkId newId = 0U;
+    static_cast<void>(rig.Spawn(20.0F, 30.0F, 0U, &newId));
+    Require(NetIndex(oldId) == NetIndex(newId) && NetGeneration(newId) == NetGeneration(oldId) + 1U, "slot reuse did not advance the generation");
+    now = rig.Run(now, 10'000U, [&] { return rig.AllConverged(); });
+    Require(rig.AllConverged() && !peer.replication->Find(oldId).IsValid(), "replacement generation did not replicate");
+    const auto replica = peer.replication->Find(newId);
+    const auto before = *peer.world->TryGet<Position>(replica);
+    peer.replication->Flush();
+    const auto stale = peer.replication->Stats().entriesStale;
+    const auto acks = peer.replication->Stats().acksSent;
+    peer.replication->HandleMessage(1U, oldState);
+    peer.replication->Flush();
+    const auto after = *peer.world->TryGet<Position>(replica);
+    Require(peer.replication->Stats().entriesStale > stale && peer.replication->Stats().acksSent == acks && before.x == after.x,
+        "an old generation changed the replacement or was acknowledged");
+}
+
+void TestLimits() {
+    Rig rig;
+    const auto first = rig.Spawn(0.0F, 0.0F, 0U);
+    Require(rig.server->Replicate(first) == ReplicateResult::AlreadyReplicated, "duplicate replication was not identified");
+    const auto dead = rig.world->CreateEntity();
+    rig.world->DestroyEntity(dead);
+    Require(rig.server->Replicate(dead) == ReplicateResult::NotAlive, "dead entity was replicated");
+
+    // A byte rate limit spreads a big change over several ticks and still converges.
     ReplicationConfig slow;
-    slow.maxBytesPerClientPerTick = 120U;
+    slow.requestedBytesPerSecond = slow.minClientRate = slow.maxClientRate = 3600U;
     slow.maxUpdateBytes = 120U;
     Rig limited({}, slow);
     limited.AddPeer(1U, 9101U, 0U);
@@ -972,6 +1513,184 @@ void TestLimits() {
     Require(limited.AllConverged() && limited.server->Stats().stateMessagesSent - messagesBefore >= 5U, "the per tick limit did not spread the change");
 }
 
+void TestRateNeverExceedsClientRequest() {
+    ReplicationConfig config;
+    config.requestedBytesPerSecond = 32768U;
+    Rig rig({}, config);
+    auto& peer = rig.AddPeer(1U, 9101U, 0U);
+    std::vector<kb::ecs::Entity> entities;
+    for (int i = 0; i < 1000; ++i) entities.push_back(rig.Spawn(0.0F, 0.0F, 0U));
+    auto now = rig.Run(0U, 60'000U, [&] { return peer.replication->ReplicaCount() == entities.size(); });
+    Require(peer.replication->ReplicaCount() == entities.size(), "rate test did not spawn all objects");
+    Require(rig.server->ClientRate(1U) == config.requestedBytesPerSecond, "HelloAck did not negotiate the requested rate");
+    rig.capturedToClient.clear();
+    const auto start = now;
+    for (; now < start + 10'000U; now += 10U) {
+        if (now % 30U == 0U) for (const auto entity : entities) rig.Move(entity, {static_cast<float>((now / 30U) % 100U), 0.0F, 0.0F});
+        rig.Step(now);
+    }
+    std::uint64_t bytes = 0U;
+    for (const auto& message : rig.capturedToClient) if (!message.data.empty() && message.data[0] == 0x10U) bytes += message.data.size() + Session::MessageOverhead(false);
+    Require(static_cast<double>(bytes) <= config.requestedBytesPerSecond * 10.0 * 1.05, "replication exceeded the requested byte rate");
+    std::printf("  rate: %llu bytes over 10 s, request=%u B/s\n", static_cast<unsigned long long>(bytes), config.requestedBytesPerSecond);
+}
+
+void TestNearObjectsKeepFullRateUnderBudget() {
+    constexpr std::size_t nearCount = 50U;
+    ReplicationConfig config;
+    config.visibilityRadius = 100.0F;
+    config.requestedBytesPerSecond = 32768U;
+    Rig rig({}, config);
+    auto& peer = rig.AddPeer(1U, 9101U, 0U);
+    static_cast<void>(rig.Spawn(0.0F, 0.0F, 1U));
+    std::vector<kb::ecs::Entity> entities;
+    std::vector<NetworkId> ids;
+    for (std::size_t i = 0; i < nearCount + 10U; ++i) {
+        NetworkId id;
+        entities.push_back(rig.Spawn(i < nearCount ? 1.0F : 80.0F, 0.0F, 0U, &id));
+        ids.push_back(id);
+    }
+    auto now = rig.Run(0U, 20'000U, [&] { return peer.replication->ReplicaCount() == entities.size() + 1U; });
+    Require(peer.replication->ReplicaCount() == entities.size() + 1U, "priority test replicas missing");
+    std::vector<std::uint32_t> updates(ids.size());
+    std::vector<std::uint64_t> latest(ids.size(), now), maximumGap(ids.size());
+    peer.replication->SetStateCallback([&](NetworkId id, kb::ecs::Entity, std::uint32_t) {
+        const auto found = std::ranges::find(ids, id);
+        if (found == ids.end()) return;
+        const auto index = static_cast<std::size_t>(found - ids.begin());
+        ++updates[index];
+        maximumGap[index] = std::max(maximumGap[index], now - latest[index]);
+        latest[index] = now;
+    });
+    const auto start = now;
+    for (; now < start + 10'000U; now += 10U) {
+        if (now % 30U == 0U) for (std::size_t i = 0; i < entities.size(); ++i) rig.Move(entities[i], {i < nearCount ? 1.0F : 80.0F, static_cast<float>((now / 30U) % 10U) * 0.1F, 0.0F});
+        rig.Step(now);
+    }
+    for (std::size_t i = 0; i < ids.size(); ++i) {
+        maximumGap[i] = std::max(maximumGap[i], now - latest[i]);
+        Require(maximumGap[i] <= 2000U && updates[i] != 0U, "priority queue starved object " + std::to_string(i) + ": gap=" + std::to_string(maximumGap[i]) + " updates=" + std::to_string(updates[i]));
+        Require(updates[i] >= (i < nearCount ? 280U : 70U), "priority rate target was missed");
+    }
+    const auto nearMinimum = *std::min_element(updates.begin(), updates.begin() + nearCount);
+    const auto farMinimum = *std::min_element(updates.begin() + nearCount, updates.end());
+    std::printf("  priorities: rate=%u B/s, minimum near=%.1f Hz far=%.1f Hz, gap=%llu ms\n", config.requestedBytesPerSecond, nearMinimum / 10.0, farMinimum / 10.0, static_cast<unsigned long long>(*std::ranges::max_element(maximumGap)));
+}
+
+void TestRateBacksOffUnderLossAndRecovers() {
+    Rig rig;
+    auto& peer = rig.AddPeer(1U, 9101U, 0U);
+    std::vector<kb::ecs::Entity> entities;
+    for (int i = 0; i < 100; ++i) entities.push_back(rig.Spawn(0.0F, 0.0F, 0U));
+    auto now = rig.Run(0U, 5000U, [&] { return peer.replication->ReplicaCount() == entities.size(); });
+    Require(peer.replication->ReplicaCount() == entities.size(), "loss test replicas missing");
+    LinkConditions loss;
+    loss.simulation.lossPermille = 300U;
+    loss.simulation.seed = 47U;
+    rig.network.SetConditions(loss);
+    const auto drive = [&](std::uint64_t duration) {
+        const auto end = now + duration;
+        for (; now < end; now += 10U) {
+            if (now % 30U == 0U) for (const auto entity : entities) rig.Move(entity, {static_cast<float>((now / 30U) % 100U), 0.0F, 0.0F});
+            rig.Step(now);
+        }
+    };
+    drive(5000U);
+    const auto reduced = rig.server->RateScale(1U);
+    Require(reduced <= 0.5F, "30 percent loss did not reduce the send rate within five seconds: " + std::to_string(reduced));
+    rig.network.SetConditions({});
+    drive(20'000U);
+    Require(rig.server->RateScale(1U) >= 0.9F, "send rate did not recover after twenty clean seconds");
+    std::printf("  AIMD: loss scale=%.2f recovered=%.2f\n", reduced, rig.server->RateScale(1U));
+}
+
+void TestCircuitBreakerStopsStateWhenNoAcks() {
+    Rig rig;
+    auto& peer = rig.AddPeer(1U, 9101U, 0U);
+    const auto entity = rig.Spawn(0.0F, 0.0F, 0U);
+    auto now = rig.Run(0U, 5000U, [&] { return peer.replication->ReplicaCount() == 1U; });
+    rig.flushAcks = false;
+    const auto drive = [&](std::uint64_t duration) {
+        const auto end = now + duration;
+        for (; now < end; now += 10U) { rig.Move(entity, {static_cast<float>(now % 100U), 0.0F, 0.0F}); rig.Step(now); }
+    };
+    drive(6000U);
+    const auto before = rig.server->Stats().stateMessagesSent;
+    drive(2000U);
+    Require(before != 0U && rig.server->Stats().stateMessagesSent == before, "no-ack circuit breaker continued sending state");
+    bool named = false;
+    for (const auto& diagnostic : rig.host->Diagnostics().Entries()) named |= diagnostic.code == DiagCode::RateLimited && std::string_view(diagnostic.detail).find("player=1") != std::string_view::npos;
+    Require(named, "no-ack circuit breaker omitted the player diagnostic");
+}
+
+
+// A change that does not fit in one state message is sent in parts, the rest follows; a component that alone is too big is named.
+void TestLargeEntityIsSplitAcrossEntries() {
+    const auto oversizeReports = [](const Rig& rig) {
+        std::uint64_t reported = 0U;
+        for (const DiagEntry& entry : rig.host->Diagnostics().Entries()) {
+            if (entry.code == DiagCode::OversizeRecord) reported += entry.count;
+        }
+        return reported;
+    };
+    ReplicationConfig config;
+    config.maxUpdateBytes = 27U; // an entry with all three components needs 29, each fits alone
+    Rig rig({}, config);
+    rig.AddPeer(1U, 9101U, 0U);
+    const kb::ecs::Entity entity = rig.Spawn(1.0F, 2.0F, 0U);
+    std::uint64_t now = rig.Run(0U, 10'000U, [&] { return rig.AllReady() && rig.AllConverged(); });
+    Require(rig.AllConverged(), "the entity did not replicate");
+    rig.capturedToClient.clear();
+    rig.world->Set(entity, Position{ 100.0F, -50.0F, 7.0F });
+    rig.world->Set(entity, Health{ 321U, false });
+    rig.world->Set(entity, Facing{ 200.0F });
+    now = rig.Run(now, 10'000U, [&] { return rig.AllConverged(); });
+    Require(rig.AllConverged() && oversizeReports(rig) == 0U, "a change over the message size was not split across messages: " + rig.why);
+
+    std::map<std::uint32_t, std::uint16_t> masksByTick;
+    for (const auto& captured : rig.capturedToClient) {
+        if (captured.data.empty() || captured.data[0] != 0x10U) continue;
+        ByteReader reader(std::span<const std::uint8_t>(captured.data).subspan(1));
+        const auto tick = reader.U32();
+        static_cast<void>(reader.U32());
+        const auto count = reader.U16();
+        for (std::uint16_t entry = 0; entry < count; ++entry) {
+            static_cast<void>(reader.U32());
+            static_cast<void>(reader.U8());
+            const auto flags = reader.U8();
+            const auto mask = reader.U16();
+            if ((flags & 1U) != 0U) static_cast<void>(reader.U16());
+            Require(mask != 0U && (mask & (mask - 1U)) == 0U, "a split entry contains more than one component");
+            masksByTick[tick] = static_cast<std::uint16_t>(masksByTick[tick] | mask);
+            for (std::size_t component = 0; component < rig.components->Count(); ++component) {
+                if ((mask & (1U << component)) != 0U) static_cast<void>(reader.Bytes(rig.components->At(component).EncodedSize()));
+            }
+        }
+        Require(reader.Ok() && reader.Remaining() == 0U, "invalid split message");
+    }
+    Require(std::ranges::any_of(masksByTick, [](const auto& item) { return item.second == 7U; }),
+        "the split did not send all components in one tick");
+
+    ReplicationConfig tight;
+    tight.maxUpdateBytes = 24U; // Position (6 bytes) cannot be sent at all
+    Rig small({}, tight);
+    small.AddPeer(1U, 9101U, 0U);
+    const kb::ecs::Entity other = small.Spawn(1.0F, 2.0F, 0U);
+    now = small.Run(0U, 5'000U, [&] { return small.AllReady() && small.AllConverged(); });
+    now = small.Run(now, 100U, [] { return false; });
+    small.world->Set(other, Health{ 77U, true });
+    small.world->Set(other, Position{ 90.0F, 90.0F, 90.0F });
+    small.Run(now, 5'000U, [&] { return false; });
+    const kb::ecs::Entity replica = small.peers[0]->replication->Find(1U);
+    const Health* health = replica.IsValid() ? small.peers[0]->world->TryGet<Health>(replica) : nullptr;
+    Require(health != nullptr && health->hp == 77U, "a component that fits was held back by one that does not");
+    bool named = false;
+    for (const DiagEntry& entry : small.host->Diagnostics().Entries()) {
+        named = named || (entry.code == DiagCode::OversizeRecord && std::string_view(entry.detail).find("Position") != std::string_view::npos);
+    }
+    Require(named, "a component over the message size was not named");
+}
+
 void TestHostileReplicationMessages() {
     Rig rig(BadLink());
     Rig::Peer& alice = rig.AddPeer(1U, 9101U, 0U);
@@ -981,7 +1700,7 @@ void TestHostileReplicationMessages() {
         entities.push_back(rig.Spawn(static_cast<float>(index), 0.0F, index % 2 == 0 ? 1U : 2U));
     }
     rig.server->SetRpcHandler("Heal", [&](std::uint64_t, std::span<const RpcValue> args) {
-        const kb::ecs::Entity target = rig.server->EntityOf(std::get<std::uint32_t>(args[0]));
+        const kb::ecs::Entity target = rig.server->EntityOf(std::get<NetworkId>(args[0]));
         Health health = *rig.world->TryGet<Health>(target);
         health.hp = std::min<std::uint32_t>(1000U, health.hp + std::get<std::uint32_t>(args[1]));
         rig.world->Set(target, health);
@@ -1002,7 +1721,7 @@ void TestHostileReplicationMessages() {
         auto sinkPort = sinkNetwork.CreateTransport(Endpoint::Loopback(9201U));
         Client sinkClient(*sinkPort, ClientConfig{}, 1U, MakeKey(1U), Endpoint::Loopback(9999U), 0U);
         kb::ecs::World fuzzWorld;
-        ReplicationClient fuzzed(sinkClient, fuzzWorld, *rig.components, *rig.rpcs, ReplicationConfig{ .maxEntities = 64U });
+        ReplicationClient fuzzed(sinkClient, fuzzWorld, *rig.components, *rig.rpcs, ReplicationConfig{});
         // The genuine hello makes the client ready.
         for (const Rig::Captured& captured : rig.capturedToClient) {
             if (captured.peer == 1U && !captured.data.empty() && captured.data[0] == 1U) {
@@ -1041,7 +1760,6 @@ void TestHostileReplicationMessages() {
             if (iteration % 1000U == 0U) {
                 fuzzed.Flush();
             }
-            Require(fuzzed.ReplicaCount() <= 64U, "the replica limit was exceeded");
         }
         for (const NetworkId id : fuzzed.ReplicaIds()) {
             Require(fuzzWorld.IsAlive(fuzzed.Find(id)), "a replica entity is dead but still registered");
@@ -1106,6 +1824,12 @@ void TestHostileReplicationMessages() {
 int main() {
     const std::vector<std::pair<const char*, void (*)()>> tests{
         { "codecs", &TestCodecs },
+        { "declarations-round-trip", &TestDeclarationsRoundTrip },
+        { "declarations-invalid", &TestDeclarationsRejectBadRange },
+        { "unknown-field-load", &TestUnknownFieldIsRefusedAtLoad },
+        { "declarations-hello-mismatch", &TestClientWithDifferentDeclarationsIsRefused },
+        { "reflected-fields-round-trip", &TestReflectedFieldsRoundTrip },
+        { "reflected-fields-clamp", &TestReflectedCodecClampsOutOfRange },
         { "rpc-registry-and-wire", &TestRpcRegistryAndWire },
         { "replication-perfect-network", &TestReplicationOnPerfectNetwork },
 #if defined(KB_NET_WEBRTC)
@@ -1118,7 +1842,30 @@ int main() {
         { "interpolation", &TestSnapshotInterpolation },
         { "registry-mismatch", &TestRegistryMismatchIsRefused },
         { "relevance", &TestRelevance },
+        { "owner-only-audience", &TestOwnerOnlyGroupReachesOnlyOwner },
+        { "others-audience", &TestOthersGroupSkipsOwner },
+        { "ownership-audience-transfer", &TestOwnershipChangeMovesOwnerOnlyData },
+        { "initial-only-audience", &TestInitialOnlyGroupIsSentOnce },
+        { "audience-fingerprint", &TestRegistryFingerprintCoversAudience },
+        { "thirty-two-groups", &TestThirtyTwoGroupsAndRemovalRoundTrip },
+        { "scene-write-dirty", &TestSceneWritesMarkReplicationDirty },
+        { "dirty-capture-cost", &TestTickCostScalesWithChangedNotTotal },
+        { "rotation-smallest-three", &TestRotationSmallestThreeRoundTrip },
+        { "position-six-bytes", &TestPositionOnlyChangeCostsSixBytes },
+        { "scale-sent-once", &TestScaleSentOnceWhenUnchanged },
+        { "changed-filter-new-and-moved", &TestChangedFilterReportsNewAndMovedEntities },
+        { "grid-matches-brute-force", &TestGridVisibilityMatchesBruteForce },
+        { "visibility-world-size", &TestVisibilityCostIsIndependentOfWorldSize },
+        { "global-and-owned-visibility", &TestAlwaysRelevantAndOwnedAreVisibleEverywhere },
+        { "million-network-objects", &TestMillionObjectsAreAcceptedAndWarned },
+        { "objects-above-4096", &TestNoSilentDropAbove4096 },
+        { "slot-reuse-generation", &TestSlotReuseBumpsGeneration },
         { "limits", &TestLimits },
+        { "rate-never-exceeds-request", &TestRateNeverExceedsClientRequest },
+        { "near-objects-under-budget", &TestNearObjectsKeepFullRateUnderBudget },
+        { "rate-loss-and-recovery", &TestRateBacksOffUnderLossAndRecovers },
+        { "no-ack-circuit-breaker", &TestCircuitBreakerStopsStateWhenNoAcks },
+        { "large-entity-split", &TestLargeEntityIsSplitAcrossEntries },
         { "hostile-messages", &TestHostileReplicationMessages },
     };
     int failures = 0;

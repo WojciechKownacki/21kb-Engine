@@ -1,4 +1,5 @@
 #include "ProjectCooker.hpp"
+#include "engine/network/ReplicationDeclarations.hpp"
 #include "engine/assets/BuiltInShapes.hpp"
 
 #include "engine/platform/FileSystemPath.hpp"
@@ -525,7 +526,7 @@ struct CookConfigurationInputFingerprint {
     std::uint64_t contentHash = 0U;
 };
 
-using CookConfigurationSnapshot = std::array<CookConfigurationInputFingerprint, 3U>;
+using CookConfigurationSnapshot = std::array<CookConfigurationInputFingerprint, 4U>;
 
 [[nodiscard]] bool CaptureCookConfigurationInput(
     const std::filesystem::path& path,
@@ -2667,7 +2668,8 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
     CookConfigurationSnapshot configurationSnapshot{};
     if (!CaptureCookConfigurationInput(projectFile, true, configurationSnapshot[0], error) ||
         !CaptureCookConfigurationInput(projectMetaPath, true, configurationSnapshot[1], error) ||
-        !CaptureCookConfigurationInput(settingsPath, false, configurationSnapshot[2], error)) {
+        !CaptureCookConfigurationInput(settingsPath, false, configurationSnapshot[2], error) ||
+        !CaptureCookConfigurationInput(projectRoot / "Config" / "Replication.json", false, configurationSnapshot[3], error)) {
         return Failure(std::move(error));
     }
     const kb::project::ProjectDescriptorReadResult project = kb::project::ProjectManager::LoadProject(projectFile);
@@ -2897,6 +2899,16 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
     manifest.targetProfileHash = asset_bake::BakeTargetProfileFingerprint(profile);
     manifest.descriptor = std::move(packagedDescriptor);
     manifest.settings = settings;
+    if (configurationSnapshot[3].present) {
+        std::vector<std::uint8_t> bytes;
+        kb::network::ReplicationDeclarations declarations;
+        if (!ReadFileBytes(projectRoot / "Config" / "Replication.json", bytes, error) ||
+            !kb::network::ParseReplicationDeclarations(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), declarations, error)) return Failure(error);
+        constexpr std::string_view virtualPath = "/Game/Config/Replication.json";
+        asset_bake::AssetBakeDigest digest{};
+        if (!StoreSourceFile(writer, profile, bytes, virtualPath, digest, error)) return Failure(error);
+        manifest.auxiliaryFiles.push_back({.virtualPath = std::string(virtualPath), .contentHash = NonZeroContentHash(bytes), .artifactDigest = digest});
+    }
     // Tile atlas coordinates refer to the exact source dimensions. Preserve texels and avoid
     // mip generation across neighboring cells, including partial final rows and odd dimensions.
     std::set<std::string> atlasTextures;

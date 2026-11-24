@@ -16,7 +16,12 @@
 // it never reaches a handler and never throws out of the receiving code.
 namespace kb::net {
 
-using NetworkId = std::uint32_t; // 0 is never a valid network id
+using NetworkId = std::uint64_t;
+[[nodiscard]] constexpr std::uint32_t NetIndex(NetworkId id) noexcept { return static_cast<std::uint32_t>(id); }
+[[nodiscard]] constexpr std::uint32_t NetGeneration(NetworkId id) noexcept { return static_cast<std::uint32_t>(id >> 32U); }
+[[nodiscard]] constexpr NetworkId MakeNetworkId(std::uint32_t index, std::uint32_t generation) noexcept {
+    return static_cast<NetworkId>(index) | (static_cast<NetworkId>(generation) << 32U);
+}
 
 enum class RpcArgType : std::uint8_t { Bool, Int32, UInt32, Float, String, NetworkId };
 
@@ -40,8 +45,8 @@ struct RpcDefinition {
     std::uint32_t maxCallsPerSecond = 30U; // per caller; a burst of this many is allowed
 };
 
-// NetworkId values are carried as std::uint32_t.
-using RpcValue = std::variant<bool, std::int32_t, std::uint32_t, float, std::string>;
+// NetworkId values carry the slot index and generation.
+using RpcValue = std::variant<bool, std::int32_t, std::uint32_t, float, std::string, std::uint64_t>;
 
 inline constexpr std::size_t kMaxRpcArgs = 8U;
 inline constexpr std::size_t kMaxRpcPayloadBytes = 900U;

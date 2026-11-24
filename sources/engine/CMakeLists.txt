@@ -83,6 +83,11 @@ add_library(kb_engine STATIC
     include/engine/network/NetworkModel.hpp
     include/engine/network/NetworkObject.hpp
     include/engine/network/ReplicationSchema.hpp
+    include/engine/network/ReplicationAudience.hpp
+    include/engine/network/ReplicationChangeSink.hpp
+    include/engine/network/ReplicationDeclarations.hpp
+    include/engine/network/ReplicableComponents.hpp
+    include/engine/scene/NetworkedVariablesComponent.hpp
     include/engine/network/Rpc.hpp
     include/engine/network/NetworkVariable.hpp
     include/engine/network/NetworkPrediction.hpp
@@ -845,6 +850,7 @@ add_library(kb_engine STATIC
     src/security/ReleaseKeys.cpp
     src/security/ReleaseManifest.cpp
     src/network/ReplicationSchema.cpp
+    src/network/ReplicationDeclarations.cpp
     src/network/Rpc.cpp
     src/gameplay/GameFlow.cpp
     src/gameplay/GameMode.cpp

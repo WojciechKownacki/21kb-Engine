@@ -1,3 +1,4 @@
+#include "engine/network/NetworkScriptBridge.hpp"
 #include "scene/entities/SceneEntityCreationService.hpp"
 
 #include "scene/SceneAccess.hpp"
@@ -106,6 +107,7 @@ SceneEntity SceneEntityCreationService::CreateEntity(Scene& scene, const SceneOb
         RollBackCreatedEntity(state, entity);
         throw;
     }
+    if (state.networkRuntime != nullptr) state.networkRuntime->ComponentChanged(entity.Id(), true);
     return entity;
 }
 
@@ -140,6 +142,7 @@ std::vector<SceneObject> SceneEntityCreationService::CreateObjects(Scene& scene,
     created.reserve(entities.size());
     for (const SceneEntity entity : entities) {
         created.push_back(SceneAccess::MakeObject(scene, entity));
+        if (state.networkRuntime != nullptr) state.networkRuntime->ComponentChanged(entity.Id(), true);
     }
     return created;
 }

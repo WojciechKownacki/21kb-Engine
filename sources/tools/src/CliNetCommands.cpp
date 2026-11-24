@@ -6,9 +6,13 @@
 #include "engine/script/ScriptEventHooks.hpp"
 #include "engine/security/Crypto.hpp"
 #include "kb/net/Host.hpp"
+#include "kb/net/ByteIO.hpp"
 #include "kb/net/Replication.hpp"
 #include "kb/net/Rpc.hpp"
 #include "kb/net/SceneReplication.hpp"
+#include "kb/net/ProjectScene.hpp"
+#include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 #include "kb/net/Session.hpp"
 
 #include <algorithm>
@@ -16,6 +20,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <unordered_set>
 
 // net: the engine's multiplayer for a person who makes a game. `info` says what there is, from the registries the engine runs on (the Net.*
 // script functions, the script events, the replicated components, the standard calls and the limits), so it cannot fall behind them;
@@ -54,7 +59,7 @@ constexpr std::string_view kUsage =
 }
 
 // The facts of the registries, as text: what `net info` prints.
-[[nodiscard]] std::string BuildInfo(const kb::script::ScriptApiCatalog& catalog) {
+[[nodiscard]] std::string BuildInfo(const kb::script::ScriptApiCatalog& catalog, const kb::net::ReplicationRegistry& components, bool declarationsPresent) {
     std::ostringstream out;
     out << "# Multiplayer\n\n"
         << "Modes (Net.Mode().mode): offline - the scene runs alone and every Net.* call that needs a session says so; server - the one machine that runs the game "
@@ -79,12 +84,12 @@ constexpr std::string_view kUsage =
     }
 
     out << "\n## What is synchronised\nThe server sends, for each object it marks (Net.Replicate), these components, and nothing else:\n";
-    const std::unique_ptr<kb::net::ReplicationRegistry> components = kb::net::MakeSceneReplicationRegistry(1000.0F);
-    for (std::size_t index = 0U; components != nullptr && index < components->Count(); ++index) {
-        const kb::net::ComponentCodec& codec = components->At(index);
-        out << "- " << codec.Name() << ", " << codec.EncodedSize() << " bytes (position, rotation and scale of the object, quantised over the world extent)\n";
+    if (!declarationsPresent) out << "Config/Replication.json is absent: only transform groups are synchronised.\n";
+    for (std::size_t index = 0U; index < components.Count(); ++index) {
+        const kb::net::ComponentCodec& codec = components.At(index);
+        out << "- " << codec.Name() << ", " << codec.EncodedSize() << " bytes, audience " << kb::network::ReplicationAudienceName(codec.Audience()) << '\n';
     }
-    out << "Everything else (health, a score, a chosen colour, a chat line) goes as a call: Net.RegisterRpc declares it, Net.Call sends it, the other side answers it in OnRpc_<name>.\n"
+    out << "Replicated fields and variables are declared in Config/Replication.json. Other messages use Net.RegisterRpc and Net.Call.\n"
         << "A player's copy of a replicated object is a replica without a mesh: a script reads its place with Transform.GetPosition(replica) and moves a visible object of its own to it.\n";
 
     out << "\n## Calls the dedicated server defines itself (a script cannot send them; declare its own)\n";
@@ -99,10 +104,9 @@ constexpr std::string_view kUsage =
     }
 
     const kb::net::HostConfig host;
-    const kb::net::ReplicationConfig replication;
     out << "\n## Limits\n"
         << "- players: up to " << host.maxClients << " per host (kb_dedicated_server --max-clients, 16 by default)\n"
-        << "- replicated objects: " << replication.maxEntities << "; components per object: " << kb::net::kMaxReplicatedComponents << '\n'
+        << "- replicated objects: up to 4294967294 slots; components per object: " << kb::net::kMaxReplicatedComponents << '\n'
         << "- one call: at most " << kb::net::kMaxRpcArgs << " arguments and " << kb::net::kMaxRpcPayloadBytes << " bytes; Net.Call has 4 number, 2 string, 2 bool and 2 entity slots; at most 30 calls a second per call and player unless maxPerSecond says more\n"
         << "- a datagram: " << kb::net::kMaxDatagramBytes << " bytes; a silent player is dropped after " << host.session.timeoutMilliseconds / 1000U << " s\n";
 
@@ -121,7 +125,15 @@ constexpr std::string_view kUsage =
         io.err << "error: " << error << '\n';
         return 1;
     }
-    const std::string text = BuildInfo(catalog);
+    kb::scene::Scene scene;
+    const auto project = arguments.Option("--project").value_or("");
+    if (!project.empty() && !scene.Assets().MountProject(project)) { io.err << "error: project assets could not be mounted\n"; return 1; }
+    kb::network::ReplicationDeclarations declarations;
+    if (!kb::net::LoadReplicationDeclarations(scene, declarations, error)) { io.err << "error: " << error << '\n'; return 1; }
+    auto components = kb::net::BuildReplicationRegistry(scene.Runtime().EcsWorld(), declarations, 1000.0F, error);
+    if (!components) { io.err << "error: " << error << '\n'; return 1; }
+    const bool present = !project.empty() && std::filesystem::exists(std::filesystem::path(project) / "Config" / "Replication.json");
+    const std::string text = BuildInfo(catalog, *components, present);
     io.out << text;
     if (io.WantsData()) {
         kb::core::JsonValue data = DataObject("21kb.cli.net-info/v1");
@@ -206,16 +218,27 @@ constexpr std::string_view kUsage =
     }
     fs::create_directories(out, ignored);
     std::string keys = "# <client id> <key>: the players this server accepts. Keep this file and the session files private.\n";
+    std::unordered_set<std::uint64_t> ids;
     for (int id = 1; id <= players; ++id) {
+        std::uint64_t clientId = 0U;
+        do {
+            std::array<std::uint8_t, 8> bytes{};
+            if (!kb::security::SecureRandom(bytes)) {
+                io.err << "error: the system could not supply random bytes for an id\n";
+                return 1;
+            }
+            kb::net::ByteReader reader(bytes);
+            clientId = reader.U64();
+        } while (clientId <= 1U || !ids.insert(clientId).second);
         std::array<std::uint8_t, 32> key{};
         if (!kb::security::SecureRandom(key)) {
             io.err << "error: the system could not supply random bytes for a key\n";
             return 1;
         }
         const std::string hex = kb::security::ToHex(key);
-        keys += std::to_string(id) + ' ' + hex + '\n';
+        keys += std::to_string(clientId) + ' ' + hex + '\n';
         std::ofstream session{ out / ("session-" + std::to_string(id) + ".json"), std::ios::binary | std::ios::trunc };
-        session << "{\n  \"address\": \"" << address << "\",\n  \"port\": " << port << ",\n  \"clientId\": \"" << id << "\",\n  \"key\": \"" << hex
+        session << "{\n  \"address\": \"" << address << "\",\n  \"port\": " << port << ",\n  \"clientId\": \"" << clientId << "\",\n  \"key\": \"" << hex
                 << "\",\n  \"worldExtent\": 1000,\n  \"reconnectAttempts\": 3\n}\n";
         if (!session.good()) {
             io.err << "error: " << (out / ("session-" + std::to_string(id) + ".json")).generic_string() << " could not be written\n";
@@ -228,6 +251,13 @@ constexpr std::string_view kUsage =
         io.err << "error: " << keysFile.generic_string() << " could not be written\n";
         return 1;
     }
+#if !defined(_WIN32)
+    fs::permissions(keysFile, fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::replace, ignored);
+    if (ignored) {
+        io.err << "error: private key file permissions could not be set\n";
+        return 1;
+    }
+#endif
     io.out << "wrote " << keysFile.generic_string() << " and session-1.json .. session-" << players << ".json in " << out.generic_string() << '\n'
            << "server: kb_dedicated_server --project " << *project << " --keys " << keysFile.generic_string() << " --replicate none --port " << port << '\n'
            << "player N: kb_game --project " << *project << " --network-config=" << (out / "session-N.json").generic_string() << '\n'

@@ -96,6 +96,7 @@ struct SessionStats {
 
 class Session final {
 public:
+    [[nodiscard]] static std::size_t MessageOverhead(bool reliable) noexcept;
     // `sendKey` seals what this side sends, `receiveKey` opens what it receives; the peer holds the
     // same two keys the other way round. `config` must be valid (SessionConfig::IsValid).
     Session(SessionConfig config, const SessionKey& sendKey, const SessionKey& receiveKey, std::uint64_t nowMilliseconds);

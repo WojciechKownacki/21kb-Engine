@@ -135,6 +135,22 @@ bool SecureRandom(std::span<std::uint8_t> out) noexcept {
 #endif
 }
 
+bool GenerateX25519KeyPair(X25519KeyPair& out) noexcept {
+    if (!SecureRandom(out.secret.Span())) {
+        out.publicKey.fill(0U);
+        return false;
+    }
+    crypto_x25519_public_key(out.publicKey.data(), out.secret.data());
+    return true;
+}
+
+bool X25519SharedSecret(const SecretBytes<32U>& secret, std::span<const std::uint8_t, 32U> peerPublic,
+    SecretBytes<32U>& out) noexcept {
+    crypto_x25519(out.data(), secret.data(), peerPublic.data());
+    const std::array<std::uint8_t, 32U> zero{};
+    return !ConstantTimeEqual(out.Span(), zero);
+}
+
 bool ConstantTimeEqual(std::span<const std::uint8_t> left, std::span<const std::uint8_t> right) noexcept {
     if (left.size() != right.size()) {
         return false;

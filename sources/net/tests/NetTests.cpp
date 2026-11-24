@@ -166,10 +166,11 @@ struct Rig {
 
 void TestEveryRefusalIsNamedAndCounted() {
     DiagLog log;
-    for (std::uint16_t code = 0U; code <= static_cast<std::uint16_t>(DiagCode::ComponentGroupLimit); ++code) {
+    for (std::uint16_t code = 0U; code <= static_cast<std::uint16_t>(DiagCode::ConnectBucketsFull); ++code) {
         log.Report(static_cast<DiagCode>(code), "entity=42 bytes=2048");
     }
-    Require(log.Total() == 14U && log.Entries().size() == 14U, "diagnostic codes were lost");
+    const auto codeCount = static_cast<std::size_t>(DiagCode::ConnectBucketsFull) + 1U;
+    Require(log.Total() == codeCount && log.Entries().size() == codeCount, "diagnostic codes were lost");
     for (std::size_t index = 0U; index < log.Entries().size(); ++index) {
         const DiagEntry& entry = log.Entries()[index];
         Require(static_cast<std::size_t>(entry.code) == index && entry.count == 1U &&
@@ -595,6 +596,142 @@ void TestTwoClientsAndReconnectOnBadNetwork() {
     Require(clientB.Stats()->smoothedRttMilliseconds > 0U && link.dropped > 0U, "the report has no round trip time or no loss");
 }
 
+void TestResponseFloodIsLimitedPerAddress() {
+    Rig rig;
+    const auto start = rig.Run(0U, 1000U, [&] { return rig.client->State() == ClientState::Connected; });
+    Require(rig.client->State() == ClientState::Connected, "initial client did not connect");
+    const auto packet = std::ranges::find_if(rig.clientTap->sent, [](const auto& data) { return data.size() > 3U && data[3] == 3U; });
+    Require(packet != rig.clientTap->sent.end(), "no authenticated Response captured");
+    const auto response = *packet;
+    const auto accepts = [&] { return std::ranges::count_if(rig.hostTap->sent, [](const auto& data) { return data.size() > 3U && data[3] == 4U; }); };
+    const auto acceptsBefore = accepts();
+    for (std::uint64_t now = start; now < start + 1000U; ++now) {
+        rig.network.Inject(rig.clientPort->LocalEndpoint(), rig.hostPort->LocalEndpoint(), response);
+        rig.network.Advance(now);
+        rig.host->Update(now);
+    }
+    Require(accepts() - acceptsBefore <= 15 && rig.host->Stats().handshakesRateLimited >= 980U,
+        "an authenticated Response flood was not limited per address");
+    auto other = rig.network.CreateTransport(Endpoint::Make(127, 0, 0, 2, 7002));
+    rig.keys.Set(43U, MakeKey(9U));
+    Client guest(*other, {}, 43U, MakeKey(9U), rig.hostPort->LocalEndpoint(), start + 1000U);
+    for (std::uint64_t now = start + 1000U; now < start + 1100U; now += 10U) {
+        rig.network.Advance(now); rig.host->Update(now); guest.Update(now);
+    }
+    Require(guest.State() == ClientState::Connected, "another proven address was blocked by the flood");
+    const auto limitedBefore = rig.host->Stats().handshakesRateLimited;
+    rig.network.Inject(rig.clientPort->LocalEndpoint(), rig.hostPort->LocalEndpoint(), response);
+    rig.host->Update(start + 11'000U);
+    Require(rig.host->Stats().handshakesRateLimited == limitedBefore, "the address bucket did not recover");
+}
+
+void TestSpoofedConnectsDoNotBlockVictimJoin() {
+    Rig rig;
+    std::vector<std::uint8_t> connect{0x4EU, 0x4BU, 2U, 1U};
+    ByteWriter writer(connect);
+    writer.U64(42U);
+    writer.U64(1U);
+    writer.Zeros(kMinConnectBytes - connect.size());
+    for (int i = 0; i < 1000; ++i) rig.network.Inject(rig.clientPort->LocalEndpoint(), rig.hostPort->LocalEndpoint(), connect);
+    rig.host->Update(0U);
+    Require(rig.host->Stats().challengesSent == 1000U && rig.host->Stats().handshakesRateLimited == 0U && rig.host->ClientCount() == 0U,
+        "unproven Connects consumed the victim's rate bucket");
+    const auto& challenge = rig.hostTap->sent.front();
+    Require(challenge.size() < connect.size(), "a spoofed Connect caused amplification");
+    std::vector<std::uint8_t> invalid{0x4EU, 0x4BU, 2U, 3U};
+    ByteWriter response(invalid);
+    response.U64(42U); response.U64(1U);
+    response.Bytes(std::span<const std::uint8_t>(challenge).subspan(12U, 8U));
+    response.Zeros(64U);
+    for (int i = 0; i < 16; ++i) rig.network.Inject(rig.clientPort->LocalEndpoint(), rig.hostPort->LocalEndpoint(), invalid);
+    rig.host->Update(0U);
+    Require(rig.host->Stats().handshakesRejected == 16U && rig.host->Stats().handshakesRateLimited == 0U,
+        "Responses with invalid MACs consumed the victim's rate bucket");
+    rig.Run(0U, 100U, [&] { return rig.client->State() == ClientState::Connected; });
+    Require(rig.client->State() == ClientState::Connected && rig.host->ClientCount() == 1U,
+        "spoofed Connects blocked the victim's join before token refill");
+}
+
+void TestFullBucketTableDoesNotLockOutNewAddresses() {
+    HostConfig config;
+    config.maxClients = 1U;
+    Rig rig({}, config);
+    const auto now = rig.Run(0U, 1000U, [&] { return rig.client->State() == ClientState::Connected; });
+    Require(rig.client->State() == ClientState::Connected, "bucket test initial client did not connect");
+    rig.keys.Set(43U, MakeKey(9U));
+    const auto exchange = [&](Client& guest, std::uint64_t time) {
+        for (int step = 0; step < 6; ++step) {
+            guest.Update(time); rig.network.Advance(time); rig.host->Update(time); rig.network.Advance(time);
+        }
+    };
+    for (std::uint32_t index = 0; index < 8191U; ++index) {
+        auto port = rig.network.CreateTransport(Endpoint{0x0A000001U + index, 7002U});
+        Client guest(*port, {}, 43U, MakeKey(9U), rig.hostPort->LocalEndpoint(), now);
+        exchange(guest, now);
+    }
+    Require(rig.host->Stats().handshakesRejected == 8191U && rig.host->Stats().connectBucketsFull == 0U,
+        "authenticated Responses did not fill the bucket table exactly");
+    rig.host->Disconnect(42U);
+    rig.host->Update(now); rig.host->Update(now);
+    Require(rig.host->ClientCount() == 0U, "bucket test could not release session capacity");
+    auto port = rig.network.CreateTransport(Endpoint::Make(10, 1, 0, 1, 7002U));
+    Client guest(*port, {}, 43U, MakeKey(9U), rig.hostPort->LocalEndpoint(), now);
+    exchange(guest, now);
+    Require(guest.State() == ClientState::Connected && rig.host->Stats().connectBucketsFull > 0U,
+        "a full bucket table locked out a new proven address");
+    bool named = false;
+    for (const auto& entry : rig.host->Diagnostics().Entries()) named |= entry.code == DiagCode::ConnectBucketsFull && entry.count > 0U && DiagName(entry.code) == "ConnectBucketsFull";
+    Require(named, "bucket exhaustion was not named and counted");
+    const auto fullBefore = rig.host->Stats().connectBucketsFull;
+    rig.host->Disconnect(43U);
+    rig.host->Update(now); rig.host->Update(now);
+    auto recoveredPort = rig.network.CreateTransport(Endpoint::Make(10, 1, 0, 2, 7002U));
+    Client recovered(*recoveredPort, {}, 43U, MakeKey(9U), rig.hostPort->LocalEndpoint(), now + 125U);
+    exchange(recovered, now + 125U);
+    Require(recovered.State() == ClientState::Connected && rig.host->Stats().connectBucketsFull == fullBefore,
+        "a full table did not immediately sweep refilled buckets before the periodic sweep");
+}
+
+void TestUnknownIdGetsIndistinguishableChallenge() {
+    const auto challenge = [](std::uint64_t id) {
+        Rig rig({}, {}, {}, id);
+        rig.client->Update(0U);
+        rig.network.Advance(1U);
+        rig.host->Update(1U);
+        Require(rig.hostTap->sent.size() == 1U, "no Challenge for a client id");
+        return rig.hostTap->sent.front();
+    };
+    const auto known = challenge(42U);
+    const auto unknown = challenge(99U);
+    Require(known.size() == unknown.size() && known.size() < kMinConnectBytes &&
+        std::equal(known.begin(), known.begin() + 4, unknown.begin()), "Challenge reveals whether an id exists");
+    Require(known.size() == 52U, "Challenge has an unexpected discriminator");
+}
+
+void TestSessionsPerAddressLimit() {
+    HostConfig config;
+    config.maxSessionsPerAddress = 2U;
+    Rig rig({}, config);
+    rig.keys.Set(43U, MakeKey(9U));
+    rig.keys.Set(44U, MakeKey(9U));
+    auto secondPort = rig.network.CreateTransport(Endpoint::Loopback(7002));
+    auto thirdPort = rig.network.CreateTransport(Endpoint::Loopback(7003));
+    Client second(*secondPort, {}, 43U, MakeKey(9U), rig.hostPort->LocalEndpoint(), 0U);
+    Client third(*thirdPort, {}, 44U, MakeKey(9U), rig.hostPort->LocalEndpoint(), 0U);
+    for (std::uint64_t now = 0; now < 2000U; now += 10U) {
+        rig.Step(now);
+        second.Update(now);
+        third.Update(now);
+    }
+    Require(rig.host->ClientCount() == 2U && rig.host->Stats().sessionsPerAddressRefused > 0U,
+        "the session limit per address was not enforced");
+    bool named = false;
+    for (const auto& entry : rig.host->Diagnostics().Entries()) {
+        named = named || (entry.code == DiagCode::HandshakeServerFull && std::string_view(entry.detail).find("per address") != std::string_view::npos);
+    }
+    Require(named, "the per-address refusal was not named");
+}
+
 void TestHandshakeAuthentication() {
     // An attacker who does not know the key can obtain a Challenge, but a Response with a made-up MAC
     // is refused, whatever cookie it carries.
@@ -620,6 +757,7 @@ void TestHandshakeAuthentication() {
         responseWriter.U64(42U);
         responseWriter.U64(0x1122334455667788ULL);
         responseWriter.Bytes(std::span<const std::uint8_t>(challenge.data() + 12U, 8U)); // the host's cookie
+        responseWriter.Zeros(32U);
         responseWriter.Bytes(MakeKey(200U));                                             // a MAC the attacker invented
         Require(attacker->Send(Endpoint::Loopback(7000), response) == TransportStatus::Ok, "the attacker could not send");
         rig.network.Advance(3U);
@@ -643,7 +781,7 @@ void TestHandshakeAuthentication() {
         Rig rig({}, {}, clientConfig, 999U, MakeKey(9U));
         rig.Run(0U, 2000U, [&] { return rig.client->State() == ClientState::Disconnected; });
         Require(rig.client->State() == ClientState::Disconnected && rig.host->ClientCount() == 0U, "an unknown client id connected");
-        Require(rig.host->Stats().handshakesRejected > 0U && rig.host->Stats().challengesSent == 0U, "an unknown client id received a challenge");
+        Require(rig.host->Stats().challengesSent > 0U, "an unknown client id did not receive a challenge");
     }
     // A genuine client connects, and its Response cannot be replayed from another address.
     {
@@ -686,7 +824,7 @@ std::vector<std::uint8_t> PacketOf(const TappingTransport& tap, std::uint8_t typ
 }
 
 std::array<std::uint8_t, 64U> OpenAcceptKeys(const std::vector<std::uint8_t>& response, const std::vector<std::uint8_t>& accept) {
-    Require(accept.size() == 88U, "Accept has the wrong size");
+    Require(accept.size() == 120U, "Accept has the wrong size");
     const auto label = [](std::string_view text) {
         return std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(text.data()), text.size());
     };
@@ -706,6 +844,43 @@ std::array<std::uint8_t, 64U> OpenAcceptKeys(const std::vector<std::uint8_t>& re
     kb::security::HkdfSha512(keys, MakeKey(9U), salt, label("21kb-net-session-v2"));
     kb::security::SecureWipe(plaintext);
     return keys;
+}
+
+void TestRecordedSessionSurvivesKeyLeak() {
+    Rig rig;
+    const auto now = rig.Run(0U, 2000U, [&] { return rig.client->State() == ClientState::Connected; });
+    Require(rig.client->State() == ClientState::Connected, "connection failed");
+    rig.Run(now, now + 100U, [] { return false; });
+    const auto response = PacketOf(*rig.clientTap, 3U);
+    const auto accept = PacketOf(*rig.hostTap, 4U);
+    const auto leakedKeys = OpenAcceptKeys(response, accept);
+    SessionKey send{}, receive{};
+    std::copy_n(leakedKeys.begin(), 32U, send.begin());
+    std::copy_n(leakedKeys.begin() + 32, 32U, receive.begin());
+    Session attacker({}, send, receive, 0U);
+    Require(attacker.ProcessPacket(now + 100U, PacketOf(*rig.hostTap, 0x10U)) == PacketResult::AuthFailed,
+        "a leaked PSK decrypted a recorded session without the ephemeral secret");
+}
+
+void TestEphemeralKeysDifferPerHandshake() {
+    ClientConfig config;
+    config.clientSalt = 123U;
+    Rig first({}, {}, config), second({}, {}, config);
+    first.client->Update(0U);
+    second.client->Update(0U);
+    const auto a = PacketOf(*first.clientTap, 1U), b = PacketOf(*second.clientTap, 1U);
+    Require(a.size() == 128U && b.size() == 128U && !std::equal(a.begin() + 32, a.begin() + 64, b.begin() + 32),
+        "client ephemeral key repeats across handshakes");
+    first.Run(0U, 2000U, [&] { return first.client->State() == ClientState::Connected; });
+    const auto response = PacketOf(*first.clientTap, 3U);
+    Require(response.size() == 92U, "Response does not carry the ephemeral key");
+    auto tampered = response;
+    tampered[28] ^= 1U;
+    const auto before = first.host->Stats().handshakesRejected;
+    first.network.Inject(Endpoint::Loopback(7001), Endpoint::Loopback(7000), tampered);
+    first.network.Advance(2001U);
+    first.host->Update(2001U);
+    Require(first.host->Stats().handshakesRejected == before + 1U, "Response MAC did not authenticate the ephemeral key");
 }
 
 void TestReplayedResponseGetsFreshKeys() {
@@ -732,13 +907,21 @@ void TestReplayedResponseGetsFreshKeys() {
     const auto freshKeys = OpenAcceptKeys(response, freshAccept);
     Require(oldKeys != freshKeys && oldAccept != freshAccept && oldServerData != freshServerData,
         "replayed Response reused session keys or server ciphertext");
-    SessionKey sendKey{}, receiveKey{};
-    std::copy_n(freshKeys.begin(), 32U, sendKey.begin());
-    std::copy_n(freshKeys.begin() + 32, 32U, receiveKey.begin());
-    Session freshClient({}, sendKey, receiveKey, connected + 130U);
-    Require(freshClient.ProcessPacket(connected + 140U, oldServerData) == PacketResult::AuthFailed &&
-        freshClient.ProcessPacket(connected + 140U, freshServerData) == PacketResult::Accepted,
-        "old server data authenticated under fresh keys");
+    const auto authBefore = rig.client->Stats()->rejectedAuth;
+    for (std::uint64_t index = 0U; index <= rig.client->Stats()->packetsAccepted; ++index) {
+        Require(rig.host->Send(42U, 1U, Pattern(99U, 16U)) == SendResult::Queued, "fresh session could not send");
+        rig.host->Update(connected + 132U);
+    }
+    const auto unusedServerData = rig.hostTap->sent.back();
+    rig.network.Advance(connected + 133U);
+    Endpoint discardedFrom;
+    std::array<std::uint8_t, kMaxDatagramBytes> discarded{};
+    std::size_t discardedSize = 0U;
+    while (rig.clientPort->Receive(discardedFrom, discarded, discardedSize) == TransportStatus::Ok) { }
+    rig.network.Inject(Endpoint::Loopback(7000), Endpoint::Loopback(7001), unusedServerData);
+    rig.network.Advance(connected + 135U);
+    rig.client->Update(connected + 135U);
+    Require(rig.client->Stats()->rejectedAuth == authBefore + 1U, "fresh server data authenticated under old keys");
     rig.network.Inject(Endpoint::Loopback(7001), Endpoint::Loopback(7000), oldClientData);
     rig.network.Advance(connected + 140U);
     rig.host->Update(connected + 140U);
@@ -1229,7 +1412,14 @@ int main() {
         { "tampered-packets", &TestTamperedPackets },
         { "backpressure", &TestBackpressureLosesNothing },
         { "queue-limits", &TestQueueLimits },
+        { "response-flood-per-address", &TestResponseFloodIsLimitedPerAddress },
+        { "spoofed-connect-victim-join", &TestSpoofedConnectsDoNotBlockVictimJoin },
+        { "full-bucket-table-new-address", &TestFullBucketTableDoesNotLockOutNewAddresses },
+        { "unknown-id-challenge", &TestUnknownIdGetsIndistinguishableChallenge },
+        { "sessions-per-address", &TestSessionsPerAddressLimit },
         { "handshake-authentication", &TestHandshakeAuthentication },
+        { "recorded-session-key-leak", &TestRecordedSessionSurvivesKeyLeak },
+        { "ephemeral-keys-per-handshake", &TestEphemeralKeysDifferPerHandshake },
         { "replayed-response-fresh-keys", &TestReplayedResponseGetsFreshKeys },
         { "version-refusal-reason", &TestVersionMismatchIsRefusedWithReason },
         { "unconfirmed-peer-expires", &TestUnconfirmedPeerExpires },

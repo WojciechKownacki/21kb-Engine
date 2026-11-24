@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -159,6 +160,7 @@ std::string SummaryJson(const ServerOptions& options, const ServerSummary& summa
     host.Set("challenges_sent", number(summary.host.challengesSent));
     host.Set("handshakes_completed", number(summary.host.handshakesCompleted));
     host.Set("handshakes_rejected", number(summary.host.handshakesRejected));
+    host.Set("connect_buckets_full", number(summary.host.connectBucketsFull));
     host.Set("unknown_peer", number(summary.host.unknownPeer));
     host.Set("rate_limited", number(summary.host.rateLimited));
     root.Set("host", std::move(host));
@@ -233,17 +235,8 @@ struct DedicatedServer::Impl {
         if (options.replicate == ReplicateMode::None) {
             return;
         }
-        struct Collector {
-            std::vector<kb::ecs::Entity>* found;
-        } collector{ &candidates };
-        candidates.clear();
-        scene->Runtime().EcsWorld().ForEach<kb::scene::TransformComponent>(
-            [](kb::ecs::Entity entity, const kb::scene::TransformComponent&, void* context) {
-                static_cast<Collector*>(context)->found->push_back(entity);
-            },
-            &collector);
         for (const kb::ecs::Entity entity : candidates) {
-            if (!considered.insert(entity.Id()).second) {
+            if (replication->IsReplicated(entity)) {
                 continue;
             }
             if (options.replicate == ReplicateMode::Prefix) {
@@ -252,8 +245,10 @@ struct DedicatedServer::Impl {
                     continue;
                 }
             }
-            static_cast<void>(replication->Replicate(entity, 0U));
+            std::string error;
+            if (!net->Replicate(entity.Id(), error)) Log("replication: " + error);
         }
+        candidates.clear();
     }
 
     void HandleHostEvent(const NetEvent& event, std::uint64_t now) {
@@ -338,7 +333,6 @@ struct DedicatedServer::Impl {
     bool revocationErrorReported = false;
     std::unique_ptr<ReplicationServer> replication;
     std::vector<kb::ecs::Entity> candidates;
-    std::unordered_set<kb::ecs::Entity::IdType> considered;
     std::uint32_t tick = 0U;
 };
 
@@ -368,6 +362,11 @@ bool DedicatedServer::Start(std::string& error) {
         error = "the bind address is not an IPv4 address: " + options.bindAddress;
         return false;
     }
+    if (!std::isfinite(options.visibilityRadius) || options.visibilityRadius < 0.0F) {
+        error = "visibility radius must be finite and nonnegative";
+        return false;
+    }
+    if (options.minClientRate == 0U || options.minClientRate > options.maxClientRate) { error = "invalid client byte rate limits"; return false; }
     if (options.tickRate < 10U || options.tickRate > 240U) {
         error = "the tick rate must be between 10 and 240";
         return false;
@@ -429,7 +428,7 @@ bool DedicatedServer::Start(std::string& error) {
         return false;
     }
     // Net.* is attached before the scripts start, so that their Created and Ready can declare RPCs and mark entities.
-    s.net = std::make_unique<ScriptNetworkRuntime>(ScriptNetworkRuntime::Role::Server, *s.scene);
+    s.net = std::make_unique<ScriptNetworkRuntime>(ScriptNetworkRuntime::Role::Server, *s.scene, opened.replication);
     if (!s.scripts->InstallSceneSystem()) {
         error = "the script scene system could not be installed";
         return false;
@@ -439,9 +438,8 @@ bool DedicatedServer::Start(std::string& error) {
     }
 
     // The network.
-    s.components = MakeSceneReplicationRegistry(options.worldExtent);
+    s.components = BuildReplicationRegistry(s.scene->Runtime().EcsWorld(), opened.replication, options.worldExtent, error);
     if (s.components == nullptr) {
-        error = "the world extent is not valid";
         return false;
     }
     s.rpcs = std::make_unique<RpcRegistry>();
@@ -512,6 +510,8 @@ bool DedicatedServer::Start(std::string& error) {
     if (options.contentVersion) contentVersion = *options.contentVersion;
     hostConfig.identity = MakeBuildIdentity(release, contentVersion);
     hostConfig.maxClients = options.maxClients;
+    hostConfig.maxConnectsPerSecondPerAddress = options.maxConnectsPerSecondPerAddress;
+    hostConfig.maxSessionsPerAddress = options.maxSessionsPerAddress;
     hostConfig.session.timeoutMilliseconds = options.idleTimeoutSeconds * 1000U;
     s.host = std::make_unique<Host>(*s.transport, hostConfig, s.keys);
     s.host->Diagnostics().SetSink([&s](std::string_view message) { s.Log(std::string(message)); });
@@ -522,8 +522,19 @@ bool DedicatedServer::Start(std::string& error) {
         error = "the network host could not be created (random numbers unavailable?)";
         return false;
     }
-    s.replication = std::make_unique<ReplicationServer>(*s.host, s.scene->Runtime().EcsWorld(), *s.components, *s.rpcs);
+    ReplicationConfig replicationConfig;
+    replicationConfig.visibilityRadius = options.visibilityRadius;
+    replicationConfig.gridPlane = options.gridPlane;
+    replicationConfig.tickRate = options.tickRate;
+    replicationConfig.minClientRate = options.minClientRate;
+    replicationConfig.maxClientRate = options.maxClientRate;
+    s.replication = std::make_unique<ReplicationServer>(*s.host, s.scene->Runtime().EcsWorld(), *s.components, *s.rpcs, replicationConfig);
     s.net->BindServer(*s.replication);
+    if (options.replicate != ReplicateMode::None) {
+        s.net->SetTransformAppeared([&s](kb::ecs::Entity entity) { s.candidates.push_back(entity); });
+        s.scene->Runtime().EcsWorld().ForEach<kb::scene::TransformComponent>(
+            [](kb::ecs::Entity entity, const kb::scene::TransformComponent&, void* context) { static_cast<Impl*>(context)->candidates.push_back(entity); }, &s);
+    }
     s.replication->SetRpcHandler("Ping", [&s](std::uint64_t caller, std::span<const RpcValue> args) {
         const std::vector<RpcValue> reply{ std::get<std::uint32_t>(args[0]) };
         static_cast<void>(s.replication->CallRpc(caller, "Pong", reply));
@@ -591,20 +602,32 @@ int DedicatedServer::Run(const std::atomic<bool>& stop) {
     if (!options.metricsFile.empty()) {
         metrics.open(options.metricsFile);
         if (!metrics) { s.Log("error: metrics file could not be opened"); return 1; }
-        metrics << "second,diag_total\n";
+        metrics << "second,tick_avg_ms,tick_max_ms,pump_ms,replication_ms,clients,state_msgs,bytes_out,bytes_in,datagrams_in,diag_total\n";
     }
+    double tickSum = 0.0, tickMax = 0.0, pumpSum = 0.0, replicationSum = 0.0;
+    std::uint64_t measuredTicks = 0U;
+    const auto elapsedMs = [](Clock::time_point start) { return std::chrono::duration<double, std::milli>(Clock::now() - start).count(); };
     for (;;) {
         const std::uint64_t now = s.NowMilliseconds();
+        const auto pumpStart = Clock::now();
         s.PumpHost(now);
+        pumpSum += elapsedMs(pumpStart);
 
         std::size_t steps = 0U;
         while (nextTickAt <= now * 1000ULL && steps < 5U) {
+            const auto tickStart = Clock::now();
             static_cast<void>(s.scene->Runtime().Update(stepSeconds));
             for (const std::string& problem : s.scene->Runtime().DrainSceneSystemErrors()) {
                 s.Log("[scene system error] " + problem);
             }
             s.SyncReplicatedEntities();
+            const auto replicationStart = Clock::now();
             s.replication->Tick(++s.tick, now);
+            replicationSum += elapsedMs(replicationStart);
+            const auto tickMs = elapsedMs(tickStart);
+            tickSum += tickMs;
+            tickMax = std::max(tickMax, tickMs);
+            ++measuredTicks;
             nextTickAt += tickMicroseconds;
             ++steps;
         }
@@ -615,7 +638,19 @@ int DedicatedServer::Run(const std::atomic<bool>& stop) {
         if (now >= nextStatusAt) {
             s.WriteStatus();
             if (metrics.is_open()) {
-                metrics << now / 1000U << ',' << s.host->Diagnostics().Total() << '\n';
+                std::uint64_t bytesOut = 0U, bytesIn = 0U;
+                for (const auto id : s.host->ClientIds()) {
+                    if (const auto* stats = s.host->ClientStats(id)) {
+                        bytesOut += stats->bytesSent;
+                        bytesIn += stats->bytesAccepted;
+                    }
+                }
+                metrics << now / 1000U << ',' << (measuredTicks == 0U ? 0.0 : tickSum / static_cast<double>(measuredTicks))
+                    << ',' << tickMax << ',' << pumpSum << ',' << replicationSum << ',' << s.host->ClientCount()
+                    << ',' << s.replication->Stats().stateMessagesSent << ',' << bytesOut << ',' << bytesIn
+                    << ',' << s.host->Stats().datagramsReceived << ',' << s.host->Diagnostics().Total() << '\n';
+                tickSum = tickMax = pumpSum = replicationSum = 0.0;
+                measuredTicks = 0U;
                 metrics.flush();
             }
             nextStatusAt = now + 1000U;

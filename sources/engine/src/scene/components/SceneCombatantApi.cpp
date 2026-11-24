@@ -1,3 +1,4 @@
+#include "engine/network/NetworkScriptBridge.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneComponentMutationService.hpp"
 #include "scene/SceneComponentQueryService.hpp"
@@ -24,6 +25,7 @@ bool SceneComponentMutationService::SetCombatant(Scene& scene, SceneEntity entit
     SceneState& state = SceneAccess::State(scene);
     state.componentStorage.Combatants().Set(entity, combatant);
     MarkScenePrefabNodeDirty(state, entity);
+    if (state.networkRuntime != nullptr) state.networkRuntime->ComponentChanged(entity.Id());
     return true;
 }
 void SceneComponentMutationService::RemoveCombatant(Scene& scene, SceneEntity entity) noexcept {
@@ -32,12 +34,14 @@ void SceneComponentMutationService::RemoveCombatant(Scene& scene, SceneEntity en
     SceneState& state = SceneAccess::State(scene);
     state.componentStorage.Combatants().Remove(entity);
     MarkScenePrefabNodeDirty(state, entity);
+    if (state.networkRuntime != nullptr) state.networkRuntime->ComponentChanged(entity.Id());
 }
 void SceneComponentMutationService::MarkCombatantModified(Scene& scene, SceneEntity entity) noexcept {
     if (!SceneEntityService::IsAlive(scene, entity)) return;
     SceneState& state = SceneAccess::State(scene);
     state.componentStorage.Combatants().MarkModified(entity);
     MarkScenePrefabNodeDirty(state, entity);
+    if (state.networkRuntime != nullptr) state.networkRuntime->ComponentChanged(entity.Id());
 }
 
 } // namespace kb::scene

@@ -1,4 +1,5 @@
 #include "kb/net/SceneClient.hpp"
+#include "kb/net/ProjectScene.hpp"
 #include "engine/security/ReleaseManifest.hpp"
 #include "kb/net/Auth.hpp"
 #include "kb/net/SceneReplication.hpp"
@@ -67,6 +68,11 @@ bool ParseSessionIdentity(const kb::core::JsonValue& root, SceneClientOptions& p
         if (!std::isfinite(value) || value < 0.0 || value > 10.0 || std::floor(value) != value) return false;
         parsed.reconnectAttempts = static_cast<std::uint32_t>(value);
     }
+    if (const auto* rate = root.Find("downlinkBytesPerSecond")) {
+        const double value = rate->AsNumber(-1.0);
+        if (!std::isfinite(value) || value < 1.0 || value > UINT32_MAX || value != std::floor(value)) return false;
+        parsed.downlinkBytesPerSecond = static_cast<std::uint32_t>(value);
+    }
     return true;
 }
 } // namespace
@@ -133,10 +139,19 @@ bool ParseNativeSceneClientSettings(std::string_view json, SceneClientOptions& o
     return true;
 }
 
+namespace {
+kb::network::ReplicationDeclarations LoadClientDeclarations(const kb::scene::Scene& scene, std::string& error) {
+    kb::network::ReplicationDeclarations result;
+    static_cast<void>(LoadReplicationDeclarations(scene, result, error));
+    return result;
+}
+}
+
 struct SceneClient::Impl {
     Impl(kb::scene::Scene& value, SceneClientOptions settings, TransportFactory create)
         : scene(value), options(std::move(settings)), factory(std::move(create)),
-          script(ScriptNetworkRuntime::Role::Client, value) {
+          replicationDeclarations(LoadClientDeclarations(value, declarationError)),
+          script(ScriptNetworkRuntime::Role::Client, value, replicationDeclarations) {
         script.SetClientAuthorized(false);
     }
     ~Impl() {
@@ -170,11 +185,15 @@ struct SceneClient::Impl {
         for (const auto& entry : client->Diagnostics().Entries()) {
             diagnostics << DiagName(entry.code) << ": " << entry.detail << '\n';
         }
-        replication = std::make_unique<ReplicationClient>(*client, scene.Runtime().EcsWorld(), *components, rpcs);
+        ReplicationConfig replicationConfig;
+        replicationConfig.requestedBytesPerSecond = options.downlinkBytesPerSecond;
+        replication = std::make_unique<ReplicationClient>(*client, scene.Runtime().EcsWorld(), *components, rpcs, replicationConfig);
         script.BindClient(*replication, *client, options.clientId);
         smoothed.clear();
         serverClock = TickClock{};
-        replication->SetStateCallback([this](NetworkId id, kb::ecs::Entity entity, std::uint32_t tick) {
+        auto variablesChanged = replication->SetStateCallback({});
+        replication->SetStateCallback([this, variablesChanged = std::move(variablesChanged)](NetworkId id, kb::ecs::Entity entity, std::uint32_t tick) {
+            if (variablesChanged) variablesChanged(id, entity, tick);
             const kb::scene::TransformComponent* transform = scene.Runtime().EcsWorld().TryGet<kb::scene::TransformComponent>(entity);
             if (transform == nullptr) return;
             auto found = smoothed.find(id);
@@ -197,6 +216,8 @@ struct SceneClient::Impl {
     kb::scene::Scene& scene;
     SceneClientOptions options;
     TransportFactory factory;
+    std::string declarationError;
+    kb::network::ReplicationDeclarations replicationDeclarations;
     ScriptNetworkRuntime script;
     std::unique_ptr<ReplicationRegistry> components;
     RpcRegistry rpcs;
@@ -273,7 +294,7 @@ std::size_t SceneClient::ReplicaCount() const {
     return impl_->replication ? impl_->replication->ReplicaCount() : 0U;
 }
 
-kb::ecs::Entity SceneClient::Replica(std::uint32_t networkId) const {
+kb::ecs::Entity SceneClient::Replica(std::uint64_t networkId) const {
     return impl_->replication ? impl_->replication->Find(networkId) : kb::ecs::Entity{};
 }
 
@@ -285,10 +306,11 @@ bool SceneClient::Update(std::uint64_t now, std::ostream& diagnostics) {
             diagnostics << "network: invalid session settings\n";
             return false;
         }
-        s.components = MakeSceneReplicationRegistry(s.options.worldExtent);
-        if (!s.components) { diagnostics << "network: replication registry rejected\n"; return false; }
-        DefineStandardRpcs(s.rpcs);
         std::string error;
+        if (!s.declarationError.empty()) { diagnostics << "network: " << s.declarationError << '\n'; return false; }
+        s.components = BuildReplicationRegistry(s.scene.Runtime().EcsWorld(), s.replicationDeclarations, s.options.worldExtent, error);
+        if (!s.components) { diagnostics << "network: " << error << '\n'; return false; }
+        DefineStandardRpcs(s.rpcs);
         if (!s.script.Freeze(s.rpcs, error)) { diagnostics << "network: RPC registry rejected\n"; return false; }
         s.initialized = true;
     }
@@ -306,6 +328,7 @@ bool SceneClient::Update(std::uint64_t now, std::ostream& diagnostics) {
         if (event.type == NetEventType::Connected) {
             if (!s.options.token.empty()) { s.tokenPending = true; continue; }
             s.authorized = true;
+            s.retries = 0U;
             s.script.SetClientAuthorized(true);
             s.Deliver(event);
             diagnostics << "network: connected\n";
@@ -322,12 +345,19 @@ bool SceneClient::Update(std::uint64_t now, std::ostream& diagnostics) {
             if (data[0] == kAuthMessageAccepted && data.size() == 5U && (data[1] & kScopePlay) != 0U) {
                 if (!s.authorized) {
                     s.authorized = true;
+                    s.retries = 0U;
                     s.script.SetClientAuthorized(true);
                     s.Deliver(NetEvent{.type = NetEventType::Connected});
                     diagnostics << "network: authorized\n";
                 }
             } else {
-                s.refused = true;
+                // Only a denied command stops automatic reconnects.
+                const std::uint32_t value = data.size() == 5U ? (static_cast<std::uint32_t>(data[1]) | static_cast<std::uint32_t>(data[2]) << 8U |
+                    static_cast<std::uint32_t>(data[3]) << 16U | static_cast<std::uint32_t>(data[4]) << 24U) : 0xFFFFFFFFU;
+                const bool expired = (data[0] == kAuthMessageKicked && value == static_cast<std::uint32_t>(AuthKickReason::Expired)) ||
+                    (data[0] == kAuthMessageRefused && value == static_cast<std::uint32_t>(AuthStatus::Expired));
+                s.refused = data[0] == kAuthMessageDenied;
+                if (expired) s.script.NotifyAuthExpired();
                 s.authorized = false;
                 s.script.SetClientAuthorized(false);
                 s.client->Disconnect();
@@ -341,7 +371,7 @@ bool SceneClient::Update(std::uint64_t now, std::ostream& diagnostics) {
         if (s.client->Authenticate(s.options.token) == SendResult::Queued) s.tokenPending = false;
     }
     if (s.authorized) {
-        s.replication->Flush();
+        s.replication->Flush(now);
         s.Smooth();
         const auto count = s.replication->ReplicaCount();
         if (count != s.lastReplicas) {

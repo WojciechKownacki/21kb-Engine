@@ -1,3 +1,5 @@
+#include "engine/network/ReplicableComponents.hpp"
+#include "engine/scene/NetworkedVariablesComponent.hpp"
 #include "scene/components/SceneComponentRegistry.hpp"
 
 #include "engine/ecs/ComponentReflectionMacros.hpp"
@@ -759,6 +761,15 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     // Keep runtime diagnostic type metadata in the host, which outlives provider DLLs.
     static_cast<void>(world.RegisterComponent<AIBrainDecisionSnapshot>(
         "AIBrainDecisionSnapshot", { .storageClass = kb::ecs::ComponentStorageClass::SparsePayload }));
+    static_cast<void>(RegisterSceneComponent<NetworkedVariablesComponent>(world, NetworkedVariablesComponent::StableId));
+    static_cast<void>(world.RegisterComponentReflection<NetworkedVariablesComponent>(NetworkedVariablesComponent::StableId, {
+        KB_ECS_FIELD(NetworkedVariablesComponent, values, kb::ecs::ComponentFieldType::Bytes),
+    }));
+    static_cast<void>(world.RegisterComponentReflection<CombatantComponent>(CombatantComponent::StableId, {
+        KB_ECS_FIELD(CombatantComponent, health, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(CombatantComponent, maximumHealth, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(CombatantComponent, healthRegeneration, kb::ecs::ComponentFieldType::Float32),
+    }));
     RegisterPhysicsReflection(world);
     RegisterAudioReflection(world);
     RegisterLightReflection(world);
@@ -893,3 +904,11 @@ std::uint64_t SceneComponentRegistry::NavLinkComponentId() const noexcept { retu
 std::uint64_t SceneComponentRegistry::NavBoundsComponentId() const noexcept { return navBoundsComponentId_; }
 
 } // namespace kb::scene
+
+namespace kb::network {
+ReplicableComponentTable MakeSceneReplicableComponents(const kb::ecs::World& world) {
+    ReplicableComponentTable table;
+    table.Add(MakeReplicable<kb::scene::CombatantComponent>(world, kb::scene::CombatantComponent::StableId));
+    return table;
+}
+} // namespace kb::network

@@ -57,7 +57,11 @@ public:
         calls.push_back({ name, target, std::vector<ScriptRpcValue>(args.begin(), args.end()) });
         return true;
     }
-    bool Replicate(std::uint64_t entity, std::string& error) override {
+    void ComponentChanged(std::uint64_t, bool = false) override {}
+    bool SetVar(std::uint64_t, const std::string& name, double, std::string& error) override { error = name + ": unknown variable"; return false; }
+    bool GetVar(std::uint64_t, const std::string& name, double&, std::string& error) const override { error = name + ": unknown variable"; return false; }
+    bool Replicate(std::uint64_t entity, std::string& error, bool global) override {
+        static_cast<void>(global);
         if (mode != ScriptNetMode::Server) {
             error = "not a server";
             return false;
@@ -333,12 +337,13 @@ void RunLuaAndEventsTest() {
     Check(shared("lua.hit.sender") && shared("lua.hit.sender")->AsInt() == 4 && shared("lua.hit.damage")->AsFloat() == 33.5F && shared("lua.hit.who")->AsString() == "goblin",
         "an RPC event did not reach the script with its arguments");
 
-    // The queue is bounded: a flood keeps the newest events and costs bounded memory.
+    // Connection lifecycle events survive even when no replaceable event can make room.
     for (int index = 0; index < 5000; ++index) {
         ScriptNetApi::QueueEvent(scene, kb::script::ScriptNetEvent{ "OnNetConnected", { { "player", std::uint32_t{ static_cast<std::uint32_t>(index) } } } });
     }
     const std::vector<kb::script::ScriptNetEvent> drained = ScriptNetApi::DrainEvents(scene);
-    Check(drained.size() == 1024U && std::get<std::uint32_t>(drained.back().arguments.front().second) == 4999U, "the event queue is not bounded to the newest events");
+    Check(drained.size() == 5000U && std::get<std::uint32_t>(drained.front().arguments.front().second) == 0U &&
+        std::get<std::uint32_t>(drained.back().arguments.front().second) == 4999U, "connection lifecycle events were dropped");
     ScriptNetApi::Attach(scene, nullptr);
 }
 

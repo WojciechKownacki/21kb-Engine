@@ -2,6 +2,7 @@
 
 #include "engine/network/NetworkScriptBridge.hpp"
 #include "kb/net/Replication.hpp"
+#include "engine/network/ReplicationDeclarations.hpp"
 
 #include <map>
 #include <string>
@@ -27,6 +28,7 @@ class Scene;
 //   OnNetDisconnected(player, reason) the same for leaving
 //   OnNetSpawned(entity, owner)       client: a replicated entity appeared in the world given to ReplicationClient
 //   OnNetDespawned(entity)            client: it went away
+//   OnNetAuthExpired()                client: the login token expired and the server ended the session (a new token is needed)
 //   OnRpc_<name>(sender, n1.., s1.., b1.., e1..)   a call arrived; sender is the calling player (0: the server)
 // An `entity` on a client is an entity of the replica world, usable as an argument of Net.Call.
 namespace kb::net {
@@ -35,7 +37,7 @@ class ScriptNetworkRuntime final : public kb::network::INetworkScriptRuntime {
 public:
     enum class Role : std::uint8_t { Server, Client };
 
-    ScriptNetworkRuntime(Role role, kb::scene::Scene& scene);
+    ScriptNetworkRuntime(Role role, kb::scene::Scene& scene, kb::network::ReplicationDeclarations declarations);
     ~ScriptNetworkRuntime() override;
 
     // Defines the declared RPCs after the ones already in `registry` (the standard ones). After this, Net.RegisterRpc is refused.
@@ -43,6 +45,7 @@ public:
     void BindServer(ReplicationServer& server);
     void BindClient(ReplicationClient& replication, Client& connection, std::uint64_t playerId);
     void SetClientAuthorized(bool authorized) noexcept { clientAuthorized_ = authorized; }
+    void NotifyAuthExpired() { Queue("OnNetAuthExpired", {}); }
     void HandleEvent(const NetEvent& event);
 
     [[nodiscard]] kb::network::ScriptNetMode Mode() const override { return role_ == Role::Server ? kb::network::ScriptNetMode::Server : kb::network::ScriptNetMode::Client; }
@@ -52,24 +55,37 @@ public:
     bool DeclareRpc(const kb::network::ScriptRpcDeclaration& declaration, std::string& error) override;
     [[nodiscard]] const kb::network::ScriptRpcDeclaration* FindRpc(const std::string& name) const override;
     bool CallRpc(const std::string& name, std::uint64_t target, std::span<const kb::network::ScriptRpcValue> args, std::string& error) override;
-    bool Replicate(std::uint64_t entity, std::string& error) override;
+    bool Replicate(std::uint64_t entity, std::string& error, bool global = false) override;
     [[nodiscard]] bool IsReplicated(std::uint64_t entity) const override;
     bool SetOwner(std::uint64_t entity, std::uint64_t player, std::string& error) override;
+    void ComponentChanged(std::uint64_t entity, bool appeared = false) override;
+    bool SetVar(std::uint64_t entity, const std::string& name, double value, std::string& error) override;
+    bool GetVar(std::uint64_t entity, const std::string& name, double& value, std::string& error) const override;
+    void SetTransformAppeared(std::function<void(kb::ecs::Entity)> callback) { transformAppeared_ = std::move(callback); }
 
 private:
     void Deliver(const kb::network::ScriptRpcDeclaration& declaration, std::uint64_t sender, std::span<const RpcValue> args);
     void Queue(std::string name, std::vector<std::pair<std::string, kb::network::ScriptRpcValue>> arguments);
+    void PrepareVariables(kb::ecs::Entity entity);
+    void VariablesChanged(NetworkId id, kb::ecs::Entity entity, bool initial);
+    [[nodiscard]] bool VariableVisible(const kb::network::ReplicatedVariableDecl& variable, NetworkId id) const;
 
     Role role_;
     kb::scene::Scene* scene_;
     std::vector<kb::network::ScriptRpcDeclaration> declarations_;
     bool frozen_ = false;
-    std::vector<std::uint64_t> pendingReplicate_;
+    struct PendingReplication { std::uint64_t entity; bool global; };
+    std::vector<PendingReplication> pendingReplicate_;
     ReplicationServer* server_ = nullptr;
     ReplicationClient* replication_ = nullptr;
     Client* connection_ = nullptr;
     std::uint64_t playerId_ = 0U;
     bool clientAuthorized_ = true;
+    std::function<void(kb::ecs::Entity)> transformAppeared_;
+    kb::network::ReplicationDeclarations replicationDeclarations_;
+    std::string replicationError_;
+    struct VariableSnapshot { std::array<float, 32U> values{}; std::uint32_t present = 0U; };
+    std::map<NetworkId, VariableSnapshot> variableSnapshots_;
 };
 
 } // namespace kb::net

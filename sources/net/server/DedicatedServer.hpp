@@ -36,13 +36,18 @@ struct ServerOptions {
     std::vector<std::string> iceServers; // "stun:host:port" or "turn:user:pass@host:port" for WebRTC peers
     std::filesystem::path keysFile;   // lines of "<client id> <64 hex digits>"; '#' starts a comment
     std::size_t maxClients = 16U;
+    std::uint32_t maxConnectsPerSecondPerAddress = 8U;
+    std::uint32_t maxSessionsPerAddress = 16U;
     std::uint32_t tickRate = 30U;     // fixed simulation and replication steps per second
+    std::uint32_t minClientRate = 16384U, maxClientRate = 262144U;
     std::uint32_t idleTimeoutSeconds = 30U;  // a client silent for this long is dropped
     std::uint32_t emptyTimeoutSeconds = 0U;  // stop after this long without a client once one has been there (0: never)
     std::uint32_t maxSeconds = 0U;           // stop after this long (0: run until told to stop)
     ReplicateMode replicate = ReplicateMode::All;
     std::string replicatePrefix;
     float worldExtent = 1000.0F;
+    float visibilityRadius = 0.0F;
+    GridPlane gridPlane = GridPlane::XZ;
     std::filesystem::path stopFile;   // the server stops cleanly when this file exists
     std::filesystem::path portFile;   // the bound port, written once the socket is open
     std::filesystem::path metricsFile;

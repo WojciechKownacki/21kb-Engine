@@ -24,6 +24,8 @@ std::string_view DiagName(DiagCode code) noexcept {
     case DiagCode::RateLimited: return "RateLimited";
     case DiagCode::ComponentGroupLimit: return "ComponentGroupLimit";
     case DiagCode::NotAuthority: return "NotAuthority";
+    case DiagCode::EventsDropped: return "EventsDropped";
+    case DiagCode::ConnectBucketsFull: return "ConnectBucketsFull";
     }
     return "Unknown";
 }

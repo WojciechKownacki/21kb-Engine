@@ -101,6 +101,8 @@ struct WorldPartitionState;
 
 } // namespace kb::world
 
+namespace kb::network { class INetworkScriptRuntime; }
+
 namespace kb::scene {
 struct SceneUIMediaState;
 
@@ -1229,6 +1231,7 @@ public:
     std::uint64_t nextSurfaceGeometryRevision = 1;
     std::vector<VectorShape2DRuntimeRecord> vectorShapes2D;
     std::shared_ptr<SceneUIMediaState> uiMedia;
+    kb::network::INetworkScriptRuntime* networkRuntime = nullptr;
 };
 
 } // namespace kb::scene

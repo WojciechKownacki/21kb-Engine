@@ -1,3 +1,4 @@
+#include "engine/network/NetworkScriptBridge.hpp"
 #include "ecs/world/WorldInternalAccess.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneEntityService.hpp"
@@ -95,6 +96,7 @@ void PublishTransformRow(SceneState& state, const SceneTransformWrite& write) {
         EnqueueSceneTransformDirtyFrontier(state, entity);
     }
     MarkScenePrefabNodeDirty(state, entity);
+    if (state.networkRuntime != nullptr) state.networkRuntime->ComponentChanged(entity.Id());
 }
 
 // Writes a live entity's transform. False when the entity is not alive.
@@ -108,6 +110,7 @@ bool WriteTransform(SceneState& state, SceneEntity entity, const TransformCompon
     if (!state.componentStorage.Transforms().Set(entity, transform)) {
         return false;
     }
+    if (state.networkRuntime != nullptr) state.networkRuntime->ComponentChanged(entity.Id(), true);
     if (SceneHierarchyCache::HasTransformLink(state, entity)) {
         EnqueueSceneTransformDirtyFrontier(state, entity);
     }

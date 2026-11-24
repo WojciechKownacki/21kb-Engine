@@ -137,7 +137,7 @@ RpcStatus ValidateRpcArguments(const RpcDefinition& definition, std::span<const 
             }
             break;
         case RpcArgType::NetworkId:
-            if (!std::holds_alternative<std::uint32_t>(value) || std::get<std::uint32_t>(value) == 0U) {
+            if (!std::holds_alternative<NetworkId>(value) || std::get<NetworkId>(value) == 0U) {
                 return RpcStatus::BadArguments;
             }
             break;
@@ -174,6 +174,8 @@ RpcStatus EncodeRpc(const RpcRegistry& registry, std::uint16_t id, std::span<con
             writer.U32(static_cast<std::uint32_t>(*signedValue));
         } else if (const auto* unsignedValue = std::get_if<std::uint32_t>(&value)) {
             writer.U32(*unsignedValue);
+        } else if (const auto* networkId = std::get_if<NetworkId>(&value)) {
+            writer.U64(*networkId);
         } else if (const auto* real = std::get_if<float>(&value)) {
             writer.U32(std::bit_cast<std::uint32_t>(*real));
         } else {
@@ -221,8 +223,10 @@ RpcStatus DecodeRpc(const RpcRegistry& registry, std::span<const std::uint8_t> p
             args.emplace_back(static_cast<std::int32_t>(reader.U32()));
             break;
         case RpcArgType::UInt32:
-        case RpcArgType::NetworkId:
             args.emplace_back(reader.U32());
+            break;
+        case RpcArgType::NetworkId:
+            args.emplace_back(reader.U64());
             break;
         case RpcArgType::Float:
             args.emplace_back(std::bit_cast<float>(reader.U32()));

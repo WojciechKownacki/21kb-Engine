@@ -1,4 +1,5 @@
 #include "scene/entities/SceneEntityDestructionService.hpp"
+#include "engine/network/NetworkScriptBridge.hpp"
 
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneEntityService.hpp"
@@ -62,6 +63,7 @@ void SceneEntityDestructionService::DestroyEntity(Scene& scene, SceneEntity enti
             state.prefabInstances.ForgetDestroyedObject(entity);
             state.componentStorage.Behaviours().NoteEntityDestroyed(entity);
             const auto beforeRemoval = state.world.NativeStorage().RemovalVersion();
+            if (state.networkRuntime != nullptr) state.networkRuntime->ComponentChanged(entity.Id());
             state.world.DestroyEntity(entity);
             state.transformTopology.LeafRemovalHandled(beforeRemoval, state.world.NativeStorage().RemovalVersion());
             if (entity == root) {

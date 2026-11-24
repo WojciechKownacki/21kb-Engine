@@ -43,15 +43,18 @@ and state replication on top; see "Replication and RPC" below. Prediction.hpp ad
 
 Each client has a 32 byte secret that the host also holds (`IKeyProvider`). The key is never sent.
 
-1. `Connect` contains client id, client salt, release (U32), and content hash (U64), padded to 128 bytes.
+1. `Connect` contains client id, client salt, release (U32), content hash (U64), and a fresh 32-byte
+   client ephemeral public key, padded to 128 bytes.
 2. `Challenge` contains the client salt, address cookie, and MAC; the host stores no pending state.
-3. `Response` proves possession of the key and the address cookie.
+3. `Response` repeats the client ephemeral public key; its MAC covers the key and both salts.
 4. `Accept` carries a random 24-byte nonce and an authenticated encrypted 32-byte server random,
-   server release, and content hash, followed by a 16-byte tag. The header and nonce are authenticated.
+   server release, content hash, and server ephemeral public key, followed by a 16-byte tag.
+   The header and nonce are authenticated.
 
 Protocol version 2 uses HKDF-SHA-512 with the client and server salts and the label
 `21kb-net-accept-v2` for the Accept key. Session keys use those salts plus the fresh server random
-and the label `21kb-net-session-v2`. The client creates its session only after authenticating Accept.
+and the label `21kb-net-session-v2`, with the client secret and ephemeral X25519 shared secret as
+input keying material. The client creates its session only after authenticating Accept.
 A duplicate Response during a live session repeats the exact cached Accept without resetting packet
 numbers. After teardown, a valid replay creates fresh keys: old session packets fail authentication.
 Peers that send no authenticated data expire after `confirmMilliseconds` (default 5000 ms), even
@@ -89,8 +92,7 @@ takes a `Client` and the client's own `World`. The application passes every `Net
 `HandleEvent`, calls `ReplicationServer::Tick` at its tick rate and `ReplicationClient::Flush` once
 per tick.
 
-* **What replicates.** `Replicate(entity, owner)` gives an entity a network id (a `std::uint32_t`,
-  never reused in a run). Only the components registered in a `ReplicationRegistry` travel, each
+* **What replicates.** `Replicate(entity, owner)` reports whether an entity was registered. `NetworkIdOf(entity)` returns its 64-bit id, with a 32-bit slot index and 32-bit generation. Only the components registered in a `ReplicationRegistry` travel, each
   through a `StructCodec<T>` that lists its float, unsigned and bool members. Floats are quantized
   (`Float(&T::x, min, max, bits)`, 1 to 24 bits, clamped to the range; a position over +-500 with 16
   bits costs 2 bytes and has a step of 0.015). Other components never leave the server. Up to 16 components.
@@ -107,11 +109,25 @@ per tick.
   retransmitted, and a component changes on the wire only when its quantized value changes. The client
   acknowledges a state message only when every entry in it was applied to an entity it has and was not
   older than what that entity shows, because the server treats an acknowledged message as delivered
-  state. Updates are bounded by `maxUpdateBytes` per message and `maxBytesPerClientPerTick` per
-  client; a big change is spread over several ticks.
-* **Relevance.** `IRelevance` decides, per client and entity, whether the client may see it; an
-  entity that stops being relevant is despawned on that client only. `RadiusRelevance` is a distance
-  rule with a hysteresis band so that an entity on the edge does not flicker.
+  state. Updates are bounded by `maxUpdateBytes` per message and a negotiated byte rate per client,
+  with a burst of two ticks. Clients request `downlinkBytesPerSecond`; the server clamps the request
+  to its configured limits (`--max-client-rate` controls the upper limit). Near, middle and far
+  objects are eligible every one, two or four ticks; accumulated priority prevents starvation.
+  Sustained loss or excessive RTT reduces the rate; clean traffic gradually restores it. Five seconds
+  without acknowledgements stop state traffic until receiver acknowledgements resume.
+* **Declarations.** `Config/Replication.json` is shared by servers, clients, tools and cooked packages.
+  `BuildReplicationRegistry` adds the three transform groups and the declared native fields and
+  script variables. No file means transform groups only. Field ranges, bit counts and audiences
+  participate in the registry fingerprint, so different declarations refuse the connection.
+  Audiences are `Everyone`, `Owner`, `Others` and `InitialOnly`; changing ownership revokes private fields.
+  `Net.Replicate` prepares the variable component. The server writes `Net.SetVar(entity, "score", 12)`;
+  allowed clients read `Net.GetVar(replica, "score")` and receive `OnNetVarChanged(entity, name, value)`
+  once per changed value. Variables support Float, Int and Bool (0 or 1).
+* **Relevance.** A spatial grid selects nearby objects in the configured plane (XZ by default, XY for planar scenes).
+  `--visibility-radius` enables the radius; zero sends every object and warns for large populations.
+  Owned objects and objects marked with `Net.Replicate(..., mode="global")` are always visible.
+  A client without an owned object with a position sees only its own and global objects.
+  Objects enter at the radius and leave beyond 1.15 times the radius.
 * **Ownership.** Each replicated entity has an owner (client id, 0 for the server). `SetOwner`
   tells the clients that see it. Ownership is what an RPC's permission check uses.
 * **Late join and reconnect.** A client that connects (again) gets a Hello, answers with the
@@ -218,10 +234,10 @@ renderer, steps it at a fixed rate, and replicates it over UDP.
 * **Keys.** The keys file lists one `<client id> <64 hex digits>` per line (`#` starts a comment). Only
   those clients can connect; the handshake is the one above, so a wrong key or an unknown id gets no session.
 * **What is replicated.** The local transform (`SceneTransformCodec`: position over +-`world-extent` with 16
-  bits, rotation, scale; 20 bytes) of the entities chosen by `--replicate`: all that have a transform, those
+  bits, rotation in 4 bytes, and scale; three independent groups of 6/4/6 bytes) of the entities chosen by `--replicate`: all that have a transform, those
   whose name starts with a prefix, or none. An entity is judged once, when it is first seen. The server
   also defines the standard RPCs `Ping`/`Pong` and `Say`/`Said` (`DefineStandardRpcs`); a client builds the
-  same registries (`MakeSceneReplicationRegistry`, `DefineStandardRpcs`) and uses `ReplicationClient`.
+  same registries (`BuildReplicationRegistry`, `DefineStandardRpcs`) and uses `ReplicationClient`.
 * **Scripts.** The server's scripts see `Net.*`: they can declare RPCs, call clients, mark entities with `Net.Replicate`, and react to
   `OnNetConnected` and `OnRpc_<name>` (see Scripts above). The test project's script greets each player by id and answers an `Echo` RPC.
 * **Loop.** The scene (and its scripts) advance by a fixed step of `1 / tick-rate`; replication runs at the
@@ -258,7 +274,7 @@ Linux.
 
 * Congestion control. The sender retransmits on a timer and has no rate limit beyond the queue
   limits; a slow link is not protected from a fast sender.
-* Forward secrecy and key distribution. The client key is long lived and must reach both sides over
+* Key distribution. The client key is long lived and must reach both sides over
   a channel the application already trusts. A leaked key lets its holder impersonate that client.
 * IPv6, NAT rebinding (a session is tied to the source address), path MTU discovery.
 * Raw browser UDP is unavailable. The supported WebSocket adapter and dedicated-server listener are described in [Browser session transport](network_websocket.md).
@@ -291,3 +307,5 @@ from the relocated runtime. Project content and operator credentials remain
 separate deployment inputs passed through `--project` and `--keys`; they are
 never collected from the build tree by the runtime packager. Install the
 platform runtime libraries required by the selected native binary.
+
+Session keys combine the client key with a fresh ephemeral X25519 shared secret using HKDF-SHA-512. The ephemeral public key is authenticated in the handshake, and private ephemeral keys are wiped after agreement. A later client-key leak does not decrypt recorded sessions.

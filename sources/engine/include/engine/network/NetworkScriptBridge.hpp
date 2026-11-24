@@ -58,9 +58,12 @@ public:
     virtual bool CallRpc(const std::string& name, std::uint64_t target, std::span<const ScriptRpcValue> args, std::string& error) = 0;
 
     // Server only.
-    virtual bool Replicate(std::uint64_t entity, std::string& error) = 0;
+    virtual bool Replicate(std::uint64_t entity, std::string& error, bool global = false) = 0;
     [[nodiscard]] virtual bool IsReplicated(std::uint64_t entity) const = 0;
     virtual bool SetOwner(std::uint64_t entity, std::uint64_t player, std::string& error) = 0;
+    virtual void ComponentChanged(std::uint64_t entity, bool appeared = false) = 0;
+    virtual bool SetVar(std::uint64_t entity, const std::string& name, double value, std::string& error) = 0;
+    virtual bool GetVar(std::uint64_t entity, const std::string& name, double& value, std::string& error) const = 0;
 };
 
 } // namespace kb::network

@@ -3,8 +3,48 @@
 #include "engine/project/ProjectManager.hpp"
 #include "engine/project/ProjectSettings.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneRuntime.hpp"
+#include "engine/assets/bake/RuntimeAssetPack.hpp"
+#include "kb/net/SceneReplication.hpp"
+
+#include <fstream>
+#include <iterator>
 
 namespace kb::net {
+
+bool LoadReplicationDeclarations(const kb::scene::Scene& scene, kb::network::ReplicationDeclarations& declarations, std::string& error) {
+    declarations = {};
+    error.clear();
+    const auto& manager = scene.Assets().Manager();
+    std::string text;
+    if (manager.IsRuntimePackMounted()) {
+        const auto pack = manager.RuntimePack();
+        constexpr std::string_view path = "/Game/Config/Replication.json";
+        bool present = false;
+        for (const auto& file : pack->Manifest().auxiliaryFiles) present |= file.virtualPath == path;
+        if (!present) return true;
+        std::vector<std::uint8_t> bytes;
+        if (pack->ReadAuxiliaryFile(path, bytes) != kb::assets::bake::RuntimeAssetPackStatus::Success) {
+            error = "Replication.json: packaged declarations could not be read";
+            return false;
+        }
+        text.assign(bytes.begin(), bytes.end());
+    } else {
+        std::filesystem::path path;
+        for (const auto& mount : manager.Mounts().Mounts()) if (mount.name == "Game") path = mount.root.parent_path() / "Config" / "Replication.json";
+        if (path.empty()) return true;
+        std::error_code status;
+        const bool present = std::filesystem::exists(path, status);
+        if (status) { error = "Replication.json: declarations could not be inspected"; return false; }
+        if (!present) return true;
+        std::ifstream input(path, std::ios::binary);
+        if (!input) { error = "Replication.json: declarations could not be read"; return false; }
+        text.assign(std::istreambuf_iterator<char>(input), {});
+        if (input.bad()) { error = "Replication.json: declarations could not be read"; return false; }
+    }
+    if (!kb::network::ParseReplicationDeclarations(text, declarations, error)) return false;
+    return BuildReplicationRegistry(scene.Runtime().EcsWorld(), declarations, 1000.0F, error) != nullptr;
+}
 
 bool OpenProjectScene(const std::filesystem::path& project, const std::string& sceneOption, OpenedProjectScene& opened, std::string& error) {
     std::error_code pathError;
@@ -44,6 +84,7 @@ bool OpenProjectScene(const std::filesystem::path& project, const std::string& s
         return false;
     }
     static_cast<void>(scene->Assets().Discover());
+    if (!LoadReplicationDeclarations(*scene, opened.replication, error)) return false;
 
     std::string name = sceneOption;
     if (name.empty()) {

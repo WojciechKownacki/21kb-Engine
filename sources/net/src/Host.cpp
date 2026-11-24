@@ -16,11 +16,11 @@ namespace {
 constexpr std::size_t kHandshakeHeaderBytes = 4U;
 constexpr std::size_t kMacBytes = 32U;
 constexpr std::size_t kChallengeBytes = kHandshakeHeaderBytes + 8U + 8U + kMacBytes;
-constexpr std::size_t kAcceptPlainBytes = 44U;
+constexpr std::size_t kAcceptPlainBytes = 76U;
 constexpr std::size_t kAcceptPrefixBytes = kHandshakeHeaderBytes + kb::security::kAeadNonceBytes;
 constexpr std::size_t kAcceptBytes = kAcceptPrefixBytes + kAcceptPlainBytes + kb::security::kAeadTagBytes;
 constexpr std::size_t kRejectBytes = 25U;
-constexpr std::size_t kResponseBytes = kHandshakeHeaderBytes + 8U + 8U + 8U + kMacBytes;
+constexpr std::size_t kResponseBytes = kHandshakeHeaderBytes + 8U + 8U + 8U + 32U + kMacBytes;
 static_assert(kChallengeBytes < kMinConnectBytes, "a Challenge must be smaller than the Connect that asks for it");
 
 constexpr std::size_t kMaxQueuedEvents = 4096U;
@@ -34,13 +34,14 @@ using Mac = std::array<std::uint8_t, kMacBytes>;
 }
 
 [[nodiscard]] Mac ComputeMac(const SessionKey& key, std::string_view label, std::uint64_t clientId, std::uint64_t clientSalt,
-    std::uint64_t serverSalt) {
+    std::uint64_t serverSalt, std::span<const std::uint8_t, 32U> clientEphemeral) {
     std::vector<std::uint8_t> message;
     ByteWriter writer(message);
     writer.Bytes(AsBytes(label));
     writer.U64(clientId);
     writer.U64(clientSalt);
     writer.U64(serverSalt);
+    writer.Bytes(clientEphemeral);
     const kb::security::Sha512Digest digest = kb::security::HmacSha512(key, message);
     Mac mac{};
     std::copy_n(digest.begin(), mac.size(), mac.begin());
@@ -48,14 +49,17 @@ using Mac = std::array<std::uint8_t, kMacBytes>;
 }
 
 void DeriveSessionKeys(const SessionKey& key, std::uint64_t clientSalt, std::uint64_t serverSalt, std::span<const std::uint8_t, 32U> serverRandom,
-    SessionKey& clientToServer, SessionKey& serverToClient) {
+    const kb::security::SecretBytes<32U>& shared, SessionKey& clientToServer, SessionKey& serverToClient) {
     std::vector<std::uint8_t> salt;
     ByteWriter writer(salt);
     writer.U64(clientSalt);
     writer.U64(serverSalt);
     writer.Bytes(serverRandom);
     std::array<std::uint8_t, 2U * kSessionKeyBytes> output{};
-    kb::security::HkdfSha512(output, key, salt, AsBytes("21kb-net-session-v2"));
+    kb::security::SecretBytes<64U> material;
+    std::copy(key.begin(), key.end(), material.data());
+    std::copy(shared.Span().begin(), shared.Span().end(), material.data() + key.size());
+    kb::security::HkdfSha512(output, material.Span(), salt, AsBytes("21kb-net-session-v2"));
     std::copy_n(output.begin(), kSessionKeyBytes, clientToServer.begin());
     std::copy_n(output.begin() + static_cast<std::ptrdiff_t>(kSessionKeyBytes), kSessionKeyBytes, serverToClient.begin());
     kb::security::SecureWipe(output);
@@ -100,6 +104,7 @@ Host::Host(IDatagramTransport& transport, HostConfig config, const IKeyProvider&
     : transport_(&transport), keys_(&keys), config_(std::move(config)) {
     valid_ = config_.session.IsValid() && config_.maxClients != 0U && config_.maxDatagramsPerUpdate != 0U &&
         config_.maxPacketsPerPeerPerUpdate != 0U && config_.cookieLifetimeMilliseconds != 0U && config_.confirmMilliseconds != 0U &&
+        config_.maxConnectsPerSecondPerAddress != 0U && config_.maxSessionsPerAddress != 0U &&
         kb::security::SecureRandom(cookieSecret_);
     if (config_.identity.release == 0U && config_.identity.contentHash == 0U) {
         diagnostics_.Report(DiagCode::VersionUnchecked, "host build identity is unchecked");
@@ -117,6 +122,49 @@ std::uint64_t Host::Cookie(const Endpoint& from, std::uint64_t clientId, std::ui
     const kb::security::Sha512Digest digest = kb::security::HmacSha512(cookieSecret_, message);
     ByteReader reader(std::span<const std::uint8_t>(digest.data(), 8U));
     return reader.U64();
+}
+
+SessionKey Host::DecoyKey(std::uint64_t clientId) const {
+    std::vector<std::uint8_t> message;
+    ByteWriter writer(message);
+    writer.Bytes(AsBytes("21kb-net-decoy"));
+    writer.U64(clientId);
+    const kb::security::Sha512Digest digest = kb::security::HmacSha512(cookieSecret_, message);
+    SessionKey key{};
+    std::copy_n(digest.begin(), key.size(), key.begin());
+    return key;
+}
+
+bool Host::AllowConnect(std::uint64_t nowMilliseconds, std::uint32_t address) {
+    constexpr std::size_t kMaxBuckets = 8192U;
+    constexpr std::uint64_t kSweepMilliseconds = 10'000U;
+    const double rate = static_cast<double>(config_.maxConnectsPerSecondPerAddress);
+    const auto refilled = [&](const ConnectBucket& bucket) {
+        return std::min(rate, bucket.tokens + static_cast<double>(nowMilliseconds - bucket.updatedAt) * rate / 1000.0);
+    };
+    const auto sweep = [&] {
+        lastBucketSweep_ = nowMilliseconds;
+        for (auto it = connectBuckets_.begin(); it != connectBuckets_.end();) {
+            it = refilled(it->second) >= rate ? connectBuckets_.erase(it) : std::next(it);
+        }
+    };
+    if (nowMilliseconds - lastBucketSweep_ >= kSweepMilliseconds) sweep();
+    auto found = connectBuckets_.find(address);
+    if (found == connectBuckets_.end()) {
+        if (connectBuckets_.size() >= kMaxBuckets) sweep();
+        if (connectBuckets_.size() >= kMaxBuckets) {
+            ++stats_.connectBucketsFull;
+            diagnostics_.Report(DiagCode::ConnectBucketsFull, "authenticated Response admitted without an address bucket: table is full");
+            return true;
+        }
+        found = connectBuckets_.emplace(address, ConnectBucket{ rate, nowMilliseconds }).first;
+    }
+    ConnectBucket& bucket = found->second;
+    bucket.tokens = refilled(bucket);
+    bucket.updatedAt = nowMilliseconds;
+    if (bucket.tokens < 1.0) return false;
+    bucket.tokens -= 1.0;
+    return true;
 }
 
 void Host::Update(std::uint64_t nowMilliseconds) {
@@ -217,6 +265,7 @@ void Host::HandleConnect(std::uint64_t nowMilliseconds, const Endpoint& from, st
     const std::uint64_t clientId = reader.U64();
     const std::uint64_t clientSalt = reader.U64();
     const BuildIdentity identity{ reader.U32(), reader.U64() };
+    const auto ephemeral = reader.Bytes(32U);
     if (identity.release < config_.minClientRelease) {
         ++stats_.handshakesRejected;
         diagnostics_.Report(DiagCode::HandshakeVersion, "client release is below minimum");
@@ -229,14 +278,20 @@ void Host::HandleConnect(std::uint64_t nowMilliseconds, const Endpoint& from, st
         SendReject(from, RejectReason::ContentMismatch, clientSalt);
         return;
     }
-    SessionKey key{};
-    if (!reader.Ok() || clientId == 0U || !keys_->LookupKey(clientId, key)) {
+    if (!reader.Ok() || clientId == 0U) {
         ++stats_.handshakesRejected;
-        diagnostics_.Report(DiagCode::HandshakeContent, "unknown client in Connect");
+        diagnostics_.Report(DiagCode::HandshakeContent, "invalid client id in Connect");
         return;
     }
+    // An unknown id gets the same Challenge, made from a key only this host can compute: its Response cannot pass, and nobody learns which ids exist.
+    SessionKey decoy = DecoyKey(clientId);
+    SessionKey key{};
+    if (!keys_->LookupKey(clientId, key)) {
+        key = decoy;
+    }
+    kb::security::SecureWipe(decoy);
     const std::uint64_t serverSalt = Cookie(from, clientId, clientSalt, nowMilliseconds / config_.cookieLifetimeMilliseconds);
-    const Mac mac = ComputeMac(key, "21kb-net-challenge", clientId, clientSalt, serverSalt);
+    const Mac mac = ComputeMac(key, "21kb-net-challenge", clientId, clientSalt, serverSalt, std::span<const std::uint8_t, 32U>(ephemeral.data(), 32U));
     std::vector<std::uint8_t> challenge;
     ByteWriter writer(challenge);
     WriteHandshakeHeader(writer, wire::kTypeChallenge);
@@ -260,6 +315,7 @@ void Host::HandleResponse(std::uint64_t nowMilliseconds, const Endpoint& from, s
     const std::uint64_t clientId = reader.U64();
     const std::uint64_t clientSalt = reader.U64();
     const std::uint64_t serverSalt = reader.U64();
+    const auto ephemeral = reader.Bytes(32U);
     const std::span<const std::uint8_t> receivedMac = reader.Bytes(kMacBytes);
     SessionKey key{};
     if (!reader.Ok() || clientId == 0U || !keys_->LookupKey(clientId, key)) {
@@ -272,7 +328,7 @@ void Host::HandleResponse(std::uint64_t nowMilliseconds, const Endpoint& from, s
     const std::uint64_t epoch = nowMilliseconds / config_.cookieLifetimeMilliseconds;
     const bool cookieOk = serverSalt == Cookie(from, clientId, clientSalt, epoch) ||
         (epoch != 0U && serverSalt == Cookie(from, clientId, clientSalt, epoch - 1U));
-    const Mac expected = ComputeMac(key, "21kb-net-response", clientId, clientSalt, serverSalt);
+    const Mac expected = ComputeMac(key, "21kb-net-response", clientId, clientSalt, serverSalt, std::span<const std::uint8_t, 32U>(ephemeral.data(), 32U));
     if (!cookieOk || !kb::security::ConstantTimeEqual(expected, receivedMac)) {
         ++stats_.handshakesRejected;
         diagnostics_.Report(DiagCode::HandshakeContent, "invalid Response MAC or expired address cookie");
@@ -280,9 +336,17 @@ void Host::HandleResponse(std::uint64_t nowMilliseconds, const Endpoint& from, s
         return;
     }
 
+    if (!AllowConnect(nowMilliseconds, from.address)) {
+        ++stats_.handshakesRateLimited;
+        diagnostics_.Report(DiagCode::HandshakeRateLimited, "Response rate limit per address reached");
+        kb::security::SecureWipe(key);
+        return;
+    }
+
     const auto existing = peers_.find(from);
     if (existing != peers_.end()) {
-        if (existing->second.clientId == clientId && existing->second.clientSalt == clientSalt && existing->second.serverSalt == serverSalt) {
+        if (existing->second.clientId == clientId && existing->second.clientSalt == clientSalt && existing->second.serverSalt == serverSalt &&
+            std::equal(ephemeral.begin(), ephemeral.end(), existing->second.clientEphemeral.begin())) {
             if (transport_->Send(from, existing->second.accept) == TransportStatus::Error) ++stats_.sendErrors;
             kb::security::SecureWipe(key);
             return;
@@ -295,6 +359,15 @@ void Host::HandleResponse(std::uint64_t nowMilliseconds, const Endpoint& from, s
         if (old != peers_.end()) {
             RemovePeer(old, DisconnectReason::Replaced);
         }
+    }
+    std::size_t sameAddress = 0U;
+    for (auto it = peers_.lower_bound(Endpoint{ from.address, 0U }); it != peers_.end() && it->first.address == from.address; ++it) ++sameAddress;
+    if (sameAddress >= config_.maxSessionsPerAddress) {
+        ++stats_.sessionsPerAddressRefused;
+        diagnostics_.Report(DiagCode::HandshakeServerFull, "session limit per address reached");
+        SendReject(from, RejectReason::ServerFull, clientSalt);
+        kb::security::SecureWipe(key);
+        return;
     }
     if (peers_.size() >= config_.maxClients) {
         ++stats_.handshakesRejected;
@@ -312,7 +385,18 @@ void Host::HandleResponse(std::uint64_t nowMilliseconds, const Endpoint& from, s
         diagnostics_.Report(DiagCode::HandshakeContent, "secure random source unavailable");
         return;
     }
+    kb::security::X25519KeyPair serverEphemeral;
+    kb::security::SecretBytes<32U> shared;
+    if (!kb::security::GenerateX25519KeyPair(serverEphemeral) || !kb::security::X25519SharedSecret(serverEphemeral.secret,
+        std::span<const std::uint8_t, 32U>(ephemeral.data(), 32U), shared)) {
+        kb::security::SecureWipe(key);
+        kb::security::SecureWipe(serverRandom);
+        ++stats_.handshakesRejected;
+        diagnostics_.Report(DiagCode::HandshakeContent, "invalid ephemeral public key or random source unavailable");
+        return;
+    }
     Peer peer;
+    std::copy(ephemeral.begin(), ephemeral.end(), peer.clientEphemeral.begin());
     peer.endpoint = from;
     peer.clientId = clientId;
     peer.clientSalt = clientSalt;
@@ -324,6 +408,7 @@ void Host::HandleResponse(std::uint64_t nowMilliseconds, const Endpoint& from, s
     accept.Bytes(serverRandom);
     accept.U32(config_.identity.release);
     accept.U64(config_.identity.contentHash);
+    accept.Bytes(serverEphemeral.publicKey);
     kb::security::AeadKey acceptKey;
     DeriveAcceptKey(key, clientSalt, serverSalt, acceptKey);
     kb::security::AeadTag tag{};
@@ -332,7 +417,7 @@ void Host::HandleResponse(std::uint64_t nowMilliseconds, const Endpoint& from, s
     accept.Bytes(tag);
     SessionKey clientToServer{};
     SessionKey serverToClient{};
-    DeriveSessionKeys(key, clientSalt, serverSalt, serverRandom, clientToServer, serverToClient);
+    DeriveSessionKeys(key, clientSalt, serverSalt, serverRandom, shared, clientToServer, serverToClient);
     kb::security::SecureWipe(serverRandom);
     kb::security::SecureWipe(key);
     if (transport_->Send(from, peer.accept) == TransportStatus::Error) ++stats_.sendErrors;
@@ -446,6 +531,10 @@ Client::Client(IDatagramTransport& transport, ClientConfig config, std::uint64_t
         Fail(DisconnectReason::Error);
         return;
     }
+    if (!kb::security::GenerateX25519KeyPair(ephemeral_)) {
+        Fail(DisconnectReason::Error);
+        return;
+    }
     if (clientSalt_ == 0U) {
         std::array<std::uint8_t, 8U> random{};
         if (!kb::security::SecureRandom(random)) {
@@ -461,6 +550,7 @@ void Client::Fail(DisconnectReason reason) {
     if (state_ == ClientState::Disconnected) {
         return;
     }
+    kb::security::SecureWipe(ephemeral_.secret.Span());
     state_ = ClientState::Disconnected;
     NetEvent event;
     event.type = NetEventType::Disconnected;
@@ -476,18 +566,20 @@ void Client::SendConnect() {
     writer.U64(clientSalt_);
     writer.U32(config_.identity.release);
     writer.U64(config_.identity.contentHash);
+    writer.Bytes(ephemeral_.publicKey);
     writer.Zeros(kMinConnectBytes - packet.size());
     static_cast<void>(transport_->Send(host_, packet));
 }
 
 void Client::SendResponse() {
-    const Mac mac = ComputeMac(key_, "21kb-net-response", clientId_, clientSalt_, serverSalt_);
+    const Mac mac = ComputeMac(key_, "21kb-net-response", clientId_, clientSalt_, serverSalt_, ephemeral_.publicKey);
     std::vector<std::uint8_t> packet;
     ByteWriter writer(packet);
     WriteHandshakeHeader(writer, wire::kTypeResponse);
     writer.U64(clientId_);
     writer.U64(clientSalt_);
     writer.U64(serverSalt_);
+    writer.Bytes(ephemeral_.publicKey);
     writer.Bytes(mac);
     static_cast<void>(transport_->Send(host_, packet));
 }
@@ -509,7 +601,7 @@ void Client::HandleDatagram(std::uint64_t nowMilliseconds, std::span<const std::
         if (!reader.Ok() || echoedSalt != clientSalt_) {
             return;
         }
-        const Mac expected = ComputeMac(key_, "21kb-net-challenge", clientId_, clientSalt_, serverSalt);
+        const Mac expected = ComputeMac(key_, "21kb-net-challenge", clientId_, clientSalt_, serverSalt, ephemeral_.publicKey);
         if (!kb::security::ConstantTimeEqual(expected, receivedMac)) {
             return; // the host does not know the key: not the host we meant to reach
         }
@@ -541,9 +633,19 @@ void Client::HandleDatagram(std::uint64_t nowMilliseconds, std::span<const std::
             Fail(DisconnectReason::ContentMismatch);
             return;
         }
+        const auto publicKey = payload.Bytes(32U);
+        kb::security::SecretBytes<32U> shared;
+        if (!kb::security::X25519SharedSecret(ephemeral_.secret,
+            std::span<const std::uint8_t, 32U>(publicKey.data(), 32U), shared)) {
+            kb::security::SecureWipe(plaintext);
+            diagnostics_.Report(DiagCode::HandshakeContent, "invalid server ephemeral public key");
+            Fail(DisconnectReason::Error);
+            return;
+        }
         SessionKey clientToServer{};
         SessionKey serverToClient{};
-        DeriveSessionKeys(key_, clientSalt_, serverSalt_, std::span<const std::uint8_t, 32U>(random.data(), 32U), clientToServer, serverToClient);
+        DeriveSessionKeys(key_, clientSalt_, serverSalt_, std::span<const std::uint8_t, 32U>(random.data(), 32U), shared, clientToServer, serverToClient);
+        kb::security::SecureWipe(ephemeral_.secret.Span());
         kb::security::SecureWipe(plaintext);
         session_ = std::make_unique<Session>(config_.session, clientToServer, serverToClient, nowMilliseconds);
         kb::security::SecureWipe(clientToServer);

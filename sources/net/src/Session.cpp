@@ -498,6 +498,10 @@ bool Session::PopMessage(Message& message) {
     return true;
 }
 
+std::size_t Session::MessageOverhead(bool reliable) noexcept {
+    return kHeaderBytes + kTagBytes + kAckBytes + (reliable ? kReliableRecordOverhead : kUnreliableRecordOverhead);
+}
+
 void Session::ApplyAcks(std::uint64_t nowMilliseconds, std::uint64_t latest, std::uint32_t bits) {
     if (latest == 0U) {
         return;

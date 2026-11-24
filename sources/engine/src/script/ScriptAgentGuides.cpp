@@ -1261,12 +1261,14 @@ constexpr std::string_view kMultiplayer = R"md(# Multiplayer: a game for several
 How a game of several players works here:
 - One server runs the game (scripts, physics) and decides; each player runs a copy of the same project and shows what the server says. A player never changes the game
   itself: it sends a call (`Net.Call`) and the server acts on it. Run the same scripts on both sides; they ask `Net.IsServer()` which they are.
-- The server shows an object to the players with `Net.Replicate(entity)`: they get its place, rotation and scale, nothing else (health, a score, a name travel as calls).
+- The server shows an object to the players with `Net.Replicate(entity)`: they get its position, rotation, scale and fields declared in `Config/Replication.json`.
   A player's copy of it has no mesh: the script keeps a visible object of its own at the replica's place (`net-object` and `net-players` do).
-- Only a position travels by itself. Anything else (health, a score, a name, a colour, an animation) goes as a call, and the server owns the value: it changes it,
-  then sends it to everyone with `Net.Call` (`net-score` for a number everyone shares, `net-health` for a value of each character). A player who joins, or whose copy
-  of a character appears later, asks for the value once (`net-score`: when `Net.Mode().connected`; `net-health`: in `OnNetSpawned`): a call about a character the
-  receiver does not have yet is dropped, so the server does not push it unasked. A player that wants to change such a value sends a call and the server decides.
+- `Config/Replication.json` is the single declaration file for native component fields and named variables. With no file, only transform groups are sent.
+  Variables declare `name`, `type` (`Float`, `Int`, `Bool`), `minimum`, `maximum`, `bits` and `audience` (`Everyone`, `Owner`, `Others`, `InitialOnly`).
+  `Net.Replicate` prepares the NetworkedVariables component. The server writes `Net.SetVar(entity, "score", 12)`; allowed clients read `Net.GetVar(replica, "score")`.
+  Float values are quantised; Int values must be whole numbers and Bool values use 0 or 1. Invalid names and ranges report a named error.
+  Clients handle `OnNetVarChanged(self, event)` using `event.args.entity`, `name` and `value`; one event is delivered per changed value after a state update.
+  Use `Net.Call` for actions and messages; a player requests an action and the server decides whether to change the replicated value.
 - A call is declared with `Net.RegisterRpc` in `Ready`, the same on the server and on every player: name, direction (`toServer` or `toClients`) and typed arguments with
   ranges (`"entity,float(-1..1),string(32)"`). It arrives as `function OnRpc_<name>(self, event)`; `event.args.sender` is the player (0: the server), `n1..` `s1..` `b1..` `e1..` the values.
 - `Net.SetOwner(entity, player)` gives an object to a player; a call that names it (`owner = 0` in the declaration) is refused for anyone else.

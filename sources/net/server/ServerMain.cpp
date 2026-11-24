@@ -59,6 +59,7 @@ usage: kb_dedicated_server --project <dir> --keys <file> [options]
   --bind <ipv4>            address to listen on (default 0.0.0.0)
   --max-clients <n>        connected clients allowed (default 16)
   --tick-rate <hz>         fixed simulation and replication steps per second, 10 to 240 (default 30)
+  --max-client-rate <n>    maximum replication bytes per second per client (default 262144)
   --idle-timeout <s>       drop a client silent for this many seconds (default 30)
   --empty-timeout <s>      stop after this many seconds without a client, once one has connected (default: never)
   --max-seconds <s>        stop after this many seconds (default: run until stopped)
@@ -68,7 +69,11 @@ usage: kb_dedicated_server --project <dir> --keys <file> [options]
   --port-file <path>       write the bound UDP port here once the socket is open
   --release <n>           override the build release number
   --content-version <s>   override the build content version
-  --metrics-file <path>    write diagnostic totals as CSV once per second
+  --visibility-radius <n>  interest radius; 0 sends every object
+  --grid-plane <xz|xy>     spatial plane (xz by default)
+  --metrics-file <path>    write timing and traffic metrics as CSV once per second
+  --max-connects-per-address <n>  authenticated Response rate and burst per address (8)
+  --max-sessions-per-address <n>  concurrent sessions per address (16)
   --status-file <path>     rewrite the status JSON here about once a second
   --state-file <path>      resume a .21kbscene checkpoint if present and save it on clean shutdown
   --auth-provider-key <p>  require signed login tokens; file contains the provider's 64-digit hex public key
@@ -115,8 +120,8 @@ ParsedArguments Parse(const std::vector<std::string>& arguments) {
             return parsed;
         }
     }
-    static const std::set<std::string> known{ "--project", "--keys", "--scene", "--port", "--bind", "--max-clients", "--tick-rate", "--idle-timeout",
-        "--empty-timeout", "--max-seconds", "--replicate", "--world-extent", "--stop-file", "--port-file", "--status-file", "--metrics-file", "--release", "--content-version", "--state-file", "--auth-provider-key", "--auth-revocations", "--websocket-port", "--websocket-origin", "--ice-servers", "--webrtc", "--json", "--quiet", "--help" };
+    static const std::set<std::string> known{ "--project", "--keys", "--scene", "--port", "--bind", "--max-clients", "--max-client-rate", "--tick-rate", "--idle-timeout",
+        "--empty-timeout", "--max-seconds", "--replicate", "--world-extent", "--visibility-radius", "--grid-plane", "--stop-file", "--port-file", "--status-file", "--metrics-file", "--max-connects-per-address", "--max-sessions-per-address", "--release", "--content-version", "--state-file", "--auth-provider-key", "--auth-revocations", "--websocket-port", "--websocket-origin", "--ice-servers", "--webrtc", "--json", "--quiet", "--help" };
     for (const auto& [name, value] : values) {
         if (!known.contains(name)) {
             parsed.error = "unknown option: " + name;
@@ -182,10 +187,24 @@ ParsedArguments Parse(const std::vector<std::string>& arguments) {
             if (!server.empty()) options.iceServers.push_back(server);
         }
     }
+    if (!number("--max-connects-per-address", 65536U, options.maxConnectsPerSecondPerAddress) ||
+        !number("--max-sessions-per-address", 4096U, options.maxSessionsPerAddress)) return parsed;
     if (!number("--port", 65535U, options.port) || !number("--max-clients", 4096U, options.maxClients) || !number("--tick-rate", 240U, options.tickRate) ||
         !number("--idle-timeout", 3600U, options.idleTimeoutSeconds) || !number("--empty-timeout", 86400U, options.emptyTimeoutSeconds) ||
-        !number("--max-seconds", 31536000U, options.maxSeconds)) {
+        !number("--max-seconds", 31536000U, options.maxSeconds) || !number("--max-client-rate", UINT32_MAX, options.maxClientRate)) {
         return parsed;
+    }
+    if (values.contains("--grid-plane")) {
+        const auto& plane = values["--grid-plane"];
+        if (plane != "xz" && plane != "xy") { parsed.error = "--grid-plane must be xz or xy"; return parsed; }
+        options.gridPlane = plane == "xy" ? kb::net::GridPlane::XY : kb::net::GridPlane::XZ;
+    }
+    if (values.contains("--visibility-radius")) {
+        try {
+            std::size_t consumed = 0;
+            options.visibilityRadius = std::stof(values["--visibility-radius"], &consumed);
+            if (consumed != values["--visibility-radius"].size()) throw std::invalid_argument("radius");
+        } catch (...) { parsed.error = "--visibility-radius must be a finite nonnegative number"; return parsed; }
     }
     if (const auto extent = values.find("--world-extent"); extent != values.end()) {
         try {

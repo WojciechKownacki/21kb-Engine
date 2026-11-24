@@ -373,7 +373,8 @@ struct RemoteClient {
         std::string error;
         transport = CreateUdpTransport(Endpoint::Loopback(0U), error);
         Require(transport != nullptr, "the client socket could not be opened: " + error);
-        components = MakeSceneReplicationRegistry(1000.0F);
+        const kb::ecs::World registryWorld;
+        components = BuildReplicationRegistry(registryWorld, {}, 1000.0F, error);
         rpcs = std::make_unique<RpcRegistry>();
         DefineStandardRpcs(*rpcs);
         DefineScriptRpcs(*rpcs);
@@ -413,7 +414,7 @@ struct RemoteClient {
                 }
                 replication->HandleEvent(event);
             }
-            replication->Flush();
+            replication->Flush(Now());
         }
     }
 
@@ -808,7 +809,8 @@ void TestBuildIdentityAndDiagnostics() {
     Require(WaitFor([&] {
         std::string csv = ReadFile(metrics);
         std::erase(csv, '\r');
-        return csv.starts_with("second,diag_total\n") && csv.find(",1\n") != std::string::npos;
+        return csv.starts_with("second,tick_avg_ms,tick_max_ms,pump_ms,replication_ms,clients,state_msgs,bytes_out,bytes_in,datagrams_in,diag_total\n") &&
+            csv.find(",1\n") != std::string::npos;
     }, 2000), "diagnostic CSV did not contain its total");
     Require(ReadFile(server.err).find("HandshakeContent:") != std::string::npos, "diagnostic sink did not reach the server log");
     server.RequestStop();

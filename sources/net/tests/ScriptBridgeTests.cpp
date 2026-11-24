@@ -16,6 +16,8 @@
 #include "engine/security/ReleaseManifest.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "kb/net/SceneReplication.hpp"
+#include "kb/net/ProjectScene.hpp"
+#include "kb/net/Auth.hpp"
 #include "kb/net/ScriptBridge.hpp"
 #include "kb/net/SceneClient.hpp"
 #include <sstream>
@@ -114,12 +116,15 @@ struct Side {
         scene->Components().Behaviours().Set(entity, kb::scene::BehaviourComponent{ .behaviourAssetId = metadata->id.value, .backend = kb::scene::BehaviourBackend::Lua, .enabled = true });
         host = std::make_unique<kb::script::ScriptRuntimeHost>(*scene);
         Require(host->Succeeded(), "the script host failed");
-        runtime = std::make_unique<ScriptNetworkRuntime>(role, *scene);
+        std::string error;
+        kb::network::ReplicationDeclarations declarations;
+        Require(LoadReplicationDeclarations(*scene, declarations, error), error);
+        runtime = std::make_unique<ScriptNetworkRuntime>(role, *scene, declarations);
         Require(host->InstallSceneSystem(), "the script scene system was not installed"); // runs Created and Ready
-        components = MakeSceneReplicationRegistry(1000.0F);
+        components = BuildReplicationRegistry(scene->Runtime().EcsWorld(), declarations, 1000.0F, error);
+        Require(components != nullptr, error);
         rpcs = std::make_unique<RpcRegistry>();
         DefineStandardRpcs(*rpcs);
-        std::string error;
         Require(runtime->Freeze(*rpcs, error), error);
     }
 
@@ -193,7 +198,7 @@ struct World {
             }
         }
         for (auto& client : clients) {
-            client->replication->Flush();
+            client->replication->Flush(now);
         }
     }
 
@@ -390,7 +395,7 @@ void TestRuntimeGuards() {
     kb::scene::Scene scene;
     kb::script::ScriptRuntimeHost host{ scene };
     {
-        ScriptNetworkRuntime runtime(ScriptNetworkRuntime::Role::Server, scene);
+        ScriptNetworkRuntime runtime(ScriptNetworkRuntime::Role::Server, scene, {});
         std::string error;
         kb::network::ScriptRpcDeclaration declaration;
         declaration.name = "Hello";
@@ -427,6 +432,97 @@ void TestRuntimeGuards() {
     static_cast<void>(project);
 }
 
+fs::path MakeVariableProject() {
+    const auto root = MakeProject();
+    fs::create_directories(root / "Config");
+    { std::ofstream output(root / "Config" / "Replication.json"); output << R"({"version":1,"variables":[
+        {"name":"score","type":"Int","minimum":0,"maximum":1000,"audience":"Everyone"},
+        {"name":"stamina","type":"Float","minimum":0,"maximum":100,"bits":8,"audience":"Owner"},
+        {"name":"ready","type":"Bool","audience":"Others"},
+        {"name":"seed","type":"Int","minimum":-100,"maximum":100,"audience":"InitialOnly"}]})"; }
+    { std::ofstream output(root / "Assets" / "Logic" / "Net.lua"); output << R"lua(
+function Ready(self)
+    if Net.IsServer() then
+        Net.Replicate(self.entity)
+        Net.SetVar(self.entity, "score", 12)
+        Net.SetVar(self.entity, "stamina", 37)
+        Net.SetVar(self.entity, "ready", 1)
+        Net.SetVar(self.entity, "seed", -7)
+    end
+end
+function OnNetConnected(self, event)
+    if Net.IsServer() and event.args.player == 1 then Net.SetOwner(self.entity, 1) end
+end
+function OnNetSpawned(self, event)
+    SetShared("variable.entity", event.args.entity)
+    SetShared("variable.score", Net.GetVar(event.args.entity, "score"))
+end
+function OnNetVarChanged(self, event)
+    SetShared("changes." .. event.args.name, (GetShared("changes." .. event.args.name) or 0) + 1)
+    SetShared("variable." .. event.args.name, Net.GetVar(event.args.entity, event.args.name))
+end
+)lua"; }
+    return root;
+}
+
+void TestNetVarSetOnServerReachesAllowedClients() {
+    World world(MakeVariableProject(), {});
+    auto& owner = world.AddClient(1U, 0U);
+    auto& other = world.AddClient(2U, 0U);
+    world.Run(0U, 2000U, [] { return false; });
+    Require(Number(owner.side.Shared("variable.score")) == 12.0 && Number(other.side.Shared("variable.score")) == 12.0, "Lua score did not reach everyone");
+    std::string error;
+    double value = 0.0;
+    const auto id = world.replication->NetworkIdOf(world.server.entity);
+    const auto ownerEntity = owner.replication->Find(id);
+    const auto otherEntity = other.replication->Find(id);
+    Require(owner.side.runtime->GetVar(ownerEntity.Id(), "stamina", value, error) && std::abs(value - 37.0) <= 0.4, "owner did not receive stamina: " + error);
+    Require(!other.side.runtime->GetVar(otherEntity.Id(), "stamina", value, error) && error.find("stamina") != std::string::npos, "stamina was exposed to another client");
+    Require(other.side.runtime->GetVar(otherEntity.Id(), "ready", value, error) && value == 1.0, "Bool did not reach Others");
+    Require(!owner.side.runtime->GetVar(ownerEntity.Id(), "ready", value, error), "Others variable was exposed to owner");
+    Require(world.server.runtime->SetVar(world.server.entity.Id(), "seed", 20.0, error), error);
+    world.Run(2000U, 500U, [] { return false; });
+    Require(other.side.runtime->GetVar(otherEntity.Id(), "seed", value, error) && value == -7.0, "InitialOnly variable changed after spawn");
+}
+
+void TestNetVarOutOfRangeIsRefusedNamed() {
+    World world(MakeVariableProject(), {});
+    std::string error;
+    const auto entity = world.server.entity.Id();
+    for (const double invalid : {-1.0, 1001.0, 1.5, std::numeric_limits<double>::infinity()}) {
+        Require(!world.server.runtime->SetVar(entity, "score", invalid, error) && error.find("score") != std::string::npos, "bad score was not refused by name");
+    }
+    Require(!world.server.runtime->SetVar(entity, "missing", 1.0, error) && error.find("missing") != std::string::npos, "unknown variable was accepted");
+    const auto empty = world.server.scene->Entities().CreateObject(kb::scene::SceneObjectDesc{.name = "Empty"});
+    Require(!world.server.runtime->SetVar(empty.Entity().Id(), "score", 1.0, error) && error.find("score") != std::string::npos && error.find("component") != std::string::npos, "missing component was not named");
+    const std::vector<kb::script::ScriptFunctionArgument> args{
+        {"entity", kb::script::ScriptValue{entity, kb::script::ScriptValueType::Entity}},
+        {"name", kb::script::ScriptValue{std::string("score")}}, {"value", kb::script::ScriptValue{1001.0}}};
+    const auto result = world.server.host->Functions().Call("Net.SetVar", args, {.scene = world.server.scene.get()});
+    Require(!result.Succeeded() && result.errors.front().find("score") != std::string::npos, "script API did not return the named range error");
+}
+
+void TestNetVarChangedEventFiresOncePerChange() {
+    auto conditions = BadLink();
+    conditions.duplicatePermille = 500U;
+    World world(MakeVariableProject(), conditions);
+    auto& owner = world.AddClient(1U, 0U);
+    auto& other = world.AddClient(2U, 0U);
+    auto now = world.Run(0U, 60'000U, [&] { return owner.replication->ReplicaCount() == 1U && other.replication->ReplicaCount() == 1U; });
+    Require(owner.replication->ReplicaCount() == 1U && other.replication->ReplicaCount() == 1U, "variable test clients did not receive the initial replica");
+    std::string error;
+    Require(world.server.runtime->SetVar(world.server.entity.Id(), "score", 13.0, error), error);
+    now = world.Run(now, 20'000U, [&] { return Number(owner.side.Shared("variable.score")) == 13.0 && Number(other.side.Shared("variable.score")) == 13.0; });
+    for (auto* client : {&owner, &other}) {
+        Require(Number(client->side.Shared("variable.score")) == 13.0 && Number(client->side.Shared("changes.score")) == 1.0,
+            "changed variable event was absent or duplicated: player=" + std::to_string(client->playerId) + " score=" + std::to_string(Number(client->side.Shared("variable.score"))) +
+            " changes=" + std::to_string(Number(client->side.Shared("changes.score"))));
+    }
+    Require(world.server.runtime->SetVar(world.server.entity.Id(), "score", 13.0, error), error);
+    world.Run(now, 5000U, [] { return false; });
+    Require(Number(owner.side.Shared("changes.score")) == 1.0 && Number(other.side.Shared("changes.score")) == 1.0, "identical write produced an event");
+}
+
 
 void TestSceneClientLifecycle() {
     struct RestoreRelease {
@@ -448,11 +544,12 @@ void TestSceneClientLifecycle() {
     kb::scene::Scene serverScene;
     kb::scene::Scene clientScene;
     const auto object = serverScene.Entities().CreateObject(kb::scene::SceneObjectDesc{.name = "Replica"});
-    auto components = MakeSceneReplicationRegistry(1000.0F);
+    std::string registryError;
+    auto components = BuildReplicationRegistry(serverScene.Runtime().EcsWorld(), {}, 1000.0F, registryError);
     RpcRegistry rpcs;
     DefineStandardRpcs(rpcs);
     ReplicationServer replication(host, serverScene.Runtime().EcsWorld(), *components, rpcs);
-    Require(replication.Replicate(object.Entity()) != 0U, "scene entity was not replicated");
+    Require(replication.Replicate(object.Entity()) == ReplicateResult::Ok, "scene entity was not replicated");
     SceneClientOptions options;
     options.clientId = 7U;
     options.key = KeyFor(7U);
@@ -495,6 +592,118 @@ void TestSceneClientLifecycle() {
     }
     Require(clientScene.Entities().Count() == 0U && kb::script::ScriptNetApi::Attached(clientScene) == nullptr,
         "scene client shutdown retained replicas or script attachment");
+}
+
+
+// The server side of a token login that answers as the test says; counts the logins it saw.
+struct ScriptedAuthServer {
+    explicit ScriptedAuthServer(std::uint16_t port) : socket(network.CreateTransport(Endpoint::Loopback(port))) {
+        keys.Set(7U, KeyFor(7U));
+        host = std::make_unique<Host>(*socket, HostConfig{}, keys);
+    }
+    void Reply(std::uint8_t type, std::uint32_t value) {
+        std::vector<std::uint8_t> message{ type, static_cast<std::uint8_t>(value), static_cast<std::uint8_t>(value >> 8U),
+            static_cast<std::uint8_t>(value >> 16U), static_cast<std::uint8_t>(value >> 24U) };
+        static_cast<void>(host->Send(7U, 0U, message));
+    }
+    void Step(std::uint64_t now) {
+        network.Advance(now);
+        host->Update(now);
+        NetEvent event;
+        while (host->PollEvent(event)) {
+            if (event.type != NetEventType::Message || event.message.data.empty() || event.message.data[0] != kAuthMessageLogin) continue;
+            ++logins;
+            if (answer == kAuthMessageAccepted) Reply(kAuthMessageAccepted, kScopePlay);
+            else Reply(answer, answerValue);
+        }
+    }
+    LoopbackNetwork network;
+    std::unique_ptr<IDatagramTransport> socket;
+    StaticKeyTable keys;
+    std::unique_ptr<Host> host;
+    std::uint8_t answer = kAuthMessageAccepted;
+    std::uint32_t answerValue = 0U;
+    std::size_t logins = 0U;
+};
+
+std::unique_ptr<SceneClient> MakeTokenClient(kb::scene::Scene& scene, ScriptedAuthServer& server, std::uint32_t attempts) {
+    SceneClientOptions options;
+    options.clientId = 7U;
+    options.key = KeyFor(7U);
+    options.server = Endpoint::Loopback(9700);
+    options.token = "token";
+    options.reconnectAttempts = attempts;
+    auto nextPort = std::make_shared<std::uint16_t>(9701);
+    return std::make_unique<SceneClient>(scene, options, [&server, nextPort](std::string&) -> std::unique_ptr<IDatagramTransport> {
+        return server.network.CreateTransport(Endpoint::Loopback((*nextPort)++));
+    });
+}
+
+void TestReconnectBudgetResetsAfterSuccess() {
+    ScriptedAuthServer server(9700);
+    kb::scene::Scene scene;
+    auto client = MakeTokenClient(scene, server, 2U);
+    std::ostringstream diagnostics;
+    std::uint64_t now = 0U;
+    std::size_t dropped = 0U;
+    // Every login is accepted, then the server drops the client: more drops than the budget of 2 attempts, each after a success.
+    for (int step = 0; step < 6000 && dropped < 5U; ++step) {
+        now += 10U;
+        server.Step(now);
+        Require(client->Update(now, diagnostics), diagnostics.str());
+        if (server.logins > dropped && client->Connected()) {
+            ++dropped;
+            server.host->Disconnect(7U);
+        }
+    }
+    Require(dropped == 5U, "the client stopped reconnecting after the budget although every connection had succeeded");
+}
+
+void TestExpiredTokenAllowsRetryDeniedDoesNot() {
+    const auto logins = [](std::uint8_t answer, std::uint32_t value, bool* expiredEvent = nullptr) {
+        ScriptedAuthServer server(9700);
+        server.answer = answer;
+        server.answerValue = value;
+        kb::scene::Scene scene;
+        auto client = MakeTokenClient(scene, server, 3U);
+        std::ostringstream diagnostics;
+        for (std::uint64_t now = 10U; now < 12'000U; now += 10U) {
+            server.Step(now);
+            Require(client->Update(now, diagnostics), diagnostics.str());
+        }
+        if (expiredEvent != nullptr) {
+            for (const auto& event : kb::script::ScriptNetApi::DrainEvents(scene)) *expiredEvent = *expiredEvent || event.name == "OnNetAuthExpired";
+        }
+        return server.logins;
+    };
+    Require(logins(kAuthMessageKicked, static_cast<std::uint32_t>(AuthKickReason::Revoked)) >= 2U, "a kicked client did not try again");
+    Require(logins(kAuthMessageDenied, 0U) == 1U, "a denied client tried again");
+    Require(logins(kAuthMessageRefused, static_cast<std::uint32_t>(AuthStatus::BadSignature)) >= 2U, "a refused login did not permit retry");
+    bool expiredEvent = false;
+    Require(logins(kAuthMessageKicked, static_cast<std::uint32_t>(AuthKickReason::Expired), &expiredEvent) >= 2U && expiredEvent,
+        "an expired token did not retry and tell the scripts");
+}
+
+void TestSpawnDespawnBeforeDrainDoesNotDeliverStaleSpawn() {
+    kb::scene::Scene scene;
+    ScriptNetworkRuntime runtime(ScriptNetworkRuntime::Role::Client, scene, {});
+    kb::script::ScriptNetApi::QueueEvent(scene, {"OnNetSpawned", {{"entity", std::uint64_t{42U}}}});
+    kb::script::ScriptNetApi::QueueEvent(scene, {"OnNetDespawned", {{"entity", std::uint64_t{42U}}}});
+    const auto events = kb::script::ScriptNetApi::DrainEvents(scene);
+    Require(events.size() == 1U && events.front().name == "OnNetDespawned", "a stale spawn reached scripts after the replica disappeared");
+}
+
+void TestDisconnectEventSurvivesQueueOverflow() {
+    kb::scene::Scene scene;
+    ScriptNetworkRuntime runtime(ScriptNetworkRuntime::Role::Client, scene, {});
+    kb::script::ScriptNetApi::QueueEvent(scene, kb::script::ScriptNetEvent{ "OnNetConnected", {} });
+    for (int index = 0; index < 1500; ++index) kb::script::ScriptNetApi::QueueEvent(scene, kb::script::ScriptNetEvent{ "OnNetSpawned", {} });
+    kb::script::ScriptNetApi::QueueEvent(scene, kb::script::ScriptNetEvent{ "OnNetDisconnected", {} });
+    const auto problems = kb::script::ScriptNetApi::DrainProblems(scene);
+    const auto events = kb::script::ScriptNetApi::DrainEvents(scene);
+    Require(events.size() == 1024U && events.front().name == "OnNetConnected" && events.back().name == "OnNetDisconnected",
+        "a connection event was dropped by a flood of spawn events");
+    Require(problems.size() == 1U && problems[0].find("EventsDropped") == 0U, "dropped events were not reported");
 }
 
 void TestWebSessionSettings() {
@@ -576,7 +785,14 @@ void TestNativeSessionSettings() {
 int main() {
     const std::vector<std::pair<const char*, void (*)()>> tests{
         { "runtime-guards", &TestRuntimeGuards },
+        { "net-vars-audiences", &TestNetVarSetOnServerReachesAllowedClients },
+        { "net-vars-named-errors", &TestNetVarOutOfRangeIsRefusedNamed },
+        { "net-vars-change-once", &TestNetVarChangedEventFiresOncePerChange },
         { "scene-client-lifecycle", &TestSceneClientLifecycle },
+        { "reconnect-budget-resets", &TestReconnectBudgetResetsAfterSuccess },
+        { "token-refusal-kinds", &TestExpiredTokenAllowsRetryDeniedDoesNot },
+        { "spawn-despawn-before-drain", &TestSpawnDespawnBeforeDrainDoesNotDeliverStaleSpawn },
+        { "disconnect-event-survives-overflow", &TestDisconnectEventSurvivesQueueOverflow },
         { "web-session-settings", &TestWebSessionSettings },
         { "native-session-settings", &TestNativeSessionSettings },
         { "scripts-over-the-network", &TestScriptsOverTheNetwork },

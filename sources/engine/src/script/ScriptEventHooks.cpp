@@ -82,6 +82,11 @@ constexpr std::array kNetSpawnedArgs{
     Arg{ "owner", "Int", "the player that owns it" },
 };
 constexpr std::array kNetDespawnedArgs{ Arg{ "entity", "Entity", "the replicated object that went away" } };
+constexpr std::array kNetVariableArgs{
+    Arg{ "entity", "Entity", "the replicated object" },
+    Arg{ "name", "String", "the declared variable name" },
+    Arg{ "value", "Float", "the new value; Bool variables use 0 or 1" },
+};
 constexpr std::array kRpcArgs{
     Arg{ "sender", "Int", "the player that called it (0 from the server)" },
     Arg{ "b1, s1, e1, n1", "Bool, String, Entity, number", "the call's arguments, numbered per type in declaration order" },
@@ -148,6 +153,8 @@ constexpr std::array kEventHooks{
     ScriptEventHook{ "OnNetDisconnected", "Network", kEventReceives, "a connection ended", kNetDisconnectedArgs },
     ScriptEventHook{ "OnNetSpawned", "Network", kEventReceives, "a replicated object appeared on this client", kNetSpawnedArgs },
     ScriptEventHook{ "OnNetDespawned", "Network", kEventReceives, "a replicated object went away on this client", kNetDespawnedArgs },
+    ScriptEventHook{ "OnNetAuthExpired", "Network", kEventReceives, "the login token of this client expired, so the server ended the session; log in again for a new token", {} },
+    ScriptEventHook{ "OnNetVarChanged", "Network", kEventReceives, "a declared variable changed on a client after a state update", kNetVariableArgs },
     ScriptEventHook{ "OnRpc_", "Network", kEventReceives, "a remote call declared by the game arrived: the function is OnRpc_<name>", kRpcArgs },
 };
 

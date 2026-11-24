@@ -2,6 +2,8 @@
 #include "kb/net/Diagnostics.hpp"
 
 #include "engine/scene/Scene.hpp"
+#include "scene/SceneAccess.hpp"
+#include "scene/SceneState.hpp"
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 
@@ -36,7 +38,6 @@ constexpr std::size_t kBoolSlots = 2U;
 constexpr std::size_t kEntitySlots = 2U;
 
 struct SceneNet {
-    INetworkScriptRuntime* runtime = nullptr;
     std::deque<ScriptNetEvent> events;
     kb::net::DiagLog diagnostics;
     std::array<std::uint64_t, 32U> drainedProblems{};
@@ -267,7 +268,10 @@ ScriptFunctionCallResult Replicate(const ScriptFunctionCallContext& context, Arg
     }
     const ScriptValue* entity = Find(arguments, "entity");
     std::string error;
-    if (entity == nullptr || !runtime->Replicate(entity->AsUInt64(), error)) {
+    const ScriptValue* mode = Find(arguments, "mode");
+    const std::string selected = mode == nullptr ? "spatial" : mode->AsString();
+    if (selected != "spatial" && selected != "global") return Failure(context, "Net.Replicate: mode must be spatial or global");
+    if (entity == nullptr || !runtime->Replicate(entity->AsUInt64(), error, selected == "global")) {
         return Failure(context, "Net.Replicate: " + (error.empty() ? std::string{ "no entity" } : error), kb::net::DiagCode::EntityLimit);
     }
     return Ok({ { "replicated", ScriptValue{ true } } });
@@ -291,6 +295,30 @@ ScriptFunctionCallResult SetOwner(const ScriptFunctionCallContext& context, Argu
         return Failure(context, "Net.SetOwner: " + (error.empty() ? std::string{ "no entity or player" } : error));
     }
     return Ok({ { "applied", ScriptValue{ true } } });
+}
+
+ScriptFunctionCallResult SetVar(const ScriptFunctionCallContext& context, Arguments arguments) {
+    auto* runtime = RuntimeOf(context);
+    const auto* name = Find(arguments, "name");
+    const auto* entity = Find(arguments, "entity");
+    const auto* value = Find(arguments, "value");
+    const std::string label = name == nullptr ? "" : name->AsString();
+    if (runtime == nullptr || runtime->Mode() != ScriptNetMode::Server) return Failure(context, "Net.SetVar '" + label + "': only a server can set variables", kb::net::DiagCode::NotAuthority);
+    std::string error;
+    if (entity == nullptr || value == nullptr || !runtime->SetVar(entity->AsUInt64(), label, value->AsDouble(), error)) return Failure(context, "Net.SetVar: " + error);
+    return Ok({{"applied", ScriptValue{true}}});
+}
+
+ScriptFunctionCallResult GetVar(const ScriptFunctionCallContext& context, Arguments arguments) {
+    auto* runtime = RuntimeOf(context);
+    const auto* name = Find(arguments, "name");
+    const auto* entity = Find(arguments, "entity");
+    const std::string label = name == nullptr ? "" : name->AsString();
+    if (runtime == nullptr) return Failure(context, "Net.GetVar '" + label + "': no network runtime is attached");
+    std::string error;
+    double value = 0.0;
+    if (entity == nullptr || !runtime->GetVar(entity->AsUInt64(), label, value, error)) return Failure(context, "Net.GetVar: " + error);
+    return Ok({{"value", ScriptValue{value}}});
 }
 
 } // namespace
@@ -391,17 +419,17 @@ bool ScriptNetApi::ParseArgumentSpecs(const std::string& text, std::vector<Scrip
 
 void ScriptNetApi::Attach(kb::scene::Scene& scene, INetworkScriptRuntime* runtime) {
     const std::lock_guard lock{ g_mutex };
+    kb::scene::SceneAccess::State(scene).networkRuntime = runtime;
     if (runtime == nullptr) {
         g_scenes.erase(&scene);
     } else {
-        g_scenes[&scene].runtime = runtime;
+        static_cast<void>(g_scenes[&scene]);
     }
 }
 
 INetworkScriptRuntime* ScriptNetApi::Attached(const kb::scene::Scene& scene) {
     const std::lock_guard lock{ g_mutex };
-    const auto found = g_scenes.find(&scene);
-    return found == g_scenes.end() ? nullptr : found->second.runtime;
+    return kb::scene::SceneAccess::State(scene).networkRuntime;
 }
 
 void ScriptNetApi::QueueEvent(const kb::scene::Scene& scene, ScriptNetEvent event) {
@@ -410,8 +438,32 @@ void ScriptNetApi::QueueEvent(const kb::scene::Scene& scene, ScriptNetEvent even
     if (found == g_scenes.end()) {
         return;
     }
-    if (found->second.events.size() >= kMaxQueuedEvents) {
-        found->second.events.pop_front();
+    SceneNet& state = found->second;
+    if (event.name == "OnNetDespawned") {
+        const auto entityOf = [](const ScriptNetEvent& queued) -> const std::uint64_t* {
+            for (const auto& [name, value] : queued.arguments) {
+                if (name == "entity") return std::get_if<std::uint64_t>(&value);
+            }
+            return nullptr;
+        };
+        if (const auto* entity = entityOf(event)) {
+            std::erase_if(state.events, [&](const ScriptNetEvent& queued) {
+                const auto* spawned = entityOf(queued);
+                return queued.name == "OnNetSpawned" && spawned != nullptr && *spawned == *entity;
+            });
+        }
+    }
+    if (state.events.size() >= kMaxQueuedEvents) {
+        const auto victim = std::find_if(state.events.begin(), state.events.end(), [](const ScriptNetEvent& queued) {
+            return queued.name == "OnNetSpawned" || queued.name == "OnNetDespawned";
+        });
+        if (victim != state.events.end()) {
+            state.events.erase(victim);
+            state.diagnostics.Report(kb::net::DiagCode::EventsDropped, "script network events were dropped because the scripts did not keep up (" + std::to_string(kMaxQueuedEvents) + " wait at once)");
+        } else if (event.name != "OnNetConnected" && event.name != "OnNetDisconnected") {
+            state.diagnostics.Report(kb::net::DiagCode::EventsDropped, "the script event queue is full; the new event was dropped");
+            return;
+        }
     }
     found->second.events.push_back(std::move(event));
 }
@@ -476,11 +528,15 @@ bool ScriptNetApi::Register(ScriptRuntimeHost& host) {
             { "n4", T::Double, false }, { "s1", T::String, false }, { "s2", T::String, false }, { "b1", T::Bool, false }, { "b2", T::Bool, false },
             { "e1", T::Entity, false }, { "e2", T::Entity, false } },
         { { "sent", T::Bool, true } }, &Call) && ok;
-    ok = add("Net.Replicate", "Marks an entity to be replicated from the server to its clients. Server only.", { { "entity", T::Entity, true } }, { { "replicated", T::Bool, true } },
+    ok = add("Net.Replicate", "Marks an entity to be replicated from the server to its clients. Server only.", { { "entity", T::Entity, true }, { "mode", T::String, false } }, { { "replicated", T::Bool, true } },
         &Replicate) && ok;
     ok = add("Net.IsReplicated", "True when the entity is replicated by this server.", { { "entity", T::Entity, true } }, { { "value", T::Bool, true } }, &IsReplicated) && ok;
     ok = add("Net.SetOwner", "Gives an entity to a player, who may then call RPCs that act on it. Server only.", { { "entity", T::Entity, true }, { "player", T::UInt32, true } },
         { { "applied", T::Bool, true } }, &SetOwner) && ok;
+    ok = add("Net.SetVar", "Sets a variable declared in Config/Replication.json. Server only; rejects unknown names, missing components and values outside the declared range. Bool variables use 0 or 1.",
+        {{"entity", T::Entity, true}, {"name", T::String, true}, {"value", T::Double, true}}, {{"applied", T::Bool, true}}, &SetVar) && ok;
+    ok = add("Net.GetVar", "Reads a declared network variable available to this scene. Bool variables return 0 or 1.",
+        {{"entity", T::Entity, true}, {"name", T::String, true}}, {{"value", T::Double, true}}, &GetVar) && ok;
     return ok;
 }
 

@@ -32,7 +32,7 @@ public:
     static void Attach(kb::scene::Scene& scene, kb::network::INetworkScriptRuntime* runtime);
     [[nodiscard]] static kb::network::INetworkScriptRuntime* Attached(const kb::scene::Scene& scene);
 
-    // Queues an event for the scene's scripts (at most 1024 wait at once; the oldest is dropped beyond that).
+    // Queues an event for the scene's scripts (at most 1024 wait at once; beyond that the oldest event that is not OnNetConnected or OnNetDisconnected is dropped and counted in the problems).
     static void QueueEvent(const kb::scene::Scene& scene, ScriptNetEvent event);
     [[nodiscard]] static std::vector<ScriptNetEvent> DrainEvents(const kb::scene::Scene& scene);
 

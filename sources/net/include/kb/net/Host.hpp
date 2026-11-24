@@ -10,6 +10,7 @@
 #include <memory>
 #include <span>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 // Connection establishment on top of IDatagramTransport, and the host and client objects that own
@@ -32,7 +33,11 @@
 // Response gets the cached Accept without resetting keys or packet numbers. Unconfirmed peers
 // expire after HostConfig::confirmMilliseconds, regardless of repeated Responses.
 //
-// Not covered: forward secrecy (the key is long lived), and key distribution itself.
+// A Connect for an id the host does not know is answered like any other (with a Challenge made from a key derived from the host's
+// secret), so the answer does not tell which ids exist; the Response then fails. Authenticated Responses are rate limited per
+// proven address before key agreement, and an address holds a bounded number of sessions.
+//
+// Ephemeral X25519 keys contribute to session keys and are wiped after agreement. Key distribution is external.
 namespace kb::net {
 
 inline constexpr std::size_t kMinConnectBytes = 128U;
@@ -97,6 +102,9 @@ struct HostStats {
     std::uint64_t unknownPeer = 0U;        // sealed data from an address with no session
     std::uint64_t rateLimited = 0U;
     std::uint64_t sendErrors = 0U;
+    std::uint64_t handshakesRateLimited = 0U;     // authenticated Responses over the per-address rate: dropped before key agreement
+    std::uint64_t sessionsPerAddressRefused = 0U; // proven Responses refused because the address already holds its share of sessions
+    std::uint64_t connectBucketsFull = 0U;       // authenticated Responses admitted without a bucket when the table remains full
 };
 
 struct BuildIdentity {
@@ -122,6 +130,10 @@ struct HostConfig {
     std::uint64_t cookieLifetimeMilliseconds = 30'000U;
     std::uint32_t minClientRelease = 0U;
     std::uint32_t confirmMilliseconds = 5000U;
+    // Per IPv4 address (the port does not count): Connects a second (also the burst), and open sessions. Raise the session limit for
+    // players behind one shared address or for many test clients on one machine.
+    std::uint32_t maxConnectsPerSecondPerAddress = 8U;
+    std::uint32_t maxSessionsPerAddress = 16U;
 };
 
 class Host final {
@@ -143,11 +155,16 @@ public:
     [[nodiscard]] const SessionStats* ClientStats(std::uint64_t clientId) const noexcept;
 
 private:
+    struct ConnectBucket {
+        double tokens = 0.0;
+        std::uint64_t updatedAt = 0U;
+    };
     struct Peer {
         Endpoint endpoint;
         std::uint64_t clientId = 0U;
         std::uint64_t clientSalt = 0U;
         std::uint64_t serverSalt = 0U;
+        std::array<std::uint8_t, 32U> clientEphemeral{};
         std::vector<std::uint8_t> accept;
         std::uint64_t createdAt = 0U;
         bool confirmed = false;
@@ -160,6 +177,8 @@ private:
     void HandleResponse(std::uint64_t nowMilliseconds, const Endpoint& from, std::span<const std::uint8_t> datagram);
     void HandleData(std::uint64_t nowMilliseconds, const Endpoint& from, std::span<const std::uint8_t> datagram);
     void DrainMessages(Peer& peer);
+    [[nodiscard]] bool AllowConnect(std::uint64_t nowMilliseconds, std::uint32_t address);
+    [[nodiscard]] SessionKey DecoyKey(std::uint64_t clientId) const;
     void RemovePeer(std::map<Endpoint, Peer>::iterator found, DisconnectReason reason);
     [[nodiscard]] std::uint64_t Cookie(const Endpoint& from, std::uint64_t clientId, std::uint64_t clientSalt, std::uint64_t epoch) const;
 
@@ -170,6 +189,8 @@ private:
     bool valid_ = false;
     std::map<Endpoint, Peer> peers_;
     std::map<std::uint64_t, Endpoint> byClient_;
+    std::unordered_map<std::uint32_t, ConnectBucket> connectBuckets_;
+    std::uint64_t lastBucketSweep_ = 0U;
     std::deque<NetEvent> events_;
     HostStats stats_;
     DiagLog diagnostics_;
@@ -215,6 +236,7 @@ private:
     ClientConfig config_;
     std::uint64_t clientId_;
     SessionKey key_;
+    kb::security::X25519KeyPair ephemeral_;
     Endpoint host_;
     std::uint64_t clientSalt_ = 0U;
     std::uint64_t serverSalt_ = 0U;

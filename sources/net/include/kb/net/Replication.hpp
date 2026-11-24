@@ -2,6 +2,8 @@
 
 #include "engine/ecs/World.hpp"
 #include "engine/network/ReplicationSchema.hpp"
+#include "engine/network/ReplicationAudience.hpp"
+#include "engine/network/ReplicationChangeSink.hpp"
 #include "kb/net/Host.hpp"
 #include "kb/net/Rpc.hpp"
 
@@ -20,8 +22,7 @@
 
 // State replication and RPC on top of Host and Client.
 //
-// The server is authoritative. Entities it marks as replicated get a network id (never reused in a
-// run) and are sent to each client that is relevant to them: once, in full, in a reliable Spawn, then
+// The server is authoritative. Entities it marks as replicated get a network id with a generation and are sent to each client that is relevant to them: once, in full, in a reliable Spawn, then
 // as unreliable delta updates. Only the components registered in the ReplicationRegistry travel, each
 // through a codec that quantizes its fields. A delta is computed against what the client has
 // acknowledged, and an update carries everything that differs from that baseline, so a lost or
@@ -38,14 +39,19 @@
 // session, which is what the default SessionConfig provides.
 namespace kb::net {
 
-inline constexpr std::size_t kMaxReplicatedComponents = 16U;
+using ReplicationAudience = kb::network::ReplicationAudience;
+inline constexpr std::size_t kMaxReplicatedComponents = 32U;
+
+using ReplicationChangeSink = kb::network::ReplicationChangeSink;
+using kb::network::ObserveReplicationChanges;
 
 // Turns one component type into a fixed-size byte string and back. The byte string is also what the
 // server compares to decide whether a component changed, so values that differ by less than the
 // quantization step never cost a byte.
 class ComponentCodec {
 public:
-    ComponentCodec() = default;
+    explicit ComponentCodec(ReplicationAudience audience = ReplicationAudience::Everyone) : audience_(audience) {}
+    [[nodiscard]] ReplicationAudience Audience() const noexcept { return audience_; }
     ComponentCodec(const ComponentCodec&) = delete;
     ComponentCodec& operator=(const ComponentCodec&) = delete;
     virtual ~ComponentCodec() = default;
@@ -53,6 +59,8 @@ public:
     [[nodiscard]] virtual const std::string& Name() const noexcept = 0;
     [[nodiscard]] virtual bool Valid() const noexcept = 0;
     [[nodiscard]] virtual std::size_t EncodedSize() const noexcept = 0;
+    [[nodiscard]] virtual kb::ecs::ComponentId SourceComponent(kb::ecs::World& world) const = 0;
+    [[nodiscard]] virtual std::array<kb::ecs::ObserverId, 3U> ObserveChanges(kb::ecs::World& world, ReplicationChangeSink& sink) const = 0;
     // Describes the layout; goes into the fingerprint so that two builds that encode differently refuse each other.
     [[nodiscard]] virtual std::string Describe() const = 0;
     // False when the entity does not have the component. `out` has EncodedSize() bytes.
@@ -62,6 +70,10 @@ public:
     // Sets the component from validated bytes.
     virtual void Apply(kb::ecs::World& world, kb::ecs::Entity entity, std::span<const std::uint8_t> bytes) const = 0;
     virtual void Remove(kb::ecs::World& world, kb::ecs::Entity entity) const = 0;
+
+private:
+    friend class ReplicationRegistry;
+    ReplicationAudience audience_;
 };
 
 // A codec for a struct of float, unsigned and bool members. Floats are quantized to `bits` (1 to 24)
@@ -156,8 +168,12 @@ public:
     [[nodiscard]] const std::string& Name() const noexcept override { return name_; }
     [[nodiscard]] bool Valid() const noexcept override { return valid_ && size_ != 0U; }
     [[nodiscard]] std::size_t EncodedSize() const noexcept override { return size_; }
+    [[nodiscard]] kb::ecs::ComponentId SourceComponent(kb::ecs::World& world) const override { return world.RegisterComponent<T>(); }
+    [[nodiscard]] std::array<kb::ecs::ObserverId, 3U> ObserveChanges(kb::ecs::World& world, ReplicationChangeSink& sink) const override {
+        return ObserveReplicationChanges<T>(world, sink);
+    }
     [[nodiscard]] std::string Describe() const override {
-        std::string text = name_;
+        std::string text = name_ + "|audience:" + std::string(kb::network::ReplicationAudienceName(Audience()));
         for (const Field& field : fields_) {
             text += "|" + field.description;
         }
@@ -234,6 +250,7 @@ class ReplicationRegistry final {
 public:
     // False when the codec is invalid, has a repeated name, or the registry is full.
     [[nodiscard]] bool Add(std::unique_ptr<ComponentCodec> codec, std::string& error);
+    [[nodiscard]] bool Add(std::unique_ptr<ComponentCodec> codec, ReplicationAudience audience, std::string& error);
     [[nodiscard]] std::size_t Count() const noexcept { return codecs_.size(); }
     [[nodiscard]] const ComponentCodec& At(std::size_t index) const { return *codecs_[index]; }
     [[nodiscard]] std::uint64_t Fingerprint() const noexcept;
@@ -242,44 +259,28 @@ private:
     std::vector<std::unique_ptr<ComponentCodec>> codecs_;
 };
 
-// Decides which replicated entities a client may see. Called every tick for each pair.
-class IRelevance {
-public:
-    IRelevance() = default;
-    IRelevance(const IRelevance&) = delete;
-    IRelevance& operator=(const IRelevance&) = delete;
-    virtual ~IRelevance() = default;
-    [[nodiscard]] virtual bool IsRelevant(std::uint64_t clientId, NetworkId id, kb::ecs::Entity entity) = 0;
-};
+// Interest uses world positions in the selected spatial plane.
+enum class GridPlane { XZ, XY };
+class SpatialGrid;
 
-// Relevance by distance in the plane. An entity becomes relevant inside `radius` and stops being
-// relevant outside `radius * hysteresis`, so one standing on the edge does not flicker.
-class RadiusRelevance final : public IRelevance {
-public:
-    using ViewerPosition = std::function<bool(std::uint64_t clientId, float& x, float& y)>;
-    using EntityPosition = std::function<bool(kb::ecs::Entity entity, float& x, float& y)>;
-
-    RadiusRelevance(float radius, float hysteresis, ViewerPosition viewer, EntityPosition entity)
-        : radius_(radius), hysteresis_(std::max(hysteresis, 1.0F)), viewer_(std::move(viewer)), entity_(std::move(entity)) {}
-
-    [[nodiscard]] bool IsRelevant(std::uint64_t clientId, NetworkId id, kb::ecs::Entity entity) override;
-
-private:
-    float radius_;
-    float hysteresis_;
-    ViewerPosition viewer_;
-    EntityPosition entity_;
-    std::set<std::pair<std::uint64_t, NetworkId>> inside_;
-};
+class ReplicationSlots;
+class ReplicaSlots;
+struct ReplicationSlot;
+enum class ReplicateResult { Ok, AlreadyReplicated, NotAlive, Limit };
 
 struct ReplicationConfig {
-    std::size_t maxEntities = 4096U;           // replicated entities on the server, replicas on a client
+    float visibilityRadius = 0.0F;
+    GridPlane gridPlane = GridPlane::XZ;
     std::size_t maxUpdateBytes = 900U;         // largest state message
-    std::size_t maxBytesPerClientPerTick = 8000U;
+    std::uint32_t requestedBytesPerSecond = 131072U;
+    std::uint32_t minClientRate = 16384U, maxClientRate = 262144U;
+    std::uint32_t tickRate = 30U;
     std::size_t maxUpdatesInFlight = 64U;      // sent but not yet acknowledged state messages, per client
 };
 
 struct ReplicationServerStats {
+    std::uint64_t capturedEntities = 0U;
+    std::uint64_t candidatesExamined = 0U;
     std::uint64_t spawnsSent = 0U;
     std::uint64_t despawnsSent = 0U;
     std::uint64_t stateMessagesSent = 0U;
@@ -306,8 +307,8 @@ public:
 
     ReplicationServer(Host& host, kb::ecs::World& world, const ReplicationRegistry& components, const RpcRegistry& rpcs, ReplicationConfig config = {});
 
-    // Marks an entity as replicated. Returns 0 when the entity is not alive, is already replicated or the limit is reached.
-    [[nodiscard]] NetworkId Replicate(kb::ecs::Entity entity, std::uint64_t owner = 0U);
+    // Marks an entity as replicated and reports the result. NetworkIdOf returns its identifier.
+    [[nodiscard]] ReplicateResult Replicate(kb::ecs::Entity entity, std::uint64_t owner = 0U);
     // Stops replicating; clients that have it receive a Despawn. The entity itself is not touched.
     bool Unreplicate(NetworkId id);
     bool SetOwner(NetworkId id, std::uint64_t owner);
@@ -315,8 +316,14 @@ public:
     // 0 when the entity is not replicated.
     [[nodiscard]] NetworkId NetworkIdOf(kb::ecs::Entity entity) const;
     [[nodiscard]] std::uint64_t OwnerOf(NetworkId id) const;
-    [[nodiscard]] std::size_t ReplicatedCount() const noexcept { return entities_.size(); }
-    void SetRelevance(IRelevance* relevance) noexcept { relevance_ = relevance; }
+    ~ReplicationServer();
+    [[nodiscard]] std::size_t ReplicatedCount() const noexcept;
+    [[nodiscard]] bool IsReplicated(kb::ecs::Entity entity) const noexcept;
+    void MarkDirty(kb::ecs::Entity entity);
+    [[nodiscard]] std::size_t DirtyCapacity() const noexcept { return dirty_.capacity(); }
+    [[nodiscard]] std::vector<NetworkId> NetworkIds() const;
+    bool SetAlwaysRelevant(NetworkId id, bool value);
+    [[nodiscard]] std::vector<NetworkId> VisibleIds(std::uint64_t client) const;
 
     // Feed every NetEvent the host produced. Connected starts the hello; Message is checked and dispatched;
     // Disconnected forgets the client.
@@ -335,45 +342,63 @@ public:
     [[nodiscard]] const ReplicationServerStats& Stats() const noexcept { return stats_; }
     [[nodiscard]] std::size_t ReadyClients() const noexcept;
     [[nodiscard]] std::size_t VisibleCount(std::uint64_t client) const;
+    [[nodiscard]] float RateScale(std::uint64_t client) const noexcept;
+    [[nodiscard]] std::uint32_t ClientRate(std::uint64_t client) const noexcept;
 
 private:
-    struct Baseline {
-        std::uint32_t epoch = 0U; // which Spawn of this entity the baseline belongs to
-        std::uint32_t tick = 0U;
-        std::uint16_t presentMask = 0U;
-        std::array<std::vector<std::uint8_t>, kMaxReplicatedComponents> bytes;
+    struct Known {
+        NetworkId id = 0U;
+        std::uint32_t epoch = 0U;
+        std::uint32_t baselineTick = 0U;
+        std::uint32_t sentTick = 0U;
+        float accum = 0.0F;
+        std::uint8_t tier = 0U;
+        std::uint32_t presentMask = 0U;
+        std::array<std::uint32_t, kMaxReplicatedComponents> componentTicks{};
     };
     struct SentEntry {
         NetworkId id = 0U;
         std::uint32_t epoch = 0U;
         std::uint32_t tick = 0U;
-        std::uint16_t changedMask = 0U;
-        std::uint16_t removedMask = 0U;
+        std::uint32_t changedMask = 0U;
+        std::uint32_t removedMask = 0U;
         std::array<std::vector<std::uint8_t>, kMaxReplicatedComponents> bytes;
     };
-    struct Replicated {
-        kb::ecs::Entity entity;
-        std::uint64_t owner = 0U;
-        std::uint16_t presentMask = 0U;
-        std::array<std::vector<std::uint8_t>, kMaxReplicatedComponents> current;
-    };
+    struct SentUpdate { std::vector<SentEntry> entries; std::uint64_t sentAt = 0U; bool lossCounted = false; };
     struct ClientState {
         bool ready = false;
-        std::set<NetworkId> visible;
-        std::map<NetworkId, Baseline> baseline;
-        std::map<std::uint32_t, std::vector<SentEntry>> inFlight;
+        std::vector<Known> known;
+        std::vector<std::uint32_t> knownIndexBySlot;
+        std::vector<std::uint8_t> baselineArena;
+        std::uint32_t viewerSlot = 0U;
+        std::map<std::uint32_t, SentUpdate> inFlight;
         std::uint32_t nextUpdateId = 1U;
-        NetworkId cursor = 0U;
         std::uint32_t nextEpoch = 1U;
+        std::uint32_t bytesPerSecond = 131072U;
+        double tokens = 0.0;
+        float rateScale = 1.0F;
+        std::uint64_t refillAt = 0U, lastAckAt = 0U, windowAt = 0U, congestionAt = 0U, quietAt = 0U, recoveryAt = 0U;
+        std::uint32_t ackedInWindow = 0U, lostInWindow = 0U;
+        std::array<std::pair<std::uint64_t, std::uint32_t>, 10U> rttMinima{};
+        bool breaker = false, congested = false;
     };
 
-    void Capture(Replicated& replicated);
-    [[nodiscard]] bool SendSpawn(std::uint64_t client, ClientState& state, NetworkId id, const Replicated& replicated, std::uint32_t tick);
+    [[nodiscard]] std::uint32_t AudienceMask(std::uint64_t client, std::uint64_t owner, bool spawn) const;
+    void Capture(std::uint32_t index, ReplicationSlot& replicated);
+    [[nodiscard]] Known* FindKnown(ClientState& state, NetworkId id) const;
+    void AddKnown(ClientState& state, NetworkId id);
+    void EraseKnown(ClientState& state, NetworkId id);
+    [[nodiscard]] std::span<std::uint8_t> BaselineBytes(ClientState& state, NetworkId id, std::size_t component) const;
+    void AddOwner(std::uint32_t index);
+    void RemoveOwner(std::uint32_t index);
+    [[nodiscard]] bool Relevant(std::uint64_t client, const ClientState& state, std::uint32_t index, bool known) const;
+    [[nodiscard]] bool SendSpawn(std::uint64_t client, ClientState& state, NetworkId id, const ReplicationSlot& replicated, std::uint32_t tick);
     [[nodiscard]] bool SendReliable(std::uint64_t client, std::span<const std::uint8_t> message);
     void Despawn(std::uint64_t client, ClientState& state, NetworkId id);
     void UpdateVisibility(std::uint64_t client, ClientState& state, std::uint32_t tick);
     void BuildUpdates(std::uint64_t client, ClientState& state, std::uint32_t tick);
     void HandleAck(ClientState& state, std::span<const std::uint8_t> data);
+    void UpdateRate(std::uint64_t client, ClientState& state, std::uint64_t now);
     void ApplyAcked(ClientState& state, const std::vector<SentEntry>& entries);
     void HandleRpc(std::uint64_t client, std::uint8_t channel, bool reliable, std::span<const std::uint8_t> data, std::uint64_t nowMilliseconds);
     [[nodiscard]] RpcStatus SendRpc(std::uint64_t client, std::uint16_t id, const RpcDefinition& definition, std::span<const RpcValue> args);
@@ -383,15 +408,21 @@ private:
     const ReplicationRegistry* components_;
     const RpcRegistry* rpcs_;
     ReplicationConfig config_;
-    IRelevance* relevance_ = nullptr;
-    std::map<NetworkId, Replicated> entities_;
-    std::map<kb::ecs::Entity::IdType, NetworkId> byEntity_;
-    NetworkId nextId_ = 1U;
+    std::unique_ptr<ReplicationSlots> slots_;
+    std::unique_ptr<SpatialGrid> grid_;
+    std::unordered_map<std::uint64_t, std::vector<std::uint32_t>> owned_;
+    std::vector<std::uint32_t> globals_;
+    bool unboundedWarningArmed_ = true;
+    bool objectWarningArmed_ = true;
+    ReplicationChangeSink changeSink_{};
+    std::vector<kb::ecs::ObserverId> observers_;
+    std::vector<NetworkId> dirty_;
     std::map<std::uint64_t, ClientState> clients_;
     std::map<std::uint16_t, RpcHandler> handlers_;
     RpcRateLimiter limiter_;
     ReplicationServerStats stats_;
     std::uint32_t lastTick_ = 0U;
+    std::uint64_t nowMilliseconds_ = 0U;
 };
 
 struct ReplicationClientStats {
@@ -405,7 +436,6 @@ struct ReplicationClientStats {
     std::uint64_t acksSent = 0U;
     std::uint64_t rejectedMalformed = 0U;
     std::uint64_t rejectedNotReady = 0U;
-    std::uint64_t rejectedLimit = 0U;
     std::uint64_t rpcReceived = 0U;
     std::uint64_t rpcRejected = 0U;
     std::uint64_t rpcNoHandler = 0U;
@@ -423,13 +453,14 @@ public:
     void HandleEvent(const NetEvent& event);
     void HandleMessage(std::uint8_t channel, std::span<const std::uint8_t> data);
     // Sends the acknowledgement of the state messages received since the last call. Call it once per tick.
-    void Flush();
+    void Flush(std::uint64_t nowMilliseconds = 0U);
 
     [[nodiscard]] kb::ecs::Entity Find(NetworkId id) const;
     // 0 when the entity is not a replica.
     [[nodiscard]] NetworkId NetworkIdOf(kb::ecs::Entity entity) const;
     [[nodiscard]] std::uint64_t OwnerOf(NetworkId id) const;
-    [[nodiscard]] std::size_t ReplicaCount() const noexcept { return replicas_.size(); }
+    ~ReplicationClient();
+    [[nodiscard]] std::size_t ReplicaCount() const noexcept;
     // Called when a replica appears or goes away (also for every replica when the connection ends).
     using SpawnCallback = std::function<void(NetworkId id, kb::ecs::Entity entity, std::uint64_t owner)>;
     using DespawnCallback = std::function<void(NetworkId id, kb::ecs::Entity entity)>;
@@ -439,7 +470,8 @@ public:
     }
     // Called after a state message changed a replica: its components now hold the newest values from the server, as of the server's `tick`.
     using StateCallback = std::function<void(NetworkId id, kb::ecs::Entity entity, std::uint32_t tick)>;
-    void SetStateCallback(StateCallback onState) { onState_ = std::move(onState); }
+    StateCallback SetStateCallback(StateCallback onState) { auto previous = std::move(onState_); onState_ = std::move(onState); return previous; }
+    [[nodiscard]] const kb::ecs::World& ReplicaWorld() const noexcept { return *world_; }
     [[nodiscard]] std::vector<NetworkId> ReplicaIds() const;
     [[nodiscard]] bool Ready() const noexcept { return ready_; }
 
@@ -450,12 +482,6 @@ public:
     [[nodiscard]] const ReplicationClientStats& Stats() const noexcept { return stats_; }
 
 private:
-    struct Replica {
-        kb::ecs::Entity entity;
-        std::uint64_t owner = 0U;
-        std::uint32_t lastTick = 0U;
-    };
-
     void Reset();
     void HandleSpawn(std::span<const std::uint8_t> data);
     void HandleDespawn(std::span<const std::uint8_t> data);
@@ -469,7 +495,7 @@ private:
     const ReplicationRegistry* components_;
     const RpcRegistry* rpcs_;
     ReplicationConfig config_;
-    std::map<NetworkId, Replica> replicas_;
+    std::unique_ptr<ReplicaSlots> slots_;
     std::map<std::uint16_t, RpcHandler> handlers_;
     SpawnCallback onSpawn_;
     DespawnCallback onDespawn_;
@@ -480,6 +506,7 @@ private:
     std::uint32_t latestUpdate_ = 0U;
     std::uint32_t receivedBits_ = 0U; // bit i: update (latestUpdate_ - 1 - i) was received
     bool ackDirty_ = false;
+    std::uint64_t lastAckSentAt_ = 0U;
     bool helloAckPending_ = false;
 };
 

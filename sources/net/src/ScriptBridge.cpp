@@ -2,9 +2,13 @@
 
 #include "engine/scene/Scene.hpp"
 #include "engine/script/ScriptNetApi.hpp"
+#include "kb/net/SceneReplication.hpp"
+#include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/NetworkedVariablesComponent.hpp"
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 
 namespace kb::net {
 
@@ -73,7 +77,9 @@ using kb::network::ScriptRpcValue;
 
 } // namespace
 
-ScriptNetworkRuntime::ScriptNetworkRuntime(Role role, kb::scene::Scene& scene) : role_(role), scene_(&scene) {
+ScriptNetworkRuntime::ScriptNetworkRuntime(Role role, kb::scene::Scene& scene, kb::network::ReplicationDeclarations declarations)
+    : role_(role), scene_(&scene), replicationDeclarations_(std::move(declarations)) {
+    static_cast<void>(BuildReplicationRegistry(scene.Runtime().EcsWorld(), replicationDeclarations_, 1000.0F, replicationError_));
     kb::script::ScriptNetApi::Attach(scene, this);
 }
 
@@ -119,6 +125,7 @@ const ScriptRpcDeclaration* ScriptNetworkRuntime::FindRpc(const std::string& nam
 }
 
 bool ScriptNetworkRuntime::Freeze(RpcRegistry& registry, std::string& error) {
+    if (!replicationError_.empty()) { error = replicationError_; return false; }
     for (const ScriptRpcDeclaration& declaration : declarations_) {
         if (!registry.Define(ToDefinition(declaration), error)) {
             error = "RPC '" + declaration.name + "': " + error;
@@ -142,8 +149,9 @@ void ScriptNetworkRuntime::BindServer(ReplicationServer& server) {
             });
         }
     }
-    for (const std::uint64_t entity : pendingReplicate_) {
-        static_cast<void>(server.Replicate(kb::ecs::Entity{ entity }, 0U));
+    for (const auto& request : pendingReplicate_) {
+        static_cast<void>(server.Replicate(kb::ecs::Entity{ request.entity }, 0U));
+        static_cast<void>(server.SetAlwaysRelevant(server.NetworkIdOf(kb::ecs::Entity{ request.entity }), request.global));
     }
     pendingReplicate_.clear();
 }
@@ -152,16 +160,19 @@ void ScriptNetworkRuntime::BindClient(ReplicationClient& replication, Client& co
     replication_ = &replication;
     connection_ = &connection;
     playerId_ = playerId;
+    variableSnapshots_.clear();
+    replication.SetStateCallback([this](NetworkId id, kb::ecs::Entity entity, std::uint32_t) { VariablesChanged(id, entity, false); });
     for (std::size_t index = 0U; index < declarations_.size(); ++index) {
         if (!declarations_[index].toServer) {
             replication.SetRpcHandler(declarations_[index].name, [this, index](std::span<const RpcValue> args) { Deliver(declarations_[index], 0U, args); });
         }
     }
     replication.SetReplicaCallbacks(
-        [this](NetworkId, kb::ecs::Entity entity, std::uint64_t owner) {
+        [this](NetworkId id, kb::ecs::Entity entity, std::uint64_t owner) {
+            VariablesChanged(id, entity, true);
             Queue("OnNetSpawned", { { "entity", entity.Id() }, { "owner", static_cast<std::uint32_t>(owner) } });
         },
-        [this](NetworkId, kb::ecs::Entity entity) { Queue("OnNetDespawned", { { "entity", entity.Id() } }); });
+        [this](NetworkId id, kb::ecs::Entity entity) { variableSnapshots_.erase(id); Queue("OnNetDespawned", { { "entity", entity.Id() } }); });
 }
 
 void ScriptNetworkRuntime::HandleEvent(const NetEvent& event) {
@@ -189,7 +200,7 @@ void ScriptNetworkRuntime::Deliver(const ScriptRpcDeclaration& declaration, std:
             arguments.emplace_back("s" + std::to_string(++next[1]), std::get<std::string>(args[index]));
             break;
         case ScriptRpcArgKind::Entity: {
-            const NetworkId id = std::get<std::uint32_t>(args[index]);
+            const NetworkId id = std::get<NetworkId>(args[index]);
             const kb::ecs::Entity entity = role_ == Role::Server ? (server_ != nullptr ? server_->EntityOf(id) : kb::ecs::Entity{})
                                                                   : (replication_ != nullptr ? replication_->Find(id) : kb::ecs::Entity{});
             if (!entity.IsValid()) {
@@ -272,25 +283,109 @@ bool ScriptNetworkRuntime::CallRpc(const std::string& name, std::uint64_t target
     return true;
 }
 
-bool ScriptNetworkRuntime::Replicate(std::uint64_t entity, std::string& error) {
+void ScriptNetworkRuntime::ComponentChanged(std::uint64_t entity, bool appeared) {
+    if (server_ == nullptr) return;
+    server_->MarkDirty(kb::ecs::Entity{entity});
+    if (appeared && transformAppeared_) transformAppeared_(kb::ecs::Entity{entity});
+}
+
+void ScriptNetworkRuntime::PrepareVariables(kb::ecs::Entity entity) {
+    auto& world = scene_->Runtime().EcsWorld();
+    if (replicationDeclarations_.variables.empty() || world.Has<kb::scene::NetworkedVariablesComponent>(entity)) return;
+    kb::scene::NetworkedVariablesComponent component;
+    for (std::size_t i = 0U; i < replicationDeclarations_.variables.size(); ++i) {
+        const auto& variable = replicationDeclarations_.variables[i];
+        component.values[i] = std::clamp(0.0F, variable.minimum, variable.maximum);
+    }
+    world.Set(entity, component);
+    ComponentChanged(entity.Id());
+}
+
+bool ScriptNetworkRuntime::VariableVisible(const kb::network::ReplicatedVariableDecl& variable, NetworkId id) const {
+    if (role_ == Role::Server) return true;
+    if (replication_ == nullptr || id == 0U) return false;
+    const auto owner = replication_->OwnerOf(id);
+    return variable.audience == ReplicationAudience::Everyone || variable.audience == ReplicationAudience::InitialOnly ||
+        (variable.audience == ReplicationAudience::Owner && owner == playerId_) ||
+        (variable.audience == ReplicationAudience::Others && owner != playerId_);
+}
+
+bool ScriptNetworkRuntime::SetVar(std::uint64_t entity, const std::string& name, double value, std::string& error) {
+    if (role_ != Role::Server) { error = name + ": only a server can set variables"; return false; }
+    if (!replicationError_.empty()) { error = replicationError_; return false; }
+    const auto found = std::ranges::find(replicationDeclarations_.variables, name, &kb::network::ReplicatedVariableDecl::name);
+    if (found == replicationDeclarations_.variables.end()) { error = name + ": unknown variable"; return false; }
+    const auto id = kb::ecs::Entity{entity};
+    auto& world = scene_->Runtime().EcsWorld();
+    const auto* existing = id.IsValid() && world.IsAlive(id) ? world.TryGet<kb::scene::NetworkedVariablesComponent>(id) : nullptr;
+    if (existing == nullptr) { error = name + ": missing NetworkedVariables component"; return false; }
+    if (!std::isfinite(value) || value < found->minimum || value > found->maximum ||
+        (found->type != kb::network::ReplicatedVariableDecl::Type::Float && value != std::floor(value))) {
+        error = name + ": value outside the declared range"; return false;
+    }
+    auto component = *existing;
+    component.values[static_cast<std::size_t>(found - replicationDeclarations_.variables.begin())] = static_cast<float>(value);
+    world.Set(id, component);
+    ComponentChanged(entity);
+    error.clear();
+    return true;
+}
+
+bool ScriptNetworkRuntime::GetVar(std::uint64_t entity, const std::string& name, double& value, std::string& error) const {
+    if (!replicationError_.empty()) { error = replicationError_; return false; }
+    const auto found = std::ranges::find(replicationDeclarations_.variables, name, &kb::network::ReplicatedVariableDecl::name);
+    if (found == replicationDeclarations_.variables.end()) { error = name + ": unknown variable"; return false; }
+    const auto id = kb::ecs::Entity{entity};
+    const auto& world = role_ == Role::Client && replication_ != nullptr ? replication_->ReplicaWorld() : scene_->Runtime().EcsWorld();
+    if (!id.IsValid() || !world.IsAlive(id) || (role_ == Role::Client && !VariableVisible(*found, replication_ == nullptr ? 0U : replication_->NetworkIdOf(id)))) {
+        error = name + ": variable is not available to this client"; return false;
+    }
+    const auto* component = world.TryGet<kb::scene::NetworkedVariablesComponent>(id);
+    if (component == nullptr) { error = name + ": missing NetworkedVariables component"; return false; }
+    value = component->values[static_cast<std::size_t>(found - replicationDeclarations_.variables.begin())];
+    error.clear();
+    return true;
+}
+
+void ScriptNetworkRuntime::VariablesChanged(NetworkId id, kb::ecs::Entity entity, bool initial) {
+    if (replicationDeclarations_.variables.empty()) return;
+    const auto* component = replication_->ReplicaWorld().TryGet<kb::scene::NetworkedVariablesComponent>(entity);
+    auto& snapshot = variableSnapshots_[id];
+    for (std::size_t i = 0U; i < replicationDeclarations_.variables.size(); ++i) {
+        const auto& variable = replicationDeclarations_.variables[i];
+        const auto bit = 1U << i;
+        if (component == nullptr || !VariableVisible(variable, id)) { snapshot.present &= ~bit; continue; }
+        const auto value = component->values[i];
+        if (!initial && ((snapshot.present & bit) == 0U || snapshot.values[i] != value)) {
+            Queue("OnNetVarChanged", {{"entity", entity.Id()}, {"name", variable.name}, {"value", value}});
+        }
+        snapshot.values[i] = value;
+        snapshot.present |= bit;
+    }
+}
+
+bool ScriptNetworkRuntime::Replicate(std::uint64_t entity, std::string& error, bool global) {
     if (role_ != Role::Server) {
         error = "only a server replicates";
         return false;
     }
+    if (!replicationError_.empty()) { error = replicationError_; return false; }
+    if (!replicationDeclarations_.variables.empty()) {
+        if (!scene_->Runtime().EcsWorld().IsAlive(kb::ecs::Entity{entity})) { error = "the entity is not alive"; return false; }
+        PrepareVariables(kb::ecs::Entity{entity});
+    }
     if (server_ == nullptr) {
-        if (std::ranges::find(pendingReplicate_, entity) == pendingReplicate_.end()) {
-            pendingReplicate_.push_back(entity); // applied when the session starts
-        }
+        const auto found = std::ranges::find(pendingReplicate_, entity, &PendingReplication::entity);
+        if (found == pendingReplicate_.end()) pendingReplicate_.push_back({entity, global});
+        else found->global = global;
         return true;
     }
-    if (server_->NetworkIdOf(kb::ecs::Entity{ entity }) != 0U) {
-        return true;
+    const auto result = server_->Replicate(kb::ecs::Entity{ entity }, 0U);
+    if (result == ReplicateResult::Ok || result == ReplicateResult::AlreadyReplicated) {
+        return server_->SetAlwaysRelevant(server_->NetworkIdOf(kb::ecs::Entity{entity}), global);
     }
-    if (server_->Replicate(kb::ecs::Entity{ entity }, 0U) == 0U) {
-        error = "the entity is not alive or the replication limit is reached";
-        return false;
-    }
-    return true;
+    error = "the entity is not alive or the replication limit is reached";
+    return false;
 }
 
 bool ScriptNetworkRuntime::IsReplicated(std::uint64_t entity) const {
@@ -298,7 +393,7 @@ bool ScriptNetworkRuntime::IsReplicated(std::uint64_t entity) const {
         return false;
     }
     if (server_ == nullptr) {
-        return std::ranges::find(pendingReplicate_, entity) != pendingReplicate_.end();
+        return std::ranges::find(pendingReplicate_, entity, &PendingReplication::entity) != pendingReplicate_.end();
     }
     return server_->NetworkIdOf(kb::ecs::Entity{ entity }) != 0U;
 }

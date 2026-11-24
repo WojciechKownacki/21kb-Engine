@@ -12,7 +12,7 @@ namespace kb::net {
 enum class DiagCode : std::uint16_t {
     EntityLimit, OversizeRecord, SendQueueFull, HandshakeVersion, HandshakeContent,
     HandshakeRateLimited, HandshakeServerFull, RpcRejected, InterestBudget,
-    ObjectCountWarning, VersionUnchecked, VisibilityUnbounded, RateLimited, ComponentGroupLimit, NotAuthority,
+    ObjectCountWarning, VersionUnchecked, VisibilityUnbounded, RateLimited, ComponentGroupLimit, NotAuthority, EventsDropped, ConnectBucketsFull,
 };
 
 struct DiagEntry {

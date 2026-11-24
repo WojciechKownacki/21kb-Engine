@@ -22,6 +22,7 @@ add_library(kb_net STATIC
     src/Host.cpp
     src/Loopback.cpp
     src/ProjectScene.cpp
+    src/ReflectedFieldsCodec.cpp
     src/Replication.cpp
     src/Rpc.cpp
     src/SceneReplication.cpp
@@ -147,4 +148,12 @@ if(BUILD_TESTING)
     add_test(NAME kb_dedicated_server_tests COMMAND $<TARGET_FILE:kb_dedicated_server_tests>)
     set_tests_properties(kb_dedicated_server_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 240 LABELS "network;correctness;process")
     kb_apply_quality_gates(kb_dedicated_server_tests)
+
+    add_executable(kb_net_bot tests/NetBot.cpp)
+    target_link_libraries(kb_net_bot PRIVATE kb_net_server)
+    kb_apply_quality_gates(kb_net_bot)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME kb_net_bench_smoke COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/net_bench.py
+        --server $<TARGET_FILE:kb_dedicated_server> --bot $<TARGET_FILE:kb_net_bot> --smoke)
+    set_tests_properties(kb_net_bench_smoke PROPERTIES TIMEOUT 90 LABELS "network;process;performance")
 endif()

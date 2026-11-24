@@ -18,6 +18,11 @@ struct SceneClientOptions {
     std::string token;
     float worldExtent = 1000.0F;
     std::uint32_t reconnectAttempts = 3U;
+#if defined(__ANDROID__)
+    std::uint32_t downlinkBytesPerSecond = 49152U;
+#else
+    std::uint32_t downlinkBytesPerSecond = 131072U;
+#endif
     // Web only: "transport": "webrtc" sends the datagrams over WebRTC data channels; `url` is then the
     // signaling WebSocket and `iceServers` lists the STUN and TURN servers (see WebRtcTransport.hpp).
     bool webRtc = false;
@@ -46,7 +51,7 @@ public:
     [[nodiscard]] bool Connected() const noexcept;
     // The replicas this client holds, and the one for a network id (invalid when it has none).
     [[nodiscard]] std::size_t ReplicaCount() const;
-    [[nodiscard]] kb::ecs::Entity Replica(std::uint32_t networkId) const;
+    [[nodiscard]] kb::ecs::Entity Replica(std::uint64_t networkId) const;
     // How many times the server's declarations (components, RPCs) differed from this client's, so that the client left: the scripts of the two sides differ.
     [[nodiscard]] std::uint64_t DeclarationMismatches() const;
 private:

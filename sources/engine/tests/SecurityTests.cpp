@@ -42,6 +42,35 @@ template <std::size_t Size>
     return std::vector<std::uint8_t>(count, value);
 }
 
+void TestX25519Rfc7748Vectors() {
+    struct Vector { const char* secret; const char* peer; const char* expected; };
+    const Vector vectors[] = {
+        { "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+          "e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c",
+          "c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552" },
+        { "4b66e9d4d1b4673c5ad22691957d6af5c11b6421e0ea01d42ca4169e7918ba0d",
+          "e5210f12786811d3f4b7959d0538ae2c31dbe7106fc03c3efc4cd549c715a493",
+          "95cbde9476e8907d7aade45cb4b873f88b595a68799fa152e6f8f7647aac7957" },
+        { "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a",
+          "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f",
+          "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742" }
+    };
+    for (const auto& vector : vectors) {
+        kb::security::SecretBytes<32U> secret, shared;
+        Require(kb::security::TryParseHex(vector.secret, secret.Span()), "invalid X25519 scalar");
+        Require(kb::security::X25519SharedSecret(secret, HexArray<32U>(vector.peer), shared) &&
+            kb::security::ConstantTimeEqual(shared.Span(), HexArray<32U>(vector.expected)), "X25519 does not match RFC 7748");
+    }
+    kb::security::X25519KeyPair first, second;
+    Require(kb::security::GenerateX25519KeyPair(first) && kb::security::GenerateX25519KeyPair(second) && first.publicKey != second.publicKey,
+        "ephemeral public keys repeat");
+    kb::security::SecretBytes<32U> a, b;
+    Require(kb::security::X25519SharedSecret(first.secret, second.publicKey, a) &&
+        kb::security::X25519SharedSecret(second.secret, first.publicKey, b) && kb::security::ConstantTimeEqual(a.Span(), b.Span()),
+        "X25519 peers disagree");
+    Require(!kb::security::X25519SharedSecret(first.secret, std::array<std::uint8_t, 32U>{}, a), "all-zero shared secret was accepted");
+}
+
 // RFC 8032 section 7.1, tests 1, 2, 3 and SHA(abc).
 void RunEd25519VectorTests() {
     struct Vector {
@@ -611,6 +640,7 @@ void RunReleaseManifestTests() {
 namespace kb::tests {
 
 void RunSecurityTests() {
+    TestX25519Rfc7748Vectors();
     RunEd25519VectorTests();
     RunSha512VectorTests();
     RunAeadVectorTests();

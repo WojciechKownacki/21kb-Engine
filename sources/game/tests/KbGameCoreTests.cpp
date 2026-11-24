@@ -485,6 +485,27 @@ void WriteSettings(const std::filesystem::path& root, const kb::project::Project
         "kb_game_core test project settings could not be written");
 }
 
+void RunReplicationDeclarationsCookTest() {
+    namespace bake = kb::assets::bake;
+    const auto fixture = BuildFixture(TestRoot() / "replication_declarations", "Project");
+    kb::project::ProjectSettings settings;
+    settings.defaultMap = fixture.sceneVirtualPath;
+    settings.physicsLayersAsset.clear();
+    settings.inputEnabled = false;
+    WriteSettings(fixture.root, settings);
+    const std::string declarations = R"({"version":1,"fields":[{"component":"kb21.gameplay.combatant","field":"health","minimum":0,"maximum":100,"bits":8,"audience":"Owner"}]})";
+    WriteTextFile(fixture.root / "Config" / "Replication.json", declarations);
+    const auto path = fixture.root / "Game.kbpack";
+    std::ostringstream diagnostics;
+    const auto cook = kb::game::CookProject({.projectPath = fixture.root, .targetProfileId = "Windows.x64", .outputPackPath = path}, diagnostics);
+    Require(cook.succeeded, cook.error.c_str());
+    bake::RuntimeAssetPack pack;
+    Require(pack.Mount(path, bake::WindowsX64BakeTargetProfile()) == bake::RuntimeAssetPackStatus::Success, "replication configuration package did not mount");
+    std::vector<std::uint8_t> bytes;
+    Require(pack.ReadAuxiliaryFile("/Game/Config/Replication.json", bytes) == bake::RuntimeAssetPackStatus::Success &&
+        std::string(bytes.begin(), bytes.end()) == declarations, "cook did not preserve the replication declaration file");
+}
+
 // The levels of detail of a skeletal mesh are built by kb_cli mesh-lod, reach the game package and load back from it
 // with their triangles, the sizes they are drawn from and the bone data of every level.
 void RunSkeletalMeshLodPackTest() {
@@ -3243,6 +3264,11 @@ void RunPackageContractCheck(
 } // namespace
 
 int main(int argc, char** argv) {
+    if (argc == 2 && std::string_view{argv[1]} == "--replication-declarations") {
+        RunReplicationDeclarationsCookTest();
+        std::fputs("kb_game_core replication declarations: 1/1 passed\n", stdout);
+        return EXIT_SUCCESS;
+    }
     // --package-contract <target profile> <Game.kbpack> <project directory> [<host path>...]
     if (argc >= 5 && std::string_view{ argv[1] } == "--package-contract") {
         RunPackageContractCheck(argv[2], argv[3], argv[4], std::vector<std::string>(argv + 5, argv + argc));

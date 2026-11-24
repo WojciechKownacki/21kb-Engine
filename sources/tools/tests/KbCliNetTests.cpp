@@ -152,7 +152,8 @@ void RunInfoTests() {
     kb::net::RpcRegistry standard;
     kb::net::DefineStandardRpcs(standard);
     for (std::uint16_t id = 1U; id <= standard.Count(); ++id) Require(Contains(info.out, "- " + standard.Find(id)->name + "("), "net info must list the standard call " + standard.Find(id)->name);
-    const std::unique_ptr<kb::net::ReplicationRegistry> components = kb::net::MakeSceneReplicationRegistry(1000.0F);
+    const kb::ecs::World world;
+    const std::unique_ptr<kb::net::ReplicationRegistry> components = kb::net::BuildReplicationRegistry(world, {}, 1000.0F, error);
     for (std::size_t index = 0U; index < components->Count(); ++index) Require(Contains(info.out, "- " + components->At(index).Name() + ", "), "net info must list the component " + components->At(index).Name());
     Require(Contains(info.out, "offline") && Contains(info.out, "kb_dedicated_server") && Contains(info.out, "net check") && Contains(info.out, "net setup"), "net info says the modes and how to play: " + info.out);
     Require(Contains(Cli({ "help", "net" }).out, "check --project"), "help net must describe the command");
@@ -211,10 +212,18 @@ void RunSetupTests() {
     std::ifstream keys{ fs::path{ out } / "keys.txt" };
     std::string line;
     std::size_t count = 0U;
+    std::vector<std::uint64_t> ids;
+    std::vector<std::string> secrets;
     while (std::getline(keys, line)) {
         if (line.empty() || line.front() == '#') continue;
         ++count;
-        Require(line.size() == std::to_string(count).size() + 1U + 64U && line.starts_with(std::to_string(count) + " "), "a key line is '<id> <64 hex digits>': " + line);
+        std::istringstream fields(line);
+        std::uint64_t clientId = 0U;
+        std::string secret;
+        fields >> clientId >> secret;
+        Require(clientId > 1U && secret.size() == 64U && std::ranges::find(ids, clientId) == ids.end(), "invalid or duplicate random identity");
+        ids.push_back(clientId);
+        secrets.push_back(secret);
     }
     Require(count == 3U, "one key for each player: " + std::to_string(count));
     // The session file is what the player's client reads, and it has the key the server has.
@@ -222,9 +231,12 @@ void RunSetupTests() {
         std::ifstream file{ fs::path{ out } / ("session-" + std::to_string(id) + ".json"), std::ios::binary };
         const std::string json{ std::istreambuf_iterator<char>{ file }, std::istreambuf_iterator<char>{} };
         kb::net::SceneClientOptions options;
-        Require(kb::net::ParseNativeSceneClientSettings(json, options) && options.clientId == static_cast<std::uint64_t>(id) && options.server.port == 27099U,
+        Require(kb::net::ParseNativeSceneClientSettings(json, options) && options.clientId == ids[static_cast<std::size_t>(id - 1)] && options.server.port == 27099U,
             "the player's client must accept session-" + std::to_string(id) + ".json: " + json);
     }
+#if !defined(_WIN32)
+    Require(fs::status(fs::path{out} / "keys.txt").permissions() == (fs::perms::owner_read | fs::perms::owner_write), "keys are not private");
+#endif
     const Run again = Cli({ "net", "setup", "--project", project, "--players", "3", "--out", out });
     Require(again.exitCode == 1 && Contains(again.err, "--replace"), "keys are not overwritten by accident: " + again.All());
     Require(Cli({ "net", "setup", "--project", project, "--players", "3", "--out", out, "--replace" }).exitCode == 0, "--replace writes new keys");

@@ -58,6 +58,16 @@ using Ed25519SecretKey = SecretBytes<64U>;
 using Ed25519Seed = SecretBytes<kEd25519SeedBytes>;
 using AeadKey = SecretBytes<kAeadKeyBytes>;
 
+struct X25519KeyPair {
+    SecretBytes<32U> secret;
+    std::array<std::uint8_t, 32U> publicKey{};
+};
+
+[[nodiscard]] bool GenerateX25519KeyPair(X25519KeyPair& out) noexcept;
+// Rejects small-order inputs that produce the all-zero result (RFC 7748 section 6.1).
+[[nodiscard]] bool X25519SharedSecret(const SecretBytes<32U>& secret,
+    std::span<const std::uint8_t, 32U> peerPublic, SecretBytes<32U>& out) noexcept;
+
 // Fills `out` from the operating system's CSPRNG (BCryptGenRandom on Windows, getrandom on
 // Linux and Android, getentropy elsewhere). Returns false, with `out` wiped, if the system
 // could not supply the bytes; a caller must never fall back to a weaker source.

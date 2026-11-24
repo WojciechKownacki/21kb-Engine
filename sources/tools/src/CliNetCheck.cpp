@@ -211,10 +211,9 @@ constexpr std::size_t kMaxTrace = 4000U;
 // One line for the server and one for each player, for each replicated object called `name`: where it is now, and where the player's replica of it is.
 void TraceReplicas(const std::string& name, int drawn, Peer& server, kb::net::ReplicationServer& replication, const std::vector<std::unique_ptr<Peer>>& players,
     std::vector<std::string>& lines) {
-    for (std::uint32_t id = 1U, found = 0U; id < 100000U && found < replication.ReplicatedCount(); ++id) {
+    for (const auto id : replication.NetworkIds()) {
         const kb::ecs::Entity entity = replication.EntityOf(id);
         if (!entity.IsValid()) continue;
-        ++found;
         if (server.Scene().Entities().Name(entity) != name) continue;
         if (const auto* authoritative = server.Scene().Runtime().EcsWorld().TryGet<kb::scene::TransformComponent>(entity)) {
             lines.push_back("trace " + std::to_string(drawn) + " server " + name + "#" + std::to_string(id) + " " + Text(authoritative->localPosition));
@@ -309,12 +308,13 @@ int RunNetCheck(const ArgumentList& arguments, CommandIo io) {
     conditions.simulation.reorderPermille = static_cast<std::uint16_t>(loss != 0 ? 50 : 0);
     conditions.simulation.seed = 21U;
     kb::net::LoopbackNetwork network{ conditions };
-    server.net = std::make_unique<kb::net::ScriptNetworkRuntime>(kb::net::ScriptNetworkRuntime::Role::Server, server.Scene());
+    server.net = std::make_unique<kb::net::ScriptNetworkRuntime>(kb::net::ScriptNetworkRuntime::Role::Server, server.Scene(), server.opened.replication);
     if (!server.host->InstallSceneSystem()) {
         io.err << "error: the script scene system could not be installed\n";
         return 1;
     }
-    std::unique_ptr<kb::net::ReplicationRegistry> components = kb::net::MakeSceneReplicationRegistry(1000.0F);
+    std::unique_ptr<kb::net::ReplicationRegistry> components = kb::net::BuildReplicationRegistry(server.Scene().Runtime().EcsWorld(), server.opened.replication, 1000.0F, error);
+    if (!components) { io.err << "error: " << error << '\n'; return 1; }
     kb::net::RpcRegistry rpcs;
     kb::net::DefineStandardRpcs(rpcs);
     if (!server.net->Freeze(rpcs, error)) {
@@ -365,7 +365,7 @@ int RunNetCheck(const ArgumentList& arguments, CommandIo io) {
     // The run.
     Positions before;
     Positions earlier;
-    std::map<std::uint32_t, kb::math::Vec3> serverEarlier;
+    std::map<kb::net::NetworkId, kb::math::Vec3> serverEarlier;
     std::uint32_t tick = 0U;
     for (int frame = 1; frame <= frames; ++frame) {
         const std::uint64_t now = static_cast<std::uint64_t>(frame) * 1000U / 30U;
@@ -415,10 +415,9 @@ int RunNetCheck(const ArgumentList& arguments, CommandIo io) {
         if (frame == 15) before = SnapshotPositions(server);
         if (frame == frames - 10) {
             earlier = SnapshotPositions(server);
-            for (std::uint32_t id = 1U, found = 0U; id < 100000U && found < replication.ReplicatedCount(); ++id) {
+            for (const auto id : replication.NetworkIds()) {
                 const kb::ecs::Entity entity = replication.EntityOf(id);
                 if (!entity.IsValid()) continue;
-                ++found;
                 if (const auto* transform = server.Scene().Runtime().EcsWorld().TryGet<kb::scene::TransformComponent>(entity)) serverEarlier[id] = transform->localPosition;
             }
         }
@@ -443,7 +442,7 @@ int RunNetCheck(const ArgumentList& arguments, CommandIo io) {
         }
     }
     std::size_t replicatedIds = 0U;
-    for (std::uint32_t id = 1U; id < 100000U && replicatedIds < replication.ReplicatedCount(); ++id) {
+    for (const auto id : replication.NetworkIds()) {
         const kb::ecs::Entity entity = replication.EntityOf(id);
         if (!entity.IsValid()) continue;
         ++replicatedIds;
