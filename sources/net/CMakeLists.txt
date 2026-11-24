@@ -6,6 +6,7 @@ add_library(kb_net STATIC
     include/kb/net/ByteIO.hpp
     include/kb/net/Host.hpp
     include/kb/net/Prediction.hpp
+    include/kb/net/ProjectScene.hpp
     include/kb/net/Replication.hpp
     include/kb/net/Rpc.hpp
     include/kb/net/SceneReplication.hpp
@@ -20,6 +21,7 @@ add_library(kb_net STATIC
     src/Auth.cpp
     src/Host.cpp
     src/Loopback.cpp
+    src/ProjectScene.cpp
     src/Replication.cpp
     src/Rpc.cpp
     src/SceneReplication.cpp

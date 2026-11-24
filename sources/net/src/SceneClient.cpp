@@ -1,17 +1,40 @@
 #include "kb/net/SceneClient.hpp"
 #include "kb/net/Auth.hpp"
 #include "kb/net/SceneReplication.hpp"
+#include "kb/net/Prediction.hpp"
 #include "kb/net/ScriptBridge.hpp"
+#include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/core/JsonValue.hpp"
 
+#include <algorithm>
 #include <charconv>
 #include <cmath>
+#include <map>
+#include <optional>
 #include <ostream>
 
 namespace kb::net {
 namespace {
+// A replica of another player's object is shown this long in the past, between two snapshots, so that it moves smoothly although the
+// server sends 30 states a second and they arrive unevenly (three ticks of the default rate).
+constexpr double kInterpolationDelaySeconds = 0.1;
+
+kb::scene::TransformComponent LerpTransform(const kb::scene::TransformComponent& from, const kb::scene::TransformComponent& to, double fraction) {
+    const float t = static_cast<float>(fraction);
+    kb::scene::TransformComponent result = to;
+    result.localPosition = { from.localPosition.x + (to.localPosition.x - from.localPosition.x) * t, from.localPosition.y + (to.localPosition.y - from.localPosition.y) * t,
+        from.localPosition.z + (to.localPosition.z - from.localPosition.z) * t };
+    result.localRotation = kb::math::Slerp(from.localRotation, to.localRotation, t);
+    result.localScale = { from.localScale.x + (to.localScale.x - from.localScale.x) * t, from.localScale.y + (to.localScale.y - from.localScale.y) * t,
+        from.localScale.z + (to.localScale.z - from.localScale.z) * t };
+    result.worldPosition = result.localPosition;
+    result.worldRotation = result.localRotation;
+    result.worldScale = result.localScale;
+    return result;
+}
+
 bool ParseSessionIdentity(const kb::core::JsonValue& root, SceneClientOptions& parsed) {
     const auto* id = root.Find("clientId");
     const auto* key = root.Find("key");
@@ -123,6 +146,7 @@ struct SceneClient::Impl {
         auto next = factory(error);
         if (!next) { diagnostics << "network: transport creation failed\n"; return false; }
         script.SetClientAuthorized(false);
+        if (replication) mismatches += replication->Stats().helloMismatch;
         replication.reset();
         client.reset();
         transport = std::move(next);
@@ -132,6 +156,17 @@ struct SceneClient::Impl {
         client = std::make_unique<Client>(*transport, config, options.clientId, options.key, options.server, now);
         replication = std::make_unique<ReplicationClient>(*client, scene.Runtime().EcsWorld(), *components, rpcs);
         script.BindClient(*replication, *client, options.clientId);
+        smoothed.clear();
+        serverClock = TickClock{};
+        replication->SetStateCallback([this](NetworkId id, kb::ecs::Entity entity, std::uint32_t tick) {
+            const kb::scene::TransformComponent* transform = scene.Runtime().EcsWorld().TryGet<kb::scene::TransformComponent>(entity);
+            if (transform == nullptr) return;
+            auto found = smoothed.find(id);
+            if (found == smoothed.end()) {
+                found = smoothed.emplace(id, SnapshotInterpolator<kb::scene::TransformComponent>{ LerpTransform, kInterpolationDelaySeconds }).first;
+            }
+            static_cast<void>(found->second.Add(ServerTime(tick), *transform));
+        });
         authorized = false;
         disconnected = false;
         tokenPending = false;
@@ -160,11 +195,71 @@ struct SceneClient::Impl {
     std::uint32_t retries = 0U;
     std::uint64_t reconnectAt = 0U;
     std::size_t lastReplicas = 0U;
+    std::uint64_t mismatches = 0U; // of the sessions that ended
+    double nowSeconds = 0.0;
+    // The server's snapshots of each replica, on a clock of the server's ticks: each new tick is stamped where the ticks before it say it should be
+    // (the period read from how fast they come), nudged a tenth of the way towards when it really arrived, so a datagram that came a frame late
+    // does not bunch two snapshots together and a clock that runs a little differently is followed.
+    std::map<NetworkId, SnapshotInterpolator<kb::scene::TransformComponent>> smoothed;
+    struct TickClock {
+        bool started = false;
+        std::uint32_t tick = 0U;
+        double stamp = 0.0;
+        double period = 1.0 / 30.0;
+    } serverClock;
+
+    double ServerTime(std::uint32_t tick) {
+        TickClock& clock = serverClock;
+        if (!clock.started) {
+            clock.started = true;
+            clock.tick = tick;
+            clock.stamp = nowSeconds;
+        }
+        if (tick > clock.tick) {
+            const double steps = static_cast<double>(tick - clock.tick);
+            const double predicted = clock.stamp + steps * clock.period;
+            const double error = nowSeconds - predicted;
+            clock.period = std::clamp(clock.period + 0.02 * error / steps, 0.004, 0.25);
+            clock.stamp = std::max(predicted + 0.1 * error, clock.stamp + 0.0005);
+            clock.tick = tick;
+        }
+        return clock.stamp - static_cast<double>(clock.tick - tick) * clock.period;
+    }
+
+    void Smooth() {
+        for (auto it = smoothed.begin(); it != smoothed.end();) {
+            const kb::ecs::Entity entity = replication ? replication->Find(it->first) : kb::ecs::Entity{};
+            if (!entity.IsValid()) {
+                it = smoothed.erase(it);
+                continue;
+            }
+            if (const std::optional<kb::scene::TransformComponent> shown = it->second.Sample(nowSeconds)) {
+                scene.Runtime().EcsWorld().Set(entity, *shown);
+            }
+            ++it;
+        }
+    }
 };
 
 SceneClient::SceneClient(kb::scene::Scene& scene, SceneClientOptions options, TransportFactory factory)
     : impl_(std::make_unique<Impl>(scene, std::move(options), std::move(factory))) {}
 SceneClient::~SceneClient() = default;
+
+bool SceneClient::Connected() const noexcept {
+    return impl_->authorized && !impl_->disconnected && impl_->client && impl_->client->State() == ClientState::Connected;
+}
+
+std::uint64_t SceneClient::DeclarationMismatches() const {
+    return impl_->mismatches + (impl_->replication ? impl_->replication->Stats().helloMismatch : 0U);
+}
+
+std::size_t SceneClient::ReplicaCount() const {
+    return impl_->replication ? impl_->replication->ReplicaCount() : 0U;
+}
+
+kb::ecs::Entity SceneClient::Replica(std::uint32_t networkId) const {
+    return impl_->replication ? impl_->replication->Find(networkId) : kb::ecs::Entity{};
+}
 
 bool SceneClient::Update(std::uint64_t now, std::ostream& diagnostics) {
     auto& s = *impl_;
@@ -188,6 +283,7 @@ bool SceneClient::Update(std::uint64_t now, std::ostream& diagnostics) {
         ++s.retries;
         if (!s.Connect(now, diagnostics)) return false;
     }
+    s.nowSeconds = static_cast<double>(now) / 1000.0;
     s.client->Update(now);
     NetEvent event;
     while (s.client->PollEvent(event)) {
@@ -230,6 +326,7 @@ bool SceneClient::Update(std::uint64_t now, std::ostream& diagnostics) {
     }
     if (s.authorized) {
         s.replication->Flush();
+        s.Smooth();
         const auto count = s.replication->ReplicaCount();
         if (count != s.lastReplicas) {
             diagnostics << "network: replicas=" << count << '\n';

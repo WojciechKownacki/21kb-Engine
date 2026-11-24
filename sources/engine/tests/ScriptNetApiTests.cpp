@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "SceneSystemTestSuites.hpp"
 #include "TestSupport.hpp"
 
@@ -249,6 +250,11 @@ void RunDeclareAndCallTest() {
     net.mode = ScriptNetMode::Client;
     Check(Failed(CallNet(host, scene, "Net.Replicate", { Arg("entity", entity) }), "only a server") && Failed(CallNet(host, scene, "Net.SetOwner", { Arg("entity", entity), Arg("player", ScriptValue{ std::uint32_t{ 3U } }) }), "only a server"),
         "a client replicated or gave away an entity");
+    // The failed calls are kept for the report of `kb_cli net check`, each text once, with what to do about it.
+    const std::vector<std::string> problems = ScriptNetApi::DrainProblems(scene);
+    Check(std::ranges::any_of(problems, [](const std::string& text) { return text.find("only a server can replicate") != std::string::npos && text.find("Net.IsServer()") != std::string::npos; }),
+        "the failed Net.Replicate was not kept with its hint");
+    Check(ScriptNetApi::DrainProblems(scene).empty(), "the problems were not cleared by reading them");
 
     ScriptNetApi::Attach(scene, nullptr);
     Check(ScriptNetApi::Attached(scene) == nullptr, "the session was not detached");

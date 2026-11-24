@@ -1243,7 +1243,56 @@ Done when `mod build` says `3 asset(s) added` and sealed, and `mod verify` ends 
 - Inspect or split a pack: `pack info <file.kbpack>`, `pack split`, `pack patch` (updates), `pack sign|verify`. A game for other platforms: `build --platform android|web|linux`. Details: docs/modding.md.
 )md";
 
-constexpr std::array<ScriptAgentGuide, 41> kGuides{ {
+constexpr std::string_view kMultiplayer = R"md(# Multiplayer: a game for several players over a network
+
+`guide --search "multiplayer"` (or "kooperacja", "gra dla 4 graczy przez internet") finds the recipes; `kb_cli recipe run <id> --project <dir>` makes one.
+
+| Recipe | What it makes |
+|---|---|
+| `multiplayer-lan` | a game for 2-4 players in one room or house: a character each, shared coins and score |
+| `multiplayer-online` | the same for players in different places, with a lobby where the first player starts the game and a chat |
+| `net-players` | a character for each player who joins; WASD moves it and everybody sees it |
+| `net-score` | a score on every screen that adds up what any player collects |
+| `net-lobby` | a waiting screen with a Start button only the first player can press |
+| `net-chat` | a line to type, a Send button and the chat of all players |
+| `net-health` | the health of each player's character, kept by the server, damaged by spikes and seen by everyone |
+| `net-object` | makes one object you already have (or a prefab) networked: every player sees it where the server has it |
+
+How a game of several players works here:
+- One server runs the game (scripts, physics) and decides; each player runs a copy of the same project and shows what the server says. A player never changes the game
+  itself: it sends a call (`Net.Call`) and the server acts on it. Run the same scripts on both sides; they ask `Net.IsServer()` which they are.
+- The server shows an object to the players with `Net.Replicate(entity)`: they get its place, rotation and scale, nothing else (health, a score, a name travel as calls).
+  A player's copy of it has no mesh: the script keeps a visible object of its own at the replica's place (`net-object` and `net-players` do).
+- Only a position travels by itself. Anything else (health, a score, a name, a colour, an animation) goes as a call, and the server owns the value: it changes it,
+  then sends it to everyone with `Net.Call` (`net-score` for a number everyone shares, `net-health` for a value of each character). A player who joins, or whose copy
+  of a character appears later, asks for the value once (`net-score`: when `Net.Mode().connected`; `net-health`: in `OnNetSpawned`): a call about a character the
+  receiver does not have yet is dropped, so the server does not push it unasked. A player that wants to change such a value sends a call and the server decides.
+- A call is declared with `Net.RegisterRpc` in `Ready`, the same on the server and on every player: name, direction (`toServer` or `toClients`) and typed arguments with
+  ranges (`"entity,float(-1..1),string(32)"`). It arrives as `function OnRpc_<name>(self, event)`; `event.args.sender` is the player (0: the server), `n1..` `s1..` `b1..` `e1..` the values.
+- `Net.SetOwner(entity, player)` gives an object to a player; a call that names it (`owner = 0` in the declaration) is refused for anyone else.
+- Events: `OnNetConnected`, `OnNetDisconnected`, `OnNetSpawned(entity, owner)` and `OnNetDespawned` (`kb_cli net info` lists them with the functions, from the engine).
+- Other players' characters move smoothly by themselves: a player shows each replica about 0.1 s in the past, between the server's two last snapshots, so a script that
+  reads `Transform.GetPosition(replica)` every frame sees a steady motion (the player's own character is not predicted: it follows the server).
+- Single-player the same scripts still run: `Net.Mode().mode` is `"offline"` and the Net calls say so; keep a script working offline by asking `Net.Mode()` first.
+
+Try it without a window, a socket or a second computer: `kb_cli net check --project <dir> --clients 2 --press 1:W@40+60`. It loads the project as the server and as 2 players
+over a simulated network and prints who connected, what the server replicated, where each player sees it, the script `Log` lines, and `warning:` lines with what to change
+(nothing replicated, an object that moves on the server but is not networked, a call refused for lack of an owner or a range, a player that cannot connect because its scripts
+differ). `--press 2:W@30+60` holds W for player 2, `--click 1:Canvas/LobbyStart@40` presses a widget, `--loss 10` drops 10% of the datagrams, `--latency 80` sets the delay.
+`net check` ends with `done: 0 diagnostics` when the scripts ran clean and everyone connected.
+
+To play for real:
+```
+kb_cli net setup --project <dir> --players 4 --address <the server's IPv4 address>
+kb_dedicated_server --project <dir> --keys <dir>/Saved/Net/keys.txt --replicate none
+kb_game --project <dir> --network-config=<dir>/Saved/Net/session-1.json
+```
+`net setup` writes the keys of the players (never into `Assets/`, which a build packs into the game) and a session file for each; give a player only theirs. `--replicate none` leaves
+what is shown to the scripts. In the same room use the server's address on the network; over the internet the server's UDP port (27015) must be reachable (a forwarded port or a machine with a public
+address): the engine has no relay, no host-and-play in one window and no matchmaking, so the lobby of `net-lobby` is a script on that server.
+)md";
+
+constexpr std::array<ScriptAgentGuide, 42> kGuides{ {
     { "recipe-material", "Recipe: colour or material", "A colour or material on an object: two commands.", kRecipeMaterial },
     { "recipe-component", "Recipe: physics or a component", "Physics (a falling body) or any component on an object, and how to check it.", kRecipeComponent },
     { "recipe-prefab", "Recipe: prefab", "Save an object, with its components, as a prefab and place copies.", kRecipePrefab },
@@ -1283,6 +1332,7 @@ constexpr std::array<ScriptAgentGuide, 41> kGuides{ {
     { "gameplay-graphs", "Gameplay graphs", "Logic made of nodes and connections (.kbgraph): add, connect, check, attach.", kGameplayGraphs },
     { "csg", "CSG shapes", "A room or a wall with a hole built from boxes added and cut away, with its collision.", kCsg },
     { "world-partition", "World partition", "A world too big to load at once: cells that stream around the player.", kWorldPartition },
+    { "multiplayer", "Multiplayer", "A game for several players over a network: the recipes, how the server and the players share a game, trying it headless with net check, and connecting players.", kMultiplayer },
     { "packs-and-mods", "Packs and mods", "Build a game pack, make a signed mod from a project, install and verify it (for a terminal).", kPacksAndMods },
     { "verify", "Checking your work", "Validate scripts and run scenes headless before you finish.", kVerify },
 } };

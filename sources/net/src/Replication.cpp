@@ -873,6 +873,9 @@ void ReplicationClient::HandleState(std::span<const std::uint8_t> data) {
         }
         found->second.lastTick = tick;
         ++stats_.entriesApplied;
+        if (onState_) {
+            onState_(entry.id, found->second.entity, tick);
+        }
     }
     ++stats_.stateMessagesApplied;
     if (!acknowledge) {

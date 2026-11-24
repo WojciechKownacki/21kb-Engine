@@ -612,7 +612,9 @@ std::span<const Recipe> Recipes() {
     static const std::vector<Recipe> all = [] {
         std::vector<Recipe> recipes;
         // The small one first: of two answers that fit equally well, the one that does less is the one asked for.
-        for (const std::span<const Recipe> floor : { BrickRecipes(), SystemRecipes(), GameRecipes() }) recipes.insert(recipes.end(), floor.begin(), floor.end());
+        for (const std::span<const Recipe> floor : { BrickRecipes(), NetworkBrickRecipes(), SystemRecipes(), NetworkSystemRecipes(), GameRecipes(), NetworkGameRecipes() }) {
+            recipes.insert(recipes.end(), floor.begin(), floor.end());
+        }
         return recipes;
     }();
     return all;
@@ -664,7 +666,19 @@ std::vector<RecipeHit> SearchRecipes(std::string_view words) {
     if (query.empty()) return hits;
     for (const Recipe& recipe : Recipes()) {
         const std::vector<std::string> name = kb::script::SearchWords(std::string{ recipe.id } + " " + std::string{ recipe.title });
-        std::vector<std::string> other = kb::script::SearchWords(recipe.words);
+        // A word with a + before it is a gate: the recipe answers a request only when the request says one of its gates (or a word that
+        // starts like one), so a recipe about a network is not offered for "the player" and "a character" alone.
+        std::vector<std::string> gates;
+        std::string plain;
+        for (const std::string& token : Words(recipe.words)) {
+            const bool gate = token.starts_with('+');
+            for (std::string& word : kb::script::SearchWords(token)) {
+                if (gate) gates.push_back(word);
+            }
+            plain += (gate ? token.substr(1U) : token) + ' ';
+        }
+        if (!gates.empty() && std::ranges::none_of(query, [&](const std::string& word) { return kb::script::SearchWordScore(word, {}, gates) >= 1; })) continue;
+        std::vector<std::string> other = kb::script::SearchWords(plain);
         // A game's purpose lists its parts; only what a customer calls the kind of game finds it, so the parts are found as themselves.
         if (recipe.kind != Kind::Game) {
             for (std::string& word : kb::script::SearchWords(recipe.purpose)) other.push_back(std::move(word));

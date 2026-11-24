@@ -23,7 +23,7 @@ class Scene;
 // Net.Call before Bind answers that the session has not started.
 //
 // Script events (arguments are read as event.args.<name> in Lua):
-//   OnNetConnected(player)            a client connected (server), or this client's connection is up (client)
+//   OnNetConnected(player)            a client connected (server), or this client's session is open (client; Net.Mode().connected turns true a moment later, when calls work)
 //   OnNetDisconnected(player, reason) the same for leaving
 //   OnNetSpawned(entity, owner)       client: a replicated entity appeared in the world given to ReplicationClient
 //   OnNetDespawned(entity)            client: it went away

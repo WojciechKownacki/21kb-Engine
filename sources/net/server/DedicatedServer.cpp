@@ -13,6 +13,7 @@
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/security/Crypto.hpp"
+#include "kb/net/ProjectScene.hpp"
 #include "kb/net/SceneReplication.hpp"
 #include "kb/net/ScriptBridge.hpp"
 
@@ -384,66 +385,13 @@ bool DedicatedServer::Start(std::string& error) {
     }
 
     // The project and the scene, the way kb_cli run loads them: no window, no renderer.
-    std::error_code pathError;
-    const std::filesystem::path projectRoot = std::filesystem::absolute(options.project, pathError).lexically_normal();
-    if (pathError || !std::filesystem::is_directory(projectRoot, pathError)) {
-        error = "the project directory was not found: " + options.project.generic_string();
+    OpenedProjectScene opened;
+    if (!OpenProjectScene(options.project, options.scene, opened, error)) {
         return false;
     }
-    std::string projectError;
-    const std::filesystem::path projectFile = kb::project::ProjectManager::FindProjectFile(projectRoot, projectError);
-    if (projectFile.empty()) {
-        error = projectError;
-        return false;
-    }
-    kb::project::ProjectDescriptorReadResult loaded = kb::project::ProjectManager::LoadProject(projectFile);
-    if (!loaded.succeeded) {
-        error = "the project descriptor could not be loaded: " + loaded.error;
-        return false;
-    }
-    for (kb::project::ProjectPluginReference& plugin : loaded.descriptor.plugins) {
-        const std::filesystem::path configured{ plugin.binaryPath };
-        if (!plugin.enabled || configured.empty() || configured.is_absolute()) {
-            continue;
-        }
-        std::error_code localError;
-        if (std::filesystem::is_regular_file(projectRoot / configured, localError) && !localError) {
-            plugin.binaryPath = (projectRoot / configured).string();
-        }
-    }
-    s.scene = std::make_unique<kb::scene::Scene>(std::move(loaded.descriptor));
-    if (!s.scene->ModuleDiagnostics().empty()) {
-        error = "a project module did not load: " + s.scene->ModuleDiagnostics().front();
-        return false;
-    }
-    if (!s.scene->Assets().MountProject(projectRoot)) {
-        error = "the project assets could not be mounted under " + projectRoot.generic_string();
-        return false;
-    }
-    static_cast<void>(s.scene->Assets().Discover());
-
-    std::string sceneOption = options.scene;
-    if (sceneOption.empty()) {
-        sceneOption = kb::project::ProjectSettingsStore::Load(kb::project::ProjectSettingsStore::FilePath(projectRoot)).settings.defaultMap;
-    }
-    if (sceneOption.empty()) {
-        error = "the project has no startup scene; pass --scene <path>";
-        return false;
-    }
-    std::filesystem::path scenePath;
-    if (s.scene->Assets().Manager().Mounts().Resolve(sceneOption).has_value()) {
-        const kb::assets::AssetMetadata* metadata = s.scene->Assets().Manager().Registry().FindByPath(sceneOption);
-        if (metadata == nullptr) {
-            error = "the scene asset was not found: " + sceneOption;
-            return false;
-        }
-        scenePath = metadata->physicalPath;
-    } else {
-        scenePath = std::filesystem::path{ sceneOption };
-        if (scenePath.is_relative()) {
-            scenePath = projectRoot / scenePath;
-        }
-    }
+    const std::filesystem::path& projectRoot = opened.projectRoot;
+    std::filesystem::path scenePath = opened.scenePath;
+    s.scene = std::move(opened.scene);
     if (!options.stateFile.empty()) {
         std::error_code stateError;
         const bool exists = std::filesystem::exists(options.stateFile, stateError);

@@ -133,6 +133,14 @@ random and mutated messages into a client replica and into the server.
 * `SnapshotInterpolator<State>`: shows a remote entity a fixed delay in the past between two snapshots;
   it holds the newest snapshot instead of extrapolating, and keeps a bounded history.
 
+The scene client (`SceneClient`, which the game and `kb_cli net check` use) applies `SnapshotInterpolator` to every replica's transform: it records each
+state message on a clock of the server's ticks (the tick period is read from how fast they arrive and followed gently, so a datagram that comes a frame late does
+not bunch two snapshots together) and shows the replica 0.1 s in the past, between the two snapshots around that time, so a script that reads the replica every
+frame sees steady motion although the server sends 30 states a second. A replica that stops is held at its last snapshot; nothing is extrapolated. `kb_cli net check
+--trace <name>` lists where each player's replica of the objects called that is at every picture (the players draw twice per 30 Hz step), and
+`KbCliNetTests.cpp` (`RunSmoothnessTest`) fails when a walking character's steps are uneven. `ClientPrediction` is still not used by the scene client: a
+player's own character follows the server.
+
 Contract: `Step` must be the same pure function on both sides. A server that also does something the
 client cannot know (a wall, another player) makes the prediction wrong by exactly that, which
 `Reconcile` measures and corrects (the test shows 13 corrections of up to 1.8 units against a wall only the
@@ -155,6 +163,7 @@ offline and `Net.Mode()` says so.
 | `Net.Call{ rpc, target, n1.., s1.., b1.., e1.. }` | Calls it. The arguments go in numbered slots by kind (4 numbers, 2 strings, 2 bools, 2 entities), in declaration order; each is checked against its declared range or length before it leaves the script. `target` is a player id on a server, 0 for all. |
 | `Net.Replicate{ entity }`, `Net.IsReplicated`, `Net.SetOwner{ entity, player }` | Server only. Mark an entity replicated, ask, and give it to a player. |
 
+A client can call the server once `Net.Mode().connected` is true (the server has agreed on the declarations); `OnNetConnected` comes a moment earlier, when the session opens.
 Events arrive as world events in the next script frame; the arguments are in `event.args`:
 `OnNetConnected(player)`, `OnNetDisconnected(player, reason)`, `OnNetSpawned(entity, owner)` and
 `OnNetDespawned(entity)` on a client, and `OnRpc_<name>(sender, n1.., s1.., ...)` for a call that arrived.
@@ -170,6 +179,17 @@ Tests: `ScriptNetApiTests.cpp` in `kb_engine_tests` (`script-net`: argument list
 call validation against a fake session, a real Lua behaviour and event delivery) and `kb_net_script_tests` (a server
 scene and two client scenes running one Lua script over a lossy simulated network: declaration, replication of
 the hero, ownership, a move RPC, the reply, and the refusal of the player who does not own the hero).
+
+## Trying a game of several players: kb_cli net
+
+`kb_cli net info` prints what a script can use, read from the engine's own registries (the `Net.*` functions, the network events, the replicated components, the standard calls and
+the limits). `kb_cli net setup --project <dir> --players 4 --address <IPv4>` writes `Saved/Net/keys.txt` for the server and a session file for each player (and refuses a folder
+inside `Assets/`, which a build packs into the game). `kb_cli net check --project <dir> [--clients 2] [--frames 300] [--press 2:W@30+60] [--click 1:Canvas/Start@40] [--loss 10]`
+loads the project as the server and as each player in one process over the simulated network of `kb_net` (`ProjectScene`, `SceneClient`, `ReplicationServer` and the script bridge,
+the same code the dedicated server and the game run), steps them at 30 frames a second and prints who connected, what was replicated and where each player sees it, the scripts' `Log`
+lines and `warning:` lines for the usual mistakes (nothing replicated, an object moved on the server that is not replicated, a call refused for lack of an owner or a range, a player
+refused because its RPC declarations differ, a replica that does not match the server). The server of `net check` leaves replication to the scripts, like
+`kb_dedicated_server --replicate none`. The recipes `multiplayer-lan`, `multiplayer-online`, `net-players`, `net-score`, `net-lobby`, `net-chat` and `net-object` are built on it.
 
 ## Dedicated server
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/ecs/Entity.hpp"
 #include "kb/net/Host.hpp"
 #include <functional>
 #include <iosfwd>
@@ -40,6 +41,13 @@ public:
     SceneClient(const SceneClient&) = delete;
     SceneClient& operator=(const SceneClient&) = delete;
     [[nodiscard]] bool Update(std::uint64_t nowMilliseconds, std::ostream& diagnostics);
+    // The session is up and the scripts may call the server.
+    [[nodiscard]] bool Connected() const noexcept;
+    // The replicas this client holds, and the one for a network id (invalid when it has none).
+    [[nodiscard]] std::size_t ReplicaCount() const;
+    [[nodiscard]] kb::ecs::Entity Replica(std::uint32_t networkId) const;
+    // How many times the server's declarations (components, RPCs) differed from this client's, so that the client left: the scripts of the two sides differ.
+    [[nodiscard]] std::uint64_t DeclarationMismatches() const;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

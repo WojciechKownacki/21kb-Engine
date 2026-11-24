@@ -5,10 +5,13 @@
 #include <filesystem>
 #include <istream>
 #include <optional>
+#include <ostream>
 #include <string>
+#include <string_view>
 
 namespace kb::script {
 struct ScriptApiCatalog;
+class ScriptRuntimeHost;
 }
 
 namespace kb::cli {
@@ -80,6 +83,12 @@ namespace kb::cli {
 [[nodiscard]] int RunScenePostProcessCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunScriptBuildCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunRunCommand(const ArgumentList& arguments, CommandIo io);
+// Gives a script host its Log function: each call prints "[log] <prefix><message>" to `out` (the run and net check commands).
+void RegisterScriptLog(kb::script::ScriptRuntimeHost& host, std::ostream& out, std::string_view prefix);
+// net: what the engine offers for a game of several players (info), the keys and session files to connect them (setup) and a headless
+// server with clients (check) (CliNetCommands.cpp, CliNetCheck.cpp).
+[[nodiscard]] int RunNetCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunNetCheck(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunMcpCommand(const ArgumentList& arguments, std::istream& in, CommandIo io);
 // lsp: the Language Server Protocol for a project's Lua scripts, over `in` and io.out (CliLspCommand.cpp).
 [[nodiscard]] int RunLspCommand(const ArgumentList& arguments, std::istream& in, CommandIo io);

@@ -863,6 +863,16 @@ R"(  image        Draw a picture into the project and import it, so it is an ass
                (guide --search "<the customer's words>" finds the recipe; --set changes a value the recipe shows
                with show; a script of the project with the same name is never overwritten; a recipe that makes
                objects of its own cannot go on --entity or --prefab)
+  net          A game for several players: what the engine offers for it, the keys and session files that connect the
+               players to a server, and a headless try-out with a server and players in one process.
+                 info [--project <dir>]
+                 setup --project <dir> [--players 4] [--address 127.0.0.1] [--port 27015] [--out <dir>] [--replace]
+                 check --project <dir> [--scene <path>] [--clients 2] [--frames 300] [--loss <percent>] [--latency <ms>] [--trace <object name>]
+                     [--press [<client>:]<Key>@<frame>[+<frames>] ...] [--click [<client>:]<widget path or x,y>@<frame> ...]
+               (info lists the Net functions, events, synchronised components and limits from the engine itself; setup writes
+               Saved/Net/keys.txt for the server and session-<n>.json for each player; check runs the project's scenes as the
+               server and as each player over a simulated network and says who connected, what was replicated, what the
+               players see and what to change - guide --search "multiplayer" finds the recipes)
   ui-theme     The look of the user interface as a shared UI Theme (.kbtheme): colours, text size,
                rounded corners. A theme has a base style and a Button variant.
                  new --project <dir> --name <Name> [--preset dark|light] [--folder Assets/UI] [--replace]
@@ -1056,6 +1066,7 @@ constexpr CliCommandDescriptor kCommands[]{
     {"ui-theme", &RunUiThemeCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Envelope},
     {"pickup", &RunPickupCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Envelope},
     {"recipe", &RunRecipeCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Envelope},
+    {"net", &RunNetCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Envelope},
     {"localization", &RunLocalizationCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Envelope},
 #if KB_CLI_RENDERER
     {"image", &RunImageCommand, CliCommandKind::Normal, true, "", CliJsonOutput::Structured, true},

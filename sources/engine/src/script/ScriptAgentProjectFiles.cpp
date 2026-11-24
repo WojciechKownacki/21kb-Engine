@@ -82,8 +82,7 @@ Fetch one with `guide`. Its commands go in one `commands` call as written; its c
 - a character that walks around obstacles: `recipe-navmesh`
 - collision layers: `recipe-collision`
 - hinge, rope, slider: `recipe-joint`
-
-`guide` alone lists the guides.
+- several players: `multiplayer`
 
 ## More
 

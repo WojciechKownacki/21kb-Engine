@@ -81,7 +81,8 @@ bool ScriptNetworkRuntime::Connected() const {
     if (role_ == Role::Server) {
         return server_ != nullptr;
     }
-    return clientAuthorized_ && connection_ != nullptr && connection_->State() == ClientState::Connected;
+    // Up means the player can call the server: the session is open and the server has agreed on the declarations (OnNetConnected comes a moment earlier).
+    return clientAuthorized_ && connection_ != nullptr && connection_->State() == ClientState::Connected && replication_ != nullptr && replication_->Ready();
 }
 
 std::size_t ScriptNetworkRuntime::PlayerCount() const {
@@ -218,11 +219,11 @@ bool ScriptNetworkRuntime::CallRpc(const std::string& name, std::uint64_t target
         return false;
     }
     if (role_ == Role::Server && server_ == nullptr) {
-        error = "the session has not started";
+        error = "the session has not started (declare RPCs in Ready and call them from Tick or an event)";
         return false;
     }
     if (role_ == Role::Client && (!clientAuthorized_ || replication_ == nullptr || !replication_->Ready())) {
-        error = "the connection is not ready";
+        error = "the connection is not ready (call the server once Net.Mode().connected is true: OnNetConnected comes a moment before; not while the client reconnects)";
         return false;
     }
     if (role_ == Role::Client && target != 0U) {
@@ -246,7 +247,7 @@ bool ScriptNetworkRuntime::CallRpc(const std::string& name, std::uint64_t target
             const kb::ecs::Entity entity{ std::get<std::uint64_t>(value) };
             const NetworkId id = role_ == Role::Server ? server_->NetworkIdOf(entity) : replication_->NetworkIdOf(entity);
             if (id == 0U) {
-                error = "an entity argument is not replicated";
+                error = "an entity argument is not replicated (the server marks an object with Net.Replicate; a client passes the replica it got in OnNetSpawned, not its own scene object)";
                 return false;
             }
             wire.emplace_back(id);

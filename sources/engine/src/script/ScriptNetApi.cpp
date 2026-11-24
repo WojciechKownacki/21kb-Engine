@@ -34,9 +34,12 @@ constexpr std::size_t kStringSlots = 2U;
 constexpr std::size_t kBoolSlots = 2U;
 constexpr std::size_t kEntitySlots = 2U;
 
+constexpr std::size_t kMaxProblems = 64U;
+
 struct SceneNet {
     INetworkScriptRuntime* runtime = nullptr;
     std::deque<ScriptNetEvent> events;
+    std::vector<std::string> problems; // the Net.* calls that failed, each text once, for `kb_cli net check`
 };
 
 std::mutex g_mutex;
@@ -51,7 +54,15 @@ std::map<const kb::scene::Scene*, SceneNet> g_scenes;
     return nullptr;
 }
 
-[[nodiscard]] ScriptFunctionCallResult Failure(std::string message) {
+// A failed call returns its text to the script and keeps it for the scene's report: a script that ignores the answer still shows up in it.
+[[nodiscard]] ScriptFunctionCallResult Failure(const ScriptFunctionCallContext& context, std::string message) {
+    if (context.scene != nullptr) {
+        const std::lock_guard lock{ g_mutex };
+        const auto found = g_scenes.find(context.scene);
+        if (found != g_scenes.end() && found->second.problems.size() < kMaxProblems && std::ranges::find(found->second.problems, message) == found->second.problems.end()) {
+            found->second.problems.push_back(message);
+        }
+    }
     return ScriptFunctionCallResult{ .executed = false, .outputs = {}, .errors = { std::move(message) } };
 }
 
@@ -125,16 +136,16 @@ ScriptFunctionCallResult LocalPlayerId(const ScriptFunctionCallContext& context,
 ScriptFunctionCallResult RegisterRpc(const ScriptFunctionCallContext& context, Arguments arguments) {
     INetworkScriptRuntime* runtime = RuntimeOf(context);
     if (runtime == nullptr) {
-        return Failure("Net.RegisterRpc: no network session is attached to this scene");
+        return Failure(context, "Net.RegisterRpc: no network session is attached to this scene (it runs offline: play it from a server and clients, or try it with `kb_cli net check`)");
     }
     ScriptRpcDeclaration declaration;
     declaration.name = Find(arguments, "name") != nullptr ? Find(arguments, "name")->AsString() : std::string{};
     if (!ValidName(declaration.name)) {
-        return Failure("Net.RegisterRpc: the name must be 1 to 32 letters, digits or underscores and start with a letter");
+        return Failure(context, "Net.RegisterRpc: the name must be 1 to 32 letters, digits or underscores and start with a letter");
     }
     const std::string direction = Find(arguments, "direction") != nullptr ? Find(arguments, "direction")->AsString() : std::string{};
     if (direction != "toServer" && direction != "toClients") {
-        return Failure("Net.RegisterRpc '" + declaration.name + "': direction must be \"toServer\" or \"toClients\"");
+        return Failure(context, "Net.RegisterRpc '" + declaration.name + "': direction must be \"toServer\" or \"toClients\"");
     }
     declaration.toServer = direction == "toServer";
     if (const ScriptValue* reliable = Find(arguments, "reliable")) {
@@ -143,7 +154,7 @@ ScriptFunctionCallResult RegisterRpc(const ScriptFunctionCallContext& context, A
     std::string error;
     if (const ScriptValue* spec = Find(arguments, "args")) {
         if (!ScriptNetApi::ParseArgumentSpecs(spec->AsString(), declaration.args, error)) {
-            return Failure("Net.RegisterRpc '" + declaration.name + "': " + error);
+            return Failure(context, "Net.RegisterRpc '" + declaration.name + "': " + error);
         }
     }
     if (const ScriptValue* owner = Find(arguments, "owner")) {
@@ -152,18 +163,18 @@ ScriptFunctionCallResult RegisterRpc(const ScriptFunctionCallContext& context, A
             (declaration.toServer && declaration.ownerArg >= 0 && static_cast<std::size_t>(declaration.ownerArg) < declaration.args.size() &&
                 declaration.args[static_cast<std::size_t>(declaration.ownerArg)].kind == ScriptRpcArgKind::Entity);
         if (!valid) {
-            return Failure("Net.RegisterRpc '" + declaration.name + "': owner must be -1 or the index of an entity argument of a toServer call");
+            return Failure(context, "Net.RegisterRpc '" + declaration.name + "': owner must be -1 or the index of an entity argument of a toServer call");
         }
     }
     if (const ScriptValue* rate = Find(arguments, "maxPerSecond")) {
         const int perSecond = rate->AsInt(30);
         if (perSecond < 1 || perSecond > 1000) {
-            return Failure("Net.RegisterRpc '" + declaration.name + "': maxPerSecond must be between 1 and 1000");
+            return Failure(context, "Net.RegisterRpc '" + declaration.name + "': maxPerSecond must be between 1 and 1000");
         }
         declaration.maxCallsPerSecond = static_cast<std::uint32_t>(perSecond);
     }
     if (!runtime->DeclareRpc(declaration, error)) {
-        return Failure("Net.RegisterRpc '" + declaration.name + "': " + error);
+        return Failure(context, "Net.RegisterRpc '" + declaration.name + "': " + error);
     }
     return Ok({ { "registered", ScriptValue{ true } } });
 }
@@ -171,12 +182,12 @@ ScriptFunctionCallResult RegisterRpc(const ScriptFunctionCallContext& context, A
 ScriptFunctionCallResult Call(const ScriptFunctionCallContext& context, Arguments arguments) {
     INetworkScriptRuntime* runtime = RuntimeOf(context);
     if (runtime == nullptr) {
-        return Failure("Net.Call: no network session is attached to this scene");
+        return Failure(context, "Net.Call: no network session is attached to this scene (it runs offline: play it from a server and clients, or try it with `kb_cli net check`)");
     }
     const std::string name = Find(arguments, "rpc") != nullptr ? Find(arguments, "rpc")->AsString() : std::string{};
     const ScriptRpcDeclaration* declaration = runtime->FindRpc(name);
     if (declaration == nullptr) {
-        return Failure("Net.Call: no RPC named '" + name + "' was registered");
+        return Failure(context, "Net.Call: no RPC named '" + name + "' was registered (declare it with Net.RegisterRpc in Ready, the same on the server and on every client)");
     }
     std::array<std::size_t, 4> next{};
     std::vector<ScriptRpcValue> values;
@@ -186,7 +197,7 @@ ScriptFunctionCallResult Call(const ScriptFunctionCallContext& context, Argument
         const std::string slot = SlotName(spec.kind, next[prefixIndex]++);
         const ScriptValue* value = Find(arguments, slot);
         if (value == nullptr) {
-            return Failure("Net.Call '" + name + "': missing argument " + slot);
+            return Failure(context, "Net.Call '" + name + "': missing argument " + slot);
         }
         used.push_back(slot);
         switch (spec.kind) {
@@ -196,7 +207,7 @@ ScriptFunctionCallResult Call(const ScriptFunctionCallContext& context, Argument
         case ScriptRpcArgKind::String: {
             const std::string text = value->AsString();
             if (text.size() > spec.maxLength) {
-                return Failure("Net.Call '" + name + "': " + slot + " is longer than " + std::to_string(spec.maxLength) + " bytes");
+                return Failure(context, "Net.Call '" + name + "': " + slot + " is longer than " + std::to_string(spec.maxLength) + " bytes");
             }
             values.emplace_back(text);
             break;
@@ -204,7 +215,7 @@ ScriptFunctionCallResult Call(const ScriptFunctionCallContext& context, Argument
         case ScriptRpcArgKind::Entity: {
             const std::uint64_t entity = value->AsUInt64();
             if (entity == 0U) {
-                return Failure("Net.Call '" + name + "': " + slot + " is not an entity");
+                return Failure(context, "Net.Call '" + name + "': " + slot + " is not an entity");
             }
             values.emplace_back(entity);
             break;
@@ -212,20 +223,20 @@ ScriptFunctionCallResult Call(const ScriptFunctionCallContext& context, Argument
         default: {
             const double number = value->AsDouble();
             if (!std::isfinite(number) || number < spec.minimum || number > spec.maximum) {
-                return Failure("Net.Call '" + name + "': " + slot + " is outside " + std::to_string(spec.minimum) + ".." + std::to_string(spec.maximum));
+                return Failure(context, "Net.Call '" + name + "': " + slot + " is outside " + std::to_string(spec.minimum) + ".." + std::to_string(spec.maximum));
             }
             if (spec.kind == ScriptRpcArgKind::Float) {
                 values.emplace_back(static_cast<float>(number));
             } else if (number != std::floor(number)) {
-                return Failure("Net.Call '" + name + "': " + slot + " must be a whole number");
+                return Failure(context, "Net.Call '" + name + "': " + slot + " must be a whole number");
             } else if (spec.kind == ScriptRpcArgKind::Int) {
                 if (number < -2147483648.0 || number > 2147483647.0) {
-                    return Failure("Net.Call '" + name + "': " + slot + " does not fit 32 bits");
+                    return Failure(context, "Net.Call '" + name + "': " + slot + " does not fit 32 bits");
                 }
                 values.emplace_back(static_cast<std::int32_t>(number));
             } else {
                 if (number < 0.0 || number > 4294967295.0) {
-                    return Failure("Net.Call '" + name + "': " + slot + " does not fit an unsigned 32 bit value");
+                    return Failure(context, "Net.Call '" + name + "': " + slot + " does not fit an unsigned 32 bit value");
                 }
                 values.emplace_back(static_cast<std::uint32_t>(number));
             }
@@ -235,7 +246,7 @@ ScriptFunctionCallResult Call(const ScriptFunctionCallContext& context, Argument
     }
     for (const ScriptFunctionArgument& argument : arguments) {
         if (argument.name != "rpc" && argument.name != "target" && std::ranges::find(used, argument.name) == used.end()) {
-            return Failure("Net.Call '" + name + "': the RPC does not take an argument " + argument.name);
+            return Failure(context, "Net.Call '" + name + "': the RPC does not take an argument " + argument.name);
         }
     }
     std::uint64_t target = 0U;
@@ -244,7 +255,7 @@ ScriptFunctionCallResult Call(const ScriptFunctionCallContext& context, Argument
     }
     std::string error;
     if (!runtime->CallRpc(name, target, values, error)) {
-        return Failure("Net.Call '" + name + "': " + error);
+        return Failure(context, "Net.Call '" + name + "': " + error);
     }
     return Ok({ { "sent", ScriptValue{ true } } });
 }
@@ -252,12 +263,12 @@ ScriptFunctionCallResult Call(const ScriptFunctionCallContext& context, Argument
 ScriptFunctionCallResult Replicate(const ScriptFunctionCallContext& context, Arguments arguments) {
     INetworkScriptRuntime* runtime = RuntimeOf(context);
     if (runtime == nullptr || runtime->Mode() != ScriptNetMode::Server) {
-        return Failure("Net.Replicate: only a server can replicate entities");
+        return Failure(context, "Net.Replicate: only a server can replicate entities (the server shows its objects to the players; on a client guard it with `if Net.IsServer() then`)");
     }
     const ScriptValue* entity = Find(arguments, "entity");
     std::string error;
     if (entity == nullptr || !runtime->Replicate(entity->AsUInt64(), error)) {
-        return Failure("Net.Replicate: " + (error.empty() ? std::string{ "no entity" } : error));
+        return Failure(context, "Net.Replicate: " + (error.empty() ? std::string{ "no entity" } : error));
     }
     return Ok({ { "replicated", ScriptValue{ true } } });
 }
@@ -271,13 +282,13 @@ ScriptFunctionCallResult IsReplicated(const ScriptFunctionCallContext& context, 
 ScriptFunctionCallResult SetOwner(const ScriptFunctionCallContext& context, Arguments arguments) {
     INetworkScriptRuntime* runtime = RuntimeOf(context);
     if (runtime == nullptr || runtime->Mode() != ScriptNetMode::Server) {
-        return Failure("Net.SetOwner: only a server can change the owner of an entity");
+        return Failure(context, "Net.SetOwner: only a server can change the owner of an entity (guard it with `if Net.IsServer() then`)");
     }
     const ScriptValue* entity = Find(arguments, "entity");
     const ScriptValue* player = Find(arguments, "player");
     std::string error;
     if (entity == nullptr || player == nullptr || !runtime->SetOwner(entity->AsUInt64(), player->AsUInt32(), error)) {
-        return Failure("Net.SetOwner: " + (error.empty() ? std::string{ "no entity or player" } : error));
+        return Failure(context, "Net.SetOwner: " + (error.empty() ? std::string{ "no entity or player" } : error));
     }
     return Ok({ { "applied", ScriptValue{ true } } });
 }
@@ -403,6 +414,16 @@ void ScriptNetApi::QueueEvent(const kb::scene::Scene& scene, ScriptNetEvent even
         found->second.events.pop_front();
     }
     found->second.events.push_back(std::move(event));
+}
+
+std::vector<std::string> ScriptNetApi::DrainProblems(const kb::scene::Scene& scene) {
+    const std::lock_guard lock{ g_mutex };
+    const auto found = g_scenes.find(&scene);
+    std::vector<std::string> drained;
+    if (found != g_scenes.end()) {
+        drained.swap(found->second.problems);
+    }
+    return drained;
 }
 
 std::vector<ScriptNetEvent> ScriptNetApi::DrainEvents(const kb::scene::Scene& scene) {

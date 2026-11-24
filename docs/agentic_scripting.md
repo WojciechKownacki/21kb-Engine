@@ -263,6 +263,11 @@ one page at a time, so a request stays small:
   own scripts, its material, and a script of the project with the same name is never overwritten.
   `--set name=value` changes a value the recipe shows with `recipe show <id>`. `guide` with `search`
   takes the customer's own words (any language) and names the best one to three recipes.
+- A game for several players (guide `multiplayer`): the recipes `multiplayer-lan`, `multiplayer-online`, `net-players`, `net-score`, `net-lobby`,
+  `net-chat` and the brick `net-object` (one existing object or prefab, networked). `kb_cli net info` lists what the engine offers (the `Net.*`
+  functions, the events, the synchronised components, the limits) from the engine itself, `kb_cli net check` runs the project as the server and as
+  2 or more players in one process, without a window or a socket, and ends with `warning:` lines for the usual mistakes, and `kb_cli net setup`
+  writes the keys and session files that connect real players. See [networking](networking.md).
 - `.kb/api/` holds the script API as small pages: `README.md` lists the function groups and
   components, and every group, function and component has a page of its own.
 
@@ -385,6 +390,7 @@ the folder.
 | `kb_cli guide [--topic <name>]` | print one how-to guide, or the list of them |
 | `kb_cli guide --search "<words>"` | the customer's own words in, the best one to three recipes, guides and ready materials out, each with its command |
 | `kb_cli recipe list\|show\|run` | list the recipes (games, systems, bricks), show one with its values, or run one on new objects, an object (`--entity`) or a prefab (`--prefab`) |
+| `kb_cli net info\|setup\|check` | multiplayer: what the engine offers, the keys and session files for the players of a server, and a headless run of the project as a server with players (`--clients`, `--press 2:W@30+60`, `--click`, `--loss`) |
 | `kb_cli script-new --project <dir> --name <Name> --language lua\|cpp` | create a Lua or C++ script from the template (never overwrites); `--code "<Lua text>"` writes a Lua script's whole text instead |
 | `kb_cli image new --project <dir> --name <Name> --preset <preset> [--style flat\|soft\|neon\|pixel] [--color #RRGGBB] [--color2 #RRGGBB] [--size 256]` | draw an icon, a UI background, a texture that tiles, a soft dot or a flame sprite sheet with the engine's own code, write it as a PNG into `Assets/Images` and import it; `--replace` draws an existing one again |
 | `kb_cli image array --project <dir> --name <Name> --layers <preset[:#color[:#color2]]>,... [--size 256]` | draw 2 to 16 pictures with the presets of `image new` and write them as the layers of one 2D array texture (`Assets/Images/<Name>.ktx`), imported, for the layered terrain material (`terrain-layers`) |

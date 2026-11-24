@@ -436,6 +436,9 @@ public:
         onSpawn_ = std::move(onSpawn);
         onDespawn_ = std::move(onDespawn);
     }
+    // Called after a state message changed a replica: its components now hold the newest values from the server, as of the server's `tick`.
+    using StateCallback = std::function<void(NetworkId id, kb::ecs::Entity entity, std::uint32_t tick)>;
+    void SetStateCallback(StateCallback onState) { onState_ = std::move(onState); }
     [[nodiscard]] std::vector<NetworkId> ReplicaIds() const;
     [[nodiscard]] bool Ready() const noexcept { return ready_; }
 
@@ -468,6 +471,7 @@ private:
     std::map<std::uint16_t, RpcHandler> handlers_;
     SpawnCallback onSpawn_;
     DespawnCallback onDespawn_;
+    StateCallback onState_;
     ReplicationClientStats stats_;
     bool ready_ = false;
     std::uint32_t latestUpdate_ = 0U;

@@ -36,6 +36,10 @@ public:
     static void QueueEvent(const kb::scene::Scene& scene, ScriptNetEvent event);
     [[nodiscard]] static std::vector<ScriptNetEvent> DrainEvents(const kb::scene::Scene& scene);
 
+    // The texts of the Net.* calls of the scene that failed since the last call, each once (at most 64): what a script that ignores
+    // the answer of a call would never show. Empty for a scene without a network runtime attached.
+    [[nodiscard]] static std::vector<std::string> DrainProblems(const kb::scene::Scene& scene);
+
     // Parses "float(-1..1),string(32),entity,bool" into argument specs; false with `error` set when it is not valid.
     [[nodiscard]] static bool ParseArgumentSpecs(const std::string& text, std::vector<kb::network::ScriptRpcArgSpec>& specs, std::string& error);
 };

@@ -46,8 +46,11 @@ add_library(kb_cli_core STATIC
     src/CliAssetTarget.cpp
     src/CliAnimationClipCommands.cpp
     src/CliPickupCommand.cpp
+    src/CliNetCheck.cpp
+    src/CliNetCommands.cpp
     src/CliRecipes.cpp
     src/CliRecipeBricks.cpp
+    src/CliRecipeNetwork.cpp
     src/CliRecipeSystems.cpp
     src/private/CliRecipes.hpp
     src/CliCinematicCommands.cpp
@@ -69,7 +72,7 @@ add_library(kb_cli_core STATIC
 
 target_include_directories(kb_cli_core PUBLIC src/private)
 
-target_link_libraries(kb_cli_core PUBLIC kb_engine kb_packages)
+target_link_libraries(kb_cli_core PUBLIC kb_engine kb_packages kb_net)
 # Workspace files use the editor's existing portable layout and settings code.
 target_include_directories(kb_cli_core PRIVATE ../editor/src/private ../editor/include)
 # build stages the engine module libraries a project enables, named by the contract the cooker validates against.
@@ -231,6 +234,7 @@ if(BUILD_TESTING)
         tests/KbCliPackageTests.cpp
         tests/KbCliAgentTests.cpp
         tests/KbCliRecipeTests.cpp
+        tests/KbCliNetTests.cpp
     )
 
     target_link_libraries(kb_cli_tests PRIVATE kb_cli_core)

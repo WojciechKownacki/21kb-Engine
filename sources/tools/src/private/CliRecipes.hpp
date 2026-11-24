@@ -21,7 +21,7 @@ struct Recipe {
     Kind kind;
     std::string_view title;       // what it is, in a few words
     std::string_view purpose;     // one line: what it is for
-    std::string_view words;       // the words a customer says for it (English and Polish, with endings)
+    std::string_view words;       // the words a customer says for it (English and Polish, with endings); +word is a gate: the recipe answers a request only when it says one of them
     std::string_view actor;       // the object it works on when no --entity is given: "Player:Capsule@0,1,0" (name, shape, place); empty: none
     std::string_view parameters;  // "speed=5|jumpSpeed=7": the values `--set` changes, with their defaults
     std::string_view steps;       // one line each: a kb_cli command, `use <id> name=value ...` or `attach <Script>`; {name} is a value
@@ -47,6 +47,10 @@ struct Script {
 [[nodiscard]] std::span<const Recipe> BrickRecipes();
 [[nodiscard]] std::span<const Recipe> SystemRecipes();
 [[nodiscard]] std::span<const Recipe> GameRecipes();
+// The recipes for a game of several players, one list per floor (CliRecipeNetwork.cpp); Recipes() puts each after the floor it belongs to.
+[[nodiscard]] std::span<const Recipe> NetworkBrickRecipes();
+[[nodiscard]] std::span<const Recipe> NetworkSystemRecipes();
+[[nodiscard]] std::span<const Recipe> NetworkGameRecipes();
 
 struct RecipeHit {
     int score = 0;

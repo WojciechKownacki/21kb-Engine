@@ -174,24 +174,6 @@ namespace {
     }
 }
 
-void RegisterStdoutLog(kb::script::ScriptRuntimeHost& host, std::ostream& out) {
-    kb::script::ScriptFunctionDesc logDesc;
-    logDesc.signature.name = "Log";
-    logDesc.signature.inputs = { kb::script::ScriptFunctionPin{ "message", kb::script::ScriptValueType::String, true } };
-    logDesc.callback = [&out](
-                           const kb::script::ScriptFunctionCallContext&,
-                           std::span<const kb::script::ScriptFunctionArgument> functionArguments) {
-        for (const kb::script::ScriptFunctionArgument& argument : functionArguments) {
-            if (argument.name == "message") {
-                out << "[log] " << argument.value.AsString() << '\n';
-                break;
-            }
-        }
-        return kb::script::ScriptFunctionCallResult{ .executed = true, .outputs = {}, .errors = {} };
-    };
-    static_cast<void>(host.RegisterFunction(std::move(logDesc)));
-}
-
 // A Lua error as the engine reports it: "<chunk>:<line>: <text>", then a line "stack traceback:" and the frames.
 struct ParsedScriptError {
     std::string chunk;
@@ -878,7 +860,7 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         std::filesystem::remove_all(hostOptions.userStorageRoot, savesError);
     }
     kb::script::ScriptRuntimeHost host{ scene, std::move(hostOptions) };
-    RegisterStdoutLog(host, io.out);
+    RegisterScriptLog(host, io.out, {});
     if (!host.Succeeded()) {
         for (const std::string& diagnostic : host.Diagnostics()) {
             io.err << "[host error] " << diagnostic << '\n';
@@ -1397,6 +1379,24 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
 }
 
 } // namespace
+
+void RegisterScriptLog(kb::script::ScriptRuntimeHost& host, std::ostream& out, std::string_view prefix) {
+    kb::script::ScriptFunctionDesc logDesc;
+    logDesc.signature.name = "Log";
+    logDesc.signature.inputs = { kb::script::ScriptFunctionPin{ "message", kb::script::ScriptValueType::String, true } };
+    logDesc.callback = [&out, prefix = std::string{ prefix }](
+                           const kb::script::ScriptFunctionCallContext&,
+                           std::span<const kb::script::ScriptFunctionArgument> functionArguments) {
+        for (const kb::script::ScriptFunctionArgument& argument : functionArguments) {
+            if (argument.name == "message") {
+                out << "[log] " << prefix << argument.value.AsString() << '\n';
+                break;
+            }
+        }
+        return kb::script::ScriptFunctionCallResult{ .executed = true, .outputs = {}, .errors = {} };
+    };
+    static_cast<void>(host.RegisterFunction(std::move(logDesc)));
+}
 
 int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
     const auto report = arguments.Option("--report");
