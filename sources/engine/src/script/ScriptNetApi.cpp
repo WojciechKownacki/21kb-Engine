@@ -39,6 +39,8 @@ constexpr std::size_t kEntitySlots = 2U;
 
 struct SceneNet {
     std::deque<ScriptNetEvent> events;
+    // Declarations made before the scene has a session wait here and move to it on Attach, like a server's replicate requests wait for BindServer.
+    std::vector<ScriptRpcDeclaration> pendingRpcDeclarations;
     kb::net::DiagLog diagnostics;
     std::array<std::uint64_t, 32U> drainedProblems{};
 };
@@ -135,10 +137,6 @@ ScriptFunctionCallResult LocalPlayerId(const ScriptFunctionCallContext& context,
 }
 
 ScriptFunctionCallResult RegisterRpc(const ScriptFunctionCallContext& context, Arguments arguments) {
-    INetworkScriptRuntime* runtime = RuntimeOf(context);
-    if (runtime == nullptr) {
-        return Failure(context, "Net.RegisterRpc: no network session is attached to this scene (it runs offline: play it from a server and clients, or try it with `kb_cli net check`)");
-    }
     ScriptRpcDeclaration declaration;
     declaration.name = Find(arguments, "name") != nullptr ? Find(arguments, "name")->AsString() : std::string{};
     if (!ValidName(declaration.name)) {
@@ -173,6 +171,20 @@ ScriptFunctionCallResult RegisterRpc(const ScriptFunctionCallContext& context, A
             return Failure(context, "Net.RegisterRpc '" + declaration.name + "': maxPerSecond must be between 1 and 1000");
         }
         declaration.maxCallsPerSecond = static_cast<std::uint32_t>(perSecond);
+    }
+    INetworkScriptRuntime* runtime = RuntimeOf(context);
+    if (runtime == nullptr) {
+        if (context.scene == nullptr) {
+            return Failure(context, "Net.RegisterRpc: the scene is unknown");
+        }
+        // The declaration is kept for the session that joins later; Ready runs before a script joins the game.
+        const std::lock_guard lock{ g_mutex };
+        std::vector<ScriptRpcDeclaration>& pending = g_scenes[context.scene].pendingRpcDeclarations;
+        if (std::ranges::any_of(pending, [&](const ScriptRpcDeclaration& known) { return known.name == declaration.name; })) {
+            return Failure(context, "Net.RegisterRpc '" + declaration.name + "': already registered");
+        }
+        pending.push_back(std::move(declaration));
+        return Ok({ { "registered", ScriptValue{ true } } });
     }
     if (!runtime->DeclareRpc(declaration, error)) {
         return Failure(context, "Net.RegisterRpc '" + declaration.name + "': " + error);
@@ -550,7 +562,16 @@ void ScriptNetApi::Attach(kb::scene::Scene& scene, INetworkScriptRuntime* runtim
     if (runtime == nullptr) {
         g_scenes.erase(&scene);
     } else {
-        static_cast<void>(g_scenes[&scene]);
+        SceneNet& state = g_scenes[&scene];
+        for (auto it = state.pendingRpcDeclarations.begin(); it != state.pendingRpcDeclarations.end();) {
+            std::string error;
+            if (runtime->DeclareRpc(*it, error)) {
+                it = state.pendingRpcDeclarations.erase(it);
+            } else {
+                state.diagnostics.Report(kb::net::DiagCode::RpcRejected, "Net.RegisterRpc '" + it->name + "': " + error);
+                ++it;
+            }
+        }
     }
 }
 

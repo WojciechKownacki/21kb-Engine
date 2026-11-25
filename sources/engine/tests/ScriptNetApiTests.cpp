@@ -188,8 +188,12 @@ void RunOfflineTest() {
             CallNet(host, scene, "Net.LocalPlayerId").Output("player")->AsUInt32() == 0U,
         "an offline scene claims to be a server or a client");
     Check(Failed(CallNet(host, scene, "Net.Call", { Arg("rpc", ScriptValue{ std::string{ "Fire" } }) }), "no network session"), "Net.Call offline did not explain itself");
-    Check(Failed(CallNet(host, scene, "Net.RegisterRpc", { Arg("name", ScriptValue{ std::string{ "Fire" } }), Arg("direction", ScriptValue{ std::string{ "toServer" } }) }), "no network session"),
-        "Net.RegisterRpc offline did not explain itself");
+    Check(CallNet(host, scene, "Net.RegisterRpc", { Arg("name", ScriptValue{ std::string{ "Fire" } }), Arg("direction", ScriptValue{ std::string{ "toServer" } }) }).Succeeded(),
+        "a declaration made before the scene has a session was refused");
+    FakeNet offlineNet;
+    ScriptNetApi::Attach(scene, &offlineNet);
+    Check(offlineNet.FindRpc("Fire") != nullptr, "a declaration made offline did not move to the session that joined later");
+    ScriptNetApi::Attach(scene, nullptr);
     Check(Failed(CallNet(host, scene, "Net.Replicate", { Arg("entity", ScriptValue{ std::uint64_t{ 1U }, kb::script::ScriptValueType::Entity }) }), "only a server"),
         "Net.Replicate offline did not explain itself");
     // Events queued for a scene that has no session are dropped, not kept forever.

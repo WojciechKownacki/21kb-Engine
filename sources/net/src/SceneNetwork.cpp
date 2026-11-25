@@ -52,6 +52,8 @@ struct SceneNetwork::Impl {
             settings.identity = options.defaults.identity;
         }
         pendingJoin = std::move(settings);
+        // The scene is a player from now on, before its scripts run their Ready: they declare their RPCs there.
+        static_cast<void>(script.SetRole(ScriptNetworkRuntime::Role::Client));
         return true;
     }
     bool HostFromScript(const kb::network::ScriptHostRequest& request, std::string& error) {
@@ -68,6 +70,7 @@ struct SceneNetwork::Impl {
             return false;
         }
         pendingHost = request;
+        static_cast<void>(script.SetRole(ScriptNetworkRuntime::Role::Host));
         return true;
     }
     // The platform's multicast lock exists only while discovery does (Android); elsewhere the hook is empty.
@@ -133,6 +136,9 @@ struct SceneNetwork::Impl {
         pendingLeave = client != nullptr || pendingJoin.has_value() || server != nullptr || pendingHost.has_value();
         pendingJoin.reset();
         pendingHost.reset();
+        if (!client && !server) {
+            static_cast<void>(script.SetRole(ScriptNetworkRuntime::Role::Offline));
+        }
     }
     void OnAppBackground() {
         if (client) {
@@ -172,6 +178,7 @@ struct SceneNetwork::Impl {
             if (!declarationError.empty()) {
                 diagnostics << "network: " << declarationError << '\n';
                 pendingHost.reset();
+                static_cast<void>(script.SetRole(ScriptNetworkRuntime::Role::Offline));
                 return false;
             }
             const kb::network::ScriptHostRequest request = *pendingHost;
@@ -180,6 +187,7 @@ struct SceneNetwork::Impl {
             if (transport == nullptr) {
                 diagnostics << "network: cannot host: " << error << '\n';
                 pendingHost.reset();
+                static_cast<void>(script.SetRole(ScriptNetworkRuntime::Role::Offline));
                 return false;
             }
             static_cast<void>(script.SetRole(ScriptNetworkRuntime::Role::Host));
@@ -227,6 +235,7 @@ struct SceneNetwork::Impl {
         if (pendingJoin && !client && !declarationError.empty()) {
             diagnostics << "network: " << declarationError << '\n';
             pendingJoin.reset();
+            static_cast<void>(script.SetRole(ScriptNetworkRuntime::Role::Offline));
             return false;
         }
         if (pendingJoin && !client) {
