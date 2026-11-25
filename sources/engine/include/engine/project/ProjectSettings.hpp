@@ -49,6 +49,21 @@ enum class ProjectNetworkingMode : std::uint8_t {
 // The mode a name stands for, whatever its letter case; nullopt for anything else.
 [[nodiscard]] std::optional<ProjectNetworkingMode> ParseProjectNetworkingMode(std::string_view name) noexcept;
 
+// The kind of link a game expects between its players and its server. Auto leaves the choice to the
+// platform; the others describe the link a session is tuned for.
+enum class ProjectNetworkLinkClass : std::uint8_t {
+    Auto = 0,
+    Wired,
+    Wireless,
+};
+
+inline constexpr std::uint8_t kProjectNetworkLinkClassCount = 3U;
+
+// The link class's name as the settings file and the command line spell it ("Auto", "Wired", "Wireless").
+[[nodiscard]] std::string_view ProjectNetworkLinkClassName(ProjectNetworkLinkClass linkClass) noexcept;
+// The link class a name stands for, whatever its letter case; nullopt for anything else.
+[[nodiscard]] std::optional<ProjectNetworkLinkClass> ParseProjectNetworkLinkClass(std::string_view name) noexcept;
+
 enum class ProjectWindowMode : std::uint8_t {
     Windowed = 0,
     // A frameless window covering the primary monitor at its native resolution.
@@ -72,6 +87,13 @@ inline constexpr float kProjectTimeScaleMax = 100.0F;
 // Bounds of the crowd level-of-detail settings: distances in metres, the far path interval in steps.
 inline constexpr float kProjectNavigationDistanceMax = 100000.0F;
 inline constexpr std::uint32_t kProjectNavigationFarPathIntervalMax = 600U;
+// Bounds of the network page: the players one server takes, the ticks it simulates per second and how far
+// from a player the server sends objects. 0 radius means the whole scene.
+inline constexpr std::uint32_t kProjectNetworkMaxPlayersMin = 1U;
+inline constexpr std::uint32_t kProjectNetworkMaxPlayersMax = 256U;
+inline constexpr std::uint32_t kProjectNetworkTickRateMin = 10U;
+inline constexpr std::uint32_t kProjectNetworkTickRateMax = 120U;
+inline constexpr float kProjectNetworkVisibilityRadiusMax = 100000.0F;
 // Most scenes a project lists for its package besides the startup scene.
 inline constexpr std::size_t kProjectAdditionalScenesMax = 256U;
 // Most tags a project defines of its own: the scene's tag catalogue holds 256 names, six of them built in.
@@ -217,6 +239,12 @@ struct ProjectSettings {
     // Network
     // The mode the scenes run in; an Android package declares the network permissions this needs.
     ProjectNetworkingMode networkingMode = ProjectNetworkingMode::None;
+    // The players one hosted game takes, the ticks it simulates and replicates per second, how far from
+    // a player the server sends objects (0 sends the whole scene) and the link it is tuned for.
+    std::uint32_t networkMaxPlayers = 16U;
+    std::uint32_t networkTickRate = 30U;
+    float networkVisibilityRadius = 0.0F;
+    ProjectNetworkLinkClass networkLinkClass = ProjectNetworkLinkClass::Auto;
 
     // Audio
     // The master gain of the game, 0 (silent) to 1 (full); it scales every sound after the mixer.

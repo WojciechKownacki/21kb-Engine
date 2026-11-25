@@ -1,0 +1,23 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    {
+      "op": "create_scene",
+      "name": "NetworkVariables",
+      "template": "Empty"
+    },
+    {
+      "op": "network_variable_edit",
+      "name": "score",
+      "type": "Int",
+      "minimum": 0,
+      "maximum": 100,
+      "audience": "Owner",
+      "mode": "Lan",
+      "max_players": 24,
+      "tick_rate": 45,
+      "visibility_radius": 250.0,
+      "link_class": "Wired"
+    }
+  ]
+}

@@ -26,6 +26,7 @@
 #include "engine/script/ScriptValue.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/project/ProjectSettings.hpp"
+#include "network/EditorNetworkDeclarations.hpp"
 #include "project/EditorProjectBootstrap.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
 #include "assets/EditorAssetUsers.hpp"
@@ -1426,6 +1427,20 @@ public:
     // valid. The open scene defines it at once. Removing one is DeleteSceneTag.
     [[nodiscard]] bool AddProjectTag(std::string_view name);
     [[nodiscard]] bool SetProjectPhysicsLayersAsset(std::string virtualPath);
+    // The Network page: the players a hosted game takes, its ticks per second, how far from a player the
+    // server sends objects (0 sends the whole scene) and the link it is tuned for; true when saved.
+    [[nodiscard]] bool SetProjectNetworkSettings(kb::project::ProjectNetworkingMode mode, std::uint32_t maxPlayers,
+        std::uint32_t tickRate, float visibilityRadius, kb::project::ProjectNetworkLinkClass linkClass);
+    // The project's replication rows (Config/Replication.json), as the Inspector's Networked Variable section
+    // and the Network page show them, and the last error of a row that could not be written.
+    [[nodiscard]] const std::vector<kb::network::ReplicatedVariableDecl>& NetworkedVariables() const noexcept {
+        return networkDeclarations_.Variables();
+    }
+    [[nodiscard]] const std::string& NetworkedVariablesError() const noexcept { return networkDeclarationsError_; }
+    [[nodiscard]] bool AddNetworkedVariable(kb::network::ReplicatedVariableDecl variable, std::string& error);
+    [[nodiscard]] bool SetNetworkedVariable(std::size_t index, kb::network::ReplicatedVariableDecl variable,
+        std::string& error);
+    [[nodiscard]] bool RemoveNetworkedVariable(std::size_t index, std::string& error);
     bool CloseProjectSettingsDropdowns() noexcept;
     [[nodiscard]] bool IsProjectPluginEnabled(std::string_view pluginId) const noexcept;
     [[nodiscard]] std::string ProjectPluginBinaryPath(std::string_view pluginId) const;
@@ -1742,6 +1757,9 @@ private:
     EditorProjectBootstrapResult projectBootstrap_;
     kb::project::ProjectDescriptor project_;
     kb::project::ProjectSettings projectConfig_;
+    // The project's replication declarations and the error of the last refused row, if any.
+    EditorNetworkDeclarations networkDeclarations_;
+    std::string networkDeclarationsError_;
     // The settings file as the editor last read or wrote it, and when it was written then: a save
     // merges onto what someone else wrote meanwhile instead of writing over it.
     kb::project::ProjectSettings projectConfigOnDisk_;

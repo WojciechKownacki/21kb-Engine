@@ -97,8 +97,10 @@
 #include "engine/network/NetworkSecurity.hpp"
 #include "engine/network/NetworkSimulation.hpp"
 #include "engine/network/NetworkVariable.hpp"
+#include "engine/network/ReplicationDeclarations.hpp"
 #include "engine/network/Rpc.hpp"
 #include "engine/network/NetworkSession.hpp"
+#include "engine/project/ProjectSettings.hpp"
 #include "engine/platform/PlatformServices.hpp"
 #include "engine/platform/PlatformAdapters.hpp"
 #include "engine/particles/ParticlePlayback.hpp"
@@ -155,6 +157,7 @@
 #include "engine/scene/SceneTransforms.hpp"
 #include "kb/render/world/NavMeshBakeTool.hpp"
 #include "kb/render/world/WorldBuildTool.hpp"
+#include "network/EditorNetworkDeclarations.hpp"
 #include "project/EditorProjectPaths.hpp"
 #include "scene/EditorPluginCatalog.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -1753,6 +1756,84 @@ ReadScriptValue(
     }
     if (std::optional<StepOutcome> postProcess = ExecutePostProcessStep(state, step, *operation)) {
         return *postProcess;
+    }
+
+    if (*operation == "network_variable_edit") {
+        // Both surfaces of the Network tooling: the project's Network page writes ProjectSettings, the
+        // Inspector's Networked Variable section writes Config/Replication.json. They share one source
+        // per value, and this step drives those production paths and then reads the files back.
+        const auto modeName = StringMember(step, "mode", error, false);
+        const auto maxPlayers = UInt32Member(step, "max_players", error, false);
+        const auto tickRate = UInt32Member(step, "tick_rate", error, false);
+        const auto radius = NumberMember(step, "visibility_radius", error, false);
+        const auto linkName = StringMember(step, "link_class", error, false);
+        const auto name = StringMember(step, "name", error);
+        const auto typeName = StringMember(step, "type", error, false);
+        const auto minimum = NumberMember(step, "minimum", error, false);
+        const auto maximum = NumberMember(step, "maximum", error, false);
+        const auto audienceName = StringMember(step, "audience", error, false);
+        if (!name || !error.empty()) return {false, error.empty() ? "missing 'name'" : error};
+        const kb::project::ProjectSettings& current = state.context.ProjectConfiguration();
+        kb::project::ProjectNetworkingMode mode = current.networkingMode;
+        if (modeName) {
+            const auto parsed = kb::project::ParseProjectNetworkingMode(*modeName);
+            if (!parsed) return {false, "'mode' is not None, Online or Lan"};
+            mode = *parsed;
+        }
+        kb::project::ProjectNetworkLinkClass linkClass = current.networkLinkClass;
+        if (linkName) {
+            const auto parsed = kb::project::ParseProjectNetworkLinkClass(*linkName);
+            if (!parsed) return {false, "'link_class' is not Auto, Wired or Wireless"};
+            linkClass = *parsed;
+        }
+        const bool settingsTouched = modeName || maxPlayers || tickRate || radius || linkName;
+        if (settingsTouched) {
+            static_cast<void>(state.context.SetProjectNetworkSettings(mode,
+                maxPlayers.value_or(current.networkMaxPlayers), tickRate.value_or(current.networkTickRate),
+                static_cast<float>(radius.value_or(current.networkVisibilityRadius)), linkClass));
+            const kb::project::ProjectSettingsLoadResult saved = kb::project::ProjectSettingsStore::Load(
+                kb::project::ProjectSettingsStore::FilePath(EditorProjectPaths::ProjectRoot()));
+            const kb::project::ProjectSettings& disk = saved.settings;
+            if (!saved.Succeeded() || !saved.found || disk.networkingMode != mode ||
+                disk.networkMaxPlayers != maxPlayers.value_or(current.networkMaxPlayers) ||
+                disk.networkTickRate != tickRate.value_or(current.networkTickRate) ||
+                disk.networkVisibilityRadius != static_cast<float>(radius.value_or(current.networkVisibilityRadius)) ||
+                disk.networkLinkClass != linkClass) {
+                return {false, saved.error.empty() ? "the network settings were not saved to ProjectSettings"
+                                                   : saved.error};
+            }
+        }
+        kb::network::ReplicatedVariableDecl variable;
+        variable.name = *name;
+        const std::string type = typeName.value_or("Float");
+        if (type == "Float") variable.type = kb::network::ReplicatedVariableDecl::Type::Float;
+        else if (type == "Int") variable.type = kb::network::ReplicatedVariableDecl::Type::Int;
+        else if (type == "Bool") variable.type = kb::network::ReplicatedVariableDecl::Type::Bool;
+        else return {false, "'type' is not Float, Int or Bool"};
+        variable.minimum = static_cast<float>(minimum.value_or(0.0));
+        variable.maximum = static_cast<float>(maximum.value_or(
+            variable.type == kb::network::ReplicatedVariableDecl::Type::Bool ? 1.0 : 0.0));
+        const std::string audience = audienceName.value_or("Everyone");
+        for (const kb::network::ReplicationAudience candidate : { kb::network::ReplicationAudience::Everyone,
+                 kb::network::ReplicationAudience::Owner, kb::network::ReplicationAudience::Others,
+                 kb::network::ReplicationAudience::InitialOnly }) {
+            if (audience == kb::network::ReplicationAudienceName(candidate)) variable.audience = candidate;
+        }
+        if (audience != kb::network::ReplicationAudienceName(variable.audience)) {
+            return {false, "'audience' is not Everyone, Owner, Others or InitialOnly"};
+        }
+        std::string rowError;
+        if (!state.context.AddNetworkedVariable(variable, rowError)) return {false, rowError};
+        const std::filesystem::path replicationFile = kb::editor::EditorNetworkDeclarations::FilePath(
+            EditorProjectPaths::ProjectRoot());
+        std::ifstream replication(replicationFile, std::ios::binary);
+        if (!replication) return {false, "replication declarations were not written"};
+        const std::string text{ std::istreambuf_iterator<char>{ replication }, std::istreambuf_iterator<char>{} };
+        kb::network::ReplicationDeclarations parsed;
+        if (!kb::network::ParseReplicationDeclarations(text, parsed, error)) return {false, error};
+        const auto row = std::ranges::find(parsed.variables, *name, &kb::network::ReplicatedVariableDecl::name);
+        if (row == parsed.variables.end()) return {false, "the added row is missing from the file"};
+        return {true, "saved " + replicationFile.string()};
     }
 
     if (*operation == "extension_load_project") {

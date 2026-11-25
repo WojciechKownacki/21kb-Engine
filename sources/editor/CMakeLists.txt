@@ -19,6 +19,7 @@ add_executable(kb_editor WIN32
     src/app/EditorAgentControl.cpp
     src/app/EditorApplicationWindowProc.cpp
     src/app/EditorAutomationScenarioRunner.cpp
+    src/network/EditorNetworkDeclarations.cpp
     src/app/EditorSelfTest.cpp
     src/app/EditorHeadlessAutomation.cpp
     src/app/EditorProfilerAutomation.cpp
@@ -1888,6 +1889,14 @@ if(BUILD_TESTING)
         set_tests_properties(kb_editor_audio_dsp_package PROPERTIES
             LABELS "editor;audio;runtime;packaging" TIMEOUT 180)
     endif()
+
+    add_test(NAME kb_editor_network_variable_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/NetworkVariableEditScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Network-Variable")
+    set_tests_properties(kb_editor_network_variable_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;network;headless" TIMEOUT 120)
 
     add_test(NAME kb_editor_script_editor_tests COMMAND $<TARGET_FILE:kb_editor_tests> script-editor)
     add_test(NAME kb_editor_profiler_tests COMMAND $<TARGET_FILE:kb_editor_tests> profiler)

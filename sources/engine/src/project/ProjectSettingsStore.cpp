@@ -185,6 +185,27 @@ std::optional<ProjectNetworkingMode> ParseProjectNetworkingMode(std::string_view
     return std::nullopt;
 }
 
+std::string_view ProjectNetworkLinkClassName(ProjectNetworkLinkClass linkClass) noexcept {
+    switch (linkClass) {
+    case ProjectNetworkLinkClass::Wired: return "Wired";
+    case ProjectNetworkLinkClass::Wireless: return "Wireless";
+    case ProjectNetworkLinkClass::Auto:
+    default: return "Auto";
+    }
+}
+
+std::optional<ProjectNetworkLinkClass> ParseProjectNetworkLinkClass(std::string_view name) noexcept {
+    const auto same = [name](std::string_view expected) noexcept {
+        return std::ranges::equal(name, expected, [](char lhs, char rhs) noexcept {
+            return (lhs >= 'A' && lhs <= 'Z' ? static_cast<char>(lhs + ('a' - 'A')) : lhs) == rhs;
+        });
+    };
+    if (same("auto")) return ProjectNetworkLinkClass::Auto;
+    if (same("wired")) return ProjectNetworkLinkClass::Wired;
+    if (same("wireless")) return ProjectNetworkLinkClass::Wireless;
+    return std::nullopt;
+}
+
 std::vector<std::string> ProjectBuildScenes(const ProjectSettings& settings) {
     std::vector<std::string> scenes;
     AppendScene(scenes, settings.defaultMap);
@@ -347,6 +368,15 @@ ProjectSettings ProjectSettingsStore::Read(const config::IniDocument& document) 
     result.settings.networkingMode = ParseProjectNetworkingMode(
         ReadString(document, kNetwork, "Mode", std::string{ProjectNetworkingModeName(defaults.networkingMode)}))
         .value_or(defaults.networkingMode);
+    result.settings.networkMaxPlayers = ReadBounded(document, kNetwork, "MaxPlayers", defaults.networkMaxPlayers,
+        kProjectNetworkMaxPlayersMin, kProjectNetworkMaxPlayersMax);
+    result.settings.networkTickRate = ReadBounded(document, kNetwork, "TickRate", defaults.networkTickRate,
+        kProjectNetworkTickRateMin, kProjectNetworkTickRateMax);
+    result.settings.networkVisibilityRadius = ReadBoundedFloat(document, kNetwork, "VisibilityRadius",
+        defaults.networkVisibilityRadius, 0.0F, kProjectNetworkVisibilityRadiusMax);
+    result.settings.networkLinkClass = ParseProjectNetworkLinkClass(
+        ReadString(document, kNetwork, "LinkClass", std::string{ProjectNetworkLinkClassName(defaults.networkLinkClass)}))
+        .value_or(defaults.networkLinkClass);
     result.settings.masterVolume = ReadBoundedFloat(document, kAudio, "MasterVolume", defaults.masterVolume, 0.0F, 1.0F);
     result.settings.microphone = document.GetBool(kAudio, "Microphone").value_or(defaults.microphone);
     const std::int64_t tagCount = std::clamp<std::int64_t>(
@@ -495,6 +525,10 @@ void ProjectSettingsStore::Write(const ProjectSettings& settings, config::IniDoc
     document.SetInt(kDisplay, "SplashMinimumMilliseconds", settings.display.splash.minimumDisplayMilliseconds);
     document.SetBool(kDisplay, "SplashProgress", settings.display.splash.showProgress);
     document.SetString(kNetwork, "Mode", std::string{ProjectNetworkingModeName(settings.networkingMode)});
+    document.SetInt(kNetwork, "MaxPlayers", settings.networkMaxPlayers);
+    document.SetInt(kNetwork, "TickRate", settings.networkTickRate);
+    document.SetFloat(kNetwork, "VisibilityRadius", settings.networkVisibilityRadius);
+    document.SetString(kNetwork, "LinkClass", std::string{ProjectNetworkLinkClassName(settings.networkLinkClass)});
     document.SetFloat(kAudio, "MasterVolume", settings.masterVolume);
     document.SetBool(kAudio, "Microphone", settings.microphone);
     // The tags as a count and one key each; keys a shorter list leaves behind are removed.

@@ -163,6 +163,7 @@
 #include "scene/transform_edit/EditorSceneTransformEditApplier.hpp"
 #include "scene/transform_edit/EditorSceneTransformEditController.hpp"
 #include "scene/transform_edit/EditorSceneTransformSnapshotBuilder.hpp"
+#include "network/EditorNetworkDeclarations.hpp"
 #include "project/EditorProjectBootstrap.hpp"
 #include "project/EditorProjectPaths.hpp"
 #include "diagnostics/EditorLagTrace.hpp"
@@ -444,6 +445,9 @@ EditorSceneContext::EditorSceneContext()
     static_cast<void>(ActivateProjectPhysicsLayers(*scene_));
     scene_->Runtime().ApplyProjectSimulation(projectConfig_.simulation);
     ApplyProjectAudioAndTags(*scene_);
+    if (!networkDeclarations_.Load(EditorProjectPaths::ProjectRoot(), networkDeclarationsError_)) {
+        console_.Error("Network", networkDeclarationsError_);
+    }
     {
         std::error_code error;
         projectConfigWritten_ = std::filesystem::last_write_time(
@@ -3933,6 +3937,48 @@ void EditorSceneContext::RememberLastOpenMap() {
     }
     projectConfig_.lastOpenMap = std::move(virtualPath);
     static_cast<void>(SaveProjectConfiguration());
+}
+
+bool EditorSceneContext::SetProjectNetworkSettings(kb::project::ProjectNetworkingMode mode,
+    std::uint32_t maxPlayers, std::uint32_t tickRate, float visibilityRadius,
+    kb::project::ProjectNetworkLinkClass linkClass) {
+    if (maxPlayers < kb::project::kProjectNetworkMaxPlayersMin || maxPlayers > kb::project::kProjectNetworkMaxPlayersMax ||
+        tickRate < kb::project::kProjectNetworkTickRateMin || tickRate > kb::project::kProjectNetworkTickRateMax ||
+        !std::isfinite(visibilityRadius) || visibilityRadius < 0.0F ||
+        visibilityRadius > kb::project::kProjectNetworkVisibilityRadiusMax) {
+        console_.Warning("Network", "The network settings were not saved: the players, tick rate or visibility radius is outside its range.");
+        return false;
+    }
+    if (projectConfig_.networkingMode == mode && projectConfig_.networkMaxPlayers == maxPlayers &&
+        projectConfig_.networkTickRate == tickRate && projectConfig_.networkVisibilityRadius == visibilityRadius &&
+        projectConfig_.networkLinkClass == linkClass) {
+        return false;
+    }
+    projectConfig_.networkingMode = mode;
+    projectConfig_.networkMaxPlayers = maxPlayers;
+    projectConfig_.networkTickRate = tickRate;
+    projectConfig_.networkVisibilityRadius = visibilityRadius;
+    projectConfig_.networkLinkClass = linkClass;
+    return SaveProjectConfiguration();
+}
+
+bool EditorSceneContext::AddNetworkedVariable(kb::network::ReplicatedVariableDecl variable, std::string& error) {
+    const bool changed = networkDeclarations_.AddVariable(std::move(variable), networkDeclarationsError_);
+    error = changed ? std::string{} : networkDeclarationsError_;
+    return changed;
+}
+
+bool EditorSceneContext::SetNetworkedVariable(std::size_t index,
+    kb::network::ReplicatedVariableDecl variable, std::string& error) {
+    const bool changed = networkDeclarations_.SetVariable(index, std::move(variable), networkDeclarationsError_);
+    error = changed ? std::string{} : networkDeclarationsError_;
+    return changed;
+}
+
+bool EditorSceneContext::RemoveNetworkedVariable(std::size_t index, std::string& error) {
+    const bool changed = networkDeclarations_.RemoveVariable(index, networkDeclarationsError_);
+    error = changed ? std::string{} : networkDeclarationsError_;
+    return changed;
 }
 
 // The one writer of the project's settings, and now the only place they are
