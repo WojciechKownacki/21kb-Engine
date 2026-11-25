@@ -1836,6 +1836,127 @@ ReadScriptValue(
         return {true, "saved " + replicationFile.string()};
     }
 
+    if (*operation == "network_inspector_click") {
+        // A click in the Inspector's Networked Variable section, found and pressed through the panel's own hit
+        // test and click handling: add or remove a row, or a row's field (a type or audience click picks the next
+        // value; a name or range row opens the inline editor, which `text` replaces).
+        const auto target = StringMember(step, "target", error);
+        const auto alias = StringMember(step, "entity", error, false);
+        const auto text = StringMember(step, "text", error, false);
+        const int index = static_cast<int>(NumberMember(step, "index", error, false).value_or(-1.0));
+        if (!target || !error.empty()) return {false, error.empty() ? "missing 'target'" : error};
+        if (alias) {
+            const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+            if (!entity.IsValid()) return {false, "inspector entity alias was not found"};
+            state.context.SelectEntity(entity);
+        }
+        InspectorPropertyId property = InspectorPropertyId::None;
+        int rowIndex = index;
+        if (*target == "add") property = InspectorPropertyId::NetworkedVariableAdd;
+        else if (*target == "remove") property = InspectorPropertyId::NetworkedVariableRemove;
+        else if (*target == "name") property = InspectorPropertyId::NetworkedVariableName;
+        else if (*target == "type") property = InspectorPropertyId::NetworkedVariableType;
+        else if (*target == "minimum") property = InspectorPropertyId::NetworkedVariableMinimum;
+        else if (*target == "maximum") property = InspectorPropertyId::NetworkedVariableMaximum;
+        else if (*target == "audience") property = InspectorPropertyId::NetworkedVariableAudience;
+        else return {false, "unknown networked variable target"};
+        if (property == InspectorPropertyId::NetworkedVariableAdd) rowIndex = -1;
+        if (!state.automation.InspectorClickRow(property, rowIndex, InspectorHitKind::TextField,
+                InspectorSectionId::NetworkedVariables)) {
+            return {false, *target + " row is not visible"};
+        }
+        if (text.has_value()) {
+            for (int backspace = 0; backspace < 24; ++backspace) static_cast<void>(state.automation.InspectorKey(VK_BACK));
+            for (const unsigned char character : *text) {
+                if (character > 0x7FU || !state.automation.InspectorChar(static_cast<wchar_t>(character))) {
+                    return {false, "the cell takes no text"};
+                }
+            }
+            static_cast<void>(state.automation.InspectorKey(VK_RETURN));
+        }
+        return {true, *target};
+    }
+
+    if (*operation == "network_settings_click") {
+        // A click on the project settings' Network page, through the page's own hit test and pointer controller:
+        // a number cell (with the text typed into it), a link class button or the LAN checkbox.
+        const auto target = StringMember(step, "target", error);
+        const int index = static_cast<int>(NumberMember(step, "index", error, false).value_or(-1.0));
+        const auto text = StringMember(step, "text", error, false);
+        if (!target || !error.empty()) return {false, error.empty() ? "missing 'target'" : error};
+        static_cast<void>(state.context.ProjectSettings().SelectCategory(static_cast<int>(ProjectSettingsCategory::Network)));
+        constexpr RECT kContent{ 0, 0, 1280, 800 };
+        const ProjectSettingsPanelLayoutRects rects = ProjectSettingsPanelLayout::Resolve(kContent);
+        RECT cell{};
+        if (*target == "max_players") cell = rects.networkValue[0];
+        else if (*target == "tick_rate") cell = rects.networkValue[1];
+        else if (*target == "visibility_radius") cell = rects.networkValue[2];
+        else if (*target == "link_class") cell = rects.networkLinkButton[std::clamp(index, 0, 2)];
+        else if (*target == "lan") cell = rects.networkLanCheckbox;
+        else return {false, "unknown network settings target"};
+        const int x = static_cast<int>((cell.left + cell.right) / 2);
+        const int y = static_cast<int>((cell.top + cell.bottom) / 2);
+        const ProjectSettingsPanelRenderer::Hit hit = ProjectSettingsPanelRenderer::HitTest(kContent, state.context, x, y);
+        const ProjectSettingsHitKind expected = *target == "link_class" ? ProjectSettingsHitKind::NetworkLinkOption
+            : *target == "lan" ? ProjectSettingsHitKind::NetworkLanToggle : ProjectSettingsHitKind::NumberField;
+        if (hit.kind != expected) return {false, *target + " cell is not there"};
+        EditorProjectSettingsPointerController controller{ state.context };
+        static_cast<void>(controller.HandlePointerDown(kContent, x, y));
+        if (text.has_value()) {
+            if (!state.context.ProjectSettings().IsNumberEditing()) return {false, "the cell takes no text"};
+            state.context.ProjectSettings().NumberEdit().Clear();
+            for (const char character : *text) state.context.ProjectSettings().NumberEdit().AppendAscii(static_cast<wchar_t>(character));
+            static_cast<void>(EditorProjectSettingsPointerController::CommitNumberEdit(state.context));
+        }
+        return {true, *target};
+    }
+
+    if (*operation == "assert_network_state") {
+        // What the two surfaces left in their files: Config/Replication.json for the Inspector's rows and
+        // ProjectSettings.ini for the Network page. Both are read back, never the editor's in-memory copy.
+        const auto name = StringMember(step, "name", error, false);
+        const auto type = StringMember(step, "type", error, false);
+        const auto minimum = NumberMember(step, "minimum", error, false);
+        const auto maximum = NumberMember(step, "maximum", error, false);
+        const auto audience = StringMember(step, "audience", error, false);
+        const auto maxPlayers = NumberMember(step, "max_players", error, false);
+        const auto tickRate = NumberMember(step, "tick_rate", error, false);
+        const auto radius = NumberMember(step, "visibility_radius", error, false);
+        const auto linkName = StringMember(step, "link_class", error, false);
+        if (!error.empty()) return {false, error};
+        std::string mismatch;
+        kb::network::ReplicationDeclarations declarations;
+        std::string fileError;
+        const std::filesystem::path replicationFile = kb::editor::EditorNetworkDeclarations::FilePath(EditorProjectPaths::ProjectRoot());
+        std::ifstream replication(replicationFile, std::ios::binary);
+        const std::string text{ std::istreambuf_iterator<char>{ replication }, std::istreambuf_iterator<char>{} };
+        if (!replication || !kb::network::ParseReplicationDeclarations(text, declarations, fileError)) {
+            return {false, fileError.empty() ? "replication declarations were not written" : fileError};
+        }
+        if (name) {
+            const auto row = std::ranges::find(declarations.variables, *name, &kb::network::ReplicatedVariableDecl::name);
+            if (row == declarations.variables.end()) return {false, "no variable named " + *name};
+            const std::string rowType = row->type == kb::network::ReplicatedVariableDecl::Type::Int ? "Int"
+                : row->type == kb::network::ReplicatedVariableDecl::Type::Bool ? "Bool" : "Float";
+            if (type && rowType != *type) mismatch = "type is " + rowType;
+            if (minimum && row->minimum != static_cast<float>(*minimum)) mismatch = "minimum is " + std::to_string(row->minimum);
+            if (maximum && row->maximum != static_cast<float>(*maximum)) mismatch = "maximum is " + std::to_string(row->maximum);
+            if (audience && *audience != kb::network::ReplicationAudienceName(row->audience)) {
+                mismatch = "audience is " + std::string{ kb::network::ReplicationAudienceName(row->audience) };
+            }
+        }
+        const kb::project::ProjectSettingsLoadResult settings = kb::project::ProjectSettingsStore::Load(
+            kb::project::ProjectSettingsStore::FilePath(EditorProjectPaths::ProjectRoot()));
+        if (!settings.Succeeded() || !settings.found) return {false, "ProjectSettings was not written"};
+        if (maxPlayers && settings.settings.networkMaxPlayers != static_cast<std::uint32_t>(*maxPlayers)) mismatch = "max players were not saved";
+        if (tickRate && settings.settings.networkTickRate != static_cast<std::uint32_t>(*tickRate)) mismatch = "tick rate was not saved";
+        if (radius && settings.settings.networkVisibilityRadius != static_cast<float>(*radius)) mismatch = "visibility radius was not saved";
+        if (linkName && *linkName != kb::project::ProjectNetworkLinkClassName(settings.settings.networkLinkClass)) {
+            mismatch = "link class was not saved";
+        }
+        return {mismatch.empty(), mismatch.empty() ? replicationFile.string() : mismatch};
+    }
+
     if (*operation == "extension_load_project") {
         const bool ok=state.extensions->LoadProject(error);return {ok,ok?"project extensions loaded":error};
     }
@@ -2828,6 +2949,8 @@ ReadScriptValue(
             index = static_cast<int>(ProjectSettingsCategory::Tags);
         } else if (*category == "navigation") {
             index = static_cast<int>(ProjectSettingsCategory::Navigation);
+        } else if (*category == "network") {
+            index = static_cast<int>(ProjectSettingsCategory::Network);
         } else if (*category == "editor") {
             index = static_cast<int>(ProjectSettingsCategory::EditorGeneral);
         } else if (*category == "plugins") {

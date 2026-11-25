@@ -1438,6 +1438,8 @@ public:
     }
     [[nodiscard]] const std::string& NetworkedVariablesError() const noexcept { return networkDeclarationsError_; }
     [[nodiscard]] bool AddNetworkedVariable(kb::network::ReplicatedVariableDecl variable, std::string& error);
+    // Adds a row the Networked Variable section offers: a Float named for the first free "variable" name.
+    [[nodiscard]] bool AddNetworkedVariableRow(std::string& error);
     [[nodiscard]] bool SetNetworkedVariable(std::size_t index, kb::network::ReplicatedVariableDecl variable,
         std::string& error);
     [[nodiscard]] bool RemoveNetworkedVariable(std::size_t index, std::string& error);

@@ -67,6 +67,8 @@ constexpr int kTooltipPaddingY = 10;
         return EditorText("projectSettings.category.tags", "Tags");
     case ProjectSettingsCategory::Navigation:
         return EditorText("projectSettings.category.navigation", "Navigation");
+    case ProjectSettingsCategory::Network:
+        return EditorText("projectSettings.category.network", "Network");
     case ProjectSettingsCategory::EditorGeneral:
         return EditorText("projectSettings.category.editorGeneral", "General");
     case ProjectSettingsCategory::EditorSaving:
@@ -539,6 +541,17 @@ struct SearchableSetting {
         return fromKinds({ Kind::Tags });
     case ProjectSettingsCategory::Navigation:
         return fromKinds({ Kind::NavigationAreas });
+    case ProjectSettingsCategory::Network:
+        return { { EditorText("projectSettings.networkMaxPlayers", "Max players"),
+            EditorText("projectSettings.networkMaxPlayersDescription", "The players one hosted game takes.") },
+            { EditorText("projectSettings.networkTickRate", "Tick rate"),
+            EditorText("projectSettings.networkTickRateDescription", "The simulation and replication steps per second.") },
+            { EditorText("projectSettings.networkVisibilityRadius", "Visibility radius"),
+            EditorText("projectSettings.networkVisibilityRadiusDescription", "How far from a player the server sends objects; 0 sends the whole scene.") },
+            { EditorText("projectSettings.networkLinkClass", "Link class"),
+            EditorText("projectSettings.networkLinkClassDescription", "The kind of link the network is tuned for.") },
+            { EditorText("projectSettings.networkLan", "LAN"),
+            EditorText("projectSettings.networkLanDescription", "Also host and find games on the local network.") } };
     case ProjectSettingsCategory::Scenes:
         return { { EditorText("projectSettings.scenesInBuild", "Scenes in Build"),
             EditorText("projectSettings.scenesInBuildDescription", "Scenes in the game package, in order. The first one starts the game.") } };
@@ -886,6 +899,34 @@ void DrawAudioPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const E
     DrawCheckbox(dc, rects.microphoneCheckbox, theme, sceneContext.ProjectConfiguration().microphone);
 }
 
+// The Network page: what a hosted game takes and how it talks. Every value is a project setting saved through
+// ProjectSettingsStore; the rows belong to the same project the replication declarations are read from.
+void DrawNetworkPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
+    const kb::project::ProjectSettings& settings = sceneContext.ProjectConfiguration();
+    GdiDrawing::FillRectColor(dc, rects.sectionHeader, Color(theme.strip));
+    DrawText(dc, RECT{ rects.sectionHeader.left + 8, rects.sectionHeader.top, rects.sectionHeader.right - 8, rects.sectionHeader.bottom },
+        EditorText("projectSettings.networkSection", "NETWORK"), Color(theme.textSecondary), 11, FW_SEMIBOLD);
+    constexpr std::array<const char*, 3U> kLabelKeys{ "projectSettings.networkMaxPlayers",
+        "projectSettings.networkTickRate", "projectSettings.networkVisibilityRadius" };
+    constexpr std::array<const char*, 3U> kLabelDefaults{ "Max players", "Tick rate", "Visibility radius" };
+    for (int row = 0; row < 3; ++row) {
+        DrawText(dc, rects.networkLabel[row], EditorText(kLabelKeys[static_cast<std::size_t>(row)], kLabelDefaults[static_cast<std::size_t>(row)]),
+            Color(theme.textSecondary), 12);
+    }
+    DrawNumberCell(dc, rects.networkValue[0], theme, sceneContext, ProjectSettingsNumber::NetworkMaxPlayers);
+    DrawNumberCell(dc, rects.networkValue[1], theme, sceneContext, ProjectSettingsNumber::NetworkTickRate);
+    DrawNumberCell(dc, rects.networkValue[2], theme, sceneContext, ProjectSettingsNumber::NetworkVisibilityRadius);
+    DrawText(dc, rects.networkLinkLabel, EditorText("projectSettings.networkLinkClass", "Link class"), Color(theme.textSecondary), 12);
+    DrawOptionButton(dc, rects.networkLinkButton[0], theme, EditorText("projectSettings.backendAuto", "Auto"),
+        settings.networkLinkClass == kb::project::ProjectNetworkLinkClass::Auto);
+    DrawOptionButton(dc, rects.networkLinkButton[1], theme, EditorText("projectSettings.networkLinkWired", "Wired"),
+        settings.networkLinkClass == kb::project::ProjectNetworkLinkClass::Wired);
+    DrawOptionButton(dc, rects.networkLinkButton[2], theme, EditorText("projectSettings.networkLinkWireless", "Wireless"),
+        settings.networkLinkClass == kb::project::ProjectNetworkLinkClass::Wireless);
+    DrawText(dc, rects.networkLanLabel, EditorText("projectSettings.networkLan", "LAN"), Color(theme.textSecondary), 12);
+    DrawCheckbox(dc, rects.networkLanCheckbox, theme, settings.networkingMode == kb::project::ProjectNetworkingMode::Lan);
+}
+
 // The cell that takes the name of a new tag: a hint while it is empty, the text so far with a caret while it is typed.
 void DrawTagNameCell(HDC dc, const RECT& cell, const EditorTheme& theme, const EditorProjectSettingsState& state) {
     const bool editing = state.IsTagNameEditing();
@@ -1121,6 +1162,9 @@ void ProjectSettingsPanelRenderer::Paint(
     case ProjectSettingsCategory::Navigation:
         DrawNavigationPage(dc, rects, theme, sceneContext);
         break;
+    case ProjectSettingsCategory::Network:
+        DrawNetworkPage(dc, rects, theme, sceneContext);
+        break;
     case ProjectSettingsCategory::EditorGeneral:
     case ProjectSettingsCategory::EditorSaving: {
         // The Editor Settings page itself, without its own title bar and category column.
@@ -1299,6 +1343,26 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
         return Hit{};
     }
 
+    if (category == ProjectSettingsCategory::Network) {
+        constexpr std::array<ProjectSettingsNumber, 3U> numbers{ ProjectSettingsNumber::NetworkMaxPlayers,
+            ProjectSettingsNumber::NetworkTickRate, ProjectSettingsNumber::NetworkVisibilityRadius };
+        for (int row = 0; row < 3; ++row) {
+            if (PointInRect(rects.networkValue[row], x, y) || PointInRect(rects.networkLabel[row], x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::NumberField, .index = static_cast<int>(numbers[static_cast<std::size_t>(row)]),
+                    .rect = rects.networkValue[row] };
+            }
+        }
+        for (int index = 0; index < 3; ++index) {
+            if (PointInRect(rects.networkLinkButton[index], x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::NetworkLinkOption, .index = index, .rect = rects.networkLinkButton[index] };
+            }
+        }
+        if (PointInRect(rects.networkLanCheckbox, x, y) || PointInRect(rects.networkLanLabel, x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::NetworkLanToggle, .index = 0, .rect = rects.networkLanCheckbox };
+        }
+        return Hit{};
+    }
+
     if (category == ProjectSettingsCategory::Navigation) {
         const ProjectSettingsPanelLayoutRects listRects = ListRects(sceneContext, rects);
         for (int row = 0; row < 3; ++row) {
@@ -1472,6 +1536,12 @@ ProjectSettingsNumberLimits ProjectSettingsPanelRenderer::NumberLimits(ProjectSe
         return { 0.0, static_cast<double>(kb::project::kProjectNavigationDistanceMax), false };
     case ProjectSettingsNumber::NavFarPathInterval:
         return { 1.0, static_cast<double>(kb::project::kProjectNavigationFarPathIntervalMax), true };
+    case ProjectSettingsNumber::NetworkMaxPlayers:
+        return { static_cast<double>(kb::project::kProjectNetworkMaxPlayersMin), static_cast<double>(kb::project::kProjectNetworkMaxPlayersMax), true };
+    case ProjectSettingsNumber::NetworkTickRate:
+        return { static_cast<double>(kb::project::kProjectNetworkTickRateMin), static_cast<double>(kb::project::kProjectNetworkTickRateMax), true };
+    case ProjectSettingsNumber::NetworkVisibilityRadius:
+        return { 0.0, static_cast<double>(kb::project::kProjectNetworkVisibilityRadiusMax), false };
     case ProjectSettingsNumber::FrameRateCap:
     case ProjectSettingsNumber::Count:
     default:
@@ -1523,6 +1593,15 @@ std::string ProjectSettingsPanelRenderer::NumberText(const kb::project::ProjectS
         break;
     case ProjectSettingsNumber::NavFarPathInterval:
         std::snprintf(text, sizeof(text), "%u", settings.navigationFarPathInterval);
+        break;
+    case ProjectSettingsNumber::NetworkMaxPlayers:
+        std::snprintf(text, sizeof(text), "%u", settings.networkMaxPlayers);
+        break;
+    case ProjectSettingsNumber::NetworkTickRate:
+        std::snprintf(text, sizeof(text), "%u", settings.networkTickRate);
+        break;
+    case ProjectSettingsNumber::NetworkVisibilityRadius:
+        std::snprintf(text, sizeof(text), "%g", static_cast<double>(settings.networkVisibilityRadius));
         break;
     case ProjectSettingsNumber::Count:
     default:
@@ -1577,6 +1656,15 @@ kb::project::ProjectSettings ProjectSettingsPanelRenderer::WithNumber(
         break;
     case ProjectSettingsNumber::NavFarPathInterval:
         settings.navigationFarPathInterval = static_cast<std::uint32_t>(value);
+        break;
+    case ProjectSettingsNumber::NetworkMaxPlayers:
+        settings.networkMaxPlayers = static_cast<std::uint32_t>(value);
+        break;
+    case ProjectSettingsNumber::NetworkTickRate:
+        settings.networkTickRate = static_cast<std::uint32_t>(value);
+        break;
+    case ProjectSettingsNumber::NetworkVisibilityRadius:
+        settings.networkVisibilityRadius = static_cast<float>(value);
         break;
     case ProjectSettingsNumber::Count:
     default:

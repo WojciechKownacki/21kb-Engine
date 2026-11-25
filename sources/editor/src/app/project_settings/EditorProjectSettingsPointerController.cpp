@@ -478,6 +478,24 @@ bool CommitNavAreaEdit(EditorSceneContext& sceneContext, int edit, std::string t
         }
         static_cast<void>(sceneContext.CloseProjectSettingsDropdowns());
         return true;
+    case ProjectSettingsHitKind::NetworkLinkOption: {
+        const kb::project::ProjectSettings& current = sceneContext.ProjectConfiguration();
+        const kb::project::ProjectNetworkLinkClass linkClass = hit.index == 1 ? kb::project::ProjectNetworkLinkClass::Wired
+            : hit.index == 2 ? kb::project::ProjectNetworkLinkClass::Wireless : kb::project::ProjectNetworkLinkClass::Auto;
+        static_cast<void>(sceneContext.SetProjectNetworkSettings(current.networkingMode, current.networkMaxPlayers,
+            current.networkTickRate, current.networkVisibilityRadius, linkClass));
+        static_cast<void>(sceneContext.CloseProjectSettingsDropdowns());
+        return true;
+    }
+    case ProjectSettingsHitKind::NetworkLanToggle: {
+        const kb::project::ProjectSettings& current = sceneContext.ProjectConfiguration();
+        const kb::project::ProjectNetworkingMode mode = current.networkingMode == kb::project::ProjectNetworkingMode::Lan
+            ? kb::project::ProjectNetworkingMode::Online : kb::project::ProjectNetworkingMode::Lan;
+        static_cast<void>(sceneContext.SetProjectNetworkSettings(mode, current.networkMaxPlayers,
+            current.networkTickRate, current.networkVisibilityRadius, current.networkLinkClass));
+        static_cast<void>(sceneContext.CloseProjectSettingsDropdowns());
+        return true;
+    }
     case ProjectSettingsHitKind::CategoryItem:
         // SelectCategory also closes any open dropdown; always repaint to show the
         // pressed row even when the same category is re-clicked.
@@ -735,6 +753,11 @@ bool EditorProjectSettingsPointerController::CommitNumberEdit(EditorSceneContext
         if (next.navigationNearDistance != current.navigationNearDistance || next.navigationMidDistance != current.navigationMidDistance ||
             next.navigationFarPathInterval != current.navigationFarPathInterval) {
             static_cast<void>(sceneContext.SetProjectNavigationCrowd(next.navigationNearDistance, next.navigationMidDistance, next.navigationFarPathInterval));
+        }
+        if (next.networkMaxPlayers != current.networkMaxPlayers || next.networkTickRate != current.networkTickRate ||
+            next.networkVisibilityRadius != current.networkVisibilityRadius) {
+            static_cast<void>(sceneContext.SetProjectNetworkSettings(current.networkingMode, next.networkMaxPlayers,
+                next.networkTickRate, next.networkVisibilityRadius, current.networkLinkClass));
         }
     }
     return true;

@@ -3968,6 +3968,26 @@ bool EditorSceneContext::AddNetworkedVariable(kb::network::ReplicatedVariableDec
     return changed;
 }
 
+bool EditorSceneContext::AddNetworkedVariableRow(std::string& error) {
+    const auto taken = [this](std::string_view name) {
+        return std::ranges::any_of(networkDeclarations_.Variables(),
+            [name](const kb::network::ReplicatedVariableDecl& row) { return row.name == name; });
+    };
+    std::string name = "variable";
+    for (int suffix = 2; taken(name) && suffix < 1000; ++suffix) {
+        name = "variable" + std::to_string(suffix);
+    }
+    if (taken(name)) {
+        error = "no free variable name";
+        return false;
+    }
+    kb::network::ReplicatedVariableDecl variable;
+    variable.name = std::move(name);
+    variable.minimum = 0.0F;
+    variable.maximum = 1.0F;
+    return AddNetworkedVariable(std::move(variable), error);
+}
+
 bool EditorSceneContext::SetNetworkedVariable(std::size_t index,
     kb::network::ReplicatedVariableDecl variable, std::string& error) {
     const bool changed = networkDeclarations_.SetVariable(index, std::move(variable), networkDeclarationsError_);

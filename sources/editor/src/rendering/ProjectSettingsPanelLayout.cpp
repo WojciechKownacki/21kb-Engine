@@ -222,6 +222,17 @@ ProjectSettingsPanelLayoutRects ProjectSettingsPanelLayout::Resolve(const RECT& 
     buttonRow(rects.gravityPresetButton, 3, rowTopAt(5), kGravityPresetButtonWidth);
     rects.microphoneLabel = RECT{ left, rowTopAt(1), left + kLabelWidth, rowTopAt(1) + kRowHeight };
     rects.microphoneCheckbox = CheckboxForRow(left, rowTopAt(1));
+
+    // Network page: three cells that take typed numbers, then the link class and LAN.
+    for (int row = 0; row < 3; ++row) {
+        rects.networkLabel[row] = RECT{ left, rowTopAt(row), left + kLabelWidth, rowTopAt(row) + kRowHeight };
+        rects.networkValue[row] = RECT{ left + kLabelWidth, rowTopAt(row) + 3, left + kLabelWidth + kNumberCellWidth,
+            rowTopAt(row) + kRowHeight - 3 };
+    }
+    rects.networkLinkLabel = RECT{ left, rowTopAt(3), left + kLabelWidth, rowTopAt(3) + kRowHeight };
+    buttonRow(rects.networkLinkButton, 3, rowTopAt(3), kModeButtonWidth);
+    rects.networkLanLabel = RECT{ left, rowTopAt(4), left + kLabelWidth, rowTopAt(4) + kRowHeight };
+    rects.networkLanCheckbox = CheckboxForRow(left, rowTopAt(4));
     return rects;
 }
 

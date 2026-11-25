@@ -143,6 +143,34 @@ using inspector_panel_rows::SectionWriter;
 // dedicated checkbox, so this covers the text-edited types). Floats use %g so a
 // 3.5 shows as "3.5" (round-trips cleanly through the edit box) rather than
 // std::to_string's "3.500000".
+// The Networked Variable section: a declared variable's type and audience as the rows show them, and its
+// range as a number the author can type. The declarations are the project's; Config/Replication.json is the
+// only place they live.
+[[nodiscard]] std::string_view NetworkVariableTypeName(kb::network::ReplicatedVariableDecl::Type type) noexcept {
+    switch (type) {
+    case kb::network::ReplicatedVariableDecl::Type::Int: return "Int";
+    case kb::network::ReplicatedVariableDecl::Type::Bool: return "Bool";
+    case kb::network::ReplicatedVariableDecl::Type::Float:
+    default: return "Float";
+    }
+}
+
+[[nodiscard]] std::string_view NetworkVariableAudienceLabel(kb::network::ReplicationAudience audience) noexcept {
+    switch (audience) {
+    case kb::network::ReplicationAudience::Owner: return EditorText("inspector.networkedVariable.owner", "Owner");
+    case kb::network::ReplicationAudience::Others: return EditorText("inspector.networkedVariable.others", "Others");
+    case kb::network::ReplicationAudience::InitialOnly: return EditorText("inspector.networkedVariable.serverOnly", "Server only");
+    case kb::network::ReplicationAudience::Everyone:
+    default: return EditorText("inspector.networkedVariable.everyone", "Everyone");
+    }
+}
+
+[[nodiscard]] std::string FormatNetworkVariableNumber(float value) {
+    char buffer[32];
+    std::snprintf(buffer, sizeof(buffer), "%g", static_cast<double>(value));
+    return buffer;
+}
+
 [[nodiscard]] std::string FormatScriptVariableValue(const kb::script::ScriptValue& value, kb::script::ScriptValueType type) {
     switch (type) {
     case kb::script::ScriptValueType::String:
@@ -4163,6 +4191,36 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         }
         y += h + kSectionGap;
     }
+    {
+        // The Networked Variable rows: the project's declarations, edited on any selected object. The type
+        // and the audience are lists a click cycles; the name and the range are typed.
+        using P = InspectorPropertyId;
+        const std::vector<kb::network::ReplicatedVariableDecl>& variables = sceneContext.NetworkedVariables();
+        const int rows = static_cast<int>(variables.size()) * 6 + 1;
+        const int h = SectionHeight(inspector, InspectorSectionId::NetworkedVariables, rows);
+        if (sectionVisible(y, h)) {
+            SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector,
+                InspectorSectionId::NetworkedVariables, HeroIconKind::Bolt,
+                EditorText("inspector.networkedVariable.title", "Networked Variable"));
+            for (int index = 0; index < static_cast<int>(variables.size()); ++index) {
+                const kb::network::ReplicatedVariableDecl& variable = variables[static_cast<std::size_t>(index)];
+                section.Field(EditorText("inspector.networkedVariable.name", "Name"), variable.name, P::NetworkedVariableName, index);
+                section.Field(EditorText("inspector.networkedVariable.type", "Type"), NetworkVariableTypeName(variable.type),
+                    P::NetworkedVariableType, index);
+                section.Field(EditorText("inspector.networkedVariable.minimum", "Minimum"), FormatNetworkVariableNumber(variable.minimum),
+                    P::NetworkedVariableMinimum, index, {}, 0.0F);
+                section.Field(EditorText("inspector.networkedVariable.maximum", "Maximum"), FormatNetworkVariableNumber(variable.maximum),
+                    P::NetworkedVariableMaximum, index, {}, 1.0F);
+                section.Field(EditorText("inspector.networkedVariable.audience", "Who gets it"), NetworkVariableAudienceLabel(variable.audience),
+                    P::NetworkedVariableAudience, index);
+                section.Action(EditorText("inspector.networkedVariable.remove", "Remove this row"), P::NetworkedVariableRemove);
+            }
+            section.Action(EditorText("inspector.networkedVariable.add", "Add variable"), P::NetworkedVariableAdd, true);
+            y = section.Bottom() + kSectionGap;
+        } else {
+            y += h + kSectionGap;
+        }
+    }
     if (const kb::scene::CameraComponent* camera =
             scene.Components().Cameras().TryGet(selected);
         camera != nullptr) {
@@ -6407,6 +6465,39 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTestRows(const RECT& cont
                     return hit;
                 }
                 AdvanceRow(y);
+            }
+        }
+        y += kSectionGap;
+    }
+
+    {
+        using P = InspectorPropertyId;
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::NetworkedVariables, x, scrolledY, false); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        if (!state.IsCollapsed(InspectorSectionId::NetworkedVariables)) {
+            const std::vector<kb::network::ReplicatedVariableDecl>& variables = sceneContext.NetworkedVariables();
+            for (int index = 0; index < static_cast<int>(variables.size()); ++index) {
+                constexpr std::array<P, 5> rowProperties{ P::NetworkedVariableName, P::NetworkedVariableType,
+                    P::NetworkedVariableMinimum, P::NetworkedVariableMaximum, P::NetworkedVariableAudience };
+                for (const P property : rowProperties) {
+                    if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::NetworkedVariables, property, x, scrolledY); hit.kind != InspectorHitKind::None) {
+                        hit.index = index;
+                        return hit;
+                    }
+                    AdvanceRow(y);
+                }
+                const RECT removeRow = RowRect(viewport, y);
+                if (Contains(removeRow, x, scrolledY)) {
+                    InspectorPanelRenderer::Hit hit = MakeHit(InspectorHitKind::TextField, InspectorSectionId::NetworkedVariables, P::NetworkedVariableRemove, removeRow);
+                    hit.index = index;
+                    return hit;
+                }
+                AdvanceRow(y);
+            }
+            const RECT addRow = RowRect(viewport, y);
+            if (Contains(addRow, x, scrolledY)) {
+                return MakeHit(InspectorHitKind::TextField, InspectorSectionId::NetworkedVariables, P::NetworkedVariableAdd, addRow);
             }
         }
         y += kSectionGap;

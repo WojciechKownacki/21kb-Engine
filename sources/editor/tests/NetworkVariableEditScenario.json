@@ -7,17 +7,76 @@
       "template": "Empty"
     },
     {
-      "op": "network_variable_edit",
+      "op": "create_entity",
+      "id": "probe",
+      "name": "Probe"
+    },
+    {
+      "op": "network_inspector_click",
+      "entity": "probe",
+      "target": "add"
+    },
+    {
+      "op": "network_inspector_click",
+      "target": "type",
+      "index": 0
+    },
+    {
+      "op": "network_inspector_click",
+      "target": "maximum",
+      "index": 0,
+      "text": "99"
+    },
+    {
+      "op": "network_inspector_click",
+      "target": "minimum",
+      "index": 0,
+      "text": "10"
+    },
+    {
+      "op": "network_inspector_click",
+      "target": "name",
+      "index": 0,
+      "text": "score"
+    },
+    {
+      "op": "network_inspector_click",
+      "target": "audience",
+      "index": 0
+    },
+    {
+      "op": "network_settings_click",
+      "target": "max_players",
+      "text": "24"
+    },
+    {
+      "op": "network_settings_click",
+      "target": "link_class",
+      "index": 1
+    },
+    {
+      "op": "network_settings_click",
+      "target": "lan"
+    },
+    {
+      "op": "assert_network_state",
       "name": "score",
       "type": "Int",
-      "minimum": 0,
-      "maximum": 100,
+      "minimum": 10,
+      "maximum": 99,
       "audience": "Owner",
-      "mode": "Lan",
       "max_players": 24,
-      "tick_rate": 45,
-      "visibility_radius": 250.0,
       "link_class": "Wired"
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "networked-variable"
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "network-page"
     }
   ]
 }

@@ -104,6 +104,14 @@ struct ProjectSettingsPanelLayoutRects {
     RECT microphoneCheckbox{};
     RECT gravityPresetLabel{};
     RECT gravityPresetButton[3]{};
+    // Network page, one row per setting: the players one server takes, the ticks it simulates per second and how
+    // far from a player it sends objects (three typed cells), then the link class buttons and the LAN checkbox.
+    RECT networkLabel[3]{};
+    RECT networkValue[3]{};
+    RECT networkLinkLabel{};
+    RECT networkLinkButton[3]{};
+    RECT networkLanLabel{};
+    RECT networkLanCheckbox{};
 };
 
 class ProjectSettingsPanelLayout {
@@ -114,8 +122,8 @@ public:
 
     // The sidebar groups its categories under captions: Project from the first category,
     // Editor from kEditorGroupStart, Plugins from kPluginsGroupStart.
-    static constexpr int kEditorGroupStart = 9;
-    static constexpr int kPluginsGroupStart = 11;
+    static constexpr int kEditorGroupStart = 10;
+    static constexpr int kPluginsGroupStart = 12;
     // A category row in the left sidebar (index 0 is the first category).
     [[nodiscard]] static RECT CategoryRow(const RECT& sidebar, int index) noexcept;
     // The caption above group 0 (Project), 1 (Editor) or 2 (Plugins).

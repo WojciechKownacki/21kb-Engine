@@ -65,6 +65,8 @@ enum class ProjectSettingsHitKind : std::uint8_t {
     NavAreaColour,        // Navigation: an area's colour swatch; a click picks the next colour (index = area id).
     NavAreaCost,          // Navigation: an area's cost cell (index = area id).
     NavAreaRemove,        // Navigation: takes the last area out of the list (index = area id).
+    NetworkLinkOption,    // Network: Auto (0), Wired (1) or Wireless (2); -1 over the label.
+    NetworkLanToggle,     // Network: the LAN checkbox; -1 over the label.
 };
 
 // Categories shown in the left sidebar. Add entries here as the panel grows;
@@ -80,6 +82,7 @@ enum class ProjectSettingsCategory : int {
     Scenes,
     Tags,
     Navigation,
+    Network,
     // Editor: the Editor Settings pages, shown in this window.
     EditorGeneral,
     EditorSaving,
@@ -90,7 +93,7 @@ enum class ProjectSettingsCategory : int {
 #endif
 
 #if defined(_WIN32)
-static_assert(static_cast<int>(ProjectSettingsCategory::EditorGeneral) == 9 && static_cast<int>(ProjectSettingsCategory::Plugins) == 11,
+static_assert(static_cast<int>(ProjectSettingsCategory::EditorGeneral) == 10 && static_cast<int>(ProjectSettingsCategory::Plugins) == 12,
     "the sidebar's group captions (ProjectSettingsPanelLayout::k*GroupStart) follow the category order");
 #endif
 
@@ -137,6 +140,9 @@ enum class ProjectSettingsNumber : int {
     NavNearDistance,
     NavMidDistance,
     NavFarPathInterval,
+    NetworkMaxPlayers,
+    NetworkTickRate,
+    NetworkVisibilityRadius,
     Count,
 };
 // What a number setting accepts: whole numbers or not, and the bounds a typed value is clamped to.

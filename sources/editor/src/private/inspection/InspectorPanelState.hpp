@@ -133,6 +133,8 @@ enum class InspectorSectionId : std::uint16_t {
     TilemapCollider,
     UITheme,
     NavBounds,
+    // The project's replication rows (Config/Replication.json), shown on any selected object.
+    NetworkedVariables,
     // The components that modules register take the values from here on, one each in name order
     // (InspectorGenericComponentModel::Sections), so there is no limit on how many a project registers.
     ModuleComponentFirst = 256,
@@ -358,6 +360,15 @@ enum class InspectorPropertyId : std::uint16_t {
     ScriptNameExtra,
     ScriptEnabledExtra,
     ScriptRemoveExtra,
+    // The Networked Variable section's rows: the name, type, range and audience of one declared variable,
+    // keyed by the row index, plus the buttons that add and remove a row.
+    NetworkedVariableName,
+    NetworkedVariableType,
+    NetworkedVariableMinimum,
+    NetworkedVariableMaximum,
+    NetworkedVariableAudience,
+    NetworkedVariableAdd,
+    NetworkedVariableRemove,
     // One row per physics-component field, keyed by row index (the "one id +
     // index" model as ScriptVariable). One id per component so an in-flight float
     // edit is unambiguous even when an entity carries several physics components.

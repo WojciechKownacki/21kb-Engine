@@ -287,6 +287,75 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
     }
 }
 
+// The Networked Variable section: every row the author touches goes through the same declarations API the
+// headless scenario uses, so Config/Replication.json stays the only place the rows live. A type or audience
+// click picks the next value of its list; the name and the range open the inline text editor.
+[[nodiscard]] bool HandleNetworkedVariableClick(EditorSceneContext& sceneContext, const InspectorPanelRenderer::Hit& hit) {
+    using P = InspectorPropertyId;
+    using Variable = kb::network::ReplicatedVariableDecl;
+    sceneContext.Inspector().EndTextEdit();
+    const std::vector<Variable> rows = sceneContext.NetworkedVariables();
+    std::string error;
+    if (hit.property == P::NetworkedVariableAdd) {
+        if (!sceneContext.AddNetworkedVariableRow(error)) {
+            sceneContext.Console().Warning("Network", error);
+        }
+        return true;
+    }
+    if (hit.index < 0 || static_cast<std::size_t>(hit.index) >= rows.size()) {
+        return true;
+    }
+    const std::size_t index = static_cast<std::size_t>(hit.index);
+    Variable row = rows[index];
+    switch (hit.property) {
+    case P::NetworkedVariableRemove:
+        static_cast<void>(sceneContext.RemoveNetworkedVariable(index, error));
+        break;
+    case P::NetworkedVariableName:
+        sceneContext.Inspector().BeginTextEdit(P::NetworkedVariableName, row.name);
+        sceneContext.Inspector().SetEditIndex(hit.index);
+        return true;
+    case P::NetworkedVariableMinimum:
+    case P::NetworkedVariableMaximum: {
+        char text[32];
+        std::snprintf(text, sizeof(text), "%g",
+            static_cast<double>(hit.property == P::NetworkedVariableMinimum ? row.minimum : row.maximum));
+        sceneContext.Inspector().BeginTextEdit(hit.property, text);
+        sceneContext.Inspector().SetEditIndex(hit.index);
+        return true;
+    }
+    case P::NetworkedVariableType: {
+        // Float -> Int -> Bool -> Float. A whole-number type keeps whole bounds; Bool is 0..1.
+        const auto next = row.type == Variable::Type::Float ? Variable::Type::Int
+            : row.type == Variable::Type::Int ? Variable::Type::Bool : Variable::Type::Float;
+        row.type = next;
+        if (next == Variable::Type::Bool) {
+            row.minimum = 0.0F;
+            row.maximum = 1.0F;
+        } else if (next == Variable::Type::Int) {
+            row.minimum = std::round(row.minimum);
+            row.maximum = std::round(row.maximum);
+            if (row.minimum >= row.maximum) row.maximum = row.minimum + 1.0F;
+        }
+        static_cast<void>(sceneContext.SetNetworkedVariable(index, row, error));
+        break;
+    }
+    case P::NetworkedVariableAudience:
+        row.audience = row.audience == kb::network::ReplicationAudience::Everyone ? kb::network::ReplicationAudience::Owner
+            : row.audience == kb::network::ReplicationAudience::Owner ? kb::network::ReplicationAudience::Others
+            : row.audience == kb::network::ReplicationAudience::Others ? kb::network::ReplicationAudience::InitialOnly
+            : kb::network::ReplicationAudience::Everyone;
+        static_cast<void>(sceneContext.SetNetworkedVariable(index, row, error));
+        break;
+    default:
+        return true;
+    }
+    if (!error.empty()) {
+        sceneContext.Console().Warning("Network", error);
+    }
+    return true;
+}
+
 [[nodiscard]] bool HandleAddComponentClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
     const std::string query = sceneContext.Inspector().EditedProperty() == InspectorPropertyId::AddComponentSearch
         ? sceneContext.Inspector().EditBuffer()
@@ -4009,6 +4078,9 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     if (hit.section == InspectorSectionId::Script) {
         return HandleScriptClick(sceneContext, entity, hit);
     }
+    if (hit.section == InspectorSectionId::NetworkedVariables) {
+        return HandleNetworkedVariableClick(sceneContext, hit);
+    }
     if (hit.section == InspectorSectionId::Prefab) {
         return HandlePrefabClick(sceneContext, entity, hit);
     }
@@ -4431,6 +4503,33 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
             const int index = inspector.EditIndex();
             if (index >= 0 && ParseFloat(inspector.EditBuffer(), scale)) {
                 static_cast<void>(sceneContext.SetInputMappingScale(sceneContext.AssetBrowser().InspectorAsset(), static_cast<std::size_t>(index), scale));
+            }
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (inspector.EditedProperty() == InspectorPropertyId::NetworkedVariableName ||
+            inspector.EditedProperty() == InspectorPropertyId::NetworkedVariableMinimum ||
+            inspector.EditedProperty() == InspectorPropertyId::NetworkedVariableMaximum) {
+            const int index = inspector.EditIndex();
+            const std::vector<kb::network::ReplicatedVariableDecl> rows = sceneContext.NetworkedVariables();
+            if (index >= 0 && static_cast<std::size_t>(index) < rows.size()) {
+                kb::network::ReplicatedVariableDecl row = rows[static_cast<std::size_t>(index)];
+                const std::string buffer{ inspector.EditBuffer() };
+                if (inspector.EditedProperty() == InspectorPropertyId::NetworkedVariableName) {
+                    row.name = buffer;
+                } else {
+                    char* end = nullptr;
+                    const double parsed = std::strtod(buffer.c_str(), &end);
+                    if (end != buffer.c_str()) {
+                        const double value = row.type == kb::network::ReplicatedVariableDecl::Type::Int ? std::round(parsed) : parsed;
+                        if (inspector.EditedProperty() == InspectorPropertyId::NetworkedVariableMinimum) row.minimum = static_cast<float>(value);
+                        else row.maximum = static_cast<float>(value);
+                    }
+                }
+                std::string error;
+                if (!sceneContext.SetNetworkedVariable(static_cast<std::size_t>(index), row, error) && !error.empty()) {
+                    sceneContext.Console().Warning("Network", error);
+                }
             }
             inspector.EndTextEdit();
             return true;
