@@ -20,6 +20,21 @@ and state replication on top; see "Replication and RPC" below. Prediction.hpp ad
 | `Session` | One authenticated connection as a state machine. It never touches a socket; the caller passes the clock. |
 | `Host`, `Client` | The handshake, a table of sessions, events (`Connected`, `Message`, `Disconnected`) and limits. |
 
+## Sessions and roles in a scene
+
+A scene's network is one `SceneNetwork` (`kb/net/SceneNetwork.hpp`) that the host creates with the scene and updates
+after its scripts. It holds one script runtime and at most one session for the scene's whole life:
+
+| Role | `Net.Mode().mode` | What it is |
+| --- | --- | --- |
+| Offline | `offline` | No session. Calls that need the network fail with a reason instead of opening a connection. |
+| Client | `client` | Joined a game with `Net.Join(address, port, password)`; the server assigns the player id (`Net.LocalPlayerId`). |
+| Host | `host` | `Net.Host(port, maxPlayers, password, name)` runs the server in this scene and keeps a local player as id 1; others join with `Net.Join`. `Net.IsServer` and `Net.IsClient` are both true. |
+| Server | `server` | A dedicated server: no local player (id 0), scripts only replicate and answer calls. |
+
+Only an offline scene can join or host; a second request is refused with a reason. `Net.Leave` ends the session and the
+scene is offline again on the next frame. The browser build cannot host and joins only the server it was started for.
+
 ## Session behaviour
 
 * Every datagram is sealed with XChaCha20-Poly1305 under a key used for one direction only. The
@@ -73,6 +88,9 @@ authenticated-guest flag. Read these through `Client::AssignedId()` and `GuestAu
 Claimed client ids cannot replace other guests. Ids zero and one are reserved in server key files.
 An empty password explicitly means encrypted connections **without guest authentication**;
 Accept marks this state and `UnauthenticatedGuests` reports it through the diagnostic log.
+At the scene layer an empty join password means an **open game**: the host admits anyone who reaches it (the exchange
+runs with the empty password and Accept marks the guest as unauthenticated), while the session stays encrypted and
+replay-checked. `Net.Host` and the local network announce mark such a game as needing no password.
 The passive dictionary regression exercises 1000 guesses, including the correct password, without
 an online oracle; it detects deterministic password tags, not a proof of computational indistinguishability.
 
@@ -117,6 +135,11 @@ SHA-512 bytes of the content version, decoded little endian.
 | Datagrams read per `Update` | 1024 | `HostConfig::maxDatagramsPerUpdate` |
 | Clients | 64 | `HostConfig::maxClients` |
 | Inactivity timeout | 10 s | `SessionConfig::timeoutMilliseconds` |
+| Player inputs per message | 3 | `kMaxInputsPerMessage` |
+| Simulation time in one player input | 100 ms | `kMaxInputDeltaSeconds` |
+| Player simulation time in hand | 250 ms | `kMaxInputBudgetMs` |
+| Input sequence numbers ahead | 8 | `kMaxInputAhead` |
+| Predicted speed and jump | clamped to `Net.SetPredicted` limits | `ReplicationServer::ApplyInput` |
 
 ## Replication and RPC
 
@@ -201,8 +224,24 @@ state message on a clock of the server's ticks (the tick period is read from how
 not bunch two snapshots together) and shows the replica 0.1 s in the past, between the two snapshots around that time, so a script that reads the replica every
 frame sees steady motion although the server sends 30 states a second. A replica that stops is held at its last snapshot; nothing is extrapolated. `kb_cli net check
 --trace <name>` lists where each player's replica of the objects called that is at every picture (the players draw twice per 30 Hz step), and
-`KbCliNetTests.cpp` (`RunSmoothnessTest`) fails when a walking character's steps are uneven. `ClientPrediction` is still not used by the scene client: a
-player's own character follows the server.
+`KbCliNetTests.cpp` (`RunSmoothnessTest`) fails when a walking character's steps are uneven.
+
+### Predicted own movement (`Net.SetPredicted`, `Net.Move`)
+
+The scene client uses `ClientPrediction` for the local player's own character. The server marks it with
+`Net.SetPredicted(entity, maxSpeed, maxJump)`; the entity must be replicated and owned by a player, and the limits must be
+finite and positive. Every frame the player's scripts call `Net.Move(vx, vz, jump)` with metres per second and the frame's
+delta time. The input goes through the scene's character step on that machine at once (the same step on both sides), and
+the last few inputs travel unreliably to the server. The server applies them in order with the same step and answers with
+the resulting state and the last input it applied; the client drops acknowledged inputs, replays the rest on the server's
+state and shows the correction (`SceneClient::PredictionCorrections` counts corrections beyond the tolerance).
+
+The server is authoritative and limits every input: the horizontal speed is clamped to `maxSpeed`, the jump to
+`maxJump`, one input covers at most 100 ms of simulation, a player holds at most 250 ms of input time (refilled by real
+time, so a burst or a long silence cannot buy movement), sequence numbers more than 8 ahead are refused, and at most 3
+inputs go in one message. A host player's character (`Net.Move` in a host scene) is stepped at once with the same limits
+and the same step, without prediction; the server marks a driven character so its fixed step leaves it to these inputs
+alone, and the two sides never both step it.
 
 Contract: `Step` must be the same pure function on both sides. A server that also does something the
 client cannot know (a wall, another player) makes the prediction wrong by exactly that, which
@@ -222,14 +261,19 @@ offline and `Net.Mode()` says so.
 | Function | What it does |
 | --- | --- |
 | `Net.Mode`, `Net.IsServer`, `Net.IsClient`, `Net.LocalPlayerId` | Which side this scene is and who the local player is. |
+| `Net.Host{ port, maxPlayers, password, name }`, `Net.Join{ address, port, password }`, `Net.Leave` | Start or end the scene's one session (offline scenes only). The session opens on the next frame, then `OnNetConnected` follows. |
 | `Net.RegisterRpc{ name, direction, args, reliable, owner, maxPerSecond }` | Declares an RPC (call it from `Created` or `Ready`). `direction` is `"toServer"` or `"toClients"`; `args` lists types such as `"entity,float(-1..1),string(32),uint,bool"`; `owner` is the index of an entity argument the caller must own. |
 | `Net.Call{ rpc, target, n1.., s1.., b1.., e1.. }` | Calls it. The arguments go in numbered slots by kind (4 numbers, 2 strings, 2 bools, 2 entities), in declaration order; each is checked against its declared range or length before it leaves the script. `target` is a player id on a server, 0 for all. |
 | `Net.Replicate{ entity }`, `Net.IsReplicated`, `Net.SetOwner{ entity, player }` | Server only. Mark an entity replicated, ask, and give it to a player. |
+| `Net.SetPredicted{ entity, maxSpeed, maxJump }` | Server only. Make a replicated, player-owned entity that player's predicted character (see Prediction and interpolation). |
+| `Net.Move{ vx, vz, jump }` | A client or host moves its own predicted character for this frame; the server steps the same input and stays authoritative. |
+| `Net.Discover{ on }` | Starts or stops looking for games on the local network; found and lost games arrive as `OnNetGameFound` and `OnNetGameLost`. |
 
 A client can call the server once `Net.Mode().connected` is true (the server has agreed on the declarations); `OnNetConnected` comes a moment earlier, when the session opens.
 Events arrive as world events in the next script frame; the arguments are in `event.args`:
 `OnNetConnected(player)`, `OnNetDisconnected(player, reason)`, `OnNetSpawned(entity, owner)` and
-`OnNetDespawned(entity)` on a client, and `OnRpc_<name>(sender, n1.., s1.., ...)` for a call that arrived.
+`OnNetDespawned(entity)` on a client, `OnNetGameFound(name, address, port, players, maxPlayers, passwordRequired)` and
+`OnNetGameLost(address, port)` while discovering, and `OnRpc_<name>(sender, n1.., s1.., ...)` for a call that arrived.
 An `entity` on a client is an entity of the replica world and can be passed back as an argument of
 `Net.Call`. A call whose entity argument the receiver does not have is dropped.
 
@@ -242,6 +286,17 @@ Tests: `ScriptNetApiTests.cpp` in `kb_engine_tests` (`script-net`: argument list
 call validation against a fake session, a real Lua behaviour and event delivery) and `kb_net_script_tests` (a server
 scene and two client scenes running one Lua script over a lossy simulated network: declaration, replication of
 the hero, ownership, a move RPC, the reply, and the refusal of the player who does not own the hero).
+
+## Local network discovery
+
+A host announces itself without a server list. `LanBeacon` sends a small plain packet every two seconds to UDP port
+41821 (and answers a player's query with a unicast announce); `LanBrowser` queries every two seconds, keeps at most 64
+games and drops one that has not announced for six seconds. The packets carry no secrets: a game's name, join port,
+player and maximum counts and whether it needs a password. The join password and session keys never leave the
+handshake. A browser looks only for its own game (content hash). `Net.Discover(true)` on an offline scene starts the
+browser; every game arrives as `OnNetGameFound` and its address and port go to `Net.Join`. A host announces while its
+game runs, with the name and player count given to `Net.Host`. On Android the browser holds the multicast lock while
+discovery is on; the browser build has no discovery.
 
 ## Trying a game of several players: kb_cli net
 
@@ -291,15 +346,6 @@ renderer, steps it at a fixed rate, and replicates it over UDP.
   joining in one tick overflows the 208 KiB default Linux buffer. The startup log prints the sizes the
   socket actually got back from `getsockopt`; a smaller value is logged and reported as the
   `SocketBufferSmall` diagnostic, which on Linux names `net.core.rmem_max` and `net.core.wmem_max`.
-* **Linux.** Configure with `-DKB_BUILD_EDITOR=OFF -DKB_BUILD_RENDERER=OFF -DBUILD_TESTING=ON`; `kb_dedicated_server`,
-  `kb_net_bot` and the network test executables build with GCC. `scripts/net_linux_smoke.py --server <kb_dedicated_server>
-  --bot <kb_net_bot>` makes a sample project and keys, runs the server and three bots over real UDP, checks
-  `clients_peak`, the replicated object count and the diagnostics, sends SIGTERM and checks exit code 0 within
-  three seconds and the saved scene checkpoint. ctest registers it as `kb_net_linux_smoke` (labels `network;process`,
-  Linux only); the CI job `Linux dedicated server` builds the targets, runs `ctest -L network` and then the script.
-  On a two-core Linux host in Release, a 50-bot run on a 1000-object scene kept 50 clients for 20 s: the server
-  wrote its port file 0.03 s after start, peaked at 41 MiB resident and used about a third of one core at 30 ticks
-  per second; the socket reported 2 MiB buffers for the 1 MiB request.
 * **Tested.** `kb_dedicated_server_tests` starts the real process and talks to it over real UDP on 127.0.0.1:
   handshake, replication of the scene's entities, RPC both ways and a broadcast, a wrong key and an unknown id,
   600 hostile datagrams, a client dropped by the idle timeout, the client limit, `--max-seconds` and
@@ -309,21 +355,39 @@ renderer, steps it at a fixed rate, and replicates it over UDP.
 Not done in the server: it replicates the local transform only (no hierarchy, no other component), and has no
 player spawning or authority rules of its own (scripts and RPCs would add them).
 
+## Dedicated server on Linux
+
+Configure with `-DKB_BUILD_EDITOR=OFF -DKB_BUILD_RENDERER=OFF -DBUILD_TESTING=ON`; `kb_dedicated_server`, `kb_net_bot`
+and the network test executables build with GCC. `scripts/net_linux_smoke.py --server <kb_dedicated_server> --bot
+<kb_net_bot>` makes a sample project and keys, runs the server and three bots over real UDP, checks `clients_peak`, the
+replicated object count and the diagnostics, sends SIGTERM and checks exit code 0 within three seconds and the saved
+scene checkpoint. ctest registers it as `kb_net_linux_smoke` (labels `network;process`, Linux only); the CI job `Linux
+dedicated server` builds the targets, runs `ctest -L network` and then the script.
+
+Measured on a two-core Linux host in Release: a 50-bot run on a 1000-object scene kept 50 clients for 20 s, wrote the
+port file 0.03 s after start, peaked at 41 MiB resident and used about a third of one core at 30 ticks per second; the
+socket reported 2 MiB buffers for the 1 MiB request.
+
+## Android
+
+The Android package declares the network permissions the project's mode needs: `INTERNET` and `ACCESS_NETWORK_STATE`
+for online play, plus `CHANGE_WIFI_MULTICAST_STATE` for local discovery (`package_game.py --android-network
+none|online|lan`; none by default). The platform's multicast lock is held only while discovery is on.
+
+The application lifecycle reaches the session: on the background a client tells its server and stops reconnecting;
+on the foreground it negotiates the same game again at once. A host keeps its game open (the system stops its loop
+anyway and guests time out on their own). The device losing its network stops connection attempts; a network coming
+back drops the old session and negotiates a new one at once, and the server replaces the session of the same player id.
+
 ## Not done
 
-* Interest management beyond a per-client predicate (no spatial grid); every tick evaluates every
-  entity for every client.
 * Delta compression of components within an entity (an entity sends its changed components whole).
-
-## Not done in phase 1
-
-* Congestion control. The sender retransmits on a timer and has no rate limit beyond the queue
-  limits; a slow link is not protected from a fast sender.
-* Key distribution. The client key is long lived and must reach both sides over
-  a channel the application already trusts. A leaked key lets its holder impersonate that client.
+* Key distribution for key-table sessions: the 32 byte client key is long lived and must reach both sides over a
+  channel the application already trusts. A leaked key lets its holder impersonate that client. Password admission does
+  not need a key table.
 * IPv6, NAT rebinding (a session is tied to the source address), path MTU discovery.
-* Raw browser UDP is unavailable. The supported WebSocket adapter and dedicated-server listener are described in [Browser session transport](network_websocket.md).
-* Entity replication, RPC dispatch, prediction and interest management (A146, A147 and later).
+* Raw browser UDP is unavailable. The supported WebSocket adapter and dedicated-server listener are described in
+  [Browser session transport](network_websocket.md).
 
 ## Tests
 

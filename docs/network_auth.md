@@ -71,6 +71,11 @@ The existing `--keys` file supplies transport session keys; signing secrets stay
 with the provider. Without the provider-key option, existing key-authenticated
 transport sessions keep their previous behavior.
 
+Token authorization is optional and separate from transport admission. An empty join password is an **open game**: the
+host admits anyone who reaches it and marks the guest as unauthenticated (the password exchange runs with the empty
+password). The session is still encrypted, authenticated per packet and replay-checked; the password decides only who is
+admitted, and a game that wants verified accounts adds a provider on top.
+
 With token authorization enabled, replication and `OnNetConnected` wait for a
 valid token with `kScopePlay`. Commands pass through the gate before RPC and
 replication validation. Expiry, revocation and transport disconnect remove the

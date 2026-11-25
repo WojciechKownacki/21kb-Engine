@@ -115,7 +115,9 @@ Lua scripts run in a sandbox. A script gets its own copy of `assert`, `error`, `
 `Settings.*` slots under the host's configured user-storage root, with a shared quota. Slot names
 cannot specify filesystem paths. `Import` resolves registered Lua assets, not arbitrary files.
 The shipped Lua API cannot start a process or open a socket. `Net.*` uses the scene's host-created
-network session; offline calls fail instead of opening a connection.
+network session; offline calls fail instead of opening a connection. A script starts or ends the scene's one session with
+`Net.Host` (server plus local player) or `Net.Join` (client) and `Net.Leave`; `Net.Discover` looks for games on the local
+network, `Net.Move` moves the local player's predicted character and the server marks it with `Net.SetPredicted`.
 
 This is the restricted execution contract for project and mod Lua, including unsigned mods when
 the host explicitly allows them. It does not assign permissions or private storage to individual
@@ -491,7 +493,10 @@ the RPC ownership check. The network script tests exercise an owning client,
 an unauthorized client, cooldown refusal, live asset refresh and an authoritative
 result reply under simulated loss, reordering and duplication. Ability state is
 not automatically replicated; the application declares its RPCs and sends the
-result fields it needs. See [networking](networking.md).
+result fields it needs. For a moving player, the characters' own movement uses
+`Net.SetPredicted` on the server and `Net.Move` on the player's machine, so the
+ability RPC travels beside predicted movement rather than through it.
+See [networking](networking.md).
 
 ## Inspecting AI decisions
 
