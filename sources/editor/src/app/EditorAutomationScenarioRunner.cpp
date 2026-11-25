@@ -90,16 +90,10 @@
 #include "engine/library/EngineLibraryManifest.hpp"
 #include "engine/library/EngineLibraryAuthoringHints.hpp"
 #include "engine/library/EngineLibraryDeterminism.hpp"
-#include "engine/network/NetworkModel.hpp"
 #include "engine/network/NetworkBudget.hpp"
-#include "engine/network/NetworkObject.hpp"
-#include "engine/network/NetworkPrediction.hpp"
 #include "engine/network/NetworkSecurity.hpp"
 #include "engine/network/NetworkSimulation.hpp"
-#include "engine/network/NetworkVariable.hpp"
 #include "engine/network/ReplicationDeclarations.hpp"
-#include "engine/network/Rpc.hpp"
-#include "engine/network/NetworkSession.hpp"
 #include "engine/project/ProjectSettings.hpp"
 #include "engine/platform/PlatformServices.hpp"
 #include "engine/platform/PlatformAdapters.hpp"
@@ -2207,177 +2201,11 @@ ReadScriptValue(
                 : provisioned.error };
     }
 
-    if (*operation == "assert_first_release_network_model") {
-        kb::script::ScriptRuntimeHost host{ state.context.Scene() };
-        if (!host.Succeeded()) {
-            return { false, "script runtime host could not be created" };
-        }
-        const kb::script::ScriptApiCatalog catalog =
-            kb::script::ScriptApiCatalog::Build(host);
-        const bool exposesNetworkApi = std::ranges::any_of(
-            catalog.functions,
-            [](const kb::script::ScriptApiCatalogFunction& function) {
-                return function.name.starts_with("Network.");
-            });
-        const bool offline =
-            kb::network::kFirstReleaseNetwork.model ==
-                kb::network::NetworkModel::OfflineOnly &&
-            !kb::network::kFirstReleaseNetwork.HasTransport() &&
-            !kb::network::CanOpenNetworkSession(
-                kb::network::kFirstReleaseNetwork) &&
-            !exposesNetworkApi;
-        return {
-            offline,
-            offline ? "offline-only; no transport or script API"
-                    : "first-release network contract is open" };
-    }
 
-    if (*operation == "assert_network_object_lifecycle") {
-        kb::network::NetworkObjects objects;
-        const bool lifecycle =
-            !objects.Spawn({}) &&
-            objects.Spawn({ .id = 7U, .owner = 11U,
-                .role = kb::network::NetworkRole::Authority }) &&
-            !objects.Spawn({ .id = 7U, .owner = 12U,
-                .role = kb::network::NetworkRole::Authority }) &&
-            objects.CanAcceptOwnerCommand(7U, 11U) &&
-            !objects.CanAcceptOwnerCommand(7U, 12U) &&
-            objects.AssignOwner(7U, 12U) &&
-            objects.Spawn({ .id = 8U, .owner = 12U,
-                .role = kb::network::NetworkRole::Proxy }) &&
-            !objects.AssignOwner(8U, 13U) && objects.Despawn(7U) &&
-            !objects.Find(7U).has_value() &&
-            !objects.CanAcceptOwnerCommand(7U, 12U) && !objects.Despawn(7U);
-        return {
-            lifecycle,
-            lifecycle ? "authority, ownership, spawn and despawn"
-                      : "network object lifecycle rejected" };
-    }
 
-    if (*operation == "assert_replication_schema") {
-        const kb::network::ReplicationSchema schema{
-            .version = 1U,
-            .fields = {
-                { .id = 1U, .name = "health",
-                    .type = kb::network::ReplicatedFieldType::QuantizedFloat,
-                    .minimum = 0.0F, .maximum = 100.0F,
-                    .quantizationBits = 10U },
-                { .id = 2U, .name = "alive",
-                    .type = kb::network::ReplicatedFieldType::Boolean },
-            } };
-        const kb::network::ReplicationSchema incompatible{
-            .version = 1U,
-            .fields = {
-                { .id = 1U, .name = "health",
-                    .type = kb::network::ReplicatedFieldType::UnsignedInteger },
-                { .id = 2U, .name = "alive",
-                    .type = kb::network::ReplicatedFieldType::Boolean },
-            } };
-        const std::optional<std::uint32_t> quantized =
-            kb::network::QuantizeFloat(schema.fields.front(), 50.0F);
-        const std::optional<float> restored = quantized.has_value()
-            ? kb::network::DequantizeFloat(schema.fields.front(), *quantized)
-            : std::nullopt;
-        const bool valid = kb::network::ValidateReplicationSchema(schema) &&
-            quantized.has_value() && restored.has_value() &&
-            std::abs(*restored - 50.0F) <= 0.1F &&
-            kb::network::ComputeDeltaFields(schema, { 1U, 0U }, { 1U, 1U }) ==
-                std::vector<std::uint16_t>{ 2U } &&
-            kb::network::AreSchemasCompatible(schema, schema) &&
-            !kb::network::AreSchemasCompatible(schema, incompatible);
-        return {
-            valid,
-            valid ? "versioned schema, quantization and delta"
-                  : "replication schema contract rejected" };
-    }
 
-    if (*operation == "assert_rpc_contract") {
-        kb::network::NetworkObjects objects;
-        const bool valid =
-            objects.Spawn({ .id = 8U, .owner = 20U,
-                .role = kb::network::NetworkRole::Authority }) &&
-            kb::network::ValidateRpc(objects, { .object = 8U, .sender = 20U,
-                .reliability = kb::network::RpcReliability::Reliable,
-                .direction = kb::network::RpcDirection::ClientToServer }) &&
-            kb::network::ValidateRpc(objects, { .object = 8U, .sender = 20U,
-                .reliability = kb::network::RpcReliability::Unreliable,
-                .direction = kb::network::RpcDirection::ClientToServer }) &&
-            !kb::network::ValidateRpc(objects, { .object = 8U, .sender = 21U,
-                .direction = kb::network::RpcDirection::ClientToServer }) &&
-            objects.Spawn({ .id = 9U, .owner = 1U,
-                .role = kb::network::NetworkRole::Proxy }) &&
-            kb::network::ValidateRpc(objects, { .object = 9U, .sender = 1U,
-                .reliability = kb::network::RpcReliability::Reliable,
-                .direction = kb::network::RpcDirection::ServerToClient }) &&
-            !kb::network::ValidateRpc(objects, { .object = 9U, .sender = 2U,
-                .direction = kb::network::RpcDirection::ServerToClient });
-        return {
-            valid,
-            valid ? "reliable/unreliable RPC ownership directions"
-                  : "RPC ownership contract rejected" };
-    }
 
-    if (*operation == "assert_network_variable") {
-        std::int32_t delta = 0;
-        kb::network::NetworkVariable<std::int32_t> value{ 2 };
-        value.SetChangedCallback(
-            [](void* context, std::int32_t previous,
-                std::int32_t current) noexcept {
-                *static_cast<std::int32_t*>(context) = current - previous;
-            },
-            &delta);
-        kb::network::NetworkVariable<std::int32_t> saturated{ 1 };
-        const bool valid = value.Set(5) && value.Revision() == 1U &&
-            delta == 3 && !value.Apply(7, 1U) && value.Apply(7, 2U) &&
-            value.Value() == 7 && delta == 2 &&
-            saturated.Apply(2, std::numeric_limits<std::uint64_t>::max()) &&
-            !saturated.Set(3) && saturated.Value() == 2;
-        return {
-            valid,
-            valid ? "typed revision, callback and stale update rejection"
-                  : "network variable contract rejected" };
-    }
 
-    if (*operation == "assert_network_prediction") {
-        const kb::network::NetworkSnapshot predicted{
-            .tick = 5U, .acknowledgedInput = 3U,
-            .position = { 0.0F, 0.0F, 0.0F } };
-        const kb::network::NetworkSnapshot authoritative{
-            .tick = 5U, .acknowledgedInput = 3U,
-            .position = { 4.0F, 0.0F, 0.0F } };
-        const kb::network::NetworkSnapshot interpolationNext{
-            .tick = 6U, .acknowledgedInput = 3U,
-            .position = { 4.0F, 0.0F, 0.0F } };
-        const kb::network::NetworkSnapshot mismatchedAcknowledgement{
-            .tick = 5U, .acknowledgedInput = 4U };
-        const kb::network::NetworkSnapshot mismatchedVelocity{
-            .tick = 5U, .acknowledgedInput = 3U,
-            .velocity = { 2.0F, 0.0F, 0.0F } };
-        const std::optional<kb::network::NetworkSnapshot> interpolated =
-            kb::network::Interpolate(
-                { .previous = predicted, .next = interpolationNext }, 0.5F);
-        const bool valid =
-            kb::network::IsValidInputCommand(
-                { .tick = 5U, .sequence = 3U, .moveX = 1.0F }) &&
-            kb::network::IsValidInputCommand(
-                { .tick = 5U, .sequence = 0U, .moveX = 1.0F }) &&
-            !kb::network::IsValidInputCommand(
-                { .tick = 0U, .sequence = 3U, .moveX = 1.0F }) &&
-            interpolated.has_value() && interpolated->position.x == 2.0F &&
-            !kb::network::Interpolate(
-                 { .previous = predicted, .next = predicted }, 0.5F)
-                 .has_value() &&
-            kb::network::RequiresReconciliation(
-                predicted, authoritative, 1.0F) &&
-            kb::network::RequiresReconciliation(
-                predicted, mismatchedAcknowledgement, 1.0F) &&
-            kb::network::RequiresReconciliation(
-                predicted, mismatchedVelocity, 1.0F);
-        return {
-            valid,
-            valid ? "input, snapshots, interpolation and reconciliation"
-                  : "network prediction contract rejected" };
-    }
 
     if (*operation == "assert_network_budget") {
         constexpr kb::network::NetworkBudget budget{};
@@ -2401,33 +2229,6 @@ ReadScriptValue(
                   : "network budget contract rejected" };
     }
 
-    if (*operation == "assert_network_security") {
-        kb::network::NetworkObjects objects;
-        constexpr kb::network::NetworkSecurityLimits limits{};
-        const bool valid =
-            objects.Spawn({ .id = 31U, .owner = 41U,
-                .role = kb::network::NetworkRole::Authority }) &&
-            kb::network::ValidateIncomingMessage(
-                objects, limits, 31U, 41U, 10U, 0U, 10U) &&
-            !kb::network::ValidateIncomingMessage(
-                objects, limits, 0U, 41U, 10U, 0U, 10U) &&
-            !kb::network::ValidateIncomingMessage(
-                objects, limits, 31U, 0U, 10U, 0U, 10U) &&
-            !kb::network::ValidateIncomingMessage(
-                objects, limits, 31U, 42U, 10U, 0U, 10U) &&
-            !kb::network::ValidateIncomingMessage(
-                objects, limits, 31U, 41U, limits.maxPayloadBytes + 1U,
-                0U, limits.maxPayloadBytes + 1U) &&
-            !kb::network::ValidateIncomingMessage(
-                objects, limits, 31U, 41U, 10U,
-                limits.maxMessagesPerTick, 10U) &&
-            !kb::network::ValidateIncomingMessage(
-                objects, limits, 31U, 41U, 10U, 0U, 11U);
-        return {
-            valid,
-            valid ? "server validation, rate and deserialization bounds"
-                  : "network security contract rejected" };
-    }
 
     if (*operation == "assert_network_simulation") {
         constexpr kb::network::NetworkSimulationConfig reordered{
@@ -2460,31 +2261,6 @@ ReadScriptValue(
                   : "network simulation contract rejected" };
     }
 
-    if (*operation == "assert_offline_network_sessions") {
-        const kb::network::ReplicationSchema schema{
-            .version = 1U,
-            .fields = { { .id = 1U, .name = "state",
-                .type = kb::network::ReplicatedFieldType::Boolean } } };
-        const kb::network::ReplicationSchema mismatch{
-            .version = 2U,
-            .fields = { { .id = 1U, .name = "state",
-                .type = kb::network::ReplicatedFieldType::Boolean } } };
-        kb::network::NetworkObjects objects;
-        const bool valid =
-            !kb::network::CanOpenNetworkSession(
-                kb::network::kFirstReleaseNetwork) &&
-            objects.Spawn({ .id = 71U, .owner = 81U,
-                .role = kb::network::NetworkRole::Authority }) &&
-            objects.Despawn(71U) &&
-            !kb::network::ValidateRpc(objects, { .object = 71U,
-                .sender = 81U,
-                .direction = kb::network::RpcDirection::ClientToServer }) &&
-            !kb::network::AreSchemasCompatible(schema, mismatch);
-        return {
-            valid,
-            valid ? "offline host/client, despawned RPC and schema mismatch"
-                  : "offline network-session contract rejected" };
-    }
 
     if (*operation == "assert_platform_capabilities") {
         struct Probe {
@@ -7763,15 +7539,13 @@ ReadScriptValue(
             return found == manifest.specialApis.end() ? nullptr : &*found;
         };
         const kb::library::LibraryApiSurfaceManifestEntry* authoring = find("ScriptAgentProjectFiles.Write");
-        const kb::library::LibraryApiSurfaceManifestEntry* server = find("NetworkObjects.AssignOwner");
         const bool restricted =
-            authoring != nullptr && server != nullptr &&
+            authoring != nullptr &&
             authoring->availability == kb::library::ToMask(kb::library::LibraryApiSurface::Authoring) &&
-            server->availability == kb::library::ToMask(kb::library::LibraryApiSurface::Server) &&
             !kb::library::IsAvailableOnSurface(authoring->availability, kb::library::LibraryApiSurface::Lua) &&
-            !kb::library::IsAvailableOnSurface(server->availability, kb::library::LibraryApiSurface::VisualGraph);
+            !kb::library::IsAvailableOnSurface(authoring->availability, kb::library::LibraryApiSurface::VisualGraph);
         return { restricted,
-            restricted ? "authoring-only and server-only APIs are excluded from script frontends"
+            restricted ? "authoring-only APIs are excluded from script frontends"
                        : "restricted API surface metadata is incomplete" };
     }
 

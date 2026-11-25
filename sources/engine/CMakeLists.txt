@@ -80,21 +80,15 @@ add_library(kb_engine STATIC
     include/engine/assets/streaming/PackBlockStream.hpp
     include/engine/assets/streaming/StreamingResidency.hpp
     include/engine/math/EngineMath.hpp
-    include/engine/network/NetworkModel.hpp
-    include/engine/network/NetworkObject.hpp
     include/engine/network/ReplicationSchema.hpp
     include/engine/network/ReplicationAudience.hpp
     include/engine/network/ReplicationChangeSink.hpp
     include/engine/network/ReplicationDeclarations.hpp
     include/engine/network/ReplicableComponents.hpp
     include/engine/scene/NetworkedVariablesComponent.hpp
-    include/engine/network/Rpc.hpp
-    include/engine/network/NetworkVariable.hpp
-    include/engine/network/NetworkPrediction.hpp
     include/engine/network/NetworkBudget.hpp
     include/engine/network/NetworkSecurity.hpp
     include/engine/network/NetworkSimulation.hpp
-    include/engine/network/NetworkSession.hpp
     include/engine/project/ProjectDescriptor.hpp
     include/engine/platform/FileSystemPath.hpp
     include/engine/platform/PlatformCapabilities.hpp
@@ -841,7 +835,6 @@ add_library(kb_engine STATIC
     src/scene/SceneSkeletalMeshSetup.cpp
     src/scene/SceneTemplates.cpp
     src/gameplay/GameInstance.cpp
-    src/network/NetworkObject.cpp
     src/platform/FileSystemPath.cpp
     src/platform/Trash.cpp
     src/platform/UserStorage.cpp
@@ -851,7 +844,6 @@ add_library(kb_engine STATIC
     src/security/ReleaseManifest.cpp
     src/network/ReplicationSchema.cpp
     src/network/ReplicationDeclarations.cpp
-    src/network/Rpc.cpp
     src/gameplay/GameFlow.cpp
     src/gameplay/GameMode.cpp
     src/gameplay/GameState.cpp

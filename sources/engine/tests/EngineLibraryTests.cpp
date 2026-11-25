@@ -45,16 +45,10 @@
 #include "engine/gameplay/GameplayModules.hpp"
 #include "engine/gameplay/GameplayAbilities.hpp"
 #include "engine/gameplay/GameplaySamples.hpp"
-#include "engine/network/NetworkModel.hpp"
-#include "engine/network/NetworkObject.hpp"
 #include "engine/network/ReplicationSchema.hpp"
-#include "engine/network/Rpc.hpp"
-#include "engine/network/NetworkVariable.hpp"
-#include "engine/network/NetworkPrediction.hpp"
 #include "engine/network/NetworkBudget.hpp"
 #include "engine/network/NetworkSecurity.hpp"
 #include "engine/network/NetworkSimulation.hpp"
-#include "engine/network/NetworkSession.hpp"
 #include "engine/platform/PlatformCapabilities.hpp"
 #include "engine/platform/PlatformServices.hpp"
 #include "engine/platform/UserStorage.hpp"
@@ -147,7 +141,6 @@
 
 namespace {
 
-void RecordNetworkVariableChange(void* context, std::int32_t previous, std::int32_t current) noexcept { *static_cast<std::int32_t*>(context) = current - previous; }
 class TestPlatformAdapter final : public kb::platform::IPlatformAdapter { public: [[nodiscard]] bool IsAvailable(kb::platform::OptionalPlatformService service) const noexcept override{return service==kb::platform::OptionalPlatformService::Achievements;} [[nodiscard]] bool UnlockAchievement(std::string_view id) override{return IsAvailable(kb::platform::OptionalPlatformService::Achievements)&&!id.empty();} };
 struct PlatformServiceProbe { bool clipboard = false; bool url = false; bool vibration = false; [[nodiscard]] static bool WriteClipboard(void* context, std::string_view text) noexcept { auto& probe=*static_cast<PlatformServiceProbe*>(context); probe.clipboard=text=="copied"; return probe.clipboard; } [[nodiscard]] static bool OpenUrl(void* context, std::string_view url) noexcept { auto& probe=*static_cast<PlatformServiceProbe*>(context); probe.url=url=="https://21kb.dev"; return probe.url; } [[nodiscard]] static bool SetVibration(void* context, float low, float high) noexcept { auto& probe=*static_cast<PlatformServiceProbe*>(context); probe.vibration=low==0.25F&&high==0.75F; return probe.vibration; } };
 
@@ -2329,17 +2322,11 @@ void RunApiManifestTest() {
             "Engine21kbLibrary manifest must declare intentionally native-only APIs as Native only");
     }
     const kb::library::LibraryApiSurfaceManifestEntry* authoringOnly = specialApi("ScriptAgentProjectFiles.Write");
-    const kb::library::LibraryApiSurfaceManifestEntry* serverOnly = specialApi("NetworkObjects.AssignOwner");
     kb::tests::Require(
         authoringOnly != nullptr && authoringOnly->availability == kb::library::ToMask(kb::library::LibraryApiSurface::Authoring) &&
             !kb::library::IsAvailableOnSurface(authoringOnly->availability, kb::library::LibraryApiSurface::Lua) &&
             !kb::library::IsAvailableOnSurface(authoringOnly->availability, kb::library::LibraryApiSurface::VisualGraph),
         "Engine21kbLibrary manifest must declare authoring-only APIs and hide them from script frontends");
-    kb::tests::Require(
-        serverOnly != nullptr && serverOnly->availability == kb::library::ToMask(kb::library::LibraryApiSurface::Server) &&
-            !kb::library::IsAvailableOnSurface(serverOnly->availability, kb::library::LibraryApiSurface::Lua) &&
-            !kb::library::IsAvailableOnSurface(serverOnly->availability, kb::library::LibraryApiSurface::VisualGraph),
-        "Engine21kbLibrary manifest must declare server-only APIs and hide them from script frontends");
 
     const kb::library::ApiManifest rebuilt = kb::library::BuildApiManifest(catalog);
     kb::tests::Require(rebuilt.manifestHash == manifest.manifestHash, "Engine21kbLibrary manifest hash must be stable across repeated builds of the same catalog");
@@ -2349,8 +2336,7 @@ void RunApiManifestTest() {
     kb::tests::Require(json.find("\"hash\":\"" + manifest.manifestHash + "\"") != std::string::npos, "Engine21kbLibrary manifest JSON is missing the hash field");
     kb::tests::Require(
         json.find("\"specialApis\"") != std::string::npos && json.find("\"name\":\"EntityHandle\"") != std::string::npos &&
-            json.find("\"name\":\"ScriptAgentProjectFiles.Write\"") != std::string::npos &&
-            json.find("\"name\":\"NetworkObjects.AssignOwner\"") != std::string::npos,
+            json.find("\"name\":\"ScriptAgentProjectFiles.Write\"") != std::string::npos,
         "Engine21kbLibrary manifest JSON is missing restricted API surface metadata");
     const std::string reference = kb::library::ToReferenceMarkdown(manifest);
     kb::tests::Require(
@@ -2414,10 +2400,8 @@ void RunApiManifestTest() {
     kb::tests::Require(
         luaStubs.find("SceneTasks.Start") == std::string::npos &&
             luaStubs.find("ScriptAgentProjectFiles.Write") == std::string::npos &&
-            luaStubs.find("NetworkObjects.AssignOwner") == std::string::npos &&
             graphCatalog.Find("NativeBinding:CallNative:Function.SceneTasks.Start") == nullptr &&
-            graphCatalog.Find("NativeBinding:CallNative:Function.ScriptAgentProjectFiles.Write") == nullptr &&
-            graphCatalog.Find("NativeBinding:CallNative:Function.NetworkObjects.AssignOwner") == nullptr,
+            graphCatalog.Find("NativeBinding:CallNative:Function.ScriptAgentProjectFiles.Write") == nullptr,
         "Engine21kbLibrary must hide restricted APIs from Lua and Visual Graph");
 }
 
@@ -5626,12 +5610,6 @@ void RunGameInstanceLifetimeTest() {
     kb::platform::PlatformServices restrictedPlatformServices{ {}, locale, "UserData" };
     const std::optional<kb::platform::PlatformLocale> exposedLocale = platformServices.Locale();
     kb::tests::Require(exposedLocale.has_value() && exposedLocale->language == "pl" && exposedLocale->region == "PL" && platformServices.UserDataPath() == std::optional<std::filesystem::path>{ "UserData" } && platformServices.SetClipboardText("copied") && platformServices.OpenUrl("https://21kb.dev") && !platformServices.OpenUrl("file:///outside") && platformServices.SetVibration(0.25F, 0.75F) && platformProbe.clipboard && platformProbe.url && platformProbe.vibration && !restrictedPlatformServices.Locale().has_value() && !restrictedPlatformServices.UserDataPath().has_value() && !restrictedPlatformServices.SetClipboardText("blocked") && !restrictedPlatformServices.OpenUrl("https://21kb.dev") && !restrictedPlatformServices.SetVibration(0.25F, 0.75F), "Platform services did not enforce capability boundaries");
-    const kb::network::ReplicationSchema sessionSchema{ .version = 1U, .fields = { { .id = 1U, .name = "state", .type = kb::network::ReplicatedFieldType::Boolean } } };
-    const kb::network::ReplicationSchema mismatchSchema{ .version = 2U, .fields = { { .id = 1U, .name = "state", .type = kb::network::ReplicatedFieldType::Boolean } } };
-    const kb::network::ReplicationSchema incompatibleWireSchema{ .version = 1U, .fields = { { .id = 1U, .name = "state", .type = kb::network::ReplicatedFieldType::UnsignedInteger } } };
-    kb::tests::Require(!kb::network::CanOpenNetworkSession(kb::network::kFirstReleaseNetwork) && kb::network::AreSchemasCompatible(sessionSchema, sessionSchema) && !kb::network::AreSchemasCompatible(sessionSchema, mismatchSchema) && !kb::network::AreSchemasCompatible(sessionSchema, incompatibleWireSchema), "Network session lifecycle did not fail closed for offline mode or incompatible schema wire contract");
-    kb::network::NetworkObjects sessionObjects;
-    kb::tests::Require(!kb::network::CanOpenNetworkSession(kb::network::kFirstReleaseNetwork) && sessionObjects.Spawn({ .id = 71U, .owner = 81U, .role = kb::network::NetworkRole::Authority }) && sessionObjects.Despawn(71U) && !kb::network::ValidateRpc(sessionObjects, { .object = 71U, .sender = 81U, .direction = kb::network::RpcDirection::ClientToServer }) && !kb::network::AreSchemasCompatible(sessionSchema, mismatchSchema), "Offline network session tests did not reject host/client, late join, reconnect, despawned RPC, or schema mismatch");
     constexpr kb::network::NetworkSimulationConfig simulation{ .latencyMilliseconds = 40U, .jitterMilliseconds = 5U, .lossPermille = 1000U, .disconnectAtTick = 10U, .seed = 8U };
     constexpr kb::network::NetworkSimulationConfig reorderedSimulation{ .latencyMilliseconds = 40U, .jitterMilliseconds = 5U, .reorderPermille = 1000U, .seed = 8U };
     static_assert(kb::network::IsValidNetworkSimulation(simulation));
@@ -5639,45 +5617,14 @@ void RunGameInstanceLifetimeTest() {
     const auto droppedPacket = kb::network::SimulateNetworkPacket(simulation, 2U, 3U);
     const auto disconnectedPacket = kb::network::SimulateNetworkPacket(simulation, 10U, 3U);
     kb::tests::Require(kb::network::ShouldDrop(simulation, 1U, 2U) && kb::network::ShouldDisconnect(simulation, 10U) && !kb::network::ShouldDisconnect(simulation, 9U) && kb::network::NetworkSimulationRandom(simulation, 2U, 3U) == kb::network::NetworkSimulationRandom(simulation, 2U, 3U) && kb::network::ShouldReorder(reorderedSimulation, 2U, 3U) && delayedPacket.has_value() && delayedPacket->reordered && !delayedPacket->dropped && delayedPacket->deliveryDelayMilliseconds>=35U && delayedPacket->deliveryDelayMilliseconds<=45U && droppedPacket.has_value() && droppedPacket->dropped && droppedPacket->deliveryDelayMilliseconds==0U && disconnectedPacket.has_value() && disconnectedPacket->disconnected && !disconnectedPacket->dropped && !kb::network::SimulatedDeliveryDelayMilliseconds({ .latencyMilliseconds = 5U, .jitterMilliseconds = 6U }, 1U, 1U).has_value(), "Network simulation was not deterministic for latency, jitter, loss, reorder, and disconnect");
-    kb::network::NetworkObjects secureObjects;
-    constexpr kb::network::NetworkSecurityLimits securityLimits{};
-    kb::tests::Require(secureObjects.Spawn({ .id = 31U, .owner = 41U, .role = kb::network::NetworkRole::Authority }) && kb::network::ValidateIncomingMessage(secureObjects, securityLimits, 31U, 41U, 10U, 0U, 10U) && !kb::network::ValidateIncomingMessage(secureObjects, securityLimits, 0U, 41U, 10U, 0U, 10U) && !kb::network::ValidateIncomingMessage(secureObjects, securityLimits, 31U, 0U, 10U, 0U, 10U) && !kb::network::ValidateIncomingMessage(secureObjects, securityLimits, 31U, 42U, 10U, 0U, 10U) && !kb::network::ValidateIncomingMessage(secureObjects, securityLimits, 31U, 41U, securityLimits.maxPayloadBytes + 1U, 0U, securityLimits.maxPayloadBytes + 1U) && !kb::network::ValidateIncomingMessage(secureObjects, securityLimits, 31U, 41U, 10U, securityLimits.maxMessagesPerTick, 10U) && !kb::network::ValidateIncomingMessage(secureObjects, securityLimits, 31U, 41U, 10U, 0U, 11U), "Network message validation did not reject spoofing, rate, and deserialization violations");
     constexpr kb::network::NetworkBudget networkBudget{};
     static_assert(kb::network::IsValidNetworkBudget(networkBudget));
     kb::network::NetworkTickClock networkClock{ networkBudget };
     kb::network::NetworkTickClock invalidNetworkClock{ { .tickRate = 1U } };
     kb::tests::Require(kb::network::AcceptsPacket(networkBudget, 0U, 1200U) && kb::network::AcceptsPacket(networkBudget, networkBudget.maxQueuedBytes - 1200U, 1200U) && !kb::network::AcceptsPacket(networkBudget, networkBudget.maxQueuedBytes - 1199U, 1200U) && !kb::network::AcceptsPacket(networkBudget, networkBudget.maxQueuedBytes, 1U) && kb::network::TickDurationMicroseconds(networkBudget) == 33333U && networkClock.Advance(33333U) == 0U && networkClock.Advance(1U) == 1U && networkClock.Tick() == 1U && networkClock.Advance(1'000'000U) == 30U && networkClock.Tick() == 31U && networkClock.RemainderMicroticks() == 20U && invalidNetworkClock.Advance(1'000'000U) == 0U, "Network tick and packet budget did not apply backpressure");
-    const kb::network::NetworkSnapshot predicted{ .tick = 5U, .acknowledgedInput = 3U, .position = { 0.0F, 0.0F, 0.0F } };
-    const kb::network::NetworkSnapshot authoritative{ .tick = 5U, .acknowledgedInput = 3U, .position = { 4.0F, 0.0F, 0.0F } };
-    const kb::network::NetworkSnapshot interpolationNext{ .tick = 6U, .acknowledgedInput = 3U, .position = { 4.0F, 0.0F, 0.0F } };
-    const kb::network::NetworkSnapshot mismatchedAcknowledgement{ .tick = 5U, .acknowledgedInput = 4U };
-    const kb::network::NetworkSnapshot mismatchedVelocity{ .tick = 5U, .acknowledgedInput = 3U, .velocity = { 2.0F, 0.0F, 0.0F } };
-    const auto interpolated = kb::network::Interpolate({ .previous = predicted, .next = interpolationNext }, 0.5F);
-    kb::tests::Require(kb::network::IsValidInputCommand({ .tick = 5U, .sequence = 3U, .moveX = 1.0F }) && kb::network::IsValidInputCommand({ .tick = 5U, .sequence = 0U, .moveX = 1.0F }) && !kb::network::IsValidInputCommand({ .tick = 0U, .sequence = 3U, .moveX = 1.0F }) && interpolated.has_value() && interpolated->position.x == 2.0F && !kb::network::Interpolate({ .previous = predicted, .next = predicted }, 0.5F).has_value() && kb::network::RequiresReconciliation(predicted, authoritative, 1.0F) && kb::network::RequiresReconciliation(predicted, mismatchedAcknowledgement, 1.0F) && kb::network::RequiresReconciliation(predicted, mismatchedVelocity, 1.0F), "Network input, snapshot, interpolation, prediction, and reconciliation contract is invalid");
-    std::int32_t variableDelta = 0;
-    kb::network::NetworkVariable<std::int32_t> networkScore{ 2 };
-    networkScore.SetChangedCallback(&RecordNetworkVariableChange, &variableDelta);
-    kb::network::NetworkVariable<std::int32_t> saturatedNetworkScore{ 1 };
-    kb::tests::Require(networkScore.Set(5) && networkScore.Revision() == 1U && variableDelta == 3 && !networkScore.Apply(7, 1U) && networkScore.Apply(7, 2U) && networkScore.Value() == 7 && variableDelta == 2 && saturatedNetworkScore.Apply(2, std::numeric_limits<std::uint64_t>::max()) && !saturatedNetworkScore.Set(3) && saturatedNetworkScore.Value() == 2, "Network variable did not provide typed revisions and change hooks");
-    kb::network::NetworkObjects rpcObjects;
-    kb::tests::Require(rpcObjects.Spawn({ .id = 8U, .owner = 20U, .role = kb::network::NetworkRole::Authority }) && kb::network::ValidateRpc(rpcObjects, { .object = 8U, .sender = 20U, .reliability = kb::network::RpcReliability::Unreliable, .direction = kb::network::RpcDirection::ClientToServer }) && !kb::network::ValidateRpc(rpcObjects, { .object = 8U, .sender = 21U, .direction = kb::network::RpcDirection::ClientToServer }) && rpcObjects.Spawn({ .id = 9U, .owner = 1U, .role = kb::network::NetworkRole::Proxy }) && kb::network::ValidateRpc(rpcObjects, { .object = 9U, .sender = 1U, .direction = kb::network::RpcDirection::ServerToClient }) && !kb::network::ValidateRpc(rpcObjects, { .object = 9U, .sender = 2U, .direction = kb::network::RpcDirection::ServerToClient }), "RPC validation did not enforce direction, reliability contract, and ownership");
     const kb::network::ReplicationSchema replicationSchema{ .version = 1U, .fields = { { .id = 1U, .name = "health", .type = kb::network::ReplicatedFieldType::QuantizedFloat, .minimum = 0.0F, .maximum = 100.0F, .quantizationBits = 10U }, { .id = 2U, .name = "alive", .type = kb::network::ReplicatedFieldType::Boolean } } };
     const auto healthQuantized = kb::network::QuantizeFloat(replicationSchema.fields[0], 50.0F);
     kb::tests::Require(kb::network::ValidateReplicationSchema(replicationSchema) && healthQuantized.has_value() && kb::network::DequantizeFloat(replicationSchema.fields[0], *healthQuantized).has_value() && kb::network::ComputeDeltaFields(replicationSchema, { 1U, 0U }, { 1U, 1U }) == std::vector<std::uint16_t>{ 2U }, "Replication schema did not validate versioned fields, quantization, and deltas");
-    kb::network::NetworkObjects networkObjects;
-    kb::tests::Require(
-        !networkObjects.Spawn({}) &&
-            networkObjects.Spawn({ .id = 7U, .owner = 11U, .role = kb::network::NetworkRole::Authority }) &&
-            !networkObjects.Spawn({ .id = 7U, .owner = 12U, .role = kb::network::NetworkRole::Authority }) &&
-            networkObjects.CanAcceptOwnerCommand(7U, 11U) && !networkObjects.CanAcceptOwnerCommand(7U, 12U) &&
-            networkObjects.AssignOwner(7U, 12U) && networkObjects.Find(7U)->owner == 12U &&
-            networkObjects.Spawn({ .id = 8U, .owner = 12U, .role = kb::network::NetworkRole::Proxy }) &&
-            !networkObjects.AssignOwner(8U, 13U) && networkObjects.Despawn(7U) &&
-            !networkObjects.Find(7U).has_value() && !networkObjects.CanAcceptOwnerCommand(7U, 12U) &&
-            !networkObjects.Despawn(7U),
-        "Network object lifecycle did not reject invalid spawn, ownership, duplicate, or despawn state");
-    static_assert(kb::network::kFirstReleaseNetwork.model == kb::network::NetworkModel::OfflineOnly);
-    kb::tests::Require(!kb::network::kFirstReleaseNetwork.HasTransport(), "First-release network model must not imply unsupported multiplayer transport");
     constexpr auto sampleProfiles = kb::gameplay::GameplaySampleProfiles();
     kb::tests::Require(sampleProfiles[0].kind == kb::gameplay::GameplaySampleKind::ThirdPerson && sampleProfiles[0].usesJump && sampleProfiles[1].movement == kb::gameplay::GameplaySampleMovement::ScreenPlane && sampleProfiles[2].movement == kb::gameplay::GameplaySampleMovement::SideScroll && sampleProfiles[3].cameraPolicy == kb::gameplay::CameraPolicy::Possess && sampleProfiles[3].usesCombat && sampleProfiles[4].kind == kb::gameplay::GameplaySampleKind::AudioShooter && sampleProfiles[4].movement == kb::gameplay::GameplaySampleMovement::ForwardFlight && sampleProfiles[4].usesCombat && sampleProfiles[4].usesAudio, "Gameplay samples did not provide the five documented controller profiles");
     kb::gameplay::GameInstance flowGame;
