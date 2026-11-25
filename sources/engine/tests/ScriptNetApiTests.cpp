@@ -98,6 +98,18 @@ public:
         owners[entity] = newOwner;
         return true;
     }
+    bool SetPredicted(std::uint64_t entity, float maxSpeed, float maxJump, std::string& error) override {
+        if (mode != ScriptNetMode::Server && mode != ScriptNetMode::Host) {
+            error = "not a server";
+            return false;
+        }
+        predicted.push_back({ entity, maxSpeed, maxJump });
+        return true;
+    }
+    bool Move(float vx, float vz, float jump, float deltaSeconds, std::string&) override {
+        moves.push_back({ vx, vz, jump, deltaSeconds });
+        return true;
+    }
 
     struct Call {
         std::string name;
@@ -113,6 +125,10 @@ public:
     std::vector<Call> calls;
     std::vector<std::uint64_t> replicated;
     std::map<std::uint64_t, std::uint64_t> owners;
+    struct Predicted { std::uint64_t entity; float maxSpeed; float maxJump; };
+    struct Moved { float vx; float vz; float jump; float deltaSeconds; };
+    std::vector<Predicted> predicted;
+    std::vector<Moved> moves;
     kb::network::ScriptJoinRequest joinRequest;
     kb::network::ScriptHostRequest hostRequest;
     bool discover = true;
@@ -161,7 +177,7 @@ void RunOfflineTest() {
     kb::scene::Scene scene;
     kb::script::ScriptRuntimeHost host{ scene };
     Check(host.Succeeded(), "the script host did not initialize");
-    for (const char* name : { "Net.Mode", "Net.IsServer", "Net.IsClient", "Net.LocalPlayerId", "Net.Join", "Net.Host", "Net.RegisterRpc", "Net.Call", "Net.Replicate", "Net.IsReplicated", "Net.SetOwner" }) {
+    for (const char* name : { "Net.Mode", "Net.IsServer", "Net.IsClient", "Net.LocalPlayerId", "Net.Join", "Net.Host", "Net.RegisterRpc", "Net.Call", "Net.Replicate", "Net.IsReplicated", "Net.SetOwner", "Net.SetPredicted", "Net.Move" }) {
         Check(host.Functions().FindSignature(name) != nullptr, std::string{ "Net function was not registered: " } + name);
     }
     Check(ScriptNetApi::Attached(scene) == nullptr, "a fresh scene has a network session");
@@ -282,7 +298,18 @@ void RunDeclareAndCallTest() {
         "an entity could not be marked as replicated");
     Check(!CallNet(host, scene, "Net.IsReplicated", { Arg("entity", ScriptValue{ std::uint64_t{ 5U }, kb::script::ScriptValueType::Entity }) }).Output("value")->AsBool(), "an unmarked entity is replicated");
     Check(CallNet(host, scene, "Net.SetOwner", { Arg("entity", entity), Arg("player", ScriptValue{ std::uint32_t{ 3U } }) }).Succeeded() && net.owners[77U] == 3U, "ownership did not reach the session");
+    Check(CallNet(host, scene, "Net.SetPredicted", { Arg("entity", entity), Arg("maxSpeed", ScriptValue{ 5.0 }), Arg("maxJump", ScriptValue{ 6.0 }) }).Succeeded() &&
+            net.predicted.size() == 1U && net.predicted.front().entity == 77U && net.predicted.front().maxSpeed == 5.0F,
+        "the predicted character did not reach the session");
+    Check(Failed(CallNet(host, scene, "Net.SetPredicted", { Arg("entity", entity), Arg("maxSpeed", ScriptValue{ 0.0 }), Arg("maxJump", ScriptValue{ 6.0 }) }), "positive"),
+        "a zero predicted speed was accepted");
+    Check(Failed(CallNet(host, scene, "Net.Move", { Arg("vx", ScriptValue{ 1.0 }) }), "only a client or a host"), "a dedicated server moved a player's character");
     net.mode = ScriptNetMode::Client;
+    Check(CallNet(host, scene, "Net.Move", { Arg("vx", ScriptValue{ 3.0 }), Arg("vz", ScriptValue{ -1.0 }), Arg("jump", ScriptValue{ 0.0 }) }).Succeeded() &&
+            net.moves.size() == 1U && net.moves.front().vx == 3.0F && net.moves.front().vz == -1.0F,
+        "movement did not reach the session");
+    Check(Failed(CallNet(host, scene, "Net.SetPredicted", { Arg("entity", entity), Arg("maxSpeed", ScriptValue{ 5.0 }), Arg("maxJump", ScriptValue{ 6.0 }) }), "only a server"),
+        "a client predicted an entity");
     Check(Failed(CallNet(host, scene, "Net.Replicate", { Arg("entity", entity) }), "only a server") && Failed(CallNet(host, scene, "Net.SetOwner", { Arg("entity", entity), Arg("player", ScriptValue{ std::uint32_t{ 3U } }) }), "only a server"),
         "a client replicated or gave away an entity");
     // The failed calls are kept for the report of `kb_cli net check`, each text once, with what to do about it.

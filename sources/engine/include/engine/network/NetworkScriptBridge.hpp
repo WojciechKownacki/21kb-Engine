@@ -92,6 +92,12 @@ public:
     virtual void ComponentChanged(std::uint64_t entity, bool appeared = false) = 0;
     virtual bool SetVar(std::uint64_t entity, const std::string& name, double value, std::string& error) = 0;
     virtual bool GetVar(std::uint64_t entity, const std::string& name, double& value, std::string& error) const = 0;
+
+    // Server only: the entity becomes a predicted character of its owner, moved by that player's inputs.
+    virtual bool SetPredicted(std::uint64_t entity, float maxSpeed, float maxJump, std::string& error) = 0;
+    // A client or a host: this frame's movement of its own character. The character moves on this machine at once
+    // and the input goes to the server, which steps it and answers with its state.
+    virtual bool Move(float vx, float vz, float jump, float deltaSeconds, std::string& error) = 0;
 };
 
 } // namespace kb::network

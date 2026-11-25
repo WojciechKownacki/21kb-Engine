@@ -63,6 +63,11 @@ public:
     void SetNetworkAvailable(bool available, std::uint64_t nowMilliseconds);
     // The session is up and the scripts may call the server.
     [[nodiscard]] bool Connected() const noexcept;
+    // The player's movement for this frame. The character moves at once on this machine and the input goes to the
+    // server, which steps the same input and answers with its state (Net.Move).
+    void Move(float vx, float vz, float jump, float dtSeconds);
+    // How many server corrections moved the predicted character further than the tolerance.
+    [[nodiscard]] std::uint64_t PredictionCorrections() const;
     // The replicas this client holds, and the one for a network id (invalid when it has none).
     [[nodiscard]] std::size_t ReplicaCount() const;
     [[nodiscard]] kb::ecs::Entity Replica(std::uint64_t networkId) const;

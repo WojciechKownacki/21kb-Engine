@@ -7,7 +7,10 @@
 #include "kb/net/NetworkClock.hpp"
 #include "kb/net/ScriptBridge.hpp"
 #include "engine/scene/TransformComponent.hpp"
+#include "engine/scene/CharacterControllerComponent.hpp"
+#include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/core/JsonValue.hpp"
 
@@ -15,7 +18,9 @@
 #include <limits>
 #include <charconv>
 #include <cmath>
+#include <deque>
 #include <map>
+#include <memory>
 #include <optional>
 #include <ostream>
 
@@ -144,6 +149,9 @@ bool ParseNativeSceneClientSettings(std::string_view json, SceneClientOptions& o
 }
 
 struct SceneClient::Impl {
+    using PredictionState = kb::scene::PhysicsBackend::CharacterStepState;
+    using Prediction = ClientPrediction<PredictionState, PredictedInput>;
+
     Impl(kb::scene::Scene& value, ScriptNetworkRuntime& runtime, SceneClientOptions settings, TransportFactory create)
         : scene(value), script(runtime), options(std::move(settings)), factory(std::move(create)) {
         static_cast<void>(script.SetRole(ScriptNetworkRuntime::Role::Client));
@@ -194,14 +202,24 @@ struct SceneClient::Impl {
         replicationConfig.requestedBytesPerSecond = options.downlinkBytesPerSecond;
         replication = std::make_unique<ReplicationClient>(*client, scene.Runtime().EcsWorld(), *components, rpcs, replicationConfig);
         script.BindClient(*replication, *client);
+        script.SetMoveHandler([this](float vx, float vz, float jump, float dt) { Move(vx, vz, jump, dt); });
         smoothed.clear();
+        prediction.reset();
+        predictedNetId = 0U;
+        predictedEntity = {};
+        pendingInputs.clear();
+        nextInputSequence = 1U;
         clock = NetworkClock{};
         auto variablesChanged = replication->SetStateCallback({});
         replication->SetStateCallback([this, variablesChanged = std::move(variablesChanged)](NetworkId id, kb::ecs::Entity entity, std::uint32_t tick) {
             if (variablesChanged) variablesChanged(id, entity, tick);
+            if (id == predictedNetId && prediction) {
+                // The predicted character keeps the state the player's own inputs produced; the server's snapshot is
+                // the baseline for the next reconciliation, not what this frame shows.
+                if (kb::scene::PhysicsBackend::CharacterSetState(scene, entity, prediction->Current())) return;
+            }
             const kb::scene::TransformComponent* transform = scene.Runtime().EcsWorld().TryGet<kb::scene::TransformComponent>(entity);
             if (transform == nullptr) return;
-            if (replication->OwnerOf(id) == client->AssignedId()) return; // the player's own replica is not delayed (prediction owns it)
             clock.SetTickRate(replication->ServerTickRate());
             clock.OnState(tick, nowSeconds);
             auto found = smoothed.find(id);
@@ -209,6 +227,9 @@ struct SceneClient::Impl {
                 found = smoothed.emplace(id, SnapshotInterpolator<kb::scene::TransformComponent>{ LerpTransform, clock.ViewDelaySeconds() }).first;
             }
             static_cast<void>(found->second.Add(clock.LocalTimeOf(tick), *transform));
+        });
+        replication->SetInputAckCallback([this](NetworkId id, std::uint32_t lastInput, const PredictedStepState& state) {
+            OnInputAcknowledged(id, lastInput, state);
         });
         authorized = false;
         disconnected = false;
@@ -247,6 +268,91 @@ struct SceneClient::Impl {
     // Each replica's server snapshots on the network clock, shown ViewDelaySeconds() in the past.
     std::map<NetworkId, SnapshotInterpolator<kb::scene::TransformComponent>> smoothed;
     NetworkClock clock;
+    // The player's own character: the inputs it sent (not yet acknowledged) and the predicted state on top of the server's.
+    std::unique_ptr<Prediction> prediction;
+    NetworkId predictedNetId = 0U;
+    kb::ecs::Entity predictedEntity{};
+    std::deque<PredictedInput> pendingInputs;
+    std::uint32_t nextInputSequence = 1U;
+
+    [[nodiscard]] bool EnsurePredictedEntity(kb::ecs::Entity entity) {
+        if (!scene.Runtime().EcsWorld().IsAlive(entity)) return false;
+        if (scene.Components().CharacterControllers().TryGet(entity) == nullptr) {
+            scene.Components().CharacterControllers().Set(entity, kb::scene::CharacterControllerComponent{});
+        }
+        return kb::scene::PhysicsBackend::CharacterSetDriven(scene, entity, true);
+    }
+
+    void OnInputAcknowledged(NetworkId id, std::uint32_t lastInput, const PredictedStepState& state) {
+        if (!replication) return;
+        if (predictedNetId != 0U && predictedNetId != id) return;
+        const kb::ecs::Entity entity = replication->Find(id);
+        if (!entity.IsValid() || !EnsurePredictedEntity(entity)) return; // the spawn has not arrived yet; the next acknowledgement retries
+        predictedNetId = id;
+        predictedEntity = entity;
+        smoothed.erase(id);
+        while (!pendingInputs.empty() && pendingInputs.front().sequence <= lastInput) {
+            pendingInputs.pop_front();
+        }
+        const PredictionState authoritative{ { state.px, state.py, state.pz }, { state.vx, state.vy, state.vz }, state.grounded };
+        if (!prediction) {
+            const auto step = [this](const PredictionState& from, const PredictedInput& input, float) {
+                PredictionState out = from;
+                if (!kb::scene::PhysicsBackend::CharacterSetState(scene, predictedEntity, from)) return out;
+                const float dt = static_cast<float>(input.dtMilliseconds) / 1000.0F;
+                const float vx = static_cast<float>(input.velocityXCentimetersPerSecond) / 100.0F;
+                const float vz = static_cast<float>(input.velocityZCentimetersPerSecond) / 100.0F;
+                const float jump = static_cast<float>(input.jumpCentimetersPerSecond) / 100.0F;
+                static_cast<void>(kb::scene::PhysicsBackend::CharacterSimulate(scene, predictedEntity, { vx, 0.0F, vz }, jump, dt, out));
+                return out;
+            };
+            const auto distance = [](const PredictionState& left, const PredictionState& right) {
+                const double dx = static_cast<double>(left.position.x) - static_cast<double>(right.position.x);
+                const double dy = static_cast<double>(left.position.y) - static_cast<double>(right.position.y);
+                const double dz = static_cast<double>(left.position.z) - static_cast<double>(right.position.z);
+                return std::sqrt(dx * dx + dy * dy + dz * dz);
+            };
+            prediction = std::make_unique<Prediction>(step, distance, authoritative, 1.0F / 60.0F, 0.01, 128U, lastInput + 1U);
+            for (const PredictedInput& input : pendingInputs) {
+                if (prediction->Predict(input) == 0U) break;
+            }
+        } else {
+            prediction->Reconcile(authoritative, lastInput);
+        }
+        static_cast<void>(kb::scene::PhysicsBackend::CharacterSetState(scene, predictedEntity, prediction->Current()));
+    }
+
+    void Move(float vx, float vz, float jump, float dtSeconds) {
+        if (!replication || !client || !authorized || disconnected || !std::isfinite(vx) || !std::isfinite(vz) ||
+            !std::isfinite(jump) || !std::isfinite(dtSeconds)) {
+            return;
+        }
+        const auto centimeters = [](float value, long minimum, long maximum) {
+            const double scaled = std::lround(static_cast<double>(value) * 100.0);
+            return static_cast<long>(std::clamp(scaled, static_cast<double>(minimum), static_cast<double>(maximum)));
+        };
+        // Truncated, not rounded: two frames of 1/60 s ask for 32 ms, never for more time than has passed.
+        const long dt = std::clamp<long>(static_cast<long>(static_cast<double>(dtSeconds) * 1000.0), 1L, 100L);
+        PredictedInput input;
+        input.sequence = nextInputSequence;
+        input.velocityXCentimetersPerSecond = static_cast<std::int16_t>(centimeters(vx, -32768L, 32767L));
+        input.velocityZCentimetersPerSecond = static_cast<std::int16_t>(centimeters(vz, -32768L, 32767L));
+        input.jumpCentimetersPerSecond = static_cast<std::uint16_t>(centimeters(jump, 0L, 65535L));
+        input.dtMilliseconds = static_cast<std::uint8_t>(dt);
+        if (prediction && prediction->Predict(input) == 0U) {
+            return; // too many inputs are still unacknowledged: this one is neither predicted nor sent
+        }
+        ++nextInputSequence;
+        pendingInputs.push_back(input);
+        while (pendingInputs.size() > 256U) pendingInputs.pop_front();
+        std::array<PredictedInput, 3U> latest{};
+        const std::size_t count = std::min<std::size_t>(3U, pendingInputs.size());
+        std::copy(pendingInputs.end() - static_cast<std::ptrdiff_t>(count), pendingInputs.end(), latest.begin());
+        static_cast<void>(replication->SendInputs(std::span<const PredictedInput>(latest.data(), count)));
+        if (prediction) {
+            static_cast<void>(kb::scene::PhysicsBackend::CharacterSetState(scene, predictedEntity, prediction->Current()));
+        }
+    }
 
     void Smooth() {
         for (auto it = smoothed.begin(); it != smoothed.end();) {
@@ -270,6 +376,14 @@ SceneClient::~SceneClient() = default;
 
 bool SceneClient::Connected() const noexcept {
     return impl_->authorized && !impl_->disconnected && impl_->client && impl_->client->State() == ClientState::Connected;
+}
+
+void SceneClient::Move(float vx, float vz, float jump, float dtSeconds) {
+    impl_->Move(vx, vz, jump, dtSeconds);
+}
+
+std::uint64_t SceneClient::PredictionCorrections() const {
+    return impl_->prediction ? impl_->prediction->GetStats().corrections : 0U;
 }
 
 std::uint64_t SceneClient::DeclarationMismatches() const {

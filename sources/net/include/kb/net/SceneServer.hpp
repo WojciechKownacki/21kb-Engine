@@ -81,4 +81,9 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
+// Wires a replication server to this scene's character step: a character marked with Net.SetPredicted moves by its
+// player's inputs (the same PhysicsBackend::CharacterSimulate the scene's fixed step would run) and its state is the
+// one acknowledged to the player. SceneServer::Start does it; a host that builds its own replication server calls it.
+void ConfigurePredictedCharacters(kb::scene::Scene& scene, ReplicationServer& replication);
+
 } // namespace kb::net

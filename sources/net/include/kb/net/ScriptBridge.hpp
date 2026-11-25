@@ -75,6 +75,10 @@ public:
     void ComponentChanged(std::uint64_t entity, bool appeared = false) override;
     bool SetVar(std::uint64_t entity, const std::string& name, double value, std::string& error) override;
     bool GetVar(std::uint64_t entity, const std::string& name, double& value, std::string& error) const override;
+    bool SetPredicted(std::uint64_t entity, float maxSpeed, float maxJump, std::string& error) override;
+    bool Move(float vx, float vz, float jump, float deltaSeconds, std::string& error) override;
+    // Where a client's own movement goes (the scene client that predicts it).
+    void SetMoveHandler(std::function<void(float, float, float, float)> handler) { move_ = std::move(handler); }
     void SetTransformAppeared(std::function<void(kb::ecs::Entity)> callback) { transformAppeared_ = std::move(callback); }
 
     // The role may change only while no session is bound (offline <-> client): the RPC declarations and the replication declarations stay.
@@ -120,6 +124,7 @@ private:
     bool clientAuthorized_ = true;
     std::uint64_t nowMilliseconds_ = 0U;
     std::function<void(kb::ecs::Entity)> transformAppeared_;
+    std::function<void(float, float, float, float)> move_;
     JoinHandler join_;
     std::function<void()> leave_;
     HostHandler host_;

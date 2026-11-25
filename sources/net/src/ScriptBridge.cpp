@@ -531,4 +531,53 @@ bool ScriptNetworkRuntime::SetOwner(std::uint64_t entity, std::uint64_t player, 
     return true;
 }
 
+bool ScriptNetworkRuntime::SetPredicted(std::uint64_t entity, float maxSpeed, float maxJump, std::string& error) {
+    if (!ServesScene()) {
+        error = "only the server moves a player's character by that player's inputs";
+        return false;
+    }
+    if (server_ == nullptr) {
+        error = "the session has not started";
+        return false;
+    }
+    const NetworkId id = server_->NetworkIdOf(kb::ecs::Entity{ entity });
+    if (id == 0U) {
+        error = "the entity is not replicated";
+        return false;
+    }
+    if (!server_->SetPredicted(id, maxSpeed, maxJump)) {
+        error = "the entity cannot be a predicted character (it needs a player owner and finite positive limits)";
+        return false;
+    }
+    return true;
+}
+
+bool ScriptNetworkRuntime::Move(float vx, float vz, float jump, float deltaSeconds, std::string& error) {
+    if (!std::isfinite(vx) || !std::isfinite(vz) || !std::isfinite(jump) || !std::isfinite(deltaSeconds)) {
+        error = "movement values must be finite";
+        return false;
+    }
+    if (role_ == Role::Host) {
+        if (server_ == nullptr) {
+            error = "the session has not started";
+            return false;
+        }
+        if (!server_->MoveHostPlayer(kHostPlayerId, vx, vz, jump, deltaSeconds, nowMilliseconds_)) {
+            error = "the server refused this input (no predicted character, or more movement than real time allows)";
+            return false;
+        }
+        return true;
+    }
+    if (role_ != Role::Client) {
+        error = "only a client or a host moves its own character";
+        return false;
+    }
+    if (!move_) {
+        error = "the session has not started";
+        return false;
+    }
+    move_(vx, vz, jump, deltaSeconds);
+    return true;
+}
+
 } // namespace kb::net

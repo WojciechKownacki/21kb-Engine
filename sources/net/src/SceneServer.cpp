@@ -1,5 +1,6 @@
 #include "kb/net/SceneServer.hpp"
 
+#include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -130,6 +131,37 @@ struct SceneServer::Impl {
     std::uint64_t lastNow = 0U;
 };
 
+void ConfigurePredictedCharacters(kb::scene::Scene& scene, ReplicationServer& replication) {
+    kb::scene::Scene* scenePtr = &scene;
+    ReplicationServer* replicationPtr = &replication;
+    replication.SetPredictedCallbacks(
+        [scenePtr, replicationPtr](NetworkId id, bool driven) {
+            const kb::ecs::Entity entity = replicationPtr->EntityOf(id);
+            if (entity.IsValid()) static_cast<void>(kb::scene::PhysicsBackend::CharacterSetDriven(*scenePtr, entity, driven));
+        },
+        [scenePtr, replicationPtr](NetworkId id, float vx, float vz, float jump, float deltaSeconds, PredictedStepState& out) {
+            const kb::ecs::Entity entity = replicationPtr->EntityOf(id);
+            if (!entity.IsValid()) return false;
+            kb::scene::PhysicsBackend::CharacterStepState state{};
+            if (!kb::scene::PhysicsBackend::CharacterSimulate(*scenePtr, entity, { vx, 0.0F, vz }, jump, deltaSeconds, state)) return false;
+            out.px = state.position.x; out.py = state.position.y; out.pz = state.position.z;
+            out.vx = state.velocity.x; out.vy = state.velocity.y; out.vz = state.velocity.z;
+            out.grounded = state.grounded;
+            return true;
+        },
+        [scenePtr, replicationPtr](NetworkId id, PredictedStepState& out) {
+            const kb::ecs::Entity entity = replicationPtr->EntityOf(id);
+            const kb::scene::TransformComponent* transform = entity.IsValid() ? scenePtr->Runtime().EcsWorld().TryGet<kb::scene::TransformComponent>(entity) : nullptr;
+            if (transform == nullptr) return false;
+            out.px = transform->localPosition.x; out.py = transform->localPosition.y; out.pz = transform->localPosition.z;
+            if (const auto velocity = kb::scene::PhysicsBackend::CharacterVelocity(*scenePtr, entity); velocity.found) {
+                out.vx = velocity.value.x; out.vy = velocity.value.y; out.vz = velocity.value.z;
+            }
+            out.grounded = kb::scene::PhysicsBackend::CharacterIsGrounded(*scenePtr, entity);
+            return true;
+        });
+}
+
 SceneServer::SceneServer(kb::scene::Scene& scene, ScriptNetworkRuntime& net,
     const kb::network::ReplicationDeclarations& declarations, const IKeyProvider& keys,
     std::unique_ptr<IDatagramTransport> transport, SceneServerOptions options, Log log)
@@ -206,6 +238,7 @@ bool SceneServer::Start(std::string& error) {
     replicationConfig.maxClientRate = options.maxClientRate;
     s.profileMetrics = replicationConfig.profile;
     s.replication = std::make_unique<ReplicationServer>(*s.host, s.scene->Runtime().EcsWorld(), *s.components, *s.rpcs, replicationConfig);
+    ConfigurePredictedCharacters(*s.scene, *s.replication);
     s.net->BindServer(*s.replication);
     if (options.replicate != ReplicateMode::None) {
         s.net->SetTransformAppeared([&s](kb::ecs::Entity entity) { s.candidates.push_back(entity); });

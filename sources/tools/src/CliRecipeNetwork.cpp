@@ -77,8 +77,8 @@ constexpr std::array kSystems{
         "NetPlayers@0,0,0", "speed=5|spacing=2|waitForStart=false|prefab=/Game/Prefabs/NetAvatar.kbprefab",
         R"(
 entity add --create Capsule --name NetAvatar --position 0,1,0
-component add --entity NetAvatar --type Rigidbody --if-missing
-component set --entity NetAvatar --type Rigidbody --set bodyType=Dynamic --set lockRotation=true
+component remove --entity NetAvatar --type Collider
+component add --entity NetAvatar --type CharacterController --if-missing
 prefab new --from-entity NetAvatar
 entity remove --name NetAvatar
 input-action new --name Move --type Axis2D --key W=+y --key S=-y --key D=+x --key A=-x --key ArrowUp=+y --key ArrowDown=-y --key ArrowRight=+x --key ArrowLeft=-x
@@ -86,9 +86,9 @@ attach NetPlayers
 )",
         R"lua(
 --- NetPlayers
--- Every player who joins gets a character, a copy of the prefab, in a row from x = -3 at the near edge of the floor (z = -3). The player holds Move (WASD or the arrows): it tells the server
--- which way, the server moves the character and every player sees it move. A replicated object with an owner is a player's character. Single-player,
--- it does nothing. With waitForStart the characters come when the game starts (the event NetGameStarted, sent by the lobby).
+-- Every player who joins gets a character, a copy of the prefab, in a row from x = -3 at the near edge of the floor (z = -3). The player holds Move (WASD or the arrows): the character
+-- moves at once on the player's machine (Net.Move) and the server steps the same input where it really is, so every player sees it move. A replicated object with an owner is a player's
+-- character. Single-player, it does nothing. With waitForStart the characters come when the game starts (the event NetGameStarted, sent by the lobby).
 -- @expose prefab String = "/Game/Prefabs/NetAvatar.kbprefab"
 -- @expose speed Float = 5.0
 -- @expose spacing Float = 2.0
@@ -96,10 +96,8 @@ attach NetPlayers
 local avatars = {}
 local order = {}
 local started = true
-local moves = {}
 local proxies = {}
 local mine = 0
-local sentX, sentY = 0.0, 0.0
 local function online()
     local net = Net.Mode()
     return net ~= nil and net.mode ~= "offline"
@@ -116,13 +114,14 @@ local function spawn(self, player)
     end
     CallFunction("Net.Replicate", { entity = entity })
     CallFunction("Net.SetOwner", { entity = entity, player = player })
+    CallFunction("Net.SetPredicted", { entity = entity, maxSpeed = v.speed, maxJump = 6.0 })
     avatars[player] = entity
+    if player == Net.LocalPlayerId() then mine = entity end
     Log("player " .. player .. " joined")
 end
 function Ready(self, dt)
     if not online() then return end
     started = not self.variables.waitForStart
-    CallFunction("Net.RegisterRpc", { name = "NetMove", direction = "toServer", args = "entity,float(-1..1),float(-1..1)", owner = 0, maxPerSecond = 60 })
 end
 function OnNetConnected(self, event)
     if not Net.IsServer() then return end
@@ -133,7 +132,6 @@ function OnNetDisconnected(self, event)
     if not Net.IsServer() then return end
     local entity = avatars[event.args.player]
     if entity then
-        moves[entity] = nil
         World.Destroy(entity, true)
         avatars[event.args.player] = nil
     end
@@ -145,9 +143,6 @@ function NetGameStarted(self, event)
     if not online() or not Net.IsServer() then return end
     started = true
     for _, player in ipairs(order) do spawn(self, player) end
-end
-function OnRpc_NetMove(self, event)
-    moves[event.args.e1] = { x = event.args.n1, y = event.args.n2 }
 end
 function OnNetSpawned(self, event)
     if event.args.owner == 0 then return end
@@ -166,19 +161,8 @@ function OnNetDespawned(self, event)
 end
 function Tick(self, dt)
     if not online() then return end
-    if Net.IsServer() then
-        local speed = self.variables.speed
-        for entity, move in pairs(moves) do
-            local velocity = World.Exists(entity) and Physics.GetVelocity(entity) or nil
-            if velocity then
-                Physics.SetVelocity(entity, move.x * speed, velocity.y, move.y * speed)
-                if move.x ~= 0.0 or move.y ~= 0.0 then Transform.SetRotation(entity, 0.0, math.deg(math.atan2(move.x, move.y)), 0.0) end
-            else
-                moves[entity] = nil
-            end
-        end
-        return
-    end
+    -- A dedicated server only waits for the players' inputs.
+    if Net.IsServer() and not Net.IsClient() then return end
     for replica, copy in pairs(proxies) do
         local at = Transform.GetPosition(replica)
         if at then
@@ -190,11 +174,8 @@ function Tick(self, dt)
     end
     if mine == 0 then return end
     local move = Input.Vector2("Move")
-    local x, y = move.x or 0.0, move.y or 0.0
-    if x ~= sentX or y ~= sentY then
-        sentX, sentY = x, y
-        CallFunction("Net.Call", { rpc = "NetMove", e1 = mine, n1 = x, n2 = y })
-    end
+    local speed = self.variables.speed
+    CallFunction("Net.Move", { vx = (move.x or 0.0) * speed, vz = (move.y or 0.0) * speed, jump = 0.0 })
 end
 )lua",
         false, "net check --press 1:W@40+40 (the log says 'player 1 joined'; the replicated: line shows the character moved forward on the server and on both clients)" },

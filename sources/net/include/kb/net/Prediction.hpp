@@ -43,9 +43,12 @@ public:
         double largestError = 0.0;
     };
 
-    ClientPrediction(StepFunction step, DistanceFunction distance, State initial, float stepSeconds, double tolerance, std::size_t maxPending = 128U)
+    // `firstSequence` is the sequence number the first input will get; it lets a caller that already sent
+    // inputs before the prediction existed continue the same numbering (the server acknowledges those).
+    ClientPrediction(StepFunction step, DistanceFunction distance, State initial, float stepSeconds, double tolerance, std::size_t maxPending = 128U,
+        std::uint32_t firstSequence = 1U)
         : step_(std::move(step)), distance_(std::move(distance)), state_(std::move(initial)), stepSeconds_(stepSeconds), tolerance_(tolerance),
-          maxPending_(maxPending) {}
+          maxPending_(maxPending), nextSequence_(firstSequence) {}
 
     // Applies the input to the predicted state at once and remembers it until the server has processed it.
     // Returns its sequence number (1, 2, ...), or 0 when `maxPending` inputs are still unacknowledged; then

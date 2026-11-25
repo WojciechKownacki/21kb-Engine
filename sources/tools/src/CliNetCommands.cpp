@@ -2,7 +2,7 @@
 #include "CliProgram.hpp"
 
 #include "engine/core/JsonValue.hpp"
-#include "engine/project/ProjectSettingsStore.hpp"
+#include "engine/project/ProjectSettings.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
 #include "engine/script/ScriptEventHooks.hpp"
 #include "engine/security/Crypto.hpp"

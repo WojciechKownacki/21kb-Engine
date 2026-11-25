@@ -6,6 +6,8 @@
 #include "engine/scene/TransformComponent.hpp"
 
 #include <cstdio>
+#include <algorithm>
+#include <cmath>
 #include <exception>
 #include <utility>
 #include <chrono>
@@ -33,6 +35,13 @@ constexpr std::uint8_t kMsgHelloAck = 6U;
 constexpr std::uint8_t kMsgState = 0x10U;
 constexpr std::uint8_t kMsgAck = 0x11U;
 constexpr std::uint8_t kMsgRpcUnreliable = 0x12U;
+constexpr std::uint8_t kMsgInput = 0x13U;
+constexpr std::uint8_t kMsgInputAck = 0x14U;
+constexpr std::size_t kMaxInputsPerMessage = 3U;
+constexpr std::uint32_t kMaxInputAhead = 8U;      // accepted sequence numbers past the last one
+constexpr double kMaxInputBudgetMs = 250.0;       // simulation time a player may have in hand, whatever the silence
+constexpr float kMaxInputDeltaSeconds = 0.1F;     // one input covers at most 100 ms
+constexpr float kMinInputDeltaSeconds = 0.001F;   // and at least 1 ms
 
 constexpr std::uint8_t kReliableChannel = 0U;
 constexpr std::uint8_t kUnreliableChannel = 1U;
@@ -256,6 +265,191 @@ NetworkId ReplicationServer::NetworkIdOf(kb::ecs::Entity entity) const { return 
 std::uint64_t ReplicationServer::OwnerOf(NetworkId id) const {
     const auto* slot = slots_->Find(id);
     return slot == nullptr ? 0U : slot->owner;
+}
+
+bool ReplicationServer::SetPredicted(NetworkId id, float maxSpeed, float maxJump) {
+    const auto* slot = slots_->Find(id);
+    if (slot == nullptr) {
+        host_->Diagnostics().Report(DiagCode::RpcRejected, "predicted entity is not replicated");
+        return false;
+    }
+    const std::uint64_t owner = slot->owner;
+    if (owner == 0U) {
+        host_->Diagnostics().Report(DiagCode::RpcRejected, "predicted entity has no player owner");
+        return false;
+    }
+    if (!std::isfinite(maxSpeed) || !std::isfinite(maxJump) || maxSpeed <= 0.0F || maxJump <= 0.0F) {
+        host_->Diagnostics().Report(DiagCode::RpcRejected, "predicted speed and jump must be finite and positive");
+        return false;
+    }
+    for (auto& [player, other] : clients_) {
+        if (player != owner && other.predicted == id) {
+            other.predicted = 0U;
+        }
+    }
+    ClientState& state = clients_[owner];
+    state.predicted = id;
+    state.maxSpeed = maxSpeed;
+    state.maxJump = maxJump;
+    state.lastInput = 0U;
+    state.inputBudgetMs = 0.0;
+    state.inputBudgetAt = nowMilliseconds_;
+    state.hasState = false;
+    state.acknowledged = false;
+    if (predictedState_) {
+        PredictedStepState initial{};
+        if (predictedState_(id, initial)) {
+            state.lastState = initial;
+            state.hasState = true;
+        }
+    }
+    if (predictedDriven_) {
+        predictedDriven_(id, true);
+    }
+    return true;
+}
+
+void ReplicationServer::SetPredictedCallbacks(PredictedDrivenFunction driven, PredictedStepFunction step, PredictedStateFunction state) {
+    predictedDriven_ = std::move(driven);
+    predictedStep_ = std::move(step);
+    predictedState_ = std::move(state);
+}
+
+std::uint32_t ReplicationServer::PredictedLastInput(std::uint64_t player) const {
+    const auto found = clients_.find(player);
+    return found == clients_.end() ? 0U : found->second.lastInput;
+}
+
+bool ReplicationServer::ApplyInput(ClientState& state, std::uint32_t sequence, float vx, float vz, float jump, float deltaSeconds) {
+    if (!predictedStep_ || state.predicted == 0U) {
+        ++stats_.predictedInputsRejected;
+        return false;
+    }
+    const float magnitude = std::sqrt(vx * vx + vz * vz);
+    if (magnitude > state.maxSpeed && magnitude > 0.0F) {
+        const float scale = state.maxSpeed / magnitude;
+        vx *= scale;
+        vz *= scale;
+    }
+    jump = std::clamp(jump, 0.0F, state.maxJump);
+    PredictedStepState out{};
+    if (!predictedStep_(state.predicted, vx, vz, jump, deltaSeconds, out)) {
+        ++stats_.predictedInputsRejected;
+        return false;
+    }
+    state.lastInput = sequence;
+    state.lastState = out;
+    state.hasState = true;
+    ++stats_.predictedInputsApplied;
+    return true;
+}
+
+void ReplicationServer::HandleInput(std::uint64_t client, ClientState& state, std::span<const std::uint8_t> data, std::uint64_t nowMilliseconds) {
+    ByteReader reader(data.subspan(1));
+    const std::uint32_t firstSequence = reader.U32();
+    const std::uint8_t count = reader.U8();
+    if (!reader.Ok() || count == 0U || count > kMaxInputsPerMessage || reader.Remaining() != static_cast<std::size_t>(count) * 7U) {
+        ++stats_.rejectedMalformed;
+        host_->Diagnostics().Report(DiagCode::RpcRejected, "rejectedMalformed");
+        return;
+    }
+    if (state.predicted == 0U) {
+        ++stats_.predictedInputsRejected;
+        host_->Diagnostics().Report(DiagCode::RpcRejected, "predicted input without a predicted entity: player=" + std::to_string(client));
+        return;
+    }
+    const std::uint64_t elapsed = state.inputBudgetAt == 0U ? 0U : nowMilliseconds - std::min(nowMilliseconds, state.inputBudgetAt);
+    state.inputBudgetMs = std::min(kMaxInputBudgetMs, state.inputBudgetMs + static_cast<double>(elapsed));
+    state.inputBudgetAt = nowMilliseconds;
+    for (std::uint8_t index = 0U; index < count; ++index) {
+        const std::uint32_t sequence = firstSequence + index;
+        const std::uint16_t rawVx = reader.U16();
+        const std::uint16_t rawVz = reader.U16();
+        const std::uint16_t rawJump = reader.U16();
+        const std::uint8_t dtMilliseconds = reader.U8();
+        if (sequence <= state.lastInput || sequence > state.lastInput + kMaxInputAhead) {
+            continue; // already applied, or further ahead than the window allows
+        }
+        if (dtMilliseconds == 0U || dtMilliseconds > static_cast<std::uint8_t>(kMaxInputDeltaSeconds * 1000.0F)) {
+            ++stats_.predictedInputsRejected;
+            continue;
+        }
+        const float deltaSeconds = static_cast<float>(dtMilliseconds) / 1000.0F;
+        if (state.inputBudgetMs < static_cast<double>(dtMilliseconds)) {
+            ++stats_.rpcRejectedRate;
+            host_->Diagnostics().Report(DiagCode::RateLimited, "predicted input rate limited: player=" + std::to_string(client));
+            break;
+        }
+        const float vx = static_cast<float>(static_cast<std::int16_t>(rawVx)) / 100.0F;
+        const float vz = static_cast<float>(static_cast<std::int16_t>(rawVz)) / 100.0F;
+        const float jump = static_cast<float>(rawJump) / 100.0F;
+        if (!ApplyInput(state, sequence, vx, vz, jump, deltaSeconds)) {
+            continue;
+        }
+        state.inputBudgetMs -= static_cast<double>(dtMilliseconds);
+    }
+}
+
+bool ReplicationServer::MoveHostPlayer(std::uint64_t player, float vx, float vz, float jump, float deltaSeconds, std::uint64_t nowMilliseconds) {
+    const auto found = clients_.find(player);
+    if (found == clients_.end() || found->second.predicted == 0U) {
+        return false;
+    }
+    ClientState& state = found->second;
+    if (!std::isfinite(deltaSeconds) || deltaSeconds < kMinInputDeltaSeconds || deltaSeconds > kMaxInputDeltaSeconds) {
+        ++stats_.predictedInputsRejected;
+        return false;
+    }
+    const auto dtMilliseconds = static_cast<std::uint32_t>(std::lround(static_cast<double>(deltaSeconds) * 1000.0));
+    const std::uint64_t elapsed = state.inputBudgetAt == 0U ? 0U : nowMilliseconds - std::min(nowMilliseconds, state.inputBudgetAt);
+    // The hosting player's frame time is the real time that passed; the session clock may lag it by one frame.
+    state.inputBudgetMs = std::min(kMaxInputBudgetMs, state.inputBudgetMs + static_cast<double>(std::max<std::uint64_t>(elapsed, dtMilliseconds)));
+    state.inputBudgetAt = nowMilliseconds;
+    if (state.inputBudgetMs < static_cast<double>(dtMilliseconds)) {
+        ++stats_.rpcRejectedRate;
+        host_->Diagnostics().Report(DiagCode::RateLimited, "predicted input rate limited: player=" + std::to_string(player));
+        return false;
+    }
+    if (!ApplyInput(state, state.lastInput + 1U, vx, vz, jump, deltaSeconds)) {
+        return false;
+    }
+    state.inputBudgetMs -= static_cast<double>(dtMilliseconds);
+    return true;
+}
+
+void ReplicationServer::SendInputAck(std::uint64_t client, ClientState& state) {
+    if (state.predicted == 0U || !state.hasState) {
+        return;
+    }
+    const PredictedStepState& last = state.lastState;
+    const PredictedStepState& acknowledged = state.acknowledgedState;
+    const bool moved = !state.acknowledged || last.px != acknowledged.px || last.py != acknowledged.py || last.pz != acknowledged.pz;
+    if (!moved && state.lastInput == state.acknowledgedInput) {
+        return;
+    }
+    std::vector<std::uint8_t> message;
+    ByteWriter writer(message);
+    writer.U8(kMsgInputAck);
+    writer.U32(static_cast<std::uint32_t>(state.predicted));
+    writer.U32(state.lastInput);
+    writer.U32(std::bit_cast<std::uint32_t>(last.px));
+    writer.U32(std::bit_cast<std::uint32_t>(last.py));
+    writer.U32(std::bit_cast<std::uint32_t>(last.pz));
+    writer.U32(std::bit_cast<std::uint32_t>(last.vx));
+    writer.U32(std::bit_cast<std::uint32_t>(last.vy));
+    writer.U32(std::bit_cast<std::uint32_t>(last.vz));
+    writer.U8(last.grounded ? 1U : 0U);
+    const auto charged = message.size() + Session::MessageOverhead(false);
+    if (state.tokens < static_cast<double>(charged)) {
+        return;
+    }
+    if (host_->Send(client, kUnreliableChannel, message) != SendResult::Queued) {
+        return;
+    }
+    state.tokens -= static_cast<double>(charged);
+    state.acknowledgedState = last;
+    state.acknowledgedInput = state.lastInput;
+    state.acknowledged = true;
 }
 
 std::size_t ReplicationServer::ReadyClients() const noexcept {
@@ -740,6 +934,7 @@ void ReplicationServer::Tick(std::uint32_t tick, std::uint64_t nowMilliseconds) 
         if (state.breaker) continue;
         UpdateVisibility(client, state, tick);
         BuildUpdates(client, state, tick);
+        SendInputAck(client, state);
     }
 }
 
@@ -827,6 +1022,17 @@ void ReplicationServer::HandleMessage(std::uint64_t client, std::uint8_t channel
         }
         break;
     }
+    case kMsgInput:
+        if (channel != kUnreliableChannel) {
+            ++stats_.rejectedMalformed;
+            host_->Diagnostics().Report(DiagCode::RpcRejected, "rejectedMalformed");
+        } else if (!state.ready) {
+            ++stats_.rejectedNotReady;
+            host_->Diagnostics().Report(DiagCode::RpcRejected, "rejectedNotReady");
+        } else {
+            HandleInput(client, state, data, nowMilliseconds);
+        }
+        break;
     default:
         ++stats_.rejectedMalformed;
         host_->Diagnostics().Report(DiagCode::RpcRejected, "rejectedMalformed");
@@ -1077,7 +1283,7 @@ void ReplicationClient::HandleMessage(std::uint8_t channel, std::span<const std:
     }
     const std::uint8_t type = data[0];
     const bool reliableType = type == kMsgHello || type == kMsgSpawn || type == kMsgDespawn || type == kMsgOwner || type == kMsgRpc;
-    const bool unreliableType = type == kMsgState || type == kMsgRpcUnreliable;
+    const bool unreliableType = type == kMsgState || type == kMsgRpcUnreliable || type == kMsgInputAck;
     if ((reliableType && channel != kReliableChannel) || (unreliableType && channel != kUnreliableChannel) || (!reliableType && !unreliableType)) {
         ++stats_.rejectedMalformed;
         return;
@@ -1095,6 +1301,7 @@ void ReplicationClient::HandleMessage(std::uint8_t channel, std::span<const std:
     case kMsgDespawn: HandleDespawn(data); break;
     case kMsgOwner: HandleOwner(data); break;
     case kMsgState: HandleState(data); break;
+    case kMsgInputAck: HandleInputAck(data); break;
     default: HandleRpc(data); break;
     }
 }
@@ -1342,6 +1549,48 @@ void ReplicationClient::Flush(std::uint64_t nowMilliseconds) {
         ackDirty_ = false;
         lastAckSentAt_ = nowMilliseconds;
         ++stats_.acksSent;
+    }
+}
+
+bool ReplicationClient::SendInputs(std::span<const PredictedInput> inputs) {
+    if (!ready_ || inputs.empty() || inputs.size() > kMaxInputsPerMessage) {
+        return false;
+    }
+    std::vector<std::uint8_t> message;
+    ByteWriter writer(message);
+    writer.U8(kMsgInput);
+    writer.U32(inputs.front().sequence);
+    writer.U8(static_cast<std::uint8_t>(inputs.size()));
+    for (const PredictedInput& input : inputs) {
+        writer.U16(static_cast<std::uint16_t>(input.velocityXCentimetersPerSecond));
+        writer.U16(static_cast<std::uint16_t>(input.velocityZCentimetersPerSecond));
+        writer.U16(input.jumpCentimetersPerSecond);
+        writer.U8(input.dtMilliseconds);
+    }
+    return client_->Send(kUnreliableChannel, message) == SendResult::Queued;
+}
+
+void ReplicationClient::HandleInputAck(std::span<const std::uint8_t> data) {
+    ByteReader reader(data.subspan(1));
+    const std::uint32_t id = reader.U32();
+    const std::uint32_t lastInput = reader.U32();
+    PredictedStepState state{};
+    state.px = std::bit_cast<float>(reader.U32());
+    state.py = std::bit_cast<float>(reader.U32());
+    state.pz = std::bit_cast<float>(reader.U32());
+    state.vx = std::bit_cast<float>(reader.U32());
+    state.vy = std::bit_cast<float>(reader.U32());
+    state.vz = std::bit_cast<float>(reader.U32());
+    const std::uint8_t grounded = reader.U8();
+    if (!reader.Ok() || reader.Remaining() != 0U || id == 0U || grounded > 1U ||
+        !std::isfinite(state.px) || !std::isfinite(state.py) || !std::isfinite(state.pz) ||
+        !std::isfinite(state.vx) || !std::isfinite(state.vy) || !std::isfinite(state.vz)) {
+        ++stats_.rejectedMalformed;
+        return;
+    }
+    state.grounded = grounded == 1U;
+    if (onInputAck_) {
+        onInputAck_(static_cast<NetworkId>(id), lastInput, state);
     }
 }
 

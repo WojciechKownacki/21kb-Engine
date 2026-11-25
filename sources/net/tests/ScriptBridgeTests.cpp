@@ -12,6 +12,8 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/PhysicsBackend.hpp"
+#include "engine/scene/CharacterControllerComponent.hpp"
 #include "engine/script/ScriptNetApi.hpp"
 #include "engine/security/ReleaseManifest.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
@@ -34,6 +36,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -1163,6 +1166,232 @@ void TestNativeSessionSettings() {
     }
 }
 
+// A deterministic, flat-ground stand-in for the physics plugin: the character step the network prediction needs,
+// with every query and Rigidbody method honestly unsupported. It keeps the states the predicted character had.
+class FlatGroundPhysics final : public kb::scene::IPhysicsBackend {
+public:
+    explicit FlatGroundPhysics(kb::scene::Scene& value) : scene(value) {}
+    struct Record {
+        kb::scene::Vec3 position{};
+        kb::scene::Vec3 velocity{};
+        bool grounded = true;
+        bool driven = false;
+    };
+
+    [[nodiscard]] bool HasCharacter(kb::scene::SceneEntity entity) const {
+        return entity.IsValid() && scene.Components().CharacterControllers().TryGet(entity) != nullptr;
+    }
+    Record& RecordOf(kb::scene::SceneEntity entity) {
+        auto found = records.find(entity.Id());
+        if (found == records.end()) {
+            const kb::scene::TransformComponent* transform = scene.Transforms().TryGet(entity);
+            const kb::scene::Vec3 position = transform == nullptr ? kb::scene::Vec3{} : transform->localPosition;
+            found = records.emplace(entity.Id(), Record{ .position = position }).first;
+        }
+        return found->second;
+    }
+    void WriteBack(kb::scene::SceneEntity entity, const Record& record) {
+        const kb::scene::TransformComponent* transform = scene.Transforms().TryGet(entity);
+        if (transform == nullptr) return;
+        kb::scene::TransformComponent value = *transform;
+        value.localPosition = record.position;
+        scene.Transforms().Set(entity, value);
+    }
+
+    [[nodiscard]] std::optional<std::uint64_t> MemoryUsageBytes() const noexcept override { return std::nullopt; }
+    bool AddForce(kb::scene::SceneEntity, kb::scene::Vec3) noexcept override { return false; }
+    bool AddImpulse(kb::scene::SceneEntity, kb::scene::Vec3) noexcept override { return false; }
+    bool AddTorque(kb::scene::SceneEntity, kb::scene::Vec3) noexcept override { return false; }
+    bool SetVelocity(kb::scene::SceneEntity, kb::scene::Vec3) noexcept override { return false; }
+    [[nodiscard]] kb::scene::PhysicsVectorResult GetVelocity(kb::scene::SceneEntity) const noexcept override { return {}; }
+    bool SetAngularVelocity(kb::scene::SceneEntity, kb::scene::Vec3) noexcept override { return false; }
+    [[nodiscard]] kb::scene::PhysicsVectorResult GetAngularVelocity(kb::scene::SceneEntity) const noexcept override { return {}; }
+    bool MoveKinematic(kb::scene::SceneEntity, kb::scene::Vec3, kb::scene::Quat, float) noexcept override { return false; }
+    bool Sleep(kb::scene::SceneEntity) noexcept override { return false; }
+    bool Wake(kb::scene::SceneEntity) noexcept override { return false; }
+    [[nodiscard]] bool IsSleeping(kb::scene::SceneEntity) const noexcept override { return false; }
+    [[nodiscard]] kb::scene::PhysicsCastResult CastShape(const kb::scene::PhysicsShapeDesc&, kb::scene::Vec3, kb::scene::Vec3, float, std::uint32_t) const noexcept override { return {}; }
+    [[nodiscard]] kb::scene::PhysicsOverlapResult OverlapShape(const kb::scene::PhysicsShapeDesc&, kb::scene::Vec3, std::uint32_t) const noexcept override { return {}; }
+    [[nodiscard]] kb::scene::PhysicsClosestPointResult ClosestPoint(kb::scene::SceneEntity, kb::scene::Vec3, std::uint32_t) const noexcept override { return {}; }
+    void RaycastAll(kb::scene::Vec3, kb::scene::Vec3, float, std::uint32_t, kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult>&) const noexcept override {}
+    void CastShapeAll(const kb::scene::PhysicsShapeDesc&, kb::scene::Vec3, kb::scene::Vec3, float, std::uint32_t, kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult>&) const noexcept override {}
+    void OverlapShapeAll(const kb::scene::PhysicsShapeDesc&, kb::scene::Vec3, std::uint32_t, kb::library::ArrayNonAlloc<kb::scene::PhysicsOverlapResult>&) const noexcept override {}
+    bool CharacterMove(kb::scene::SceneEntity, kb::scene::Vec3) noexcept override { return false; }
+    bool CharacterJump(kb::scene::SceneEntity, float) noexcept override { return false; }
+
+    bool CharacterSimulate(kb::scene::SceneEntity entity, kb::scene::Vec3 horizontalVelocity, float, float deltaSeconds,
+        kb::scene::IPhysicsBackend::CharacterStepState& out) noexcept override {
+        if (!HasCharacter(entity) || !std::isfinite(deltaSeconds) || deltaSeconds <= 0.0F || deltaSeconds > 0.25F) return false;
+        Record& record = RecordOf(entity);
+        record.velocity = horizontalVelocity;
+        record.position = { record.position.x + horizontalVelocity.x * deltaSeconds, record.position.y,
+            record.position.z + horizontalVelocity.z * deltaSeconds };
+        record.grounded = true;
+        WriteBack(entity, record);
+        out.position = record.position;
+        out.velocity = record.velocity;
+        out.grounded = record.grounded;
+        return true;
+    }
+    bool CharacterSetState(kb::scene::SceneEntity entity, const kb::scene::IPhysicsBackend::CharacterStepState& state) noexcept override {
+        if (!entity.IsValid()) return false;
+        Record& record = RecordOf(entity);
+        record.position = state.position;
+        record.velocity = state.velocity;
+        record.grounded = state.grounded;
+        WriteBack(entity, record);
+        return true;
+    }
+    bool CharacterSetDriven(kb::scene::SceneEntity entity, bool driven) noexcept override {
+        if (!HasCharacter(entity)) return false;
+        RecordOf(entity).driven = driven;
+        return true;
+    }
+    [[nodiscard]] kb::scene::PhysicsVectorResult CharacterVelocity(kb::scene::SceneEntity entity) const noexcept override {
+        const auto found = records.find(entity.Id());
+        return found == records.end() ? kb::scene::PhysicsVectorResult{} : kb::scene::PhysicsVectorResult{ .found = true, .value = found->second.velocity };
+    }
+    [[nodiscard]] bool CharacterIsGrounded(kb::scene::SceneEntity entity) const noexcept override {
+        const auto found = records.find(entity.Id());
+        return found != records.end() && found->second.grounded;
+    }
+    [[nodiscard]] kb::scene::PhysicsVectorResult CharacterGroundNormal(kb::scene::SceneEntity) const noexcept override { return { .found = true, .value = { 0.0F, 1.0F, 0.0F } }; }
+    [[nodiscard]] kb::scene::PhysicsVectorResult CharacterGroundVelocity(kb::scene::SceneEntity) const noexcept override { return {}; }
+
+    kb::scene::Scene& scene;
+    std::unordered_map<std::uint64_t, Record> records;
+};
+
+// A server scene with one predicted character of player 7, and a client scene that joins it over a loopback link
+// with the given conditions. The steps below are what both applications do each frame.
+struct PredictionWorld {
+    PredictionWorld(LinkConditions conditions, std::uint16_t port)
+        : loopback(conditions), serverPhysics(serverScene), clientPhysics(clientScene), nextPort(static_cast<std::uint16_t>(port + 1U)),
+          socket(loopback.CreateTransport(Endpoint::Loopback(port))) {
+        kb::scene::PhysicsBackend::RegisterBackend(serverScene, serverPhysics);
+        kb::scene::PhysicsBackend::RegisterBackend(clientScene, clientPhysics);
+        keys.Set(7U, KeyFor(7U));
+        const auto object = serverScene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Predicted" });
+        entity = object.Entity();
+        kb::scene::TransformComponent transform = *serverScene.Transforms().TryGet(entity);
+        transform.localPosition = { -3.0F, 1.0F, -3.0F };
+        serverScene.Transforms().Set(entity, transform);
+        serverScene.Components().CharacterControllers().Set(entity, kb::scene::CharacterControllerComponent{});
+        std::string error;
+        Require(serverRuntime.Replicate(entity.Id(), error), error);
+        SceneServerOptions serverOptions;
+        serverOptions.identity = MakeBuildIdentity(7U, "scene-content");
+        serverOptions.replicate = ReplicateMode::None;
+        server = std::make_unique<SceneServer>(serverScene, serverRuntime, kb::network::ReplicationDeclarations{}, keys, std::move(socket), serverOptions,
+            [](const std::string&) {});
+        Require(server->Start(error), "the prediction server did not start: " + error);
+        SceneClientOptions options;
+        options.identity = MakeBuildIdentity(7U, "scene-content");
+        options.clientId = 7U;
+        options.key = KeyFor(7U);
+        options.server = Endpoint::Loopback(port);
+        client = std::make_unique<SceneClient>(clientScene, clientRuntime, options, [this](std::string&) -> std::unique_ptr<IDatagramTransport> {
+            return loopback.CreateTransport(Endpoint::Loopback(nextPort++));
+        });
+    }
+    void Step(bool moving, float vx, float dtSeconds = 0.01F) {
+        now += 10U;
+        loopback.Advance(now);
+        server->Pump(now);
+        server->Tick(++tick, now);
+        Require(client->Update(now, diagnostics), diagnostics.str());
+        if (moving) client->Move(vx, 0.0F, 0.0F, dtSeconds);
+    }
+    void Connect() {
+        for (int i = 0; i < 400 && !(client->Connected() && client->ReplicaCount() == 1U); ++i) Step(false, 0.0F);
+        Require(client->Connected() && client->ReplicaCount() == 1U, "the prediction client did not connect: " + diagnostics.str());
+    }
+    [[nodiscard]] NetworkId PredictedId() const { return server->Replication().NetworkIdOf(entity); }
+    [[nodiscard]] kb::scene::Vec3 ServerPosition() const { return serverScene.Transforms().TryGet(entity)->localPosition; }
+    [[nodiscard]] kb::scene::Vec3 ClientPosition() const {
+        const kb::ecs::Entity replica = client->Replica(PredictedId());
+        Require(replica.IsValid(), "the client has no replica of the predicted character");
+        return clientScene.Transforms().TryGet(replica)->localPosition;
+    }
+
+    LoopbackNetwork loopback;
+    kb::scene::Scene serverScene;
+    kb::scene::Scene clientScene;
+    FlatGroundPhysics serverPhysics;
+    FlatGroundPhysics clientPhysics;
+    std::uint16_t nextPort;
+    std::unique_ptr<IDatagramTransport> socket;
+    StaticKeyTable keys;
+    kb::scene::SceneEntity entity{};
+    ScriptNetworkRuntime serverRuntime{ ScriptNetworkRuntime::Role::Server, serverScene, {} };
+    ScriptNetworkRuntime clientRuntime{ ScriptNetworkRuntime::Role::Offline, clientScene, {} };
+    std::unique_ptr<SceneServer> server;
+    std::unique_ptr<SceneClient> client;
+    std::ostringstream diagnostics;
+    std::uint64_t now = 0U;
+    std::uint32_t tick = 0U;
+};
+
+LinkConditions LossyLink() {
+    LinkConditions conditions;
+    conditions.simulation.latencyMilliseconds = 75U;
+    conditions.simulation.lossPermille = 50U;
+    conditions.simulation.seed = 21U;
+    return conditions;
+}
+
+void TestPredictionConvergesUnderRttAndLoss() {
+    PredictionWorld world(LossyLink(), 9850U);
+    world.Connect();
+    std::string error;
+    Require(world.serverRuntime.SetOwner(world.entity.Id(), 7U, error), error);
+    Require(world.serverRuntime.SetPredicted(world.entity.Id(), 3.0F, 6.0F, error), error);
+    for (int step = 0; step < 200; ++step) world.Step(true, 3.0F);
+    for (int step = 0; step < 100; ++step) world.Step(false, 0.0F);
+    const kb::scene::Vec3 server = world.ServerPosition();
+    const kb::scene::Vec3 client = world.ClientPosition();
+    const double distance = std::sqrt(static_cast<double>((server.x - client.x) * (server.x - client.x) +
+        (server.y - client.y) * (server.y - client.y) + (server.z - client.z) * (server.z - client.z)));
+    Require(distance < 0.01, "the predicted character did not converge on the server's position by " + std::to_string(distance) + " m");
+    Require(world.client->PredictionCorrections() <= 3U,
+        "the prediction needed too many corrections: " + std::to_string(world.client->PredictionCorrections()));
+}
+
+void TestServerClampsPredictedSpeedAndTime() {
+    {
+        PredictionWorld world({}, 9860U);
+        world.Connect();
+        std::string error;
+        Require(world.serverRuntime.SetOwner(world.entity.Id(), 7U, error), error);
+        Require(world.serverRuntime.SetPredicted(world.entity.Id(), 5.0F, 6.0F, error), error);
+        const float start = world.ServerPosition().x;
+        for (int step = 0; step < 100; ++step) world.Step(true, 100.0F);
+        const float travelled = std::abs(world.ServerPosition().x - start);
+        Require(travelled <= 5.0F * 1.05F, "the server moved the character " + std::to_string(travelled) + " m at 100 m/s (limit 5 m/s)");
+    }
+    {
+        PredictionWorld world({}, 9870U);
+        world.Connect();
+        std::string error;
+        Require(world.serverRuntime.SetOwner(world.entity.Id(), 7U, error), error);
+        Require(world.serverRuntime.SetPredicted(world.entity.Id(), 5.0F, 6.0F, error), error);
+        const float start = world.ServerPosition().x;
+        for (int step = 0; step < 20; ++step) world.Step(true, 5.0F, 0.1F); // 2 s of input in 0.2 s of real time
+        const float travelled = std::abs(world.ServerPosition().x - start);
+        Require(travelled <= 5.0F * 0.45F, "the server simulated " + std::to_string(travelled / 5.0F) + " s of movement in 0.2 s of real time");
+    }
+}
+
+void TestPredictedInputRefusedWithoutPredictedEntity() {
+    PredictionWorld world({}, 9880U);
+    world.Connect();
+    const kb::scene::Vec3 start = world.ServerPosition();
+    for (int step = 0; step < 20; ++step) world.Step(true, 3.0F);
+    const kb::scene::Vec3 end = world.ServerPosition();
+    Require(std::abs(end.x - start.x) < 1.0e-4F && std::abs(end.z - start.z) < 1.0e-4F, "an input moved a character that no server marked as predicted");
+    Require(world.server->Replication().Stats().predictedInputsRejected > 0U, "an input without a predicted entity was not counted as rejected");
+}
+
 } // namespace
 
 int main() {
@@ -1178,6 +1407,9 @@ int main() {
         { "scene-network-change-rehandshake", &TestNetworkChangeForcesNewHandshakeWithin100ms },
         { "scene-network-unavailable-no-reconnect", &TestNoReconnectWhileNetworkUnavailable },
         { "scene-network-repeated-available", &TestRepeatedNetworkAvailableNegotiatesAgain },
+        { "prediction-converges-under-150ms-rtt-and-loss", &TestPredictionConvergesUnderRttAndLoss },
+        { "server-clamps-predicted-speed-and-time", &TestServerClampsPredictedSpeedAndTime },
+        { "predicted-input-refused-without-predicted-entity", &TestPredictedInputRefusedWithoutPredictedEntity },
         { "scene-server-on-provided-scene", &TestSceneServerRunsOnProvidedScene },
         { "script-join-refusals", &TestScriptJoinRequestIsRefusedByName },
         { "host-and-guest", &TestHostPlayerSeesGuestAndGuestSeesHostObject },

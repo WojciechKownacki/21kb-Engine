@@ -1276,7 +1276,10 @@ How a game of several players works here:
   `Net.Leave()`; both take effect on the next frame and the usual `OnNetConnected` / `OnNetDisconnected` follow. A player hosts a game for friends with `Net.Host(port, maxPlayers, password, name)`: that game is the server and its own player is player 1 (`Net.IsServer()` and `Net.IsClient()` are both true). Nearby games are listed with `Net.Discover(true)` (`Net.Discover(false)` stops): each one arrives as `OnNetGameFound(name, address, port, players, maxPlayers, passwordRequired)` and leaves as `OnNetGameLost(address, port)`, so a menu can fill itself and join with `Net.Join`.
 - Events: `OnNetConnected`, `OnNetDisconnected`, `OnNetSpawned(entity, owner)` and `OnNetDespawned` (`kb_cli net info` lists them with the functions, from the engine).
 - Other players' characters move smoothly by themselves: a player shows each replica about 0.1 s in the past, between the server's two last snapshots, so a script that
-  reads `Transform.GetPosition(replica)` every frame sees a steady motion (the player's own character is not predicted: it follows the server).
+  reads `Transform.GetPosition(replica)` every frame sees a steady motion.
+- A player's own character is predicted: the server marks it with `Net.SetPredicted(entity, maxSpeed, maxJump)` (the entity must belong to that player) and the player calls
+  `Net.Move(vx, vz, jump)` every frame from `Input.Vector2("Move")`; the character moves at once on that machine, the server steps the same input (clamped to those limits and to
+  the time that has passed) and the player replays the inputs the server has not seen yet on top of the state it sends back.
 - Single-player the same scripts still run: `Net.Mode().mode` is `"offline"` and the Net calls say so; keep a script working offline by asking `Net.Mode()` first.
 
 Try it without a window, a socket or a second computer: `kb_cli net check --project <dir> --clients 2 --press 1:W@40+60`. It loads the project as the server and as 2 players

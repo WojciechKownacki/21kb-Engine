@@ -279,6 +279,23 @@ struct ReplicationConfig {
     std::size_t maxUpdatesInFlight = 64U;      // sent but not yet acknowledged state messages, per client
 };
 
+// One player input of a predicted character. Values are the ones that travel on the wire, in centimetres
+// per second and milliseconds, so that the client and the server step the same numbers.
+struct PredictedInput {
+    std::uint32_t sequence = 0U;
+    std::int16_t velocityXCentimetersPerSecond = 0;
+    std::int16_t velocityZCentimetersPerSecond = 0;
+    std::uint16_t jumpCentimetersPerSecond = 0U;
+    std::uint8_t dtMilliseconds = 0U;
+};
+
+// The state a predicted step produced: where the character is, how it moves and whether it stands on ground.
+struct PredictedStepState {
+    float px = 0.0F, py = 0.0F, pz = 0.0F;
+    float vx = 0.0F, vy = 0.0F, vz = 0.0F;
+    bool grounded = false;
+};
+
 struct ReplicationServerStats {
     std::uint64_t visibilityNs = 0U, candidatesNs = 0U, orderingNs = 0U, encodingNs = 0U;
     std::uint64_t capturedEntities = 0U;
@@ -301,11 +318,19 @@ struct ReplicationServerStats {
     std::uint64_t rpcNoHandler = 0U;
     std::uint64_t rpcHandlerErrors = 0U;
     std::uint64_t rpcDispatched = 0U;
+    std::uint64_t predictedInputsApplied = 0U;
+    std::uint64_t predictedInputsRejected = 0U;
 };
 
 class ReplicationServer final {
 public:
     using RpcHandler = std::function<void(std::uint64_t caller, std::span<const RpcValue> args)>;
+    // Steps a predicted character with one input (the scene's own character step); fills the resulting state.
+    using PredictedStepFunction = std::function<bool(NetworkId id, float vx, float vz, float jump, float deltaSeconds, PredictedStepState& out)>;
+    // Reads the character's current state (the first acknowledgement, before any input).
+    using PredictedStateFunction = std::function<bool(NetworkId id, PredictedStepState& out)>;
+    // The server's scene drives a predicted character only through its inputs.
+    using PredictedDrivenFunction = std::function<void(NetworkId id, bool driven)>;
 
     ReplicationServer(Host& host, kb::ecs::World& world, const ReplicationRegistry& components, const RpcRegistry& rpcs, ReplicationConfig config = {});
 
@@ -339,6 +364,18 @@ public:
     [[nodiscard]] RpcStatus CallRpc(std::uint64_t client, const std::string& name, std::span<const RpcValue> args);
     void CallRpcAll(const std::string& name, std::span<const RpcValue> args, RpcStatus& status);
     void SetRpcHandler(const std::string& name, RpcHandler handler);
+
+    // Makes a replicated entity a predicted character of the player who owns it: its inputs go through this
+    // server's character step, clamped and time-budgeted, and its state is acknowledged to the player.
+    // False with a named refusal when the entity is not replicated, has no player owner, or a limit is not finite and positive.
+    [[nodiscard]] bool SetPredicted(NetworkId id, float maxSpeed, float maxJump);
+    // The scene's character step, state read and driven flag. Set by the server that owns the scene.
+    void SetPredictedCallbacks(PredictedDrivenFunction driven, PredictedStepFunction step, PredictedStateFunction state);
+    // The hosting player's input: the same clamps and time budget as a guest's, applied at once on this machine, no prediction.
+    [[nodiscard]] bool MoveHostPlayer(std::uint64_t player, float vx, float vz, float jump, float deltaSeconds, std::uint64_t nowMilliseconds);
+    // The last predicted input this server accepted from a player (0: none).
+    [[nodiscard]] std::uint32_t PredictedLastInput(std::uint64_t player) const;
+
     // A client-to-server call made on this machine (the hosting player): the same checks as a call from a guest (direction, arguments,
     // rate, ownership) and the same handler; refusals are counted and reported the same way.
     [[nodiscard]] RpcStatus CallLocalRpc(std::uint64_t caller, const std::string& name, std::span<const RpcValue> args, std::uint64_t nowMilliseconds);
@@ -387,6 +424,17 @@ private:
         std::uint32_t ackedInWindow = 0U, lostInWindow = 0U;
         std::array<std::pair<std::uint64_t, std::uint32_t>, 10U> rttMinima{};
         bool breaker = false, congested = false;
+        // Predicted character of this player (0: none): its inputs advance it, its state goes back as an acknowledgement.
+        NetworkId predicted = 0U;
+        float maxSpeed = 0.0F, maxJump = 0.0F;
+        std::uint32_t lastInput = 0U;
+        double inputBudgetMs = 0.0;
+        std::uint64_t inputBudgetAt = 0U;
+        PredictedStepState lastState{};
+        bool hasState = false;
+        PredictedStepState acknowledgedState{};
+        std::uint32_t acknowledgedInput = 0U;
+        bool acknowledged = false;
     };
 
     [[nodiscard]] std::uint32_t AudienceMask(std::uint64_t client, std::uint64_t owner, bool spawn) const;
@@ -404,6 +452,9 @@ private:
     void UpdateVisibility(std::uint64_t client, ClientState& state, std::uint32_t tick);
     void BuildUpdates(std::uint64_t client, ClientState& state, std::uint32_t tick);
     void HandleAck(ClientState& state, std::span<const std::uint8_t> data);
+    void HandleInput(std::uint64_t client, ClientState& state, std::span<const std::uint8_t> data, std::uint64_t nowMilliseconds);
+    [[nodiscard]] bool ApplyInput(ClientState& state, std::uint32_t sequence, float vx, float vz, float jump, float deltaSeconds);
+    void SendInputAck(std::uint64_t client, ClientState& state);
     void UpdateRate(std::uint64_t client, ClientState& state, std::uint64_t now);
     void ApplyAcked(ClientState& state, const SentUpdate& update);
     void HandleRpc(std::uint64_t client, std::uint8_t channel, bool reliable, std::span<const std::uint8_t> data, std::uint64_t nowMilliseconds);
@@ -428,6 +479,9 @@ private:
     std::map<std::uint16_t, RpcHandler> handlers_;
     RpcRateLimiter limiter_;
     ReplicationServerStats stats_;
+    PredictedDrivenFunction predictedDriven_;
+    PredictedStepFunction predictedStep_;
+    PredictedStateFunction predictedState_;
     std::uint32_t lastTick_ = 0U;
     std::uint64_t nowMilliseconds_ = 0U;
     std::uint64_t visibilityRevision_ = 1U;
@@ -490,6 +544,13 @@ public:
     [[nodiscard]] RpcStatus CallRpc(const std::string& name, std::span<const RpcValue> args);
     void SetRpcHandler(const std::string& name, RpcHandler handler);
 
+    // Sends the player's inputs (the last few, oldest first) to the server on the unreliable channel. False when the
+    // session is not ready or the send queue is full (the next call sends them again).
+    [[nodiscard]] bool SendInputs(std::span<const PredictedInput> inputs);
+    // Called with the server's state of the predicted character and the last input it applied.
+    using InputAckCallback = std::function<void(NetworkId id, std::uint32_t lastInput, const PredictedStepState& state)>;
+    InputAckCallback SetInputAckCallback(InputAckCallback callback) { auto previous = std::move(onInputAck_); onInputAck_ = std::move(callback); return previous; }
+
     [[nodiscard]] DiagLog& Diagnostics() noexcept { return diagnostics_; }
     [[nodiscard]] const ReplicationClientStats& Stats() const noexcept { return stats_; }
 
@@ -501,6 +562,7 @@ private:
     void HandleState(std::span<const std::uint8_t> data);
     void HandleHello(std::span<const std::uint8_t> data);
     void HandleRpc(std::span<const std::uint8_t> data);
+    void HandleInputAck(std::span<const std::uint8_t> data);
 
     Client* client_;
     kb::ecs::World* world_;
@@ -512,6 +574,7 @@ private:
     SpawnCallback onSpawn_;
     DespawnCallback onDespawn_;
     StateCallback onState_;
+    InputAckCallback onInputAck_;
     ReplicationClientStats stats_;
     DiagLog diagnostics_;
     bool ready_ = false;

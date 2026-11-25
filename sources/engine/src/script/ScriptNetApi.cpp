@@ -385,6 +385,45 @@ ScriptFunctionCallResult SetOwner(const ScriptFunctionCallContext& context, Argu
     return Ok({ { "applied", ScriptValue{ true } } });
 }
 
+ScriptFunctionCallResult SetPredicted(const ScriptFunctionCallContext& context, Arguments arguments) {
+    INetworkScriptRuntime* runtime = RuntimeOf(context);
+    if (runtime == nullptr || (runtime->Mode() != ScriptNetMode::Server && runtime->Mode() != ScriptNetMode::Host)) {
+        return Failure(context, "Net.SetPredicted: only a server marks a player's character as predicted (guard it with `if Net.IsServer() then`)", kb::net::DiagCode::NotAuthority);
+    }
+    const ScriptValue* entity = Find(arguments, "entity");
+    const ScriptValue* maxSpeed = Find(arguments, "maxSpeed");
+    const ScriptValue* maxJump = Find(arguments, "maxJump");
+    if (entity == nullptr || maxSpeed == nullptr || maxJump == nullptr) {
+        return Failure(context, "Net.SetPredicted: entity, maxSpeed and maxJump are required");
+    }
+    const double speed = maxSpeed->AsDouble();
+    const double jump = maxJump->AsDouble();
+    if (!std::isfinite(speed) || !std::isfinite(jump) || speed <= 0.0 || jump <= 0.0) {
+        return Failure(context, "Net.SetPredicted: maxSpeed and maxJump must be finite and positive");
+    }
+    std::string error;
+    if (!runtime->SetPredicted(entity->AsUInt64(), static_cast<float>(speed), static_cast<float>(jump), error)) {
+        return Failure(context, "Net.SetPredicted: " + (error.empty() ? std::string{ "refused" } : error));
+    }
+    return Ok({ { "predicted", ScriptValue{ true } } });
+}
+
+ScriptFunctionCallResult Move(const ScriptFunctionCallContext& context, Arguments arguments) {
+    INetworkScriptRuntime* runtime = RuntimeOf(context);
+    if (runtime == nullptr || (runtime->Mode() != ScriptNetMode::Client && runtime->Mode() != ScriptNetMode::Host)) {
+        return Failure(context, "Net.Move: only a client or a host moves its own character", kb::net::DiagCode::NotAuthority);
+    }
+    const ScriptValue* vx = Find(arguments, "vx");
+    const ScriptValue* vz = Find(arguments, "vz");
+    const ScriptValue* jump = Find(arguments, "jump");
+    std::string error;
+    if (!runtime->Move(vx == nullptr ? 0.0F : static_cast<float>(vx->AsDouble()), vz == nullptr ? 0.0F : static_cast<float>(vz->AsDouble()),
+            jump == nullptr ? 0.0F : static_cast<float>(jump->AsDouble()), context.deltaSeconds, error)) {
+        return Failure(context, "Net.Move: " + (error.empty() ? std::string{ "refused" } : error));
+    }
+    return Ok({ { "moved", ScriptValue{ true } } });
+}
+
 ScriptFunctionCallResult SetVar(const ScriptFunctionCallContext& context, Arguments arguments) {
     auto* runtime = RuntimeOf(context);
     const auto* name = Find(arguments, "name");
@@ -634,6 +673,14 @@ bool ScriptNetApi::Register(ScriptRuntimeHost& host) {
     ok = add("Net.IsReplicated", "True when the entity is replicated by this server.", { { "entity", T::Entity, true } }, { { "value", T::Bool, true } }, &IsReplicated) && ok;
     ok = add("Net.SetOwner", "Gives an entity to a player, who may then call RPCs that act on it. Server only.", { { "entity", T::Entity, true }, { "player", T::UInt32, true } },
         { { "applied", T::Bool, true } }, &SetOwner) && ok;
+    ok = add("Net.SetPredicted",
+        "Marks a replicated entity as a predicted character of its player: every frame the player calls Net.Move, the character moves on that machine at once, and the server steps the same input (clamped to maxSpeed and maxJump, within real time) and sends its state back. Server only.",
+        { { "entity", T::Entity, true }, { "maxSpeed", T::Double, true }, { "maxJump", T::Double, true } },
+        { { "predicted", T::Bool, true } }, &SetPredicted) && ok;
+    ok = add("Net.Move",
+        "Moves this machine's own player character for this frame: vx and vz in metres per second and jump in metres per second. The input is sent to the server, which decides; the character is predicted here so it moves without waiting.",
+        { { "vx", T::Double, false }, { "vz", T::Double, false }, { "jump", T::Double, false } },
+        { { "moved", T::Bool, true } }, &Move) && ok;
     ok = add("Net.SetVar", "Sets a variable declared in Config/Replication.json. Server only; rejects unknown names, missing components and values outside the declared range. Bool variables use 0 or 1.",
         {{"entity", T::Entity, true}, {"name", T::String, true}, {"value", T::Double, true}}, {{"applied", T::Bool, true}}, &SetVar) && ok;
     ok = add("Net.GetVar", "Reads a declared network variable available to this scene. Bool variables return 0 or 1.",

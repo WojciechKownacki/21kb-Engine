@@ -22,6 +22,7 @@
 #include "kb/net/ProjectScene.hpp"
 #include "kb/net/SceneNetwork.hpp"
 #include "kb/net/SceneReplication.hpp"
+#include "kb/net/SceneServer.hpp"
 #include "kb/net/ScriptBridge.hpp"
 
 #include <algorithm>
@@ -330,6 +331,7 @@ int RunNetCheck(const ArgumentList& arguments, CommandIo io) {
         return 1;
     }
     kb::net::ReplicationServer replication{ host, server.Scene().Runtime().EcsWorld(), *components, rpcs };
+    kb::net::ConfigurePredictedCharacters(server.Scene(), replication);
     server.net->BindServer(replication);
 
     // The players.
