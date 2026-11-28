@@ -35,12 +35,18 @@ bool EditorNetworkDeclarations::Load(const std::filesystem::path& projectRoot, s
     declarations_ = {};
     error.clear();
     std::error_code fileError;
-    if (!std::filesystem::is_regular_file(file_, fileError)) {
-        if (fileError) {
-            error = "replication declarations could not be checked: " + fileError.message();
-            return false;
-        }
+    const std::filesystem::file_status status = std::filesystem::status(file_, fileError);
+    // A missing file is no declarations. status() still reports the not-found code, so only the type tells it apart.
+    if (status.type() == std::filesystem::file_type::not_found) {
         return true;
+    }
+    if (fileError) {
+        error = "replication declarations could not be checked: " + fileError.message();
+        return false;
+    }
+    if (!std::filesystem::is_regular_file(status)) {
+        error = "replication declarations are not a file: " + file_.generic_string();
+        return false;
     }
     std::ifstream file(file_, std::ios::binary);
     if (!file) {

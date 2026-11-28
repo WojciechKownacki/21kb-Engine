@@ -6,6 +6,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "network/EditorNetworkDeclarations.hpp"
 #include "project/EditorProjectBootstrap.hpp"
 #include "project/EditorProjectPaths.hpp"
 #include "scene/EditorPluginCatalog.hpp"
@@ -218,6 +219,26 @@ void RunTerrainEditorPluginCatalogTest() {
         "Terrain Editor catalog binary path should be configuration agnostic");
 }
 
+void RunNetworkDeclarationsMissingFileTest() {
+    std::error_code error;
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_editor_network_declarations_tests";
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    kb::editor::tests::Require(!error, "Network declarations test temp root could not be created");
+    // No Config folder at all: the project simply has no declarations.
+    std::string message;
+    kb::editor::EditorNetworkDeclarations missing;
+    kb::editor::tests::Require(missing.Load(root, message), "a missing declarations file is not an error");
+    kb::editor::tests::Require(message.empty() && missing.Variables().empty(),
+        "a missing file leaves no declarations and no message");
+    // A Config/Replication.json that is a folder rather than a file is reported.
+    std::filesystem::create_directories(kb::editor::EditorNetworkDeclarations::FilePath(root) / "nested", error);
+    kb::editor::EditorNetworkDeclarations directory;
+    kb::editor::tests::Require(!directory.Load(root, message), "a declarations path that is not a file is an error");
+    kb::editor::tests::Require(!message.empty(), "the error explains why the declarations were not read");
+    std::filesystem::remove_all(root, error);
+}
+
 } // namespace
 
 namespace kb::editor::tests {
@@ -227,6 +248,7 @@ void RunEditorProjectTests() {
     RunProjectPathsPreferRepositoryProjectWhenLaunchedFromBuildTreeTest();
     RunParticleProviderMigrationPolicyTest();
     RunTerrainEditorPluginCatalogTest();
+    RunNetworkDeclarationsMissingFileTest();
 }
 
 } // namespace kb::editor::tests

@@ -82,6 +82,10 @@ int main(int argumentCount, char** arguments) {
         kb::editor::tests::RunEditorAgentGuidanceTests();
         return 0;
     }
+    if (argumentCount == 2 && std::string_view{ arguments[1] } == "project") {
+        kb::editor::tests::RunEditorProjectTests();
+        return 0;
+    }
     if (argumentCount == 2 && std::string_view{ arguments[1] } == "terrain-foliage") {
         kb::editor::tests::RunEditorTerrainFoliageTests();
         return 0;

@@ -1495,6 +1495,7 @@ if(BUILD_TESTING)
         tests/EditorSettingsTests.cpp
         tests/EditorAgentGuidanceTests.cpp
         src/agent/EditorAgentCatalog.cpp
+        src/network/EditorNetworkDeclarations.cpp
         src/agent/EditorAgentGuidance.cpp
         src/agent/EditorAgentPlan.cpp
         src/agent/EditorAgentPrices.cpp
