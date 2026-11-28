@@ -81,6 +81,7 @@ void RunProjectBootstrapCreatesDescriptorAndRuntimeFoldersTest() {
     kb::editor::tests::Require(std::filesystem::is_regular_file(kb::editor::EditorProjectPaths::ProjectFile()), "Editor project descriptor file was not created");
     kb::editor::tests::Require(std::filesystem::is_directory(kb::editor::EditorProjectPaths::ScenesRoot()), "Editor project scenes folder was not created");
     kb::editor::tests::Require(std::filesystem::is_directory(kb::editor::EditorProjectPaths::PrefabsRoot()), "Editor project prefabs folder was not created");
+    kb::editor::tests::Require(std::filesystem::is_regular_file(kb::editor::EditorProjectPaths::ScenesRoot() / "Main.21kbscene"), "Editor project bootstrap did not write the startup scene its settings name");
     kb::editor::tests::Require(created.settings.defaultMap == "/Game/Scenes/Main.21kbscene", "Editor project default map is invalid");
     kb::editor::tests::Require(HasEnabledPlugin(created.descriptor, "Physics.Jolt"), "Editor project default physics plugin was not configured");
     kb::editor::tests::Require(HasEnabledPlugin(created.descriptor, "Audio.Miniaudio"), "Editor project default audio plugin was not configured");
@@ -128,6 +129,50 @@ void RunProjectBootstrapCreatesDescriptorAndRuntimeFoldersTest() {
     kb::editor::EditorProjectPaths::SetProjectFile({});
     std::filesystem::current_path(TempRoot().parent_path(), error);
     std::filesystem::remove_all(TempRoot(), error);
+}
+
+void RunProjectBootstrapKeepsSavedStateTest() {
+    std::error_code error;
+    const std::filesystem::path savedRoot = TempRoot().parent_path() / "21kb_editor_bootstrap_saved_test";
+    std::filesystem::remove_all(savedRoot, error);
+    std::filesystem::create_directories(savedRoot / "Project" / "Saved" / "Cache", error);
+    kb::editor::tests::Require(!error, "Editor project bootstrap saved-state test root could not be created");
+    WriteTextFile(savedRoot / "Project" / "Saved" / "Cache" / "thumb.bin", "cache\n");
+
+    {
+        kb::editor::EditorProjectPaths::SetProjectFile({});
+        const ScopedCurrentPath currentPath{ savedRoot };
+
+        const kb::editor::EditorProjectBootstrapResult created = kb::editor::EditorProjectBootstrap::BootstrapDefaultProject();
+        kb::editor::tests::Require(created.succeeded, "Editor project bootstrap did not create a project in a folder holding only Saved state");
+        kb::editor::tests::Require(created.created, "Editor project bootstrap should report first-run creation next to Saved state");
+        kb::editor::tests::Require(std::filesystem::is_regular_file(kb::editor::EditorProjectPaths::ScenesRoot() / "Main.21kbscene"),
+            "Editor project bootstrap did not write the startup scene next to Saved state");
+        kb::editor::tests::Require(std::filesystem::is_regular_file(savedRoot / "Project" / "Saved" / "Cache" / "thumb.bin"),
+            "Editor project bootstrap removed the Saved state it found");
+    }
+
+    const std::filesystem::path refusedRoot = TempRoot().parent_path() / "21kb_editor_bootstrap_refused_test";
+    std::filesystem::remove_all(refusedRoot, error);
+    std::filesystem::create_directories(refusedRoot / "Project", error);
+    kb::editor::tests::Require(!error, "Editor project bootstrap refused test root could not be created");
+    WriteTextFile(refusedRoot / "Project" / "notes.txt", "notes\n");
+
+    {
+        kb::editor::EditorProjectPaths::SetProjectFile({});
+        const ScopedCurrentPath currentPath{ refusedRoot };
+
+        const kb::editor::EditorProjectBootstrapResult refused = kb::editor::EditorProjectBootstrap::BootstrapDefaultProject();
+        kb::editor::tests::Require(!refused.succeeded, "Editor project bootstrap should refuse a folder holding files that are not Saved state");
+        kb::editor::tests::Require(!refused.error.empty(), "Editor project bootstrap refusal should explain why");
+        kb::editor::tests::Require(std::filesystem::is_regular_file(refusedRoot / "Project" / "notes.txt"),
+            "Editor project bootstrap refusal must keep the user's file");
+    }
+
+    kb::editor::EditorProjectPaths::SetProjectFile({});
+    std::filesystem::current_path(TempRoot().parent_path(), error);
+    std::filesystem::remove_all(savedRoot, error);
+    std::filesystem::remove_all(refusedRoot, error);
 }
 
 void RunProjectPathsPreferRepositoryProjectWhenLaunchedFromBuildTreeTest() {
@@ -245,6 +290,7 @@ namespace kb::editor::tests {
 
 void RunEditorProjectTests() {
     RunProjectBootstrapCreatesDescriptorAndRuntimeFoldersTest();
+    RunProjectBootstrapKeepsSavedStateTest();
     RunProjectPathsPreferRepositoryProjectWhenLaunchedFromBuildTreeTest();
     RunParticleProviderMigrationPolicyTest();
     RunTerrainEditorPluginCatalogTest();

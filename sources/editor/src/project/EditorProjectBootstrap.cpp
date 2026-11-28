@@ -12,10 +12,6 @@
 namespace kb::editor {
 namespace {
 
-[[nodiscard]] kb::project::ProjectDescriptor DefaultDescriptor() {
-    return kb::project::ProjectCreator::DefaultDescriptor();
-}
-
 [[nodiscard]] bool NormalizeBuiltInPluginPaths(kb::project::ProjectDescriptor& descriptor) {
     bool changed = false;
     for (kb::project::ProjectPluginReference& plugin : descriptor.plugins) {
@@ -87,62 +83,66 @@ void RemoveRetiredStateFiles(const std::filesystem::path& projectRoot) {
 } // namespace
 
 EditorProjectBootstrapResult EditorProjectBootstrap::BootstrapDefaultProject() {
+    const std::filesystem::path projectFile = EditorProjectPaths::ProjectFile();
+    bool created = false;
+    std::error_code error;
+    const bool projectFileExists = std::filesystem::exists(projectFile, error);
+    if (error) {
+        return EditorProjectBootstrapResult{
+            .succeeded = false,
+            .descriptor = {},
+            .projectFile = projectFile,
+            .error = "The project file could not be checked: " + error.message(),
+            .created = false,
+        };
+    }
+    if (!projectFileExists) {
+        // A folder with no project gets the same new project as the Hub and kb_cli make: descriptor, settings,
+        // default mixer and the startup scene the settings name.
+        const std::u8string stem = projectFile.stem().u8string();
+        const std::string name{ stem.begin(), stem.end() };
+        const kb::project::NewProjectResult made =
+            kb::project::ProjectCreator::CreateIn(projectFile.parent_path(), name);
+        if (!made.succeeded) {
+            return EditorProjectBootstrapResult{
+                .succeeded = false,
+                .descriptor = {},
+                .projectFile = projectFile,
+                .error = made.error,
+                .created = false,
+            };
+        }
+        created = true;
+    }
+
     if (!EnsureProjectDirectories()) {
         return EditorProjectBootstrapResult{
             .succeeded = false,
             .descriptor = {},
-            .projectFile = EditorProjectPaths::ProjectFile(),
+            .projectFile = projectFile,
             .error = "Project directories could not be created.",
-            .created = false,
+            .created = created,
         };
     }
 
-    const std::filesystem::path projectFile = EditorProjectPaths::ProjectFile();
-    std::error_code error;
-    if (std::filesystem::exists(projectFile, error) && !error) {
-        kb::project::ProjectDescriptorReadResult loaded = kb::project::ProjectManager::LoadProject(projectFile);
-        if (loaded.succeeded && NormalizeBuiltInPluginPaths(loaded.descriptor)) {
-            if (!kb::project::ProjectManager::SaveProject(projectFile, loaded.descriptor)) {
-                loaded.succeeded = false;
-                loaded.error = "Project descriptor plugin paths could not be normalized.";
-            }
+    kb::project::ProjectDescriptorReadResult loaded = kb::project::ProjectManager::LoadProject(projectFile);
+    if (loaded.succeeded && NormalizeBuiltInPluginPaths(loaded.descriptor)) {
+        if (!kb::project::ProjectManager::SaveProject(projectFile, loaded.descriptor)) {
+            loaded.succeeded = false;
+            loaded.error = "Project descriptor plugin paths could not be normalized.";
         }
-        const kb::project::ParticleProjectPolicyResult particlePolicy = loaded.succeeded
-            ? kb::project::ParticleProjectPolicy::Inspect(projectFile.parent_path(), loaded.descriptor)
-            : kb::project::ParticleProjectPolicyResult{};
-        EditorProjectBootstrapResult result{
-            .succeeded = loaded.succeeded,
-            .descriptor = loaded.descriptor,
-            .projectFile = projectFile,
-            .error = loaded.error,
-            .created = false,
-            .particlePolicy = particlePolicy,
-            .legacySettings = loaded.legacySettings,
-        };
-        LoadOrSeedSettings(result);
-        RemoveRetiredStateFiles(projectFile.parent_path());
-        return result;
     }
-
-    kb::project::ProjectDescriptor descriptor = DefaultDescriptor();
-    if (!kb::project::ProjectManager::CreateProject(projectFile, descriptor)) {
-        // A folder too deep for the project's files says so and what to do, as opening such a project does.
-        std::string budget = kb::project::ProjectManager::PathBudgetError(projectFile);
-        return EditorProjectBootstrapResult{
-            .succeeded = false,
-            .descriptor = {},
-            .projectFile = projectFile,
-            .error = budget.empty() ? std::string{ "Project descriptor could not be created." } : std::move(budget),
-            .created = false,
-        };
-    }
-
+    const kb::project::ParticleProjectPolicyResult particlePolicy = loaded.succeeded
+        ? kb::project::ParticleProjectPolicy::Inspect(projectFile.parent_path(), loaded.descriptor)
+        : kb::project::ParticleProjectPolicyResult{};
     EditorProjectBootstrapResult result{
-        .succeeded = true,
-        .descriptor = std::move(descriptor),
+        .succeeded = loaded.succeeded,
+        .descriptor = loaded.descriptor,
         .projectFile = projectFile,
-        .error = {},
-        .created = true,
+        .error = loaded.error,
+        .created = created,
+        .particlePolicy = particlePolicy,
+        .legacySettings = loaded.legacySettings,
     };
     LoadOrSeedSettings(result);
     RemoveRetiredStateFiles(projectFile.parent_path());

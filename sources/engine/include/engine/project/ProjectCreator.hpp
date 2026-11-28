@@ -21,7 +21,7 @@ struct NewProjectResult {
 // audio mixer (Assets/Audio/DefaultMixer.kbmixer: Music, Effects and Voice buses) and the startup scene
 // Assets/Scenes/Main.21kbscene made from `startupTemplate` (Basic: camera, sun, sky and floor) with that
 // mixer active; the template also sets the project's settings and writes the files its scene uses. `name` must be a valid project name (letters, digits, '-' and '_'). The project
-// folder must not exist or be empty - nothing the user already has is overwritten - and nothing
+// folder must not exist, be empty or hold only a Saved folder - nothing the user already has is overwritten - and nothing
 // is left on disk when the project cannot be created.
 class ProjectCreator {
 public:
@@ -33,6 +33,11 @@ public:
     // audio, lighting, particles), referenced by their file name next to the executables.
     [[nodiscard]] static ProjectDescriptor DefaultDescriptor();
     [[nodiscard]] static NewProjectResult Create(const std::filesystem::path& parentDirectory, std::string_view name,
+        kb::scene::SceneTemplate startupTemplate = kb::scene::SceneTemplate::Basic);
+    // Creates the project in `projectRoot` itself, its descriptor named `name` (Create puts it in parentDirectory / name).
+    // The folder may be missing, empty, or hold only a Saved folder (the editor's caches and logs, never project content),
+    // which is kept as it is.
+    [[nodiscard]] static NewProjectResult CreateIn(const std::filesystem::path& projectRoot, std::string_view name,
         kb::scene::SceneTemplate startupTemplate = kb::scene::SceneTemplate::Basic);
 };
 

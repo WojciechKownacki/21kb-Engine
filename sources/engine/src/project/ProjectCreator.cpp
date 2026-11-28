@@ -57,6 +57,26 @@ constexpr std::string_view kDefaultMixerVirtualPath = "/Game/Audio/DefaultMixer.
     return NewProjectResult{ .succeeded = false, .projectFile = std::move(projectFile), .error = std::move(error) };
 }
 
+// Whether `folder` holds nothing but the editor's Saved folder (its caches and logs, never project content).
+[[nodiscard]] bool HoldsOnlySavedState(const std::filesystem::path& folder, std::error_code& error) {
+    std::filesystem::directory_iterator iterator{ folder, error };
+    if (error) {
+        return false;
+    }
+    const std::filesystem::directory_iterator end;
+    for (; iterator != end; iterator.increment(error)) {
+        if (error) {
+            return false;
+        }
+        const std::filesystem::directory_entry& entry = *iterator;
+        std::error_code typeError;
+        if (!entry.is_directory(typeError) || typeError || entry.path().filename() != std::filesystem::path{ "Saved" }) {
+            return false;
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 ProjectDescriptor ProjectCreator::DefaultDescriptor() {
@@ -103,11 +123,21 @@ NewProjectResult ProjectCreator::Create(const std::filesystem::path& parentDirec
     if (!IsValidName(name)) {
         return Refuse({}, "Project name is invalid: use letters, digits, '-' and '_'.");
     }
+    return CreateIn(parentDirectory / Utf8Path(name), name, startupTemplate);
+}
+
+NewProjectResult ProjectCreator::CreateIn(const std::filesystem::path& projectRoot, std::string_view name,
+    kb::scene::SceneTemplate startupTemplate) {
+    if (projectRoot.empty()) {
+        return Refuse({}, "Choose the folder the project is created in.");
+    }
+    if (!IsValidName(name)) {
+        return Refuse({}, "Project name is invalid: use letters, digits, '-' and '_'.");
+    }
     if (std::string problem = kb::assets::AssetFileNameError(name); !problem.empty()) {
         return Refuse({}, "Project name is invalid: " + problem);
     }
 
-    const std::filesystem::path projectRoot = parentDirectory / Utf8Path(name);
     const std::filesystem::path descriptorFile = projectRoot / Utf8Path(std::string{ name } + ".21kbproject");
     // Refused before anything is created: a project the engine could not open afterwards must not
     // be left on disk for the user to find out later.
@@ -126,7 +156,7 @@ NewProjectResult ProjectCreator::Create(const std::filesystem::path& parentDirec
         if (!std::filesystem::is_directory(projectRoot, error)) {
             return Refuse(descriptorFile, "A file with the project's name is in the way. Choose another name.");
         }
-        if (!std::filesystem::is_empty(projectRoot, error) || error) {
+        if (!HoldsOnlySavedState(projectRoot, error) || error) {
             return Refuse(descriptorFile, "The folder " + projectRoot.filename().string() +
                 " already exists and is not empty. Choose another name or another location.");
         }
@@ -135,11 +165,15 @@ NewProjectResult ProjectCreator::Create(const std::filesystem::path& parentDirec
     if (error) {
         return Refuse(descriptorFile, "The project folder could not be created: " + error.message());
     }
-    // Everything inside the folder is ours from here on, so a failure takes it all back.
+    // Everything inside the folder is ours from here on, apart from the Saved state it already held,
+    // so a failure takes back only what was created.
     const auto undo = [&projectRoot, rootExisted]() {
         std::error_code ignored;
         if (rootExisted) {
             for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(projectRoot, ignored)) {
+                if (entry.path().filename() == std::filesystem::path{ "Saved" }) {
+                    continue;
+                }
                 std::filesystem::remove_all(entry.path(), ignored);
             }
         } else {
