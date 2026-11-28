@@ -696,7 +696,9 @@ void EditorAgentPanelState::RefreshAgents() {
     // nothing starts until they choose (the model stays as remembered; the choice of agent is open).
     missingAgent_ = !found && !remembered.empty() && !agents_.empty() ? remembered : std::string{};
     const EditorAgent* agent = Current();
-    model_ = missingAgent_.empty() ? model : std::string{};
+    // A model remembered by its family's short name is the main model the program runs for that name.
+    const std::string resolved = agent != nullptr ? agent->ResolveModel(model) : std::string{};
+    model_ = !missingAgent_.empty() ? std::string{} : resolved.empty() ? model : resolved;
     effort_ = agent != nullptr && std::ranges::find(agent->efforts, effort) != agent->efforts.end() ? effort : std::string{};
     StartAccountCheck();
 }

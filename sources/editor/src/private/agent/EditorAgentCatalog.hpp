@@ -19,10 +19,14 @@ enum class EditorAgentOutputFormat : std::uint8_t {
 };
 
 // One model an agent can be started with: the exact name its command line takes, the name the program shows for it (empty
-// when it gives none) and whether the program lists it among its main models rather than its older or extra ones.
+// when it gives none), the family the program groups it in (empty when it gives none) and whether the program lists it among
+// its main models rather than its older or extra ones.
 struct EditorAgentModel {
     std::string id;
     std::string name;
+    // The family the program groups it in (its short name, which the program also takes in place of the id); empty when
+    // the file gives none.
+    std::string family;
     bool main = true;
 
     // "Name (id)", or the id alone when there is no name.
@@ -90,6 +94,9 @@ struct EditorAgent {
     [[nodiscard]] bool OffersModel(const std::string& id) const;
     // The shown name of model `id`, or `id` itself when the model is not listed or has no name.
     [[nodiscard]] std::string ModelName(const std::string& id) const;
+    // The id a remembered model name stands for: `value` itself when it is listed, else the id of the first main model of the
+    // family named `value` (the model the program runs for that short name); empty when it is neither.
+    [[nodiscard]] std::string ResolveModel(const std::string& value) const;
 };
 
 // Every agent on this machine: each built-in preset whose CLI is on PATH, once per sign-in

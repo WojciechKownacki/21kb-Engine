@@ -299,7 +299,7 @@ void AppendCustomAgents(std::vector<EditorAgent>& agents, const std::map<std::st
         agent.custom = true;
         // The models it can be started with, best first, and the words that pass the chosen one ({model}).
         for (const std::string& model : Strings(entry->Find("models"))) {
-            agent.models.push_back(EditorAgentModel{ model, {}, true });
+            agent.models.push_back(EditorAgentModel{ model, {}, {}, true });
         }
         agent.modelArguments = Strings(entry->Find("modelArguments"));
         agent.ladder = ModelLadder(MainModelIds(agent.models), tiers.contains(agent.name) ? tiers.at(agent.name) : std::vector<std::string>{});
@@ -354,13 +354,15 @@ std::vector<EditorAgentModel> ListedEditorAgentModels(const std::filesystem::pat
         if (name.empty()) name = textOf(model->Find("display_name"));
         const std::string section = textOf(model->Find("section"));
         const bool main = section.empty() || section == "main";
+        const kb::core::JsonValue* runtime = model->Find("runtime");
+        const std::string family = textOf(runtime != nullptr ? runtime->Find("family") : nullptr);
         const bool duplicate = std::ranges::any_of(models, [&id](const EditorAgentModel& listedModel) {
             return listedModel.id == id;
         });
         if (id.empty() || textOf(model->Find("visibility")) == "hide" || duplicate) {
             continue;
         }
-        models.push_back(EditorAgentModel{ std::move(id), std::move(name), main });
+        models.push_back(EditorAgentModel{ std::move(id), std::move(name), std::move(family), main });
     }
     return models;
 }
@@ -388,6 +390,19 @@ std::string EditorAgent::ModelName(const std::string& id) const {
         return model.id == id;
     });
     return found == models.end() || found->name.empty() ? id : found->name;
+}
+
+std::string EditorAgent::ResolveModel(const std::string& value) const {
+    if (value.empty()) {
+        return {};
+    }
+    if (OffersModel(value)) {
+        return value;
+    }
+    const auto found = std::ranges::find_if(models, [&value](const EditorAgentModel& model) {
+        return model.main && model.family == value;
+    });
+    return found != models.end() ? found->id : std::string{};
 }
 
 std::vector<EditorAgent> DetectEditorAgents() {

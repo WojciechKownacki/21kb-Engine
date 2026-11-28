@@ -217,7 +217,7 @@ void RunListedModelsTests() {
         R"({"version":2,"catalog":{"config":{"models":[
             {"id":"x-1","name":"Model One","section":"main","runtime":{"family":"fam-a"}},
             {"id":"x-2","section":"main","runtime":{"family":"fam-a"}},
-            {"id":"x-3","name":"Model Three","section":"overflow"},
+            {"id":"x-3","name":"Model Three","section":"overflow","runtime":{"family":"fam-a"}},
             {"id":"x-1","section":"main"},
             {"id":"x-4","visibility":"hide"}]}}})");
     const std::vector<kb::editor::EditorAgentModel> catalogModels = kb::editor::ListedEditorAgentModels(catalog);
@@ -229,6 +229,10 @@ void RunListedModelsTests() {
     Require(agent.ModelName("x-1") == "Model One" && agent.ModelName("x-2") == "x-2" && agent.ModelName("alias") == "alias",
         "a model shows the name from the file, or its id when it has none");
     Require(agent.OffersModel("x-3") && !agent.OffersModel("alias"), "an agent offers exactly the models from its file");
+    Require(catalogModels[0].family == "fam-a" && catalogModels[2].family == "fam-a", "the family comes from the runtime");
+    Require(agent.ResolveModel("x-3") == "x-3", "a listed id stands for itself");
+    Require(agent.ResolveModel("fam-a") == "x-1", "a family's short name is its first main model, not an extra one");
+    Require(agent.ResolveModel("alias").empty() && agent.ResolveModel("").empty(), "anything else stands for no model");
     Require(kb::editor::ListedEditorAgentModels(root / "missing.json").empty(), "no file, no models");
     Require(kb::editor::ListedEditorAgentModels(write("broken.json", "{ not json")).empty(), "a damaged file gives no models");
     fs::remove_all(root, error);
