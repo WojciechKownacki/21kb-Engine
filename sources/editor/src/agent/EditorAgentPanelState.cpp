@@ -599,6 +599,11 @@ struct EngineCall {
     return text;
 }
 
+// The name the program shows for model `id`, with its first letter capitalized.
+[[nodiscard]] std::string ShownModel(const EditorAgent* agent, const std::string& id) {
+    return Capitalized(agent != nullptr ? agent->ModelName(id) : id);
+}
+
 // Why the agent was stopped, in plain words for the person and as a clause for the agent.
 [[nodiscard]] std::string StuckText(EditorAgentStuck reason) {
     switch (reason) {
@@ -726,7 +731,7 @@ void EditorAgentPanelState::SelectAgent(int index) {
 
 bool EditorAgentPanelState::ModelUnavailable() const {
     const EditorAgent* agent = Current();
-    return agent != nullptr && !model_.empty() && std::ranges::find(agent->models, model_) == agent->models.end();
+    return agent != nullptr && !model_.empty() && !agent->OffersModel(model_);
 }
 
 bool EditorAgentPanelState::NoModelList() const {
@@ -1732,9 +1737,9 @@ std::optional<EditorAgentCard> EditorAgentPanelState::Card() const {
         } else {
             card.title = std::string{ EditorText("agent.missingModel.title", "The model is not available") };
             card.body = EditorLocalization::Format("agent.missingModel.body", "{model} is not offered by {agent} any more. Choose another model.",
-                { { "model", Capitalized(model_) }, { "agent", agent->Label() } });
-            for (const std::string& name : agent->models) {
-                if (card.buttons.size() < 4U) card.buttons.push_back({ Capitalized(name), EditorAgentCardAction::ChooseModel, name });
+                { { "model", ShownModel(agent, model_) }, { "agent", agent->Label() } });
+            for (const EditorAgentModel& listed : agent->models) {
+                if (card.buttons.size() < 4U) card.buttons.push_back({ listed.Label(), EditorAgentCardAction::ChooseModel, listed.id });
             }
             card.buttons.push_back({ std::string{ EditorText("agent.missingModel.own", "The program's own") }, EditorAgentCardAction::ChooseModel, {} });
         }
@@ -1752,7 +1757,7 @@ std::optional<EditorAgentCard> EditorAgentPanelState::Card() const {
             ? StrongerStepModel(conversation.plan.steps[static_cast<std::size_t>(conversation.plan.current)])
             : agent != nullptr ? StrongerModel(agent->ladder, model_) : std::string{};
         if (!stronger.empty()) {
-            card.buttons.push_back({ EditorLocalization::Format("agent.stuck.stronger", "Continue with {model}", { { "model", Capitalized(stronger) } }),
+            card.buttons.push_back({ EditorLocalization::Format("agent.stuck.stronger", "Continue with {model}", { { "model", ShownModel(agent, stronger) } }),
                 EditorAgentCardAction::ContinueStronger });
         }
         card.buttons.push_back({ std::string{ EditorText("agent.stuck.split", "Split into smaller steps") }, EditorAgentCardAction::SplitIntoSteps });
@@ -1774,14 +1779,14 @@ std::optional<EditorAgentCard> EditorAgentPanelState::Card() const {
         card.body = hint->text;
         card.buttons.push_back({ hint->label, EditorAgentCardAction::AcceptAdvice });
         card.buttons.push_back({ forModel && !model_.empty()
-                ? EditorLocalization::Format("agent.advice.stayModel", "Stay with {model}", { { "model", Capitalized(model_) } })
+                ? EditorLocalization::Format("agent.advice.stayModel", "Stay with {model}", { { "model", ShownModel(agent, model_) } })
                 : std::string{ EditorText("agent.advice.stay", "Keep it as it is") },
             EditorAgentCardAction::DismissAdvice });
         return card;
     }
     card.kind = EditorAgentCardKind::Plan;
-    const std::string chosen = Capitalized(model_);
-    const std::string strong = agent != nullptr && !agent->ladder.empty() ? Capitalized(agent->ladder.back()) : std::string{};
+    const std::string chosen = ShownModel(agent, model_);
+    const std::string strong = agent != nullptr && !agent->ladder.empty() ? ShownModel(agent, agent->ladder.back()) : std::string{};
     switch (plan.phase) {
     case EditorAgentPlan::Phase::Writing:
         card.title = std::string{ EditorText("agent.plan.writingTitle", "Making a plan") };
@@ -2019,16 +2024,16 @@ std::optional<EditorAgentHint> EditorAgentPanelState::ComputedHint() const {
         hint_ = EditorAgentHint{ EditorAgentHintAction::PlanInSteps,
             std::string{ EditorText("agent.hint.big", "This is a big request. It works best in small steps.") },
             agent->ladder.empty() ? std::string{ EditorText("agent.hint.plan", "Plan it in steps") }
-                : EditorLocalization::Format("agent.hint.planWith", "Plan it with {model}", { { "model", Capitalized(Strongest()) } }), {} };
+                : EditorLocalization::Format("agent.hint.planWith", "Plan it with {model}", { { "model", ShownModel(agent, Strongest()) } }), {} };
         return hint_;
     }
     const std::string suggested = ModelForSize(agent->ladder, size);
     if (!suggested.empty() && suggested != model_) {
         hint_ = EditorAgentHint{ EditorAgentHintAction::UseModel,
             size == EditorAgentRequestSize::Small
-                ? EditorLocalization::Format("agent.hint.small", "A small change: {model} is enough.", { { "model", Capitalized(suggested) } })
-                : EditorLocalization::Format("agent.hint.feature", "A feature: {model} suits it.", { { "model", Capitalized(suggested) } }),
-            EditorLocalization::Format("agent.hint.use", "Use {model}", { { "model", Capitalized(suggested) } }), suggested };
+                ? EditorLocalization::Format("agent.hint.small", "A small change: {model} is enough.", { { "model", ShownModel(agent, suggested) } })
+                : EditorLocalization::Format("agent.hint.feature", "A feature: {model} suits it.", { { "model", ShownModel(agent, suggested) } }),
+            EditorLocalization::Format("agent.hint.use", "Use {model}", { { "model", ShownModel(agent, suggested) } }), suggested };
     }
     return hint_;
 }

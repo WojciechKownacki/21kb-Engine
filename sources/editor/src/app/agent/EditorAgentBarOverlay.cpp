@@ -200,9 +200,9 @@ void EditorAgentBarOverlay::HandlePointerDown(int x, int y) {
     case AgentBarHitKind::MenuModel: {
         const int listed = agent.MenuAgent();
         if (listed >= 0 && listed < static_cast<int>(agent.Agents().size())) {
-            const std::vector<std::string> models = agent.Agents()[static_cast<std::size_t>(listed)].models;
+            const std::vector<EditorAgentModel> models = agent.Agents()[static_cast<std::size_t>(listed)].models;
             agent.SelectAgent(listed);
-            agent.SelectModel(hit.index == 0 ? std::string{} : models[static_cast<std::size_t>(hit.index - 1)]);
+            agent.SelectModel(hit.index == 0 ? std::string{} : models[static_cast<std::size_t>(hit.index - 1)].id);
         }
         agent.SetModelMenuOpen(false);
         break;

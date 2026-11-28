@@ -825,7 +825,7 @@ void AgentPanelRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& t
     if (layout.agentMenu.right - layout.agentMenu.left > 40) {
         PaintPicker(dc, layout.agentMenu, theme, agent != nullptr ? agent->Label() : std::string{ EditorText("agent.none", "None found") }, agent != nullptr);
     }
-    PaintPicker(dc, layout.modelMenu, theme, state.Model().empty() ? defaultValue : Capitalized(state.Model()), agent != nullptr && !agent->models.empty());
+    PaintPicker(dc, layout.modelMenu, theme, state.Model().empty() ? defaultValue : Capitalized(agent != nullptr ? agent->ModelName(state.Model()) : state.Model()), agent != nullptr && !agent->models.empty());
     const bool canSend = state.Running() || (agent != nullptr && (!state.Input().empty() || !state.Attachments().empty()));
     const COLORREF sendFill = state.Running() ? kDanger : (canSend ? Color(theme.accent) : Color(theme.panel));
     FillRound(dc, layout.sendButton, sendFill, sendFill, 6);

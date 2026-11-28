@@ -475,8 +475,24 @@ void EditorAgentPanelController::ShowChoiceMenu(HWND owner, const RECT& anchor, 
     if (current == nullptr) {
         return;
     }
-    const std::vector<std::string>& choices = models ? current->models : current->efforts;
     const std::string& selected = models ? agent.Model() : agent.Effort();
+    // What each item hands back and what it shows: a model's exact command-line name with its shown name, or a level with
+    // its own first letter capitalized.
+    std::vector<std::string> values;
+    std::vector<std::wstring> labels;
+    if (models) {
+        for (const EditorAgentModel& model : current->models) {
+            values.push_back(model.id);
+            labels.push_back(Widen(model.Label()));
+        }
+    } else {
+        for (const std::string& effort : current->efforts) {
+            values.push_back(effort);
+            std::wstring label = Widen(effort);
+            if (!label.empty()) label[0] = static_cast<wchar_t>(towupper(label[0]));
+            labels.push_back(std::move(label));
+        }
+    }
     HMENU menu = CreatePopupMenu();
     if (menu == nullptr) {
         return;
@@ -484,12 +500,10 @@ void EditorAgentPanelController::ShowChoiceMenu(HWND owner, const RECT& anchor, 
     // The agent's own default first, then what it offers; a disabled note when it offers nothing.
     AppendMenuW(menu, MF_STRING | (selected.empty() ? MF_CHECKED : 0U), kFirstChoiceCommand,
         Widen(models ? EditorText("agent.defaultModel", "Default (the agent's own setting)") : EditorText("agent.defaultEffort", "Default (the agent's own setting)")).c_str());
-    for (std::size_t index = 0; index < choices.size(); ++index) {
-        std::wstring label = Widen(choices[index]);
-        if (!label.empty()) label[0] = static_cast<wchar_t>(towupper(label[0]));
-        AppendMenuW(menu, MF_STRING | (choices[index] == selected ? MF_CHECKED : 0U), kFirstChoiceCommand + 1U + static_cast<UINT>(index), label.c_str());
+    for (std::size_t index = 0; index < values.size(); ++index) {
+        AppendMenuW(menu, MF_STRING | (values[index] == selected ? MF_CHECKED : 0U), kFirstChoiceCommand + 1U + static_cast<UINT>(index), labels[index].c_str());
     }
-    if (choices.empty()) {
+    if (values.empty()) {
         AppendMenuW(menu, MF_STRING | MF_GRAYED, 0U, Widen(models ? EditorText("agent.noModels", "This agent picks its model itself")
                                                               : EditorText("agent.noEfforts", "This agent has no reasoning levels")).c_str());
     }
@@ -501,7 +515,7 @@ void EditorAgentPanelController::ShowChoiceMenu(HWND owner, const RECT& anchor, 
         return;
     }
     const std::size_t index = static_cast<std::size_t>(chosen) - kFirstChoiceCommand;
-    const std::string value = index == 0U ? std::string{} : choices[index - 1U];
+    const std::string value = index == 0U ? std::string{} : values[index - 1U];
     if (models) {
         agent.SelectModel(value);
     } else {
@@ -534,10 +548,8 @@ void EditorAgentPanelController::ShowModelMenu(HWND owner, POINT screenAnchor) {
         AppendMenuW(menu, MF_STRING | (current && agent.Model().empty() ? MF_CHECKED : 0U), base,
             Widen("    " + std::string{ EditorText("agent.defaultModelShort", "Default model") }).c_str());
         for (std::size_t model = 0; model < entry.models.size() && model + 1U < kModelsPerAgent; ++model) {
-            std::string label = entry.models[model];
-            if (!label.empty()) label[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(label[0])));
-            AppendMenuW(menu, MF_STRING | (current && agent.Model() == entry.models[model] ? MF_CHECKED : 0U),
-                base + 1U + static_cast<UINT>(model), Widen("    " + label).c_str());
+            AppendMenuW(menu, MF_STRING | (current && agent.Model() == entry.models[model].id ? MF_CHECKED : 0U),
+                base + 1U + static_cast<UINT>(model), Widen("    " + entry.models[model].Label()).c_str());
         }
     }
     // The reasoning level of the current agent, in plain words.
@@ -572,7 +584,7 @@ void EditorAgentPanelController::ShowModelMenu(HWND owner, POINT screenAnchor) {
             return;
         }
         agent.SelectAgent(static_cast<int>(index));
-        agent.SelectModel(model == 0U ? std::string{} : agents[index].models[model - 1U]);
+        agent.SelectModel(model == 0U ? std::string{} : agents[index].models[model - 1U].id);
     } else if (command >= kFirstEffortCommand) {
         const EditorAgent* current = agent.Current();
         const UINT index = command - kFirstEffortCommand;

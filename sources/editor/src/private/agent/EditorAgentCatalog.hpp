@@ -18,6 +18,17 @@ enum class EditorAgentOutputFormat : std::uint8_t {
     PlainText,
 };
 
+// One model an agent can be started with: the exact name its command line takes, the name the program shows for it (empty
+// when it gives none) and whether the program lists it among its main models rather than its older or extra ones.
+struct EditorAgentModel {
+    std::string id;
+    std::string name;
+    bool main = true;
+
+    // "Name (id)", or the id alone when there is no name.
+    [[nodiscard]] std::string Label() const;
+};
+
 // One agent the Agent panel can run: a command-line agent found on this machine, with one of its
 // sign-in profiles. The panel never signs in itself; it starts the CLI with the profile's folder
 // and the CLI works with whatever account that folder is signed in to.
@@ -53,15 +64,14 @@ struct EditorAgent {
     // agent and its tools for every request.
     std::vector<std::string> persistentArguments;
     std::string requestTemplate;
-    // Models to choose from, by the names the CLI takes; empty means only its own default.
-    // {model} in modelArguments receives the choice; nothing is passed for the default.
-    std::vector<std::string> models;
+    // Models to choose from, best first; {model} in modelArguments receives the chosen id; nothing is passed for the default.
+    std::vector<EditorAgentModel> models;
     std::vector<std::string> modelArguments;
     // A file in the profile folder where the CLI keeps the models it offers (the last part of the path may hold one *: the newest
     // such file is read); when `models` is empty the list is read from it as the agent is detected, so it is the CLI's own and
     // current. Empty `models` after that: the agent picks its model itself.
     std::string modelsFile;
-    // `models` from the lightest to the strongest, to suggest one by the size of a request and to move one step up; the user's
+    // The ids of the main models from the lightest to the strongest, to suggest one by the size of a request and to move one step up; the user's
     // own order for the agent when the agents file has one (Agents.json "tiers"), else the program's list turned round.
     std::vector<std::string> ladder;
     // Reasoning (effort) levels, lowest first, and how a chosen level is passed ({effort}).
@@ -76,6 +86,10 @@ struct EditorAgent {
 
     // "Claude Code" for the default profile, "Claude Code - .claude-work" for another.
     [[nodiscard]] std::string Label() const;
+    // Whether `id` is one of `models`.
+    [[nodiscard]] bool OffersModel(const std::string& id) const;
+    // The shown name of model `id`, or `id` itself when the model is not listed or has no name.
+    [[nodiscard]] std::string ModelName(const std::string& id) const;
 };
 
 // Every agent on this machine: each built-in preset whose CLI is on PATH, once per sign-in
@@ -83,9 +97,8 @@ struct EditorAgent {
 // EditorAgentsFile().
 [[nodiscard]] std::vector<EditorAgent> DetectEditorAgents();
 
-// The names of the models in a CLI's cache file, in the file's order, without the ones the CLI keeps out of its picker.
-// Empty when the file is missing or unreadable.
-[[nodiscard]] std::vector<std::string> ListedEditorAgentModels(const std::filesystem::path& file);
+// The models in a program's cache file, in the file's order, without the ones it hides. Empty when the file is missing or unreadable.
+[[nodiscard]] std::vector<EditorAgentModel> ListedEditorAgentModels(const std::filesystem::path& file);
 // The prices the user keeps in the agents file; no entry for any model when there are none.
 [[nodiscard]] EditorAgentPrices LoadEditorAgentPrices();
 

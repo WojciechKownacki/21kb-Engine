@@ -204,19 +204,31 @@ void RunListedModelsTests() {
         std::ofstream(root / name, std::ios::binary) << text;
         return root / name;
     };
-    // A list with a slug per model, some hidden.
-    const fs::path slugs = write("slugs.json", R"({"models":[{"slug":"m-a","visibility":"list"},{"slug":"m-b","visibility":"hide"},{"slug":"m-c"}]})");
-    Require(kb::editor::ListedEditorAgentModels(slugs) == std::vector<std::string>({ "m-a", "m-c" }), "hidden models are left out, the file's order is kept");
-    // A catalog with the family of each model's runtime, the same family listed again and an overflow section.
+    // A list with a slug and a shown name per model, some hidden.
+    const fs::path slugs = write("slugs.json",
+        R"({"models":[{"slug":"m-a","display_name":"M-A","visibility":"list"},{"slug":"m-b","visibility":"hide"},{"slug":"m-c"}]})");
+    const std::vector<kb::editor::EditorAgentModel> listed = kb::editor::ListedEditorAgentModels(slugs);
+    Require(listed.size() == 2U && listed[0].id == "m-a" && listed[1].id == "m-c" && listed[0].main && listed[1].main,
+        "hidden models are left out, the file's order is kept");
+    Require(listed[0].name == "M-A" && listed[1].name.empty(), "the shown name is the display name, empty when the file gives none");
+    Require(listed[0].Label() == "M-A (m-a)" && listed[1].Label() == "m-c", "a model shows its name with its id, or just its id");
+    // A catalog with the same family twice, an overflow section, a repeated id and a hidden entry.
     const fs::path catalog = write("catalog.json",
         R"({"version":2,"catalog":{"config":{"models":[
-            {"id":"x-1","section":"main","runtime":{"family":"fam-a"}},
-            {"id":"x-2","section":"main","runtime":{"family":"fam-b"}},
-            {"id":"x-3","section":"main","runtime":{"family":"fam-a"}},
-            {"id":"x-4","section":"overflow","runtime":{"family":"fam-c"}},
-            {"id":"x-5","section":"main"}]}}})");
-    Require(kb::editor::ListedEditorAgentModels(catalog) == std::vector<std::string>({ "fam-a", "fam-b", "x-5" }),
-        "a catalog gives each family once, in its order, with the overflow left out and an id for a model with no family");
+            {"id":"x-1","name":"Model One","section":"main","runtime":{"family":"fam-a"}},
+            {"id":"x-2","section":"main","runtime":{"family":"fam-a"}},
+            {"id":"x-3","name":"Model Three","section":"overflow"},
+            {"id":"x-1","section":"main"},
+            {"id":"x-4","visibility":"hide"}]}}})");
+    const std::vector<kb::editor::EditorAgentModel> catalogModels = kb::editor::ListedEditorAgentModels(catalog);
+    Require(catalogModels.size() == 3U && catalogModels[0].id == "x-1" && catalogModels[1].id == "x-2" && catalogModels[2].id == "x-3",
+        "a catalog keeps every model once in its order, the overflow included and the hidden one left out");
+    Require(catalogModels[0].main && catalogModels[1].main && !catalogModels[2].main, "only the main section holds the main models");
+    kb::editor::EditorAgent agent;
+    agent.models = catalogModels;
+    Require(agent.ModelName("x-1") == "Model One" && agent.ModelName("x-2") == "x-2" && agent.ModelName("alias") == "alias",
+        "a model shows the name from the file, or its id when it has none");
+    Require(agent.OffersModel("x-3") && !agent.OffersModel("alias"), "an agent offers exactly the models from its file");
     Require(kb::editor::ListedEditorAgentModels(root / "missing.json").empty(), "no file, no models");
     Require(kb::editor::ListedEditorAgentModels(write("broken.json", "{ not json")).empty(), "a damaged file gives no models");
     fs::remove_all(root, error);

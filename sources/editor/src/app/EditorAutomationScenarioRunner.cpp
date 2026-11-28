@@ -5881,9 +5881,9 @@ ReadScriptValue(
         panel.SelectAgent(chosen);
         const EditorAgent& agent = panel.Agents()[static_cast<std::size_t>(chosen)];
         if (model.has_value()) {
-            if (!model->empty() && std::ranges::find(agent.models, *model) == agent.models.end()) {
+            if (!model->empty() && !agent.OffersModel(*model)) {
                 std::string offered;
-                for (const std::string& name : agent.models) offered += (offered.empty() ? "" : ", ") + name;
+                for (const EditorAgentModel& listed : agent.models) offered += (offered.empty() ? "" : ", ") + listed.id;
                 return { false, "model not offered by " + agent.name + ": " + *model + " (offered: " + (offered.empty() ? "none" : offered) + ")" };
             }
             panel.SelectModel(*model);

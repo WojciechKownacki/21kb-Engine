@@ -154,7 +154,7 @@ struct Typography {
     if (agent == nullptr) {
         return std::string{ EditorText("agent.bar.noAgent", "Choose an agent") };
     }
-    std::string text = state.Model().empty() ? agent->name : state.Model();
+    std::string text = state.Model().empty() ? agent->name : agent->ModelName(state.Model());
     if (!text.empty()) text[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(text[0])));
     if (!state.Effort().empty()) text += " \xC2\xB7 " + AgentBarRenderer::EffortLabel(state.Effort());
     return text;
@@ -531,9 +531,9 @@ void PaintMenu(Gdiplus::Graphics& graphics, const AgentBarLayout& layout, const 
     if (agent != nullptr && !agent->models.empty()) {
         for (std::size_t index = 0; index < layout.menuModels.size(); ++index) {
             const RECT& row = layout.menuModels[index];
-            std::string name = index == 0U ? std::string{ EditorText("agent.menu.defaultModel", "Default") } : agent->models[index - 1U];
-            if (!name.empty()) name[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(name[0])));
-            const bool selected = listedIsCurrent && (index == 0U ? state.Model().empty() : state.Model() == agent->models[index - 1U]);
+            std::string name = index == 0U ? std::string{ EditorText("agent.menu.defaultModel", "Default") } : agent->models[index - 1U].Label();
+            if (index == 0U && !name.empty()) name[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(name[0])));
+            const bool selected = listedIsCurrent && (index == 0U ? state.Model().empty() : state.Model() == agent->models[index - 1U].id);
             if (hovered(row)) FillRow(graphics, row, 9);
             DrawLabel(graphics, Wide(name), type.body, selected ? kText : kDim, static_cast<float>(row.left + 12), static_cast<float>(row.top + 6));
             if (selected) {

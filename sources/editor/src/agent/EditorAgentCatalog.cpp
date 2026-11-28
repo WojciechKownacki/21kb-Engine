@@ -259,6 +259,15 @@ struct Preset {
     return tiers;
 }
 
+// The ids of the models a program lists among its main ones, in their order.
+[[nodiscard]] std::vector<std::string> MainModelIds(const std::vector<EditorAgentModel>& models) {
+    std::vector<std::string> ids;
+    for (const EditorAgentModel& model : models) {
+        if (model.main) ids.push_back(model.id);
+    }
+    return ids;
+}
+
 void AppendCustomAgents(std::vector<EditorAgent>& agents, const std::map<std::string, std::vector<std::string>>& tiers) {
     const kb::core::JsonValue document = AgentsDocument();
     const kb::core::JsonValue* list = document.Find("agents");
@@ -289,9 +298,11 @@ void AppendCustomAgents(std::vector<EditorAgent>& agents, const std::map<std::st
         agent.connectArguments = Strings(entry->Find("connect"));
         agent.custom = true;
         // The models it can be started with, best first, and the words that pass the chosen one ({model}).
-        agent.models = Strings(entry->Find("models"));
+        for (const std::string& model : Strings(entry->Find("models"))) {
+            agent.models.push_back(EditorAgentModel{ model, {}, true });
+        }
         agent.modelArguments = Strings(entry->Find("modelArguments"));
-        agent.ladder = ModelLadder(agent.models, tiers.contains(agent.name) ? tiers.at(agent.name) : std::vector<std::string>{});
+        agent.ladder = ModelLadder(MainModelIds(agent.models), tiers.contains(agent.name) ? tiers.at(agent.name) : std::vector<std::string>{});
         if (const kb::core::JsonValue* output = entry->Find("output"); output != nullptr) {
             agent.output = output->AsString() == "stream-json" ? EditorAgentOutputFormat::StreamJson
                 : output->AsString() == "codex" ? EditorAgentOutputFormat::CodexJson
@@ -309,46 +320,49 @@ void AppendCustomAgents(std::vector<EditorAgent>& agents, const std::map<std::st
 
 } // namespace
 
-std::vector<std::string> ListedEditorAgentModels(const std::filesystem::path& file) {
-    std::vector<std::string> names;
+std::vector<EditorAgentModel> ListedEditorAgentModels(const std::filesystem::path& file) {
+    std::vector<EditorAgentModel> models;
     std::ifstream stream(file, std::ios::binary);
     if (!stream) {
-        return names;
+        return models;
     }
     std::ostringstream text;
     text << stream.rdbuf();
     kb::core::JsonValue document;
     std::string error;
     if (!kb::core::JsonValue::Parse(text.str(), document, error)) {
-        return names;
+        return models;
     }
     // The list is at the top of the file or under catalog.config.
     const kb::core::JsonValue* catalog = document.Find("catalog");
     const kb::core::JsonValue* config = catalog != nullptr ? catalog->Find("config") : nullptr;
-    const kb::core::JsonValue* models = config != nullptr ? config->Find("models") : document.Find("models");
-    if (models == nullptr || models->GetKind() != kb::core::JsonValue::Kind::Array) {
-        return names;
+    const kb::core::JsonValue* listed = config != nullptr ? config->Find("models") : document.Find("models");
+    if (listed == nullptr || listed->GetKind() != kb::core::JsonValue::Kind::Array) {
+        return models;
     }
     const auto textOf = [](const kb::core::JsonValue* value) {
         return value != nullptr && value->GetKind() == kb::core::JsonValue::Kind::String ? value->AsString() : std::string{};
     };
-    for (std::size_t index = 0; index < models->Size(); ++index) {
-        const kb::core::JsonValue* model = models->At(index);
+    for (std::size_t index = 0; index < listed->Size(); ++index) {
+        const kb::core::JsonValue* model = listed->At(index);
         if (model == nullptr) continue;
-        // The name the CLI takes: the entry's slug, else the family of its runtime, else its id.
-        const kb::core::JsonValue* runtime = model->Find("runtime");
-        std::string name = textOf(model->Find("slug"));
-        if (name.empty()) name = textOf(runtime != nullptr ? runtime->Find("family") : nullptr);
-        if (name.empty()) name = textOf(model->Find("id"));
-        // What the CLI itself keeps out of its picker: hidden entries and the ones it files as overflow.
+        // The name the command line takes: the entry's slug, else its id.
+        std::string id = textOf(model->Find("slug"));
+        if (id.empty()) id = textOf(model->Find("id"));
+        // The name the program shows for it: its name, else its display name.
+        std::string name = textOf(model->Find("name"));
+        if (name.empty()) name = textOf(model->Find("display_name"));
         const std::string section = textOf(model->Find("section"));
-        if (name.empty() || textOf(model->Find("visibility")) == "hide" || (!section.empty() && section != "main") ||
-            std::ranges::find(names, name) != names.end()) {
+        const bool main = section.empty() || section == "main";
+        const bool duplicate = std::ranges::any_of(models, [&id](const EditorAgentModel& listedModel) {
+            return listedModel.id == id;
+        });
+        if (id.empty() || textOf(model->Find("visibility")) == "hide" || duplicate) {
             continue;
         }
-        names.push_back(std::move(name));
+        models.push_back(EditorAgentModel{ std::move(id), std::move(name), main });
     }
-    return names;
+    return models;
 }
 
 EditorAgentPrices LoadEditorAgentPrices() {
@@ -357,6 +371,23 @@ EditorAgentPrices LoadEditorAgentPrices() {
 
 std::string EditorAgent::Label() const {
     return profile == "default" ? name : name + " \xC2\xB7 " + profile;
+}
+
+std::string EditorAgentModel::Label() const {
+    return name.empty() ? id : name + " (" + id + ")";
+}
+
+bool EditorAgent::OffersModel(const std::string& id) const {
+    return std::ranges::any_of(models, [&id](const EditorAgentModel& model) {
+        return model.id == id;
+    });
+}
+
+std::string EditorAgent::ModelName(const std::string& id) const {
+    const auto found = std::ranges::find_if(models, [&id](const EditorAgentModel& model) {
+        return model.id == id;
+    });
+    return found == models.end() || found->name.empty() ? id : found->name;
 }
 
 std::vector<EditorAgent> DetectEditorAgents() {
@@ -385,7 +416,7 @@ std::vector<EditorAgent> DetectEditorAgents() {
             if (!agent.modelsFile.empty() && agent.models.empty()) {
                 agent.models = ListedEditorAgentModels(ResolveModelsFile(folder.empty() ? HomeFolder() / preset.profileFolder : folder, agent.modelsFile));
             }
-            agent.ladder = ModelLadder(agent.models, tiers.contains(agent.name) ? tiers.at(agent.name) : std::vector<std::string>{});
+            agent.ladder = ModelLadder(MainModelIds(agent.models), tiers.contains(agent.name) ? tiers.at(agent.name) : std::vector<std::string>{});
             agents.push_back(std::move(agent));
         }
         // Local models: Codex runs against Ollama when it is installed, with no account at all.
