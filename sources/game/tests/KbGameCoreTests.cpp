@@ -7,6 +7,8 @@
 // green. These run the bootstrap directly, on projects that have those things.
 
 #include "AndroidGraphicsApi.hpp"
+#include "GameProjectLighting.hpp"
+#include "GameRuntimeDiagnostics.hpp"
 #include "GameProjectRuntime.hpp"
 #include "PackagedRuntimeModuleContract.hpp"
 #include "ProjectCooker.hpp"
@@ -70,6 +72,8 @@
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
 #include "kb/render/resources/RenderMaterialParameterCollection.hpp"
+
+#include <bgfx/bgfx.h>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -3261,6 +3265,89 @@ void RunPackageContractCheck(
         std::string{ profileId }.c_str(), scenes.size(), textures, familyList.c_str(), backendList.c_str());
 }
 
+// -------------------------------------------------------------------------
+// The GPU frame report a development package writes to its log.
+// -------------------------------------------------------------------------
+
+void RunGpuFrameDiagnosticsTests() {
+    bgfx::ViewStats views[3]{};
+    std::snprintf(views[0].name, sizeof(views[0].name), "%s", "KB Shadow Depth");
+    views[0].view = 1U;
+    views[0].gpuTimeBegin = 100;
+    views[0].gpuTimeEnd = 300;
+    std::snprintf(views[1].name, sizeof(views[1].name), "%s", "KB Scene3D");
+    views[1].view = 2U;
+    views[1].gpuTimeBegin = 300;
+    views[1].gpuTimeEnd = 1300;
+    std::snprintf(views[2].name, sizeof(views[2].name), "%s", "KB Idle");
+    views[2].view = 3U;
+    views[2].gpuTimeBegin = 0;
+    views[2].gpuTimeEnd = 0;
+
+    bgfx::Stats stats{};
+    stats.gpuTimerFreq = 1000;
+    stats.cpuTimerFreq = 1000;
+    stats.gpuTimeBegin = 0;
+    stats.gpuTimeEnd = 1500;
+    stats.cpuTimeFrame = 16;
+    stats.waitRender = 1;
+    stats.waitSubmit = 12;
+    stats.numDraw = 42;
+    stats.numCompute = 3;
+    stats.numViews = 3;
+    stats.viewStats = views;
+
+    const std::vector<kb::game::GpuViewTime> times = kb::game::ReadGpuViewTimes(stats);
+    Require(times.size() == 2U, "only the views the renderer timed must be reported");
+    Require(times[0].name == "KB Shadow Depth" && times[0].view == 1U && times[0].milliseconds == 200.0,
+        "the first reported view must keep its name, index and GPU time");
+    Require(times[1].name == "KB Scene3D" && times[1].view == 2U && times[1].milliseconds == 1000.0,
+        "the second reported view must keep its name, index and GPU time");
+    Require(kb::game::DescribeGpuFrame(stats) ==
+            "gpu frame_ms=1500.00 cpu_frame_ms=16.00 wait_render_ms=1.00 wait_submit_ms=12.00 draws=42 compute=3 "
+            "views: KB Scene3D#2=1000.00 KB Shadow Depth#1=200.00",
+        "the GPU frame report must list the timed views slowest first");
+    stats.gpuTimerFreq = 0;
+    Require(kb::game::ReadGpuViewTimes(stats).empty(), "a frame without a GPU timer reports no view times");
+    const std::string unavailable = kb::game::DescribeGpuFrame(stats);
+    Require(Mentions(unavailable, "frame_ms=unavailable"), "a frame without a GPU timer reports an unavailable frame time");
+    Require(unavailable.ends_with("views: none"), "a frame without a GPU timer reports no views");
+}
+
+// -------------------------------------------------------------------------
+// The frame-time window a development package reports to its log every two seconds.
+// -------------------------------------------------------------------------
+
+void RunFrameTimeWindowTests() {
+    kb::game::FrameTimeWindow window{std::chrono::milliseconds{40}};
+    const auto t0 = std::chrono::steady_clock::time_point{} + std::chrono::seconds{1};
+    Require(!window.Add(t0).has_value(), "the first frame only starts the window");
+    Require(!window.Add(t0 + std::chrono::milliseconds{10}).has_value(), "a window shorter than its length reports nothing");
+    Require(!window.Add(t0 + std::chrono::milliseconds{20}).has_value(), "a window shorter than its length reports nothing");
+    const std::optional<std::string> first = window.Add(t0 + std::chrono::milliseconds{50});
+    Require(first.has_value() && *first == "frames=3 mean_ms=16.67 slowest_ms=30.00",
+        "a window that reached its length reports its frame count, mean and slowest interval");
+    Require(!window.Add(t0 + std::chrono::milliseconds{60}).has_value(), "a report starts the next window");
+    const std::optional<std::string> second = window.Add(t0 + std::chrono::milliseconds{90});
+    Require(second.has_value() && *second == "frames=2 mean_ms=20.00 slowest_ms=30.00",
+        "the next window counts only its own frames");
+
+    window.Reset();
+    Require(!window.Add(t0 + std::chrono::milliseconds{1000}).has_value(), "a reset window waits for its first frame");
+    const std::optional<std::string> resumed = window.Add(t0 + std::chrono::milliseconds{1040});
+    Require(resumed.has_value() && *resumed == "frames=1 mean_ms=40.00 slowest_ms=40.00",
+        "a reset window does not count a pause as a frame");
+
+    kb::render::DisplayConfig config{};
+    kb::project::ProjectDisplaySettings display{};
+    display.vsync = false;
+    kb::game::ApplyGameProjectDisplaySync(config, display);
+    Require(config.syncMode == kb::render::DisplaySyncMode::Uncapped, "a project without vertical sync leaves the player uncapped");
+    display.vsync = true;
+    kb::game::ApplyGameProjectDisplaySync(config, display);
+    Require(config.syncMode == kb::render::DisplaySyncMode::VSync, "a project with vertical sync caps the player");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -3331,6 +3418,8 @@ int main(int argc, char** argv) {
 
     RunRuntimeDeltaTests();
     RunAndroidGraphicsApiTests();
+    RunGpuFrameDiagnosticsTests();
+    RunFrameTimeWindowTests();
     RunPackagedRuntimeModuleContractTests();
     RunCookOutputLockTest();
     RunTextureReuseCookTests();

@@ -1,12 +1,18 @@
 #pragma once
 
 #include "GameProjectRuntime.hpp"
+#include "kb/render/DisplayConfig.hpp"
 #include "kb/render/Renderer.hpp"
 #include "kb/render/scene/SceneLightingQuality.hpp"
 
 #include <ostream>
 
 namespace kb::game {
+
+// The project's vertical sync choice, for every player that creates the renderer.
+inline void ApplyGameProjectDisplaySync(kb::render::DisplayConfig& config, const kb::project::ProjectDisplaySettings& display) {
+    config.syncMode = display.vsync ? kb::render::DisplaySyncMode::VSync : kb::render::DisplaySyncMode::Uncapped;
+}
 
 // Apply after renderer initialization, including surface/context recreation. The project's render scale is
 // applied here too, so packaged hosts draw the 3D scene at the share of the surface the project chose.

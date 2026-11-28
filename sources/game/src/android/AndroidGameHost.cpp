@@ -63,6 +63,7 @@
 #include <exception>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <span>
 #include <string>
@@ -744,6 +745,7 @@ private:
             kb::render::DisplayConfig config{};
             config.writableStorageRoot = storageRoot_;
             config.enableEditorRendering = false;
+            kb::game::ApplyGameProjectDisplaySync(config, projectRuntime_.display);
             if (!InitializeRenderer(config)) {
                 LogError("renderer initialization failed");
                 failed_ = true;
@@ -757,6 +759,16 @@ private:
             std::ostringstream lightingDiagnostics;
             kb::game::ApplyGameProjectLighting(renderer_, projectRuntime_, lightingDiagnostics);
             LogInfo(lightingDiagnostics.str());
+#if defined(KB_DEVELOPMENT_PLAYER)
+            // Per-view GPU timing changes how the renderer submits its passes, so it is off unless asked for:
+            // adb shell setprop debug.kb.gpu_views 1
+            char gpuViews[PROP_VALUE_MAX] = {};
+            if (__system_property_get("debug.kb.gpu_views", gpuViews) > 0 && gpuViews[0] == '1') {
+                bgfx::setDebug(BGFX_DEBUG_TEXT | BGFX_DEBUG_PROFILER);
+                LogInfo("gpu view timing on");
+            }
+            LogInfo(config.syncMode == kb::render::DisplaySyncMode::VSync ? "display sync=vsync" : "display sync=uncapped");
+#endif
             if (!HasRequiredTextureCapabilities()) {
                 std::ostringstream message;
                 message << "profile=" << targetProfileId_
@@ -926,6 +938,9 @@ private:
         const float deltaSeconds = tickClockReady_
             ? kb::game::RuntimeDeltaSeconds(previousTick_, now)
             : 0.0F;
+#if defined(KB_DEVELOPMENT_PLAYER)
+        if (!tickClockReady_) frameWindow_.Reset();
+#endif
         previousTick_ = now;
         tickClockReady_ = true;
         static_cast<void>(scene_->UI().SetSafeAreaInsets(kb::game::ReadAndroidWindowInsets(*app_.activity)));
@@ -961,6 +976,12 @@ private:
             if (!message.empty()) LogInfo(message);
         }
         renderer_.EndFrame();
+#if defined(KB_DEVELOPMENT_PLAYER)
+        if (const std::optional<std::string> report = frameWindow_.Add(std::chrono::steady_clock::now())) {
+            LogInfo(*report);
+            if (const bgfx::Stats* const stats = bgfx::getStats()) LogInfo(kb::game::DescribeGpuFrame(*stats));
+        }
+#endif
         if (!submitted) {
             LogError("renderer could not submit the scene");
             for (const auto& event : renderer_.LastSceneDiagnostics().events) {
@@ -1149,6 +1170,9 @@ private:
     bool imeDismissed_ = false;
     kb::scene::SceneEntity imeField_{};
     std::chrono::steady_clock::time_point previousTick_{};
+#if defined(KB_DEVELOPMENT_PLAYER)
+    kb::game::FrameTimeWindow frameWindow_{std::chrono::seconds{2}};
+#endif
 };
 
 } // namespace

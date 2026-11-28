@@ -225,6 +225,11 @@ if(ANDROID AND KB_BUILD_ANDROID_HOST)
     kb_attach_project_native(kb_game_android)
     kb_apply_quality_gates(kb_game_android)
 
+    option(KB_DEVELOPMENT_PLAYER "The Android player of a development package: it logs frame times and, on request, the GPU time of every render view" OFF)
+    if(KB_DEVELOPMENT_PLAYER)
+        target_compile_definitions(kb_game_android PRIVATE KB_DEVELOPMENT_PLAYER)
+    endif()
+
     # bx's public assertion macro uses the long-standing GNU `, ##__VA_ARGS__`
     # extension. Keep our warnings strict while silencing only that vendor-header
     # diagnostic in the host translation unit that includes Renderer.hpp.

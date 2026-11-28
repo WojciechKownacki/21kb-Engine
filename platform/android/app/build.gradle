@@ -280,7 +280,9 @@ android {
 
     buildTypes {
         debug {
+            // A development package stays debuggable but runs optimized native code, so its frame times mean something.
             debuggable = true
+            externalNativeBuild.cmake.arguments += ["-DCMAKE_BUILD_TYPE=RelWithDebInfo", "-DKB_DEVELOPMENT_PLAYER=ON"]
         }
         release {
             debuggable = false

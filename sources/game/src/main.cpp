@@ -1,5 +1,6 @@
 #include "GameProjectRuntime.hpp"
 #include "GameWindow.hpp"
+#include "GameProjectLighting.hpp"
 #include "RuntimeSceneFrameSync.hpp"
 #include "ParticleRuntimeDiagnostics.hpp"
 #include "GameCaptureCamera.hpp"
@@ -682,7 +683,8 @@ int RunGame(const GameOptions& options) {
     kb::render::DisplayConfig displayConfig{};
     displayConfig.enableEditorRendering = false;
     displayConfig.preferredBgfxRendererType = options.rendererType;
-    if (uncapped || !display.vsync) {
+    kb::game::ApplyGameProjectDisplaySync(displayConfig, display);
+    if (uncapped) {
         displayConfig.syncMode = kb::render::DisplaySyncMode::Uncapped;
     }
     kb::render::Renderer renderer;
@@ -1138,14 +1140,11 @@ int RunGame(const GameOptions& options) {
             rendering.Set("gpu_ms", gpuMilliseconds >= 0.0 ? JsonValue::MakeNumber(gpuMilliseconds) : JsonValue::MakeNull());
             if (options.profileGpuViews && gpu != nullptr && gpu->gpuTimerFreq > 0 && gpu->viewStats != nullptr) {
                 auto views = JsonValue::MakeArray();
-                for (std::uint16_t index = 0U; index < gpu->numViews; ++index) {
-                    const auto& view = gpu->viewStats[index];
-                    if (view.gpuTimeEnd <= view.gpuTimeBegin) continue;
+                for (const kb::game::GpuViewTime& view : kb::game::ReadGpuViewTimes(*gpu)) {
                     auto entry = JsonValue::MakeObject();
                     entry.Set("name", JsonValue::MakeString(view.name));
                     entry.Set("view", JsonValue::MakeNumber(view.view));
-                    entry.Set("gpu_ms", JsonValue::MakeNumber(
-                        static_cast<double>(view.gpuTimeEnd - view.gpuTimeBegin) * 1000.0 / static_cast<double>(gpu->gpuTimerFreq)));
+                    entry.Set("gpu_ms", JsonValue::MakeNumber(view.milliseconds));
                     views.Append(std::move(entry));
                 }
                 rendering.Set("gpu_views", std::move(views));
