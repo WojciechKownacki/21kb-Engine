@@ -699,7 +699,9 @@ void EditorAgentPanelState::RefreshAgents() {
     // A model remembered by its family's short name is the main model the program runs for that name.
     const std::string resolved = agent != nullptr ? agent->ResolveModel(model) : std::string{};
     model_ = !missingAgent_.empty() ? std::string{} : resolved.empty() ? model : resolved;
-    effort_ = agent != nullptr && std::ranges::find(agent->efforts, effort) != agent->efforts.end() ? effort : std::string{};
+    effort_ = agent != nullptr && std::ranges::any_of(agent->EffortsFor(model_), [&effort](const EditorAgentEffort& level) {
+        return level.id == effort;
+    }) ? effort : std::string{};
     StartAccountCheck();
 }
 
@@ -743,6 +745,13 @@ bool EditorAgentPanelState::NoModelList() const {
 
 void EditorAgentPanelState::SelectModel(std::string model) {
     model_ = std::move(model);
+    // A level the new model does not take is not passed to it: the choice goes back to the model's own.
+    const EditorAgent* agent = Current();
+    if (!effort_.empty() && (agent == nullptr || std::ranges::none_of(agent->EffortsFor(model_), [this](const EditorAgentEffort& level) {
+            return level.id == effort_;
+        }))) {
+        effort_.clear();
+    }
     RememberSelection();
 }
 
@@ -1741,7 +1750,7 @@ std::optional<EditorAgentCard> EditorAgentPanelState::Card() const {
             card.body = EditorLocalization::Format("agent.missingModel.body", "{model} is not offered by {agent} any more. Choose another model.",
                 { { "model", ShownModel(agent, model_) }, { "agent", agent->Label() } });
             for (const EditorAgentModel& listed : agent->models) {
-                if (card.buttons.size() < 4U) card.buttons.push_back({ listed.Label(), EditorAgentCardAction::ChooseModel, listed.id });
+                if (card.buttons.size() < 4U) card.buttons.push_back({ ShownModel(agent, listed.id), EditorAgentCardAction::ChooseModel, listed.id });
             }
             card.buttons.push_back({ std::string{ EditorText("agent.missingModel.own", "The program's own") }, EditorAgentCardAction::ChooseModel, {} });
         }

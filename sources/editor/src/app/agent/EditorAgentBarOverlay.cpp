@@ -210,10 +210,11 @@ void EditorAgentBarOverlay::HandlePointerDown(int x, int y) {
     case AgentBarHitKind::MenuEffort: {
         const int listed = agent.MenuAgent();
         if (listed >= 0 && listed < static_cast<int>(agent.Agents().size())) {
-            const std::vector<std::string> efforts = agent.Agents()[static_cast<std::size_t>(listed)].efforts;
+            const std::vector<EditorAgentEffort> levels = AgentBarRenderer::MenuEfforts(agent);
+            if (hit.index > 0 && static_cast<std::size_t>(hit.index - 1) >= levels.size()) break;
             agent.SelectAgent(listed);
             agent.SetMenuAgent(listed);
-            agent.SelectEffort(hit.index == 0 ? std::string{} : efforts[static_cast<std::size_t>(hit.index - 1)]);
+            agent.SelectEffort(hit.index == 0 ? std::string{} : levels[static_cast<std::size_t>(hit.index - 1)].id);
         }
         break;
     }

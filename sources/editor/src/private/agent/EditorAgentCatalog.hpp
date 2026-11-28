@@ -18,6 +18,15 @@ enum class EditorAgentOutputFormat : std::uint8_t {
     PlainText,
 };
 
+// One reasoning level a model takes: the word its command line takes, the name the program shows for it (empty when it gives
+// none) and a short note the program shows beside it ("Recommended"), marked when it warns of a higher cost.
+struct EditorAgentEffort {
+    std::string id;
+    std::string name;
+    std::string badge;
+    bool warning = false;
+};
+
 // One model an agent can be started with: the exact name its command line takes, the name the program shows for it (empty
 // when it gives none), the family the program groups it in (empty when it gives none) and whether the program lists it among
 // its main models rather than its older or extra ones.
@@ -28,9 +37,10 @@ struct EditorAgentModel {
     // the file gives none.
     std::string family;
     bool main = true;
-
-    // "Name (id)", or the id alone when there is no name.
-    [[nodiscard]] std::string Label() const;
+    // The reasoning levels the program lists for this model, lowest first; `listsEfforts` false when its file says nothing
+    // about them (the agent's own list applies), true with no levels for a model that does not reason.
+    std::vector<EditorAgentEffort> efforts;
+    bool listsEfforts = false;
 };
 
 // One agent the Agent panel can run: a command-line agent found on this machine, with one of its
@@ -97,6 +107,11 @@ struct EditorAgent {
     // The id a remembered model name stands for: `value` itself when it is listed, else the id of the first main model of the
     // family named `value` (the model the program runs for that short name); empty when it is neither.
     [[nodiscard]] std::string ResolveModel(const std::string& value) const;
+    // The reasoning levels for model `id` (empty: the agent's default model): the model's own when its file lists them, else
+    // the agent's `efforts` with no names or notes.
+    [[nodiscard]] std::vector<EditorAgentEffort> EffortsFor(const std::string& id) const;
+    // The shown name of level `effort` for model `id`, or `effort` itself with its first letter capitalized.
+    [[nodiscard]] std::string EffortName(const std::string& id, const std::string& effort) const;
 };
 
 // Every agent on this machine: each built-in preset whose CLI is on PATH, once per sign-in

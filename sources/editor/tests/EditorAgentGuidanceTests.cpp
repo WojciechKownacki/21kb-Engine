@@ -204,26 +204,31 @@ void RunListedModelsTests() {
         std::ofstream(root / name, std::ios::binary) << text;
         return root / name;
     };
-    // A list with a slug and a shown name per model, some hidden.
+    // A list with a slug and a shown name per model, some hidden, and the reasoning levels of one.
     const fs::path slugs = write("slugs.json",
-        R"({"models":[{"slug":"m-a","display_name":"M-A","visibility":"list"},{"slug":"m-b","visibility":"hide"},{"slug":"m-c"}]})");
+        R"({"models":[{"slug":"m-a","display_name":"M-A","visibility":"list","supported_reasoning_levels":[{"effort":"low"},{"effort":"ultra"}]},{"slug":"m-b","visibility":"hide"},{"slug":"m-c"}]})");
     const std::vector<kb::editor::EditorAgentModel> listed = kb::editor::ListedEditorAgentModels(slugs);
     Require(listed.size() == 2U && listed[0].id == "m-a" && listed[1].id == "m-c" && listed[0].main && listed[1].main,
         "hidden models are left out, the file's order is kept");
     Require(listed[0].name == "M-A" && listed[1].name.empty(), "the shown name is the display name, empty when the file gives none");
-    Require(listed[0].Label() == "M-A (m-a)" && listed[1].Label() == "m-c", "a model shows its name with its id, or just its id");
-    // A catalog with the same family twice, an overflow section, a repeated id and a hidden entry.
+    Require(listed[0].listsEfforts && listed[0].efforts.size() == 2U && listed[0].efforts[0].id == "low" && listed[0].efforts[1].id == "ultra",
+        "the reasoning levels come from the model's own list");
+    Require(!listed[1].listsEfforts && listed[1].efforts.empty(), "a model whose file says nothing about levels lists none");
+    // A catalog with the same family twice, an overflow section, a repeated id, a hidden entry and the reasoning levels of two.
     const fs::path catalog = write("catalog.json",
         R"({"version":2,"catalog":{"config":{"models":[
-            {"id":"x-1","name":"Model One","section":"main","runtime":{"family":"fam-a"}},
-            {"id":"x-2","section":"main","runtime":{"family":"fam-a"}},
+            {"id":"x-1","name":"Model One","section":"main","thinking":{"type":"effort","effort_options":[{"id":"low","name":"Low"},{"id":"medium","name":"Medium","badge":{"message":"Recommended","variant":"neutral"}},{"id":"max","name":"Max","badge":{"message":"costly","variant":"warning"}}]},"runtime":{"family":"fam-a"}},
+            {"id":"x-2","section":"main","thinking":{"type":"none"},"runtime":{"family":"fam-a"}},
             {"id":"x-3","name":"Model Three","section":"overflow","runtime":{"family":"fam-a"}},
+            {"id":"x-0","name":"Model Zero","section":"overflow"},
             {"id":"x-1","section":"main"},
             {"id":"x-4","visibility":"hide"}]}}})");
     const std::vector<kb::editor::EditorAgentModel> catalogModels = kb::editor::ListedEditorAgentModels(catalog);
-    Require(catalogModels.size() == 3U && catalogModels[0].id == "x-1" && catalogModels[1].id == "x-2" && catalogModels[2].id == "x-3",
-        "a catalog keeps every model once in its order, the overflow included and the hidden one left out");
-    Require(catalogModels[0].main && catalogModels[1].main && !catalogModels[2].main, "only the main section holds the main models");
+    Require(catalogModels.size() == 4U && catalogModels[0].id == "x-1" && catalogModels[1].id == "x-2" &&
+        catalogModels[2].id == "x-3" && catalogModels[3].id == "x-0",
+        "the main models come first, the file's order kept in each group");
+    Require(catalogModels[0].main && catalogModels[1].main && !catalogModels[2].main && !catalogModels[3].main,
+        "only the main section holds the main models");
     kb::editor::EditorAgent agent;
     agent.models = catalogModels;
     Require(agent.ModelName("x-1") == "Model One" && agent.ModelName("x-2") == "x-2" && agent.ModelName("alias") == "alias",
@@ -233,6 +238,19 @@ void RunListedModelsTests() {
     Require(agent.ResolveModel("x-3") == "x-3", "a listed id stands for itself");
     Require(agent.ResolveModel("fam-a") == "x-1", "a family's short name is its first main model, not an extra one");
     Require(agent.ResolveModel("alias").empty() && agent.ResolveModel("").empty(), "anything else stands for no model");
+    Require(catalogModels[0].listsEfforts && catalogModels[0].efforts.size() == 3U &&
+        catalogModels[0].efforts[1].badge == "Recommended" && !catalogModels[0].efforts[1].warning && catalogModels[0].efforts[2].warning,
+        "a model's levels carry the program's notes and warnings");
+    Require(catalogModels[1].listsEfforts && catalogModels[1].efforts.empty(), "a model that does not reason lists no levels");
+    Require(!catalogModels[2].listsEfforts, "a model whose file says nothing about levels leaves the agent's own list");
+    agent.efforts = { "low", "high" };
+    Require(agent.EffortsFor("x-1").size() == 3U, "a model's own levels win over the agent's");
+    Require(agent.EffortsFor("x-2").empty(), "a model that does not reason takes no level");
+    Require(agent.EffortsFor("x-3").size() == 2U && agent.EffortsFor("x-3")[0].id == "low" && agent.EffortsFor("x-3")[1].id == "high",
+        "a model without levels of its own takes the agent's");
+    Require(agent.EffortsFor("").size() == 2U && agent.EffortsFor("")[1].id == "high", "the default model takes the agent's list");
+    Require(agent.EffortName("x-1", "medium") == "Medium" && agent.EffortName("x-3", "high") == "High",
+        "a level shows the program's name for it, or its own word capitalized");
     Require(kb::editor::ListedEditorAgentModels(root / "missing.json").empty(), "no file, no models");
     Require(kb::editor::ListedEditorAgentModels(write("broken.json", "{ not json")).empty(), "a damaged file gives no models");
     fs::remove_all(root, error);

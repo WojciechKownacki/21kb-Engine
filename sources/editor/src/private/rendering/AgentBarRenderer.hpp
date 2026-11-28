@@ -97,8 +97,9 @@ public:
     // `hover` is the pointer in window coordinates, for the picker's highlight.
     static void Paint(void* pixels, const AgentBarLayout& layout, const EditorAgentPanelState& state, POINT hover);
     [[nodiscard]] static AgentBarHit HitTest(const AgentBarLayout& layout, const EditorAgentPanelState& state, int x, int y);
-    // An agent's reasoning level as the agent itself names it ("low", "high", "xhigh").
-    [[nodiscard]] static std::string EffortLabel(std::string_view effort);
+    // The reasoning levels the picker offers for the agent it lists: the chosen model's when that agent is the current one,
+    // else the agent's default model's.
+    [[nodiscard]] static std::vector<EditorAgentEffort> MenuEfforts(const EditorAgentPanelState& state);
     // How far the unfolded conversation can scroll up.
     [[nodiscard]] static int MaximumScroll(const AgentBarLayout& layout, const EditorAgentPanelState& state);
 };

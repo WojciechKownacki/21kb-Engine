@@ -11,6 +11,7 @@
 #endif
 
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <fstream>
 #include <map>
@@ -299,7 +300,9 @@ void AppendCustomAgents(std::vector<EditorAgent>& agents, const std::map<std::st
         agent.custom = true;
         // The models it can be started with, best first, and the words that pass the chosen one ({model}).
         for (const std::string& model : Strings(entry->Find("models"))) {
-            agent.models.push_back(EditorAgentModel{ model, {}, {}, true });
+            EditorAgentModel listedModel;
+            listedModel.id = model;
+            agent.models.push_back(std::move(listedModel));
         }
         agent.modelArguments = Strings(entry->Find("modelArguments"));
         agent.ladder = ModelLadder(MainModelIds(agent.models), tiers.contains(agent.name) ? tiers.at(agent.name) : std::vector<std::string>{});
@@ -362,8 +365,55 @@ std::vector<EditorAgentModel> ListedEditorAgentModels(const std::filesystem::pat
         if (id.empty() || textOf(model->Find("visibility")) == "hide" || duplicate) {
             continue;
         }
-        models.push_back(EditorAgentModel{ std::move(id), std::move(name), std::move(family), main });
+        // The reasoning levels this model takes; a file that says nothing about them leaves the agent's own list in place.
+        std::vector<EditorAgentEffort> efforts;
+        bool listsEfforts = false;
+        const kb::core::JsonValue* thinking = model->Find("thinking");
+        const std::string thinkingType = textOf(thinking != nullptr ? thinking->Find("type") : nullptr);
+        if (thinkingType == "effort") {
+            listsEfforts = true;
+            const kb::core::JsonValue* options = thinking->Find("effort_options");
+            if (options != nullptr && options->GetKind() == kb::core::JsonValue::Kind::Array) {
+                for (std::size_t option = 0; option < options->Size(); ++option) {
+                    const kb::core::JsonValue* listedEffort = options->At(option);
+                    if (listedEffort == nullptr) continue;
+                    const std::string effortId = textOf(listedEffort->Find("id"));
+                    if (effortId.empty()) continue;
+                    const kb::core::JsonValue* badge = listedEffort->Find("badge");
+                    EditorAgentEffort effort;
+                    effort.id = effortId;
+                    effort.name = textOf(listedEffort->Find("name"));
+                    effort.badge = textOf(badge != nullptr ? badge->Find("message") : nullptr);
+                    effort.warning = textOf(badge != nullptr ? badge->Find("variant") : nullptr) == "warning";
+                    efforts.push_back(std::move(effort));
+                }
+            }
+        } else if (thinkingType == "none") {
+            listsEfforts = true;
+        } else if (const kb::core::JsonValue* levels = model->Find("supported_reasoning_levels");
+                   levels != nullptr && levels->GetKind() == kb::core::JsonValue::Kind::Array) {
+            listsEfforts = true;
+            for (std::size_t level = 0; level < levels->Size(); ++level) {
+                const kb::core::JsonValue* listedLevel = levels->At(level);
+                if (listedLevel == nullptr) continue;
+                const std::string effortId = textOf(listedLevel->Find("effort"));
+                if (effortId.empty()) continue;
+                EditorAgentEffort effort;
+                effort.id = effortId;
+                efforts.push_back(std::move(effort));
+            }
+        }
+        EditorAgentModel listedModel;
+        listedModel.id = std::move(id);
+        listedModel.name = std::move(name);
+        listedModel.family = std::move(family);
+        listedModel.main = main;
+        listedModel.efforts = std::move(efforts);
+        listedModel.listsEfforts = listsEfforts;
+        models.push_back(std::move(listedModel));
     }
+    // The main models first, as the program's picker shows them; the file's order within each group.
+    std::ranges::stable_partition(models, [](const EditorAgentModel& model) { return model.main; });
     return models;
 }
 
@@ -373,10 +423,6 @@ EditorAgentPrices LoadEditorAgentPrices() {
 
 std::string EditorAgent::Label() const {
     return profile == "default" ? name : name + " \xC2\xB7 " + profile;
-}
-
-std::string EditorAgentModel::Label() const {
-    return name.empty() ? id : name + " (" + id + ")";
 }
 
 bool EditorAgent::OffersModel(const std::string& id) const {
@@ -403,6 +449,36 @@ std::string EditorAgent::ResolveModel(const std::string& value) const {
         return model.main && model.family == value;
     });
     return found != models.end() ? found->id : std::string{};
+}
+
+std::vector<EditorAgentEffort> EditorAgent::EffortsFor(const std::string& id) const {
+    const auto found = std::ranges::find_if(models, [&id](const EditorAgentModel& model) {
+        return model.id == id;
+    });
+    if (found != models.end() && found->listsEfforts) {
+        return found->efforts;
+    }
+    std::vector<EditorAgentEffort> levels;
+    levels.reserve(efforts.size());
+    for (const std::string& effort : efforts) {
+        EditorAgentEffort level;
+        level.id = effort;
+        levels.push_back(std::move(level));
+    }
+    return levels;
+}
+
+std::string EditorAgent::EffortName(const std::string& id, const std::string& effort) const {
+    for (const EditorAgentEffort& level : EffortsFor(id)) {
+        if (level.id == effort && !level.name.empty()) {
+            return level.name;
+        }
+    }
+    std::string shown = effort;
+    if (!shown.empty()) {
+        shown[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(shown[0])));
+    }
+    return shown;
 }
 
 std::vector<EditorAgent> DetectEditorAgents() {

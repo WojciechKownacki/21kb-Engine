@@ -5889,7 +5889,8 @@ ReadScriptValue(
             panel.SelectModel(*model);
         }
         if (effort.has_value()) {
-            if (!effort->empty() && std::ranges::find(agent.efforts, *effort) == agent.efforts.end()) {
+            if (!effort->empty() && std::ranges::none_of(agent.EffortsFor(model.has_value() ? *model : std::string{}),
+                    [&effort](const EditorAgentEffort& level) { return level.id == *effort; })) {
                 return { false, "effort not offered by " + agent.name + ": " + *effort };
             }
             panel.SelectEffort(*effort);

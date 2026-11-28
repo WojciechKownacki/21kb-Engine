@@ -340,6 +340,17 @@ void PaintPicker(HDC dc, const RECT& rect, const EditorTheme& theme, std::string
     return text;
 }
 
+// What the model picker shows: the chosen model's name and level, or the word for the agent's own default.
+[[nodiscard]] std::string ModelPickerText(const EditorAgentPanelState& state) {
+    const std::string defaultValue{ EditorText("agent.default", "Default") };
+    const EditorAgent* agent = state.Current();
+    std::string text = state.Model().empty() ? defaultValue : Capitalized(agent != nullptr ? agent->ModelName(state.Model()) : state.Model());
+    if (agent != nullptr && !state.Effort().empty()) {
+        text += " \xC2\xB7 " + agent->EffortName(state.Model(), state.Effort());
+    }
+    return text;
+}
+
 // The files the latest request changed: how many, Keep all and Undo all, and one row per file with its own Undo.
 void PaintReview(HDC dc, const AgentPanelLayout& layout, const EditorTheme& theme, const EditorAgentPanelState& state) {
     const std::vector<EditorAgentReviewRow>& review = state.Review();
@@ -578,7 +589,11 @@ AgentPanelLayout AgentPanelRenderer::Resolve(const RECT& content, const EditorAg
     layout.modeMenu = RECT{ rowLeft, rowTop, rowLeft + 70, rowBottom };
     rowLeft += 70 + 4;
     layout.sendButton = RECT{ layout.composer.right - 6 - 30, rowTop, layout.composer.right - 6, rowBottom };
-    layout.modelMenu = RECT{ layout.sendButton.left - 4 - 76, rowTop, layout.sendButton.left - 4, rowBottom };
+    // The model picker is as wide as what it says (its text, padding and chevron); the agent picker keeps the rest, never under 60.
+    const int modelRight = static_cast<int>(layout.sendButton.left) - 4;
+    const int modelWidest = std::max(76, modelRight - (rowLeft + 60 + 4));
+    const int modelWidth = std::clamp(TextWidth(MeasuringDc(), ModelPickerText(state), 11) + 30, 76, modelWidest);
+    layout.modelMenu = RECT{ modelRight - modelWidth, rowTop, modelRight, rowBottom };
     layout.agentMenu = RECT{ rowLeft, rowTop, std::max(rowLeft, static_cast<int>(layout.modelMenu.left) - 4), rowBottom };
     layout.input = RECT{ layout.composer.left + 10, layout.composer.top + 8, layout.composer.right - 10, rowTop - 4 };
 
@@ -818,14 +833,13 @@ void AgentPanelRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& t
             enabled ? Color(theme.textSecondary) : Color(theme.textDisabled), 1);
     };
     iconButton(layout.attach, HeroIconKind::Plus, true);
-    iconButton(layout.effortMenu, HeroIconKind::AdjustmentsHorizontal, agent != nullptr && !agent->efforts.empty());
-    const std::string defaultValue{ EditorText("agent.default", "Default") };
+    iconButton(layout.effortMenu, HeroIconKind::AdjustmentsHorizontal, agent != nullptr && !agent->EffortsFor(state.Model()).empty());
     PaintPicker(dc, layout.modeMenu, theme, state.Mode() == EditorAgentMode::Plan ? EditorText("agent.mode.plan", "Plan")
         : state.Mode() == EditorAgentMode::Ask ? EditorText("agent.mode.ask", "Ask") : EditorText("agent.mode.agent", "Agent"), true);
     if (layout.agentMenu.right - layout.agentMenu.left > 40) {
         PaintPicker(dc, layout.agentMenu, theme, agent != nullptr ? agent->Label() : std::string{ EditorText("agent.none", "None found") }, agent != nullptr);
     }
-    PaintPicker(dc, layout.modelMenu, theme, state.Model().empty() ? defaultValue : Capitalized(agent != nullptr ? agent->ModelName(state.Model()) : state.Model()), agent != nullptr && !agent->models.empty());
+    PaintPicker(dc, layout.modelMenu, theme, ModelPickerText(state), agent != nullptr && !agent->models.empty());
     const bool canSend = state.Running() || (agent != nullptr && (!state.Input().empty() || !state.Attachments().empty()));
     const COLORREF sendFill = state.Running() ? kDanger : (canSend ? Color(theme.accent) : Color(theme.panel));
     FillRound(dc, layout.sendButton, sendFill, sendFill, 6);

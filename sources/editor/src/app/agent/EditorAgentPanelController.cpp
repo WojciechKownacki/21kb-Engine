@@ -175,6 +175,25 @@ constexpr UINT kModelsPerAgent = 64U;
     return static_cast<std::size_t>(chosen) - kFirstChoiceCommand;
 }
 
+// The reasoning levels of model `model` as menu items from `first` on (first: the model's own default), the program's note on each
+// beside its name, a warning marked; under a grayed line that says what the level changes.
+void AppendEffortItems(HMENU menu, const EditorAgent& agent, const std::string& model, const std::string& selected, UINT first) {
+    AppendMenuW(menu, MF_STRING | MF_GRAYED, 0U, Widen(EditorText("agent.effortNote",
+        "More reasoning gives more thorough answers, but takes longer and uses more of the account's limits.")).c_str());
+    AppendMenuW(menu, MF_SEPARATOR, 0U, nullptr);
+    AppendMenuW(menu, MF_STRING | (selected.empty() ? MF_CHECKED : 0U), first,
+        Widen(EditorText("agent.defaultEffort", "Default (the agent's own setting)")).c_str());
+    const std::vector<EditorAgentEffort> levels = agent.EffortsFor(model);
+    for (std::size_t index = 0; index < levels.size(); ++index) {
+        std::string text = agent.EffortName(model, levels[index].id);
+        if (!levels[index].badge.empty()) {
+            text += "\t" + std::string{ levels[index].warning ? "\xE2\x9A\xA0 " : "" } + levels[index].badge;
+        }
+        AppendMenuW(menu, MF_STRING | (levels[index].id == selected ? MF_CHECKED : 0U),
+            first + 1U + static_cast<UINT>(index), Widen(text).c_str());
+    }
+}
+
 // The engine's own folders an agent may not read: beside the editor the checkout is found as the SDK finds it (the folder that holds
 // the SDK headers), and everything in it is hidden but its documentation, its build folder (the SDK libraries) and the headers. A
 // folder the project lies in or holds is never hidden.
@@ -475,37 +494,60 @@ void EditorAgentPanelController::ShowChoiceMenu(HWND owner, const RECT& anchor, 
     if (current == nullptr) {
         return;
     }
-    const std::string& selected = models ? agent.Model() : agent.Effort();
-    // What each item hands back and what it shows: a model's exact command-line name with its shown name, or a level with
-    // its own first letter capitalized.
-    std::vector<std::string> values;
-    std::vector<std::wstring> labels;
-    if (models) {
-        for (const EditorAgentModel& model : current->models) {
-            values.push_back(model.id);
-            labels.push_back(Widen(model.Label()));
-        }
-    } else {
-        for (const std::string& effort : current->efforts) {
-            values.push_back(effort);
-            std::wstring label = Widen(effort);
-            if (!label.empty()) label[0] = static_cast<wchar_t>(towupper(label[0]));
-            labels.push_back(std::move(label));
-        }
-    }
+    // The levels the chosen model takes; the levels button and the reasoning submenu both show the model's own.
+    const std::vector<EditorAgentEffort> levels = current->EffortsFor(agent.Model());
     HMENU menu = CreatePopupMenu();
     if (menu == nullptr) {
         return;
     }
-    // The agent's own default first, then what it offers; a disabled note when it offers nothing.
-    AppendMenuW(menu, MF_STRING | (selected.empty() ? MF_CHECKED : 0U), kFirstChoiceCommand,
-        Widen(models ? EditorText("agent.defaultModel", "Default (the agent's own setting)") : EditorText("agent.defaultEffort", "Default (the agent's own setting)")).c_str());
-    for (std::size_t index = 0; index < values.size(); ++index) {
-        AppendMenuW(menu, MF_STRING | (values[index] == selected ? MF_CHECKED : 0U), kFirstChoiceCommand + 1U + static_cast<UINT>(index), labels[index].c_str());
-    }
-    if (values.empty()) {
-        AppendMenuW(menu, MF_STRING | MF_GRAYED, 0U, Widen(models ? EditorText("agent.noModels", "This agent picks its model itself")
-                                                              : EditorText("agent.noEfforts", "This agent has no reasoning levels")).c_str());
+    if (!models) {
+        if (levels.empty()) {
+            AppendMenuW(menu, MF_STRING | MF_GRAYED, 0U, Widen(EditorText("agent.noEfforts", "This agent has no reasoning levels")).c_str());
+        } else {
+            AppendEffortItems(menu, *current, agent.Model(), agent.Effort(), kFirstEffortCommand);
+        }
+    } else {
+        // The agent's own default, the main models by name with a shortcut number, then what the model reasons with and the rest.
+        AppendMenuW(menu, MF_STRING | (agent.Model().empty() ? MF_CHECKED : 0U), kFirstChoiceCommand,
+            Widen(EditorText("agent.defaultModel", "Default (the agent's own setting)")).c_str());
+        std::size_t mainCount = 0U;
+        for (std::size_t index = 0; index < current->models.size(); ++index) {
+            const EditorAgentModel& model = current->models[index];
+            if (!model.main) continue;
+            std::string text = current->ModelName(model.id);
+            if (mainCount < 9U) {
+                text += "\t&" + std::to_string(mainCount + 1U);
+            }
+            ++mainCount;
+            AppendMenuW(menu, MF_STRING | (model.id == agent.Model() ? MF_CHECKED : 0U),
+                kFirstChoiceCommand + 1U + static_cast<UINT>(index), Widen(text).c_str());
+        }
+        AppendMenuW(menu, MF_SEPARATOR, 0U, nullptr);
+        if (!levels.empty()) {
+            HMENU reasoning = CreatePopupMenu();
+            AppendEffortItems(reasoning, *current, agent.Model(), agent.Effort(), kFirstEffortCommand);
+            const std::string title = std::string{ EditorText("agent.reasoningMenu", "Reasoning") } + "\t" +
+                (agent.Effort().empty() ? std::string{ EditorText("agent.default", "Default") }
+                                        : current->EffortName(agent.Model(), agent.Effort()));
+            AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(reasoning), Widen(title).c_str());
+        }
+        const bool hasExtraModels = std::ranges::any_of(current->models, [](const EditorAgentModel& model) { return !model.main; });
+        if (hasExtraModels) {
+            if (!levels.empty()) {
+                AppendMenuW(menu, MF_SEPARATOR, 0U, nullptr);
+            }
+            HMENU more = CreatePopupMenu();
+            for (std::size_t index = 0; index < current->models.size(); ++index) {
+                const EditorAgentModel& model = current->models[index];
+                if (model.main) continue;
+                AppendMenuW(more, MF_STRING | (model.id == agent.Model() ? MF_CHECKED : 0U),
+                    kFirstChoiceCommand + 1U + static_cast<UINT>(index), Widen(current->ModelName(model.id)).c_str());
+            }
+            AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(more), Widen(EditorText("agent.moreModels", "More models")).c_str());
+        }
+        if (current->models.empty()) {
+            AppendMenuW(menu, MF_STRING | MF_GRAYED, 0U, Widen(EditorText("agent.noModels", "This agent picks its model itself")).c_str());
+        }
     }
     POINT point{ anchor.left, anchor.bottom };
     ClientToScreen(owner, &point);
@@ -514,12 +556,19 @@ void EditorAgentPanelController::ShowChoiceMenu(HWND owner, const RECT& anchor, 
     if (chosen < static_cast<int>(kFirstChoiceCommand)) {
         return;
     }
-    const std::size_t index = static_cast<std::size_t>(chosen) - kFirstChoiceCommand;
-    const std::string value = index == 0U ? std::string{} : values[index - 1U];
+    const UINT command = static_cast<UINT>(chosen);
+    if (command >= kFirstEffortCommand) {
+        const std::size_t index = command - kFirstEffortCommand;
+        if (index <= levels.size()) {
+            agent.SelectEffort(index == 0U ? std::string{} : levels[index - 1U].id);
+        }
+        return;
+    }
     if (models) {
-        agent.SelectModel(value);
-    } else {
-        agent.SelectEffort(value);
+        const std::size_t index = command - kFirstChoiceCommand;
+        if (index <= current->models.size()) {
+            agent.SelectModel(index == 0U ? std::string{} : current->models[index - 1U].id);
+        }
     }
 }
 
@@ -548,24 +597,30 @@ void EditorAgentPanelController::ShowModelMenu(HWND owner, POINT screenAnchor) {
         AppendMenuW(menu, MF_STRING | (current && agent.Model().empty() ? MF_CHECKED : 0U), base,
             Widen("    " + std::string{ EditorText("agent.defaultModelShort", "Default model") }).c_str());
         for (std::size_t model = 0; model < entry.models.size() && model + 1U < kModelsPerAgent; ++model) {
+            if (!entry.models[model].main) continue;
             AppendMenuW(menu, MF_STRING | (current && agent.Model() == entry.models[model].id ? MF_CHECKED : 0U),
-                base + 1U + static_cast<UINT>(model), Widen("    " + entry.models[model].Label()).c_str());
+                base + 1U + static_cast<UINT>(model), Widen("    " + entry.ModelName(entry.models[model].id)).c_str());
+        }
+        if (std::ranges::any_of(entry.models, [](const EditorAgentModel& model) { return !model.main; })) {
+            HMENU more = CreatePopupMenu();
+            for (std::size_t model = 0; model < entry.models.size() && model + 1U < kModelsPerAgent; ++model) {
+                if (entry.models[model].main) continue;
+                AppendMenuW(more, MF_STRING | (current && agent.Model() == entry.models[model].id ? MF_CHECKED : 0U),
+                    base + 1U + static_cast<UINT>(model), Widen(entry.ModelName(entry.models[model].id)).c_str());
+            }
+            AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(more),
+                Widen("    " + std::string{ EditorText("agent.moreModels", "More models") }).c_str());
         }
     }
     // The reasoning level of the current agent, in plain words.
-    if (const EditorAgent* current = agent.Current(); current != nullptr && !current->efforts.empty()) {
+    if (const EditorAgent* current = agent.Current(); current != nullptr && !current->EffortsFor(agent.Model()).empty()) {
         HMENU efforts = CreatePopupMenu();
-        AppendMenuW(efforts, MF_STRING | (agent.Effort().empty() ? MF_CHECKED : 0U), kFirstEffortCommand,
-            Widen(EditorText("agent.defaultEffort", "Default (the agent's own setting)")).c_str());
-        for (std::size_t index = 0; index < current->efforts.size(); ++index) {
-            AppendMenuW(efforts, MF_STRING | (agent.Effort() == current->efforts[index] ? MF_CHECKED : 0U), kFirstEffortCommand + 1U + static_cast<UINT>(index),
-                Widen(AgentBarRenderer::EffortLabel(current->efforts[index])).c_str());
-        }
+        AppendEffortItems(efforts, *current, agent.Model(), agent.Effort(), kFirstEffortCommand);
         if (!agents.empty()) {
             AppendMenuW(menu, MF_SEPARATOR, 0U, nullptr);
         }
         const std::string title = std::string{ EditorText("agent.reasoningMenu", "Reasoning") } +
-            (agent.Effort().empty() ? std::string{} : ": " + AgentBarRenderer::EffortLabel(agent.Effort()));
+            (agent.Effort().empty() ? std::string{} : ": " + current->EffortName(agent.Model(), agent.Effort()));
         AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(efforts), Widen(title).c_str());
     }
     AppendMenuW(menu, MF_SEPARATOR, 0U, nullptr);
@@ -588,8 +643,11 @@ void EditorAgentPanelController::ShowModelMenu(HWND owner, POINT screenAnchor) {
     } else if (command >= kFirstEffortCommand) {
         const EditorAgent* current = agent.Current();
         const UINT index = command - kFirstEffortCommand;
-        if (current != nullptr && index <= current->efforts.size()) {
-            agent.SelectEffort(index == 0U ? std::string{} : current->efforts[index - 1U]);
+        if (current != nullptr) {
+            const std::vector<EditorAgentEffort> levels = current->EffortsFor(agent.Model());
+            if (index <= levels.size()) {
+                agent.SelectEffort(index == 0U ? std::string{} : levels[index - 1U].id);
+            }
         }
     } else if (command == kRefreshCommand) {
         agent.RefreshAgents();

@@ -156,7 +156,7 @@ struct Typography {
     }
     std::string text = state.Model().empty() ? agent->name : agent->ModelName(state.Model());
     if (!text.empty()) text[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(text[0])));
-    if (!state.Effort().empty()) text += " \xC2\xB7 " + AgentBarRenderer::EffortLabel(state.Effort());
+    if (!state.Effort().empty()) text += " \xC2\xB7 " + agent->EffortName(state.Model(), state.Effort());
     return text;
 }
 
@@ -409,6 +409,16 @@ void PaintNotice(Gdiplus::Graphics& graphics, const AgentBarLayout& layout, cons
     return index >= 0 && index < static_cast<int>(state.Agents().size()) ? &state.Agents()[static_cast<std::size_t>(index)] : nullptr;
 }
 
+// The model the picker's levels belong to: the current one while the listed agent is the current agent, else the default.
+[[nodiscard]] std::string MenuModelOf(const EditorAgentPanelState& state) {
+    return state.MenuAgent() < 0 || state.MenuAgent() == state.CurrentIndex() ? state.Model() : std::string{};
+}
+
+// Whether picker row `row` (0: the default) is the first of the models the program files under its extra ones.
+[[nodiscard]] bool StartsMoreModels(const EditorAgent& agent, std::size_t row) {
+    return row >= 1U && !agent.models[row - 1U].main && (row == 1U || agent.models[row - 2U].main);
+}
+
 // Lays the picker out in a panel whose top-left corner is (left, top); returns its height.
 int LayOutMenu(AgentBarLayout& layout, const EditorAgentPanelState& state, int left, int top, int width) {
     Typography& type = Type();
@@ -432,17 +442,20 @@ int LayOutMenu(AgentBarLayout& layout, const EditorAgentPanelState& state, int l
     const EditorAgent* agent = MenuAgentOf(state);
     if (agent != nullptr && !agent->models.empty()) {
         for (std::size_t index = 0; index <= agent->models.size(); ++index) {
+            if (StartsMoreModels(*agent, index)) y += kMenuHeading;
             layout.menuModels.push_back(RECT{ columnLeft, y, columnRight, y + kMenuModelRow });
             y += kMenuModelRow;
         }
     } else {
         y += kMenuModelRow;
     }
-    if (agent != nullptr && !agent->efforts.empty()) {
+    const std::vector<EditorAgentEffort> levels = AgentBarRenderer::MenuEfforts(state);
+    if (agent != nullptr && !levels.empty()) {
         y += 12 + kMenuHeading;
+        const std::string model = MenuModelOf(state);
         int x = columnLeft;
-        for (std::size_t index = 0; index <= agent->efforts.size(); ++index) {
-            const std::wstring label = index == 0U ? Wide(EditorText("agent.menu.defaultEffort", "Default")) : Wide(AgentBarRenderer::EffortLabel(agent->efforts[index - 1U]));
+        for (std::size_t index = 0; index <= levels.size(); ++index) {
+            const std::wstring label = index == 0U ? Wide(EditorText("agent.menu.defaultEffort", "Default")) : Wide(agent->EffortName(model, levels[index - 1U].id));
             const int pillWidth = static_cast<int>(Width(label, type.caption)) + 26;
             if (x + pillWidth > columnRight && x > columnLeft) {
                 x = columnLeft;
@@ -531,7 +544,11 @@ void PaintMenu(Gdiplus::Graphics& graphics, const AgentBarLayout& layout, const 
     if (agent != nullptr && !agent->models.empty()) {
         for (std::size_t index = 0; index < layout.menuModels.size(); ++index) {
             const RECT& row = layout.menuModels[index];
-            std::string name = index == 0U ? std::string{ EditorText("agent.menu.defaultModel", "Default") } : agent->models[index - 1U].Label();
+            if (StartsMoreModels(*agent, index)) {
+                DrawLabel(graphics, Wide(EditorText("agent.menu.moreModels", "MORE MODELS")), type.caption, kFaint, columnLeft + 12.0F,
+                    static_cast<float>(row.top) - kMenuHeading + 6.0F);
+            }
+            std::string name = index == 0U ? std::string{ EditorText("agent.menu.defaultModel", "Default") } : agent->ModelName(agent->models[index - 1U].id);
             if (index == 0U && !name.empty()) name[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(name[0])));
             const bool selected = listedIsCurrent && (index == 0U ? state.Model().empty() : state.Model() == agent->models[index - 1U].id);
             if (hovered(row)) FillRow(graphics, row, 9);
@@ -544,12 +561,14 @@ void PaintMenu(Gdiplus::Graphics& graphics, const AgentBarLayout& layout, const 
         DrawLabel(graphics, Wide(EditorText("agent.menu.noModels", "This agent chooses its model")), type.caption, kFaint,
             columnLeft + 12.0F, static_cast<float>(layout.menu.top + kMenuPad + kMenuHeading + 7));
     }
+    const std::vector<EditorAgentEffort> levels = AgentBarRenderer::MenuEfforts(state);
+    const std::string levelsModel = MenuModelOf(state);
     if (agent != nullptr && !layout.menuEfforts.empty()) {
         const float headingY = static_cast<float>(layout.menuEfforts.front().top) - kMenuHeading + 6.0F;
         DrawLabel(graphics, Wide(EditorText("agent.menu.reasoning", "REASONING")), type.caption, kFaint, columnLeft + 12.0F, headingY);
         for (std::size_t index = 0; index < layout.menuEfforts.size(); ++index) {
             const RECT& pill = layout.menuEfforts[index];
-            const bool selected = listedIsCurrent && (index == 0U ? state.Effort().empty() : state.Effort() == agent->efforts[index - 1U]);
+            const bool selected = listedIsCurrent && (index == 0U ? state.Effort().empty() : state.Effort() == levels[index - 1U].id);
             Gdiplus::GraphicsPath path;
             RoundedPath(path, ToRectF(pill), kMenuPill / 2.0F);
             if (selected) {
@@ -559,7 +578,7 @@ void PaintMenu(Gdiplus::Graphics& graphics, const AgentBarLayout& layout, const 
                 const Gdiplus::SolidBrush brush(Gdiplus::Color(hovered(pill) ? 22 : 10, 255, 255, 255));
                 graphics.FillPath(&brush, &path);
             }
-            const std::wstring label = index == 0U ? Wide(EditorText("agent.menu.defaultEffort", "Default")) : Wide(AgentBarRenderer::EffortLabel(agent->efforts[index - 1U]));
+            const std::wstring label = index == 0U ? Wide(EditorText("agent.menu.defaultEffort", "Default")) : Wide(agent->EffortName(levelsModel, levels[index - 1U].id));
             DrawLabel(graphics, label, type.caption, selected ? Gdiplus::Color(255, 21, 23, 27) : kDim, static_cast<float>(pill.left + 13), static_cast<float>(pill.top + 6));
         }
     }
@@ -567,9 +586,9 @@ void PaintMenu(Gdiplus::Graphics& graphics, const AgentBarLayout& layout, const 
 
 } // namespace
 
-std::string AgentBarRenderer::EffortLabel(std::string_view effort) {
-    // The agent's own name for the level, as its documentation and command line spell it.
-    return std::string{ effort };
+std::vector<EditorAgentEffort> AgentBarRenderer::MenuEfforts(const EditorAgentPanelState& state) {
+    const EditorAgent* agent = MenuAgentOf(state);
+    return agent != nullptr ? agent->EffortsFor(MenuModelOf(state)) : std::vector<EditorAgentEffort>{};
 }
 
 AgentBarLayout AgentBarRenderer::Resolve(int bubbleWidth, int maximumBubbleHeight, const EditorAgentPanelState& state) {
